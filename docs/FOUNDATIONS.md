@@ -46,7 +46,7 @@ Every subsystem's structure is a decision: the Rust shape may come from GPUI, Xi
 | Paint & display list | Skia / Vello record-replay | `Canvas` → `DisplayList` of `DrawCommand`, GPU-free |
 | Layer / compositor tree | Per-frame layer tree | Append-only `LayerTree` built per frame; cross-frame reuse and damage keyed on repaint boundaries ([ADR-0087](adr/ADR-0087-raster-contract-and-cpu-backend.md), `crates/flui-layer/ARCHITECTURE.md`) |
 | GPU engine / tessellation | lyon now → Vello-hybrid later | `RasterBackend` trait seam; lyon impl now |
-| Text / shaping / IME | Rust-native (cosmic-text, moving to Parley per [ADR-0092](adr/ADR-0092-per-realm-text-over-parley.md)) + GPUI for IME | `TextPainter` measures and paints with Parley over a per-realm `TextContext`, the display list carries shaped runs (`ShapedParagraph`) and the engine's glyph atlas rasterizes them with swash; carets and selection stay on cosmic-text until ADR-0092 §10 step 5; `PlatformTextInput` capability trait |
+| Text / shaping / IME | Rust-native (cosmic-text, moving to Parley per [ADR-0092](adr/ADR-0092-per-realm-text-over-parley.md)) + GPUI for IME | `TextPainter` measures and paints with Parley over a per-realm `TextContext`, the display list carries shaped runs (`ShapedParagraph`) and the engine's glyph atlas rasterizes them with swash; carets, selection and hit-testing read the same Parley layout; `PlatformTextInput` capability trait |
 | Scheduler & frame loop | Frame phases + winit `ControlFlow::Wait` | Phase model, on-demand wakeup |
 | Gestures / hit-testing | Gesture arena, Rust-shaped | Arena + recognizer FSMs, `ui-events` vocabulary |
 | Animation | FLUI `Listenable` | `AnimationController`/`Curve`/`Tween`, lock-free dirty-mark |

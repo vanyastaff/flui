@@ -3,7 +3,7 @@
 
 Why it exists
 -------------
-`oversized_space_from_an_emoji_face_is_closed` reproduces issue #927's actual
+`a_missing_family_never_takes_its_space_from_an_emoji_face` reproduces issue #927's actual
 symptom: an emoji face shaping the SPACE of a Latin run at ~1.24 em while the
 letters shape elsewhere. Reproducing it needs a face that carries `U+0020` and
 no letters. Neither shipped icon font qualifies — both map neither — so the
@@ -336,16 +336,10 @@ FACES = [
         out="decoy-wide-space.ttf",
         space_advance=1300,  # 1.3 em — deliberately wide, the symptom.
     ),
-    # One family at two weights, monospaced, carrying letters. Three probes in
-    # `font_resolve` have no other fixture that discriminates them:
-    #   * `family_accepts_weight` must NOT accept a monospaced face at a weight
-    #     it does not carry (the arm that read cosmic-text's request-level
-    #     `is_mono` as a face property);
-    #   * `snap_weight` must pick by CSS order rather than absolute distance —
-    #     100 and 600 against a W500 request disagree, 100 being the CSS answer
-    #     and 600 the nearest;
-    #   * the generic binding needs a family it can actually choose, which
-    #     means `can_render_latin` coverage.
+    # One family at two weights, monospaced, carrying letters: a face tests
+    # register and measure in, and one the generic binding can actually
+    # choose, which means `can_render_latin` coverage. (The weight-snap probes
+    # it was made for left with cosmic-text shaping, ADR-0092 §10 step 5.)
     FaceSpec(
         family="FLUI Probe Mono",
         postscript="FLUIProbeMono-Thin",

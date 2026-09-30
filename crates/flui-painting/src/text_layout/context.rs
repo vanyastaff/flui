@@ -14,14 +14,14 @@
 //!
 //! The app's collection is fed from the host
 //! ([`FontCollection::with_host_faces`]): the faces the process font system
-//! discovered, its generic families and its fallback order, so the Parley
-//! path shapes text in the face cosmic-text places its carets in (ADR-0092 §7).
-//! It keeps that font system as its caret side: a face registered on the
-//! collection is loaded there too, so measurement, paint and carets gain it
-//! together. [`FontCollection::new`] holds the bundled faces alone and has no
-//! caret side; without `bundled-fonts` it starts empty, text shapes with no
-//! face until one is registered, and the first registered family that can set
-//! Latin text becomes every generic family ([`FontCollection::register_font`]).
+//! discovered, its generic families and its fallback order (ADR-0092 §7).
+//! Measurement, paint and carets all read the one layout shaped on the
+//! collection, so a face registered on it reaches all three together; the
+//! process font system is read once, to feed it, and never again.
+//! [`FontCollection::new`] holds the bundled faces alone; without
+//! `bundled-fonts` it starts empty, text shapes with no face until one is
+//! registered, and the first registered family that can set Latin text
+//! becomes every generic family ([`FontCollection::register_font`]).
 
 use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -43,11 +43,6 @@ struct FontCollectionInner {
     /// Bumped once per registration that added a face; a measurement
     /// cached against an older value is stale.
     generation: AtomicU64,
-    /// The process font system the caret layout shapes with, for a
-    /// collection fed from it: a registration loads the face there too, so
-    /// carets sit on the glyphs measurement and paint shaped. `None` for a
-    /// collection that measures and paints alone ([`FontCollection::new`]).
-    carets: Option<SharedFontSystem>,
     /// fontique's collection in shared mode. It never scans the host itself:
     /// host faces come from the process font system's discovery.
     collection: parley::fontique::Collection,
@@ -67,7 +62,7 @@ impl FontCollection {
     /// ([`FontCollection::register_font`]).
     #[must_use]
     pub fn new() -> Self {
-        Self(Arc::new(FontCollectionInner::build(None, None)))
+        Self(Arc::new(FontCollectionInner::build(None)))
     }
 
     /// A collection fed from the host: [`FontCollection::new`]'s faces, then
@@ -76,22 +71,19 @@ impl FontCollection {
     /// binds them to (system-ui to sans-serif's) and the fallback order
     /// `fonts` was built with.
     ///
-    /// Text measured on it resolves the family the process font system
-    /// places carets in, and falls back in the same order past it (ADR-0092 §7).
-    /// The app's composition root builds one per app, before the first
-    /// frame; it reads the font files again, outside `fonts`' lock, so it
-    /// costs a second scan of the host's fonts. A file that cannot be read is
-    /// skipped.
-    ///
-    /// `fonts` becomes the collection's caret side: every face
-    /// [`Self::register_font`] adds is loaded into `fonts` as well.
+    /// Text measured on it resolves families by the rule the process font
+    /// system resolves them by, and falls back in its order past them
+    /// (ADR-0092 §7). The app's composition root builds one per app, before
+    /// the first frame; it reads the font files again, outside `fonts`'
+    /// lock, so it costs a second scan of the host's fonts. A file that
+    /// cannot be read is skipped. The collection keeps no handle on `fonts`:
+    /// a face registered on it later reaches the collection alone.
     #[must_use]
     pub fn with_host_faces(fonts: &SharedFontSystem) -> Self {
         fonts.count_host_feed();
-        Self(Arc::new(FontCollectionInner::build(
-            Some(&fonts.host_faces()),
-            Some(fonts.clone()),
-        )))
+        Self(Arc::new(FontCollectionInner::build(Some(
+            &fonts.host_faces(),
+        ))))
     }
 
     /// Whether `a` and `b` are the same collection.
@@ -134,15 +126,11 @@ impl FontCollection {
         self.0.collection.clone().family_id(family).is_some()
     }
 
-    /// Adds every face in `font_bytes` to the collection, and to its caret
-    /// side when it has one.
+    /// Adds every face in `font_bytes` to the collection.
     ///
     /// Visible to every [`TextContext`] built from this collection, including
-    /// ones built before the call: each measures and paints with it from its
-    /// next shape. On a collection built by [`Self::with_host_faces`] the face
-    /// is loaded into that font system as well, so carets and selection sit
-    /// on the glyphs that painted. This is the one registration door: a face
-    /// loaded on the process font system alone reaches carets only.
+    /// ones built before the call: each measures, paints and places carets
+    /// with it from its next shape. This is the one registration door.
     /// [`Self::generation`] rises by one, which is how a
     /// pipeline learns that text it laid out may measure differently now.
     ///
@@ -162,35 +150,22 @@ impl FontCollection {
     ///
     /// # Errors
     ///
-    /// [`RegisterFontError`] if either side finds no face in the bytes:
-    /// nothing is added to either and the generation does not move.
+    /// [`RegisterFontError`] if the collection finds no face in the bytes:
+    /// nothing is added and the generation does not move.
     #[tracing::instrument(skip_all, fields(bytes = font_bytes.len()))]
     pub fn register_font(&self, font_bytes: &[u8]) -> Result<(), RegisterFontError> {
         // Checked before fontique sees the bytes: its registration bumps the
         // shared version even when it finds no face, which would make every
-        // context deep-copy the collection for nothing.
-        if ::swash::FontRef::from_index(font_bytes, 0).is_none() {
-            return Err(RegisterFontError);
-        }
+        // context deep-copy the collection for nothing. The scratch
+        // collection takes no shared lock and bumps no version; the shared
+        // registration below reads the same bytes the same way.
         let blob = parley::fontique::Blob::new(Arc::new(font_bytes.to_vec()));
-        // The collection's verdict before the caret side loads anything: the
-        // caret side never drops a face, so one it kept and the collection
-        // lacks would split the two for good. A scratch collection takes no
-        // shared lock and bumps no version; the shared registration below
-        // reads the same bytes the same way.
-        if self.0.carets.is_some() && !measures_a_family(&blob) {
+        if ::swash::FontRef::from_index(font_bytes, 0).is_none() || !measures_a_family(&blob) {
             return Err(RegisterFontError);
-        }
-        if let Some(carets) = &self.0.carets {
-            // fontdb's verdict: an error here means nothing was added
-            // anywhere.
-            carets.add_face(font_bytes)?;
         }
         let mut collection = self.0.collection.clone();
         let families = collection.register_fonts(blob, None);
         if families.is_empty() {
-            // Reached only without a caret side: with one, the scratch check
-            // above found a family in these bytes.
             return Err(RegisterFontError);
         }
         let text_family = families.iter().find_map(|(family, faces)| {
@@ -206,9 +181,8 @@ impl FontCollection {
         Ok(())
     }
 
-    /// Whether [`Self::register_font`] would accept `font_bytes` on a
-    /// collection fed from the host: both the caret side and the collection
-    /// find a face in them. Changes nothing anywhere.
+    /// Whether [`Self::register_font`] would accept `font_bytes`: the
+    /// collection finds a face in them. Changes nothing anywhere.
     ///
     /// For a caller that must answer for bytes before it has a collection
     /// to register them on, such as the app holding a registration made
@@ -216,27 +190,15 @@ impl FontCollection {
     ///
     /// # Errors
     ///
-    /// [`RegisterFontError`] if either side finds no face in the bytes.
+    /// [`RegisterFontError`] if the collection finds no face in the bytes.
     pub fn check_font(font_bytes: &[u8]) -> Result<(), RegisterFontError> {
         if ::swash::FontRef::from_index(font_bytes, 0).is_none()
             || !measures_a_family(&parley::fontique::Blob::new(Arc::new(font_bytes.to_vec())))
         {
             return Err(RegisterFontError);
         }
-        if fontdb_finds_a_face(font_bytes) {
-            Ok(())
-        } else {
-            Err(RegisterFontError)
-        }
+        Ok(())
     }
-}
-
-/// Whether fontdb, which the caret side loads faces with, finds a face in
-/// `font_bytes`, asked of a scratch database.
-fn fontdb_finds_a_face(font_bytes: &[u8]) -> bool {
-    let mut scratch = cosmic_text::fontdb::Database::new();
-    scratch.load_font_data(font_bytes.to_vec());
-    !scratch.is_empty()
 }
 
 /// Whether the face at `index` in `font_bytes` can set Latin text: it maps
@@ -297,7 +259,7 @@ impl FontCollectionInner {
     /// Builds the collection unshared, so no step takes fontique's shared
     /// mutex, and shares it last: it starts at generation zero whatever it
     /// holds.
-    fn build(host: Option<&HostFaces>, carets: Option<SharedFontSystem>) -> Self {
+    fn build(host: Option<&HostFaces>) -> Self {
         use parley::fontique::{Collection, CollectionOptions, SourceCache};
 
         let mut collection = Collection::new(CollectionOptions {
@@ -312,7 +274,6 @@ impl FontCollectionInner {
         collection.make_shared();
         Self {
             generation: AtomicU64::new(0),
-            carets,
             collection,
             source_cache: SourceCache::new_shared(),
         }
@@ -537,7 +498,6 @@ mod tests {
         collection.make_shared();
         FontCollection(Arc::new(FontCollectionInner {
             generation: std::sync::atomic::AtomicU64::new(0),
-            carets: None,
             collection,
             source_cache: SourceCache::new_shared(),
         }))
@@ -673,7 +633,7 @@ mod tests {
             fantasy: "Roboto".to_owned(),
             chain: Arc::new(FallbackChain::new("en-US".to_owned(), CommonIsRoboto)),
         };
-        let mut collection = FontCollectionInner::build(Some(&host), None).collection;
+        let mut collection = FontCollectionInner::build(Some(&host)).collection;
 
         let roboto = collection
             .family_id("Roboto")
@@ -733,7 +693,6 @@ mod tests {
             collection.make_shared();
             let fonts = FontCollection(Arc::new(FontCollectionInner {
                 generation: std::sync::atomic::AtomicU64::new(0),
-                carets: None,
                 collection,
                 source_cache: SourceCache::new_shared(),
             }));
@@ -791,9 +750,10 @@ mod tests {
         );
     }
 
-    /// Registration on a collection pairs measurement and paint with carets.
-    /// Driven on a font system of the test's own (`SharedFontSystem::pinned`),
-    /// so no row touches the process-wide one.
+    /// Registration adds a face to the collection alone: measurement, paint
+    /// and carets all read the layout shaped on it. Driven on a font system
+    /// of the test's own (`SharedFontSystem::pinned`), so no row touches the
+    /// process-wide one.
     mod registration_contract {
         use super::super::super::layout::{SharedFontSystem, font_system_initialized};
         use super::super::FontCollection;
@@ -801,20 +761,18 @@ mod tests {
 
         const PROBE: &str = "FLUI Probe Mono";
 
-        fn caret_side() -> SharedFontSystem {
+        fn host() -> SharedFontSystem {
             SharedFontSystem::pinned(&[ROBOTO], "Roboto")
         }
 
         /// A face registered on a collection fed from a font system reaches
-        /// both: the collection measures and paints with it and the font
-        /// system lays carets out with it, and each generation rises by one.
-        /// Fails if the collection keeps no caret side, or registers on one
-        /// side only.
-        fn a_registration_reaches_the_caret_side_and_the_collection() {
-            let carets = caret_side();
-            let fonts = FontCollection::with_host_faces(&carets);
-            let (carets_before, fonts_before) = (carets.generation(), fonts.generation());
-            assert!(!carets.family_names().iter().any(|name| name == PROBE));
+        /// the collection, whose generation rises by one, and not the font
+        /// system, which nothing reads after the feed. Fails if registration
+        /// still loads faces into the font system, or skips the collection.
+        fn a_registration_reaches_the_collection_alone() {
+            let host = host();
+            let fonts = FontCollection::with_host_faces(&host);
+            let before = fonts.generation();
             assert!(!fonts.holds(PROBE));
 
             assert_eq!(
@@ -823,33 +781,31 @@ mod tests {
                 "the probe face loads"
             );
 
-            assert!(
-                carets.family_names().iter().any(|name| name == PROBE),
-                "the caret side holds the face"
-            );
             assert!(fonts.holds(PROBE), "the collection holds the face");
-            assert_eq!(carets.generation(), carets_before + 1);
-            assert_eq!(fonts.generation(), fonts_before + 1);
+            assert_eq!(fonts.generation(), before + 1);
+            assert!(
+                !host.family_names().iter().any(|name| name == PROBE),
+                "the font system the collection was fed from gains nothing"
+            );
         }
 
-        /// Bytes with no face are refused and move neither side. Fails if a
-        /// refused registration bumps a generation, which would lay out every
-        /// realm's text again for nothing.
-        fn bytes_with_no_face_move_neither_side() {
-            let carets = caret_side();
-            let fonts = FontCollection::with_host_faces(&carets);
-            let (carets_before, fonts_before) = (carets.generation(), fonts.generation());
+        /// Bytes with no face are refused and move nothing. Fails if a
+        /// refused registration bumps the generation, which would lay out
+        /// every realm's text again for nothing.
+        fn bytes_with_no_face_are_refused() {
+            let fonts = FontCollection::with_host_faces(&host());
+            let before = fonts.generation();
 
             for bytes in [&b"not a font"[..], &[]] {
                 assert!(fonts.register_font(bytes).is_err());
+                assert!(FontCollection::check_font(bytes).is_err());
             }
 
-            assert_eq!(carets.generation(), carets_before);
-            assert_eq!(fonts.generation(), fonts_before);
+            assert_eq!(fonts.generation(), before);
         }
 
         /// The probe face with its `cmap` table hidden (its tag renamed in
-        /// the table directory): fontdb still loads it, fontique finds no
+        /// the table directory): it parses as a font, but fontique finds no
         /// family in it.
         fn probe_without_cmap() -> Vec<u8> {
             let mut bytes = PROBE_MONO.to_vec();
@@ -864,30 +820,23 @@ mod tests {
             bytes
         }
 
-        /// Bytes the caret side would load but the collection finds no family
-        /// in are refused before either side changes. Fails if the caret side
-        /// loads them first: it would place carets in a face measurement and
-        /// paint never gain, for good.
-        fn bytes_only_the_caret_side_reads_move_neither_side() {
-            let carets = caret_side();
-            let fonts = FontCollection::with_host_faces(&carets);
-            let (carets_before, fonts_before) = (carets.generation(), fonts.generation());
+        /// Bytes that parse as a font but hold no family the collection can
+        /// measure are refused, by `check_font` too, and move nothing.
+        fn bytes_with_no_family_are_refused() {
+            let fonts = FontCollection::with_host_faces(&host());
+            let before = fonts.generation();
+            let bytes = probe_without_cmap();
 
-            assert!(fonts.register_font(&probe_without_cmap()).is_err());
+            assert!(FontCollection::check_font(&bytes).is_err());
+            assert!(fonts.register_font(&bytes).is_err());
 
-            assert!(
-                !carets.family_names().iter().any(|name| name == PROBE),
-                "the caret side did not load the face"
-            );
-            assert_eq!(carets.generation(), carets_before);
-            assert_eq!(fonts.generation(), fonts_before);
+            assert!(!fonts.holds(PROBE));
+            assert_eq!(fonts.generation(), before);
         }
 
-        /// A collection built without a font system registers for
-        /// measurement and paint alone and never reaches the process-wide
-        /// font system.
-        /// Fails if `FontCollection::new` pairs with it.
-        fn a_bundled_only_collection_registers_without_a_caret_side() {
+        /// A collection built without a font system registers without ever
+        /// building the process-wide one.
+        fn a_bundled_only_collection_registers_without_the_process_font_system() {
             let fonts = FontCollection::new();
 
             assert_eq!(
@@ -900,7 +849,7 @@ mod tests {
             assert_eq!(fonts.generation(), 1);
             assert!(
                 !font_system_initialized(),
-                "a collection with no caret side does not build the process font system"
+                "registration does not build the process font system"
             );
         }
 
@@ -908,20 +857,20 @@ mod tests {
         fn registration_contract() {
             let cases: &[(&str, fn())] = &[
                 (
-                    "a_registration_reaches_the_caret_side_and_the_collection",
-                    a_registration_reaches_the_caret_side_and_the_collection,
+                    "a_registration_reaches_the_collection_alone",
+                    a_registration_reaches_the_collection_alone,
                 ),
                 (
-                    "bytes_with_no_face_move_neither_side",
-                    bytes_with_no_face_move_neither_side,
+                    "bytes_with_no_face_are_refused",
+                    bytes_with_no_face_are_refused,
                 ),
                 (
-                    "bytes_only_the_caret_side_reads_move_neither_side",
-                    bytes_only_the_caret_side_reads_move_neither_side,
+                    "bytes_with_no_family_are_refused",
+                    bytes_with_no_family_are_refused,
                 ),
                 (
-                    "a_bundled_only_collection_registers_without_a_caret_side",
-                    a_bundled_only_collection_registers_without_a_caret_side,
+                    "a_bundled_only_collection_registers_without_the_process_font_system",
+                    a_bundled_only_collection_registers_without_the_process_font_system,
                 ),
             ];
             let failed: Vec<&str> = cases
@@ -932,6 +881,206 @@ mod tests {
             assert!(
                 failed.is_empty(),
                 "registration_contract: failing cases: {failed:?}"
+            );
+        }
+    }
+
+    /// The family rule (`resolve_family_name`) over what a collection holds,
+    /// and what it keeps out of a shaped run (ADR-0059; ADR-0092 §7, gate 5).
+    mod family_resolution {
+        use std::sync::Arc;
+
+        use cosmic_text::fontdb::Family;
+        use parley::fontique::{Blob, Collection, CollectionOptions};
+
+        use super::super::super::fallback_chain::FallbackChain;
+        use super::super::super::font_resolve::resolve_family_name;
+        use super::super::super::layout::{HostData, HostFaces, HostSource};
+        use super::super::{FontCollection, FontCollectionInner, TextContext};
+        use super::ROBOTO;
+        use crate::parley_text::{ParagraphSpec, holds_exactly};
+        use crate::typography::{TextDirection, TextStyle};
+
+        const MATERIAL_ICONS: &[u8] =
+            include_bytes!("../../assets/fonts/MaterialIcons-Regular.ttf");
+        /// Maps only `U+0020`, at 1.3 em, as family `FLUI Decoy Emoji` with
+        /// "Emoji" in its PostScript name (`tools/decoy-face/generate.py`).
+        const DECOY_WIDE_SPACE: &[u8] = include_bytes!("../../assets/fonts/decoy-wide-space.ttf");
+
+        /// A collection holding exactly `faces`.
+        fn holding(faces: &[&'static [u8]]) -> Collection {
+            let mut collection = Collection::new(CollectionOptions {
+                shared: false,
+                system_fonts: false,
+            });
+            for bytes in faces {
+                collection.register_fonts(Blob::new(Arc::new(*bytes)), None);
+            }
+            collection
+        }
+
+        fn chained(family: &str, chain: &[&str]) -> TextStyle {
+            TextStyle {
+                font_family: Some(family.to_owned()),
+                font_family_fallback: chain.iter().map(|name| (*name).to_owned()).collect(),
+                ..TextStyle::default()
+            }
+        }
+
+        /// Each style resolves to one family: a held primary; the first held
+        /// or generic entry of its chain past absent ones; the sans-serif
+        /// degrade; and a held family spelled in another case, which the
+        /// rule does not match and so degrades too. A held family that sets
+        /// no Latin (Material Icons) still stops the chain, since fallback is
+        /// per style and not per glyph; an absent primary with the same chain
+        /// reaches Roboto.
+        fn a_style_resolves_by_the_family_rule() {
+            let mut collection = holding(&[ROBOTO, MATERIAL_ICONS]);
+            let rows = [
+                (TextStyle::default(), Family::SansSerif),
+                (chained("Roboto", &[]), Family::Name("Roboto")),
+                (chained("roboto", &[]), Family::SansSerif),
+                (
+                    chained("material icons", &["Material Icons"]),
+                    Family::Name("Material Icons"),
+                ),
+                (
+                    chained("CupertinoSystemText", &["-apple-system", "Material Icons"]),
+                    Family::Name("Material Icons"),
+                ),
+                (
+                    chained(
+                        "CupertinoSystemText",
+                        &["-apple-system", "monospace", "Roboto"],
+                    ),
+                    Family::Monospace,
+                ),
+                (
+                    chained("Nothing Carries This", &["system-ui"]),
+                    Family::SansSerif,
+                ),
+                (
+                    chained("Material Icons", &["Roboto"]),
+                    Family::Name("Material Icons"),
+                ),
+                (
+                    chained("Nothing Carries This", &["Roboto"]),
+                    Family::Name("Roboto"),
+                ),
+            ];
+            for (style, expected) in &rows {
+                let got =
+                    resolve_family_name(Some(style), |name| holds_exactly(&mut collection, name));
+                assert_eq!(got, *expected, "{style:?}");
+            }
+        }
+
+        /// Only the decoy is on the common fallback list: the host shape of
+        /// issue #927, a unix host whose only listed family is its emoji
+        /// face.
+        struct EmojiFirst;
+
+        impl cosmic_text::Fallback for EmojiFirst {
+            fn common_fallback(&self) -> &[&'static str] {
+                &["FLUI Decoy Emoji"]
+            }
+
+            fn forbidden_fallback(&self) -> &[&'static str] {
+                &[]
+            }
+
+            fn script_fallback(&self, _: unicode_script::Script, _: &str) -> &[&'static str] {
+                &[]
+            }
+        }
+
+        /// A style naming a family the collection lacks never takes its space
+        /// from an emoji face (issue #927). On a collection fed from a host
+        /// whose fallback order puts an emoji face before Roboto, `"Ao Bo"`
+        /// styled `CupertinoSystemText` shapes letters and space in one face,
+        /// the space under half an em. Fails if the family reaches Parley
+        /// unresolved: Parley then walks the fallback order per cluster, and
+        /// the space, which the decoy maps, lands in it at 1.3 em while the
+        /// letters fall through to Roboto.
+        fn a_missing_family_never_takes_its_space_from_an_emoji_face() {
+            const SIZE: f32 = 32.0;
+            let host = HostFaces {
+                sources: vec![
+                    HostSource {
+                        data: HostData::Blob(Arc::new(ROBOTO)),
+                        families: vec!["Roboto".to_owned()],
+                    },
+                    HostSource {
+                        data: HostData::Blob(Arc::new(DECOY_WIDE_SPACE)),
+                        families: vec!["FLUI Decoy Emoji".to_owned()],
+                    },
+                ],
+                sans_serif: "Roboto".to_owned(),
+                serif: "Roboto".to_owned(),
+                monospace: "Roboto".to_owned(),
+                cursive: "Roboto".to_owned(),
+                fantasy: "Roboto".to_owned(),
+                chain: Arc::new(FallbackChain::new("en-US".to_owned(), EmojiFirst)),
+            };
+            let fonts = FontCollection(Arc::new(FontCollectionInner::build(Some(&host))));
+            let style = TextStyle {
+                font_family: Some("CupertinoSystemText".to_owned()),
+                ..TextStyle::default()
+            };
+            let spans: Vec<(String, Option<TextStyle>)> = vec![("Ao Bo".to_owned(), Some(style))];
+            let paragraph = TextContext::new(&fonts)
+                .shape(&ParagraphSpec {
+                    spans: &spans,
+                    default_style: None,
+                    font_size: SIZE,
+                    max_width: None,
+                    line_height: None,
+                    direction: TextDirection::Ltr,
+                    max_lines: None,
+                    ellipsis: None,
+                })
+                .to_shaped(None);
+            let glyphs: Vec<_> = paragraph
+                .runs()
+                .flat_map(|run| {
+                    let face = run.face().key();
+                    run.glyphs().iter().map(move |glyph| (face, *glyph))
+                })
+                .collect();
+            assert_eq!(glyphs.len(), 5, "one glyph per character: {glyphs:?}");
+            assert!(
+                glyphs
+                    .iter()
+                    .all(|(face, glyph)| glyph.id != 0 && *face == glyphs[0].0),
+                "letters and space shape in one face, none as .notdef: {glyphs:?}"
+            );
+            let space_em = (glyphs[3].1.x - glyphs[2].1.x) / SIZE;
+            assert!(
+                space_em < 0.5,
+                "a space of {space_em} em is a foreign face's advance, not a text face's"
+            );
+        }
+
+        #[test]
+        fn family_resolution() {
+            let cases: &[(&str, fn())] = &[
+                (
+                    "a_style_resolves_by_the_family_rule",
+                    a_style_resolves_by_the_family_rule,
+                ),
+                (
+                    "a_missing_family_never_takes_its_space_from_an_emoji_face",
+                    a_missing_family_never_takes_its_space_from_an_emoji_face,
+                ),
+            ];
+            let failed: Vec<&str> = cases
+                .iter()
+                .filter(|(_, case)| std::panic::catch_unwind(*case).is_err())
+                .map(|(name, _)| *name)
+                .collect();
+            assert!(
+                failed.is_empty(),
+                "family_resolution: failing cases: {failed:?}"
             );
         }
     }

@@ -422,6 +422,10 @@ swash = { version = "0.2.10", default-features = false, features = ["std", "scal
 # Parley shaping and measurement (ADR-0092 §10).
 # No `system`: fontique's host scan reaches `windows`, which tier S forbids.
 parley = { version = "0.11.1", default-features = false, features = ["std"] }
+# ICU4X grapheme and word segmentation for hit-testing and word boundaries on
+# the Parley layout (ADR-0092 §10 step 5): the copy Parley already builds and
+# marks its clusters with, so no second one, and no dictionary or LSTM data.
+icu_segmenter = { version = "2.1.2", default-features = false, features = ["compiled_data"] }
 dyn-clone = "1.0"
 downcast-rs = "2.0.2"
 static_assertions = "1.1"

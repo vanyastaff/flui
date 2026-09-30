@@ -242,13 +242,14 @@ pub(super) struct ComposingState {
 /// [`Self::move_caret_left`] documents for character movement.
 ///
 /// This is a SEPARATE implementation from `flui-painting`'s
-/// `TextLayout::get_word_boundary` (neither is a doc link here:
+/// `TextPainter::get_word_boundary` (neither is a doc link here:
 /// `flui-painting` is a dev-dependency of this crate, not a regular one,
 /// and `EditableTextState::wrap_double_tap_word_select`, which calls it,
 /// is private to `editable_text.rs`), which backs double-tap word
-/// selection one layer up — same underlying crate
-/// (`unicode-segmentation`), different tie-break, by design, because the
-/// two answer different questions: a directional jump here, a positional
+/// selection one layer up with ICU4X's word segmenter, where this uses
+/// `unicode-segmentation` until ADR-0092 §10 step 6 moves it onto the same
+/// ICU4X boundaries. The tie-breaks differ by design, because the two
+/// answer different questions: a directional jump here, a positional
 /// lookup there, not expected to agree at every boundary.
 #[derive(Clone)]
 pub struct TextEditingController {

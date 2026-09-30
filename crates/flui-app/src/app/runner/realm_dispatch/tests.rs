@@ -874,29 +874,19 @@ fn a_registration_from_inside_a_realm_task_reaches_that_realm_after_it_returns()
     teardown_platform_realm();
 }
 
-/// A face registered on a thread that runs no app reaches neither the
-/// process font system carets shape with nor the app's collection, so carets
-/// and measurement cannot disagree over it. Fails if the call registers on
-/// the caret side from a thread whose collection no window reads.
-fn a_registration_on_a_thread_that_runs_no_app_changes_neither_side() {
+/// A face registered on a thread that runs no app does not reach the app's
+/// collection, and wakes no realm. Fails if the call registers on a
+/// collection a window of the app reads.
+fn a_registration_on_a_thread_that_runs_no_app_leaves_the_app_alone() {
     let dispatcher = install_test_realm();
     clear_redraw(dispatcher);
-    let paint = flui_painting::shared_font_system();
-    let (paint_before, fonts_before) = (
-        paint.generation(),
-        super::super::host::runtime_font_collection().generation(),
-    );
+    let fonts_before = super::super::host::runtime_font_collection().generation();
 
     std::thread::spawn(|| super::super::register_font(PROBE_MONO_THIN))
         .join()
         .expect("the worker does not panic")
         .expect("the bytes hold a face");
 
-    assert_eq!(
-        paint.generation(),
-        paint_before,
-        "the caret side gained no face"
-    );
     assert_eq!(
         super::super::host::runtime_font_collection().generation(),
         fonts_before,
@@ -908,16 +898,11 @@ fn a_registration_on_a_thread_that_runs_no_app_changes_neither_side() {
 }
 
 /// A face registered before a thread builds its first realm is held, and
-/// lands on both sides when the collection is built: the first window
-/// measures and paints with it and lays carets out in it. Fails if a
-/// registration before the start is lost, reaches carets before the
-/// collection exists, or accepts bytes with
-/// no face because nothing judges them yet.
+/// lands when the collection is built: the first window measures, paints
+/// and places carets with it. Fails if a registration before the start is
+/// lost, or accepts bytes with no face because nothing judges them yet.
 fn a_registration_before_the_first_realm_lands_with_the_collection() {
     std::thread::spawn(|| {
-        let paint = flui_painting::shared_font_system();
-        let paint_before = paint.generation();
-
         assert!(
             matches!(
                 super::super::register_font(b"not a font"),
@@ -927,11 +912,6 @@ fn a_registration_before_the_first_realm_lands_with_the_collection() {
         );
         super::super::register_font(DECOY).expect("the bytes hold a face");
         assert_eq!(
-            paint.generation(),
-            paint_before,
-            "held until the collection is built"
-        );
-        assert_eq!(
             super::super::register_font(DECOY),
             Err(super::super::FontRegistrationError::AlreadyRegistered),
             "a held face counts as registered"
@@ -940,11 +920,6 @@ fn a_registration_before_the_first_realm_lands_with_the_collection() {
         // What the runner does as it builds the first realm.
         let fonts = super::super::host::runtime_font_collection();
         assert_eq!(fonts.generation(), 1, "the collection gained the face");
-        assert_eq!(
-            paint.generation(),
-            paint_before + 1,
-            "the caret side gained it too"
-        );
     })
     .join()
     .expect("the registration lands with the collection");
@@ -1018,8 +993,8 @@ fn realm_dispatch_matrix() {
                     as fn(),
             ),
             (
-                "a_registration_on_a_thread_that_runs_no_app_changes_neither_side",
-                a_registration_on_a_thread_that_runs_no_app_changes_neither_side as fn(),
+                "a_registration_on_a_thread_that_runs_no_app_leaves_the_app_alone",
+                a_registration_on_a_thread_that_runs_no_app_leaves_the_app_alone as fn(),
             ),
             (
                 "a_registration_before_the_first_realm_lands_with_the_collection",

@@ -6,8 +6,8 @@ third-party font licence** because it contains no third party's work: two empty
 glyph outlines, a `cmap` mapping only `U+0020`, and the minimum table set a
 parser expects.
 
-**What it is for.** `oversized_space_from_an_emoji_face_is_closed`
-(`flui-painting`) reproduces issue #927's symptom — an emoji face shaping the
+**What it is for.** `a_missing_family_never_takes_its_space_from_an_emoji_face`
+(`flui-painting`, table `family_resolution`) reproduces issue #927's symptom — an emoji face shaping the
 SPACE of a Latin run while the letters shape elsewhere. That needs a face
 carrying `U+0020` and no letters; neither shipped icon font qualifies
 (`MaterialIcons-Regular.ttf` and `CupertinoIcons.ttf` map neither), so the test
@@ -28,6 +28,8 @@ near the diff that triggered it (issue #932).
   (`font/system.rs:35`), which is what sorts emoji faces FIRST in its unfiltered
   fallback tail. A fixture the shaper classifies the way it classifies a real
   emoji font is what lets a hermetic test reach that path — see issue #930.
+  Nothing shapes on cosmic-text any more; the Parley row reaches the face
+  through the host fallback order it builds, where the name decides nothing.
 
 Regenerate with `python3 tools/decoy-face/generate.py`; the output is
 byte-stable.

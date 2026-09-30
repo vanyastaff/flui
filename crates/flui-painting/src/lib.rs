@@ -29,13 +29,12 @@
 //! [`TextPainter`] lays out an inline span against a width constraint,
 //! answers caret / hit-test / line queries on the result, and paints it —
 //! the shape a `RenderParagraph` drives. It shapes on Parley through the
-//! realm's [`TextContext`], and paints the layout that measured as a
+//! realm's [`TextContext`], paints the layout that measured as a
 //! [`ShapedParagraph`], whose glyphs the engine rasterizes through
-//! [`glyphs::SwashRasterizer`]. Carets, selection and line metrics still come
-//! from a cosmic-text [`TextLayout`] over the process-wide font system
-//! ([`shared_font_system`]) until ADR-0092 §10 step 5. A face registered
-//! through [`FontCollection::register_font`] reaches measurement, paint and
-//! carets alike.
+//! [`glyphs::SwashRasterizer`], and answers carets, selection, hit-testing
+//! and line metrics from that same layout. A face registered through
+//! [`FontCollection::register_font`] reaches measurement, paint and carets
+//! alike.
 //!
 //! # Decorations
 //!
@@ -47,11 +46,11 @@
 //! # Threading
 //!
 //! Every type here is `Send + Sync` value data; a `Canvas` is mutated through
-//! `&mut self` by one owner. On the cosmic-text path the one shared resource
-//! is the font system behind [`SharedFontSystem`], taken for one shape at a
-//! time through [`SharedFontSystem::shape`]. The Parley path has no shared
-//! lock: each realm shapes through its own [`TextContext`], used through
-//! `&mut`, over the app's [`FontCollection`].
+//! `&mut self` by one owner. Text shaping takes no shared lock: each realm
+//! shapes through its own [`TextContext`], used through `&mut`, over the
+//! app's [`FontCollection`]. The process font system behind
+//! [`SharedFontSystem`] is read once per app, to feed that collection from
+//! the host.
 //!
 //! The paint vocabulary (`Paint`, `Shader`, `BlendMode`, …) is defined in
 //! [`paint`] and re-exported here; the style values live in [`styling`] and
@@ -101,16 +100,10 @@ pub use canvas::Canvas;
 pub use decoration::{DecorationPaintOptions, box_decoration_hit_test, paint_box_decoration};
 pub use display_list::{DamageExtent, DisplayList, DrawCommand, DrawOp, ShapedParagraph};
 pub use error::RegisterFontError;
-// `ResolvedFont` carries a `Family`, and a consumer that cannot name it
-// cannot hold the result. The one cosmic-text type on this crate's surface
-// (ADR-0016 boundary): paragraphs cross the display list as
-// `ShapedParagraph`s, which name no shaper (ADR-0092 §4).
-pub use cosmic_text::fontdb::Family;
 pub use glyphs::{GlyphContent, GlyphImage, GlyphKey, GlyphRasterizer, PlacedGlyph};
 pub use table_border::paint_table_border;
 pub use text_layout::{
-    FontCollection, ResolvedFont, Shaper, SharedFontSystem, TextContext, TextLayout,
-    TextLayoutResult, shared_font_system,
+    FontCollection, SharedFontSystem, TextContext, TextLayoutResult, shared_font_system,
 };
 pub use text_painter::{Invalidation, TextBaseline, TextPainter};
 

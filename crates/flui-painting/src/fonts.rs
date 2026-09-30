@@ -3,12 +3,11 @@
 //! Three faces ship inside the binary so a host with no usable system fonts
 //! still measures and paints text and icons: the default text face plus the
 //! two icon families whose private-use glyphs no system font carries. The
-//! realm's `FontCollection` measures and paints on them, and the process-wide
-//! font system, which lays out carets and selection until ADR-0092 §10 step 5,
-//! installs them at construction (each in place of a host face of the same
-//! family) and binds its generic families to Roboto, so default-family and
-//! icon text gets its carets in the face it was measured and painted in on
-//! every host.
+//! realm's `FontCollection` measures, paints and places carets on them, and
+//! the process-wide font system a host-fed collection is built from installs
+//! them at construction (each in place of a host face of the same family)
+//! and binds its generic families to Roboto, so the collection's generics
+//! name Roboto on every host.
 //!
 //! They are public because font resolution is otherwise *host*-dependent: a
 //! test that wants a layout it can commit to a snapshot pins the face set to
@@ -39,11 +38,10 @@ const BUNDLED: [(&str, &[u8]); 3] = [
 /// host carries under that family name.
 ///
 /// The realm's `FontCollection` measures each of these families in the
-/// bundled face alone (a host copy is never fed into it), so the caret layout
-/// must not pick a host build of one: another version's advances differ, a
-/// host weight the collection does not hold places carets where the bundled
-/// Regular was not measured, and an older icon font lacks private-use glyphs
-/// the bundled one measures (mapping decisions 16 and 17). Checked per family, so a host
+/// bundled face alone: a host source naming a family the collection already
+/// holds is never fed into it, and the host's generic bindings, read from
+/// this database, must name the bundled Roboto rather than a host build of it
+/// (mapping decisions 16 and 17). Checked per family, so a host
 /// "Material Icons" does not touch the Cupertino face.
 pub(crate) fn install_bundled(db: &mut cosmic_text::fontdb::Database) {
     for (family, bytes) in BUNDLED {
@@ -66,11 +64,10 @@ pub(crate) fn install_bundled(db: &mut cosmic_text::fontdb::Database) {
     }
 }
 
-/// Points every generic family of `db` at Roboto, the face the realm's
-/// `FontCollection` binds them to, so the caret layout of text measured and
-/// painted on Parley is shaped in that face too (flui-painting
-/// `ARCHITECTURE.md`, mapping decision 16). Binds nothing when `db` carries
-/// no Roboto.
+/// Points every generic family of `db` at Roboto, the face every
+/// `FontCollection` binds them to, so a collection fed from `db` binds its
+/// generics to Roboto too (flui-painting `ARCHITECTURE.md`, mapping
+/// decision 16). Binds nothing when `db` carries no Roboto.
 ///
 /// Called before `font_resolve::bind_generic_families`, which keeps a
 /// generic already bound to a family the database carries.

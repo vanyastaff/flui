@@ -161,23 +161,19 @@ fn source_offset_at_global(
 ///
 /// Delegates to [`RenderEditable::word_range_at_local_offset`]
 /// (`flui-objects`), which itself delegates to `flui-painting`'s
-/// `TextLayout::get_word_boundary` (not a doc link: `flui-painting` is a
+/// `TextPainter::get_word_boundary` (not a doc link: `flui-painting` is a
 /// dev-dependency of this crate, not a regular one, so the path would not
-/// resolve in a normal `cargo doc` build)
-/// — UAX #29 segmentation via the same `unicode-segmentation` crate this
-/// widget's own Ctrl/Alt+Arrow word-jump uses (`controller.rs`'s private
-/// `next_word_boundary`/`prev_word_boundary`), but NOT the same function:
-/// that pair answers a directional "next/
-/// previous stop" query with its own asymmetric tie-break (see the
-/// controller's `# Word unit` doc), while this one answers "which segment
-/// is under this exact position", with a DIFFERENT tie-break suited to
-/// that question. A double-tap and a keyboard word-jump can therefore
-/// land on different boundaries for the same buffer in edge cases (a
-/// caret sitting exactly on a segment boundary, say) — a known
-/// consequence of not sharing one primitive across a crate boundary that
-/// only `flui-painting` can see (`TextLayout`) and only
-/// `flui-widgets::controller` can see (the raw buffer, no shaping), not
-/// an oversight.
+/// resolve in a normal `cargo doc` build) — ICU4X word segmentation over
+/// the laid-out text. This widget's own Ctrl/Alt+Arrow word-jump
+/// (`controller.rs`'s private `next_word_boundary`/`prev_word_boundary`)
+/// uses `unicode-segmentation`'s UAX #29 data instead, until ADR-0092 §10
+/// step 6 moves it onto the same ICU4X boundaries, and answers a different
+/// question: a directional "next/previous stop" with its own asymmetric
+/// tie-break (see the controller's `# Word unit` doc), where this one
+/// answers "which segment is under this exact position". A double-tap and
+/// a keyboard word-jump can therefore land on different boundaries for the
+/// same buffer in edge cases (a caret sitting exactly on a segment
+/// boundary, or where the two segmenters' data disagree).
 ///
 /// `source_text` must be the CONTROLLER's own source string — see
 /// [`source_offset_at_global`]'s doc for why `RenderEditable::plain_text()`

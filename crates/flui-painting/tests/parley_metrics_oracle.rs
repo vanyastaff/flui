@@ -1,16 +1,15 @@
 //! Parley's paragraph metrics and painted runs on the bundled Roboto
 //! (ADR-0092 §8 gate 8).
 //!
-//! `TextPainter` measures on Parley and paints the runs of the same layout,
-//! while its caret queries read a cosmic-text layout until ADR-0092 §10
-//! step 5. `parley_metrics_round_to_todays_baseline` lays a painter out with
-//! Roboto named, with no family and with the monospace generic, regular and
-//! bold, which both shapers must resolve to the bundled Roboto Regular
-//! rather than a host face (painting mapping decision 16), and compares it
-//! with the cosmic-text layout of the same text: the paragraph height, a
-//! single line's width, and the device row the first baseline is painted on
-//! (`ShapedRun::placed_glyphs`, `round(baseline × scale)`), which is where
-//! cosmic-text placed it.
+//! `TextPainter` measures on Parley and paints the runs of the same layout.
+//! `parley_metrics_round_to_todays_baseline` lays a painter out with Roboto
+//! named, with no family and with the monospace generic, regular and bold,
+//! which must all resolve to the bundled Roboto Regular rather than a host
+//! face (painting mapping decision 16), and compares it with what the
+//! cosmic-text layout measured for the same text before it was removed
+//! (`COSMIC`, recorded from it): the paragraph height, a single line's width,
+//! and the device row the first baseline is painted on
+//! (`ShapedRun::placed_glyphs`, `round(baseline × scale)`).
 //!
 //! `measured_lines_are_painted_lines` extends it past one line: wrapped
 //! paragraphs, hard breaks, and style combinations the painter normalizes
@@ -24,15 +23,30 @@ use flui_foundation::geometry::Offset;
 use flui_painting::glyphs::FontRegistry;
 use flui_painting::typography::{FontWeight, TextDirection, TextSpan, TextStyle};
 use flui_painting::{
-    Canvas, DrawOp, FontCollection, ShapedParagraph, TextBaseline, TextContext, TextLayout,
-    TextPainter,
+    Canvas, DrawOp, FontCollection, ShapedParagraph, TextBaseline, TextContext, TextPainter,
 };
 
-const SIZES: [f64; 5] = [13.0, 14.0, 16.0, 18.0, 32.0];
-const HEIGHTS: [Option<f64>; 2] = [None, Some(1.5)];
 const SCALES: [f32; 4] = [1.0, 1.25, 1.5, 2.0];
 const TEXT: &str = "Hamburgefonstiv 0123";
-const ROBOTO: &[u8] = include_bytes!("../assets/fonts/Roboto-Regular.ttf");
+
+/// What the cosmic-text layout measured for `TEXT` in the bundled Roboto
+/// Regular, recorded from it on this repository's last build that had it:
+/// `(size, line height, width, height, first-baseline device row at each of
+/// `SCALES`)`. Every family and weight below resolved to the same face on
+/// that side, so one row serves them all.
+#[expect(clippy::type_complexity, reason = "a literal table")]
+const COSMIC: [(f64, Option<f64>, f64, f64, [i32; 4]); 10] = [
+    (13.0, None, 132.6724, 15.6, [12, 15, 18, 24]),
+    (13.0, Some(1.5), 132.6724, 19.5, [14, 18, 21, 28]),
+    (14.0, None, 142.8779, 16.8, [13, 16, 20, 26]),
+    (14.0, Some(1.5), 142.8779, 21.0, [15, 19, 23, 31]),
+    (16.0, None, 163.2891, 19.2, [15, 19, 23, 30]),
+    (16.0, Some(1.5), 163.2891, 24.0, [17, 22, 26, 35]),
+    (18.0, None, 183.7002, 21.6, [17, 21, 25, 34]),
+    (18.0, Some(1.5), 183.7002, 27.0, [20, 25, 29, 39]),
+    (32.0, None, 326.5781, 38.4, [30, 38, 45, 60]),
+    (32.0, Some(1.5), 326.5781, 48.0, [35, 44, 52, 70]),
+];
 /// Roboto by name, the default family, and a generic other than sans-serif.
 const FAMILIES: [Option<&str>; 3] = [Some("Roboto"), None, Some("monospace")];
 /// Regular, and a weight the bundled Roboto has no face for.
@@ -66,27 +80,18 @@ fn first_baseline_row(paragraph: &ShapedParagraph, scale: f32) -> i32 {
 /// Every family, weight, size, line height and scale factor paints the first
 /// baseline on the device row cosmic-text placed it on, with the paragraph
 /// height it measured and a single line's width within a hundredth of a
-/// pixel.
+/// pixel (`COSMIC`).
 #[test]
 fn parley_metrics_round_to_todays_baseline() {
-    // With `bundled-fonts` the process font system already carries Roboto
-    // and binds the generic families to it (painting mapping decision 16).
-    // Registering it again adds a face but moves no generic binding, so the
-    // default-family rows still depend on that one.
-    flui_painting::shared_font_system()
-        .register_font(ROBOTO)
-        .expect("the bundled Roboto loads");
     let mut context = TextContext::new(&FontCollection::new());
     let mut failures = Vec::new();
-    for (family, weight, size, height) in FAMILIES.into_iter().flat_map(|family| {
-        WEIGHTS.into_iter().flat_map(move |weight| {
-            SIZES.into_iter().flat_map(move |size| {
-                HEIGHTS
-                    .into_iter()
-                    .map(move |height| (family, weight, size, height))
-            })
+    for (family, weight, (size, height, width, line_box, rows)) in
+        FAMILIES.into_iter().flat_map(|family| {
+            WEIGHTS
+                .into_iter()
+                .flat_map(move |weight| COSMIC.into_iter().map(move |row| (family, weight, row)))
         })
-    }) {
+    {
         let style = TextStyle {
             font_family: family.map(str::to_owned),
             font_weight: Some(weight),
@@ -95,53 +100,38 @@ fn parley_metrics_round_to_todays_baseline() {
             ..TextStyle::default()
         };
         let mut painter = TextPainter::new()
-            .with_text(TextSpan::styled(TEXT, style.clone()))
+            .with_text(TextSpan::styled(TEXT, style))
             .with_text_direction(TextDirection::Ltr);
         painter.layout(&mut context, 0.0, f64::INFINITY);
         let paragraph = painted(&painter);
-        let cosmic =
-            TextLayout::new(TEXT, Some(&style), size, None, None, TextDirection::Ltr).metrics();
         let case = format!("{family:?} {weight:?} {size} px, height {height:?}");
-        if (painter.height() - cosmic.height).abs() > 1e-3
-            || (paragraph.size().height - cosmic.height).abs() > 1e-3
+        if (painter.height() - line_box).abs() > 1e-3
+            || (paragraph.size().height - line_box).abs() > 1e-3
         {
             failures.push(format!(
-                "{case}: height measured {} painted {} cosmic-text {}",
+                "{case}: height measured {} painted {} cosmic-text {line_box}",
                 painter.height(),
                 paragraph.size().height,
-                cosmic.height
             ));
         }
-        if (painter.width() - cosmic.width).abs() > 0.01 {
+        if (painter.width() - width).abs() > 0.01 {
             failures.push(format!(
-                "{case}: width measured {} cosmic-text {}",
+                "{case}: width measured {} cosmic-text {width}",
                 painter.width(),
-                cosmic.width
             ));
         }
         let alphabetic = painter.compute_distance_to_actual_baseline(TextBaseline::Alphabetic);
-        for scale in SCALES {
-            #[expect(
-                clippy::cast_possible_truncation,
-                reason = "cosmic-text's own baseline rule: a rounded device row"
-            )]
-            let todays = (cosmic.alphabetic_baseline * f64::from(scale)).round() as i32;
+        for (scale, todays) in SCALES.into_iter().zip(rows) {
             let row = first_baseline_row(&paragraph, scale);
             if row != todays {
                 failures.push(format!(
-                    "{case}, scale {scale}: baseline painted on row {row}, cosmic-text's row                      {todays} (measured baseline {alphabetic})"
+                    "{case}, scale {scale}: baseline painted on row {row}, cosmic-text's row \
+                     {todays} (measured baseline {alphabetic})"
                 ));
             }
         }
     }
-    assert!(
-        failures.is_empty(),
-        "{}",
-        failures.join(
-            "
-"
-        )
-    );
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
 /// Lays `painter` out at `max_width` and returns it with the paragraph it

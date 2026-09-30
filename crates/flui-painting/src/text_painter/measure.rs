@@ -1,13 +1,13 @@
 //! `TextPainter` layout and measurement: `layout`, the cached metrics it
 //! produces, and the size / baseline / overflow queries over them.
 
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use crate::typography::{InlineSpan, TextAlign, TextDirection, TextStyle};
 use flui_foundation::geometry::{Offset, Size};
 
 use super::{DEFAULT_FONT_SIZE, LayoutMetrics, TextBaseline, TextLayoutCache, TextPainter};
-use crate::text_layout::{FontsKey, TextContext, TextLayout, TextLayoutResult};
+use crate::text_layout::{FontsKey, TextContext, TextLayoutResult};
 
 impl TextPainter {
     /// What a cached layout was taken against: `text_cx`'s collection and
@@ -38,8 +38,8 @@ impl TextPainter {
     #[expect(clippy::expect_used)] // Documented precondition: text and text_direction must be set
     pub fn layout(&mut self, text_cx: &mut TextContext, min_width: f64, max_width: f64) {
         // NaN is forbidden, but `+INFINITY` is the documented "no max
-        // width" sentinel — `compute_paint_offset` and the cosmic-text
-        // path below detect `!is_finite()` and skip alignment shifts /
+        // width" sentinel — `compute_paint_offset` and the shaping
+        // below detect `!is_finite()` and skip alignment shifts /
         // width clamping. Do not tighten this to `is_finite()`.
         assert!(
             !max_width.is_nan() && !min_width.is_nan(),
@@ -50,21 +50,11 @@ impl TextPainter {
         let fonts = Self::font_key(text_cx);
         if let Some(cache) = self
             .layout_cache
-            .as_mut()
+            .as_ref()
             .filter(|cache| cache.fonts.matches(&fonts))
             && (cache.min_width - min_width).abs() < f64::EPSILON
             && (cache.max_width - max_width).abs() < f64::EPSILON
         {
-            // The measurement stands; a caret layout shaped before a face
-            // was registered on the process font database is dropped, so the
-            // next cursor query shapes it once against that face. Checked
-            // only when a caret layout exists, which has already built the
-            // process font system: measurement alone never builds it.
-            if let Some((shaped_at, _)) = cache.caret_layout.get()
-                && *shaped_at != crate::shared_font_system().generation()
-            {
-                cache.caret_layout = OnceLock::new();
-            }
             return;
         }
 
@@ -97,7 +87,7 @@ impl TextPainter {
             did_exceed_max_lines: metrics.did_exceed_max_lines,
             paint_offset: metrics.paint_offset,
             paragraph,
-            caret_layout: OnceLock::new(),
+            layout,
             min_intrinsic_width,
             max_intrinsic_width,
         });
@@ -127,30 +117,8 @@ impl TextPainter {
             * self.text_scale_factor
     }
 
-    /// Shapes `text` on cosmic-text at `max_width` for carets, selection,
-    /// line metrics and hit-testing, with `max_lines` and the ellipsis
-    /// applied.
-    pub(super) fn cosmic_layout(&self, text: &InlineSpan, max_width: f64) -> TextLayout {
-        let direction = self.text_direction.unwrap_or(TextDirection::Ltr);
-        // RICH shaping: the span tree flattens to per-run styles with
-        // inheritance (`TextStyle::merge`), so a bold or larger child
-        // span measures as bold or larger. The text scale factor is baked
-        // into each run's font size here, where the effective size is known.
-        let spans = collect_styled_spans(text, self.text_scale_factor);
-        TextLayout::from_spans(
-            spans,
-            text.style(),
-            self.scaled_font_size(text),
-            max_width.is_finite().then_some(max_width),
-            None,
-            direction,
-            self.max_lines.map(|n| n as usize),
-            self.ellipsis.as_deref(),
-        )
-    }
-
     /// Shapes `text` on Parley through `text_cx` at `max_width`, with the
-    /// same span flattening and scale as the caret layout. Every span
+    /// span flattening and scale factor applied. Every span
     /// carries its merged style; the root's style, scaled as a span's is, is
     /// the paragraph default, so a paragraph with no run (empty text)
     /// measures the line its style would, family and line height included.
@@ -548,15 +516,9 @@ pub(crate) fn collect_styled_spans(
 /// `style` as a run is shaped with: its font size, [`DEFAULT_FONT_SIZE`]
 /// where it sets none, and its letter spacing, both multiplied by `scale`.
 ///
-/// The size is made explicit because the caret layout applies a run's
-/// letter spacing and line height only at a size the run carries, while
-/// Parley applies them at the inherited one: a spacing or height set without
-/// a size would otherwise paint and place carets differently.
-///
-/// Letter spacing scales with the size so that `from_spans` computes the EM
-/// ratio as `spacing / font_size` in consistent units: without it, at a
-/// scale of 2 a 2 px spacing on a 16 px font yields 2/32 = 0.0625 EM instead
-/// of 0.125 EM.
+/// Every run carries its size explicitly, so a span's letter spacing and
+/// line height apply at the size it shapes at. Letter spacing is in logical
+/// pixels and scales with the size: at a scale of 2 a 2 px spacing is 4 px.
 fn effective_style(style: &TextStyle, scale: f64) -> TextStyle {
     let mut style = style.clone();
     style.font_size = Some(style.font_size.unwrap_or(DEFAULT_FONT_SIZE) * scale);

@@ -1,8 +1,8 @@
 //! A face registered on the app's collection reaches a laid-out
-//! `TextPainter`'s measurement, paint and caret layout together.
+//! `TextPainter`'s measurement, paint and carets together.
 //!
-//! Its own test target: it appends to the process-wide font database, which
-//! the `painting_it` binary's tests deliberately never do.
+//! Its own test target: it builds the process font system from the host's
+//! fonts, to feed the collection as the app does.
 
 use std::sync::Arc;
 
@@ -23,8 +23,7 @@ const PROBE_MONO: &[u8] = include_bytes!("../assets/fonts/probe-mono-100.ttf");
 /// The same text styled with the probe family: before the face is registered
 /// it resolves to sans-serif, after it to the monospace probe.
 fn probe_painter(text: &str) -> TextPainter {
-    // The probe ships a single face at weight 100; asking for it by weight is
-    // what keeps cosmic-text on the family once it is present.
+    // The probe ships a single face at weight 100.
     let style = TextStyle {
         font_family: Some("FLUI Probe Mono".to_string()),
         font_weight: Some(FontWeight::W100),
@@ -63,14 +62,13 @@ fn painted_faces(paragraph: &ShapedParagraph) -> Vec<FaceKey> {
 }
 
 /// A face registered through the one door, the app's collection, reaches
-/// measurement, paint and carets together at the next `layout()`: the
-/// collection measures and paints with it, and the process font system it was
-/// fed from lays carets out with it. Before that `layout()` the painter keeps
-/// what it had, carets included.
+/// measurement, paint and carets together at the next `layout()`, which
+/// shapes the one layout all three read. Before that `layout()` the painter
+/// keeps what it had, carets included.
 ///
-/// Fails if the collection keeps no caret side (the carets stay on the
-/// fallback), or if a registration reaches the process font system alone
-/// (measurement and paint stay on the fallback).
+/// Fails if caret queries read another layout than the one that measured
+/// and painted (the carets stay on the fallback), or if a registration misses
+/// the collection (measurement and paint stay on the fallback).
 #[test]
 fn a_face_registered_on_the_collection_reaches_measurement_paint_and_carets() {
     let fonts = FontCollection::with_host_faces(&shared_font_system());
@@ -84,15 +82,14 @@ fn a_face_registered_on_the_collection_reaches_measurement_paint_and_carets() {
     fonts
         .register_font(PROBE_MONO)
         .expect("the probe face loads");
-    // Until the next `layout()` the cursor queries keep the caret layout
-    // they have: shaping it again on every query would put a full cosmic-text
-    // shape, under the process font lock, on each caret and selection read.
+    // Until the next `layout()` the cursor queries read the layout the
+    // painter measured and painted: a query never shapes.
     for query in 0..2 {
         assert_eq!(
             caret_line_width(&painter),
             caret_width,
             "caret query {query} after the registration and before `layout()` reads the \
-             caret layout it already had"
+             layout it already had"
         );
     }
     painter.layout(&mut text_cx, 0.0, WIDTH);
@@ -118,7 +115,7 @@ fn a_face_registered_on_the_collection_reaches_measurement_paint_and_carets() {
     );
     assert!(
         (caret_line_width(&painter) - caret_width).abs() > 1.0,
-        "the caret layout moves to the probe ({caret_width} vs {})",
+        "the carets move to the probe ({caret_width} vs {})",
         caret_line_width(&painter)
     );
 }

@@ -1319,6 +1319,15 @@ and both placeholders set. **Unasserted:** no test pins this.
 **Rule:** Design stance ("Look around before settling") — search the market/existing dependency graph
 before adding one, and cite what an unmatched reference actually needs.
 
+**Since ADR-0092 §10 step 5** double-tap word selection
+(`TextPainter::get_word_boundary`, flui-painting mapping decision 15) segments
+with ICU4X's word segmenter for non-complex scripts, the data Parley already
+brings, with the same tie-break and the same limits as below: no dictionary
+or LSTM data, so CJK and Thai stay per character. The controller's keyboard
+word jumps and grapheme steps below still use `unicode-segmentation` until
+ADR-0092 §10 step 6 moves them onto the same ICU4X boundaries; until then a
+double-tap and a word jump can disagree where the two data sets do.
+
 **Background:** ICU's word-mode break iterator (the usual backing for Ctrl+Arrow
 word-jump and double-tap word selection) is **dictionary-based**
 for two distinct groups: Thai, Lao, Khmer, and Myanmar (scripts with no
@@ -1395,8 +1404,8 @@ the wrong trade for what this feature is worth today.
   premature relative to `GestureSettings`' own still-open gap.
 
 **Replacement tests:**
-`flui-painting::tests::text_layout_unit::get_word_boundary_two_space_run_boundary_matrix`
-pins a specific boundary rather than a loose "some boundary was found" check:
+`two_space_run_word_boundary`, a row of flui-painting's `caret_contract`
+(`crates/flui-painting/tests/caret_contract.rs`), pins a specific boundary rather than a loose "some boundary was found" check:
 `"foo  bar"` at 3/4/5, where an offset inside the two-space run selects the
 whole run. The controller's word-jump stops (skipping trailing whitespace, a
 whitespace run as one stop, an apostrophe inside a word, the CJK per-character
@@ -1428,9 +1437,10 @@ contact) and its `on_double_tap_down` callback — a genuine new capability
 this change adds to `GestureDetector`/`DoubleTapGestureRecognizer`, not
 previously exposed — widens the caret `Listener` just placed into the
 enclosing word, via
-[`TextLayout::get_word_boundary`](#19-word-boundary-movement-uses-unicode-segmentation-uax-29-not-icu-dictionary-segmentation)
-— the same `unicode-segmentation`/UAX #29 machinery Ctrl/Alt+Arrow
-word-jump uses one layer down, but NOT the same function: the keyboard
+[`TextPainter::get_word_boundary`](#19-word-boundary-movement-uses-unicode-segmentation-uax-29-not-icu-dictionary-segmentation)
+— ICU4X word segmentation, where Ctrl/Alt+Arrow word-jump uses
+`unicode-segmentation` one layer down until ADR-0092 §10 step 6, and NOT
+the same function either: the keyboard
 path's `next_word_boundary`/`prev_word_boundary`
 (`crates/flui-widgets/src/text/controller.rs`) answer a directional
 "next/previous stop" query with their own asymmetric tie-break, while
@@ -1790,9 +1800,16 @@ is kept at any scalar boundary, including inside a grapheme cluster (offset 4
 of `"a😀e\u{301}…"` is between the `e` and its combining mark), because TSF and
 AppKit address scalars and a snapped answer would disagree with what they set.
 A tap, a drag and the arrow keys keep snapping to extended grapheme clusters
-through the controller (its "Character unit"). **Tests:** the kit's
-`selection_inside_a_grapheme_is_kept_exactly`, for the platform half. A tap
-still snapping to a grapheme cluster: **Unasserted:** no test pins this.
+through the controller (its "Character unit"); a tap and a drag land where
+`TextPainter::get_position_for_offset` answers, which snaps to an ICU4X
+grapheme boundary while a caret query stays per scalar (flui-painting mapping
+decision 15). Until the editor's grapheme steps move to ICU4X (ADR-0092 §10
+step 6), the arrow keys step `unicode-segmentation` graphemes and a hit snaps
+to ICU4X ones; where the two disagree, an arrow key can land on an offset no
+hit answers. **Tests:** the kit's
+`selection_inside_a_grapheme_is_kept_exactly`, for the platform half; for the
+tap half, the painter's `a_combining_mark_is_one_hit_target` and
+`a_zwj_family_is_one_hit_target` rows of flui-painting's `caret_contract`.
 
 ### 36. `WidgetsApp::router`: a bare Router as the routing subtree, and a form without navigator builders
 

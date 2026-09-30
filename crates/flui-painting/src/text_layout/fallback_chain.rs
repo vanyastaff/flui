@@ -97,7 +97,8 @@ pub(crate) fn fontique_scripts() -> impl Iterator<Item = parley::fontique::Scrip
 /// Only families the collection holds are written, in the chain's order,
 /// each once. The trailing sans-serif family stands in for cosmic-text's
 /// last resort, which fontique lacks, so a glyph no listed family has still
-/// reaches the face the caret side's generic names rather than `.notdef`
+/// reaches the face the process font system's sans-serif generic names
+/// rather than `.notdef`
 /// (a host whose common list is empty, as on Android, falls back there
 /// alone). Only the default key of each script is set (no locale): the
 /// Parley path shapes with no locale today. A script with no held family at
@@ -207,8 +208,8 @@ mod tests {
 
     /// Han's fallback is the chain's Han list for the chain's locale, then
     /// the common list, held families only, each once, in order; Latin (no
-    /// list of its own) and Common are the common list alone. The caret side
-    /// reads the same lists through `ChainFallback`.
+    /// list of its own) and Common are the common list alone. The process
+    /// font system is built over the same lists (`ChainFallback`).
     #[test]
     fn fontique_fallbacks_follow_the_paint_chain_in_order() {
         let chain = FallbackChain::new("ja-JP".to_owned(), Fixture);
@@ -238,7 +239,7 @@ mod tests {
         assert_eq!(
             cosmic_text::Fallback::script_fallback(&paint, unicode_script::Script::Han, "ja-JP"),
             ["Material Icons", "Roboto"],
-            "the caret side reads the same Han list"
+            "the process font system reads the same Han list"
         );
     }
 

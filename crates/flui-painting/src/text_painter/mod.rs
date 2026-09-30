@@ -7,18 +7,17 @@
 //!
 //! Every measurement shapes on Parley through the lent
 //! [`TextContext`](crate::TextContext): a render object lends its realm's,
-//! and `paint` records the runs of the layout that measured. Carets,
-//! selection, line metrics and hit-testing still come from a cosmic-text
-//! `TextLayout`, built on the first such query, until ADR-0092 §10 step 5
-//! (flui-painting `ARCHITECTURE.md`, mapping decision 15).
+//! `paint` records the runs of the layout that measured, and carets,
+//! selection, line metrics, hit-testing and word boundaries read that same
+//! layout (flui-painting `ARCHITECTURE.md`, mapping decision 15).
 
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use crate::typography::{InlineSpan, TextAlign, TextDirection};
 use flui_foundation::geometry::{Offset, Size};
 
 use crate::display_list::ShapedParagraph;
-use crate::text_layout::TextLayout;
+use crate::parley_text::ParagraphLayout;
 
 pub mod baseline;
 pub mod measure;
@@ -114,11 +113,9 @@ pub(super) struct TextLayoutCache {
     /// The paragraph `paint` records: the runs of the layout that gave
     /// `size`, so what is painted is, by identity, what was measured.
     pub(super) paragraph: Arc<ShapedParagraph>,
-    /// The cosmic-text layout carets, selection, line metrics and
-    /// hit-testing read, with the process font database's generation it was
-    /// shaped at; built on the first such query (ADR-0092 §10 step 5 moves
-    /// them to Parley).
-    pub(super) caret_layout: OnceLock<(u64, Arc<TextLayout>)>,
+    /// The layout that measured and painted, which carets, selection, line
+    /// metrics, hit-testing and word boundaries read.
+    pub(super) layout: ParagraphLayout,
 
     /// Precomputed min intrinsic width (narrowest unbreakable run).
     /// Computed once during `layout()` — O(1) access for intrinsics queries.

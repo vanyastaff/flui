@@ -42,11 +42,10 @@ cosmic-text = { version = "0.19" }
 # direct edge onto a crate the tree was building anyway, not a new dependency.
 # Needed by `EmojiForbiddenFallback` (issue #930).
 unicode-script = { version = "=0.5.8" }
-# UAX #29 word segmentation for `TextLayout::get_word_boundary` (double-tap
-# word selection) — was already resolved transitively through cosmic-text;
-# this is a direct edge onto the same copy, not a new one. See the
-# workspace-level comment on this dependency in the root `Cargo.toml`.
-unicode-segmentation = { workspace = true }
+# Grapheme snapping for hit-testing and word segmentation for
+# `TextPainter::get_word_boundary` (double-tap word selection), over ICU4X:
+# the segmenters Parley marks its clusters with.
+icu_segmenter = { workspace = true }
 # The Parley path (`parley_text`, `TextContext`): Parley shapes and measures
 # over fontique's shared collection, swash rasterizes.
 swash = { workspace = true }
@@ -86,7 +85,8 @@ testing = []
 name = "painting_it"
 path = "tests/main.rs"
 
-# Appends to the process-wide font database, so it runs in its own process.
+# Builds the process font system from the host's fonts, so it runs in its
+# own process.
 [[test]]
 name = "font_registration"
 path = "tests/font_registration.rs"
@@ -104,16 +104,15 @@ path = "tests/parley_oracle.rs"
 name = "text_context"
 path = "tests/text_context.rs"
 
-# Parley's paragraph metrics and painted baselines against cosmic-text's on
-# the bundled Roboto (ADR-0092 gate 8). Its own binary: it builds the process
-# font system, which `text_context` asserts the Parley path never does.
+# Parley's paragraph metrics and painted baselines against what cosmic-text
+# measured on the bundled Roboto, recorded (ADR-0092 gate 8).
 [[test]]
 name = "parley_metrics_oracle"
 path = "tests/parley_metrics_oracle.rs"
 
-# Parley measurement against the cosmic-text caret layout on the host's own faces, over a
-# collection fed from the process font system (ADR-0092 §7). Its own binary:
-# it builds the process font system from the host's fonts.
+# Measurement against paint on the host's own faces, over a collection fed
+# from the process font system (ADR-0092 §7). Its own binary: it builds the
+# process font system from the host's fonts.
 [[test]]
 name = "host_faces_oracle"
 path = "tests/host_faces_oracle.rs"
@@ -146,5 +145,5 @@ order = 3
 globals = [
     { item = "decoration::WARN_CIRCLE_BORDER_RADIUS", grant = "ADR-0097", class = "diagnostic", reason = "warn-once gate for a circle with a border radius; no behavior reads it" },
     { item = "decoration::WARN_CIRCLE_NON_UNIFORM_BORDER", grant = "ADR-0097", class = "diagnostic", reason = "warn-once gate for a circle with a non-uniform border; no behavior reads it" },
-    { item = "text_layout::layout::FONT_SYSTEM", exit = "ADR-0092", reason = "one cosmic-text FontSystem shared by every realm; leaves with cosmic-text at ADR-0092 §10 step 6" },
+    { item = "text_layout::layout::FONT_SYSTEM", exit = "ADR-0092", reason = "host font discovery, read once to feed the app's FontCollection; nothing shapes on it; leaves with cosmic-text at ADR-0092 §10 step 6" },
 ]

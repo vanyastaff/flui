@@ -479,7 +479,8 @@ impl GlyphInfo {
 #[derive(Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct LineMetrics {
-    /// Whether this line ends with a hard break.
+    /// Whether this line ends with an explicit line break (a newline, CR LF,
+    /// …) or at the end of the paragraph.
     pub hard_break: bool,
     /// Ascent (distance from baseline to top).
     pub ascent: f64,
