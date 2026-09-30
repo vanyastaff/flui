@@ -110,7 +110,7 @@ entry in [open questions](open-questions.md). Decisions already taken are indexe
 | M | Windows was dropped from the CI test matrix "temporarily" (`.github/workflows/ci.yml:638-643`). The Windows evidence gate adds only the a11y probe, not the test suite | Confirmed | [tooling_testing_docs][m-tool] | An input to the [CI redesign](open-questions.md#ci-redesign) |
 | M | The `unwrap` target is already met: no bare `unwrap()` in production and no file above 2,000 production lines. The owner roadmap's "1143 unwrap" and "46 files over 2000" figures are out of date | *Map claim* | [xcut_safety_health][m-safety] | Roadmap update |
 | M | Owner-roadmap lines that neither report edits still describe removed tooling or missing features: `docs/workspace-layers.toml` and `docs/runtime-contract.toml` (both deleted in #1283), a `flui-state` crate, "68 ADR" (there are 61), and nested scrolling (no `NestedScroll` in the code) | Checked against the tree | [plan_alignment][m-plan] | Roadmap update |
-| L | `tools/text-spike` is a nested workspace with its own lockfile, outside every gate. `tools/` has no layer, so its dependencies (rmcp, uiautomation, xcap) sit in the root lock | *Map claim* | [tooling_testing_docs][m-tool] | ADR-0081 (tool tier) |
+| L | `tools/` has no layer, so its dependencies (rmcp, uiautomation, xcap) sit in the root lock | *Map claim* | [tooling_testing_docs][m-tool] | ADR-0081 (tool tier) |
 
 ### 2.5 API and developer experience
 
