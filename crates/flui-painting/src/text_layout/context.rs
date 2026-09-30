@@ -20,8 +20,8 @@
 //! collection is loaded there too, so measurement, paint and carets gain it
 //! together. [`FontCollection::new`] holds the bundled faces alone and has no
 //! caret side; without `bundled-fonts` it starts empty, text shapes with no
-//! face until one is registered, and the first family registered becomes
-//! every generic family ([`FontCollection::register_font`]).
+//! face until one is registered, and the first registered family that can set
+//! Latin text becomes every generic family ([`FontCollection::register_font`]).
 
 use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -63,7 +63,8 @@ impl FontCollection {
     /// serif, monospace, cursive, fantasy, system-ui) to Roboto, so text shapes the same on
     /// every host. Without `bundled-fonts` it starts empty: text measures
     /// with no face until one is registered, and the first registered family
-    /// then serves as every generic family ([`FontCollection::register_font`]).
+    /// that can set Latin text then serves as every generic family
+    /// ([`FontCollection::register_font`]).
     #[must_use]
     pub fn new() -> Self {
         Self(Arc::new(FontCollectionInner::build(None, None)))
@@ -150,11 +151,14 @@ impl FontCollection {
     /// never removed.
     ///
     /// A generic family bound to nothing is bound to the first family the
-    /// bytes hold, so text that names no family (or a generic) measures in
-    /// it rather than in no face. Only a collection built without
-    /// `bundled-fonts` and without a host feed has an unbound generic; a bound
-    /// one is never moved. Two registrations racing on an unbound generic
-    /// each bind a family they registered, and the later write stays.
+    /// bytes hold that can set Latin text (a face of it maps the space and a
+    /// basic Latin letter), so text that names no family (or a generic)
+    /// measures in it rather than in no face. An icon font maps no space, so
+    /// it binds nothing and a text face registered after it still takes the
+    /// generics. Only a collection built without `bundled-fonts` and without
+    /// a host feed has an unbound generic; a bound one is never moved. Two
+    /// registrations racing on an unbound generic each bind a family they
+    /// registered, and the later write stays.
     ///
     /// # Errors
     ///
@@ -184,12 +188,20 @@ impl FontCollection {
         }
         let mut collection = self.0.collection.clone();
         let families = collection.register_fonts(blob, None);
-        let Some(&(family, _)) = families.first() else {
+        if families.is_empty() {
             // Reached only without a caret side: with one, the scratch check
             // above found a family in these bytes.
             return Err(RegisterFontError);
-        };
-        bind_unbound_generics(&mut collection, family);
+        }
+        let text_family = families.iter().find_map(|(family, faces)| {
+            faces
+                .iter()
+                .any(|face| sets_latin_text(font_bytes, face.index()))
+                .then_some(*family)
+        });
+        if let Some(family) = text_family {
+            bind_unbound_generics(&mut collection, family);
+        }
         self.0.generation.fetch_add(1, Ordering::AcqRel);
         Ok(())
     }
@@ -225,6 +237,23 @@ fn fontdb_finds_a_face(font_bytes: &[u8]) -> bool {
     let mut scratch = cosmic_text::fontdb::Database::new();
     scratch.load_font_data(font_bytes.to_vec());
     !scratch.is_empty()
+}
+
+/// Whether the face at `index` in `font_bytes` can set Latin text: it maps
+/// the space and at least one basic Latin letter. An icon font fails the
+/// first (Material Icons maps lowercase letters for its ligatures, but no
+/// space), so it never becomes a generic family.
+fn sets_latin_text(font_bytes: &[u8], index: u32) -> bool {
+    let Ok(index) = usize::try_from(index) else {
+        return false;
+    };
+    ::swash::FontRef::from_index(font_bytes, index).is_some_and(|font| {
+        let charmap = font.charmap();
+        charmap.map(' ') != 0
+            && ('A'..='Z')
+                .chain('a'..='z')
+                .any(|letter| charmap.map(letter) != 0)
+    })
 }
 
 /// Whether fontique finds a family in `blob`, asked of a scratch collection
@@ -515,14 +544,24 @@ mod tests {
     }
 
     /// On a collection that starts with no face, text naming no family
-    /// measures in the first family registered: it measures nothing before
-    /// the registration and four of the probe's one-em `A`s after it. Fails
-    /// if registration leaves the generics unbound.
-    #[test]
-    fn a_registered_family_serves_the_generics_an_empty_collection_leaves_unbound() {
-        let fonts = unbundled();
-        let width = |fonts: &FontCollection| {
-            let spans: Vec<(String, Option<TextStyle>)> = vec![("AAAA".to_owned(), None)];
+    /// measures in the first registered family that can set Latin text: it
+    /// measures nothing before the registration and four of the probe's
+    /// one-em `A`s after it. An icon font registered first binds nothing, so
+    /// Roboto registered after it still takes the generics and unstyled
+    /// `home` measures in Roboto, not as the icon font's ligature. Fails if
+    /// registration leaves the generics unbound, or binds them to whichever
+    /// family came first.
+    mod unbound_generics {
+        use super::{
+            FontCollection, PROBE_MONO, ParagraphSpec, ROBOTO, TextContext, TextDirection,
+            TextStyle, unbundled,
+        };
+
+        const MATERIAL_ICONS: &[u8] =
+            include_bytes!("../../assets/fonts/MaterialIcons-Regular.ttf");
+
+        fn width(fonts: &FontCollection, text: &str) -> f64 {
+            let spans: Vec<(String, Option<TextStyle>)> = vec![(text.to_owned(), None)];
             TextContext::new(fonts)
                 .shape(&ParagraphSpec {
                     spans: &spans,
@@ -536,21 +575,63 @@ mod tests {
                 })
                 .metrics()
                 .width
-        };
-        assert!(
-            width(&fonts).abs() < 1e-3,
-            "no face measures nothing, got {}",
-            width(&fonts)
-        );
+        }
 
-        fonts
-            .register_font(PROBE_MONO)
-            .expect("the probe face loads");
-        assert!(
-            (width(&fonts) - 80.0).abs() < 1e-3,
-            "unstyled text measures in the probe, got {}",
-            width(&fonts)
-        );
+        fn a_registered_text_family_serves_the_generics() {
+            let fonts = unbundled();
+            assert!(
+                width(&fonts, "AAAA").abs() < 1e-3,
+                "no face measures nothing, got {}",
+                width(&fonts, "AAAA")
+            );
+
+            fonts
+                .register_font(PROBE_MONO)
+                .expect("the probe face loads");
+            assert!(
+                (width(&fonts, "AAAA") - 80.0).abs() < 1e-3,
+                "unstyled text measures in the probe, got {}",
+                width(&fonts, "AAAA")
+            );
+        }
+
+        fn an_icon_font_registered_first_leaves_the_generics_to_a_text_face() {
+            let fonts = unbundled();
+            fonts
+                .register_font(MATERIAL_ICONS)
+                .expect("the icon face loads");
+            fonts.register_font(ROBOTO).expect("Roboto loads");
+            let roboto_only = unbundled();
+            roboto_only.register_font(ROBOTO).expect("Roboto loads");
+            let (got, roboto) = (width(&fonts, "home"), width(&roboto_only, "home"));
+            assert!(
+                roboto > 1.0 && (got - roboto).abs() < 1e-3,
+                "unstyled text measures in Roboto ({roboto}), not the icon font, got {got}"
+            );
+        }
+
+        #[test]
+        fn unbound_generics() {
+            let cases: &[(&str, fn())] = &[
+                (
+                    "a_registered_text_family_serves_the_generics",
+                    a_registered_text_family_serves_the_generics,
+                ),
+                (
+                    "an_icon_font_registered_first_leaves_the_generics_to_a_text_face",
+                    an_icon_font_registered_first_leaves_the_generics_to_a_text_face,
+                ),
+            ];
+            let failed: Vec<&str> = cases
+                .iter()
+                .filter(|(_, case)| std::panic::catch_unwind(*case).is_err())
+                .map(|(name, _)| *name)
+                .collect();
+            assert!(
+                failed.is_empty(),
+                "unbound_generics: failing cases: {failed:?}"
+            );
+        }
     }
 
     struct CommonIsRoboto;

@@ -15,7 +15,7 @@
 - Letter spacing and line height set on a style without a font size apply at the default 14 px.
 - `TextPainter::with_max_lines(Some(0))` / `set_max_lines(Some(0))` mean no limit and read back as `None`; `ParagraphSpec::max_lines` of `Some(0)` keeps every line.
 - An empty paragraph's alphabetic baseline is the one a line of text in its style has (13.19 px at 14 px Roboto, was 8.40 px); its height is unchanged.
-- Without `bundled-fonts`, the first family registered on an empty `FontCollection` becomes every generic family, so text that names no family measures in it.
+- Without `bundled-fonts`, the first family registered on an empty `FontCollection` that can set Latin text (a face maps the space and a basic Latin letter) becomes every generic family, so text that names no family measures in it; an icon font registered first binds nothing.
 - `RenderErrorBox` shapes its debug message at layout through the realm's text context; a new message is a layout change in debug builds.
 
 ### Added
