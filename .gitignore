@@ -42,9 +42,6 @@ __pycache__/
 # Claude Code, the runtime CLAUDE.md is written for, keeps per-user settings
 # and whole worktree checkouts under .claude/.
 .claude/
-# Raw upstream issue threads pulled into a spec during triage; the ledger
-# beside them records what each one established.
-/.rust-studio/specs/**/flutter-issues/[0-9]*.md
 
 # ── Secrets ──────────────────────────────────────────────────────────────────
 # Nothing in the build reads these. The entries keep a stray credential out of

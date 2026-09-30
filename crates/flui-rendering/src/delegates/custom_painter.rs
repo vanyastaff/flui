@@ -40,8 +40,6 @@ impl SemanticsBuilder {
     ///
     /// Currently a no-op shell — custom-painter semantics build operations
     /// land when `CustomPainter` exposes a real semantics-builder contract.
-    /// See `docs/research/2026-05-22-flui-rendering-engine-audit.md` for
-    /// the background on this gap.
     ///
     /// On the first call per process emits a `tracing::warn!`; the
     /// `Once` gate suppresses subsequent warns to avoid per-frame log

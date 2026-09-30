@@ -38,6 +38,6 @@
 //! `BoxHitTestEntry` / `SliverHitTestEntry` (parallel sibling structs
 //! that used to live in this module) were deleted once the
 //! protocol-side versions in `crate::protocol` were confirmed to cover
-//! the same need -- see `docs/research/2026-05-22-cycle4-wave2-design.md`.
+//! the same need.
 
 pub use flui_interaction::routing::HitTestEntry;

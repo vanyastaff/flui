@@ -9,9 +9,9 @@ dependency pins that exact version, so a published cohort can never mix
 with a later one. The numbering starts at `0.1.0` where the public history
 does: nothing was published before, and the beta status is stated in the
 README rather than in a pre-release suffix that `flui = "0.1"` would not
-match. Fine-grained phase history lives in
-[`docs/archive/ROADMAP-TRACKER.md`](docs/archive/ROADMAP-TRACKER.md); this file records the
-repo-consumer-visible summary.
+match. Fine-grained phase history up to September 2026 lives in the
+[archived roadmap tracker](https://github.com/vanyastaff/flui/blob/e30ab7194d50ac1c11ffe17c59230958d2fbeecd/docs/archive/ROADMAP-TRACKER.md);
+this file records the repo-consumer-visible summary.
 Unreleased entries arrive as fragments under [`changelog.d/`](changelog.d/README.md), merged
 here by `cargo xtask changelog --write` at release time.
 
@@ -19,10 +19,10 @@ here by `cargo xtask changelog --write` at release time.
 
 Workspace version bumped to `0.2.0-dev` to mark active development toward the next release;
 every internal crate-to-crate pin moved in step (root `Cargo.toml` `[workspace.dependencies]`
-plus each crate's own manifest, `Cargo.lock` regenerated). `docs/ROADMAP-TRACKER.md` and the
-prior `docs/ROADMAP.md` moved to `docs/archive/` (historical, not a source of status); the live
+plus each crate's own manifest, `Cargo.lock` regenerated). The prior roadmap and its tracker
+left the tree (git history keeps them, and the header above links the tracker); the live
 `docs/ROADMAP.md` is now a short milestone table (B0–B4) pointing at the working roadmap
-document. Beta-readiness audit reports landed under `docs/audits/2026-09-22-beta-audit/`.
+document.
 
 ### Added
 
@@ -1452,8 +1452,9 @@ then `flui create` pins this tag as a git dependency.
 
 ### Pre-changelog milestones
 
-Recorded retroactively from `docs/ROADMAP-TRACKER.md`; evidence links live
-there.
+Recorded retroactively from the
+[roadmap tracker](https://github.com/vanyastaff/flui/blob/e30ab7194d50ac1c11ffe17c59230958d2fbeecd/docs/archive/ROADMAP-TRACKER.md);
+evidence links live there.
 
 - **2026-07-01 — Core.2 exit**: full render-object catalog (37 concrete
   RenderBox/RenderSliver objects extracted to `flui-objects`), 250/250

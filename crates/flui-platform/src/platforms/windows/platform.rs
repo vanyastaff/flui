@@ -449,8 +449,7 @@ pub struct WindowsPlatform {
 // (see `WindowsWindow`'s `Send`/`Sync` docs); the remaining affine calls here
 // (`quit`'s `PostQuitMessage`, `open_window`'s queue binding) are logic-level
 // rather than memory-safety and stay guarded by `affinity.debug_assert_owner`
-// — see the event-loop affinity gap in
-// `docs/audits/2026-07-25-upgrade-pack-audit.md`.
+// — see ADR-0039 (event-loop affinity).
 unsafe impl Send for WindowsPlatform {}
 // SAFETY: as for `Send` — `&WindowsPlatform` grants no more than shared access
 // to already-synchronized members plus a never-dereferenced address.

@@ -8,10 +8,8 @@ extend-exclude = [
     ".gpui/**",
     ".claude/**",
     "Cargo.lock",
-    "docs/research/**/*.md",     # audits quote external code; preserve verbatim
-    "docs/brainstorms/**/*.md",
+    "docs/research/**/*.md",     # research quotes external code; preserve verbatim
     "docs/plans/**/*.md",        # plans are reviewed artifacts; preserve verbatim
-    "specs/**/*.md",             # speckit artifacts: reviewed, preserved verbatim
 ]
 
 [default]

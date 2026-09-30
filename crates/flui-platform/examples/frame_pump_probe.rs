@@ -22,8 +22,8 @@
 //! the FIRST frame arrives and then stops for good, so every frame counted in
 //! the measurement window came from the frame's own re-arm. That is the
 //! counterfactual the fix is about — with the deferral removed, the same run
-//! counts zero frames in the window and fails (measured; see the run logs in
-//! `.rust-studio/specs/macos-native-vsync-pacing-evidence/`).
+//! counts zero frames in the window and fails (measured; the run logs are at
+//! <https://github.com/vanyastaff/flui/tree/e30ab7194d50ac1c11ffe17c59230958d2fbeecd/.rust-studio/specs/macos-native-vsync-pacing-evidence>).
 //!
 //! macOS-only by construction: besides the main-thread floor (libtest runs
 //! `#[test]` bodies on a worker thread, and AppKit requires main-thread window

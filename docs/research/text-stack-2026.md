@@ -84,8 +84,8 @@ corpora, four axes:
 Each of the 6×2×2×2 = 48 combinations was run 5 times in `--release` mode
 (`CARGO_BUILD_JOBS=6 CARGO_INCREMENTAL=0`), while holding the shared dev
 machine's compile slot and with no other worker's build running concurrently
-(both required for the numbers to be comparable — see
-`.rust-studio/specs/b7-text-stack-spike/plan.md` §6).
+(both required for the numbers to be comparable — see §6 of the
+[spike plan](https://github.com/vanyastaff/flui/blob/e30ab7194d50ac1c11ffe17c59230958d2fbeecd/.rust-studio/specs/b7-text-stack-spike/plan.md)).
 
 ### Reproduction
 
