@@ -1,13 +1,12 @@
 //! Measurement against paint on the host's own faces (ADR-0092 §7).
 //!
-//! The collection is the one the app builds, fed from the process font
-//! system (`FontCollection::with_host_faces`); the painter measures, paints
+//! The collection is the one the app builds, fed from a scan of the host's
+//! fonts (`FontCollection::with_host_fonts`); the painter measures, paints
 //! and places carets on Parley over it, so what is measured is by identity
 //! what is painted. What the host decides is whether each row finds a face:
 //! the style's family is resolved by the family rule and fallen back past in
 //! the host's order, CJK, emoji and a family chain the host only partly
-//! carries included. Its own binary, because it builds the process font
-//! system from the host's fonts.
+//! carries included.
 
 use std::sync::Arc;
 
@@ -17,7 +16,7 @@ use flui_painting::testing::{
 };
 use flui_painting::typography::{FontWeight, TextDirection, TextSpan, TextStyle};
 use flui_painting::{
-    Canvas, DrawOp, FontCollection, ShapedParagraph, TextContext, TextPainter, shared_font_system,
+    Canvas, DrawOp, FontCollection, HostFonts, ShapedParagraph, TextContext, TextPainter,
 };
 
 const LATIN: &str = "Hamburgefonstiv 0123";
@@ -55,21 +54,22 @@ fn weighted(family: Option<&str>, weight: FontWeight) -> TextStyle {
 /// where that differs from how the host names it: both shapers match family
 /// names exactly, as fontdb does, so both degrade it to the sans-serif
 /// generic rather than one finding the family and the other not.
-fn mis_cased_family() -> Option<String> {
-    let sans_serif = host_sans_serif_family();
-    host_family_names()
-        .into_iter()
-        .filter(|name| *name != sans_serif)
+fn mis_cased_family(host: &HostFonts) -> Option<String> {
+    let sans_serif = host_sans_serif_family(host);
+    let names = host_family_names(host);
+    names
+        .iter()
+        .filter(|name| **name != sans_serif)
         .map(|name| name.to_lowercase())
-        .find(|lower| !host_family_names().contains(lower))
+        .find(|lower| !names.contains(lower))
 }
 
 /// A text family the host carries under its own name, spelled exactly: the
 /// host's UI face where it has a well-known one, else any family other than
 /// the sans-serif generic's. Measured and painted in that host face.
-fn named_host_family() -> Option<String> {
-    let names = host_family_names();
-    let sans_serif = host_sans_serif_family();
+fn named_host_family(host: &HostFonts) -> Option<String> {
+    let names = host_family_names(host);
+    let sans_serif = host_sans_serif_family(host);
     ["Segoe UI", "DejaVu Sans", "Helvetica", "Arial", "Noto Sans"]
         .into_iter()
         .map(str::to_owned)
@@ -78,9 +78,10 @@ fn named_host_family() -> Option<String> {
 }
 
 /// The rows: a name, the style, the text.
-fn rows() -> Vec<(&'static str, TextStyle, &'static str)> {
-    let mis_cased = mis_cased_family().expect("the host names a family with an upper-case letter");
-    let named = named_host_family().expect("the host carries a family of its own");
+fn rows(host: &HostFonts) -> Vec<(&'static str, TextStyle, &'static str)> {
+    let mis_cased =
+        mis_cased_family(host).expect("the host names a family with an upper-case letter");
+    let named = named_host_family(host).expect("the host carries a family of its own");
     vec![
         (
             "mis_cased_family",
@@ -163,17 +164,18 @@ fn measure_and_paint(
 /// paint path that stops reading it.
 #[test]
 fn measured_width_equals_painted_width_on_host_faces() {
-    let fonts = FontCollection::with_host_faces(&shared_font_system());
+    let host = HostFonts::scan();
+    let fonts = FontCollection::with_host_fonts(&host);
     let mut context = TextContext::new(&fonts);
     let mut failures = Vec::new();
     let mut latin_rows = 0;
-    for (name, style, text) in rows() {
-        if !host_chain_covers(text) {
+    for (name, style, text) in rows(&host) {
+        if !host_chain_covers(&host, text) {
             let missing: Vec<_> = text
                 .chars()
-                .filter(|c| !c.is_whitespace() && !host_chain_covers(&c.to_string()))
+                .filter(|c| !c.is_whitespace() && !host_chain_covers(&host, &c.to_string()))
                 .map(|c| {
-                    let reach = if host_covers(&c.to_string()) {
+                    let reach = if host_covers(&host, &c.to_string()) {
                         "is covered only past the fallback chain"
                     } else {
                         "is covered by no host face"
@@ -209,14 +211,15 @@ fn measured_width_equals_painted_width_on_host_faces() {
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
-/// Every family the process font system carries is a family of the fed
-/// collection: the two scans of the same files name families alike, so the
-/// family rule resolves the same family on both sides.
+/// Every family the host scan found is a family of the fed collection:
+/// fontdb and fontique read the same files' names alike, so a style naming a
+/// host family by the name the scan reports finds it in the collection.
 #[test]
-fn every_family_the_process_font_system_carries_resolves_in_the_collection() {
-    let fonts = FontCollection::with_host_faces(&shared_font_system());
-    let names = host_family_names();
-    assert!(!names.is_empty(), "the process font system holds faces");
+fn every_family_the_host_scan_finds_resolves_in_the_collection() {
+    let host = HostFonts::scan();
+    let fonts = FontCollection::with_host_fonts(&host);
+    let names = host_family_names(&host);
+    assert!(!names.is_empty(), "the host has fonts");
     let missing: Vec<_> = names
         .iter()
         .filter(|name| !collection_holds(&fonts, name))

@@ -4,7 +4,7 @@
 //!
 //! ```text
 //! View (TextLabel) → Element tree → RenderParagraph
-//!   → layout (TextPainter / cosmic-text) → paint (DrawTextSpan)
+//!   → layout (TextPainter / Parley) → paint (DrawTextSpan)
 //!   → engine glyph atlas → wgpu
 //! ```
 //!

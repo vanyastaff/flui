@@ -192,9 +192,9 @@ fn probe_paragraph_width(realm: &UiRealm) -> f64 {
 }
 
 /// A realm measures text in the faces of its own collection (ADR-0092 §10
-/// step 4a): the probe face, registered only on A's collection and never on
-/// the process font system, sizes A's paragraph at four em, while B's falls
-/// back. Fails if layout measures on cosmic-text, which never sees the face.
+/// step 4a): the probe face, registered only on A's collection, sizes A's
+/// paragraph at four em, while B's falls back. Fails if layout measures on any
+/// other collection, which never sees the face.
 fn a_realm_measures_text_with_the_faces_of_its_own_collection() {
     let with_probe = FontCollection::new();
     with_probe

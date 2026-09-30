@@ -150,8 +150,8 @@ fn system_text_fallback() -> Vec<String> {
 }
 
 /// Same fallback chain as [`system_text_fallback`] — the Text/Display split
-/// exists only because San Francisco ships as two optical sizes; a
-/// `cosmic-text` fallback has no such split to mirror.
+/// exists only because San Francisco ships as two optical sizes; a family
+/// fallback chain has no such split to mirror.
 fn system_display_fallback() -> Vec<String> {
     system_text_fallback()
 }

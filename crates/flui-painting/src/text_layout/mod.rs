@@ -2,29 +2,33 @@
 //!
 //! - `context` — [`FontCollection`], the app's add-only font collection, and
 //!   [`TextContext`], the per-realm service built from it (ADR-0092 §2–§3).
-//! - `fallback_chain` — the host's fallback order, which a collection fed
-//!   from the host walks past a style's family.
+//! - `host` — [`HostFonts`], the one scan of the host's installed fonts a
+//!   collection is fed from, with its generic families and fallback lists.
+//! - `fallback_chain` — the fallback order a host-fed collection walks past
+//!   a style's family; `fallback_tables` holds each platform's lists.
 //! - `font_resolve` — picking a family the collection actually holds.
-//! - `layout` — the process-wide font system: host discovery, the generic
-//!   bindings and the fallback lists a host-fed collection is built from.
 
 use flui_foundation::geometry::Size;
+
+use crate::typography::TextStyle;
 
 mod context;
 pub(crate) mod fallback_chain;
 #[cfg(test)]
 mod fallback_recorded;
+mod fallback_tables;
 pub(crate) mod font_resolve;
-pub(crate) mod layout;
+mod host;
 
 pub(crate) use context::FontsKey;
 pub use context::{FontCollection, TextContext};
-pub(crate) use layout::paint_color;
-pub use layout::{SharedFontSystem, shared_font_system};
-// Test-support only: pinning the process-wide font system is irreversible, so
-// it stays off the shipped surface. See its docs.
-#[cfg(any(test, feature = "testing"))]
-pub use layout::{font_system_initialized, init_font_system_with_faces};
+pub use host::HostFonts;
+
+/// The colour a style paints its glyphs with: `foreground` wins over
+/// `color`.
+pub(crate) fn paint_color(style: &TextStyle) -> Option<crate::styling::Color> {
+    style.foreground.or(style.color)
+}
 
 /// Text layout result containing computed metrics.
 #[derive(Debug, Clone)]

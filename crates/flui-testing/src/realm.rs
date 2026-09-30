@@ -371,7 +371,7 @@ impl HeadlessRealm {
             // A collection of its own: the realm owns a `TextContext` over it
             // (ADR-0092 §3), exactly as a hosted realm does. Deliberately
             // bundled-only, unlike the app's host-fed one
-            // (`FontCollection::with_host_faces`), so text measures the same
+            // (`FontCollection::with_host_fonts`), so text measures the same
             // on every host a test runs on.
             &flui_painting::FontCollection::new(),
             ClockSource::Manual(clock.clone()),

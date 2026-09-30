@@ -17,13 +17,12 @@
 //! widening every change's CI scope.
 
 use std::fmt::Write as _;
-use std::sync::Once;
 use std::time::Duration;
 
 use flui_painting::styling::Color;
 use flui_rendering::pipeline::PipelineOwner;
 use flui_rendering::view::ScrollPosition;
-use flui_testing::{FrameReport, HeadlessBinding, MountOptions, MountOwners, pin_font_faces};
+use flui_testing::{FrameReport, HeadlessBinding, MountOptions, MountOwners};
 use flui_widgets::prelude::*;
 use flui_widgets::{
     ColoredBox, Column, Expanded, FocusRoot, GestureArenaScope, ListView, SizedBox, Text,
@@ -127,16 +126,8 @@ impl Mounted {
     }
 }
 
-fn pin_fonts() {
-    static PIN: Once = Once::new();
-    PIN.call_once(|| {
-        pin_font_faces(&[flui_painting::fonts::ROBOTO_REGULAR], "Roboto");
-    });
-}
-
 /// Mounts [`PerfApp`] at 800×600 with semantics on.
 fn mount() -> Mounted {
-    pin_fonts();
     let label = StateHandle::new(String::from("label"));
     let position = ScrollPosition::new(0.0);
     let app = PerfApp {

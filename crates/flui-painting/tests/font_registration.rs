@@ -1,8 +1,7 @@
 //! A face registered on the app's collection reaches a laid-out
 //! `TextPainter`'s measurement, paint and carets together.
 //!
-//! Its own test target: it builds the process font system from the host's
-//! fonts, to feed the collection as the app does.
+//! The collection is fed from a scan of the host's fonts, as the app's is.
 
 use std::sync::Arc;
 
@@ -11,7 +10,7 @@ use flui_foundation::geometry::Offset;
 use flui_painting::glyphs::FaceKey;
 use flui_painting::typography::{FontWeight, TextDirection, TextSpan, TextStyle};
 use flui_painting::{
-    Canvas, DrawOp, FontCollection, ShapedParagraph, TextContext, TextPainter, shared_font_system,
+    Canvas, DrawOp, FontCollection, HostFonts, ShapedParagraph, TextContext, TextPainter,
 };
 
 /// Wide enough for the probe text on one line, and finite: the painter
@@ -71,7 +70,7 @@ fn painted_faces(paragraph: &ShapedParagraph) -> Vec<FaceKey> {
 /// the collection (measurement and paint stay on the fallback).
 #[test]
 fn a_face_registered_on_the_collection_reaches_measurement_paint_and_carets() {
-    let fonts = FontCollection::with_host_faces(&shared_font_system());
+    let fonts = FontCollection::with_host_fonts(&HostFonts::scan());
     let mut text_cx = TextContext::new(&fonts);
     let mut painter = probe_painter("iiii wwww");
     painter.layout(&mut text_cx, 0.0, WIDTH);

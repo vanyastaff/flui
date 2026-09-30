@@ -255,9 +255,10 @@ impl RenderingBinding {
         // its current presentation. This rendering binding deliberately does
         // not initialize a second gesture singleton with a disconnected arena.
         //
-        // Painting has no binding at all: the one process-wide painting
-        // resource, the shared font system, is installed by `AppRuntime`'s
-        // `SharedEngineServices` at realm install (`app/runtime.rs`).
+        // Painting has no binding at all: the app's font collection, fed from
+        // one host scan, is built by `AppRuntime`'s `SharedEngineServices`
+        // at realm install (`app/runtime.rs`), and nothing about painting is
+        // process-wide.
         //
         // Semantics enablement is per-presentation now (`SemanticsHost`,
         // `crate::semantics_host`) -- there is no process-wide semantics

@@ -27,8 +27,9 @@
 //! - ✅ A wake pump that actuates the registered wake deadline (`wake_pump.rs`),
 //!   since AppKit exposes no `ControlFlow::WaitUntil`
 //!
-//! No Core Text system is needed: text shaping is cosmic-text end to end
-//! ([ADR-0059](../../../../../docs/adr/ADR-0059-flui-stays-on-cosmic-text.md)),
+//! No Core Text system is needed: text is shaped by Parley and discovered by
+//! fontdb in flui-painting, end to end
+//! ([ADR-0092](../../../../../docs/adr/ADR-0092-per-realm-text-over-parley.md)),
 //! which is why the historical "Core Text (TODO)" item is gone rather than done.
 //!
 //! # Usage

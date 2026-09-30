@@ -19,7 +19,7 @@ use std::sync::atomic::{AtomicIsize, Ordering};
 
 use criterion::Criterion;
 use flui_painting::typography::{TextDirection, TextSpan};
-use flui_painting::{FontCollection, TextContext, TextPainter, shared_font_system};
+use flui_painting::{FontCollection, HostFonts, TextContext, TextPainter};
 
 /// The system allocator, counting the bytes it holds out.
 struct Counting;
@@ -123,17 +123,17 @@ fn main() {
     criterion.bench_function("FontCollection::new", |b| {
         b.iter(|| black_box(FontCollection::new()));
     });
-    criterion.bench_function("host scan (cosmic_text::FontSystem::new)", |b| {
-        b.iter(|| black_box(cosmic_text::FontSystem::new()));
+    criterion.bench_function("HostFonts::scan", |b| {
+        b.iter(|| black_box(HostFonts::scan()));
     });
-    let host = shared_font_system();
-    criterion.bench_function("FontCollection::with_host_faces", |b| {
-        b.iter(|| black_box(FontCollection::with_host_faces(&host)));
+    let host = HostFonts::scan();
+    criterion.bench_function("FontCollection::with_host_fonts", |b| {
+        b.iter(|| black_box(FontCollection::with_host_fonts(&host)));
     });
     criterion.final_summary();
 
     let before = live();
-    let fonts = FontCollection::with_host_faces(&host);
+    let fonts = FontCollection::with_host_fonts(&host);
     let collection = live() - before;
     let mut context = TextContext::new(&fonts);
     println!();

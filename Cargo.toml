@@ -410,15 +410,23 @@ cursor-icon = "1.2"
 bitflags = "2.10"
 # Extended grapheme cluster segmentation (UAX #29) for text editing: caret
 # movement and deletion step by user-perceived character, as Flutter's
-# `characters` package does. Already in the graph through cosmic-text.
+# `characters` package does. Already in the graph through winit.
 unicode-segmentation = "1.12"
 # Percent-encoding of route path segments (`flui_widgets::RoutePath`): the
 # servo/rust-url implementation of the URL path-segment set. Already in the
 # graph through `url`.
 percent-encoding = "2"
-# The Parley path's glyph rasterizer (ADR-0092 §5). The same swash cosmic-text
-# 0.19 already builds; a direct edge, not a second copy.
-swash = { version = "0.2.10", default-features = false, features = ["std", "scale"] }
+# The Parley path's glyph rasterizer (ADR-0092 §5). `render` carries
+# `scale::Render`, which draws a glyph's outline or bitmap into an image.
+swash = { version = "0.2.10", default-features = false, features = ["std", "scale", "render"] }
+# Host font discovery (ADR-0092 §7): one scan of the platform's font
+# directories, and fontconfig's configuration through a pure-Rust parser.
+fontdb = { version = "0.23", default-features = false, features = ["std", "fs", "memmap", "fontconfig"] }
+# The host's locale, which picks the Han fallback list (ADR-0092 §7).
+sys-locale = "0.3"
+# A character's Unicode script, for the painting test harness's
+# fallback-coverage query. The copy Parley already builds.
+icu_properties = { version = "2.3", default-features = false, features = ["compiled_data"] }
 # Parley shaping and measurement (ADR-0092 §10).
 # No `system`: fontique's host scan reaches `windows`, which tier S forbids.
 parley = { version = "0.11.1", default-features = false, features = ["std"] }
@@ -933,7 +941,7 @@ opt-level = 1 # Some optimization for faster runtime
 # crashed rustc (STATUS_ACCESS_VIOLATION) on the heavier test binaries.
 incremental = true
 # `line-tables-only` keeps file:line in panic backtraces and profiler stacks
-# but drops ALL variable/scope/type DWARF — on this 28-crate wgpu/cosmic-text/
+# but drops ALL variable/scope/type DWARF — on this 28-crate wgpu/parley/
 # lyon/naga workspace that debuginfo was the bulk of `target/debug/deps`
 # (measured: a full debug tree ran to ~20 GB and repeatedly filled agent
 # containers; CI hit the same ceiling in PRs #236/#242 and has built with
@@ -945,12 +953,12 @@ debug = "line-tables-only"
 [profile.dev.package."*"]
 # Dependencies are compiled once and rebuilt only when Cargo.lock moves, so
 # their optimization is paid rarely and repaid on every run: wgpu/naga shader
-# translation, cosmic-text shaping and lyon tessellation dominate debug-build
+# translation, Parley shaping and lyon tessellation dominate debug-build
 # frame time and test wall-clock. Workspace crates stay at opt-level 1 for
 # fast rebuilds.
 opt-level = 3
 # No debuginfo at all for dependencies — they inherited `line-tables-only` from
-# `dev`, and wgpu/naga/cosmic-text/lyon are the bulk of the dependency graph.
+# `dev`, and wgpu/naga/parley/lyon are the bulk of the dependency graph.
 # Stepping into a dep is rare enough to raise this for one package when needed.
 #
 # Caveat that applies to every `debug =` key in this file: a global `-C debuginfo=`

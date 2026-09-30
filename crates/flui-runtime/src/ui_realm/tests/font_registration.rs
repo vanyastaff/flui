@@ -1,11 +1,11 @@
 //! A face registered on the app's font collection reaches every realm's
 //! layout at its next frame (ADR-0092 §2, §10 step 3b).
 //!
-//! The rows register on a collection fed from the process font system, as the
-//! app's is, so each adds a family to `FONT_SYSTEM`. Every row names a family
-//! no other test in this crate names, and the rows run in this one table.
+//! The rows register on a collection fed from a scan of the host's fonts, as
+//! the app's is. Every row names a family no other test in this crate names,
+//! and the rows run in this one table.
 
-use flui_painting::{DrawOp, FontCollection, shared_font_system};
+use flui_painting::{DrawOp, FontCollection, HostFonts};
 
 use super::*;
 
@@ -108,7 +108,7 @@ fn assert_near(actual: f64, expected: f64, what: &str) {
 fn a_face_registered_after_start_re_lays_out_text_in_every_realm_on_the_next_frame() {
     use flui_painting::typography::FontWeight;
 
-    let fonts = FontCollection::with_host_faces(&shared_font_system());
+    let fonts = FontCollection::with_host_fonts(&HostFonts::scan());
     let a = realm_over(&fonts);
     let b = realm_over(&fonts);
     for realm in [&a, &b] {
@@ -151,7 +151,7 @@ fn a_face_registered_after_start_re_lays_out_text_in_every_realm_on_the_next_fra
 fn a_face_registered_before_the_realm_is_built_measures_on_its_first_frame() {
     use flui_painting::typography::FontWeight;
 
-    let fonts = FontCollection::with_host_faces(&shared_font_system());
+    let fonts = FontCollection::with_host_fonts(&HostFonts::scan());
     fonts
         .register_font(PROBE_SANS)
         .expect("the probe face loads");

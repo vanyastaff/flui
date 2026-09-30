@@ -50,8 +50,8 @@ impl VariationId {
     }
 }
 
-/// Horizontal quarter-pixel bin: cosmic-text's rule, so both paths draw the
-/// same bitmap for the same glyph at the same position.
+/// Horizontal quarter-pixel bin: the rule cosmic-text drew with, kept so a
+/// glyph draws the bitmap it drew there (`parley_oracle`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum SubpixelBin {
     /// Offset 0.0.
@@ -142,9 +142,9 @@ impl Synthesis {
 /// Identifies one rasterized bitmap (ADR-0092 §5). Names no shaper and no
 /// process table.
 ///
-/// Two equal keys rasterize to equal bitmaps. There is no vertical bin: the
-/// cosmic-text path truncates a glyph's row before binning, so its vertical
-/// bin is always zero, and this key keeps that.
+/// Two equal keys rasterize to equal bitmaps. There is no vertical bin: a
+/// glyph's row is truncated before binning, as cosmic-text truncated it, so
+/// the vertical bin would always be zero.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct GlyphKey {
     face: FaceKey,

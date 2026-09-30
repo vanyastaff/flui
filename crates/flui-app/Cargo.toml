@@ -160,8 +160,8 @@ flui-rendering = { path = "../flui-rendering", version = "=0.2.0-dev", features 
 # wiring test can plant a layout-builder registry entry. Same pattern; the
 # `register_layout_builder_for_test` hook stays out of release builds.
 flui-view = { path = "../flui-view", version = "=0.2.0-dev", features = ["test-utils"] }
-# `testing::host_face_feeds`, which the font-collection tests count the
-# host-face feed with. Same dev-only feature-unification pattern.
+# `testing::host_fed`, which the font-collection tests check the app's
+# collection with. Same dev-only feature-unification pattern.
 flui-painting = { path = "../flui-painting", version = "=0.2.0-dev", features = ["testing"] }
 # The concrete render object and the animation controller the runner's
 # device-recovery, frame-pacing and dispatch tests mount; the realm that

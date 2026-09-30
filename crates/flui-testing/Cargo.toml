@@ -67,15 +67,10 @@ flui-objects = { workspace = true }
 flui-runtime = { path = "../flui-runtime", version = "=0.2.0-dev", features = ["test-support"] }
 # The widget harness's recording IME double.
 parking_lot = { workspace = true }
-# The process-wide `FontSystem` text measurement resolves against. `fonts`
-# pins its face set so a test can commit a layout that does not depend on the
-# host machine's installed fonts. `features = ["testing"]` because the
-# initializer that pin rides is deliberately off flui-painting's shipped
-# surface: claiming `FONT_SYSTEM` is irreversible for the process, so no
-# production caller should be able to win that race. This crate is itself test
-# support and never enters a production graph, so the feature travels nowhere
-# new.
-flui-painting = { path = "../flui-painting", version = "=0.2.0-dev", features = ["testing"] }
+# The font collection a headless realm shapes on (bundled faces only, so text
+# measures alike on every host) and the painting values the widget harness
+# reads.
+flui-painting = { path = "../flui-painting", version = "=0.2.0-dev" }
 # Registered `AnimationController`s the frame loop ticks on the virtual timeline,
 # restart-aware via the controller's `run_generation` counter.
 flui-animation = { path = "../flui-animation", version = "=0.2.0-dev" }
