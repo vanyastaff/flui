@@ -165,9 +165,7 @@ fn pinned(dest: &str) -> bool {
             .and_then(|rest| rest.split_once('/'))
             .is_some_and(|(reference, _)| {
                 (7..=40).contains(&reference.len())
-                    && reference
-                        .bytes()
-                        .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+                    && reference.bytes().all(|byte| byte.is_ascii_hexdigit())
             })
     })
 }
@@ -260,9 +258,12 @@ fn path(word: &str) -> Option<String> {
     if !ROOTS.contains(&first) || rest.is_empty() || foreign(word) {
         return None;
     }
-    let plain = word
-        .bytes()
-        .all(|byte| byte.is_ascii_alphanumeric() || b"._-/".contains(&byte));
+    // any character a filename holds (`docs/不存在.md`, `foo+bar.md`) but a
+    // pattern's, a placeholder's, a quote or a shell operator
+    let plain = !word.contains([
+        '*', '?', '[', ']', '{', '}', '<', '>', '$', '…', '"', '\'', '`', '\\', '|', ':', ';', ',',
+        '(', ')', '=',
+    ]);
     if !plain {
         return None;
     }
@@ -354,6 +355,49 @@ const SUDO_VALUE_OPTIONS: [&str; 22] = [
     "--chroot",
 ];
 
+/// sudo's short options that take a value, joined (`-uroot`) or in the next
+/// word, alone or at the end of a cluster (`-Eu root`).
+const SUDO_SHORT_VALUES: [char; 11] = ['u', 'g', 'C', 'D', 'h', 'p', 'r', 't', 'U', 'T', 'R'];
+
+/// The shells whose `-c` operand is a script to read (`sh -c 'cargo …'`).
+const SHELLS: [&str; 5] = ["sh", "bash", "zsh", "dash", "ksh"];
+
+/// The first value-taking option of a short-option cluster (`-Eu`, `-iS`)
+/// among `takes_value`, and the value joined after it (`""` when the value is
+/// the next word); `None` for a word that is no such cluster.
+fn short_cluster<'a>(word: &'a str, takes_value: &[char]) -> Option<(char, &'a str)> {
+    let flags = word
+        .strip_prefix('-')
+        .filter(|flags| !flags.starts_with('-'))?;
+    flags
+        .char_indices()
+        .find(|(_, flag)| takes_value.contains(flag))
+        .map(|(at, flag)| (flag, &flags[at + flag.len_utf8()..]))
+}
+
+/// The script a shell runs with `-c` (`sh -c 'cargo test -p x'`), with the
+/// line its word starts on; `None` for any other command.
+fn shell_script(words: &VecDeque<(usize, String)>) -> Option<(usize, String)> {
+    let mut words = words.iter().skip_while(|(_, word)| assignment(word));
+    let (_, program) = words.next()?;
+    let name = program.rsplit('/').next().unwrap_or(program);
+    if !SHELLS.contains(&name) {
+        return None;
+    }
+    while let Some((_, word)) = words.next() {
+        match word.strip_prefix('-') {
+            // `-c`, or a cluster holding it (`-lc`, `-ec`)
+            Some(flags) if !flags.starts_with('-') && flags.contains('c') => {
+                return words.next().map(|(line, script)| (*line, script.clone()));
+            }
+            Some(_) => {}
+            // a script file, not a command string
+            None => return None,
+        }
+    }
+    None
+}
+
 /// GNU `time`'s options that take a value in the next word.
 const TIME_VALUE_OPTIONS: [&str; 4] = ["-f", "--format", "-o", "--output"];
 
@@ -380,6 +424,13 @@ pub(super) fn packages_in(code: &str, dialect: shell::Dialect) -> Vec<Selected> 
     let mut found = Vec::new();
     for command in shell::commands_in(code, dialect) {
         let mut words: VecDeque<(usize, String)> = command.into();
+        if let Some((line, script)) = shell_script(&words) {
+            for mut selected in packages_in(&script, shell::Dialect::Posix) {
+                selected.line += line;
+                found.push(selected);
+            }
+            continue;
+        }
         if !cargo_command(&mut words) {
             continue;
         }
@@ -449,7 +500,10 @@ fn cargo_command(words: &mut VecDeque<(usize, String)>) -> bool {
             while let Some((line, word)) = words.pop_front() {
                 if word == "--" {
                     break;
-                } else if SUDO_VALUE_OPTIONS.contains(&word.as_str()) {
+                } else if SUDO_VALUE_OPTIONS.contains(&word.as_str())
+                    || short_cluster(&word, &SUDO_SHORT_VALUES)
+                        .is_some_and(|(_, value)| value.is_empty())
+                {
                     words.pop_front();
                 } else if !word.starts_with('-') && !assignment(&word) {
                     words.push_front((line, word));
@@ -509,22 +563,28 @@ fn cargo_command(words: &mut VecDeque<(usize, String)>) -> bool {
         }
         // `env [OPTION]... [NAME=VALUE]... COMMAND [ARG]...` runs COMMAND
         while let Some((line, word)) = words.pop_front() {
-            let split = if matches!(word.as_str(), "-S" | "--split-string") {
+            let cluster = short_cluster(&word, &['S', 'u', 'C']);
+            let split = if word == "--split-string" {
                 words.pop_front().map(|(_, value)| value)
+            } else if let Some(value) = word.strip_prefix("--split-string=") {
+                Some(value.to_owned())
+            } else if let Some(('S', value)) = cluster {
+                if value.is_empty() {
+                    words.pop_front().map(|(_, value)| value)
+                } else {
+                    Some(value.to_owned())
+                }
             } else {
-                word.strip_prefix("--split-string=")
-                    .or_else(|| {
-                        word.strip_prefix("-S")
-                            .filter(|value| !value.is_empty() && !word.starts_with("--"))
-                    })
-                    .map(str::to_owned)
+                None
             };
             if let Some(split) = split {
                 for part in split_string(&split).into_iter().rev() {
                     words.push_front((line, part));
                 }
                 break;
-            } else if ENV_VALUE_OPTIONS.contains(&word.as_str()) {
+            } else if ENV_VALUE_OPTIONS.contains(&word.as_str())
+                || cluster.is_some_and(|(_, value)| value.is_empty())
+            {
                 words.pop_front();
             } else if !word.starts_with('-') {
                 // an assignment or the command: the outer loop reads it
@@ -610,7 +670,8 @@ fn package(word: &str) -> Option<(String, Option<String>, Option<String>)> {
     // fragment's, or else the URL's last path segment; the URL is its source
     let (spec, source) = match word.rsplit_once('#') {
         Some((url, fragment)) if url.contains("://") => {
-            let spec = if fragment.starts_with(|c: char| c.is_ascii_alphabetic()) {
+            // a package name starts with a letter or `_`; a version with a digit
+            let spec = if fragment.starts_with(|c: char| c.is_alphabetic() || c == '_') {
                 fragment.to_owned()
             } else {
                 format!("{}@{fragment}", last_segment(url_path(url)))

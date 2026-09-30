@@ -39,6 +39,9 @@ fn a_path_needs_a_known_root_and_a_slash() {
             "crates/gpuii/src/window.rs",
             &["crates/gpuii/src/window.rs"],
         ),
+        // any filename character
+        ("docs/不存在.md", &["docs/不存在.md"]),
+        ("docs/foo+bar.md", &["docs/foo+bar.md"]),
         // `.` and `..` resolve, so a stale path behind them is still checked
         ("docs/./adr/../testing.md", &["docs/testing.md"]),
         ("docs/../removed.md", &["removed.md"]),
@@ -282,6 +285,23 @@ fn packages_are_read_only_from_cargo_commands() {
             "cat <<EO\\\nF\nx\nEOF\ncargo build -p a",
             &[(4, build, "a")],
         ),
+        // an unquoted body joins a backslash-newline before the terminator
+        // check; a quoted one keeps its lines as written
+        ("cat <<EOF\nEO\\\nF\ncargo build -p a", &[(3, build, "a")]),
+        (
+            "cat <<'EOF'\nEO\\\nF\nEOF\ncargo build -p a",
+            &[(4, build, "a")],
+        ),
+        // a comment may follow an operator directly
+        ("echo \"$(true;# )\ncargo test -p a\n)\"", &[(1, test, "a")]),
+        // value-taking options inside a cluster
+        ("env -iS 'cargo test -p a'", &[(0, test, "a")]),
+        ("env -iu X cargo test -p a", &[(0, test, "a")]),
+        ("sudo -Eu root cargo test -p a", &[(0, test, "a")]),
+        // a shell's `-c` script is read
+        ("sh -c 'cargo test -p a'", &[(0, test, "a")]),
+        ("bash -lc \"cargo build -p a\"", &[(0, build, "a")]),
+        ("bash script.sh -p x", &[]),
         ("cat <<\\EOF\n$(cargo test -p gone)\nEOF", &[]),
         (
             "cat <<'END MARK'\ncargo test -p gone\nEND MARK\ncargo build -p a",
@@ -436,6 +456,11 @@ fn a_lockfile_package_is_selected_only_by_update_and_tree() {
                 "1.2.3",
                 Some("git+file:///tmp/gitdep?rev=abc#abc"),
             ),
+            (
+                "_helper",
+                "1.2.3",
+                Some("git+https://host/repo?rev=abc#abc"),
+            ),
         ]),
     };
     for (code, selects) in [
@@ -462,6 +487,11 @@ fn a_lockfile_package_is_selected_only_by_update_and_tree() {
         // a version-only fragment names the package by the URL's path, not its query
         (
             "cargo pkgid -p 'git+file:///tmp/gitdep?rev=abc#1.2.3'",
+            true,
+        ),
+        // a fragment starting with `_` names a package
+        (
+            "cargo pkgid -p 'git+https://host/repo?rev=abc#_helper@1.2.3'",
             true,
         ),
         // cargo canonicalizes the source kind's case and a default port
@@ -796,7 +826,9 @@ fn a_pinned_label_is_no_path_but_its_command_is_read() {
         local: locked(&[("flui-view", "0.2.0")]),
         locked: BTreeMap::new(),
     };
+    // a commit hash is hex in either case
     let text = "[`docs/gone.md`](https://github.com/vanyastaff/flui/blob/e30ab71/docs/gone.md) \
+                [`docs/gone2.md`](https://github.com/vanyastaff/flui/blob/E30AB71/docs/gone2.md) \
                 [`cargo test -p gone`](https://github.com/vanyastaff/flui/blob/e30ab71/x.md)\n";
     let found: Vec<(Kind, String)> = stale("README.md", text, &known(), &packages, &|_| None)
         .into_iter()

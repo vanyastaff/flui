@@ -456,11 +456,18 @@ impl Lexer<'_> {
             let mut body = String::new();
             loop {
                 let mut body_line = String::new();
-                while let Some(next) = self.chars.next_if(|&next| next != '\n') {
-                    body_line.push(next);
-                }
-                let ended = self.chars.next().is_none();
-                self.line += usize::from(!ended);
+                let ended = loop {
+                    while let Some(next) = self.chars.next_if(|&next| next != '\n') {
+                        body_line.push(next);
+                    }
+                    let ended = self.chars.next().is_none();
+                    self.line += usize::from(!ended);
+                    // an unquoted body's backslash-newline joins the next line
+                    if ended || heredoc.quoted || !body_line.ends_with('\\') {
+                        break ended;
+                    }
+                    body_line.pop();
+                };
                 let body_line = body_line.trim_end_matches('\r');
                 let body_line = if heredoc.strip_tabs {
                     body_line.trim_start_matches('\t')
@@ -572,7 +579,10 @@ fn substitution_text(chars: &mut Peekable<Chars<'_>>, closing: char) -> String {
                 continue;
             }
             // a comment runs to the line's end: its words are no keywords
-            '#' if text.is_empty() || text.ends_with(char::is_whitespace) => {
+            // a comment starts a word: after a blank or an operator
+            '#' if text.is_empty()
+                || text.ends_with(|c: char| c.is_whitespace() || ";&|()".contains(c)) =>
+            {
                 text.push(c);
                 while let Some(skipped) = chars.next_if(|&next| next != '\n') {
                     text.push(skipped);
