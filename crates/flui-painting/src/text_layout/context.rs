@@ -154,10 +154,8 @@ impl FontCollection {
     ///
     /// # Errors
     ///
-    /// [`RegisterFontError`] if the bytes hold no face: nothing is added and
-    /// the generation does not move. Bytes the paint side loads but the
-    /// measuring side finds no family in also return the error, with a
-    /// warning; the paint side keeps the face, as it keeps every face.
+    /// [`RegisterFontError`] if either side finds no face in the bytes:
+    /// nothing is added to either and the generation does not move.
     #[tracing::instrument(skip_all, fields(bytes = font_bytes.len()))]
     pub fn register_font(&self, font_bytes: &[u8]) -> Result<(), RegisterFontError> {
         // Checked before fontique sees the bytes: its registration bumps the
@@ -165,6 +163,17 @@ impl FontCollection {
         // context deep-copy the collection for nothing.
         #[cfg(feature = "parley")]
         if ::swash::FontRef::from_index(font_bytes, 0).is_none() {
+            return Err(RegisterFontError);
+        }
+        #[cfg(feature = "parley")]
+        let blob = parley::fontique::Blob::new(Arc::new(font_bytes.to_vec()));
+        // The measuring side's verdict before the paint side loads anything:
+        // paint never drops a face, so one it kept and measurement lacks
+        // would split the two for good. A scratch collection takes no shared
+        // lock and bumps no version; the shared registration below reads the
+        // same bytes the same way.
+        #[cfg(feature = "parley")]
+        if self.0.paint.is_some() && !measures_a_family(&blob) {
             return Err(RegisterFontError);
         }
         match &self.0.paint {
@@ -187,23 +196,26 @@ impl FontCollection {
         #[cfg(feature = "parley")]
         {
             let mut collection = self.0.collection.clone();
-            let families = collection.register_fonts(
-                parley::fontique::Blob::new(Arc::new(font_bytes.to_vec())),
-                None,
-            );
-            if families.is_empty() {
-                if self.0.paint.is_some() {
-                    tracing::warn!(
-                        "the paint side loaded a face the measuring side found no family in; \
-                         paint keeps it"
-                    );
-                }
+            if collection.register_fonts(blob, None).is_empty() {
+                // Reached only without a paint side: with one, the scratch
+                // check above found a family in these bytes.
                 return Err(RegisterFontError);
             }
         }
         self.0.generation.fetch_add(1, Ordering::AcqRel);
         Ok(())
     }
+}
+
+/// Whether fontique finds a family in `blob`, asked of a scratch collection
+/// that shares nothing.
+#[cfg(feature = "parley")]
+fn measures_a_family(blob: &parley::fontique::Blob<u8>) -> bool {
+    let mut scratch = parley::fontique::Collection::new(parley::fontique::CollectionOptions {
+        shared: false,
+        system_fonts: false,
+    });
+    !scratch.register_fonts(blob.clone(), None).is_empty()
 }
 
 /// A collection and its generation, as a cached measurement records them.
@@ -582,6 +594,39 @@ mod tests {
             assert_eq!(fonts.generation(), fonts_before);
         }
 
+        /// The probe face with its `cmap` table hidden (its tag renamed in
+        /// the table directory): fontdb still loads it, fontique finds no
+        /// family in it.
+        fn probe_without_cmap() -> Vec<u8> {
+            let mut bytes = PROBE_MONO.to_vec();
+            let tables = usize::from(u16::from_be_bytes([bytes[4], bytes[5]]));
+            let record = (0..tables)
+                .map(|table| 12 + table * 16)
+                .find(|&record| &bytes[record..record + 4] == b"cmap")
+                .expect("the probe face has a cmap table");
+            bytes[record] = b'z';
+            bytes
+        }
+
+        /// Bytes the paint side would load but the measuring side finds no
+        /// family in are refused before either side changes. Fails if the
+        /// paint side loads them first: it would paint a face measurement
+        /// never gains, for good.
+        fn bytes_only_the_paint_side_reads_move_neither_side() {
+            let paint = paint_side();
+            let fonts = FontCollection::with_host_faces(&paint);
+            let (paint_before, fonts_before) = (paint.generation(), fonts.generation());
+
+            assert!(fonts.register_font(&probe_without_cmap()).is_err());
+
+            assert!(
+                !paint.family_names().iter().any(|name| name == PROBE),
+                "the paint side did not load the face"
+            );
+            assert_eq!(paint.generation(), paint_before);
+            assert_eq!(fonts.generation(), fonts_before);
+        }
+
         /// A collection built without a font system registers for
         /// measurement alone and never reaches the process-wide font system.
         /// Fails if `FontCollection::new` pairs with it.
@@ -612,6 +657,10 @@ mod tests {
                 (
                     "bytes_with_no_face_move_neither_side",
                     bytes_with_no_face_move_neither_side,
+                ),
+                (
+                    "bytes_only_the_paint_side_reads_move_neither_side",
+                    bytes_only_the_paint_side_reads_move_neither_side,
                 ),
                 (
                     "a_bundled_only_collection_registers_for_measurement_alone",
