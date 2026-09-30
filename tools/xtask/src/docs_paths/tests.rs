@@ -183,6 +183,11 @@ fn packages_are_read_only_from_cargo_commands() {
             &[(3, build, "a")],
         ),
         ("cat <<< x; cargo build -p a", &[(0, build, "a")]),
+        // an unquoted here-document runs its command substitutions
+        ("cat <<EOF\nx $(cargo test -p a)\nEOF", &[(1, test, "a")]),
+        ("cat <<EOF\n`cargo build -p a`\nEOF", &[(1, build, "a")]),
+        ("cat <<'EOF'\n$(cargo test -p gone)\nEOF", &[]),
+        ("cat <<\\EOF\n$(cargo test -p gone)\nEOF", &[]),
         (
             "cat <<'END MARK'\ncargo test -p gone\nEND MARK\ncargo build -p a",
             &[(3, build, "a")],
@@ -321,6 +326,7 @@ fn a_lockfile_package_is_selected_only_by_update_and_tree() {
             ("flui-app", "0.2.0"),
             ("alpha", "1.2.3+meta"),
         ]),
+        dirs: [("flui-app".to_owned(), vec!["crates/flui-app".to_owned()])].into(),
         locked: lockfile(&[
             ("wgpu", "25.0.0", Some(CRATES_IO)),
             ("bitflags", "1.3.2", Some(CRATES_IO)),
@@ -370,11 +376,36 @@ fn a_lockfile_package_is_selected_only_by_update_and_tree() {
         // a path source names a checkout package
         ("cargo pkgid -p 'path+file:///repo/crates/flui-app'", true),
         ("cargo pkgid -p 'path+file:///repo/crates/gone'", false),
+        // a path source must be the package's directory, at its version
+        (
+            "cargo pkgid -p 'file:///repo/crates/flui-app#flui-app@0.2.0'",
+            true,
+        ),
+        (
+            "cargo pkgid -p 'file:///definitely/missing#flui-app@0.2.0'",
+            false,
+        ),
+        (
+            "cargo pkgid -p 'file:///repo/crates/flui-app#flui-app@9'",
+            false,
+        ),
+        // a source's scheme and host match in any case, its path does not
+        (
+            "cargo pkgid -p 'registry+HTTPS://GITHUB.COM/rust-lang/crates.io-index#bitflags@2.13.2'",
+            true,
+        ),
+        (
+            "cargo pkgid -p 'registry+https://github.com/RUST-LANG/crates.io-index#bitflags@2.13.2'",
+            false,
+        ),
         // glob classes, as cargo's package patterns take them
         ("cargo test -p 'flui-[v]iew'", true),
         ("cargo test -p 'flui-[a-z]pp'", true),
         ("cargo test -p 'flui-[!v]iew'", false),
         ("cargo test -p 'flui-[^a]pp'", false),
+        // many stars take linear steps, not exponential backtracking
+        ("cargo test -p '*******************************z'", false),
+        ("cargo test -p '**f**l**u**i**-**a**p**p**'", true),
         ("cargo update -p wgpu", true),
         ("cargo tree -p wgpu", true),
         ("cargo pkgid -p wgpu", true),
@@ -561,6 +592,7 @@ fn a_doc_reports_each_stale_name_once() {
     let known = known();
     let packages = Packages {
         local: locked(&[("flui-view", "0.2.0"), ("flui-app", "0.2.0")]),
+        dirs: BTreeMap::new(),
         locked: lockfile(&[("wgpu", "25.0.0", Some(CRATES_IO))]),
     };
     let read = |path: &str| (path == "docs/testing.md").then(|| "# The harness\n".to_owned());

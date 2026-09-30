@@ -161,6 +161,9 @@ struct Packages {
     /// manifest for (the Android examples are excluded from the workspace),
     /// each with its version when the manifest states one.
     local: BTreeMap<String, BTreeSet<String>>,
+    /// The directory of each checkout package, repository-relative (`""` is
+    /// the root), for a `path+file://…` source to name.
+    dirs: BTreeMap<String, Vec<String>>,
     /// Every package in `Cargo.lock`, each locked version with its source,
     /// for a [`GRAPH_SUBCOMMANDS`] command.
     locked: BTreeMap<String, Vec<LockedVersion>>,
@@ -211,9 +214,19 @@ impl Packages {
                     return versions.is_empty() || versions.iter().any(|known| version_ok(known));
                 }
             }
-            // a path source is a checkout package's
+            // a path source names a checkout package by its directory
             Some(source) if source.starts_with("path+") || source.starts_with("file:") => {
-                return self.local.contains_key(&selected.name);
+                let path = source.strip_prefix("path+").unwrap_or(source);
+                let path = path.strip_prefix("file://").unwrap_or(path);
+                let path = path.trim_end_matches('/');
+                let in_dir = self.dirs.get(&selected.name).is_some_and(|dirs| {
+                    dirs.iter()
+                        .any(|dir| dir.is_empty() || path.ends_with(&format!("/{dir}")))
+                });
+                let versioned = self.local.get(&selected.name).is_some_and(|versions| {
+                    versions.is_empty() || versions.iter().any(|known| version_ok(known))
+                });
+                return in_dir && versioned;
             }
             Some(_) => {}
         }
@@ -246,7 +259,31 @@ fn source_matches(spec: &str, known: Option<&str>) -> bool {
     };
     let base = known.split(['?', '#']).next().unwrap_or(known);
     let url = base.split_once('+').map_or(base, |(_, url)| url);
-    spec == known || spec == base || spec == url
+    let spec = normalized_url(spec);
+    [known, base, url]
+        .iter()
+        .any(|known| normalized_url(known) == spec)
+}
+
+/// `source` with its URL's scheme and host lowercased, which URLs match in
+/// any case; the kind (`registry+`) and the path keep theirs.
+fn normalized_url(source: &str) -> String {
+    let (kind, url) = match source.split_once("://") {
+        Some((head, _)) => match head.rsplit_once('+') {
+            Some((kind, _)) => (&source[..=kind.len()], &source[kind.len() + 1..]),
+            None => ("", source),
+        },
+        None => return source.to_owned(),
+    };
+    let Some((scheme, rest)) = url.split_once("://") else {
+        return source.to_owned();
+    };
+    let (host, path) = rest.split_at(rest.find('/').unwrap_or(rest.len()));
+    format!(
+        "{kind}{}://{}{path}",
+        scheme.to_ascii_lowercase(),
+        host.to_ascii_lowercase()
+    )
 }
 
 /// Whether the version of a package-ID spec (`1`, `1.3`, `1.3.2`,
@@ -292,6 +329,7 @@ fn packages(root: &std::path::Path, known: &Known) -> anyhow::Result<Packages> {
         version: Option<toml::Value>,
     }
     let mut names: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    let mut dirs: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for package in crate::util::metadata(root)?.workspace_packages() {
         names
             .entry(package.name.to_string())
@@ -310,6 +348,11 @@ fn packages(root: &std::path::Path, known: &Known) -> anyhow::Result<Packages> {
             package: Some(package),
         }) = toml::from_str(&text)
         {
+            let dir = manifest
+                .strip_suffix("/Cargo.toml")
+                .unwrap_or_default()
+                .to_owned();
+            dirs.entry(package.name.clone()).or_default().push(dir);
             let versions = names.entry(package.name).or_default();
             if let Some(version) = package.version.as_ref().and_then(toml::Value::as_str) {
                 versions.insert(version.to_owned());
@@ -327,6 +370,7 @@ fn packages(root: &std::path::Path, known: &Known) -> anyhow::Result<Packages> {
     }
     Ok(Packages {
         local: names,
+        dirs,
         locked,
     })
 }

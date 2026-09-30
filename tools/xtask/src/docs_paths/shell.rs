@@ -7,8 +7,8 @@
 //!   attached to a word or not;
 //! - a redirection (`>log`, `2>&1`, `<in`) and its target are dropped, so
 //!   `>log cargo test` is cargo's command;
-//! - a here-document's body (`<<EOF` … `EOF`, the delimiter quoted or not) is
-//!   skipped as data;
+//! - a here-document's body (`<<EOF` … `EOF`) is data, but for the command
+//!   substitutions of one whose delimiter is unquoted, which the shell runs;
 //! - a command substitution (`$(…)`, `` `…` ``), bare or inside double
 //!   quotes, is a command of its own, and stands for a `$` in its word.
 //!
@@ -40,6 +40,16 @@ pub(super) fn commands(code: &str) -> Vec<Command> {
 /// The characters that end an unquoted word.
 const WORD_ENDS: &str = ";&|()<>";
 
+/// A here-document opened on the current line.
+struct Heredoc {
+    delimiter: String,
+    /// `<<-`: leading tabs are stripped from the body and the delimiter line.
+    strip_tabs: bool,
+    /// A quoted delimiter makes the body inert; an unquoted one leaves its
+    /// command substitutions to run.
+    quoted: bool,
+}
+
 /// The state of one pass over the code.
 struct Lexer<'a> {
     chars: Peekable<Chars<'a>>,
@@ -51,7 +61,7 @@ struct Lexer<'a> {
     word: Option<(usize, String)>,
     /// The here-documents opened on this line: each delimiter, and whether
     /// `<<-` strips leading tabs. Their bodies follow the newline.
-    heredocs: Vec<(String, bool)>,
+    heredocs: Vec<Heredoc>,
     /// The commands of the substitutions met so far.
     nested: Vec<Command>,
 }
@@ -187,13 +197,18 @@ impl Lexer<'_> {
             text.push(c);
         }
         self.line += text.matches('\n').count();
-        for mut command in commands(&text) {
-            for (line, _) in &mut command {
-                *line += start;
+        self.nest(&text, start);
+        self.push('$');
+    }
+
+    /// The commands of a substitution's `text`, which starts on `line`.
+    fn nest(&mut self, text: &str, line: usize) {
+        for mut command in commands(text) {
+            for (at, _) in &mut command {
+                *at += line;
             }
             self.nested.push(command);
         }
-        self.push('$');
     }
 
     /// Drops a redirection whose operator started with the character just
@@ -244,14 +259,20 @@ impl Lexer<'_> {
             .is_some()
         {}
         let mut delimiter = String::new();
-        self.read_word(|c| delimiter.push(c));
+        let quoted = self.read_word(|c| delimiter.push(c));
         if !delimiter.is_empty() {
-            self.heredocs.push((delimiter, strip_tabs));
+            self.heredocs.push(Heredoc {
+                delimiter,
+                strip_tabs,
+                quoted,
+            });
         }
     }
 
-    /// Reads one shell word, quotes removed, handing each character to `each`.
-    fn read_word(&mut self, mut each: impl FnMut(char)) {
+    /// Reads one shell word, quotes removed, handing each character to `each`;
+    /// whether any of it was quoted or escaped.
+    fn read_word(&mut self, mut each: impl FnMut(char)) -> bool {
+        let mut quoted = false;
         let mut quote: Option<char> = None;
         while let Some(&next) = self.chars.peek() {
             match quote {
@@ -267,18 +288,27 @@ impl Lexer<'_> {
                 None => {
                     self.chars.next();
                     match next {
-                        '\'' | '"' => quote = Some(next),
-                        '\\' => each(self.chars.next().unwrap_or_default()),
+                        '\'' | '"' => {
+                            quoted = true;
+                            quote = Some(next);
+                        }
+                        '\\' => {
+                            quoted = true;
+                            each(self.chars.next().unwrap_or_default());
+                        }
                         next => each(next),
                     }
                 }
             }
         }
+        quoted
     }
 
     /// Skips the bodies of the here-documents opened on the line just ended.
     fn skip_heredoc_bodies(&mut self) {
-        for (delimiter, strip_tabs) in std::mem::take(&mut self.heredocs) {
+        for heredoc in std::mem::take(&mut self.heredocs) {
+            let start = self.line;
+            let mut body = String::new();
             loop {
                 let mut body_line = String::new();
                 while let Some(next) = self.chars.next_if(|&next| next != '\n') {
@@ -287,13 +317,23 @@ impl Lexer<'_> {
                 let ended = self.chars.next().is_none();
                 self.line += usize::from(!ended);
                 let body_line = body_line.trim_end_matches('\r');
-                let body_line = if strip_tabs {
+                let body_line = if heredoc.strip_tabs {
                     body_line.trim_start_matches('\t')
                 } else {
                     body_line
                 };
-                if ended || body_line == delimiter {
+                if body_line == heredoc.delimiter {
                     break;
+                }
+                body.push_str(body_line);
+                body.push('\n');
+                if ended {
+                    break;
+                }
+            }
+            if !heredoc.quoted {
+                for (offset, text) in substitutions(&body) {
+                    self.nest(&text, start + offset);
                 }
             }
         }
@@ -335,4 +375,49 @@ impl Lexer<'_> {
             self.commands.push(Command::new());
         }
     }
+}
+
+/// The command substitutions (`$(…)`, `` `…` ``) of a here-document body the
+/// shell expands, each with the 0-based line of the body it starts on.
+fn substitutions(body: &str) -> Vec<(usize, String)> {
+    let mut found = Vec::new();
+    let mut chars = body.chars().peekable();
+    let mut line = 0;
+    while let Some(c) = chars.next() {
+        match c {
+            '\n' => line += 1,
+            '\\' => {
+                if chars.next() == Some('\n') {
+                    line += 1;
+                }
+            }
+            '$' if chars.next_if_eq(&'(').is_some() => {
+                let (start, mut depth, mut text) = (line, 0_usize, String::new());
+                for c in chars.by_ref() {
+                    match c {
+                        ')' if depth == 0 => break,
+                        '(' => depth += 1,
+                        ')' => depth -= 1,
+                        '\n' => line += 1,
+                        _ => {}
+                    }
+                    text.push(c);
+                }
+                found.push((start, text));
+            }
+            '`' => {
+                let (start, mut text) = (line, String::new());
+                for c in chars.by_ref() {
+                    if c == '`' {
+                        break;
+                    }
+                    line += usize::from(c == '\n');
+                    text.push(c);
+                }
+                found.push((start, text));
+            }
+            _ => {}
+        }
+    }
+    found
 }

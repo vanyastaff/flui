@@ -551,30 +551,69 @@ pub(super) fn is_glob(name: &str) -> bool {
 
 /// Whether the glob `pattern` matches all of `name`: `*` any run, `?` any one
 /// character, `[abc]`/`[a-z]` one of a class (`[!…]`/`[^…]` one not in it).
+/// A table over (pattern token, name prefix), so no pattern takes more than
+/// their product in steps (`***…z` does not backtrack).
 pub(super) fn glob_matches(pattern: &str, name: &str) -> bool {
-    let pattern: Vec<char> = pattern.chars().collect();
     let name: Vec<char> = name.chars().collect();
-    glob_at(&pattern, &name)
+    // `reached[j]`: the tokens so far match the first `j` characters of `name`
+    let mut reached = vec![false; name.len() + 1];
+    reached[0] = true;
+    for token in glob_tokens(pattern) {
+        let mut next = vec![false; name.len() + 1];
+        match token {
+            GlobToken::Star => {
+                let mut any = false;
+                for (j, slot) in next.iter_mut().enumerate() {
+                    any |= reached[j];
+                    *slot = any;
+                }
+            }
+            GlobToken::One(matches) => {
+                for (j, &c) in name.iter().enumerate() {
+                    next[j + 1] = reached[j] && matches(c);
+                }
+            }
+        }
+        reached = next;
+    }
+    reached[name.len()]
 }
 
-fn glob_at(pattern: &[char], name: &[char]) -> bool {
-    match pattern.first() {
-        None => name.is_empty(),
-        Some('*') => (0..=name.len()).any(|skip| glob_at(&pattern[1..], &name[skip..])),
-        Some('?') => !name.is_empty() && glob_at(&pattern[1..], &name[1..]),
-        Some('[') => match (class(&pattern[1..]), name.first()) {
-            (Some((set, len)), Some(&c)) => set(c) && glob_at(&pattern[1 + len..], &name[1..]),
-            (Some(_), None) => false,
-            // an unclosed `[` is a literal
-            (None, first) => first == Some(&'[') && glob_at(&pattern[1..], &name[1..]),
-        },
-        Some(literal) => name.first() == Some(literal) && glob_at(&pattern[1..], &name[1..]),
+/// One token of a glob.
+enum GlobToken {
+    /// `*`: any run of characters.
+    Star,
+    /// One character the predicate accepts: `?`, a class, or a literal.
+    One(Box<dyn Fn(char) -> bool>),
+}
+
+/// The tokens of `pattern`; an unclosed `[` is a literal.
+fn glob_tokens(pattern: &str) -> Vec<GlobToken> {
+    let pattern: Vec<char> = pattern.chars().collect();
+    let mut tokens = Vec::new();
+    let mut at = 0;
+    while at < pattern.len() {
+        let c = pattern[at];
+        at += 1;
+        tokens.push(match c {
+            '*' => GlobToken::Star,
+            '?' => GlobToken::One(Box::new(|_| true)),
+            '[' => match class(&pattern[at..]) {
+                Some((set, len)) => {
+                    at += len;
+                    GlobToken::One(Box::new(set))
+                }
+                None => GlobToken::One(Box::new(|c| c == '[')),
+            },
+            literal => GlobToken::One(Box::new(move |c| c == literal)),
+        });
     }
+    tokens
 }
 
 /// The class after a `[`: whether a character is in it, and how many
 /// characters of the pattern it takes, its `]` included; `None` when unclosed.
-fn class(pattern: &[char]) -> Option<(impl Fn(char) -> bool + '_, usize)> {
+fn class(pattern: &[char]) -> Option<(impl Fn(char) -> bool + 'static, usize)> {
     let negated = matches!(pattern.first(), Some('!' | '^'));
     let body_start = usize::from(negated);
     // a `]` first in the class is a member, not its end
@@ -583,7 +622,7 @@ fn class(pattern: &[char]) -> Option<(impl Fn(char) -> bool + '_, usize)> {
         .skip(body_start + 1)
         .position(|&c| c == ']')
         .map(|at| at + body_start + 1)?;
-    let body = &pattern[body_start..close];
+    let body: Vec<char> = pattern[body_start..close].to_vec();
     let contains = move |c: char| {
         let mut at = 0;
         while at < body.len() {
