@@ -37,6 +37,10 @@ use super::aggregator::WIDE_CONDITION;
 /// inputs of the `xtask` package.
 pub(super) const DOCS_ONLY: &[&str] = &[
     "*.md", // root-level only: `*` does not cross `/` (see `matches`)
+    // License texts, and their copies shipped in each package: no build reads
+    // them, and cargo-deny judges the manifests' SPDX `license` field instead.
+    "LICENSE*",
+    "NOTICE*",
     "docs/**",
     "design/**",
     "book/**",
@@ -46,7 +50,6 @@ pub(super) const DOCS_ONLY: &[&str] = &[
     ".editorconfig",
     "crates/*/ARCHITECTURE.md",
     "crates/*/CHANGELOG.md",
-    // the root license texts' per-crate copies, shipped in each package
     "crates/*/LICENSE*",
     "crates/*/NOTICE",
     "packages/*/ARCHITECTURE.md",
@@ -109,8 +112,6 @@ pub(super) const TOOLING: &[&str] = &[
     ".gitignore",
     ".gitattributes",
     "llms.txt",
-    "LICENSE*",
-    "NOTICE*",
     ".github/dependabot.yml",
 ];
 
@@ -774,6 +775,8 @@ pub(super) mod tests {
     fn documentation_paths() {
         for path in [
             "README.md",
+            "LICENSE-APACHE",
+            "NOTICE",
             "docs/testing.md",
             "design/architecture.md",
             "book/src/intro.md",
