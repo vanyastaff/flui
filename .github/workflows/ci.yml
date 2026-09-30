@@ -5,14 +5,18 @@ name: CI
 #   docs      a PR changing only documentation: nothing else
 #   tooling   a PR changing only repository tooling or a standalone crate
 #             (its own [workspace]): `deps`, and `standalone` for the crate
-#   wide      a PR that compiles anything: `deps` and every Linux job
-#             (HEAVY_JOBS in `ci`) over the whole workspace, in parallel, and
-#             `ios-runner` when the change reaches the iOS runner; no Windows
-#             or macOS suite. One serial job over the changed crates
-#             measured 35 min median against this lane's
-#             18 (2026-09-30), and hosted runners do not queue here.
-#   full      push to main, merge_group: `wide` plus the Windows and macOS
-#             jobs (FULL_JOBS)
+#   wide      a PR that compiles anything: `deps` and the pull-request gate
+#             (HEAVY_JOBS in `ci`: clippy, cross-typecheck, test,
+#             test-nested, doc, wasm-check) over the whole workspace, in
+#             parallel, and `ios-runner` when the change reaches the iOS
+#             runner. One serial job over the changed crates measured 35 min
+#             median against this lane's 18 (2026-09-30), and hosted runners
+#             do not queue here.
+#   full      push to main, merge_group: `wide` plus FULL_JOBS: the Windows
+#             and macOS jobs, and the Linux jobs that caught nothing clippy
+#             and test missed in 171 runs (2026-09-26..30): feature-matrix,
+#             test-features, live-smoke, miri, bench-compile, doc-test. A
+#             break they find turns main red and is fixed forward.
 #   extended  the nightly schedule, workflow_dispatch, a PR labelled
 #             `full-ci`: `full` plus the nightly-only platform jobs
 #             (EXTENDED_JOBS)
@@ -53,13 +57,12 @@ name: CI
 # it, and every job that saves from main writes a new entry whenever
 # Cargo.lock moves. So a job keeps a target cache only when its cold run
 # would outlast its lane's longest jobs (`test`, `test-nested`, about 9 min
-# warm, on a pull request; `gpu-test` on main): `test` (shared with
-# `test-nested`), `test-features`, `feature-matrix`, `wasm-check`,
-# `live-smoke` and `gpu-test`. Cold, `test` took 18 min, `test-nested` 27,
-# `wasm-check` 13 and a `feature-matrix` shard 19 (run 36776652181).
-# `clippy`, `cross-typecheck`, `miri`, `doc`, `doc-test`, `bench-compile`,
-# `platform-windows` and the macOS jobs build cold (under 9 min each; 3 for
-# `bench-compile`). One key per job: a key shared across jobs with
+# warm, on a pull request; `gpu-test`, 23 min, on main): `test` (shared
+# with `test-nested`), `wasm-check` and `gpu-test`. Cold, `test` took 18 min,
+# `test-nested` 27 and `wasm-check` 13 (run 36776652181). Every other job
+# builds cold: the pull-request ones in under 9 min, the main-only ones
+# (a `feature-matrix` shard 19 min, `test-features` about 17) inside
+# `gpu-test`'s 23. One key per job: a key shared across jobs with
 # different build modes lost time (clippy restoring `test`'s build-mode
 # artifacts re-checked every crate). Saved on main only.
 # Runners: named images (`ubuntu-26.04`), not `-latest`, so an image change
@@ -621,7 +624,7 @@ jobs:
   test-features:
     name: test-features
     needs: [checks, plan]
-    if: contains(fromJSON('["wide","full","extended"]'), needs.plan.outputs.lane)
+    if: contains(fromJSON('["full","extended"]'), needs.plan.outputs.lane)
     runs-on: ubuntu-26.04
     timeout-minutes: 30
     steps:
@@ -632,11 +635,6 @@ jobs:
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
 
-      - name: Cache cargo registry + target
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          cache-on-failure: true
-          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Install cargo-nextest
         uses: taiki-e/install-action@76c2e6406e52637deed7160d77bded76bd83e06e # v2.87.14
@@ -711,7 +709,7 @@ jobs:
   live-smoke:
     name: live-smoke
     needs: [checks, plan]
-    if: contains(fromJSON('["wide","full","extended"]'), needs.plan.outputs.lane)
+    if: contains(fromJSON('["full","extended"]'), needs.plan.outputs.lane)
     runs-on: ubuntu-26.04
     timeout-minutes: 30
     steps:
@@ -722,11 +720,6 @@ jobs:
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
 
-      - name: Cache cargo registry + target
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          cache-on-failure: true
-          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       # xvfb for the virtual display; libxkbcommon-x11 because winit's X11
       # backend dlopens it at startup (`xkbcommon-dl` panics without it, so
@@ -885,7 +878,7 @@ jobs:
   bench-compile:
     name: bench-compile
     needs: [checks, plan]
-    if: contains(fromJSON('["wide","full","extended"]'), needs.plan.outputs.lane)
+    if: contains(fromJSON('["full","extended"]'), needs.plan.outputs.lane)
     runs-on: ubuntu-26.04
     timeout-minutes: 25
     steps:
@@ -996,7 +989,7 @@ jobs:
   doc-test:
     name: doc-test
     needs: [checks, plan]
-    if: contains(fromJSON('["wide","full","extended"]'), needs.plan.outputs.lane)
+    if: contains(fromJSON('["full","extended"]'), needs.plan.outputs.lane)
     runs-on: ubuntu-26.04
     timeout-minutes: 30
     steps:
@@ -1034,7 +1027,7 @@ jobs:
   miri:
     name: miri
     needs: [checks, plan]
-    if: contains(fromJSON('["wide","full","extended"]'), needs.plan.outputs.lane)
+    if: contains(fromJSON('["full","extended"]'), needs.plan.outputs.lane)
     runs-on: ubuntu-26.04
     timeout-minutes: 30
     env:
@@ -1113,20 +1106,13 @@ jobs:
   feature-matrix:
     name: feature-matrix (${{ matrix.slice }})
     needs: [checks, plan]
-    if: contains(fromJSON('["wide","full","extended"]'), needs.plan.outputs.lane)
+    if: contains(fromJSON('["full","extended"]'), needs.plan.outputs.lane)
     runs-on: ubuntu-26.04
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        # `cache` names each entry's cache: slices compile different packages
-        # under different feature sets, so a shared cache would be overwritten
-        # by whichever slice finished last.
-        include:
-          - { slice: "1/3", cache: shard-1 }
-          - { slice: "2/3", cache: shard-2 }
-          - { slice: "3/3", cache: shard-3 }
-          - { slice: combinations, cache: combinations }
+        slice: ["1/3", "2/3", "3/3", combinations]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -1137,12 +1123,6 @@ jobs:
         with:
           components: clippy
 
-      - name: Cache cargo registry + target
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          prefix-key: v2-rust-feature-matrix-${{ matrix.cache }}
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-          cache-on-failure: true
 
       - name: Install cargo-hack
         uses: taiki-e/install-action@76c2e6406e52637deed7160d77bded76bd83e06e # v2.87.14
@@ -1547,11 +1527,10 @@ jobs:
         env:
           NEEDS: ${{ toJSON(needs) }}
           HEAVY_JOBS: >-
-            clippy feature-matrix wasm-check cross-typecheck test
-            test-nested test-features live-smoke bench-compile doc doc-test
-            miri
+            clippy wasm-check cross-typecheck test test-nested doc
           FULL_JOBS: >-
-            gpu-test platform-windows cli-macos
+            gpu-test platform-windows cli-macos feature-matrix test-features
+            live-smoke bench-compile doc-test miri
           EXTENDED_JOBS: >-
             macos-ci test-windows
           LANE: ${{ needs.plan.outputs.lane }}

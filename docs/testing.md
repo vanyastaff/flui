@@ -931,8 +931,8 @@ runs `checks`, `plan` and the `ci` aggregator:
 |---|---|---|
 | `docs` | a pull request that changes only documentation | nothing |
 | `tooling` | a pull request that changes only repository tooling, or a standalone crate | `deps`; `standalone` for the crate |
-| `wide` | a pull request that compiles anything | `deps` and every Linux job (`HEAVY_JOBS`) over the whole workspace; `ios-runner` when the change reaches the iOS runner; no Windows or macOS suite |
-| `full` | a push to `main`, the merge queue | `wide` plus the Windows and macOS jobs (`FULL_JOBS`) |
+| `wide` | a pull request that compiles anything | `deps` and the pull-request gate (`HEAVY_JOBS`: `clippy`, `cross-typecheck`, `test`, `test-nested`, `doc`, `wasm-check`) over the whole workspace; `ios-runner` when the change reaches the iOS runner |
+| `full` | a push to `main`, the merge queue | `wide` plus `FULL_JOBS`: the Windows and macOS jobs, `feature-matrix`, `test-features`, `live-smoke`, `miri`, `bench-compile`, `doc-test` |
 | `extended` | the nightly schedule, `workflow_dispatch`, a pull request labelled `full-ci` | `full` plus the nightly-only platform jobs (`EXTENDED_JOBS`) |
 
 - **Wide lane**: every pull request that compiles anything runs every Linux
@@ -977,8 +977,13 @@ runs `checks`, `plan` and the `ci` aggregator:
   A red run on main or nightly opens (or comments on) the "CI is red on main"
   issue. The rule is fix forward within the hour, or revert.
 
-**Only `full` and `extended` check these**, so even a wide pull request can
-merge green and still turn main red: every Windows and macOS job, that is
+**Only `full` and `extended` check these**, so a pull request can merge green
+and still turn main red: the per-feature matrix (`feature-matrix`), the
+feature-gated suites (`test-features`), `live-smoke`, miri, bench linking
+(`bench-compile`) and the doctests (`doc-test`) — over 171 runs of
+2026-09-26..30 none of them failed where `clippy` and `test` passed, so they
+run after the merge and a break is fixed forward — and every Windows and
+macOS job, that is
 GPU readback on WARP (`gpu-test`), flui-platform's Windows suite
 (`platform-windows`), macOS's `flui-cli` suite and the iOS runner clippy
 (`cli-macos`; on a pull request the iOS clippy runs in `ios-runner` when
