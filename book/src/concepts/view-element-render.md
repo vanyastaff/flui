@@ -60,7 +60,7 @@ object" in AGENTS.md's Extending FLUI table for the checklist to implement a new
 pub enum Layer { /* Canvas, Picture, Texture, PlatformView, ... */ }
 ```
 
-*(`crates/flui-layer/src/layer/mod.rs`)* — the retained compositing tree that paint produces,
+*(`crates/flui-layer/src/layer/mod.rs`)* — the compositing tree that paint builds fresh each frame,
 consumed by `flui-engine`'s compositor. Unlike `View` and `RenderObject`, `Layer` is a closed
 `enum` rather than a trait — FLUI's layer set is a known, fixed vocabulary rather than an extensible hierarchy,
 which is one of the deliberate divergences from Flutter's `Layer` class hierarchy (see the

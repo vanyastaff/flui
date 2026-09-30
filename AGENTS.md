@@ -10,9 +10,9 @@ and gates enforce, and the conventions they can't check.
 
 A declarative UI framework for Rust: Flutter-shaped at the protocol level, Rust-shaped
 everywhere else. Five trees — `View` (immutable config) → `Element` (lifecycle, reconciliation)
-→ `RenderObject` (layout / paint / hit-test) → `Layer` (retained compositing), with `Semantics`
-alongside for accessibility — then `flui-engine` → `wgpu`. Pre-1.0: breaking changes are cheap
-now and expensive once consumers exist, so fix a bad shape instead of working around it.
+→ `RenderObject` (layout / paint / hit-test) → `Layer` (compositing, rebuilt each frame), with
+`Semantics` alongside for accessibility — then `flui-engine` → `wgpu`. Pre-1.0: breaking changes
+are cheap now and expensive once consumers exist, so fix a bad shape instead of working around it.
 
 ## Design stance
 
