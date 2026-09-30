@@ -138,8 +138,8 @@ impl<P, Pr> BuilderContextBuilder<P, Pr> {
 
     /// Set custom output directory.
     ///
-    /// If not set, defaults to `target/flui-out/<platform>` (see
-    /// [`default_output_dir`]).
+    /// If not set, defaults to `<cargo target-dir>/flui-out/<project>/<platform>`
+    /// (see [`default_output_dir`]).
     ///
     /// # Arguments
     ///

@@ -1,4 +1,4 @@
-use crate::build::output::clean_output_dirs;
+use crate::build::output::{clean_output_dirs, project_output_root};
 use crate::error::{CliError, CliResult};
 use crate::runner::{CargoCommand, OutputStyle};
 use crate::ui;
@@ -7,8 +7,8 @@ use serde_json::json;
 use std::path::{Path, PathBuf};
 
 /// Platform names `flui clean --platform` accepts.
-/// `desktop` is one output directory for every desktop target
-/// (`target/flui-out/desktop`), the way `flui build` names it.
+/// `desktop` is one output directory for every desktop target, the way
+/// `flui build` names it.
 const VALID_PLATFORMS: &[&str] = &["android", "ios", "web", "desktop"];
 
 /// Execute the clean command.
@@ -39,11 +39,12 @@ pub(crate) fn execute(deep: bool, platform: Option<String>) -> CliResult<()> {
 
         let spinner = ui::spinner();
         spinner.start(format!("Cleaning {plat_lower} artifacts..."));
-        let removed = clean_platform(&std::env::current_dir()?, &plat_lower)?;
+        let root = std::env::current_dir()?;
+        let removed = clean_platform(&root, &project_output_root(&root), &plat_lower)?;
         spinner.stop(format!("{} {plat_lower} cleaned", style("✓").green()));
         report_removed(&removed)?;
     } else {
-        // Build outputs first: the `--out` directories builds claimed are
+        // Build outputs first: the `--output` directories builds claimed are
         // recorded under `target/`, which `cargo clean` removes.
         let spinner = ui::spinner();
         spinner.start("Cleaning build outputs...");
@@ -84,12 +85,13 @@ fn report_removed(removed: &[PathBuf]) -> CliResult<()> {
 /// with `deep`, what its build tool writes in `platforms/`. Returns the
 /// paths removed.
 fn clean_build_outputs(root: &Path, deep: bool) -> CliResult<Vec<PathBuf>> {
+    let output_root = project_output_root(root);
     let mut removed = Vec::new();
     for platform in VALID_PLATFORMS {
         if deep {
-            removed.extend(clean_platform(root, platform)?);
+            removed.extend(clean_platform(root, &output_root, platform)?);
         } else {
-            removed.extend(clean_output_dirs(root, platform)?);
+            removed.extend(clean_output_dirs(root, &output_root, platform)?);
         }
     }
     Ok(removed)
@@ -97,11 +99,11 @@ fn clean_build_outputs(root: &Path, deep: bool) -> CliResult<Vec<PathBuf>> {
 
 /// Clean build artifacts for a specific platform, returning the paths that
 /// were actually removed: the build's output directories (the default one
-/// and each `--out` directory a build claimed, see [`clean_output_dirs`]),
+/// and each `--output` directory a build claimed, see [`clean_output_dirs`]),
 /// and what the platform's own build tool writes inside
 /// `platforms/<platform>/`.
-fn clean_platform(root: &Path, platform: &str) -> CliResult<Vec<PathBuf>> {
-    let mut removed = clean_output_dirs(root, platform)?;
+fn clean_platform(root: &Path, output_root: &Path, platform: &str) -> CliResult<Vec<PathBuf>> {
+    let mut removed = clean_output_dirs(root, output_root, platform)?;
 
     let platform_dir = root.join("platforms").join(platform);
     let tool_outputs: &[&str] = match platform {
@@ -156,7 +158,7 @@ mod tests {
                 .with_profile(Profile::Debug)
                 .with_output_dir(out.clone())
                 .build();
-            prepare_output_dir(&ctx).expect("claim --out");
+            prepare_output_dir(&ctx).expect("claim --output");
             claimed.push(out);
         }
         let gradle = root.join("platforms/android/app/build");

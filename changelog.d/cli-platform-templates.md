@@ -1,3 +1,10 @@
+### Changed
+
+- Build outputs (APK, `.app`, web page) go to `<target-dir>/flui-out/<project>/<platform>/`, where
+  `<target-dir>` is the one cargo reports (following `CARGO_TARGET_DIR`, `build.target-dir` and an
+  enclosing workspace), instead of `<project>/target/flui-out/<platform>/`. `cargo clean` removes
+  them, and projects sharing a target-dir keep apart.
+
 ### Fixed
 
 - `flui create` and `flui platform add android` no longer scaffold a Gradle build script that moves
@@ -14,10 +21,10 @@
   never writes.
 - `flui clean --platform <android|ios|web|desktop>` (`desktop` is new, one output directory for
   every desktop target) removes the build's output in
-  `target/flui-out/<platform>/`, and each `--out` directory a build created (or found empty): the
+  `<target-dir>/flui-out/<project>/<platform>/`, and each `--output` directory a build created (or found empty): the
   build leaves a `.flui-out` marker there, and a directory that held anything before the first
   build into it is never removed. For web it removed `platforms/web/pkg/`, which no build writes.
-  `flui clean` without `--platform` removes every platform's `--out` directories too, before
+  `flui clean` without `--platform` removes every platform's `--output` directories too, before
   `cargo clean` removes the record of them; `--deep` still adds what the platform build tools write
   in `platforms/`. The record of those directories is only an index: losing or damaging it
   (`cargo clean`, deleting `target/` by hand) never fails a build or a clean, and the next build

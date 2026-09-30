@@ -7,9 +7,14 @@ use assert_cmd::Command;
 use assert_cmd::cargo::cargo_bin_cmd;
 use tempfile::TempDir;
 
-/// Get a command for the `flui` binary.
+/// Get a command for the `flui` binary. The project's own Cargo
+/// configuration decides its target-dir, not one the test run inherits.
 fn flui() -> Command {
-    cargo_bin_cmd!("flui")
+    let mut command = cargo_bin_cmd!("flui");
+    command
+        .env_remove("CARGO_TARGET_DIR")
+        .env_remove("CARGO_BUILD_TARGET_DIR");
+    command
 }
 
 /// A temp dir with a `flui.toml` that already targets `android`, so
@@ -92,18 +97,18 @@ fn git_ignores(project: &std::path::Path, rel_path: &str) -> bool {
 /// root-project and `app` module outputs (the module one holds the APK
 /// `flui build android` copies out), the native libraries the builder
 /// copies in before Gradle runs, xcodebuild's output, and each build's
-/// deliverables under `target/flui-out/<platform>`.
+/// deliverables under `<target-dir>/flui-out/<project>/<platform>`.
 const BUILD_OUTPUTS: &[&str] = &[
     "platforms/android/.gradle/8.9/checksums/checksums.lock",
     "platforms/android/build/reports/problems/problems-report.html",
     "platforms/android/app/build/outputs/apk/debug/app-debug.apk",
     "platforms/android/app/src/main/jniLibs/arm64-v8a/liball_platforms.so",
     "platforms/ios/build/Debug/iphoneos/flui.app/Info.plist",
-    "target/flui-out/android/all-platforms-debug.apk",
-    "target/flui-out/ios/flui.app/Info.plist",
-    "target/flui-out/web/pkg/app_bg.wasm",
-    "target/flui-out/web/index.html",
-    "target/flui-out/desktop/all-platforms.exe",
+    "target/flui-out/all-platforms/android/all-platforms-debug.apk",
+    "target/flui-out/all-platforms/ios/flui.app/Info.plist",
+    "target/flui-out/all-platforms/web/pkg/app_bg.wasm",
+    "target/flui-out/all-platforms/web/index.html",
+    "target/flui-out/all-platforms/desktop/all-platforms.exe",
 ];
 
 /// Scaffolded or user-added source the builds read, which must stay
@@ -166,6 +171,46 @@ fn scaffolded_platforms_ignore_and_clean_what_builds_write() {
         .filter(|path| project.join(path).exists())
         .collect();
     assert!(left.is_empty(), "`flui clean` left build outputs: {left:?}");
+}
+
+/// The build outputs live in the target-dir cargo reports for the project
+/// (here one `.cargo/config.toml` moves beside it, shared with another
+/// project), under the project's own name: a clean removes this project's
+/// outputs there, not the other project's, and not a `target/` cargo never
+/// uses.
+#[test]
+fn clean_follows_cargos_target_dir_and_keeps_other_projects_outputs() {
+    let (tmp, project) = project_with_every_platform();
+    std::fs::create_dir_all(project.join(".cargo")).expect(".cargo");
+    std::fs::write(
+        project.join(".cargo/config.toml"),
+        "[build]\ntarget-dir = \"../shared-target\"\n",
+    )
+    .expect("config.toml");
+    let shared = tmp.path().join("shared-target/flui-out");
+    let ours = shared.join("all-platforms/web/index.html");
+    let theirs = shared.join("other-app/web/index.html");
+    let unused = project.join("target/flui-out/all-platforms/web/index.html");
+    for path in [&ours, &theirs, &unused] {
+        std::fs::create_dir_all(path.parent().expect("parent")).expect("output dir");
+        std::fs::write(path, b"").expect("output");
+    }
+
+    flui()
+        .current_dir(&project)
+        .args(["clean", "--platform", "web"])
+        .assert()
+        .success();
+
+    assert!(
+        !ours.exists(),
+        "the project's output in the shared target-dir survived"
+    );
+    assert!(theirs.exists(), "clean removed another project's output");
+    assert!(
+        unused.exists(),
+        "clean looked in a target/ cargo does not use"
+    );
 }
 
 /// `flui build android` reads the Gradle APK from Gradle's default module
