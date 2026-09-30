@@ -92,7 +92,7 @@ it. Inside the FLUI checkout, generate against the local source instead:
 | `flui test` | `cargo test` with `--unit`, `--integration`, `--release`, and harness args after `--`. |
 | `flui analyze` | `cargo clippy --workspace --all-targets -D warnings` (`--pedantic`, `--fix`). |
 | `flui format` | `cargo fmt --all` (`--check` exits 4 when unformatted). |
-| `flui clean` | Cargo artifacts, plus platform build dirs with `--deep` or `--platform`. |
+| `flui clean` | Cargo artifacts and every platform's build output; `--platform <android\|ios\|web\|desktop>` cleans one platform's output instead, and `--deep` adds what platform build tools write in `platforms/`. A directory given to `flui build --output` is yours to clean. |
 | `flui doctor` | Environment checks with fix hints; `--fix` installs missing `rustup` targets. |
 | `flui devices` | Desktop, Android (`adb`), iOS simulators and browsers, with the ids `--device` takes. |
 | `flui emulators list|launch` | List and start Android AVDs and iOS simulators. |
@@ -216,7 +216,9 @@ An Android build compiles the project's `cdylib` with `cargo ndk` (the
 `aapt2 link` on the scaffolded manifest, the library stored under
 `lib/<abi>/`, `zipalign`, and `apksigner` with the debug keystore in
 `~/.android` (created on first use). The result is
-`target/flui-out/android/<name>-<profile>.apk`. When the project has a
+`<target-dir>/flui-out/<project>/android/<name>-<profile>.apk`, where
+`<target-dir>` is the one cargo uses (`target/` unless `CARGO_TARGET_DIR`,
+`build.target-dir` or an enclosing workspace says otherwise). When the project has a
 `platforms/android/gradlew`, Gradle builds the APK instead, so an app that
 grows Java or Kotlin code keeps working with the same command.
 
