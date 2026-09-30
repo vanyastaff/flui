@@ -355,7 +355,11 @@ fn textures_and_overlays_are_damaged_every_frame() {
         );
         frame.push(
             parent,
-            PerformanceOverlayLayer::all_stats(Rect::from_xywh(300.0, 0.0, 100.0, 20.0)),
+            PerformanceOverlayLayer::new(
+                Rect::from_xywh(300.0, 0.0, 100.0, 20.0),
+                crate::PerformanceOverlayOption::all(),
+                Canvas::new().finish(),
+            ),
         );
         frame.scene()
     };

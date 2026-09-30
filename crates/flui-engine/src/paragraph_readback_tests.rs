@@ -28,13 +28,16 @@ fn sample(pixels: &[u8], x: u32, y: u32) -> [u8; 4] {
 /// hands it comes from a `ShapedParagraph` built from the layout that
 /// measured it, placed through `ShapedRun::placed_glyphs` and rasterised
 /// through flui-painting's `SwashRasterizer` (ADR-0065, ADR-0067, ADR-0092
-/// §4-§5). The performance overlay's labels, which no recorder shapes, go
-/// through flui-painting's `TextContext`, not a shaper crate.
+/// §4-§5). The performance overlay's labels arrive shaped too, recorded
+/// upstream through the realm's text context, so no text-context, font
+/// collection or paragraph-spec name appears either.
 fn the_engine_does_not_shape() {
     let sources = [
         ("glyph_atlas.rs", include_str!("glyph_atlas.rs")),
         ("batches/text.rs", include_str!("batches/text.rs")),
         ("layer_dispatcher.rs", include_str!("layer_dispatcher.rs")),
+        ("layer_render.rs", include_str!("layer_render.rs")),
+        ("command_renderer.rs", include_str!("command_renderer.rs")),
         ("dispatch.rs", include_str!("dispatch.rs")),
         ("painter/draw.rs", include_str!("painter/draw.rs")),
         ("painter/mod.rs", include_str!("painter/mod.rs")),
@@ -51,6 +54,10 @@ fn the_engine_does_not_shape() {
             "fontique",
             "swash::",
             "skrifa",
+            "TextContext",
+            "FontCollection",
+            "ParagraphSpec",
+            "parley_text",
         ] {
             assert!(
                 !source.contains(needle),
@@ -530,5 +537,203 @@ fn parley_runs_read_back() {
     assert!(
         failed.is_empty(),
         "parley_runs_read_back: failing rows: {failed:?}"
+    );
+}
+
+/// The overlay's readout shaped through `text`, at the default bounds, for a
+/// sample at `fps` with a diagnostic line.
+fn overlay(text: &mut flui_painting::TextContext, fps: f64) -> flui_layer::PerformanceOverlayLayer {
+    flui_layer::PerformanceOverlayLayer::record(
+        text,
+        flui_layer::PerformanceOverlayLayer::default_bounds(),
+        flui_layer::PerformanceOverlayOption::all(),
+        &flui_layer::PerformanceSample {
+            fps,
+            frame_time_ms: 16.7,
+            diagnostic_line: Some("present_p99=16ms input_p99=24ms"),
+        },
+    )
+}
+
+/// The channels of a pixel that must each exceed every channel of the
+/// second set by a margin, for the pixel to lean to a label's colour.
+type Channels = (&'static [usize], &'static [usize]);
+
+/// `layer` under a uniform `scale`, as a layer tree.
+fn scaled(layer: flui_layer::Layer, scale: f64) -> flui_layer::LayerTree {
+    let mut tree = flui_layer::LayerTree::new(flui_layer::Layer::from(
+        flui_layer::TransformLayer::scale(scale),
+    ));
+    let root = tree.root();
+    tree.push_child(root, layer);
+    tree
+}
+
+/// The overlay's labels read back where and in the colour they were
+/// recorded, at `scale`: inside each label's ink box some pixel leans to its
+/// colour (cyan "GPU", green fps, purple "Frame"), a pixel of the overlay
+/// away from every label is the background composited over white, and a
+/// pixel below the overlay stays white. Fails if a label is missing, carries
+/// no glyphs, or is placed anywhere but its recorded offset under the
+/// layer's transform.
+fn overlay_labels_land_as_recorded(renderer: &crate::headless::HeadlessRenderer, scale: f64) {
+    const SIZE: (u32, u32) = (1000, 160);
+    let mut text = flui_painting::TextContext::new(&FontCollection::new());
+    let layer = overlay(&mut text, 60.0);
+    let readout: Vec<_> = layer
+        .readout()
+        .iter()
+        .filter_map(|command| match &command.op {
+            flui_painting::DrawOp::Paragraph {
+                paragraph, offset, ..
+            } => Some((paragraph.clone(), *offset)),
+            _ => None,
+        })
+        .collect();
+    let pixels = renderer
+        .render_layer_tree(&scaled(flui_layer::Layer::from(layer), scale), SIZE)
+        .expect("the headless capture path rasterizes the overlay");
+    let at = |x: u32, y: u32| {
+        let i = ((y * SIZE.0 + x) * 4) as usize;
+        [pixels[i], pixels[i + 1], pixels[i + 2]]
+    };
+    let lean = |p: [u8; 3], (hi, lo): Channels| {
+        hi.iter()
+            .all(|h| lo.iter().all(|l| i16::from(p[*h]) - i16::from(p[*l]) > 40))
+    };
+    // The channels that exceed the others by a margin: cyan is g and b over
+    // r, the 60 fps green g over r and b, purple b and r over g.
+    let rows: [(&str, Channels); 3] = [
+        ("GPU", (&[1, 2], &[0])),
+        ("60", (&[1], &[0, 2])),
+        ("Frame", (&[0, 2], &[1])),
+    ];
+    for (label, channels) in rows {
+        let (paragraph, offset) = readout
+            .iter()
+            .find(|(paragraph, _)| paragraph.text() == label)
+            .unwrap_or_else(|| panic!("the readout records {label:?}"));
+        let ink = paragraph
+            .ink_bounds()
+            .unwrap_or_else(|| panic!("{label:?} has ink"));
+        let (x0, y0) = (
+            (ink.left() + offset.dx) * scale,
+            (ink.top() + offset.dy) * scale,
+        );
+        let (x1, y1) = (
+            (ink.right() + offset.dx) * scale,
+            (ink.bottom() + offset.dy) * scale,
+        );
+        let hit = (y0.floor() as u32..y1.ceil() as u32)
+            .flat_map(|y| (x0.floor() as u32..x1.ceil() as u32).map(move |x| (x, y)))
+            .any(|(x, y)| lean(at(x, y), channels));
+        assert!(
+            hit,
+            "{label:?} inks its colour inside its ink box at scale {scale}"
+        );
+    }
+    // The background: rgba(10, 10, 15, 200) over white.
+    let background = at((470.0 * scale) as u32, (12.0 * scale) as u32);
+    for (channel, expected) in background.iter().zip([63u8, 63, 67]) {
+        assert!(
+            channel.abs_diff(expected) <= 2,
+            "the overlay's background at scale {scale} reads {background:?}"
+        );
+    }
+    assert_eq!(
+        at((470.0 * scale) as u32, (70.0 * scale) as u32),
+        [255, 255, 255],
+        "nothing inks below the overlay at scale {scale}"
+    );
+}
+
+/// Frames that carry the overlay register no face the scene does not name:
+/// an app paragraph and the overlay, shaped over one collection, rendered
+/// five times through one painter with a changing fps, leave the glyph
+/// registry at the scene's distinct faces. Fails if the engine shapes the
+/// overlay over a collection of its own, whose faces the registry would then
+/// hold as well.
+fn overlay_frames_do_not_grow_the_glyph_registry(renderer: &crate::headless::HeadlessRenderer) {
+    let mut capture = renderer
+        .retained_capture((500, 100))
+        .expect("capture target");
+    let mut text = flui_painting::TextContext::new(&FontCollection::new());
+    let app = std::sync::Arc::new(
+        text.shape(&flui_painting::parley_text::ParagraphSpec {
+            spans: &[("Hamburg".to_owned(), None)],
+            default_style: None,
+            font_size: 14.0,
+            max_width: None,
+            line_height: None,
+            direction: TextDirection::Ltr,
+            max_lines: None,
+            ellipsis: None,
+        })
+        .to_shaped(None),
+    );
+    let app_picture = || {
+        let mut canvas = Canvas::new();
+        canvas.draw_paragraph(&app, Offset::new(8.0, 70.0), Color::BLACK);
+        canvas.finish()
+    };
+    let mut counts = Vec::new();
+    let mut named = std::collections::BTreeSet::new();
+    for fps in [10.0, 30.0, 60.0, 99.0, 120.0] {
+        let layer = overlay(&mut text, fps);
+        for list in [layer.readout(), &app_picture()] {
+            for command in list {
+                if let flui_painting::DrawOp::Paragraph { paragraph, .. } = &command.op {
+                    named.extend(paragraph.runs().map(|run| run.face().blob().id()));
+                }
+            }
+        }
+        let mut tree = flui_layer::LayerTree::new(flui_layer::Layer::from(
+            flui_layer::PictureLayer::new(app_picture()),
+        ));
+        let root = tree.root();
+        tree.push_child(root, flui_layer::Layer::from(layer));
+        capture
+            .render_unmanaged(&flui_layer::Scene::new(tree))
+            .expect("the frame renders");
+        counts.push(capture.glyph_face_count());
+    }
+    assert!(!named.is_empty(), "the scene names faces");
+    assert_eq!(
+        counts,
+        vec![named.len(); 5],
+        "the registry holds exactly the faces the scene names, every frame"
+    );
+}
+
+/// The performance overlay, recorded upstream, reads back as recorded at 1x
+/// and 2x, and its frames leave the glyph registry at the scene's faces.
+#[test]
+fn performance_overlay_labels_read_back() {
+    let Some(renderer) = crate::test_support::renderer_or_skip() else {
+        return;
+    };
+    type Row = (&'static str, fn(&crate::headless::HeadlessRenderer));
+    let rows: [Row; 3] = [
+        ("labels_at_1x", |renderer| {
+            overlay_labels_land_as_recorded(renderer, 1.0);
+        }),
+        ("labels_at_2x", |renderer| {
+            overlay_labels_land_as_recorded(renderer, 2.0);
+        }),
+        (
+            "overlay_frames_do_not_grow_the_glyph_registry",
+            overlay_frames_do_not_grow_the_glyph_registry,
+        ),
+    ];
+    let failed: Vec<&str> = rows
+        .iter()
+        .filter(|(_, row)| {
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| row(&renderer))).is_err()
+        })
+        .map(|(name, _)| *name)
+        .collect();
+    assert!(
+        failed.is_empty(),
+        "performance_overlay_labels_read_back: failing rows: {failed:?}"
     );
 }

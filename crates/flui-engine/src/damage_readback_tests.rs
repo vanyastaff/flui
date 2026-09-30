@@ -1702,13 +1702,24 @@ fn a_changed_undersized_performance_overlay_matches_a_full_frame() {
         return;
     };
     let (root, background) = (ContentToken::mint(), ContentToken::mint());
+    let text = std::cell::RefCell::new(flui_painting::TextContext::new(
+        &flui_painting::FontCollection::new(),
+    ));
     let build = |fps: f64, frame_time_ms: f64| {
         backdrop_scene(&root, &background, &green_background, &|tree, root_id| {
             // The labels start 8 px in, the values 50 px in: a 30 px wide
-            // overlay leaves the values outside its bounds.
-            let mut overlay =
-                PerformanceOverlayLayer::all_stats(Rect::from_xywh(10.0, 10.0, 30.0, 40.0));
-            overlay.update_stats(fps, frame_time_ms, 1);
+            // overlay records the values outside its bounds, which the
+            // engine's clip keeps from inking.
+            let overlay = PerformanceOverlayLayer::record(
+                &mut text.borrow_mut(),
+                Rect::from_xywh(10.0, 10.0, 30.0, 40.0),
+                flui_layer::PerformanceOverlayOption::all(),
+                &flui_layer::PerformanceSample {
+                    fps,
+                    frame_time_ms,
+                    diagnostic_line: None,
+                },
+            );
             tree.push_child(root_id, Layer::from(overlay));
         })
     };

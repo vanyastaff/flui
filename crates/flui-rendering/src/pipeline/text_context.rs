@@ -86,6 +86,18 @@ impl TextContextHandle {
         f(&mut lend(TextSource::unrecorded(&self.0)))
     }
 
+    /// Runs `f` on the context, or returns `None` while it is lent: a caller
+    /// outside layout, such as the scene assembly that shapes the performance
+    /// overlay's readout, skips its work rather than wait or panic.
+    ///
+    /// The loan records no node, so a font change lays nothing out again on
+    /// its account: a caller that shapes through it reshapes on its own
+    /// schedule.
+    pub fn try_with<R>(&self, f: impl FnOnce(&mut TextContext) -> R) -> Option<R> {
+        let mut context = self.0.try_borrow_mut().ok()?;
+        Some(f(&mut context))
+    }
+
     /// The shared cell layout borrows from.
     pub(crate) fn cell(&self) -> &RefCell<TextContext> {
         &self.0
@@ -311,5 +323,16 @@ mod tests {
             handle.cell().try_borrow_mut().is_ok(),
             "the loan ends with the TextCx"
         );
+    }
+
+    /// `try_with` declines while a measurement holds the context, rather
+    /// than panic, and runs once the loan ends.
+    #[test]
+    fn try_with_declines_while_the_context_is_lent() {
+        let handle = TextContextHandle::standalone();
+        let lent = lend(handle.source());
+        assert_eq!(handle.try_with(|_| ()), None, "the context is lent");
+        drop(lent);
+        assert_eq!(handle.try_with(|_| 7), Some(7), "the loan has ended");
     }
 }

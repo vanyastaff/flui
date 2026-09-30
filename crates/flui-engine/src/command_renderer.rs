@@ -263,29 +263,4 @@ pub(crate) trait CommandRenderer {
     /// Unbalanced pops are a recording bug, not a rendering one — a backend
     /// should report and ignore rather than corrupt its stack.
     fn restore_state(&mut self);
-
-    // ===== Performance Overlay =====
-
-    /// Add a performance overlay to the scene
-    ///
-    /// Renders an FPS counter and frame timing statistics at the specified
-    /// location.
-    ///
-    /// # Arguments
-    ///
-    /// * `options` - Which readouts to draw
-    /// * `bounds` - Rectangle where the overlay should be displayed
-    /// * `fps` - Current frames per second
-    /// * `frame_time_ms` - Average frame time in milliseconds
-    /// * `total_frames` - Total frames rendered
-    /// * `diagnostic_line` - Optional runtime-owned structured-metric summary
-    fn add_performance_overlay(
-        &mut self,
-        options: flui_layer::PerformanceOverlayOption,
-        bounds: Rect<f64>,
-        fps: f32,
-        frame_time_ms: f32,
-        total_frames: u64,
-        diagnostic_line: Option<&str>,
-    );
 }

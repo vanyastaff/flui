@@ -826,8 +826,7 @@ cosmic-text paint it replaced:
 The raster side's registry is append-only and keys a face by its blob's id,
 not its bytes: every `FontCollection` build and every `register_font` wraps
 the bytes in a new blob, so registering the same file again, or building a
-second collection over the bundled faces (the performance overlay's
-`WgpuPainter::draw_label` builds its own), adds one more face to each
+second collection over the bundled faces, adds one more face to each
 painter's registry and rasterizes its glyphs again under new keys; neither is
 released while the painter lives. The growth is bounded by how often an app
 registers or builds a collection, not by frames.

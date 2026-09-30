@@ -66,7 +66,9 @@ mod text_app;
 mod widgets_gallery;
 
 use flui_engine::HeadlessRenderer;
-use flui_layer::{Layer, LayerTree, PerformanceOverlayLayer};
+use flui_layer::{
+    Layer, LayerTree, PerformanceOverlayLayer, PerformanceOverlayOption, PerformanceSample,
+};
 use flui_testing::HeadlessBinding;
 use flui_testing::bootstrap::{MountOptions, MountOwners};
 use flui_view::IntoView;
@@ -157,10 +159,18 @@ fn main() {
 }
 
 fn telemetry_overlay_layers() -> LayerTree {
-    let mut overlay = PerformanceOverlayLayer::all_stats(PerformanceOverlayLayer::default_bounds());
-    overlay.set_diagnostic_line(Some(
-        "present_p99=16ms input_p99=24ms deferred=3 dropped=1 input_truncated=false".to_string(),
-    ));
+    let overlay = PerformanceOverlayLayer::record(
+        &mut flui_painting::TextContext::new(&flui_painting::FontCollection::new()),
+        PerformanceOverlayLayer::default_bounds(),
+        PerformanceOverlayOption::all(),
+        &PerformanceSample {
+            fps: 0.0,
+            frame_time_ms: 0.0,
+            diagnostic_line: Some(
+                "present_p99=16ms input_p99=24ms deferred=3 dropped=1 input_truncated=false",
+            ),
+        },
+    );
 
     LayerTree::new(Layer::from(overlay))
 }

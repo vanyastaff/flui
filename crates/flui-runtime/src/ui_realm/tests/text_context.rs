@@ -215,6 +215,71 @@ fn a_realm_measures_text_with_the_faces_of_its_own_collection() {
     );
 }
 
+/// The blob ids of every run of every paragraph in `list`.
+fn paragraph_blob_ids(list: &flui_painting::DisplayList) -> std::collections::BTreeSet<u64> {
+    list.iter()
+        .filter_map(|command| match &command.op {
+            flui_painting::DrawOp::Paragraph { paragraph, .. } => Some(paragraph.clone()),
+            _ => None,
+        })
+        .flat_map(|paragraph| {
+            paragraph
+                .runs()
+                .map(|run| run.face().blob().id())
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
+/// The performance overlay's labels are shaped at scene assembly through the
+/// realm's own text context (ADR-0092): the readout's runs name only faces
+/// of the realm's collection. Fails if the overlay is shaped over a
+/// collection of its own, or carries no shaped labels for the engine to
+/// shape instead.
+fn the_overlay_shapes_through_the_realm_text_context() {
+    let realm = realm_over(&FontCollection::new());
+    realm.set_performance_overlay(true);
+    realm
+        .enter(|realm| realm.attach_root_widget(&flui_widgets::Text::new("A")))
+        .expect("attach succeeds");
+    let scene = realm
+        .draw_frame(BoxConstraints::tight(flui_foundation::geometry::Size::new(
+            400.0, 300.0,
+        )))
+        .expect("the first frame paints");
+    let overlay = scene
+        .tree()
+        .iter()
+        .find_map(|(_, node)| node.layer().as_performance_overlay().cloned())
+        .expect("the overlay is attached");
+    let overlay_ids = paragraph_blob_ids(overlay.readout());
+    assert!(!overlay_ids.is_empty(), "the readout carries shaped labels");
+
+    let realm_ids = realm.text_context_for_test().with(|text| {
+        let spans = [("GPU FPS Frame ms 0123456789.=_ ".to_owned(), None)];
+        let shaped = text
+            .shape(&flui_painting::parley_text::ParagraphSpec {
+                spans: &spans,
+                default_style: None,
+                font_size: 11.0,
+                max_width: None,
+                line_height: None,
+                direction: flui_painting::typography::TextDirection::Ltr,
+                max_lines: None,
+                ellipsis: None,
+            })
+            .to_shaped(None);
+        shaped
+            .runs()
+            .map(|run| run.face().blob().id())
+            .collect::<std::collections::BTreeSet<_>>()
+    });
+    assert!(
+        overlay_ids.is_subset(&realm_ids),
+        "the overlay names blobs {overlay_ids:?}, the realm's collection {realm_ids:?}"
+    );
+}
+
 #[test]
 fn text_context_matrix() {
     crate::table_test::run_table(
@@ -243,6 +308,10 @@ fn text_context_matrix() {
             (
                 "a_realm_measures_text_with_the_faces_of_its_own_collection",
                 a_realm_measures_text_with_the_faces_of_its_own_collection as fn(),
+            ),
+            (
+                "the_overlay_shapes_through_the_realm_text_context",
+                the_overlay_shapes_through_the_realm_text_context as fn(),
             ),
         ],
     );

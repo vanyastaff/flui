@@ -417,14 +417,13 @@ impl<R: CommandRenderer + LayerStateStack + ?Sized> LayerRender<R> for FollowerL
 // ============================================================================
 
 impl<R: CommandRenderer + LayerStateStack + ?Sized> LayerRender<R> for PerformanceOverlayLayer {
+    /// Replays the readout, shaped upstream, clipped to the bounds: the
+    /// bounds are all the damage producer repaints for the overlay each
+    /// frame, so a readout recorded past them must not ink outside them. A
+    /// hard-edge rect clip is a scissor and opens no offscreen.
     fn render(&self, renderer: &mut R) {
-        renderer.add_performance_overlay(
-            self.options(),
-            self.bounds(),
-            self.fps() as f32,
-            self.frame_time_ms() as f32,
-            self.total_frames(),
-            self.diagnostic_line(),
-        );
+        renderer.push_clip_rect(&self.bounds(), flui_painting::paint::Clip::HardEdge);
+        dispatch_commands(self.readout().commands(), renderer);
+        renderer.pop_clip();
     }
 }

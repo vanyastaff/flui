@@ -113,9 +113,14 @@ that the type is nameable without an engine dependency — not its field set.
 (decision 8), are defined here. Its
 three-rect merge was removed with the move: the one consumer reads `damage_rect()`, the bounding
 union, through which the merge was unobservable. `PerformanceStats` (a clock-bearing frame-time
-window) moved to `flui-app`; `PerformanceOverlayLayer::update_stats(fps, frame_time_ms,
-total_frames)` takes the numbers, and `PerformanceOverlayOption` crosses the engine boundary as
-itself rather than as a `u32`.
+window) lives in `flui-runtime`, beside the presentation that knows when a frame was
+composited; `PerformanceOverlayLayer::record` composes the numbers it is handed through the
+caller's `TextContext` into the display list the layer carries, so the engine replays shaped
+labels and shapes nothing (ADR-0092). `record` stays here, beside the layer, because it is the
+one recorder of the layer's readout and `examples/screenshot.rs` records one with no runtime
+behind it; it holds no state, and the numbers stay with their owner. `PerformanceOverlayOption`
+crosses the engine boundary as itself rather than as a `u32`
+(`performance_overlay_readout_rows`).
 
 ### 8. Damage is a diff of boundary stamps — [ADR-0087 §3](../../docs/adr/ADR-0087-raster-contract-and-cpu-backend.md)
 
@@ -173,8 +178,8 @@ feature's `LayerSpec`/`LayerTester` DSL (a third builder with no consumer); `pre
 ## Producers
 
 Five variants have no production producer today: `Canvas`, `Texture`, `PlatformView`,
-`ClipSuperellipse`, `AnnotatedRegion` (the composer emits the other fourteen; `flui-app` adds
-`PerformanceOverlay`). `Texture` and `PlatformView` carry real contracts (`freeze`,
+`ClipSuperellipse`, `AnnotatedRegion` (the composer emits the other fourteen; `flui-runtime`
+adds `PerformanceOverlay`). `Texture` and `PlatformView` carry real contracts (`freeze`,
 `hit_test_behavior`) awaiting the platform layer; `AnnotatedRegion`'s reader half was deleted
 with annotation search and a producer would bring it back as one change; `Canvas` is a recorder
 inside the output vocabulary that `PictureLayer` already covers. Whether each is "not wired yet" or

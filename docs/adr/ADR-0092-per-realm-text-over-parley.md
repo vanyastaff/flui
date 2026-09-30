@@ -21,7 +21,9 @@
   together as the owner decided: Parley measures in the default build and paint draws the
   runs of the layout that measured (`DrawOp::Paragraph` carries a `ShapedParagraph`, the
   engine's atlas rasterizes through `SwashRasterizer`); the `parley` and `parley-layout`
-  features are gone; the line-break gate is closed by that decision. §10 step 5 landed:
+  features are gone; the line-break gate is closed by that decision. The performance overlay's
+  labels are shaped through the realm's `TextContext` at scene assembly too, so the engine
+  shapes no text at all. §10 step 5 landed:
   carets, selection boxes, hit-testing, line metrics and word boundaries read the Parley layout
   that measured and painted, the cosmic-text `TextLayout` is gone with no rollback flag, and a
   registration loads the collection alone; the process font system is host discovery until
@@ -557,8 +559,10 @@ that wires what it adds.
    - (4b) The engine's atlas is `GlyphAtlas<SwashRasterizer>`, and the atlas's default
      parameter is gone. Recording a paragraph registers each run's face in the rasterizer's
      registry and places the run's glyphs; the engine no longer takes `FONT_SYSTEM`'s lock to
-     rasterize. `WgpuPainter::draw_text` is gone; the performance overlay's labels are shaped
-     through flui-painting's `TextContext`.
+     rasterize. `WgpuPainter::draw_text` is gone. The performance overlay's labels are shaped
+     through the realm's `TextContext` at scene assembly: `PerformanceOverlayLayer::record`
+     composes them into the display list the layer carries, and the engine clips it to the
+     overlay's bounds and replays it, rasterizing the labels like any other paragraph.
    - (4b) The cosmic-text paint path is removed: `TextLayout::placed_glyphs` and its ink
      bounds, `SharedFontSystem::rasterize` and its `GlyphRasterizer` impl, and the cosmic
      `GlyphKey`, whose name `ParleyGlyphKey` takes.
