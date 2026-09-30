@@ -221,6 +221,7 @@ graph TD
     runtime --> protocol
     sdk --> widgets
     testing --> runtime
+    hotreload --> layer
     hotreload -.-> view
     hotreload -.-> sdk
     material --> sdk

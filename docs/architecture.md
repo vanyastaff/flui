@@ -76,7 +76,7 @@ View Tree        ──build──▶   Element Tree   ──layout──▶   R
 | Layout | `PipelineOwner<Layout>` | `Constraints` | `Size` per `RenderBox` | Single-pass O(n) where possible (Flutter constraint protocol) |
 | Paint | `PipelineOwner<PaintPhase>` | `RenderBox` tree | `DisplayList` → layers | Recording is in `flui-painting`; GPU submission in `flui-engine` |
 
-The pipeline is **on-demand**. The platform event loop waits (`ControlFlow::Wait`, or `WaitUntil` for a scheduled deadline); nothing runs unless a tree is dirty (`mark_needs_layout`, `mark_needs_paint`). A render loop that polls every frame is not an accepted design.
+The pipeline is **on-demand**. The platform event loop waits (`ControlFlow::Wait`, or `WaitUntil` for a scheduled deadline), and a frame runs only when something asks for one: a dirty tree (`mark_needs_layout`, `mark_needs_paint`), or a scheduled frame callback (a ticker, a transient callback, an async completion), which `UpdateScheduler::schedule_frame_callback` turns into a frame request even when no tree is dirty. A render loop that polls every frame is not an accepted design.
 
 ### Threading & ownership model
 
@@ -157,7 +157,7 @@ Text shaping is **not** a `Platform` method — that Flutter binding (`PlatformT
 
 ## Confinement of `unsafe`
 
-The workspace sets `unsafe_code = "warn"`; `flui-painting` and `flui-platform-api` forbid it outright, and `flui-platform` allows it for its OS bindings. Outside `flui-platform`, `unsafe` appears at a few narrow sites: `flui-engine`'s raw window handles, `flui-rendering`'s subtree arena, `flui-foundation`'s unchecked id constructor, `flui-view`'s `ObjectKey`, `flui-log`'s subscriber backends, and the dynamic-library loading in `flui-hot-reload` and `flui-cli`. Each `unsafe` block carries a `// SAFETY:` comment naming the invariant it relies on. The widget catalog, the design systems and application code are `unsafe`-free.
+The workspace sets `unsafe_code = "warn"`; `flui-painting` and `flui-platform-api` forbid it outright, and `flui-platform` allows it for its OS bindings. Outside `flui-platform`, compiled production code uses `unsafe` at a few narrow sites: `flui-rendering`'s subtree arena, `flui-foundation`'s unchecked id constructor, `flui-view`'s `ObjectKey`, `flui-log`'s subscriber backends, `flui-hot-reload`'s dynamic-library loading, and `flui-cli`'s Windows std-handle inheritance call (`src/proc.rs`). `flui-engine` denies `unsafe` outside its tests, where a fake window target is the only site; the `transmute` in `flui-cli`'s hot-reload template is source text emitted into a generated project, not code the CLI runs. Each `unsafe` block carries a `// SAFETY:` comment naming the invariant it relies on. The widget catalog, the design systems and application code are `unsafe`-free.
 
 ## Logging and Errors
 
