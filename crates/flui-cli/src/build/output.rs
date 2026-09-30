@@ -9,6 +9,12 @@
 //! directory only while the marker is still there. A directory that held
 //! anything before the first build into it (`--out .`, `--out src`, a shared
 //! folder) is never claimed, so it is never removed.
+//!
+//! The marker is the proof of ownership; the record is only an index of
+//! where to look. Losing or damaging the record (`cargo clean`, deleting
+//! `target/` by hand, a truncated write) never fails a build or a clean: an
+//! unreadable record reads as empty, a record that cannot be written is
+//! skipped, and the next build into a claimed directory records it again.
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -42,12 +48,12 @@ fn claims_file(workspace_root: &Path, platform: &str) -> PathBuf {
 
 /// Create `ctx.output_dir`. An `--out` directory the build finds missing or
 /// empty, or one an earlier build already claimed, gets the owner marker and
-/// is recorded for `flui clean --platform`.
+/// is recorded for `flui clean`.
 ///
 /// # Errors
 ///
-/// Returns the I/O error of creating the directory, writing the marker or
-/// recording the claim.
+/// Returns the I/O error of creating the directory or writing the marker.
+/// Recording the claim is best effort and never fails the build.
 pub(crate) fn prepare_output_dir(ctx: &BuilderContext) -> io::Result<()> {
     let platform = ctx.platform.name();
     let dir = &ctx.output_dir;
@@ -66,15 +72,27 @@ pub(crate) fn prepare_output_dir(ctx: &BuilderContext) -> io::Result<()> {
     }
     std::fs::write(dir.join(OWNER_MARKER), "")?;
 
-    let claimed = std::fs::canonicalize(dir)?;
     let claims = claims_file(&ctx.workspace_root, platform);
-    let mut recorded = read_claims(&claims)?;
+    if let Err(error) = record_claim(&claims, dir) {
+        crate::ui::debug(format!(
+            "could not record {} in {}: {error}; `flui clean` will find it after the next build",
+            dir.display(),
+            claims.display()
+        ));
+    }
+    Ok(())
+}
+
+/// Add `dir` to the record at `claims` unless it is already there.
+fn record_claim(claims: &Path, dir: &Path) -> io::Result<()> {
+    let claimed = std::fs::canonicalize(dir)?;
+    let mut recorded = read_claims(claims);
     if !recorded.contains(&claimed) {
         recorded.push(claimed);
         if let Some(parent) = claims.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        std::fs::write(&claims, join_claims(&recorded))?;
+        std::fs::write(claims, join_claims(&recorded))?;
     }
     Ok(())
 }
@@ -86,13 +104,14 @@ pub(crate) fn prepare_output_dir(ctx: &BuilderContext) -> io::Result<()> {
 ///
 /// # Errors
 ///
-/// Returns the I/O error of reading the record or removing a directory.
+/// Returns the I/O error of resolving the project or removing a directory.
+/// An unreadable or unremovable record is not an error.
 pub(crate) fn clean_output_dirs(workspace_root: &Path, platform: &str) -> io::Result<Vec<PathBuf>> {
     let claims = claims_file(workspace_root, platform);
     let project = std::fs::canonicalize(workspace_root)?;
 
     let mut removed = Vec::new();
-    for dir in read_claims(&claims)? {
+    for dir in read_claims(&claims) {
         let owned = dir.join(OWNER_MARKER).is_file() && !project.starts_with(&dir);
         if owned {
             std::fs::remove_dir_all(&dir)?;
@@ -107,21 +126,23 @@ pub(crate) fn clean_output_dirs(workspace_root: &Path, platform: &str) -> io::Re
     if let Err(error) = std::fs::remove_file(&claims)
         && error.kind() != io::ErrorKind::NotFound
     {
-        return Err(error);
+        crate::ui::debug(format!("could not remove {}: {error}", claims.display()));
     }
     Ok(removed)
 }
 
-fn read_claims(claims: &Path) -> io::Result<Vec<PathBuf>> {
-    match std::fs::read_to_string(claims) {
-        Ok(text) => Ok(text
-            .lines()
-            .filter(|line| !line.is_empty())
-            .map(PathBuf::from)
-            .collect()),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(Vec::new()),
-        Err(error) => Err(error),
-    }
+/// The recorded directories; a missing or unreadable record is empty, and a
+/// line that is not a path simply fails the marker check in the clean.
+fn read_claims(claims: &Path) -> Vec<PathBuf> {
+    std::fs::read(claims)
+        .map(|bytes| {
+            String::from_utf8_lossy(&bytes)
+                .lines()
+                .filter(|line| !line.is_empty())
+                .map(PathBuf::from)
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 fn join_claims(dirs: &[PathBuf]) -> String {
@@ -242,6 +263,42 @@ mod tests {
         assert!(out.is_dir(), "a forgotten claim was removed again");
     }
 
+    fn a_lost_record_is_rebuilt_by_the_next_build() {
+        let (tmp, root) = project();
+        let out = tmp.path().join("dist");
+        let ctx = web_ctx(&root, Some(out.clone()));
+        prepare_output_dir(&ctx).expect("first build");
+        std::fs::remove_dir_all(root.join("target")).expect("delete target by hand");
+        prepare_output_dir(&ctx).expect("build after target is gone");
+        clean_output_dirs(&root, "web").expect("clean");
+        assert!(!out.exists(), "the rebuilt claim was not cleaned");
+    }
+
+    fn a_damaged_record_breaks_neither_build_nor_clean() {
+        let (tmp, root) = project();
+        let claims = claims_file(&root, "web");
+        std::fs::create_dir_all(claims.parent().expect("parent")).expect("record dir");
+        std::fs::write(&claims, [0xff, 0xfe, b'\n', 0x00]).expect("garbage record");
+        let out = tmp.path().join("dist");
+        prepare_output_dir(&web_ctx(&root, Some(out.clone()))).expect("build over garbage");
+        clean_output_dirs(&root, "web").expect("clean over garbage");
+        assert!(
+            !out.exists(),
+            "the claim recorded after garbage was not cleaned"
+        );
+    }
+
+    fn an_unwritable_record_breaks_neither_build_nor_clean() {
+        let (tmp, root) = project();
+        // A directory where the record file belongs: reading and writing it
+        // both fail.
+        std::fs::create_dir_all(claims_file(&root, "web")).expect("record path taken");
+        let out = tmp.path().join("dist");
+        prepare_output_dir(&web_ctx(&root, Some(out.clone()))).expect("build");
+        assert!(out.join(OWNER_MARKER).is_file(), "the claim was not marked");
+        clean_output_dirs(&root, "web").expect("clean");
+    }
+
     #[test]
     fn clean_removes_only_output_dirs_a_build_claimed() {
         crate::test_cases::run_cases(&[
@@ -271,6 +328,18 @@ mod tests {
                 the_default_dir_is_cleaned_without_a_marker,
             ),
             ("clean_forgets_the_claims", clean_forgets_the_claims),
+            (
+                "a_lost_record_is_rebuilt_by_the_next_build",
+                a_lost_record_is_rebuilt_by_the_next_build,
+            ),
+            (
+                "a_damaged_record_breaks_neither_build_nor_clean",
+                a_damaged_record_breaks_neither_build_nor_clean,
+            ),
+            (
+                "an_unwritable_record_breaks_neither_build_nor_clean",
+                an_unwritable_record_breaks_neither_build_nor_clean,
+            ),
         ]);
     }
 }

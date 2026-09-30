@@ -19,4 +19,6 @@
   build into it is never removed. For web it removed `platforms/web/pkg/`, which no build writes.
   `flui clean` without `--platform` removes every platform's `--out` directories too, before
   `cargo clean` removes the record of them; `--deep` still adds what the platform build tools write
-  in `platforms/`.
+  in `platforms/`. The record of those directories is only an index: losing or damaging it
+  (`cargo clean`, deleting `target/` by hand) never fails a build or a clean, and the next build
+  into a claimed directory records it again.
