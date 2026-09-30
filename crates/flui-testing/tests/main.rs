@@ -23,6 +23,8 @@ mod a11y_query;
 mod async_driver;
 #[path = "controller_restart.rs"]
 mod controller_restart;
+#[path = "headless_realm.rs"]
+mod headless_realm;
 #[path = "layout_builder_seam.rs"]
 mod layout_builder_seam;
 #[path = "lifecycle_panic_containment.rs"]
@@ -39,6 +41,8 @@ mod owner_scope;
 mod pointer_script_replay;
 #[path = "post_frame_after_layout.rs"]
 mod post_frame_after_layout;
+#[path = "realm_driver.rs"]
+mod realm_driver;
 #[path = "self_rescheduling_local_post_frame.rs"]
 mod self_rescheduling_local_post_frame;
 #[path = "text_store_kit.rs"]

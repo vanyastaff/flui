@@ -3,14 +3,17 @@
 - **Status:** Accepted in part (2026-09-26): §1's placement (tier K, kind `internal`, above
   `flui-widgets`, a normal graph that reaches none of the K set) and the first three moves (see
   `## Migration`). Move 4 has moved; its acceptance waits on CI's `cross-typecheck`,
-  `wasm-check` and `wasm-test`, which this host cannot run. §1's ordering before `flui-testing` follows §4 and is not yet in place
-  (`flui-testing` still sits below the runtime). §1's ownership list is accepted for the items
+  `wasm-check` and `wasm-test`, which this host cannot run. §1's ordering before `flui-testing` is
+  in place: `flui-testing` sits above the runtime (order 6). §1's ownership list is accepted for the items
   those moves placed (the presentation lanes, the frame sink seam, `PerformanceStats`,
   `ExecutionServices`, and the realm core: `UiRealm`, `PresentationState`, the presentation
   forest, the per-presentation lifecycle, frame-failure reporting and its ADR-0048
   containment); §1's frame transaction is accepted as `UiRealm::pump`, which every runner
-  drives (the first half of move 5), with the same CI wait for its Android, iOS and wasm sites;
-  the rest of it and §2–§5 remain Proposed.
+  drives (the first half of move 5), with the same CI wait for its Android, iOS and wasm sites.
+  §4 is accepted in part (move 6a): `flui-testing` sits above the runtime and absorbs
+  `flui_widgets::testing`, and its widget harness drives `UiRealm::pump` on a manual clock with a
+  headless sink; `HeadlessBinding::pump_frame` remains for the raw-owner suites until move 6b.
+  The rest of §1 and §2, §3, the rest of §4 and §5 remain Proposed.
 - **Date:** 2026-09-25
 - **Supersedes in part:** [ADR-0041](ADR-0041-workspace-topology-contract.md)
   (the paragraph "No `flui-runtime` without two consumers")
@@ -203,9 +206,14 @@ transaction, not copying the production event-loop topology, is the test-driver 
 `flui-widgets` stops depending on `flui-testing` (`crates/flui-widgets/Cargo.toml:89` goes). That
 is prepared by its own change, which lands first: the tests in the 22 `src/` files that used
 `crate::testing` and reach the harness move to `crates/flui-widgets/tests/`, where the library
-links once; the tests there that do not reach the harness stay unit tests. The compiler keeps it
-that way: `flui_widgets::testing` is `#[cfg(all(feature = "testing", not(test)))]`, so a unit test
-under `src/` that names it fails to build. A moved test that still reads a private item reaches it
+links once; the tests there that do not reach the harness stay unit tests. Review keeps it that
+way, not the compiler: `flui-testing` depends on `flui-widgets`, so `flui-widgets` names it only on
+a dev edge, and a unit test under `src/` that drives the harness links a second copy of the
+library. That still compiles, since the harness takes a `flui_view::View` and there is one
+`flui_view`, but the realm installs the other copy's inherited scopes, so the test's
+`crate::MediaQuery::maybe_of` and every other lookup of a `flui-widgets` type reads `None`. The
+planned "harness stays above the runtime" gate (`design/architecture.md`) turns this into a check.
+`reach-forbid = ["flui-testing"]` keeps the test driver out of the widgets' normal closure. A moved test that still reads a private item reaches it
 through `flui_widgets::__test_access`: doc-hidden, always compiled (no visibility feature, one type
 layout), for `crates/flui-widgets/tests` only, and **temporary**. It holds probe traits for
 methods on public types, re-exports of private types raised to `pub` inside private modules, and
@@ -298,10 +306,12 @@ The crate is created first and filled in five moves, each independently mergeabl
 | 5a. Owner FIFO correctness (done; platform-target acceptance waits on CI) | Before extraction, replace the per-realm/rejection dispatch with one host-wide FIFO of addressed owner work. A reentrant dispatch to any realm appends instead of recursing or being lost; execution-time admission drops a target made stale by earlier work; checkout restoration and realm-owning drops remain panic-safe and happen outside live mutable host borrows. `NestedCrossRealmDispatchRejected` is gone. This transitional queue retains the pre-existing unbounded drain-until-empty policy and private `RealmTask` vocabulary; neither is an extraction contract | move 4 |
 | 5b. Bounded owner batches (done; platform-target acceptance waits on CI) | Bound each continuation callback and request one sequence-stamped later opportunity when work remains. Fresh native roots and carried FIFO entries share the callback budget; a root stays synchronous while budget remains, and excess roots join the FIFO. Terminal close admission fences later work for that exact presentation incarnation. Desktop/iOS use their owner signal, Android uses a non-dirty redraw poke, and web consumes the continuation on the next RAF. Deterministic tests prove a self-enqueueing cross-realm chain yields at every budget boundary and that fresh roots cannot extend a continuation beyond its budget | move 5a |
 | 5c. Closed owner operations | Replace arbitrary `RealmTask::Frame`/`Pump` closures with target-typed presentation, realm and registry operations plus explicit pump/background-pump methods. Give lossless transitions, latest-value state and edge-coalesced wakes distinct admission rules. True cross-thread producers use a bounded typed ingress plus a wake capability; the owner-local dispatcher remains `!Send` | move 5b |
-| 5d. Transaction and host extraction (the pump has moved; acceptance of its Android, iOS and wasm sites waits on CI's `cross-typecheck`, `wasm-check` and `wasm-test`) | `UiRealm::pump` absorbs the runners' `drive_frame_with_lane` calls: every runner's frame wake is its gate, then the pump, then its pacing; the device-recovery wrapper brackets the whole pump; the background arm is `UiRealm::pump_background`; `flui-app`'s `RealmRaster` is test-only. Extract the realm-neutral registry, FIFO, checkout and deferred-mutation machinery as ordinary `flui_runtime::OwnerHost`. `APP_RUNTIME` remains the sole TLS in `flui-app` and contains it beside the `WindowRegistry`, surface appliers and other host-only state; no platform, engine, application-service or execution-pool owner moves with it. The pump verification tests remain in `flui-runtime` until `flui-testing` drives `UiRealm::pump` directly (§4). Rollback: revert (no `legacy-frame-driver` feature, see `## Consequences`) | move 5c |
+| 5d. Transaction and host extraction (the pump has moved; acceptance of its Android, iOS and wasm sites waits on CI's `cross-typecheck`, `wasm-check` and `wasm-test`) | `UiRealm::pump` absorbs the runners' `drive_frame_with_lane` calls: every runner's frame wake is its gate, then the pump, then its pacing; the device-recovery wrapper brackets the whole pump; the background arm is `UiRealm::pump_background`; `flui-app`'s `RealmRaster` is test-only. Extract the realm-neutral registry, FIFO, checkout and deferred-mutation machinery as ordinary `flui_runtime::OwnerHost`. `APP_RUNTIME` remains the sole TLS in `flui-app` and contains it beside the `WindowRegistry`, surface appliers and other host-only state; no platform, engine, application-service or execution-pool owner moves with it. The pump verification tests remain in `flui-runtime`, where the pump lives: they reach its crate-private pipeline. Rollback: revert (no `legacy-frame-driver` feature, see `## Consequences`) | move 5c |
+| 6a. Test driver on the pump (done) | `flui-testing` moves above the runtime (`order = 6`, a normal dependent the runtime admits beside `flui-app`) and absorbs `flui_widgets::testing` as `flui_testing::widgets`; `flui-widgets` loses its `testing` feature. A realm takes its clock as a `ClockSource`, so one `ManualClock` drives its frame time, gesture deadlines and produce gate. `HeadlessRealm` hosts a `UiRealm` over a headless window and sink and raises a contained frame failure after the pump, the first one authoritative. The widget harness (`lay_out`, `harness::mount`) runs every frame, the mount included, through `UiRealm::pump`; the tests that pinned what the old driver lacked (no root `MediaQuery` or `VsyncScope`, no post-frame lanes, no text-input capability) mount on `HeadlessBinding` or assert the realm's behaviour | move 4 |
+| 6b. Substrate suites on the pump | `HeadlessBinding::pump_frame`, `run_pipeline` and `pump_presentation`/`pump_all` are deleted; the raw-owner suites (`flui-view`, animation, scheduler, interaction, `flui-widgets`' `perf` target and its baseline, the facade's `tests/*.rs`) mount under the realm's root scopes, which changes their tree shapes and needs its own review; per-presentation clocks become separate realms | move 6a |
 
-§2 (sealing the entry points), §4 (`flui-testing` above the runtime, taking an `order` after it)
-and the widgets' inline test modules follow move 5d.
+§2 (sealing the entry points) and the widgets' inline test modules follow move 5d. Move 6 does
+not wait on 5c or 5d: §4 keeps the test driver off `OwnerHost`, so it needs only the pump.
 
 `cargo xtask reach` (ADR-0081 §2) checks the K-set fact for `flui-runtime` over every root
 build: its tier K forbids `flui-platform`, `winit`, `android-activity`, `ndk`, `windows`,
@@ -334,11 +344,11 @@ test that failed before the fix:
 ## Verification
 
 The first exists: both crates are tier K, and `cargo xtask reach` checks them on every change.
-The pump tests exist in `flui-runtime` (`ui_realm/tests/pump_transaction.rs`, driven through
-`flui_runtime::testing::ScriptedSink` and `flui_foundation::ManualClock`, the virtual clock
-`flui-testing` already runs on, which implements `FrameClockSource` under `test-support`); they
-move to `flui-testing` once it drives the pump (§4), since `flui-testing` still sits below the runtime and its
-`HeadlessBinding` hosts no realm.
+The pump tests stay in `flui-runtime`, where the pump lives (`ui_realm/tests/pump_transaction.rs`,
+driven through `flui_runtime::testing::ScriptedSink` and `flui_foundation::ManualClock`, which
+implements `FrameClockSource`; they reach the realm's crate-private pipeline). What the test
+driver adds on top is tested in `flui-testing` (`tests/headless_realm.rs`,
+`tests/realm_driver.rs`).
 
 - `cargo xtask reach` (ADR-0081): `flui-runtime` and `flui-testing` reach none of the K set.
 - `cargo xtask frame-entry --self-test` (if option 2 of §2 is used): a planted call to
@@ -348,9 +358,9 @@ move to `flui-testing` once it drives the pump (§4), since `flui-testing` still
   (`pump_post_frame_callback_observes_this_frames_committed_layout`).
 - The ADR-0075 acceptance test, once that record is accepted: an effect runs under the product
   frame driven by the runner's code path, not only under the harness.
-- A grep-free structural check: a `reach-forbid` fact (ADR-0081 §2) that `flui-testing` is
-  absent from `flui-widgets`' normal closure with all features. (`cargo tree -i` cannot state it:
-  it errors on an absent package.)
+- A grep-free structural check (done): a `reach-forbid` fact (ADR-0081 §2) that `flui-testing`
+  is absent from `flui-widgets`' normal closure with all features, `reach-forbid = ["flui-testing"]`
+  in `flui-widgets`' manifest. (`cargo tree -i` cannot state it: it errors on an absent package.)
 - A test that fails when the begin-frame phase is skipped: an animation controller driven through
   `UiRealm::pump` with a manual clock advances its value between two frames
   (`pump_advances_a_scheduler_ticker_between_two_pumps`); and one that fails when the pump does

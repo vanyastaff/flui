@@ -285,11 +285,6 @@ class = "wave"
 count = 1
 
 [[allow]]
-path = "crates/flui-testing/src/lib.rs"
-class = "wave"
-count = 1
-
-[[allow]]
 path = "crates/flui-view/src/element/dispatch.rs"
 class = "wave"
 count = 1

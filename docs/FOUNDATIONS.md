@@ -211,6 +211,7 @@ graph TD
     widgets --> objects
     widgets --> animation
     widgets --> assets
+    testing --> widgets
     testing --> view
     testing --> rendering
     testing --> interaction

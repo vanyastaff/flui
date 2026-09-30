@@ -82,7 +82,8 @@ impl UiRealm {
     ///    instant its [`FrameClockSource`](crate::pump::FrameClockSource)
     ///    returned, so `Vsync` controllers advance on the frame's clock, as
     ///    Flutter's tickers see the frame's timestamp;
-    /// 3. the wall clock, for a frame driven outside a pump.
+    /// 3. the realm's clock source now, for a frame driven outside a pump
+    ///    (the wall clock for a host's `ClockSource::Platform`).
     pub(super) fn now_secs(&self) -> f64 {
         #[cfg(any(test, feature = "test-support"))]
         {
@@ -95,7 +96,9 @@ impl UiRealm {
             Some(frame_time) => frame_time
                 .saturating_duration_since(self.start)
                 .as_secs_f64(),
-            None => self.start.elapsed().as_secs_f64(),
+            None => flui_foundation::MonotonicClock::now(&self.clock)
+                .saturating_duration_since(self.start)
+                .as_secs_f64(),
         }
     }
 

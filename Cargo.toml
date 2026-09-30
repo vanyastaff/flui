@@ -29,7 +29,7 @@ members = [
     "crates/flui-widgets",   # User-facing widget catalog (ACTIVE — Core.1 slice)
     "crates/flui-runtime",   # Frame runtime: per-presentation lanes a realm drives (ADR-0083)
     "crates/flui-sdk",       # Package-author surface: what official and third-party packages build on (ADR-0088)
-    "crates/flui-testing",   # Test-support: headless deterministic frame driver (pump_frame) (ACTIVE)
+    "crates/flui-testing",   # Test-support: headless realm host, widget harness, substrate driver (ACTIVE)
 
     # === Phase 4: Application Layer ===
     "crates/flui-app",    # Application framework (ACTIVE - Migration)
@@ -682,9 +682,9 @@ flui-platform = { path = "crates/flui-platform", version = "=0.2.0-dev" }
 # === Hot-Reload (for examples) ===
 flui-hot-reload = { path = "crates/flui-hot-reload", version = "=0.2.0-dev" }
 
-# === Test support (for the vertical_slice_demo acceptance test) ===
+# === Test support (the vertical_slice_demo acceptance test, and the widget
+# harness `flui_testing::widgets` that tests/agent_workflow.rs drives) ===
 flui-testing = { workspace = true }
-flui-widgets = { path = "crates/flui-widgets", version = "=0.2.0-dev", features = ["testing"] }
 # Snapshot assertions + `cargo insta review` for tests/demo_layer_snapshots.rs.
 insta = { workspace = true }
 # tests/facade_serde.rs round-trips a value from each crate `flui/serde` reaches.
@@ -722,7 +722,7 @@ objc2-app-kit = { workspace = true, features = ["NSApplication", "NSResponder", 
 dispatch2.workspace = true
 
 [features]
-testing = ["dep:flui-testing", "flui-widgets/testing", "flui-rendering/testing"]
+testing = ["dep:flui-testing", "flui-rendering/testing"]
 # No catalog, tool or capability is on by default: an application names what it
 # uses (ADR-0088 §6). The base widget surface (`flui::widgets`, `flui::prelude`
 # minus the Material glob, `flui::run_app`) needs no feature at all;

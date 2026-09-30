@@ -51,7 +51,6 @@ impl TextStoreFixture for EditableTextFixture {
 
     fn reset(&mut self, text: &str) {
         self.store().set_observer(None);
-        self.harness.set_transaction_open(false);
         // Through empty, so the caret lands at the end and any composition
         // ends even when `text` is what the field already holds.
         self.controller.set_text("");

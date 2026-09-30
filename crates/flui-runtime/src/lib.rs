@@ -43,8 +43,8 @@
 //! - [`sink`]: the [`FrameSink`](sink::FrameSink) a frame is submitted
 //!   through, and the [`SubmitVerdict`](sink::SubmitVerdict) the realm
 //!   classifies;
-//! - `testing` (with the `test-support` feature): a window double, a
-//!   scripted sink and a manual frame clock for driving a realm headlessly.
+//! - `testing` (with the `test-support` feature): a window double and a
+//!   scripted sink for driving a realm headlessly.
 
 pub mod epoch;
 pub mod execution;

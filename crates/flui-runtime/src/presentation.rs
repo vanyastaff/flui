@@ -26,7 +26,7 @@ use flui_rendering::pipeline::PipelineCell;
 #[cfg(test)]
 use flui_rendering::pipeline::PipelineOwner;
 use flui_scheduler::{
-    AsyncDriver, FrameClock, LocalPostFrameHandle, PostFrameHandle, UpdateScheduler,
+    AsyncDriver, ClockSource, FrameClock, LocalPostFrameHandle, PostFrameHandle, UpdateScheduler,
     input_to_present_histogram, produce_to_present_histogram,
 };
 use flui_semantics::platform::PlatformAccessibility;
@@ -91,6 +91,9 @@ pub(crate) struct RealmCapabilities<'a> {
     /// The realm's platform clipboard, handed to widgets through
     /// `LifecycleContext::clipboard_handle`.
     pub(crate) clipboard: Arc<dyn Clipboard>,
+    /// Where the realm reads time: this presentation's gesture arena and
+    /// [`FrameClock`] read the same source as the realm's frame clock.
+    pub(crate) clock: &'a ClockSource,
     /// The realm's text context, installed on the presentation's pipeline so
     /// its layout measures text through the realm (ADR-0092 §10 step 3).
     pub(crate) text: flui_rendering::TextContextHandle,
@@ -510,8 +513,14 @@ impl PresentationState {
     /// to `window` (shared by every constructor below — production and
     /// test alike — since the callback shape never varies with capability
     /// wiring).
-    fn build_gestures(id: PresentationId, window: &Arc<dyn PlatformWindow>) -> GestureBinding {
-        let gestures = GestureBinding::new();
+    fn build_gestures(
+        id: PresentationId,
+        window: &Arc<dyn PlatformWindow>,
+        clock: &ClockSource,
+    ) -> GestureBinding {
+        // The arena's deadlines read the realm's clock: a recognizer's
+        // timeout and the frame that polls it share one timeline.
+        let gestures = GestureBinding::with_clock(Arc::new(clock.clone()));
         let cursor_window = Arc::downgrade(window);
         gestures
             .mouse_tracker()
@@ -568,7 +577,8 @@ impl PresentationState {
         // The one place a presentation's pipeline gets the realm's text
         // context, before anything can lay it out.
         pipeline.with_mut(|owner| owner.set_text_context(capabilities.text));
-        let gestures = Self::build_gestures(id, &window);
+        let gestures = Self::build_gestures(id, &window, capabilities.clock);
+        let frame_clock = FrameClock::with_source(capabilities.clock.clone());
         let alive = Rc::new(());
         let focus = FocusManager::new();
         let text_input = TextInputOwner::new(window.text_input());
@@ -688,7 +698,7 @@ impl PresentationState {
             performance_overlay: RefCell::new(None),
             redraw_pending: Cell::new(false),
             vsync: RefCell::new(Vsync::new()),
-            clock: FrameClock::new(),
+            clock: frame_clock,
             last_segment_span: Cell::new(None),
             tree_revision: Cell::new(TreeRevision::ZERO),
             presented_revision: Cell::new(TreeRevision::ZERO),
@@ -719,7 +729,7 @@ impl PresentationState {
         pipeline: PipelineCell,
         window: Arc<dyn PlatformWindow>,
     ) -> Self {
-        let gestures = Self::build_gestures(id, &window);
+        let gestures = Self::build_gestures(id, &window, &ClockSource::Platform);
         let alive = Rc::new(());
         let focus = FocusManager::new();
         let text_input = TextInputOwner::new(window.text_input());

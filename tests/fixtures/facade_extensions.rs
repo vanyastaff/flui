@@ -591,9 +591,10 @@ fn retained_focus_node_uses_context_capabilities_through_the_facade() {
     let handles = handles.as_ref().expect("init_state capabilities");
     assert!(handles.focus.primary_focus().is_some());
     assert!(handles.hit_test.is_some());
-    // The headless fixture has no native IME owner: this checks typed capability
-    // access, not operating-system text-input behavior.
-    assert!(handles.text_input.is_none());
+    // The realm installs its presentation's text-input capability, as on
+    // screen; the headless window offers no platform input method, so this
+    // checks typed capability access, not operating-system text-input behavior.
+    assert!(handles.text_input.is_some());
     view.node.unfocus();
     tree.tick();
     assert!(!view.node.has_primary_focus());

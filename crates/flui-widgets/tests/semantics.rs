@@ -101,7 +101,7 @@ use flui_testing::{Action, ActionData, ActionRequest, NodeId, TreeId, invoke_sem
 fn pump_labelled(
     semantics: Semantics,
 ) -> (
-    flui_widgets::testing::LaidOut,
+    flui_testing::widgets::LaidOut,
     flui_testing::A11yTree,
     NodeId,
 ) {

@@ -236,7 +236,7 @@ impl Mounted {
     ///
     /// Widget harnesses that insert an `Align` loosener under the `RenderView`
     /// (only for non-tight mount constraints) then take that Align's child as
-    /// the caller's root — see `flui_widgets::testing::lay_out`.
+    /// the caller's root — see `flui_testing::widgets::lay_out`.
     ///
     /// # Panics
     ///

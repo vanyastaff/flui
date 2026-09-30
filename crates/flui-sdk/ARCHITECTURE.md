@@ -61,8 +61,9 @@ their tests, measured at `431c8757c` (2026-09-26):
 `painting::DrawOp` is added for the packages' paint tests, the only place they name it.
 `flui-devtools`, measured the same way when it moved, adds `hooks::FrameSnapshot` and the
 `foundation::observe` paths (see Consumers). Their
-tests under `tests/` also use `flui-widgets`' and `flui-interaction`'s `testing` features and
-`flui-testing`; those stay dev-dependencies of the packages and are not SDK surface.
+tests under `tests/` also use `flui-interaction`'s `testing` feature and `flui-testing` (whose
+`widgets` module is the widget harness); those stay dev-dependencies of the packages and are
+not SDK surface.
 
 ## Consumers
 

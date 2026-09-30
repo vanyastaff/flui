@@ -1944,7 +1944,6 @@ version = "0.2.0-dev"
 dependencies = [
  "flui-sdk",
  "flui-testing",
- "flui-widgets",
  "tracing",
 ]
 
@@ -2150,7 +2149,6 @@ dependencies = [
  "flui-interaction",
  "flui-sdk",
  "flui-testing",
- "flui-widgets",
  "tracing",
 ]
 
@@ -2406,9 +2404,11 @@ dependencies = [
  "flui-painting",
  "flui-platform-api",
  "flui-rendering",
+ "flui-runtime",
  "flui-scheduler",
  "flui-semantics",
  "flui-view",
+ "flui-widgets",
  "parking_lot",
  "static_assertions",
  "thiserror 2.0.20",
@@ -2495,7 +2495,6 @@ dependencies = [
  "flui-scheduler",
  "flui-testing",
  "flui-view",
- "flui-widgets",
  "futures-core",
  "futures-util",
  "image",

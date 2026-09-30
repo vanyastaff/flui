@@ -92,15 +92,17 @@
 //! assert!(fired.load(Ordering::SeqCst));
 //! ```
 
-// Ship bar (wave 3): every public item is documented; keep it that way.
+// Every public item is documented; keep it that way.
 #![deny(missing_docs)]
 
 pub mod a11y;
 pub mod bootstrap;
 pub mod fonts;
 pub mod log_capture;
+pub mod realm;
 pub mod replay;
 pub mod text_store_kit;
+pub mod widgets;
 
 pub use a11y::{
     A11yNode, A11yQuery, A11yQueryError, A11yTree, Action, ActionData, ActionRequest,
@@ -109,6 +111,7 @@ pub use a11y::{
 pub use bootstrap::{BuildCapabilities, MountOptions, MountOwners, Mounted};
 pub use fonts::pin_font_faces;
 pub use log_capture::{CapturedLog, CapturedRecord, capture, disarm_interest_cache};
+pub use realm::{HeadlessRealm, HeadlessSink, HeadlessWindow};
 pub use replay::{GestureRecorder, PointerPhase, PointerScript, ScriptedPointer};
 
 use std::collections::HashMap;

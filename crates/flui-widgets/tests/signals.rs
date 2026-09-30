@@ -117,7 +117,7 @@ pub(crate) fn writing_a_signal_rebuilds_exactly_its_readers() {
     // Mount a placeholder first: the tree's own graph is the one the build
     // contexts hand out, so the signals must be minted there.
     let mut laid = lay_out(SizedBox::square(1.0), loose(1000.0));
-    let r = laid.build_owner_mut().reactive().clone();
+    let r = laid.with_build_owner_mut(|owner| owner.reactive().clone());
     let a = r.signal(10u32);
     let b = r.signal(20u32);
     let (builds_a, builds_b) = (builds(), builds());
@@ -172,7 +172,7 @@ pub(crate) fn writing_a_signal_rebuilds_exactly_its_readers() {
 
 pub(crate) fn a_stale_handle_read_in_build_is_a_typed_error_through_try_get() {
     let mut laid = lay_out(SizedBox::square(1.0), loose(1000.0));
-    let r = laid.build_owner_mut().reactive().clone();
+    let r = laid.with_build_owner_mut(|owner| owner.reactive().clone());
     let sig = r.signal(4u32);
     let outcome = Rc::new(Cell::new(None));
     laid.pump_widget(TolerantReader {
@@ -196,7 +196,7 @@ pub(crate) fn a_stale_handle_read_in_build_is_a_typed_error_through_try_get() {
 
 pub(crate) fn writes_and_creations_inside_build_are_refused_by_the_runtime() {
     let mut laid = lay_out(SizedBox::square(1.0), loose(1000.0));
-    let r = laid.build_owner_mut().reactive().clone();
+    let r = laid.with_build_owner_mut(|owner| owner.reactive().clone());
     let sig = r.signal(1u32);
     let outcome = Rc::new(Cell::new(None));
     let created = Rc::new(Cell::new(None));

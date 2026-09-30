@@ -11,6 +11,7 @@ fn realm_over(fonts: &FontCollection) -> UiRealm {
         Arc::new(AtomicBool::new(false)),
         crate::presentation::test_clipboard(),
         fonts,
+        flui_scheduler::ClockSource::Platform,
     )
     .expect("a realm over a headless window")
 }

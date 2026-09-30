@@ -26,14 +26,10 @@ tracing = { workspace = true }
 # framework through `flui_sdk::` like any package, and these crates only for
 # what the SDK does not carry.
 [dev-dependencies]
-# `tests/common/mod.rs` re-exports the headless harness in
-# `flui_widgets::testing`; the dev-dependency turns on the feature that compiles
-# it (and, through it, `flui-rendering`'s and `flui-objects`' `testing`), so
-# the normal build never links the test driver.
-flui-widgets = { path = "../../crates/flui-widgets", version = "=0.2.0-dev", features = [
-    "testing",
-] }
-# `a11y::Role`, which the button semantics tests assert against.
+# The headless harness `tests/common/mod.rs` re-exports
+# (`flui_testing::widgets`), and `a11y::Role`, which the button semantics tests
+# assert against; a dev edge only, so the normal build never links the test
+# driver.
 flui-testing = { workspace = true }
 
 [lints]

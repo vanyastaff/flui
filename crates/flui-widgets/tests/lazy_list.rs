@@ -274,7 +274,7 @@ pub(crate) fn lazy_list_view_builder_exhausted_pass_budget_defers_the_rest_to_th
         .repaint_boundaries(false)
     };
     let mut laid = lay_out(SizedBox::square(10.0), tight(200.0, 600.0));
-    laid.build_owner_mut().set_lazy_band_pass_budget_for_test(1);
+    laid.with_build_owner_mut(|owner| owner.set_lazy_band_pass_budget_for_test(1));
 
     laid.pump_widget(list());
     // `try_size`: a deferred item exists in the render tree (the safety net

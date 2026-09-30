@@ -50,6 +50,7 @@ pub(super) fn build_runtime_realm(
         runtime_needs_redraw_handle(),
         runtime_clipboard(),
         &runtime_font_collection(),
+        flui_scheduler::ClockSource::Platform,
     )
 }
 

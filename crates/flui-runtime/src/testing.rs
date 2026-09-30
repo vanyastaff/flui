@@ -8,8 +8,6 @@
 //!   text-input capability) and recorders for what the realm asked of it
 //!   (redraws, pre-present notifications, the cursor).
 //! - [`ScriptedSink`]: a [`FrameSink`] whose submit verdicts a test scripts.
-//! - a [`FrameClockSource`] impl for [`flui_foundation::ManualClock`], so a
-//!   test advances by hand the frame clock a `UiRealm::pump` reads.
 //!
 //! Neither the window nor the sink is `flui_platform`'s `MockWindow` or a raster backend: those are
 //! minted by a live headless platform or a GPU device, and a state-level
@@ -27,7 +25,6 @@ use flui_platform_api::{
 };
 use flui_semantics::platform::PlatformAccessibility;
 
-use crate::pump::FrameClockSource;
 use crate::sink::{FrameSink, SubmitVerdict};
 
 /// Configurable [`PlatformWindow`] double. Construct with [`TestWindow::new`],
@@ -354,22 +351,5 @@ impl FrameSink for ScriptedSink {
         let call_index = self.submit_calls;
         self.submit_calls += 1;
         (self.script)(call_index, &scene)
-    }
-}
-
-/// The workspace's one virtual clock, [`flui_foundation::ManualClock`], is
-/// also a pump's frame clock: a test advances it by hand, so a pump's frame
-/// timestamp — and every `Vsync` controller ticked at it — is a value the
-/// test controls rather than whatever the wall clock read. It is the clock
-/// `flui-testing`'s headless binding already drives its gesture-arena
-/// deadlines from, so a driver that pumps a realm off the same handle keeps
-/// the frame timestamp and those deadlines on one timeline (clones share it).
-///
-/// It starts at the instant it was constructed. Construct it after the realm
-/// it drives: a realm measures frame time from its own start, and an instant
-/// before that start reads as zero.
-impl FrameClockSource for flui_foundation::ManualClock {
-    fn frame_time(&mut self) -> web_time::Instant {
-        flui_foundation::MonotonicClock::now(self)
     }
 }

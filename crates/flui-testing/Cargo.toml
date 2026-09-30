@@ -11,6 +11,9 @@ description = "Test support for FLUI: a deterministic headless frame driver on a
 keywords = ["ui", "gesture", "headless", "testing"]
 categories = ["gui"]
 
+# Dev-only files kept out of the published archive:
+exclude = ["/ARCHITECTURE.md"]
+
 # Single-binary integration-test consolidation: every root test file is a
 # module of `tests/main.rs` (one link of the full dep stack instead of 2
 # separate binaries). See the `[[test]] name = "flui_testing_it"` target below.
@@ -33,9 +36,8 @@ workspace = true
 # `replay` builds its scripted events through flui-interaction's own
 # `make_*_event_for_id` constructors, so a script cannot drift from the event
 # shape a real platform translation produces. This crate is itself test
-# support and never enters a production graph (dev edges only, plus the one
-# sanctioned optional edge from flui-widgets' `testing` feature, which already
-# enables flui-interaction/testing itself), so the feature travels nowhere new.
+# support and never enters a production graph (dev edges only, plus the
+# facade's optional `testing` feature), so the feature travels nowhere new.
 flui-interaction = { path = "../flui-interaction", version = "=0.2.0-dev", features = ["testing"] }
 # PresentationId, the multi-presentation clock registry's key -- it now
 # appears directly in HeadlessBinding's own public method signatures
@@ -50,7 +52,21 @@ flui-platform-api = { workspace = true }
 # drains the external inbox an animation/listenable tick fills).
 flui-view = { path = "../flui-view", version = "=0.2.0-dev" }
 # The pipeline owner the frame loop lays out / paints / composites (`run_frame`).
-flui-rendering = { path = "../flui-rendering", version = "=0.2.0-dev" }
+# `testing` for `inspect`, the committed-geometry and layer accessors the
+# widget harness (`widgets`) reads.
+flui-rendering = { path = "../flui-rendering", version = "=0.2.0-dev", features = ["testing"] }
+# The widget harness (`widgets`): the catalog widgets it wraps a root in
+# (`Align`, `ConstrainedBox`, `UnconstrainedBox`, `FocusRoot`,
+# `GestureArenaScope`), and the concrete render objects its probes downcast.
+flui-widgets = { path = "../flui-widgets", version = "=0.2.0-dev" }
+flui-objects = { workspace = true }
+# `HeadlessRealm` hosts a `UiRealm` and drives its frame transaction
+# (`UiRealm::pump`, ADR-0083 §4). The runtime admits this crate as a normal
+# dependent beside the host. `test-support` exposes the test-only realm hooks
+# the harness reads (`UiRealm::active_text_store`).
+flui-runtime = { path = "../flui-runtime", version = "=0.2.0-dev", features = ["test-support"] }
+# The widget harness's recording IME double.
+parking_lot = { workspace = true }
 # The process-wide `FontSystem` text measurement resolves against. `fonts`
 # pins its face set so a test can commit a layout that does not depend on the
 # host machine's installed fonts. `features = ["testing"]` because the
@@ -88,19 +104,11 @@ tracing = { workspace = true }
 
 [dev-dependencies]
 static_assertions.workspace = true
-# The shared-state fixtures of tests/async_driver.rs and
-# tests/post_frame_after_layout.rs; the harness itself takes no lock.
-parking_lot = { workspace = true }
-# `inspect::box_geometry` — the canonical committed-geometry accessor the
-# bootstrap contract test asserts against. Dev-only: the harness itself never
-# reads geometry, its consumers do.
-flui-rendering = { path = "../flui-rendering", version = "=0.2.0-dev", features = ["testing"] }
 # Enable flui-view's `test-utils` feature in test builds so the layout-builder
 # seam test can plant a registry entry (`register_layout_builder_for_test`).
 # Same dev-only feature-unification pattern used by flui-app; the hook stays out
 # of release builds.
 flui-view = { path = "../flui-view", version = "=0.2.0-dev", features = ["test-utils"] }
-flui-objects = { workspace = true }
 # The long-press deadline recognizer + settings exercised by the pump_frame test,
 # plus the geometry/offset types for the synthetic pointer-down. The `testing`
 # feature is NOT required: `add_pointer`/`poll_deadlines` are part of the release
@@ -115,8 +123,10 @@ path = "tests/main.rs"
 layer = 6
 tier = "K"
 tier-kind = "internal"
-# Below flui-widgets, which names it as an optional dependency.
-order = 2
+# Above flui-widgets (3), flui-runtime (4) and flui-sdk (5): the test driver
+# wraps the catalog and the frame runtime (ADR-0083 §4). Every crate below
+# names it only on a dev edge.
+order = 6
 # Process-global state, checked by `cargo xtask globals` (ADR-0097).
 globals = [
     { item = "log_capture::SINK", grant = "ADR-0097", class = "process", reason = "per-thread capture buffer behind tracing's global dispatcher, which the process has once" },

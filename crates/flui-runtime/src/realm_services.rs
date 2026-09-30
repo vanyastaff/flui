@@ -9,7 +9,7 @@ use flui_foundation::{PresentationId, RealmId};
 use flui_painting::{FontCollection, TextContext};
 use flui_platform_api::Clipboard;
 use flui_rendering::TextContextHandle;
-use flui_scheduler::{AsyncDriver, LocalPostFrameLane, UpdateScheduler};
+use flui_scheduler::{AsyncDriver, ClockSource, LocalPostFrameLane, UpdateScheduler};
 
 /// What [`UiRealm`](crate::ui_realm::UiRealm)'s constructors need to wire it
 /// up: a fresh, realm-owned [`UpdateScheduler`] — the strong root — plus the
@@ -23,6 +23,9 @@ pub(crate) struct RealmServices {
     /// The platform clipboard every presentation of this realm hands its
     /// widgets (`LifecycleContext::clipboard_handle`).
     pub(crate) clipboard: Arc<dyn Clipboard>,
+    /// Where the realm reads time: its frame-time origin, and every
+    /// presentation's gesture arena and frame clock.
+    pub(crate) clock: ClockSource,
     /// The realm's text service (ADR-0092 §3): one per realm, built from the
     /// app's [`FontCollection`] and dropped with the realm. Every
     /// presentation's pipeline holds a clone of the handle and lends the
@@ -41,14 +44,20 @@ impl RealmServices {
     ///
     /// `fonts` is the app's font collection; the realm gets its own
     /// [`TextContext`] over it, so a face registered on the collection
-    /// reaches this realm as it reaches every other.
-    pub(crate) fn construct(clipboard: Arc<dyn Clipboard>, fonts: &FontCollection) -> Self {
+    /// reaches this realm as it reaches every other. `clock` is where it
+    /// reads time.
+    pub(crate) fn construct(
+        clipboard: Arc<dyn Clipboard>,
+        fonts: &FontCollection,
+        clock: ClockSource,
+    ) -> Self {
         let scheduler = UpdateScheduler::new();
         Self {
             local_post_frame: scheduler.new_local_post_frame_lane(),
             async_driver: scheduler.async_driver().clone(),
             scheduler,
             clipboard,
+            clock,
             text: TextContextHandle::new(TextContext::new(fonts)),
         }
     }

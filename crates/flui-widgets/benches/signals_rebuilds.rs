@@ -22,9 +22,9 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use criterion::{Criterion, criterion_group, criterion_main};
+use flui_testing::widgets::{LaidOut, lay_out, loose};
 use flui_view::{FrameBuildReport, Reactive, RebuildReason, Signal, StateHandle, View};
 use flui_widgets::prelude::*;
-use flui_widgets::testing::{LaidOut, lay_out, loose};
 use flui_widgets::{Column, SizedBox};
 
 const LIST_ROWS: usize = 10_000;
@@ -294,14 +294,16 @@ impl Scenario {
             .pipeline_owner()
             .with(flui_rendering::pipeline::PipelineOwner::layout_roots_total);
         Measured {
-            build: self.laid.build_owner_mut().last_frame_build_report(),
+            build: self
+                .laid
+                .with_build_owner_mut(|owner| owner.last_frame_build_report()),
             layout_roots: (after - before) as usize,
         }
     }
 }
 
 fn reactive(laid: &mut LaidOut) -> Reactive {
-    laid.build_owner_mut().reactive().clone()
+    laid.with_build_owner_mut(|owner| owner.reactive().clone())
 }
 
 fn mount_b<V: View>(make: impl FnOnce(&Reactive) -> V) -> LaidOut {

@@ -33,7 +33,7 @@ the same bug found by a whole-demo snapshot names a demo.
 | Render object | A real `PipelineOwner` — layout, paint, hit-test, intrinsics | `flui_rendering::testing::{RenderTester, Probe}` | `flui-rendering/testing` |
 | **Frame** | A **whole headless frame** on a virtual clock: build → layout → paint → composite, gestures, animation, async tasks | `flui_testing::HeadlessBinding` | dev-dependency |
 | Realm | A `UiRealm`'s own frame transaction, multi-presentation routing and failure containment, submitting to a scripted sink | `flui_runtime::ui_realm::UiRealm::for_test` with `flui_runtime::testing::{ScriptedSink, TestWindow}` (the realm tests live in `crates/flui-runtime/src/ui_realm/`) | `flui-runtime/test-support` |
-| **Widget** | A mounted widget tree with geometry probes and synthetic input | `flui_widgets::testing::{lay_out, LaidOut}` | `flui-widgets/testing` |
+| **Widget** | A mounted widget tree with geometry probes and synthetic input, every frame the realm's own `UiRealm::pump` on a manual clock | `flui_testing::widgets::{lay_out, LaidOut}`, `flui_testing::HeadlessRealm` | dev-dependency |
 | Accessibility | The assembled semantics tree, queried by role | `flui_testing::a11y::{A11yTree, A11yQuery}` | dev-dependency |
 | Gesture replay | A scripted gesture replayed with its timing | `flui_testing::replay::PointerScript` | dev-dependency |
 | Log capture | The `tracing` events a frame emitted | `flui_testing::log_capture::capture` | dev-dependency |
@@ -44,11 +44,11 @@ the same bug found by a whole-demo snapshot names a demo.
 Two structural rules hold across the stack:
 
 - **Test-only APIs live in `flui-testing`**, not behind a `testing` feature on a
-  shipped crate. Where layering forbids the move — `flui_widgets::testing`
-  mounts `FocusRoot`/`VsyncScope`/`GestureArenaScope`, which are widgets, and
-  `flui-testing` may never depend on the widget catalog — the harness stays put
-  but is *built on* `flui-testing`, so the shared machinery is not forked.
-- **Mount through `HeadlessBinding::mount_root`.** It owns the eight-step
+  shipped crate. It sits above the frame runtime and the widget catalog, so
+  the widget harness lives there too and drives the product frame
+  transaction: `lay_out` mounts its tree in a `HeadlessRealm`, whose frames are
+  `UiRealm::pump` (ADR-0083 §4).
+- **On the substrate driver, mount through `HeadlessBinding::mount_root`.** It owns the eight-step
   bootstrap whose ordering is load-bearing, and its contract is that the
   bootstrap frame is the same frame `pump_frame` runs (same layout↔build
   fixpoint, same lazy-sliver service pass). Hand-rolled copies of that sequence
@@ -490,9 +490,11 @@ The constitution requires `///` doc comments on every public item and `//!` over
 ## Test Conventions
 
 - **Unit tests** live in the same file under `#[cfg(test)] mod tests { ... }`.
-  `flui-widgets` unit tests cannot use the headless harness: `flui_widgets::testing` is
-  `cfg(not(test))`, so a test that mounts a tree lives in `crates/flui-widgets/tests/`
-  (ADR-0083 §4).
+  `flui-widgets` unit tests must not use the headless harness: `flui-testing` depends on
+  `flui-widgets`, so a unit test under `src/` links a second copy of the library. It still
+  compiles, but the realm's inherited scopes (`MediaQuery`, `FocusRoot`, `VsyncScope`) are the
+  other copy's types, so the test's own lookups of them read `None`. Nothing but review
+  catches it; a test that mounts a tree lives in `crates/flui-widgets/tests/` (ADR-0083 §4).
 - **Integration tests** live in `tests/` per crate. Cross-crate pipelines are tested in `flui-engine`.
   A crate's root `tests/*.rs` files compile as modules of **one** integration-test
   binary (`tests/main.rs` with `#[path]` module declarations, `autotests = false`
@@ -537,7 +539,7 @@ tests/benches/examples via a self dev-dependency; downstream crates opt in with
 | `flui-painting` | [crates/flui-painting/src/testing/mod.rs](../crates/flui-painting/src/testing/mod.rs) | `record`, `command_count`, `bounds`, `diagnostics` |
 | `flui-foundation` | [crates/flui-foundation/docs/TESTING.md](../crates/flui-foundation/docs/TESTING.md) | `DiagnosticsNode` / `DiagnosticsBuilder` for structured assertions (no `testing` module) |
 | `flui-testing` | [crates/flui-testing/README.md](../crates/flui-testing/README.md) | `HeadlessBinding` (`pump_frame`, `mount_root`, `replay`), `a11y::A11yQuery` — a **dev-dependency**, not a `testing` feature |
-| `flui-widgets` | [crates/flui-widgets/README.md](../crates/flui-widgets/README.md) | `testing::{lay_out, LaidOut, settle_lazy}` — the canonical widget harness, shared verbatim by `flui-material` / `flui-cupertino` |
+| `flui-testing` (widgets) | [crates/flui-testing/ARCHITECTURE.md](../crates/flui-testing/ARCHITECTURE.md) | `widgets::{lay_out, LaidOut, settle_lazy}`, `widgets::harness::{mount, mount_with_ime}` — the canonical widget harness on the realm, shared verbatim by `flui-widgets` / `flui-material` / `flui-cupertino` |
 
 | Crate | What it gives you |
 |-------|-------------------|
@@ -628,8 +630,9 @@ let mounted = binding.mount_root(&root, MountOwners::fresh(), MountOptions::tigh
 binding.pump_frame(Duration::from_millis(16));
 ```
 
-`flui_widgets::testing::lay_out` is the widget tier over it, adding the
-presentation scopes and geometry probes. It is one harness, shared verbatim by
+`flui_testing::widgets::lay_out` is the widget tier: it mounts the tree in a
+`HeadlessRealm`, under the realm's own root scopes, and adds geometry probes;
+every frame, the mount included, is `UiRealm::pump`. It is one harness, shared verbatim by
 `flui-widgets`, `flui-material`, and `flui-cupertino` — the per-crate
 `tests/common/mod.rs` files are thin re-export shims, so mount ordering,
 pointer-contact identity, and virtual-clock policy cannot drift apart between
@@ -752,7 +755,7 @@ the state primitive. Five steps, each backed by a documented, facade-reachable A
 | 4. Drive | Tap the label's own bounds | `flui::testing::HeadlessBinding::replay` with `flui::testing::replay::PointerScript::tap` |
 | 5. Assert | Confirm the rendered count advanced | The diagnostics dump again, checked for the `RenderParagraph` `text` property |
 
-Step 4 is deliberately **not** `flui_widgets::testing::lay_out`'s
+Step 4 is deliberately **not** `flui_testing::widgets::lay_out`'s
 `dispatch_pointer_down`/`find_text` convenience: those are widget-internal
 shortcuts this package's own tests use freely (see
 `tests/material_demo.rs`), but an outside agent driving the framework through

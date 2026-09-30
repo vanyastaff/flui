@@ -19,7 +19,7 @@ use flui_platform_api::Clipboard;
 #[cfg(any(test, feature = "test-support"))]
 use flui_platform_api::PlatformTextInput;
 use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
-use flui_scheduler::AppLifecycleState;
+use flui_scheduler::{AppLifecycleState, ClockSource};
 use flui_view::GlobalKeyScope;
 use std::cell::{Cell, RefCell};
 use std::marker::PhantomData;
@@ -52,6 +52,15 @@ impl UiRealm {
     /// `SharedEngineServices` in production). The realm owns a `TextContext`
     /// built from it (ADR-0092 §3), which lives exactly as long as the realm.
     ///
+    /// `clock` is where the realm reads time: its frame-time origin, every
+    /// presentation's gesture-arena deadlines and its [`FrameClock`]'s
+    /// produce gate all read this one source. A host passes
+    /// [`ClockSource::Platform`]; a headless test driver passes the
+    /// [`ClockSource::Manual`] clock it advances by hand, so those three
+    /// share the driver's timeline instead of the wall clock.
+    ///
+    /// [`FrameClock`]: flui_scheduler::FrameClock
+    ///
     /// # Errors
     ///
     /// [`UiRealmError::InteractionLane`] if the owner-local interaction lane
@@ -63,6 +72,7 @@ impl UiRealm {
         needs_redraw: Arc<AtomicBool>,
         clipboard: Arc<dyn Clipboard>,
         fonts: &FontCollection,
+        clock: ClockSource,
     ) -> Result<Self, UiRealmError> {
         Self::with_capacity(
             DEFAULT_COMMAND_CAPACITY,
@@ -72,6 +82,7 @@ impl UiRealm {
             needs_redraw,
             clipboard,
             fonts,
+            clock,
         )
     }
 
@@ -86,6 +97,10 @@ impl UiRealm {
     ///
     /// Panics if `capacity == 0` (a zero-capacity inbox could never accept
     /// a command; every sender would spuriously report backpressure).
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "`Self::new`'s parameters plus the inbox capacity; each is a distinct host-owned input"
+    )]
     pub(crate) fn with_capacity(
         capacity: usize,
         wake: Arc<dyn Fn() + Send + Sync>,
@@ -94,10 +109,11 @@ impl UiRealm {
         needs_redraw: Arc<AtomicBool>,
         clipboard: Arc<dyn Clipboard>,
         fonts: &FontCollection,
+        clock: ClockSource,
     ) -> Result<Self, UiRealmError> {
         assert!(capacity > 0, "UiRealm inbox capacity must be non-zero");
         let identity = crate::realm_services::next_identity();
-        let services = RealmServices::construct(clipboard, fonts);
+        let services = RealmServices::construct(clipboard, fonts, clock);
         Self::construct(
             capacity,
             wake,
@@ -149,6 +165,7 @@ impl UiRealm {
             async_driver,
             scheduler,
             clipboard,
+            clock,
             text,
         } = services;
 
@@ -194,10 +211,14 @@ impl UiRealm {
                     wake: Arc::clone(&wake),
                 },
                 clipboard: Arc::clone(&clipboard),
+                clock: &clock,
                 text: text.clone(),
             },
         );
 
+        // The frame-time origin reads the realm's clock, so a manual clock's
+        // frame timestamps measure from the same timeline they advance on.
+        let start = flui_foundation::MonotonicClock::now(&clock);
         Ok(Self {
             realm_id,
             local_post_frame,
@@ -206,7 +227,8 @@ impl UiRealm {
             presentations: PresentationForest::single(presentation),
             focus_coordinator: FocusCoordinator::new(presentation_id),
             host_lifecycle: Cell::new(HostLifecycle::Observed(AppLifecycleState::Resumed)),
-            start: web_time::Instant::now(),
+            start,
+            clock,
             frame_time: Cell::new(None),
             needs_redraw,
             wake: Arc::clone(&wake),
@@ -271,6 +293,7 @@ impl UiRealm {
             RealmServices::construct(
                 crate::presentation::test_clipboard(),
                 &FontCollection::new(),
+                ClockSource::Platform,
             ),
             needs_redraw,
         )

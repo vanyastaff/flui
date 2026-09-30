@@ -97,16 +97,17 @@ host.
   lane, or its direct sink over a borrowed backend on the web runner), and
   the realm tests pick `testing::ScriptedSink`. How a host maps its
   backend's outcomes to verdicts is that host's to test.
-- **Internal, and only the host depends on it.** Tier K,
+- **Internal, and only the hosts depend on it.** Tier K,
   `tier-kind = "internal"`: nothing here is an embedder API (ADR-0027 §9)
   except the `execution` host-injection seam below.
-  `allowed-dependents = ["flui-app"]` makes `flui-app` the only crate allowed a
-  normal edge, checked by `cargo xtask workspace`. That rule is what
-  keeps ADR-0047's invariant true now that `ExecutionServices` is `pub`: only
-  a host crate, one of the runtime's `allowed-dependents`, constructs the
-  services, and no other workspace crate reaches the pools. ADR-0083 §4 adds
-  `flui-testing` to that list when the test driver runs the real frame, as a
-  host of its own headless loop. Dev edges are not restricted.
+  `allowed-dependents = ["flui-app", "flui-testing"]` makes the application
+  host and the headless test driver the only crates allowed a normal edge,
+  checked by `cargo xtask workspace`. That rule is what keeps ADR-0047's
+  invariant true now that `ExecutionServices` is `pub`: only a host crate, one
+  of the runtime's `allowed-dependents`, constructs the services, and no other
+  workspace crate reaches the pools. `flui-testing` is the host of its own
+  headless loop (ADR-0083 §4) and constructs no execution services. Dev edges
+  are not restricted.
 - **The execution host-injection seam carries the Stable promise.**
   `HostExecutors`, `HostComputePool`, `HostIoPool`, `ComputeJob`, `IoFuture`,
   `SpawnError` and `DeterministicExecutors` are defined in `execution` but
@@ -119,11 +120,20 @@ host.
   The rest of `execution` (`ExecutionServices`) is reached
   only by `flui-app` and carries no promise. `execution_public_paths` in
   `flui-app` pins the re-exported paths.
-- **The test driver shares the transaction, not the production host.** Once
-  `flui-testing` moves above this crate it drives `UiRealm::pump` directly
-  with its manual clock and headless sink. It neither constructs `OwnerHost`
-  nor reproduces native event-loop routing; owner-turn behavior is tested in
-  this crate's own host tests.
+- **The test driver shares the transaction, not the production host.**
+  `flui-testing` sits above this crate: its `HeadlessRealm` drives
+  `UiRealm::pump` directly with its manual clock and headless sink, and its
+  widget harness runs every frame through it. It neither constructs
+  `OwnerHost` nor reproduces native event-loop routing; owner-turn behavior
+  is tested in this crate's own host tests.
+- **A realm reads time from one `ClockSource`.** `UiRealm::new` takes the
+  source: the realm's frame-time origin, every presentation's gesture arena
+  (its deadlines) and `FrameClock` (its produce gate) read it, so a
+  `ClockSource::Manual` realm keeps them on the timeline its driver
+  advances, and a host passes `ClockSource::Platform`. The pump's
+  `FrameClockSource` is the frame's timestamp; a driver hands it the same
+  `ManualClock` (`a_realm_on_a_manual_clock_fires_gesture_deadlines_on_that_clock`,
+  `a_manual_clock_realm_gates_its_min_produce_interval_on_that_clock`).
 - **Per realm, per presentation or per host loop, never per process.** Every
   type here is owned by one realm (`UiRealm`, its scheduler and command
   inbox), one presentation (`PresentationState`, `HeldPointerQueue`,
@@ -136,7 +146,9 @@ host.
   calls them; what only `flui-app`'s tests call is `pub` under
   `test-support`; the rest is `pub(crate)`. `flui-app` re-exports none of
   them, only `frame_failure`'s report types and `RenderingFlutterBinding`,
-  at their old `flui_app` paths.
+  at their old `flui_app` paths. `flui-testing` hosts a realm in its
+  `HeadlessRealm` and keeps it crate-private, so `flui::testing` does not
+  reach it either.
 - **The frame sink is the host's, the verdict is the realm's.** A host
   implements `sink::FrameSink`; the realm reads its `SubmitVerdict` and
   classifies retry, device loss and not-shown (ADR-0068). The trait stays
@@ -166,8 +178,12 @@ host.
   `for_test` constructors and `*_for_test` probes such as
   `text_context_for_test`, the `testing` doubles),
   compile only under `cfg(test)` or the `test-support` feature, which only
-  dev edges enable. Wiring one into production removes its gate in the same
-  change.
+  dev edges and the headless test driver `flui-testing` enable (it is a
+  test-only crate, reached by applications through dev edges or the facade's
+  `testing` feature). Wiring one into production removes its gate in the same
+  change. `UiRealm::active_text_store` is one of them until a pull-model
+  platform input method reads it. The exception is the `FrameClockSource`
+  impl for `ManualClock`, which a trait impl cannot gate per caller.
 
 ## Mapping decisions
 
