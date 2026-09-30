@@ -39,13 +39,16 @@ pub enum FontRegistrationError {
 /// A realm is told on its own owner turn, so a call made from inside one
 /// realm's callback reaches that realm after the callback returns.
 ///
-/// Faces are never removed. Called before the app starts, it builds the
-/// app's font collection then, and with it the scan of the host's fonts the
-/// first window would otherwise pay for.
+/// Faces are never removed. Called before the app starts, it checks the
+/// bytes and holds them; the first window registers them as it builds the
+/// app's font collection, and measures and paints with them from its first
+/// frame.
 ///
-/// On any other thread it registers with a runtime of that thread's own,
-/// which no window of the app reads: the face reaches paint and not the
-/// app's measurement.
+/// The app's fonts belong to the thread that runs it. Called on another
+/// thread (a worker that downloaded the bytes, say), the bytes are held for
+/// an app that thread never runs: neither paint nor measurement gains the
+/// face, so the two never disagree, and no scan of the host's fonts runs
+/// there. Send the bytes to the app's thread and register them there.
 ///
 /// # Errors
 ///
@@ -60,11 +63,11 @@ pub fn register_font(font_bytes: &[u8]) -> Result<(), FontRegistrationError> {
         let runtime = slot
             .try_borrow()
             .map_err(|_| FontRegistrationError::RuntimeBusy)?;
-        runtime.register_font(font_bytes)?;
-        // No owner thread means no realm was installed yet: the first one is
-        // built over the collection and measures with the face from the
-        // start.
-        let Some(owner_thread) = runtime.owner_thread else {
+        // Held for the first realm, or no owner thread (no realm installed
+        // yet): whichever realm comes first is built over the collection
+        // and measures with the face from the start.
+        let registered_now = runtime.register_font(font_bytes)?;
+        let (true, Some(owner_thread)) = (registered_now, runtime.owner_thread) else {
             return Ok(Vec::new());
         };
         Ok::<_, FontRegistrationError>(
