@@ -4,7 +4,7 @@ FLUI's pipeline is four trees, each built from the last, with a fifth, the `Sema
 (`flui-semantics`), built alongside for accessibility:
 
 ```text
-View (config)  →  Element (lifecycle)  →  RenderObject (layout/paint)  →  Layer (retained)
+View (config)  →  Element (lifecycle)  →  RenderObject (layout/paint)  →  Layer (per frame)
 ```
 
 ## `View`

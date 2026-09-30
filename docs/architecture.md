@@ -109,7 +109,7 @@ impl RenderBox for RenderPadding {
 
 Slab-based storage uses 0-based indices internally; public IDs are 1-based, so `Option<Id>` costs no extra space (niche optimization). There are two shapes in `flui_foundation::id`:
 
-- **Plain IDs** (`ViewId`, `LayerId`, `SemanticsId`, …) wrap a `NonZeroUsize`: insert `slab_index + 1`, look up `id.get() - 1`.
+- **Plain IDs** wrap a `NonZeroUsize`. The slab-backed ones (`ViewId`, `LayerId`, `SemanticsId`) are the slot plus one: insert `slab_index + 1`, look up `id.get() - 1`. The rest (`ListenerId`, `ObserverId`, `FrameCallbackId`, `FrameId`, `TaskId`, `TickerId`) are opaque counters with no slot behind them.
 - **Generational IDs** (`ElementId`, `RenderId`, `RealmId`, …) pack the slab index with a `NonZeroU32` generation into a `NonZeroU64`, so an id held across a slot's reuse fails the generation check instead of addressing the new occupant. They have no `get()`; the owning tree's accessors use `.index()` (0-based) and `.generation()`.
 
 ```rust
@@ -157,7 +157,7 @@ Text shaping is **not** a `Platform` method — that Flutter binding (`PlatformT
 
 ## Confinement of `unsafe`
 
-The workspace sets `unsafe_code = "warn"`; `flui-painting` and `flui-platform-api` forbid it outright, and `flui-platform` allows it for its OS bindings. Outside `flui-platform`, compiled production code uses `unsafe` at a few narrow sites: `flui-rendering`'s subtree arena, `flui-foundation`'s unchecked id constructor, `flui-view`'s `ObjectKey`, `flui-log`'s subscriber backends, `flui-hot-reload`'s dynamic-library loading, and `flui-cli`'s Windows std-handle inheritance call (`src/proc.rs`). `flui-engine` denies `unsafe` outside its tests (its test code has a fake window target and an allocation-counting `GlobalAlloc`); the `transmute` in `flui-cli`'s hot-reload template is source text emitted into a generated project, not code the CLI runs. Each `unsafe` block carries a `// SAFETY:` comment naming the invariant it relies on. The widget catalog, the design systems and application code are `unsafe`-free.
+The workspace sets `unsafe_code = "warn"`; `flui-painting` and `flui-platform-api` forbid it outright, and `flui-platform` allows it for its OS bindings. Outside `flui-platform`, compiled production code uses `unsafe` at a few narrow sites: `flui-rendering`'s subtree arena, `flui-foundation`'s unchecked id constructor, `flui-view`'s `ObjectKey`, `flui-log`'s subscriber backends, `flui-hot-reload`'s dynamic-library loading, and `flui-cli`'s Windows std-handle inheritance call (`src/proc.rs`). `flui-engine` denies `unsafe` in its hand-written production code; its `*/generated.rs` bridges allow it for the included `wgsl_bindgen` output (its `unsafe impl` of `Pod` and `Zeroable`), and its test code has a fake window target and an allocation-counting `GlobalAlloc`; the `transmute` in `flui-cli`'s hot-reload template is source text emitted into a generated project, not code the CLI runs. Each `unsafe` block carries a `// SAFETY:` comment naming the invariant it relies on. The widget catalog, the design systems and application code are `unsafe`-free.
 
 ## Logging and Errors
 

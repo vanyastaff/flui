@@ -26,9 +26,11 @@ use crate::text::RichText;
 /// Cupertino Icons (family `"CupertinoIcons"`) faces and installs each one
 /// the host lacks (`flui_painting::fonts`), so those families' codepoints
 /// shape to real glyphs in measurement and paint alike. Any other icon font
-/// must be registered first (`SharedFontSystem::register_font`,
-/// `FontCollection::register_font`); until then its codepoints shape to tofu
-/// (the "missing glyph" box).
+/// must be registered first with `SharedFontSystem::register_font`, which
+/// paint and default measurement use; under `flui-painting/parley-layout`
+/// measurement goes through the realm's `FontCollection`, so the font must be
+/// registered there too (`FontCollection::register_font`). Until then its
+/// codepoints shape to tofu (the "missing glyph" box).
 ///
 /// # Deferred from the oracle
 ///

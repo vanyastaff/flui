@@ -54,10 +54,11 @@ cargo build --workspace
 
 ## Create an Application
 
-FLUI is not yet published to crates.io — the beta itself will not be published
-there until a beta tag is cut (see [Beta release criteria](BETA.md)). Until
-then, generate an application using the local checkout. Run these commands
-from the checkout root:
+The `flui` CLI (`flui-cli` 0.1.0) is on crates.io; the framework crates are
+not. A CLI installed with `cargo install flui-cli --locked` generates a
+project that depends on the FLUI git tag matching the CLI's version (see
+[`crates/flui-cli/README.md`](../crates/flui-cli/README.md)). To build against
+this checkout instead, run these commands from the checkout root:
 
 ```bash
 cargo install --path crates/flui-cli --locked
