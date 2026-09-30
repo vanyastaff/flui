@@ -474,9 +474,13 @@ rather than holding a FLUI lock; both are accepted because registration is
 rare. Until ADR-0092 §10 step 6 the bundled faces sit in both this collection
 and the cosmic-text font system, and so does every registered face: the
 collection is the one registration door, and one built by `with_host_faces`
-keeps that font system as its paint side and loads each face there first. A
-face the paint side loads and the collection finds no family in stays on the
-paint side, and the registration reports the error. `FontCollection::new` has
+keeps that font system as its paint side and loads each face there first. The
+collection judges the bytes on a scratch fontique collection before the paint
+side loads anything, so bytes one side reads and the other does not (a face
+with no `cmap`: fontdb loads it, fontique finds no family) change neither.
+`FontCollection::check_font` gives the same verdict with no collection at
+all, for the app to answer a registration made before its first window.
+`FontCollection::new` has
 no paint side and never touches the process font system. Locked by
 `two_realms_shape_in_parallel` and
 `a_face_registered_after_the_fork_shapes_in_every_realm`

@@ -70,7 +70,7 @@ Text is one process-wide, locked object today.
   (`crates/flui-painting/src/lib.rs:87`).
 - Every painter builds its own glyph atlas over that shared system
   (`crates/flui-engine/src/painter/mod.rs:163-167`), one per window.
-- `register_font` appends a face and bumps the generation (`layout.rs:391-402`); the family
+- `add_face` appends a face and bumps the generation (`layout.rs:484-495`); the family
   resolver rebuilds on the new generation (`font_resolve.rs:641-662`), but nothing marks text
   render objects for layout. [ADR-0065](ADR-0065-painting-owns-shaping-text-crosses-the-display-list-shaped.md)
   records this as a named gap and defers "a `FontContext` handle threaded through layout" until a
@@ -397,7 +397,7 @@ that wires what it adds.
      Under `parley-layout` size, baselines and intrinsics come from Parley while glyphs and
      carets still come from cosmic-text, until steps 4 and 5 (flui-painting `ARCHITECTURE.md`,
      mapping decisions 14 and 15).
-   - (3b, landed) Registering raises a font-collection-changed event on every realm, which marks
+   - (3b) Registering raises a font-collection-changed event on every realm, which marks
      text render objects for layout (ADR-0065's named gap). The app's door is
      `flui::register_font` (`flui_app::register_font`): it registers on the app's collection,
      whose `register_font` also loads the face into the process font system the collection was
@@ -407,7 +407,12 @@ that wires what it adds.
      with the last one it applied: on a change it marks every recorded node for layout and
      paint. `SharedFontSystem::register_font` is no longer a public door (a `testing` one
      remains). This meets the precondition step 4's move of measurement waits on: a face
-     registered after start reaches measurement and paint alike.
+     registered after start reaches measurement and paint alike. The app's fonts belong to the
+     thread that runs it: a registration made before that thread builds its first realm is
+     checked (`FontCollection::check_font`) and held, and lands on both sides when the
+     collection is built, so a call on a thread that never runs the app changes neither side.
+     The collection judges bytes before the paint side loads them, so no refusal leaves a face
+     on one side only.
    - (3b) Every pipeline is built with a text context: `PipelineOwner::new` and
      `new_with_capacity` take a `TextContextHandle`, `PipelineOwner` has no `Default`, and a
      layout, intrinsic or dry-query context takes a `TextSource`, so no path builds a context

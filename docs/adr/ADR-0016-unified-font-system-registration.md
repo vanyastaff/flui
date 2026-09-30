@@ -26,9 +26,10 @@ both measuring and painting.**
 - `flui_painting::shared_font_system()` returns a `SharedFontSystem` handle to
   it. `flui-painting` is the lowest crate that needs fonts, and `flui-engine`
   depends on it, so the engine reaches down rather than owning a copy.
-- `SharedFontSystem::register_font(&[u8])` is the only way the font database
-  changes after construction. It is append-only and bumps a generation that
-  every shaped-text cache keys on.
+- The font database changes after construction only through
+  `FontCollection::register_font`, which loads the face here through a
+  crate-internal door (`add_face`) as it adds it to the collection. It is
+  append-only and bumps a generation that every shaped-text cache keys on.
 - The baseline faces load at construction: host fonts plus the embedded faces
   behind `flui-painting`'s default-on `bundled-fonts` feature (Roboto, Material
   Icons, Cupertino Icons), so `Icon` renders a glyph out of the box and

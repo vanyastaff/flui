@@ -1054,9 +1054,11 @@ checked. FLUI differs on purpose:
 
 **Accepted trade-off.** The record is sticky: a node that measured once stays recorded until the
 next change takes the set, so a node that stopped measuring text is laid out once more than it
-needs, at worst. A removed node's id stays in the set until then and is skipped (render ids are
-generational, so a reused slot never matches it). Locked by `font_change_contract`
-(`tests/text_context.rs`).
+needs, at worst. A removed node's id is skipped (render ids are generational, so a reused slot
+never matches it), and each drain drops the removed ids once the set holds more than twice the
+live tree: an app that never registers a font keeps a set bounded by its live nodes, not by every
+text node it ever built. Locked by `font_change_contract` (`tests/text_context.rs`), whose
+`the_record_stays_bounded_without_a_font_change` row rebuilds a paragraph 500 times.
 
 
 ## Thread safety

@@ -3,9 +3,13 @@
 - **`flui::register_font`** and **`FontRegistrationError`** (`flui_app::register_font`): registers
   a font's faces with the app, before it starts or while it runs, for measurement and paint
   alike; every realm lays its text out again on its next frame. The same bytes registered twice
-  are refused (`AlreadyRegistered`)
+  are refused (`AlreadyRegistered`). A registration made before the app's first window is
+  checked and held until the window builds the app's font collection; one made on a thread that
+  never runs the app changes neither paint nor measurement, so register on the app's thread
   ([ADR-0092](/docs/adr/ADR-0092-per-realm-text-over-parley.md) §2).
 - **`FontCollection::generation`** (`flui-painting`): how many registrations added a face.
+- **`FontCollection::check_font`** (`flui-painting`): whether a collection fed from the host
+  would accept font bytes, changing nothing.
 - **`PipelineOwner::apply_font_change`** (`flui-rendering`): lays out again, and repaints, every
   node that measured text through the pipeline's context since the collection last changed.
 - **`UiRealm::fonts_changed`** (`flui-runtime`): requests a frame for every presentation after a
@@ -15,7 +19,9 @@
 
 - `FontCollection::register_font` exists in every build, not only under `parley`. On a
   collection built by `FontCollection::with_host_faces` it loads the face into that process font
-  system too, so the face paints as it measures.
+  system too, so the face paints as it measures. Bytes either side finds no face in (a face
+  with no `cmap` table, which fontdb loads and fontique does not) are refused before either side
+  changes.
 - `PipelineOwner::drain_pending_dirty` applies a font collection change after the dirty
   requests it drains.
 

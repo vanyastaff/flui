@@ -58,8 +58,8 @@ an engine-owned rasteriser, which is its own project.
   `Shaper::resolve_font` and `Shaper::font_system`, never bumps the
   generation. Resolution and shaping happen under one acquisition, so the
   "resolve before `with_mut`, never inside" deadlock has no reachable shape.
-- `register_font(&[u8])`: the only mutation of the database, append-only,
-  bumps `generation()`. A face is never removed, so a font id recorded
+- `add_face(&[u8])`, reached through `FontCollection::register_font`: the
+  only mutation of the database, append-only, bumps `generation()`. A face is never removed, so a font id recorded
   anywhere stays valid for the life of the process.
 - `generation()`: what every cache of shaped text keys on.
   `TextLayoutCache` re-lays-out when it moves; the engine drops its buffer
