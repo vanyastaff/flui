@@ -334,6 +334,32 @@ pub(crate) fn a_refused_write_in_a_target_callback_is_reported_not_panicked() {
     assert_eq!(rig.probe.reads().last(), Some(&1));
 }
 
+/// Unmounting a target releases its slot from the owner lane, so the state
+/// its callbacks capture is dropped with the target rather than kept until
+/// the realm closes.
+pub(crate) fn unmounting_a_target_releases_its_slot() {
+    let captured = Rc::new(());
+    let witness = Rc::downgrade(&captured);
+    let target = DragTarget::<u32>::new(|_candidates, _rejected| {
+        SizedBox::new(40.0, 40.0).into_view().boxed()
+    })
+    .on_accept(move |_cx, _details| {
+        let _held = &captured;
+    });
+    let mut app = lay_out(target, tight(400.0, 400.0));
+    assert!(
+        witness.upgrade().is_some(),
+        "the mounted target holds its callbacks"
+    );
+
+    app.pump_widget(SizedBox::shrink());
+    assert!(
+        witness.upgrade().is_none(),
+        "the unmounted target's slot, and what its callbacks captured, must leave \
+         the owner lane with the target"
+    );
+}
+
 /// A drag callback that panics while the unmount cancels the drag must not
 /// leave the drag's feedback layer in the overlay: `dispose` removes the
 /// layer before the cancel runs any user code. Whether the unmount path

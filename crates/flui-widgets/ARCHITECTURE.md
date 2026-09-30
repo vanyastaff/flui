@@ -1383,7 +1383,11 @@ put it on something the widget owns — reached through ADR-0086's lane payload.
   has no owner to run the closure in
   (`an_action_invoked_outside_its_realm_is_dropped_with_a_warning`). A node
   mounted in a detached render-object context advertises none of these
-  actions, so no platform sees a control nothing can run.
+  actions, so no platform sees a control nothing can run
+  (`a_detached_mount_advertises_no_actions`). Unmount releases the node's
+  table from the lane, closures and their captures with it
+  (`unmounting_a_node_releases_its_action_table`; a `DragTarget`'s slot the
+  same way, `unmounting_a_target_releases_its_slot`).
 - **This publishes actions; it does not make any shipped control
   activatable by itself.** Flutter's `InkResponse` publishes
   `Semantics(onTap: …)` itself (`material/ink_well.dart`); FLUI's

@@ -291,6 +291,60 @@ pub(crate) fn rebuilding_with_fresh_handlers_keeps_the_configuration_and_runs_th
     assert_eq!(ran.get(), 2, "the rebuilt closure ran, not the first one");
 }
 
+/// Unmounting a node releases its action table from the owner lane, so the
+/// state a handler captures is dropped with the node rather than kept until
+/// the realm closes. The action is delivered through `Harness`, whose realm
+/// entry is what lets the handler run at all.
+pub(crate) fn unmounting_a_node_releases_its_action_table() {
+    let captured = Rc::new(());
+    let witness = Rc::downgrade(&captured);
+    let activations = Rc::new(Cell::new(0_u32));
+    let counted = Rc::clone(&activations);
+    let mut harness = crate::common::harness::mount(
+        host()
+            .on_tap(move |_cx| {
+                let _held = &captured;
+                counted.set(counted.get() + 1);
+            })
+            .child(SizedBox::new(40.0, 20.0)),
+    );
+    harness.enable_semantics();
+    harness.tick();
+    let tree = harness
+        .a11y_tree()
+        .expect("semantics enabled before the frame");
+    harness
+        .invoke_semantics_action(request(Action::Click, labelled_node(&tree), None))
+        .expect("a click on a node advertising one must resolve");
+    assert_eq!(activations.get(), 1, "the handler ran inside the realm");
+
+    harness.swap_root(SizedBox::shrink());
+    assert!(
+        witness.upgrade().is_none(),
+        "the unmounted node's handler, and what it captured, must leave the \
+         owner lane with the node"
+    );
+}
+
+/// A node mounted with no owner advertises none of its actions: nothing
+/// could run them, and an advertised action nothing runs is a dead control.
+pub(crate) fn a_detached_mount_advertises_no_actions() {
+    use flui_view::RenderView as _;
+
+    let render = host()
+        .on_tap(|_cx| {})
+        .create_render_object(&flui_view::RenderObjectContext::detached());
+    let configuration = render.configuration();
+    assert!(
+        configuration.label().is_some(),
+        "the detached node still carries its own configuration"
+    );
+    assert!(
+        !configuration.has_action(SemanticsAction::Tap),
+        "a detached node must not advertise a tap it cannot run"
+    );
+}
+
 /// The configuration the single `Semantics` wrapper has mounted.
 fn mounted_configuration(laid: &LaidOut) -> flui_rendering::semantics::SemanticsConfiguration {
     let [id] = laid.find_semantics_wrappers()[..] else {
