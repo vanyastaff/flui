@@ -31,7 +31,7 @@ use crate::text_layout::{TextContext, TextLayoutResult, paint_color};
 #[derive(Clone, Copy, Debug)]
 pub struct ParagraphSpec<'a> {
     /// The styled spans, in order; their texts concatenate to the paragraph.
-    /// The same shape `TextLayout::from_spans` takes.
+    /// Each span's style is already merged over its ancestors'.
     pub spans: &'a [(String, Option<TextStyle>)],
     /// The style applied where a span sets nothing of its own.
     pub default_style: Option<&'a TextStyle>,

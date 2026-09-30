@@ -20,9 +20,9 @@ Design decisions are recorded under [Mapping decisions](#mapping-decisions).
 |---|---|---|
 | Recorder | `canvas/{mod,state,transform,clipping,drawing,scoped}.rs` | `Canvas`: the `dart:ui` surface, save/restore, transforms, clips, `draw_*`, and the `with_*` helpers that pair a save with its restore |
 | Wire vocabulary | `display_list/{mod,command,command_ops,paragraph}.rs` | `DisplayList` (commands + cached bounds), `DrawCommand` (the closed enum `flui-engine` matches exhaustively), `DrawCommand::bounds`, `ShapedParagraph` (the shaped text `DrawOp::Paragraph` carries, decision 18) |
-| Text | `text_layout/{layout,font_resolve}.rs`, `text_painter/{mod,measure,paint,baseline}.rs` | `TextPainter`; the process-wide font system and `SharedFontSystem`, `TextLayout` (the caret, hit-test and line queries until ADR-0092 §10 step 5), family resolution against the host |
+| Text | `text_layout/{layout,font_resolve}.rs`, `text_painter/{mod,measure,paint,baseline}.rs` | `TextPainter`; the process-wide font system and `SharedFontSystem` (host discovery a collection is fed from, until ADR-0092 §10 step 6), family resolution |
 | Per-realm text context | `text_layout/context.rs` | `FontCollection` (the app's shared, add-only fontique collection) and `TextContext` (one realm's Parley font and layout contexts over it, used through `&mut`); constructed by the runtime, one context per realm; every `TextPainter` measurement shapes on it |
-| Parley shaping | `parley_text/shape.rs` | `TextContext::shape`: a `ParagraphSpec` (styled spans, width, line height, direction, `max_lines`, ellipsis) to a `ParagraphLayout` whose `metrics()` read the laid-out lines and whose `to_shaped()` is the paragraph paint records |
+| Parley shaping | `parley_text/{shape,caret,boundaries}.rs` | `TextContext::shape`: a `ParagraphSpec` (styled spans, width, line height, direction, `max_lines`, ellipsis) to a `ParagraphLayout` whose `metrics()` read the laid-out lines, whose `to_shaped()` is the paragraph paint records, and whose caret, hit-test, selection, line and word queries `TextPainter` answers from (decision 15); grapheme and word boundaries over ICU4X |
 | Raster side | `glyphs/{mod,key,registry,swash}.rs` | `GlyphKey` (a face named by font blob), `FontRegistry` (faces and interned variation instances), `SwashRasterizer` (the engine's atlas draws through it), `GlyphRasterizer`, `PlacedGlyph`, `GlyphImage` |
 | Paint values | `paint/{style,path,shader,effects,image,clipping,blend_mode,canvas}.rs` | `Paint`, `Path` (with its shape hint), shaders, filters, images, clip and blend modes: the vocabulary the recorder records |
 | Style values | `styling/*.rs`, `lerp_impls.rs` | `Color` (straight-alpha sRGB, premultiplied `lerp`), borders, radii, decorations, gradients, shadows |
@@ -89,24 +89,16 @@ coordinates, synthesis and colour (decision 18). Truncation keeps the lines
 the metrics keep; an ellipsis is shaped into the last kept line, text dropped
 from its end until the line and the ellipsis fit the width.
 
-Carets, selection, word boundaries, line metrics and hit-testing still read a
-cosmic-text `TextLayout` (`TextLayout::from_spans`, shaped through the
-process-wide font system, family and weight resolved against the host
-database first, decision 8), built on the first such query and kept while the
-process font system's generation is unchanged (decision 15). Plain `Text`
-never builds one. The font system is a `OnceLock<Arc<Mutex<FontState>>>`, an
-ambient residual (a process-global the runtime still reaches); `AppRuntime`
-installs it at realm install. `SharedFontSystem` has two public doors:
-`shape(|Shaper| …)` resolves and shapes under one acquisition and never bumps
-the generation; `generation()` is what the caret layout keys on. The one
-mutation, append-only and bumping the generation, is crate-internal
-(`add_face`): an app registers through `FontCollection::register_font` on a
-collection built by `with_host_faces`, which loads the face into the
-collection (measurement and paint) and here (carets) alike (decision 11). The
-`testing` feature keeps `SharedFontSystem::register_font` as a caret-only
-door for tests. The collection is fed from its discovery (decision 17). The
-embedded baseline faces (`fonts.rs`, `bundled-fonts`) are installed at
-construction.
+Carets, selection boxes, word boundaries, line metrics and hit-testing read
+the same `ParagraphLayout`, which the cache keeps beside the paragraph
+(`parley_text/caret.rs`, decision 15): a query never shapes. The process-wide
+font system (a `OnceLock<Arc<Mutex<FontState>>>`, an ambient residual the
+runtime still reaches; `AppRuntime` builds it before the first realm) lays
+nothing out: it is the host's discovery, generic bindings and fallback lists,
+read once per app by `FontCollection::with_host_faces` (decision 17), and
+nothing changes it after construction. A registration loads the collection
+alone (decision 11). The embedded baseline faces (`fonts.rs`,
+`bundled-fonts`) are installed in it at construction (decision 16).
 
 The raster side is `glyphs` (ADR-0092 §5). What crosses to the engine is the
 `ShapedParagraph`; the engine's atlas registers each run's face in its
@@ -140,9 +132,9 @@ so a key stays valid after fontique's source cache drops the file
 
 `#![forbid(unsafe_code)]`. Every type is plain `Send + Sync` value data;
 `Canvas` and `TextPainter` are mutated through `&mut self` by one owner.
-The one lock is the cosmic-text path's font system, which carets, selection
-and host discovery still take, never nested with another lock in this crate;
-neither measurement, paint nor rasterization takes it. The crate's
+The one lock is the process font system's, taken to read the host's
+discovery once per app and never nested with another lock in this crate;
+measurement, paint, carets and rasterization never take it. The crate's
 `clippy.toml` disallows `Mutex` and `RwLock`; that font system is the one
 `#[expect]`ed site (`text_layout/layout.rs`), and it leaves at ADR-0092 §10
 step 6.
@@ -305,22 +297,12 @@ property of the *request*, not of any face. Reading it as a face property is wha
 revision of `family_accepts_weight` accept any monospaced face at any weight.) Naming a family the database carries forecloses both,
 because `Database::query`'s front-insert puts the CSS-matched face ahead of the emoji entry in each.
 
-The requested *weight* is resolved alongside the family, snapped to one the resolved family can
-serve (`snap_weight`), and the two travel as one value (`ResolvedFont`) so no caller can pair a
-resolved family with the style's original weight. Both halves of that sentence are corrections of
-earlier decisions recorded here, and both were wrong for reasons worth keeping:
-
-- Snapping was first *rejected* as "worse than doing nothing", on the grounds that
-  `Database::query` already applies CSS font matching and that a snap strips the requested instance
-  off a variable face. The first is true and irrelevant: `query` picks the best face *within* a
-  family, while the abandonment happens a layer up, in `default_font_match_key`, whose empty result
-  makes `next_item` leave the family altogether. The second is why `family_accepts_weight` probes
-  the variable `wght` axis before it snaps, and snaps only when no face — static or variable — can
-  serve the request.
-- The snap then ran on measurement only. `SharedFontSystem` exposed the family without its weight,
-  so the raster path read `style.font_weight` directly and shaped a string in a different font from
-  the one it was measured in. Making the pair the only obtainable value is the fix; a second
-  accessor returning just the family would let the same defect back in.
+Nothing shapes on cosmic-text any more (ADR-0092 §10 step 5): the family rule serves the
+collection (`resolve_family_name`, decision 17), and its cosmic-text side (`resolve_family`) is
+kept only for the test that pins the two sides agree. The weight snap that kept cosmic-text from
+abandoning a family at a weight it lacks (`snap_weight`, issue #929) served cosmic-text shaping
+alone and left with it: Parley matches a weight within the family and synthesizes a bold the family
+lacks (decisions 10 and 18).
 
 **Alternatives:**
 A custom `Fallback` impl whose `forbidden_fallback()` excludes emoji families is complementary
@@ -384,7 +366,7 @@ request); `probe-variable-wght.ttf` carries an `fvar` `wght` axis spanning 100..
 **Choice:** [`TextPainter`](src/text_painter/measure.rs) min/max intrinsic width probes
 (`layout()` cache fill and the uncached getters) shape with
 `LineOverflow::IgnoreForWidthIntrinsic`, so `max_lines` truncation does not reach
-`TextLayout::from_spans`. When `max_lines` and a non-empty ellipsis are both set, the
+`TextContext::shape`. When `max_lines` and a non-empty ellipsis are both set, the
 probe then floors at the shaped ellipsis width (`ellipsis_width_floor`) — truncating
 layouts may commit an ellipsis-only buffer once the text prefix is exhausted. Committed
 `layout`, `dry_size`, `intrinsic_height`, and `dry_baseline` use `LineOverflow::Enforce`.
@@ -468,18 +450,17 @@ because a glyph key names its face by blob and must not outlive it
 collection's data once, on its next shape, and `register_font` itself clones
 fontique's local collection data to get the `&mut` its registration takes,
 rather than holding a FLUI lock; both are accepted because registration is
-rare. Until ADR-0092 §10 step 6 the bundled faces sit in both this collection
-and the cosmic-text font system, and so does every registered face: the
-collection is the one registration door, and one built by `with_host_faces`
-keeps that font system as its caret side and loads each face there first, so
-one registration reaches measurement, paint and carets at the next layout. The
-collection judges the bytes on a scratch fontique collection before the caret
-side loads anything, so bytes one side reads and the other does not (a face
-with no `cmap`: fontdb loads it, fontique finds no family) change neither.
+rare. The collection is the one registration door, and a registered face
+reaches the collection alone: measurement, paint and carets read the one
+layout shaped on it, so one registration reaches all three at the next layout,
+and the process font system a host-fed collection was built from (until
+ADR-0092 §10 step 6 the bundled faces sit there too) never gains it. The
+collection judges the bytes on a scratch fontique collection before the shared
+registration, which bumps fontique's version even for bytes with no family, so
+a refused registration (no face, or a face with no `cmap`) changes nothing.
 `FontCollection::check_font` gives the same verdict with no collection at
 all, for the app to answer a registration made before its first window.
-`FontCollection::new` has
-no caret side and never touches the process font system. Locked by
+Registration never touches the process font system. Locked by
 `two_realms_shape_in_parallel` and
 `a_face_registered_after_the_fork_shapes_in_every_realm`
 (`tests/text_context.rs`), and `registration_contract`
@@ -500,13 +481,11 @@ of `Rtl` that can be honoured today.
 
 **Accepted trade-off:** a right-to-left paragraph whose text starts with Latin
 or neutrals lays out its runs in the wrong order until the base direction can
-be set; that belongs to ADR-0092 §10 step 5, where editable text moves to
-Parley and its acceptance covers LTR, RTL and mixed bidi. The painted runs
-come from the layout that measured, so measurement and paint agree; the caret
-layout is cosmic-text's (decision 15), shaped separately: line widths do not
-depend on run order, so only a line break that falls differently shows, and
-then the caret layout's line count can differ from the painted one. This is a
-divergence of the default build from Flutter's. Locked by
+be set. Setting it needs a leading directional mark and an offset map through
+spans, the ellipsis cut and every caret query, a step of its own after
+ADR-0092 §10 step 5. Measurement, paint and carets read one layout, so they
+agree on the order they have (decision 15). This is a divergence of the
+default build from Flutter's. Locked by
 `rtl_aligns_lines_right_without_setting_the_base_direction`
 (`src/parley_text/shape.rs`).
 
@@ -547,86 +526,112 @@ where only one realm exists. The context is shaped on in every build (ADR-0092
 realm level by `a_realm_measures_text_with_the_faces_of_its_own_collection`
 (`crates/flui-runtime/src/ui_realm/tests/text_context.rs`).
 
-### 15. Carets and selection use a different shaper until ADR-0092 §10 step 5
+### 15. Carets, selection and hit-testing read the layout that measured
 
-**Rule:** size, baselines, intrinsic widths and the painted glyphs come from
-one Parley layout on the realm's context; line metrics, carets, selection,
-word boundaries and hit-testing still come from a cosmic-text `TextLayout` of
-the same spans, built on the first such query. Parley metrics are
-unquantized, as cosmic-text's are, so a baseline reaches the device grid once,
+**Rule:** size, baselines, intrinsic widths, the painted glyphs, line
+metrics, carets, selection boxes, word boundaries and hit-testing all come
+from one Parley layout on the realm's context. `TextPainter`'s cache keeps
+the `ParagraphLayout` beside the paragraph it paints, and the queries
+(`parley_text/caret.rs`) answer in the painted box's coordinates: each
+cluster edge takes the same per-line shift `to_shaped` gives the line's
+glyphs (`ParagraphLayout::line_shift`), so a caret sits on the glyph it
+follows under `Rtl` and on a line narrower than the width it broke at.
+Parley metrics are unquantized, so a baseline reaches the device grid once,
 when its glyphs are placed (`round(baseline × scale)`). Parley's width
-excludes trailing whitespace; cosmic-text's includes it, and so does
-Flutter's max intrinsic width (recalled, not checked against a clone).
+excludes trailing whitespace, and so does a line's `width` in the line
+metrics; Flutter's max intrinsic width includes it (recalled, not checked
+against a clone).
 
-The painter hands both shapers inputs they read alike:
+The painter shapes with:
 
-- a word wider than the line breaks between its glyphs: Parley shapes with
-  `OverflowWrap::BreakWord`, cosmic-text's buffers wrap `WordOrGlyph`.
-  `BreakWord` rather than `Anywhere`, so the min-content width stays the
-  widest word;
-- every styled run carries an explicit size, the default 14 px where no
-  ancestor sets one, because cosmic-text applies a run's letter spacing and
-  line height only at a size the run carries while Parley applies them at the
-  inherited one (`effective_style`);
-- `max_lines` of zero is no limit (`TextPainter::set_max_lines`,
-  `ParagraphSpec::max_lines`), as cosmic-text always read it.
+- `OverflowWrap::BreakWord`, so a word wider than the line breaks between its
+  glyphs while the min-content width stays the widest word;
+- an explicit size on every styled run, the default 14 px where no ancestor
+  sets one, so a run's letter spacing and line height apply at the size it
+  shapes at (`effective_style`);
+- `max_lines` of zero as no limit (`TextPainter::set_max_lines`,
+  `ParagraphSpec::max_lines`).
 
 An empty paragraph measures one line of its style from the font: the line box
-and the baseline a line of text in that style has (13.19 px at 14 px Roboto),
-where cosmic-text put that baseline mid-line (8.40 px), which left an empty
-`Text` in a baseline-aligned row off its neighbours' baseline. An empty span
-shapes no run, so the root's style, scaled as a run's is, is the Parley
-paragraph's default style: its family, weight and line height shape the empty
-line as they would a line of text.
+and the baseline a line of text in that style has (13.19 px at 14 px Roboto).
+An empty span shapes no run, so the root's style, scaled as a run's is, is the
+Parley paragraph's default style.
 
-**Why:** carets and selection move to Parley's clusters with gate 3's LTR,
-RTL and mixed-bidi tests (ADR-0092 §10 step 5); until then the caret queries
-keep the layout they were tested on.
+How the queries answer, and where that differs from Flutter (Flutter's
+behaviour recalled from its `TextPainter` and SkParagraph, not checked
+against a clone):
 
-**Accepted trade-off:** where the two shapers read a paragraph differently,
-the caret layout and the painted glyphs disagree:
+- **A caret is per scalar.** Parley splits a cluster of several scalars (a
+  combining mark, a ZWJ sequence, a ligature) into one cluster per scalar,
+  sharing the advance evenly, and `get_offset_for_caret` answers each scalar
+  offset with its own edge: a proportional slice of the grapheme. Flutter
+  snaps a caret to grapheme edges. FLUI does not, because a text store answers
+  an input method's rect queries per scalar and platform selection is exact
+  ([ADR-0090](../../docs/adr/ADR-0090-ime-pull-text-store-contract.md);
+  flui-widgets mapping decision 35).
+- **A hit snaps to a grapheme.** `get_position_for_offset` takes the cluster
+  under the point, the edge the point is nearer, and then the nearer of the
+  enclosing ICU4X grapheme's two edges on the hit line, so a tap never lands
+  between `e` and its accent or between CR and LF, as in Flutter. A hit past
+  a hard break's cluster answers its start, since the position after it is on
+  the next line.
+- **Selection boxes follow bidi runs.** `get_boxes_for_selection` gives one
+  box per stretch of adjacent clusters of one direction on one line, in visual
+  order, each carrying its run's direction, as Flutter does; a hard break gets
+  no box. A box is as tall as the line box, where Flutter's default
+  `BoxHeightStyle.tight` uses the run's ascent and descent; FLUI has no box
+  height parameter.
+- **Affinity picks the side.** At a soft wrap `Downstream` puts the caret at
+  the next line's start and `Upstream` at the previous line's end, as in
+  Flutter; across a bidi run boundary it picks the run. After a hard break, a
+  trailing one included, the caret starts the next line whatever the
+  affinity.
+- **Truncated text keeps its queries in the kept text.** An offset in dropped
+  lines or in an appended ellipsis answers the kept text's end, and a hit
+  never answers an offset past it; the line metrics list only kept lines.
+  Flutter's paragraph can place a caret in the ellipsis.
+- **Word boundaries** come from ICU4X's word segmenter for non-complex
+  scripts over the kept text, with FLUI's tie-break (a word beats whitespace
+  on either side; between two words the following one wins). The layout's
+  cluster flags come from the same segmenter but hold a space where the text
+  has the CR of a CR LF (decision 18), so they are not read. Parley's
+  `complex-scripts` feature stays off: without dictionary or LSTM data, CJK
+  and Thai word selection is per character, where Flutter uses dictionaries.
+- **The base direction** is still the first strong character's (decision
+  12).
+- **A CR before an LF** is shaped as a space (decision 18), so the rect of
+  that one scalar is a space wide; only an exact input-method selection can
+  land between CR and LF.
 
-- Hard breaks (decision 18): after a trailing `\n` or U+2029 the painted
-  paragraph has an empty last line, and the caret sits at the end of the line
-  before it instead of on it; after U+2028 or a lone `\r` the painted text
-  continues on a line the caret layout does not have, and at U+0085 or
-  U+001C–U+001E the caret layout breaks where paint does not. An editable
-  paragraph's caret and selection can then be a line away from its glyphs.
-- A caret after trailing whitespace in `EditableText` can sit past the
-  measured width, because the caret layout counts the whitespace.
-- A face the two shapers resolve differently shapes the carets in another
-  face. Over the app's collection, fed from the host (decision 17), that is
-  only the residue decision 17 lists. A bundled-only collection
-  (`FontCollection::new()`, standalone contexts and the hot-reload plugin)
-  measures and paints every family it lacks, and every glyph a family it holds
-  lacks, in Roboto.
-- A face loaded on the process font system alone (the `testing` door
-  `SharedFontSystem::register_font`) reaches the caret layout but neither
-  measurement nor paint; an app registers through its collection, which
-  reaches all three (decision 11).
-- A line narrower than a space's advance (2 px at 12–17 px) takes each space
-  of a glyph-broken paragraph onto a line of its own in the caret layout and
-  hangs it on Parley (`"ab cd"` at 0 px: 4 lines painted, 5 in the caret
-  layout).
-- An `Rtl` paragraph's lines can break differently in the two (decision 12).
-- A truncated paragraph's caret layout drops text by cosmic-text's rule, one
-  character at a time until its ellipsis fits, which can keep a character
-  more or less than the painted line.
+**Why:** a second shaper for carets was a second layout that could disagree
+with the painted glyphs, and it did on multi-line text: the cosmic-text
+layout compared global byte offsets with glyph offsets counted per buffer
+line, so `"ab\ncd"` gave the selection `3..5` no box. One layout makes that
+disagreement impossible, and needs no process font system for a caret.
 
-On the same face the two agree: `parley_metrics_round_to_todays_baseline`
-(`tests/parley_metrics_oracle.rs`) pins equal width and height between the
-measurement and the cosmic-text layout, and the device row the painted runs
-put the first baseline on against cosmic-text's, for the bundled Roboto by
-name, as the default family and as the monospace generic (decision 16), at
-13–32 px, default and 1.5 line height, scales 1–2.
+**Accepted trade-off:** the queries walk the kept lines' clusters on each call
+rather than caching an index, which costs linear time in the paragraph's
+length per query; editable text is short, and a query never shapes.
+
+Locked by the table `caret_contract` (`tests/main.rs`, rows in
+`tests/caret_contract.rs`): `a_combining_mark_is_one_hit_target` and
+`a_zwj_family_is_one_hit_target` (per-scalar carets, grapheme hits),
+`rtl_paragraph_carets_run_right_to_left`,
+`mixed_bidi_boxes_carry_their_run_direction`,
+`a_trailing_newline_puts_the_caret_on_the_empty_line`,
+`crlf_is_one_break_for_carets`, `multi_line_selection_boxes_follow_their_line`,
+`carets_sit_on_the_painted_glyphs`, `a_soft_wrap_caret_follows_its_affinity`,
+`truncated_carets_stay_in_kept_lines`, `caret_position` and
+`two_space_run_word_boundary`; by `word_boundaries_agree_with_the_layouts_clusters`
+(`src/parley_text/caret.rs`); by
+`caret_queries_never_build_the_process_font_system` (`tests/text_context.rs`);
+and, as pixels, by `selection_highlights_the_second_line` in flui-engine's
+`parley_runs_read_back`. `parley_metrics_round_to_todays_baseline`
+(`tests/parley_metrics_oracle.rs`) pins width, height and the painted
+baseline row against the numbers the cosmic-text layout measured, recorded;
 `measured_lines_are_painted_lines` pins that the measured height is the
-painted paragraph's for wrapped paragraphs, an overlong word, hard breaks,
-spacing and height set without a size, and zero `max_lines`;
-`an_empty_paragraph_measures_a_line_of_its_style` (`text_contract`,
-`tests/main.rs`) pins the empty paragraph;
-`measured_width_equals_painted_width_on_host_faces`
-(`tests/host_faces_oracle.rs`) pins the caret layout's size against the
-measurement on the host's faces.
+painted paragraph's; `an_empty_paragraph_measures_a_line_of_its_style`
+(`text_contract`, `tests/main.rs`) pins the empty paragraph;
 `a_face_registered_on_the_collection_reaches_measurement_paint_and_carets`
 (`tests/font_registration.rs`) pins that one registration moves all three.
 
@@ -638,22 +643,21 @@ sans-serif, serif, cursive, fantasy and monospace to it before the host
 generics are bound (`fonts::bind_generics_to_bundled`), as every
 `FontCollection` does; the app's collection, fed from the host, binds its
 generics to the families the process font system binds them to, so Roboto
-there too (decision 17). In the caret layout, a weight Roboto lacks snaps to
-the Regular it has, the monospace generic included (`font_resolve::snap_weight`).
-Text whose style names no family, names "Roboto" or names a generic is
-measured, painted and given carets in the bundled Roboto Regular on every host;
-paint synthesizes a bold weight on it instead of snapping (decisions 10 and 18).
+there too (decision 17). Text whose style names no family, names "Roboto" or
+names a generic is measured, painted and given carets in the bundled Roboto
+Regular on every host; paint synthesizes a bold weight on it (decisions 10 and
+18).
 
 **Flutter:** the default family is the platform's (Segoe UI on Windows, the
 system font on Apple platforms, Roboto on Android). Recalled, not checked
 against a clone.
 
 **Why:** every collection binds its generics to the bundled Roboto, the
-standalone and bundled-only ones included, and carets are shaped on the
-process font system until ADR-0092 §10 step 5. Bound to a host face, default
-text would be measured and painted in Roboto on a bundled-only collection and
-its carets placed in Segoe UI, Arial or DejaVu. The host-fed collection (decision 17) would agree with either
-binding; default text stays the same face on every host.
+standalone and bundled-only ones included, and the host-fed collection takes
+its generic bindings from the process font system (decision 17). Bound to a
+host face there, default text would measure in Roboto on a bundled-only
+collection and in Segoe UI, Arial or DejaVu on the app's; bound to Roboto,
+default text is the same face on every host and in every collection.
 
 **Accepted trade-off:** on every desktop host:
 
@@ -668,8 +672,8 @@ binding; default text stays the same face on every host.
 
 Locked by the default-family, monospace and bold rows of
 `parley_metrics_round_to_todays_baseline` (`tests/parley_metrics_oracle.rs`),
-which fail without the binding (the bold monospace rows also without the
-monospace snap), and by `a_host_copy_does_not_replace_a_bundled_face`
+which fail when a row measures in another face than the bundled Roboto
+Regular, and by `a_host_copy_does_not_replace_a_bundled_face`
 (`src/fonts.rs`), which fails when a host Roboto, Material Icons or
 CupertinoIcons keeps its place.
 
@@ -695,54 +699,48 @@ families, and the common list as the emoji generic. `FontCollection::new()`
 stays bundled-only, for standalone contexts, tests and the hot-reload plugin,
 and falls back to Roboto for every script.
 
-**Why:** measurement and paint (Parley over the collection) and the caret
-layout (cosmic-text over the process font system, decision 15) must pick the
-same face for the same text. Over a
-bundled-only collection, text the bundled faces do not cover measured in
-another face than it painted in: `你好世界 emoji 😀` at 16 px measured 82.77 px
-and painted 134.01 px on Windows, and Cupertino's chain, which the host
-resolves to Segoe UI, measured in Roboto (163.29 px against 161.16 px). The
-feed reads the process font system's discovery rather than scanning again
-through fontique's `system` feature, which reaches `windows` and is forbidden
-at tier S (ADR-0092 §10 step 5). Flutter's engine collection resolves through
-the platform font manager (recalled, not checked); FLUI has two shapers until
-ADR-0092 §10 step 6, so it mirrors one into the other instead.
+**Why:** the app's text must find the host's faces. Over a bundled-only
+collection, text the bundled faces do not cover had no face: `你好世界 emoji
+😀` at 16 px measured 82.77 px where the host's faces give 134.01 px on
+Windows, and Cupertino's chain, which the host resolves to Segoe UI, measured
+in Roboto (163.29 px against 161.16 px). The feed reads the process font
+system's discovery rather than scanning again through fontique's `system`
+feature, which reaches `windows` and is forbidden at tier S (ADR-0092 §10
+step 6). Flutter's engine collection resolves through the platform font
+manager (recalled, not checked); FLUI keeps the process font system's
+discovery until ADR-0092 §10 step 6, so it mirrors its lists instead.
 
 **Accepted trade-off:**
 
 - cosmic-text's last resort, any face not forbidden, has no Parley
   counterpart beyond the trailing sans-serif family: a character neither the
   script's list, the common list nor that family covers measures and paints as
-  notdef, while the caret layout shapes it in whatever face that walk finds.
-  The oracle skips such text.
+  notdef. The oracle skips such text.
 - Family names match exactly on both sides, where CSS matches them without
   regard to case: a style must spell a family as the fonts name it.
 - Parley appends the Han fallback to every cluster's fallback families
   (fontique `Query::set_fallbacks`), so such a character may measure in the Han
   fallback face.
-- cosmic-text falls back per word, Parley per cluster; in a word whose
-  characters only partly fall back, the two can split it differently.
+- Parley falls back per cluster, where cosmic-text fell back per word.
 - Only each script's default key is set, with no locale: the Parley path
   passes none. A change that passes one must set locale keys too.
 - Android's platform common list is empty, so the collection falls back to the
-  sans-serif family alone there while the caret layout still walks its last
-  resort;
-  unverified, since Android is clippy-only here.
+  sans-serif family alone there; unverified, since Android is clippy-only here.
 - Two scans decide what is carried: a file that disappears between them is
-  carried on the caret side and absent from the collection, and a family name
-  fontdb records in another language only (fontique keeps the English or first
-  name) resolves on the caret side alone.
+  absent from the collection, and a family name fontdb records in another
+  language only (fontique keeps the English or first name) is not found by the
+  family rule's exact match.
 - A host copy of a bundled family (Roboto, Material Icons, CupertinoIcons) is
   not fed, so one family never mixes two copies. With `bundled-fonts` the
   process font system replaces every host face of those families with the
-  bundled one (`fonts::install_bundled`), so both sides measure and paint the
+  bundled one (`fonts::install_bundled`), so its generic bindings name the
   bundled copy; an app that wants a host's own icon font registers it under
   another family name.
 - The feed reads the host's font files a second time before the first frame
-  (about 35 ms over 76 families on the Windows development host), until
-  ADR-0092 §10 step 3b's event lets it run off the owner thread.
-- A face registered after the feed reaches the collection and the process
-  font system together, through `FontCollection::register_font` (decision 11).
+  (about 35 ms over 76 families on the Windows development host), until it
+  runs off the owner thread at ADR-0092 §10 step 6.
+- A face registered after the feed reaches the collection alone, through
+  `FontCollection::register_font` (decision 11).
 
 Locked by `measured_width_equals_painted_width_on_host_faces` and
 `every_family_the_process_font_system_carries_resolves_in_the_collection`

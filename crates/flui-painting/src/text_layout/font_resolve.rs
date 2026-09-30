@@ -44,7 +44,7 @@
 //!   size, weight, letter-spacing and height, and no family) falls into the
 //!   tail. Each generic is re-pointed only when its configured family is
 //!   missing.
-//! * [`resolve_family`] degrades a named family the database lacks to
+//! * `resolve_family` degrades a named family the database lacks to
 //!   `Family::SansSerif`; the binding above points that generic at a carried
 //!   family whenever the database holds any Latin-capable face. This is
 //!   the Cupertino path, whose roles all name `CupertinoSystemText` — a family
@@ -123,7 +123,7 @@ fn generics_need_rebinding(db: &Database) -> bool {
 /// Points every generic family name at a family this database carries.
 ///
 /// Called on a freshly built [`Database`] and again, through
-/// [`InstalledFamilies::sync`], whenever the database changes — generic names
+/// `InstalledFamilies::sync`, whenever the database changes — generic names
 /// live in the database and are read at query time, so a later call takes
 /// effect on a live `FontSystem` too.
 ///
@@ -188,7 +188,7 @@ pub(crate) fn bind_generic_families(db: &mut Database) {
 /// Coverage of `'A'` and `' '` is the actual requirement, and every face that
 /// should win a generic binding has it.
 ///
-/// Reached only while (re)building [`InstalledFamilies`], never per shaped
+/// Reached only while (re)building `InstalledFamilies`, never per shaped
 /// run — but it is not cheap and it is not paid once: `fontdb::with_face_data`
 /// opens, maps and parses the file on every call with no cache of its own, and
 /// the cost is candidates × faces, repeated on every observed database change
@@ -247,11 +247,10 @@ fn can_render_latin(db: &Database, id: fontdb::ID) -> bool {
 /// cosmic-text reads `forbidden_fallback()` once, inside `Fallbacks::new`,
 /// which runs in the `FontSystem` constructor, and exposes no setter —
 /// `Fallbacks::extend` refreshes only the per-script lists. So an emoji face
-/// registered *after* construction, through
-/// `SharedFontSystem::register_font` or any other `SharedFontSystem::with_mut`, is
-/// never forbidden.
+/// added to the database *after* construction is never forbidden. Nothing
+/// adds one today: a registration loads the collection alone.
 ///
-/// That is the same growth [`InstalledFamilies::sync`] exists to track, and it
+/// That is the same growth `InstalledFamilies::sync` exists to track, and it
 /// is not hypothetical: on a host where `FontSystem::new()` finds no faces at
 /// all — headless, CI, a minimal container — this scan sees an empty database
 /// and forbids nothing for the life of the process. The asymmetry is stated
@@ -513,7 +512,7 @@ impl InstalledFamilies {
 /// The family to shape `style` with, against the process font system.
 ///
 /// [`resolve_family_name`] over the families `font_system` carries. Every
-/// path, the generic ones included, first brings [`InstalledFamilies`] and
+/// path, the generic ones included, first brings `InstalledFamilies` and
 /// the generic bindings up to date with `font_system`, so a database that
 /// gained faces after construction resolves against what it now holds rather
 /// than what it held then. A named family that degrades to the sans-serif

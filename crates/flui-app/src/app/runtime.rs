@@ -145,8 +145,7 @@ struct FontRegistrations {
     digests: HashSet<FontDigest>,
     /// Fonts accepted before this thread resolved its services, registered
     /// on the collection when it is built. On a thread that never builds a
-    /// realm they stay here: neither the collection nor the caret layout
-    /// ever gains them, so the two cannot disagree.
+    /// realm they stay here, and no collection gains them.
     pending: Vec<Vec<u8>>,
 }
 
@@ -888,14 +887,12 @@ impl AppRuntime {
         self.resolved_services().fonts.clone()
     }
 
-    /// Registers `font_bytes` on the app's font collection, which loads the
-    /// face into the process font system the caret layout shapes with too.
+    /// Registers `font_bytes` on the app's font collection, which measures,
+    /// paints and places carets in text.
     ///
     /// Before this thread has built a realm, the bytes are checked and held,
     /// and registered when the first realm resolves the services: a thread
-    /// that never runs the app never scans the host's fonts for them, and
-    /// never loads a face into the caret layout that no measurement of the
-    /// app gains.
+    /// that never runs the app never scans the host's fonts for them.
     /// Returns whether the collection gained the face now, so that the
     /// realms must be told.
     ///

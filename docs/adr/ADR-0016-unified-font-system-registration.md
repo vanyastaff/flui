@@ -45,12 +45,11 @@ keeping two databases in sync.
 **No longer holds for measurement or paint (ADR-0092 §10 step 4).** Layout
 measures on Parley over the realm's `FontCollection` and paint draws the runs of
 that layout, rasterized by the engine's `SwashRasterizer` from the faces the
-runs carry; this font system shapes only the caret layout until step 5, and the
-engine no longer reads glyphs through it. The one registration door,
-`FontCollection::register_font`, loads a face into the collection (measurement
-and paint) and into this font system (carets) alike, so the three still agree
-on which faces exist (flui-painting `ARCHITECTURE.md`, mapping decisions 11,
-15, 16 and 18). The rest of
+runs carry, and since step 5 carets and selection read that same layout: this
+font system shapes nothing and the engine reads no glyphs through it. It is
+the host discovery the app's collection is fed from. The one registration
+door, `FontCollection::register_font`, loads a face into the collection alone
+(flui-painting `ARCHITECTURE.md`, mapping decisions 11, 15, 16 and 18). The rest of
 this record stands until ADR-0092 supersedes it.
 
 ## What is changing
@@ -59,11 +58,9 @@ Today the font system is a process-wide static (`FONT_SYSTEM` in
 `flui-painting`'s `text_layout`), eagerly constructed by
 `SharedEngineServices::resolve()` at realm install and read ambiently on layout
 paths. Apps register through the app's `FontCollection` (`flui::register_font`),
-which feeds the face into this font system as well, so carets sit on the
-faces measurement and paint use; every realm lays out again, on its next frame, the text it measured
-before the face existed (ADR-0092 §2). `SharedFontSystem::register_font` is no
-longer an app's door: the collection reaches the database through a
-crate-internal one, and a `testing` door remains for tests of the caret layout.
+which measures, paints and places carets with the face; every realm lays out
+again, on its next frame, the text it measured before the face existed
+(ADR-0092 §2). Nothing adds a face to this font system after it is built.
 The target is a font system per realm rather than a
 process global; ADR-0077 records that together with the move to parley, and
 supersedes this record when accepted. The part that carries over unchanged is

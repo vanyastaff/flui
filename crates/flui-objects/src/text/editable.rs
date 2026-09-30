@@ -358,10 +358,10 @@ impl RenderEditable {
     /// `caret_width` × `caret_height`.
     ///
     /// `None` before layout, and for a non-empty range that covers no glyph.
-    /// A range inside a multi-scalar glyph cluster is a proportional slice of
-    /// the cluster's box, the same interpolation caret placement uses. This
-    /// is the geometry a text store answers an input method's rect queries
-    /// with (ADR-0090).
+    /// A range inside a grapheme of several scalars is a proportional slice of
+    /// its box: the layout gives each scalar an even share of the cluster's
+    /// advance, and caret placement reads the same edges. This is the geometry
+    /// a text store answers an input method's rect queries with (ADR-0090).
     #[must_use]
     pub fn local_rect_for_range(&self, range: Range<usize>) -> Option<Rect> {
         if !self.painter.has_layout() {
@@ -451,9 +451,10 @@ impl RenderEditable {
     /// and "there is nothing laid out" are different facts and only one of
     /// them should move a caret.
     ///
-    /// Clamped to a char boundary the same way
-    /// [`Self::with_caret_byte_offset`] clamps, so a point landing inside a
-    /// multi-byte character cannot produce an offset that slices it.
+    /// The offset is a grapheme boundary: a point over `e` and its combining
+    /// mark answers before or after both, never between them. It is also
+    /// clamped to a char boundary the same way [`Self::with_caret_byte_offset`]
+    /// clamps.
     #[must_use]
     pub fn byte_offset_for_local_offset(&self, point: Offset) -> Option<usize> {
         if !self.painter.has_layout() {
@@ -748,8 +749,10 @@ impl RenderEditable {
     /// when a box query can return boxes larger than the glyphs (up to the
     /// strut). FLUI's
     /// [`TextPainter::get_boxes_for_selection`] takes no box-style parameter: every
-    /// box comes from the same layout that produced
-    /// [`TextPainter::size`], so none can exceed it. The intersection was
+    /// box comes from the same layout that produced [`TextPainter::size`], as
+    /// tall as its line, so none reaches above or below the text. A selected
+    /// trailing space does reach past the measured width, which leaves
+    /// trailing whitespace out, by that space's advance. The intersection was
     /// written and then removed, because reverting it changed no test and no
     /// measured output — it is unreachable here, and shipping it would have
     /// been dead code with a green test that could not fail. It comes back

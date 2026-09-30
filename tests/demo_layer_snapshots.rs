@@ -44,13 +44,12 @@
 //!
 //! Text is measured and painted on the realm's font collection, which holds
 //! only the bundled faces, so the geometry and the recorded paragraphs do not
-//! depend on the host. Carets still come from the process-wide font system
-//! until ADR-0092 §10 step 5, and that one resolves against the *host's*
-//! fonts: before measurement moved, the Cupertino demo's button came out
-//! 61.18 px wide on a host with fonts installed and 129.55 px on one without.
-//! [`pin_font_faces`] builds the process-wide font system from the faces this
-//! repository ships, once per process, so caret geometry is reproducible off
-//! this machine. Everything else in the serialized form is
+//! depend on the host; carets come from the same layout. The process-wide
+//! font system resolves against the *host's* fonts (before measurement
+//! moved, the Cupertino demo's button came out 61.18 px wide on a host with
+//! fonts installed and 129.55 px on one without), and
+//! [`pin_font_faces`] builds it from the faces this repository ships, once per
+//! process, so nothing that reaches it resolves against this machine. Everything else in the serialized form is
 //! documented stable: two-decimal floats, insertion-ordered children, no
 //! hash-map iteration.
 //!

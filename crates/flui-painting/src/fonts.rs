@@ -64,11 +64,10 @@ pub(crate) fn install_bundled(db: &mut cosmic_text::fontdb::Database) {
     }
 }
 
-/// Points every generic family of `db` at Roboto, the face the realm's
-/// `FontCollection` binds them to, so the caret layout of text measured and
-/// painted on Parley is shaped in that face too (flui-painting
-/// `ARCHITECTURE.md`, mapping decision 16). Binds nothing when `db` carries
-/// no Roboto.
+/// Points every generic family of `db` at Roboto, the face every
+/// `FontCollection` binds them to, so a collection fed from `db` binds its
+/// generics to Roboto too (flui-painting `ARCHITECTURE.md`, mapping
+/// decision 16). Binds nothing when `db` carries no Roboto.
 ///
 /// Called before `font_resolve::bind_generic_families`, which keeps a
 /// generic already bound to a family the database carries.
