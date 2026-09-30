@@ -274,11 +274,11 @@ pub use routing::{
     FocusScopeNode, FocusTraversalPolicy, FocusTreeError, GlobalPointerHandler, HitTestBehavior,
     HitTestEntry, HitTestHandle, HitTestProbe, HitTestResult, HitTestSnapshot, HitTestable,
     InteractionDispatchError, InteractionDispatchHandle, InteractionLane, KeyEventCallback,
-    KeyEventHandler, KeyEventResult, NodeContext, PathClipTarget, PointerDispatch,
-    PointerRouteHandler, PointerRouter, PointerTarget, ReadingOrderPolicy, RectProvider, RenderId,
-    ResolvedRouteToken, ResolvedStep, RoutePanic, RouteResolution, RouteResolutionMiss,
-    ScrollTarget, ShaderMaskTarget, TransformGuard, TraversalEdgeBehavior,
-    resolve_path_clip_target, resolve_shader_mask_target,
+    KeyEventHandler, KeyEventResult, LocalPayloadTarget, NodeContext, PathClipTarget,
+    PointerDispatch, PointerRouteHandler, PointerRouter, PointerTarget, ReadingOrderPolicy,
+    RectProvider, RenderId, ResolvedRouteToken, ResolvedStep, RoutePanic, RouteResolution,
+    RouteResolutionMiss, ScrollTarget, ShaderMaskTarget, TransformGuard, TraversalEdgeBehavior,
+    resolve_local_payload, resolve_path_clip_target, resolve_shader_mask_target,
 };
 pub use sealed::{CustomGestureRecognizer, CustomHitTestable};
 pub use settings::{
@@ -378,6 +378,7 @@ mod static_assertions {
     impl AssertSendSync for ScrollTarget {}
     impl AssertSendSync for PathClipTarget {}
     impl AssertSendSync for ShaderMaskTarget {}
+    impl AssertSendSync for LocalPayloadTarget {}
 
     // Data-path types should be Send + Sync
     impl AssertSendSync for HitTestResult {}

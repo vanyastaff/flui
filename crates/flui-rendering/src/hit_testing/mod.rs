@@ -91,10 +91,10 @@ pub use flui_interaction::routing::HitTestBehavior;
 // signals and trackpad pan-zoom.
 pub use flui_interaction::events::{CursorIcon, InputEvent, PointerEvent, PointerEventExt};
 pub use flui_interaction::routing::{
-    DeviceId, EventPropagation, MouseEnterCallback, MouseExitCallback, MouseHoverCallback,
-    MouseRegionCallbacks, MouseRegionTarget, MouseTrackerAnnotation, PanZoomTarget, PathClipTarget,
-    PointerDispatch, PointerTarget, ScrollTarget, ShaderMaskTarget, resolve_path_clip_target,
-    resolve_shader_mask_target,
+    DeviceId, EventPropagation, LocalPayloadTarget, MouseEnterCallback, MouseExitCallback,
+    MouseHoverCallback, MouseRegionCallbacks, MouseRegionTarget, MouseTrackerAnnotation,
+    PanZoomTarget, PathClipTarget, PointerDispatch, PointerTarget, ScrollTarget, ShaderMaskTarget,
+    resolve_path_clip_target, resolve_shader_mask_target,
 };
 pub use result::HitTestResult;
 pub use transform::MatrixTransformPart;
