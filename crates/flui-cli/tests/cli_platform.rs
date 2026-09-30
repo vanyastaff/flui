@@ -91,13 +91,18 @@ fn git_ignores(project: &std::path::Path, rel_path: &str) -> bool {
 /// What a platform build writes under `platforms/`: Gradle's cache, its
 /// root-project and `app` module outputs (the module one holds the APK
 /// `flui build android` copies out), the native libraries the builder
-/// copies in before Gradle runs, and xcodebuild's output.
+/// copies in before Gradle runs, xcodebuild's output, and each build's
+/// deliverables under `target/flui-out/<platform>`.
 const BUILD_OUTPUTS: &[&str] = &[
     "platforms/android/.gradle/8.9/checksums/checksums.lock",
     "platforms/android/build/reports/problems/problems-report.html",
     "platforms/android/app/build/outputs/apk/debug/app-debug.apk",
     "platforms/android/app/src/main/jniLibs/arm64-v8a/liball_platforms.so",
     "platforms/ios/build/Debug/iphoneos/flui.app/Info.plist",
+    "target/flui-out/android/all-platforms-debug.apk",
+    "target/flui-out/ios/flui.app/Info.plist",
+    "target/flui-out/web/pkg/app_bg.wasm",
+    "target/flui-out/web/index.html",
 ];
 
 /// Scaffolded or user-added source the builds read, which must stay
@@ -148,7 +153,7 @@ fn scaffolded_platforms_ignore_and_clean_what_builds_write() {
             .expect("create output dir");
         std::fs::write(&path, b"").expect("write output");
     }
-    for platform in ["android", "ios"] {
+    for platform in ["android", "ios", "web"] {
         flui()
             .current_dir(&project)
             .args(["clean", "--platform", platform])

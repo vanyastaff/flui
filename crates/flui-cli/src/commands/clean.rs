@@ -1,3 +1,4 @@
+use crate::build::context_builder::default_output_dir;
 use crate::error::{CliError, CliResult};
 use crate::runner::{CargoCommand, OutputStyle};
 use crate::ui;
@@ -83,24 +84,23 @@ fn report_removed(removed: &[PathBuf]) -> CliResult<()> {
 }
 
 /// Clean build artifacts for a specific platform, returning the paths that
-/// were actually removed.
+/// were actually removed: the build's default output directory, and what the
+/// platform's own build tool writes inside `platforms/<platform>/`.
 fn clean_platform(platform: &str) -> CliResult<Vec<PathBuf>> {
     let platform_dir = Path::new("platforms").join(platform);
-
-    if !platform_dir.exists() {
-        return Ok(Vec::new());
-    }
-
-    let sub_dirs: &[&str] = match platform {
+    let tool_outputs: &[&str] = match platform {
         "android" => &["app/build", "build", ".gradle", "app/src/main/jniLibs"],
-        "web" => &["pkg"],
         "ios" => &["build"],
         _ => &[],
     };
 
     let mut removed = Vec::new();
-    for sub_dir in sub_dirs {
-        let dir = platform_dir.join(sub_dir);
+    let dirs = std::iter::once(default_output_dir(Path::new(""), platform)).chain(
+        tool_outputs
+            .iter()
+            .map(|sub_dir| platform_dir.join(sub_dir)),
+    );
+    for dir in dirs {
         if remove_dir_if_exists(&dir)? {
             removed.push(dir);
         }

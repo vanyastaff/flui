@@ -8,7 +8,7 @@
 ///
 /// - `NoPlatform` / `HasPlatform` - Platform configuration
 /// - `NoProfile` / `HasProfile` - Build profile (debug/release)
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::build::platform::{AppBundle, BuildUnit, BuilderContext, Platform, Profile};
 
@@ -137,7 +137,7 @@ impl<P, Pr> BuilderContextBuilder<P, Pr> {
 
     /// Set custom output directory.
     ///
-    /// If not set, defaults to `workspace_root/target/flui-out/`.
+    /// If not set, defaults to [`default_output_dir`].
     ///
     /// # Arguments
     ///
@@ -161,12 +161,9 @@ impl BuilderContextBuilder<HasPlatform, HasProfile> {
     /// A fully configured `BuilderContext`.
     #[must_use]
     pub(crate) fn build(self) -> BuilderContext {
-        let output_dir = self.output_dir.unwrap_or_else(|| {
-            self.workspace_root
-                .join("target")
-                .join("flui-out")
-                .join(self.platform.0.name())
-        });
+        let output_dir = self
+            .output_dir
+            .unwrap_or_else(|| default_output_dir(&self.workspace_root, self.platform.0.name()));
 
         BuilderContext {
             workspace_root: self.workspace_root,
@@ -177,4 +174,15 @@ impl BuilderContextBuilder<HasPlatform, HasProfile> {
             bundle: self.bundle,
         }
     }
+}
+
+/// Where a build for `platform` (a [`Platform::name`]) writes its
+/// deliverables when no `--out` is given: `target/flui-out/<platform>` under
+/// the project. `flui clean --platform` removes the same directory.
+#[must_use]
+pub(crate) fn default_output_dir(workspace_root: &Path, platform: &str) -> PathBuf {
+    workspace_root
+        .join("target")
+        .join("flui-out")
+        .join(platform)
 }
