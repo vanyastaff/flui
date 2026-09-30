@@ -153,7 +153,7 @@ let platform = current_platform()?; // Result<Box<dyn Platform>, PlatformError>
 
 Backends: `WindowsPlatform` (Win32), `MacOSPlatform` (AppKit), `LinuxPlatform`, `WebPlatform`, `AndroidPlatform`, `IOSPlatform` (UIKit), `HeadlessPlatform` (CI / tests), and a `WinitPlatform` fallback (optional `winit` dependency). All platform-specific imports (`windows::*`, `objc2::*`/`objc2-app-kit::*`/`objc2-ui-kit::*`, `winit::*`) are confined to this crate. The Apple backends both use the `objc2` binding family — macOS/AppKit and iOS/UIKit alike; the older `cocoa`/`objc` crates this backend used are gone (ADR-0071).
 
-Text shaping is **not** a `Platform` method — that Flutter binding (`PlatformTextSystem`) was deliberately not carried over. `flui-painting` shapes text with `cosmic-text` by default and with Parley over a per-realm `TextContext` behind its `parley` feature (the migration [ADR-0092](adr/ADR-0092-per-realm-text-over-parley.md) describes); `flui-engine` rasterizes glyphs through `flui-painting` into its own glyph atlas.
+Text shaping is **not** a `Platform` method — that Flutter binding (`PlatformTextSystem`) was deliberately not carried over. `flui-painting` shapes text with `cosmic-text` by default. Its `parley-layout` feature makes `TextPainter` measure size, baselines and intrinsics with Parley over a per-realm `TextContext`, while glyphs and carets stay on cosmic-text; `parley` alone only compiles the Parley path without choosing it (the migration [ADR-0092](adr/ADR-0092-per-realm-text-over-parley.md) describes); `flui-engine` rasterizes glyphs through `flui-painting` into its own glyph atlas.
 
 ## Confinement of `unsafe`
 
