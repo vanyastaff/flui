@@ -20,7 +20,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use super::shell;
 
-use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
+use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
 
 /// The top-level directories a path in a code span must start at.
 pub(super) const ROOTS: [&str; 16] = [
@@ -71,6 +71,22 @@ pub(super) struct Code {
     pub(super) text: String,
     /// A code block (fenced or indented), not an inline code span.
     pub(super) block: bool,
+    /// The shell the code is written for: PowerShell for a `powershell`,
+    /// `pwsh` or `ps1` fence, POSIX otherwise.
+    pub(super) dialect: shell::Dialect,
+}
+
+/// The shell a code fence's info string (`bash`, `powershell title=x`) names.
+fn dialect(info: &str) -> shell::Dialect {
+    let language = info.split_whitespace().next().unwrap_or_default();
+    if ["powershell", "pwsh", "ps1", "ps"]
+        .iter()
+        .any(|name| language.eq_ignore_ascii_case(name))
+    {
+        shell::Dialect::PowerShell
+    } else {
+        shell::Dialect::Posix
+    }
 }
 
 /// The code spans and code blocks of `markdown`, in order, but for a code
@@ -90,12 +106,18 @@ pub(super) fn code(markdown: &str) -> Vec<Code> {
                 line: lines.line(range.start),
                 text: text.into_string(),
                 block: false,
+                dialect: shell::Dialect::Posix,
             }),
-            Event::Start(Tag::CodeBlock(_)) => {
+            Event::Start(Tag::CodeBlock(kind)) => {
+                let dialect = match kind {
+                    CodeBlockKind::Fenced(info) => dialect(&info),
+                    CodeBlockKind::Indented => shell::Dialect::Posix,
+                };
                 block = Some(Code {
                     line: 0,
                     text: String::new(),
                     block: true,
+                    dialect,
                 });
             }
             Event::Text(text) => {
@@ -127,8 +149,16 @@ fn pinned(dest: &str) -> bool {
     else {
         return false;
     };
+    const REPO: &str = "vanyastaff/flui/";
+    let Some(rest) = rest
+        .get(..REPO.len())
+        .filter(|repo| repo.eq_ignore_ascii_case(REPO))
+        .map(|_| &rest[REPO.len()..])
+    else {
+        return false;
+    };
     ["blob", "tree"].iter().any(|kind| {
-        rest.strip_prefix(&format!("vanyastaff/flui/{kind}/"))
+        rest.strip_prefix(&format!("{kind}/"))
             .and_then(|rest| rest.split_once('/'))
             .is_some_and(|(reference, _)| {
                 (7..=40).contains(&reference.len())
@@ -296,7 +326,28 @@ const RESERVED: [&str; 9] = [
 ];
 
 /// `sudo`'s options that take a value in the next word.
-const SUDO_VALUE_OPTIONS: [&str; 10] = ["-u", "-g", "-C", "-D", "-h", "-p", "-r", "-t", "-U", "-T"];
+const SUDO_VALUE_OPTIONS: [&str; 20] = [
+    "-u",
+    "-g",
+    "-C",
+    "-D",
+    "-h",
+    "-p",
+    "-r",
+    "-t",
+    "-U",
+    "-T",
+    "--user",
+    "--group",
+    "--close-from",
+    "--chdir",
+    "--host",
+    "--prompt",
+    "--role",
+    "--type",
+    "--other-user",
+    "--command-timeout",
+];
 
 /// GNU `time`'s options that take a value in the next word.
 const TIME_VALUE_OPTIONS: [&str; 4] = ["-f", "--format", "-o", "--output"];
@@ -313,9 +364,15 @@ const SHORT_VALUE_OPTIONS: [char; 4] = ['C', 'F', 'Z', 'j'];
 /// (`-qpx`, `-qp x`). A command is cargo's when its first word, after any
 /// `NAME=value` assignments and an `env` wrapper, is `cargo` (or a path ending
 /// in `/cargo`); its arguments stop at `--`, after which they are the program's.
+#[cfg(test)]
 pub(super) fn packages(code: &str) -> Vec<Selected> {
+    packages_in(code, shell::Dialect::Posix)
+}
+
+/// [`packages`] of code written for `dialect`.
+pub(super) fn packages_in(code: &str, dialect: shell::Dialect) -> Vec<Selected> {
     let mut found = Vec::new();
-    for command in shell::commands(code) {
+    for command in shell::commands_in(code, dialect) {
         let mut words: VecDeque<(usize, String)> = command.into();
         if !cargo_command(&mut words) {
             continue;
@@ -448,7 +505,11 @@ fn cargo_command(words: &mut VecDeque<(usize, String)>) -> bool {
                     .map(str::to_owned)
             };
             if let Some(split) = split {
-                for (_, part) in shell::commands(&split).into_iter().flatten().rev() {
+                for (_, part) in shell::commands_in(&split, shell::Dialect::Posix)
+                    .into_iter()
+                    .flatten()
+                    .rev()
+                {
                     words.push_front((line, part));
                 }
                 break;

@@ -20,9 +20,20 @@ use std::str::Chars;
 /// One command: its words, each with the 0-based line of the code it starts on.
 pub(super) type Command = Vec<(usize, String)>;
 
-/// The commands of `code`, empty ones left out.
-pub(super) fn commands(code: &str) -> Vec<Command> {
+/// The shell a piece of code is written for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Dialect {
+    /// sh, bash, zsh: the default.
+    Posix,
+    /// PowerShell: a backtick escapes (and continues a line), `\` is a
+    /// plain character, and there is no `$'…'` or here-document.
+    PowerShell,
+}
+
+/// The commands of `code`, written for `dialect`, empty ones left out.
+pub(super) fn commands_in(code: &str, dialect: Dialect) -> Vec<Command> {
     let mut lexer = Lexer {
+        dialect,
         chars: code.chars().peekable(),
         line: 0,
         commands: vec![Command::new()],
@@ -52,6 +63,7 @@ struct Heredoc {
 
 /// The state of one pass over the code.
 struct Lexer<'a> {
+    dialect: Dialect,
     chars: Peekable<Chars<'a>>,
     /// The 0-based line the next character is on.
     line: usize,
@@ -70,6 +82,8 @@ impl Lexer<'_> {
     fn run(&mut self) {
         while let Some(c) = self.chars.next() {
             match c {
+                '\\' if self.dialect == Dialect::PowerShell => self.push('\\'),
+                '`' if self.dialect == Dialect::PowerShell => self.powershell_escape(),
                 ' ' | '\t' | '\r' => self.flush(),
                 '\n' => {
                     self.flush();
@@ -132,7 +146,9 @@ impl Lexer<'_> {
                     self.chars.next();
                     self.substitution(')');
                 }
-                '$' if self.chars.next_if_eq(&'\'').is_some() => self.ansi_c_quoted(),
+                '$' if self.dialect == Dialect::Posix && self.chars.next_if_eq(&'\'').is_some() => {
+                    self.ansi_c_quoted();
+                }
                 // PowerShell's line continuation: a backtick ending the line
                 '`' if self.continues_line() => {}
                 '`' => self.substitution('`'),
@@ -148,6 +164,8 @@ impl Lexer<'_> {
         while let Some(quoted) = self.chars.next() {
             match quoted {
                 '"' => break,
+                '\\' if self.dialect == Dialect::PowerShell => self.push('\\'),
+                '`' if self.dialect == Dialect::PowerShell => self.powershell_escape(),
                 // a line continuation inside quotes too
                 '\\' if self.chars.next_if_eq(&'\n').is_some() => self.line += 1,
                 '\\' if self
@@ -199,21 +217,31 @@ impl Lexer<'_> {
     fn ansi_c_quoted(&mut self) {
         self.start_word();
         while let Some(c) = self.chars.next() {
-            let c = match c {
+            match c {
                 '\'' => break,
-                '\\' => match ansi_c_escape(&mut self.chars) {
-                    Some(c) => c,
-                    None => continue,
-                },
-                c => c,
-            };
-            self.push_counting(c);
+                '\\' => {
+                    for c in ansi_c_escape(&mut self.chars).chars() {
+                        self.push_counting(c);
+                    }
+                }
+                c => self.push_counting(c),
+            }
+        }
+    }
+
+    /// A PowerShell backtick just read: a line continuation at a line's end,
+    /// or else the escape of the next character, which it keeps.
+    fn powershell_escape(&mut self) {
+        if !self.continues_line()
+            && let Some(escaped) = self.chars.next()
+        {
+            self.push_counting(escaped);
         }
     }
 
     /// The commands of a substitution's `text`, which starts on `line`.
     fn nest(&mut self, text: &str, line: usize) {
-        for mut command in commands(text) {
+        for mut command in commands_in(text, self.dialect) {
             for (at, _) in &mut command {
                 *at += line;
             }
@@ -222,14 +250,21 @@ impl Lexer<'_> {
     }
 
     /// Drops a redirection whose operator started with the character just
-    /// read: a file-descriptor number before it, the rest of the operator,
-    /// and its target word.
+    /// read: a file-descriptor number (`2>`) or name (`{fd}>`) before it, the
+    /// rest of the operator, and its target word, whose command substitutions
+    /// still run (`>"$(cargo …)"`).
     fn redirect(&mut self) {
-        if self
-            .word
-            .as_ref()
-            .is_some_and(|(_, word)| word.bytes().all(|b| b.is_ascii_digit()))
-        {
+        let descriptor = |word: &str| {
+            word.bytes().all(|b| b.is_ascii_digit())
+                || word
+                    .strip_prefix('{')
+                    .and_then(|rest| rest.strip_suffix('}'))
+                    .is_some_and(|name| {
+                        !name.is_empty()
+                            && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
+                    })
+        };
+        if self.word.as_ref().is_some_and(|(_, word)| descriptor(word)) {
             self.word = None;
         }
         self.flush();
@@ -243,7 +278,43 @@ impl Lexer<'_> {
             .next_if(|&next| next == ' ' || next == '\t')
             .is_some()
         {}
-        self.read_word(|_| {});
+        let start = self.line;
+        let mut target = String::new();
+        self.read_raw_word(&mut target);
+        for (offset, text) in substitutions(&target) {
+            self.nest(&text, start + offset);
+        }
+    }
+
+    /// Reads one shell word as written, quotes kept, into `raw`: its end is
+    /// where the shell's is, a `$(…)` in it included.
+    fn read_raw_word(&mut self, raw: &mut String) {
+        let mut quote: Option<char> = None;
+        while let Some(&next) = self.chars.peek() {
+            if let Some(open) = quote {
+                self.chars.next();
+                raw.push(next);
+                if next == open {
+                    quote = None;
+                }
+                continue;
+            }
+            if next.is_whitespace() || WORD_ENDS.contains(next) {
+                break;
+            }
+            self.chars.next();
+            raw.push(next);
+            match next {
+                '\'' | '"' => quote = Some(next),
+                '\\' => raw.extend(self.chars.next()),
+                '$' if self.chars.next_if_eq(&'(').is_some() => {
+                    raw.push('(');
+                    raw.push_str(&substitution_text(&mut self.chars, ')'));
+                    raw.push(')');
+                }
+                _ => {}
+            }
+        }
     }
 
     /// Whether the `<` just read opens a `<name>` placeholder: a run of name
@@ -279,8 +350,9 @@ impl Lexer<'_> {
         }
     }
 
-    /// Reads one shell word, quotes removed, handing each character to `each`;
-    /// whether any of it was quoted or escaped.
+    /// Reads one shell word, quotes removed (`'…'`, `"…"`, `$'…'` with its
+    /// escapes), handing each character to `each`; whether any of it was quoted
+    /// or escaped.
     fn read_word(&mut self, mut each: impl FnMut(char)) -> bool {
         let mut quoted = false;
         let mut quote: Option<char> = None;
@@ -298,6 +370,18 @@ impl Lexer<'_> {
                 None => {
                     self.chars.next();
                     match next {
+                        '$' if self.chars.next_if_eq(&'\'').is_some() => {
+                            quoted = true;
+                            while let Some(c) = self.chars.next() {
+                                match c {
+                                    '\'' => break,
+                                    '\\' => {
+                                        ansi_c_escape(&mut self.chars).chars().for_each(&mut each);
+                                    }
+                                    c => each(c),
+                                }
+                            }
+                        }
                         '\'' | '"' => {
                             quoted = true;
                             quote = Some(next);
@@ -389,14 +473,16 @@ impl Lexer<'_> {
 
 /// The text of a command substitution up to its `closing` (`)` of `$(`, or
 /// `` ` ``), quotes and escapes honoured and kept for the nested lexing: a `)`
-/// inside quotes does not close it.
+/// inside quotes, a comment, or a `case` pattern does not close it.
 fn substitution_text(chars: &mut Peekable<Chars<'_>>, closing: char) -> String {
     let mut text = String::new();
     let mut depth = 0_usize;
     let mut quote: Option<char> = None;
-    // `case … esac` blocks open: in one, an unmatched `)` ends a pattern
+    // `case … esac` blocks open: in one, an unmatched `)` ends a pattern. A
+    // keyword counts only as a whole word at a command's start.
     let mut cases = 0_usize;
     let mut word = String::new();
+    let mut command_start = true;
     while let Some(c) = chars.next() {
         if let Some(open) = quote {
             if c == open {
@@ -408,12 +494,22 @@ fn substitution_text(chars: &mut Peekable<Chars<'_>>, closing: char) -> String {
         if c.is_alphanumeric() || c == '_' {
             word.push(c);
         } else {
-            match word.as_str() {
-                "case" => cases += 1,
-                "esac" => cases = cases.saturating_sub(1),
-                _ => {}
+            if command_start {
+                match word.as_str() {
+                    "case" => cases += 1,
+                    "esac" => cases = cases.saturating_sub(1),
+                    _ => {}
+                }
+            }
+            if !word.is_empty() {
+                // `case WORD in`: the words after `case` are not commands; the
+                // one after `in`, `;;` or a pattern's `)` is
+                command_start = matches!(word.as_str(), "in" | "do" | "then" | "else");
             }
             word.clear();
+            if matches!(c, ';' | '\n' | '|' | '&' | '(') {
+                command_start = true;
+            }
         }
         match c {
             '\\' => {
@@ -421,8 +517,16 @@ fn substitution_text(chars: &mut Peekable<Chars<'_>>, closing: char) -> String {
                 text.extend(chars.next());
                 continue;
             }
+            // a comment runs to the line's end: its words are no keywords
+            '#' if text.is_empty() || text.ends_with(char::is_whitespace) => {
+                text.push(c);
+                while let Some(skipped) = chars.next_if(|&next| next != '\n') {
+                    text.push(skipped);
+                }
+                continue;
+            }
             '\'' | '"' => quote = Some(c),
-            ')' if closing == ')' && depth == 0 && cases > 0 => {}
+            ')' if closing == ')' && depth == 0 && cases > 0 => command_start = true,
             c if c == closing && depth == 0 => break,
             '(' if closing == ')' => depth += 1,
             ')' if closing == ')' => depth -= 1,
@@ -433,10 +537,10 @@ fn substitution_text(chars: &mut Peekable<Chars<'_>>, closing: char) -> String {
     text
 }
 
-/// The character an ANSI-C escape (after its `\\`) stands for: `\\n`,
-/// `\\x2d`, octal `\\055`, `\\u002d`, `\\U0000002d`, `\\cX`, and the
-/// rest of Bash's; `None` for one that stands for nothing.
-fn ansi_c_escape(chars: &mut Peekable<Chars<'_>>) -> Option<char> {
+/// What an ANSI-C escape (after its `\\`) stands for: `\\n`, `\\x2d`, octal
+/// `\\055`, `\\u002d`, `\\U0000002d`, `\\cX`, and the rest of Bash's. An
+/// escape missing its digits (`\\x-`) stays as written, as Bash keeps it.
+fn ansi_c_escape(chars: &mut Peekable<Chars<'_>>) -> String {
     let digits = |chars: &mut Peekable<Chars<'_>>, radix: u32, most: usize| {
         let mut value = 0_u32;
         let mut read = 0;
@@ -450,25 +554,26 @@ fn ansi_c_escape(chars: &mut Peekable<Chars<'_>>) -> Option<char> {
         }
         (read > 0).then(|| char::from_u32(value)).flatten()
     };
-    Some(match chars.next()? {
-        'a' => '\u{7}',
-        'b' => '\u{8}',
-        'e' | 'E' => '\u{1b}',
-        'f' => '\u{c}',
-        'n' => '\n',
-        'r' => '\r',
-        't' => '\t',
-        'v' => '\u{b}',
-        'x' => return digits(chars, 16, 2),
-        'u' => return digits(chars, 16, 4),
-        'U' => return digits(chars, 16, 8),
-        'c' => {
-            return chars
-                .next()
-                .and_then(|c| char::from_u32(u32::from(c) & 0x1f));
-        }
+    let Some(escape) = chars.next() else {
+        return "\\".to_owned();
+    };
+    let decoded = match escape {
+        'a' => Some('\u{7}'),
+        'b' => Some('\u{8}'),
+        'e' | 'E' => Some('\u{1b}'),
+        'f' => Some('\u{c}'),
+        'n' => Some('\n'),
+        'r' => Some('\r'),
+        't' => Some('\t'),
+        'v' => Some('\u{b}'),
+        'x' => digits(chars, 16, 2),
+        'u' => digits(chars, 16, 4),
+        'U' => digits(chars, 16, 8),
+        'c' => chars
+            .next()
+            .and_then(|c| char::from_u32(u32::from(c) & 0x1f)),
         first @ '0'..='7' => {
-            let mut value = first.to_digit(8)?;
+            let mut value = first.to_digit(8).unwrap_or_default();
             for _ in 0..2 {
                 let Some(digit) = chars.peek().and_then(|c| c.to_digit(8)) else {
                     break;
@@ -476,10 +581,11 @@ fn ansi_c_escape(chars: &mut Peekable<Chars<'_>>) -> Option<char> {
                 chars.next();
                 value = value * 8 + digit;
             }
-            return char::from_u32(value);
+            char::from_u32(value)
         }
-        other => other,
-    })
+        other => Some(other),
+    };
+    decoded.map_or_else(|| format!("\\{escape}"), String::from)
 }
 
 /// The command substitutions (`$(…)`, `` `…` ``) of a here-document body the

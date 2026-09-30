@@ -208,15 +208,12 @@ impl Packages {
         };
         match selected.source.as_deref() {
             None => {
-                if let Some(versions) = self.local.get(&selected.name) {
+                // a graph subcommand weighs the lockfile's same-named packages too
+                if graph.is_none()
+                    && let Some(versions) = self.local.get(&selected.name)
+                {
                     // a manifest that inherits its version states none to check
-                    if versions.is_empty() || versions.iter().any(|known| version_ok(known)) {
-                        return true;
-                    }
-                    // a graph subcommand may still pick a dependency of that name
-                    if graph.is_none() {
-                        return false;
-                    }
+                    return versions.is_empty() || versions.iter().any(|known| version_ok(known));
                 }
             }
             // a path source names one machine's absolute directory: cargo
@@ -229,10 +226,11 @@ impl Packages {
         let Some(subcommand) = graph else {
             return false;
         };
-        let Some(locked) = self.locked.get(&selected.name) else {
-            return false;
-        };
-        let matching = locked
+        let locked = self
+            .locked
+            .get(&selected.name)
+            .map_or(&[][..], Vec::as_slice);
+        let in_lock = locked
             .iter()
             .filter(|locked| {
                 version_ok(&locked.version)
@@ -242,6 +240,14 @@ impl Packages {
                         .is_none_or(|source| source_matches(source, locked.source.as_deref()))
             })
             .count();
+        // a workspace member is in the lockfile, without a source; a checkout
+        // package that is not (an excluded example) is one candidate more
+        let only_local = selected.source.is_none()
+            && !locked.iter().any(|locked| locked.source.is_none())
+            && self.local.get(&selected.name).is_some_and(|versions| {
+                versions.is_empty() || versions.iter().any(|known| version_ok(known))
+            });
+        let matching = in_lock + usize::from(only_local);
         matching == 1 || (matching > 1 && subcommand == "clean")
     }
 }
@@ -261,8 +267,9 @@ fn source_matches(spec: &str, known: Option<&str>) -> bool {
         .any(|known| normalized_url(known) == spec)
 }
 
-/// `source` with its URL's scheme and host lowercased, which URLs match in
-/// any case; the kind (`registry+`) and the path keep theirs.
+/// `source` as cargo canonicalizes it: the kind (`registry+`), the URL's
+/// scheme and host lowercased, and a scheme's default port dropped
+/// (`github.com:443`); the path keeps its case.
 fn normalized_url(source: &str) -> String {
     let (kind, url) = match source.split_once("://") {
         Some((head, _)) => match head.rsplit_once('+') {
@@ -274,12 +281,19 @@ fn normalized_url(source: &str) -> String {
     let Some((scheme, rest)) = url.split_once("://") else {
         return source.to_owned();
     };
+    let scheme = scheme.to_ascii_lowercase();
     let (host, path) = rest.split_at(rest.find('/').unwrap_or(rest.len()));
-    format!(
-        "{kind}{}://{}{path}",
-        scheme.to_ascii_lowercase(),
-        host.to_ascii_lowercase()
-    )
+    let host = host.to_ascii_lowercase();
+    let default_port = match scheme.as_str() {
+        "https" => ":443",
+        "http" => ":80",
+        _ => "",
+    };
+    let host = match host.strip_suffix(default_port) {
+        Some(bare) if !default_port.is_empty() => bare.to_owned(),
+        _ => host,
+    };
+    format!("{}{scheme}://{host}{path}", kind.to_ascii_lowercase())
 }
 
 /// Whether the version of a package-ID spec (`1`, `1.3`, `1.3.2`,
@@ -531,7 +545,7 @@ fn stale(
                 }
             }
         }
-        for selected in extract::packages(&code.text) {
+        for selected in extract::packages_in(&code.text, code.dialect) {
             if !packages.selects(&selected) {
                 // `code.line` is the line of the block's first line of text
                 push(code.line + selected.line, Kind::Package, &selected.name);

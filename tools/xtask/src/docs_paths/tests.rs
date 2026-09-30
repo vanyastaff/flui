@@ -212,6 +212,23 @@ fn packages_are_read_only_from_cargo_commands() {
         ("sudo cargo test -p a", &[(0, test, "a")]),
         ("sudo -u root -E cargo build -p a", &[(0, build, "a")]),
         ("X+=y cargo test -p a", &[(0, test, "a")]),
+        // an escape missing its digits stays as written
+        (
+            "cargo test -p $'flui\\x-view'",
+            &[(0, test, "flui\\x-view")],
+        ),
+        // a comment's `esac` closes no `case`
+        (
+            "echo \"$(case x # esac\nin x) cargo test -p a;; esac)\"",
+            &[(1, test, "a")],
+        ),
+        // an ANSI-C here-document delimiter
+        ("cat <<$'END'\nx\nEND\ncargo build -p a", &[(3, build, "a")]),
+        // a redirection target's substitution runs; a named descriptor is dropped
+        ("echo >\"$(cargo test -p a)\"", &[(0, test, "a")]),
+        ("{fd}>build.log cargo test -p a", &[(0, test, "a")]),
+        // sudo's long options take their value too
+        ("sudo --user root cargo test -p a", &[(0, test, "a")]),
         ("cat <<\\EOF\n$(cargo test -p gone)\nEOF", &[]),
         (
             "cat <<'END MARK'\ncargo test -p gone\nEND MARK\ncargo build -p a",
@@ -371,6 +388,15 @@ fn a_lockfile_package_is_selected_only_by_update_and_tree() {
         ("cargo test -p flui-view@999", false),
         // a graph subcommand picks the dependency the local version misses
         ("cargo tree -p flui-view@2", true),
+        // a bare name is ambiguous to a graph subcommand when a dependency
+        // shares it; `clean` takes both
+        ("cargo tree -p flui-view", false),
+        ("cargo clean -p flui-view", true),
+        // cargo canonicalizes the source kind's case and a default port
+        (
+            "cargo pkgid -p 'REGISTRY+https://github.com:443/rust-lang/crates.io-index#bitflags@2.13.2'",
+            true,
+        ),
         ("cargo test -p flui-view@2", false),
         // a prerelease matches only its full version
         ("cargo test -p flui-view@0.2.0-dev", true),
@@ -477,6 +503,27 @@ fn headings_give_github_anchors() {
     assert_eq!(extract::anchors(markdown), want);
 }
 
+fn a_powershell_fence_is_lexed_as_powershell() {
+    let markdown =
+        "```powershell\ncargo test -p a`-b `\n  -p x\\y\n```\n\n```bash\ncargo test -p a`x`\n```\n";
+    let code = extract::code(markdown);
+    let dialects: Vec<shell::Dialect> = code.iter().map(|code| code.dialect).collect();
+    assert_eq!(
+        dialects,
+        [shell::Dialect::PowerShell, shell::Dialect::Posix]
+    );
+    let names = |code: &extract::Code| -> Vec<String> {
+        extract::packages_in(&code.text, code.dialect)
+            .into_iter()
+            .map(|selected| selected.name)
+            .collect()
+    };
+    // a backtick escapes and continues the line; `\` is a plain character
+    assert_eq!(names(&code[0]), ["a-b", "x\\y"]);
+    // in bash the backtick opens a substitution
+    assert_eq!(names(&code[1]), [] as [&str; 0]);
+}
+
 fn code_spans_and_blocks_carry_their_lines() {
     // a code span labelling a permalink to a commit (its scheme and host in
     // any case) cites the file as it was
@@ -484,7 +531,7 @@ fn code_spans_and_blocks_carry_their_lines() {
     // a path to check
     let markdown = "# T\n\nSee `docs/x.md`.\n\n```bash\ncargo test\ncargo run -p a\n```\n\n    indented\n\n\
                     [l](docs/y.md) ![i](/z.png) \
-                    [`docs/old.md`](HTTPS://GitHub.com/vanyastaff/flui/blob/e30ab71/docs/old.md) \
+                    [`docs/old.md`](HTTPS://GitHub.com/VANYASTAFF/FLUI/blob/e30ab71/docs/old.md) \
                     [`docs/now.md`](https://github.com/vanyastaff/flui/blob/mian/docs/now.md) \
                     [`docs/testng.md`](docs/testing.md)\n";
     let code = extract::code(markdown);
@@ -495,26 +542,31 @@ fn code_spans_and_blocks_carry_their_lines() {
                 line: 3,
                 text: "docs/x.md".to_owned(),
                 block: false,
+                dialect: shell::Dialect::Posix,
             },
             extract::Code {
                 line: 6,
                 text: "cargo test\ncargo run -p a\n".to_owned(),
                 block: true,
+                dialect: shell::Dialect::Posix,
             },
             extract::Code {
                 line: 10,
                 text: "indented\n".to_owned(),
                 block: true,
+                dialect: shell::Dialect::Posix,
             },
             extract::Code {
                 line: 12,
                 text: "docs/now.md".to_owned(),
                 block: false,
+                dialect: shell::Dialect::Posix,
             },
             extract::Code {
                 line: 12,
                 text: "docs/testng.md".to_owned(),
                 block: false,
+                dialect: shell::Dialect::Posix,
             },
         ]
     );
@@ -525,7 +577,7 @@ fn code_spans_and_blocks_carry_their_lines() {
             (12, "/z.png".to_owned()),
             (
                 12,
-                "HTTPS://GitHub.com/vanyastaff/flui/blob/e30ab71/docs/old.md".to_owned()
+                "HTTPS://GitHub.com/VANYASTAFF/FLUI/blob/e30ab71/docs/old.md".to_owned()
             ),
             (
                 12,
@@ -814,6 +866,10 @@ fn docs_paths_contract() {
             (
                 "headings_give_github_anchors",
                 headings_give_github_anchors as fn(),
+            ),
+            (
+                "a_powershell_fence_is_lexed_as_powershell",
+                a_powershell_fence_is_lexed_as_powershell as fn(),
             ),
             (
                 "code_spans_and_blocks_carry_their_lines",
