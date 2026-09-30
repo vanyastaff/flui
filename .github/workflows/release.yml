@@ -38,14 +38,16 @@ jobs:
       fail-fast: false
       matrix:
         # The Linux runners fix the archives' glibc floor (a binary needs the
-        # glibc it was linked against or newer): 22.04's 2.35 covers Debian 12
-        # and Ubuntu 22.04. Named, not `-latest`, so it moves deliberately;
-        # when GitHub retires 22.04 the build fails here, loudly.
+        # glibc it was linked against or newer): 24.04's 2.39, the same on
+        # both architectures. Named, not `-latest`, so the floor moves only
+        # by a commit here. Not 22.04: its images are deprecated since
+        # 2026-09-17 and unsupported from 2027-04-17 (actions/runner-images#14254),
+        # which would fail a tag's release build on a day nobody is watching.
         include:
           - target: x86_64-unknown-linux-gnu
-            os: ubuntu-22.04
+            os: ubuntu-24.04
           - target: aarch64-unknown-linux-gnu
-            os: ubuntu-22.04-arm
+            os: ubuntu-24.04-arm
           - target: x86_64-apple-darwin
             os: macos-15-intel
           - target: aarch64-apple-darwin

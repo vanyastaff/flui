@@ -688,8 +688,9 @@ Not changed, with the reason:
   `cross-typecheck`, `miri`, `doc`, `doc-test` and the macOS jobs (about 3.6 GB of entries) build
   cold; their cold times are what the follow-up's own CI run measures.
 - **Runner images.** Every job names its image (`ubuntu-26.04`) instead of `ubuntu-latest`,
-  which moves to 26.04 during 2026-10-19..11-19; the release archives build on `ubuntu-22.04`
-  (x86_64 and arm64), which fixes their glibc floor at 2.35.
+  which moves to 26.04 during 2026-10-19..11-19; the release archives build on `ubuntu-24.04`
+  (x86_64 and arm64), which fixes their glibc floor at 2.39 on both (22.04 images are deprecated
+  since 2026-09-17).
 - **Debuginfo.** `line-tables-only` stays ([build-footprint R5](build-footprint.md)): `debug = 0`,
   as Bevy, Slint and Xilem use in CI, would drop file:line from CI backtraces for about 2 GB.
 - **Dependency opt-level.** Dependencies build at `opt-level = 3` (`[profile.dev.package."*"]`).
