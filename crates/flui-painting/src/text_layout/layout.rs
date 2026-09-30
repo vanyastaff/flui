@@ -46,7 +46,7 @@ pub(super) struct FontState {
     /// guards; its own memo tables are unused — the engine's atlas is the
     /// cache.
     scaler: SwashCache,
-    /// Bumped by [`SharedFontSystem::register_font`], the one door through
+    /// Bumped by [`SharedFontSystem::add_face`], the one door through
     /// which the database changes after construction. Counting mutations
     /// rather than faces means an index keyed on it can never describe a
     /// database that no longer exists; shaping ([`SharedFontSystem::shape`])
@@ -146,7 +146,7 @@ static FONT_SYSTEM: OnceLock<Arc<Mutex<FontState>>> = OnceLock::new();
 /// Held in an `Arc` (per ADR-0016) so the render engine's glyph pipeline
 /// can shape against the *same* `FontSystem` this module measures with:
 /// a font registered through
-/// [`SharedFontSystem::register_font`]
+/// [`FontCollection::register_font`](super::FontCollection::register_font)
 /// becomes visible to both measurement and rendering, closing the historic
 /// two-`FontSystem` gap where a registered face could measure but not paint.
 fn font_system_arc() -> &'static Arc<Mutex<FontState>> {
@@ -237,6 +237,23 @@ fn font_system_arc() -> &'static Arc<Mutex<FontState>> {
 /// `flui_testing::fonts::pin_font_faces`.
 #[cfg(any(test, feature = "testing"))]
 pub fn init_font_system_with_faces(faces: &[&[u8]], default_family: &str, locale: &str) -> bool {
+    FONT_SYSTEM
+        .set(Arc::new(Mutex::new(pinned_font_state(
+            faces,
+            default_family,
+            locale,
+        ))))
+        .is_ok()
+}
+
+/// A font state built from `faces` alone, as [`init_font_system_with_faces`]
+/// describes, without claiming the process-wide slot.
+///
+/// # Panics
+///
+/// As [`init_font_system_with_faces`].
+#[cfg(any(test, feature = "testing"))]
+fn pinned_font_state(faces: &[&[u8]], default_family: &str, locale: &str) -> FontState {
     assert!(
         !faces.is_empty(),
         "init_font_system_with_faces: at least one face is required -- an empty \
@@ -275,9 +292,7 @@ pub fn init_font_system_with_faces(faces: &[&[u8]], default_family: &str, locale
         db,
         ChainFallback(Arc::clone(&chain)),
     );
-    FONT_SYSTEM
-        .set(Arc::new(Mutex::new(FontState::new(font_system, chain))))
-        .is_ok()
+    FontState::new(font_system, chain)
 }
 
 /// Whether the process-wide font system has been built. A test of a path that
@@ -291,8 +306,10 @@ pub fn font_system_initialized() -> bool {
 /// The process-wide font system, as a shared handle.
 ///
 /// The render engine's glyph pipeline shapes against the exact same faces
-/// this module measures with (ADR-0016): a font registered through
-/// [`SharedFontSystem::register_font`] is visible to both.
+/// this module measures with (ADR-0016): a font registered through the
+/// app's collection fed from it
+/// ([`FontCollection::register_font`](super::FontCollection::register_font))
+/// is visible to both.
 pub fn shared_font_system() -> SharedFontSystem {
     SharedFontSystem(Arc::clone(font_system_arc()))
 }
@@ -356,11 +373,25 @@ pub(super) fn metrics_from_shaped_buffer(
 /// ADR-0016) and mediates access through a scoped callback, so the lock type
 /// never appears in a public signature. `Clone` is an `Arc` bump —
 /// clone it to give another subsystem access to the *same* faces, so a font
-/// registered through
-/// [`SharedFontSystem::register_font`]
+/// registered through the collection fed from it
+/// ([`FontCollection::register_font`](super::FontCollection::register_font))
 /// is visible to both measurement and rendering.
 #[derive(Clone)]
 pub struct SharedFontSystem(Arc<Mutex<FontState>>);
+
+impl SharedFontSystem {
+    /// A font system of its own, built from `faces` alone as
+    /// [`init_font_system_with_faces`] builds the process one, for a test
+    /// that must not touch the process-wide font system.
+    #[cfg(all(test, feature = "parley"))]
+    pub(crate) fn pinned(faces: &[&[u8]], default_family: &str) -> Self {
+        Self(Arc::new(Mutex::new(pinned_font_state(
+            faces,
+            default_family,
+            "en-US",
+        ))))
+    }
+}
 
 impl SharedFontSystem {
     /// Shapes under the font lock.
@@ -419,21 +450,38 @@ impl SharedFontSystem {
         self.0.lock().db_generation
     }
 
+    /// Loads every face in `font_bytes` into this font system alone, for a
+    /// test of the paint side.
+    ///
+    /// Test door only: an app registers through its
+    /// [`FontCollection`](super::FontCollection), which loads the face here
+    /// and into the collection its text is measured on, and tells every realm
+    /// to lay its text out again. A face loaded here reaches paint alone.
+    ///
+    /// # Errors
+    ///
+    /// [`RegisterFontError`] when `font_bytes` parses to zero loadable faces.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn register_font(&self, font_bytes: &[u8]) -> Result<(), RegisterFontError> {
+        self.add_face(font_bytes)
+    }
+
     /// Loads every face in `font_bytes` into the shared font database.
     ///
-    /// The only public mutation of the database, and append-only: a face is
-    /// never removed, so a font id recorded anywhere stays valid for the life
-    /// of the process. The face is visible to measurement and to the engine's
-    /// glyph pipeline from the next shape onward, and [`Self::generation`]
-    /// advances so shaped-text caches refill — text already laid out is not
-    /// re-laid-out by this call.
+    /// The one mutation of the database, and append-only: a face is never
+    /// removed, so a font id recorded anywhere stays valid for the life of
+    /// the process. The face is visible to the engine's glyph pipeline and to
+    /// the cosmic-text layout from the next shape onward, and
+    /// [`Self::generation`] advances so shaped-text caches refill. Reached
+    /// through [`FontCollection::register_font`](super::FontCollection::register_font),
+    /// which also tells the pipelines what to lay out again.
     ///
     /// # Errors
     ///
     /// [`RegisterFontError`] when `font_bytes` parses to zero loadable faces
     /// (empty, truncated, or not a font at all).
     #[tracing::instrument(skip(self, font_bytes), fields(bytes = font_bytes.len()))]
-    pub fn register_font(&self, font_bytes: &[u8]) -> Result<(), RegisterFontError> {
+    pub(crate) fn add_face(&self, font_bytes: &[u8]) -> Result<(), RegisterFontError> {
         let mut state = self.0.lock();
         let faces_before = state.system.db().len();
         state.system.db_mut().load_font_data(font_bytes.to_vec());

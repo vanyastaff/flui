@@ -15,10 +15,9 @@ use crate::styling::Color;
 ///
 /// Two glyphs with equal keys rasterise to identical bitmaps, so an atlas
 /// keyed on this shares them. A key stays valid for the life of the process:
-/// the font database is append-only ([`SharedFontSystem::register_font`]),
-/// so the face it names is never removed.
-///
-/// [`SharedFontSystem::register_font`]: super::SharedFontSystem::register_font
+/// the font database is append-only
+/// ([`FontCollection::register_font`](super::FontCollection::register_font)
+/// adds and nothing removes), so the face it names is never removed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct GlyphKey(pub(super) cosmic_text::CacheKey);
 
