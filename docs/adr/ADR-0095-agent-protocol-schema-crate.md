@@ -143,8 +143,9 @@ This settles ADR-0080's open item:
 - *Credentials.* The launching tool passes the endpoint and the token in the environment
   (`FLUI_AGENT_ENDPOINT`, `FLUI_AGENT_TOKEN`); the token is at least 32 bytes and compared in
   constant time. It defends against other users and remote callers, not the same user's other
-  processes, which can read the environment. The Windows pipe admits its owner only and refuses
-  remote clients; a Unix socket must sit in a `0700` directory the current user owns.
+  processes, which can read the environment. The Windows pipe admits the current user only (the
+  process token's user SID, not the object owner, which is the Administrators group for an
+  elevated process) and refuses remote clients; a Unix socket must sit in a `0700` directory the current user owns.
 - *Timeouts.* The server waits a bounded time for the owner's answer and never makes the owner
   wait on it. A read that times out answers `timeout` (retry `soon`); an action that times out
   answers `timeout` with the `may_have_run` effect, because it stays queued and runs at the next

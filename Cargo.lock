@@ -2010,6 +2010,7 @@ dependencies = [
  "tracing-subscriber",
  "web-time",
  "widestring",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

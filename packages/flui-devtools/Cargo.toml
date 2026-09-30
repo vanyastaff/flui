@@ -47,9 +47,16 @@ tracing-subscriber = { workspace = true, optional = true }
 flui-protocol = { workspace = true, features = ["serde"], optional = true }
 interprocess = { workspace = true, optional = true }
 
-# `agent` on Windows: the pipe's owner-only security descriptor, as SDDL.
+# `agent` on Windows: the pipe's user-only security descriptor, as SDDL, over
+# the user SID read from the process token.
 [target.'cfg(windows)'.dependencies]
 widestring = { workspace = true, optional = true }
+windows-sys = { workspace = true, optional = true, features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_System_Threading",
+] }
 
 [features]
 # Everything on: a crate that exists only to provide these three modules
@@ -88,6 +95,7 @@ agent = [
     "dep:tracing",
     "dep:interprocess",
     "dep:widestring",
+    "dep:windows-sys",
 ]
 
 # The complete inventory, kept as an explicit name for `cargo hack` runs.

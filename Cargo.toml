@@ -225,9 +225,12 @@ crossbeam-channel = "0.5"
 # synchronous: `flui-devtools`' agent endpoint (ADR-0095 §3). No default
 # features, so no tokio integration.
 interprocess = { version = "2.4", default-features = false }
-# The SDDL string of the agent endpoint's owner-only pipe security descriptor
+# The SDDL string of the agent endpoint's user-only pipe security descriptor
 # (Windows); `interprocess` already builds it.
 widestring = "1"
+# The process token's user SID for that descriptor (Windows); the version
+# `interprocess` already builds, so no second copy.
+windows-sys = { version = "0.61", default-features = false }
 
 # TIME - std::time re-export on native; performance.now()-backed Instant on
 # wasm32 (std Instant::now() panics there). Single source so every crate's

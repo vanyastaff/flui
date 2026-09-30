@@ -154,8 +154,9 @@ a read and the `may_have_run` effect for an action, which is still queued and
 runs at the next frame. Read the tree for an action's effect rather than
 acting again.
 
-**Security model.** The endpoint is local only: a named pipe that admits its
-owner alone and refuses remote clients, or a Unix socket in a directory the
+**Security model.** The endpoint is local only: a named pipe that admits the
+current user alone (by the process token's user SID, so an elevated app still
+admits the same user's unelevated client) and refuses remote clients, or a Unix socket in a directory the
 current user owns with mode `0700` (the server refuses any other). A client
 must present the launch token first, compared in constant time; a wrong or
 missing token closes the connection without a reply. The token keeps out
