@@ -24,6 +24,9 @@ const WRITE_TIMEOUT: Duration = Duration::from_secs(5);
 /// would never go through; small writes go through as the client reads.
 const WRITE_CHUNK: usize = 512;
 
+/// How long a connection being closed may stay quiet before it is closed.
+const LINGER_IDLE: Duration = Duration::from_millis(250);
+
 /// The longest single wait on an answer before the stop flag is looked at.
 const WAIT_SLICE: Duration = Duration::from_millis(50);
 
@@ -148,14 +151,17 @@ impl Connection {
         }
     }
 
-    /// Before closing on a client still writing: discard what it sends for a
-    /// while, so the reply already written is not lost with the unread input
-    /// when the connection closes.
+    /// Before closing on a client still writing: discard what it sends until
+    /// it stops (or a bound passes), so the reply already written is not lost
+    /// with the unread input when the connection closes.
     fn linger(&mut self, shared: &Shared) {
         let deadline = Instant::now() + WRITE_TIMEOUT;
         let mut chunk = [0_u8; 8192];
         let mut progress = Instant::now();
-        while Instant::now() < deadline && !shared.stop.load(Ordering::SeqCst) {
+        while Instant::now() < deadline
+            && progress.elapsed() < LINGER_IDLE
+            && !shared.stop.load(Ordering::SeqCst)
+        {
             match read_some(&self.stream, &mut chunk) {
                 Ok(0) => return,
                 Ok(_) => progress = Instant::now(),
