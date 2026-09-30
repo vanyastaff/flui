@@ -78,7 +78,6 @@ pub(crate) fn a_truncated_paragraph_paints_exactly_the_lines_it_measured() {
         1,
         "the recorded paragraph has exactly the measured line"
     );
-    assert!(layout.truncated());
     assert!(
         layout.text().ends_with('…'),
         "the ellipsis is in the recorded text, got {:?}",

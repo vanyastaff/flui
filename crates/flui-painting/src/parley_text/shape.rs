@@ -240,7 +240,6 @@ impl ParagraphLayout {
             text: self.text.as_str().into(),
             size: Size::new(metrics.width, metrics.height),
             baselines: baselines.into(),
-            truncated: metrics.truncated,
             ink: ink.finish(),
             faces: faces.into(),
             runs: runs.into(),

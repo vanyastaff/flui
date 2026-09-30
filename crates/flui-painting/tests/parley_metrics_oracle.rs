@@ -187,7 +187,6 @@ fn assert_paints_lines(text: &str, lines: usize) {
         "{text:?} paints {} lines, not {lines}",
         painted.line_count()
     );
-    assert_eq!(painted.baselines().len(), lines, "one baseline per line");
     #[expect(clippy::cast_precision_loss, reason = "a handful of lines")]
     let expected = one.height() * lines as f64;
     assert!(

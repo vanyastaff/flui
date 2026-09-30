@@ -124,7 +124,6 @@ pub struct ShapedParagraph {
     pub(crate) text: Box<str>,
     pub(crate) size: Size<f64>,
     pub(crate) baselines: Box<[f32]>,
-    pub(crate) truncated: bool,
     pub(crate) ink: Option<Rect<f64>>,
     pub(crate) faces: Box<[FontFace]>,
     pub(crate) runs: Box<[RunData]>,
@@ -150,18 +149,6 @@ impl ShapedParagraph {
     #[must_use]
     pub fn line_count(&self) -> usize {
         self.baselines.len().max(1)
-    }
-
-    /// Each kept line's baseline, in logical pixels from the top.
-    #[must_use]
-    pub fn baselines(&self) -> &[f32] {
-        &self.baselines
-    }
-
-    /// Whether lines past `max_lines` were dropped.
-    #[must_use]
-    pub fn truncated(&self) -> bool {
-        self.truncated
     }
 
     /// A box covering every pixel the glyphs can ink, relative to the
@@ -228,36 +215,12 @@ impl<'a> ShapedRun<'a> {
         &self.face().blob
     }
 
-    /// The font size, in logical pixels.
-    #[must_use]
-    pub fn font_size(&self) -> f32 {
-        self.data.font_size
-    }
-
     /// The normalized variation coordinates, synthesis variations included;
     /// empty for the default instance.
     #[must_use]
     pub fn coords(&self) -> &'a [i16] {
         let range = self.data.coords.start as usize..self.data.coords.end as usize;
         &self.paragraph.coords[range]
-    }
-
-    /// Synthetic bold and oblique the rasterizer applies.
-    #[must_use]
-    pub fn synthesis(&self) -> Synthesis {
-        self.data.synthesis
-    }
-
-    /// The span colour, when it differs from the paragraph's root colour.
-    #[must_use]
-    pub fn color(&self) -> Option<Color> {
-        self.data.color
-    }
-
-    /// The run's line baseline, in logical pixels from the paragraph's top.
-    #[must_use]
-    pub fn baseline(&self) -> f32 {
-        self.data.baseline
     }
 
     /// The run's glyphs, in visual order.
