@@ -55,6 +55,71 @@ fn command_error(command: &str, error: impl std::fmt::Display) -> BuildError {
     }
 }
 
+/// What `cargo metadata` says about the project at `dir`.
+pub(crate) struct CargoProject {
+    /// The directory cargo builds the project into: whichever of
+    /// `CARGO_TARGET_DIR`, `build.target-dir` and the enclosing workspace's
+    /// `target/` cargo itself would use.
+    pub(crate) target_dir: PathBuf,
+    /// The package whose manifest is in `dir`, not a package of an
+    /// enclosing workspace; `None` for a virtual workspace.
+    pub(crate) package: Option<String>,
+}
+
+/// Ask `cargo metadata` (without dependencies) about the project at `dir`.
+///
+/// # Errors
+///
+/// Returns the failure of `cargo metadata`, such as a missing or invalid
+/// manifest.
+pub(crate) fn cargo_project(dir: &Path) -> BuildResult<CargoProject> {
+    let metadata = cargo_metadata::MetadataCommand::new()
+        .current_dir(dir)
+        .no_deps()
+        .exec()
+        .map_err(|error| command_error("cargo metadata", error))?;
+    let here = std::fs::canonicalize(dir).ok();
+    let package = metadata
+        .packages
+        .iter()
+        .find(|package| {
+            here.is_some()
+                && package
+                    .manifest_path
+                    .parent()
+                    .and_then(|dir| std::fs::canonicalize(dir).ok())
+                    == here
+        })
+        .map(|package| package.name.to_string());
+    Ok(CargoProject {
+        target_dir: metadata.target_directory.into_std_path_buf(),
+        package,
+    })
+}
+
+/// The directory cargo builds the project at `dir` into: the
+/// [`CargoProject::target_dir`] of [`cargo_project`].
+///
+/// # Errors
+///
+/// Returns the failure of `cargo metadata`, such as a missing or invalid
+/// manifest.
+pub(crate) fn target_directory(dir: &Path) -> BuildResult<PathBuf> {
+    cargo_project(dir).map(|project| project.target_dir)
+}
+
+/// The directory inside a target-dir that cargo names after `profile`: `dev`
+/// and `test` build into `debug`, `bench` into `release`, and any other
+/// profile, `release` included, into its own name.
+#[must_use]
+pub(crate) fn profile_dir(profile: &str) -> &str {
+    match profile {
+        "dev" | "test" => "debug",
+        "bench" => "release",
+        other => other,
+    }
+}
+
 async fn cargo_output(dir: &Path, args: &[&str]) -> BuildResult<Vec<u8>> {
     let output = Command::new("cargo")
         .args(args)

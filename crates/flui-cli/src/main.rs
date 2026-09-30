@@ -341,7 +341,8 @@ enum Commands {
         #[arg(long)]
         deep: bool,
 
-        /// Clean specific platform only
+        /// Clean one platform only: android, ios, web or desktop (every
+        /// desktop target shares one output directory)
         #[arg(long)]
         platform: Option<String>,
     },

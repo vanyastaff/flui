@@ -168,8 +168,7 @@ pub(crate) mod event_cx {
     use crate::common::{LaidOut, ProbeSignals, SignalProbe, lay_out, tight};
 
     use flui_painting::styling::Color;
-    use flui_rendering::pipeline::PipelineCell;
-    use flui_testing::{A11yTree, Action, ActionRequest, TreeId, invoke_semantics_action};
+    use flui_testing::{A11yTree, Action, ActionRequest, TreeId};
     use flui_view::prelude::*;
     use flui_widgets::{ColoredBox, GestureDetector, Semantics, Text};
 
@@ -210,22 +209,19 @@ pub(crate) mod event_cx {
             .child(detector.child(Text::new("Tap")))
     }
 
-    fn invoke_labelled_action(pipeline_owner: &PipelineCell, tree: &A11yTree, action: Action) {
+    fn invoke_labelled_action(app: &LaidOut, tree: &A11yTree, action: Action) {
         let id = tree
             .find_by_label("Tap")
             .unwrap_or_else(|error| {
                 panic!("one node labelled \"Tap\": {error}\n{}", tree.describe())
             })
             .id();
-        invoke_semantics_action(
-            pipeline_owner,
-            ActionRequest {
-                action,
-                target_tree: TreeId::ROOT,
-                target_node: id,
-                data: None,
-            },
-        )
+        app.invoke_semantics_action(ActionRequest {
+            action,
+            target_tree: TreeId::ROOT,
+            target_node: id,
+            data: None,
+        })
         .expect("a click on a node advertising one resolves");
     }
 
@@ -245,9 +241,8 @@ pub(crate) mod event_cx {
         app.enable_semantics();
         app.pump();
         let tree = app.a11y_tree().expect("semantics enabled before the frame");
-        let owner = app.pipeline_owner();
-        invoke_labelled_action(&owner, &tree, Action::Click);
-        invoke_labelled_action(&owner, &tree, Action::ShowContextMenu);
+        invoke_labelled_action(&app, &tree, Action::Click);
+        invoke_labelled_action(&app, &tree, Action::ShowContextMenu);
 
         let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| app.tick()));
         assert!(

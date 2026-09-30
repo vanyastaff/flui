@@ -1,7 +1,2 @@
-# Flutter-related
-**/Flutter/ephemeral/
-**/Pods/
-
-# Xcode-related
-**/dgph
-**/xcuserdata/
+# `flui build` writes desktop builds under `target/`, so nothing in this
+# directory is generated; add what your own platform code produces.

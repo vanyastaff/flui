@@ -49,11 +49,15 @@ and delivery reads the current callback (mapping decision 37).
 Tests: `tests/draggable_events.rs`, `tests/page_view_events.rs`, and the
 `event_cx_tests` module of `tests/shortcuts.rs`.
 
-This does not migrate the drag-target hit-test payload callbacks, the raw
-semantics action handlers, or the unmounted `LocalHistoryEntry::on_remove`
-navigation primitive. The first two travel in `Send + Sync` render-object
-metadata and change with it (ADR-0091 §1); the last needs an explicit
-navigation write-context contract rather than an invented ambient writer.
+`DragTarget`'s `on_accept`/`on_leave`/`on_move` and `Semantics`' action
+handlers take `EventCx` too. Their render data must stay `Send + Sync`, so each
+widget registers its owner-local state (the drag target's slot, the node's
+action table, each with its `WriterSource`) in the interaction lane and stores
+only the lane's `LocalPayloadTarget` ticket; the drag session and the semantics
+action handler resolve it inside the realm (ADR-0086 §3, amended 2026-09-30;
+mapping decisions 1 and 17). The unmounted `LocalHistoryEntry::on_remove`
+navigation primitive is not migrated: it needs an explicit navigation
+write-context contract rather than an invented ambient writer.
 
 The user-facing widget catalog: configuration objects over the `flui-objects`
 render catalog, plus the stateful widgets that own gesture, focus, routing and
@@ -117,38 +121,40 @@ find one with `rg <name> tests/`.
 
 ### 1. `DragTarget` publishes a shared `DragTargetSlot`, not its `State`
 
-**Choice:** the hit-test payload is an `Arc<DragTargetSlot>` — a non-generic object that
-owns the entered list (keyed by `PointerId`), holds the current build's
-callbacks type-erased behind a private `TargetCallbacks` trait, and carries the
-target element's `RebuildHandle` so a transition can schedule a rebuild.
-`DragTargetState<T>` keeps only the slot and reads
-its candidate/rejected lists back out of it; `build` refreshes the callbacks
-into the slot so a rebuilt view's closures are the ones a later transition
-invokes.
+**Choice:** the target keeps an owner-local `Rc<DragTargetSlot>` — a
+non-generic object that owns the entered list (keyed by `PointerId`), holds the
+current build's callbacks type-erased behind a private `TargetCallbacks` trait,
+and carries the target element's `RebuildHandle` and `WriterSource` so a
+transition can schedule a rebuild and open its callbacks' `EventCx`. The slot
+is registered in the owner's interaction lane, and the hit-test payload is only
+the lane's `LocalPayloadTarget` ticket, which the drag session resolves back to
+the slot inside pointer dispatch. `DragTargetState<T>` keeps only the slot and
+reads its candidate/rejected lists back out of it; `build` refreshes the
+callbacks into the slot so a rebuilt view's closures are the ones a later
+transition invokes.
 
 **Why the payload is not the state.** Two independent reasons, both
 structural:
 
 - A hit-test payload is `Arc<dyn Any + Send + Sync>` (`HitTestEntry::metadata`).
-  A `DragTargetState` holding `Rc<dyn Fn …>` callbacks could not be one.
+  Neither a `DragTargetState` nor a slot holding `Rc<dyn Fn …>` callbacks can
+  be one, so the payload is a ticket and the slot stays in the lane.
 - FLUI's callbacks live on the *view*, which the state does not own. A payload
   reaching only the state could not invoke them at all.
 
 **Consequences:**
 
-- **`DragTarget`'s four transition callbacks change from `Rc<dyn Fn …>` to
-  `Arc<dyn Fn … + Send + Sync>`** — a breaking public-API change, forced by
-  the `Send + Sync` hit-test payload above; it puts the target's cross-thread
-  contract in the type system. `Draggable`'s
-  callbacks, which never cross the payload, are owner-local and take
-  `EventCx`; `DragTarget` keeps `Send + Sync` until the metadata becomes
-  owner-local (ADR-0086 Status). The *builder* stays `Rc`: it produces a
-  `BoxedView`, which is owner-local by construction, and it is only ever called
-  from `build`.
+- **`on_accept`, `on_leave` and `on_move` take `&mut EventCx<'_>`** and run
+  synchronously inside the drag's dispatch, so a drop lands before the
+  draggable's `on_drag_end`
+  (`a_drop_writes_through_the_targets_on_accept_before_the_draggable_completes`).
+  `on_will_accept` is a query and takes none. None of the four needs
+  `Send + Sync`. The *builder* stays `Rc`: it produces a `BoxedView`, which is
+  owner-local by construction, and it is only ever called from `build`.
 - The veto (`on_will_accept`) stays **synchronous**, which a deferred
   drain-on-next-build queue would have lost — a drag has to know at move time
   which targets are candidates.
-- The slot outlives its element by `Arc`. A target that leaves the tree
+- The slot outlives its element by `Rc`. A target that leaves the tree
   mid-drag is `retire`d in `dispose`, and every later transition is a no-op —
   a "not mounted" early return in a form that cannot be forgotten at one
   call site. `did_drop` on a retired slot returns `false`, so the drag reports
@@ -1134,88 +1140,69 @@ completion — there is no separate "the push was canceled" state at this
 layer, only whichever lifecycle state the entry has moved to by the time the
 queued command is drained.
 
-### 17. `Semantics` action builders take `Send + Sync` handlers, so the caller hoists the `Arc` instead of capturing a `State` field
+### 17. `Semantics` action handlers are owner-local `EventCx` callbacks behind one `Send + Sync` ticket handler per node
 
-**Rule:** this file's own scope note puts a callback bound here rather
-than in an ADR: it is local to this crate.
+**Rule:** the lane mechanism is ADR-0086 §3 (amended 2026-09-30); how this
+widget uses it is local to this crate, so it is recorded here rather than in an
+ADR.
 
 **Choice:** eleven payload-free builders — `on_tap`, `on_long_press`,
 `on_scroll_{left,right,up,down}`, `on_increase`, `on_decrease`,
 `on_show_on_screen`, `on_focus`, `on_blur` — take
-`impl Fn() + Send + Sync + 'static`; `on_set_text` takes `impl Fn(&str) + …`
-and `on_scroll_to_offset` takes `impl Fn(f64, f64) + …`. `on_action` registers
-any `SemanticsAction` verbatim for the two things the typed set deliberately
-does not cover. All of them go through one private `add_action_handler`.
+`Fn(&mut EventCx<'_>) -> R`; `on_set_text` takes `Fn(&mut EventCx<'_>, &str)`,
+`on_scroll_to_offset` takes `Fn(&mut EventCx<'_>, f64, f64)`, and `on_action`
+takes any `SemanticsAction` with `Fn(&mut EventCx<'_>, Option<ActionArgs>)`
+for what the typed set does not cover. None needs `Send + Sync`: the closures
+never reach the configuration.
 
-**Why the bound.** The bound is already at the
-storage, so it has to be met somewhere, and this is where it is met:
-
-- `SemanticsActionHandler` is
-  `Arc<dyn Fn(SemanticsAction, Option<ActionArgs>) + Send + Sync>`
-  (`crates/flui-semantics/src/action.rs`). **The bounds come from storage, not
-  from a calling convention:** the handler is stored in a
-  `SemanticsConfiguration`, which rides in the annotation render object, whose
-  `RenderView::RenderObject` associated type is pinned `Send + Sync + 'static`.
-  The handler is *not* invoked across a thread — resolution is owner-local and
-  commits only at the pipeline's `Idle` point
-  (`PipelineOwner::resolve_semantics_action`, whose module doc says exactly
-  this), which is why the invocation it returns holds a cloned handler rather
-  than a borrow. The genuinely cross-thread seam in this story is one layer out,
-  in the platform's action *listener*. An earlier draft of this entry gave the
-  thread-crossing reason; it sounded right and was wrong.
-- `RenderView::RenderObject` is bounded
-  `RenderObject<_> + Send + Sync + 'static`
-  (`crates/flui-view/src/view/render.rs`), so the annotation render object the
-  widget wraps cannot hold a `!Send` closure either.
-- The catalog's **dominant** callback convention is `Rc<dyn Fn(..)>`, owner-thread-local: the
-  callback type aliases in `flui-widgets/src` and `flui-material/src` are `Rc<dyn Fn…>`, spelled
-  out or through `support::EventCallback`/`ValueCallback`
-  (`git grep -nE "type \w+(<[^=]*>)? = (Rc<dyn Fn|EventCallback|ValueCallback)" --
-  crates/flui-widgets/src packages/flui-material/src` lists them). This bound is stricter than
-  that convention, and a caller meets it on the first handler they write.
-- It is **not unprecedented**. The one other public family that takes `impl Fn(..) + Send + Sync
-  + 'static` is `interaction/drag_target.rs` (4 builders), for the same reason: its callbacks
-  ride `Send + Sync` render-object metadata. `Draggable` and `PageView::on_page_changed` used
-  to, and moved to owner-local `EventCx` callbacks once nothing `Send` stored them. Each
-  `DragTarget` builder stores the callback as `Arc::new(<the caller's closure>)`; none shows the
-  hoist pattern a caller needs when the closure must be shared with something else, so
-  `on_action`'s own docs carry that example instead of pointing at them.
+**Why the handlers stay owner-local, and how the storage bound is met.**
+`SemanticsActionHandler` is
+`Arc<dyn Fn(SemanticsAction, Option<ActionArgs>) + Send + Sync>`
+(`crates/flui-semantics/src/action.rs`), stored in a `SemanticsConfiguration`
+that rides in the annotation render object, which `RenderView::RenderObject`
+pins `Send + Sync + 'static`. The handler is *not* invoked across a thread —
+resolution is owner-local (`PipelineOwner::resolve_semantics_action`) and the
+realm drains it at a frame boundary, inside its entry. So the widget keeps its
+closures and its `WriterSource` in the interaction lane as one table per node,
+stores only the lane's ticket on the render object (`SemanticsActionRoute`),
+and advertises every action through one `Send + Sync` handler that holds the
+ticket and resolves it when invoked. This is the shape the surveyed frameworks
+point at — none puts `Send` on the handler; Bevy, Iced, Slint and Dioxus/Blitz
+put it on something the widget owns — reached through ADR-0086's lane payload.
 
 **Consequences, named rather than left to be discovered:**
 
-- **The ordinary "activation toggles this control's own state" closure does not
-  compile.** A widget's state is `Rc<RefCell<_>>`, which is neither `Send` nor
-  `Sync`. `Arc<Mutex<_>>`, or a shared store, is the way through — the same
-  trade `CustomPainter` already makes, which is `Send + Sync` and
-  widget-facing. `on_action`'s own docs show the hoist.
+- **The ordinary "activation toggles this control's own state" closure is a
+  signal write.** `on_increase(move |cx| value.update(cx, |v| *v += 1))`
+  (`an_action_handler_writes_a_signal_and_rebuilds_its_reader`); a refused
+  write is reported, not panicked
+  (`a_refused_write_in_an_action_handler_is_reported_not_panicked`).
+- **An action invoked outside its realm is dropped with a warning.** A caller
+  that holds a `SemanticsActionInvocation` and invokes it with no realm entered
+  has no owner to run the closure in
+  (`an_action_invoked_outside_its_realm_is_dropped_with_a_warning`). A node
+  mounted in a detached render-object context advertises none of these
+  actions, so no platform sees a control nothing can run
+  (`a_detached_mount_advertises_no_actions`). Unmount releases the node's
+  table from the lane, closures and their captures with it
+  (`unmounting_a_node_releases_its_action_table`; a `DragTarget`'s slot the
+  same way, `unmounting_a_target_releases_its_slot`).
 - **This publishes actions; it does not make any shipped control
-  activatable.** No Material or Cupertino widget gains a semantics action here,
-  so nothing in the catalog can be activated through the semantics tree yet.
-  `Button`, `Checkbox` and `ListTile` publish no tap semantics of their own, so
-  the wiring belongs at `InkResponse`'s layer when it lands. Bridging a widget's *existing* gesture
-  callback into an action is a separate change, and what blocks it is storage and
-  threading — not this surface.
-- **The likelier long-term shape is the opposite one, and it is rejected here
-  only for want of a design.** No surveyed framework puts the bound on the
-  handler: GPUI's listener carries none at all, and Bevy, Iced, Slint, and
-  Dioxus/Blitz each put `Send` on a sender the widget owns rather than on the
-  callback. What FLUI would need to reach that shape is the `!Send` closure
-  carried beside an owner-local handle — a handle type and its own design
-  record, so it is not this widget's change; until then the bound is the
-  documented contract rather than an accident a later reader has to guess at.
+  activatable by itself.** No Material or Cupertino widget gains a semantics
+  action here; `Button`, `Checkbox` and `ListTile` publish no tap semantics of
+  their own, so that wiring belongs at `InkResponse`'s layer when it lands.
+  `GestureDetector` advertises its own `on_tap`/`on_long_press` and delivers
+  them one frame late through its local post-frame bridge, while a raw
+  `Semantics` handler runs synchronously in the drain.
 
-**A handler allocated on every build costs a `SEMANTICS` impact on every
-rebuild — the price of comparing handlers by identity.** The configuration
-stores the handler it is handed and compares two configurations' handlers with
-`Arc::ptr_eq`
-(`crates/flui-semantics/src/configuration.rs`), so a handler built on the spot
-inside `build` is a fresh `Arc` each time, the mounted configuration compares
-unequal, and `RenderSemanticsAnnotations::set_configuration` answers
-`RenderUpdateImpact::SEMANTICS` even when nothing semantic changed — every typed
-builder allocates one through `add_action_handler` (`src/semantics/mod.rs`). The
-escape is the hoist `on_action`'s own rustdoc demonstrates: build the handler
-once where the widget's state lives and let each build take an `Arc::clone`.
-**Unasserted:** no test pins this.
+**A rebuild with a fresh closure costs no semantics update.** The
+configuration compares handlers with `Arc::ptr_eq`
+(`crates/flui-semantics/src/configuration.rs`). The per-node ticket handler is
+minted once, at mount, and reused by every update, which replaces only the
+lane's table under the same ticket; so a closure literal in `build` leaves the
+mounted configuration equal and `set_configuration` answers `NONE`, and the
+action runs the rebuilt closure
+(`rebuilding_with_fresh_handlers_keeps_the_configuration_and_runs_the_new_one`).
 
 **Builder inventory, and what has no builder.** FLUI's action vocabulary
 (`crates/flui-semantics/src/action.rs`) has 24 `SemanticsAction` variants, of

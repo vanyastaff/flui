@@ -28,8 +28,8 @@
 //!    `LifecycleContext::hit_test_handle()` (acquired in `init_state` /
 //!    `did_change_dependencies`, never from a frame phase) runs a fresh test
 //!    against the live render tree, and [`DragTarget`](crate::DragTarget)
-//!    publishes an `Arc<DragTargetSlot>` as its hit-test payload for the walk
-//!    to find. Pointer dispatch still resolves its own route once at
+//!    publishes its interaction-lane ticket as hit-test metadata for the walk
+//!    to find and resolve back to its owner-local `DragTargetSlot`. Pointer dispatch still resolves its own route once at
 //!    `PointerDown` and replays it; the fresh probe is deliberately
 //!    independent of that route, which is the whole point.
 //!
@@ -121,9 +121,10 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use flui_foundation::geometry::Axis;
 use flui_foundation::geometry::{Matrix4, Offset};
 use flui_interaction::{
-    DragUpdateDetails, GestureRecognizer, HitTestEntry, HitTestHandle, MultiDragAxis,
-    MultiDragEndDetails, MultiDragGestureRecognizer, MultiDragHandle, MultiDragStartCallback,
-    MultiDragUpdateDetails, PointerEventExt as _, PointerId, Velocity,
+    DragUpdateDetails, GestureRecognizer, HitTestEntry, HitTestHandle, InteractionDispatchError,
+    LocalPayloadTarget, MultiDragAxis, MultiDragEndDetails, MultiDragGestureRecognizer,
+    MultiDragHandle, MultiDragStartCallback, MultiDragUpdateDetails, PointerEventExt as _,
+    PointerId, Velocity, resolve_local_payload,
 };
 use flui_view::element::ElementKind;
 use flui_view::prelude::*;
@@ -452,9 +453,10 @@ impl<T: Clone + Send + Sync + 'static> std::fmt::Debug for DraggableState<T> {
 ///
 /// `Draggable::data` is carried **erased** (`ErasedDragData`): a session hands
 /// it to targets that cannot name `T`, and `Arc<dyn Any + Send + Sync>` is
-/// what a hit-test-discovered target's callbacks downcast from — the payload
-/// still crosses hit-test metadata, which stays `Send + Sync` until that
-/// metadata becomes owner-local. What a live drag reads is its own
+/// what a hit-test-discovered target's callbacks downcast from. The payload
+/// no longer crosses hit-test metadata (a target publishes only its lane
+/// ticket there); its `Send + Sync` bound goes with the `T: Send + Sync`
+/// bound on `Draggable` and `DragTarget`, a separate change. What a live drag reads is its own
 /// [`DragStart`] snapshot, not this. `feedback`/`feedback_offset` live in the
 /// separate [`FeedbackConfig`] cell.
 struct DragConfig {
@@ -773,7 +775,7 @@ impl ViewState<DragOrigin> for DragOriginState {
 /// which only the hit entry's transform can give.
 #[derive(Clone)]
 struct EnteredTarget {
-    slot: Arc<DragTargetSlot>,
+    slot: Rc<DragTargetSlot>,
     at: DragPosition,
 }
 
@@ -797,24 +799,54 @@ fn localize(global: Offset<f64>, transform: Option<&Matrix4>) -> Offset<f64> {
 /// metadata-tagged targets and keeps those whose `T` matches the drag's
 /// payload. Order is the path's own, which is what
 /// makes the innermost of a set of nested targets win.
+///
+/// A target tags its node with a lane ticket, resolved here to its
+/// owner-local slot; this runs inside pointer dispatch, where the realm's
+/// lane is active. A ticket that no longer resolves because its target
+/// unmounted since the hit test is skipped, as a foreign payload is. Any
+/// other lane error means the question could not be asked at all (no realm
+/// entered, or another realm's), so the answer is `None`, not an empty list:
+/// see [`DragSession::discover`].
 fn drag_targets_on(
     path: &[HitTestEntry],
     data: &ErasedDragData,
     global: Offset<f64>,
-) -> Vec<EnteredTarget> {
-    path.iter()
-        .filter_map(|entry| {
-            let payload = Arc::clone(entry.metadata.as_ref()?);
-            let slot = payload.downcast::<DragTargetSlot>().ok()?; // the hit-test payload channel is `dyn Any` by construction (`HitTestEntry::metadata`); this is the check that the tagged metadata is a target slot.
-            slot.accepts_data_type(data).then(|| EnteredTarget {
+) -> Option<Vec<EnteredTarget>> {
+    let mut targets = Vec::new();
+    for entry in path {
+        let Some(target) = entry.metadata_as::<LocalPayloadTarget>().copied() else {
+            continue;
+        };
+        let payload = match resolve_local_payload(target) {
+            Ok(payload) => payload,
+            Err(InteractionDispatchError::TargetGone) => {
+                tracing::debug!("drag-target ticket outlived its target; skipped");
+                continue;
+            }
+            Err(error) => {
+                tracing::debug!(
+                    ?error,
+                    "drag-target discovery skipped: the lane could not answer"
+                );
+                return None;
+            }
+        };
+        // A lane payload is `dyn Any` by construction; this is the check
+        // that the tagged node is a drag target's slot.
+        let Ok(slot) = payload.downcast::<DragTargetSlot>() else {
+            continue;
+        };
+        if slot.accepts_data_type(data) {
+            targets.push(EnteredTarget {
                 at: DragPosition {
                     global,
                     local: localize(global, entry.transform.as_ref()),
                 },
                 slot,
-            })
-        })
-        .collect()
+            });
+        }
+    }
+    Some(targets)
 }
 
 /// What a drag reads from its `Draggable` exactly once, when it starts.
@@ -960,7 +992,7 @@ impl DragSession {
         let probe_at = global + self.start.feedback_offset;
         match handle.hit_test_at(probe_at) {
             Ok(snapshot) => {
-                let targets = drag_targets_on(snapshot.path(), &data, global);
+                let targets = drag_targets_on(snapshot.path(), &data, global)?;
                 Some((data, targets))
             }
             Err(error) => {
@@ -1010,7 +1042,7 @@ impl DragSession {
                 && entered
                     .iter()
                     .zip(targets.iter())
-                    .all(|(was, now)| Arc::ptr_eq(&was.slot, &now.slot))
+                    .all(|(was, now)| Rc::ptr_eq(&was.slot, &now.slot))
         };
         let unchanged_length = targets.len() == self.entered.borrow().len();
 
@@ -1075,7 +1107,7 @@ impl DragSession {
             was_accepted = active.slot.did_drop(self.pointer, active.at);
             self.entered
                 .borrow_mut()
-                .retain(|target| !Arc::ptr_eq(&target.slot, &active.slot));
+                .retain(|target| !Rc::ptr_eq(&target.slot, &active.slot));
         }
         self.leave_all_entered();
         let _prev = self.active.borrow_mut().take();

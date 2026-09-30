@@ -14,10 +14,10 @@ use super::provider::{ImageProvider, ImageProviderError};
 /// An [`ImageProvider`] that loads and decodes an asset file through a
 /// `flui-assets` [`AssetRegistry`], off the calling thread.
 ///
-/// # No global registry
+/// # The registry is an argument
 ///
-/// [`AssetRegistry::global()`] is deliberately never used here: the registry
-/// is an explicit constructor argument, so the same registry (and therefore
+/// There is no process-wide registry: the registry is an explicit
+/// constructor argument, so the same registry (and therefore
 /// the same background runtime, byte-loader cache, and lifetime) an
 /// application already manages is the one `AssetImage` loads through. Two
 /// `AssetImage`s built with different registries but the same `path` are

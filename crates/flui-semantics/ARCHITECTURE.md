@@ -262,8 +262,8 @@ no FLUI argument shape: the handler receives `SetText` with no arguments. Nothin
 `accesskit_translation.rs`, which advertises `Expand` on a collapsed node and `Collapse` on an
 expanded one. For the numeric `set_value` losing its number, a node advertising both
 transitions, and a platform expand reaching a mounted node's tap handler end to end:
-**Unasserted:** no test pins this. `flui_testing::a11y::invoke_semantics_action` has no state
-guard: sending it the transition the node does not advertise toggles it anyway.
+**Unasserted:** no test pins this. `flui_testing::widgets::LaidOut::invoke_semantics_action` has no
+state guard: sending it the transition the node does not advertise toggles it anyway.
 
 ### 6. Every explicit role maps to an AccessKit role; `DragHandle` and `HotKey` stay generic
 
