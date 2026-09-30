@@ -2,13 +2,15 @@
 
 ## Supported Versions
 
-FLUI is pre-1.0 and not yet published to crates.io. Security fixes are made on
-`main`; downstream users should track the latest commit until the first stable
-release line exists.
+FLUI is pre-1.0. Of its crates only the `flui` CLI (`flui-cli` 0.1.0) is
+published to crates.io; the framework crates are consumed from a git clone or
+the `v0.1.0` tag. Security fixes are made on `main`; downstream users should
+track the latest commit until the first stable release line exists.
 
-Until the first beta tag is cut, only `main` is supported — there is no
-released version to patch separately. Once a beta is tagged, the supported
-beta series will be listed here.
+Until the first beta is tagged, only `main` is supported: earlier tags,
+`v0.1.0` and the `flui-cli` 0.1.0 release included, are not patched
+separately. Once a beta is tagged, the supported beta series will be listed
+here.
 
 ## Reporting a Vulnerability
 

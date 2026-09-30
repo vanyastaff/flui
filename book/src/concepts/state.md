@@ -1,6 +1,6 @@
 # State: setState, InheritedView, ValueNotifier
 
-FLUI has three ways state enters the tree, matching Flutter's three:
+FLUI has four ways state enters the tree: Flutter's three, plus realm-scoped signals:
 
 ## `setState`
 

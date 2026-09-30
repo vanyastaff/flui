@@ -41,14 +41,14 @@ this crate.
 
 ```toml
 [dependencies]
-flui-scheduler = "0.2"
+flui-scheduler = { git = "https://github.com/vanyastaff/flui" }
 
 # With serialization support
-flui-scheduler = { version = "0.2", features = ["serde"] }
+flui-scheduler = { git = "https://github.com/vanyastaff/flui", features = ["serde"] }
 ```
 
-This crate isn't published to crates.io yet; until the first release, depend
-on it via a git tag or path — see the [flui facade's README](../../README.md).
+This crate isn't published to crates.io; depend on it via git or path — see
+the [flui facade's README](../../README.md).
 
 ## Usage
 
@@ -308,11 +308,9 @@ match event {
 `FrameBudget` reports timing statistics (jank, phase durations, over-budget)
 against whichever target the caller chose — `UpdateScheduler` itself makes
 no frame-rate assumption and does not act on these statistics to skip work.
-The only thing that ever defers work is [`drive_frame`]'s own `deadline`
+The only thing that ever defers work is `UpdateScheduler::drive_frame`'s own `deadline`
 parameter, and it bounds `Priority::Idle` tasks alone; `Priority::Animation`
 and `Priority::Build` always run to completion.
-
-[`drive_frame`]: https://docs.rs/flui-scheduler/latest/flui_scheduler/scheduler/struct.UpdateScheduler.html#method.drive_frame
 
 ### Zero-Cost Abstractions
 

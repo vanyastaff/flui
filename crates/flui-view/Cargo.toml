@@ -111,10 +111,8 @@ test-utils = ["dep:tracing-subscriber"]
 # `--features flui-view/signals`; it goes with that step.
 signals = []
 
-# The `legacy-downcast` feature flag was retired
-# (FR-021): the pre-FR-021 inline `downcast_ref::<V>()` body inside
-# `ElementCore::update_view` is gone — `dispatch_view_update`
-# (TypeId-keyed `Box::downcast::<V>`) is the only path now.
+# There is no `legacy-downcast` feature: `ElementCore::update_view` reaches the
+# view only through `dispatch_view_update` (TypeId-keyed `Box::downcast::<V>`).
 
 # Files cargo-shear reports as unlinked although the build uses them:
 # - `tests/ui/*.rs`: trybuild compile-fail inputs driven by `trybuild_ui.rs`,

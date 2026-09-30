@@ -1,6 +1,6 @@
 [book]
 title = "FLUI"
-description = "A Flutter-inspired declarative UI framework for Rust — book skeleton (H2, part 1)."
+description = "A Flutter-inspired declarative UI framework for Rust."
 authors = ["FLUI Contributors"]
 language = "en"
 src = "src"
@@ -8,7 +8,7 @@ src = "src"
 [build]
 # Rust code fences are marked `rust,ignore` wherever they are not copied
 # verbatim from a compiling source (an example, a CLI template, or a
-# doctest) — see AGENTS.md's "no invented API" rule for this book. This
+# doctest), so the book names no API the source tree lacks. This
 # flag is a backstop, not the primary defense: it stops an accidentally
 # un-ignored fence from failing a `mdbook test` run, but `mdbook test`
 # is not part of this book's CI gate (see .github/workflows/docs.yml's

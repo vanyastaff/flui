@@ -1,11 +1,11 @@
 # Concepts
 
-FLUI's mental model is Flutter's: declarative widget composition over a retained three-tree.
+FLUI's mental model is Flutter's: declarative widget composition over retained trees.
 These pages explain the tree and its rules; if you already know Flutter, read
 [Flutter → FLUI mapping](../mapping.md) first for the vocabulary, then come back here for the
 parts that differ.
 
-- [View, Element, RenderObject](view-element-render.md) — the three trees themselves.
+- [View, Element, RenderObject](view-element-render.md) — the trees themselves.
 - [Keys](keys.md) — identity and reparenting.
 - [Lifecycle](lifecycle.md) — the states an `Element` moves through.
 - [Layout: constraints down, sizes up](layout.md) — the layout protocol.

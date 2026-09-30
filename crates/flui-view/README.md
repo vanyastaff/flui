@@ -141,9 +141,11 @@ preserve state across inactive retake and active-to-active reparent paths.
   reparenting, and `ReconcileEvent`.
 - `seq/` - `ViewSeq` tuple and `Vec` implementations.
 - `macros/` - `column!` and `row!`.
-- `key/` - `ObjectKey`, `GlobalKey`, and the process-wide global-key registry.
-- `binding/` and `owner/` - build-frame coordination and split-borrow owner
-  handles.
+- `key/` - `ObjectKey`, `GlobalKey`, and the lookup handle `GlobalKey` reads,
+  which belongs to one binding and is active only while its realm is entered.
+- `binding.rs` and `owner/` - `WidgetsBinding` (build-frame coordination for
+  one realm), `BuildOwner`, the per-tree global-key registry, and split-borrow
+  owner handles.
 
 ## Verification
 
@@ -152,10 +154,4 @@ For focused work in this crate:
 ```bash
 cargo test -p flui-view --features test-utils --all-targets
 cargo clippy -p flui-view --features test-utils --all-targets -- -D warnings
-```
-
-In the Codex sandbox for this repository, use a writable target directory:
-
-```bash
-env CARGO_TARGET_DIR=/tmp/flui-target cargo test -p flui-view --features test-utils --all-targets
 ```

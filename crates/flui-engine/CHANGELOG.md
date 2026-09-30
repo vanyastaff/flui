@@ -377,4 +377,4 @@ one states what the thing is without opening the file:
   info. (#253)
 - Smooth Win32 live-resize alongside the L2 AA-norm SSAA path. (#265)
 
-[Unreleased]: https://github.com/flui-org/flui/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/vanyastaff/flui/compare/v0.1.0...HEAD

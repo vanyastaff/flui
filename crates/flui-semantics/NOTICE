@@ -14,12 +14,15 @@ What is derived, and what is not:
 
   * FLUI takes Flutter's observable behavior as its reference. Where a Flutter
     test pins that behavior, the scenario (inputs, expected values, edge
-    cases) is adapted into a Rust test; each such file names its source in a
-    "Ported from `.flutter/packages/flutter/...`" comment. As of 2026-09-03
-    those files live in the crates flui-app, flui-foundation,
-    flui-interaction, flui-objects, flui-rendering, flui-scheduler,
-    flui-semantics, flui-testing, flui-view, and flui-widgets; a copy of this
-    NOTICE ships with each of them.
+    cases) is adapted into a Rust test. The Rust file names the Flutter test
+    file it follows by its path under `packages/flutter/test/`, usually in
+    its leading doc comment and often with the Flutter release tag and the
+    names of the cases it covers, under a lead-in such as "Parity oracles",
+    "Flutter reference" or "Ported from". Some render objects and other
+    components modeled on a Flutter class cite the corresponding
+    `packages/flutter/lib/src/` file the same way; not all do. A copy of this NOTICE
+    ships with the `flui` facade and with every crate under `crates/` and
+    package under `packages/`.
   * Framework source is designed in Rust from that behavioral reference. It
     is not a translation of Dart source, and Flutter's documentation prose is
     not copied.

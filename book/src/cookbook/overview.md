@@ -1,14 +1,13 @@
 # Cookbook
 
 Task-oriented pages, each pointing at a real, runnable example rather than a hand-written snippet
-that could drift from the actual API. Per AGENTS.md's "no invented API" rule for this book, a
-cookbook page only exists for a topic that has a working example in `examples/` today — this
-keeps the cookbook from promising a recipe that doesn't actually run.
+that could drift from the actual API. A cookbook page only exists for a topic that has a working
+example in `examples/` today, so the cookbook never promises a recipe that doesn't run.
 
-Not every topic you might expect is here yet. Navigation (`Navigator`,
-`crates/flui-widgets/src/navigator/navigator.rs`, ADR-0019/ADR-0024's named-route seam) is real
-API, but no bundled example currently exercises it — that page will be added once one does, rather
-than shipped as a stub with invented code.
+Not every topic you might expect has a page yet. Navigation has a runnable example but no page:
+`cargo run --example two_screens` (`examples/two_screens.rs`) roots an app in
+`WidgetsApp::router` over a `#[derive(Routable)]` route enum, and its pages push and pop route
+values through a `RouterHandle` (ADR-0093; see the [mapping](../mapping.md) notes).
 
 - [Forms](forms.md)
 - [Async](async.md)
