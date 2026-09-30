@@ -58,23 +58,25 @@ fn history(doc: &str) -> bool {
 const PACKAGE_LAYOUT: [&str; 4] = ["benches", "examples", "src", "tests"];
 
 /// Links to this repository's `main` on GitHub; the rest is a checkout path.
-const SELF_MAIN: [&str; 2] = ["vanyastaff/flui/blob/main/", "vanyastaff/flui/tree/main/"];
+const SELF_MAIN: [&str; 2] = ["blob/main/", "tree/main/"];
+
+/// This repository on GitHub, whose owner and name match in any case.
+const SELF_REPO: &str = "vanyastaff/flui/";
 
 /// GitHub's origin, whose scheme and host match in any case.
 const GITHUB: &str = "https://github.com/";
 
 /// The checkout path a link to this repository's `main` names ([`SELF_MAIN`]).
 fn self_main(dest: &str) -> Option<&str> {
-    let origin = dest.get(..GITHUB.len())?;
-    let rest = &dest[GITHUB.len()..];
-    origin
-        .eq_ignore_ascii_case(GITHUB)
-        .then(|| {
-            SELF_MAIN
-                .iter()
-                .find_map(|prefix| rest.strip_prefix(prefix))
-        })
-        .flatten()
+    let origin = GITHUB.len() + SELF_REPO.len();
+    let (github, repo) = dest.get(..origin)?.split_at(GITHUB.len());
+    if !github.eq_ignore_ascii_case(GITHUB) || !repo.eq_ignore_ascii_case(SELF_REPO) {
+        return None;
+    }
+    // the branch and the checkout path keep their case
+    SELF_MAIN
+        .iter()
+        .find_map(|prefix| dest[origin..].strip_prefix(prefix))
 }
 
 /// Arguments for `cargo xtask docs-paths`.
@@ -208,7 +210,13 @@ impl Packages {
             None => {
                 if let Some(versions) = self.local.get(&selected.name) {
                     // a manifest that inherits its version states none to check
-                    return versions.is_empty() || versions.iter().any(|known| version_ok(known));
+                    if versions.is_empty() || versions.iter().any(|known| version_ok(known)) {
+                        return true;
+                    }
+                    // a graph subcommand may still pick a dependency of that name
+                    if graph.is_none() {
+                        return false;
+                    }
                 }
             }
             // a path source names one machine's absolute directory: cargo

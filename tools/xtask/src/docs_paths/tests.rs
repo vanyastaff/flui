@@ -195,6 +195,20 @@ fn packages_are_read_only_from_cargo_commands() {
         ("echo $(printf ')' ; cargo build -p a)", &[(0, build, "a")]),
         // ANSI-C quoting, `sudo`, and an appending assignment
         ("cargo test -p $'a'", &[(0, test, "a")]),
+        // every ANSI-C escape form: hex, octal, Unicode
+        ("cargo test -p $'flui\\x2dview'", &[(0, test, "flui-view")]),
+        ("cargo test -p $'flui\\055view'", &[(0, test, "flui-view")]),
+        (
+            "cargo test -p $'flui\\u002dview'",
+            &[(0, test, "flui-view")],
+        ),
+        // a `case` pattern's `)` does not close the substitution around it
+        (
+            "echo \"$(case x in x) cargo test -p a;; esac)\"",
+            &[(0, test, "a")],
+        ),
+        // PowerShell's backtick continues the line
+        ("cargo test `\n  -p a", &[(1, test, "a")]),
         ("sudo cargo test -p a", &[(0, test, "a")]),
         ("sudo -u root -E cargo build -p a", &[(0, build, "a")]),
         ("X+=y cargo test -p a", &[(0, test, "a")]),
@@ -341,6 +355,12 @@ fn a_lockfile_package_is_selected_only_by_update_and_tree() {
             ("wgpu", "25.0.0", Some(CRATES_IO)),
             ("bitflags", "1.3.2", Some(CRATES_IO)),
             ("bitflags", "2.13.2", Some(CRATES_IO)),
+            // a git dependency named like a workspace package
+            (
+                "flui-view",
+                "2.0.0",
+                Some("git+https://example.com/flui?rev=1#abc"),
+            ),
         ]),
     };
     for (code, selects) in [
@@ -349,6 +369,9 @@ fn a_lockfile_package_is_selected_only_by_update_and_tree() {
         ("cargo test -p flui-app@0.2", true),
         ("cargo test -p flui-app@0.2.0", true),
         ("cargo test -p flui-view@999", false),
+        // a graph subcommand picks the dependency the local version misses
+        ("cargo tree -p flui-view@2", true),
+        ("cargo test -p flui-view@2", false),
         // a prerelease matches only its full version
         ("cargo test -p flui-view@0.2.0-dev", true),
         ("cargo pkgid -p flui-view@0.2", false),
@@ -558,7 +581,7 @@ fn an_llms_link_resolves_like_a_github_link() {
         ),
         // a scheme and a host match in any case
         (
-            "HTTPS://GitHub.COM/vanyastaff/flui/tree/main/crates/flui-view",
+            "HTTPS://GitHub.COM/VanyaStaff/FLUI/tree/main/crates/flui-view",
             Some(Some("crates/flui-view")),
         ),
         ("docs/../README.md", Some(Some("README.md"))),

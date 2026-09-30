@@ -133,6 +133,8 @@ impl Lexer<'_> {
                     self.substitution(')');
                 }
                 '$' if self.chars.next_if_eq(&'\'').is_some() => self.ansi_c_quoted(),
+                // PowerShell's line continuation: a backtick ending the line
+                '`' if self.continues_line() => {}
                 '`' => self.substitution('`'),
                 c => self.push(c),
             }
@@ -177,18 +179,31 @@ impl Lexer<'_> {
         self.push('$');
     }
 
+    /// Whether a backtick just read ends its line, as PowerShell continues a
+    /// line; the newline is taken.
+    fn continues_line(&mut self) -> bool {
+        let mut ahead = self.chars.clone();
+        while ahead
+            .next_if(|&c| c == ' ' || c == '\t' || c == '\r')
+            .is_some()
+        {}
+        if ahead.next() != Some('\n') {
+            return false;
+        }
+        self.chars = ahead;
+        self.line += 1;
+        true
+    }
+
     /// The rest of an ANSI-C `$'…'` string, its escapes applied.
     fn ansi_c_quoted(&mut self) {
         self.start_word();
         while let Some(c) = self.chars.next() {
             let c = match c {
                 '\'' => break,
-                '\\' => match self.chars.next() {
-                    Some('n') => '\n',
-                    Some('t') => '\t',
-                    Some('r') => '\r',
-                    Some(escaped) => escaped,
-                    None => break,
+                '\\' => match ansi_c_escape(&mut self.chars) {
+                    Some(c) => c,
+                    None => continue,
                 },
                 c => c,
             };
@@ -379,6 +394,9 @@ fn substitution_text(chars: &mut Peekable<Chars<'_>>, closing: char) -> String {
     let mut text = String::new();
     let mut depth = 0_usize;
     let mut quote: Option<char> = None;
+    // `case … esac` blocks open: in one, an unmatched `)` ends a pattern
+    let mut cases = 0_usize;
+    let mut word = String::new();
     while let Some(c) = chars.next() {
         if let Some(open) = quote {
             if c == open {
@@ -387,6 +405,16 @@ fn substitution_text(chars: &mut Peekable<Chars<'_>>, closing: char) -> String {
             text.push(c);
             continue;
         }
+        if c.is_alphanumeric() || c == '_' {
+            word.push(c);
+        } else {
+            match word.as_str() {
+                "case" => cases += 1,
+                "esac" => cases = cases.saturating_sub(1),
+                _ => {}
+            }
+            word.clear();
+        }
         match c {
             '\\' => {
                 text.push(c);
@@ -394,6 +422,7 @@ fn substitution_text(chars: &mut Peekable<Chars<'_>>, closing: char) -> String {
                 continue;
             }
             '\'' | '"' => quote = Some(c),
+            ')' if closing == ')' && depth == 0 && cases > 0 => {}
             c if c == closing && depth == 0 => break,
             '(' if closing == ')' => depth += 1,
             ')' if closing == ')' => depth -= 1,
@@ -402,6 +431,55 @@ fn substitution_text(chars: &mut Peekable<Chars<'_>>, closing: char) -> String {
         text.push(c);
     }
     text
+}
+
+/// The character an ANSI-C escape (after its `\\`) stands for: `\\n`,
+/// `\\x2d`, octal `\\055`, `\\u002d`, `\\U0000002d`, `\\cX`, and the
+/// rest of Bash's; `None` for one that stands for nothing.
+fn ansi_c_escape(chars: &mut Peekable<Chars<'_>>) -> Option<char> {
+    let digits = |chars: &mut Peekable<Chars<'_>>, radix: u32, most: usize| {
+        let mut value = 0_u32;
+        let mut read = 0;
+        while read < most {
+            let Some(digit) = chars.peek().and_then(|c| c.to_digit(radix)) else {
+                break;
+            };
+            chars.next();
+            value = value * radix + digit;
+            read += 1;
+        }
+        (read > 0).then(|| char::from_u32(value)).flatten()
+    };
+    Some(match chars.next()? {
+        'a' => '\u{7}',
+        'b' => '\u{8}',
+        'e' | 'E' => '\u{1b}',
+        'f' => '\u{c}',
+        'n' => '\n',
+        'r' => '\r',
+        't' => '\t',
+        'v' => '\u{b}',
+        'x' => return digits(chars, 16, 2),
+        'u' => return digits(chars, 16, 4),
+        'U' => return digits(chars, 16, 8),
+        'c' => {
+            return chars
+                .next()
+                .and_then(|c| char::from_u32(u32::from(c) & 0x1f));
+        }
+        first @ '0'..='7' => {
+            let mut value = first.to_digit(8)?;
+            for _ in 0..2 {
+                let Some(digit) = chars.peek().and_then(|c| c.to_digit(8)) else {
+                    break;
+                };
+                chars.next();
+                value = value * 8 + digit;
+            }
+            return char::from_u32(value);
+        }
+        other => other,
+    })
 }
 
 /// The command substitutions (`$(…)`, `` `…` ``) of a here-document body the
