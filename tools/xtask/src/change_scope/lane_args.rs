@@ -21,7 +21,9 @@
 //!   covers the changed crates that have features, any crate whose Cargo.toml
 //!   changed, and every dependent in scope whose edge to an in-scope package
 //!   only exists under one of its features (optional, or named in a feature):
-//!   the default build never compiles the code on that edge;
+//!   the default build never compiles the code on that edge; past
+//!   [`MAX_PER_FEATURE_PACKAGES`] packages that pass would outrun the job's
+//!   timeout, and the wide lane's sharded feature-matrix job runs instead;
 //! - the flui-app/flui iOS runner gets a macOS clippy leg whenever either is in
 //!   scope, like the Android runner (it needs xcrun, so it is a separate job,
 //!   `fast-lane-ios`);
@@ -47,6 +49,16 @@ use super::classify::{Mode, Package, Repo, Scope, Workspace};
 
 /// More feature-gated dependents than this: the wide lane (see [`lane_args`]).
 const MAX_FEATURE_GATED_DEPENDENTS: usize = 3;
+
+/// More packages in the fast lane's per-feature pass than this: the wide lane.
+///
+/// The pass runs `cargo hack clippy --each-feature` twice (library, then
+/// tests/benches/examples) inside the 40-minute `fast-lane` job, after about
+/// 20 minutes of other steps on a wide scope. Measured on CI, the library pass
+/// alone costs from 2 s (flui-layer) to 3 minutes (the facade) per package and
+/// the second pass about as much again, so the six heaviest packages fill the
+/// roughly 15 minutes left.
+const MAX_PER_FEATURE_PACKAGES: usize = 6;
 
 /// The GitHub event a run was started by (`github.event_name`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
@@ -463,12 +475,26 @@ pub(super) fn lane_args(
         // features, for any crate whose manifest changed, and for dependents
         // whose edge into the scope only a feature compiles; other dependents
         // get the default build only (the wide lane's feature-matrix covers the rest)
-        hack_args = p(seeds
+        let per_feature: BTreeSet<&str> = seeds
             .iter()
             .copied()
             .filter(|n| featured(n))
             .chain(scope.manifests.iter().map(String::as_str))
-            .chain(gated.iter().copied()));
+            .chain(gated.iter().copied())
+            .collect();
+        if gated.len() <= MAX_FEATURE_GATED_DEPENDENTS
+            && per_feature.len() > MAX_PER_FEATURE_PACKAGES
+        {
+            heavy_required = true;
+            let first: Vec<&str> = per_feature.iter().copied().take(4).collect();
+            let _ = write!(
+                reason,
+                "; {} packages need the per-feature pass ({}, ...), past the fast lane's {MAX_PER_FEATURE_PACKAGES}: the feature-matrix job covers them",
+                per_feature.len(),
+                first.join(", ")
+            );
+        }
+        hack_args = p(per_feature.iter().copied());
     }
 
     Ok(LaneArgs {
@@ -751,6 +777,29 @@ mod tests {
         assert!(a.reason.contains("feature-matrix"));
     }
 
+    fn many_per_feature_packages_take_the_wide_lane() {
+        // a sweep over the upper crates' sources: few dependents are left to
+        // reach them only under a feature, but every one is a featured seed,
+        // and their per-feature passes together outrun the fast lane's timeout
+        let a = args(&[
+            "src/lib.rs",
+            "crates/flui-app/src/lib.rs",
+            "crates/flui-hot-reload/src/lib.rs",
+            "crates/flui-objects/src/lib.rs",
+            "crates/flui-runtime/src/lib.rs",
+            "crates/flui-testing/src/lib.rs",
+            "crates/flui-widgets/src/lib.rs",
+            "packages/flui-devtools/src/lib.rs",
+        ]);
+        assert!(a.heavy_required, "{}", a.reason);
+        assert_eq!(a.lane, Lane::Wide);
+        assert!(
+            a.reason.contains("packages need the per-feature pass"),
+            "{}",
+            a.reason
+        );
+    }
+
     fn ios_leg_when_flui_app_or_the_facade_is_in_scope() {
         assert!(args(&["crates/flui-view/src/lib.rs"]).cross_ios);
         // the facade gates code on iOS too
@@ -942,6 +991,10 @@ mod tests {
                 (
                     "many_feature_gated_dependents_take_the_wide_lane",
                     many_feature_gated_dependents_take_the_wide_lane as fn(),
+                ),
+                (
+                    "many_per_feature_packages_take_the_wide_lane",
+                    many_per_feature_packages_take_the_wide_lane as fn(),
                 ),
                 (
                     "a_design_system_change_gets_the_facades_per_feature_pass",
