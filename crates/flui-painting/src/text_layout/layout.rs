@@ -26,6 +26,7 @@ use unicode_segmentation::UnicodeSegmentation;
 use crate::error::RegisterFontError;
 
 use super::TextLayoutResult;
+use super::fallback_chain::{ChainFallback, FallbackChain};
 use super::font_resolve::{self, InstalledFamilies};
 use super::glyphs::{GlyphContent, GlyphImage, GlyphKey, GlyphRasterizer, PlacedGlyph};
 
@@ -51,15 +52,27 @@ pub(super) struct FontState {
     /// database that no longer exists; shaping ([`SharedFontSystem::shape`])
     /// cannot reach the database and so never bumps it.
     db_generation: u64,
+    /// The fallback lists `system` was built with, shared with every
+    /// collection fed from this font system (`SharedFontSystem::host_faces`).
+    #[cfg_attr(
+        not(feature = "parley"),
+        expect(dead_code, reason = "only the Parley path's collection reads it")
+    )]
+    chain: Arc<FallbackChain>,
+    /// How many collections were built from the host
+    /// ([`SharedFontSystem::count_host_feed`]): one per app.
+    host_feeds: u64,
 }
 
 impl FontState {
-    fn new(system: FontSystem) -> Self {
+    fn new(system: FontSystem, chain: Arc<FallbackChain>) -> Self {
         Self {
             system,
             installed_families: InstalledFamilies::default(),
             scaler: SwashCache::new(),
             db_generation: 0,
+            chain,
+            host_feeds: 0,
         }
     }
 
@@ -163,10 +176,21 @@ fn font_system_arc() -> &'static Arc<Mutex<FontState>> {
         // so installing it means constructing a second time — cheap, because
         // `into_locale_and_db` moves the populated database across and the
         // second pass never rescans the host.
+        //
+        // The fallback lists are kept beside the font system as a
+        // `FallbackChain`, which a collection fed from this database reads
+        // too, so both shapers fall back in the same order.
         let (locale, db) = discovered.into_locale_and_db();
-        let forbidden = font_resolve::EmojiForbiddenFallback::new(&db);
-        let system = FontSystem::new_with_locale_and_db_and_fallback(locale, db, forbidden);
-        Arc::new(Mutex::new(FontState::new(system)))
+        let chain = Arc::new(FallbackChain::new(
+            locale.clone(),
+            font_resolve::EmojiForbiddenFallback::new(&db),
+        ));
+        let system = FontSystem::new_with_locale_and_db_and_fallback(
+            locale,
+            db,
+            ChainFallback(Arc::clone(&chain)),
+        );
+        Arc::new(Mutex::new(FontState::new(system, chain)))
     })
 }
 
@@ -242,11 +266,17 @@ pub fn init_font_system_with_faces(faces: &[&[u8]], default_family: &str, locale
     // Same emoji suppression the host-discovery path installs, so a pinned
     // database and a discovered one do not disagree about where an unmatched
     // family lands.
-    let forbidden = font_resolve::EmojiForbiddenFallback::new(&db);
-    let font_system =
-        FontSystem::new_with_locale_and_db_and_fallback(locale.to_owned(), db, forbidden);
+    let chain = Arc::new(FallbackChain::new(
+        locale.to_owned(),
+        font_resolve::EmojiForbiddenFallback::new(&db),
+    ));
+    let font_system = FontSystem::new_with_locale_and_db_and_fallback(
+        locale.to_owned(),
+        db,
+        ChainFallback(Arc::clone(&chain)),
+    );
     FONT_SYSTEM
-        .set(Arc::new(Mutex::new(FontState::new(font_system))))
+        .set(Arc::new(Mutex::new(FontState::new(font_system, chain))))
         .is_ok()
 }
 
@@ -415,6 +445,209 @@ impl SharedFontSystem {
         tracing::debug!(faces_added, "registered font");
         Ok(())
     }
+
+    /// What this font system holds, for a collection to be fed from
+    /// ([`FontCollection::with_host_faces`](super::FontCollection::with_host_faces)).
+    ///
+    /// Takes the lock once and only copies: each font file's path, each
+    /// in-memory font's data (shared, not copied), every source's family
+    /// names, the five generic families' names and the fallback chain.
+    /// Parsing the files again is the caller's work, outside the lock.
+    #[cfg(feature = "parley")]
+    pub(crate) fn host_faces(&self) -> HostFaces {
+        use cosmic_text::fontdb::Source;
+        use std::collections::HashMap;
+
+        #[derive(PartialEq, Eq, Hash)]
+        enum SourceKey {
+            Path(std::path::PathBuf),
+            Blob(usize),
+        }
+
+        let state = self.0.lock();
+        let db = state.system.db();
+        let mut sources: Vec<HostSource> = Vec::new();
+        let mut index: HashMap<SourceKey, usize> = HashMap::new();
+        for face in db.faces() {
+            let (key, data) = match &face.source {
+                Source::Binary(data) => (
+                    SourceKey::Blob(Arc::as_ptr(data).cast::<()>() as usize),
+                    HostData::Blob(Arc::clone(data)),
+                ),
+                Source::File(path) | Source::SharedFile(path, _) => {
+                    (SourceKey::Path(path.clone()), HostData::Path(path.clone()))
+                }
+            };
+            let slot = *index.entry(key).or_insert_with(|| {
+                sources.push(HostSource {
+                    data,
+                    families: Vec::new(),
+                });
+                sources.len() - 1
+            });
+            let families = &mut sources[slot].families;
+            for (name, _) in &face.families {
+                if !families.contains(name) {
+                    families.push(name.clone());
+                }
+            }
+        }
+        let generic = |family: Family<'_>| db.family_name(&family).to_owned();
+        HostFaces {
+            sources,
+            sans_serif: generic(Family::SansSerif),
+            serif: generic(Family::Serif),
+            monospace: generic(Family::Monospace),
+            cursive: generic(Family::Cursive),
+            fantasy: generic(Family::Fantasy),
+            chain: Arc::clone(&state.chain),
+        }
+    }
+
+    /// Records that a collection was built from this font system's host
+    /// faces ([`FontCollection::with_host_faces`](super::FontCollection::with_host_faces)),
+    /// whether or not the build has the Parley path to feed them into.
+    pub(crate) fn count_host_feed(&self) {
+        self.0.lock().host_feeds += 1;
+    }
+
+    /// How many collections were built from the host.
+    #[cfg(any(test, feature = "testing"))]
+    pub(crate) fn host_feeds(&self) -> u64 {
+        self.0.lock().host_feeds
+    }
+
+    /// The family the sans-serif generic names.
+    #[cfg(any(test, feature = "testing"))]
+    pub(crate) fn sans_serif_family(&self) -> String {
+        self.0
+            .lock()
+            .system
+            .db()
+            .family_name(&Family::SansSerif)
+            .to_owned()
+    }
+
+    /// The first family name of every face, each once, in database order.
+    #[cfg(any(test, feature = "testing"))]
+    pub(crate) fn family_names(&self) -> Vec<String> {
+        let state = self.0.lock();
+        let mut names: Vec<String> = Vec::new();
+        for face in state.system.db().faces() {
+            if let Some((name, _)) = face.families.first()
+                && !names.contains(name)
+            {
+                names.push(name.clone());
+            }
+        }
+        names
+    }
+
+    /// Whether some face in this font system maps every character of
+    /// `text` that is not whitespace.
+    #[cfg(any(test, feature = "testing"))]
+    pub(crate) fn covers(&self, text: &str) -> bool {
+        let state = self.0.lock();
+        let db = state.system.db();
+        text.chars()
+            .filter(|c| !c.is_whitespace())
+            .all(|c| db.faces().any(|face| face_maps(db, face, c)))
+    }
+
+    /// Whether every character of `text` that is not whitespace is mapped by
+    /// a face of a family both shapers reach past the style's own: the
+    /// sans-serif generic's family, the chain's list for the character's
+    /// script, or the chain's common list. cosmic-text's last resort, the
+    /// walk over every other face, is left out, since the Parley path has
+    /// none (flui-painting `ARCHITECTURE.md`, mapping decision 16).
+    #[cfg(all(feature = "parley", any(test, feature = "testing")))]
+    pub(crate) fn chain_covers(&self, text: &str) -> bool {
+        use unicode_script::UnicodeScript as _;
+
+        let state = self.0.lock();
+        let db = state.system.db();
+        let sans_serif = db.family_name(&Family::SansSerif);
+        text.chars().filter(|c| !c.is_whitespace()).all(|c| {
+            let script = state.chain.script(c.script());
+            let reachable = |name: &str| {
+                name == sans_serif || script.contains(&name) || state.chain.common().contains(&name)
+            };
+            db.faces().any(|face| {
+                face.families.iter().any(|(name, _)| reachable(name)) && face_maps(db, face, c)
+            })
+        })
+    }
+}
+
+/// Whether `face` maps `c` to a glyph.
+#[cfg(any(test, feature = "testing"))]
+fn face_maps(
+    db: &cosmic_text::fontdb::Database,
+    face: &cosmic_text::fontdb::FaceInfo,
+    c: char,
+) -> bool {
+    use cosmic_text::skrifa::{self, MetadataProvider as _};
+
+    db.with_face_data(face.id, |data, index| {
+        skrifa::FontRef::from_index(data, index)
+            .ok()
+            .and_then(|font| font.charmap().map(c))
+            .is_some()
+    }) == Some(true)
+}
+
+/// The faces a process font system holds, taken by
+/// `SharedFontSystem::host_faces` for a collection to be fed from.
+#[cfg_attr(
+    not(feature = "parley"),
+    expect(
+        dead_code,
+        reason = "only the Parley path's collection reads the faces"
+    )
+)]
+pub(crate) struct HostFaces {
+    /// Every font source, in the order the database first names it.
+    pub(crate) sources: Vec<HostSource>,
+    /// The family the sans-serif generic names.
+    pub(crate) sans_serif: String,
+    /// The family the serif generic names.
+    pub(crate) serif: String,
+    /// The family the monospace generic names.
+    pub(crate) monospace: String,
+    /// The family the cursive generic names.
+    pub(crate) cursive: String,
+    /// The family the fantasy generic names.
+    pub(crate) fantasy: String,
+    /// The fallback lists the font system was built with.
+    pub(crate) chain: Arc<FallbackChain>,
+}
+
+/// One font file or in-memory font, and every family name its faces carry.
+#[cfg_attr(
+    not(feature = "parley"),
+    expect(
+        dead_code,
+        reason = "only the Parley path's collection reads the faces"
+    )
+)]
+pub(crate) struct HostSource {
+    pub(crate) data: HostData,
+    pub(crate) families: Vec<String>,
+}
+
+/// Where a [`HostSource`]'s bytes are.
+#[cfg_attr(
+    not(feature = "parley"),
+    expect(
+        dead_code,
+        reason = "only the Parley path's collection reads the faces"
+    )
+)]
+pub(crate) enum HostData {
+    /// A file, which the collection maps itself.
+    Path(std::path::PathBuf),
+    /// Bytes the font system holds: a registered or embedded font.
+    Blob(Arc<dyn AsRef<[u8]> + Send + Sync>),
 }
 
 /// The cosmic-text path's rasterizer: the engine's default atlas draws
