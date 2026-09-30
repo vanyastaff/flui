@@ -17,6 +17,7 @@ mod change_scope;
 mod changelog;
 mod doc_strict;
 mod docs_links;
+mod docs_paths;
 mod doctor;
 mod file_length;
 mod fonts;
@@ -113,6 +114,8 @@ enum Command {
     DocStrict(doc_strict::DocStrictArgs),
     /// Check the links in the repository's markdown (lychee, offline).
     DocsLinks(docs_links::DocsLinksArgs),
+    /// Check the repository paths, packages and llms.txt links the docs name.
+    DocsPaths(docs_paths::DocsPathsArgs),
     /// Check or list the bundled font assets.
     FontAssets(fonts::FontAssetsArgs),
     /// Check that no .rs file exceeds 3000 production lines (ADR-0081 §5).
@@ -171,6 +174,7 @@ fn main() -> ExitCode {
         Command::LockedVersion(args) => wasm::locked_version(&args),
         Command::DocStrict(args) => doc_strict::doc_strict(&args),
         Command::DocsLinks(args) => docs_links::docs_links(&args),
+        Command::DocsPaths(args) => docs_paths::docs_paths(&args),
         Command::FontAssets(args) => fonts::font_assets(&args),
         Command::FileLength(args) => file_length::file_length(&args),
         Command::Markers(args) => markers::markers(&args),

@@ -82,6 +82,9 @@ must still test the build that ships; its tests pin a painter to Parley
 through `testing::measure_with_parley`. The painter's cache keys on the
 context's collection and its `FontCollection::generation`, so a layout from
 another realm's collection, or from before a registration, measures again.
+The app's collection is fed from the process font system's faces, generics
+and fallback order, and both shapers resolve a family by one rule (decision
+16), so Parley measures a paragraph in the faces cosmic-text paints it with.
 `TextPainter::paint` records `DrawCommand::Paragraph { layout, offset,
 color }` with the very `Arc<TextLayout>` its cache holds (ADR-0065): the
 engine rasterises what was measured and shapes nothing. The root colour
@@ -539,7 +542,10 @@ clusters (step 5). Until then measurement can move to the realm's context
 without a paint path, behind a feature that is off everywhere.
 
 **Accepted trade-off:** under `parley-layout`, a face the two shapers resolve
-differently measures and paints in different faces, a truncated paragraph's
+differently measures and paints in different faces; over the app's collection,
+fed from the host (decision 16), that is only the residue decision 16 lists,
+while a bundled-only collection (`FontCollection::new()`) measures every
+family it lacks, and every glyph a family it holds lacks, in Roboto. A truncated paragraph's
 painted ellipsis can overhang its measured width, and a face registered
 through `SharedFontSystem::register_font` reaches paint but not measurement
 (ADR-0092 §10 step 3b routes registration through the collection). On the same
@@ -550,6 +556,88 @@ because the cosmic-text path loads the bundled Roboto only on a host with no
 fonts). `register_font_invalidates_a_laid_out_painter` is ignored under
 `parley-layout`, naming this decision in its `ignore` reason: registration
 reaches the process font system, not the collection Parley measures on.
+
+### 16. The collection mirrors the process font system's faces, generics and fallback order
+
+**Rule:** the app's `FontCollection` is built with
+`FontCollection::with_host_faces` over the process font system, once per app
+(flui-app's shared engine services). It holds the bundled faces, then every
+face the process font system holds whose family it does not already hold, read
+from the same files (or shared from the same in-memory fonts). Its generic
+families name the families the process font system binds them to, system-ui
+naming sans-serif's. Both shapers resolve a style's family by one rule,
+`resolve_family_name` (decision 8's rule, over the families each side holds),
+and Parley is handed that one family. A side holds a family only when spelled
+exactly as its fonts name it: fontdb matches exactly, so the Parley side
+narrows fontique's case-insensitive lookup (`holds_exactly`), and `"segoe ui"`
+degrades to the sans-serif generic on both. Past it both walk one fallback
+order, `FallbackChain`, built once beside the process font system: the font
+system is constructed over it, and the collection gets each script's list, then
+the common list, then the sans-serif generic's family as that script's fallback
+families, and the common list as the emoji generic. `FontCollection::new()`
+stays bundled-only, for standalone contexts, tests and the hot-reload plugin,
+and falls back to Roboto for every script.
+
+**Why:** measurement (Parley over the collection) and paint (cosmic-text over
+the process font system) must pick the same face for the same text. Over a
+bundled-only collection, text the bundled faces do not cover measured in
+another face than it painted in: `你好世界 emoji 😀` at 16 px measured 82.77 px
+and painted 134.01 px on Windows, and Cupertino's chain, which the host
+resolves to Segoe UI, measured in Roboto (163.29 px against 161.16 px). The
+feed reads the process font system's discovery rather than scanning again
+through fontique's `system` feature, which reaches `windows` and is forbidden
+at tier S (ADR-0092 §10 step 5). Flutter's engine collection resolves through
+the platform font manager (recalled, not checked); FLUI has two shapers until
+ADR-0092 §10 step 6, so it mirrors one into the other instead.
+
+**Accepted trade-off:**
+
+- cosmic-text's last resort, any face not forbidden, has no Parley
+  counterpart beyond the trailing sans-serif family: a character neither the
+  script's list, the common list nor that family covers measures as notdef and
+  paints in whatever face that walk finds. The oracle skips such text.
+- Family names match exactly on both sides, where CSS matches them without
+  regard to case: a style must spell a family as the fonts name it.
+- Parley appends the Han fallback to every cluster's fallback families
+  (fontique `Query::set_fallbacks`), so such a character may measure in the Han
+  fallback face.
+- cosmic-text falls back per word, Parley per cluster; in a word whose
+  characters only partly fall back, the two can split it differently.
+- Only each script's default key is set, with no locale: the Parley path
+  passes none. A change that passes one must set locale keys too.
+- Android's platform common list is empty, so the collection falls back to the
+  sans-serif family alone there while paint still walks its last resort;
+  unverified, since Android is clippy-only here.
+- Two scans decide what is carried: a file that disappears between them is
+  carried on the paint side and absent from the collection, and a family name
+  fontdb records in another language only (fontique keeps the English or first
+  name) resolves on the paint side alone.
+- A host copy of a bundled family (Roboto, Material Icons, CupertinoIcons) is
+  not fed, so one family never mixes two copies. The process font system loads
+  the bundled Roboto only when the host has no faces at all, and an icon face
+  only when the host lacks that family; a host that installs one of them paints
+  it with its own copy and measures it with the bundled one until the process
+  font system prefers the bundled faces too.
+- The feed reads the host's font files a second time before the first frame
+  (about 35 ms over 76 families on the Windows development host), until
+  ADR-0092 §10 step 3b's event lets it run off the owner thread.
+- A face registered after the feed reaches the process font system only
+  (decision 15; ADR-0092 §10 step 3b).
+
+Locked by `measured_width_equals_painted_width_on_host_faces` and
+`every_family_the_process_font_system_carries_resolves_in_the_collection`
+(`tests/host_faces_oracle.rs`, under `parley`, host-dependent: a row whose
+text only cosmic-text's last resort reaches is skipped, the Latin rows, a
+mis-cased family among them, never are),
+`fontique_fallbacks_follow_the_paint_chain_in_order`,
+`the_sans_serif_family_ends_every_script_fallback` and
+`the_emoji_generic_is_the_common_list` (`src/text_layout/fallback_chain.rs`),
+`a_glyph_the_named_family_lacks_measures_in_roboto_on_the_bundled_collection`
+(`src/parley_text/shape.rs`),
+the row `the_collection_resolves_the_family_the_font_system_does` of
+`family_resolution_contract` (`src/text_layout/font_resolve.rs`), and
+`a_missing_path_is_skipped_and_the_feed_completes`
+(`src/text_layout/context.rs`).
 
 ---
 

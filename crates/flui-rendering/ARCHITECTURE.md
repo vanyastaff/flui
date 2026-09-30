@@ -791,7 +791,7 @@ they were removed rather than adapted: they could not fail for a reason a user w
 - `OnceCell<Box<dyn>>` — rejected. `OnceCell::get()` returns `&T`; the trait still has `&mut self` methods that need mutation, so the lock would have to come back under another name.
 - Arity-keyed enum dispatch — rejected. The trait is open-set via the blanket `impl<T: RenderBox + Diagnosticable> RenderObject<P> for T` (see [`src/traits/render_box.rs`](src/traits/render_box.rs)). Closing it to a known enum would force every user-defined render object into a derive-macro discipline and break the widget extensibility story.
 - `RenderObjectId` indirection (render object lives in a separate slab keyed by ID) — considered. Adds one extra indirection per access and doubles the lifecycle invariants (insert/delete across two slabs). Equivalent soundness-wise but more moving parts than necessary.
-- Inner-mutability split (immutable `Arc<dyn>` config + all mutation moved to `RenderState`) — considered. Largest API change of all the options; would force every concrete render object in `src/objects/` to be refactored. Filed as future work.
+- Inner-mutability split (immutable `Arc<dyn>` config + all mutation moved to `RenderState`) — considered. Largest API change of all the options; would force every concrete render object in `flui-objects` to be refactored. Filed as future work.
 
 **Accepted trade-off:** the layout and update paths must hold `&mut RenderTree` for the duration of the phase. Multi-child layout requires the `get_many_mut` primitive. The borrow checker, not a lock, enforces single-writer-per-frame — single-threaded with debug asserts, in place of the previous `RwLock`-based shape.
 
@@ -992,8 +992,8 @@ walk's `catch_unwind` turns it into `Poisoned`. Locked by
 | Site | Primitive | Category | Notes |
 |---|---|---|---|
 | `RenderEntry<P>::render_object` (`src/storage/entry.rs`) | plain `Box<dyn RenderObject<P>>` | Owned by value | Mutable access via `&mut self` from `&mut RenderTree`. The previous `RwLock<Box<dyn>>` was the canonical refusal-trigger violation; removed by the U2 exemplar refactor. |
-| `RenderState<P>::flags` (`src/storage/state.rs`) | `AtomicRenderFlags` (wrapping `AtomicU32`) | Lock-free atomics | Bit-level dirty flags + boundary bits. `Acquire/Release` ordering. The new `WAS_REPAINT_BOUNDARY` bit lives here. |
-| `RenderState<P>::geometry`, `constraints` (`src/storage/state.rs`) | `Option<ProtocolGeometry<P>>` / `Option<ProtocolConstraints<P>>` | Mutable via `&mut self` | Set and cleared via `&mut RenderState` during layout; no lock required. |
+| `RenderState<P>::flags` (`src/storage/state/mod.rs`) | `AtomicRenderFlags` (wrapping `AtomicU32`) | Lock-free atomics | Bit-level dirty flags + boundary bits. `Acquire/Release` ordering. The new `WAS_REPAINT_BOUNDARY` bit lives here. |
+| `RenderState<P>::geometry`, `constraints` (`src/storage/state/mod.rs`) | `Option<ProtocolGeometry<P>>` / `Option<ProtocolConstraints<P>>` | Mutable via `&mut self` | Set and cleared via `&mut RenderState` during layout; no lock required. |
 | `RenderState<P>::offset` (`src/storage/state/offset.rs`) | `OffsetCell` | `Cell` (single-threaded tree) | Paint position. |
 | `RenderTree::owner` (`src/storage/tree.rs:65`) | `Option<Arc<RwLock<PipelineOwner>>>` | Shared infrastructure | Allowed: locks may guard shared infrastructure. Off the per-node hot path. |
 | `PipelineOwner` parent/back-references throughout [`src/pipeline/owner/mod.rs`](src/pipeline/owner/mod.rs) | `Arc<RwLock<PipelineOwner>>`, `Weak<RwLock<PipelineOwner>>` | Shared infrastructure | Soundness-rewrite precedent ([core-crates-hardening Task 7](https://github.com/vanyastaff/flui/blob/e30ab7194d50ac1c11ffe17c59230958d2fbeecd/docs/plans/2026-03-31-core-crates-hardening.md)). |
@@ -1002,8 +1002,8 @@ walk's `catch_unwind` turns it into `Poisoned`. Locked by
 | `PipelineOwner::text` (`src/pipeline/text_context.rs`) | `Rc<RefCell<TextContext>>` | Owner-thread shared infrastructure | The realm's text context, shared by its presentations' pipelines. Borrowed once per measurement, never across a child's layout; `!Send`, like the owner. See "Layout contexts lend the realm's text context". |
 
 Two rows left this table because their sites left the crate: the mouse tracker
-lives in `flui-interaction` (`src/routing/mouse_tracker.rs`) and the render-view
-error builder in `flui-view` (`src/view/error.rs`); each is accounted for in its
+lives in `flui-interaction` (`crates/flui-interaction/src/routing/mouse_tracker.rs`) and
+the render-view error builder in `flui-view` (`crates/flui-view/src/view/error.rs`); each is accounted for in its
 owning crate.
 
 `NodePtr` in `src/pipeline/owner/subtree_arena.rs` is a plain raw-pointer newtype for the disjoint-subtree-borrow substrate ([`SubtreeArena`]) — `!Send + !Sync` by the language default, no manual impl. Confinement to the constructing thread is structural (`SubtreeArena` itself is `!Send + !Sync`, pinned by `static_assertions::assert_not_impl_any!`); there is no runtime thread check (`check_thread` and the pointer's former `unsafe impl Send/Sync` were both deleted once `PipelineCell`/dropped `Send + Sync` bounds made confinement type-enforced). Re-entrancy primitives `RenderTree::get_two_mut` and `get_parent_and_children_mut` (both in `src/storage/tree.rs`) are implemented and shipped; their unsafe is local to each function with unit-testable disjoint-keys invariants.

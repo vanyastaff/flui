@@ -671,22 +671,14 @@ impl InstalledFamilies {
     }
 }
 
-/// The family to shape `style` with.
+/// The family to shape `style` with, against the process font system.
 ///
-/// Returns the style's own family when the database carries it, the matching
-/// generic when the style names one, and `Family::SansSerif` when the style
-/// names a family that is absent. The generic binding points that fallback at
-/// a carried family whenever the database holds a Latin-capable face. A generic is returned *as a generic*, so
-/// `Family::Monospace` keeps cosmic-text's monospace-specific fallback path —
-/// its `is_mono` bypass of the exact-weight filter, and its panose-driven
-/// monospace candidate set.
-///
-/// Every path here, the generic ones included, first brings
-/// [`InstalledFamilies`] and the generic bindings up to date with
-/// `font_system`, so a database that gained faces after construction resolves
-/// against what it now holds rather than what it held then.
-///
-/// The returned `Family` borrows `style`, so resolution allocates nothing.
+/// [`resolve_family_name`] over the families `font_system` carries. Every
+/// path, the generic ones included, first brings [`InstalledFamilies`] and
+/// the generic bindings up to date with `font_system`, so a database that
+/// gained faces after construction resolves against what it now holds rather
+/// than what it held then. A named family that degrades to the sans-serif
+/// generic is reported once per family.
 ///
 /// Average and worst case O(1) once `installed` is in sync, O(faces) on the
 /// call that observes a database change.
@@ -697,19 +689,66 @@ pub(crate) fn resolve_family<'a>(
     db_generation: u64,
 ) -> Family<'a> {
     installed.sync(font_system, db_generation);
+    let (family, degraded_from) = resolve(style, |name| installed.carries(name));
+    if let Some(requested) = degraded_from
+        && installed.reported_absent.insert(requested.into())
+    {
+        tracing::debug!(
+            family = requested,
+            "font family not installed, and no declared fallback is either; \
+             shaping through the sans-serif generic instead"
+        );
+    }
+    family
+}
 
+/// The family to shape `style` with, given which families the fonts carry.
+///
+/// Returns the style's own family when `carries` says so, the matching
+/// generic when the style names one, then the first entry of the style's
+/// declared fallback chain that is a generic or is carried, and
+/// `Family::SansSerif` when nothing is. The generic binding points that
+/// fallback at a carried family whenever the fonts hold a Latin-capable face.
+/// A generic is returned *as a generic*, so `Family::Monospace` keeps
+/// cosmic-text's monospace-specific fallback path — its `is_mono` bypass of
+/// the exact-weight filter, and its panose-driven monospace candidate set.
+///
+/// The one family rule of both shapers: the process font system asks it with
+/// the families its database carries, and the Parley path with the families
+/// its collection holds (ADR-0092 §7), so both are handed the same family for
+/// the same style when both hold the same faces. Past that family, both walk
+/// the same fallback order (`fallback_chain`).
+///
+/// The returned `Family` borrows `style`, so resolution allocates nothing.
+#[cfg_attr(
+    not(feature = "parley"),
+    expect(dead_code, reason = "the Parley path's shaping is its only caller")
+)]
+pub(crate) fn resolve_family_name(
+    style: Option<&TextStyle>,
+    carries: impl FnMut(&str) -> bool,
+) -> Family<'_> {
+    resolve(style, carries).0
+}
+
+/// [`resolve_family_name`], and the requested family when resolution
+/// degraded it to the sans-serif generic.
+fn resolve(
+    style: Option<&TextStyle>,
+    mut carries: impl FnMut(&str) -> bool,
+) -> (Family<'_>, Option<&str>) {
     let Some(requested) = style.and_then(|style| style.font_family.as_deref()) else {
         // Matches what `Attrs::new()` has always defaulted to; a style naming
         // no family is unchanged by this module beyond the generic binding.
-        return Family::SansSerif;
+        return (Family::SansSerif, None);
     };
 
     if let Some(generic) = generic_family(requested) {
-        return generic;
+        return (generic, None);
     }
 
-    if installed.carries(requested) {
-        return Family::Name(requested);
+    if carries(requested) {
+        return (Family::Name(requested), None);
     }
 
     // The declared chain, before giving up on it. `TextStyle::font_family_fallback`
@@ -724,21 +763,14 @@ pub(crate) fn resolve_family<'a>(
     // the degrade below.
     for candidate in style.map_or(&[][..], |style| style.font_family_fallback.as_slice()) {
         if let Some(generic) = generic_family(candidate) {
-            return generic;
+            return (generic, None);
         }
-        if installed.carries(candidate) {
-            return Family::Name(candidate);
+        if carries(candidate) {
+            return (Family::Name(candidate), None);
         }
     }
 
-    if installed.reported_absent.insert(requested.into()) {
-        tracing::debug!(
-            family = requested,
-            "font family not installed, and no declared fallback is either; \
-             shaping through the sans-serif generic instead"
-        );
-    }
-    Family::SansSerif
+    (Family::SansSerif, Some(requested))
 }
 
 #[cfg(test)]
@@ -937,10 +969,70 @@ mod tests {
         );
     }
 
+    /// Over the same faces, the Parley path's check (the collection holds a
+    /// family spelled exactly so) resolves every style to the family the
+    /// process font system resolves it to: a carried primary, the first
+    /// carried or generic entry of the chain past absent ones, the
+    /// sans-serif degrade, and a carried family spelled in another case,
+    /// which fontdb does not match and so degrades too.
+    #[cfg(feature = "parley")]
+    fn the_collection_resolves_the_family_the_font_system_does() {
+        use parley::fontique::{Blob, Collection, CollectionOptions};
+        use std::sync::Arc;
+
+        let mut system = font_system(database(&[ROBOTO, MATERIAL_ICONS]));
+        let mut installed = InstalledFamilies::default();
+        let mut collection = Collection::new(CollectionOptions {
+            shared: false,
+            system_fonts: false,
+        });
+        for bytes in [ROBOTO, MATERIAL_ICONS] {
+            collection.register_fonts(Blob::new(Arc::new(bytes)), None);
+        }
+
+        let chained = |family: &str, chain: &[&str]| TextStyle {
+            font_family: Some(family.to_owned()),
+            font_family_fallback: chain.iter().map(|name| (*name).to_owned()).collect(),
+            ..TextStyle::default()
+        };
+        let rows = [
+            (TextStyle::default(), Family::SansSerif),
+            (chained("Roboto", &[]), Family::Name("Roboto")),
+            (chained("roboto", &[]), Family::SansSerif),
+            (
+                chained("material icons", &["Material Icons"]),
+                Family::Name("Material Icons"),
+            ),
+            (
+                chained("CupertinoSystemText", &["-apple-system", "Material Icons"]),
+                Family::Name("Material Icons"),
+            ),
+            (
+                chained(
+                    "CupertinoSystemText",
+                    &["-apple-system", "monospace", "Roboto"],
+                ),
+                Family::Monospace,
+            ),
+            (
+                chained("Nothing Carries This", &["system-ui"]),
+                Family::SansSerif,
+            ),
+        ];
+        for (style, expected) in &rows {
+            let paint = resolve_family(Some(style), &mut system, &mut installed, 0);
+            let measure = resolve_family_name(Some(style), |name| {
+                crate::parley_text::holds_exactly(&mut collection, name)
+            });
+            assert_eq!(paint, *expected, "{style:?} on the font system");
+            assert_eq!(measure, paint, "{style:?}: the collection agrees");
+        }
+    }
+
     /// Font resolution rows: each names the family-selection rule it pins.
     #[test]
     fn family_resolution_contract() {
-        let cases: [(&str, fn()); 2] = [
+        let cases: Vec<(&str, fn())> = vec![
             (
                 "a_present_but_narrow_family_stops_the_chain",
                 a_present_but_narrow_family_stops_the_chain_without_per_glyph_fallback,
@@ -948,6 +1040,11 @@ mod tests {
             (
                 "oversized_space_from_an_emoji_face_is_closed",
                 oversized_space_from_an_emoji_face_is_closed,
+            ),
+            #[cfg(feature = "parley")]
+            (
+                "the_collection_resolves_the_family_the_font_system_does",
+                the_collection_resolves_the_family_the_font_system_does,
             ),
         ];
         let mut failed = Vec::new();
