@@ -1,26 +1,27 @@
 //! Measurement against paint on the host's own faces (ADR-0092 §7).
 //!
 //! The collection is the one the app builds, fed from the process font
-//! system (`FontCollection::with_host_faces`); the painter measures and
-//! paints on Parley over it, while carets, selection and line metrics read a
-//! cosmic-text layout the process font system shapes until ADR-0092 §10
-//! step 5. Both sides resolve the style's family by one rule and fall back
-//! past it in one order, so the paragraph measured is the paragraph the
-//! carets walk: CJK, emoji and a family chain the host only partly carries
-//! included. Its own binary, because it builds the process font system from
-//! the host's fonts.
+//! system (`FontCollection::with_host_faces`); the painter measures, paints
+//! and places carets on Parley over it, so what is measured is by identity
+//! what is painted. What the host decides is whether each row finds a face:
+//! the style's family is resolved by the family rule and fallen back past in
+//! the host's order, CJK, emoji and a family chain the host only partly
+//! carries included. Its own binary, because it builds the process font
+//! system from the host's fonts.
 
+use std::sync::Arc;
+
+use flui_foundation::geometry::Offset;
 use flui_painting::testing::{
     collection_holds, host_chain_covers, host_covers, host_family_names, host_sans_serif_family,
 };
 use flui_painting::typography::{FontWeight, TextDirection, TextSpan, TextStyle};
-use flui_painting::{FontCollection, TextContext, TextLayout, TextPainter, shared_font_system};
+use flui_painting::{
+    Canvas, DrawOp, FontCollection, ShapedParagraph, TextContext, TextPainter, shared_font_system,
+};
 
 const LATIN: &str = "Hamburgefonstiv 0123";
 const SIZES: [f64; 2] = [16.0, 32.0];
-/// The same face and the same shaper input on both sides leave only float
-/// accumulation between them.
-const TOLERANCE: f64 = 0.05;
 
 /// Cupertino's text chain: a family no host carries, then the system-font
 /// names each platform aliases, then the generic that ends it.
@@ -110,35 +111,53 @@ fn rows() -> Vec<(&'static str, TextStyle, &'static str)> {
     ]
 }
 
-/// `(measured, caret layout)` widths and heights of `text` in `style` at
-/// `size`: the painter's Parley measurement, and the cosmic-text layout its
-/// caret queries shape.
+/// The paragraph `painter` records.
+fn painted(painter: &TextPainter) -> Arc<ShapedParagraph> {
+    let mut canvas = Canvas::new();
+    painter.paint(&mut canvas, Offset::ZERO);
+    canvas
+        .finish()
+        .iter()
+        .find_map(|command| match &command.op {
+            DrawOp::Paragraph { paragraph, .. } => Some(Arc::clone(paragraph)),
+            _ => None,
+        })
+        .expect("a laid-out painter records a paragraph")
+}
+
+/// `(measured, painted)` widths and heights of `text` in `style` at `size`,
+/// and how many glyphs painted as `.notdef` (glyph 0), the glyph a run with
+/// no face for its text shapes to.
 fn measure_and_paint(
     context: &mut TextContext,
     style: &TextStyle,
     text: &str,
     size: f64,
-) -> ((f64, f64), (f64, f64)) {
+) -> ((f64, f64), (f64, f64), usize) {
     let style = TextStyle {
         font_size: Some(size),
         ..style.clone()
     };
     let mut painter = TextPainter::new()
-        .with_text(TextSpan::styled(text, style.clone()))
+        .with_text(TextSpan::styled(text, style))
         .with_text_direction(TextDirection::Ltr);
     painter.layout(context, 0.0, f64::INFINITY);
-    let painted =
-        TextLayout::new(text, Some(&style), size, None, None, TextDirection::Ltr).metrics();
+    let paragraph = painted(&painter);
+    let notdef = paragraph
+        .runs()
+        .flat_map(|run| run.glyphs().iter())
+        .filter(|glyph| glyph.id == 0)
+        .count();
     (
         (painter.width(), painter.height()),
-        (painted.width, painted.height),
+        (paragraph.size().width, paragraph.size().height),
+        notdef,
     )
 }
 
-/// Every row measures within [`TOLERANCE`] of the width and height its caret
-/// layout has. Fails on a collection holding only the bundled faces
-/// (`FontCollection::new()`): there CJK and emoji have no face to measure in,
-/// and a host-named family measures in Roboto.
+/// Every row the host covers paints what it measured, and paints no glyph as
+/// `.notdef`. Fails on a collection holding only the bundled faces
+/// (`FontCollection::new()`): there CJK and emoji have no face to paint in.
 #[test]
 fn measured_width_equals_painted_width_on_host_faces() {
     let fonts = FontCollection::with_host_faces(&shared_font_system());
@@ -166,18 +185,19 @@ fn measured_width_equals_painted_width_on_host_faces() {
             latin_rows += 1;
         }
         for size in SIZES {
-            let ((width, height), (painted_width, painted_height)) =
+            let ((width, height), (painted_width, painted_height), notdef) =
                 measure_and_paint(&mut context, &style, text, size);
             println!(
-                "{name} at {size} px: measured {width:.2} x {height:.2}, caret layout \
-                 {painted_width:.2} x {painted_height:.2}"
+                "{name} at {size} px: measured {width:.2} x {height:.2}, painted \
+                 {painted_width:.2} x {painted_height:.2}, {notdef} .notdef"
             );
-            if (width - painted_width).abs() > TOLERANCE
-                || (height - painted_height).abs() > TOLERANCE
+            if (width - painted_width).abs() > 1e-9
+                || (height - painted_height).abs() > 1e-9
+                || notdef > 0
             {
                 failures.push(format!(
-                    "{name} at {size} px: measured {width:.2} x {height:.2}, caret layout \
-                     {painted_width:.2} x {painted_height:.2}"
+                    "{name} at {size} px: measured {width:.2} x {height:.2}, painted \
+                     {painted_width:.2} x {painted_height:.2}, {notdef} .notdef"
                 ));
             }
         }

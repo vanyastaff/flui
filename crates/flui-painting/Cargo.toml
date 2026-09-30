@@ -104,16 +104,15 @@ path = "tests/parley_oracle.rs"
 name = "text_context"
 path = "tests/text_context.rs"
 
-# Parley's paragraph metrics and painted baselines against cosmic-text's on
-# the bundled Roboto (ADR-0092 gate 8). Its own binary: it builds the process
-# font system, which `text_context` asserts the Parley path never does.
+# Parley's paragraph metrics and painted baselines against what cosmic-text
+# measured on the bundled Roboto, recorded (ADR-0092 gate 8).
 [[test]]
 name = "parley_metrics_oracle"
 path = "tests/parley_metrics_oracle.rs"
 
-# Parley measurement against the cosmic-text caret layout on the host's own faces, over a
-# collection fed from the process font system (ADR-0092 §7). Its own binary:
-# it builds the process font system from the host's fonts.
+# Measurement against paint on the host's own faces, over a collection fed
+# from the process font system (ADR-0092 §7). Its own binary: it builds the
+# process font system from the host's fonts.
 [[test]]
 name = "host_faces_oracle"
 path = "tests/host_faces_oracle.rs"
