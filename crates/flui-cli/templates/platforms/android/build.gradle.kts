@@ -1,21 +1,11 @@
 plugins {
     id("com.android.application")
-    id("kotlin-android")
 }
 
 android {
     namespace = "{{package_name}}"
     compileSdk = 35
     ndkVersion = "29.0.14206865"
-
-    compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_11
-        targetCompatibility = JavaVersion.VERSION_11
-    }
-
-    kotlinOptions {
-        jvmTarget = JavaVersion.VERSION_11.toString()
-    }
 
     defaultConfig {
         applicationId = "{{package_name}}"

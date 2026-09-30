@@ -92,7 +92,7 @@ fn clean_platform(platform: &str) -> CliResult<Vec<PathBuf>> {
     }
 
     let sub_dirs: &[&str] = match platform {
-        "android" => &["app/build", ".gradle"],
+        "android" => &["app/build", "build", ".gradle", "app/src/main/jniLibs"],
         "web" => &["pkg"],
         "ios" => &["build"],
         _ => &[],
