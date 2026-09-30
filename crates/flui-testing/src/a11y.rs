@@ -27,7 +27,7 @@ use flui_semantics::{
 // version that must match ours. Named items only — a glob would enrol every
 // future accesskit item into this crate's contract without anyone deciding to.
 // `ActionRequest` and its payload type are here because they are the
-// *parameter* of [`invoke_semantics_action`]: a caller cannot construct a
+// *parameter* of `invoke_semantics_action`: a caller cannot construct a
 // request, or a replacement for its target tree, without naming them. The two
 // geometry payloads are aliased because `Rect` and `Point` are otherwise
 // indistinguishable from this crate's own vocabulary at a call site, and a
@@ -425,6 +425,12 @@ pub enum InvokeActionError {
 /// Deliver an accessibility action to the node it addresses, as a platform
 /// adapter would.
 ///
+/// Crate-private: a widget's action handlers are owner-local and run only
+/// inside its realm, so the public entry points are
+/// [`LaidOut::invoke_semantics_action`](crate::widgets::LaidOut::invoke_semantics_action)
+/// and [`Harness::invoke_semantics_action`](crate::widgets::harness::Harness::invoke_semantics_action),
+/// which enter the realm around this.
+///
 /// The write half of this module: [`A11yTree::nodes`] and
 /// [`A11yNode::supports_action`] say what the tree *advertises*, and this says
 /// whether pressing it *does* anything. A node can do both and still be dead —
@@ -481,7 +487,7 @@ pub enum InvokeActionError {
 /// presentation has no semantics owner, when the node id is unknown, or when the
 /// node does not effectively support the action — the last of which is how
 /// `block_user_actions` becomes observable.
-pub fn invoke_semantics_action(
+pub(crate) fn invoke_semantics_action(
     cell: &PipelineCell,
     request: accesskit::ActionRequest,
 ) -> Result<(), InvokeActionError> {

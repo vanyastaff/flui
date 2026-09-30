@@ -407,6 +407,54 @@ impl<'a> RenderObjectContext<'a> {
     ) -> Result<(), RenderObjectContextError> {
         Ok(self.dispatch_handle()?.unregister_shader_mask(target)?)
     }
+
+    /// Register an owner-local payload in the active owner lane.
+    ///
+    /// For a render view whose executable state does not fit one callback
+    /// shape — a drag target's slot, a semantics node's action table. The
+    /// returned target is data-only and may be stored in a render object or
+    /// published as hit-test metadata; its dispatcher resolves it back with
+    /// `flui_interaction::resolve_local_payload` on the owner thread.
+    ///
+    /// # Errors
+    ///
+    /// Returns the lane's typed dispatch error when no owner lane is active,
+    /// the element was mounted detached, or the owner is gone.
+    pub fn register_local_payload(
+        &self,
+        payload: std::rc::Rc<dyn std::any::Any>,
+    ) -> Result<flui_interaction::LocalPayloadTarget, RenderObjectContextError> {
+        Ok(self.dispatch_handle()?.register_local_payload(payload)?)
+    }
+
+    /// Replace an existing payload without changing its data-plane identity.
+    ///
+    /// # Errors
+    ///
+    /// Returns the lane's typed dispatch error for wrong/detached owner state
+    /// or for a target that no longer belongs to the active owner lane.
+    pub fn replace_local_payload(
+        &self,
+        target: flui_interaction::LocalPayloadTarget,
+        payload: std::rc::Rc<dyn std::any::Any>,
+    ) -> Result<(), RenderObjectContextError> {
+        Ok(self
+            .dispatch_handle()?
+            .replace_local_payload(target, payload)?)
+    }
+
+    /// Remove a payload from future owner-lane resolution.
+    ///
+    /// # Errors
+    ///
+    /// Returns the lane's typed dispatch error for wrong/detached owner state
+    /// or for a target already removed from the active owner lane.
+    pub fn unregister_local_payload(
+        &self,
+        target: flui_interaction::LocalPayloadTarget,
+    ) -> Result<(), RenderObjectContextError> {
+        Ok(self.dispatch_handle()?.unregister_local_payload(target)?)
+    }
 }
 
 // ============================================================================
