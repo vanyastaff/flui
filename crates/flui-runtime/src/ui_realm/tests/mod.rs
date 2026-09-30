@@ -468,3 +468,9 @@ fn frame_failure_containment_matrix() {
 // presentation.
 // ========================================================================
 mod text_context;
+
+// ========================================================================
+// A face registered on the app's collection re-lays out every realm's text
+// at its next frame (ADR-0092 §10 step 3b).
+// ========================================================================
+mod font_registration;

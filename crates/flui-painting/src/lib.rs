@@ -31,7 +31,7 @@
 //! the shape a `RenderParagraph` drives. [`TextLayout`] underneath shapes
 //! through the process-wide font system, which the engine's glyph pipeline
 //! shares ([`shared_font_system`]) so a face registered through
-//! [`SharedFontSystem::register_font`] measures and paints alike.
+//! [`FontCollection::register_font`] measures and paints alike.
 //!
 //! # Decorations
 //!

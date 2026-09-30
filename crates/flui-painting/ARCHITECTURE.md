@@ -96,12 +96,17 @@ The font system is a `OnceLock<Arc<Mutex<FontState>>>`, an ambient residual
 (a process-global the runtime still reaches); `AppRuntime` installs it at realm
 install so first use is not whichever text measurement runs first.
 `SharedFontSystem` is the handle the engine's glyph atlas rasterises from
-(ADR-0016), so a face registered through `register_font` measures and
-paints alike. It has four doors: `shape(|Shaper| …)` resolves and shapes
-under one acquisition and never bumps the generation; `register_font` is
-the only mutation, append-only, and bumps it; `generation()` is what every
-shaped-text cache keys on (ADR-0065); `rasterize(GlyphKey)` returns one
-glyph's bitmap for the engine's atlas (ADR-0067). The embedded baseline
+(ADR-0016), so a face registered on the app's collection measures and
+paints alike. It has three public doors: `shape(|Shaper| …)` resolves and
+shapes under one acquisition and never bumps the generation;
+`generation()` is what every shaped-text cache keys on (ADR-0065);
+`rasterize(GlyphKey)` returns one glyph's bitmap for the engine's atlas
+(ADR-0067). The one mutation, append-only and bumping the generation, is
+crate-internal (`add_face`): an app registers through
+`FontCollection::register_font` on a collection built by `with_host_faces`,
+which loads the face here and into the collection (decision 11). The
+`testing` feature keeps `SharedFontSystem::register_font` as a paint-only
+door for tests. The embedded baseline
 faces (`fonts.rs`, `bundled-fonts`) are installed at construction, so a
 headless test measures an `Icon` in the face the app paints.
 
@@ -197,8 +202,8 @@ consumer at all and broke the "immutable after recording" claim.
 `PaintingBinding` owned an image cache nothing read (the live decode cache
 is `flui_widgets::image::decode_cache`) and a font-change notifier nothing
 listened to; its one live accessor reached the process-wide font system,
-which `shared_font_system()` now names directly, and `register_font` lives
-on `SharedFontSystem`. `ClipContext` had no production implementor.
+which `shared_font_system()` now names directly, and a registration goes
+through `FontCollection::register_font`. `ClipContext` had no production implementor.
 
 ### 5. `Canvas::finish(self) -> DisplayList` stays infallible
 
@@ -467,9 +472,20 @@ collection's data once, on its next shape, and `register_font` itself clones
 fontique's local collection data to get the `&mut` its registration takes,
 rather than holding a FLUI lock; both are accepted because registration is
 rare. Until ADR-0092 §10 step 6 the bundled faces sit in both this collection
-and the cosmic-text font system. Locked by `two_realms_shape_in_parallel` and
+and the cosmic-text font system, and so does every registered face: the
+collection is the one registration door, and one built by `with_host_faces`
+keeps that font system as its paint side and loads each face there first. The
+collection judges the bytes on a scratch fontique collection before the paint
+side loads anything, so bytes one side reads and the other does not (a face
+with no `cmap`: fontdb loads it, fontique finds no family) change neither.
+`FontCollection::check_font` gives the same verdict with no collection at
+all, for the app to answer a registration made before its first window.
+`FontCollection::new` has
+no paint side and never touches the process font system. Locked by
+`two_realms_shape_in_parallel` and
 `a_face_registered_after_the_fork_shapes_in_every_realm`
-(`tests/text_context.rs`).
+(`tests/text_context.rs`), and `registration_contract`
+(`src/text_layout/context.rs`).
 
 
 ### 12. `TextDirection` sets line alignment on the Parley path, not the base direction
@@ -627,8 +643,8 @@ ADR-0092 §10 step 6, so it mirrors one into the other instead.
 - The feed reads the host's font files a second time before the first frame
   (about 35 ms over 76 families on the Windows development host), until
   ADR-0092 §10 step 3b's event lets it run off the owner thread.
-- A face registered after the feed reaches the process font system only
-  (decision 15; ADR-0092 §10 step 3b).
+- A face registered after the feed reaches the collection and the process
+  font system together, through `FontCollection::register_font` (decision 11).
 
 Locked by `measured_width_equals_painted_width_on_host_faces` and
 `every_family_the_process_font_system_carries_resolves_in_the_collection`
@@ -649,11 +665,6 @@ the row `the_collection_resolves_the_family_the_font_system_does` of
 
 ## Open items
 
-- **Nothing marks text render objects dirty on `register_font`.** The caches
-  heal at the next layout (they key on `generation()` and on the collection's
-  `FontCollection::generation`), but the layout is not requested by the
-  registration — ADR-0092 §10 step 3b raises a font-collection-changed event
-  on every realm for it.
 - **`Save`/`Restore` carry a transform nobody reads.** Every command is
   stamped, the markers included; a marker-only shape would save 64 bytes
   per scope at the cost of a second command type on the wire.

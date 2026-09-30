@@ -22,6 +22,7 @@ mod device_recovery;
     not(target_arch = "wasm32")
 ))]
 mod first_reveal;
+mod fonts;
 mod frame_pacing;
 mod host;
 #[cfg(target_os = "ios")]
@@ -54,6 +55,7 @@ pub use android::{run_app_android, run_app_android_with_config};
     not(target_arch = "wasm32")
 ))]
 use desktop::run_desktop;
+pub use fonts::{FontRegistrationError, register_font};
 pub(crate) use host::{OwnerHostClearGuard, install_owner_platform, with_owner_platform};
 #[cfg(target_os = "ios")]
 pub use ios::{run_app_ios, run_app_ios_with_config};

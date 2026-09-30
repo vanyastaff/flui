@@ -4,10 +4,7 @@
 //! OUT of its slot while its own computation runs, making re-entry through
 //! a cyclic child link detectable rather than UB.
 
-use std::cell::RefCell;
-
 use flui_foundation::RenderId;
-use flui_painting::TextContext;
 #[cfg(any(test, feature = "testing"))]
 use rustc_hash::FxHashMap;
 
@@ -15,6 +12,7 @@ use rustc_hash::FxHashMap;
 use crate::testing::parent_data::ParentDataSeed;
 
 use crate::parent_data::ParentData;
+use crate::pipeline::TextLender;
 use crate::pipeline::phase::PipelinePhase;
 use crate::storage::RenderTree;
 
@@ -59,10 +57,12 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         let Self {
             render_tree,
             layout_poison,
+            text_measurers,
             ..
         } = self;
         let mut slots = acquire_query_slots(render_tree, id)?;
-        let mut cx = QueryPoisonCx::new(layout_poison, text.cell());
+        let mut cx =
+            QueryPoisonCx::new(layout_poison, TextLender::new(text.cell(), text_measurers));
         let result = intrinsic_query(
             &mut slots,
             &mut cx,
@@ -108,10 +108,12 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         let Self {
             render_tree,
             layout_poison,
+            text_measurers,
             ..
         } = self;
         let mut slots = acquire_query_slots(render_tree, id)?;
-        let mut cx = QueryPoisonCx::new(layout_poison, text.cell());
+        let mut cx =
+            QueryPoisonCx::new(layout_poison, TextLender::new(text.cell(), text_measurers));
         let result = dry_layout_query(
             &mut slots,
             &mut cx,
@@ -152,10 +154,12 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         let Self {
             render_tree,
             layout_poison,
+            text_measurers,
             ..
         } = self;
         let mut slots = acquire_query_slots(render_tree, id)?;
-        let mut cx = QueryPoisonCx::new(layout_poison, text.cell());
+        let mut cx =
+            QueryPoisonCx::new(layout_poison, TextLender::new(text.cell(), text_measurers));
         let result = dry_baseline_query(
             &mut slots,
             &mut cx,
@@ -233,8 +237,9 @@ pub(super) struct QuerySlot<'a> {
 /// walk's borrows are released.
 pub(super) struct QueryPoisonCx<'a> {
     poison: &'a LayoutPoison,
-    /// The realm's text context, lent to every node the query measures.
-    text: &'a RefCell<TextContext>,
+    /// The realm's text context, lent to every node the query measures;
+    /// each loan records the node it was made for.
+    text: TextLender<'a>,
     failures: Vec<(
         RenderId,
         RenderId,
@@ -245,7 +250,7 @@ pub(super) struct QueryPoisonCx<'a> {
 }
 
 impl<'a> QueryPoisonCx<'a> {
-    fn new(poison: &'a LayoutPoison, text: &'a RefCell<TextContext>) -> Self {
+    fn new(poison: &'a LayoutPoison, text: TextLender<'a>) -> Self {
         Self {
             poison,
             text,
@@ -502,7 +507,7 @@ fn intrinsic_query_impl(
                 children.len(),
                 &child_parent_data_refs,
                 &mut child_query,
-                crate::pipeline::TextSource::new(text),
+                text.source(id),
             )
         };
         if let Some(err) = child_err {
@@ -640,7 +645,7 @@ fn dry_layout_query_impl(
                 children.len(),
                 &child_parent_data_refs,
                 &mut child_query,
-                crate::pipeline::TextSource::new(text),
+                text.source(id),
             )
         };
         if let Some(err) = child_err {
@@ -785,7 +790,7 @@ fn dry_baseline_query_impl(
                 children.len(),
                 &child_parent_data_refs,
                 &mut child_query,
-                crate::pipeline::TextSource::new(text),
+                text.source(id),
             )
         };
         if let Some(err) = child_err {

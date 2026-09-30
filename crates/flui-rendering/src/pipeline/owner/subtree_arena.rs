@@ -44,9 +44,7 @@
 // rest of the owner module's unit tests ride along in the same filter).
 #![expect(unsafe_code)]
 
-use std::cell::RefCell;
-
-use flui_painting::TextContext;
+use crate::pipeline::TextLender;
 
 use std::collections::HashMap;
 use std::marker::PhantomData;
@@ -224,8 +222,9 @@ pub(super) struct SubtreeArena<'tree> {
     layout_poison: &'tree LayoutPoison,
     /// The realm's text context, lent to each node the walk lays out or
     /// measures: box leaves, box parents, and box intrinsic queries, whether
-    /// a box or a sliver parent asked for them.
-    text: &'tree RefCell<TextContext>,
+    /// a box or a sliver parent asked for them. Each loan records the node
+    /// it was made for.
+    text: TextLender<'tree>,
     /// Nodes this walk re-attempted despite being poisoned because the
     /// incoming constraints differ from the failed attempt's.  A success
     /// for such a node IS a real recovery, so
@@ -283,7 +282,7 @@ impl<'tree> SubtreeArena<'tree> {
         ids: &[RenderId],
         refs: Vec<&'tree mut RenderNode>,
         layout_poison: &'tree LayoutPoison,
-        text: &'tree RefCell<TextContext>,
+        text: TextLender<'tree>,
         #[cfg(any(test, feature = "testing"))] all_seeds: &FxHashMap<RenderId, ParentDataSeed>,
     ) -> Self {
         debug_assert_eq!(
@@ -553,7 +552,7 @@ impl<'tree> SubtreeArena<'tree> {
         render_tree: &'tree mut RenderTree,
         id: RenderId,
         layout_poison: &'tree LayoutPoison,
-        text: &'tree RefCell<TextContext>,
+        text: TextLender<'tree>,
         #[cfg(any(test, feature = "testing"))] all_seeds: &FxHashMap<RenderId, ParentDataSeed>,
     ) -> crate::error::RenderResult<Self> {
         let subtree_ids = render_tree.collect_subtree_ids(id);
@@ -1155,8 +1154,7 @@ unsafe fn layout_subtree_borrowed_impl(
 
         // Leaf path: delegate to layout_leaf_only.
         if is_leaf {
-            return entry
-                .layout_leaf_only(constraints, crate::pipeline::TextSource::new(arena.text));
+            return entry.layout_leaf_only(constraints, arena.text.source(id));
         }
 
         // Descendant-error tracking flag.  Closure flips to `true` on any
@@ -1365,7 +1363,7 @@ unsafe fn layout_subtree_borrowed_impl(
             Some(crate::protocol::DegradationProbe::new(
                 &arena.degradation_events,
             )),
-            crate::pipeline::TextSource::new(arena.text),
+            arena.text.source(id),
         );
         let erased: &mut dyn BoxLayoutCtxErased = &mut ctx;
 
@@ -1670,7 +1668,7 @@ unsafe fn box_intrinsic_query_borrowed_impl(
             child_ids.len(),
             &child_parent_data_refs,
             &mut child_query,
-            crate::pipeline::TextSource::new(arena.text),
+            arena.text.source(id),
         )
     };
 

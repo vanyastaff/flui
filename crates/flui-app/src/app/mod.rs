@@ -59,6 +59,7 @@ pub use runner::open_secondary_window;
 pub use runner::open_window;
 #[cfg(not(target_os = "ios"))]
 pub use runner::request_presentation_close;
+pub use runner::{FontRegistrationError, register_font};
 #[cfg(target_os = "android")]
 pub use runner::{run_app_android, run_app_android_with_config};
 pub use runner::{run_app_impl as run_app, run_app_with_config_impl as run_app_with_config};

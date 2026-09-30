@@ -26,9 +26,10 @@ both measuring and painting.**
 - `flui_painting::shared_font_system()` returns a `SharedFontSystem` handle to
   it. `flui-painting` is the lowest crate that needs fonts, and `flui-engine`
   depends on it, so the engine reaches down rather than owning a copy.
-- `SharedFontSystem::register_font(&[u8])` is the only way the font database
-  changes after construction. It is append-only and bumps a generation that
-  every shaped-text cache keys on.
+- The font database changes after construction only through
+  `FontCollection::register_font`, which loads the face here through a
+  crate-internal door (`add_face`) as it adds it to the collection. It is
+  append-only and bumps a generation that every shaped-text cache keys on.
 - The baseline faces load at construction: host fonts plus the embedded faces
   behind `flui-painting`'s default-on `bundled-fonts` feature (Roboto, Material
   Icons, Cupertino Icons), so `Icon` renders a glyph out of the box and
@@ -46,9 +47,13 @@ keeping two databases in sync.
 Today the font system is a process-wide static (`FONT_SYSTEM` in
 `flui-painting`'s `text_layout`), eagerly constructed by
 `SharedEngineServices::resolve()` at realm install and read ambiently on layout
-paths. `register_font` from one realm is a staleness window for another
-realm's in-flight layout, not a data race, and heals at the next layout through
-the generation key. The target is a font system per realm rather than a
+paths. Apps register through the app's `FontCollection` (`flui::register_font`),
+which feeds the face into this font system as well, so paint still has one
+source; every realm lays out again, on its next frame, the text it measured
+before the face existed (ADR-0092 §2). `SharedFontSystem::register_font` is no
+longer an app's door: the collection reaches the database through a
+crate-internal one, and a `testing` door remains for tests of the paint side.
+The target is a font system per realm rather than a
 process global; ADR-0077 records that together with the move to parley, and
 supersedes this record when accepted. The part that carries over unchanged is
 the decision above: one font source for measuring and painting.

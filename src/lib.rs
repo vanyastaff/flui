@@ -215,6 +215,10 @@ pub use flui_app::run_app;
 /// [`run_app`] with an explicit [`AppConfig`] (window title, size, services,
 /// failure policy). Re-exported from [`app`] (`flui-app`).
 pub use flui_app::run_app_with_config;
+/// Registers a font's faces with the app, for measurement and paint alike;
+/// every realm lays its text out again on its next frame. Re-exported from
+/// [`app`] (`flui-app`).
+pub use flui_app::{FontRegistrationError, register_font};
 /// The Android entry points, called from the `cdylib`'s `android_main`
 /// (`flui create` writes one). Re-exported from `flui-app`.
 #[cfg(target_os = "android")]
@@ -274,7 +278,7 @@ pub mod prelude {
         not(target_arch = "wasm32")
     ))]
     pub use flui_app::app::{AppWindowError, open_secondary_window, open_window};
-    pub use flui_app::{run_app, run_app_with_config};
+    pub use flui_app::{register_font, run_app, run_app_with_config};
     #[cfg(feature = "material")]
     pub use flui_material::{
         AlertDialog, AppBar, BackButton, Card, Checkbox, Chip, ColorScheme, DefaultTabController,
