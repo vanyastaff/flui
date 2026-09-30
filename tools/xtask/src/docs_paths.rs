@@ -7,8 +7,8 @@
 //! - the link destinations of `llms.txt`, which lychee reads as plain text,
 //!   with an `#anchor` into Markdown naming one of its headings;
 //! - the package after `-p`/`--package` in a cargo command, in a code span or
-//!   a code block, which must be one the checkout has, or for `cargo update`
-//!   and `cargo tree` one in `Cargo.lock` ([`Packages`]).
+//!   a code block, which must be one the checkout has, or for `cargo update`,
+//!   `tree`, `pkgid` and `clean` one in `Cargo.lock` ([`Packages`]).
 //!
 //! [`extract`] says what counts as a path or a package. A path resolves
 //! against the repository root, the doc's own directory, or the package the
@@ -136,8 +136,9 @@ fn listed(root: &std::path::Path) -> anyhow::Result<Vec<String>> {
 }
 
 /// The cargo subcommands whose `-p` takes any package of the resolved graph,
-/// a dependency too (`cargo update -p wgpu`, `cargo tree -p parley`).
-const GRAPH_SUBCOMMANDS: [&str; 2] = ["tree", "update"];
+/// a dependency too (`cargo update -p wgpu`, `cargo tree -p parley`,
+/// `cargo pkgid -p wgpu`, `cargo clean -p wgpu`).
+const GRAPH_SUBCOMMANDS: [&str; 4] = ["clean", "pkgid", "tree", "update"];
 
 /// The packages a `-p` may name.
 #[derive(Debug, Default)]
@@ -364,8 +365,8 @@ fn stale(
     for code in extract::code(text) {
         if !code.block {
             for path in extract::paths(&code.text) {
-                if !known.resolves(doc, path) {
-                    push(code.line, Kind::Path, path);
+                if !known.resolves(doc, &path) {
+                    push(code.line, Kind::Path, &path);
                 }
             }
         }
@@ -381,10 +382,12 @@ fn stale(
             let Some(path) = link_target(doc, &dest) else {
                 continue;
             };
-            let anchor = dest.split_once('#').map(|(_, anchor)| anchor);
+            let anchor = dest
+                .split_once('#')
+                .map(|(_, anchor)| percent_decoded(anchor));
             let resolves = path.as_deref().is_some_and(|path| {
                 known.has(path)
-                    && anchor.is_none_or(|anchor| {
+                    && anchor.as_ref().is_none_or(|anchor| {
                         // an anchor into Markdown names a heading, as lychee checks it
                         !(extract::has_extension(path, "md") || path == doc)
                             || read(path)
@@ -420,10 +423,13 @@ fn link_target(doc: &str, dest: &str) -> Option<Option<String>> {
         None if dest.contains(':') || dest.starts_with("//") || dest.is_empty() => return None,
         None => dest,
     };
-    let dest = dest.split(['#', '?']).next().unwrap_or_default();
+    let dest = percent_decoded(dest.split(['#', '?']).next().unwrap_or_default());
     let (base, rest) = match dest.strip_prefix('/') {
         Some(rest) => ("", rest),
-        None => (doc.rsplit_once('/').map_or("", |(dir, _)| dir), dest),
+        None => (
+            doc.rsplit_once('/').map_or("", |(dir, _)| dir),
+            dest.as_str(),
+        ),
     };
     let mut segments: Vec<&str> = base.split('/').filter(|s| !s.is_empty()).collect();
     for segment in rest.split('/') {
@@ -438,6 +444,28 @@ fn link_target(doc: &str, dest: &str) -> Option<Option<String>> {
         }
     }
     Some(Some(segments.join("/")))
+}
+
+/// `text` with each `%XX` escape of a URL decoded (`review%20probe.md` is the
+/// file `review probe.md`); an escape that is not two hex digits stays as written.
+fn percent_decoded(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut at = 0;
+    while at < bytes.len() {
+        let escaped = (bytes[at] == b'%')
+            .then(|| text.get(at + 1..at + 3))
+            .flatten()
+            .and_then(|hex| u8::from_str_radix(hex, 16).ok());
+        if let Some(byte) = escaped {
+            decoded.push(byte);
+            at += 3;
+        } else {
+            decoded.push(bytes[at]);
+            at += 1;
+        }
+    }
+    String::from_utf8_lossy(&decoded).into_owned()
 }
 
 /// The allowlist file.

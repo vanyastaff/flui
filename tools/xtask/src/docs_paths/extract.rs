@@ -191,13 +191,15 @@ pub(super) fn anchors(markdown: &str) -> BTreeSet<String> {
 }
 
 /// The repository paths a code span names, each without its `:line`,
-/// `#anchor` or `::item` suffix; a trailing `/` is kept (a directory).
-pub(super) fn paths(span: &str) -> Vec<&str> {
+/// `#anchor` or `::item` suffix and with its `.` and `..` segments resolved;
+/// a trailing `/` is kept (a directory).
+pub(super) fn paths(span: &str) -> Vec<String> {
     span.split_whitespace().filter_map(path).collect()
 }
 
-/// `word` as a repository path, when it is one.
-fn path(word: &str) -> Option<&str> {
+/// `word` as a repository path, when it is one. A path that climbs above the
+/// root with `..` names nothing in the checkout and is not one.
+fn path(word: &str) -> Option<String> {
     let word = word.trim_start_matches(['(', '[', '"', '\'']);
     let word = word.split_once('#').map_or(word, |(path, _)| path);
     let word = match word.split_once("::") {
@@ -213,11 +215,29 @@ fn path(word: &str) -> Option<&str> {
     let plain = word
         .bytes()
         .all(|byte| byte.is_ascii_alphanumeric() || b"._-/".contains(&byte));
-    let dotted = word
-        .trim_end_matches('/')
-        .split('/')
-        .any(|segment| segment.is_empty() || segment.chars().all(|c| c == '.'));
-    (plain && !dotted).then_some(word)
+    if !plain {
+        return None;
+    }
+    let mut segments = Vec::new();
+    for segment in word.trim_end_matches('/').split('/') {
+        match segment {
+            "." => {}
+            ".." => {
+                segments.pop()?;
+            }
+            // `docs//x`, or an ellipsis standing for elided segments
+            segment if segment.chars().all(|c| c == '.') => return None,
+            segment => segments.push(segment),
+        }
+    }
+    if segments.is_empty() {
+        return None;
+    }
+    let mut path = segments.join("/");
+    if word.ends_with('/') {
+        path.push('/');
+    }
+    Some(path)
 }
 
 /// `word` without a `:12`, `:12:5` or `:12-40` suffix.
@@ -246,18 +266,37 @@ pub(super) struct Selected {
 /// (`cargo --color always update`).
 const GLOBAL_VALUE_OPTIONS: [&str; 4] = ["--color", "--config", "-C", "-Z"];
 
+/// `env`'s options that take a value in the next word.
+const ENV_VALUE_OPTIONS: [&str; 4] = ["-u", "--unset", "-C", "--chdir"];
+
 /// The packages the cargo commands in `code` select, in every spelling cargo
 /// takes: `-p x`, `--package x`, `-p=x`, `--package=x` and `-px`. A command is
-/// cargo's when its first word, after any `NAME=value` assignments, is
-/// `cargo` (or a path ending in `/cargo`); its arguments stop at `--`, after
-/// which they are the program's.
+/// cargo's when its first word, after any `NAME=value` assignments and an
+/// `env` wrapper, is `cargo` (or a path ending in `/cargo`); its arguments stop
+/// at `--`, after which they are the program's.
 pub(super) fn packages(code: &str) -> Vec<Selected> {
     let mut found = Vec::new();
     for command in shell::commands(code) {
         let mut words = command.into_iter().skip_while(|(_, word)| assignment(word));
-        let Some((_, program)) = words.next() else {
+        let Some((_, mut program)) = words.next() else {
             continue;
         };
+        // `env [OPTION]... [NAME=VALUE]... COMMAND [ARG]...` runs COMMAND
+        while program == "env" || program.ends_with("/env") {
+            let mut command = None;
+            while let Some((_, word)) = words.next() {
+                if ENV_VALUE_OPTIONS.contains(&word.as_str()) {
+                    words.next();
+                } else if !word.starts_with('-') && !assignment(&word) {
+                    command = Some(word);
+                    break;
+                }
+            }
+            let Some(command) = command else {
+                break;
+            };
+            program = command;
+        }
         if program != "cargo" && !program.ends_with("/cargo") {
             continue;
         }
@@ -305,15 +344,16 @@ fn assignment(word: &str) -> bool {
     })
 }
 
-/// `word` as a package name, without a `@version`, when it is not a placeholder.
+/// `word` as a package name, without a `@version`; `None` for a placeholder
+/// (`<crate>`, `$CRATE`, `{name}`, `…`), which names no one package. Any other
+/// word is the name as written, so a malformed one (`definitely.missing`) is
+/// a finding, as cargo rejects it.
 fn package(word: &str) -> Option<&str> {
-    let word = word.trim_end_matches([';', ',', ')']);
     let name = word.split_once('@').map_or(word, |(name, _)| name);
-    let plain = !name.is_empty()
-        && name
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || b"_-".contains(&byte));
-    plain.then_some(name)
+    let placeholder = name.is_empty()
+        || name.contains(['<', '>', '$', '{', '}', '*', '…'])
+        || name.contains("...");
+    (!placeholder).then_some(name)
 }
 
 /// Byte offsets to 1-based line numbers.

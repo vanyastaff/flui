@@ -30,6 +30,10 @@ fn a_path_needs_a_known_root_and_a_slash() {
             &["crates/flui-view/ARCHITECTURE.md"][..],
         ),
         ("docs/adr/", &["docs/adr/"]),
+        // `.` and `..` resolve, so a stale path behind them is still checked
+        ("docs/./adr/../testing.md", &["docs/testing.md"]),
+        ("docs/../removed.md", &["removed.md"]),
+        ("crates/flui-view/../flui-app/", &["crates/flui-app/"]),
         // a misspelt crate is this repository's path, not another's
         (
             "crates/fluu-view/src/lib.rs",
@@ -91,7 +95,9 @@ fn a_pattern_a_placeholder_or_a_foreign_layout_is_not_a_path() {
         "crates/…/src",
         "crates/.../src",
         "docs//x.md",
-        "docs/../x.md",
+        // climbing above the root, or resolving to the root itself
+        "docs/../../x.md",
+        "docs/..",
         "src/semantics/semantics.dart",
         "packages/flutter/lib/src/rendering/object.dart",
         "packages/flutter_test/lib/x",
@@ -152,7 +158,18 @@ fn packages_are_read_only_from_cargo_commands() {
             "cargo run -p flui-cli -- -p 8080",
             &[(0, Some("run"), "flui-cli")],
         ),
+        // `env` runs the command after its options and assignments
+        ("env RUSTFLAGS=x cargo test -p a", &[(0, test, "a")]),
+        ("env -i -u X -C dir cargo build -p a", &[(0, build, "a")]),
+        ("/usr/bin/env cargo test -p a", &[(0, test, "a")]),
+        // a malformed name is taken as written, for the check to reject
+        (
+            "cargo test -p definitely.missing",
+            &[(0, test, "definitely.missing")],
+        ),
         // not cargo, or cargo's command ended
+        ("env echo cargo test -p gone", &[]),
+        ("env RUSTFLAGS=x", &[]),
         ("mkdir -p target/x", &[]),
         ("cargo build && mkdir -p out", &[]),
         ("cargo build&& mkdir -p out", &[]),
@@ -170,6 +187,7 @@ fn packages_are_read_only_from_cargo_commands() {
         ("cargo test -p <crate>", &[]),
         ("cargo test -p $CRATE", &[]),
         ("cargo test -p {name}", &[]),
+        ("cargo test -p …", &[]),
     ] {
         let selected = extract::packages(code);
         let got: Vec<(usize, Option<&str>, &str)> = selected
@@ -192,6 +210,8 @@ fn a_lockfile_package_is_selected_only_by_update_and_tree() {
         ("cargo test -p flui-view", true),
         ("cargo update -p wgpu", true),
         ("cargo tree -p wgpu", true),
+        ("cargo pkgid -p wgpu", true),
+        ("cargo clean -p wgpu", true),
         ("cargo test -p wgpu", false),
         ("cargo -p wgpu", false),
         ("cargo update -p flui-types", false),
@@ -330,6 +350,8 @@ fn an_llms_link_resolves_like_a_github_link() {
         ("https://github.com/vanyastaff/flui/issues/1", None),
         ("mailto:a@b.c", None),
         ("//example.com/docs", None),
+        // a percent-escaped name is the file's name
+        ("docs/review%20probe.md", Some(Some("docs/review probe.md"))),
         ("#start-here", Some(Some("llms.txt"))),
     ] {
         let got = link_target("llms.txt", dest);
@@ -349,7 +371,8 @@ fn a_doc_reports_each_stale_name_once() {
                 ```sh\ncargo update -p wgpu\ncargo test -p flui-types\ncargo test -p wgpu\n```\n\n\
                 [ok](docs/testing.md) [gone](docs/gone.md) [out](../x.md) [web](https://a.b/)\n\
                 [h](docs/testing.md#the-harness) [no](docs/testing.md#no-heading) \
-                [dir](crates/flui-view#x) [self](#no-heading)\n";
+                [dir](crates/flui-view#x) [self](#no-heading) \
+                [escaped](docs/testing.md#the%2Dharness)\n";
     let names = |doc: &str| -> Vec<(usize, Kind, String)> {
         stale(doc, text, &known, &packages, &read)
             .into_iter()
