@@ -75,28 +75,38 @@ impl flui_view::View for Counter {
 
 fn counter(realm: &UiRealm, hide_at: Option<u32>) -> Arc<AtomicU32> {
     let presses = Arc::new(AtomicU32::new(0));
+    // Inside the realm's entry, as a host attaches: the button's semantics
+    // action lives in the realm's interaction lane.
     realm
-        .attach_root_widget_to_for_test(
-            realm.presentation_id(),
-            &Counter {
-                presses: Arc::clone(&presses),
-                hide_at,
-            },
-        )
+        .enter(|realm| {
+            realm.attach_root_widget_to_for_test(
+                realm.presentation_id(),
+                &Counter {
+                    presses: Arc::clone(&presses),
+                    hide_at,
+                },
+            )
+        })
         .expect("the counter attaches");
     presses
 }
 
 /// One whole frame, post-frame callbacks included: the frame step a pump
-/// runs after its drain, without the drain.
+/// runs after its drain, without the drain, inside the realm's entry as a
+/// pump runs it.
 fn frame(realm: &UiRealm, sink: &mut ScriptedSink) {
     let now = flui_scheduler::Instant::now();
-    let _presented = realm.drive_frame(now, flui_scheduler::IdleDeadline::far_future(now), || {
-        realm.render_frame(sink)
+    let _presented = realm.enter(|realm| {
+        realm.drive_frame(now, flui_scheduler::IdleDeadline::far_future(now), || {
+            realm.render_frame(sink)
+        })
     });
 }
 
-/// Serves the inbox and takes the answer the drain produced.
+/// Serves the inbox through the public drain, deliberately without entering
+/// the realm first: the drain enters it itself, so an act still reaches a
+/// handler that lives in the realm's interaction lane. Takes the answer the
+/// drain produced.
 fn answer<T>(realm: &UiRealm, mut reply: AgentReply<T>) -> Result<T, AgentError> {
     let _report = realm.drain_commands();
     reply
