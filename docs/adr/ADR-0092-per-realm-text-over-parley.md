@@ -400,18 +400,23 @@ that wires what it adds.
      decision 15, records what differs meanwhile.
    - (4a) The `parley` and `parley-layout` features are removed: Parley, swash and the raster
      side are in the default build, and nothing selects cosmic-text measurement.
-   - (4a) With `bundled-fonts`, the process font system installs Roboto and binds its generic
-     families to it, as the collection does, so default-family text paints in the face it was
-     measured in (mapping decision 16).
-   - (4a) Preconditions: the registration half of step 3b (the font-collection-changed event,
-     and `register_font` moving to the collection) merges first, and the owner accepts one of:
-     non-Latin and named host families measure with no covering face, or in Roboto, until §7
-     (step 5); a host-face feed into the collection ahead of 4a; or 4a lands with 4b.
+   - (4a) With `bundled-fonts`, the process font system installs the bundled Roboto in place of
+     any host face of that name, binds its generic families to it, as the collection does, and
+     snaps a weight the family lacks to one it has, so default-family and generic text, bold
+     included, paints in the face it was measured in (mapping decision 16).
+   - (4a) Merge gate, open until the owner records the choice in this bullet: the registration
+     half of step 3b (the font-collection-changed event, and `register_font` moving to the
+     collection) merges first, and the owner accepts one of: non-Latin and named host families
+     (Cupertino's `-apple-system`/`Segoe UI` chain among them) measure with no covering face, or
+     in Roboto, until §7 (step 5), while they paint in host faces; a host-face feed into the
+     collection ahead of 4a; or 4a lands with 4b. The Status line above describes the step once
+     this gate is passed.
    - *Acceptance (4a):* measurement is Parley's in the default build, at the painter
      (`text_context_contract`, a face registered only on the process font system reaches paint
      and not measurement) and at the realm (a face registered on one realm's collection sizes
-     that realm's paragraph); measured and painted metrics agree on the bundled Roboto, named
-     and as the default family; the `wasm32` lane, `cargo xtask deps` and `cargo xtask reach`
+     that realm's paragraph); measured and painted metrics agree on the bundled Roboto, named,
+     as the default family and as the monospace generic, regular and bold, and a host face named
+     "Roboto" does not replace the bundled one; the `wasm32` lane, `cargo xtask deps` and `cargo xtask reach`
      are green.
    - `DrawOp::Paragraph` carries flui-painting's `ShapedParagraph`: runs naming a FLUI-owned
      font blob id, face index, size, interned variation and synthesis, with glyph id, position,
@@ -421,8 +426,8 @@ that wires what it adds.
    - A per-frame table carries the blobs a frame names first, which is the door §5 leaves open.
      The engine's atlas becomes `GlyphAtlas<SwashRasterizer>` (the `parley` feature was already
      folded in 4a), and the atlas's default parameter goes.
-   - `TextPainter` measures on Parley in the default build and the `parley-layout` feature is
-     removed, so the runs painted come from the layout that measured. Folding `parley` alone
+   - Paint draws the runs of the Parley layout that measured, which closes mapping decision 15's
+     differences. 4a folded both features at once, because folding `parley` alone at this step
      would leave measurement on cosmic-text while paint moves to Parley runs.
    - *Acceptance:* `draw_command_fits_its_budget` holds; the text readback suite passes
      unmodified; `the_engine_does_not_shape` is extended so the engine's manifest names no
@@ -562,6 +567,7 @@ exist yet.
   (`crates/flui-painting/tests/main.rs`); in `crates/flui-painting/tests/font_registration.rs`,
   `a_face_registered_on_the_process_font_system_reaches_paint_not_measurement`; in
   `crates/flui-runtime/src/ui_realm/tests/text_context.rs`,
-  `a_realm_measures_text_with_the_faces_of_its_own_collection`; and the default-family rows of
-  `parley_metrics_round_to_todays_baseline`, which fail without flui-painting's mapping
-  decision 16.
+  `a_realm_measures_text_with_the_faces_of_its_own_collection`; the default-family, monospace
+  and bold rows of `parley_metrics_round_to_todays_baseline`, which fail without flui-painting's
+  mapping decision 16 (the bold monospace rows also without the monospace weight snap); and
+  `a_host_roboto_does_not_replace_the_bundled_face` (`crates/flui-painting/src/fonts.rs`).

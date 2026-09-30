@@ -596,6 +596,11 @@ realm's faces decide its layout before the paint path moves.
   non-Latin script's host fallback, since the collection holds only the
   bundled and registered faces until ADR-0092 §7) is measured in Roboto or
   with no face, and painted in the host face, so it can clip or overhang.
+  Measured on a Windows host at 16 px: Cupertino's chain (`-apple-system`,
+  `system-ui`, `Segoe UI`) and a style naming `Segoe UI` measure 163.29 px and
+  paint 161.16 px; `你好世界 emoji 😀` measures 82.77 px and paints 133.27 px,
+  because the collection has no CJK or emoji face. Whether this ships is the
+  owner's choice recorded in ADR-0092 §10 step 4.
 - A truncated paragraph's painted ellipsis can overhang its measured width.
 - A caret after trailing whitespace in `EditableText` can sit past the
   measured width, because the painted layout counts the whitespace.
@@ -614,10 +619,13 @@ re-shapes, the measured size does not move.
 ### 16. With `bundled-fonts`, the process font system's generic families bind to Roboto
 
 **Rule:** with `bundled-fonts`, the process font system installs the bundled
-Roboto whether or not the host has fonts, and binds sans-serif, serif,
-cursive, fantasy and monospace to it before the host generics are bound
-(`fonts::bind_generics_to_bundled`), as every `FontCollection` does. Text whose
-style names no family is measured and painted in Roboto on every host.
+Roboto on every host, in place of any host face named "Roboto", and binds
+sans-serif, serif, cursive, fantasy and monospace to it before the host
+generics are bound (`fonts::bind_generics_to_bundled`), as every
+`FontCollection` does. A weight Roboto lacks snaps to the Regular it has, the
+monospace generic included (`font_resolve::snap_weight`). Text whose style
+names no family, names "Roboto" or names a generic is measured and painted in
+the bundled Roboto Regular on every host.
 
 **Flutter:** the default family is the platform's (Segoe UI on Windows, the
 system font on Apple platforms, Roboto on Android). Recalled, not checked
@@ -628,11 +636,23 @@ paint runs on the process font system until ADR-0092 §10 step 4b. Bound to a
 host face, default text would be measured in Roboto and painted in Segoe UI,
 Arial or DejaVu.
 
-**Accepted trade-off:** default text is Roboto on every desktop host until
-ADR-0092 §7 brings host faces into the collection; an app that wants the
-host's face names the family (and then meets decision 15's first case).
-Locked by the default-family rows of `parley_metrics_round_to_todays_baseline`
-(`tests/parley_metrics_oracle.rs`), which fail without the binding.
+**Accepted trade-off:** until ADR-0092 §7 brings host faces into the
+collection, on every desktop host:
+
+- default text is Roboto; an app that wants the host's face names the family
+  (and then meets decision 15's first case);
+- a bold or medium weight in the default family, in "Roboto" or in a generic
+  paints as Regular, because only Regular is bundled. Parley measures those
+  runs with Regular's advances too, and flags a synthetic bold, which the
+  step 4b runs carry to paint;
+- `monospace` is the proportional Roboto, so `RenderErrorBox` and
+  `flui-material`'s error style lose their fixed pitch.
+
+Locked by the default-family, monospace and bold rows of
+`parley_metrics_round_to_todays_baseline` (`tests/parley_metrics_oracle.rs`),
+which fail without the binding (the bold monospace rows also without the
+monospace snap), and by `a_host_roboto_does_not_replace_the_bundled_face`
+(`src/fonts.rs`), which fails when a host Roboto keeps its place.
 
 ---
 
