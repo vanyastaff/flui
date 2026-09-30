@@ -87,10 +87,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 Central hub for asset loading and caching.
 
 ```rust
-// Global registry (recommended)
+// Default capacity (100 MB)
 let registry = AssetRegistryBuilder::new().with_default_capacity().build();
 
-// Custom registry
+// Custom capacity
 let registry = AssetRegistryBuilder::new()
     .with_capacity(100 * 1024 * 1024)
     .build();

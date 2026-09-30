@@ -206,10 +206,10 @@ use futures::future::join_all;
 
 let registry = AssetRegistryBuilder::new().with_default_capacity().build();
 
-// Load 100 fonts concurrently
+// Load 100 fonts concurrently; every future borrows the one registry
 let handles = (0..100)
     .map(|i| {
-        let registry = registry.clone();
+        let registry = &registry;
         async move {
             registry.load(FontAsset::file(&format!("font{}.ttf", i))).await
         }

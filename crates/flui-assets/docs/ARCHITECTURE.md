@@ -250,7 +250,8 @@ Key creation:  ~100ns (interning overhead)
 
 **Read-heavy workload** (typical):
 ```rust
-// Multiple threads can load simultaneously
+// Multiple threads can load simultaneously. `registry` is an `Arc<AssetRegistry>`:
+// each spawned task needs an owned handle to the one registry.
 let handles: Vec<_> = (0..10)
     .map(|i| {
         let registry = registry.clone();
