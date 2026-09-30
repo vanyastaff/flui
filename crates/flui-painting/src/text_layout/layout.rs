@@ -163,7 +163,7 @@ fn font_system_arc() -> &'static Arc<Mutex<FontState>> {
         // a generic that already names a carried family.
         #[cfg(feature = "bundled-fonts")]
         {
-            crate::fonts::load_missing_into(discovered.db_mut());
+            crate::fonts::install_bundled(discovered.db_mut());
             crate::fonts::bind_generics_to_bundled(discovered.db_mut());
         }
         font_resolve::bind_generic_families(discovered.db_mut());

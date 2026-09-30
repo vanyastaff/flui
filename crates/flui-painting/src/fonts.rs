@@ -4,9 +4,10 @@
 //! still measures and paints text and icons: the default text face plus the
 //! two icon families whose private-use glyphs no system font carries. The
 //! realm's `FontCollection` measures on them, and the process-wide font
-//! system, which paints, installs them at construction (the bundled Roboto in
-//! place of a host one) and binds its generic families to Roboto, so
-//! default-family text paints in the face it was measured in on every host.
+//! system, which paints, installs them at construction (each in place of a
+//! host face of the same family) and binds its generic families to Roboto, so
+//! default-family and icon text paints in the face it was measured in on
+//! every host.
 //!
 //! They are public because font resolution is otherwise *host*-dependent: a
 //! test that wants a layout it can commit to a snapshot pins the face set to
@@ -26,39 +27,41 @@ pub const CUPERTINO_ICONS: &[u8] = include_bytes!("../assets/fonts/CupertinoIcon
 /// The family name of [`ROBOTO_REGULAR`].
 const ROBOTO_FAMILY: &str = "Roboto";
 
-/// Installs the embedded faces into `db`.
+/// Every embedded face with the family it names.
+const BUNDLED: [(&str, &[u8]); 3] = [
+    (ROBOTO_FAMILY, ROBOTO_REGULAR),
+    ("Material Icons", MATERIAL_ICONS_REGULAR),
+    ("CupertinoIcons", CUPERTINO_ICONS),
+];
+
+/// Installs the embedded faces into `db`, each in place of every face the
+/// host carries under that family name.
 ///
-/// Roboto always, in place of any face the host carries under that name: the
-/// realm's `FontCollection` measures "Roboto", and every generic family, in
-/// the bundled Regular, so paint must not pick a host build of it, or a host
-/// weight the collection does not hold (mapping decision 16). Each icon
-/// family only when no face of that name is present, checked per family,
-/// because a system-installed "Material Icons" must not suppress the
-/// Cupertino face.
-pub(crate) fn load_missing_into(db: &mut cosmic_text::fontdb::Database) {
-    let host_roboto: Vec<_> = db
-        .faces()
-        .filter(|face| face.families.iter().any(|(name, _)| name == ROBOTO_FAMILY))
-        .map(|face| face.id)
-        .collect();
-    if !host_roboto.is_empty() {
-        tracing::debug!(
-            faces = host_roboto.len(),
-            "the bundled Roboto replaces the host's"
-        );
-    }
-    for id in host_roboto {
-        db.remove_face(id);
-    }
-    db.load_font_data(ROBOTO_REGULAR.to_vec());
-    for (family, bytes) in [
-        ("Material Icons", MATERIAL_ICONS_REGULAR),
-        ("CupertinoIcons", CUPERTINO_ICONS),
-    ] {
-        if !carries_family(db, family) {
-            db.load_font_data(bytes.to_vec());
-            tracing::debug!(family, "loaded embedded font");
+/// The realm's `FontCollection` measures each of these families in the
+/// bundled face alone (a host copy is never fed into it), so paint must not
+/// pick a host build of one: another version's advances differ, a host
+/// weight the collection does not hold paints where the bundled Regular
+/// measured, and an older icon font lacks private-use glyphs the bundled one
+/// measures (mapping decisions 16 and 17). Checked per family, so a host
+/// "Material Icons" does not touch the Cupertino face.
+pub(crate) fn install_bundled(db: &mut cosmic_text::fontdb::Database) {
+    for (family, bytes) in BUNDLED {
+        let host: Vec<_> = db
+            .faces()
+            .filter(|face| face.families.iter().any(|(name, _)| name == family))
+            .map(|face| face.id)
+            .collect();
+        if !host.is_empty() {
+            tracing::debug!(
+                family,
+                faces = host.len(),
+                "the bundled face replaces the host's"
+            );
         }
+        for id in host {
+            db.remove_face(id);
+        }
+        db.load_font_data(bytes.to_vec());
     }
 }
 
@@ -96,19 +99,19 @@ mod tests {
         Database, FaceInfo, Family, ID, Language, Query, Source, Stretch, Style, Weight,
     };
 
-    use super::{ROBOTO_REGULAR, bind_generics_to_bundled, load_missing_into};
+    use super::{BUNDLED, bind_generics_to_bundled, install_bundled};
 
-    /// A face the host calls "Roboto" at `weight`, over bytes that are not
+    /// A face the host calls `family` at `weight`, over bytes that are not
     /// the bundled face's.
-    fn host_roboto(weight: Weight) -> FaceInfo {
+    fn host_face(family: &str, weight: Weight) -> FaceInfo {
         FaceInfo {
             id: ID::dummy(),
             source: Source::Binary(Arc::new(
                 include_bytes!("../assets/fonts/probe-sans-400.ttf").to_vec(),
             )),
             index: 0,
-            families: vec![("Roboto".to_owned(), Language::English_UnitedStates)],
-            post_script_name: "Roboto-Host".to_owned(),
+            families: vec![(family.to_owned(), Language::English_UnitedStates)],
+            post_script_name: format!("{family}-Host"),
             style: Style::Normal,
             weight,
             stretch: Stretch::Normal,
@@ -116,38 +119,48 @@ mod tests {
         }
     }
 
-    fn is_bundled(db: &Database, id: ID) -> bool {
-        db.with_face_data(id, |data, _| data == ROBOTO_REGULAR)
+    fn is_bundled(db: &Database, id: ID, bytes: &[u8]) -> bool {
+        db.with_face_data(id, |data, _| data == bytes)
             .unwrap_or(false)
     }
 
-    /// A host that installs its own Roboto still paints "Roboto", and every
-    /// generic family, in the bundled face the collection measures with, at
-    /// every weight it is asked for.
+    /// A host that installs its own copy of a bundled family (Roboto, or
+    /// either icon family) still paints that family, and every generic
+    /// family, in the bundled face the collection measures with, at every
+    /// weight it is asked for.
     #[test]
-    fn a_host_roboto_does_not_replace_the_bundled_face() {
+    fn a_host_copy_does_not_replace_a_bundled_face() {
         let mut db = Database::new();
-        db.push_face_info(host_roboto(Weight::NORMAL));
-        db.push_face_info(host_roboto(Weight::BOLD));
-        load_missing_into(&mut db);
+        for (family, _) in BUNDLED {
+            db.push_face_info(host_face(family, Weight::NORMAL));
+            db.push_face_info(host_face(family, Weight::BOLD));
+        }
+        install_bundled(&mut db);
         bind_generics_to_bundled(&mut db);
 
+        let roboto = BUNDLED[0].1;
+        let mut queries: Vec<(Family<'_>, &[u8])> = BUNDLED
+            .iter()
+            .map(|&(family, bytes)| (Family::Name(family), bytes))
+            .collect();
+        queries.push((Family::SansSerif, roboto));
+        queries.push((Family::Monospace, roboto));
         let mut failures = Vec::new();
-        for family in [Family::Name("Roboto"), Family::SansSerif, Family::Monospace] {
+        for (family, bytes) in queries {
             for weight in [Weight::NORMAL, Weight::MEDIUM, Weight::BOLD] {
                 let face = db.query(&Query {
                     families: &[family],
                     weight,
                     ..Query::default()
                 });
-                if !face.is_some_and(|id| is_bundled(&db, id)) {
+                if !face.is_some_and(|id| is_bundled(&db, id, bytes)) {
                     failures.push(format!("{family:?} at {weight:?}"));
                 }
             }
         }
         assert!(
             failures.is_empty(),
-            "resolved to a face other than the bundled Roboto: {failures:?}"
+            "resolved to a face other than the bundled one: {failures:?}"
         );
     }
 }
