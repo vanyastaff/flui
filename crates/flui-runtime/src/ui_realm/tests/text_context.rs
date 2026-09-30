@@ -156,8 +156,7 @@ fn every_presentation_pipeline_holds_the_realms_text_context() {
 }
 
 /// A face only the probe family carries; it maps `A` one em wide.
-const PROBE_MONO: &[u8] =
-    include_bytes!("../../../../flui-painting/assets/fonts/probe-mono-100.ttf");
+const PROBE_MONO: &[u8] = flui_painting::testing::PROBE_MONO_100;
 
 /// The width the realm's `RenderParagraph` was laid out at, for `AAAA` in the
 /// probe family at 20 px, centred so the paragraph takes its own width.

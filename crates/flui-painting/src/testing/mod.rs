@@ -17,6 +17,12 @@
 
 use crate::{Canvas, DisplayList, FontCollection, TextContext};
 
+/// The FLUI Probe Mono face at weight 100: a generated family no host
+/// carries, which maps `A` one em wide. A consumer's tests register it on a
+/// collection to tell which collection measured a paragraph; it ships inside
+/// this package, so they build from a published archive too.
+pub const PROBE_MONO_100: &[u8] = include_bytes!("../../assets/fonts/probe-mono-100.ttf");
+
 /// Records drawing commands into a fresh [`DisplayList`]: runs `f` against
 /// a new [`Canvas`] and finishes it.
 pub fn record(f: impl FnOnce(&mut Canvas)) -> DisplayList {
