@@ -68,13 +68,20 @@ pub(super) struct Code {
     pub(super) block: bool,
 }
 
-/// The code spans and code blocks of `markdown`, in order.
+/// The code spans and code blocks of `markdown`, in order, but for a code
+/// span that is (part of) a link's text.
 pub(super) fn code(markdown: &str) -> Vec<Code> {
     let lines = LineIndex::new(markdown);
     let mut found = Vec::new();
     let mut block: Option<Code> = None;
+    // a code span in a link's text labels the link, which lychee checks; a
+    // permalink to a commit cites a file as it was, deleted since or not
+    let mut links = 0_usize;
     for (event, range) in Parser::new_ext(markdown, Options::all()).into_offset_iter() {
         match event {
+            Event::Start(Tag::Link { .. }) => links += 1,
+            Event::End(TagEnd::Link) => links = links.saturating_sub(1),
+            Event::Code(_) if links > 0 => {}
             Event::Code(text) => found.push(Code {
                 line: lines.line(range.start),
                 text: text.into_string(),

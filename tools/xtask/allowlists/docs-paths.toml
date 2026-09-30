@@ -4,75 +4,9 @@
 # needs, with each `reason` left empty for a person to fill in.
 
 [[allow]]
-path = ".rust-studio/research/display-list-effect-depth-cliff.md"
-kind = "path"
-count = 1
-reason = "a dated research note: it cites the tree as it was when written"
-
-[[allow]]
-path = ".rust-studio/research/flutter-build-phase-geometry-lessons.md"
-kind = "path"
-count = 1
-reason = "a dated research note: it cites the tree as it was when written"
-
-[[allow]]
-path = ".rust-studio/research/flutter-cacheable-hot-path-lessons.md"
-kind = "path"
-count = 7
-reason = "a dated research note: it cites the tree as it was when written"
-
-[[allow]]
-path = ".rust-studio/research/flutter-container-state-loss-lessons.md"
-kind = "path"
-count = 1
-reason = "a dated research note: it cites the tree as it was when written"
-
-[[allow]]
-path = ".rust-studio/research/flutter-deep-widget-stack-lessons.md"
-kind = "path"
-count = 2
-reason = "a dated research note: it cites the tree as it was when written"
-
-[[allow]]
-path = ".rust-studio/research/flutter-invalid-unicode-text-input-lessons.md"
-kind = "path"
-count = 1
-reason = "a dated research note: it cites the tree as it was when written"
-
-[[allow]]
-path = ".rust-studio/research/flutter-overlay-follower-lessons.md"
-kind = "path"
-count = 3
-reason = "a dated research note: it cites the tree as it was when written"
-
-[[allow]]
-path = ".rust-studio/research/flutter-page-storage-typed-state-lessons.md"
-kind = "path"
-count = 1
-reason = "a dated research note: it cites the tree as it was when written"
-
-[[allow]]
-path = ".rust-studio/research/layer-tree-recursive-hot-walks.md"
-kind = "path"
-count = 2
-reason = "a dated research note: it cites the tree as it was when written"
-
-[[allow]]
-path = ".rust-studio/research/scheduler-async-frame-inventory.md"
-kind = "path"
-count = 1
-reason = "a dated research note: it cites the tree as it was when written"
-
-[[allow]]
-path = ".rust-studio/research/unsafe-concurrency-inventory.md"
-kind = "path"
-count = 1
-reason = "a dated research note: it cites the tree as it was when written"
-
-[[allow]]
 path = "crates/flui-cli/README.md"
 kind = "path"
-count = 2
+count = 3
 reason = "a file of the project `flui create` generates, not of this repository"
 
 [[allow]]
@@ -88,12 +22,6 @@ count = 2
 reason = "the files of deferred work, named before they exist"
 
 [[allow]]
-path = "crates/flui-rendering/docs/AUDIT-AND-PLAN-2026-06.md"
-kind = "path"
-count = 2
-reason = "a dated audit: it names the files it audited"
-
-[[allow]]
 path = "design/architecture.md"
 kind = "path"
 count = 1
@@ -104,6 +32,12 @@ path = "design/build-footprint.md"
 kind = "path"
 count = 1
 reason = "trybuild's directory under the target directory, a build output"
+
+[[allow]]
+path = "design/ci.md"
+kind = "path"
+count = 2
+reason = "a crate the text records as it then was, and a fixture path inside a test's temporary repository"
 
 [[allow]]
 path = "design/decisions.md"
@@ -156,7 +90,7 @@ reason = "the decision's context names the layout the decision changed"
 [[allow]]
 path = "docs/adr/ADR-0077-migrate-to-parley.md"
 kind = "path"
-count = 1
+count = 2
 reason = "the decision's context names the layout the decision changed"
 
 [[allow]]
@@ -208,45 +142,27 @@ count = 2
 reason = "the decision's context names the layout the decision changed"
 
 [[allow]]
+path = "docs/adr/ADR-0092-per-realm-text-over-parley.md"
+kind = "path"
+count = 1
+reason = "the decision's context names the layout the decision changed"
+
+[[allow]]
+path = "docs/adr/ADR-0093-router-is-the-primary-navigation-api.md"
+kind = "path"
+count = 1
+reason = "the decision's context names the layout the decision changed"
+
+[[allow]]
 path = "docs/adr/ADR-0097-no-process-global-state-gate.md"
 kind = "path"
 count = 1
 reason = "the decision's context names the layout the decision changed"
 
 [[allow]]
-path = "docs/designs/2026-05-20-mythos-flui-engine-redesign.md"
-kind = "path"
-count = 29
-reason = "a dated design proposal: it names the layout it proposed or replaced"
-
-[[allow]]
-path = "docs/designs/2026-05-20-mythos-flui-layer-redesign.md"
-kind = "path"
-count = 7
-reason = "a dated design proposal: it names the layout it proposed or replaced"
-
-[[allow]]
-path = "docs/designs/2026-05-20-mythos-flui-painting-redesign.md"
-kind = "path"
-count = 41
-reason = "a dated design proposal: it names the layout it proposed or replaced"
-
-[[allow]]
-path = "docs/designs/2026-05-20-mythos-flui-rendering-redesign.md"
-kind = "path"
-count = 2
-reason = "a dated design proposal: it names the layout it proposed or replaced"
-
-[[allow]]
 path = "docs/designs/2026-06-28-flutter-parity-hot-reload.md"
 kind = "package"
 count = 1
-reason = "a dated design proposal: it names the layout it proposed or replaced"
-
-[[allow]]
-path = "docs/designs/2026-08-10-render-update-impact.md"
-kind = "path"
-count = 2
 reason = "a dated design proposal: it names the layout it proposed or replaced"
 
 [[allow]]
@@ -260,30 +176,6 @@ path = "docs/hot-reload.md"
 kind = "package"
 count = 2
 reason = "the worker and host packages of the project `flui run` builds, not of this repository"
-
-[[allow]]
-path = "docs/test-minimization/inventory.md"
-kind = "package"
-count = 1
-reason = "a dated test-minimization report: it names the files it measured"
-
-[[allow]]
-path = "docs/test-minimization/inventory.md"
-kind = "path"
-count = 2
-reason = "a dated test-minimization report: it names the files it measured"
-
-[[allow]]
-path = "docs/test-minimization/report.md"
-kind = "package"
-count = 1
-reason = "a dated test-minimization report: it names the files it measured"
-
-[[allow]]
-path = "docs/test-minimization/report.md"
-kind = "path"
-count = 7
-reason = "a dated test-minimization report: it names the files it measured"
 
 [[allow]]
 path = "docs/testing.md"

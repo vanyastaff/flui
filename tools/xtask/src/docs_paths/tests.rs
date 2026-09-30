@@ -182,7 +182,9 @@ fn headings_give_github_anchors() {
 }
 
 fn code_spans_and_blocks_carry_their_lines() {
-    let markdown = "# T\n\nSee `docs/x.md`.\n\n```bash\ncargo test\ncargo run -p a\n```\n\n    indented\n\n[l](docs/y.md) ![i](/z.png)\n";
+    // the code span labelling a permalink is the link's, not a path to check
+    let markdown = "# T\n\nSee `docs/x.md`.\n\n```bash\ncargo test\ncargo run -p a\n```\n\n    indented\n\n\
+                    [l](docs/y.md) ![i](/z.png) [`docs/old.md` then](https://github.com/o/r/blob/abc/docs/old.md)\n";
     let code = extract::code(markdown);
     assert_eq!(
         code,
@@ -206,7 +208,11 @@ fn code_spans_and_blocks_carry_their_lines() {
     );
     assert_eq!(
         extract::links(markdown),
-        [(12, "docs/y.md".to_owned()), (12, "/z.png".to_owned())]
+        [
+            (12, "docs/y.md".to_owned()),
+            (12, "/z.png".to_owned()),
+            (12, "https://github.com/o/r/blob/abc/docs/old.md".to_owned())
+        ]
     );
 }
 
@@ -315,7 +321,7 @@ fn the_docs_are_live_markdown_and_llms_txt() {
             "changelog.d/x.md",
             "docs/plans/x.md",
             "docs/plans.md",
-            "specs/004/spec.md",
+            "docs/research/x.md",
             "crates/flui-view/specs/x.md",
         ]
         .map(str::to_owned),
