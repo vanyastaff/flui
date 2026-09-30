@@ -83,7 +83,7 @@ enum Command {
     DemoSnapshots(tasks::DemoSnapshotsArgs),
     /// Remove the nested-cargo test caches under the target directory.
     CleanNested(tasks::CleanNestedArgs),
-    /// Run a macOS or iOS device check (tools/device-checks).
+    /// Run a macOS, iOS or Windows device check (drivers in tools/device-checks).
     Device(device::DeviceArgs),
     /// Check crate layers, manifests, test reachability and ADR numbers.
     Workspace(workspace::WorkspaceArgs),

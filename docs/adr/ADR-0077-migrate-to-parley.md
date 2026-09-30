@@ -7,7 +7,8 @@
 - **Supersedes (when ADR-0092 §§1–5 are accepted):** ADR-0016, ADR-0059
 
 Backed by a research spike: [`docs/research/text-stack-2026.md`](../research/text-stack-2026.md),
-code in `tools/text-spike/` (standalone crate, not a workspace member). Nothing in `crates/flui-*`
+code in [`tools/text-spike/`](https://github.com/vanyastaff/flui/tree/e30ab7194d50ac1c11ffe17c59230958d2fbeecd/tools/text-spike)
+(a standalone crate, not a workspace member, since removed from the tree). Nothing in `crates/flui-*`
 has changed as part of this ADR; the migration is separate work. Until ADR-0092 is accepted,
 ADR-0016 and ADR-0059 stay in force.
 

@@ -295,10 +295,3 @@ pub fn convert_gesture(event: &ui_events::pointer::PointerGestureEvent) -> Point
         device_kind: PointerDeviceKind::Trackpad,
     }
 }
-
-// ============================================================================
-// Tests
-// ============================================================================
-
-#[cfg(test)]
-mod tests {}

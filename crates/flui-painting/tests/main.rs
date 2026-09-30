@@ -39,6 +39,8 @@ mod text_layout_unit;
 mod text_overflow_unit;
 #[path = "text_painter_unit.rs"]
 mod text_painter_unit;
+#[path = "values.rs"]
+mod values;
 
 use cases::run_cases;
 
@@ -58,6 +60,35 @@ fn color_contract() {
             (
                 "lerp_multi_stop_brackets_and_clamps",
                 color_property::lerp_multi_stop_brackets_and_clamps,
+            ),
+            (
+                "channels_round_to_the_nearest_step",
+                color_property::channels_round_to_the_nearest_step,
+            ),
+            (
+                "lerp_to_transparent_keeps_the_hue",
+                color_property::lerp_to_transparent_keeps_the_hue,
+            ),
+        ],
+    );
+}
+
+#[test]
+fn value_contract() {
+    run_cases(
+        "value",
+        &[
+            (
+                "font_weight_from_css_breaks_ties_like_css",
+                values::font_weight_from_css_breaks_ties_like_css,
+            ),
+            (
+                "a_one_sided_focal_point_lerps_to_the_other_center",
+                values::a_one_sided_focal_point_lerps_to_the_other_center,
+            ),
+            (
+                "an_arc_joins_an_open_contour_and_starts_a_closed_one_fresh",
+                values::an_arc_joins_an_open_contour_and_starts_a_closed_one_fresh,
             ),
         ],
     );

@@ -192,6 +192,3 @@ impl AxisDirection {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {}

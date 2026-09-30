@@ -280,8 +280,9 @@ libraries the workspace's Linux builds (CI included) do not install. Enabling th
 manifest change plus those packages.
 
 The accessibility layer is one trait (`AccessibilityBackend` in `src/a11y/mod.rs`) and one
-vocabulary (`src/a11y/role.rs`); a macOS backend over AX (`objc2-application-services`) or
-a Linux one over AT-SPI (`atspi`) is a new module behind it, mapping its roles onto the
+vocabulary, flui-protocol's `Role`, `ActionName` and `Checked` (`src/a11y/role.rs` maps a
+native API's names onto them); a macOS backend over AX (`objc2-application-services`) or a
+Linux one over AT-SPI (`atspi`) is a new module behind it, mapping its roles onto the
 vocabulary.
 
 All UI Automation and input work runs on one dedicated thread, in arrival order: UIA objects

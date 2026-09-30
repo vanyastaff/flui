@@ -5,10 +5,6 @@
 //! `SubtreeArena::by_id` per-slot `AtomicBool` in-flight flag +
 //! RAII `LayoutCycleGuard`), and that the guard's `Drop` runs on
 //! panic so the in-flight flag stays consistent across frames.
-//!
-//! Refs:
-//!   * docs/plans/2026-05-23-001-feat-pipeline-wiring-d-block-plan.md
-//!   * docs/research/2026-05-23-d-block-architecture-decision-memo.md
 
 use flui_foundation::geometry::Size;
 use flui_objects::{RenderColoredBox, RenderPadding};

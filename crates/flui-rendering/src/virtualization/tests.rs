@@ -340,26 +340,3 @@ mod prop {
         bound + 1
     }
 }
-
-// ===========================================================================
-// Direct ExtentTree edits — the mid-list insert/remove differentiator. A
-// Fenwick/BIT pays O(n) for these; this B+-tree pays O(log n) and must stay
-// rebalanced and drift-free. The Virtualizer surface above never inserts/removes
-// in the interior, so these go straight at the tree against a Vec oracle.
-// ===========================================================================
-mod tree_edits {
-
-    use proptest::prelude::*;
-
-    proptest! {
-        #![proptest_config(ProptestConfig::with_cases(2000))]
-
-    }
-}
-
-// ============================================================================
-// Adaptive estimate — re-hinting unmeasured items keeps the anchor stationary
-// ============================================================================
-mod adaptive_estimate {}
-
-mod band_local_mean {}

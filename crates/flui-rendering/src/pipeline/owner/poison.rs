@@ -255,6 +255,3 @@ impl LayoutPoison {
         self.entries.retain(|id, _| !removed.contains(id));
     }
 }
-
-#[cfg(test)]
-mod tests {}

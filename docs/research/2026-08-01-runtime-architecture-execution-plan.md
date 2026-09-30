@@ -1,7 +1,7 @@
 # Runtime Architecture Execution Plan
 
 > Dependency-ordered work derived from the
-> [UI Runtime Evolution Study](2026-08-01-ui-runtime-evolution-study.md).
+> [UI Runtime Evolution Study](https://github.com/vanyastaff/flui/blob/e30ab7194d50ac1c11ffe17c59230958d2fbeecd/docs/research/2026-08-01-ui-runtime-evolution-study.md).
 > This is an execution plan for accepted ADR-0027/0037 direction and the
 > validation of proposed ADR-0039. It does not redesign Flutter-loyal
 > View/Element/Render behavior.
@@ -11,7 +11,7 @@ gates are maintained separately in the
 [Runtime Dependency Adoption Guide](2026-08-01-runtime-dependency-adoption-guide.md).
 Workspace-member responsibilities, facade composition, localization direction,
 and logging ownership are reviewed in the
-[Workspace Boundary and Logging Review](2026-08-01-workspace-boundary-and-logging-review.md).
+[Workspace Boundary and Logging Review](https://github.com/vanyastaff/flui/blob/e30ab7194d50ac1c11ffe17c59230958d2fbeecd/docs/research/2026-08-01-workspace-boundary-and-logging-review.md).
 
 **Date:** 2026-08-01
 **Target:** desktop-first multi-window and hostable runtime foundations.
@@ -406,7 +406,7 @@ justify them.
   outside its recorded gate, and every member's disposition still matches what
   the milestone actually did to it
   ([ADR-0041](../adr/ADR-0041-workspace-topology-contract.md), derived from the
-  [Workspace Boundary and Logging Review](2026-08-01-workspace-boundary-and-logging-review.md)).
+  [Workspace Boundary and Logging Review](https://github.com/vanyastaff/flui/blob/e30ab7194d50ac1c11ffe17c59230958d2fbeecd/docs/research/2026-08-01-workspace-boundary-and-logging-review.md)).
 - `just ci`, `taplo fmt --check`, and `typos` pass.
 - Miri covers owner-local traversal and generation rejection paths.
 - Loom or an equivalent controlled scheduler covers mailbox/shutdown races.

@@ -1,7 +1,7 @@
 //! Hot-reload driver — manages the plugin lifecycle and mtime-based polling.
 //!
-//! `HotReloadDriver` replaces the ad-hoc polling/reload loops (like the one in
-//! `android_demo`) with a reusable abstraction. It handles:
+//! `HotReloadDriver` is the plugin polling and reload loop a host embeds. It
+//! handles:
 //!
 //! - Initial plugin load attempt
 //! - Periodic mtime polling to detect changes

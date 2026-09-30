@@ -900,6 +900,3 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + Downcast + 'static {
 }
 
 impl_downcast!(RenderObject<P> where P: Protocol);
-
-#[cfg(test)]
-mod tests {}

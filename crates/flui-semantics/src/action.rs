@@ -109,6 +109,3 @@ impl SemanticsActionRequest {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {}

@@ -141,6 +141,3 @@ pub trait RenderAbstractViewport: RenderObject<BoxProtocol> {
     /// This assumes [`CacheExtentStyle::Pixel`].
     const DEFAULT_CACHE_EXTENT: f64 = 250.0;
 }
-
-#[cfg(test)]
-mod tests {}

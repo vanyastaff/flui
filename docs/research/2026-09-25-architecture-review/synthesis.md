@@ -692,4 +692,4 @@ The invariant across horizons: each horizon adds implementations behind contract
 - Crate-size and rebuild fan-out numbers other than those the judges re-measured.
 - Whether static ID counters reach semantic snapshots.
 
-Input files: `C:\Users\vanya\AppData\Local\Temp\claude\D--flui\bbb28042-f972-4a10-8e94-731819e26161\scratchpad\context.md`, `plan.md`, `roadmap.md`.
+Input files: `<scratchpad>\context.md`, `plan.md`, `roadmap.md`.

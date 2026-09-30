@@ -469,4 +469,4 @@ Ordered by how much later work each one unblocks:
 
 ---
 
-Relevant input files: `C:\Users\vanya\AppData\Local\Temp\claude\D--flui\bbb28042-f972-4a10-8e94-731819e26161\scratchpad\context.md`, `...\plan.md`, `...\roadmap.md`.
+Relevant input files: `<scratchpad>\context.md`, `...\plan.md`, `...\roadmap.md`.

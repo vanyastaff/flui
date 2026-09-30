@@ -639,6 +639,3 @@ impl GestureSettings {
         velocity.abs() >= self.min_fling_velocity
     }
 }
-
-#[cfg(test)]
-mod tests {}

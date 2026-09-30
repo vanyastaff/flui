@@ -209,6 +209,3 @@ impl ProtocolLayoutCache for () {
         false
     }
 }
-
-#[cfg(test)]
-mod tests {}

@@ -305,6 +305,3 @@ impl<'ctx, 'cx> FlowPaintingContext<'ctx, 'cx> {
         self.painted.iter().all(|&p| p)
     }
 }
-
-#[cfg(test)]
-mod tests {}

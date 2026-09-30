@@ -65,7 +65,7 @@ _Raw research, options, judge verdicts and verification for this question (2026-
       "who": "wgpu family / AccessKit adapters (from our own Cargo.lock)",
       "what": "wgpu-core, wgpu-hal and wgpu-types share the wgpu version (30.0.1). accesskit_consumer is numbered independently (0.39 against accesskit 0.25) but re-releases whenever accesskit breaks.",
       "outcome_or_lesson": "A layer that re-exports another crate's types cannot have a truly independent version. Its number is either lockstep or a separate counter that bumps on every upstream break, which fits flui-sdk as `0.N` bumped per train.",
-      "source": "D:/flui/Cargo.lock (grep of name/version entries)"
+      "source": "Cargo.lock (grep of name/version entries)"
     }
   ],
   "constraints": [
@@ -82,7 +82,7 @@ _Raw research, options, judge verdicts and verification for this question (2026-
     "Not verified: crates.io availability of the name `flui-sdk` (the crates.io MCP server failed to connect this session); whether cargo-semver-checks has a per-module exemption (believed not); the exact resolver error text for conflicting `=` pins through a registry (only the path-dependency E0308 variant was reproduced)."
   ],
   "experiments_run": [
-    "Probe 1, type identity (C:/Users/vanya/AppData/Local/Temp/claude/D--flui/bbb28042-f972-4a10-8e94-731819e26161/scratchpad/probe-sdk/{core1,core2,sdk,facade,pkg}): sdk re-exports core 0.1's BoxConstraints, facade re-exports core 0.2's, and pkg passes `facade::constraints()` to `sdk::paint_shape`. `cargo check` fails: `error[E0308]: mismatched types ... expected sdk::BoxConstraints, found facade::rendering::BoxConstraints` and `note: there are multiple different versions of crate core in the dependency graph`. Conclusion: sdk must be version-locked to the train.",
+    "Probe 1, type identity (<scratchpad>/probe-sdk/{core1,core2,sdk,facade,pkg}): sdk re-exports core 0.1's BoxConstraints, facade re-exports core 0.2's, and pkg passes `facade::constraints()` to `sdk::paint_shape`. `cargo check` fails: `error[E0308]: mismatched types ... expected sdk::BoxConstraints, found facade::rendering::BoxConstraints` and `note: there are multiple different versions of crate core in the dependency graph`. Conclusion: sdk must be version-locked to the train.",
     "Probe 2, feature leak (probe-sdk/{f2,pk2,app2}): f2 has `#[cfg(feature=\"unstable\")] pub mod sdk`, pk2 enables `f2/unstable`, and app2 depends on f2 without the feature but calls `f2::sdk::draw_op()`. `cargo check` passes (`Finished dev profile`). Conclusion: a Cargo-feature-gated Evolving module in the facade leaks to apps through feature unification.",
     "`cargo tree -p flui-material|flui -e normal --prefix none`, deduplicated by name+version: 127 against 191 crates. `cargo tree -p flui-material -e normal -i wgpu` reports that wgpu is not in material's graph.",
     "grep inventory of every `flui_*::path` used by crates/flui-{material,cupertino,devtools,hot-reload}/src, to split what already belongs to Stable modules from about 12 truly internal items.",
