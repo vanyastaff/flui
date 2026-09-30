@@ -14,7 +14,7 @@
 //!
 //! What has no Parley counterpart is cosmic-text's last resort, the walk
 //! over every face not forbidden (flui-painting `ARCHITECTURE.md`, mapping
-//! decision 16).
+//! decision 17).
 
 use std::fmt;
 use std::sync::Arc;
@@ -40,19 +40,11 @@ impl FallbackChain {
     }
 
     /// The families tried after a script's own list, in order.
-    #[cfg_attr(
-        not(feature = "parley"),
-        expect(dead_code, reason = "read by `install_into`, which needs `parley`")
-    )]
     pub(crate) fn common(&self) -> &[&'static str] {
         self.fallback.common_fallback()
     }
 
     /// The families tried first for `script`, in order.
-    #[cfg_attr(
-        not(feature = "parley"),
-        expect(dead_code, reason = "read by `install_into`, which needs `parley`")
-    )]
     pub(crate) fn script(&self, script: unicode_script::Script) -> &[&'static str] {
         self.fallback.script_fallback(script, &self.locale)
     }
@@ -88,7 +80,6 @@ impl Fallback for ChainFallback {
 
 /// Every script fontique names, and the Common, Inherited and Unknown
 /// scripts: the keys a collection's fallbacks are set under.
-#[cfg(feature = "parley")]
 pub(crate) fn fontique_scripts() -> impl Iterator<Item = parley::fontique::Script> {
     use parley::fontique::{Script, ScriptExt as _};
 
@@ -111,7 +102,6 @@ pub(crate) fn fontique_scripts() -> impl Iterator<Item = parley::fontique::Scrip
 /// alone). Only the default key of each script is set (no locale): the
 /// Parley path shapes with no locale today. A script with no held family at
 /// all gets no entry, so it keeps whatever it had.
-#[cfg(feature = "parley")]
 pub(crate) fn install_into(chain: &FallbackChain, collection: &mut parley::fontique::Collection) {
     use parley::fontique::{FallbackKey, GenericFamily};
 
@@ -139,7 +129,6 @@ pub(crate) fn install_into(chain: &FallbackChain, collection: &mut parley::fonti
 
 /// `into` extended with the ids of the `names` `collection` holds, in
 /// order, skipping any already present.
-#[cfg(feature = "parley")]
 fn held(
     collection: &mut parley::fontique::Collection,
     names: &[&str],
@@ -155,7 +144,7 @@ fn held(
     into
 }
 
-#[cfg(all(test, feature = "parley"))]
+#[cfg(test)]
 mod tests {
     use std::sync::Arc;
 

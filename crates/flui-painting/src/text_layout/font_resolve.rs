@@ -74,7 +74,7 @@ use cosmic_text::{Fallback as _, FontSystem, PlatformFallback};
 /// The spellings mirror what the two `style_to_attrs` conversions accepted
 /// before this module existed, so no style that resolved to a generic stops
 /// doing so.
-pub(crate) fn generic_family(name: &str) -> Option<Family<'static>> {
+fn generic_family(name: &str) -> Option<Family<'static>> {
     match name {
         "serif" | "Serif" => Some(Family::Serif),
         "sans-serif" | "SansSerif" | "sans" => Some(Family::SansSerif),
@@ -715,10 +715,6 @@ pub(crate) fn resolve_family<'a>(
 /// the same fallback order (`fallback_chain`).
 ///
 /// The returned `Family` borrows `style`, so resolution allocates nothing.
-#[cfg_attr(
-    not(feature = "parley"),
-    expect(dead_code, reason = "the Parley path's shaping is its only caller")
-)]
 pub(crate) fn resolve_family_name(
     style: Option<&TextStyle>,
     carries: impl FnMut(&str) -> bool,
@@ -974,7 +970,6 @@ mod tests {
     /// carried or generic entry of the chain past absent ones, the
     /// sans-serif degrade, and a carried family spelled in another case,
     /// which fontdb does not match and so degrades too.
-    #[cfg(feature = "parley")]
     fn the_collection_resolves_the_family_the_font_system_does() {
         use parley::fontique::{Blob, Collection, CollectionOptions};
         use std::sync::Arc;
@@ -1040,7 +1035,6 @@ mod tests {
                 "oversized_space_from_an_emoji_face_is_closed",
                 oversized_space_from_an_emoji_face_is_closed,
             ),
-            #[cfg(feature = "parley")]
             (
                 "the_collection_resolves_the_family_the_font_system_does",
                 the_collection_resolves_the_family_the_font_system_does,

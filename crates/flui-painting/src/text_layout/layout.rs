@@ -54,10 +54,6 @@ pub(super) struct FontState {
     db_generation: u64,
     /// The fallback lists `system` was built with, shared with every
     /// collection fed from this font system (`SharedFontSystem::host_faces`).
-    #[cfg_attr(
-        not(feature = "parley"),
-        expect(dead_code, reason = "only the Parley path's collection reads it")
-    )]
     chain: Arc<FallbackChain>,
     /// How many collections were built from the host
     /// ([`SharedFontSystem::count_host_feed`]): one per app.
@@ -456,7 +452,6 @@ impl SharedFontSystem {
     /// in-memory font's data (shared, not copied), every source's family
     /// names, the five generic families' names and the fallback chain.
     /// Parsing the files again is the caller's work, outside the lock.
-    #[cfg(feature = "parley")]
     pub(crate) fn host_faces(&self) -> HostFaces {
         use cosmic_text::fontdb::Source;
         use std::collections::HashMap;
@@ -562,8 +557,8 @@ impl SharedFontSystem {
     /// sans-serif generic's family, the chain's list for the character's
     /// script, or the chain's common list. cosmic-text's last resort, the
     /// walk over every other face, is left out, since the Parley path has
-    /// none (flui-painting `ARCHITECTURE.md`, mapping decision 16).
-    #[cfg(all(feature = "parley", any(test, feature = "testing")))]
+    /// none (flui-painting `ARCHITECTURE.md`, mapping decision 17).
+    #[cfg(any(test, feature = "testing"))]
     pub(crate) fn chain_covers(&self, text: &str) -> bool {
         use unicode_script::UnicodeScript as _;
 
@@ -601,13 +596,6 @@ fn face_maps(
 
 /// The faces a process font system holds, taken by
 /// `SharedFontSystem::host_faces` for a collection to be fed from.
-#[cfg_attr(
-    not(feature = "parley"),
-    expect(
-        dead_code,
-        reason = "only the Parley path's collection reads the faces"
-    )
-)]
 pub(crate) struct HostFaces {
     /// Every font source, in the order the database first names it.
     pub(crate) sources: Vec<HostSource>,
@@ -626,26 +614,12 @@ pub(crate) struct HostFaces {
 }
 
 /// One font file or in-memory font, and every family name its faces carry.
-#[cfg_attr(
-    not(feature = "parley"),
-    expect(
-        dead_code,
-        reason = "only the Parley path's collection reads the faces"
-    )
-)]
 pub(crate) struct HostSource {
     pub(crate) data: HostData,
     pub(crate) families: Vec<String>,
 }
 
 /// Where a [`HostSource`]'s bytes are.
-#[cfg_attr(
-    not(feature = "parley"),
-    expect(
-        dead_code,
-        reason = "only the Parley path's collection reads the faces"
-    )
-)]
 pub(crate) enum HostData {
     /// A file, which the collection maps itself.
     Path(std::path::PathBuf),

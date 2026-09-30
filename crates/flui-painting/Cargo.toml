@@ -116,7 +116,6 @@ path = "tests/parley_metrics_oracle.rs"
 [[test]]
 name = "host_faces_oracle"
 path = "tests/host_faces_oracle.rs"
-required-features = ["parley"]
 
 # cargo-shear reports the trybuild compile-fail inputs as unlinked: the
 # `compile_fail` test hands them to rustc by glob, no module declares them.

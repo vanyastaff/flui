@@ -12,7 +12,6 @@ use flui_foundation::geometry::Offset;
 use flui_painting::display_list::DrawOp;
 use flui_painting::testing::{
     collection_holds, host_chain_covers, host_covers, host_family_names, host_sans_serif_family,
-    measure_with_parley,
 };
 use flui_painting::typography::{FontWeight, TextDirection, TextSpan, TextStyle};
 use flui_painting::{Canvas, FontCollection, TextContext, TextPainter, shared_font_system};
@@ -64,13 +63,32 @@ fn mis_cased_family() -> Option<String> {
         .find(|lower| !host_family_names().contains(lower))
 }
 
+/// A text family the host carries under its own name, spelled exactly: the
+/// host's UI face where it has a well-known one, else any family other than
+/// the sans-serif generic's. Measured and painted in that host face.
+fn named_host_family() -> Option<String> {
+    let names = host_family_names();
+    let sans_serif = host_sans_serif_family();
+    ["Segoe UI", "DejaVu Sans", "Helvetica", "Arial", "Noto Sans"]
+        .into_iter()
+        .map(str::to_owned)
+        .find(|name| names.contains(name))
+        .or_else(|| names.into_iter().find(|name| *name != sans_serif))
+}
+
 /// The rows: a name, the style, the text.
 fn rows() -> Vec<(&'static str, TextStyle, &'static str)> {
     let mis_cased = mis_cased_family().expect("the host names a family with an upper-case letter");
+    let named = named_host_family().expect("the host carries a family of its own");
     vec![
         (
             "mis_cased_family",
             weighted(Some(&mis_cased), FontWeight::W400),
+            LATIN,
+        ),
+        (
+            "named_host_family",
+            weighted(Some(&named), FontWeight::W400),
             LATIN,
         ),
         ("latin_default", weighted(None, FontWeight::W400), LATIN),
@@ -106,7 +124,6 @@ fn measure_and_paint(
     let mut painter = TextPainter::new()
         .with_text(TextSpan::styled(text, style))
         .with_text_direction(TextDirection::Ltr);
-    measure_with_parley(&mut painter);
     painter.layout(context, 0.0, f64::INFINITY);
     let mut canvas = Canvas::new();
     painter.paint(&mut canvas, Offset::ZERO);
@@ -157,6 +174,10 @@ fn measured_width_equals_painted_width_on_host_faces() {
         for size in SIZES {
             let ((width, height), (painted_width, painted_height)) =
                 measure_and_paint(&mut context, &style, text, size);
+            println!(
+                "{name} at {size} px: measured {width:.2} x {height:.2}, painted \
+                 {painted_width:.2} x {painted_height:.2}"
+            );
             if (width - painted_width).abs() > TOLERANCE
                 || (height - painted_height).abs() > TOLERANCE
             {
@@ -167,7 +188,7 @@ fn measured_width_equals_painted_width_on_host_faces() {
             }
         }
     }
-    assert_eq!(latin_rows, 6, "every Latin row runs on any host");
+    assert_eq!(latin_rows, 7, "every Latin row runs on any host");
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
