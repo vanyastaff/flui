@@ -1,12 +1,10 @@
 //! Pipeline phase typestate markers.
 //!
-//! Per docs/designs/2026-05-20-mythos-flui-rendering-redesign.md, the
 //! `PipelineOwner` carries a phantom type parameter `Phase: PipelinePhase`
 //! that lifts the runtime "what frame phase am I in" question into the
-//! type system. The design was finalized on 2026-05-20: each
-//! `run_*` method now lives only on its phase's impl block, so calling
-//! `run_paint` on `<Idle>` or `run_layout` on `<Compositing>` is a
-//! compile error, not a runtime assert.
+//! type system: each `run_*` method lives only on its phase's impl block,
+//! so calling `run_paint` on `<Idle>` or `run_layout` on `<Compositing>` is
+//! a compile error, not a runtime assert.
 //!
 //! # Compile-time enforcement examples
 //!

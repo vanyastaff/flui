@@ -14,9 +14,6 @@
 //!   descendants are visited.
 //! - **Paint** sorts deep-first so leaves emit their layers before
 //!   ancestor compositing decisions are taken.
-//!
-//! See `docs/designs/2026-05-20-mythos-flui-rendering-redesign.md`
-//! Section 6 for the broader rationale.
 
 use flui_foundation::RenderId;
 use rustc_hash::{FxHashMap, FxHashSet};

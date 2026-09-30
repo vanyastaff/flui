@@ -2,7 +2,7 @@
 
 This document is the per-crate architecture record for `flui-rendering`. It records the Flutter → Rust mapping for this crate, the divergence decisions taken so far, the current thread-safety surface, the known friction not yet refactored, and the planned cleanups still to pick up.
 
-The deeper architectural write-ups for individual subsystems (protocol, layout, paint, hit-test) live alongside this file under [`docs/`](docs/) and migration plans under [`migration/`](migration/). The Flutter class hierarchy walk lives in [`flutter-rendering-hierarchy.md`](flutter-rendering-hierarchy.md) as a sibling appendix and is referenced from `## Flutter source mapping` below.
+Deeper write-ups for layout and hit-testing, and the render test harness guide, live alongside this file under [`docs/`](docs/). The Flutter class hierarchy walk lives in [`flutter-rendering-hierarchy.md`](flutter-rendering-hierarchy.md) as a sibling appendix and is referenced from `## Flutter source mapping` below.
 
 ---
 
@@ -1122,8 +1122,7 @@ owning crate.
 Known sites that do not yet match the intended design but do not break a current rule. Each entry names the site and the next planned step.
 
 - **`PipelineOwner` paint-loop downcasts to `Box<dyn ContainerLayer>`** ([`src/pipeline/owner/mod.rs`](src/pipeline/owner/mod.rs)) — the paint phase uses `Box<dyn ContainerLayer>` returned from `RenderObject::paint`. This is correct for compositing-layer heterogeneity but worth periodic audit to ensure the cost stays at the boundary, not in the per-frame inner loop.
-- **`docs/PROTOCOL_ARCHITECTURE.md` predates this template** ([`docs/PROTOCOL_ARCHITECTURE.md`](docs/PROTOCOL_ARCHITECTURE.md)) — a deeper design write-up that overlaps with `## Flutter source mapping` above for protocol-specific concerns. Not migrated under this template in U3; remains as a companion document.
-- **`docs/LAYOUT_SYSTEM.md`, `docs/PAINT_SYSTEM.md`, `docs/HIT_TEST_SYSTEM.md`** — subsystem-level deep-dives. Not part of the template surface. Stay as companion documents.
+- **`docs/LAYOUT_SYSTEM.md`, `docs/HIT_TEST_SYSTEM.md`** — subsystem-level deep-dives. Not part of the template surface. Stay as companion documents.
 
 ---
 
@@ -1205,7 +1204,7 @@ Criterion is already in `flui-rendering` dev-dependencies. The bench harness nee
 
 ### Migrate `docs/` companion architecture docs onto template-adjacent shape — DONE
 
-**File:** [`docs/PROTOCOL_ARCHITECTURE.md`](docs/PROTOCOL_ARCHITECTURE.md), [`docs/LAYOUT_SYSTEM.md`](docs/LAYOUT_SYSTEM.md), [`docs/PAINT_SYSTEM.md`](docs/PAINT_SYSTEM.md), [`docs/HIT_TEST_SYSTEM.md`](docs/HIT_TEST_SYSTEM.md), [`docs/ROADMAP.md`](docs/ROADMAP.md).
+**File:** [`docs/LAYOUT_SYSTEM.md`](docs/LAYOUT_SYSTEM.md), [`docs/HIT_TEST_SYSTEM.md`](docs/HIT_TEST_SYSTEM.md).
 
 These deep-dives stay as companion documents (not under the per-crate template directly); each now opens with a "See also" header line pointing back to this file, linking them into the methodology index.
 

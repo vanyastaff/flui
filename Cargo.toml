@@ -449,7 +449,7 @@ criterion = { version = "0.8", default-features = false, features = [
 insta = "1"
 
 # PROPERTY-BASED TESTING - invariant/roundtrip/idempotence properties over
-# generated inputs (test-minimization effort). Test-only; not compiled in release.
+# generated inputs. Test-only; not compiled in release.
 proptest = "1"
 
 # Workspace-wide lints for consistent code quality (Rust 1.74+)

@@ -140,7 +140,5 @@ subsystem-level deep-dives:
 
 - [`docs/GESTURES.md`](GESTURES.md) — gesture catalogue.
 - [`docs/HIT_TESTING.md`](HIT_TESTING.md) — hit-test walk.
-- [`docs/INTEGRATION.md`](INTEGRATION.md) — `GestureBinding`
-  integration guide for downstream crates.
 - [`docs/PERFORMANCE.md`](PERFORMANCE.md) — performance notes
   (60 fps / 16 ms / 0 alloc on hot path).

@@ -1,5 +1,5 @@
 # cargo-gamma configuration: mutation testing, the measure a test suite is
-# judged by here (see docs/testing.md and docs/test-minimization/). Mutation
+# judged by here (see docs/testing.md, "Mutation Testing"). Mutation
 # score, not test count or line coverage, is what shows a rewritten or pruned
 # suite still catches what the old one did.
 #

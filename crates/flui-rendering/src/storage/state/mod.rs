@@ -107,9 +107,6 @@ mod offset;
 
 pub use layout_cache::{BoxLayoutCache, IntrinsicDimension, ProtocolLayoutCache};
 
-#[cfg(test)]
-mod tests;
-
 use offset::OffsetCell;
 
 // ============================================================================

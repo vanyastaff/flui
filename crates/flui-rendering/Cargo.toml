@@ -16,7 +16,6 @@ exclude = [
     "/ARCHITECTURE.md",
     "/benches/",
     "/docs/",
-    "/migration/",
     "/flutter-rendering-hierarchy.md",
 ]
 repository.workspace = true
