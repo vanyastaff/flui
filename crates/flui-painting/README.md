@@ -26,8 +26,8 @@ let list = canvas.finish(); // Save, DrawRect, Restore
 - `TextPainter` / `TextLayout` — lay an inline span out against a width
   constraint, query caret / hit-test / lines, paint it. Shaping goes through
   the process-wide font system that the engine shares
-  (`shared_font_system()`), so a face registered through
-  `SharedFontSystem::register_font` measures and paints alike.
+  (`shared_font_system()`), so a face an app registers (`flui::register_font`,
+  through the app's `FontCollection`) measures and paints alike.
 - `paint_box_decoration`, `paint_table_border` — the
   decoration painters.
 
