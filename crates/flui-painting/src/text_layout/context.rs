@@ -17,8 +17,9 @@
 //! discovered, its generic families and its fallback order, so the Parley
 //! path measures text in the face cosmic-text paints it with (ADR-0092 §7).
 //! [`FontCollection::new`] holds the bundled faces alone; without
-//! `bundled-fonts` it starts empty, and text shapes with no face until one is
-//! registered.
+//! `bundled-fonts` it starts empty, text shapes with no face until one is
+//! registered, and the first family registered becomes every generic family
+//! ([`FontCollection::register_font`]).
 
 use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -54,7 +55,8 @@ impl FontCollection {
     /// Cupertino Icons faces, and binds the generic families (sans-serif,
     /// serif, monospace, cursive, fantasy, system-ui) to Roboto, so text shapes the same on
     /// every host. Without `bundled-fonts` it starts empty: text measures
-    /// with no face until one is registered.
+    /// with no face until one is registered, and the first registered family
+    /// then serves as every generic family ([`FontCollection::register_font`]).
     #[must_use]
     pub fn new() -> Self {
         Self(Arc::new(FontCollectionInner::build(None)))
@@ -125,6 +127,13 @@ impl FontCollection {
     /// Registration goes through a local clone of fontique's collection, whose
     /// shared mode propagates the change; FLUI adds no lock.
     ///
+    /// A generic family bound to nothing is bound to the first family the
+    /// bytes hold, so text that names no family (or a generic) measures in
+    /// it rather than in no face. Only a collection built without
+    /// `bundled-fonts` and without a host feed has an unbound generic; a bound
+    /// one is never moved. Two registrations racing on an unbound generic
+    /// each bind a family they registered, and the later write stays.
+    ///
     /// # Errors
     ///
     /// [`RegisterFontError`] if the bytes hold no face; nothing is added and
@@ -141,9 +150,10 @@ impl FontCollection {
             parley::fontique::Blob::new(Arc::new(font_bytes.to_vec())),
             None,
         );
-        if families.is_empty() {
+        let Some(&(family, _)) = families.first() else {
             return Err(RegisterFontError);
-        }
+        };
+        bind_unbound_generics(&mut collection, family);
         self.0.generation.fetch_add(1, Ordering::AcqRel);
         Ok(())
     }
@@ -253,6 +263,32 @@ fn feed_host_faces(collection: &mut parley::fontique::Collection, host: &HostFac
     tracing::debug!(files, "fed the host's faces into the font collection");
 }
 
+/// Every generic family a style can name, `system-ui` included.
+const GENERICS: [parley::fontique::GenericFamily; 6] = {
+    use parley::fontique::GenericFamily;
+    [
+        GenericFamily::SansSerif,
+        GenericFamily::Serif,
+        GenericFamily::Monospace,
+        GenericFamily::Cursive,
+        GenericFamily::Fantasy,
+        GenericFamily::SystemUi,
+    ]
+};
+
+/// Binds `family` to every generic family of `collection` that is bound to
+/// nothing.
+fn bind_unbound_generics(
+    collection: &mut parley::fontique::Collection,
+    family: parley::fontique::FamilyId,
+) {
+    for generic in GENERICS {
+        if collection.generic_families(generic).next().is_none() {
+            collection.set_generic_families(generic, std::iter::once(family));
+        }
+    }
+}
+
 /// Registers the embedded faces, binds every generic family to Roboto and
 /// makes Roboto every script's fallback.
 ///
@@ -263,7 +299,7 @@ fn feed_host_faces(collection: &mut parley::fontique::Collection, host: &HostFac
 /// the host's order (`install_into`).
 #[cfg(feature = "bundled-fonts")]
 fn bind_bundled_faces(collection: &mut parley::fontique::Collection) {
-    use parley::fontique::{Blob, FallbackKey, GenericFamily};
+    use parley::fontique::{Blob, FallbackKey};
 
     use crate::fonts::{CUPERTINO_ICONS, MATERIAL_ICONS_REGULAR, ROBOTO_REGULAR};
 
@@ -275,14 +311,7 @@ fn bind_bundled_faces(collection: &mut parley::fontique::Collection) {
         .collect();
     register(MATERIAL_ICONS_REGULAR);
     register(CUPERTINO_ICONS);
-    for generic in [
-        GenericFamily::SansSerif,
-        GenericFamily::Serif,
-        GenericFamily::Monospace,
-        GenericFamily::Cursive,
-        GenericFamily::Fantasy,
-        GenericFamily::SystemUi,
-    ] {
+    for generic in GENERICS {
         collection.set_generic_families(generic, roboto.iter().copied());
     }
     for script in super::fallback_chain::fontique_scripts() {
@@ -380,9 +409,68 @@ mod tests {
 
     use super::super::fallback_chain::FallbackChain;
     use super::super::layout::{HostData, HostFaces, HostSource};
-    use super::FontCollectionInner;
+    use super::{FontCollection, FontCollectionInner, TextContext};
+    use crate::parley_text::ParagraphSpec;
+    use crate::typography::{TextDirection, TextStyle};
 
     const ROBOTO: &[u8] = include_bytes!("../../assets/fonts/Roboto-Regular.ttf");
+    const PROBE_MONO: &[u8] = include_bytes!("../../assets/fonts/probe-mono-100.ttf");
+
+    /// A collection holding no face and binding no generic: what
+    /// `FontCollection::new` builds without `bundled-fonts`, which this
+    /// crate's own tests always enable.
+    fn unbundled() -> FontCollection {
+        use parley::fontique::{Collection, CollectionOptions, SourceCache};
+
+        let mut collection = Collection::new(CollectionOptions {
+            shared: false,
+            system_fonts: false,
+        });
+        collection.make_shared();
+        FontCollection(Arc::new(FontCollectionInner {
+            generation: std::sync::atomic::AtomicU64::new(0),
+            collection,
+            source_cache: SourceCache::new_shared(),
+        }))
+    }
+
+    /// On a collection that starts with no face, text naming no family
+    /// measures in the first family registered: it measures nothing before
+    /// the registration and four of the probe's one-em `A`s after it. Fails
+    /// if registration leaves the generics unbound.
+    #[test]
+    fn a_registered_family_serves_the_generics_an_empty_collection_leaves_unbound() {
+        let fonts = unbundled();
+        let width = |fonts: &FontCollection| {
+            let spans: Vec<(String, Option<TextStyle>)> = vec![("AAAA".to_owned(), None)];
+            TextContext::new(fonts)
+                .shape(&ParagraphSpec {
+                    spans: &spans,
+                    default_style: None,
+                    font_size: 20.0,
+                    max_width: None,
+                    line_height: None,
+                    direction: TextDirection::Ltr,
+                    max_lines: None,
+                })
+                .metrics()
+                .width
+        };
+        assert!(
+            width(&fonts).abs() < 1e-3,
+            "no face measures nothing, got {}",
+            width(&fonts)
+        );
+
+        fonts
+            .register_font(PROBE_MONO)
+            .expect("the probe face loads");
+        assert!(
+            (width(&fonts) - 80.0).abs() < 1e-3,
+            "unstyled text measures in the probe, got {}",
+            width(&fonts)
+        );
+    }
 
     struct CommonIsRoboto;
 
