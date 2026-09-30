@@ -473,7 +473,9 @@ mod did_change_dependencies_on_inherited_update {
         let render_root_element = tree.mount_root_with_pipeline_owner(
             &flui_view::RootRenderView::new(provider_v1.clone(), 800.0, 600.0),
             Some(flui_rendering::pipeline::PipelineCell::new(
-                flui_rendering::pipeline::PipelineOwner::new(),
+                flui_rendering::pipeline::PipelineOwner::new(
+                    flui_rendering::TextContextHandle::standalone(),
+                ),
             )),
             &mut owner.element_owner_mut(),
         );

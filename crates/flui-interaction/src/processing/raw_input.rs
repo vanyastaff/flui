@@ -507,6 +507,3 @@ impl InputMode {
         matches!(self, Self::Raw | Self::Both)
     }
 }
-
-#[cfg(test)]
-mod tests {}

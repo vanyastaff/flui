@@ -38,7 +38,7 @@ fn mount(opacity: f64) -> (PipelineOwner, flui_foundation::RenderId) {
     let content = box_node(RenderFlex::row())
         .children((0..4).map(|_| box_node(RenderColoredBox::red(40.0, 40.0))));
 
-    let mut owner = PipelineOwner::new();
+    let mut owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
     let (root_id, registry) = tree::mount(
         &mut owner,
         box_node(RenderFlex::row())
@@ -160,7 +160,7 @@ fn mount_transform(seed: Matrix4) -> (PipelineOwner, flui_foundation::RenderId) 
     let content = box_node(RenderFlex::row())
         .children((0..4).map(|_| box_node(RenderColoredBox::red(40.0, 40.0))));
 
-    let mut owner = PipelineOwner::new();
+    let mut owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
     let (root_id, registry) = tree::mount(
         &mut owner,
         box_node(RenderFlex::row())
@@ -283,7 +283,7 @@ fn the_transform_update_path_and_a_repaint_produce_the_same_pixels() {
 /// coverage could differ between the two arms for reasons other than the
 /// radius.
 fn mount_clip_rrect(radius: f64) -> (PipelineOwner, flui_foundation::RenderId) {
-    let mut owner = PipelineOwner::new();
+    let mut owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
     let (root_id, registry) = tree::mount(
         &mut owner,
         box_node(RenderFlex::row())
@@ -445,7 +445,7 @@ impl flui_rendering::traits::RenderBox for RunLocalClipParent {
 }
 
 fn canvas_clip_stays_in_its_run_when_paint_child_splits_the_picture() {
-    let mut owner = PipelineOwner::new();
+    let mut owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
     let (root_id, _) = tree::mount(
         &mut owner,
         box_node(RunLocalClipParent).child(box_node(RenderColoredBox::blue(20.0, 20.0))),

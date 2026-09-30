@@ -295,8 +295,8 @@ which exists.
   `cargo xtask facade-combos` and the AGENTS.md "Extending FLUI" row about
   `[[example]] required-features` are rewritten; `tests/facade_smoke.rs`, README, the crate docs
   and the book are updated from the list
-  `rg 'flui::(material|cupertino)|features.*(material|cupertino)'` produces (excluding
-  `docs/archive/`). `.github/workflows/ci.yml:924` builds `--features material --example
+  `rg 'flui::(material|cupertino)|features.*(material|cupertino)'` produces.
+  `.github/workflows/ci.yml:924` builds `--features material --example
   sliver_demo`; that line changes, which needs the owner's sign-off and the `full-ci` label.
 - The name `flui-sdk` is free on crates.io (checked 2026-09-26, when the crate was created); the
   fallback `flui-package-sdk` is not needed.

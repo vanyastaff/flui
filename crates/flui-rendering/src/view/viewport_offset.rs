@@ -471,6 +471,3 @@ impl ViewportOffset for ScrollableViewportOffset {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {}

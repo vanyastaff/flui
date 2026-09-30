@@ -279,7 +279,7 @@ fails CI if a new render object lacks harness coverage.
 
 ## Paint snapshots & phase pumping
 
-_Design reference: [`docs/plans/2026-06-14-render-harness-paint-phase-design.md`](../../../docs/plans/2026-06-14-render-harness-paint-phase-design.md)_
+_Design reference: [`docs/plans/2026-06-14-render-harness-paint-phase-design.md`](https://github.com/vanyastaff/flui/blob/e30ab7194d50ac1c11ffe17c59230958d2fbeecd/docs/plans/2026-06-14-render-harness-paint-phase-design.md)_
 
 Sub-project A of render-harness 2.0 adds three integrated capabilities:
 

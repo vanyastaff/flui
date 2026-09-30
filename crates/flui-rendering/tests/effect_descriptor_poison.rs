@@ -93,7 +93,7 @@ fn mount(
     alpha: u8,
     skip_paint: bool,
 ) -> (PipelineOwner<Idle>, RenderId) {
-    let mut owner = PipelineOwner::new();
+    let mut owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
     let (root_id, registry) = tree::mount(
         &mut owner,
         box_node(RenderFlex::row()).child(

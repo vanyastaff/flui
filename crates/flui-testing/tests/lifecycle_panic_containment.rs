@@ -239,7 +239,9 @@ fn snapshot(
 }
 
 fn mount_healthy_row() -> (HeadlessBinding, PipelineCell, ElementId, DenseSnapshot) {
-    let pipeline = PipelineCell::new(PipelineOwner::new());
+    let pipeline = PipelineCell::new(PipelineOwner::new(
+        flui_rendering::TextContextHandle::standalone(),
+    ));
     let mut binding = HeadlessBinding::new();
     let mounted = binding.mount_root(
         &DenseRow {

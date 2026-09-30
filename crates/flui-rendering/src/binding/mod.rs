@@ -16,10 +16,6 @@
 //! ```text
 //! flui_app::RenderingFlutterBinding implements RendererBinding
 //! ```
-//!
-//! The three-trait stack (`PipelineManifold`, `HitTestDispatcher`,
-//! `ViewHitTestable`) was collapsed on 2026-05-20. See
-//! `docs/designs/2026-05-20-mythos-flui-rendering-redesign.md` Section 12.
 
 use std::sync::Arc;
 
@@ -27,7 +23,7 @@ use parking_lot::RwLock;
 
 use crate::{
     hit_testing::HitTestResult,
-    pipeline::{PipelineCell, PipelineOwner},
+    pipeline::PipelineCell,
     view::{RenderView, ViewConfiguration},
 };
 
@@ -53,7 +49,7 @@ use crate::{
 ///
 /// # Responsibilities
 ///
-/// - Managing the root [`PipelineOwner`] tree
+/// - Managing the root [`PipelineOwner`](crate::pipeline::PipelineOwner) tree
 /// - Managing [`RenderView`]s (add/remove)
 /// - Creating [`ViewConfiguration`]s for views
 /// - Declaring the first-frame deferral gate via
@@ -77,7 +73,7 @@ use crate::{
 ///
 /// These phase methods were lifted out of `PipelineOwner<Idle>` and
 /// onto their phase-typed impls on 2026-05-20. The
-/// orchestrator is [`PipelineOwner::<Idle>::run_frame`], which
+/// orchestrator is [`PipelineOwner::<Idle>::run_frame`](crate::pipeline::PipelineOwner::run_frame), which
 /// composes the four phase transitions and returns the owner back at
 /// `Idle` plus the produced layer tree. Pumping that orchestrator and
 /// gating step 6 on [`send_frames_to_engine`](Self::send_frames_to_engine)
@@ -132,14 +128,6 @@ pub trait RendererBinding {
     /// own multiple PipelineOwner instances side-by-side; the previous
     /// `PipelineOwner::adopt_child` hierarchical API was removed.
     fn root_pipeline_owner(&self) -> &PipelineCell;
-
-    /// Creates the root pipeline owner.
-    ///
-    /// Override this to customize the root pipeline owner configuration.
-    /// By default, creates a pipeline owner that cannot have a root node.
-    fn create_root_pipeline_owner(&self) -> PipelineOwner {
-        PipelineOwner::new()
-    }
 
     // ========================================================================
     // RenderView Management

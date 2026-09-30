@@ -378,6 +378,3 @@ impl PendingInputEpochs {
         self.pending
     }
 }
-
-#[cfg(test)]
-mod tests {}

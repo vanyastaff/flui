@@ -162,8 +162,9 @@ host.
   services hold it), and `RealmServices::construct` builds the realm's one
   `TextContext` over it (ADR-0092 §3), behind a `TextContextHandle`. A
   presentation builds none: `PresentationState::new`, the one place a
-  presentation's pipeline gets its capabilities, installs the realm's handle on
-  it (`RealmCapabilities::text`, a required field), so every presentation's
+  presentation's pipeline gets its capabilities, builds that pipeline from the
+  realm's handle (`RealmCapabilities::text`, a required field; `PipelineOwner`
+  has no constructor without one), so every presentation's
   layout, intrinsic and dry queries measure through the realm's one context
   (ADR-0092 §10 step 3). No static holds one, and the context drops with the
   realm and its presentations. Pinned by `ui_realm::tests::text_context`,

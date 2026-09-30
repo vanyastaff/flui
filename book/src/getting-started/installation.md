@@ -15,7 +15,7 @@ not a generated application).
 
 | Tool | Minimum version | Notes |
 |------|-----------------|-------|
-| Rust | 1.97 | MSRV floor in `workspace.package.rust-version`; `rustup` installs the pinned dev toolchain automatically on first `cargo` invocation. |
+| Rust | 1.98 | MSRV floor in `workspace.package.rust-version`; `rustup` installs the pinned dev toolchain automatically on first `cargo` invocation. |
 | Native toolchain | platform-specific | MSVC on Windows, Xcode CLT on macOS, NDK on Android (only if targeting Android). |
 
 FLUI is not yet published to crates.io — the beta itself will not be published there until a beta

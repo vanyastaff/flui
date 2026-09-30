@@ -1695,15 +1695,3 @@ fn clip_layer(clip: PaintClip, origin: Offset) -> Layer {
         }
     }
 }
-
-// ============================================================================
-// Tests (the correlation byproduct and the resolution)
-// ============================================================================
-
-#[cfg(test)]
-mod tests {
-
-    // ------------------------------------------------------------------
-    // `PaintClip::PathTarget` — resolved by the walk, never by the producer
-    // ------------------------------------------------------------------
-}

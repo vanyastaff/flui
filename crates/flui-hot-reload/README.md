@@ -23,8 +23,8 @@ scene plugin (cdylib): exposes the scene entry points
 render pipeline continues with the fresh scene
 ```
 
-Android hot-reload uses the same plugin contract (see the `examples/android_*`
-crates, built via `cargo ndk`).
+Android hot-reload uses the same plugin contract: `flui run --scene` rebuilds the scene crate
+with `cargo ndk` and pushes it to the device ([`docs/hot-reload.md`](../../docs/hot-reload.md)).
 
 ## Installing in a host
 

@@ -275,6 +275,3 @@ impl SemanticsTreeUpdateBuilder {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {}

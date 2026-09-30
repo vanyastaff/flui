@@ -94,13 +94,11 @@ crate you're changing before changing it.
 - **Red main:** fix forward within the hour, or revert. A red CI run on main or nightly opens a
   "CI is red on main" issue; close it once main is green.
 - **Leave these alone unless the task is about them:** `.github/workflows/` (it is the merge
-  path, and a change there decides what every other PR must pass); `docs/archive/` (a
-  historical record); `Cargo.lock` by hand (cargo regenerates it, a hand edit drifts from the
-  manifests).
+  path, and a change there decides what every other PR must pass); `Cargo.lock` by hand (cargo
+  regenerates it, a hand edit drifts from the manifests).
 - **No internal process-ID markers** (`Cycle N`, `PR #NNN review`, `Phase B`, slice/wave labels)
   in code or docs — state the invariant, not the history that produced it. `ADR-NNNN` citations
-  are fine. Archival roots are exempt (`docs/{archive,audits,brainstorms,ideation,plans,research,superpowers}`,
-  `.rust-studio/specs`, `specs`, `openspec`).
+  are fine. Archival roots are exempt (`docs/{plans,research}`).
 - **A new gate** is a `cargo xtask` command *and* a step in a CI job the `ci` aggregator gates,
   usually `checks` (a check folded into `cargo xtask checks` gets both) — a command alone never
   reaches the merge path. Prefer a lint or a type over a new check. A doc pulled in with

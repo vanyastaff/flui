@@ -302,9 +302,3 @@ pub(crate) fn solve_two(
         None => (None, None),
     }
 }
-
-#[cfg(test)]
-mod tests {
-
-    proptest::proptest! {}
-}

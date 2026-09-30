@@ -304,7 +304,9 @@ fn duplicate_global_key_panics_in_debug() {
         &DuplicateHost {
             children: vec![counter_a.boxed(), counter_b.boxed()],
         },
-        Some(PipelineCell::new(PipelineOwner::new())),
+        Some(PipelineCell::new(PipelineOwner::new(
+            flui_rendering::TextContextHandle::standalone(),
+        ))),
         &mut owner.write().element_owner_mut(),
     );
     owner

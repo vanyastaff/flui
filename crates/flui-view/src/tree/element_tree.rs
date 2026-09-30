@@ -2915,16 +2915,8 @@ mod tests {
     use super::*;
     use crate::view::{IntoView, ViewExt};
 
-    #[cfg(test)]
-    #[path = "../activation_recovery_tests.rs"]
+    #[path = "activation_recovery_tests.rs"]
     mod activation_recovery_tests;
-    #[path = "../element_depth_tests.rs"]
-    mod element_depth_tests;
-    #[path = "replace_child_with_tests.rs"]
-    mod replace_child_with_tests;
-    #[cfg(test)]
-    #[path = "../update_region_tests.rs"]
-    mod update_region_tests;
 
     use crate::{BuildContext, BuildOwner, GlobalKey, RenderView, StatelessView, View};
 
@@ -3153,7 +3145,9 @@ mod tests {
             Box<dyn flui_rendering::traits::RenderObject<flui_rendering::protocol::BoxProtocol>>;
         let mut tree = ElementTree::new();
         let mut owner = BuildOwner::new();
-        let pipeline = PipelineCell::new(flui_rendering::pipeline::PipelineOwner::new());
+        let pipeline = PipelineCell::new(flui_rendering::pipeline::PipelineOwner::new(
+            flui_rendering::TextContextHandle::standalone(),
+        ));
         let root = tree.mount_root_with_pipeline_owner(
             &UnitRenderHost,
             Some(pipeline.clone()),

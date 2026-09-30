@@ -27,7 +27,7 @@ path = "src/main.rs"
 workspace = true
 
 [dependencies]
-anyhow = "1.0"
+anyhow = { workspace = true }
 
 # X11-only by scope (the harness drives an X server); target-gated so a
 # Windows/macOS workspace build — should either rejoin CI's test matrix —

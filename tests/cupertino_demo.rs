@@ -74,7 +74,9 @@ impl MountedDemo {
             CupertinoTheme::new(CupertinoThemeData::default(), root_view),
         );
 
-        let pipeline_owner = PipelineCell::new(PipelineOwner::new());
+        let pipeline_owner = PipelineCell::new(PipelineOwner::new(
+            flui_rendering::TextContextHandle::standalone(),
+        ));
 
         let focused_root = FocusRoot::new(wrapped_root);
         let animated_root = VsyncScope::new(binding.vsync().clone(), focused_root);

@@ -4,8 +4,8 @@
 //! separately; compiling them as modules of one `view_it` binary cuts
 //! link time and `target/` disk. Source files stay in place (see
 //! `autotests = false` + `[[test]]` in `Cargo.toml`), so file-relative
-//! paths (`include_str!("fixtures/greeting.rs")`) and manifest-relative
-//! paths (trybuild's `tests/ui/`) keep working unchanged.
+//! paths (`include_str!`, `#[path]`) and manifest-relative paths
+//! (trybuild's `tests/ui/`) keep working unchanged.
 //!
 //! Convention: tests that WRITE process-global state (e.g. the
 //! error-view builder) live in their own [[test]] target instead —

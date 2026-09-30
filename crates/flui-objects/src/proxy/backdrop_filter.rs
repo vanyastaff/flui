@@ -21,8 +21,8 @@
 //! plumbing with zero consumers. This port targets the classic
 //! `filter`/`blendMode`/`enabled` surface (the deprecated oracle `filter`
 //! getter/setter this already IS, modulo naming) and documents the
-//! newer surface as deferred — see the design research doc,
-//! `docs/research/2026-07-01-render-backdrop-filter-shader-mask-plan.md`,
+//! newer surface as deferred — see the
+//! [design research](https://github.com/vanyastaff/flui/blob/e30ab7194d50ac1c11ffe17c59230958d2fbeecd/docs/research/2026-07-01-render-backdrop-filter-shader-mask-plan.md),
 //! §1.3 and §6.
 //!
 //! # Rust-native shape

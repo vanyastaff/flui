@@ -59,6 +59,3 @@ impl ElementArity for Optional {}
 ///
 /// Used for elements that can have multiple children (e.g., RenderElement).
 impl ElementArity for Variable {}
-
-#[cfg(test)]
-mod tests {}

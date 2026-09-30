@@ -8,8 +8,8 @@
 **Toolchain constraint:** workspace stable Rust 1.97.1 and declared
 `rust-version = "1.97"` remain unchanged.
 **Related work:** [Runtime Architecture Execution Plan](2026-08-01-runtime-architecture-execution-plan.md),
-[UI Runtime Evolution Study](2026-08-01-ui-runtime-evolution-study.md), and
-[Rust Accessibility Ecosystem](2026-06-09-rust-a11y-ecosystem.md).
+[UI Runtime Evolution Study](https://github.com/vanyastaff/flui/blob/e30ab7194d50ac1c11ffe17c59230958d2fbeecd/docs/research/2026-08-01-ui-runtime-evolution-study.md), and
+[Rust Accessibility Ecosystem](https://github.com/vanyastaff/flui/blob/e30ab7194d50ac1c11ffe17c59230958d2fbeecd/docs/research/2026-06-09-rust-a11y-ecosystem.md).
 
 ## Decision rule
 

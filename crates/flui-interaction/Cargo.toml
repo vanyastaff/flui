@@ -12,7 +12,7 @@ categories = ["gui"]
 
 # Dev-only files a `cargo package --list` sweep found leaking into the
 # published archive (internal architecture docs, criterion benches, etc.):
-exclude = ["/benches/", "/docs/", "/proptest-regressions/"]
+exclude = ["/benches/", "/docs/"]
 keywords = ["gui", "ui", "events", "gestures", "interaction"]
 # All root tests/*.rs files are compiled as modules of ONE integration-test
 # binary (tests/main.rs); the per-file auto-discovered targets each linked the
@@ -64,9 +64,6 @@ static_assertions = { workspace = true }
 # InteractionLane route resolution/invocation. Each follows the workspace
 # benchmark template at `rust-studio/.../templates/benchmark-report.md`.
 criterion = { workspace = true }
-# Property tests for the pure-math substrate (LSQ solver, velocity tracker).
-# Same version as the rest of the workspace (flui-painting / flui-platform-api).
-proptest = "1.5"
 # Bench fixtures use the `make_*_event` test helpers which are gated
 # behind the `testing` feature (they're not part of the release API).
 # Checkout-only test edge: versionless, so Cargo drops it from the published manifest.

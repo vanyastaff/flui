@@ -3453,9 +3453,8 @@ fn harness_viewport_stacks_two_slivers() {
     assert_eq!(run.sliver_geometry(run.id("body")).scroll_extent, 80.0);
 }
 
-// Regression coverage for the `RenderViewport::attempt_layout` sign bug
-// documented in docs/research/widget-renderobject-map.md ("Two pre-existing
-// infrastructure defects"): the forward sequence's `overlap` used
+// Regression coverage for the `RenderViewport::attempt_layout` sign bug: the
+// forward sequence's `overlap` used
 // `center_offset.min(0.0)` (== `(-corrected_offset).min(0.0)`) instead of the
 // oracle's `corrected_offset.min(0.0)` (`rendering/viewport.dart:1834`,
 // `overlap: leadingNegativeChild == null ? math.min(0.0, -centerOffset) :
@@ -5509,7 +5508,7 @@ fn harness_subtree_anchor_detach_preserves_replacement_publication() {
     use flui_rendering::pipeline::PipelineOwner;
     use flui_rendering::protocol::BoxProtocol;
     let anchor = SubtreeAnchor::new();
-    let mut owner = PipelineOwner::new();
+    let mut owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
     let first = owner.insert::<BoxProtocol>(Box::new(RenderSubtreeAnchor::new(anchor.clone())));
     let second = owner.insert::<BoxProtocol>(Box::new(RenderSubtreeAnchor::new(anchor.clone())));
     assert_eq!(anchor.get(), Some(second));
