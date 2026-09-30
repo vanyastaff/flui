@@ -118,14 +118,7 @@ pub(crate) fn an_empty_paragraph_measures_a_line_of_its_style() {
             ));
         }
     }
-    assert!(
-        failures.is_empty(),
-        "{}",
-        failures.join(
-            "
-"
-        )
-    );
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
 /// Measurement is Parley on the lent context in the default build: the probe

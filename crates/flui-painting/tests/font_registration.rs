@@ -91,7 +91,8 @@ fn a_face_registered_on_the_collection_reaches_measurement_paint_and_carets() {
         assert_eq!(
             caret_line_width(&painter),
             caret_width,
-            "caret query {query} after the registration and before `layout()` reads the              caret layout it already had"
+            "caret query {query} after the registration and before `layout()` reads the \
+             caret layout it already had"
         );
     }
     painter.layout(&mut text_cx, 0.0, WIDTH);
