@@ -132,9 +132,9 @@ with an `event` discriminator (`doctor.check`, `device`, `run.app.log`, …).
 `--quiet` drops narration but keeps warnings, errors and tool output. The policy
 is a process-global `OnceLock` because a CLI has exactly one terminal.
 
-This follows Flutter's `--machine` and Dioxus's `--json-output`, with two
-deliberate differences: every listing and the dev loop
-emit JSON, not only a daemon, and JSON mode never mixes human text into stdout.
+Every listing and the dev loop emit JSON, not only a daemon, and JSON mode
+never mixes human text into stdout (Dioxus's `--json-output` is the closest
+prior art).
 The alternative — a `Context` parameter threaded through every helper — was
 rejected as pure noise for commands that are free functions.
 
@@ -151,8 +151,7 @@ A CI job that forgot the project name gets a one-line fix, not a hung runner.
 `CliError::exit_code` maps every variant to a documented table (0 success,
 2 usage, 3 environment, 4 build/test failed, 5 device not found, 6 not a FLUI
 project, 7 needs a terminal, 130 interrupted). Scripts branch on the code;
-the text is for people. Flutter documents only 64/1; `dx` and `tauri` document
-none.
+the text is for people. `dx` and `tauri` document no such table.
 
 ### External tools run with a deadline
 
@@ -165,7 +164,7 @@ result of a missing or hung tool: discovery never fails the command.
 ### The dev loop multiplexes four sources
 
 `flui run` drives one `dev_loop` over a `ReloadStrategy` (process restart, or
-worker host for the Flutter-parity layout). The loop polls, in priority order:
+worker host for the host/worker layout). The loop polls, in priority order:
 the Ctrl-C flag (set by a `tokio::signal` listener on its own thread), hot-keys
 from a `console::Term::read_key_raw` thread (`r`/`R`/`c`/`h`/`q`), the child's
 exit status, and the debounced source watcher. The child never shares stdin

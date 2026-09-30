@@ -5,11 +5,9 @@
 //! `has_constraints`).
 //!
 //! The prior `OnceCell`-backed `set_constraints` panicked on second
-//! invocation, which made any re-layout of the same node a crash. Flutter
-//! `.flutter/.../object.dart:2865` straight-assigns `_constraints =
-//! constraints` each layout pass; we mirror that semantics by holding
-//! constraints in `Option<T>` and replacing unconditionally inside
-//! `set_constraints`. The method takes `&mut self`; the production caller
+//! invocation, which made any re-layout of the same node a crash. Each
+//! layout pass now straight-assigns the constraints: they are held in
+//! `Option<T>` and replaced unconditionally inside `set_constraints`. The method takes `&mut self`; the production caller
 //! (`RenderEntry::layout`) already holds `&mut self` on the entry so the
 //! borrow chain reaches the state mutably.
 
@@ -47,8 +45,8 @@ impl<P: Protocol> RenderState<P> {
     /// constraints and the node is clean, the layout can be skipped.
     ///
     /// The prior `OnceCell`-backed implementation panicked on second
-    /// invocation. Re-layout of the same node now mirrors Flutter's
-    /// straight-assignment semantics. See module-level doc for rationale.
+    /// invocation. Re-layout of the same node now
+    /// straight-assigns the constraints. See module-level doc for rationale.
     #[inline]
     pub fn set_constraints(&mut self, constraints: ProtocolConstraints<P>) {
         self.constraints = Some(constraints);

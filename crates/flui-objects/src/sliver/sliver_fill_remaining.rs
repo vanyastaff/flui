@@ -3,9 +3,8 @@
 //!
 //! The scroll-body variant sizes directly from paint extent. The non-scroll
 //! variants query the Box child's max intrinsic main-axis extent through the
-//! Sliver -> Box intrinsic bridge and mirror Flutter's
-//! `RenderSliverFillRemaining` / `RenderSliverFillRemainingAndOverscroll`
-//! geometry formulas.
+//! Sliver -> Box intrinsic bridge and derive geometry from that extent (with
+//! and without overscroll).
 
 use flui_foundation::Diagnosticable;
 use flui_foundation::Single;
@@ -149,7 +148,7 @@ impl RenderSliver for RenderSliverFillRemainingAndOverscroll {
             max_extent = max_extent.max(extent);
             // Lay the child out; its measured main-axis size is not used for
             // positioning — the offset is derived from geometry.scroll_extent
-            // (see below), matching the sibling fill slivers and the oracle.
+            // (see below), matching the sibling fill slivers.
             let _ =
                 ctx.layout_box_child(0, constraints.as_box_constraints(extent, max_extent, None));
         }
@@ -170,10 +169,9 @@ impl RenderSliver for RenderSliverFillRemainingAndOverscroll {
         };
         if ctx.child_count() > 0 {
             // Position via geometry.scroll_extent, NOT the measured child extent.
-            // Flutter's RenderSliverSingleBoxAdapter.setChildParentData (sliver.dart)
-            // uses paintExtent + scrollOffset - scrollExtent on the reverse axis;
-            // using the (overscrolled) measured size mispositioned the child. This
-            // is the same helper the sibling fill slivers use.
+            // The reverse axis uses paint extent + scroll offset - scroll
+            // extent; using the (overscrolled) measured size mispositioned the
+            // child. This is the same helper the sibling fill slivers use.
             ctx.position_child(0, child_paint_offset(&constraints, &geometry));
         }
         geometry

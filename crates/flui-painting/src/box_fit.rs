@@ -7,7 +7,7 @@ const EPSILON: f64 = 1e-6;
 
 /// How a box should inscribe into another box.
 ///
-/// This is similar to CSS `object-fit` property and Flutter's `BoxFit`.
+/// This is similar to the CSS `object-fit` property.
 ///
 /// # Examples
 ///
@@ -137,14 +137,10 @@ impl BoxFit {
 
     /// Apply this fit mode to given input and output sizes.
     ///
-    /// Behavior-faithful port of Flutter's
-    /// [`applyBoxFit`](https://api.flutter.dev/flutter/painting/applyBoxFit.html)
-    /// (`packages/flutter/lib/src/painting/box_fit.dart`, 3.44.0) — every
-    /// branch below mirrors that function's `switch` arm exactly, including
-    /// which variants crop the source (`Cover`, and the "like cover" half
-    /// of `FitWidth`/`FitHeight`/`None`) versus which never do (`Contain`,
-    /// `ScaleDown`, `Fill`, and the "like contain" half of `FitWidth`/
-    /// `FitHeight`).
+    /// Variants differ in whether they crop the source (`Cover`, and the
+    /// "like cover" half of `FitWidth`/`FitHeight`/`None`) or never do
+    /// (`Contain`, `ScaleDown`, `Fill`, and the "like contain" half of
+    /// `FitWidth`/`FitHeight`).
     ///
     /// Returns a [`FittedSizes`] where:
     /// - [`FittedSizes::source`] is the portion of `input_size` to show —
@@ -155,8 +151,8 @@ impl BoxFit {
     ///   `FitWidth`/`FitHeight`), otherwise exactly `output_size`.
     ///
     /// A non-positive width or height on either input answers the
-    /// degenerate `(Size::ZERO, Size::ZERO)` pair, matching Flutter's own
-    /// leading guard — there is no meaningful fit to compute.
+    /// degenerate `(Size::ZERO, Size::ZERO)` pair — there is no meaningful
+    /// fit to compute.
     #[must_use]
     #[inline]
     pub fn apply(self, input_size: Size<f64>, output_size: Size<f64>) -> FittedSizes {
@@ -278,7 +274,7 @@ impl BoxFit {
             }
 
             BoxFit::ScaleDown => {
-                // Flutter's own two-step sequential shrink (NOT a delegation
+                // A two-step sequential shrink (NOT a delegation
                 // to Contain/None): source is always the full input; the
                 // destination starts at the input's own size and is
                 // rescaled down an axis at a time, height first, using the
@@ -330,7 +326,6 @@ impl BoxFit {
 /// The shape of a box.
 ///
 /// This is used to determine how a box should be clipped or rendered.
-/// Similar to Flutter's `BoxShape`.
 ///
 /// # Examples
 ///

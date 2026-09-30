@@ -1,53 +1,46 @@
 //! [`AppBar`] — a Material app bar: a leading/title/actions toolbar on a
 //! [`Material`] surface.
 //!
-//! # Flutter parity
+//! # Implemented subset
 //!
-//! `material/app_bar.dart`'s `AppBar` (oracle tag `3.44.0`). Implemented
-//! subset: `leading`, `title`, `actions`, `toolbar_height`, `bottom`,
-//! `background_color`, `foreground_color`, `elevation`, and the M3 token defaults
-//! (`_AppBarDefaultsM3`, `app_bar.dart:2521-2570`): `background_color` falls
-//! back to `ColorScheme.surface`, `foreground_color` to `ColorScheme.on_surface`,
-//! `elevation` to `0.0`, and the title's text style to `TextTheme.title_large`
-//! (recolored to the resolved foreground).
+//! `leading`, `title`, `actions`, `toolbar_height`, `bottom`,
+//! `background_color`, `foreground_color`, `elevation`, and the M3 token
+//! defaults: `background_color` falls back to `ColorScheme.surface`,
+//! `foreground_color` to `ColorScheme.on_surface`, `elevation` to `0.0`, and
+//! the title's text style to `TextTheme.title_large` (recolored to the
+//! resolved foreground).
 //!
 //! ## The app bar consumes the top inset itself
 //!
-//! When `widget.primary` (`app_bar.dart:1189-1191`), the oracle wraps its
-//! toolbar in `SafeArea(bottom: false, child: appBar)` — the app bar pads
-//! itself against `MediaQuery.paddingOf(context).top`, rather than a parent
-//! adding that padding on its behalf. This substrate does the same
-//! unconditionally (no `primary` toggle yet — every `AppBar` behaves as
-//! `primary: true`), via [`flui_sdk::widgets::SafeArea`]. A consequence, matching
-//! the oracle: a standalone `AppBar` (mounted with no `Scaffold` at all, just
-//! a `MediaQuery` ancestor) already reserves the status-bar inset on its own.
+//! The app bar wraps its toolbar in a top-only `SafeArea` — it pads itself
+//! against `MediaQuery`'s top padding, rather than a parent adding that
+//! padding on its behalf. This is unconditional (no `primary` toggle yet —
+//! every `AppBar` behaves as a primary one), via
+//! [`flui_sdk::widgets::SafeArea`]. A consequence: a standalone `AppBar`
+//! (mounted with no `Scaffold` at all, just a `MediaQuery` ancestor) already
+//! reserves the status-bar inset on its own.
 //!
-//! ## `centerTitle`: a platform switch, narrowed
+//! ## Title alignment: a platform switch, narrowed
 //!
-//! `_getEffectiveCenterTitle` (`app_bar.dart:805-817`) is a `TargetPlatform`
-//! switch: `false` on Android/Fuchsia/Linux/Windows, `true` on iOS/macOS with
-//! fewer than two actions. FLUI's desktop targets are Linux and Win32 — both
-//! land on the `false` branch — so this substrate always start-aligns the
-//! title (no `center_title` override, no `NavigationToolbar`-style toggle
-//! yet). **Named divergence**: real macOS parity (the `true` branch) waits
-//! for a platform-adaptive seam; today every platform gets the
+//! The Material spec centers the title on iOS/macOS with fewer than two
+//! actions and start-aligns it elsewhere. FLUI's desktop targets are Linux and
+//! Win32 — both start-aligned — so this substrate always start-aligns the
+//! title (no `center_title` override, no navigation-toolbar-style toggle
+//! yet). **Named limitation**: the centered macOS behavior waits for a
+//! platform-adaptive seam; today every platform gets the
 //! Android/Linux/Windows answer.
 //!
 //! ## `bottom`: a fixed-height slot below the toolbar
 //!
 //! [`AppBar::bottom`] accepts anything implementing [`PreferredSizeView`]
 //! (typically a [`crate::TabBar`]) and mounts it directly beneath the
-//! toolbar, inside the same [`SafeArea`]. Flutter parity: `_AppBarState.build`'s
-//! `if (widget.bottom != null)` branch (`app_bar.dart:1164-1183`, oracle tag
-//! `3.44.0`) — ported as the identical shape: a `Column` with
-//! `mainAxisAlignment: spaceBetween` whose first child is the toolbar wrapped
-//! in `Flexible(child: ConstrainedBox(maxHeight: toolbar_height))` and whose
+//! toolbar, inside the same [`SafeArea`]. The shape is a `Column` with
+//! `MainAxisAlignment::SpaceBetween` whose first child is the toolbar wrapped
+//! in a flexible `ConstrainedBox` (max height `toolbar_height`) and whose
 //! second is `bottom` itself, unwrapped. The whole `Column` is forced to
 //! `toolbar_height + bottom.preferred_size().height` via an outer
-//! [`SizedBox`] (this substrate's equivalent of the oracle's
-//! `_PreferredAppBarSize`-driven ambient sizing — see [`AppBar::preferred_size`]
-//! below), then handed to the same top-inset-consuming `SafeArea` the toolbar
-//! alone already used.
+//! [`SizedBox`] (see [`AppBar::preferred_size`] below), then handed to the
+//! same top-inset-consuming `SafeArea` the toolbar alone already used.
 //!
 //! **Why the toolbar flexes and `bottom` does not**: `Flexible` (not
 //! `Expanded`) with a *loose* fit means the toolbar happily shrinks below
@@ -56,9 +49,9 @@
 //! bar's own preferred size, or a `SafeArea` top inset large enough to eat
 //! into it) — `bottom` is the `Column`'s other, non-flexible child, so it
 //! always gets its own natural height first and the toolbar absorbs the
-//! shortfall. This is not a simplification: it's the exact oracle shape,
-//! ported so a `TabBar` mounted as `bottom` never gets silently clipped
-//! by a tight parent while the toolbar above it holds its full height.
+//! shortfall. This ensures a `TabBar` mounted as `bottom` never gets silently
+//! clipped by a tight parent while the toolbar above it holds its full
+//! height.
 //!
 //! [`Scaffold::app_bar`](crate::Scaffold::app_bar)'s own cap math
 //! (`max_height = view.app_bar_preferred_height + media_query.padding.top`)
@@ -72,86 +65,72 @@
 //! standalone, with no `Scaffold` reserving room for it at all).
 //!
 //! **Deferred, and named** (this `bottom` slot specifically): `bottomOpacity`
-//! (the oracle's `Opacity`/`Interval`-curve fade as a `SliverAppBar` scrolls
-//! `bottom` toward its collapsed state — no `scrolledUnder`/sliver-collapse
-//! substrate here to drive it) and `PreferredSizeWidget`'s `Scaffold`-side
-//! bottom-height re-consult on data change (see [`PreferredSizeView`]'s own
-//! "Named divergence" doc — this whole substrate resolves it once, at
-//! `.bottom(...)`/`.app_bar(...)` builder time).
+//! (fading `bottom` as a sliver app bar scrolls toward its collapsed state —
+//! no scrolled-under/sliver-collapse substrate here to drive it) and a
+//! `Scaffold`-side bottom-height re-consult on data change (see
+//! [`PreferredSizeView`]'s own limitation note — this whole substrate
+//! resolves it once, at `.bottom(...)`/`.app_bar(...)` builder time).
 //!
 //! ## Deferred, and named
 //!
-//! - `center_title` / a full `NavigationToolbar` port — the title area here
-//!   is a plain `Expanded` + `Align(center_left)`, not `NavigationToolbar`'s
-//!   overflow-aware middle-widget layout.
-//! - `scrolledUnder` — no `ScrollNotification` substrate to observe yet.
-//! - `flexibleSpace` — stacked behind the toolbar+bottom in the oracle
-//!   (`app_bar.dart`'s trailing `Stack` when `widget.flexibleSpace != null`);
-//!   no consumer or substrate for it here yet.
-//! - **Named divergence: no shadow suppression at a nonzero elevation.**
-//!   `_AppBarDefaultsM3` sets `shadowColor: Colors.transparent` AND
-//!   `surfaceTintColor: Colors.transparent` (`app_bar.dart:2541-2545`) — the
-//!   oracle's M3 app bar casts no shadow even when `scrolledUnderElevation`/
-//!   an explicit `elevation` override raises it above `0`; the surface
-//!   communicates elevation through a tonal color shift instead (M3's
-//!   `ElevationOverlay`), not a drop shadow. [`crate::Material`] has no
-//!   `shadow_color` setter yet (see that module's docs' `surfaceTintColor`
-//!   section for the matching gap), so this substrate cannot suppress it —
-//!   an `AppBar::new().elevation(4.0)` here casts a real shadow the M3
-//!   oracle would not. Revisit once `Material` grows `shadow_color`.
+//! - `center_title` / a full navigation-toolbar layout — the title area here
+//!   is a plain `Expanded` + `Align(center_left)`, not an overflow-aware
+//!   middle-widget layout.
+//! - Scrolled-under styling — no scroll-notification substrate to observe yet.
+//! - `flexibleSpace` — stacked behind the toolbar+bottom; no consumer or
+//!   substrate for it here yet.
+//! - **Named limitation: no shadow suppression at a nonzero elevation.**
+//!   The M3 app bar casts no shadow even when an explicit `elevation`
+//!   override raises it above `0`: its shadow and surface-tint colors are
+//!   transparent, and the surface communicates elevation through a tonal
+//!   color shift instead (M3's elevation overlay), not a drop shadow.
+//!   [`crate::Material`] has no `shadow_color` setter yet (see that module's
+//!   docs' `surfaceTintColor` section for the matching gap), so this
+//!   substrate cannot suppress it — an `AppBar::new().elevation(4.0)` here
+//!   casts a real shadow the M3 spec would not. Revisit once `Material` grows
+//!   `shadow_color`.
 //!
 //! ## Implied leading: a `BackButton`, no `DrawerButton`
 //!
-//! `_AppBarState.build`'s leading resolution (`app_bar.dart:1009-1014`,
-//! oracle tag `3.44.0`): when `leading` is unset and
-//! `automatically_imply_leading` is set, the oracle synthesizes a
-//! `DrawerButton` if the enclosing `Scaffold` has a drawer, else a
-//! `BackButton`/`CloseButton` if `parentRoute?.impliesAppBarDismissal ??
-//! false` (`willHandlePopInternally || canPop`, from `ModalRoute`). This
-//! substrate has no `Drawer`/`Scaffold.hasDrawer` and no `ModalRoute`
-//! abstraction (routes are plain [`flui_sdk::widgets::Route`]s, not modal-aware
-//! ones), so `resolve_leading` narrows the condition to what those two
-//! substrates leave reachable: no leading set, `automatically_imply_leading`
-//! set, a [`NavigatorHandle`] ancestor
+//! When `leading` is unset and `automatically_imply_leading` is set, the
+//! Material spec synthesizes a drawer button if the enclosing `Scaffold` has
+//! a drawer, else a back/close button if the enclosing route can be
+//! dismissed. This substrate has no drawer and no modal-route abstraction
+//! (routes are plain [`flui_sdk::widgets::Route`]s, not modal-aware ones), so
+//! `resolve_leading` narrows the condition to what is reachable: no leading
+//! set, `automatically_imply_leading` set, a [`NavigatorHandle`] ancestor
 //! exists, and it reports [`NavigatorHandle::can_pop`] — always a
-//! [`crate::BackButton`], never a `CloseButton` (no `fullscreenDialog`
-//! substrate to pick that branch) or `DrawerButton` (no drawer substrate at
-//! all). **Named divergence**, not a silently dropped case.
+//! [`crate::BackButton`], never a close button (no fullscreen-dialog
+//! substrate to pick that branch) or drawer button (no drawer substrate at
+//! all). **Named limitation**, not a silently dropped case.
 //!
-//! **Second named divergence, worth calling out precisely:**
-//! `NavigatorHandle::can_pop` is navigator-global (Flutter's own
-//! `NavigatorState.canPop` is too), but the oracle's `parentRoute` is
-//! resolved via `ModalRoute.of(context)` — the SPECIFIC route this
-//! `AppBar`'s subtree is inside — so a bottom-of-stack route's own
-//! `impliesAppBarDismissal` is `false` even while the navigator as a whole
-//! can pop (a route above it exists). This substrate has no `ModalRoute`
-//! equivalent to ask "which route is this `AppBar` inside, and specifically
-//! is IT poppable" — every mounted `AppBar` under the same navigator sees
-//! the same global answer. In the common case (one route showing an
-//! `AppBar` at a time, which is what an `Overlay`-based navigator is for)
-//! this is unobservable; it only diverges when multiple routes carrying
-//! their own `AppBar` are simultaneously mounted (see
-//! `tests/app_bar.rs`'s `implied_leading_appears_once_the_navigator_can_pop`
-//! for exactly that case, documented rather than hidden).
+//! **Second named limitation, worth calling out precisely:**
+//! `NavigatorHandle::can_pop` is navigator-global, but the right question is
+//! about the SPECIFIC route this `AppBar`'s subtree is inside — a
+//! bottom-of-stack route's own app bar should not imply a back button even
+//! while the navigator as a whole can pop (a route above it exists). This
+//! substrate has no modal-route equivalent to ask "which route is this
+//! `AppBar` inside, and specifically is IT poppable" — every mounted
+//! `AppBar` under the same navigator sees the same global answer. In the
+//! common case (one route showing an `AppBar` at a time, which is what an
+//! `Overlay`-based navigator is for) this is unobservable; it only differs
+//! when multiple routes carrying their own `AppBar` are simultaneously
+//! mounted (see `tests/app_bar.rs`'s
+//! `implied_leading_appears_once_the_navigator_can_pop` for exactly that
+//! case, documented rather than hidden).
 //!
 //! ## The leading slot is a fixed `LEADING_WIDTH`, not the leading widget's own intrinsic size
 //!
-//! Whatever `leading` resolves to (explicit or implied) is wrapped in
-//! `ConstrainedBox(BoxConstraints.tightFor(width: LEADING_WIDTH))` around
-//! `Center` before it reaches the toolbar `Row` — Flutter parity:
-//! `_AppBarState.build`'s own `leading = ConstrainedBox(constraints:
-//! BoxConstraints.tightFor(width: widget.leadingWidth ?? appBarTheme.leadingWidth
-//! ?? _kLeadingWidth), child: leading)` (`app_bar.dart`, tag `3.44.0`;
-//! `_kLeadingWidth = kToolbarHeight`, "so the leading button is square").
-//! Simplified from the oracle in one way: Flutter only wraps in `Center`
-//! `when leading is IconButton`; this substrate does it unconditionally
+//! Whatever `leading` resolves to (explicit or implied) is wrapped in a
+//! `ConstrainedBox` with a tight `LEADING_WIDTH` around a `Center` before it
+//! reaches the toolbar `Row` (`LEADING_WIDTH` equals the toolbar height, "so
+//! the leading button is square"). The `Center` wrap is unconditional
 //! (harmless for any leading widget that already fills its own bounds).
-//! **Without this wrap**, a bare 40×40 `IconButton` (this crate's
-//! `_IconButtonDefaultsM3.minimumSize`) would collapse the slot to 40px
-//! wide in the `Row` instead of the M3-specified 56px — `LEADING_WIDTH`'s
-//! `ConstrainedBox` is what prevents that. No `leadingWidth`/
-//! `AppBarTheme.leadingWidth` override exists yet (named V1 deferral), so
-//! `LEADING_WIDTH` is the only width this slot ever takes.
+//! **Without this wrap**, a bare 40×40 `IconButton` (this crate's M3
+//! minimum size) would collapse the slot to 40px wide in the `Row` instead of
+//! the M3-specified 56px — `LEADING_WIDTH`'s `ConstrainedBox` is what prevents
+//! that. No `leading_width`/`AppBarTheme` override exists yet (named V1
+//! deferral), so `LEADING_WIDTH` is the only width this slot ever takes.
 
 use flui_sdk::painting::Color;
 use flui_sdk::painting::TextStyle;
@@ -170,16 +149,12 @@ use crate::theme::Theme;
 use crate::theme_data::ThemeData;
 
 /// The default toolbar height in logical pixels.
-///
-/// Flutter parity: `material/constants.dart`'s `kToolbarHeight` (oracle tag
-/// `3.44.0`).
 pub const DEFAULT_TOOLBAR_HEIGHT: f64 = 56.0;
 
-/// The leading slot's fixed width — Flutter parity: `_AppBarState.build`'s
-/// `_kLeadingWidth` (`app_bar.dart:43`, `= kToolbarHeight`, "so the leading
-/// button is square"). No `widget.leadingWidth`/`AppBarTheme.leadingWidth`
-/// override exists yet in this V1 (see the module docs' deferred list), so
-/// this constant is the only width the slot ever takes.
+/// The leading slot's fixed width — the toolbar height, "so the leading
+/// button is square". No `leading_width`/`AppBarTheme` override exists yet in
+/// this V1 (see the module docs' deferred list), so this constant is the only
+/// width the slot ever takes.
 const LEADING_WIDTH: f64 = DEFAULT_TOOLBAR_HEIGHT;
 
 /// A Material app bar: a `leading` / `title` / `actions` toolbar painted on a
@@ -209,7 +184,7 @@ pub struct AppBar {
     elevation: Option<f64>,
     bottom: Option<BoxedView>,
     /// A widget painted behind the toolbar and above this bar's own
-    /// [`Material`] — Flutter's `AppBar.flexibleSpace` slot. Inert at the
+    /// [`Material`] — the flexible-space slot. Inert at the
     /// bar's own preferred size; it earns its name inside a `SliverAppBar`,
     /// where the bar's box expands and collapses around it.
     flexible_space: Option<BoxedView>,
@@ -321,7 +296,7 @@ impl AppBar {
     }
 
     /// Sets the widget painted behind the toolbar, above this bar's own
-    /// [`Material`] — Flutter's `AppBar.flexibleSpace`. Mostly useful
+    /// [`Material`]. Mostly useful
     /// through `SliverAppBar`, where the bar's box expands around it.
     #[must_use]
     pub fn flexible_space(mut self, flexible_space: impl IntoView) -> Self {
@@ -352,9 +327,8 @@ impl std::fmt::Debug for AppBar {
     }
 }
 
-/// [`AppBar`]'s theme-resolved colors and text styles — `_AppBarDefaultsM3`
-/// (`app_bar.dart:2521-2570`, oracle tag `3.44.0`) applied to the caller's
-/// overrides, then coalesced. Factored out of [`AppBar::build`] so the
+/// [`AppBar`]'s theme-resolved colors and text styles — the M3 defaults
+/// applied to the caller's overrides, then coalesced. Factored out of [`AppBar::build`] so the
 /// resolution itself (a pure function of a [`ThemeData`] and the three
 /// override fields) is directly unit-testable without mounting a widget
 /// tree — see this module's tests.
@@ -362,22 +336,19 @@ struct ResolvedAppBarStyle {
     background_color: Color,
     foreground_color: Color,
     elevation: f64,
-    /// The **toolbar-wide** ambient text style — Flutter parity:
-    /// `defaults.toolbarTextStyle?.copyWith(color: foregroundColor)`
-    /// (`app_bar.dart`, oracle tag `3.44.0`). Always the M3 default recolored
-    /// to `foreground_color`; FLUI has no `toolbarTextStyle` widget/theme
+    /// The **toolbar-wide** ambient text style. Always the M3 default recolored
+    /// to `foreground_color`; FLUI has no toolbar-text-style widget/theme
     /// override slot yet (named deferral — nothing reads one). [`AppBar::build`]
     /// wraps the WHOLE toolbar in this, so a bare `Text` in `leading`/`actions`
     /// gets a sane ambient style — this must stay independent of
     /// [`title_style`](Self::title_style) below, or a themed title style
     /// leaks into every other toolbar child (the bug this split fixes).
     toolbar_text_style: TextStyle,
-    /// The **title-only** text style — Flutter parity: `widget.titleTextStyle
-    /// ?? appBarTheme.titleTextStyle ?? defaults.titleTextStyle?.copyWith(
-    /// color: foregroundColor)` (`app_bar.dart`, oracle tag `3.44.0`).
+    /// The **title-only** text style: the widget's own, else the theme's, else
+    /// the M3 default recolored to the foreground color.
     /// [`AppBar::build`] wraps ONLY `self.title` in this, never the toolbar
-    /// at large — matching the oracle, where `titleTextStyle` styles the
-    /// title widget specifically, not `leading`/`actions`.
+    /// at large — it styles the title widget specifically, not
+    /// `leading`/`actions`.
     ///
     /// A **verbatim** theme-tier value, not recolored, when
     /// `app_bar_theme.title_text_style` is set: only the default tier gets
@@ -390,10 +361,8 @@ struct ResolvedAppBarStyle {
 /// cascade: `background_color` falls back to `ThemeData.app_bar_theme`'s own
 /// `background_color`, then `ColorScheme.surface`; `foreground_color`
 /// likewise falls back through `app_bar_theme` to `ColorScheme.on_surface`;
-/// `elevation` through `app_bar_theme` to `0.0`. Flutter parity:
-/// `widget.backgroundColor ?? appBarTheme.backgroundColor ??
-/// defaults.backgroundColor` (and the `foregroundColor`/`elevation`
-/// equivalents), `app_bar.dart`, oracle tag `3.44.0`.
+/// `elevation` through `app_bar_theme` to `0.0`. The widget's own value wins
+/// over the theme's, which wins over the M3 default.
 ///
 /// `title_style` and `toolbar_text_style` are deliberately DIFFERENT values
 /// once a theme configures `title_text_style` — see [`ResolvedAppBarStyle`]'s
@@ -507,11 +476,9 @@ impl StatelessView for AppBar {
 
         let mut toolbar_children: Vec<BoxedView> = Vec::new();
         if let Some(leading) = &leading {
-            // Flutter parity: `_AppBarState.build` wraps `leading` in
-            // `Center` (when it `is IconButton`; simplified here to
-            // unconditional — see the module docs' "Implied leading"
-            // section) then `ConstrainedBox(BoxConstraints.tightFor(width:
-            // _kLeadingWidth))`, pinning the slot to a fixed 56px width
+            // `leading` is wrapped in a `Center` (unconditionally — see the
+            // module docs' leading-slot section) then a tight-width
+            // `ConstrainedBox`, pinning the slot to a fixed 56px width
             // regardless of the leading widget's own intrinsic size —
             // NOT the 40px `IconButton` minimum size a bare, unwrapped
             // leading would otherwise collapse to in this `Row`.
@@ -524,7 +491,7 @@ impl StatelessView for AppBar {
             );
         }
         if let Some(title) = &self.title {
-            // Always start-aligned — see the module docs' `centerTitle` note.
+            // Always start-aligned — see the module docs' title-alignment note.
             // `title_style` is scoped to JUST this slot via its own
             // `DefaultTextStyle` — it must NOT reach the toolbar-wide wrap
             // below (which carries `toolbar_text_style` instead), or a
@@ -583,10 +550,8 @@ impl StatelessView for AppBar {
         let safe_toolbar = SafeArea::new().bottom(false).child(toolbar_and_bottom);
 
         // The flexible space paints ABOVE this bar's own Material and BELOW
-        // the toolbar — `app_bar.dart`'s trailing Stack when
-        // `widget.flexibleSpace != null`. Outside that slot order the bar's
-        // opaque surface either hides the flexible content or fails to back
-        // it.
+        // the toolbar. Outside that slot order the bar's opaque surface either
+        // hides the flexible content or fails to back it.
         let surface_content: BoxedView = match &self.flexible_space {
             Some(flexible_space) => {
                 Stack::new((Positioned::fill(flexible_space.clone()), safe_toolbar)).boxed()
@@ -602,9 +567,8 @@ impl StatelessView for AppBar {
 
 impl PreferredSizeView for AppBar {
     fn preferred_size(&self) -> Size {
-        // Flutter oracle: `_PreferredAppBarSize(toolbarHeight, bottom?.preferredSize.height)`
-        // (`app_bar.dart:76-81`, oracle tag `3.44.0`) — `toolbar_height` plus
-        // `bottom`'s own preferred height, `0.0` when there is no `bottom`.
+        // `toolbar_height` plus `bottom`'s own preferred height, `0.0` when
+        // there is no `bottom`.
         Size::new(
             f64::INFINITY,
             self.toolbar_height + self.bottom_preferred_height,

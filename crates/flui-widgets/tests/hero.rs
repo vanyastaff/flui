@@ -37,8 +37,8 @@ fn tag(name: &'static str) -> HeroTag {
 // ============================================================================
 
 /// **Preserving child state without a `GlobalKey`.** A stateful hero child must keep its state when
-/// the hero enters and leaves a flight — Flutter guarantees this with `_HeroState._key`
-/// (`heroes.dart:363`, `:434`), a `GlobalKey`.
+/// the hero enters and leaves a flight; a framework could guarantee this with a
+/// `GlobalKey`.
 ///
 /// FLUI needs no key: `HeroState::build` emits the fixed chain
 /// `SizedBox(size?) → Offstage(show) → child` in **both** the not-in-flight and the

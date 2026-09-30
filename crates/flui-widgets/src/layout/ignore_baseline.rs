@@ -15,8 +15,7 @@ use flui_view::{Child, IntoView, RenderView, impl_render_view};
 /// and sits flush at the cross start. Everything else — size, paint,
 /// hit-testing, intrinsics — passes straight through.
 ///
-/// Flutter parity: `widgets/basic.dart` `IgnoreBaseline` (tag `3.44.0`), a
-/// `SingleChildRenderObjectWidget` over `RenderIgnoreBaseline` with no
+/// A single-child render widget over `RenderIgnoreBaseline` with no
 /// configuration of its own.
 #[derive(Clone, Debug, Default)]
 pub struct IgnoreBaseline {
@@ -56,8 +55,8 @@ impl RenderView for IgnoreBaseline {
         _ctx: &flui_view::RenderObjectContext<'_>,
         _render_object: &mut Self::RenderObject,
     ) -> flui_rendering::RenderUpdateImpact {
-        // The render object carries no configuration — the oracle's
-        // `IgnoreBaseline` has no fields either, so there is nothing to push.
+        // The render object carries no configuration, so there is nothing
+        // to push.
         flui_rendering::RenderUpdateImpact::NONE
     }
 

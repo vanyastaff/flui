@@ -3,10 +3,6 @@
 //! When an error occurs during build, the broken widget is replaced
 //! by an ErrorView. This provides visual feedback and debugging information.
 //!
-//! # Flutter Equivalent
-//!
-//! This corresponds to Flutter's `ErrorWidget` class.
-//!
 //! # Example
 //!
 //! ```rust,ignore
@@ -33,7 +29,7 @@ use super::view::View;
 /// Factory function type for creating custom error widgets.
 ///
 /// This allows applications to customize how errors are displayed.
-pub type ErrorViewBuilder = fn(&FlutterError) -> Box<dyn View>;
+pub type ErrorViewBuilder = fn(&FrameworkError) -> Box<dyn View>;
 
 /// Global configurable factory for ErrorView.
 ///
@@ -86,7 +82,7 @@ pub(crate) fn isolate_error_view_builder_test(test_name: &str) -> bool {
 
 /// Error details for framework errors.
 #[derive(Debug, Clone)]
-pub struct FlutterError {
+pub struct FrameworkError {
     /// The error message.
     pub message: String,
     /// Optional stack trace or additional details.
@@ -95,7 +91,7 @@ pub struct FlutterError {
     pub exception: Option<String>,
 }
 
-impl FlutterError {
+impl FrameworkError {
     /// Create a new error with just a message.
     pub fn new(message: impl Into<String>) -> Self {
         Self {
@@ -123,7 +119,7 @@ impl FlutterError {
         }
     }
 
-    /// Create a `FlutterError` from a panic payload caught by
+    /// Create a `FrameworkError` from a panic payload caught by
     /// [`std::panic::catch_unwind`].
     ///
     /// A panic payload is a `Box<dyn Any + Send>`. The common shapes are
@@ -134,10 +130,6 @@ impl FlutterError {
     /// `context` describes *what* was building when the panic happened
     /// (e.g. `"building StatelessElement"`) and is stored as the error
     /// `details` so the rendered [`ErrorView`] carries a breadcrumb.
-    ///
-    /// Flutter parity: `ComponentElement.performRebuild`
-    /// (`framework.dart:5823-5834`) funnels the caught exception through
-    /// `_reportException` into `ErrorWidget.builder`.
     pub fn from_panic(payload: &(dyn std::any::Any + Send), context: impl Into<String>) -> Self {
         Self::from_payload_text(payload_text(payload), context)
     }
@@ -161,7 +153,7 @@ impl FlutterError {
     }
 }
 
-impl std::fmt::Display for FlutterError {
+impl std::fmt::Display for FrameworkError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.message)?;
         if let Some(details) = &self.details {
@@ -171,7 +163,7 @@ impl std::fmt::Display for FlutterError {
     }
 }
 
-impl std::error::Error for FlutterError {}
+impl std::error::Error for FrameworkError {}
 
 /// A View that displays an error message.
 ///
@@ -206,8 +198,8 @@ impl ErrorView {
         }
     }
 
-    /// Create an ErrorView from a FlutterError.
-    pub fn from_error(error: &FlutterError) -> Self {
+    /// Create an ErrorView from a FrameworkError.
+    pub fn from_error(error: &FrameworkError) -> Self {
         Self {
             message: error.message.clone(),
             details: error.details.clone(),
@@ -215,7 +207,7 @@ impl ErrorView {
     }
 
     /// Build an error view using the global builder or default.
-    pub fn build_error_view(error: &FlutterError) -> Box<dyn View> {
+    pub fn build_error_view(error: &FrameworkError) -> Box<dyn View> {
         // Check for custom builder
         if let Ok(guard) = ERROR_VIEW_BUILDER.read()
             && let Some(builder) = *guard
@@ -261,7 +253,6 @@ impl View for ErrorView {
     /// subtree that failed to build, and every place that subtree could sit
     /// — a lazy sliver child in particular, which must carry a render node to
     /// be laid out at all — needs something with size and paint there.
-    /// Flutter's `ErrorWidget` is a `RenderErrorBox` for the same reason.
     fn create_element(&self) -> crate::element::ElementKind {
         crate::element::ElementKind::render_variable(self)
     }
@@ -279,7 +270,7 @@ impl View for ErrorView {
 /// `crate::element::sparse_children::build_item_or_error` — a *different*
 /// containment window, the lazy-sliver item builder itself — calls this
 /// too, so the two never drift into two ways of stripping a key.
-pub(crate) fn recovery_view_for(error: &FlutterError) -> BoxedView {
+pub(crate) fn recovery_view_for(error: &FrameworkError) -> BoxedView {
     let recovered = ErrorView::build_error_view(error);
     if recovered.key().is_some() {
         BoxedView(Box::new(UnkeyedRecovery {

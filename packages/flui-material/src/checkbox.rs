@@ -1,64 +1,48 @@
 //! [`Checkbox`] — a tristate-capable M3 selection control.
 //!
-//! # Flutter parity
-//!
-//! `material/checkbox.dart`, `material/checkbox_theme.dart`, and
-//! `widgets/toggleable.dart`'s `ToggleableStateMixin`/`ToggleablePainter`
-//! (oracle tag `3.44.0`).
-//!
 //! # V1 scope: static states, no toggle/reaction animation
 //!
-//! The oracle's `ToggleableStateMixin` drives four `AnimationController`s
-//! (`positionController` for the box/check morph, `reactionController` for
-//! the radial ink splash, plus hover/focus fade controllers) so a value
-//! change or an interaction visibly interpolates. This V1 **snaps**: no
-//! `positionController`, so `CheckboxPainter` always paints the box/check
-//! at their fully-settled `t == 1.0` shape (`_CheckboxPainter._drawCheck`/
-//! `_drawDash` evaluated at `t = 1.0`, `checkbox.dart` `:750-783`), and no
-//! `reactionController`/radial-splash painting — the hover/focus/press
-//! overlay comes from [`InkWell`] instead (a single resolved-color fill, not
-//! an expanding circle), matching how [`crate::floating_action_button`]
-//! already substitutes `InkWell` for `RawMaterialButton`'s ink-feature
-//! registry. Named deferral, not a silent drop: a future animated Checkbox
-//! reintroduces `AnimationController`-driven interpolation without changing
-//! this type's public surface (`value` via [`Checkbox::new`] /
-//! [`Checkbox::tristate`], plus `on_changed`, are already the oracle's
-//! steady-state contract).
+//! A full toggleable control drives several animation controllers (one for
+//! the box/check morph, one for the radial ink splash, plus hover/focus fade
+//! controllers) so a value change or an interaction visibly interpolates. This
+//! V1 **snaps**: `CheckboxPainter` always paints the box/check at their
+//! fully-settled shape, and there is no radial-splash painting — the
+//! hover/focus/press overlay comes from [`InkWell`] instead (a single
+//! resolved-color fill, not an expanding circle), matching how
+//! [`crate::floating_action_button`] already substitutes `InkWell` for an
+//! ink-feature registry. Named deferral, not a silent drop: a future animated
+//! Checkbox reintroduces animation-controller-driven interpolation without
+//! changing this type's public surface (`value` via [`Checkbox::new`] /
+//! [`Checkbox::tristate`], plus `on_changed`, are already the steady-state
+//! contract).
 //!
 //! # Composition: `InkWell` owns interaction, `Checkbox` owns `Selected`
 //!
-//! [`InkWell`] already ports the oracle's hover/focus/press wiring and
-//! `Disabled` derivation (`ink_well.dart`'s `_InkResponseState`, reused here
-//! rather than re-deriving `ToggleableStateMixin`'s
-//! `FocusableActionDetector`/`GestureDetector` composition from scratch).
-//! `Checkbox` shares one [`WidgetStatesController`] with the `InkWell` it
-//! builds (via [`InkWell::states_controller`]): `InkWell` manages
-//! `Hovered`/`Focused`/`Pressed`/`Disabled` on it, `Checkbox` manages
-//! `Selected` on it (mirroring `ToggleableStateMixin.states`'s `if (value ??
-//! true) WidgetState.selected`) — both read the same live set. `Error` is
-//! never stored on the controller (the oracle's `isError` is layered onto a
-//! *local copy* of `states` only where consumed, `checkbox.dart` `:538-541`
-//! /`:564-566`/`:574-576`); this port folds it in the same way, at each
-//! resolution site.
+//! [`InkWell`] already provides the hover/focus/press wiring and `Disabled`
+//! derivation, so it is reused here rather than re-deriving that composition
+//! from scratch. `Checkbox` shares one [`WidgetStatesController`] with the
+//! `InkWell` it builds (via [`InkWell::states_controller`]): `InkWell`
+//! manages `Hovered`/`Focused`/`Pressed`/`Disabled` on it, `Checkbox` manages
+//! `Selected` on it (a `None` value counts as selected) — both read the same
+//! live set. `Error` is never stored on the controller (it is layered onto a
+//! *local copy* of `states` only where consumed); this type folds it in the
+//! same way, at each resolution site.
 //!
 //! # Painting: `CustomPaint` + real stroked geometry, not a glyph
 //!
 //! `CheckboxPainter` draws the 18dp rounded-rect box
 //! ([`Canvas::draw_rrect`]/[`Canvas::draw_drrect`]) and the checkmark/dash as
 //! an actual stroked [`Path`]/line ([`Canvas::draw_path`]/
-//! [`Canvas::draw_line`]) at the oracle's exact relative coordinates
-//! (`_CheckboxPainter._drawCheck`/`_drawDash`, `checkbox.dart` `:750-783`) —
-//! not a bundled icon-font glyph. Unlike [`crate::back_button::BackButton`]
+//! [`Canvas::draw_line`]) at fixed relative coordinates — not a bundled
+//! icon-font glyph. Unlike [`crate::back_button::BackButton`]
 //! (which had no path-drawing seam and fell back to a `MaterialIcons` glyph
-//! identity), `flui-painting`'s [`Canvas`] already exposes the primitives the
-//! oracle's own painter uses, so this is a direct, honest port of the static
-//! (non-animated) shape.
+//! identity), `flui-painting`'s [`Canvas`] already exposes the primitives, so
+//! this is a direct, honest rendering of the static (non-animated) shape.
 //!
 //! # Overlay shape: the whole tap target, not a fixed-radius circle
 //!
-//! `_CheckboxDefaultsM3.splashRadius` (`20.0`) sizes the oracle's own
-//! FREE (unclipped) radial-reaction circle
-//! (`ToggleablePainter.paintRadialReaction`). `InkWell`'s single-fill
+//! The M3 splash radius (`20.0`) sizes a FREE (unclipped) radial-reaction
+//! circle. `InkWell`'s single-fill
 //! substitution (see the "V1 scope" section above) has no free-circle
 //! primitive — it paints one shape-clipped fill over its own bounds. This
 //! port shapes that fill as [`MaterialShape::Stadium`] over the FULL
@@ -69,19 +53,19 @@
 //! # Deferred (named, not silently dropped)
 //!
 //! - **Toggle/reaction/hover/focus-fade animation** — see above.
-//! - **`Checkbox.adaptive`** (`CupertinoCheckbox` platform switch) — no
-//!   `TargetPlatform` substrate to switch on yet.
+//! - **An adaptive (Cupertino) checkbox** — no platform substrate to switch
+//!   on yet.
 //! - **`mouse_cursor`, `splash_radius`, `material_tap_target_size`,
 //!   `visual_density` overrides** — V1 always uses the M3 defaults
-//!   (`kMinInteractiveDimension` = 48dp tap target, `VisualDensity.standard`
-//!   = no adjustment, `splashRadius = 20.0` — see the "Overlay shape"
+//!   (48dp tap target, standard visual density = no adjustment, splash
+//!   radius `20.0` — see the "Overlay shape"
 //!   section above for why the InkWell substitution doesn't hit that value
 //!   exactly). [`crate::CheckboxThemeData`] and the widget both omit these
 //!   fields; see that type's own doc comment.
 //! - **Widget-level `fill_color`/`overlay_color`/`side`/`shape` overrides**
-//!   (the oracle's `WidgetStateProperty`-shaped constructor parameters) —
-//!   only [`Checkbox::active_color`] and [`Checkbox::check_color`] (the
-//!   oracle's plain-`Color` overrides) ship at the widget tier; the theme
+//!   (state-property-shaped parameters) —
+//!   only [`Checkbox::active_color`] and [`Checkbox::check_color`] (plain
+//!   `Color` overrides) ship at the widget tier; the theme
 //!   tier ([`crate::CheckboxThemeData`]) and the M3 default tier are both
 //!   fully state-resolved. A future widget-level `WidgetStateProperty` override
 //!   slot is additive.
@@ -111,22 +95,18 @@ use crate::shape::MaterialShape;
 use crate::state_color::resolve_state_color;
 use crate::theme::Theme;
 
-/// A checkbox's edge length. Flutter parity: `Checkbox.width` (`18.0`,
-/// `checkbox.dart`, oracle tag `3.44.0`).
+/// A checkbox's edge length (`18.0`).
 pub const CHECKBOX_EDGE_SIZE: f64 = 18.0;
 
-/// The box outline's and checkmark/dash's stroke width. Flutter parity:
-/// `_kStrokeWidth` (`checkbox.dart`).
+/// The box outline's and checkmark/dash's stroke width.
 const STROKE_WIDTH: f64 = 2.0;
 
-/// The M3 tap-target side length. Flutter parity: `kMinInteractiveDimension`
-/// (`constants.dart`, `48.0`), the `MaterialTapTargetSize.padded` branch
-/// `_CheckboxState.build` always takes in V1 (no `materialTapTargetSize`
-/// override yet — see the module docs).
+/// The M3 tap-target side length (`48.0`, the minimum interactive dimension),
+/// always used in V1 (no `material_tap_target_size` override yet — see the
+/// module docs).
 pub const CHECKBOX_TAP_TARGET_SIZE: f64 = 48.0;
 
-/// The box's corner radius. Flutter parity: `_CheckboxDefaultsM3.shape`,
-/// `RoundedRectangleBorder(borderRadius: BorderRadius.all(Radius.circular(2.0)))`.
+/// The box's corner radius, `2.0`.
 const CORNER_RADIUS: f64 = 2.0;
 
 // The 18dp box must fit inside the 48dp tap target with room for the
@@ -146,8 +126,8 @@ type CheckboxChangeCallback = Rc<dyn Fn(&mut flui_sdk::view::EventCx<'_>, Option
 /// [`Checkbox::tristate`] when the third (`None`/indeterminate) value is
 /// allowed. Storage is a private mode enum (binary vs tristate), so
 /// `(value: None, tristate: false)` is not representable even inside this
-/// module (Flutter only `assert`s the pair in debug; FLUI closes the release
-/// hole — same public-widget invariant class as GitHub #1101 for tabs). Ledger:
+/// module (a debug-only assertion would leave a release hole; this closes it —
+/// same public-widget invariant class as GitHub #1101 for tabs). Ledger:
 /// `ARCHITECTURE.md` §Checkbox value/tristate.
 ///
 /// ```rust
@@ -176,8 +156,8 @@ enum CheckboxMode {
 }
 
 impl CheckboxMode {
-    /// The oracle's `value` field: always `Some` for binary, `None` when
-    /// indeterminate under tristate.
+    /// The value: always `Some` for binary, `None` when indeterminate under
+    /// tristate.
     fn value(self) -> Option<bool> {
         match self {
             Self::Binary(value) => Some(value),
@@ -185,7 +165,8 @@ impl CheckboxMode {
         }
     }
 
-    /// Flutter parity: `value ?? true` for `WidgetState.selected`.
+    /// Whether `WidgetState::Selected` applies: an indeterminate value counts
+    /// as selected.
     fn is_selected(self) -> bool {
         self.value().unwrap_or(true)
     }
@@ -262,7 +243,7 @@ impl Checkbox {
     /// checkbox interactive — `None` (the default) renders disabled and
     /// swallows taps. On tap, fires with the next value in cycle order:
     /// `Some(false) -> Some(true) -> (tristate: None, else: Some(false))
-    /// -> Some(false) -> ...`. Flutter parity: `Checkbox.onChanged`.
+    /// -> Some(false) -> ...`.
     #[must_use]
     pub fn on_changed<R: flui_sdk::view::EventOutcome>(
         mut self,
@@ -273,15 +254,14 @@ impl Checkbox {
     }
 
     /// Overrides the fill color used when this checkbox is selected (and
-    /// enabled). Flutter parity: `Checkbox.activeColor`.
+    /// enabled).
     #[must_use]
     pub fn active_color(mut self, color: Color) -> Self {
         self.active_color = Some(color);
         self
     }
 
-    /// Overrides the checkmark/dash stroke color. Flutter parity:
-    /// `Checkbox.checkColor`.
+    /// Overrides the checkmark/dash stroke color.
     #[must_use]
     pub fn check_color(mut self, color: Color) -> Self {
         self.check_color = Some(color);
@@ -289,31 +269,27 @@ impl Checkbox {
     }
 
     /// Marks this checkbox as showing an error state — recolors the fill,
-    /// check, border, and overlay through the M3 error branch. Flutter
-    /// parity: `Checkbox.isError`.
+    /// check, border, and overlay through the M3 error branch.
     #[must_use]
     pub fn is_error(mut self, is_error: bool) -> Self {
         self.is_error = is_error;
         self
     }
 
-    /// Sets the accessible label announced by assistive technology. Flutter
-    /// parity: `Checkbox.semanticLabel`.
+    /// Sets the accessible label announced by assistive technology.
     #[must_use]
     pub fn semantic_label(mut self, label: impl Into<String>) -> Self {
         self.semantic_label = Some(label.into());
         self
     }
 
-    /// Whether this checkbox responds to taps. Flutter parity:
-    /// `ToggleableStateMixin.isInteractive` (`onChanged != null`).
+    /// Whether this checkbox responds to taps (`on_changed` is set).
     fn is_interactive(&self) -> bool {
         self.on_changed.is_some()
     }
 
-    /// The value a tap applies. Flutter parity: `_handleTap`'s `switch
-    /// (value)` (`checkbox.dart` `:241-248`): `false -> true`, `true ->
-    /// tristate ? null : false`, `null -> false`.
+    /// The value a tap applies: `false -> true`, `true -> tristate ? null :
+    /// false`, `null -> false`.
     fn next_value(&self) -> Option<bool> {
         match self.mode {
             CheckboxMode::Binary(false) | CheckboxMode::Tristate(Some(false)) => Some(true),
@@ -345,10 +321,10 @@ impl StatefulView for Checkbox {
     type State = CheckboxState;
 
     fn create_state(&self) -> Self::State {
-        // Flutter parity: `ToggleableStateMixin.states`'s `if (value ?? true)
-        // WidgetState.selected` — seeded from the initial view (`&self`
-        // here IS that initial view), so `Selected` is correct before the
-        // first `build` rather than needing a same-frame correction.
+        // `Selected` is seeded from the initial view (`&self` here IS that
+        // initial view; an indeterminate value counts as selected), so it is
+        // correct before the first `build` rather than needing a same-frame
+        // correction.
         let initial = if self.mode.is_selected() {
             WidgetStates::from(WidgetState::Selected)
         } else {
@@ -374,9 +350,8 @@ impl ViewState<Checkbox> for CheckboxState {
     }
 
     fn did_update_view(&mut self, old_view: &Checkbox, new_view: &Checkbox) {
-        // Flutter parity: `didUpdateWidget` -> `animateToValue()` on a value
-        // change (`checkbox.dart` `:424-430`); V1 has no animation to drive,
-        // so this resyncs `Selected` directly. Never called from `build` —
+        // On a value change, V1 has no animation to drive, so this resyncs
+        // `Selected` directly. Never called from `build` —
         // same care `InkWellState::did_update_view` takes.
         if old_view.mode.value() != new_view.mode.value() {
             self.states
@@ -485,14 +460,11 @@ impl ViewState<Checkbox> for CheckboxState {
 /// Resolves [`Checkbox`]'s fill color through the widget -> theme -> default
 /// cascade — extracted as its own pure function (not left inline in
 /// `build`) specifically so the tier-precedence order is unit-testable
-/// without mounting a widget tree. Flutter parity: `_widgetFillColor`
-/// (`checkbox.dart` `:450-460`) composed with `_CheckboxState.build`'s own
-/// `?? checkboxTheme.fillColor?.resolve ?? defaults.fillColor.resolve`
-/// chain — `active_color` only substitutes when [`WidgetState::Selected`]
-/// AND NOT [`WidgetState::Disabled`] (the oracle's `_widgetFillColor`
-/// returns `null` otherwise, falling through); the `widget.fillColor`
-/// `WidgetStateProperty` tier above it is a named V1 deferral (see the
-/// module docs), so this cascade starts one tier lower than the oracle's.
+/// without mounting a widget tree. `active_color` only substitutes when
+/// [`WidgetState::Selected`] AND NOT [`WidgetState::Disabled`] (otherwise it
+/// falls through to the theme tier, then the M3 default); a widget-level
+/// state-property fill tier above it is a named V1 deferral (see the
+/// module docs).
 fn resolve_checkbox_fill_color(
     active_color: Option<Color>,
     theme_fill_color: Option<&WidgetStateProperty<Option<Color>>>,
@@ -509,7 +481,7 @@ fn resolve_checkbox_fill_color(
         .unwrap_or_else(|| checkbox_default_fill_color(colors, states))
 }
 
-/// `_CheckboxDefaultsM3.fillColor` (`checkbox.dart`, oracle tag `3.44.0`).
+/// The M3 default fill color.
 fn checkbox_default_fill_color(colors: &ColorScheme, states: WidgetStates) -> Color {
     if states.contains_state(WidgetState::Disabled) {
         return if states.contains_state(WidgetState::Selected) {
@@ -528,7 +500,7 @@ fn checkbox_default_fill_color(colors: &ColorScheme, states: WidgetStates) -> Co
     Color::TRANSPARENT
 }
 
-/// `_CheckboxDefaultsM3.checkColor` (`checkbox.dart`, oracle tag `3.44.0`).
+/// The M3 default check color.
 fn checkbox_default_check_color(colors: &ColorScheme, states: WidgetStates) -> Color {
     if states.contains_state(WidgetState::Disabled) {
         return if states.contains_state(WidgetState::Selected) {
@@ -547,7 +519,7 @@ fn checkbox_default_check_color(colors: &ColorScheme, states: WidgetStates) -> C
     Color::TRANSPARENT
 }
 
-/// `_CheckboxDefaultsM3.side` (`checkbox.dart`, oracle tag `3.44.0`).
+/// The M3 default border side.
 fn checkbox_default_side(colors: &ColorScheme, states: WidgetStates) -> BorderSide<f64> {
     let side = |color: Color, width: f64| BorderSide::new(color, width, BorderStyle::Solid);
 
@@ -573,9 +545,8 @@ fn checkbox_default_side(colors: &ColorScheme, states: WidgetStates) -> BorderSi
     side(colors.on_surface_variant, 2.0)
 }
 
-/// `_CheckboxDefaultsM3.overlayColor` (`checkbox.dart`, oracle tag `3.44.0`).
-/// Returns `None` where the oracle returns `Colors.transparent` — see
-/// [`InkWell`]'s own "`None` resolution = no overlay layer at all" contract.
+/// The M3 default overlay color. Returns `None` where the M3 table calls for
+/// transparent — see [`InkWell`]'s own "`None` resolution = no overlay layer at all" contract.
 fn checkbox_default_overlay_color(colors: &ColorScheme, states: WidgetStates) -> Color {
     if states.contains_state(WidgetState::Error) {
         if states.contains_state(WidgetState::Pressed) {
@@ -614,11 +585,9 @@ fn checkbox_default_overlay_color(colors: &ColorScheme, states: WidgetStates) ->
 
 /// Paints the checkbox's box (fill + border) and, for a settled `Some(true)`/
 /// `None` value, the checkmark/dash — always at the fully-settled shape (see
-/// the module docs' V1-scope section). Flutter parity: `_CheckboxPainter`
-/// (`checkbox.dart` `:653-837`), evaluated at `t = 1.0` throughout (no
-/// `position`/`previousValue` interpolation) with no
-/// `ToggleablePainter.paintRadialReaction` call (the overlay comes from
-/// [`InkWell`] instead — see the module docs' "Composition" section).
+/// the module docs' V1-scope section), with no interpolation and no
+/// radial-reaction painting (the overlay comes from [`InkWell`] instead — see
+/// the module docs' "Composition" section).
 #[derive(Debug, Clone, PartialEq)]
 struct CheckboxPainter {
     fill_color: Color,
@@ -670,9 +639,7 @@ impl CustomPainter for CheckboxPainter {
     }
 }
 
-/// The settled (`t = 1.0`) checkmark stroke. Flutter parity:
-/// `_CheckboxPainter._drawCheck` (`checkbox.dart` `:750-771`) at `t = 1.0`:
-/// the full `start -> mid -> end` polyline.
+/// The settled checkmark stroke: the full `start -> mid -> end` polyline.
 fn draw_checkmark(canvas: &mut Canvas, origin_x: f64, origin_y: f64, paint: &Paint) {
     let point = |dx: f64, dy: f64| Point::new(origin_x + dx, origin_y + dy);
     let mut path = Path::new();
@@ -682,9 +649,7 @@ fn draw_checkmark(canvas: &mut Canvas, origin_x: f64, origin_y: f64, paint: &Pai
     canvas.draw_path(&path, paint);
 }
 
-/// The settled (`t = 1.0`) indeterminate dash: a full-width horizontal line.
-/// Flutter parity: `_CheckboxPainter._drawDash` (`checkbox.dart` `:773-783`)
-/// at `t = 1.0`.
+/// The settled indeterminate dash: a full-width horizontal line.
 fn draw_dash(canvas: &mut Canvas, origin_x: f64, origin_y: f64, paint: &Paint) {
     let point = |dx: f64| Point::new(origin_x + dx, origin_y + CHECKBOX_EDGE_SIZE * 0.5);
     canvas.draw_line(
@@ -707,7 +672,7 @@ mod tests {
     // ------------------------------------------------------------------
 
     // ------------------------------------------------------------------
-    // M3 default token tables — per-state probes, oracle branch order
+    // M3 default token tables — per-state probes, in branch order
     // ------------------------------------------------------------------
 
     fn light() -> ColorScheme {

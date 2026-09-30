@@ -1,7 +1,7 @@
-//! Flutter-parity hot-reload project template.
+//! State-preserving hot-reload project template.
 //!
 //! Emits the three-crate host/worker/types layout the reload protocol requires
-//! (see `docs/designs/2026-06-28-flutter-parity-hot-reload.md` §5): the host
+//! (see `docs/designs/2026-06-28-hot-reload-runtime-protocol.md` §5): the host
 //! binary owns the element tree — and therefore every `State` — while the
 //! reloadable worker `cdylib` holds only the `build()` implementations, so a
 //! code change to the worker preserves state across a reload.
@@ -227,7 +227,7 @@ fn readme(name: &str, types_package: &str, worker_package: &str, host_package: &
     format!(
         r"# {name}
 
-A FLUI application with Flutter-parity **hot reload** (state preserved).
+A FLUI application with state-preserving **hot reload**.
 
 ## Layout
 

@@ -1,5 +1,4 @@
-//! Sparse, on-demand child storage for lazy slivers — the FLUI analogue of the
-//! child bookkeeping in Flutter's `SliverMultiBoxAdaptorElement`.
+//! Sparse, on-demand child storage for lazy slivers.
 //!
 //! A normal multi-child element keeps a *dense* `Vec<ElementId>` reconciled
 //! top-down. A lazy sliver instead builds only the children whose logical
@@ -10,7 +9,7 @@
 //! freshly-built child's render node with its [`SliverMultiBoxAdaptorParentData`](flui_rendering::parent_data::SliverMultiBoxAdaptorParentData)
 //! index. Stamping is what lets the lazy sliver recover `logical -> dense slot`
 //! from parent-data alone (ADR-0003), so children may be attached in any order —
-//! FLUI has no equivalent of Flutter's `_currentBeforeChild` insertion cursor.
+//! there is no insertion cursor.
 
 use std::any::{Any, TypeId};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -86,7 +85,7 @@ impl SparseChildren {
     ///
     /// Idempotent: a second call for an already-built index returns the existing
     /// id and does **not** rebuild (reconciling a changed `view` is a later
-    /// concern — Flutter's `updateChild`).
+    /// concern).
     pub(crate) fn ensure(
         &mut self,
         logical_index: usize,
@@ -106,8 +105,7 @@ impl SparseChildren {
 
     /// Drop the bookkeeping for `child` without touching the tree — the
     /// child was grafted to another parent by a `GlobalKey` retake and is
-    /// no longer this sliver's to evict or refresh (Flutter's
-    /// `SliverMultiBoxAdaptorElement.forgetChild`). Returns the logical
+    /// no longer this sliver's to evict or refresh. Returns the logical
     /// index it held, if it was resident.
     pub(crate) fn forget(&mut self, child: ElementId) -> Option<usize> {
         let index = self
@@ -165,9 +163,8 @@ impl SparseChildren {
         // stopped producing is destroyed regardless, because a held child
         // squatting on index 3 while a keyed resident relocates onto 3 would
         // leave two attached children stamped 3 and trip the uniqueness
-        // assertion in the band walk. Flutter draws the same line — a hold is
-        // consulted by `collectGarbage`, while a removal goes through
-        // `removeChild` and destroys unconditionally.
+        // assertion in the band walk. A hold is consulted only by band
+        // eviction, while a removal destroys unconditionally.
         // Resolved once for the pass, not per candidate: each holder costs one
         // walk to its nearest sparse host, and resolving it *now* rather than
         // caching it at acquisition is what makes a holder grafted between two
@@ -203,23 +200,18 @@ impl SparseChildren {
     }
 
     /// Reconcile the resident children against a (possibly changed) data
-    /// source — the sparse counterpart of Flutter's
-    /// `SliverMultiBoxAdaptorElement.performRebuild`
-    /// (`widgets/sliver.dart`, tag `3.44.0`), and the mechanism behind
-    /// `SliverChildBuilderDelegate.shouldRebuild => true`: a new delegate
-    /// re-consults the builder for every resident index, not only the
-    /// newly-visible ones.
+    /// source: a new delegate re-consults the builder for every resident
+    /// index, not only the newly-visible ones.
     ///
     /// Two-phase, into a fresh map, so that a shift or swap of several keyed
-    /// residents can never overwrite one of them (Flutter's separate
-    /// `newChildren` map is load-bearing for the same reason):
+    /// residents can never overwrite one of them:
     ///
     /// 1. **Snapshot and build.** Record every resident `(index, element,
     ///    key)`. The indices to build are the resident ones plus, for every
     ///    keyed resident, the index `find_index_by_key` reports for its key —
     ///    that is how a keyed child whose data moved *out of the resident
-    ///    band* is still found (Flutter's `findChildIndexCallback`; a
-    ///    `SliverChildListDelegate` derives the map from its children). Every
+    ///    band* is still found (a static child list derives the map from its
+    ///    children). Every
     ///    index is built through [`build_item_or_error`], so a panicking
     ///    builder yields an error child at that index and nothing else.
     /// 2. **Match and apply.** A built view with a key claims the first
@@ -244,8 +236,7 @@ impl SparseChildren {
     /// `retain_band` bounds the work: a keyless resident outside the band the
     /// layout pass retained is neither built nor evicted here — it is carried
     /// over for the band eviction that follows, so a scroll that rebuilds the
-    /// host never calls the builder for an item it is about to drop (Flutter
-    /// rebuilds every resident and collects the garbage afterwards).
+    /// host never calls the builder for an item it is about to drop.
     /// A **kept-alive** resident is the exception, and reconciles like an
     /// in-band one: it is not about to be dropped, so carrying it over would
     /// freeze its content at whatever the data said when it left the band —
@@ -479,7 +470,7 @@ impl SparseChildren {
     }
 }
 
-/// A borrowed key → index callback (Flutter's `findChildIndexCallback`).
+/// A borrowed key → index callback.
 pub(crate) type FindIndexByKeyRef<'a> = &'a dyn Fn(&dyn ViewKey) -> Option<usize>;
 
 /// The data source [`SparseChildren::reconcile`] reconciles against.
@@ -616,7 +607,7 @@ fn update_or_replace_resident(
 /// Call `builder(index)` under a panic boundary, with no recovery or
 /// reporting of its own — the raw window every caller of the item builder
 /// shares. `Err` carries the unconverted panic payload so each caller builds
-/// its own `FlutterError`/`RecoveredPanic` exactly once, instead of the
+/// its own `FrameworkError`/`RecoveredPanic` exactly once, instead of the
 /// payload being converted here and thrown away by a caller that does not
 /// want it (the count probes).
 fn try_build_item(
@@ -646,7 +637,7 @@ pub(crate) fn build_item_or_error(
 ) -> Option<BoxedView> {
     match try_build_item(builder, index) {
         Ok(view) => view,
-        Err(payload) => Some(recovery_view_for(&crate::view::FlutterError::from_panic(
+        Err(payload) => Some(recovery_view_for(&crate::view::FrameworkError::from_panic(
             payload.as_ref(),
             format!("probing lazy sliver child {index}"),
         ))),
@@ -667,7 +658,7 @@ pub(crate) fn build_item_or_error(
 /// callers — this IS production content, and the panic is reported through
 /// `owner` exactly once, at [`LifecycleHook::Build`].
 ///
-/// Recovery is per item, as in Flutter: the error child takes exactly the
+/// Recovery is per item: the error child takes exactly the
 /// panicking index, is unkeyed (so it can never be mistaken for a user's
 /// keyed item by `find_index_by_key`), and updates in place while the panic
 /// persists. Everything the caller had already done for other indices
@@ -730,8 +721,8 @@ fn find_index_or_none(
 /// Delegates to `tree/id_reconcile.rs`'s `can_update_by_id` — the same
 /// type-then-key predicate the dense reconciler uses, so a keyed lazy child
 /// (an item wrapper carrying the item's salted key, or an item answering
-/// `View::key` itself) remounts on a key mismatch exactly as Flutter's
-/// `Widget.canUpdate` demands, and a keyless one reconciles by type alone.
+/// `View::key` itself) remounts on a key mismatch,
+/// and a keyless one reconciles by type alone.
 ///
 /// [`ViewKey`]: flui_foundation::ViewKey
 fn resident_type_matches(tree: &ElementTree, existing: ElementId, new: &dyn View) -> bool {
@@ -746,7 +737,7 @@ fn resident_type_matches(tree: &ElementTree, existing: ElementId, new: &dyn View
 ///
 /// This is the *relocation* half of the stamp. A freshly-mounted render
 /// object is stamped at adoption by `RenderBehavior::on_mount`, reading the
-/// `sliver_slot` the slab seeded on insert (Flutter's `didAdoptChild`); a
+/// `sliver_slot` the slab seeded on insert; a
 /// subtree that arrives through GlobalKey relocation never re-mounts, so its
 /// already-built render descendants are found here and stamped explicitly.
 /// A fresh composite child (a bare `Text`, a `StatefulView`) has no render

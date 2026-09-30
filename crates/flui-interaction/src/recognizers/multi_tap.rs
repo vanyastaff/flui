@@ -6,8 +6,6 @@
 //! - Specified number of pointers down within time window
 //! - All pointers stay within slop tolerance
 //! - All pointers released (tap completed)
-//!
-//! Flutter reference: <https://api.flutter.dev/flutter/gestures/MultiTapGestureRecognizer-class.html>
 
 use std::{cell::RefCell, collections::HashMap, rc::Rc, sync::Arc};
 
@@ -285,9 +283,7 @@ impl MultiTapGestureRecognizer {
             let delta = position - info.initial_position;
             let distance = delta.distance();
 
-            // Kind-aware, matching `isWithinGlobalTolerance(event,
-            // computeHitSlop(event.kind, gestureSettings))` at
-            // `multitap.dart:419`. Reading the touch tier unconditionally let a
+            // Kind-aware: reading the touch tier unconditionally let a
             // pointer from a precise device wander the full finger tolerance
             // before the tap was cancelled.
             if distance > settings.hit_slop(kind) {
@@ -478,9 +474,8 @@ impl GestureRecognizer for MultiTapGestureRecognizer {
 
     fn dispose(&self) {
         self.state.mark_disposed();
-        // Reject arena entries + clear tracked pointer (Flutter parity:
-        // gestures/recognizer.dart:485-493 disposing GestureRecognizer
-        // clears arena state for tracked pointers).
+        // Reject arena entries + clear tracked pointer, so a disposed
+        // recognizer never lingers in the arena for a tracked pointer.
         self.state.reject();
         self.callbacks.borrow_mut().on_multi_tap = None;
         self.callbacks.borrow_mut().on_multi_tap_cancel = None;

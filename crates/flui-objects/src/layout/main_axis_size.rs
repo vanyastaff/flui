@@ -1,8 +1,6 @@
 //! How much main-axis space a flex takes.
 
 /// How much space a flex container should occupy in its main axis.
-///
-/// Mirrors Flutter's `MainAxisSize`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum MainAxisSize {

@@ -41,13 +41,11 @@ enum OffsetSource {
 ///   `HeadlessBinding::pump_frame` and the production `UiRealm::draw_frame`,
 ///   where the child-manager wiring and its test coverage converge.
 ///
-///   **First-frame settling (Flutter divergence):** lazy children are built
+///   **First-frame settling:** lazy children are built
 ///   *after* the frame's paint, so the first frame a viewport band appears it
 ///   paints blank; content lands on the next frame (~16 ms @ 60 fps). The
 ///   settling frame is automatically scheduled because layout marks the sliver
-///   dirty. This is a deliberate divergence from Flutter, which builds lazy
-///   children during the same-frame layout pass. See [`SliverChildBuilderDelegate`]
-///   for the full rationale.
+///   dirty. See [`SliverChildBuilderDelegate`] for the full rationale.
 ///
 /// Both modes compose a [`Viewport`] over their respective sliver, or a
 /// [`ShrinkWrappingViewport`] when [`ListView::shrink_wrap`] is enabled.
@@ -55,12 +53,8 @@ enum OffsetSource {
 ///
 /// A horizontal `scroll_direction` resolves its `AxisDirection` from the
 /// ambient [`Directionality`](crate::Directionality) (`RightToLeft` under an
-/// RTL ancestor), matching `ScrollView.getDirection`
-/// (`widgets/scroll_view.dart`); the vertical axis never consults it.
+/// RTL ancestor); the vertical axis never consults it.
 /// `ListView` has no `reverse` flag yet.
-///
-/// Flutter parity: `widgets/scroll_view.dart` `ListView` and
-/// `ListView.builder`.
 #[derive(Clone, StatelessView)]
 pub struct ListView {
     scroll_direction: Axis,
@@ -81,13 +75,9 @@ pub struct ListView {
     children_in_boundaries: std::cell::OnceCell<Rc<StaticChildren>>,
     /// Builder delegate for the lazy variant. `None` in the static variant.
     builder_source: Option<SliverChildBuilderDelegate>,
-    /// Wrap each item in a `RepaintBoundary` (default `true`).
-    ///
-    /// Flutter parity: the same knob its delegates carry as
-    /// `addRepaintBoundaries`, defaulting to `true` for the reason its doc
-    /// gives — children in a scrolling container "do not need to be repainted
-    /// as the list scrolls". Set `false` when an item is cheaper to repaint
-    /// than to composite.
+    /// Wrap each item in a `RepaintBoundary` (default `true`, because children in
+    /// a scrolling container do not need to be repainted as the list scrolls).
+    /// Set `false` when an item is cheaper to repaint than to composite.
     add_repaint_boundaries: bool,
 }
 
@@ -145,10 +135,8 @@ impl ListView {
 
     /// Wrap each item in a `RepaintBoundary` (default `true`).
     ///
-    /// Flutter parity: the `addRepaintBoundaries` knob its delegates carry,
-    /// defaulting to `true` for the reason its doc gives — children in a
-    /// scrolling container "do not need to be repainted as the list scrolls".
-    /// Pass `false` when a item is cheaper to repaint than to composite.
+    /// On by default because children in a scrolling container do not need to be
+    /// repainted as the list scrolls. Pass `false` when a item is cheaper to repaint than to composite.
     #[must_use]
     pub fn repaint_boundaries(mut self, add: bool) -> Self {
         self.add_repaint_boundaries = add;
@@ -157,7 +145,7 @@ impl ListView {
 
     /// Map an item's key to its current index in the data source, so a keyed
     /// item whose data moved out of the built band keeps its element state
-    /// across insert, remove, and reorder (Flutter's `findChildIndexCallback`).
+    /// across insert, remove, and reorder.
     /// Items moving *within* the band are matched by key without it.
     ///
     /// Only meaningful for [`ListView::builder`]; the key handed to `find`
@@ -208,7 +196,7 @@ impl ListView {
     /// Whether the list should size itself to its sliver contents in the scroll
     /// axis.
     ///
-    /// Defaults to `false`, matching Flutter. Use `true` when the parent gives
+    /// Defaults to `false`. Use `true` when the parent gives
     /// unbounded main-axis constraints.
     #[must_use]
     pub fn shrink_wrap(mut self, shrink_wrap: bool) -> Self {
@@ -243,8 +231,7 @@ impl StatelessView for ListView {
     fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
         // `reverse` isn't modeled on `ListView` yet, so it's always `false`
         // here — the resolution still consults ambient `Directionality` for
-        // a horizontal `scroll_direction`, matching `ScrollView.getDirection`
-        // (`widgets/scroll_view.dart`).
+        // a horizontal `scroll_direction`.
         let axis_direction =
             axis_direction_from_axis_reverse_and_directionality(ctx, self.scroll_direction, false);
         // Both arms produce `Viewport<(BoxedView,)>` by boxing the sliver so

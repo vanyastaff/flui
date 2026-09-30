@@ -18,8 +18,6 @@ use crate::layout::SizedBox;
 ///
 /// Implemented as `Expanded::new(SizedBox::shrink()).flex(flex)`, so the cross
 /// axis is unconstrained (zero) while the main axis fills the flex share.
-///
-/// Flutter parity: `widgets/spacer.dart` `Spacer`.
 #[derive(Clone, StatelessView)]
 pub struct Spacer {
     flex: i32,

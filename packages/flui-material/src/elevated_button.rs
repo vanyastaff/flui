@@ -1,20 +1,17 @@
 //! [`ElevatedButton`] — a filled M3 button whose `Material` elevates when
 //! pressed.
 //!
-//! # Flutter parity
+//! # Defaults and scope
 //!
-//! `material/elevated_button.dart`'s `ElevatedButton` (oracle tag `3.44.0`).
-//! `default_style` is a field-by-field port of `_ElevatedButtonDefaultsM3`
-//! (`elevated_button.dart` `:513-637`), narrowed to the V1 slots
-//! [`ButtonStyle`] carries — see that module's docs for the full omitted-slot
-//! list. Ported fields: `text_style`, `background_color`, `foreground_color`,
+//! `default_style` holds the M3 elevated-button defaults, narrowed to the V1
+//! slots [`ButtonStyle`] carries — see that module's docs for the full
+//! omitted-slot list. Populated fields: `text_style`, `background_color`, `foreground_color`,
 //! `overlay_color`, `elevation`, `padding`, `minimum_size`, `maximum_size`,
-//! `shape`. Deferred alongside every other V1 button (not `_ElevatedButtonDefaultsM3`-
-//! specific): `icon_color`/`icon_size`, `mouse_cursor`,
+//! `shape`. Deferred alongside every other V1 button:
+//! `icon_color`/`icon_size`, `mouse_cursor`,
 //! `visual_density`/`tap_target_size`, `animation_duration`/`enable_feedback`/
-//! `splash_factory`. `_ElevatedButtonDefaultsM3` sets no default `side` or
-//! `fixed_size` either (the oracle's own "No default fixedSize" / "No
-//! default side" comments), so neither field is populated here.
+//! `splash_factory`. The M3 elevated button sets no default `side` or
+//! `fixed_size` either, so neither field is populated here.
 
 use flui_sdk::geometry::{EdgeInsets, Size};
 use flui_sdk::painting::Color;
@@ -90,10 +87,8 @@ impl StatelessView for ElevatedButton {
         let theme = Theme::of(ctx);
         let mut core = ButtonStyleButtonCore::new(default_style(&theme), self.child.clone())
             .style(self.style.clone().unwrap_or_default());
-        // Middle cascade tier — Flutter parity, simplified: the oracle reads
-        // `ElevatedButtonTheme.of(context)?.style`, a standalone
-        // `InheritedTheme`; FLUI V1 has no per-button `InheritedTheme`
-        // wrapper yet, so this reads the same style off the ambient
+        // Middle cascade tier: FLUI V1 has no per-button `InheritedTheme`
+        // wrapper yet, so this reads the button style off the ambient
         // `ThemeData`'s `elevated_button_theme` slot instead (see
         // `crate::button_style_button`'s module docs for this reduction,
         // shared by every button in this crate).

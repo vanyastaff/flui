@@ -7,7 +7,7 @@
 - **Supersedes (on acceptance, after the spike below passes):** the three-crate dlopen worker
   design described in [`docs/hot-reload.md`](../hot-reload.md),
   [`crates/flui-hot-reload/ARCHITECTURE.md`](../../crates/flui-hot-reload/ARCHITECTURE.md) and
-  [the Flutter-parity hot reload design](../designs/2026-06-28-flutter-parity-hot-reload.md). No
+  [the Flutter-parity hot reload design](../designs/2026-06-28-hot-reload-runtime-protocol.md). No
   ADR is superseded.
 - **Related:** [ADR-0027](ADR-0027-owner-affine-ui-realms.md) §9 (owner-queued hot reload stays
   in the closed command vocabulary), [ADR-0039](ADR-0039-event-loop-affinity-capability.md) §6

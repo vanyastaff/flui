@@ -2,14 +2,12 @@
 //! `Router`, whose navigator is the app's only one and whose stack survives a
 //! rebuild of the app.
 //!
-//! # Parity oracle
+//! # Shape
 //!
-//! Flutter's `widgets/app.dart` `_WidgetsAppState.build`: the router forms
-//! mount `Router`/`Router.withConfig` as the routing subtree, bare, below
+//! The router form mounts `Router` as the routing subtree, bare, below
 //! `Localizations` and the `builder` hook; only the navigator form wraps its
-//! `Navigator` in a `FocusScope`. `WidgetsApp.router` asserts that
-//! `navigatorKey` and `navigatorObservers` are not given; here the router
-//! form has no such builders (the `routable_ui` compile-fail suite).
+//! `Navigator` in a `FocusScope`. The router form has no navigator key or
+//! observer builders (the `routable_ui` compile-fail suite).
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;

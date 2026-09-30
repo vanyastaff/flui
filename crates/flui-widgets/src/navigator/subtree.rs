@@ -1,49 +1,37 @@
-//! Route subtree identity — the FLUI shape of `ModalRoute._subtreeKey`.
+//! Route subtree identity: the ids a route publishes for its page subtree.
 //!
 //! **Private**: nothing here is exported.
 //!
-//! # What Flutter names, and how
+//! # What a route publishes
 //!
-//! `ModalRoute` hangs a `GlobalKey` on the `RepaintBoundary` that wraps *only*
-//! `buildPage(...)` — not the transitions around it (`routes.dart:1229-1231`,
-//! `:2268`). `Route.subtreeContext => _subtreeKey.currentContext` (`:1966`) is
-//! what `HeroController` then measures against:
+//! The hero controller measures a route's page subtree (only the built page, not
+//! the transitions around it), so a route must publish two things: a
+//! **`BuildContext`** to walk its page subtree from, and a **`RenderBox`** to
+//! resolve coordinates against.
 //!
-//! ```dart
-//! final fromRouteRenderBox = toRoute.subtreeContext?.findRenderObject() as RenderBox?;  // heroes.dart:952
-//! Hero._allHeroesFor(from.subtreeContext!, …)                                            // heroes.dart:1014
-//! ```
+//! # Two ids, two lifecycle hooks
 //!
-//! So a route must publish two things: a **`BuildContext`** to walk its page
-//! subtree from, and a **`RenderBox`** to resolve coordinates against.
-//!
-//! # Why FLUI cannot spell it the same way
-//!
-//! `BuildContext::find_render_object()` walks strict **ancestors** — it is
-//! Flutter's `findAncestorRenderObjectOfType`, not `context.findRenderObject()`.
-//! A `BuildContext` therefore cannot yield the `RenderId` *below* it, and a
+//! `BuildContext::find_render_object()` walks strict **ancestors**. A
+//! `BuildContext` therefore cannot yield the `RenderId` *below* it, and a
 //! `GlobalKey` would not change that. The two ids have to come from two different
 //! lifecycle hooks:
 //!
-//! | Flutter | FLUI | Published at | Cleared at |
-//! |---|---|---|---|
-//! | `_subtreeKey.currentContext` | [`RouteSubtree::element_id`] | `ViewState::init_state` | `ViewState::dispose` |
-//! | `…currentContext.findRenderObject()` | [`RouteSubtree::render_id`] | `RenderBox::attach` | `RenderBox::detach` |
+//! | Id | Published at | Cleared at |
+//! |---|---|---|
+//! | [`RouteSubtree::element_id`] | `ViewState::init_state` | `ViewState::dispose` |
+//! | [`RouteSubtree::render_id`] | `RenderBox::attach` | `RenderBox::detach` |
 //!
 //! [`RouteSubtreeAnchor`] is the view that owns both hooks. Its element is the
-//! route's `subtreeContext`; the [`RenderSubtreeAnchor`] it builds is the route's
+//! route's subtree context; the [`RenderSubtreeAnchor`] it builds is the route's
 //! render coordinate space.
 //!
-//! **The one-element offset.** Flutter's key sits *on* the `RepaintBoundary`, so
-//! its element and its render object are the same node. Here they are parent and
-//! child: `element_id` names the stateful anchor view, `render_id` names the
-//! `RenderSubtreeAnchor` immediately below it. Both bracket exactly the page
-//! subtree, which is what `_allHeroesFor` and `_boundingBoxFor` need, so no
-//! observable behaviour depends on the offset. It is recorded, not claimed away.
+//! **The one-element offset.** The element and its render object are parent and
+//! child, not the same node: `element_id` names the stateful anchor view,
+//! `render_id` names the `RenderSubtreeAnchor` immediately below it. Both bracket
+//! exactly the page subtree, so no observable behaviour depends on the offset.
 //!
-//! **Not a repaint boundary.** Flutter's `_subtreeKey` rides on a
-//! `RepaintBoundary` that exists for its own reasons. [`RenderSubtreeAnchor`] is
-//! identity without the compositing side effect (`flui_objects`, module docs).
+//! **Not a repaint boundary.** [`RenderSubtreeAnchor`] is identity without any
+//! compositing side effect (`flui_objects`, module docs).
 //!
 //! # Resolution is two-stage, and the second stage is not here
 //!

@@ -1,7 +1,7 @@
 //! [`AnimatedSize`] — animates its own size toward its child's natural size
 //! whenever that size changes.
 //!
-//! Flutter parity: `widgets/animated_size.dart` `AnimatedSize`. This widget is
+//! This widget is
 //! structurally different from every sibling in this module
 //! (`AnimatedOpacity`, `AnimatedAlign`, `AnimatedPadding`): those all delegate
 //! their `build` to an existing plain widget (`Opacity`, `Align`, `Padding`)
@@ -61,8 +61,8 @@ pub struct AnimatedSize {
 
 impl AnimatedSize {
     /// Animates size changes over `duration`, with `Alignment::CENTER`,
-    /// `Curves::Linear` (oracle parity — `widgets/animated_size.dart:33` —
-    /// deliberately NOT the sibling widgets' `EaseInOut` default), and
+    /// `Curves::Linear` (deliberately NOT the sibling widgets' `EaseInOut`
+    /// default), and
     /// `Clip::HardEdge`. The child is optional: a childless `AnimatedSize`
     /// exercises the tight/no-child fast path, a real configuration.
     pub fn new(duration: Duration) -> Self {
@@ -94,8 +94,8 @@ impl AnimatedSize {
 
     /// Overrides the reverse-run duration. Confirmed inert for
     /// `RenderAnimatedSize` today — it only ever drives its controller
-    /// forward, never `.reverse()` — kept for constructor/widget parity with
-    /// Flutter's `AnimationController` API.
+    /// forward, never `.reverse()` — kept so the constructor mirrors
+    /// the `AnimationController` API.
     #[must_use]
     pub fn reverse_duration(mut self, reverse_duration: Duration) -> Self {
         self.reverse_duration = Some(reverse_duration);
@@ -171,7 +171,7 @@ impl StatefulView for AnimatedSize {
         // A real, but permanently detached, ticker -- not `without_ticker`:
         // this controller's `is_animating()` is read by `RenderAnimatedSize`
         // (`flui-objects`), and `is_animating` is intentionally
-        // ticker-based, not status-based (Flutter parity: `Ticker.isActive`)
+        // ticker-based, not status-based
         // — a ticker-less controller can never report `is_animating() ==
         // true`. `VsyncScope` still drives the actual value ticks
         // deterministically via `tick_at`; `with_detached_ticker` gives this
@@ -268,8 +268,7 @@ impl ViewState<AnimatedSize> for AnimatedSizeState {
         let previous = self.on_end.replace(new_view.on_end.clone());
         drop(previous);
         self.child = new_view.child.clone();
-        // Plain-assignment setters, matching the oracle — no restart of an
-        // in-flight run.
+        // Plain-assignment setters — no restart of an in-flight run.
         self.controller.set_duration(new_view.duration);
         if let Some(reverse_duration) = new_view.reverse_duration {
             self.controller.set_reverse_duration(reverse_duration);

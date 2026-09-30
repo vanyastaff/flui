@@ -8,8 +8,7 @@ use flui_view::{Child, IntoView, RenderView, impl_render_view};
 
 /// Sizes its child to a fraction of the available space along each axis.
 ///
-/// Flutter parity: `widgets/basic.dart` `FractionallySizedBox` over
-/// `RenderFractionallySizedBox`. A `None` factor leaves that axis at the
+/// Backed by `RenderFractionallySizedBox`. A `None` factor leaves that axis at the
 /// incoming constraint; factors must be finite and `>= 0`. Defaults to
 /// `Alignment::CENTER`.
 #[derive(Clone, Debug, Default)]

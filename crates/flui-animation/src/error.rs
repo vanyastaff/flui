@@ -79,7 +79,7 @@ pub enum AnimationError {
     /// A `+-inf` input is refused only when the bound it would clamp to is
     /// itself non-finite (an [`unbounded`](crate::AnimationController::unbounded)-family
     /// controller); on a bounded controller it clamps to that bound instead
-    /// (unchanged Flutter-parity "go to the end" idiom).
+    /// (the "go to the end" idiom).
     ///
     /// Returned by [`forward`](crate::AnimationController::forward)/[`forward_from`](crate::AnimationController::forward_from),
     /// [`reverse`](crate::AnimationController::reverse)/[`reverse_from`](crate::AnimationController::reverse_from),

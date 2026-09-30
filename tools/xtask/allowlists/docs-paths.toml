@@ -160,7 +160,7 @@ count = 1
 reason = "the decision's context names the layout the decision changed"
 
 [[allow]]
-path = "docs/designs/2026-06-28-flutter-parity-hot-reload.md"
+path = "docs/designs/2026-06-28-hot-reload-runtime-protocol.md"
 kind = "package"
 count = 1
 reason = "a dated design proposal: it names the layout it proposed or replaced"

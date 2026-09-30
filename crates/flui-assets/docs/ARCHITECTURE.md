@@ -20,7 +20,7 @@
         └─────────────┴─────────────┘
                       │
 ┌─────────────────────▼─────────────────────────────────────┐
-│              AssetRegistry (Global)                        │
+│              AssetRegistry (per app)                      │
 │  • Type-erased storage (TypeId → Box<dyn Any>)           │
 │  • Automatic cache creation per asset type                │
 │  • Thread-safe with parking_lot::RwLock                   │
@@ -51,13 +51,13 @@
 
 ### 1. AssetRegistry
 
-**Purpose**: Global entry point for asset loading and management.
+**Purpose**: The entry point for asset loading and management. An application builds one
+with `AssetRegistryBuilder` and owns it; there is no process-wide instance.
 
 **Key Features**:
 - Type-erased storage using `TypeId`
 - Lazy cache creation (only when first asset of type is loaded)
 - Thread-safe concurrent access
-- Global singleton pattern with `once_cell`
 
 **Implementation**:
 ```rust
@@ -250,7 +250,8 @@ Key creation:  ~100ns (interning overhead)
 
 **Read-heavy workload** (typical):
 ```rust
-// Multiple threads can load simultaneously
+// Multiple threads can load simultaneously. `registry` is an `Arc<AssetRegistry>`:
+// each spawned task needs an owned handle to the one registry.
 let handles: Vec<_> = (0..10)
     .map(|i| {
         let registry = registry.clone();

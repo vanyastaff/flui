@@ -42,8 +42,6 @@
 //! // When any team member wins, captain receives the gesture
 //! // to forward to native view
 //! ```
-//!
-//! Flutter reference: <https://api.flutter.dev/flutter/gestures/GestureArenaTeam-class.html>
 
 use std::sync::Arc;
 

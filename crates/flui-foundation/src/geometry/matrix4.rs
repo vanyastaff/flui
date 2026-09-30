@@ -163,12 +163,11 @@ impl Matrix4 {
     /// This is the correct way to interpolate an affine transform: a naive
     /// component-wise lerp of the 16 elements shears and distorts rotation
     /// (a 90° rotation lerped element-wise collapses through a degenerate
-    /// matrix at `t = 0.5`). Matches Flutter's `Matrix4Tween`, which likewise
-    /// decomposes. `t` is not clamped, so it extrapolates.
+    /// matrix at `t = 0.5`). `t` is not clamped, so it extrapolates.
     ///
     /// Decomposition assumes an SRT-composable matrix (the common UI case:
     /// translate/rotate/scale); skew and perspective components are not
-    /// preserved, exactly as in Flutter.
+    /// preserved.
     #[inline]
     #[must_use]
     pub fn lerp(self, other: Self, t: f64) -> Self {
@@ -349,9 +348,7 @@ impl Matrix4 {
     /// This matrix as a pure 2D translation `(dx, dy)`, or `None` if it is
     /// anything else.
     ///
-    /// The port of Flutter's `MatrixUtils.getAsTranslation`
-    /// (`painting/matrix_utils.dart`), and deliberately **exact** rather than
-    /// epsilon-tolerant, unlike [`is_translation_only`](Self::is_translation_only):
+    /// Deliberately **exact** rather than epsilon-tolerant, unlike [`is_translation_only`](Self::is_translation_only):
     /// the caller's next move is to drop the matrix entirely and shift the
     /// child by `(dx, dy)` instead, so a matrix that is merely *near* a
     /// translation must take the general path. Accepting it would silently

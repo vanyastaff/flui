@@ -95,9 +95,7 @@ impl RenderOpacity {
         // A pure alpha change lands ONLY on the `OpacityLayer` this node
         // pushes, so the frame can rebuild that layer and replay the enclosing
         // repaint boundary's retained output rather than repainting the
-        // subtree. Flutter's own setter does exactly this
-        // (`proxy_box.dart`, `RenderOpacity.opacity`: `markNeedsCompositedLayerUpdate()`,
-        // not `markNeedsPaint()`).
+        // subtree, hence a composited-layer update rather than a paint mark.
         let mut impact = flui_rendering::RenderUpdateImpact::COMPOSITED_LAYER_UPDATE;
         if old_needs_compositing != self.needs_compositing() {
             // Crossing the layered threshold changes which layers exist, not
@@ -165,7 +163,7 @@ impl RenderOpacity {
     /// Returns `true` only when `always_needs_compositing` is set OR the alpha
     /// is non-trivially blended (`0 < alpha < 255`). Fully-transparent
     /// (`alpha == 0`) does not need compositing because the subtree is skipped
-    /// entirely — Flutter parity: `alwaysNeedsCompositing => alpha > 0`.
+    /// entirely.
     pub fn needs_compositing(&self) -> bool {
         self.always_needs_compositing || (self.alpha > 0 && self.alpha != 255)
     }
@@ -234,7 +232,6 @@ impl RenderBox for RenderOpacity {
     fn paint_effects(&self, _size: Size) -> PaintEffects {
         // None when fully opaque (255) OR fully transparent (0) without the
         // always-needs-compositing flag: neither requires an OpacityLayer.
-        // Flutter: alpha=0 → layer=null (no layer needed).
         if (self.alpha == 255 || self.alpha == 0) && !self.always_needs_compositing {
             PaintEffects::NONE
         } else {
@@ -243,7 +240,6 @@ impl RenderBox for RenderOpacity {
     }
 
     fn skip_paint(&self) -> bool {
-        // Flutter RenderOpacity.paint: `if (_alpha == 0) { return; }`
         // Fully transparent without the always-compositing flag: suppress child
         // paint entirely.
         self.alpha == 0 && !self.always_needs_compositing

@@ -16,10 +16,6 @@ use crate::context::BuildContext;
 /// - Their configuration changes (parent rebuilds with new View)
 /// - An InheritedView they depend on changes
 ///
-/// # Flutter Equivalent
-///
-/// This corresponds to Flutter's `StatelessWidget`.
-///
 /// # Example
 ///
 /// ```rust,ignore

@@ -3,9 +3,8 @@
 //! # Public shape
 //!
 //! Exported from `flui-view::element` and re-exported by `flui-widgets` plus its
-//! prelude once the design passed its Flutter-parity gate. The keyed identity shape is signed
-//! off by the repository owner; this repository has no separate api-design-lead
-//! role. The state type is public only because Rust requires a public associated
+//! prelude. The keyed identity shape is signed off by the repository owner;
+//! this repository has no separate api-design-lead role. The state type is public only because Rust requires a public associated
 //! `State` type for a public `StatefulView` implementation; it remains opaque.
 //!
 //! # Sibling of `FutureBuilder`
@@ -17,22 +16,15 @@
 //! # Why this never polls eagerly
 //!
 //! `FutureBuilder` subscribes with `AsyncDriver::spawn_local_eager`, whose inline
-//! poll reproduces Dart's synchronous `.then` (`SynchronousFuture`). A stream
-//! must **not** do that.
+//! poll lets a ready future complete inside `init_state`. A stream must **not**
+//! do that.
 //!
-//! `_StreamBuilderBaseState._subscribe` (`.flutter/.../widgets/async.dart`) reads:
-//!
-//! ```text
-//! _subscription = widget.stream!.listen(...);
-//! _summary = widget.afterConnected(_summary);   // unconditional — no Done guard
-//! ```
-//!
-//! `afterConnected` is `inState(waiting)` with no guard, and Dart's
-//! `Stream.listen` never delivers an event synchronously — the first event always
-//! arrives in a later microtask. So `Waiting` is *always* observed before the
+//! Subscribing applies `after_connected` unconditionally, with no `Done` guard,
+//! and a stream subscription never delivers an event synchronously — the first
+//! event always arrives later. So `Waiting` is *always* observed before the
 //! first event. An eager inline poll could yield an item before `after_connected`
 //! ran, and `after_connected` would then drag `Active` back to `Waiting`.
-//! `spawn_local` (first poll on the next frame's driver step) is the faithful
+//! `spawn_local` (first poll on the next frame's driver step) is the correct
 //! shape, and also the simpler one.
 //!
 //! # Folds
@@ -45,9 +37,8 @@
 //! | `None` (end) | `after_done` | `Done`, last payload preserved |
 //! | key change / dispose | `after_disconnected` | `None`, payload preserved |
 //!
-//! A Dart stream continues after an error unless `cancelOnError`; a Rust
-//! `Stream<Item = Result<T, E>>` does the same, so an error leaves the state
-//! `Active` and polling continues.
+//! A `Stream<Item = Result<T, E>>` keeps yielding after an error, so an error
+//! leaves the state `Active` and polling continues.
 
 use std::{pin::Pin, rc::Rc, sync::Arc};
 
@@ -91,7 +82,7 @@ fn apply_event<T, E>(
 
 /// A view that builds itself from the latest interaction with a stream.
 pub struct StreamBuilder<K, T, E> {
-    /// Identity of the stream. `None` ⇒ no stream (Flutter's null stream).
+    /// Identity of the stream. `None` ⇒ no stream.
     key: Option<K>,
     /// Creates the stream when the subscription starts.
     make: StreamFactory<T, E>,
@@ -143,8 +134,7 @@ where
 
     /// Seed the snapshot before the first subscription.
     ///
-    /// Flutter's `StreamBuilder.initialData`. Applied **only** at `init_state`; a
-    /// later key change does not re-apply it.
+    /// Applied **only** at `init_state`; a later key change does not re-apply it.
     #[must_use]
     pub fn with_initial_data(mut self, initial_data: InitialDataFactory<T>) -> Self {
         self.initial_data = Some(initial_data);
@@ -240,8 +230,8 @@ where
     /// Cancel the live subscription and invalidate its generation, so an event
     /// already in flight is discarded.
     ///
-    /// Flutter's `_unsubscribe` calls `StreamSubscription.cancel()`. Dropping the
-    /// token here does the same: the poll loop stops and the stream is dropped.
+    /// Dropping the token cancels the subscription: the poll loop stops and the
+    /// stream is dropped.
     fn unsubscribe(&mut self) {
         self.token = None; // Drop cancels.
         self.key = None;
@@ -321,7 +311,7 @@ where
             None => AsyncSnapshot::nothing(),
         };
 
-        // An absent key is Flutter's null stream: no subscription, snapshot stays
+        // An absent key means no stream: no subscription, snapshot stays
         // where `initial` left it.
         if let Some(key) = self.initial_key.clone() {
             let make = Rc::clone(&self.initial_make);

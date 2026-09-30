@@ -7,12 +7,11 @@ use flui_view::{Child, IntoView, RenderView, impl_render_view};
 
 /// A sliver that, when `offstage` is `true`, collapses its reported geometry to
 /// zero, skips painting, and is unreachable by hit-testing — while still laying
-/// out its child (Flutter parity).
+/// out its child.
 ///
 /// When `offstage` is `false` it behaves as a transparent single-child proxy.
 ///
-/// Flutter parity: `widgets/sliver.dart` `SliverOffstage` over
-/// `RenderSliverOffstage` (`rendering/proxy_sliver.dart`). Lives inside a
+/// Backed by `RenderSliverOffstage`. Lives inside a
 /// [`Viewport`](crate::Viewport).
 ///
 /// **Note:** the box-protocol equivalent is [`Offstage`](crate::Offstage) from

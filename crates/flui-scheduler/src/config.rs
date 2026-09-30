@@ -69,8 +69,7 @@ pub enum InvalidTimeDilation {
     NonFinite(f64),
 }
 
-/// Set time dilation scaling factor (Flutter parity at
-/// `binding.dart::timeDilation`).
+/// Set the time dilation scaling factor.
 ///
 /// Validates and stores the process-wide dilation factor only — it has no
 /// reach into any particular [`UpdateScheduler`](crate::scheduler::UpdateScheduler)'s

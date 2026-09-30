@@ -1,9 +1,8 @@
 //! Ambient direction and localized-resource infrastructure: [`Directionality`],
 //! [`Localizations`], and the [`WidgetsLocalizations`] resource contract.
 //!
-//! Flutter parity: `widgets/directionality.dart`, `widgets/localizations.dart`.
-//! See `localizations`'s module docs for the sync-only-v1 divergences from
-//! the oracle (no async delegate loading, no `Semantics` wrapper).
+//! See `localizations`'s module docs for the sync-only-v1 limits (no async
+//! delegate loading, no `Semantics` wrapper).
 
 mod directionality;
 mod global_widgets_localizations;

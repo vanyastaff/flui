@@ -142,7 +142,7 @@ impl TemplateBuilder {
         self
     }
 
-    /// Generate the Flutter-parity hot-reload workspace (host/worker/types)
+    /// Generate the hot-reload workspace (host/worker/types)
     /// instead of a single-crate project.
     ///
     /// Takes precedence over [`template`](Self::template): the hot-reload

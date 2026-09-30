@@ -1,6 +1,6 @@
 # flui_animation
 
-Animation system for FLUI, based on Flutter's proven architecture.
+Animation system for FLUI: values over time driven by a ticker, with controllers, curves, tweens and simulations.
 
 Standalone `rust` blocks in this document are compiled as doctests. Blocks
 marked `rust,ignore` are excerpts that depend on values introduced by the
@@ -10,7 +10,7 @@ surrounding narrative rather than complete programs.
 
 ### The Animation Model
 
-Animations in FLUI follow Flutter's model: an `Animation<T>` produces values of type `T` over time. The animation itself doesn't know about time—it's driven externally by a ticker.
+In FLUI an `Animation<T>` produces values of type `T` over time. The animation itself doesn't know about time—it's driven externally by a ticker.
 
 ```text
 ┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
@@ -550,10 +550,9 @@ Constructors validate parameters and panic on invalid input:
 
 ---
 
-## Beyond Flutter
+## Additional capabilities
 
-Capabilities this crate ships that Flutter's animation library does not, each
-implemented from the canonical published source:
+Each implemented from the canonical published source:
 
 | Capability | Source | API |
 |---|---|---|

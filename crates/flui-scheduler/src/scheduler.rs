@@ -1,9 +1,9 @@
 //! Main scheduler - coordinates frame lifecycle and task execution
 //!
 //! The UpdateScheduler is the central orchestrator for FLUI's rendering pipeline,
-//! following Flutter's scheduler model with proper phase separation.
+//! with proper phase separation.
 //!
-//! ## Frame Lifecycle (Flutter-like)
+//! ## Frame Lifecycle
 //!
 //! ```text
 //! VSync Signal
@@ -177,11 +177,9 @@ struct LifecycleListener {
 /// input. `#[non_exhaustive]` at the enum level, too: a caller must not
 /// assume these are the only two ways a frame can end.
 ///
-/// Divergence from Flutter, recorded rather than silently improved:
-/// `SchedulerBinding.endOfFrame` (`scheduler/binding.dart` @ 3.44.0) resolves
-/// a bare `Future<void>` with no outcome at all -- Dart has no signal here
-/// for "the frame aborted" either. See this crate's `ARCHITECTURE.md`
-/// `## Mapping decisions` entry for #1162.
+/// This type tells a caller of the end-of-frame future whether the frame
+/// aborted. See this crate's
+/// `ARCHITECTURE.md` `## Mapping decisions` entry for #1162.
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy)]
 pub enum FrameOutcome {
@@ -793,7 +791,7 @@ struct FrameState {
     /// `UpdateScheduler` is `Send + Sync` and documented as reachable from
     /// any thread; this field is what lets `ensure_visual_update`
     /// distinguish "I am the thread already driving this frame" (safe to
-    /// trust Flutter's phase classification) from "some other thread is
+    /// trust the phase classification) from "some other thread is
     /// mid-frame and I am not it" (must request regardless of phase, since
     /// nothing on this thread will otherwise observe what prompted the
     /// call).
@@ -849,8 +847,7 @@ struct BindingState {
     /// Current performance mode
     current_performance_mode: Mutex<PerformanceMode>,
     /// Platform wake hook, fired on the `frame_scheduled` false->true
-    /// transition (Flutter parity: `SchedulerBinding.scheduleFrame` ->
-    /// `platformDispatcher.scheduleFrame`). Without it, ticker
+    /// transition. Without it, ticker
     /// re-registration only sets an atomic nobody reads while the
     /// platform sleeps, and animations starve after the first frame.
     on_frame_scheduled: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
@@ -974,7 +971,7 @@ impl Drop for SchedulerInner {
 
 /// Main scheduler for frame and task management
 ///
-/// Implements Flutter-like scheduling with proper phase separation:
+/// Implements phased scheduling:
 /// - TransientCallbacks: Animation tickers
 /// - PersistentCallbacks: Rendering pipeline
 /// - PostFrameCallbacks: Cleanup
@@ -1184,7 +1181,7 @@ impl UpdateScheduler {
     }
 
     // =========================================================================
-    // Phase Management (Flutter-like)
+    // Phase Management
     // =========================================================================
 
     /// Get current scheduler phase
@@ -1263,12 +1260,11 @@ impl UpdateScheduler {
     }
 
     // =========================================================================
-    // Frame Scheduling (Flutter-like handleBeginFrame/handleDrawFrame)
+    // Frame Scheduling (begin frame / draw frame)
     // =========================================================================
 
     /// Handle begin frame - called when vsync signal arrives
     ///
-    /// This corresponds to Flutter's `handleBeginFrame`.
     /// Executes transient callbacks (animation tickers) with the vsync
     /// timestamp.
     #[tracing::instrument(skip(self))]
@@ -1391,7 +1387,6 @@ impl UpdateScheduler {
 
     /// Run the frame's **persistent callbacks** and priority task queue.
     ///
-    /// Flutter's `handleDrawFrame` persistent phase (`scheduler/binding.dart:1343-1346`).
     /// Leaves the scheduler in [`SchedulerPhase::PersistentCallbacks`]: the caller's
     /// **pipeline** (build → layout → compositing → paint) occupies that slot next,
     /// and [`end_frame`](Self::end_frame) closes the frame afterwards.
@@ -1512,16 +1507,13 @@ impl UpdateScheduler {
     /// Close the frame: run its **post-frame callbacks**, record timing, notify
     /// waiters, and return to [`SchedulerPhase::Idle`].
     ///
-    /// Flutter's `handleDrawFrame` post-frame phase
-    /// (`scheduler/binding.dart:1349-1358`). Called **after** the pipeline has
-    /// committed layout and paint, so a post-frame callback observes this frame's
-    /// geometry — the contract `HeroController` depends on
-    /// (`heroes.dart:968`).
+    /// Called **after** the pipeline has committed layout and paint, so a
+    /// post-frame callback observes this frame's geometry (for example, a
+    /// hero transition measuring its endpoints).
     ///
     /// A callback registered *from* a post-frame callback runs on the **next**
     /// frame: the queue is drained into a local buffer before any callback is
-    /// invoked, so re-registrations land in the now-empty queue. Flutter behaves
-    /// the same way (`scheduler/binding.dart:1350-1351`).
+    /// invoked, so re-registrations land in the now-empty queue.
     ///
     /// Each callback runs **exactly once** — the queue is drained, not iterated.
     ///
@@ -1660,8 +1652,7 @@ impl UpdateScheduler {
     /// Abandon the open frame: return to [`SchedulerPhase::Idle`] **without**
     /// running its post-frame callbacks.
     ///
-    /// Flutter's `finally { _schedulerPhase = idle; _currentFrameTimeStamp = null; }`
-    /// (`scheduler/binding.dart:1364-1374`): when a persistent callback throws, the
+    /// When a persistent callback panics, the
     /// post-frame loop is skipped but the phase is still reset. The queued
     /// callbacks survive and run on the next completed frame.
     ///
@@ -1741,7 +1732,7 @@ impl UpdateScheduler {
     /// `pipeline` is the binding's build → layout → compositing → paint step. It
     /// runs in the [`SchedulerPhase::PersistentCallbacks`] slot without being
     /// registered as a callback: FLUI's bindings own their element tree by value,
-    /// so no `Fn` closure could drive it the way Flutter's `drawFrame` does.
+    /// so no `Fn` closure could drive it.
     ///
     /// # `deadline` bounds Idle work only
     ///
@@ -1795,19 +1786,9 @@ impl UpdateScheduler {
     /// the panicking entry — see `handle_begin_frame`'s transient-callback loop and
     /// [`TaskQueue::execute_until`](crate::TaskQueue::execute_until)'s own docs — so
     /// only the entry that actually panicked is lost; everything queued after it
-    /// runs on the next completed frame, not retried and not silently dropped. This
-    /// is Flutter's `try { persistent; postFrame } finally { phase = idle; }`
-    /// (`scheduler/binding.dart:1341-1374`) in spirit — a throwing persistent
-    /// callback skips the post-frame loop but still resets the phase — but not in
-    /// mechanism: Flutter's `_invokeFrameCallback` wraps every individual
-    /// transient/persistent/post-frame callback in its own error-reporting
-    /// boundary, and `drawFrame()` — the pipeline's own equivalent — is itself
-    /// registered and invoked as a persistent callback through that SAME boundary
-    /// (`rendering/binding.dart:61`, `:557-558`), so no callback's exception,
-    /// `drawFrame`'s included, ever unwinds Dart's call stack far enough to reach
-    /// the `finally` at all. Per-callback isolation is what the source actually
-    /// shows holding there; the `finally` covers whatever else could still
-    /// escape past it. FLUI does not isolate per callback — a panic here poisons
+    /// runs on the next completed frame, not retried and not silently dropped. A
+    /// panicking persistent callback skips the post-frame loop but still resets
+    /// the phase. FLUI does not isolate per callback — a panic here poisons
     /// and propagates the whole frame, same as before this issue — this method's
     /// contract is only that the scheduler's OWN bookkeeping is never left
     /// half-closed by it.
@@ -2069,8 +2050,7 @@ impl UpdateScheduler {
             cbs.push_back(CancellableTransientCallback { id, callback });
             id
         };
-        // Registering a tick demands a frame to run it in (Flutter parity:
-        // `scheduleFrameCallback` calls `scheduleFrame`). `request_frame`
+        // Registering a tick demands a frame to run it in. `request_frame`
         // wakes the platform on the false->true transition.
         self.request_frame();
         tracing::debug!("schedule_frame_callback: registered callback id={:?}", id);
@@ -2154,8 +2134,8 @@ impl UpdateScheduler {
         self.inner.async_driver.spawn_local(future)
     }
 
-    /// Spawn `future`, polling it once inline (Flutter's synchronous-`.then`
-    /// window). `None` when it completed on that first poll.
+    /// Spawn `future`, polling it once inline (so an already-complete future
+    /// completes synchronously). `None` when it completed on that first poll.
     ///
     /// Thin forwarder to [`AsyncDriver::spawn_local_eager`](crate::AsyncDriver::spawn_local_eager).
     #[must_use = "dropping the TaskToken immediately cancels the task"]
@@ -2173,7 +2153,7 @@ impl UpdateScheduler {
     ///
     /// # Where this sits in a frame
     ///
-    /// Flutter's `SchedulerPhase.midFrameMicrotasks`: after the frame's transient
+    /// The mid-frame-microtasks slot: after the frame's transient
     /// callbacks (animation ticks), before its persistent callbacks (build →
     /// layout → paint). Both bindings call it in exactly that slot, between
     /// `vsync.tick_all` and `build_scope`.
@@ -2326,8 +2306,7 @@ impl UpdateScheduler {
     }
 
     /// Install the platform wake hook fired when a frame is first
-    /// scheduled (Flutter parity: `SchedulerBinding.scheduleFrame` →
-    /// `platformDispatcher.scheduleFrame`).
+    /// scheduled.
     ///
     /// The hook runs on whichever thread schedules the frame and may run
     /// while callers hold their own locks — it must only touch wake machinery,
@@ -2362,9 +2341,8 @@ impl UpdateScheduler {
     /// Fires every frame during PersistentCallbacks phase. Use for the
     /// rendering pipeline (build/layout/paint).
     ///
-    /// Flutter parity at [`binding.dart:773`](../../../.flutter/flutter-master/packages/flutter/lib/src/scheduler/binding.dart):
-    /// "Persistent frame callbacks cannot be unregistered. Once registered,
-    /// they are called for every frame for the lifetime of the application."
+    /// Persistent frame callbacks cannot be unregistered: once registered,
+    /// they are called for every frame for the lifetime of the application.
     /// Returns `()` — no removal handle.
     pub fn add_persistent_frame_callback(&self, callback: RecurringFrameCallback) {
         let id = self.inner.callbacks.id_gen.next();
@@ -2379,8 +2357,7 @@ impl UpdateScheduler {
     ///
     /// Fires once after the current/next frame completes.
     ///
-    /// Flutter parity at [`binding.dart:802`](../../../.flutter/flutter-master/packages/flutter/lib/src/scheduler/binding.dart):
-    /// "Post-frame callbacks ... are called exactly once" and cannot be
+    /// Post-frame callbacks are called exactly once and cannot be
     /// cancelled before they fire. Returns `()` — no cancellation handle.
     pub fn add_post_frame_callback(&self, callback: PostFrameCallback) {
         self.with_post_frame_registration(|id| {
@@ -2438,10 +2415,10 @@ impl UpdateScheduler {
     /// [`handle_draw_frame`](Self::handle_draw_frame): a microtask enqueued
     /// reentrantly by another one in the SAME pass is invisible to
     /// [`flush_microtasks_pass`](Self::flush_microtasks_pass) and instead
-    /// runs in the NEXT pass, one pass later -- Dart's own nested-microtask
+    /// runs in the NEXT pass, one pass later -- nested-microtask
     /// semantics are preserved for a chain no deeper than the cap (a
     /// microtask scheduled from inside another still runs before THIS flush
-    /// call returns), just spread over one extra pass rather than Dart's
+    /// call returns), just spread over one extra pass rather than a
     /// live re-peek. **This is only true up to the cap.** A FINITE chain
     /// deeper than [`MAX_MICROTASK_REENTRY_PASSES`] passes -- 33 levels of
     /// nesting, say, with no genuinely unbounded re-enqueuing anywhere in
@@ -2723,8 +2700,7 @@ impl UpdateScheduler {
         )
         .unwrap_or(AppLifecycleState::Detached);
 
-        // Auto-toggle frames_enabled per Flutter parity at
-        // binding.dart:414-441. Resumed/Inactive keep rendering active
+        // Auto-toggle frames_enabled. Resumed/Inactive keep rendering active
         // (Inactive means visible-but-unfocused — split screen, modal — still
         // needs to draw). Hidden/Paused/Detached disable the frame loop.
         let should_render = matches!(
@@ -2742,9 +2718,7 @@ impl UpdateScheduler {
             .frames_enabled
             .swap(should_render, Ordering::SeqCst);
 
-        // Flutter's `_setFramesEnabledState(true)` (binding.dart @ 3.44.0)
-        // schedules a frame on exactly the disabled→enabled edge —
-        // `SchedulerBinding.scheduleFrame()` is called there, not on every
+        // Schedule a frame on exactly the disabled→enabled edge, not on every
         // transition that happens to leave frames enabled. Without this leg,
         // an app that was Hidden/Paused/Detached and comes back to
         // Resumed/Inactive never wakes: nothing else re-requests a frame
@@ -2869,10 +2843,6 @@ impl UpdateScheduler {
     /// }
     /// ```
     ///
-    /// # Flutter Equivalent
-    ///
-    /// This is similar to Flutter's `SchedulerBinding.endOfFrame` Future.
-    ///
     /// # Demand
     ///
     /// Registering **is** the demand: this schedules a frame on the 0 → 1
@@ -2882,8 +2852,7 @@ impl UpdateScheduler {
     /// call, and N registrations inside one frame still cost at most one
     /// wake (`request_frame`'s own false→true swap edge coalesces them).
     ///
-    /// The demand honors `frames_enabled`, matching Dart's `scheduleFrame()`
-    /// and its own documented consequence: a scheduler whose owner disabled
+    /// The demand honors `frames_enabled`: a scheduler whose owner disabled
     /// frames is not forced awake, and a future registered there resolves
     /// only once frames come back — see
     /// [`set_frames_enabled`](Self::set_frames_enabled).
@@ -2942,8 +2911,7 @@ impl UpdateScheduler {
             // linearization point: demand-first would let a concurrent
             // frame both begin and drain in between, leaving this waiter to
             // miss the frame it just paid for and buy a redundant next one.
-            // Flutter's `endOfFrame` requests first; this is a deliberate
-            // divergence, recorded in this crate's ARCHITECTURE.md.
+            // The ordering is recorded in this crate's ARCHITECTURE.md.
             registry.waiters.push(future.notifier());
 
             !had_live_waiter
@@ -3077,9 +3045,9 @@ impl UpdateScheduler {
 
     /// Enable or disable frame scheduling.
     ///
-    /// The disabled → enabled edge re-requests a frame, mirroring
+    /// The disabled → enabled edge re-requests a frame, as
     /// [`handle_app_lifecycle_state_change`](Self::handle_app_lifecycle_state_change)
-    /// and Flutter's `_setFramesEnabledState`. A demand issued while frames
+    /// does. A demand issued while frames
     /// were disabled is silently dropped by
     /// [`schedule_frame_if_enabled`](Self::schedule_frame_if_enabled) with
     /// nothing recording the loss, and a pending
@@ -3131,8 +3099,7 @@ impl UpdateScheduler {
 
     /// Ensure a visual update is scheduled.
     ///
-    /// Flutter parity: `SchedulerBinding.ensureVisualUpdate`
-    /// (`scheduler/binding.dart`). [`SchedulerPhase::Idle`] and
+    /// [`SchedulerPhase::Idle`] and
     /// [`SchedulerPhase::PostFrameCallbacks`] request one, through
     /// [`schedule_frame_if_enabled`](Self::schedule_frame_if_enabled) (which
     /// keeps the `frames_enabled` gate); a call from `PostFrameCallbacks`
@@ -3153,8 +3120,8 @@ impl UpdateScheduler {
     /// `TransientCallbacks`/`MidFrameMicrotasks`, which precede the
     /// pipeline in the frame's slot order, but not for
     /// `PersistentCallbacks`, where the pipeline itself runs — a call made
-    /// after paint has already happened would have its demand dropped,
-    /// same as in Flutter. (A raw `handle_begin_frame`/`handle_draw_frame`
+    /// after paint has already happened would have its demand dropped.
+    /// (A raw `handle_begin_frame`/`handle_draw_frame`
     /// sequence outside `drive_frame_impl`'s panic boundary whose callback
     /// panics leaves the phase stuck exactly where it panicked, and this
     /// gate stays silent on that thread until something resets the phase
@@ -3208,7 +3175,7 @@ impl UpdateScheduler {
 
     /// Set the process-wide time dilation factor and reset this scheduler's
     /// epoch, so the change takes effect without a large time jump on the
-    /// next frame. Flutter parity: `binding.dart::timeDilation`'s setter.
+    /// next frame.
     ///
     /// Delegates validation and storage to
     /// [`config::set_time_dilation`](crate::config::set_time_dilation) —
@@ -3445,8 +3412,7 @@ impl TickerProvider for UpdateScheduler {
     /// Vend an auto-scheduling [`Ticker`](crate::ticker::Ticker) attached to
     /// this scheduler.
     ///
-    /// Flutter parity: [`ticker.dart:248`](../../../.flutter/flutter-master/packages/flutter/lib/src/scheduler/ticker.dart)
-    /// `Ticker createTicker(TickerCallback)`. The vended ticker self-registers
+    /// The vended ticker self-registers
     /// a transient frame callback on `start`/`unmute` and cancels it on
     /// `stop`/`mute`/`dispose`.
     ///
@@ -3679,8 +3645,7 @@ mod tests {
 
     // Lifecycle State Tests
 
-    /// Flutter parity leg (binding.dart `_setFramesEnabledState(true)` @
-    /// 3.44.0): the disabled→enabled edge must actually schedule a frame,
+    /// The disabled→enabled edge must actually schedule a frame,
     /// through the real `request_frame` path so `on_frame_scheduled` fires —
     /// otherwise a resumed app never wakes an idle event loop.
     fn lifecycle_reenable_edge_schedules_exactly_one_frame() {

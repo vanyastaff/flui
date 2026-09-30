@@ -19,11 +19,10 @@ use flui_view::prelude::*;
 use crate::support::{event_callback, value_callback};
 use crate::{GestureArenaScope, Listener, Semantics};
 
-/// A no-argument gesture callback (Flutter's `onTap` / `onLongPress` /
-/// `onDoubleTap`) — fired with the dispatch's [`EventCx`] and no details when
+/// A no-argument gesture callback (tap, long press, double tap) — fired with the dispatch's [`EventCx`] and no details when
 /// the gesture is recognized. Stored already adapted to report its outcome.
 type GestureCallback = Rc<dyn Fn(&mut EventCx<'_>)>;
-/// Carries the tap's position — Flutter's `onDoubleTapDown(TapDownDetails)`.
+/// Carries the tap's position.
 /// See [`GestureDetector::on_double_tap_down`]'s doc for why this is a
 /// separate callback from `on_double_tap` rather than widening it.
 type DoubleTapDownHandler = Rc<dyn Fn(&mut EventCx<'_>, DoubleTapDetails)>;
@@ -43,7 +42,7 @@ type HorizontalDragCancelHandler = Rc<dyn Fn(&mut EventCx<'_>)>;
 
 /// Detects gestures on its child and invokes the matching callback.
 ///
-/// Flutter parity: `widgets/gesture_detector.dart` `GestureDetector`. It owns a
+/// It owns a
 /// set of gesture recognizers, wraps its child in a [`Listener`], and feeds the
 /// pointer stream to every recognizer; an arena resolves the competition and the
 /// winning recognizer fires its callback.
@@ -73,8 +72,8 @@ type HorizontalDragCancelHandler = Rc<dyn Fn(&mut EventCx<'_>)>;
 ///   note on why the two are mutually exclusive on one detector.
 ///
 /// Only the recognizers whose callback is set participate in the arena for a
-/// contact (Flutter parity: a recognizer is constructed only when its callback
-/// is non-null). They compete in one arena: a quick down→up resolves to the tap
+/// contact (a recognizer is constructed only when its callback
+/// is set). They compete in one arena: a quick down→up resolves to the tap
 /// (the front member), a hold resolves to the long-press, a drag past slop hands
 /// off to whichever drag-family recognizer is configured — so at most one
 /// gesture fires per contact.
@@ -88,21 +87,14 @@ type HorizontalDragCancelHandler = Rc<dyn Fn(&mut EventCx<'_>)>;
 /// motion, and which family wins becomes registration-order-dependent rather
 /// than deterministic.
 ///
-/// Flutter's oracle (`widgets/gesture_detector.dart`, tag `3.44.0`) asserts the
-/// analogous case only when a `pan`/`scale` family AND **both**
-/// `onVerticalDrag*` AND `onHorizontalDrag*` are configured together (vertical
-/// alone or horizontal alone combines fine there, because the oracle's pan
-/// recognizer, unlike this one, only becomes ambiguous once both single-axis
-/// families are present to jointly cover every direction pan already covers).
-/// FLUI has no `on_vertical_drag_*` family yet, so this detector tightens the
-/// guard to `on_pan_*` + `on_horizontal_drag_*` alone — that pairing is already
-/// redundant here without waiting for a vertical family to complete the
-/// overlap. Combine the two into one family instead: `on_horizontal_drag_*`
+/// FLUI has no `on_vertical_drag_*` family yet, so the guard is
+/// `on_pan_*` + `on_horizontal_drag_*` alone — that pairing is already
+/// redundant without waiting for a vertical family to complete the overlap. Combine the two into one family instead: `on_horizontal_drag_*`
 /// alone, or `on_pan_*` alone.
 ///
 /// # Assistive-technology activation
 ///
-/// Flutter parity: `RawGestureDetector`'s `_GestureSemantics` — a detector
+/// A detector
 /// with `on_tap` advertises a semantics *tap* action, and one with
 /// `on_long_press` a *long press* action, so a screen reader's activate
 /// gesture (VoiceOver's VO-Space, `AXPress` on macOS) presses the control
@@ -298,9 +290,8 @@ impl GestureDetector {
         self
     }
 
-    /// Called the instant the second contact of a double-tap goes down —
-    /// Flutter parity: `onDoubleTapDown(TapDownDetails)`
-    /// (`gestures/double_tap.dart`). Fires before, and independently of,
+    /// Called the instant the second contact of a double-tap goes down.
+    /// Fires before, and independently of,
     /// [`on_double_tap`](Self::on_double_tap): the recognizer already knows
     /// the gesture is a double tap once the second contact is validated
     /// (timing + slop against the first), and a consumer that wants the
@@ -439,7 +430,7 @@ impl GestureDetector {
 }
 
 /// The pan callbacks the drag recognizer reads, refreshed from the view on every
-/// `build` (Flutter's `didUpdateWidget`).
+/// `build`.
 #[derive(Clone, Default)]
 struct PanCallbacks {
     start: Option<PanStartHandler>,
@@ -449,7 +440,7 @@ struct PanCallbacks {
 
 /// The horizontal-drag callbacks the axis-constrained recognizer reads,
 /// refreshed from the view on every `build`. Mirrors [`PanCallbacks`] plus the
-/// `down`/`cancel` pair Flutter's `onHorizontalDrag*` family also exposes.
+/// `down`/`cancel` pair the horizontal-drag family also exposes.
 #[derive(Clone, Default)]
 struct HorizontalDragCallbacks {
     down: Option<HorizontalDragDownHandler>,
@@ -918,10 +909,9 @@ impl ViewState<GestureDetector> for GestureDetectorState {
 
 /// Debug-only conflict guard for `on_pan_*` and `on_horizontal_drag_*` — see
 /// [`GestureDetector`]'s "Pan and horizontal-drag conflict" doc section for
-/// the full rationale and the divergence from Flutter's literal condition.
-/// Only `start`/`update`/`end` count toward "configured", matching the
-/// oracle's own `haveHorizontalDrag`/`havePan` checks (`down`/`cancel` don't
-/// participate there either).
+/// the full rationale.
+/// Only `start`/`update`/`end` count toward "configured" (`down`/`cancel`
+/// don't participate).
 fn assert_no_pan_horizontal_drag_conflict(view: &GestureDetector) {
     let have_pan =
         view.on_pan_start.is_some() || view.on_pan_update.is_some() || view.on_pan_end.is_some();
@@ -944,8 +934,7 @@ impl GestureDetectorState {
     /// stream.
     ///
     /// Each recognizer participates for a contact only when its configured
-    /// callback is live (Flutter parity: `gesture_detector.dart` constructs a
-    /// recognizer only when its callback is non-null). Participation is read from
+    /// callback is live. Participation is read from
     /// the live slots at event time (the `*_active` predicates), so a rebuild
     /// with a changed configuration is honored, and a double-tap-only detector
     /// does not let its tap recognizer steal the first up.

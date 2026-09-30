@@ -5,7 +5,7 @@
 //!
 //! # Architecture
 //!
-//! The architecture is inspired by GPUI and Flutter's platform layer:
+//! The architecture is inspired by GPUI's platform layer:
 //!
 //! ```text
 //! flui-platform-api         - Contracts: PlatformWindow, capability traits,

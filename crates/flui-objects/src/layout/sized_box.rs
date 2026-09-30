@@ -1,20 +1,17 @@
 //! RenderSizedBox — a **leaf** sized primitive.
 //!
-//! # Not a port of Flutter's `SizedBox`
+//! # Relation to the `SizedBox` widget
 //!
-//! Flutter's `SizedBox` widget is `RenderConstrainedBox(additionalConstraints:
-//! tightFor(width, height))` — a single-child proxy where an unset axis is
-//! *pass-through* (`0..=∞`). In FLUI that role is filled by the widget-layer
-//! `SizedBox` (`flui-widgets/src/layout/sized_box.rs`), which maps to
-//! [`RenderConstrainedBox`](crate::RenderConstrainedBox) with `tightFor`
-//! constraints — the Flutter-faithful path.
+//! The widget-layer `SizedBox` (`flui-widgets/src/layout/sized_box.rs`) is a
+//! single-child proxy where an unset axis is *pass-through* (`0..=∞`); it maps
+//! to [`RenderConstrainedBox`](crate::RenderConstrainedBox) with tight
+//! constraints.
 //!
 //! `RenderSizedBox` here is a **distinct childless (leaf) primitive**: an unset
 //! axis (`None`) means **expand to the incoming `max`**, which is what makes
 //! [`RenderSizedBox::expand`] (`new(None, None)`) fill its parent. This
-//! `None → max` (fill) rule is intentional and load-bearing for `expand()`; it
-//! is deliberately NOT Flutter's `SizedBox` `null → collapse` semantics (box
-//! render-object audit #4 — an intentional, documented divergence, not a bug).
+//! `None → max` (fill) rule is intentional and load-bearing for `expand()`;
+//! it is not a `None → collapse` rule.
 //! [`RenderSizedBox::shrink`] is the explicit `(0, 0)` counterpart.
 
 use flui_foundation::Leaf;

@@ -3,8 +3,6 @@
 use flui_rendering::constraints::AxisDirection;
 
 /// The direction in which boxes flow vertically.
-///
-/// Similar to Flutter's `VerticalDirection`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum VerticalDirection {

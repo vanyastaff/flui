@@ -109,6 +109,6 @@ pub(crate) trait ChildManager {
     /// Drop the bookkeeping for `child`, which a `GlobalKey` retake has just
     /// grafted onto another parent. The child is no longer this sliver's to
     /// evict or refresh; touching it would reach into the new parent's
-    /// subtree. Flutter's `SliverMultiBoxAdaptorElement.forgetChild`.
+    /// subtree.
     fn forget_child(&mut self, child: flui_foundation::ElementId);
 }

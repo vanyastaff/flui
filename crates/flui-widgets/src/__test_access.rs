@@ -76,7 +76,7 @@ pub trait NavigatorProbe {
     fn tracked_subtree_count(&self) -> usize;
     /// `id`'s subtree cell, element half and render half, unjoined.
     fn route_subtree_parts(&self, id: RouteId) -> Option<(Option<ElementId>, Option<RenderId>)>;
-    /// Flutter's `Route.isCurrent`.
+    /// Whether the route is the navigator's current (topmost) route.
     fn is_current(&self, id: RouteId) -> bool;
     /// The overlay the navigator presents its routes in.
     fn overlay(&self) -> &OverlayHandle;
@@ -196,8 +196,8 @@ impl Route for ZeroDurationRoute {
         &self.settings
     }
 
-    /// `TransitionRoute.finishedWhenPopped => controller.isDismissed` — false
-    /// while the exit transition runs, so disposal defers to `finalize()`.
+    /// False while the exit transition runs, so disposal defers to
+    /// `finalize()`.
     fn finished_when_popped(&self) -> bool {
         false
     }

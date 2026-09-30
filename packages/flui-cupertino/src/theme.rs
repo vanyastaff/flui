@@ -1,24 +1,17 @@
 //! [`CupertinoTheme`] — publishes [`CupertinoThemeData`] to a subtree via
 //! FLUI's inherited-data mechanism.
 //!
-//! Flutter parity: `cupertino/theme.dart` `CupertinoTheme` /
-//! `InheritedCupertinoTheme` / `CupertinoThemeData` (oracle tag `3.44.0`).
-//! Like `flui-material`'s `Theme`, this collapses the oracle's
-//! `CupertinoTheme` (a `StatelessWidget`) + `InheritedCupertinoTheme` (the
-//! actual `InheritedTheme`) pair into one `InheritedView` type — the split
-//! exists in Dart only so `CupertinoTheme.build` can also imply an
-//! `IconTheme`, which this crate's V1 doesn't yet wire (no icon-family
-//! component consumes it).
+//! Like `flui-material`'s `Theme`, this is one `InheritedView` type. It does
+//! not also imply an `IconTheme`, which this crate's V1 doesn't yet wire (no
+//! icon-family component consumes it).
 //!
 //! ## Material-interop seam (nothing owed here)
 //!
-//! At tag `3.44.0`, `CupertinoTheme.of` never reads Material — it is
-//! Material's `ThemeData.cupertinoOverrideTheme` /
-//! `MaterialBasedCupertinoThemeData` that inject an `InheritedCupertinoTheme`
-//! from *its* side when a Material `Theme` wants to also drive Cupertino
-//! widgets underneath it. Per ADR-0028, that injection seam belongs to a
-//! future `flui-material` increment, not this crate — `flui-cupertino` has
-//! no dependency on `flui-material` and nothing here needs to change to
+//! `CupertinoTheme::of` never reads Material. A Material theme that wants to
+//! also drive Cupertino widgets underneath it would have to inject a
+//! `CupertinoTheme` from *its* side. Per ADR-0028, that injection seam belongs
+//! to a future `flui-material` increment, not this crate — `flui-cupertino`
+//! has no dependency on `flui-material` and nothing here needs to change to
 //! support it later.
 
 use flui_sdk::painting::Color;
@@ -30,10 +23,9 @@ use flui_sdk::widgets::{InheritedTheme, MediaQuery};
 use crate::colors::{CupertinoColor, CupertinoColors, CupertinoDynamicColor};
 use crate::text_theme::CupertinoTextThemeData;
 
-/// The oracle's `_kDefaultTheme.barBackgroundColor` — `0xF0F9F9F9` /
-/// `0xF01D1D1D` (navigation-bar translucent background; toolbar/tabbar use a
-/// darker `0xF0161616` the oracle notes but does not use here — see
-/// `theme.dart`'s comment on `_kDefaultTheme`).
+/// The default bar background — `0xF0F9F9F9` / `0xF01D1D1D` (navigation-bar
+/// translucent background; toolbars and tab bars could use a darker
+/// `0xF0161616`, which is not used here).
 fn default_bar_background_color() -> CupertinoDynamicColor {
     CupertinoDynamicColor::with_brightness(
         Color::rgba(0xF9, 0xF9, 0xF9, 0xF0),
@@ -58,17 +50,15 @@ fn as_dynamic(color: CupertinoColor) -> CupertinoDynamicColor {
 
 /// Styling specification for a [`CupertinoTheme`].
 ///
-/// Every field is optional; an unset field falls back to the oracle's
-/// `_kDefaultTheme` iOS defaults (systemBlue primary, white contrasting,
-/// systemBackground scaffold, a translucent navigation-bar background).
+/// Every field is optional; an unset field falls back to the iOS defaults
+/// (system blue primary, white contrasting, system background scaffold, a
+/// translucent navigation-bar background).
 ///
-/// Flutter parity: `CupertinoThemeData` (`cupertino/theme.dart`, oracle tag
-/// `3.44.0`), scoped to this crate's V1 consumers. **Named deferral**:
-/// `selectionHandleColor` and `applyThemeToAll` are dropped — no
+/// Scoped to this crate's V1 consumers. **Named deferral**: a selection
+/// handle color and an apply-theme-to-all flag are dropped — no
 /// `CupertinoTextField`/Material-interop consumer exists yet in this crate to
 /// pin their shape against; add them alongside whichever component first
-/// needs them, per Flutter's own component-slot pattern (see
-/// `flui-material::ThemeData`'s equivalent note).
+/// needs them (see `flui-material::ThemeData`'s equivalent note).
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct CupertinoThemeData {
     brightness: Option<Brightness>,
@@ -80,7 +70,7 @@ pub struct CupertinoThemeData {
 }
 
 impl CupertinoThemeData {
-    /// The default theme — Flutter parity: `CupertinoThemeData()`.
+    /// The default theme.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
@@ -131,15 +121,14 @@ impl CupertinoThemeData {
 
     /// The explicit brightness override, if any — `None` means "follow
     /// `MediaQuery::platform_brightness`", resolved by
-    /// [`CupertinoTheme::maybe_brightness_of`]. Flutter parity: `brightness`.
+    /// [`CupertinoTheme::maybe_brightness_of`].
     #[must_use]
     pub fn brightness(&self) -> Option<Brightness> {
         self.brightness
     }
 
     /// The theme's primary interactive color — `CupertinoButton`'s default
-    /// fill/foreground. Flutter parity: `primaryColor`, default
-    /// [`CupertinoColors::SYSTEM_BLUE`].
+    /// fill/foreground. Default [`CupertinoColors::SYSTEM_BLUE`].
     #[must_use]
     pub fn primary_color(&self) -> CupertinoColor {
         self.primary_color
@@ -147,16 +136,15 @@ impl CupertinoThemeData {
     }
 
     /// The color placed on top of [`Self::primary_color`] (e.g.
-    /// `CupertinoButton.filled`'s text). Flutter parity:
-    /// `primaryContrastingColor`, default [`CupertinoColors::WHITE`].
+    /// `CupertinoButton::filled`'s text). Default [`CupertinoColors::WHITE`].
     #[must_use]
     pub fn primary_contrasting_color(&self) -> CupertinoColor {
         self.primary_contrasting_color
             .unwrap_or(CupertinoColor::Static(CupertinoColors::WHITE))
     }
 
-    /// The type-style roles for this theme. Flutter parity: `textTheme`,
-    /// default a [`CupertinoTextThemeData`] whose `primary_color` follows
+    /// The type-style roles for this theme. Default a
+    /// [`CupertinoTextThemeData`] whose `primary_color` follows
     /// [`Self::primary_color`].
     #[must_use]
     pub fn text_theme(&self) -> CupertinoTextThemeData {
@@ -165,16 +153,14 @@ impl CupertinoThemeData {
         })
     }
 
-    /// The background color for opaque bars (navigation/tab bars). Flutter
-    /// parity: `barBackgroundColor`.
+    /// The background color for opaque bars (navigation/tab bars).
     #[must_use]
     pub fn bar_background_color(&self) -> CupertinoColor {
         self.bar_background_color
             .unwrap_or(CupertinoColor::Dynamic(default_bar_background_color()))
     }
 
-    /// The background color for a full-screen Cupertino scaffold. Flutter
-    /// parity: `scaffoldBackgroundColor`, default
+    /// The background color for a full-screen Cupertino scaffold. Default
     /// [`CupertinoColors::SYSTEM_BACKGROUND`].
     #[must_use]
     pub fn scaffold_background_color(&self) -> CupertinoColor {
@@ -186,16 +172,13 @@ impl CupertinoThemeData {
     /// [`CupertinoTheme::of`]'s doc for why ordinary consumers never call
     /// this directly.
     ///
-    /// **Named simplification** vs. the oracle: `CupertinoThemeData.resolveFrom`
-    /// keeps the override/default distinction alive internally (so a
-    /// still-unset field's *default* also resolves, without materializing an
-    /// override). This port instead resolves each getter's current effective
-    /// value once and stores it as the new override — externally equivalent
-    /// (every getter reads the same resolved color either way), simpler
-    /// internally, at the cost of `PartialEq`-visible "was this explicitly
-    /// set" round-tripping this crate has no consumer for yet.
-    ///
-    /// Flutter parity: `CupertinoThemeData.resolveFrom`.
+    /// **Named simplification**: this resolves each getter's current effective
+    /// value once and stores it as the new override, rather than keeping the
+    /// override/default distinction alive (so a still-unset field's *default*
+    /// also resolves, without materializing an override). Externally
+    /// equivalent (every getter reads the same resolved color either way),
+    /// simpler internally, at the cost of `PartialEq`-visible "was this
+    /// explicitly set" round-tripping this crate has no consumer for yet.
     #[must_use]
     pub fn resolve_from(&self, ctx: &dyn BuildContext) -> Self {
         Self {
@@ -217,9 +200,6 @@ impl CupertinoThemeData {
 
 /// Provides [`CupertinoThemeData`] to its subtree via FLUI's inherited-data
 /// mechanism.
-///
-/// Flutter parity: `CupertinoTheme` (`cupertino/theme.dart`, oracle tag
-/// `3.44.0`).
 ///
 /// # Example
 ///
@@ -250,8 +230,6 @@ impl CupertinoTheme {
     /// [`CupertinoTheme`], or [`CupertinoThemeData::default`] if there is no
     /// ancestor — resolved against `ctx` either way, so ordinary consumers
     /// always see concrete colors (see [`CupertinoThemeData::resolve_from`]).
-    ///
-    /// Flutter parity: `CupertinoTheme.of`.
     #[must_use]
     pub fn of(ctx: &dyn BuildContext) -> CupertinoThemeData {
         let ambient = ctx.depend_on::<Self, _>(|theme| theme.data.clone());
@@ -263,8 +241,6 @@ impl CupertinoTheme {
     /// [`CupertinoThemeData::brightness`], falling back to
     /// [`MediaQueryData::platform_brightness`](flui_sdk::widgets::MediaQueryData::platform_brightness). Returns `None` if neither is
     /// available.
-    ///
-    /// Flutter parity: `CupertinoTheme.maybeBrightnessOf`.
     #[must_use]
     pub fn maybe_brightness_of(ctx: &dyn BuildContext) -> Option<Brightness> {
         match ctx.depend_on::<Self, _>(|theme| theme.data.brightness) {
@@ -277,13 +253,10 @@ impl CupertinoTheme {
     /// when neither a [`CupertinoTheme`] nor a [`MediaQuery`] ancestor is
     /// present.
     ///
-    /// **Documented divergence from Flutter**: the oracle's `brightnessOf`
-    /// throws when both are missing; this crate follows the same
-    /// light-default fallback [`crate::colors::CupertinoDynamicColor::resolve_from`]
-    /// already uses for the identical missing-context case, rather than
-    /// introducing a panic path a caller has to specifically avoid.
-    ///
-    /// Flutter parity: `CupertinoTheme.brightnessOf`.
+    /// This follows the same light-default fallback
+    /// [`crate::colors::CupertinoDynamicColor::resolve_from`] already uses for
+    /// the identical missing-context case, rather than introducing a panic
+    /// path a caller has to specifically avoid.
     #[must_use]
     pub fn brightness_of(ctx: &dyn BuildContext) -> Brightness {
         Self::maybe_brightness_of(ctx).unwrap_or(Brightness::Light)

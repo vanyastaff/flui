@@ -1,7 +1,4 @@
 //! [`ThemeData`] — the value [`crate::Theme`] publishes to a subtree.
-//!
-//! Flutter parity: `material/theme_data.dart` `ThemeData` (oracle tag
-//! `3.44.0`).
 
 use flui_sdk::geometry::EdgeInsets;
 use flui_sdk::painting::TextStyle;
@@ -24,30 +21,23 @@ type StateColor = WidgetStateProperty<Option<Color>>;
 /// Compute the M3 default [`TextTheme`]: `englishLike2021` geometry overlaid
 /// with a color-only theme uniformly recolored to `on_surface`.
 ///
-/// Flutter parity, in two parts:
+/// Two parts:
 ///
 /// - The **merge direction** — geometry as the base, a color-only theme as
-///   the patch — mirrors `Theme`'s build-time localization step:
-///   `ThemeData.localize(baseTheme, localTextGeometry)` sets
-///   `textTheme: localTextGeometry.merge(baseTheme.textTheme)`
-///   (`theme_data.dart`, oracle tag `3.44.0`), i.e. `geometry.merge(color)`.
-/// - The **uniform recolor** mirrors `Typography.material2021`'s
-///   `base.black.apply(displayColor: dark, bodyColor: dark, ...)` /
-///   `base.white.apply(displayColor: light, bodyColor: light, ...)`
-///   (`typography.dart`, oracle tag `3.44.0`), where the oracle's `dark` and
-///   `light` locals both reduce to `colorScheme.onSurface` regardless of
-///   brightness — so every role ends up the same color, `on_surface`, not
-///   the `black54`/`black87`/`black` (or `white70`/`white`) tiers
+///   the patch, i.e. `geometry.merge(color)`.
+/// - The **uniform recolor**: the M3 default text colors both reduce to
+///   `colorScheme.onSurface` regardless of brightness — so every role ends
+///   up the same color, `on_surface`, not the `black54`/`black87`/`black`
+///   (or `white70`/`white`) tiers
 ///   [`TextTheme::black_mountain_view`]/[`TextTheme::white_mountain_view`]
 ///   themselves carry.
 ///
-/// **Documented divergence**: the oracle recomputes this lazily, per
-/// `Theme.of` read, keyed on the ambient locale's `ScriptCategory` (English
-/// vs. dense/tall scripts — ADR: see [`crate::typography`] module docs on why
-/// dense/tall are deferred). FLUI V1 has no script-category-resolving
-/// localization consumer yet, so this bakes the `englishLike`-only default
-/// once, here, at [`ThemeData::light`]/[`ThemeData::dark`] construction time
-/// instead of on every `Theme::of` read.
+/// This is baked once, at [`ThemeData::light`]/[`ThemeData::dark`]
+/// construction time, rather than recomputed lazily on every `Theme::of`
+/// read keyed on the ambient locale's script category (English vs.
+/// dense/tall scripts — see [`crate::typography`] module docs on why
+/// dense/tall are deferred): FLUI V1 has no script-category-resolving
+/// localization consumer yet, so only the `englishLike` default exists.
 fn default_text_theme(brightness: Brightness, on_surface: Color) -> TextTheme {
     let geometry = typography::english_like_2021();
     let color_theme = match brightness {
@@ -63,11 +53,9 @@ fn default_text_theme(brightness: Brightness, on_surface: Color) -> TextTheme {
 /// `crate::button_style_button`'s resolve-then-coalesce docs for how this
 /// slot's `style` participates in the three-tier cascade.
 ///
-/// Flutter parity: `ElevatedButtonThemeData` (`material/elevated_button_theme.dart`,
-/// oracle tag `3.44.0`), which carries the identical single `style` field.
-/// **Named reduction**: the oracle also has a standalone `ElevatedButtonTheme`
-/// `InheritedTheme` widget (so a subtree can override the style without
-/// touching the whole [`ThemeData`]); FLUI V1 has no per-widget
+/// **Named reduction**: a subtree could override the style with a
+/// standalone `ElevatedButtonTheme` `InheritedTheme` widget, without
+/// touching the whole [`ThemeData`]; FLUI V1 has no per-widget
 /// `InheritedTheme` wrappers yet, so `ElevatedButton` reads only this
 /// [`ThemeData`] slot via [`Theme::of`](crate::Theme::of).
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -78,9 +66,7 @@ pub struct ElevatedButtonThemeData {
 }
 
 /// Overrides [`FilledButton`](crate::FilledButton)'s default [`ButtonStyle`]
-/// (both the plain and `tonal` variants share this one slot, matching the
-/// oracle). Flutter parity: `FilledButtonThemeData`
-/// (`material/filled_button_theme.dart`, oracle tag `3.44.0`) — same named
+/// (both the plain and `tonal` variants share this one slot). Same named
 /// reduction as [`ElevatedButtonThemeData`] (no standalone `InheritedTheme`
 /// wrapper yet).
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -91,9 +77,7 @@ pub struct FilledButtonThemeData {
 }
 
 /// Overrides [`OutlinedButton`](crate::OutlinedButton)'s default
-/// [`ButtonStyle`]. Flutter parity: `OutlinedButtonThemeData`
-/// (`material/outlined_button_theme.dart`, oracle tag `3.44.0`) — same named
-/// reduction as [`ElevatedButtonThemeData`].
+/// [`ButtonStyle`]. Same named reduction as [`ElevatedButtonThemeData`].
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct OutlinedButtonThemeData {
     /// Overrides for [`OutlinedButton`](crate::OutlinedButton)'s default
@@ -102,8 +86,7 @@ pub struct OutlinedButtonThemeData {
 }
 
 /// Overrides [`TextButton`](crate::TextButton)'s default [`ButtonStyle`].
-/// Flutter parity: `TextButtonThemeData` (`material/text_button_theme.dart`,
-/// oracle tag `3.44.0`) — same named reduction as [`ElevatedButtonThemeData`].
+/// Same named reduction as [`ElevatedButtonThemeData`].
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct TextButtonThemeData {
     /// Overrides for [`TextButton`](crate::TextButton)'s default style.
@@ -112,8 +95,7 @@ pub struct TextButtonThemeData {
 }
 
 /// Overrides [`IconButton`](crate::IconButton)'s default [`ButtonStyle`].
-/// Flutter parity: `IconButtonThemeData` (`material/icon_button_theme.dart`,
-/// oracle tag `3.44.0`) — same named reduction as [`ElevatedButtonThemeData`].
+/// Same named reduction as [`ElevatedButtonThemeData`].
 /// Not to be confused with [`flui_sdk::widgets::IconThemeData`], which colors an
 /// `Icon` child, not an `IconButton`'s own resolved `ButtonStyle`.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -127,8 +109,7 @@ pub struct IconButtonThemeData {
 /// time — an unset field here still falls through to `AppBar`'s own default
 /// (see that type's `resolve_style`), it does not blank the whole slot.
 ///
-/// Flutter parity: `AppBarThemeData` (`material/app_bar_theme.dart`, oracle
-/// tag `3.44.0`), narrowed to the fields FLUI's `AppBar` actually consumes:
+/// Narrowed to the fields FLUI's `AppBar` actually consumes:
 /// [`background_color`](Self::background_color),
 /// [`foreground_color`](Self::foreground_color),
 /// [`elevation`](Self::elevation), [`title_text_style`](Self::title_text_style).
@@ -147,11 +128,10 @@ pub struct AppBarThemeData {
     pub foreground_color: Option<Color>,
     /// Overrides [`AppBar`](crate::AppBar)'s default elevation (`0.0`).
     pub elevation: Option<f64>,
-    /// Overrides the title's text style verbatim — Flutter parity:
+    /// Overrides the title's text style verbatim — the cascade is
     /// `widget.titleTextStyle ?? appBarTheme.titleTextStyle ??
-    /// defaults.titleTextStyle?.copyWith(color: foregroundColor)`
-    /// (`app_bar.dart`, oracle tag `3.44.0`): unlike the default tier, a
-    /// theme-supplied style is used as-is, not recolored to the resolved
+    /// defaults.titleTextStyle?.copyWith(color: foregroundColor)`: unlike
+    /// the default tier, a theme-supplied style is used as-is, not recolored to the resolved
     /// [`foreground_color`](Self::foreground_color).
     pub title_text_style: Option<TextStyle>,
 }
@@ -159,8 +139,7 @@ pub struct AppBarThemeData {
 /// Overrides [`Card`](crate::Card)'s `_CardDefaultsM3` token defaults, one
 /// field at a time.
 ///
-/// Flutter parity: `CardThemeData` (`material/card_theme.dart`, oracle tag
-/// `3.44.0`), narrowed to the fields FLUI's `Card` actually consumes:
+/// Narrowed to the fields FLUI's `Card` actually consumes:
 /// [`color`](Self::color), [`elevation`](Self::elevation),
 /// [`shape`](Self::shape), [`margin`](Self::margin). Named deferrals (no
 /// consumer in FLUI's `Card` yet): `shadow_color`, `surface_tint_color`,
@@ -183,8 +162,7 @@ pub struct CardThemeData {
 /// Overrides [`Dialog`](crate::Dialog)/[`AlertDialog`](crate::AlertDialog)'s
 /// `_DialogDefaultsM3` token defaults, one field at a time.
 ///
-/// Flutter parity: `DialogThemeData` (`material/dialog_theme.dart`, oracle
-/// tag `3.44.0`), narrowed to the fields FLUI's `Dialog`/`AlertDialog`
+/// Narrowed to the fields FLUI's `Dialog`/`AlertDialog`
 /// actually consume: [`background_color`](Self::background_color) (`Dialog`),
 /// [`elevation`](Self::elevation) (`Dialog`), [`shape`](Self::shape)
 /// (`Dialog`), [`title_text_style`](Self::title_text_style) (`AlertDialog`'s
@@ -217,9 +195,7 @@ pub struct DialogThemeData {
 /// Overrides [`FloatingActionButton`](crate::FloatingActionButton)'s
 /// `_FABDefaultsM3` token defaults, one field at a time.
 ///
-/// Flutter parity: `FloatingActionButtonThemeData`
-/// (`material/floating_action_button_theme.dart`, oracle tag `3.44.0`),
-/// narrowed to the fields FLUI's `FloatingActionButton` actually consumes:
+/// Narrowed to the fields FLUI's `FloatingActionButton` actually consumes:
 /// [`background_color`](Self::background_color),
 /// [`foreground_color`](Self::foreground_color),
 /// [`elevation`](Self::elevation) (the enabled/disabled tier — see
@@ -252,9 +228,7 @@ pub struct FabThemeData {
 /// (see `input_decorator.rs`'s `default_*` functions), it does not blank the
 /// whole slot.
 ///
-/// Flutter parity: `InputDecorationThemeData` (`material/input_decorator.dart`,
-/// oracle tag `3.44.0`), narrowed to the fields FLUI's `InputDecorator`
-/// actually consumes: [`fill_color`](Self::fill_color),
+/// Narrowed to the fields FLUI's `InputDecorator` actually consumes: [`fill_color`](Self::fill_color),
 /// [`active_indicator`](Self::active_indicator), [`hint_style`](Self::hint_style),
 /// [`label_style`](Self::label_style), [`helper_style`](Self::helper_style),
 /// [`error_style`](Self::error_style), [`content_padding`](Self::content_padding).
@@ -302,14 +276,12 @@ pub struct InputDecorationThemeData {
 /// `ListTile`'s own default (see `list_tile.rs`'s `resolve_*` functions), it
 /// does not blank the whole slot.
 ///
-/// Flutter parity: `ListTileThemeData` (`material/list_tile_theme.dart`,
-/// oracle tag `3.44.0`), narrowed to the fields FLUI's `ListTile` actually
-/// consumes. FLUI collapses the oracle's two theme tiers (the ambient `ListTileTheme`
-/// inherited widget and this [`ThemeData`] slot) into this one slot, the same
+/// Narrowed to the fields FLUI's `ListTile` actually consumes. FLUI
+/// collapses the two theme tiers (an ambient `ListTileTheme` inherited
+/// widget and this [`ThemeData`] slot) into this one slot, the same
 /// "named reduction" every other component-theme type in this crate already
-/// makes (see [`CardThemeData`]'s doc comment) — `list_tile.dart`'s own
-/// `ListTile.build` reads both (`tileTheme.iconColor ??
-/// theme.listTileTheme.iconColor`), so this slot stands in for both reads.
+/// makes (see [`CardThemeData`]'s doc comment) — so this slot stands in for
+/// both reads.
 /// Named deferrals (no consumer in FLUI's `ListTile` yet):
 /// `style` (`ListTileStyle` is an M2-only fork this M3-only crate has no use
 /// for), `enable_feedback`, `mouse_cursor`, `visual_density`,
@@ -377,10 +349,8 @@ pub struct ListTileThemeData {
 /// Overrides [`Divider`](crate::Divider)/[`VerticalDivider`](crate::VerticalDivider)'s
 /// `_DividerDefaultsM3` token defaults, one field at a time.
 ///
-/// Flutter parity: `DividerThemeData` (`material/divider_theme.dart`, oracle
-/// tag `3.44.0`) — every oracle field has a consumer here, so nothing is
-/// narrowed. FLUI collapses the oracle's `DividerTheme` inherited widget into
-/// this one [`ThemeData`] slot, the same named reduction
+/// Every field has a consumer here, so nothing is narrowed. FLUI collapses
+/// a `DividerTheme` inherited widget into this one [`ThemeData`] slot, the same named reduction
 /// [`ListTileThemeData`] makes.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct DividerThemeData {
@@ -405,9 +375,7 @@ pub struct DividerThemeData {
 /// to `Checkbox`'s own M3 default table (see `checkbox.rs`'s
 /// `checkbox_default_*` functions), it does not blank the whole slot.
 ///
-/// Flutter parity: `CheckboxThemeData` (`material/checkbox_theme.dart`,
-/// oracle tag `3.44.0`), narrowed to the fields FLUI's `Checkbox` actually
-/// consumes: [`fill_color`](Self::fill_color), [`check_color`](Self::check_color),
+/// Narrowed to the fields FLUI's `Checkbox` actually consumes: [`fill_color`](Self::fill_color), [`check_color`](Self::check_color),
 /// [`overlay_color`](Self::overlay_color), [`side`](Self::side). Named
 /// deferrals (no consumer in FLUI's `Checkbox` yet — see that module's docs
 /// for the full named-divergence list): `mouse_cursor`, `splash_radius`
@@ -435,8 +403,7 @@ pub struct CheckboxThemeData {
 /// M3 default table (see `chip.rs`'s `chip_default_*`/`chip_*_color_default`
 /// functions), it does not blank the whole slot.
 ///
-/// Flutter parity: `ChipThemeData` (`material/chip_theme.dart`, oracle tag
-/// `3.44.0`), narrowed to the fields FLUI's [`Chip`](crate::Chip)/
+/// Narrowed to the fields FLUI's [`Chip`](crate::Chip)/
 /// [`FilterChip`](crate::FilterChip) actually consume:
 /// [`label_color`](Self::label_color), [`icon_color`](Self::icon_color),
 /// [`delete_icon_color`](Self::delete_icon_color),
@@ -522,8 +489,7 @@ pub struct ChipThemeData {
 /// `Switch`'s own M3 default table (see `switch.rs`'s `switch_default_*`
 /// functions), it does not blank the whole slot.
 ///
-/// Flutter parity: `SwitchThemeData` (`material/switch_theme.dart`, oracle
-/// tag `3.44.0`), narrowed to the fields FLUI's `Switch` actually consumes:
+/// Narrowed to the fields FLUI's `Switch` actually consumes:
 /// [`thumb_color`](Self::thumb_color), [`track_color`](Self::track_color),
 /// [`track_outline_color`](Self::track_outline_color),
 /// [`overlay_color`](Self::overlay_color). Named deferrals (no consumer in
@@ -552,9 +518,7 @@ pub struct SwitchThemeData {
 /// `navigation_bar_default_*`/`navigation_destination_default_*` functions),
 /// it does not blank the whole slot.
 ///
-/// Flutter parity: `NavigationBarThemeData` (`material/navigation_bar_theme.dart`,
-/// oracle tag `3.44.0`), narrowed to the fields FLUI's `NavigationBar` actually
-/// consumes: [`height`](Self::height), [`background_color`](Self::background_color),
+/// Narrowed to the fields FLUI's `NavigationBar` actually consumes: [`height`](Self::height), [`background_color`](Self::background_color),
 /// [`elevation`](Self::elevation), [`indicator_color`](Self::indicator_color),
 /// [`icon_color`](Self::icon_color), [`label_text_style`](Self::label_text_style),
 /// [`overlay_color`](Self::overlay_color). Named deferrals (no consumer in
@@ -608,8 +572,7 @@ pub struct NavigationBarThemeData {
 /// `TabBar`'s own M3 secondary default table (see `tabs.rs`'s
 /// `resolve_style`), it does not blank the whole slot.
 ///
-/// Flutter parity: `TabBarThemeData` (`material/tab_bar_theme.dart`, oracle
-/// tag `3.44.0`), narrowed to the fields FLUI's `TabBar` actually consumes:
+/// Narrowed to the fields FLUI's `TabBar` actually consumes:
 /// [`indicator_color`](Self::indicator_color), [`label_color`](Self::label_color),
 /// [`unselected_label_color`](Self::unselected_label_color),
 /// [`label_style`](Self::label_style),
@@ -655,8 +618,7 @@ pub struct TabBarThemeData {
 /// `Radio`'s own M3 default table (see `radio.rs`'s `radio_default_*`
 /// functions), it does not blank the whole slot.
 ///
-/// Flutter parity: `RadioThemeData` (`material/radio_theme.dart`, oracle tag
-/// `3.44.0`), narrowed to the fields FLUI's `Radio` actually consumes:
+/// Narrowed to the fields FLUI's `Radio` actually consumes:
 /// [`fill_color`](Self::fill_color), [`overlay_color`](Self::overlay_color).
 /// Named deferrals (no consumer in FLUI's `Radio` yet — see that module's
 /// docs for the full named-divergence list): `mouse_cursor`,
@@ -678,9 +640,7 @@ pub struct RadioThemeData {
 /// M3 default table (see `data_table.rs`'s `DEFAULT_*` constants), it does
 /// not blank the whole slot.
 ///
-/// Flutter parity: `DataTableThemeData` (`material/data_table_theme.dart`,
-/// oracle tag `3.44.0`), narrowed to the fields FLUI's `DataTable` actually
-/// consumes. Named deferrals (no consumer in FLUI's `DataTable` yet — see
+/// Narrowed to the fields FLUI's `DataTable` actually consumes. Named deferrals (no consumer in FLUI's `DataTable` yet — see
 /// that module's docs for the full named-divergence list): `headingCellCursor`,
 /// `dataRowCursor` (no `sortColumnIndex`/mouse-cursor surface yet),
 /// `headingRowAlignment` (no sort-arrow layout to align around yet).
@@ -728,8 +688,7 @@ pub struct DataTableThemeData {
 /// alongside their owning widgets, not in this theming-foundation unit — see
 /// the crate root docs' scope section.
 ///
-/// Flutter parity: `ThemeData` (`material/theme_data.dart`, oracle tag
-/// `3.44.0`) — implemented subset: [`color_scheme`](Self::color_scheme),
+/// Implemented subset: [`color_scheme`](Self::color_scheme),
 /// [`text_theme`](Self::text_theme), and the button-family/`AppBar`/`Card`/
 /// `Dialog`/`FloatingActionButton` component-theme slots below (each
 /// narrowed to its owning widget's actually-consumed fields — see that
@@ -750,94 +709,79 @@ pub struct DataTableThemeData {
 #[derive(Debug, Clone, PartialEq, flui_sdk::view::prelude::InheritedData)]
 pub struct ThemeData {
     /// The Material 3 color roles this theme provides.
-    ///
-    /// Flutter parity: `ThemeData.colorScheme`.
     pub color_scheme: ColorScheme,
 
     /// The type-scale roles this theme provides.
-    ///
-    /// Flutter parity: `ThemeData.textTheme`.
     pub text_theme: TextTheme,
 
     /// Overrides [`ElevatedButton`](crate::ElevatedButton)'s default style.
     /// `None` (the default): no override, `ElevatedButton` uses its own
-    /// M3 token table verbatim. Flutter parity:
-    /// `ThemeData.elevatedButtonTheme`.
+    /// M3 token table verbatim.
     pub elevated_button_theme: Option<ElevatedButtonThemeData>,
 
     /// Overrides [`FilledButton`](crate::FilledButton)'s default style.
-    /// Flutter parity: `ThemeData.filledButtonTheme`.
     pub filled_button_theme: Option<FilledButtonThemeData>,
 
     /// Overrides [`OutlinedButton`](crate::OutlinedButton)'s default style.
-    /// Flutter parity: `ThemeData.outlinedButtonTheme`.
     pub outlined_button_theme: Option<OutlinedButtonThemeData>,
 
-    /// Overrides [`TextButton`](crate::TextButton)'s default style. Flutter
-    /// parity: `ThemeData.textButtonTheme`.
+    /// Overrides [`TextButton`](crate::TextButton)'s default style.
     pub text_button_theme: Option<TextButtonThemeData>,
 
-    /// Overrides [`IconButton`](crate::IconButton)'s default style. Flutter
-    /// parity: `ThemeData.iconButtonTheme`.
+    /// Overrides [`IconButton`](crate::IconButton)'s default style.
     pub icon_button_theme: Option<IconButtonThemeData>,
 
     /// Overrides [`AppBar`](crate::AppBar)'s M3 token defaults, per field.
-    /// Flutter parity: `ThemeData.appBarTheme`.
     pub app_bar_theme: Option<AppBarThemeData>,
 
     /// Overrides [`Card`](crate::Card)'s M3 token defaults, per field.
-    /// Flutter parity: `ThemeData.cardTheme`.
     pub card_theme: Option<CardThemeData>,
 
     /// Overrides [`Dialog`](crate::Dialog)/[`AlertDialog`](crate::AlertDialog)'s
-    /// M3 token defaults, per field. Flutter parity: `ThemeData.dialogTheme`.
+    /// M3 token defaults, per field.
     pub dialog_theme: Option<DialogThemeData>,
 
     /// Overrides [`FloatingActionButton`](crate::FloatingActionButton)'s M3
-    /// token defaults, per field. Flutter parity:
-    /// `ThemeData.floatingActionButtonTheme`.
+    /// token defaults, per field.
     pub floating_action_button_theme: Option<FabThemeData>,
 
     /// Overrides [`InputDecorator`](crate::input_decorator::InputDecorator)'s
-    /// M3 token defaults, per field. Flutter parity:
-    /// `ThemeData.inputDecorationTheme`.
+    /// M3 token defaults, per field.
     pub input_decoration_theme: Option<InputDecorationThemeData>,
 
     /// Overrides [`ListTile`](crate::ListTile)'s M3 token defaults, per
-    /// field. Flutter parity: `ThemeData.listTileTheme`.
+    /// field.
     pub list_tile_theme: Option<ListTileThemeData>,
 
     /// Overrides [`Divider`](crate::Divider)/
     /// [`VerticalDivider`](crate::VerticalDivider)'s M3 token defaults, per
-    /// field. Flutter parity: `ThemeData.dividerTheme`.
+    /// field.
     pub divider_theme: Option<DividerThemeData>,
 
     /// Overrides [`Checkbox`](crate::Checkbox)'s M3 token defaults, per
-    /// field. Flutter parity: `ThemeData.checkboxTheme`.
+    /// field.
     pub checkbox_theme: Option<CheckboxThemeData>,
 
     /// Overrides [`Chip`](crate::Chip)/[`FilterChip`](crate::FilterChip)'s
-    /// M3 token defaults, per field. Flutter parity: `ThemeData.chipTheme`.
+    /// M3 token defaults, per field.
     pub chip_theme: Option<ChipThemeData>,
 
     /// Overrides [`Switch`](crate::Switch)'s M3 token defaults, per field.
-    /// Flutter parity: `ThemeData.switchTheme`.
     pub switch_theme: Option<SwitchThemeData>,
 
     /// Overrides [`Radio`](crate::Radio)'s M3 token defaults, per field.
-    /// Flutter parity: `ThemeData.radioTheme`.
     pub radio_theme: Option<RadioThemeData>,
 
     /// Overrides [`NavigationBar`](crate::NavigationBar)'s M3 token defaults,
-    /// per field. Flutter parity: `ThemeData.navigationBarTheme`.
+    /// per field.
     pub navigation_bar_theme: Option<NavigationBarThemeData>,
 
     /// Overrides [`TabBar`](crate::TabBar)'s M3 secondary token defaults,
-    /// per field. Flutter parity: `ThemeData.tabBarTheme`.
+    /// per field.
     pub tab_bar_theme: Option<TabBarThemeData>,
 
     /// Overrides [`DataTable`](crate::DataTable)'s M3 token defaults, per
-    /// field. Flutter parity: `ThemeData.dataTableTheme`.
+    /// field.
     pub data_table_theme: Option<DataTableThemeData>,
 }
 
@@ -905,9 +849,6 @@ impl ThemeData {
     }
 
     /// This theme's brightness, read from [`ColorScheme::brightness`].
-    ///
-    /// Flutter parity: `ThemeData.brightness => colorScheme.brightness`
-    /// (`theme_data.dart`, oracle tag `3.44.0`).
     #[must_use]
     pub fn brightness(&self) -> Brightness {
         self.color_scheme.brightness
@@ -923,10 +864,8 @@ impl ThemeData {
     /// absorbs new fields as `..Default::default()`-compatible additions
     /// instead.
     ///
-    /// Flutter parity: `ThemeData.copyWith(colorScheme: ..., textTheme: ...)`
-    /// (`theme_data.dart`, oracle tag `3.44.0`), narrowed to this crate's
-    /// implemented subset and reshaped as a struct (Rust has no optional
-    /// named parameters).
+    /// Narrowed to this crate's implemented subset and shaped as a struct
+    /// (Rust has no optional named parameters).
     ///
     /// # Example
     ///
@@ -1016,9 +955,6 @@ impl ThemeData {
 /// [`ThemeData`] gets a matching field here; adding one is still additive
 /// for any caller already writing `..Default::default()`, without needing
 /// the `#[non_exhaustive]` ceremony.
-///
-/// Flutter parity: the optional-parameter list of `ThemeData.copyWith`
-/// (`theme_data.dart`, oracle tag `3.44.0`), reshaped as a struct.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ThemeDataOverrides {
     /// Overrides [`ThemeData::color_scheme`].
@@ -1070,7 +1006,7 @@ pub struct ThemeDataOverrides {
 }
 
 impl Default for ThemeData {
-    /// Same default as Flutter's `ThemeData()`: the M3 light baseline.
+    /// The M3 light baseline.
     fn default() -> Self {
         Self::light()
     }

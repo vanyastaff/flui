@@ -173,8 +173,7 @@ impl<T: NumericUnit> BorderSide<T>
 where
     T: std::ops::Mul<f64, Output = T>,
 {
-    /// Linearly interpolate between two border sides (Flutter's
-    /// `BorderSide.lerp`, `t` clamped to `0..=1`).
+    /// Linearly interpolate between two border sides (`t` clamped to `0..=1`).
     ///
     /// When the styles differ, a `None` side takes part as its own color
     /// made fully transparent and the result is `Solid`, so a border fades
@@ -193,7 +192,10 @@ where
             return Self::none();
         }
         let stroke_align = a.stroke_align + (b.stroke_align - a.stroke_align) * t;
-        #[expect(clippy::float_cmp, reason = "Flutter's exact-equality shortcut")]
+        #[expect(
+            clippy::float_cmp,
+            reason = "exact-equality shortcut for identical styles"
+        )]
         if a.style == b.style && a.stroke_align == b.stroke_align {
             return Self {
                 color: Color::lerp(a.color, b.color, t),

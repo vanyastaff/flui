@@ -1,7 +1,7 @@
 //! Typography types for text rendering and styling.
 //!
 //! This module provides comprehensive types for text styling, alignment,
-//! decoration, metrics, and spans, inspired by Flutter's typography system.
+//! decoration, metrics, and spans.
 
 pub mod text_alignment;
 pub mod text_decoration;

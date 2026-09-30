@@ -46,7 +46,7 @@ const ADAPTIVE_ESTIMATE_RELATIVE_TOLERANCE: f64 = 0.05;
 /// Adapts [`SliverConstraints`] to the protocol-agnostic [`ScrollWindow`]
 /// that [`Virtualizer::query`] expects.
 ///
-/// Field mapping follows Flutter's `RenderSliverMultiBoxAdaptor` semantics:
+/// Field mapping:
 ///
 /// | `ScrollWindow` field | `SliverConstraints` field(s)                              |
 /// |----------------------|-----------------------------------------------------------|
@@ -350,8 +350,7 @@ where
     // ── 4a. Adapt the estimate for still-unmeasured items ──────────────────
     // The caller's `default_extent_estimate` seeds the first pass only. From
     // then on the unmeasured items are hinted with the mean of the band's
-    // own measured children (Flutter's `_extrapolateMaxScrollOffset`
-    // averages the same set) — the band's, not all history's, so a jump from
+    // own measured children — the band's, not all history's, so a jump from
     // tall items into short ones adapts on the first measured batch instead
     // of after hundreds. Without this a band under an over-estimate
     // converges geometrically — each pass only requests the few items the

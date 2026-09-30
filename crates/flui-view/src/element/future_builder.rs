@@ -3,9 +3,8 @@
 //! # Public shape
 //!
 //! Exported from `flui-view::element` and re-exported by `flui-widgets` plus its
-//! prelude once the design passed its Flutter-parity gate. The keyed identity shape is signed
-//! off by the repository owner; this repository has no separate api-design-lead
-//! role. The state type is public only because Rust requires a public associated
+//! prelude. The keyed identity shape is signed off by the repository owner;
+//! this repository has no separate api-design-lead role. The state type is public only because Rust requires a public associated
 //! `State` type for a public `StatefulView` implementation; it remains opaque.
 //!
 //! # How the seams compose
@@ -19,12 +18,12 @@
 //!
 //! # Identity is an explicit key
 //!
-//! Flutter compares `oldWidget.future == widget.future`. A Rust `Future` is
-//! move-only, not `Clone`, not `Eq`, and cannot live in a `Clone` view. So the
-//! view carries `key: Option<K>` plus a factory; the subscription is recreated
-//! exactly when the key changes, and `None` means "no future" (Flutter's null
-//! future). This also makes Flutter's worst `FutureBuilder` footgun —
-//! constructing the future inside `build` — unrepresentable.
+//! A Rust `Future` is move-only, not `Clone`, not `Eq`, and cannot live in a
+//! `Clone` view, so it cannot be compared across rebuilds. The view carries
+//! `key: Option<K>` plus a factory; the subscription is recreated exactly when
+//! the key changes, and `None` means "no future". This also makes the classic
+//! `FutureBuilder` footgun — constructing the future inside `build` —
+//! unrepresentable.
 //!
 //! **Divergence from the ADR sketch:** the ADR wrote `make: impl FnOnce() -> Fut`.
 //! A view is cloned on every rebuild, so the factory must be `Fn`, not `FnOnce`.
@@ -35,9 +34,9 @@
 //! `init_state` runs inside `build_scope`, and the frame's driver step already
 //! ran *before* `build_scope`. A plain `spawn_local` would therefore first poll
 //! on the next frame, and the first build would show `Waiting` even for a ready
-//! future — diverging from Flutter's `SynchronousFuture` behavior.
+//! future.
 //! `AsyncDriver::spawn_local_eager` polls once inline at subscribe time,
-//! exactly as Dart's synchronous `.then` runs inline inside `initState`.
+//! so a ready future completes inside `init_state`.
 //!
 //! While that inline poll runs, `inline_window` is set: a completion landing in
 //! it writes the snapshot but does **not** schedule a rebuild, because the build
@@ -81,7 +80,7 @@ fn apply_completion<T, E>(slot: &SharedSlot<T, E>, generation: u64, result: Resu
 
 /// A view that builds itself from the latest interaction with a future.
 pub struct FutureBuilder<K, T, E> {
-    /// Identity of the future. `None` ⇒ no future (Flutter's null future).
+    /// Identity of the future. `None` ⇒ no future.
     key: Option<K>,
     /// Creates the future when the subscription starts.
     make: FutureFactory<T, E>,
@@ -135,7 +134,7 @@ where
 
     /// Seed the snapshot with `initial_data` before the first subscription.
     ///
-    /// Flutter's `FutureBuilder.initialData`. It is applied **only** at
+    /// It is applied **only** at
     /// `init_state`; a later key change does not re-apply it.
     #[must_use]
     pub fn with_initial_data(mut self, initial_data: InitialDataFactory<T>) -> Self {
@@ -235,8 +234,7 @@ where
     /// Cancel the live subscription, if any, and invalidate its generation so a
     /// completion already in flight is discarded.
     ///
-    /// Flutter's `_unsubscribe`, which merely clears `_activeCallbackIdentity` —
-    /// Dart cannot cancel a future. Dropping the token here stops the producer.
+    /// Dropping the token here stops the producer.
     fn unsubscribe(&mut self) {
         self.token = None; // Drop cancels.
         self.key = None;
@@ -245,10 +243,8 @@ where
 
     /// Start a subscription for `key` using `make`.
     ///
-    /// Mirrors `_FutureBuilderState._subscribe`: spawn, then move the snapshot to
-    /// `Waiting` **unless the future already completed inline** (Flutter's
-    /// `if (_snapshot.connectionState != ConnectionState.done)` guard for
-    /// `SynchronousFuture`).
+    /// Spawns, then moves the snapshot to `Waiting` **unless the future already
+    /// completed inline**.
     fn subscribe(&mut self, key: K, make: &FutureFactory<T, E>) {
         let Some(driver) = self.driver.clone() else {
             // No binding installed a driver: nothing can poll the future. Report
@@ -308,7 +304,7 @@ where
             None => AsyncSnapshot::nothing(),
         };
 
-        // An absent key is Flutter's null future: no subscription, snapshot stays
+        // An absent key means no future: no subscription, snapshot stays
         // where `initial` left it.
         if let Some(key) = self.initial_key.clone() {
             let make = Rc::clone(&self.initial_make);

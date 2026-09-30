@@ -129,12 +129,12 @@ require a prior layout pass, but you can call them after `run_layout` or
 | Method | Purpose |
 |--------|---------|
 | `intrinsic_dimension(id, dimension, extent)` | Raw intrinsic dispatch |
-| `min_intrinsic_width(id, height)` | `computeMinIntrinsicWidth` |
-| `max_intrinsic_width(id, height)` | `computeMaxIntrinsicWidth` |
-| `min_intrinsic_height(id, width)` | `computeMinIntrinsicHeight` |
-| `max_intrinsic_height(id, width)` | `computeMaxIntrinsicHeight` |
-| `dry_layout(id, constraints)` | Flutter `getDryLayout` |
-| `dry_baseline(id, constraints, baseline)` | Flutter `getDryBaseline` |
+| `min_intrinsic_width(id, height)` | Minimum intrinsic width at a height |
+| `max_intrinsic_width(id, height)` | Maximum intrinsic width at a height |
+| `min_intrinsic_height(id, width)` | Minimum intrinsic height at a width |
+| `max_intrinsic_height(id, width)` | Maximum intrinsic height at a width |
+| `dry_layout(id, constraints)` | Size under constraints, without laying out |
+| `dry_baseline(id, constraints, baseline)` | Baseline under constraints, without laying out |
 
 ```rust
 use flui_objects::{RenderColoredBox, RenderOpacity};
@@ -361,10 +361,8 @@ run.assert_paints_any(|c| c.kind == DrawKind::Shadow);   // shadow is painted
 Committed `.snap` files are reviewed like code — never auto-accept blindly.  Snapshot files
 live in `crates/flui-objects/tests/snapshots/`.
 
-**Op-sequence matching is intentionally absent.** Flutter's `paints..rect()..clip()`
-style matcher is a documented anti-pattern: it has a silent-pass bug
-([flutter#95981](https://github.com/flutter/flutter/issues/95981)) and is brittle on benign
-paint refactors.  Use `snapshot()` (structural primary oracle) +
+**Op-sequence matching is intentionally absent.** A `paints..rect()..clip()`-style ordered
+matcher can pass silently and is brittle on benign paint refactors.  Use `snapshot()` (structural primary oracle) +
 `assert_paints_any(pred)` (targeted presence check) instead.
 
 **`DrawCommandSummary` and `DrawKind`** are the unit the predicates operate on:

@@ -13,12 +13,12 @@ is an index into it, not a restatement.
 - [`docs/FOUNDATIONS.md`](https://github.com/vanyastaff/flui/blob/main/docs/FOUNDATIONS.md) — the
   architecture contract and the locked contracts (C1–C9).
 - [`AGENTS.md`](https://github.com/vanyastaff/flui/blob/main/AGENTS.md) — the design stance
-  toward Flutter and the rules the compiler and gates enforce.
+  and the rules the compiler and gates enforce.
 
 ## Per-crate architecture
 
 Each framework-layer crate carries its own `ARCHITECTURE.md` for the design decisions local to it,
-including a `## Mapping decisions` section recording any deliberate Flutter divergence:
+including a `## Mapping decisions` section recording its local design decisions:
 `crates/flui-{engine,foundation,layer,painting,platform,rendering,scheduler,widgets}/ARCHITECTURE.md`.
 
 ## Architecture Decision Records

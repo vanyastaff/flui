@@ -1,8 +1,8 @@
 //! Platform text input (IME) capability
 //!
-//! Flutter's `services` package is deliberately dissolved in FLUI
-//! (`docs/FOUNDATIONS.md`); its IME/text-input residue becomes a capability
-//! trait here instead of a standalone crate. [`PlatformTextInput`] is reached
+//! FLUI has no standalone `services` layer (`docs/FOUNDATIONS.md`); IME
+//! text input is a capability trait here instead of a standalone crate.
+//! [`PlatformTextInput`] is reached
 //! through [`PlatformWindow::text_input`](crate::PlatformWindow::text_input) — the same
 //! capability-discovery pattern as [`PlatformWindow::display`](crate::PlatformWindow::display)
 //! and `flui_platform::Platform::primary_display`: a fallible accessor
@@ -33,10 +33,9 @@ pub trait PlatformTextInput: Send + Sync {
     ///
     /// Disabling mid-composition drops the in-progress composing text rather
     /// than committing it — winit's macOS backend clears its marked text on
-    /// `set_ime_allowed(false)` before queueing `Ime::Disabled`, and a
-    /// deliberate divergence from Flutter, which closes a connection leaving
-    /// the composed characters in the controller's text and clears only the
-    /// composing range. See the `PlatformTextInput` ADR (ADR-0069).
+    /// `set_ime_allowed(false)` before queueing `Ime::Disabled`. Leaving the
+    /// composed characters in the text and clearing only the composing range
+    /// is deliberately not done. See the `PlatformTextInput` ADR (ADR-0069).
     fn set_ime_allowed(&self, allowed: bool);
 
     /// Tell the platform IME where to draw its candidate/composition

@@ -3,8 +3,7 @@
 //! This module provides key types for view identity tracking.
 //! Base key types (`Key`, `ValueKey`, `UniqueKey`, `ViewKey`) are in
 //! `flui-foundation`. Widget-layer keys (`ObjectKey`, `GlobalKey`) are defined
-//! here, matching Flutter's architecture where they live in
-//! `widgets/framework.dart`.
+//! here.
 
 mod global_key;
 mod object_key;

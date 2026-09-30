@@ -2,9 +2,7 @@
 //!
 //! When a user `build()` panics, `ElementBase::build_into_views` must
 //! catch the unwind and substitute the registered `ErrorView` instead of
-//! letting the panic abort the frame — mirroring Flutter's
-//! `ComponentElement.performRebuild` dual try/catch
-//! (`framework.dart:5810-5859`).
+//! letting the panic abort the frame.
 //!
 //! E3 + H3: the element no longer owns its children, and component
 //! builds require the live tree-backed `BuildCtx` supplied by
@@ -31,7 +29,7 @@ use std::{
 };
 
 use flui_view::{
-    BuildContext, BuildOwner, ElementTree, ErrorView, FlutterError, IntoView, Lifecycle,
+    BuildContext, BuildOwner, ElementTree, ErrorView, FrameworkError, IntoView, Lifecycle,
     LifecycleContext, StatefulView, StatelessView, View, ViewExt, ViewState,
     clear_error_view_builder, set_error_view_builder,
 };
@@ -190,7 +188,7 @@ fn stateless_build_panic_substitutes_registered_error_view() {
     // the rendered child even under parallel cargo-test runs.
     static BUILDER_HITS: AtomicUsize = AtomicUsize::new(0);
     BUILDER_HITS.store(0, Ordering::SeqCst);
-    fn builder(error: &FlutterError) -> Box<dyn View> {
+    fn builder(error: &FrameworkError) -> Box<dyn View> {
         BUILDER_HITS.fetch_add(1, Ordering::SeqCst);
         Box::new(ErrorView::new(format!("custom: {}", error.message)))
     }

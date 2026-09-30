@@ -198,11 +198,9 @@ pub(crate) fn animated_container_interpolates_size_over_frames() {
 // must re-ease the run already in flight, not keep coasting on the curve
 // captured at construction.
 //
-// Flutter parity: `ImplicitlyAnimatedWidgetState.didUpdateWidget`
-// (`implicit_animations.dart` `didUpdateWidget`/`_createCurve` at tag `3.44.0`) swaps in a fresh
-// `CurvedAnimation` over the SAME controller on a curve change, without
-// restarting it (`controller.forward(from: 0.0)` is strictly gated on
-// `_constructTweens()`, i.e. a genuine target change). Both probes below
+// A curve change swaps in a fresh curved animation over the SAME controller,
+// without restarting it (a restart is strictly gated on a genuine target
+// change). Both probes below
 // start a genuine 0->target run under `Curves::Linear`, advance it to raw
 // progress `0.4`, then swap ONLY the curve to `Threshold(0.5)` (target held
 // fixed) — a run-restart would also produce a value change, so the "target

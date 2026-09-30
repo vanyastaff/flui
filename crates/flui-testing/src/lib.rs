@@ -4,13 +4,12 @@
 //!
 //! [`HeadlessBinding`] owns a virtual [`ManualClock`] and a clock-bound
 //! [`GestureArena`], and advances time one frame at a time via
-//! [`HeadlessBinding::pump_frame`]. It is the FLUI-native equivalent of Flutter's
-//! `TestWidgetsFlutterBinding.pump(dt)`: every deadline-driven gesture (long-press,
+//! [`HeadlessBinding::pump_frame`]. Every deadline-driven gesture (long-press,
 //! and the press-delay of double-tap) is driven off a single virtual timeline, so
 //! tests are deterministic with **no wall-clock `thread::sleep`**.
 //!
-//! Unlike Flutter's `WidgetsFlutterBinding` (and FLUI's `RenderingFlutterBinding`),
-//! this binding is an ordinary instantiable value, not a process global — many can
+//! Unlike a process-global binding, this binding is an ordinary instantiable
+//! value — many can
 //! exist at once, so test suites run in parallel without contending on shared
 //! singleton state.
 //!
@@ -20,7 +19,7 @@
 //! due gesture deadlines, ticks registered animation controllers, then (when the
 //! binding is tree-bound) rebuilds the element tree and runs the render pipeline
 //! frame. The order is load-bearing — everything that can dirty the tree runs
-//! before the rebuild — and mirrors Flutter's `TestWidgetsFlutterBinding.pump`.
+//! before the rebuild.
 //!
 //! A binding has two flavors, sharing one `pump_frame`:
 //!
@@ -841,8 +840,7 @@ impl HeadlessBinding {
     /// `root_id` onto the dirty heap via `ElementOwner::schedule_build_for` so
     /// the next [`pump_frame`](Self::pump_frame) picks it up.
     ///
-    /// This is the headless equivalent of Flutter's `WidgetTester.pumpWidget`
-    /// (second call / root swap): replace the mounted root widget's configuration
+    /// This is the headless root swap: replace the mounted root widget's configuration
     /// without tearing down and re-mounting the full tree.
     ///
     /// # Panics
@@ -872,8 +870,7 @@ impl HeadlessBinding {
         });
     }
 
-    /// Flutter `WidgetsBinding.performReassemble()` — the hot-reload entry
-    /// point, headless.
+    /// The hot-reload entry point, headless.
     ///
     /// Marks every mounted element dirty without unmounting or disposing any
     /// `State`, exactly as production
@@ -902,8 +899,7 @@ impl HeadlessBinding {
         });
     }
 
-    /// Flutter `PipelineOwner.reassembleSubtree` — the render half of a hot
-    /// reload, headless.
+    /// The render half of a hot reload, headless.
     ///
     /// Marks the whole render tree's layout and paint dirty so the next frame
     /// re-runs `perform_layout`/`paint`, mirroring production
@@ -923,17 +919,13 @@ impl HeadlessBinding {
     ///
     /// # Ordering
     ///
-    /// The steps mirror Flutter's `TestWidgetsFlutterBinding.pump(dt)`
-    /// (`fakeAsync.elapse(dt)` → `handleBeginFrame` → `handleDrawFrame`), and the
-    /// order is load-bearing:
+    /// The order is load-bearing:
     ///
     /// 1. **Advance the virtual clock.** Everything time-based reads from here, so
-    ///    the new instant must be visible before anything observes it — the
-    ///    analogue of `fakeAsync.elapse(dt)`.
+    ///    the new instant must be visible before anything observes it.
     /// 2. **Drain deferred arena defaults.** This is the frame-boundary fallback
     ///    for a lone member queued at a previous event boundary that unwound.
-    /// 3. **Fire gesture deadlines** at the new time. Flutter fires due `Timer`s
-    ///    inside `elapse`, *ahead* of `handleBeginFrame`; a deadline (e.g. a
+    /// 3. **Fire gesture deadlines** at the new time. A deadline (e.g. a
     ///    long-press) that has now elapsed resolves here, before any later frame
     ///    work — so the deadline poll is the first thing after the clock moves.
     ///
@@ -945,12 +937,8 @@ impl HeadlessBinding {
     /// 6. **Run the pipeline frame** (tree-bound only): `PipelineOwner::run_frame`
     ///    lays out, paints, and composites.
     /// 7. **Re-hit-test every stationary pointing device** (tree-bound only)
-    ///    against the tree this frame just laid out — Flutter's implicit
-    ///    `MouseTracker.updateAllDevices` postframe recheck
-    ///    (`rendering/mouse_tracker.dart`, called from
-    ///    `RendererBinding._handlePersistentFrameCallback`'s
-    ///    `_scheduleMouseTrackerUpdate`, still inside the persistent phase,
-    ///    ahead of the post-frame callback queue). This is what lets a
+    ///    against the tree this frame just laid out, still inside the
+    ///    persistent phase and ahead of the post-frame callback queue. This is what lets a
     ///    region that appears, moves, or disappears under a **motionless**
     ///    pointer emit enter/exit with no new pointer motion: the mechanism
     ///    production already wires
@@ -1224,8 +1212,7 @@ impl std::ops::AddAssign<&FrameReport> for FrameReport {
 
 /// The deterministic multi-presentation clock (issue #556).
 ///
-/// [`HeadlessBinding::pump_frame`] above is the FLUI-native equivalent of
-/// Flutter's `WidgetTester.pump` — and, like Flutter's, it is single-view:
+/// [`HeadlessBinding::pump_frame`] above is single-view:
 /// one virtual clock, one `Vsync`. This is the multi-presentation version:
 /// each [`PresentationId`] a caller registers via
 /// [`install_presentation_clock`](HeadlessBinding::install_presentation_clock)
@@ -1352,14 +1339,11 @@ impl HeadlessBinding {
     /// Demand is sampled BEFORE `tick_all`, not after: the tick that
     /// carries a controller across its completion threshold must still be
     /// treated as real animation work, even though `has_running()` already
-    /// reports `false` by the time that same tick returns. This matches the
-    /// oracle's own contract — `.flutter/packages/flutter/lib/src/scheduler/
-    /// ticker.dart`'s `_tick` invokes `_onTick` unconditionally (deciding
-    /// whether to *reschedule* only afterward), and `.flutter/packages/
-    /// flutter/lib/src/animation/animation_controller.dart`'s own `_tick`
-    /// clamps the value to the endpoint, flips the status to `Completed`,
-    /// calls `stop()`, and ONLY THEN calls `notifyListeners()`/
-    /// `_checkStatusChanged()` — the completing tick still delivers the
+    /// reports `false` by the time that same tick returns. A ticker's tick
+    /// invokes its callback unconditionally (deciding whether to *reschedule*
+    /// only afterward), and a controller's tick clamps the value to the
+    /// endpoint, flips the status to `Completed`, stops, and ONLY THEN
+    /// notifies listeners — the completing tick still delivers the
     /// final value and fires the status listener. Sampling `has_running()`
     /// after `tick_all` would silently drop the one pump that carries that
     /// final value/status, because by then the controller has already

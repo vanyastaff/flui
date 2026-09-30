@@ -1,7 +1,7 @@
 //! Slab-based Element tree storage.
 //!
-//! Elements are stored in a Slab for O(1) access by ElementId.
-//! This follows Flutter's approach where Elements form the retained tree.
+//! Elements are stored in a Slab for O(1) access by ElementId; they form the
+//! retained tree.
 
 use std::any::TypeId;
 use std::cell::Cell;
@@ -104,11 +104,9 @@ pub struct ElementNode {
     /// only to pick a bucket, so a hash alone could unregister the wrong
     /// entry whenever two distinct keys collide.
     ///
-    /// Flutter parity: keys are tracked on the
-    /// element itself in `framework.dart:2884`-ish via `Element._widget`
-    ///   + `Widget.key`; we mirror the effect with a side channel
-    ///     because our `View` value is owned by `ElementCore` and not
-    ///     available at the dispatch boundary used for finalization.
+    /// Kept as a side channel on the node because the `View` value is owned by
+    /// `ElementCore` and not available at the dispatch boundary used for
+    /// finalization.
     pub(crate) registered_global_key: Option<Box<dyn ViewKey>>,
     /// This node's slab-id-based child list — the single, authoritative
     /// element child graph (E3 — atomic box→arena swap).
@@ -134,17 +132,15 @@ pub struct ElementNode {
     ///
     /// Built top-down at [`insert`](ElementTree::insert) /
     /// [`mount_root_with_pipeline_owner`](ElementTree::mount_root_with_pipeline_owner):
-    /// a non-provider aliases its parent's map by refcount (`Arc::clone`, the
-    /// `framework.dart:5129` pointer-copy); a provider stores
+    /// a non-provider aliases its parent's map by refcount (`Arc::clone`); a
+    /// provider stores
     /// `parent_map + (view_type_id → self)` so nested same-type providers
     /// shadow nearest-wins. Recomputed for a re-taken subtree on GlobalKey
     /// reparent. Like `parent`/`depth`/`child_ids` it is a node field, so it
     /// survives the `build_scope` take/put window and a building element can
     /// read its own scope while its `element` slot is a hole.
     ///
-    /// Flutter parity: `Element._inheritedElements` (`framework.dart:5053`,
-    /// `_updateInheritance` at `:5127`/`:6270`). flui keys on the provider
-    /// view `TypeId` (== Flutter's `widget.runtimeType`) and uses a plain
+    /// The map is keyed on the provider view `TypeId` and is a plain
     /// `Arc<HashMap>` with copy-on-insert-at-providers rather than a persistent
     /// HAMT — provider counts in a UI scope are tiny, so the per-provider
     /// O(k) clone is effectively O(1) and avoids a new dependency.
@@ -161,9 +157,8 @@ pub struct ElementNode {
 /// A provider's resolved scope therefore includes ITSELF — so
 /// `depend_on::<P>()` from inside a `P` provider's own build resolves that
 /// provider, where the old strict-ancestor walk skipped self and found the
-/// next `P` up (or `None`). This is an intentional, Flutter-faithful shift
-/// (`_updateInheritance` puts `this` into `_inheritedElements`,
-/// `framework.dart:6274`); it is currently unreachable because
+/// next `P` up (or `None`). This is an intentional shift; it is currently
+/// unreachable because
 /// `InheritedBehavior::build_into_views` only returns the child and never
 /// self-depends.
 fn compute_inherited_scope(
@@ -305,8 +300,8 @@ impl ElementNode {
     /// `View::key().map(ViewKey::key_hash)` for this element.
     ///
     /// Convenience over the two-step `key().map(ViewKey::key_hash)`.
-    /// Returns `None` for keyless elements (matches Flutter's
-    /// "no key, fall back to positional" semantics).
+    /// Returns `None` for keyless elements ("no key, fall back to positional"
+    /// matching).
     pub fn key_hash(&self) -> Option<u64> {
         self.key.as_ref().map(|k| k.key_hash())
     }
@@ -396,11 +391,6 @@ impl std::fmt::Debug for ElementNode {
 ///
 /// Provides O(1) access to Elements by ElementId.
 /// ElementIds use NonZeroUsize (1-based) while Slab uses 0-based indices.
-///
-/// # Flutter Equivalent
-///
-/// This roughly corresponds to how Flutter's Element tree is managed,
-/// but uses a Slab for efficient allocation/deallocation.
 ///
 /// # Memory Layout
 ///
@@ -781,9 +771,7 @@ impl ElementTree {
         // scope.
         //
         // No reservation is recorded here: a reservation names the PARENT
-        // that declared the key, and a root has none. Flutter reaches the
-        // same place from the other direction — reservations are recorded
-        // in `Element.updateChild`, which a root mount never runs.
+        // that declared the key, and a root has none.
         if let Some(key) = global_key_of(view) {
             register_global_key_with_collision_check(owner, key, id);
             self.nodes[slab_index].registered_global_key = Some(key.clone_key());
@@ -817,8 +805,7 @@ impl ElementTree {
     /// queue (from a prior soft-remove this frame), the inactive
     /// element is pulled back to the new parent/slot instead of a
     /// fresh element being created. Its `ElementId` and persistent
-    /// state survive. Flutter parity:
-    /// `framework.dart:4571` `_retakeInactiveElement`.
+    /// state survive.
     pub fn insert(
         &mut self,
         view: &dyn View,
@@ -1116,9 +1103,7 @@ impl ElementTree {
         });
 
         // A freshly-attached render child reads the parent-data its nearest
-        // ancestor `ParentDataView` (`Expanded`, `Positioned`) contributes — the
-        // E3 analogue of Flutter's `RenderObjectElement.attachRenderObject`
-        // calling `_findAncestorParentDataElement`.
+        // ancestor `ParentDataView` (`Expanded`, `Positioned`) contributes.
         self.apply_ancestor_parent_data(id);
 
         // A render-bearing child appended itself to its render parent in
@@ -1141,8 +1126,7 @@ impl ElementTree {
     /// No-op unless `child_id` owns a render node. Walks strictly upward from
     /// the child, taking the *nearest* `parent_data_config()` and stopping the
     /// search at the first ancestor render object (the render parent that reads
-    /// the data during layout) — Flutter's `_findAncestorParentDataElement`
-    /// fused with `_findAncestorRenderObjectElement`. The nearest config wins.
+    /// the data during layout). The nearest config wins.
     /// Existing data is mutated through the typed hook so layout-owned fields
     /// survive; its returned impact controls the render-parent dirty work.
     ///
@@ -1308,8 +1292,7 @@ impl ElementTree {
     /// sibling that already attached, the parent's children list ends up in
     /// attach order, not slot order. This single post-build pass walks the
     /// element tree depth-first in slot order, derives each render parent's
-    /// correct child sequence, and rewrites only those that drifted — the
-    /// arena analogue of Flutter slotting each child via `insertRenderObjectChild`.
+    /// correct child sequence, and rewrites only those that drifted.
     ///
     /// No-op unless insertion or committed child reconciliation set
     /// `needs_render_reorder`.
@@ -1612,9 +1595,8 @@ impl ElementTree {
     /// let the dirty heap rebuild a descendant before its moved parent.
     ///
     /// A node is processed only after its parent, so each child observes the
-    /// parent's already-updated scope and depth. This is the Rust-native
-    /// equivalent of Flutter's recursive `_updateDepth` plus the
-    /// `_updateInheritance` work performed while reactivating a subtree.
+    /// parent's already-updated scope and depth. Depth and inherited scope are
+    /// both refreshed while reactivating a subtree.
     /// Average/worst case O(subtree size), paid only for a reparent.
     /// Move a lazy sliver's resident child to a new logical index without
     /// remounting it: the node's slot becomes `new_slot`, and the inherited
@@ -1764,8 +1746,7 @@ impl ElementTree {
         // holder's state drops. An element can be torn down without that
         // happening in the same step, and a stranded holder would keep
         // resolving to whatever sparse child it last sat under, so the unmount
-        // seam clears it too. This is the liveness half Flutter leaves to
-        // `AutomaticKeepAliveClientMixin.dispose`.
+        // seam clears it too. This is the liveness half of the lease.
         //
         // There is no matching "forget the held child" step: nothing records a
         // held child any more. A hold is resolved from its holder when eviction
@@ -1828,14 +1809,11 @@ impl ElementTree {
     ///   `try_retake_global_key` (private). End-of-frame
     ///   [`BuildOwner::finalize_tree`](crate::BuildOwner::finalize_tree) drains any stragglers via
     ///   [`Self::remove_finalized`] (full slab-remove + unregister).
-    ///   Flutter parity: `framework.dart:4636` `deactivateChild` +
-    ///   `framework.dart:2099` `_InactiveElements`.
     /// - **Eager (un-keyed):** Behaves as before — `Element::unmount`
     ///   then slab-remove. No deferred queue entry.
     ///
-    /// This split matches Flutter's behavior where only elements
-    /// reachable by `GlobalKey` are deferred; ordinary unmounts are
-    /// processed inline.
+    /// Only elements reachable by `GlobalKey` are deferred; ordinary
+    /// unmounts are processed inline.
     ///
     /// Does NOT automatically remove children — caller must handle that.
     ///
@@ -2056,9 +2034,8 @@ impl ElementTree {
     ///
     /// This bypasses the soft-remove path even for keyed elements:
     /// the slab entry is freed and the `GlobalKey` registration is
-    /// cleared via `ElementOwner::unregister_global_key`. Flutter parity: `framework.dart:2118`
-    /// `_unmountAll` — the finalization phase that drains
-    /// `_inactiveElements` doesn't push back into the queue.
+    /// cleared via `ElementOwner::unregister_global_key`. The finalization
+    /// phase that drains the inactive queue doesn't push back into it.
     pub fn remove_finalized(
         &mut self,
         id: ElementId,
@@ -2075,11 +2052,10 @@ impl ElementTree {
     /// announced, and reporting an unmount for it would hand an observer an
     /// id it never saw appear (ADR-0040's causal ordering).
     ///
-    /// Flutter never reaches this teardown at all: `_InactiveElements` only
-    /// ever holds an element whose `mount` already returned, so a throwing
-    /// `createElement`/mount is contained one level up, before
-    /// an element object exists to deactivate. FLUI's version is asymmetric
-    /// with `remove_finalized` for the same reason —
+    /// The inactive queue only ever holds an element whose `mount` already
+    /// returned, so a node abandoned mid-mount never reaches
+    /// `remove_finalized`. This teardown is asymmetric with it for that
+    /// reason —
     /// `RenderView::did_unmount_render_object` still runs here on a render
     /// object that WAS created and adopted moments earlier (a real seam,
     /// bounded separately).
@@ -2307,9 +2283,8 @@ fn global_key_of(view: &dyn View) -> Option<&dyn ViewKey> {
 /// element means one key is live on two elements at once inside one tree —
 /// a real duplicate, not the hash accident the old hash-keyed registry
 /// could also produce here (two distinct keys that collide now hold two
-/// independent entries and never meet). Debug builds panic, matching
-/// Flutter's `assert` inside `BuildOwner._registerGlobalKey`
-/// (`framework.dart:3160`); release builds trace and fall through to
+/// independent entries and never meet). Debug builds panic;
+/// release builds trace and fall through to
 /// last-write-wins so an application does not crash on it, and the frame
 /// boundary's reservation check reports the duplicate as data.
 fn register_global_key_with_collision_check(
@@ -2347,8 +2322,6 @@ fn register_global_key_with_collision_check(
 /// Returns the migrated `ElementId` on success (or the [`ChildHookPanic`]
 /// its own containment window caught), or `None` when no retakeable element
 /// exists (caller falls back to creating a fresh element).
-///
-/// Flutter parity: `framework.dart:4571` `_retakeInactiveElement`.
 enum GlobalKeyRetake {
     Absent,
     Retaken(ElementId),
@@ -2638,9 +2611,7 @@ fn retake_inactive_global_key(
     // here propagates uncontained (see `ChildHookPanic`'s doc). The
     // subtree moved under a new parent, so its inherited scopes (built
     // against the OLD ancestor chain) and descendant depths are stale.
-    // Recompute both top-down against `new_parent`; this combines
-    // Flutter's recursive `_updateDepth` and `_updateInheritance`
-    // reactivation work.
+    // Recompute both top-down against `new_parent`.
     tree.recompute_subtree_ancestry(candidate_id);
     tree.synchronize_destination_render_children_for_relocation(new_parent, &provisional);
     for &(element_id, _) in &relocation.frontier {
@@ -2760,7 +2731,7 @@ fn retake_active_global_key(
     owner.displace_global_key(from_parent, candidate_id, key, new_parent);
     // A lazy sliver that loses a child this way must forget it too, or its
     // next band eviction / delegate refresh would reach into another
-    // parent's subtree (Flutter's `forgetChild` on the losing element).
+    // parent's subtree.
     if let Some(losing_render_id) = tree
         .get(from_parent)
         .and_then(|node| node.element().render_id())

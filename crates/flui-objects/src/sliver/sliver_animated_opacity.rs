@@ -2,22 +2,17 @@
 //! transparency to a single sliver child, driven by an injected,
 //! hot-swappable [`ProxyAnimation<f64>`].
 //!
-//! # Flutter equivalence
+//! # Relation to the box variant
 //!
-//! Behavior-faithful port of Flutter's `RenderAnimatedOpacityMixin` +
-//! `RenderSliverAnimatedOpacity` (`packages/flutter/lib/src/rendering/proxy_sliver.dart`,
-//! tag `3.44.0`). `RenderSliverAnimatedOpacity` is a bare
-//! `RenderProxySliver with RenderAnimatedOpacityMixin<RenderSliver>` — it
-//! mixes in the SAME alpha-caching/dirty-marking rule the box variant uses.
+//! It uses the SAME alpha-caching/dirty-marking rule the box variant uses.
 //! See [`RenderAnimatedOpacity`](crate::RenderAnimatedOpacity)'s module docs
-//! for the full ported-mechanism writeup (alpha caching, the
-//! paint/compositing-bits marking rule, the documented
-//! no-composited-layer-update divergence, the `is_layered` predicate both
+//! for the full mechanism (alpha caching, the
+//! paint/compositing-bits marking rule, the `is_layered` predicate both
 //! variants use for `always_needs_compositing`, and the *Retargeting*
-//! section explaining why `didUpdateAnimation` is unreachable here — the
+//! section explaining why no re-subscription is needed here — the
 //! proxy absorbs it on the widget side) — this module only restates the
 //! sliver-specific contract surface (`RenderSliverOpacity`'s layout/hit-test
-//! passthrough) that the mixin's host class supplies.
+//! passthrough).
 //!
 //! # Zero-consumer honesty
 //!
@@ -242,8 +237,7 @@ impl RenderSliver for RenderSliverAnimatedOpacity {
         &self,
         ctx: &mut SliverHitTestContext<'_, Single, SliverPhysicalParentData>,
     ) -> bool {
-        // Flutter parity: same as `RenderSliverOpacity` — hit-tests
-        // regardless of alpha.
+        // Same as `RenderSliverOpacity` — hit-tests regardless of alpha.
         ctx.hit_test_child_at_layout_offset(0)
     }
 
@@ -252,9 +246,8 @@ impl RenderSliver for RenderSliverAnimatedOpacity {
     // `dyn RenderObject<SliverProtocol>` (see `sliver/sliver_opacity.rs`'s
     // comment on that override for the walk's mechanics). The box variant,
     // `RenderAnimatedOpacity`, carries the analogous override for the same
-    // reason — see its own comment for the predicate this port uses
-    // (`is_layered`, `0 < alpha < 255`) and why, versus Flutter's raw
-    // `alpha > 0`.
+    // reason — see its own comment for the predicate used
+    // (`is_layered`, `0 < alpha < 255`) and why.
     fn always_needs_compositing(&self) -> bool {
         Self::is_layered(self.alpha())
     }
@@ -265,7 +258,7 @@ impl RenderSliver for RenderSliverAnimatedOpacity {
     fn paint_effects(&self, _size: Size) -> PaintEffects {
         let alpha = self.alpha();
         // None when fully opaque (255) or fully transparent (0): neither
-        // requires an OpacityLayer. Flutter: alpha=0 -> layer=null.
+        // requires an OpacityLayer.
         if alpha == 255 || alpha == 0 {
             PaintEffects::NONE
         } else {

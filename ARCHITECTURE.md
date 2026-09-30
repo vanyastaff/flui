@@ -77,11 +77,8 @@ hidden public type reexport in their defining crate, so dependency renaming or
 access through the facade does not require extra consumer dependencies.
 
 [Iced's advanced API](https://docs.rs/iced/latest/iced/advanced/index.html)
-demonstrates a deliberate extension surface for custom widgets. Flutter groups
-[rendering](https://api.flutter.dev/flutter/rendering/) and
-[painting](https://api.flutter.dev/flutter/painting/) concepts into separate
-libraries. FLUI adopts the task-oriented grouping, keeping its typed Rust
-protocols and contexts. No extra `advanced` feature is required: these runtime
+demonstrates a deliberate extension surface for custom widgets. FLUI adopts a
+task-oriented grouping, keeping its typed Rust protocols and contexts. No extra `advanced` feature is required: these runtime
 dependencies already participate in ordinary widget applications. Sources were
 consulted on 2026-09-19.
 
@@ -111,7 +108,7 @@ workspace layer inventory, while private examples/tools retain `publish = false`
 No parallel release package list is maintained. Cargo's normalized dependency
 rules define the distribution closure: optional/build/target declarations and
 versioned dev-dependencies count; versionless dev-dependencies do not. This is a
-Rust packaging decision, not a Flutter protocol. The
+Rust packaging decision. The
 [Cargo dependency reference](https://doc.rust-lang.org/cargo/reference/specifying-dependencies.html#development-dependencies)
 and [package command](https://doc.rust-lang.org/cargo/commands/cargo-package.html)
 are the source contracts. Fixture tests inspect actual tiny archives and preserve

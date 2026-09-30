@@ -69,7 +69,7 @@ pub trait Routable: Clone + PartialEq + 'static {
     /// The stack a location opens with, bottom to top.
     ///
     /// The default is every prefix of `path` that parses, root first, ending
-    /// with `path` itself — Flutter's `Navigator.defaultGenerateInitialRoutes`:
+    /// with `path` itself:
     /// a prefix that matches nothing is a gap and is skipped, but the full path
     /// must match.
     ///

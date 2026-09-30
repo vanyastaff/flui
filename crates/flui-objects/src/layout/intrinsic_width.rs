@@ -1,11 +1,6 @@
 //! `RenderIntrinsicWidth` — expands the child to its maximum intrinsic width.
 //!
-//! # Flutter equivalence
-//!
-//! Behavior-faithful port of Flutter's `RenderIntrinsicWidth`
-//! (`packages/flutter/lib/src/rendering/proxy_box.dart`, lines 624–782).
-//! The sizing algorithm follows Flutter's `_childConstraints` exactly:
-//! query the child's max intrinsic width with the incoming (raw, un-snapped)
+//! The sizing algorithm: query the child's max intrinsic width with the incoming (raw, un-snapped)
 //! height, snap the result to the nearest `step_width` multiple, then lay the
 //! child out at tight constraints built from those values.  When the parent's
 //! width is already tight, the intrinsic width is not queried.  When
@@ -13,12 +8,10 @@
 //! raw `constraints.max_width` (not the computed step-snapped width), and the
 //! result is snapped and tightened on the height axis.
 //!
-//! # Rust-native improvements
+//! # Design
 //!
-//! * `step_width` / `step_height` are `Option<f64>` (vs Dart's nullable
-//!   `double?`) — `None` preserves the raw intrinsic value without rounding.
-//! * The step-rounding helper is a private named function instead of a Dart
-//!   lambda for clarity.
+//! * `step_width` / `step_height` are `Option<f64>` — `None` preserves the
+//!   raw intrinsic value without rounding.
 //! * `child_constraints` takes a generic `intrinsic` closure, routing the
 //!   same constraint math through all three compute passes (`perform_layout`,
 //!   `compute_dry_layout`, `compute_dry_baseline`) — one fact, one place.
@@ -40,10 +33,8 @@ use flui_rendering::{
 // HELPERS
 // ============================================================================
 
-/// Flutter's `_applyStep`: rounds `input` up to the nearest multiple of `step`
-/// when `step` is `Some`.  Returns `input` unchanged when `step` is `None`.
-///
-/// Mirrors `_applyStep(double input, double? step)` in `proxy_box.dart`.
+/// Rounds `input` up to the nearest multiple of `step` when `step` is `Some`.
+/// Returns `input` unchanged when `step` is `None`.
 #[inline]
 fn apply_step(input: f64, step: Option<f64>) -> f64 {
     match step {
@@ -75,10 +66,6 @@ fn apply_step(input: f64, step: Option<f64>) -> f64 {
 ///    clamp to the constraints.
 /// 4. Lay the child out with the tight constraints derived above.
 /// 5. Report `constraints.constrain(child_size)`.
-///
-/// Flutter parity: `RenderIntrinsicWidth` in `proxy_box.dart`, including
-/// `_childConstraints` (proxy_box.dart:712-720) and `_computeSize`
-/// (proxy_box.dart:723-734).
 #[derive(Debug, Clone)]
 pub struct RenderIntrinsicWidth {
     /// Optional column-width quantum.  When set, the computed intrinsic width
@@ -148,15 +135,11 @@ impl RenderIntrinsicWidth {
 
     /// Computes the tight child constraints using an `intrinsic` closure.
     ///
-    /// Mirrors Flutter's `RenderIntrinsicWidth._childConstraints`
-    /// (proxy_box.dart:712-720) exactly:
-    ///
     /// - **Width axis**: if the incoming width is already tight, keep it.
     ///   Otherwise call `intrinsic(MaxWidth, constraints.max_height)` with the
     ///   RAW `max_height` (not step-snapped), apply `step_width`, and tighten.
-    ///   `apply_step(x, None) == x`, so the no-step case forces the child to
-    ///   its raw intrinsic width (the core behavioral fix vs. the old code that
-    ///   only forced when `step_width.is_some()`).
+    ///   `apply_step(x, None) == x`, so the no-step case still forces the child
+    ///   to its raw intrinsic width (not only when `step_width.is_some()`).
     ///
     /// - **Height axis**: if `step_height` is `None`, keep the incoming height.
     ///   Otherwise call `intrinsic(MaxHeight, constraints.max_width)` with the
@@ -164,8 +147,7 @@ impl RenderIntrinsicWidth {
     ///   `step_height`, and tighten.
     ///
     /// FLUI's `BoxConstraints::tighten` clamps the argument to `[min, max]`,
-    /// so the ordering is step → tighten(clamp) — matching Flutter's
-    /// step-then-clamp contract.
+    /// so the ordering is step → tighten(clamp).
     ///
     /// The `intrinsic` closure is called at most twice — once for each non-tight
     /// axis that needs forcing — and is consumed by this method.  Callers pass
@@ -185,7 +167,7 @@ impl RenderIntrinsicWidth {
         constraints: BoxConstraints,
         mut intrinsic: impl FnMut(IntrinsicDimension, f64) -> f64,
     ) -> BoxConstraints {
-        // Width axis — proxy_box.dart:713-715
+        // Width axis.
         let width = if constraints.has_tight_width() {
             // Parent already determined width; skip the intrinsic query.
             None
@@ -196,7 +178,7 @@ impl RenderIntrinsicWidth {
             Some(apply_step(raw, self.step_width))
         };
 
-        // Height axis — proxy_box.dart:716-718
+        // Height axis.
         let height = if self.step_height.is_none() {
             // No step_height configured; leave the height axis unchanged.
             None
@@ -206,7 +188,7 @@ impl RenderIntrinsicWidth {
             Some(apply_step(raw, self.step_height))
         };
 
-        // tighten clamps to [min, max]: step-then-clamp, matching Flutter.
+        // tighten clamps to [min, max]: step-then-clamp.
         constraints.tighten(width, height)
     }
 }
@@ -251,21 +233,17 @@ impl RenderBox for RenderIntrinsicWidth {
 
     // ---- intrinsic dimensions -----------------------------------------------
     //
-    // Flutter parity: proxy_box.dart RenderIntrinsicWidth.
-    //
-    // * `computeMinIntrinsicWidth(height) => getMaxIntrinsicWidth(height)` —
-    //   the min-width query delegates to the max-width query verbatim instead
+    // * The min-width query delegates to the max-width query verbatim instead
     //   of asking the child for its own min. Forcing the child to a single
     //   width (the max intrinsic) is the entire point of this render object,
     //   so its own reported min and max width are always equal.
-    // * `computeMaxIntrinsicWidth(height)` queries the child's max intrinsic
+    // * The max-width query asks the child's max intrinsic
     //   width at the RAW `height` — no `step_height` snapping here; stepping
     //   only tightens the layout height axis (`child_constraints`), not this
     //   intrinsic query — then applies `step_width`.
-    // * `computeMinIntrinsicHeight`/`computeMaxIntrinsicHeight(width)` resolve
-    //   an infinite `width` to this object's own forced max intrinsic width
-    //   first (proxy_box.dart: `if (!width.isFinite) { width =
-    //   getMaxIntrinsicWidth(double.infinity); }`), then query the child's
+    // * The min/max height queries resolve an infinite `width` to this
+    //   object's own forced max intrinsic width first (its max intrinsic
+    //   width at infinity), then query the child's
     //   min/max intrinsic height at that resolved width and apply `step_height`.
 
     fn compute_min_intrinsic_width(&self, height: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {

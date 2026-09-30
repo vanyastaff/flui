@@ -5,8 +5,7 @@ use crate::styling::Color;
 /// A linear decoration to draw near the text (underline, overline, line-through).
 ///
 /// Decorations are stored as a bitfield, so multiple decorations can be
-/// combined via [`TextDecoration::combine`] (mirroring Flutter's
-/// `TextDecoration.combine`).
+/// combined via [`TextDecoration::combine`].
 #[derive(Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct TextDecoration {

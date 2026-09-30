@@ -1,23 +1,17 @@
 //! [`DragTarget`] — receives typed data when a [`Draggable`](crate::Draggable)
 //! is dropped on it.
 //!
-//! Flutter parity: `widgets/drag_target.dart` (tag `3.44.0`) — `DragTarget`,
-//! `_DragTargetState`, `DragTargetDetails`. This is the accept/candidate/
-//! reject/leave state machine, and it is now **live**: the target publishes a
+//! This is the accept/candidate/reject/leave state machine, and it is
+//! **live**: the target publishes a
 //! shared [`DragTargetSlot`] as its hit-test payload (through
 //! [`MetaData`]), and a dragging [`Draggable`](crate::Draggable)
 //! discovers it by hit-testing at the pointer's current global position on
-//! every move — the oracle's `_DragAvatar.updateDrag` / `_getDragTargets`
-//! shape. See [`crate::Draggable`]'s module docs for the discovery half.
+//! every move. See [`crate::Draggable`]'s module docs for the discovery half.
 //!
-//! # Divergences from the oracle
+//! # Design notes
 //!
-//! - **The transitions live on a shared slot, not on the state object.** The
-//!   oracle's `_getDragTargets` finds a `_DragTargetState` on the hit path and
-//!   calls `didEnter`/`didMove`/`didLeave`/`didDrop` on it directly, because
-//!   Dart's payload is a GC'd reference to the live `State` and that `State`
-//!   can reach its own widget for the callbacks. Neither holds here: a
-//!   hit-test payload is `Arc<dyn Any + Send + Sync>`, and FLUI's callbacks
+//! - **The transitions live on a shared slot, not on the state object.**
+//!   A hit-test payload is `Arc<dyn Any + Send + Sync>`, and FLUI's callbacks
 //!   live on the *view*, which the state does not own. So the payload is an
 //!   `Arc<DragTargetSlot>` that carries both the entered list and the
 //!   callbacks; each build refreshes the callbacks into it, and
@@ -30,43 +24,32 @@
 //!   cross the payload and are owner-local `EventCx` callbacks. The
 //!   *builder* stays `Rc`: it produces a `BoxedView`, which is owner-local by
 //!   construction.
-//! - **`DragTargetDetails` also carries a target-local position.** The
-//!   oracle's `DragTargetDetails.offset` is a global position and nothing
-//!   else; a Dart target that wants a local one calls `globalToLocal` on its
-//!   own render object, which FLUI callback code cannot reach. So `offset`
-//!   keeps the oracle's global meaning and
-//!   [`local_offset`](DragTargetDetails::local_offset) adds the same point
+//! - **`DragTargetDetails` carries a global and a target-local position.**
+//!   A target cannot map a global position into its own space from callback
+//!   code, so `offset` is the global position and
+//!   [`local_offset`](DragTargetDetails::local_offset) is the same point
 //!   mapped through the hit entry's own global-to-local transform — correct
 //!   under transforms and nested scroll offsets, where subtracting a
 //!   remembered origin is not.
-//! - **One accept callback, not two.** The oracle carries both the deprecated
-//!   `onWillAccept`/`onAccept` (data-only) and the current
-//!   `onWillAcceptWithDetails`/`onAcceptWithDetails` (details-carrying) pairs,
-//!   asserting the two forms of each are not combined. FLUI ships only the
-//!   details-carrying form under the plain name (`on_will_accept`,
-//!   `on_accept`) — there is no deprecated predecessor to stay compatible
-//!   with in a new port.
-//! - **`rejected_data` is typed (`&[T]`), not `List<dynamic>`.** The oracle's
-//!   `rejectedData` signature is `List<dynamic>`, but `_getDragTargets`
-//!   (`drag_target.dart`) filters every hit-tested target by
-//!   `isExpectedDataType(data, T)` *before* `didEnter` is ever called for it
-//!   — a type-mismatched drag never becomes an entry in `_rejectedAvatars`
-//!   (or `_candidateAvatars`) at all, only an `onWillAccept`-vetoed drag
-//!   whose data already matched `T` does. So the oracle's own rejected list,
-//!   for a given `DragTarget<T>`, only ever holds `T?`-typed values in
-//!   practice — `List<dynamic>` is Dart's loose typing describing a fact
-//!   that is always `T`-shaped, not evidence of real heterogeneity. FLUI's
-//!   `rejected_data() -> Vec<T>` makes that already-true fact explicit in
-//!   the type system rather than replicating Dart's looser surface.
-//!   [`DragTargetSlot::did_enter`] mirrors the same discovery-time filter: a
+//! - **One accept callback, not two.** Only the details-carrying form exists
+//!   under the plain name (`on_will_accept`, `on_accept`); there is no
+//!   data-only predecessor to stay compatible with.
+//! - **`rejected_data` is typed (`&[T]`), not untyped.** Discovery filters
+//!   every hit-tested target by whether the drag's data is a `T` *before*
+//!   `did_enter` is ever called for it — a type-mismatched drag never becomes
+//!   an entry (candidate or rejected) at all, only an `on_will_accept`-vetoed
+//!   drag whose data already matched `T` does. So a target's rejected list
+//!   only ever holds `T`-typed values, and `rejected_data() -> Vec<T>` makes
+//!   that fact explicit in the type system.
+//!   [`DragTargetSlot::did_enter`] applies the same discovery-time filter: a
 //!   genuinely type-mismatched payload is never added to either list (see
 //!   its own doc), so `did_leave`/`did_move` never need to reconstruct a
 //!   "was this ever a real `T`" answer after the fact.
 //! - **`hit_test_behavior` is not configurable.** The target always tags
-//!   itself `HitTestBehavior::Translucent`, which is the oracle's own
-//!   default — found within its own bounds without stopping targets beneath
-//!   it from being found too, which is what makes overlapping targets
-//!   discoverable at all. Making it configurable is a named deferral.
+//!   itself `HitTestBehavior::Translucent`: found within its own bounds
+//!   without stopping targets beneath it from being found too, which is what
+//!   makes overlapping targets discoverable at all. Making it configurable is
+//!   a named deferral.
 
 use std::any::Any;
 use std::marker::PhantomData;
@@ -84,15 +67,14 @@ use parking_lot::Mutex;
 use crate::MetaData;
 
 /// A drag's data, type-erased at the `Draggable`/`DragTarget` boundary so a
-/// target can reject a payload whose concrete type does not match `T`
-/// (`_DragTargetState.isExpectedDataType`), mirroring Dart's `data is T?`.
+/// target can reject a payload whose concrete type does not match `T`.
 pub type ErasedDragData = Arc<dyn Any + Send + Sync>;
 
 /// Where a drag currently is, as one particular target sees it.
 ///
 /// Both halves are needed and neither is derivable from the other by the
 /// callback: `global` is the pointer's position in the root coordinate space
-/// (the oracle's `_lastOffset`), and `local` is that same point mapped into
+/// and `local` is that same point mapped into
 /// the target's own space through the hit entry's global-to-local transform,
 /// so it stays correct under an ancestor `Transform`, a scroll offset, or any
 /// other non-translation mapping.
@@ -120,8 +102,7 @@ impl DragPosition {
 /// Details for a [`DragTarget`] callback: the (typed) data and where the drag
 /// is.
 ///
-/// Flutter parity: `DragTargetDetails<T>`, plus
-/// [`local_offset`](Self::local_offset) — see the module docs.
+/// [`local_offset`](Self::local_offset) is documented in the module docs.
 #[derive(Debug, Clone)]
 pub struct DragTargetDetails<T> {
     /// The data carried by the drag.
@@ -135,11 +116,10 @@ pub struct DragTargetDetails<T> {
 /// Builds a [`DragTarget`]'s contents from its current candidate/rejected
 /// state.
 ///
-/// Flutter parity: `DragTargetBuilder<T>`, minus the `BuildContext` parameter
-/// (the target's own `build` already has one available if the builder needs
-/// ambient lookups — the candidate/rejected data is what changes per drag),
-/// and a typed `&[T]` rejected list rather than `List<dynamic>` — see the
-/// module docs on why that is a faithful narrowing, not a divergence.
+/// The builder takes no `BuildContext` (the target's own `build` already has
+/// one available if the builder needs ambient lookups — the candidate/rejected
+/// data is what changes per drag), and receives a typed `&[T]` rejected list —
+/// see the module docs.
 ///
 /// Stays `Rc` where the transition callbacks became `Arc`: a builder produces
 /// a `BoxedView`, which is owner-local, so no `Send + Sync` bound is
@@ -158,8 +138,6 @@ pub type DragTargetMove<T> = Arc<dyn Fn(DragTargetDetails<T>) + Send + Sync>;
 
 /// A widget that receives data when a [`Draggable`](crate::Draggable) is
 /// dropped on it.
-///
-/// Flutter parity: `widgets/drag_target.dart` `DragTarget`.
 #[derive(Clone, StatefulView)]
 pub struct DragTarget<T: Clone + Send + Sync + 'static> {
     builder: DragTargetBuilder<T>,
@@ -236,8 +214,7 @@ impl<T: Clone + Send + Sync + 'static> DragTarget<T> {
 /// `data` as a `T`, or `None` when its concrete type is something else.
 ///
 /// The single place the `Draggable`/`DragTarget` boundary's erasure is
-/// reversed. Flutter parity: `_DragTargetState.isExpectedDataType`, i.e. Dart's
-/// `data is T?` — a mismatch is a routine answer (the target is filtered out of
+/// reversed. A mismatch is a routine answer (the target is filtered out of
 /// the drag's discovery), never an error and never a panic.
 fn typed_as<T: Clone + Send + Sync + 'static>(data: &ErasedDragData) -> Option<T> {
     let payload = Arc::clone(data);
@@ -251,8 +228,7 @@ fn typed_as<T: Clone + Send + Sync + 'static>(data: &ErasedDragData) -> Option<T
 /// target's side of the boundary. Each method takes the erased data and
 /// downcasts once, here, where `T` is still in scope.
 trait TargetCallbacks: Send + Sync {
-    /// Whether `data`'s concrete type is this target's `T`
-    /// (`_DragTargetState.isExpectedDataType`).
+    /// Whether `data`'s concrete type is this target's `T`.
     fn accepts_data_type(&self, data: &ErasedDragData) -> bool;
     /// The `on_will_accept` veto. `true` (candidate) when unset.
     fn will_accept(&self, data: &ErasedDragData, at: DragPosition) -> bool;
@@ -342,7 +318,7 @@ impl<T: Clone + Send + Sync + 'static> TargetCallbacks for TypedCallbacks<T> {
 /// One pointer's standing with a target: the erased data plus whether
 /// `on_will_accept` made it a candidate.
 ///
-/// `accepted == false` is exactly the oracle's `_rejectedAvatars`: an
+/// `accepted == false` means an
 /// `on_will_accept`-vetoed drag whose data already matched `T`, not a
 /// foreign-typed one (which never becomes an entry at all).
 struct EnteredDrag {
@@ -354,7 +330,7 @@ struct EnteredDrag {
 /// The live handle a [`DragTarget`] publishes to hit tests, and the object a
 /// drag drives its transitions through.
 ///
-/// It exists because the two halves of the oracle's `_DragTargetState` cannot
+/// It exists because a target's state and its callbacks cannot
 /// travel together in FLUI: a hit-test payload is `Arc<dyn Any + Send + Sync>`
 /// and the callbacks live on the view. The slot owns the entered list, holds
 /// the current build's callbacks, and knows how to schedule the target's
@@ -366,19 +342,17 @@ struct EnteredDrag {
 /// entered a target keeps the slot alive, so a target unmounting mid-drag
 /// leaves the drag with a valid — if retired — handle instead
 /// of a dangling one. A retired slot answers every transition as a no-op,
-/// which is the oracle's `if (!mounted) return;` guard in a form that cannot
+/// which is an unmounted guard in a form that cannot
 /// be forgotten at one call site.
 pub struct DragTargetSlot {
     /// The current build's callbacks. Cloned out before every invocation, so
     /// no user code ever runs with this lock held.
     callbacks: Mutex<SharedTargetCallbacks>,
     /// Every drag currently over this target, keyed by pointer so several
-    /// simultaneous drags stay independent (`_candidateAvatars` /
-    /// `_rejectedAvatars`, which the oracle keys by avatar identity).
+    /// simultaneous drags stay independent.
     entered: Mutex<Vec<EnteredDrag>>,
     /// The target element's rebuild capability, published by
-    /// `DragTargetState::init_state` — never from `build`. Stands in for the
-    /// oracle's `setState`.
+    /// `DragTargetState::init_state` — never from `build`.
     rebuild: Mutex<Option<RebuildHandle>>,
     /// `false` once the target's element is disposed.
     mounted: AtomicBool,
@@ -425,8 +399,7 @@ impl DragTargetSlot {
         Arc::clone(&self.callbacks.lock())
     }
 
-    /// The oracle's `setState`: the candidate/rejected lists the builder reads
-    /// just changed.
+    /// The candidate/rejected lists the builder reads just changed.
     fn schedule_rebuild(&self) {
         // Cloned out and the lock dropped before calling into the framework.
         let handle = self.rebuild.lock().clone();
@@ -435,9 +408,8 @@ impl DragTargetSlot {
         }
     }
 
-    /// Whether this target's `T` is `data`'s concrete type — the oracle's
-    /// `isExpectedDataType`, which `_getDragTargets` applies to filter the hit
-    /// path *before* any transition runs.
+    /// Whether this target's `T` is `data`'s concrete type. Discovery applies
+    /// this to filter the hit path *before* any transition runs.
     #[must_use]
     pub fn accepts_data_type(&self, data: &ErasedDragData) -> bool {
         self.mounted.load(Ordering::Acquire) && self.callbacks().accepts_data_type(data)
@@ -450,13 +422,11 @@ impl DragTargetSlot {
     /// A `data` whose concrete type does not match this target's `T` is never
     /// tracked at all — no candidate entry, no rejected entry, and returns
     /// `false` without creating anything for `pointer` to leave later. This
-    /// mirrors `_getDragTargets`' `isExpectedDataType` filter, which runs
-    /// *before* `didEnter` and keeps a type-mismatched avatar out of
-    /// `_enteredTargets` entirely — `didEnter` itself, once reached, only ever
+    /// mirrors the discovery-time type filter, which runs
+    /// *before* entering and keeps a type-mismatched drag out of
+    /// the entered list entirely — once reached, this only ever
     /// decides candidate vs. rejected for already-`T`-typed data via
     /// `on_will_accept`.
-    ///
-    /// Flutter parity: `_DragTargetState.didEnter`.
     pub fn did_enter(&self, pointer: PointerId, data: &ErasedDragData, at: DragPosition) -> bool {
         if !self.mounted.load(Ordering::Acquire) {
             return false;
@@ -467,7 +437,7 @@ impl DragTargetSlot {
         );
         let callbacks = self.callbacks();
         if !callbacks.accepts_data_type(data) {
-            // Type mismatch: never becomes an entry, matching the oracle's
+            // Type mismatch: never becomes an entry, matching the
             // discovery-time filter — no candidate, no rejected, no future
             // did_leave/did_move/did_drop call for this pointer at all.
             return false;
@@ -489,9 +459,7 @@ impl DragTargetSlot {
     ///
     /// The removal happens even for a retired slot, so "this pointer is no
     /// longer entered" holds unconditionally after this returns; only the
-    /// callback is gated, which is the oracle's `if (!mounted) return;`.
-    ///
-    /// Flutter parity: `_DragTargetState.didLeave`.
+    /// callback is gated.
     pub fn did_leave(&self, pointer: PointerId) {
         let removed = {
             let mut entered = self.entered.lock();
@@ -511,13 +479,9 @@ impl DragTargetSlot {
     }
 
     /// `pointer`'s drag moves while over this target — fires `on_move` for
-    /// **either** standing (candidate or rejected), matching the oracle's
-    /// `didMove`, whose only gate is `avatar.data == null` (a genuinely null
-    /// payload, not rejection status: a vetoed-but-typed avatar still sits in
-    /// `_enteredTargets` and receives moves). A no-op only for an untracked
-    /// pointer, or a retired slot.
-    ///
-    /// Flutter parity: `_DragTargetState.didMove`.
+    /// **either** standing (candidate or rejected): a vetoed-but-typed drag still
+    /// sits in the entered list and receives moves. A no-op only for an
+    /// untracked pointer, or a retired slot.
     pub fn did_move(&self, pointer: PointerId, at: DragPosition) {
         if !self.mounted.load(Ordering::Acquire) {
             return;
@@ -535,23 +499,18 @@ impl DragTargetSlot {
     }
 
     /// `pointer`'s drag is dropped on this target. Only a current candidate
-    /// can be accepted (mirrors the oracle's
-    /// `assert(_candidateAvatars.contains(avatar))`); returns whether the drop
+    /// can be accepted; returns whether the drop
     /// was accepted.
     ///
     /// A retired slot accepts nothing: a target that left the tree mid-drag
     /// did not receive the data, and saying otherwise would have the drag
-    /// report a completed drop into a widget that no longer exists. The
-    /// oracle's `didDrop` returns early on `!mounted` but its caller still
-    /// records `wasAccepted = true`; this reports the drop honestly instead.
+    /// report a completed drop into a widget that no longer exists.
     ///
     /// The removal happens either way, exactly as in
     /// [`did_leave`](Self::did_leave): "the target did not accept it" must not
     /// also mean "the entry is still there", or a retired slot keeps the
     /// standing — and the drag payload it holds by `Arc` — for as long as
     /// anything holds the slot. Only the callback and the rebuild are gated.
-    ///
-    /// Flutter parity: `_DragTargetState.didDrop`.
     pub fn did_drop(&self, pointer: PointerId, at: DragPosition) -> bool {
         let dropped = {
             let mut entered = self.entered.lock();
@@ -624,7 +583,7 @@ impl<T: Clone + Send + Sync + 'static> DragTargetState<T> {
 
     /// The rejected (`on_will_accept`-vetoed) data currently over this
     /// target, in entry order. See the module docs on why this is typed
-    /// (`Vec<T>`) rather than the oracle's `List<dynamic>`.
+    /// (`Vec<T>`) rather than untyped.
     #[must_use]
     pub fn rejected_data(&self) -> Vec<T> {
         self.slot
@@ -676,8 +635,7 @@ impl<T: Clone + Send + Sync + 'static> ViewState<DragTarget<T>> for DragTargetSt
 
         // The discovery edge: without this the transitions above are real,
         // tested, and unreachable — nothing on a hit path names this target.
-        // `Translucent` is the oracle's own default `hitTestBehavior`, and is
-        // what makes overlapping targets discoverable: an `Opaque` tag would
+        // `Translucent` is what makes overlapping targets discoverable: an `Opaque` tag would
         // hide every target beneath it.
         MetaData::shared(Arc::clone(&self.slot) as Arc<dyn Any + Send + Sync>)
             .behavior(HitTestBehavior::Translucent)

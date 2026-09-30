@@ -13,7 +13,7 @@
 >
 > **What a render object actually does today:** return `true` to be the target,
 > or call `ctx.register_self_hit_entry()` to appear in the path without blocking
-> what is behind it (Flutter's `HitTestBehavior::Translucent`). No id is passed —
+> what is behind it (a translucent hit). No id is passed —
 > the driver already has it.
 >
 > `HitTestCapability::Result` and `::Entry` survive as vocabulary with no

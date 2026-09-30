@@ -1,8 +1,7 @@
 //! [`paint_table_border`] — draws a [`TableBorder`] around and inside a
 //! table's cell grid.
 //!
-//! Flutter parity: `rendering/table_border.dart` `TableBorder.paint`. Paint
-//! order (oracle, `table_border.dart:296-329`): interior vertical lines
+//! Paint order: interior vertical lines
 //! (`vertical_inside`, one column per entry in `columns`), then interior
 //! horizontal lines (`horizontal_inside`, one row per entry in `rows`), then
 //! the outer border (`top`/`right`/`bottom`/`left`) — painted last so it sits
@@ -11,8 +10,8 @@
 //! [`TableBorder::border_radius`] rounds the outer border when it is uniform:
 //! the corners are handed to [`crate::decoration`]'s border painter as an
 //! [`RRect`], which already rounds the uniform outer path and ignores the
-//! radius on the non-uniform (four-edge) path — matching the oracle, which
-//! only rounds a uniform outer edge (`table_border.dart:143-156`).
+//! radius on the non-uniform (four-edge) path, so only a uniform outer edge
+//! is rounded.
 
 use crate::{
     paint::{Paint, Path},
@@ -63,8 +62,7 @@ pub fn paint_table_border(
     // Outer border painted last (on top of the interior grid). Its corners
     // come from `border.border_radius` (square when zero): a uniform outer
     // edge rounds to this `RRect`, while `paint_border` ignores the radius on
-    // the non-uniform four-edge path — matching the oracle, which rounds a
-    // uniform outer edge only (`table_border.dart:143-156`).
+    // the non-uniform four-edge path, so only a uniform outer edge rounds.
     let outer_rrect = RRect::from_rect_and_corners(
         rect,
         border.border_radius.top_left,

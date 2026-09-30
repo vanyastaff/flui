@@ -17,8 +17,7 @@ use crate::support::generic_render_view_element;
 /// [`FlowDelegate`], instead of the layout-time offsets every other
 /// multi-child layout widget uses.
 ///
-/// Flutter parity: `widgets/basic.dart` `Flow` over `RenderFlow`. Defaults
-/// match Flutter: `clip_behavior = Clip::HardEdge`.
+/// Backed by `RenderFlow`. `clip_behavior` defaults to `Clip::HardEdge`.
 ///
 /// Generic over `C: ViewSeq`, like [`Stack`](crate::Stack) — a dynamic
 /// `Vec<BoxedView>` or a `stack!`/`column!`-style tuple.
@@ -30,7 +29,7 @@ pub struct Flow<C = Vec<BoxedView>> {
 }
 
 impl<C> Flow<C> {
-    /// A flow of the given children, driven by `delegate`, with Flutter's
+    /// A flow of the given children, driven by `delegate`, with the
     /// default `Clip::HardEdge` clip behavior.
     pub fn new(delegate: Arc<dyn FlowDelegate>, children: C) -> Self {
         Self {

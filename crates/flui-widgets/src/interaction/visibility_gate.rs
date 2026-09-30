@@ -7,17 +7,16 @@ use flui_view::{Child, IntoView, RenderView, impl_render_view};
 /// Keeps its child laid out — occupying its full space — while suppressing
 /// the child's paint when `visible` is false.
 ///
-/// Flutter parity: the private `_Visibility` over `_RenderVisibility`
-/// (`widgets/indexed_stack.dart`), which `Visibility`'s `maintainSize` branch
-/// composes. FLUI exposes it under a name of its own because `Visibility` is
-/// already taken by the composing widget, and because a paint gate is useful
+/// `Visibility`'s `maintainSize` branch composes it. It is a public widget
+/// under a name of its own because `Visibility` is already taken by the
+/// composing widget, and because a paint gate is useful
 /// on its own — but [`Visibility`](crate::Visibility) is what callers
 /// normally want, since this widget alone changes neither hit-testing nor
 /// focus.
 ///
 /// Deliberately not `Opacity(0.0)`: a fully transparent opacity still leaves
 /// an opacity layer in the tree and forces every ancestor to composite, which
-/// is the reason the oracle grew a dedicated render object for this.
+/// is why this has a dedicated render object.
 #[derive(Clone, Debug)]
 pub struct VisibilityGate {
     visible: bool,

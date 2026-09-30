@@ -1,6 +1,6 @@
 //! Rounded rectangle type.
 //!
-//! API design inspired by Flutter and kurbo.
+//! API design inspired by kurbo.
 
 use super::{
     Point, Rect, Size,
@@ -408,7 +408,7 @@ impl RRect {
     /// Translates the rounded rect by an offset; corner radii are
     /// translation-invariant and pass through unchanged.
     ///
-    /// Mirrors [`Rect::translate_offset`] (Flutter `RRect.shift`).
+    /// Mirrors [`Rect::translate_offset`].
     #[inline]
     #[must_use]
     pub fn translate_offset(&self, offset: crate::geometry::Offset<f64>) -> Self {

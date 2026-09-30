@@ -1,6 +1,6 @@
 # flui-widgets
 
-The user-facing, Flutter-style **widget catalog** for [FLUI](../../README.md) —
+The user-facing **widget catalog** for [FLUI](../../README.md) —
 the layer an app author composes. Every widget is a small, immutable
 *configuration object* over the `flui-objects` render catalog: declarative on the
 outside, the gold-standard render machine underneath.
@@ -42,8 +42,7 @@ runnable demo (`cargo run -p flui --example widgets_gallery`).
 | **Composition** | `SafeArea` |
 | **Text** | `Text` |
 
-Each is **behavior-loyal to Flutter** (same layout/paint algorithm) with a
-**Rust-native** surface: compile-time child-arity safety, plain `f64` logical pixels at the call site,
+Each has a **Rust-native** surface: compile-time child-arity safety, plain `f64` logical pixels at the call site,
 and a chainable `#[must_use]` builder API.
 
 ## How it composes (the three shapes)
@@ -65,7 +64,7 @@ and a chainable `#[must_use]` builder API.
 
 It is **reactive**: a `setState`/rebuild that changes a widget's configuration
 updates its render object in place (no remount), and an `Animation` tick
-schedules the same in-place update — exactly as Flutter does.
+schedules the same in-place update.
 
 ## Status
 
@@ -75,7 +74,7 @@ including parent-data layout (`Flexible`/`Expanded`/`Positioned`), scrolling
 (`ListView`/`SingleChildScrollView` over slivers), and animation
 (`FadeTransition` driven directly at the render layer by an `Animation`).
 Interaction landed too: `Listener` (raw pointer routing — its handler rides on
-the hit-test entry, with Flutter's `HitTestBehavior`: `DeferToChild` default /
+the hit-test entry, with `HitTestBehavior`: `DeferToChild` default /
 `Opaque`) and `GestureDetector` (`on_tap` plus `on_pan_start`/`on_pan_update`/
 `on_pan_end`, where a real `TapGestureRecognizer` and `DragGestureRecognizer`
 compete in the presentation binding's shared arena — a quick tap wins the front
@@ -91,8 +90,8 @@ for the design rationale.
 
 Integration tests in [`tests/`](tests/) drive a **headless view-level harness**
 (`tests/common/mod.rs`): mount a widget tree, run a real frame, and assert the
-computed `Size`/`Offset` against Flutter's layout algorithm — no GPU, no window,
-no singleton, so they run in parallel. Every widget carries a parity test that
+computed `Size`/`Offset` — no GPU, no window,
+no singleton, so they run in parallel. Every widget carries a test that
 would fail if it mis-wired its render object.
 
 ```

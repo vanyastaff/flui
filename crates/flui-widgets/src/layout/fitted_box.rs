@@ -9,8 +9,8 @@ use flui_view::{Child, IntoView, RenderView, impl_render_view};
 
 /// Scales and positions its child within itself according to a [`BoxFit`].
 ///
-/// Flutter parity: `widgets/basic.dart` `FittedBox` over `RenderFittedBox`.
-/// Defaults match Flutter: `BoxFit::Contain`, `Alignment::CENTER`, `Clip::None`.
+/// Backed by `RenderFittedBox`. Defaults: `BoxFit::Contain`,
+/// `Alignment::CENTER`, `Clip::None`.
 #[derive(Clone, Debug)]
 pub struct FittedBox {
     fit: BoxFit,
@@ -31,7 +31,7 @@ impl Default for FittedBox {
 }
 
 impl FittedBox {
-    /// A `FittedBox` with Flutter's defaults (`Contain` / centered / no clip).
+    /// A `FittedBox` with the default fit (`Contain` / centered / no clip).
     pub fn new() -> Self {
         Self::default()
     }

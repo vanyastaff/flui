@@ -35,8 +35,7 @@ fn color_property(color: flui_sdk::painting::Color) -> String {
 
 /// The highest tier still wins over a configured theme: an explicit
 /// `.style(..)` override on the widget itself must resolve over the theme's
-/// `elevated_button_theme`, matching Flutter's own `getProperty(widgetStyle)
-/// ?? getProperty(themeStyle) ?? …` precedence.
+/// `elevated_button_theme` (`widget_style ?? theme_style ?? default`).
 pub fn widget_level_style_wins_over_the_elevated_button_theme() {
     let themed_background = flui_sdk::painting::Color::rgb(1, 1, 1);
     let widget_background = flui_sdk::painting::Color::rgb(9, 9, 9);
