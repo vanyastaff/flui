@@ -551,7 +551,7 @@ without a paint path, behind a feature that is off everywhere.
 differently measures and paints in different faces; over the app's collection,
 fed from the host (decision 16), that is only the residue decision 16 lists,
 while a bundled-only collection (`FontCollection::new()`) measures every
-family it lacks in Roboto. A truncated paragraph's
+family it lacks, and every glyph a family it holds lacks, in Roboto. A truncated paragraph's
 painted ellipsis can overhang its measured width, and a face registered
 through `SharedFontSystem::register_font` reaches paint but not measurement
 (ADR-0092 §10 step 3b routes registration through the collection). On the same
@@ -573,12 +573,16 @@ from the same files (or shared from the same in-memory fonts). Its generic
 families name the families the process font system binds them to, system-ui
 naming sans-serif's. Both shapers resolve a style's family by one rule,
 `resolve_family_name` (decision 8's rule, over the families each side holds),
-and Parley is handed that one family. Past it both walk one fallback order,
-`FallbackChain`, built once beside the process font system: the font system is
-constructed over it, and the collection gets each script's list followed by the
-common list as that script's fallback families, and the common list as the
-emoji generic. `FontCollection::new()` stays bundled-only, for standalone
-contexts, tests and the hot-reload plugin.
+and Parley is handed that one family. A side holds a family only when spelled
+exactly as its fonts name it: fontdb matches exactly, so the Parley side
+narrows fontique's case-insensitive lookup (`holds_exactly`), and `"segoe ui"`
+degrades to the sans-serif generic on both. Past it both walk one fallback
+order, `FallbackChain`, built once beside the process font system: the font
+system is constructed over it, and the collection gets each script's list, then
+the common list, then the sans-serif generic's family as that script's fallback
+families, and the common list as the emoji generic. `FontCollection::new()`
+stays bundled-only, for standalone contexts, tests and the hot-reload plugin,
+and falls back to Roboto for every script.
 
 **Why:** measurement (Parley over the collection) and paint (cosmic-text over
 the process font system) must pick the same face for the same text. Over a
@@ -595,8 +599,11 @@ ADR-0092 §10 step 6, so it mirrors one into the other instead.
 **Accepted trade-off:**
 
 - cosmic-text's last resort, any face not forbidden, has no Parley
-  counterpart: a character neither the script's list nor the common list
-  covers measures as notdef and paints in whatever face that walk finds.
+  counterpart beyond the trailing sans-serif family: a character neither the
+  script's list, the common list nor that family covers measures as notdef and
+  paints in whatever face that walk finds. The oracle skips such text.
+- Family names match exactly on both sides, where CSS matches them without
+  regard to case: a style must spell a family as the fonts name it.
 - Parley appends the Han fallback to every cluster's fallback families
   (fontique `Query::set_fallbacks`), so such a character may measure in the Han
   fallback face.
@@ -604,9 +611,9 @@ ADR-0092 §10 step 6, so it mirrors one into the other instead.
   characters only partly fall back, the two can split it differently.
 - Only each script's default key is set, with no locale: the Parley path
   passes none. A change that passes one must set locale keys too.
-- Android's platform common list is empty, so the collection gets no fallback
-  order there while paint still reaches its last resort; unverified, since
-  Android is clippy-only here.
+- Android's platform common list is empty, so the collection falls back to the
+  sans-serif family alone there while paint still walks its last resort;
+  unverified, since Android is clippy-only here.
 - Two scans decide what is carried: a file that disappears between them is
   carried on the paint side and absent from the collection, and a family name
   fontdb records in another language only (fontique keeps the English or first
@@ -626,9 +633,13 @@ ADR-0092 §10 step 6, so it mirrors one into the other instead.
 Locked by `measured_width_equals_painted_width_on_host_faces` and
 `every_family_the_process_font_system_carries_resolves_in_the_collection`
 (`tests/host_faces_oracle.rs`, under `parley`, host-dependent: a row whose
-text no host face covers is skipped, the Latin rows never are),
-`fontique_fallbacks_follow_the_paint_chain_in_order` and
+text only cosmic-text's last resort reaches is skipped, the Latin rows, a
+mis-cased family among them, never are),
+`fontique_fallbacks_follow_the_paint_chain_in_order`,
+`the_sans_serif_family_ends_every_script_fallback` and
 `the_emoji_generic_is_the_common_list` (`src/text_layout/fallback_chain.rs`),
+`a_glyph_the_named_family_lacks_measures_in_roboto_on_the_bundled_collection`
+(`src/parley_text/shape.rs`),
 the row `the_collection_resolves_the_family_the_font_system_does` of
 `family_resolution_contract` (`src/text_layout/font_resolve.rs`), and
 `a_missing_path_is_skipped_and_the_feed_completes`

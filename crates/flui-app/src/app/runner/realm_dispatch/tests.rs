@@ -425,7 +425,11 @@ fn two_realms_via_separate_windows_policy_share_nothing() {
 /// from `UiRealm::for_test`, which builds its own collection, so it is not
 /// asserted on. Fails if that call hands a realm a fresh collection, if the
 /// runtime resolves a new one per call, or if building a realm feeds the
-/// host's faces again (two realms would feed twice).
+/// host's faces again (two realms would feed twice). The feed count is only
+/// bounded here: the runtime may have resolved its collection before this
+/// test's window opened, so zero passes too.
+/// `the_runtime_feeds_host_faces_once_for_every_realm` pins that the feed
+/// happens, exactly once.
 fn separate_realm_windows_shape_over_the_runtimes_font_collection() {
     let (dispatcher_a, _clear_guard) = install_realm_a_through_a_real_owner_platform();
 

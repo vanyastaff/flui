@@ -269,11 +269,15 @@ The collection is fed once per app, in the host's shared engine services; realms
 Measurement and paint must pick the same face for the same text, so the two shapers share:
 
 - **one family rule**: `resolve_family_name` (ADR-0059's rule) resolves a style against the fonts
-  each side holds, and Parley is handed that one family, with nothing after it;
+  each side holds, and Parley is handed that one family, with nothing after it. A side holds a
+  family only when spelled exactly as its fonts name it: fontdb matches names exactly, so the
+  Parley side narrows fontique's case-insensitive lookup to the same question;
 - **one fallback order**: past that family, cosmic-text walks the script's platform list and then
   the common list; the same lists (`FallbackChain`, built once beside the process font system)
   are written into the collection as each script's fallback families, with the common list
-  after the script's own, and as the emoji generic;
+  after the script's own, and as the emoji generic. The family the sans-serif generic names ends
+  every script's list, standing in for cosmic-text's last resort (any face not forbidden), which
+  fontique lacks;
 - **one set of generics**: the collection's generic families name the families the process font
   system binds them to, and system-ui names sans-serif's.
 
@@ -282,8 +286,9 @@ font-collection-changed event exists (§10 step 3b) the feed runs synchronously 
 thread before the first frame, because text measured before a later feed would keep its old
 measurement; with the event it moves off the owner thread and its faces arrive through that event
 as a registration does. On wasm32 fontdb finds no host fonts and the platform has no common
-list, so the collection holds the bundled and registered faces and no fallback order, as the
-process font system does.
+list, so the collection holds the bundled and registered faces and every script falls back to the
+sans-serif family alone. A bundled-only collection (`FontCollection::new()`) falls back to Roboto
+for every script, as cosmic-text's last resort does over the bundled faces.
 
 ### 8. Acceptance gates
 
@@ -431,7 +436,10 @@ that wires what it adds.
      cosmic-text layout's within 0.05 px for Latin at 400 and 700, monospace, Cupertino's chain
      at 400 and 600, CJK, emoji and mixed text, at 16 and 32 px, and fail on a bundled-only
      collection; every family the process font system carries is in the collection; each
-     script's fallback families and the emoji generic follow the paint side's lists in order;
+     script's fallback families and the emoji generic follow the paint side's lists in order,
+     with the sans-serif family last; a family spelled in another case than the fonts name it
+     resolves alike on both sides; on a bundled-only collection a glyph the named family lacks
+     measures in Roboto;
      the runtime feeds once per app, not per realm; a font file that cannot be read is skipped
      and the feed completes. `cargo xtask globals` is unchanged.
 4. **Neutral shaped runs on the display list.**
@@ -570,8 +578,10 @@ exist yet.
   `measured_width_equals_painted_width_on_host_faces` and
   `every_family_the_process_font_system_carries_resolves_in_the_collection`; in
   `crates/flui-painting/src/text_layout/fallback_chain.rs`,
-  `fontique_fallbacks_follow_the_paint_chain_in_order` and
-  `the_emoji_generic_is_the_common_list`; the row
+  `fontique_fallbacks_follow_the_paint_chain_in_order`,
+  `the_sans_serif_family_ends_every_script_fallback` and
+  `the_emoji_generic_is_the_common_list`; in `crates/flui-painting/src/parley_text/shape.rs`,
+  `a_glyph_the_named_family_lacks_measures_in_roboto_on_the_bundled_collection`; the row
   `the_collection_resolves_the_family_the_font_system_does` of `family_resolution_contract`
   (`font_resolve.rs`); `a_missing_path_is_skipped_and_the_feed_completes` (`context.rs`); in
   flui-app, `the_runtime_feeds_host_faces_once_for_every_realm` (`runtime.rs`) and the feed count
