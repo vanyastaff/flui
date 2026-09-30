@@ -721,19 +721,19 @@ pub(crate) fn resolve_family<'a>(
     not(feature = "parley"),
     expect(dead_code, reason = "the Parley path's shaping is its only caller")
 )]
-pub(crate) fn resolve_family_name<'a>(
-    style: Option<&'a TextStyle>,
+pub(crate) fn resolve_family_name(
+    style: Option<&TextStyle>,
     carries: impl FnMut(&str) -> bool,
-) -> Family<'a> {
+) -> Family<'_> {
     resolve(style, carries).0
 }
 
 /// [`resolve_family_name`], and the requested family when resolution
 /// degraded it to the sans-serif generic.
-fn resolve<'a>(
-    style: Option<&'a TextStyle>,
+fn resolve(
+    style: Option<&TextStyle>,
     mut carries: impl FnMut(&str) -> bool,
-) -> (Family<'a>, Option<&'a str>) {
+) -> (Family<'_>, Option<&str>) {
     let Some(requested) = style.and_then(|style| style.font_family.as_deref()) else {
         // Matches what `Attrs::new()` has always defaulted to; a style naming
         // no family is unchanged by this module beyond the generic binding.

@@ -8,7 +8,7 @@
 //! after the style's families for an emoji cluster. A [`FallbackChain`] is
 //! built once, beside the process font system, and is the source of both:
 //! the font system is constructed over it ([`ChainFallback`]) and
-//! [`install_into`] writes the same lists into a fontique collection, so a
+//! `install_into` writes the same lists into a fontique collection, so a
 //! character that falls back lands on the same family when it is measured
 //! and when it is painted.
 //!
@@ -189,14 +189,16 @@ mod tests {
     }
 
     fn ids(collection: &mut Collection, names: &[&str]) -> Vec<FamilyId> {
-        names
+        let ids: Vec<_> = names
             .iter()
-            .map(|name| {
-                collection
-                    .family_id(name)
-                    .unwrap_or_else(|| panic!("the fixture registers {name}"))
-            })
-            .collect()
+            .filter_map(|name| collection.family_id(name))
+            .collect();
+        assert_eq!(
+            ids.len(),
+            names.len(),
+            "the fixture registers every family it names"
+        );
+        ids
     }
 
     /// Han's fallback is the chain's Han list for the chain's locale, then
