@@ -139,8 +139,7 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::Diagnosticable
     /// Hit tests this render object.
     ///
     /// The default implementation checks if the hit position is within the
-    /// render object's size bounds (Flutter parity: `RenderBox.hitTest`
-    /// in `box.dart:2916-2959`). Subclasses can override to add children
+    /// render object's size bounds. Implementors can override to add children
     /// testing or special hit behavior.
     ///
     /// The context provides:
@@ -196,9 +195,7 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::Diagnosticable
     // `local_to_global` / `global_to_local` used to live here as `&self`
     // methods returning `point` unchanged. They were identity stubs, and they
     // could not be anything else: a FLUI render object has no parent link and no
-    // owner, so `self` cannot know where it is. Flutter's live on `RenderBox`
-    // precisely because a Dart render object *does* hold `parent` and `owner`
-    // (`box.dart:3062`, `:3113`, both implemented via `getTransformTo`).
+    // owner, so `self` cannot know where it is.
     //
     // ADR-0021 removed them and put the real thing on the pipeline, which
     // does own the tree:
@@ -217,13 +214,12 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::Diagnosticable
     // (`PipelineOwner::box_intrinsic_dimension`), which memoizes every
     // level in the per-node layout cache and clears it on
     // `mark_needs_layout` with boundary-crossing escalation
-    // (Flutter `_LayoutCacheStorage`, box.dart:2840). The Flutter
-    // `getMinIntrinsicWidth` wrapper layer IS the pipeline here; there
-    // is deliberately no uncached `get_*` mirror on the trait.
+    // The caching wrapper layer IS the pipeline; there is deliberately
+    // no uncached `get_*` mirror on the trait.
 
     /// Computes the minimum intrinsic width for a given height.
     ///
-    /// Default: `0.0` (Flutter parity — `RenderBox` itself reports no
+    /// Default: `0.0` (a bare render box reports no
     /// intrinsic extent; containers override and fold their children's
     /// answers via `ctx`).
     fn compute_min_intrinsic_width(
@@ -353,8 +349,7 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::Diagnosticable
     /// ```
     ///
     /// The default implementation splices all children in tree order
-    /// (Flutter's `RenderProxyBox.paint` parity) — pass-through
-    /// containers need no override. An override that does NOT call any
+    /// — pass-through containers need no override. An override that does NOT call any
     /// child-painting method hides its subtree (offstage semantics).
     fn paint(&self, ctx: &mut crate::context::PaintCx<'_, Self::Arity>) {
         ctx.paint_children_in_order();
@@ -540,10 +535,6 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::Diagnosticable
     /// child that demonstrably fell out, or a parent laying out through a path
     /// of its own would hide its whole subtree). So exclusion by stamp is
     /// history-dependent, and this is not.
-    ///
-    /// Flutter parity: `RenderObject.visitChildrenForSemantics`, which
-    /// `RenderTheater` overrides to walk `_childrenInPaintOrder()`
-    /// (`overlay.dart:1427-1428`).
     fn visits_child_for_semantics(&self, _child_slot: usize) -> bool {
         true
     }

@@ -3,64 +3,51 @@
 //!
 //! Ported under ADR-0020. **Private:** no `PageRoute`, no `PopupRoute`, no public API.
 //!
-//! # Flutter parity
-//!
-//! `.flutter/packages/flutter/lib/src/widgets/routes.dart:1730-2360`
-//! (`ModalRoute`), master `3.33.0-0.0.pre-6280-g88e87cd963f`.
+//! # What this layer provides
 //!
 //! Three things arrive with this layer, and only these three are claimed:
 //!
-//! 1. **`maintainState`** (`routes.dart:1893`, written onto the scope entry at
-//!    `:2230`). Now real, because `Overlay` honours it. A covered
-//!    modal with `maintain_state == false` is *unmounted*; its subtree state is
-//!    destroyed and rebuilt fresh when it is uncovered.
-//! 2. **`offstage`** (`:1949-1962`). The page keeps its real geometry but is not
-//!    painted, hit-tested or announced — [`Offstage`] over the fixed
-//!    `RenderOffstage`.
-//! 3. **`changedInternalState`** (`:2221-2231`), which rebuilds *this route's*
-//!    overlay entry and republishes `maintainState`. It does **not** rebuild the
-//!    navigator.
+//! 1. **`maintain_state`**, written onto the route's overlay entry. Now real,
+//!    because `Overlay` honours it. A covered modal with `maintain_state == false`
+//!    is *unmounted*; its subtree state is destroyed and rebuilt fresh when it is
+//!    uncovered.
+//! 2. **`offstage`**. The page keeps its real geometry but is not painted,
+//!    hit-tested or announced — [`Offstage`] over the fixed `RenderOffstage`.
+//! 3. **`changed_internal_state`**, which rebuilds *this route's* overlay entry and
+//!    republishes `maintain_state`. It does **not** rebuild the navigator.
 //!
 //! ADR-0021 added the fourth: **`offstage` swaps the animation proxies** to
-//! `kAlwaysComplete` / `kAlwaysDismissed` (`:1958-1961`), so an offstage route's
-//! builders lay it out at its *final* position. That is what lets `HeroController`
-//! read a flight's destination one frame early.
+//! always-complete / always-dismissed, so an offstage route's builders lay it out
+//! at its *final* position. That is what lets `HeroController` read a flight's
+//! destination one frame early.
 //!
 //! # One overlay entry, not two
 //!
-//! Flutter's `createOverlayEntries` returns `[_modalBarrier, _modalScope]`
-//! (`:2350-2356`). FLUI's navigator keys **one** entry per route (see
-//! `overlay_route.rs`), so this route builds a `Stack[barrier, page]` into a
-//! single entry instead. The three properties the overlay reads survive the merge:
-//!
-//! | Flutter | Merged |
-//! |---|---|
-//! | `_modalBarrier.opaque = opaque` on transition complete | the one entry's `opaque` |
-//! | `_modalScope.maintainState = maintainState` | the one entry's `maintain_state` |
-//! | `_modalBarrier.markNeedsBuild()` | the one entry's `mark_needs_build()` |
+//! FLUI's navigator keys **one** entry per route (see `overlay_route.rs`), so this
+//! route builds a `Stack[barrier, page]` into a single entry rather than separate
+//! barrier and page entries. The three properties the overlay reads live on that
+//! one entry: `opaque`, `maintain_state` and `mark_needs_build()`.
 //!
 //! The barrier sits below the page either way, so paint and hit-test order are
-//! unchanged. Two costs, both recorded: a `markNeedsBuild` for the barrier alone
-//! rebuilds the page too, and a covered `maintainState` route keeps its barrier
-//! subtree mounted where Flutter drops it (the barrier is stateless).
+//! unchanged. Two costs, both recorded: a rebuild for the barrier alone rebuilds
+//! the page too, and a covered `maintain_state` route keeps its barrier subtree
+//! mounted (the barrier is stateless).
 //!
-//! # Divergences — none of this is parity
+//! # Current limits
 //!
 //! * **Per-route `FocusScope` — landed (ADR-0026).** The page is wrapped in
-//!   `FocusScope::with_external_node` (`routes.dart:1201-1202`) and the current
-//!   route's scope is installed through the enclosing scope's
-//!   `setFirstFocus` history chain. Still absent: `traversalEdgeBehavior` (no
-//!   node-layer flag) and `requestFocus = false` opt-out.
+//!   `FocusScope::with_external_node` and the current route's scope is installed
+//!   through the enclosing scope's first-focus history chain. Still absent:
+//!   `traversalEdgeBehavior` (no node-layer flag) and a `requestFocus = false`
+//!   opt-out.
 //! * **No `BlockSemantics`, no barrier semantics.** No `semanticsDismissible`, no
-//!   `barrierLabel`, no `Semantics(sortKey: OrdinalSortKey(1.0))`. A covered
-//!   route's semantics are still announced. The barrier absorbs *pointers* only.
-//! * **No `AnimatedModalBarrier`.** `barrier_color` is a flat colour, not driven
-//!   through `barrierCurve` by the route's animation.
-//! * **No `IgnorePointer(ignoring: !animation.isForwardOrCompleted)`**
-//!   (`routes.dart:2278-2283`): the barrier absorbs pointers for the whole life of
-//!   the route, including while it pops.
-//! * **No `filter` / `BackdropFilter`, no `PopScope`, no `LocalHistoryRoute`, no
-//!   `_modalScopeCache`.**
+//!   `barrierLabel`, no semantics sort key. A covered route's semantics are still
+//!   announced. The barrier absorbs *pointers* only.
+//! * **No animated modal barrier.** `barrier_color` is a flat colour, not driven
+//!   through a barrier curve by the route's animation.
+//! * **The barrier is not pointer-ignoring while the route pops.** It absorbs
+//!   pointers for the whole life of the route, including while it pops.
+//! * **No `filter` / `BackdropFilter`, and no cached modal scope.**
 
 // `ModalRoute` is private; `PageRoute` / `PopupRoute` are its production
 // consumers and do not surface every knob. `ModalHandle::set_offstage` in
@@ -102,7 +89,7 @@ use crate::{
     AbsorbPointer, ColoredBox, FocusScope, GestureDetector, Offstage, SizedBox, Stack, StackFit,
 };
 
-/// `_defaultTransitionsBuilder` (`pages.dart:68-75`): a jump cut.
+/// The default transitions builder: a jump cut.
 pub(crate) fn default_transitions_builder() -> RouteTransitionsBuilder {
     Rc::new(|_ctx, _animation, _secondary, child| child)
 }
@@ -111,13 +98,13 @@ pub(crate) fn default_transitions_builder() -> RouteTransitionsBuilder {
 /// binding. The builder is an `Rc<dyn Fn>` installed in the overlay entry and
 /// outlives every borrow of the route, so nothing it reads can live on `self`.
 struct ModalInner {
-    /// `ModalRoute.offstage` (`routes.dart:1949`).
+    /// Whether the route is forced offstage.
     offstage: AtomicBool,
-    /// `ModalRoute.maintainState` (`:1893`).
+    /// Whether a covered route keeps its subtree mounted.
     maintain_state: AtomicBool,
-    /// `barrierDismissible` (`:1804`): a tap on the barrier pops the route.
+    /// Whether a tap on the barrier pops the route.
     ///
-    /// `final` in Flutter. A cell here only because `ModalInner` is `Arc`-shared
+    /// Fixed after construction. A cell here only because `ModalInner` is `Arc`-shared
     /// with the content builder from the moment the route is constructed, so a
     /// `.barrier_dismissible(true)` builder cannot reach it through `&mut`.
     barrier_dismissible: AtomicBool,
@@ -129,13 +116,13 @@ struct ModalInner {
     /// never flips (`ModalScopeState::build` reads it once per build, but the
     /// value itself never changes after construction).
     back_gesture_enabled: AtomicBool,
-    /// `barrierColor` (`:1774`). `None` means an invisible barrier that still
-    /// absorbs pointers — Flutter's `ModalBarrier` with no colour.
+    /// The barrier colour. `None` means an invisible barrier that still absorbs
+    /// pointers.
     barrier_color: Mutex<Option<Color>>,
 
-    /// `buildPage` (`routes.dart:1455`).
+    /// Builds the page.
     page: RoutePageBuilder,
-    /// `buildTransitions` (`:1591`), defaulting to a jump cut. A cell because the
+    /// Builds the transitions, defaulting to a jump cut. A cell because the
     /// content closure captures `inner` at construction, before a
     /// `.transitions(…)` builder can run.
     transitions: Mutex<RouteTransitionsBuilder>,
@@ -147,11 +134,10 @@ struct ModalInner {
     /// [`RouteBindingSlot`] `changed_internal_state` writes through.
     transition: OnceLock<TransitionHandle>,
 
-    /// One notifier the `_ModalScope` subscribes to, fed by *both* animations.
+    /// One notifier the modal scope subscribes to, fed by *both* animations.
     ///
-    /// Flutter uses `Listenable.merge([animation, secondaryAnimation])`
-    /// (`routes.dart:1101`); `flui_foundation::Listenable` has no `merge`. A relay
-    /// is the equivalent, and it has the property `AnimatedView` needs: the same
+    /// `flui_foundation::Listenable` has no `merge`, so a relay stands in, and it
+    /// has the property `AnimatedView` needs: the same
     /// object every time `listenable()` is called, even though the `ModalScope`
     /// view is rebuilt on every overlay-entry build.
     relay: Arc<ChangeNotifier>,
@@ -159,55 +145,49 @@ struct ModalInner {
     /// closed in `dispose`. `Listenable` has no `Drop`-based unsubscribe.
     relay_subscriptions: Mutex<Vec<(RouteAnimation, ListenerId)>>,
 
-    /// `ModalRoute._animationProxy` (`routes.dart:1685`, `:1969-1970`).
+    /// The primary animation proxy.
     ///
-    /// **This — not the controller — is what `buildPage` and `buildTransitions`
-    /// see.** Its parent is the `TransitionRoute` controller normally, and
-    /// `kAlwaysCompleteAnimation` while the route is [`offstage`](Self::offstage)
-    /// (`:1958`). That swap is the entire reason an offstage route lays out at its
+    /// **This — not the controller — is what the page and transitions builders
+    /// see.** Its parent is the `TransitionRoute` controller normally, and an
+    /// always-complete animation while the route is [`offstage`](Self::offstage).
+    /// That swap is the entire reason an offstage route lays out at its
     /// *final* geometry rather than wherever its entrance transition happens to be:
     /// `HeroController` measures the destination one frame before the flight.
     primary: Arc<ProxyAnimation<f64>>,
-    /// `ModalRoute._secondaryAnimationProxy` (`:1686`, `:1973-1974`).
+    /// The secondary animation proxy.
     ///
-    /// Parent is the `TransitionRoute` secondary train, or
-    /// `kAlwaysDismissedAnimation` while offstage (`:1959-1961`) — an offstage route
-    /// must not be pushed aside by whatever sits above it either.
+    /// Parent is the `TransitionRoute` secondary train, or an always-dismissed
+    /// animation while offstage — an offstage route must not be pushed aside by
+    /// whatever sits above it either.
     secondary: Arc<ProxyAnimation<f64>>,
 
-    /// `ModalRoute._subtreeKey` (`routes.dart:2268`) — owned from construction,
-    /// filled while the page is mounted. ADR-0021, seam 4.
+    /// The route's page subtree, owned from construction and filled while the
+    /// page is mounted. ADR-0021, seam 4.
     subtree: RouteSubtreeCell,
 
-    /// Every `Hero` mounted in this route's page, by tag. Flutter builds the
-    /// equivalent map on demand by walking `subtreeContext`'s elements
-    /// (`heroes.dart:279-345`); FLUI's heroes register themselves into this one, so
-    /// no walk and no downcast is ever needed. ADR-0021
+    /// Every `Hero` mounted in this route's page, by tag. FLUI's heroes register
+    /// themselves into this one, so no element walk and no downcast is ever
+    /// needed. ADR-0021
     heroes: HeroRegistry,
 
-    /// Every `PopScope` mounted in this route's page — Flutter's
-    /// `ModalRoute._popEntries` (`routes.dart:1980`). Consulted by
+    /// Every `PopScope` mounted in this route's page. Consulted by
     /// [`Route::vetoes_pop`] and notified from [`Route::on_pop_invoked`].
     pop_entries: PopEntryRegistry,
 
-    /// This route's local-history stack — Flutter's `_localHistory`
-    /// (`routes.dart:748`). While non-empty, a pop removes the most recent
+    /// This route's local-history stack. While non-empty, a pop removes the most recent
     /// entry instead of the route (ADR-0025).
     local_history: LocalHistoryRegistry,
 
-    /// `_ModalScopeState.focusScopeNode` (`routes.dart:1095`): the per-route
-    /// focus scope. The page is wrapped in a `FocusScope::with_external_node`
+    /// The per-route focus scope. The page is wrapped in a `FocusScope::with_external_node`
     /// over this, and the route lifecycle promotes it through native
     /// first-focus history while the route is current.
     focus_scope: Rc<FocusScopeNode>,
 }
 
 impl ModalInner {
-    /// `_buildModalBarrier` + `buildModalBarrier` (`routes.dart:2273-2330`),
-    /// reduced to the primitives FLUI has.
+    /// Build the modal barrier from the primitives FLUI has.
     ///
-    /// `!offstage` gates the barrier, exactly as `buildModalBarrier` does
-    /// (`:2301`) — an offstage route must not eat pointers.
+    /// `!offstage` gates the barrier — an offstage route must not eat pointers.
     ///
     /// The [`AbsorbPointer`] is what makes the barrier a barrier: it is hit within
     /// its own bounds whether or not it has a child, so a *colourless* barrier
@@ -231,8 +211,7 @@ impl ModalInner {
             return barrier.boxed();
         }
 
-        // `ModalBarrier`'s `onDismiss ?? () => Navigator.maybePop(context)`
-        // (`modal_barrier.dart`). The handle is cloned out from under the tree
+        // A tap on the barrier pops the route. The handle is cloned out from under the tree
         // borrow here and popped later, from the gesture callback.
         let navigator = NavigatorHandle::maybe_of(ctx);
         GestureDetector::new()
@@ -245,16 +224,14 @@ impl ModalInner {
             .boxed()
     }
 
-    /// `_buildModalScope` (`routes.dart:2333-2345`), minus `Semantics` and
-    /// `PrimaryScrollController`.
+    /// Build the modal scope, without `Semantics` or a primary scroll controller.
     ///
-    /// The `Offstage` wraps the whole scope, as Flutter's does — so an offstage
-    /// route's transitions still run, its page still lays out at real size, and
-    /// nothing of it paints. Inside it, `FocusScope::with_external_node` over
-    /// [`focus_scope`](Self::focus_scope) is Flutter's
-    /// `FocusScope.withExternalFocusNode` (`routes.dart:1201-1202`): heroes,
-    /// text fields and `Focus` widgets in the page attach under the route's own
-    /// scope, so traversal stays within the route (ADR-0026).
+    /// The `Offstage` wraps the whole scope — so an offstage route's transitions
+    /// still run, its page still lays out at real size, and nothing of it paints.
+    /// Inside it, `FocusScope::with_external_node` over
+    /// [`focus_scope`](Self::focus_scope): heroes, text fields and `Focus`
+    /// widgets in the page attach under the route's own scope, so traversal stays
+    /// within the route (ADR-0026).
     fn build_scope(self: &Arc<Self>) -> BoxedView {
         let scope = match self.transition.get() {
             Some(transition) => ModalScope {
@@ -286,10 +263,7 @@ impl ModalInner {
     }
 
     /// Make this route's scope the traversal boundary and move the keyboard
-    /// focus into it — FLUI's analogue of
-    /// `navigator.focusNode.enclosingScope?.setFirstFocus(focusScopeNode)`
-    /// (`routes.dart:1692`, `:1137`). Flutter chains focused children so focus
-    /// lands in the current route. The scope itself resolves its owning
+    /// focus into it, so focus lands in the current route. The scope itself resolves its owning
     /// presentation and updates enclosing-scope history; there is no global
     /// active-scope override.
     fn activate_focus_scope(&self) {
@@ -297,8 +271,7 @@ impl ModalInner {
     }
 
     /// The page-facing local-history capability: the registry plus this
-    /// route's `changed_internal_state`, owed on the empty↔non-empty edges
-    /// (`routes.dart:886-895`).
+    /// route's `changed_internal_state`, owed on the empty↔non-empty edges.
     fn local_history_handle(self: &Arc<Self>) -> LocalHistoryHandle {
         let inner = Arc::clone(self);
         LocalHistoryHandle::new(
@@ -308,8 +281,8 @@ impl ModalInner {
     }
 
     /// Repoint both proxies at whatever [`offstage`](Self::offstage) currently
-    /// implies — Flutter's two lines in the `offstage` setter (`routes.dart:1958-1961`),
-    /// hoisted so `install()` can run them too.
+    /// implies — hoisted out of the `offstage` setter so `install()` can run it
+    /// too.
     ///
     /// `install()` needs them because a route may be forced offstage before it is
     /// pushed: `ModalHandle` is minted from the *unpushed* route, and
@@ -338,7 +311,7 @@ impl ModalInner {
     ///
     /// The proxies, not the controller: `ProxyAnimation::set_parent` moves the
     /// listeners with it *and* notifies them, so an offstage swap rebuilds the scope
-    /// by itself. That is what carries the completed animation into `buildPage`
+    /// by itself. That is what carries the completed animation into the page builder
     /// within the same frame. (Nothing ticks an offstage route afterwards — its
     /// parent is a constant — which is fine: there is nothing left to animate.)
     fn open_relay(self: &Arc<Self>) {
@@ -363,31 +336,30 @@ impl ModalInner {
 }
 
 // ============================================================================
-// _ModalScope — the animation-driven half of the entry
+// ModalScope — the animation-driven half of the entry
 // ============================================================================
 
-/// Flutter's `_ModalScope` (`routes.dart:1055-1250`), reduced to the one job FLUI
-/// can do today: rebuild the page and its transitions when either animation ticks.
+/// The modal scope, reduced to the one job FLUI can do today: rebuild the page and
+/// its transitions when either animation ticks.
 ///
-/// Flutter caches the page in `_page ??= …` so only the transitions rebuild per
-/// frame (`routes.dart:1229-1240`). FLUI's `BoxedView` is not cloneable, so the
-/// page builder re-runs on every tick. Element reconciliation preserves the page's
-/// `ViewState`, so this is a **cost**, not a state difference; recorded, not
-/// claimed as parity.
+/// The page is not cached across ticks, so only the transitions would need to
+/// rebuild per frame; but FLUI's `BoxedView` is not cloneable, so the page builder
+/// re-runs on every tick. Element reconciliation preserves the page's `ViewState`,
+/// so this is a **cost**, not a state difference.
 ///
-/// An [`AnimatedView`], which is `AnimatedWidget` — the framework subscribes to
+/// An [`AnimatedView`] — the framework subscribes to
 /// [`listenable`](AnimatedView::listenable) on mount and unsubscribes on unmount.
 /// `AnimatedBuilder` could not be used: its builder takes no `BuildContext`, and
-/// `buildPage` needs one.
+/// the page builder needs one.
 #[derive(Clone)]
 struct ModalScope {
     page: RoutePageBuilder,
     transitions: RouteTransitionsBuilder,
     transition: TransitionHandle,
-    /// `widget.route.animation` (`routes.dart:1234`) — the **proxy**, so an offstage
-    /// route's builders see `kAlwaysCompleteAnimation`.
+    /// The route's animation — the **proxy**, so an offstage route's builders see
+    /// an always-complete animation.
     primary: Arc<ProxyAnimation<f64>>,
-    /// `widget.route.secondaryAnimation` (`:1235`).
+    /// The route's secondary animation proxy.
     secondary: Arc<ProxyAnimation<f64>>,
     relay: Arc<ChangeNotifier>,
     subtree: RouteSubtreeCell,
@@ -423,13 +395,10 @@ impl StatefulView for ModalScope {
 pub(crate) struct ModalScopeState;
 
 impl ViewState<ModalScope> for ModalScopeState {
-    /// `buildTransitions(context, animation, secondaryAnimation, buildPage(…))`
-    /// (`routes.dart:1229-1240`, `:1656`).
+    /// Builds the transitions around the page.
     ///
-    /// The [`RouteSubtreeAnchor`] wraps **only** the page, inside the transitions —
-    /// exactly where Flutter hangs `_subtreeKey`, on the `RepaintBoundary` around
-    /// `buildPage` and nothing else (`routes.dart:1229-1231`). Anchoring outside
-    /// the transitions would give `HeroController` the transition's coordinate
+    /// The [`RouteSubtreeAnchor`] wraps **only** the page, inside the transitions.
+    /// Anchoring outside the transitions would give `HeroController` the transition's coordinate
     /// space (mid-slide, mid-scale) instead of the page's.
     fn build(&self, view: &ModalScope, ctx: &dyn BuildContext) -> impl IntoView {
         view.transition.drain_pending_statuses();
@@ -439,7 +408,7 @@ impl ViewState<ModalScope> for ModalScopeState {
         let page = (view.page)(ctx, &primary, &secondary);
         // The `HeroScope` sits **inside** the subtree anchor, so the anchor stays the
         // route's coordinate root and every hero is a descendant of it — which is what
-        // `transform_to(hero, route_subtree)` needs (`heroes.dart:501-509`).
+        // `transform_to(hero, route_subtree)` needs.
         let anchored = RouteSubtreeAnchor::new(
             view.subtree.clone(),
             HeroScope::new(
@@ -498,8 +467,8 @@ impl<T: Send + Clone + 'static> ModalRoute<T> {
     /// A modal showing `page`, entering and leaving over `duration`, with a
     /// jump-cut transition.
     ///
-    /// Defaults match Flutter's `ModalRoute`: `maintain_state = true`,
-    /// `offstage = false`, no barrier colour, not dismissible, not opaque.
+    /// Defaults: `maintain_state = true`, `offstage = false`, no barrier colour,
+    /// not dismissible, not opaque.
     pub fn new(duration: Duration, page: RoutePageBuilder) -> Self {
         let inner = Arc::new(ModalInner {
             offstage: AtomicBool::new(false),
@@ -512,9 +481,8 @@ impl<T: Send + Clone + 'static> ModalRoute<T> {
             transition: OnceLock::new(),
             relay: Arc::new(ChangeNotifier::new()),
             relay_subscriptions: Mutex::new(Vec::new()),
-            // Both rest at `kAlwaysDismissedAnimation` until `install()` points them
-            // at the controller — Flutter builds them there too (`routes.dart:1685`),
-            // and an unpushed route has no animation to proxy.
+            // Both rest at an always-dismissed animation until `install()` points
+            // them at the controller — an unpushed route has no animation to proxy.
             primary: Arc::new(ProxyAnimation::new(always_dismissed())),
             secondary: Arc::new(ProxyAnimation::new(always_dismissed())),
             subtree: RouteSubtreeCell::new(),
@@ -528,7 +496,7 @@ impl<T: Send + Clone + 'static> ModalRoute<T> {
             let inner = Arc::clone(&inner);
             move |ctx: &dyn BuildContext| -> BoxedView {
                 // Barrier first: it paints below the page and is hit-tested after
-                // it, matching `[_modalBarrier, _modalScope]` entry order.
+                // it.
                 let children = vec![inner.build_barrier(ctx), inner.build_scope()];
                 Stack::new(children).fit(StackFit::Expand).boxed()
             }
@@ -551,26 +519,26 @@ impl<T: Send + Clone + 'static> ModalRoute<T> {
         self
     }
 
-    /// `TransitionRoute.opaque`. `PageRoute` sets this; `PopupRoute` does not.
+    /// Whether the route is opaque. `PageRoute` sets this; `PopupRoute` does not.
     #[must_use]
     pub fn opaque(mut self, opaque: bool) -> Self {
         self.transition = self.transition.opaque(opaque);
         self
     }
 
-    /// `buildTransitions` (`routes.dart:1591`).
+    /// The transitions builder.
     pub(crate) fn transitions(self, transitions: RouteTransitionsBuilder) -> Self {
         let _prev = std::mem::replace(&mut *self.inner.transitions.lock(), transitions);
         self
     }
 
-    /// `transitionDuration` (`routes.dart:140-147`).
+    /// The forward transition duration.
     pub(crate) fn duration(mut self, duration: Duration) -> Self {
         self.transition = self.transition.duration(duration);
         self
     }
 
-    /// `reverseTransitionDuration` (`routes.dart:148`).
+    /// The reverse transition duration.
     pub(crate) fn reverse_duration(mut self, duration: Duration) -> Self {
         self.transition = self.transition.reverse_duration(duration);
         self
@@ -582,13 +550,13 @@ impl<T: Send + Clone + 'static> ModalRoute<T> {
         self
     }
 
-    /// The `result ?? currentResult` fallback (`navigator.dart:426`).
+    /// The result a pop with no explicit result delivers.
     pub(crate) fn with_current_result(mut self, result: T) -> Self {
         self.transition = self.transition.with_current_result(result);
         self
     }
 
-    /// `ModalRoute.maintainState` (`routes.dart:1893`).
+    /// Whether a covered route keeps its subtree mounted.
     #[must_use]
     pub fn maintain_state(self, maintain_state: bool) -> Self {
         self.inner
@@ -597,7 +565,7 @@ impl<T: Send + Clone + 'static> ModalRoute<T> {
         self
     }
 
-    /// `barrierDismissible` (`routes.dart:1804`).
+    /// Whether a tap on the barrier pops the route.
     #[must_use]
     pub fn barrier_dismissible(self, dismissible: bool) -> Self {
         self.inner
@@ -615,7 +583,7 @@ impl<T: Send + Clone + 'static> ModalRoute<T> {
         self
     }
 
-    /// `barrierColor` (`routes.dart:1774`).
+    /// The barrier colour.
     #[must_use]
     pub fn barrier_color(self, color: Color) -> Self {
         *self.inner.barrier_color.lock() = Some(color);
@@ -658,7 +626,7 @@ impl<T> fmt::Debug for ModalRoute<T> {
 /// lives behind `Box<dyn ErasedRoute>` inside the history's mutex and cannot
 /// be reached directly.
 ///
-/// This is FLUI's `route.offstage = …` (`routes.dart:1951`). `HeroController` holds
+/// This is how a route is forced offstage. `HeroController` holds
 /// one per route, looked up by [`RouteId`] through the navigator's registry.
 #[derive(Clone)]
 pub struct ModalHandle {
@@ -677,8 +645,8 @@ impl fmt::Debug for ModalHandle {
 /// caller, and it is itself dead until the `Hero` widget uses it. See `hero_controller.rs`.
 #[expect(dead_code)]
 impl ModalHandle {
-    /// Deliver `onPopInvokedWithResult(did_pop, …)` to every `PopScope`
-    /// registered in this route's page (`routes.dart:2045-2050`). Called by
+    /// Deliver the pop-invoked callback (`did_pop`, …) to every `PopScope`
+    /// registered in this route's page. Called by
     /// `NavigatorShared::apply` **outside** the history lock — the callbacks
     /// are user code and may call back into the navigator.
     pub(crate) fn notify_pop_invoked(&self, did_pop: bool) {
@@ -686,11 +654,10 @@ impl ModalHandle {
     }
 
     /// Fire the `on_remove`s owed by local-history pops that happened inside
-    /// the flush, and the emptied-edge `changed_internal_state`
-    /// (`routes.dart:952-963`). Called by `NavigatorShared::apply` with **no
-    /// lock held** (ADR-0025).
+    /// the flush, and the emptied-edge `changed_internal_state`. Called by
+    /// `NavigatorShared::apply` with **no lock held** (ADR-0025).
     /// Make this route's focus scope the active one and restore the focus it
-    /// remembers (`routes.dart:1692`, `:1137`). Called by the navigator from
+    /// remembers. Called by the navigator from
     /// `apply`, **outside** the history lock: this moves the primary focus, and
     /// the listeners that fire are user code.
     pub(crate) fn activate_focus_scope(&self) {
@@ -707,43 +674,40 @@ impl ModalHandle {
         }
     }
 
-    /// `ModalRoute.offstage = value` (`routes.dart:1951-1962`), whole: the early
-    /// return on an unchanged value, the animation-proxy swap, and
-    /// `changedInternalState`.
-    ///
-    /// (ADR-0021 added the proxy swap. Until then this doc read "minus the
-    /// animation-proxy swap", which was true when written and a trap afterwards.)
+    /// Force the route offstage (or back), whole: the early return on an
+    /// unchanged value, the animation-proxy swap (ADR-0021), and
+    /// `changed_internal_state`.
     pub fn set_offstage(&self, offstage: bool) {
         if self.inner.offstage.swap(offstage, Ordering::Relaxed) == offstage {
-            return; // `if (_offstage == value) return;`
+            return; // Unchanged.
         }
-        // `_animationProxy!.parent = _offstage ? kAlwaysCompleteAnimation : super.animation;`
-        // `_secondaryAnimationProxy!.parent = _offstage ? kAlwaysDismissedAnimation : …`
-        // (`routes.dart:1958-1961`) — before `changedInternalState`, so the rebuild it
+        // Offstage points the primary proxy at an always-complete animation and the
+        // secondary at an always-dismissed one; back onstage restores the real
+        // ones. This runs before `changed_internal_state`, so the rebuild it
         // schedules already sees the swapped animations.
         self.inner.sync_animation_proxies();
         changed_internal_state(&self.inner);
     }
 
-    /// `ModalRoute.offstage`.
+    /// Whether the route is forced offstage.
     #[must_use]
     pub fn offstage(&self) -> bool {
         self.inner.offstage.load(Ordering::Relaxed)
     }
 
-    /// What the route's builders currently see as `route.animation`
-    /// (`routes.dart:1969`) — the proxy, so `1.0`/completed while offstage.
+    /// What the route's builders currently see as the route animation — the
+    /// proxy, so `1.0`/completed while offstage.
     pub(crate) fn primary_animation(&self) -> RouteAnimation {
         Arc::clone(&self.inner.primary) as RouteAnimation
     }
 
-    /// `route.secondaryAnimation` (`:1973`) — `0.0`/dismissed while offstage.
+    /// The route's secondary animation — `0.0`/dismissed while offstage.
     pub(crate) fn secondary_animation(&self) -> RouteAnimation {
         Arc::clone(&self.inner.secondary) as RouteAnimation
     }
 
-    /// The heroes mounted in this route's page — FLUI's `Hero._allHeroesFor(route)`
-    /// (`heroes.dart:279`), as a registry rather than an element walk.
+    /// The heroes mounted in this route's page, as a registry rather than an
+    /// element walk.
     #[must_use]
     pub fn heroes(&self) -> HeroRegistry {
         self.inner.heroes.clone()
@@ -751,16 +715,13 @@ impl ModalHandle {
 
     /// Every hero visible for a flight through this route: this route's own,
     /// plus — recursively — whatever each nested `Navigator` mounted inside it
-    /// publishes for its own current top `PageRoute`. FLUI's
-    /// `Hero._allHeroesFor(route.subtreeContext, …, navigator)`
-    /// (`heroes.dart:279-333`), including the nested-navigator branch.
+    /// publishes for its own current top `PageRoute`.
     #[must_use]
     pub fn all_heroes(&self) -> HashMap<HeroTag, HeroHandle> {
         self.inner.heroes.all_heroes()
     }
 
-    /// `route.maintainState` (`heroes.dart:957`): whether this route keeps
-    /// its subtree built while covered. Read by
+    /// Whether this route keeps its subtree built while covered. Read by
     /// `HeroController::maybe_start`'s gesture-pop sync fast path — a
     /// destination that does not maintain state may not be laid out yet, so
     /// only a `true` here can skip the offstage measurement dance.
@@ -769,10 +730,8 @@ impl ModalHandle {
         self.inner.maintain_state.load(Ordering::Relaxed)
     }
 
-    /// There is no `maintainState` setter in Flutter — it is an abstract getter a
-    /// subclass overrides, and `changedInternalState` republishes it. This is the
-    /// same thing with a cell behind it, which is what lets a test observe the
-    /// republish.
+    /// Set `maintain_state` and republish it through `changed_internal_state`.
+    /// The value sits in a cell, which is what lets a test observe the republish.
     pub fn set_maintain_state(&self, maintain_state: bool) {
         if self
             .inner
@@ -786,12 +745,10 @@ impl ModalHandle {
     }
 }
 
-/// `ModalRoute.changedInternalState` (`routes.dart:2221-2231`).
-///
-/// Rebuilds this route's overlay entry and republishes `maintainState`. Flutter's
-/// `schedulerPhase != persistentCallbacks` guard has no analogue: FLUI's
-/// `mark_needs_build` only inserts an id into an inbox the next `build_scope`
-/// drains, so it is already safe from any phase (`entry.rs` module docs).
+/// Rebuilds this route's overlay entry and republishes `maintain_state`. No
+/// scheduler-phase guard is needed: FLUI's `mark_needs_build` only inserts an id
+/// into an inbox the next `build_scope` drains, so it is already safe from any
+/// phase (`entry.rs` module docs).
 ///
 /// **What `mark_entry_needs_build` actually rebuilds** is this route's *overlay
 /// entry* — `Stack[barrier, Offstage[scope]]` — so a flipped `offstage` reaches the
@@ -836,22 +793,18 @@ impl<T: Send + Clone + 'static> Route for ModalRoute<T> {
         self.transition.finished_when_popped()
     }
 
-    /// `LocalHistoryRoute.willHandlePopInternally` (`routes.dart:970-972`):
-    /// non-empty local history claims the pop.
+    /// Non-empty local history claims the pop.
     fn will_handle_pop_internally(&self) -> bool {
         !self.inner.local_history.is_empty() || self.transition.will_handle_pop_internally()
     }
 
-    /// `OverlayRoute.install` creates the entries, then `TransitionRoute.install`
-    /// builds the controller (`routes.dart:69-71`, `:323-334`). FLUI's entry is
-    /// created by `push_bound` just before the flush, so the only thing left here
-    /// is publishing `maintainState` onto it — Flutter does that at
-    /// `createOverlayEntries` (`:2353-2355`).
+    /// The transition route builds the controller. FLUI's entry is created by
+    /// `push_bound` just before the flush, so the only thing left here is
+    /// publishing `maintain_state` onto it.
     fn install(&mut self) {
         self.transition.install();
         // Order: the controller must exist before the proxies can point at it
-        // (`routes.dart:1684-1688` — `super.install()` then the two `ProxyAnimation`s),
-        // and the relay subscribes to the proxies, so it goes last.
+        // (transition install, then the two proxies), and the relay subscribes to the proxies, so it goes last.
         self.inner.sync_animation_proxies();
         self.inner.open_relay();
         if let Some(binding) = self.binding() {
@@ -859,13 +812,12 @@ impl<T: Send + Clone + 'static> Route for ModalRoute<T> {
             // Registered before the page has ever been built, so the registry
             // knows the route exists; it resolves to `None` until the page mounts.
             binding.publish_subtree(self.inner.subtree.clone());
-            // `HeroController` reaches `route.offstage` through this, by id.
+            // `HeroController` reaches the route's `offstage` through this, by id.
             binding.publish_modal(self.handle());
         }
     }
 
-    /// `ModalRoute.didPush` moves the focus into the route's scope
-    /// (`routes.dart:1690-1695`); so does `didAdd` (`:1698-1703`).
+    /// A push (like an add) moves the focus into the route's scope.
     /// Focus activation is **not** done here: this runs inside the flush, under
     /// the history lock, and moving the focus fires user listeners (a `Focus`
     /// widget's `on_focus_change` and its rebuild) that may call back into the
@@ -884,8 +836,7 @@ impl<T: Send + Clone + 'static> Route for ModalRoute<T> {
         self.transition.did_replace(previous);
     }
 
-    /// `LocalHistoryRoute.didPop` (`routes.dart:950-965`): while entries
-    /// exist, pop the most recent one and answer `false` — the route stays and
+    /// While local-history entries exist, pop the most recent one and answer `false` — the route stays and
     /// its future stays pending. The entry's `on_remove` (and the emptied-edge
     /// `changed_internal_state`) are **owed**, not fired: this runs under the
     /// history lock, and `NavigatorShared::apply` delivers them outside it
@@ -901,18 +852,14 @@ impl<T: Send + Clone + 'static> Route for ModalRoute<T> {
         self.transition.did_complete(result);
     }
 
-    /// The route above popped: this one is current again, and Flutter
-    /// re-focuses it through `changedInternalState` → `_routeSetState`
-    /// (`routes.dart:1731-1736`).
+    /// The route above popped: this one is current again, and is re-focused.
     fn did_pop_next(&mut self, popped: RouteId) {
         self.transition.did_pop_next(popped);
     }
 
     fn did_change_next(&mut self, next: Option<RouteId>) {
-        // Becoming topmost re-activates this route's scope — Flutter's
-        // `_routeSetState` re-`setFirstFocus`es whenever `isCurrent` flips
-        // (`routes.dart:1731-1736`); a pop announces `did_change_next(None)`
-        // to the revealed route.
+        // Becoming topmost re-activates this route's scope whenever it becomes
+        // current; a pop announces `did_change_next(None)` to the revealed route.
         self.transition.did_change_next(next);
     }
 
@@ -920,13 +867,12 @@ impl<T: Send + Clone + 'static> Route for ModalRoute<T> {
         self.transition.did_change_previous(previous);
     }
 
-    /// `ModalRoute.popDisposition`'s `PopEntry` veto (`routes.dart:2033-2042`).
+    /// Whether any registered `PopScope` vetoes the pop.
     fn vetoes_pop(&self) -> bool {
         self.inner.pop_entries.any_vetoes()
     }
 
-    /// The route-level hook only. The user-facing `PopScope` fan-out
-    /// (`routes.dart:2045-2050`) is **not** fired from here: this runs inside
+    /// The route-level hook only. The user-facing `PopScope` fan-out is **not** fired from here: this runs inside
     /// the flush, under the history lock, where a user callback calling back
     /// into the navigator deadlocks. The flush owes the fan-out through
     /// `FlushOutcome::pop_invoked`, and `apply` delivers it via
@@ -944,8 +890,8 @@ impl<T: Send + Clone + 'static> Route for ModalRoute<T> {
     /// go now: a disposed route that a `HeroController` can still name is a route
     /// it can still measure.
     fn dispose(&mut self) {
-        // Sever local history first: live entries drop un-fired (Flutter
-        // GC-drops the list) and late adds become inert (ADR-0025).
+        // Sever local history first: live entries drop un-fired and late adds
+        // become inert (ADR-0025).
         self.inner.local_history.sever();
         if let Some(binding) = self.binding() {
             binding.withdraw_subtree();

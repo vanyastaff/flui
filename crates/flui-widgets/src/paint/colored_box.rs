@@ -8,11 +8,9 @@ use flui_view::{Child, IntoView, RenderView, impl_render_view};
 
 /// Paints a solid `color` filling its bounds, behind its child.
 ///
-/// Flutter parity: `widgets/basic.dart` `ColoredBox`. In Flutter this is a
-/// dedicated single-child proxy; FLUI realises the same behavior as a
-/// `RenderDecoratedBox` with a color-only `BoxDecoration` (a `ColoredBox` is a
-/// `DecoratedBox(decoration: BoxDecoration(color: color))`). It sizes to its
-/// child, or fills the incoming constraints when childless.
+/// Realised as a `RenderDecoratedBox` with a color-only `BoxDecoration` (a
+/// `ColoredBox` is a `DecoratedBox` with `BoxDecoration { color }`). It sizes to
+/// its child, or fills the incoming constraints when childless.
 #[derive(Clone, Debug)]
 pub struct ColoredBox {
     color: Color,
@@ -34,7 +32,6 @@ impl ColoredBox {
     ///
     /// Turn it off for a box whose edges already land on pixel boundaries,
     /// where the feathered edge reads as a blur rather than as smoothing.
-    /// Flutter parity: `ColoredBox(isAntiAlias:)`.
     #[must_use]
     pub const fn anti_alias(mut self, value: bool) -> Self {
         self.anti_alias = value;

@@ -5,14 +5,8 @@
 
 `flui-semantics` carries the information assistive technologies need — screen
 readers (VoiceOver, TalkBack, NVDA, JAWS), switch control, voice control,
-braille displays — mirroring Flutter's semantics protocol:
-
-| FLUI | Flutter |
-|------|---------|
-| `SemanticsNode` | `SemanticsNode` |
-| `SemanticsConfiguration` | `SemanticsConfiguration` |
-| `SemanticsOwner` | `SemanticsOwner` |
-| `SemanticsAction` / `SemanticsEvent` | `SemanticsAction` / semantics events |
+braille displays — through `SemanticsNode`, `SemanticsConfiguration`, `SemanticsOwner`, and
+`SemanticsAction` / `SemanticsEvent`.
 
 Part of the [FLUI](https://github.com/vanyastaff/flui) workspace — pre-release,
 consumed by path (not published to crates.io).

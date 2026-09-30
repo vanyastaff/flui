@@ -1,10 +1,8 @@
 //! [`basic_locale_list_resolution`] — the default locale-resolution
 //! algorithm.
 //!
-//! Flutter parity: `basicLocaleListResolution`
-//! (`widgets/app.dart::basicLocaleListResolution`, oracle tag `3.44.0`).
-//! Ported in full, including the deferred-language-match tie-break and the
-//! country-only fallback.
+//! Includes the deferred-language-match tie-break and the country-only
+//! fallback.
 
 use std::collections::HashMap;
 
@@ -12,11 +10,8 @@ use flui_platform_api::Locale;
 
 /// Composite lookup keys, built once per `supported_locales` entry so the
 /// resolution loop below is a hash lookup per preferred locale rather than a
-/// linear scan. Rust tuple/`Option` keys replace the oracle's
-/// `"${a}_${b}_${c}"` string-concatenation keys (Dart's `null` interpolates
-/// to the literal substring `"null"`, which only works because no real
-/// subtag spells that word) — same partition, no string-formatting
-/// footgun.
+/// linear scan. Tuple/`Option` keys are used rather than concatenated
+/// strings, which would conflate an absent subtag with one spelled `"null"`.
 struct SupportedLocaleIndex<'a> {
     /// language + script + country -> supported locale (perfect match).
     exact: HashMap<(&'a str, Option<&'a str>, Option<&'a str>), &'a Locale>,
@@ -40,8 +35,8 @@ impl<'a> SupportedLocaleIndex<'a> {
             country: HashMap::new(),
         };
         for locale in supported_locales {
-            // `.or_insert` mirrors the oracle's `??=`: only the FIRST
-            // supported locale claiming a given key wins.
+            // `.or_insert`: only the FIRST supported locale claiming a
+            // given key wins.
             index
                 .exact
                 .entry((locale.language(), locale.script(), locale.country()))
@@ -91,9 +86,8 @@ impl<'a> SupportedLocaleIndex<'a> {
 ///
 /// # Panics
 ///
-/// Panics if `supported_locales` is empty — mirrors the oracle's unchecked
-/// `supportedLocales.first`, which throws `StateError` on an empty
-/// `Iterable`. An app must declare at least one supported locale.
+/// Panics if `supported_locales` is empty. An app must declare at least one
+/// supported locale.
 #[must_use]
 pub fn basic_locale_list_resolution(
     preferred_locales: Option<&[Locale]>,
@@ -105,7 +99,7 @@ pub fn basic_locale_list_resolution(
 
     // `preferred_locales` is `None`/empty before the platform has reported
     // locales, or on platforms without locale-passing support. Default to
-    // the first supported locale, matching the oracle.
+    // the first supported locale.
     let Some(preferred_locales) = preferred_locales.filter(|locales| !locales.is_empty()) else {
         return first_supported.clone();
     };
@@ -121,7 +115,7 @@ pub fn basic_locale_list_resolution(
 
     for (locale_index, user_locale) in preferred_locales.iter().enumerate() {
         // Perfect match: return the *preferred* locale itself (not the
-        // supported-list entry) — oracle parity, `return userLocale;`.
+        // supported-list entry).
         if index.exact.contains_key(&(
             user_locale.language(),
             user_locale.script(),

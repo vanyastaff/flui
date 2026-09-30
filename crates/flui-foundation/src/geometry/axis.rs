@@ -3,8 +3,6 @@
 use crate::geometry::Size;
 
 /// The two cardinal directions in two dimensions.
-///
-/// Similar to Flutter's `Axis`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum Axis {

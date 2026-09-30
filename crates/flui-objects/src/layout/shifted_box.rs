@@ -7,7 +7,7 @@
 //!
 //! It is intentionally **factor-free**: width/height scaling factors belong to
 //! the wrapping object (`RenderAlign`, `RenderCenter`), not here.  This keeps
-//! the base reusable for factor-less objects such as `RotatedBox` (Phase 4).
+//! the base reusable for factor-less objects such as `RotatedBox`.
 //!
 //! # Composition pattern
 //!
@@ -46,9 +46,7 @@ use flui_rendering::{
 ///
 /// The component also caches both baseline kinds (alphabetic/ideographic) from
 /// the most recent layout so that [`actual_baseline`] can forward the live
-/// baseline upward — mirroring Flutter
-/// `RenderShiftedBox.computeDistanceToActualBaseline` which returns
-/// `child.getDistanceToActualBaseline(baseline) + childParentData.offset.dy`.
+/// baseline upward as the child's baseline plus the child's vertical offset.
 ///
 /// [`align_child`]: AligningShiftedBox::align_child
 /// [`hit_test`]: AligningShiftedBox::hit_test
@@ -91,10 +89,9 @@ impl AligningShiftedBox {
 
     /// Updates the alignment; returns `true` if the value changed.
     ///
-    /// Mirrors Flutter `RenderAligningShiftedBox`'s `alignment` setter
-    /// (`shifted_box.dart:339-345`), which triggers a relayout (not just a
-    /// repaint) because the child offset depends on it — the caller is
-    /// responsible for marking the owning render object dirty on `true`.
+    /// A change requires a relayout (not just a repaint) because the child
+    /// offset depends on it — the caller is responsible for marking the owning
+    /// render object dirty on `true`.
     pub(crate) fn set_alignment(&mut self, alignment: Alignment) -> bool {
         if self.alignment == alignment {
             return false;
@@ -164,9 +161,8 @@ impl AligningShiftedBox {
 
     /// Returns the live actual baseline of this box for the given kind.
     ///
-    /// Mirrors Flutter `RenderShiftedBox.computeDistanceToActualBaseline`:
-    /// returns `child_raw_baseline + child_offset.dy`, or `None` when the
-    /// child has no child, or the child reports no baseline for that kind.
+    /// Returns `child_raw_baseline + child_offset.dy`, or `None` when there is
+    /// no child, or the child reports no baseline for that kind.
     ///
     /// `child_offset.dy` is the stored value from the most recent [`align_child`]
     /// call; the result is valid only after layout.
@@ -190,8 +186,7 @@ impl AligningShiftedBox {
     /// Hit-tests the child at its laid-out offset.
     ///
     /// Returns `false` immediately if the position lies outside the parent's
-    /// own size (mirrors Flutter `RenderShiftedBox.hitTestChildren`
-    /// `addWithPaintOffset` guard).  If a child exists, delegates via
+    /// own size.  If a child exists, delegates via
     /// [`hit_test_child_at_layout_offset`], which resolves the child's offset
     /// from `RenderState` (committed by [`align_child`]) AND records the paint
     /// offset into the `HitTestResult` so `HitTestResult::dispatch` can localize
@@ -202,9 +197,7 @@ impl AligningShiftedBox {
     /// now, but takes it as a caller-supplied parameter that can drift from
     /// what `RenderState` actually committed; prefer
     /// `hit_test_child_at_layout_offset` whenever the child's real laid-out
-    /// offset is what you mean to test against — Flutter
-    /// `RenderShiftedBox.hitTestChildren` records the offset via
-    /// `addWithPaintOffset`.)
+    /// offset is what you mean to test against.)
     ///
     /// [`hit_test_child_at_layout_offset`]: BoxHitTestContext::hit_test_child_at_layout_offset
     /// [`align_child`]: AligningShiftedBox::align_child

@@ -47,11 +47,8 @@
 //! from `flui_widgets::prelude`). The element, behavior, and erased builder alias
 //! stay `pub(crate)` — nothing outside this crate needs them.
 //!
-//! Cross-checked against `.flutter/packages/flutter/lib/src/widgets/layout_builder.dart`
-//! and `packages/flutter/test/widgets/layout_builder_test.dart` (Flutter master
-//! `3.33.0-0.0.pre-6280-g88e87cd963f`). `performLayout`, the skip
-//! condition, and the update/error semantics match; the intrinsics, dry-layout,
-//! and double-invocation divergences are recorded in ADR-0017's *Parity findings*.
+//! The intrinsics, dry-layout, and double-invocation divergences are recorded
+//! in ADR-0017.
 
 use std::{rc::Rc, sync::Arc};
 
@@ -112,7 +109,7 @@ pub(crate) type LayoutWidgetBuilder = Rc<dyn Fn(&dyn BuildContext, BoxConstraint
 ///
 /// Intrinsic dimensions and dry layout, because both would require running the
 /// builder speculatively. They answer `0.0` / `Size::ZERO` and log an error, in
-/// place of Flutter's throw. See `flui_objects::RenderLayoutBuilder`.
+/// place of a throw. See `flui_objects::RenderLayoutBuilder`.
 #[derive(Clone)]
 pub struct LayoutBuilder {
     /// Called with the constraints published by the render object.

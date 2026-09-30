@@ -3,10 +3,7 @@
 //! BuildContext is passed to Views during the build phase, providing
 //! access to tree information and dependency injection.
 //!
-//! # Flutter Equivalent
-//!
-//! This corresponds to Flutter's `BuildContext` abstract class.
-//! In Flutter, `Element` implements `BuildContext` - same pattern here.
+//! `Element` implements `BuildContext` directly.
 
 use std::any::TypeId;
 
@@ -155,9 +152,6 @@ pub trait BuildContext: sealed::Sealed + flui_foundation::read_scope::ReadScope 
     ///
     /// Returns `true` if an ancestor InheritedView of that type was
     /// found and the callback was invoked; `false` otherwise.
-    ///
-    /// Flutter parity: `framework.dart:5081`
-    /// `dependOnInheritedWidgetOfExactType`.
     fn depend_on_inherited(
         &self,
         type_id: TypeId,
@@ -228,9 +222,6 @@ pub trait BuildContext: sealed::Sealed + flui_foundation::read_scope::ReadScope 
     /// Returns `true` if an ancestor View of that type was found and the
     /// callback was invoked; `false` otherwise. The callback is invoked
     /// at most once.
-    ///
-    /// Flutter parity: `framework.dart:5122`
-    /// `findAncestorWidgetOfExactType<T>`.
     fn find_ancestor_view(
         &self,
         type_id: TypeId,
@@ -240,16 +231,11 @@ pub trait BuildContext: sealed::Sealed + flui_foundation::read_scope::ReadScope 
     /// Get the nearest ancestor `ViewState` of a specific type.
     ///
     /// `type_id` keys off the **State** type (`TypeId::of::<V::State>()`),
-    /// not the StatefulView type — Flutter's
-    /// `findAncestorStateOfType<T extends State>` does the same: it
-    /// matches against the State runtime type, since two different
-    /// StatefulWidgets may share a State subtype.
+    /// not the StatefulView type, since two different StatefulViews may
+    /// share a State subtype.
     ///
     /// Same callback shape as [`find_ancestor_view`]: synchronous
     /// callback while the read-lock is held, no borrow extension.
-    ///
-    /// Flutter parity: `framework.dart:5132`
-    /// `findAncestorStateOfType<T>`.
     ///
     /// [`find_ancestor_view`]: BuildContext::find_ancestor_view
     fn find_ancestor_state(
@@ -267,9 +253,6 @@ pub trait BuildContext: sealed::Sealed + flui_foundation::read_scope::ReadScope 
     ///
     /// Same callback shape and `type_id` semantics as
     /// [`find_ancestor_state`].
-    ///
-    /// Flutter parity: `framework.dart:5146`
-    /// `findRootAncestorStateOfType<T>`.
     ///
     /// [`find_ancestor_state`]: BuildContext::find_ancestor_state
     fn find_root_ancestor_state(
@@ -338,10 +321,6 @@ pub trait BuildContext: sealed::Sealed + flui_foundation::read_scope::ReadScope 
     /// // Dispatch from inside a View's build method
     /// ctx.dispatch_notification(&LayoutChangedNotification);
     /// ```
-    ///
-    /// # Flutter Equivalent
-    ///
-    /// Corresponds to Flutter's `BuildContext.dispatchNotification()`.
     fn dispatch_notification(&self, notification: &dyn crate::element::Notification);
 }
 
@@ -582,10 +561,9 @@ pub trait LifecycleContext: BuildContext {
     /// [`find_render_object`](BuildContext::find_render_object) hands out a `RenderId`, and
     /// a `RenderId` alone answers nothing: geometry lives in the
     /// [`PipelineOwner`](flui_rendering::pipeline::PipelineOwner) that owns the
-    /// node. Flutter has no equivalent because a Dart `RenderObject` *is* the
-    /// handle — `renderObject.size`, `renderObject.getTransformTo(ancestor)`
-    /// (`heroes.dart:952`, `:999`, `:1014-1018`). This is that reference,
-    /// reified.
+    /// node. Render objects here are arena nodes, not objects a caller can
+    /// hold, so this is the reference through which size and transforms
+    /// are queried.
     ///
     /// The returned [`PipelineCell`](flui_rendering::pipeline::PipelineCell) is an
     /// owner-local, closure-scoped handle to the whole render tree's owner
@@ -773,9 +751,6 @@ pub trait BuildContextExt: BuildContext {
     /// declarative-build invariant (Constitution Principle 5) and avoid
     /// extending the ancestor-view borrow across the rest of `build()`.
     ///
-    /// Flutter parity: `framework.dart:5122`
-    /// `findAncestorWidgetOfExactType<T>`.
-    ///
     /// # Example
     ///
     /// ```rust,ignore
@@ -797,14 +772,10 @@ pub trait BuildContextExt: BuildContext {
     ///
     /// Typed callback wrapper over [`BuildContext::find_ancestor_state`].
     /// `S` is the State type itself (e.g. `MyCounterState`), not the
-    /// owning StatefulView — Flutter's `findAncestorStateOfType<T>` does
-    /// the same: it keys off the State runtime type.
+    /// owning StatefulView; the lookup keys off the State runtime type.
     ///
     /// Same callback contract as [`find_ancestor`]: synchronous run, no
     /// borrow extension. Does NOT register a dependency.
-    ///
-    /// Flutter parity: `framework.dart:5132`
-    /// `findAncestorStateOfType<T>`.
     ///
     /// # Example
     ///
@@ -834,9 +805,6 @@ pub trait BuildContextExt: BuildContext {
     ///
     /// Same callback contract as [`find_state`]: synchronous run, no
     /// borrow extension. Does NOT register a dependency.
-    ///
-    /// Flutter parity: `framework.dart:5146`
-    /// `findRootAncestorStateOfType<T>`.
     ///
     /// # Example
     ///

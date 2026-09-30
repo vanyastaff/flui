@@ -2,10 +2,8 @@
 //! subtree so overlapping `GestureDetector`s compete in one arena and a binding
 //! can drive their deadlines.
 //!
-//! Flutter parity: Flutter has a single ambient `GestureArenaManager` on
-//! `GestureBinding`; every recognizer reaches it through the binding. FLUI is
-//! non-singleton, so the arena is handed down explicitly as inherited data — the
-//! analogue of that ambient binding, scoped to a subtree.
+//! FLUI is non-singleton, so there is no ambient arena: it is handed down
+//! explicitly as inherited data, scoped to a subtree.
 
 use flui_interaction::arena::{GestureArena, SweepModel};
 use flui_view::prelude::*;
@@ -21,7 +19,7 @@ use flui_view::{BoxedView, InheritedView, impl_inherited_view};
 ///
 /// 1. **Competition for free** — overlapping detectors along a hit-test path add
 ///    their recognizers to the *same* arena entry for one contact, so the
-///    standard Flutter disambiguation (front-member-wins, reject-on-loss) plays
+///    standard disambiguation (front-member-wins, reject-on-loss) plays
 ///    out across detectors, not just within one.
 /// 2. **Deadline polling** — because [`GestureArena`] is `Arc`-backed, the clone
 ///    the scope hands down and the one the binding holds are the same arena and

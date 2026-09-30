@@ -1,22 +1,18 @@
 //! `RenderWrap` — lays children out in runs along the main axis,
 //! wrapping to a new run when the next child would overflow.
 //!
-//! # Flutter equivalence
+//! # Layout
 //!
-//! Faithful port of Flutter's `RenderWrap`
-//! (`packages/flutter/lib/src/rendering/wrap.dart`).
-//!
-//! The layout algorithm — run-building loop, `_RunMetrics`, main/cross-axis
-//! sizing, and the two-pass positioning (`runAlignment` distributes free space
+//! The layout algorithm — run-building loop, run metrics, main/cross-axis
+//! sizing, and the two-pass positioning (`run_alignment` distributes free space
 //! between runs; `alignment` distributes free space within a run;
-//! `crossAxisAlignment` places each child within its run's cross extent) — is
-//! ported 1:1 from Flutter.
+//! `cross_axis_alignment` places each child within its run's cross extent).
 //!
 //! # Axis flipping
 //!
 //! `text_direction` flips the HORIZONTAL axis and `vertical_direction` the
-//! VERTICAL one; which of those is the main axis depends on `direction`
-//! (`rendering/wrap.dart`'s `_areAxesFlipped`). So a horizontal wrap under
+//! VERTICAL one; which of those is the main axis depends on `direction`.
+//! So a horizontal wrap under
 //! `Rtl` fills each run from the right, while a VERTICAL wrap under `Rtl`
 //! keeps its top-to-bottom main axis and instead lays its runs out
 //! right-to-left. Both default to unflipped (`Ltr`, `Down`), which is the
@@ -39,8 +35,8 @@ use flui_rendering::{
 // This `pub use` also serves as the module-level import for the code below.
 pub use super::wrap_alignment::{WrapAlignment, WrapCrossAlignment};
 
-/// Precision tolerance for run-overflow detection: Flutter's
-/// `precisionErrorTolerance`, at the same `f64` scale (ADR-0098).
+/// Precision tolerance for run-overflow detection, at the `f64` scale
+/// (ADR-0098).
 const PRECISION_TOLERANCE: f64 = flui_foundation::EPSILON;
 
 // ── Layout helpers ────────────────────────────────────────────────────────────
@@ -53,13 +49,13 @@ const PRECISION_TOLERANCE: f64 = flui_foundation::EPSILON;
 ///
 /// * `flipped` — whether this axis runs in the reverse direction.
 ///
-/// Mirrors Flutter `WrapAlignment._distributeSpace`. Only `Start` and `End`
+/// Only `Start` and `End`
 /// are flip-sensitive: reversing the visitation order alone does NOT move
 /// `Start` to the opposite physical edge when there is free space, because the
 /// leading space is still measured from the unflipped edge. `Center`,
 /// `SpaceAround` and `SpaceEvenly` are symmetric, so the flag cannot change
-/// them; `SpaceBetween` is symmetric too except in the one-item case, where the
-/// reference delegates to `Start` and therefore inherits the flip.
+/// them; `SpaceBetween` is symmetric too except in the one-item case, where it
+/// delegates to `Start` and therefore inherits the flip.
 fn distribute_space(
     alignment: WrapAlignment,
     free_space: f64,
@@ -69,8 +65,8 @@ fn distribute_space(
 ) -> (f64, f64) {
     match alignment {
         WrapAlignment::Start => (if flipped { free_space } else { 0.0 }, item_spacing),
-        // `End` is `Start` with the flip inverted -- the reference's own
-        // definition, kept as a delegation so the two cannot drift apart.
+        // `End` is `Start` with the flip inverted, kept as a delegation so
+        // the two cannot drift apart.
         WrapAlignment::End => distribute_space(
             WrapAlignment::Start,
             free_space,
@@ -117,8 +113,6 @@ fn cross_axis_child_offset(alignment: WrapCrossAlignment, run_cross: f64, child_
 // ── Run descriptor ────────────────────────────────────────────────────────────
 
 /// Metrics accumulated for one complete run during `perform_layout`.
-///
-/// Mirrors Flutter's `_RunMetrics`.
 struct RunMetrics {
     /// Index of the first child in this run.
     first_child_index: usize,
@@ -153,9 +147,8 @@ struct WrapSizes {
 /// Child paint offsets are stored in
 /// [`WrapParentData::offset`](flui_rendering::parent_data::WrapParentData).
 ///
-/// # Flutter parity
+/// # Alignment
 ///
-/// Faithful port of `RenderWrap.performLayout` and `_positionChildren`.
 /// [`WrapAlignment::Start`] / [`WrapAlignment::End`] and
 /// [`WrapCrossAlignment::Start`] / [`WrapCrossAlignment::End`] are always
 /// LTR/TTB — FLUI does not yet support RTL text direction.
@@ -174,13 +167,10 @@ pub struct RenderWrap {
     /// Alignment of each child within its run on the cross axis.
     cross_axis_alignment: WrapCrossAlignment,
     /// Reading direction, which decides whether the HORIZONTAL axis is
-    /// flipped. `None` means "not provided"; the reference treats that as
-    /// `Ltr` for layout and only asserts on it when the alignment actually
-    /// depends on a direction (`wrap.dart`'s `debugCheckHasDirectionality`
-    /// path), so an absent value is a defaulted `Ltr` here rather than a
-    /// panic.
+    /// flipped. `None` means "not provided" and is treated as `Ltr` rather
+    /// than panicking.
     text_direction: Option<TextDirection>,
-    /// Whether the VERTICAL axis is flipped. `Down` is the reference default.
+    /// Whether the VERTICAL axis is flipped. `Down` is the default.
     vertical_direction: VerticalDirection,
     /// Cached child count from the most recent `perform_layout` call; used by
     /// `hit_test` which executes after layout.
@@ -188,7 +178,7 @@ pub struct RenderWrap {
     /// How content that overflows this wrap is clipped when it paints.
     ///
     /// `Clip::None` by default — a `Wrap` is a layout, not a viewport, and
-    /// most of them never overflow, so the reference does not make them pay
+    /// most of them never overflow, so they do not pay
     /// for a clip layer they do not need.
     clip_behavior: Clip,
     /// Whether the last accepted layout produced content larger than the box
@@ -217,7 +207,7 @@ impl Default for RenderWrap {
 }
 
 impl RenderWrap {
-    /// Creates a `RenderWrap` with Flutter's defaults: horizontal direction,
+    /// Creates a `RenderWrap` with horizontal direction,
     /// all alignments [`Start`](WrapAlignment::Start), zero spacing.
     pub fn new() -> Self {
         Self::default()
@@ -311,7 +301,7 @@ impl RenderWrap {
 
     /// `(flip_main, flip_cross)` for this wrap's own axes.
     ///
-    /// Ported from `rendering/wrap.dart`'s `_areAxesFlipped`: the reading
+    /// The reading
     /// direction decides the HORIZONTAL flip and `vertical_direction` the
     /// VERTICAL one, and which of those lands on the main axis depends on
     /// `direction` — so a vertical wrap's MAIN axis is flipped by
@@ -387,7 +377,7 @@ impl RenderWrap {
     }
 
     /// Child constraints: loose on the cross axis, bounded by the incoming
-    /// max on the main axis. Mirrors Flutter's `_childConstraints`.
+    /// max on the main axis.
     fn child_constraints(&self, parent: &BoxConstraints) -> BoxConstraints {
         match self.direction {
             Axis::Horizontal => BoxConstraints::new(0.0, parent.max_width, 0.0, f64::INFINITY),
@@ -459,13 +449,9 @@ impl RenderWrap {
             let child_main = self.main_extent(child_size);
             let child_cross = self.cross_extent(child_size);
 
-            // PORT: FLUI's shared core applies PRECISION_TOLERANCE in both
-            // the real and dry layout paths. Flutter's _computeDryLayout
-            // (wrap.dart:656-698) re-runs the run-break loop without
-            // PRECISION_TOLERANCE, so a sub-PRECISION_TOLERANCE overflow
-            // could diverge between Flutter's dry and real sizing. Using
-            // PRECISION_TOLERANCE here makes FLUI's dry == real, which is
-            // more correct for a floating-point layout engine.
+            // The shared core applies PRECISION_TOLERANCE in both the real
+            // and dry layout paths, so a sub-tolerance overflow cannot make
+            // dry and real sizing diverge: dry == real.
             let needs_new_run = run_child_count > 0
                 && run_main + child_main + self.spacing - main_limit > PRECISION_TOLERANCE;
 
@@ -522,9 +508,8 @@ impl RenderWrap {
     /// max-intrinsic main extent as a proxy size and return the resulting
     /// total cross-axis extent.
     ///
-    /// This is an approximation (Flutter would call `getDryLayout`), but it
-    /// gives reasonable intrinsic values and is the standard approach for
-    /// `RenderWrap`-style widgets.
+    /// This is an approximation (a dry layout would be exact), but it
+    /// gives reasonable intrinsic values.
     fn simulate_wrap_cross(&self, max_main: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
         let child_count = ctx.child_count();
         if child_count == 0 {
@@ -606,12 +591,12 @@ impl RenderBox for RenderWrap {
     type Arity = Variable;
     type ParentData = WrapParentData;
 
-    /// Three-phase layout matching Flutter's `RenderWrap.performLayout`.
+    /// Three-phase layout.
     ///
     /// **Phases 1-2** are delegated to the private `compute_runs` so that
     /// `compute_dry_layout` can reuse identical sizing logic.
     ///
-    /// **Phase 3 — child positioning** (`_positionChildren`): distribute
+    /// **Phase 3 — child positioning**: distribute
     /// free cross-axis space among runs via `run_alignment`, then distribute
     /// free main-axis space within each run via `alignment`, then place each
     /// child with its `cross_axis_alignment` offset within the run.
@@ -640,7 +625,7 @@ impl RenderBox for RenderWrap {
         let runs = sized.runs;
         let child_sizes = sized.child_sizes;
 
-        // Oracle (`rendering/wrap.dart:724`): overflow on EITHER axis, where
+        // Overflow on EITHER axis, where
         // the free extent is what the container has left after the children.
         // `compute_runs` already constrained `container`, so a negative free
         // extent is exactly the case where the constraint clamped the content.
@@ -655,11 +640,9 @@ impl RenderBox for RenderWrap {
 
         // ── Phase 3: position children ────────────────────────────────────────
 
-        // Flipping is purely a POSITIONING concern here. The reference also
-        // threads `flipMainAxis` through run assembly, but only to remember
-        // which child leads a run for its linked-list traversal; run
-        // MEMBERSHIP is identical either way, and this port addresses children
-        // by index, so `compute_runs` needs no flip.
+        // Flipping is purely a POSITIONING concern here: run MEMBERSHIP is
+        // identical either way, and children are addressed by index, so
+        // `compute_runs` needs no flip.
         let (flip_main, flip_cross) = self.axes_flipped();
 
         let num_runs = runs.len();
@@ -710,8 +693,7 @@ impl RenderBox for RenderWrap {
             for position_in_run in 0..run.child_count {
                 // `flip_main` walks the run's children from the far end while
                 // the cursor still advances forward, which places the LAST
-                // child at the leading edge -- the reference's
-                // `nextChild = flipMainAxis ? childBefore : childAfter`.
+                // child at the leading edge.
                 //
                 // The SIZE has to follow the child being positioned, not the
                 // iteration step. Reading it from a forward iterator while
@@ -780,8 +762,7 @@ impl RenderBox for RenderWrap {
     fn compute_max_intrinsic_width(&self, height: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
         match self.direction {
             // Best case: all children on one row → SUM of child max widths.
-            // Flutter wrap.dart computeMaxIntrinsicWidth sums the children with
-            // NO inter-child `spacing` term; adding it diverged from the oracle.
+            // The sum has NO inter-child `spacing` term.
             Axis::Horizontal => (0..ctx.child_count())
                 .map(|i| ctx.child_max_intrinsic_width(i, f64::INFINITY))
                 .sum(),
@@ -809,8 +790,8 @@ impl RenderBox for RenderWrap {
             // Horizontal: simulate row wrapping at the given width.
             Axis::Horizontal => self.simulate_wrap_cross(width, ctx),
             // Best case: all children in one column → SUM of child max heights.
-            // Flutter wrap.dart computeMaxIntrinsicHeight sums with NO `spacing`
-            // term (matches the horizontal max-width path above).
+            // The sum has NO `spacing` term (matches the horizontal
+            // max-width path above).
             Axis::Vertical => (0..ctx.child_count())
                 .map(|i| ctx.child_max_intrinsic_height(i, f64::INFINITY))
                 .sum(),
@@ -820,7 +801,7 @@ impl RenderBox for RenderWrap {
     // ── Hit testing ───────────────────────────────────────────────────────────
 
     fn paint(&self, ctx: &mut PaintCx<'_, Variable>) {
-        // Oracle (`rendering/wrap.dart:847-863`). A `Wrap` clips only when it
+        // A `Wrap` clips only when it
         // actually overflowed AND a behaviour was asked for — the default is
         // `Clip::None`, so the common case pushes no layer at all. That is the
         // opposite default from a viewport, and deliberately so: a viewport

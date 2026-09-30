@@ -4,7 +4,7 @@
 //! Roles describe the structural type of UI element and help
 //! assistive technologies understand how to interact with elements.
 //!
-//! Note: In Flutter, interactive element types like Button, Checkbox,
+//! Note: interactive element types like Button, Checkbox,
 //! Slider are represented as flags (`SemanticsFlag`), not roles.
 //! Roles are for structural elements (tables, menus, regions, etc.).
 //!
@@ -22,10 +22,6 @@ pub use flui_protocol::SemanticsRole;
 ///
 /// This is typically used to prevent screen readers from focusing
 /// on parts of the UI.
-///
-/// # Flutter Equivalence
-///
-/// Corresponds to Flutter's `AccessibilityFocusBlockType` enum.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum AccessibilityFocusBlockType {
     /// Accessibility focus is **not blocked**.
@@ -74,10 +70,6 @@ impl AccessibilityFocusBlockType {
 // ============================================================================
 
 /// Order for dumping the semantics tree in debug output.
-///
-/// # Flutter Equivalence
-///
-/// Corresponds to Flutter's `DebugSemanticsDumpOrder` enum.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum DebugSemanticsDumpOrder {
     /// Inverse hit test order (visual, bottom-to-top).
@@ -95,10 +87,6 @@ pub enum DebugSemanticsDumpOrder {
 /// The assertiveness level for accessibility announcements.
 ///
 /// This controls how urgently screen readers announce content.
-///
-/// # Flutter Equivalence
-///
-/// Corresponds to Flutter's `Assertiveness` enum.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum Assertiveness {
     /// Polite announcements wait for the user to finish.

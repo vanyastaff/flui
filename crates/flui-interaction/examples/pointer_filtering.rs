@@ -4,7 +4,7 @@
 //!
 //! 1. [`OneEuroFilter2D`] — speed-adaptive jitter removal (Casiez CHI 2012);
 //! 2. [`ImpulseVelocityTracker`] (Android's default fling strategy) next to
-//!    the least-squares [`VelocityTracker`] (Flutter's strategy), showing how
+//!    the least-squares [`VelocityTracker`], showing how
 //!    the impulse model discounts stale samples after a sharp deceleration.
 //!
 //! Run with: `cargo run -p flui-interaction --example pointer_filtering`
@@ -81,7 +81,7 @@ fn main() {
     let impulse_v = impulse.get_velocity().pixels_per_second.dx;
     let lsq_v = lsq.get_velocity().pixels_per_second.dx;
     println!("   impulse (Android default): {impulse_v:8.1} px/s");
-    println!("   least-squares (Flutter):   {lsq_v:8.1} px/s");
+    println!("   least-squares:             {lsq_v:8.1} px/s");
     println!(
         "\n   The impulse model weights each interval by the velocity CHANGE it\n   \
          represents, so the release velocity tracks the finger's final intent\n   \

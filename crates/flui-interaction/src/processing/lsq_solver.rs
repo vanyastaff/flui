@@ -2,9 +2,8 @@
 //!
 //! Reusable solver for fitting a polynomial to a weighted dataset. Used by
 //! the velocity tracker (gesture fling estimation) and the input predictor
-//! (position extrapolation). Mirrors Flutter's `lsq_solver.dart` API but
-//! with Rust-native types and a static-allocating design for the
-//! 20-sample hot path.
+//! (position extrapolation). It uses a
+//! static-allocating design for the 20-sample hot path.
 //!
 //! # Algorithm
 //!
@@ -14,8 +13,7 @@
 //! The coefficient of determination (R²) is also reported as a
 //! confidence measure.
 //!
-//! This is the same algorithm Flutter uses; it is numerically stable for
-//! the small sample sizes (≤ 20) typical of pointer tracking.
+//! It is numerically stable for the small sample sizes (≤ 20) typical of pointer tracking.
 //!
 //! # Example
 //!
@@ -34,14 +32,12 @@
 //!     let velocity = fit.coefficients[1];
 //! }
 //! ```
-//!
-//! Flutter reference: <https://api.flutter.dev/flutter/gestures/LeastSquaresSolver-class.html>
 
 // ============================================================================
 // Constants
 // ============================================================================
 
-/// Flutter's `precisionErrorTolerance` (1e-6). Vectors whose norm falls
+/// Precision tolerance (1e-6). Vectors whose norm falls
 /// below this are considered linearly dependent and the solve returns
 /// `None`.
 const PRECISION_ERROR_TOLERANCE: f64 = 1e-6;
@@ -50,7 +46,7 @@ const PRECISION_ERROR_TOLERANCE: f64 = 1e-6;
 /// buffer; this is the maximum size the solver will see in practice.
 pub const MAX_SAMPLES: usize = 20;
 
-/// Default maximum polynomial degree. Flutter fits degree=2 (quadratic)
+/// Default maximum polynomial degree: degree 2 (quadratic) is fitted
 /// for the velocity estimator; higher degrees are not meaningful for
 /// the sample sizes we have.
 pub const MAX_DEGREE: usize = 2;
@@ -136,8 +132,8 @@ impl PolynomialFit {
 /// side, so it can be reused across multiple `y`-vectors — see [`solve_two`].
 /// Complexity: O(n²·m), and with n ≤ `MAX_DEGREE`+1 and m ≤ `MAX_SAMPLES` that is
 /// a small bounded constant.
-// Math-style names (x, w, q, r, a, m, n, h, i, j) mirror Flutter's
-// lsq_solver.dart QR/Gram-Schmidt algorithm; renaming would hurt parity review.
+// Math-style names (x, w, q, r, a, m, n, h, i, j) follow the standard
+// QR/Gram-Schmidt notation; renaming would hurt review against the algorithm.
 #[expect(clippy::many_single_char_names)]
 fn factorize(
     x: &[f64],
@@ -213,8 +209,8 @@ fn factorize(
 /// factorization from [`factorize`]. Back-substitutes `R B = Qᵀ W Y` and
 /// computes the R² confidence. `x`/`w` must be the slices that produced the
 /// factorization. Complexity: O(n·m).
-// Math-style names (x, y, w, q, r, m, n, h, i, j) mirror Flutter's
-// lsq_solver.dart back-substitution; renaming would hurt parity review.
+// Math-style names (x, y, w, q, r, m, n, h, i, j) follow the standard
+// back-substitution notation; renaming would hurt review against the algorithm.
 #[expect(clippy::many_single_char_names)]
 fn solve_rhs(
     x: &[f64],
@@ -260,7 +256,7 @@ fn solve_rhs(
             x_pow *= x[h];
         }
         let err = y[h] - predicted;
-        // Flutter weights residuals by w² (lsq_solver.dart).
+        // Residuals are weighted by w².
         let wh_sq = w[h] * w[h];
         sum_squared_error += wh_sq * err * err;
         let v = y[h] - y_mean;
@@ -283,7 +279,7 @@ fn solve_rhs(
 /// dominant O(n²·m) cost — is computed once and reused for both, halving the
 /// factorization work versus two independent `solve_one` calls. (`solve_one`
 /// is `#[cfg(test)]`, so it is not an intra-doc link here.)
-// Math-style names (x, w, q, r, m, n) mirror Flutter's lsq_solver.dart.
+// Math-style names (x, w, q, r, m, n) follow the standard QR notation.
 #[expect(clippy::many_single_char_names)]
 pub(crate) fn solve_two(
     x: &[f64],

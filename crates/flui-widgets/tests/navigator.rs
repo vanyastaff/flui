@@ -3,14 +3,12 @@
 //! (ADR-0083 §4); the handle, export and registry unit tests stay in
 //! `src/navigator/navigator_tests.rs`.
 //!
-//! # Parity oracles
+//! # Scenarios
 //!
-//! `.flutter/packages/flutter/test/widgets/navigator_test.dart` —
-//! `'Can navigator navigate to and from a stateful widget'`,
-//! `'Navigator.of fails gracefully when not found in context'`,
-//! `'Navigator.of rootNavigator finds root Navigator'`,
-//! `'Can push, pop, and replace in sequence'`, `'removeRoute'`.
-//! Expected values are read from `navigator.dart`, not from running this code.
+//! Navigating to and from a stateful widget, a graceful failure when no
+//! navigator is in context, finding the root navigator, push/pop/replace in
+//! sequence, and `remove_route`. Expected values are fixed by the documented
+//! contract, not by running this code.
 //!
 //! Unlike `src/navigator/tests.rs` (the route stack's pure-data suite), these drive a
 //! real element tree.
@@ -116,8 +114,7 @@ fn layers(harness: &mut Harness) -> Vec<ElementId> {
 // ============================================================================
 
 /// `push` installs the route, adds its overlay entry, and rearranges — so the
-/// overlay order matches the route stack, bottom → top
-/// (`_allRouteOverlayEntries`, `navigator.dart:4151`).
+/// overlay order matches the route stack, bottom → top.
 ///
 /// Red-check: drop the `self.shared.apply(&outcome)` in `NavigatorHandle::push`;
 /// the new layer never reaches the overlay.
@@ -136,8 +133,8 @@ pub(crate) fn navigator_push_builds_new_route_and_rearranges_overlay() {
 }
 
 /// `pop(result)` removes the top route, completes its future, and drops its
-/// overlay entry. Flutter passes `rearrangeOverlay: false` here (`:5671`) because
-/// `OverlayEntry.remove()` already updated the overlay.
+/// overlay entry. No rearrange is needed here because removing the entry
+/// already updated the overlay.
 ///
 /// Red-check: skip the `entry.remove()` loop in `NavigatorShared::apply`; the
 /// stale layer stays in the overlay.
@@ -205,7 +202,7 @@ pub(crate) fn navigator_of_then_push_from_a_route_build_does_not_deadlock() {
 // ============================================================================
 
 /// `PopScope` — ADR-0019's deferred veto, landed via the route's `PopEntry`
-/// registry (`routes.dart:1980`, `:2033-2050`). A `can_pop(false)` scope makes
+/// registry. A `can_pop(false)` scope makes
 /// `maybe_pop` refuse-and-report-handled — the route stays, and every scope
 /// hears `on_pop_invoked(false)`. A programmatic `pop()` is **not** blocked
 /// (`canPop` guards the user's back navigation, not code) and reports `true`.
@@ -262,7 +259,7 @@ pub(crate) fn pop_scope_vetoes_maybe_pop_but_not_programmatic_pop() {
 }
 
 // ============================================================================
-// Local history (routes.dart:747-973)
+// Local history
 // ============================================================================
 
 pub(crate) mod local_history {
@@ -348,7 +345,7 @@ pub(crate) mod local_history {
         }
     }
 
-    /// **The Flutter example, end to end** (`routes.dart:762-880`): with an
+    /// **The local-history flow, end to end**: with an
     /// entry on the top route, a pop consumes the **entry** — the route stays,
     /// its future stays pending, observers hear nothing — and the next pop
     /// removes the route itself.
@@ -380,12 +377,12 @@ pub(crate) mod local_history {
         assert_eq!(
             route_result.try_take(),
             None,
-            "the route's future stays pending (`routes.dart:964-966`)"
+            "the route's future stays pending"
         );
         assert_eq!(
             pops.0.load(Ordering::SeqCst),
             0,
-            "observers hear nothing for an entry pop (`navigator.dart:4517-4519`)"
+            "observers hear nothing for an entry pop"
         );
 
         assert!(handle.maybe_pop(), "the second pop takes the route");
@@ -401,7 +398,7 @@ pub(crate) mod local_history {
 }
 
 // ============================================================================
-// User gestures (navigator.dart:5803-5860)
+// User gestures
 // ============================================================================
 
 /// A panic in a route lifecycle hook must not brick the navigator.

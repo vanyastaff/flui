@@ -137,7 +137,7 @@ enum Commands {
         #[arg(short, long)]
         interactive: bool,
 
-        /// Generate a Flutter-parity hot-reload project (three-crate
+        /// Generate a hot-reload project (three-crate
         /// host / worker / types layout).
         ///
         /// The host binary holds the element-tree state; the reloadable worker

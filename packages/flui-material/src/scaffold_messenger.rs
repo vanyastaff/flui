@@ -3,24 +3,21 @@
 //! (returned by [`ScaffoldMessengerHandle::show_snack_bar`]) and
 //! [`SnackBarClosedReason`].
 //!
-//! # Flutter parity
+//! # Scope
 //!
-//! `material/scaffold.dart`'s `ScaffoldMessenger`/`ScaffoldMessengerState`
-//! (oracle tag `3.44.0`), narrowed to the snack-bar half of that type (no
-//! `MaterialBanner` queue — a separate, undated feature). Every citation
-//! below is `scaffold.dart` unless noted.
+//! Narrowed to the snack-bar half of a full messenger (no `MaterialBanner`
+//! queue — a separate, undated feature).
 //!
 //! ## Named divergence: `AnimationController`-as-timer
 //!
-//! The oracle drives the per-snackbar display duration with a real
-//! `dart:async` `Timer` (`_snackBarTimer`, `:619`). FLUI has no
+//! A real timer would drive the per-snackbar display duration. FLUI has no
 //! frame-independent virtual-clock timer primitive yet (`flui-scheduler`
 //! only drives the frame loop) — see `docs/ROADMAP.md`. This substrate
 //! substitutes a second, per-snackbar [`AnimationController`] whose
 //! `duration` is the snackbar's own configured display duration
 //! ([`crate::SnackBar::duration`]): it is `forward()`-ed when the entrance
 //! animation completes, and its own `Completed` status stands in for the
-//! oracle's `Timer` callback. **Honest cost**: unlike a real timer, this
+//! timer callback. **Honest cost**: unlike a real timer, this
 //! keeps the frame loop scheduled for the full display duration (a `Vsync`
 //! registration ticks every frame, not just once at expiry) — accepted
 //! because it makes the duration trivially controllable under a virtual
@@ -109,8 +106,7 @@
 //!   public [`ScaffoldMessengerHandle`] method (`show_snack_bar`/
 //!   `hide_current_snack_bar`/`remove_current_snack_bar`/`clear_snack_bars`),
 //!   which only ever run from event-handler call stacks. `on_closed` fires
-//!   immediately here — Flutter parity: `removeCurrentSnackBar` completes its
-//!   completer synchronously, in the same call.
+//!   immediately here — removal completes synchronously, in the same call.
 //! - **`ReconcileOrigin::Build`** — from [`ScaffoldMessengerState::build`],
 //!   reached when the Send-safe controller listeners scheduled a rebuild for
 //!   a PURELY tick-driven status settle (no explicit API call in between —
@@ -157,7 +153,7 @@
 //! then hidden via `MessengerCore::hide_current` with
 //! [`SnackBarClosedReason::Hide`] — `clearSnackBars` delegates to
 //! `hideCurrentSnackBar()`, whose reason parameter defaults to
-//! `SnackBarClosedReason.hide` (`:441`), *not* `.remove` as its name might
+//! `SnackBarClosedReason.hide`, *not* `.remove` as its name might
 //! suggest.
 //!
 //! ## Completion slot
@@ -165,19 +161,16 @@
 //! Each queued entry carries a `reason` cell the eventual pop reads (falling
 //! back to [`SnackBarClosedReason::Remove`] only in the unreachable-in-
 //! practice case of a pop with no reason ever recorded). It is set two
-//! different ways, matching an asymmetry in the oracle itself:
+//! different ways, an intentional asymmetry:
 //!
 //! - `QueuedEntry::set_reason_once` (hide, timeout) — **provisional**: only
-//!   applies if nothing has been recorded yet. Flutter parity:
-//!   `hideCurrentSnackBar`'s completion is itself deferred to
-//!   `_snackBarController!.reverse().then(...)` — it does not complete
-//!   anything until the reverse actually settles, so whatever reason is
-//!   recorded here is only a promise about what a LATER completion will
-//!   carry, not a completion itself.
+//!   applies if nothing has been recorded yet. A hide's completion is
+//!   itself deferred until the reverse animation actually settles, so
+//!   whatever reason is recorded here is only a promise about what a LATER
+//!   completion will carry, not a completion itself.
 //! - `QueuedEntry::set_reason` (remove) — **unconditional overwrite**.
-//!   Flutter parity: `removeCurrentSnackBar` completes the still-pending
-//!   completer with ITS OWN reason immediately, `if (!completer.isCompleted)`
-//!   — a race it always wins against a hide/timeout that recorded a reason
+//!   A remove completes the still-pending completion with ITS OWN reason
+//!   immediately — a race it always wins against a hide/timeout that recorded a reason
 //!   but has not yet actually completed (settled to `Dismissed`). So a
 //!   `remove_current_snack_bar()` call arriving mid-reverse (after an
 //!   earlier `hide_current_snack_bar()`) must report `Remove`, not the
@@ -215,14 +208,13 @@ use flui_sdk::widgets::animated::VsyncScope;
 
 use crate::snack_bar::SnackBar;
 
-/// The shared entrance/exit controller's duration — Flutter's
-/// `_snackBarTransitionDuration` (`snack_bar.dart`).
+/// The shared entrance/exit controller's duration.
 const ENTRY_TRANSITION_DURATION: Duration = Duration::from_millis(250);
 
 /// Specifies how a [`SnackBar`] was closed.
 ///
-/// Flutter parity: `SnackBarClosedReason` (`snack_bar.dart`). See the module
-/// docs' "V1 scope" section for which variants are reachable today.
+/// See the module docs' "V1 scope" section for which variants are
+/// reachable today.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SnackBarClosedReason {
     /// Closed after the user pressed the [`crate::snack_bar::SnackBarAction`].
@@ -252,9 +244,7 @@ type ClosedCallbackSlot = Rc<RefCell<Option<Box<dyn FnOnce(SnackBarClosedReason)
 /// caller register a one-shot callback for when this particular entry
 /// closes.
 ///
-/// Flutter parity: `ScaffoldFeatureController<SnackBar,
-/// SnackBarClosedReason>` narrowed to the one capability V1 exposes: the
-/// oracle's `Completer<SnackBarClosedReason>`/`Future` pair becomes a
+/// Narrowed to the one capability V1 exposes: the completion is a
 /// synchronous one-shot callback slot (this substrate has no async
 /// `Future`-in-the-view-tree plumbing to hang a `Future` on).
 #[derive(Clone)]
@@ -536,14 +526,13 @@ impl MessengerCore {
         self.last_duration_status.set(AnimationStatus::Dismissed);
     }
 
-    /// Flutter parity: `hideCurrentSnackBar` (`:441-459`), minus the
-    /// `accessibleNavigation` immediate-complete branch (not ported — no
+    /// Always takes the animated-reverse path: there is no
+    /// `accessibleNavigation` immediate-complete branch (no
     /// `MediaQuery.accessibleNavigation` consumer exists yet in this
-    /// substrate; always takes the animated-reverse path).
+    /// substrate).
     fn hide_current(&self, reason: SnackBarClosedReason) {
         if self.entry_controller.status() == AnimationStatus::Dismissed {
-            // Oracle: `if (_snackBars.isEmpty || controller.isDismissed)
-            // return;` — nothing showing to hide, including the empty-queue
+            // Nothing showing to hide, including the empty-queue
             // case (an empty queue always leaves the controller Dismissed
             // under this module's invariant).
             return;
@@ -556,8 +545,7 @@ impl MessengerCore {
         let _ = self.entry_controller.reverse();
     }
 
-    /// Flutter parity: `removeCurrentSnackBar` (`:424-436`) — no
-    /// `isDismissed` early return in the oracle, which is exactly why this
+    /// There is no `isDismissed` early return here, which is exactly why this
     /// needs the direct-pop fallback the module docs describe. Overwrites
     /// the reason unconditionally, not once-only — see the module docs'
     /// "Completion slot" section for why `remove` always wins over a
@@ -578,8 +566,7 @@ impl MessengerCore {
         }
     }
 
-    /// Flutter parity: `clearSnackBars` (`:463-472`) — see the module docs'
-    /// "`clearSnackBars`" section for the exact reason `hide_current` closes
+    /// See the module docs' "`clearSnackBars`" section for the exact reason `hide_current` closes
     /// the surviving current entry with.
     fn clear(&self) {
         if self.queue.borrow().is_empty()
@@ -703,8 +690,7 @@ impl ScaffoldMessengerHandle {
     /// keyed by [`ElementId`], a later call with the same id simply replaces
     /// the stored [`RebuildHandle`]. If a snack bar is already
     /// showing/queued, schedules an immediate rebuild so the newly
-    /// registered scaffold picks it up (Flutter parity: `_register`,
-    /// `:211-223`).
+    /// registered scaffold picks it up.
     pub(crate) fn register_scaffold(&self, element_id: ElementId, rebuild: RebuildHandle) {
         if !self.shared.queue.borrow().is_empty() {
             rebuild.schedule(flui_sdk::view::RebuildReason::StateChange);
@@ -757,7 +743,7 @@ impl ScaffoldMessengerHandle {
     /// is already showing, `snack_bar` queues behind it (FIFO) and is shown
     /// once every earlier entry has closed.
     ///
-    /// Flutter parity: `showSnackBar` (`:314-384`), narrowed to the one
+    /// Narrowed to the one
     /// snack bar per call this substrate exposes (no `snackBarAnimationStyle`
     /// override — the transition duration is fixed at
     /// `ENTRY_TRANSITION_DURATION`).
@@ -820,8 +806,6 @@ impl ScaffoldMessengerHandle {
 }
 
 /// Publishes a [`ScaffoldMessengerHandle`] to its subtree.
-///
-/// Flutter parity: `_ScaffoldMessengerScope` (`scaffold.dart`).
 #[derive(Clone)]
 pub struct ScaffoldMessengerScope {
     handle: ScaffoldMessengerHandle,
@@ -886,8 +870,6 @@ impl_inherited_view!(ScaffoldMessengerScope);
 /// Manages [`SnackBar`] queuing/display for every registered
 /// [`crate::Scaffold`] descendant. Mount once, above every [`crate::Scaffold`]
 /// that should share a queue.
-///
-/// Flutter parity: `ScaffoldMessenger` (`scaffold.dart`, oracle tag `3.44.0`).
 ///
 /// # Examples
 ///

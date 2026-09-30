@@ -23,11 +23,11 @@ fn two_column_delegate() -> Arc<dyn SliverGridDelegate> {
 // ============================================================================
 
 // ============================================================================
-// Test 2 — oracle 2-D positions
+// Test 2 — 2-D positions
 // ============================================================================
 
 /// A 2-column 200 px-wide grid with square 100×100 tiles must place tiles at
-/// (0, 0), (100, 0), (0, 100), (100, 100) — the same oracle
+/// (0, 0), (100, 0), (0, 100), (100, 100) — the same positions
 /// `crates/flui-objects/tests/render_object_harness.rs`'s
 /// `harness_render_sliver_grid_pre_seeded_tiles_lay_out_correctly` pins at the
 /// render-object level, proving the delegate-windowed geometry is unchanged
@@ -57,8 +57,7 @@ pub(crate) fn lazy_grid_view_builder_places_tiles_at_oracle_positions() {
 
     // The grid positions the per-item `RenderRepaintBoundary`; the tile inside
     // it sits at (0, 0) relative to that. Reading the leaf's offset would give
-    // four zeroes — the same structure Flutter produces, since its delegates
-    // wrap children in a boundary by default.
+    // four zeroes — the delegates wrap children in a boundary by default.
     let tile_ids = laid.find_all_by_render_type("RenderRepaintBoundary");
     assert_eq!(
         tile_ids.len(),

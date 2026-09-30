@@ -1,24 +1,21 @@
 //! `RenderCustomPaint` — delegates painting (and optionally hit testing) to
 //! user-supplied [`CustomPainter`]s around a single child.
 //!
-//! Flutter parity: `rendering/custom_paint.dart` `RenderCustomPaint`. Paint
-//! order is background painter → child → foreground painter; hit-test order
-//! is foreground → child → background (oracle L559-570). Sizing: to the
-//! child when present, else `constraints.constrain(preferred_size)` (oracle
-//! `computeSizeForNoChild`, L579).
+//! Paint order is background painter → child → foreground painter; hit-test
+//! order is foreground → child → background. Sizing: to the child when
+//! present, else `constraints.constrain(preferred_size)`.
 //!
-//! Repaint wiring (`CustomPainter.addListener`/`removeListener` driving
-//! `markNeedsPaint`) is implemented via ADR-0013: [`CustomPainter::repaint`]
+//! Repaint wiring (a painter's listenable driving `mark_needs_paint`) is
+//! implemented via ADR-0013: [`CustomPainter::repaint`]
 //! returns an optional [`Listenable`](flui_foundation::Listenable) that
 //! [`RenderBox::attach`] subscribes to
 //! (marking this node needing paint on notify) and [`RenderBox::detach`] tears
 //! down; a painter swap migrates the subscription.
 //!
-//! Deferred vs. the oracle (documented, not silently dropped): `semanticsBuilder`
-//! and the `isComplex`/`willChange` raster-cache hints have no FLUI-side
-//! plumbing yet — FLUI's [`PaintCx`] has no `setIsComplexHint`/`setWillChangeHint`
-//! equivalent. The two hint fields are carried on this type for Flutter-shape
-//! parity but are currently inert.
+//! Deferred (documented, not silently dropped): a semantics builder and the
+//! `is_complex`/`will_change` raster-cache hints have no FLUI-side
+//! plumbing yet — [`PaintCx`] has no raster-cache-hint API. The two hint
+//! fields are carried on this type but are currently inert.
 
 use std::sync::Arc;
 
@@ -121,10 +118,8 @@ impl RenderCustomPaint {
     /// Hints that this layer's painting is complex enough to benefit from
     /// raster caching.
     ///
-    /// Carried for Flutter constructor-shape parity (`RenderCustomPaint`'s
-    /// `isComplex` is a plain field with no custom setter) but currently
-    /// inert: FLUI's [`PaintCx`] has no raster-cache-hint API to forward it
-    /// to. See the module docs for the full deferred list.
+    /// Currently inert: FLUI's [`PaintCx`] has no raster-cache-hint API to
+    /// forward it to. See the module docs for the full deferred list.
     #[must_use]
     pub fn with_is_complex(mut self, is_complex: bool) -> Self {
         self.is_complex = is_complex;
@@ -175,7 +170,7 @@ impl RenderCustomPaint {
     /// Replaces the background painter.
     ///
     /// Returns the independently evaluated paint and semantics work required
-    /// by Flutter's `_didUpdatePainter` contract. Absence and concrete-type
+    /// by a painter swap. Absence and concrete-type
     /// transitions require both; same-type replacements consult
     /// [`CustomPainter::should_repaint`] and
     /// [`CustomPainter::should_rebuild_semantics`] separately.
@@ -224,8 +219,8 @@ impl RenderCustomPaint {
     }
 }
 
-/// Flutter `_didUpdatePainter` (oracle L450-469), with paint and semantics
-/// decisions kept independent for same-type delegates.
+/// The impact of a painter swap, with paint and semantics decisions kept
+/// independent for same-type delegates.
 fn painter_update_impact(
     old: Option<&Arc<dyn CustomPainter>>,
     new: Option<&Arc<dyn CustomPainter>>,
@@ -255,11 +250,10 @@ fn painter_update_impact(
 }
 
 /// Runs `painter.paint(canvas, size)` inside a balanced `save()`/`restore()`
-/// pair (Flutter `RenderCustomPaint._paintWithPainter`, oracle L583-636).
+/// pair.
 ///
 /// No offset translation: the fragment recorder pre-translates `canvas` to
-/// this node's local origin before paint runs (unlike the oracle, which
-/// paints in the parent's coordinate space and translates explicitly).
+/// this node's local origin before paint runs.
 fn paint_with_painter(canvas: &mut Canvas, size: Size, painter: &dyn CustomPainter) {
     canvas.save();
     let save_count = canvas.save_count();
@@ -274,8 +268,7 @@ fn paint_with_painter(canvas: &mut Canvas, size: Size, painter: &dyn CustomPaint
 }
 
 /// Childless intrinsic answer for one axis: the preferred extent when
-/// finite, else `0.0` (Flutter `computeMinIntrinsicWidth` et al., oracle
-/// L513-543 — the same formula serves min and max on both axes).
+/// finite, else `0.0` (the same formula serves min and max on both axes).
 fn finite_extent_or_zero(extent: f64) -> f64 {
     if extent.is_finite() { extent } else { 0.0 }
 }
@@ -383,7 +376,7 @@ impl RenderBox for RenderCustomPaint {
     }
 
     fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Single, Self::ParentData>) -> bool {
-        // Flutter order (oracle L559-570): bounds gate, then foreground →
+        // Order: bounds gate, then foreground →
         // child → background, each painter's `None` falling back to its
         // documented default (foreground misses by default, background
         // hits by default).

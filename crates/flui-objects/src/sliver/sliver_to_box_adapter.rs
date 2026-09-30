@@ -1,6 +1,6 @@
 //! `RenderSliverToBoxAdapter` — Sliver wrapper for one Box child.
 //!
-//! Mirrors Flutter's `RenderSliverToBoxAdapter`: the Box child is laid out
+//! The Box child is laid out
 //! with tight cross-axis constraints derived from the sliver constraint space,
 //! then the child's main-axis size becomes the sliver scroll extent.
 

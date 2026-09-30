@@ -7,8 +7,6 @@
 //! - Pointer stays within touch_slop of initial position
 //! - Pointer up within timeout
 //!
-//! Flutter reference: <https://api.flutter.dev/flutter/gestures/TapGestureRecognizer-class.html>
-//!
 //! # Button support
 //!
 //! The recogniser is button-aware: callers can register
@@ -19,7 +17,7 @@
 //! path fires the `on_secondary_tap*` callbacks on
 //! [`PointerButton::Secondary`] events; the tertiary path fires on
 //! [`PointerButton::Auxiliary`]
-//! (Flutter maps "tertiary" to the middle / auxiliary mouse button).
+//! ("tertiary" is the middle / auxiliary mouse button).
 //! If no button-specific callback is registered, the event is
 //! silently dropped (the recogniser stays a no-op for that button).
 
@@ -39,14 +37,13 @@ use crate::{
     traits::PointerEventExtTrait,
 };
 
-/// Tap button slot — matches Flutter's `kPrimaryButton` / `kSecondaryButton`
-/// / `kTertiaryButton` separation.
+/// Tap button slot: primary, secondary and tertiary are tracked separately.
 ///
 /// Button mapping:
 /// - [`TapButton::Primary`]   ↔ `ui_events::pointer::PointerButton::Primary`
 /// - [`TapButton::Secondary`] ↔ `ui_events::pointer::PointerButton::Secondary`
 /// - [`TapButton::Tertiary`]  ↔ `ui_events::pointer::PointerButton::Auxiliary`
-///   (Flutter convention — middle mouse button).
+///   (the middle mouse button).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum TapButton {
@@ -59,12 +56,12 @@ pub enum TapButton {
 }
 
 impl TryFrom<PointerButton> for TapButton {
-    /// The unsupported button (outside the three Flutter-tracked slots).
+    /// The unsupported button (outside the three tracked slots).
     type Error = PointerButton;
 
     /// Map a raw [`PointerButton`] event payload to a [`TapButton`] slot.
     ///
-    /// Errors for buttons outside the three Flutter-tracked slots
+    /// Errors for buttons outside the three tracked slots
     /// (X1/X2/pen-eraser/etc.) — those events are ignored by the tap
     /// recogniser entirely.
     fn try_from(button: PointerButton) -> Result<Self, Self::Error> {
@@ -138,9 +135,8 @@ pub struct TapGestureRecognizer {
     settings: Arc<Mutex<GestureSettings>>,
 
     /// Pending tap-down details captured at add_pointer, fired on
-    /// arena accept (Flutter parity at tap.dart — `on_tap_down` callback
-    /// only fires after `BaseTapGestureRecognizer._checkDown` resolves
-    /// `_sentTapDown = true` post-arena). Cleared on accept or reject.
+    /// arena accept (the `on_tap_down` callback only fires once the arena
+    /// has resolved in this recognizer's favour). Cleared on accept or reject.
     pending_down: Arc<Mutex<Option<PendingDown>>>,
 
     /// Pending tap-up details captured at handle_event Up; fired by
@@ -164,16 +160,13 @@ pub struct TapGestureRecognizer {
     /// to tell a *stale* arena resolution (for a pointer this recognizer has
     /// already abandoned) apart from the current sequence's own resolution.
     ///
-    /// Flutter parity: `recognizer.dart:668 PrimaryPointerGestureRecognizer._primaryPointer`
-    /// — deliberately does *not* clear when tracking stops (unlike
+    /// Deliberately does *not* clear when tracking stops (unlike
     /// [`RecognizerBase::primary_pointer`], which `stop_tracking` resets to
     /// `None` the moment the pointer's up event is processed), specifically
     /// so a held gesture's late win/loss can still be compared against the
-    /// pointer that produced it. `BaseTapGestureRecognizer::acceptGesture`
-    /// / `::rejectGesture` (`tap.dart:348-368`) both guard on
-    /// `pointer == primaryPointer` before touching `_down`/`_up`/
-    /// `_wonArenaForPrimaryPointer` — this field plus the guards in
-    /// `accept_gesture`/`reject_gesture`/`resolve_pointer` port that check.
+    /// pointer that produced it. `accept_gesture`, `reject_gesture` and
+    /// `resolve_pointer` guard on `pointer == sequence_pointer` before
+    /// touching the pending down/up state or the accepted flag.
     sequence_pointer: Arc<Mutex<Option<PointerId>>>,
 }
 
@@ -186,7 +179,7 @@ impl std::fmt::Debug for TapGestureRecognizer {
     }
 }
 
-// Field names keep Flutter's `onTapDown`-style callback names (parity).
+// Field names keep the `on_tap_down`-style callback names.
 #[expect(clippy::struct_field_names)]
 #[derive(Default)]
 struct TapCallbacks {
@@ -433,13 +426,12 @@ impl TapGestureRecognizer {
     }
 
     /// Handle tap down event — records pending down details + transitions
-    /// state. The per-button down callback is NOT fired here; per Flutter
-    /// parity at `tap.dart::_BaseTapGestureRecognizer::_checkDown`, the
-    /// callback fires only after arena accept (see [`Self::accept_gesture`]).
+    /// state. The per-button down callback is NOT fired here; it
+    /// fires only after arena accept (see [`Self::accept_gesture`]).
     ///
     /// `button` is locked at down-time; a primary-button down that
     /// later receives a secondary up is treated as cancel (button
-    /// mismatch), matching Flutter's `_route` rejection path.
+    /// mismatch).
     fn handle_tap_down(
         &self,
         position: Offset<f64>,
@@ -459,8 +451,7 @@ impl TapGestureRecognizer {
     }
 
     /// Fire pending per-button `on_*_tap_down` callback, if any. Called
-    /// from `accept_gesture` once arena resolves us as the winner. Matches
-    /// Flutter `tap.dart::_checkDown`'s `_sentTapDown` guard — fires
+    /// from `accept_gesture` once arena resolves us as the winner. Fires
     /// exactly once per gesture sequence.
     fn fire_pending_tap_down(&self) {
         let Some(pending) = self.pending_down.lock().take() else {
@@ -472,7 +463,7 @@ impl TapGestureRecognizer {
         }
     }
 
-    /// Deliver the won tap — Flutter's `_checkDown` + `_checkUp`.
+    /// Deliver the won tap.
     ///
     /// Fires the per-button `on_*_tap_down` (idempotent via `pending_down`),
     /// then `on_*_tap_up` + `on_*_tap`, but ONLY once the arena has accepted
@@ -489,7 +480,7 @@ impl TapGestureRecognizer {
         let Some(pending_up) = self.pending_up.lock().take() else {
             return;
         };
-        // Fire per-button tap-down first (Flutter ordering), then up + tap.
+        // Fire per-button tap-down first, then up + tap.
         self.fire_pending_tap_down();
         let (up_cb, tap_cb) = {
             let cbs = self.callbacks.borrow();
@@ -515,9 +506,8 @@ impl TapGestureRecognizer {
     /// recognizers also receive Up events without winning).
     ///
     /// Button mismatch (down was Primary, up is Secondary) cancels
-    /// the tap rather than firing the secondary slot — Flutter
-    /// `tap.dart::_checkUp` routes the up to whichever button stream
-    /// initiated the down.
+    /// the tap rather than firing the secondary slot: the up is routed to
+    /// whichever button stream initiated the down.
     fn handle_tap_up(
         &self,
         position: Offset<f64>,
@@ -615,7 +605,7 @@ impl TapGestureRecognizer {
         let current_state = *self.gesture_state.lock();
 
         if current_state == TapState::Down {
-            // Call on_tap_move callback (primary-only — Flutter has no
+            // Call on_tap_move callback (primary-only: there is no
             // secondary/tertiary move; a primary-button tap that moves is
             // still observed by `on_tap_move`).
             if let Some(callback) = self.callbacks.borrow().on_tap_move.clone() {
@@ -683,15 +673,13 @@ impl GestureRecognizer for TapGestureRecognizer {
         }
         // Reset accepted flag + pending_up for the new sequence (flags
         // from a prior gesture must not bleed into the new one), and adopt
-        // `pointer` as the sequence this recognizer now tracks. Flutter
-        // parity: `tap.dart:277-298 addAllowedPointer` resets `_down`/`_up`
-        // and reassigns `_primaryPointer` the moment `state == ready` — which
-        // for FLUI holds on every `add_pointer` call, since the previous
+        // `pointer` as the sequence this recognizer now tracks. This holds on
+        // every `add_pointer` call, since the previous
         // pointer's own `stop_tracking()` already cleared
         // `RecognizerBase::primary_pointer`. A pointer whose down+up were
         // both seen but whose arena entry is still held open (e.g. a
-        // double-tap's inter-tap window) is abandoned here exactly as
-        // Flutter abandons it — see `accept_gesture`/`reject_gesture` below
+        // double-tap's inter-tap window) is abandoned here — see
+        // `accept_gesture`/`reject_gesture` below
         // for how that pointer's late resolution is then ignored rather
         // than corrupting this new sequence.
         *self.accepted.lock() = None;
@@ -782,9 +770,8 @@ impl GestureRecognizer for TapGestureRecognizer {
 
     fn dispose(&self) {
         self.state.mark_disposed();
-        // Reject arena entries + clear tracked pointer (Flutter parity:
-        // gestures/recognizer.dart:485-493 disposing GestureRecognizer
-        // clears arena state for tracked pointers).
+        // Reject arena entries + clear tracked pointer, so a disposed
+        // recognizer never lingers in the arena for a tracked pointer.
         self.state.reject();
         let mut callbacks = self.callbacks.borrow_mut();
         callbacks.on_tap_down = None;
@@ -815,9 +802,8 @@ impl GestureRecognizer for TapGestureRecognizer {
 // Canonical trait hierarchy adoption
 // =============================================================================
 //
-// Flutter parity: `tap.dart:202 BaseTapGestureRecognizer extends
-// PrimaryPointerGestureRecognizer`. The trait infrastructure
-// at one_sequence.rs + primary_pointer.rs is now implemented for Tap.
+// Tap implements the trait infrastructure in one_sequence.rs and
+// primary_pointer.rs.
 
 impl crate::recognizers::OneSequenceGestureRecognizer for TapGestureRecognizer {
     fn tracked_pointers(&self) -> Vec<PointerId> {
@@ -868,12 +854,10 @@ impl GestureArenaMember for TapGestureRecognizer {
         // A held gesture (e.g. a double-tap's inter-tap window) can resolve
         // *after* this recognizer has already moved on to a newer pointer's
         // sequence (`add_pointer` reassigns `sequence_pointer` the moment a
-        // new pointer arrives — see its doc comment). Flutter parity:
-        // `tap.dart:348-355 BaseTapGestureRecognizer.acceptGesture` guards
-        // `pointer == primaryPointer` before touching `_down`/`_up`/
-        // `_wonArenaForPrimaryPointer`; a late win for an already-abandoned
-        // pointer is silently dropped there too, rather than resurrecting
-        // stale state or corrupting whatever sequence is now current.
+        // new pointer arrives — see its doc comment). A late win for an
+        // already-abandoned pointer is silently dropped, rather than
+        // resurrecting stale state or corrupting whatever sequence is now
+        // current.
         if *self.sequence_pointer.lock() != Some(pointer) {
             return;
         }
@@ -998,9 +982,9 @@ mod tests {
     // Mirrors the double-tap-hold overlap: pointer A's up is recorded but
     // its arena entry is still held (e.g. `DoubleTapGestureRecognizer`'s
     // inter-tap window) when pointer B starts a new, unrelated sequence on
-    // the SAME shared `TapGestureRecognizer`. Flutter parity: `tap.dart:
-    // 348-368 acceptGesture`/`rejectGesture` guard on `pointer ==
-    // primaryPointer`; a pointer whose down+up were both seen but whose
+    // the SAME shared `TapGestureRecognizer`. `accept_gesture` and
+    // `reject_gesture` guard on `pointer == sequence_pointer`; a pointer
+    // whose down+up were both seen but whose
     // arena entry never resolved before a newer pointer took over is
     // abandoned, and its late resolution is a no-op rather than resurrected
     // or left to clobber the newer sequence's state.

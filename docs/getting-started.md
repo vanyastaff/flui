@@ -190,6 +190,6 @@ RUST_LOG=flui_platform=trace,flui_engine=info cargo test -p flui-platform
 
 ## See Also
 
-- [Architecture](architecture.md) — three-tree pipeline and crate DAG
+- [Architecture](architecture.md) — frame pipeline and crate DAG
 - [Crates Map](crates.md) — per-layer crate inventory and status
 - [Testing](testing.md) — running the test suite and benchmarks

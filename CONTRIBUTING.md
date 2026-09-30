@@ -21,9 +21,9 @@ code, in this order:
    has not been decided, only defaulted into.
 3. **Contract** — what changes for callers: public API, observable behavior, error cases, edge
    cases.
-4. **Reference check** — for render/layout/paint/hit-test/semantics/scheduling changes, what does
-   `.flutter/` do? If FLUI diverges, name what's better and how a test proves it (see
-   [`AGENTS.md`](AGENTS.md)'s Design stance).
+4. **Reference check** — for render/layout/paint/hit-test/semantics/scheduling changes, how do
+   comparable frameworks solve it, and why is this design right for FLUI? Name the test that
+   proves it (see [`AGENTS.md`](AGENTS.md)'s Design stance).
 5. **Plan** — the dependency-ordered steps, each one shippable.
 
 Put the record where the change is: an ADR under `docs/adr/` for a protocol-level or cross-crate
@@ -81,6 +81,6 @@ that test into the issue — it is the reproduction, and it is what stops the bu
 ## See Also
 
 - [Getting Started](docs/getting-started.md) — toolchain setup and first build
-- [Architecture](docs/architecture.md) — three-tree pipeline + layered DAG
+- [Architecture](docs/architecture.md) — frame pipeline + layered DAG
 - [Crates Map](docs/crates.md) — per-layer crate inventory and status
 - [Testing](docs/testing.md) — quality gates and coverage targets

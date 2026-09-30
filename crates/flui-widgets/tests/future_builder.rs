@@ -5,16 +5,13 @@
 //! The `flui-view` unit tests cover the seam's internals; this file covers what an
 //! app author can observe.
 //!
-//! # Parity oracles
+//! # Scenarios
 //!
-//! Expected values come from Flutter, not from running the code first:
-//! `.flutter/packages/flutter/test/widgets/async_test.dart`
-//! (`'tracks life-cycle of Future to success'`, `'… to error'`,
-//! `'gives expected snapshot with SynchronousFuture'`,
-//! `'runs the builder using given initial data'`,
-//! `'ignores initialData when reconfiguring'`,
-//! `'gracefully handles transition to other future'`,
-//! `'gracefully handles transition to null future'`).
+//! Expected values are fixed by the documented contract, not by running the
+//! code first: the life-cycle of a future to success and to error, the
+//! snapshot for an already-ready future, the builder running with initial
+//! data, initial data being ignored on reconfigure, and transitions to
+//! another future or to none.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::task::{Context, Poll, Waker};

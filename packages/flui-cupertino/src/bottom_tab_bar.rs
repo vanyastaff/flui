@@ -1,44 +1,35 @@
 //! [`CupertinoTabBar`] — the iOS-style bottom tab bar, and
 //! [`CupertinoTabBarItem`], the per-tab icon/label pair it displays.
 //!
-//! Flutter parity: `cupertino/bottom_tab_bar.dart`'s `CupertinoTabBar` and
-//! `BottomNavigationBarItem` (the latter is `material`'s shared item type in
-//! the oracle; [`CupertinoTabBarItem`] is this crate's own, narrower type —
-//! see below). Oracle tag `3.44.0`.
+//! ## What it does
 //!
-//! ## What this ports
-//!
-//! - `_kTabBarHeight` (`50.0`) as the default `height`.
-//! - The hairline top border, `_kDefaultTabBarBorderColor`
-//!   (`0x4D000000`/`0x29000000` light/dark) — same "real 1.0px stroke, not a
-//!   literal device-pixel `width: 0.0`" divergence [`crate::CupertinoNavigationBar`]
-//!   documents.
-//! - `inactiveColor`'s default (`CupertinoColors.inactiveGray`),
-//!   `activeColor`'s default (the theme's `primaryColor`), and the
-//!   icon/label recoloring per item based on `current_index`.
+//! - A default `height` of `50.0`.
+//! - The hairline top border (`0x4D000000`/`0x29000000` light/dark) — a real
+//!   1.0px stroke, not a literal device-pixel `width: 0.0`, as
+//!   [`crate::CupertinoNavigationBar`] documents.
+//! - `inactive_color` defaults to `CupertinoColors::INACTIVE_GRAY`,
+//!   `active_color` to the theme's `primary_color`, and each item's
+//!   icon/label is recolored based on `current_index`.
 //! - Self-padding against the bottom safe-area inset (`MediaQuery`'s
 //!   `padding.bottom` folded into both the bar's own height and the label
-//!   row's bottom padding) — mirroring `_kNavBarPersistentHeight`'s
-//!   top-inset self-padding on [`crate::CupertinoNavigationBar`].
+//!   row's bottom padding), like the top-inset self-padding on
+//!   [`crate::CupertinoNavigationBar`].
 //! - `opaque(ctx)`: whether the resolved background is fully opaque —
 //!   consumed by [`crate::CupertinoTabScaffold`]'s content-padding math (the
-//!   opaque/translucent branch, both ported).
-//! - Per-item `Semantics(selected: active)`, and
-//!   `Semantics(explicitChildNodes: true)` around the item row so each item
-//!   keeps its own semantics node rather than merging into one.
+//!   opaque and translucent branches).
+//! - Per-item `Semantics(selected: active)`, with each item keeping its own
+//!   semantics node rather than merging into one.
 //!
-//! ## `CupertinoTabBarItem`, not `BottomNavigationBarItem`
+//! ## `CupertinoTabBarItem`, not a shared item type
 //!
-//! The oracle's item type is `material`'s `BottomNavigationBarItem`
-//! (`icon`, `activeIcon`, `label`, `tooltip`, `backgroundColor`, …) — a
-//! shared cross-design-system type ADR-0028 forbids depending on
-//! (`flui-material` is never a dependency of this crate). This ships a
-//! narrower, Cupertino-owned type instead: `icon` (required), `active_icon`
-//! (optional, defaults to `icon`), `label` (optional `String`, rendered as
-//! plain [`Text`]). No `tooltip`/`backgroundColor` — neither the tab bar nor
-//! `CupertinoTabScaffold` consumes them in the oracle either
-//! (`backgroundColor` on the *item* is Material-only; the tab bar's own
-//! `backgroundColor` is a separate, already-ported field).
+//! A cross-design-system bottom-navigation item type would be one ADR-0028
+//! forbids depending on (`flui-material` is never a dependency of this
+//! crate). This crate ships a narrower, Cupertino-owned type instead: `icon`
+//! (required), `active_icon` (optional, defaults to `icon`), `label`
+//! (optional `String`, rendered as plain [`Text`]). No
+//! `tooltip`/`background_color`: neither the tab bar nor
+//! `CupertinoTabScaffold` consumes them (the tab bar's own `background_color`
+//! is a separate field).
 //!
 //! ## Deferred, named
 //!
@@ -47,16 +38,14 @@
 //!   `flui-widgets` yet. A caller-supplied translucent `background_color`
 //!   does reach the opaque/translucent branch (`opaque(ctx)` is wired), it
 //!   just paints with no blur behind it.
-//! - **The localized `Semantics.hint`**
-//!   (`localizations.tabSemanticsLabel(tabIndex:, tabCount:)`) — no
-//!   `CupertinoLocalizations`-equivalent in this crate; `selected` is ported,
+//! - **The localized `Semantics` hint** (tab index and count) — no
+//!   `CupertinoLocalizations`-equivalent in this crate; `selected` is set,
 //!   the hint is not.
-//! - **`copyWith`** — Flutter's manual clone-with-overrides method.
-//!   `CupertinoTabBar: Clone` plus its own builder methods (`.current_index(...)`,
-//!   `.on_tap(...)`) already give [`crate::CupertinoTabScaffold`] the same
-//!   capability idiomatically; no separate method is needed.
-//! - **`MouseRegion`/`TextFieldTapRegion`** — no mouse-cursor or text-field
-//!   tap-region substrate to wire either through.
+//! - **A `copy_with` method** — `CupertinoTabBar: Clone` plus its own builder
+//!   methods (`.current_index(...)`, `.on_tap(...)`) already give
+//!   [`crate::CupertinoTabScaffold`] the same capability idiomatically.
+//! - **Mouse-region and text-field tap-region wrappers** — no mouse-cursor or
+//!   text-field tap-region substrate to wire either through.
 
 use std::rc::Rc;
 
@@ -73,20 +62,18 @@ use flui_sdk::widgets::{
 use crate::colors::{CupertinoColor, CupertinoColors, CupertinoDynamicColor};
 use crate::theme::CupertinoTheme;
 
-/// `_kTabBarHeight` (`bottom_tab_bar.dart`, oracle tag `3.44.0`) — standard
-/// iOS 10 tab bar height.
+/// The standard iOS 10 tab bar height.
 pub const TAB_BAR_HEIGHT: f64 = 50.0;
 
-/// The stroke width this port paints the hairline border at — see
+/// The stroke width the hairline border is painted at — see
 /// [`crate::nav_bar::HAIRLINE_BORDER_WIDTH`]'s doc for why a literal
-/// `width: 0.0` cannot be ported verbatim.
+/// `width: 0.0` cannot be used.
 pub const HAIRLINE_BORDER_WIDTH: f64 = crate::nav_bar::HAIRLINE_BORDER_WIDTH;
 
-/// `_kDefaultTabBarBorderColor` (`bottom_tab_bar.dart`, oracle tag `3.44.0`):
-/// `CupertinoDynamicColor.withBrightness(color: 0x4D000000, darkColor:
-/// 0x29000000)` — genuinely brightness-dependent, unlike
+/// The default border color, `0x4D000000` light / `0x29000000` dark —
+/// genuinely brightness-dependent, unlike
 /// [`crate::CupertinoNavigationBar`]'s own hairline border color (a plain,
-/// non-dynamic `Color` in the oracle). Resolved fresh in `build` against the
+/// non-dynamic `Color`). Resolved fresh in `build` against the
 /// ambient brightness, not baked into a `const` at construction time.
 fn default_border_color() -> CupertinoDynamicColor {
     CupertinoDynamicColor::with_brightness(
@@ -95,8 +82,7 @@ fn default_border_color() -> CupertinoDynamicColor {
     )
 }
 
-/// One tab's icon/label pair. Flutter parity: `BottomNavigationBarItem` —
-/// narrowed to a Cupertino-owned type, see the module docs.
+/// One tab's icon/label pair — a Cupertino-owned type, see the module docs.
 ///
 /// ```
 /// use flui_cupertino::CupertinoTabBarItem;
@@ -124,16 +110,14 @@ impl CupertinoTabBarItem {
     }
 
     /// Overrides the icon shown when this tab is active. Defaults to the
-    /// same icon as the inactive state. Flutter parity:
-    /// `BottomNavigationBarItem.activeIcon`.
+    /// same icon as the inactive state.
     #[must_use]
     pub fn active_icon(mut self, active_icon: impl IntoView) -> Self {
         self.active_icon = Some(active_icon.into_view().boxed());
         self
     }
 
-    /// Sets the label text, rendered below the icon. Flutter parity:
-    /// `BottomNavigationBarItem.label`.
+    /// Sets the label text, rendered below the icon.
     #[must_use]
     pub fn label(mut self, label: impl Into<String>) -> Self {
         self.label = Some(label.into());
@@ -154,9 +138,8 @@ impl std::fmt::Debug for CupertinoTabBarItem {
 /// ADR-0027) — matches `GestureDetector::on_tap`'s own callback shape.
 type TabTapCallback = Rc<dyn Fn(&mut flui_sdk::view::EventCx<'_>, usize)>;
 
-/// An iOS-style bottom tab bar. Flutter parity: `CupertinoTabBar`
-/// (`bottom_tab_bar.dart`, oracle tag `3.44.0`) — see the module docs for
-/// exactly what is and is not ported.
+/// An iOS-style bottom tab bar — see the module docs for exactly what is and
+/// is not supported.
 ///
 /// ```
 /// use flui_cupertino::{CupertinoTabBar, CupertinoTabBarItem};
@@ -183,7 +166,7 @@ pub struct CupertinoTabBar {
     /// against the ambient brightness every time, rather than using a color
     /// baked in once at construction — see that function's doc for why this
     /// component's default border (unlike `CupertinoNavigationBar`'s) is
-    /// genuinely brightness-dependent in the oracle.
+    /// genuinely brightness-dependent.
     border_is_default: bool,
 }
 
@@ -192,8 +175,8 @@ impl CupertinoTabBar {
     /// top border, and the theme's `bar_background_color`.
     ///
     /// `items` must carry at least 2 entries — Apple's Human Interface
-    /// Guidelines require it, and the oracle's own constructor asserts the
-    /// same (debug-only, matching Dart's `assert`).
+    /// Guidelines require it, and the constructor asserts the
+    /// same (debug builds only).
     #[must_use]
     pub fn new(items: Vec<CupertinoTabBarItem>) -> Self {
         debug_assert!(
@@ -220,8 +203,7 @@ impl CupertinoTabBar {
         &self.items
     }
 
-    /// Sets the tap handler, called with the tapped item's index. Flutter
-    /// parity: `CupertinoTabBar.onTap`.
+    /// Sets the tap handler, called with the tapped item's index.
     #[must_use]
     pub fn on_tap<R: flui_sdk::view::EventOutcome>(
         mut self,
@@ -231,8 +213,7 @@ impl CupertinoTabBar {
         self
     }
 
-    /// Sets which item is drawn active. Flutter parity:
-    /// `CupertinoTabBar.currentIndex`.
+    /// Sets which item is drawn active.
     #[must_use]
     pub fn current_index(mut self, current_index: usize) -> Self {
         self.current_index = current_index;
@@ -246,8 +227,7 @@ impl CupertinoTabBar {
     }
 
     /// Overrides the resolved background. Defaults to
-    /// [`crate::CupertinoThemeData::bar_background_color`]. Flutter parity:
-    /// `CupertinoTabBar.backgroundColor`.
+    /// [`crate::CupertinoThemeData::bar_background_color`].
     #[must_use]
     pub fn background_color(mut self, color: impl Into<CupertinoColor>) -> Self {
         self.background_color = Some(color.into());
@@ -255,8 +235,7 @@ impl CupertinoTabBar {
     }
 
     /// Overrides the active item's icon/label color. Defaults to
-    /// [`crate::CupertinoThemeData::primary_color`]. Flutter parity:
-    /// `CupertinoTabBar.activeColor`.
+    /// [`crate::CupertinoThemeData::primary_color`].
     #[must_use]
     pub fn active_color(mut self, color: impl Into<CupertinoColor>) -> Self {
         self.active_color = Some(color.into());
@@ -264,24 +243,21 @@ impl CupertinoTabBar {
     }
 
     /// Overrides the inactive items' icon/label color. Defaults to
-    /// [`CupertinoColors::INACTIVE_GRAY`]. Flutter parity:
-    /// `CupertinoTabBar.inactiveColor`.
+    /// [`CupertinoColors::INACTIVE_GRAY`].
     #[must_use]
     pub fn inactive_color(mut self, color: impl Into<CupertinoColor>) -> Self {
         self.inactive_color = color.into();
         self
     }
 
-    /// Overrides the icon size. Defaults to `30.0`. Flutter parity:
-    /// `CupertinoTabBar.iconSize`.
+    /// Overrides the icon size. Defaults to `30.0`.
     #[must_use]
     pub fn icon_size(mut self, icon_size: f64) -> Self {
         self.icon_size = icon_size;
         self
     }
 
-    /// Overrides the bar's height. Defaults to [`TAB_BAR_HEIGHT`]. Flutter
-    /// parity: `CupertinoTabBar.height`.
+    /// Overrides the bar's height. Defaults to [`TAB_BAR_HEIGHT`].
     #[must_use]
     pub fn height(mut self, height: f64) -> Self {
         self.height = height;
@@ -289,7 +265,7 @@ impl CupertinoTabBar {
     }
 
     /// Overrides the top border, or removes it with `None`. Defaults to
-    /// the hairline border. Flutter parity: `CupertinoTabBar.border`.
+    /// the hairline border.
     #[must_use]
     pub fn border(mut self, border: Option<Border<f64>>) -> Self {
         self.border = border;
@@ -300,14 +276,12 @@ impl CupertinoTabBar {
     /// The currently registered tap handler, if any. `pub(crate)` so
     /// [`crate::CupertinoTabScaffold`] can chain through the caller's
     /// original handler after overriding `on_tap` for its own
-    /// index-tracking — Flutter parity: `widget.tabBar.onTap?.call(newIndex)`
-    /// in `_CupertinoTabScaffoldState.build`.
+    /// index-tracking.
     pub(crate) fn on_tap_handler(&self) -> Option<TabTapCallback> {
         self.on_tap.clone()
     }
 
-    /// Whether the resolved background is fully opaque — Flutter parity:
-    /// `CupertinoTabBar.opaque`. Consumed by
+    /// Whether the resolved background is fully opaque. Consumed by
     /// [`crate::CupertinoTabScaffold`]'s content-padding math.
     #[must_use]
     pub fn opaque(&self, ctx: &dyn BuildContext) -> bool {
@@ -386,11 +360,8 @@ impl StatelessView for CupertinoTabBar {
                     detector = detector.on_tap(move |cx| on_tap(cx, index));
                 }
 
-                // `Semantics(selected: active, hint: localizations.tabSemanticsLabel(...), …)`
-                // (`bottom_tab_bar.dart`, oracle tag `3.44.0`) — `selected`
-                // ported; the localized `hint` is deferred (no
-                // `CupertinoLocalizations`-equivalent `tabSemanticsLabel` in
-                // this crate).
+                // `selected` is set; the localized `hint` is deferred (no
+                // `CupertinoLocalizations`-equivalent tab label in this crate).
                 Expanded::new(
                     Semantics::new()
                         .selected(is_active)
@@ -400,10 +371,8 @@ impl StatelessView for CupertinoTabBar {
             })
             .collect();
 
-        // `Padding(bottom: bottomPadding, child: Semantics(explicitChildNodes:
-        // true, child: Row(...)))` (`bottom_tab_bar.dart`, oracle tag
-        // `3.44.0`) — each item owns its own semantics node rather than
-        // merging into one.
+        // Bottom padding around the item row; each item owns its own semantics
+        // node rather than merging into one.
         let toolbar = Padding::new(flui_sdk::geometry::EdgeInsets::only_bottom(bottom_inset))
             .child(
                 Semantics::new()

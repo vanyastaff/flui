@@ -12,6 +12,7 @@
 
 pub(crate) mod close_request;
 mod config;
+pub(crate) mod dev_agent;
 pub mod direct;
 pub(crate) mod hot_reload;
 #[cfg(not(target_arch = "wasm32"))]
@@ -30,6 +31,7 @@ pub(crate) mod window_test_support;
 
 pub use close_request::{CloseRequest, CloseRequestError, CloseRequestHandler, CloseResponse};
 pub use config::{AppConfig, DiagnosticsProfile};
+pub use dev_agent::DevAgent;
 pub use direct::run_direct;
 pub use flui_runtime::frame_failure::{
     FailureDisposition, FrameFailureDetail, FrameFailureHandler, FrameFailureKind,

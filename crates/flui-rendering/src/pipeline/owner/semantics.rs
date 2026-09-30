@@ -30,10 +30,8 @@
 //!
 //! Geometry and configuration outside the grafted subtrees keep their
 //! last-published values. This makes semantics freshness strictly
-//! mark-driven — matching Flutter, whose `flushSemantics` also updates
-//! only dirty boundaries — where the previous full rebuild refreshed
-//! every node's geometry as a side effect of ANY mark, an accident no
-//! contract promised.
+//! mark-driven, where a full rebuild would refresh every node's geometry
+//! as a side effect of ANY mark, an accident no contract promises.
 
 use flui_foundation::RenderId;
 use flui_foundation::geometry::{Offset, Point, Rect, Size};
@@ -91,8 +89,7 @@ impl PipelineOwner<Semantics> {
     ///
     /// Nodes are sorted by depth (shallow first) for top-down traversal.
     /// The geometries of children depend on ancestors' transforms and clips,
-    /// so parents must be processed first. This matches Flutter's
-    /// `flushSemantics`.
+    /// so parents must be processed first.
     pub fn run_semantics(&mut self) -> crate::error::RenderResult<()> {
         if !self.semantics_enabled() {
             return Ok(());
@@ -105,8 +102,7 @@ impl PipelineOwner<Semantics> {
 
         self.scheduler.enter_phase(PhaseKind::Semantics);
 
-        // Sort shallow-first matching Flutter's flushSemantics. Roots
-        // dispatch before their descendants so a parent's config is
+        // Sort shallow-first. Roots dispatch before their descendants so a parent's config is
         // assembled before children fold into it.
         self.scheduler.sort_semantics_shallow_first();
 
@@ -146,8 +142,8 @@ impl PipelineOwner<Semantics> {
                 let published = owner.flush();
                 self.counters.semantics_nodes_updated += published as u64;
             } else if pending_count > 0 {
-                // This matches Flutter's early return when `_semanticsOwner`
-                // is absent. Keep the warning so enabled-without-owner wiring
+                // With no owner installed the pass returns early. Keep the
+                // warning so enabled-without-owner wiring
                 // is visible during integration without panicking in a frame
                 // hot path.
                 tracing::warn!(
@@ -291,8 +287,8 @@ impl SemanticsClips {
 
     /// The clips a child of this node inherits.
     ///
-    /// Paint clips always intersect. The semantics clip follows Flutter's
-    /// three-way rule:
+    /// Paint clips always intersect. The semantics clip follows a three-way
+    /// rule:
     ///
     /// - a node that declares one REPLACES whatever it inherited, so a nested
     ///   viewport re-grants its own cache area to its own children instead of
@@ -550,9 +546,7 @@ fn build_semantics_fragments_impl(
             // Skip a child this pass did not lay out, as paint and hit-test
             // do. Its rect describes a pass that no longer holds, and a screen
             // reader sent to it lands somewhere with nothing on it — worse
-            // than not announcing the row at all, which is what the reference
-            // does: Flutter removes an off-screen or kept-alive child from the
-            // render child list, so it publishes no semantics whatsoever.
+            // than not announcing the row at all.
             //
             // Announcing it would also make the accessibility tree disagree
             // with the two walks that already skip it.
@@ -946,23 +940,20 @@ fn describe_semantics_configuration(node: &RenderNode) -> SemanticsConfiguration
 /// Publish a lazy sliver child's position in the set, from the index its host
 /// stamped rather than from a wrapper widget.
 ///
-/// A screen reader's "item 12 of 100" needs the 12. Flutter's lazy delegates
-/// supply it by wrapping every materialised item in an `IndexedSemantics`
-/// (`addSemanticIndexes`, on by default) — a render node per item, carrying an
-/// index captured when the item was built. The sliver already stamps each
-/// child's slot into its parent data and keeps it in step with the row's real
-/// position as the band moves, so reading it here costs no node and cannot go
-/// stale against the row it describes.
+/// A screen reader's "item 12 of 100" needs the 12. Wrapping every
+/// materialised item in an indexing render node would cost a node per item,
+/// carrying an index captured when the item was built. The sliver instead
+/// already stamps each child's slot into its parent data and keeps it in step
+/// with the row's real position as the band moves, so reading it here costs
+/// no node and cannot go stale against the row it describes.
 ///
 /// Applied AFTER the render object's own description on purpose: an explicit
-/// [`IndexedSemantics`] on the item wins, which is what makes hand-indexed
+/// `IndexedSemantics` on the item wins, which is what makes hand-indexed
 /// content inside a lazy list possible at all.
 ///
 /// A `semantic_index` of `None` publishes nothing — the child occupies a
 /// logical index without being a member of the set, which is what a separator
 /// is. A missing position degrades to "item ? of 100"; a wrong one misleads.
-///
-/// [`IndexedSemantics`]: https://api.flutter.dev/flutter/widgets/IndexedSemantics-class.html
 /// Hand a transparent stamped node's position down to the fragments it
 /// forwards, so the node that does form for this item carries it.
 ///
@@ -1027,10 +1018,10 @@ fn apply_lazy_child_semantic_index(node: &RenderNode, config: &mut SemanticsConf
         // publishes as `size_of_set` (`accesskit_translation`'s
         // `data.scroll_child_count -> set_size_of_set`). On an item node it
         // means the size of the set the item belongs to, NOT that the item
-        // scrolls — the name comes from Flutter, where the property sits on the
-        // scrollable and each platform bridge recombines it with the item's
-        // index. AccessKit wants both on one node, so here it travels with the
-        // item.
+        // scrolls — the name comes from the scrollable-centric framing, where
+        // the property sits on the scrollable and each platform bridge
+        // recombines it with the item's index. AccessKit wants both on one
+        // node, so here it travels with the item.
         if let Some(size) = pd.semantic_set_size {
             config.set_scroll_child_count(size);
         }

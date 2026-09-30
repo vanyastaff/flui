@@ -1,12 +1,12 @@
 # FLUI
 
-FLUI is a Flutter-inspired declarative UI framework for Rust. It takes its shape from Flutter's
-tree pipeline — immutable `View` configuration → mutable `Element` lifecycle → layout/paint
-`RenderObject` → a `Layer` tree built each frame, with a `Semantics` tree alongside for accessibility →
-`flui-engine` compositor → `wgpu` GPU — but it is not a port: where Flutter's contracts are good, FLUI starts from them and says so; where they are not,
-or where Rust's ownership model asks for something different, FLUI diverges and records the
-reasoning as an ADR. See [`AGENTS.md`](https://github.com/vanyastaff/flui/blob/main/AGENTS.md)'s
-Design stance for the full policy.
+FLUI is a declarative UI framework for Rust, inspired by Flutter's widget-style composition. Its
+pipeline is a tree design — immutable `View` configuration → mutable `Element` lifecycle →
+layout/paint `RenderObject` → a `Layer` tree built each frame, with a `Semantics` tree alongside
+for accessibility → `flui-engine` compositor → `wgpu` GPU — with structure and APIs designed for
+Rust. Cross-crate decisions are recorded as ADRs. See
+[`AGENTS.md`](https://github.com/vanyastaff/flui/blob/main/AGENTS.md)'s Design stance for the
+full policy.
 
 This book is a work in progress, published at <https://vanyastaff.github.io/flui/>: the structure
 is here; sections still being written are stubs that point at the working reference material

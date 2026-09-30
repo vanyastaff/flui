@@ -1,7 +1,8 @@
-//! FLUI Rendering - Flutter-inspired render object system for Rust.
+//! FLUI Rendering - the render object system for Rust.
 //!
-//! This crate provides the rendering layer for FLUI, implementing Flutter's
-//! proven three-tree architecture with Rust's type safety guarantees.
+//! This crate provides the rendering layer for FLUI: the render-object tree
+//! with layout, paint and hit-test protocols, backed by Rust's type safety
+//! guarantees.
 //!
 //! # Architecture
 //!

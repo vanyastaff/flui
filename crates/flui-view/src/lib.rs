@@ -89,6 +89,7 @@ extern crate self as flui_view;
 pub mod binding;
 pub mod child;
 pub mod context;
+pub mod dev_agent;
 pub mod dev_reload;
 pub mod element;
 pub mod key;
@@ -226,7 +227,7 @@ pub use state_cell::{StateCell, StateHandle};
 pub use tree::{ElementNode, ElementTree};
 pub use view::{
     AnimatedElement, AnimatedView, BoxedElement, BoxedView, ElementBase, ElementDepth, ElementExt,
-    ErrorView, ErrorViewBuilder, FieldMask, FieldSet, FlutterError, InheritedData,
+    ErrorView, ErrorViewBuilder, FieldMask, FieldSet, FrameworkError, InheritedData,
     InheritedElement, InheritedView, IntoElement, IntoView, Memo, ParentDataConfig,
     ParentDataElement, ParentDataView, ProxyElement, ProxyView, RenderElement, RenderObjectContext,
     RenderObjectContextError, RenderView, RootRenderElement, RootRenderView, StatefulElement,

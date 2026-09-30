@@ -1,19 +1,16 @@
 //! [`CupertinoTextThemeData`] — the iOS text-style roles (`textStyle`,
 //! `actionTextStyle`, `navTitleTextStyle`, …).
 //!
-//! Flutter parity: `cupertino/text_theme.dart` (oracle tag `3.44.0`).
+//! ## Font family: alias names, not real San Francisco metrics
 //!
-//! ## Font family: verbatim oracle strings, not real San Francisco metrics
-//!
-//! The oracle's default styles use the font-family names `'CupertinoSystemText'`
-//! and `'CupertinoSystemDisplay'` — internal aliases the Flutter *engine*
-//! resolves to the platform's San Francisco font on iOS/macOS. FLUI has no
-//! engine-level alias table and ships no bundled SF font (license), so this
-//! port keeps the oracle's exact family name, for citation fidelity: a reader
-//! diffing against `text_theme.dart` sees the same string. This is **metrics
-//! parity, not pixel parity** — sizes, weights and letter-spacing match the
-//! oracle's tables exactly, but off Apple platforms the glyphs come from
-//! whatever the host provides.
+//! The default styles use the font-family names `'CupertinoSystemText'`
+//! and `'CupertinoSystemDisplay'` — aliases conventionally resolved to the
+//! platform's San Francisco font on iOS/macOS. FLUI has no engine-level alias
+//! table and ships no bundled SF font (license), so the alias names are kept
+//! as the primary family and a fallback chain follows. This is **metrics
+//! parity, not pixel parity** — sizes, weights and letter-spacing follow the
+//! iOS type ramp, but off Apple platforms the glyphs come from whatever the
+//! host provides.
 //!
 //! What resolves that name off Apple platforms is `flui_painting`'s family
 //! resolution: it walks the style's own family, then each entry of
@@ -35,7 +32,7 @@ use flui_sdk::view::prelude::BuildContext;
 
 use crate::colors::{CupertinoColors, CupertinoDynamicColor};
 
-/// `_kDefaultTextStyle` (`text_theme.dart`, oracle tag `3.44.0`).
+/// The default general-content text style.
 fn default_text_style() -> TextStyle {
     TextStyle {
         font_family: Some("CupertinoSystemText".to_string()),
@@ -47,7 +44,7 @@ fn default_text_style() -> TextStyle {
     }
 }
 
-/// `_kDefaultActionTextStyle` (`text_theme.dart`, oracle tag `3.44.0`).
+/// The default style of interactive text without a background.
 fn default_action_text_style() -> TextStyle {
     TextStyle {
         font_family: Some("CupertinoSystemText".to_string()),
@@ -59,7 +56,7 @@ fn default_action_text_style() -> TextStyle {
     }
 }
 
-/// `_kDefaultActionSmallTextStyle` (`text_theme.dart`, oracle tag `3.44.0`).
+/// The default style of interactive text in a small button.
 fn default_action_small_text_style() -> TextStyle {
     TextStyle {
         font_family: Some("CupertinoSystemText".to_string()),
@@ -71,7 +68,7 @@ fn default_action_small_text_style() -> TextStyle {
     }
 }
 
-/// `_kDefaultTabLabelTextStyle` (`text_theme.dart`, oracle tag `3.44.0`).
+/// The default style of tab labels.
 fn default_tab_label_text_style() -> TextStyle {
     TextStyle {
         font_family: Some("CupertinoSystemText".to_string()),
@@ -84,8 +81,7 @@ fn default_tab_label_text_style() -> TextStyle {
     }
 }
 
-/// `_kDefaultMiddleTitleTextStyle` (`text_theme.dart`, oracle tag `3.44.0`) —
-/// the source for [`CupertinoTextThemeData::nav_title_text_style`].
+/// The source for [`CupertinoTextThemeData::nav_title_text_style`].
 fn default_middle_title_text_style() -> TextStyle {
     TextStyle {
         font_family: Some("CupertinoSystemText".to_string()),
@@ -98,7 +94,7 @@ fn default_middle_title_text_style() -> TextStyle {
     }
 }
 
-/// `_kDefaultLargeTitleTextStyle` (`text_theme.dart`, oracle tag `3.44.0`).
+/// The default style of large titles.
 fn default_large_title_text_style() -> TextStyle {
     TextStyle {
         font_family: Some("CupertinoSystemDisplay".to_string()),
@@ -111,7 +107,7 @@ fn default_large_title_text_style() -> TextStyle {
     }
 }
 
-/// `_kDefaultPickerTextStyle` (`text_theme.dart`, oracle tag `3.44.0`).
+/// The default style of pickers.
 fn default_picker_text_style() -> TextStyle {
     TextStyle {
         font_family: Some("CupertinoSystemDisplay".to_string()),
@@ -124,8 +120,7 @@ fn default_picker_text_style() -> TextStyle {
     }
 }
 
-/// `_kDefaultDateTimePickerTextStyle` (`text_theme.dart`, oracle tag
-/// `3.44.0`).
+/// The default style of date/time pickers.
 fn default_date_time_picker_text_style() -> TextStyle {
     TextStyle {
         font_family: Some("CupertinoSystemDisplay".to_string()),
@@ -154,20 +149,17 @@ fn system_text_fallback() -> Vec<String> {
     .collect()
 }
 
-/// Same fallback chain as [`system_text_fallback`] — the oracle's Text/
-/// Display split exists only because San Francisco ships as two optical
-/// sizes; a `cosmic-text` fallback has no such split to mirror.
+/// Same fallback chain as [`system_text_fallback`] — the Text/Display split
+/// exists only because San Francisco ships as two optical sizes; a
+/// `cosmic-text` fallback has no such split to mirror.
 fn system_display_fallback() -> Vec<String> {
     system_text_fallback()
 }
 
-/// Flutter parity: `_TextThemeDefaultsBuilder.actionTextStyle({Color?
-/// primaryColor})` — the oracle's `primaryColor` is nullable there only
-/// because the private builder can be called before the owning
-/// `CupertinoTextThemeData` resolves its own (non-nullable, defaulted)
-/// `primaryColor`; this port always has a concrete [`CupertinoDynamicColor`]
-/// to read `.color` off, so this is a plain function rather than a method on
-/// [`TextThemeDefaults`] (it reads none of that type's fields).
+/// The action style for `primary_color`. There is always a concrete
+/// [`CupertinoDynamicColor`] to read `.color` off, so this is a plain function
+/// rather than a method on [`TextThemeDefaults`] (it reads none of that
+/// type's fields).
 fn action_text_style_for(primary_color: CupertinoDynamicColor) -> TextStyle {
     TextStyle {
         color: Some(primary_color.color),
@@ -175,7 +167,7 @@ fn action_text_style_for(primary_color: CupertinoDynamicColor) -> TextStyle {
     }
 }
 
-/// Flutter parity: `_TextThemeDefaultsBuilder.actionSmallTextStyle`.
+/// The small-button action style for `primary_color`.
 fn action_small_text_style_for(primary_color: CupertinoDynamicColor) -> TextStyle {
     TextStyle {
         color: Some(primary_color.color),
@@ -183,17 +175,14 @@ fn action_small_text_style_for(primary_color: CupertinoDynamicColor) -> TextStyl
     }
 }
 
-/// Flutter parity: `navActionTextStyle` — the oracle defines it as a direct
-/// delegate to `actionTextStyle`.
+/// The navigation-bar action style — a direct delegate to the action style.
 fn nav_action_text_style_for(primary_color: CupertinoDynamicColor) -> TextStyle {
     action_text_style_for(primary_color)
 }
 
-/// Sets `style.color` to `color`, matching the oracle's
-/// `_applyLabelColor`'s `original.color == color ? original :
-/// original.copyWith(color: color)` short-circuit (kept for parity with the
-/// oracle's own no-op-avoidance, even though FLUI's `TextStyle` is cheap to
-/// clone regardless).
+/// Sets `style.color` to `color`, returning `style` unchanged when it already
+/// has that color (a no-op short-circuit, even though FLUI's `TextStyle` is
+/// cheap to clone regardless).
 fn apply_label_color(style: TextStyle, color: Color) -> TextStyle {
     if style.color == Some(color) {
         style
@@ -206,13 +195,10 @@ fn apply_label_color(style: TextStyle, color: Color) -> TextStyle {
 }
 
 /// The label-color-driven default styles, parameterized on the two dynamic
-/// colors that drive them. Flutter parity: `_TextThemeDefaultsBuilder`
-/// (`text_theme.dart`, oracle tag `3.44.0`).
+/// colors that drive them.
 ///
-/// The oracle types `labelColor`/`inactiveGrayColor` as plain `Color` (able
-/// to hold a `CupertinoDynamicColor` polymorphically); this port types them
-/// as [`CupertinoDynamicColor`] directly, since they are always dynamic in
-/// practice — see `colors.rs`'s module doc on why FLUI needs
+/// The label and inactive-gray colors are typed as [`CupertinoDynamicColor`]
+/// directly, since they are always dynamic in practice — see `colors.rs`'s module doc on why FLUI needs
 /// [`crate::colors::CupertinoColor`] only where a field can hold *either* a
 /// concrete or dynamic color, not where it is always one or the other.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -262,7 +248,7 @@ impl TextThemeDefaults {
         )
     }
 
-    /// Flutter parity: `_TextThemeDefaultsBuilder.resolveFrom`.
+    /// Collapses both colors to the variant implied by `ctx`.
     fn resolve_from(&self, ctx: &dyn BuildContext) -> Self {
         let resolved_label = self.label_color.resolve_from(ctx);
         let resolved_inactive_gray = self.inactive_gray_color.resolve_from(ctx);
@@ -276,14 +262,11 @@ impl TextThemeDefaults {
 /// Cupertino typography theme: the type-style roles a Cupertino widget tree
 /// reads by name instead of hard-coding a `TextStyle`.
 ///
-/// Flutter parity: `CupertinoTextThemeData` (`cupertino/text_theme.dart`,
-/// oracle tag `3.44.0`).
-///
 /// ## Read-time dynamic resolution
 ///
 /// The label/action-family roles below are **not** pre-resolved: they embed
 /// [`CupertinoColors::LABEL`]/[`CupertinoColors::ACTIVE_BLUE`]'s *unresolved
-/// effective* color (the light-mode variant — Flutter parity: a
+/// effective* color (the light-mode variant — a
 /// `CupertinoDynamicColor` defaults to its `color` field until resolved).
 /// [`CupertinoTextThemeData::resolve_from`] produces a copy with those roles
 /// collapsed to the color actually implied by the ambient context (dark mode
@@ -333,7 +316,7 @@ impl Default for CupertinoTextThemeData {
 }
 
 impl CupertinoTextThemeData {
-    /// The default text theme — Flutter parity: `CupertinoTextThemeData()`.
+    /// The default text theme.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
@@ -341,8 +324,7 @@ impl CupertinoTextThemeData {
 
     /// Sets the color [`Self::action_text_style`]/[`Self::action_small_text_style`]/
     /// [`Self::nav_action_text_style`] derive from when not overridden.
-    /// Defaults to [`CupertinoColors::SYSTEM_BLUE`]. Flutter parity:
-    /// `CupertinoTextThemeData(primaryColor: ...)`.
+    /// Defaults to [`CupertinoColors::SYSTEM_BLUE`].
     #[must_use]
     pub fn with_primary_color(mut self, primary_color: CupertinoDynamicColor) -> Self {
         self.primary_color = primary_color;
@@ -377,7 +359,7 @@ impl CupertinoTextThemeData {
         self
     }
 
-    /// The style of general text content. Flutter parity: `textStyle`.
+    /// The style of general text content.
     #[must_use]
     pub fn text_style(&self) -> TextStyle {
         self.text_style
@@ -386,8 +368,7 @@ impl CupertinoTextThemeData {
     }
 
     /// The style of interactive text without a background (e.g.
-    /// `CupertinoButton`'s large/medium text). Flutter parity:
-    /// `actionTextStyle`.
+    /// `CupertinoButton`'s large/medium text).
     #[must_use]
     pub fn action_text_style(&self) -> TextStyle {
         self.action_text_style
@@ -395,8 +376,7 @@ impl CupertinoTextThemeData {
             .unwrap_or_else(|| action_text_style_for(self.primary_color))
     }
 
-    /// The style of interactive text in a small button. Flutter parity:
-    /// `actionSmallTextStyle`.
+    /// The style of interactive text in a small button.
     #[must_use]
     pub fn action_small_text_style(&self) -> TextStyle {
         self.action_small_text_style
@@ -404,7 +384,7 @@ impl CupertinoTextThemeData {
             .unwrap_or_else(|| action_small_text_style_for(self.primary_color))
     }
 
-    /// The style of unselected tabs. Flutter parity: `tabLabelTextStyle`.
+    /// The style of unselected tabs.
     #[must_use]
     pub fn tab_label_text_style(&self) -> TextStyle {
         self.tab_label_text_style
@@ -412,8 +392,7 @@ impl CupertinoTextThemeData {
             .unwrap_or_else(|| self.defaults.tab_label_text_style())
     }
 
-    /// The style of titles in standard navigation bars. Flutter parity:
-    /// `navTitleTextStyle`.
+    /// The style of titles in standard navigation bars.
     #[must_use]
     pub fn nav_title_text_style(&self) -> TextStyle {
         self.nav_title_text_style
@@ -421,8 +400,7 @@ impl CupertinoTextThemeData {
             .unwrap_or_else(|| self.defaults.nav_title_text_style())
     }
 
-    /// The style of large titles in sliver navigation bars. Flutter parity:
-    /// `navLargeTitleTextStyle`.
+    /// The style of large titles in sliver navigation bars.
     #[must_use]
     pub fn nav_large_title_text_style(&self) -> TextStyle {
         self.nav_large_title_text_style
@@ -430,8 +408,7 @@ impl CupertinoTextThemeData {
             .unwrap_or_else(|| self.defaults.nav_large_title_text_style())
     }
 
-    /// The style of interactive text in navigation bars. Flutter parity:
-    /// `navActionTextStyle`.
+    /// The style of interactive text in navigation bars.
     #[must_use]
     pub fn nav_action_text_style(&self) -> TextStyle {
         self.nav_action_text_style
@@ -439,7 +416,7 @@ impl CupertinoTextThemeData {
             .unwrap_or_else(|| nav_action_text_style_for(self.primary_color))
     }
 
-    /// The style of pickers. Flutter parity: `pickerTextStyle`.
+    /// The style of pickers.
     #[must_use]
     pub fn picker_text_style(&self) -> TextStyle {
         self.picker_text_style
@@ -447,8 +424,7 @@ impl CupertinoTextThemeData {
             .unwrap_or_else(|| self.defaults.picker_text_style())
     }
 
-    /// The style of date/time pickers. Flutter parity:
-    /// `dateTimePickerTextStyle`.
+    /// The style of date/time pickers.
     #[must_use]
     pub fn date_time_picker_text_style(&self) -> TextStyle {
         self.date_time_picker_text_style
@@ -458,7 +434,6 @@ impl CupertinoTextThemeData {
 
     /// Returns a copy with every role's dynamic color resolved against
     /// `ctx` — see the type doc's "Read-time dynamic resolution" section.
-    /// Flutter parity: `CupertinoTextThemeData.resolveFrom`.
     #[must_use]
     pub fn resolve_from(&self, ctx: &dyn BuildContext) -> Self {
         let resolved_primary = self.primary_color.resolve_from(ctx);

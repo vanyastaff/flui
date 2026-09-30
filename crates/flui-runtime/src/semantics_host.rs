@@ -78,7 +78,7 @@ pub struct SemanticsHost {
     ///
     /// `Arc`-wrapped (not a bare `AtomicBool`) so
     /// [`Self::platform_semantics_enabled_handle`] can hand a cheap clone to
-    /// the realm's `RenderingFlutterBinding::add_semantics_enabled_listener`
+    /// the realm's `RenderingBinding::add_semantics_enabled_listener`
     /// fan-out closure without that closure borrowing this host (which lives
     /// on the same `UiRealm` the renderer does — a self-reference the
     /// closure's `'static` bound forbids). Mirrors `AppRuntime`'s
@@ -186,7 +186,7 @@ impl SemanticsHost {
     }
 
     /// A cheap clone of the platform-enablement flag, for wiring into a
-    /// realm's `RenderingFlutterBinding::add_semantics_enabled_listener` fan-out
+    /// realm's `RenderingBinding::add_semantics_enabled_listener` fan-out
     /// closure — see this field's own doc for why a handle rather than
     /// borrowing `&self`. Wired at `UiRealm::construct`.
     #[must_use]

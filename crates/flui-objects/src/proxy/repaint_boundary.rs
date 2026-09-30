@@ -93,8 +93,7 @@ impl RenderBox for RenderRepaintBoundary {
     }
 
     fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Single, BoxParentData>) -> bool {
-        // Pure pass-through (Flutter RenderProxyBox: `hitTestSelf` is false, so
-        // the boundary is hit iff its child is hit). Without this override the
+        // Pure pass-through (the boundary is hit iff its child is hit). Without this override the
         // trait default `is_within_own_size()` would absorb the hit on the
         // boundary itself and never recurse — blocking the entire subtree from
         // receiving pointer events.

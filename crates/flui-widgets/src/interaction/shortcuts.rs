@@ -2,28 +2,21 @@
 //! the leaf→root key dispatch.
 //!
 //! ADR-0023. A shortcut widget is, mechanically, a
-//! `Focus(canRequestFocus: false, onKeyEvent: …)` wrapper
-//! (`shortcuts.dart:1134-1143`, `:1225-1231`): it sees a key only when every
-//! `Focus` below it — most importantly the focused field — *ignored* the
-//! event and the ADR-0023 walk bubbled it up.
-//!
-//! # Flutter parity
-//!
-//! `.flutter/packages/flutter/lib/src/widgets/shortcuts.dart`, master
-//! `3.33.0-0.0.pre-6280-g88e87cd963f`: `SingleActivator` (`:433-581`),
-//! `CallbackShortcuts` (`:1181-1231`).
+//! `Focus(canRequestFocus: false, onKeyEvent: …)` wrapper: it sees a key only
+//! when every `Focus` below it — most importantly the focused field —
+//! *ignored* the event and the ADR-0023 walk bubbled it up.
 //!
 //! # Deferred, and named (ADR-0023)
 //!
 //! `LogicalKeySet` (needs a `HardwareKeyboard`-style pressed-set tracker),
 //! `CharacterActivator` (no consumer), a shared `ShortcutManager`, and
 //! `includeSemantics`. The Intent-mapped [`Shortcuts`] resolves its intent at
-//! the **primary focus**, as Flutter does: each `Focus` records the
+//! the **primary focus**: each `Focus` records the
 //! [`Actions`] chain visible at its position on its node, so an `Actions`
 //! between the focused widget and the `Shortcuts` — a button's activation —
 //! is found (ADR-0079).
 //!
-//! Of `DefaultTextEditingShortcuts`, [`DefaultFocusTraversal`] binds only
+//! Of the standard text-editing shortcuts, [`DefaultFocusTraversal`] binds only
 //! copy, cut and paste; select-all, the Insert-key clipboard chords
 //! (Ctrl/Shift+Insert, Shift+Delete) and the caret-movement intents are not
 //! bound (`EditableText`'s own key handler moves the caret).
@@ -53,15 +46,13 @@ pub type ShortcutCallback = Rc<dyn Fn(&mut EventCx<'_>)>;
 // SingleActivator
 // ============================================================================
 
-/// A shortcut trigger: one logical key plus an **exact** set of modifiers —
-/// Flutter's `SingleActivator` (`shortcuts.dart:433`).
+/// A shortcut trigger: one logical key plus an **exact** set of modifiers.
 ///
 /// `SingleActivator::character("c").control()` matches Ctrl+C and *only*
-/// Ctrl+C: an event with an extra Shift held does not match, exactly as
-/// Flutter's `_shouldAcceptModifiers` demands equality per modifier
-/// (`:560-565`). Key-repeat events match by default; opt out with
-/// [`allow_repeats(false)`](Self::allow_repeats) (`:461`). Only key-down
-/// events ever match (`:576-581`).
+/// Ctrl+C: an event with an extra Shift held does not match, because each
+/// modifier must be equal. Key-repeat events match by default; opt out with
+/// [`allow_repeats(false)`](Self::allow_repeats). Only key-down
+/// events ever match.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SingleActivator {
     trigger: Key,
@@ -98,7 +89,7 @@ impl SingleActivator {
         Self::new(Key::Named(key))
     }
 
-    /// Require the Control modifier (`shortcuts.dart:487`).
+    /// Require the Control modifier.
     #[must_use]
     pub fn control(mut self) -> Self {
         self.control = true;
@@ -134,12 +125,11 @@ impl SingleActivator {
         self
     }
 
-    /// Whether `event` triggers this activator — Flutter's `accepts`
-    /// (`shortcuts.dart:576-581`): a key-down (or allowed repeat) of exactly
-    /// the trigger key under exactly the required modifiers.
+    /// Whether `event` triggers this activator: a key-down (or allowed repeat)
+    /// of exactly the trigger key under exactly the required modifiers.
     ///
-    /// An ASCII letter trigger matches either case: Flutter's
-    /// `LogicalKeyboardKey.keyC` names the key, not the character, while a
+    /// An ASCII letter trigger matches either case: the trigger names the
+    /// key, not the character, while a
     /// FLUI `Key::Character` carries what the key produced — `"C"` under Caps
     /// Lock or Shift. The exact Shift check still tells Ctrl+Shift+C apart.
     #[must_use]
@@ -171,13 +161,12 @@ fn trigger_matches(trigger: &Key, pressed: &Key) -> bool {
 // CallbackShortcuts
 // ============================================================================
 
-/// Binds key combinations to callbacks for its subtree — Flutter's
-/// `CallbackShortcuts` (`shortcuts.dart:1181`), the `Intent`-free shortcut
-/// widget.
+/// Binds key combinations to callbacks for its subtree — the `Intent`-free
+/// shortcut widget.
 ///
 /// While the primary focus sits inside `child`, a key event that every inner
 /// `Focus` ignored bubbles here; **every** matching binding fires
-/// (`:1210-1220`) and the event counts as handled iff at least one did. The
+/// and the event counts as handled iff at least one did. The
 /// `Intent`-mapped `Shortcuts` / `Actions` pair is the general form; this is the
 /// direct-callback shortcut for when an `Intent` would be ceremony (ADR-0023).
 #[derive(Clone)]
@@ -232,7 +221,7 @@ impl View for CallbackShortcuts {
 
 impl StatelessView for CallbackShortcuts {
     /// `Focus(canRequestFocus: false, onKeyEvent: …)` around the child,
-    /// exactly as Flutter builds it (`shortcuts.dart:1225-1231`).
+    /// so it sees only the keys the focused subtree ignored.
     fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
         let bindings = self.bindings.clone();
         Focus::new(self.child.clone())
@@ -260,8 +249,7 @@ impl StatelessView for CallbackShortcuts {
 // ============================================================================
 
 /// Maps key combinations to [`Intent`]s, dispatched through the enclosing
-/// [`Actions`] chain — Flutter's `Shortcuts`
-/// (`shortcuts.dart:1004`).
+/// [`Actions`] chain.
 ///
 /// On a key the focused subtree ignored, the **first** matching activator's
 /// intent resolves to the nearest enabled action enclosing the **primary
@@ -274,12 +262,12 @@ impl StatelessView for CallbackShortcuts {
 /// the final [`KeyEventResult`] — it is an overridable method, so the action has
 /// the last word. Its default consumes the
 /// key when the action performed its work, and reports the event unconsumed —
-/// stopping the bubbling *without* consuming — when the action declined
-/// (`actions.dart:312-314`); an action may override it to decide otherwise. No
+/// stopping the bubbling *without* consuming — when the action declined;
+/// an action may override it to decide otherwise. No
 /// match, or no enabled action: the key keeps bubbling.
 #[derive(Clone, StatefulView)]
 pub struct Shortcuts {
-    bindings: Vec<(SingleActivator, Rc<dyn Intent>)>, // ADR-0023 — Flutter's `Map<ShortcutActivator, Intent>`; read back only through its own TypeId.
+    bindings: Vec<(SingleActivator, Rc<dyn Intent>)>, // ADR-0023 — activator-to-intent pairs; read back only through its own TypeId.
     child: BoxedView,
     /// The node its key handler lives on, when the owner needs to name it.
     focus_node: Option<Rc<FocusNode>>,
@@ -350,8 +338,8 @@ impl ViewState<Shortcuts> for ShortcutsState {
         self.focus_manager = Some(ctx.focus_manager());
     }
 
-    /// The `Focus(canRequestFocus: false, onKeyEvent: …)` wrapper
-    /// (`shortcuts.dart:1134-1143`). This widget's own chain is captured with
+    /// The `Focus(canRequestFocus: false, onKeyEvent: …)` wrapper.
+    /// This widget's own chain is captured with
     /// a real dependency, as the fallback for a focused node that records
     /// none; the primary focus's chain is read at key time.
     fn build(&self, view: &Shortcuts, ctx: &dyn BuildContext) -> impl IntoView {
@@ -370,9 +358,9 @@ impl ViewState<Shortcuts> for ShortcutsState {
             .can_request_focus(false)
             .debug_label("Shortcuts")
             .on_key_event(move |cx, event| {
-                // `_find` (`shortcuts.dart:892-899`): the FIRST matching
-                // activator decides; an unresolvable intent falls through as
-                // ignored, it does not try later activators (`:922-938`).
+                // The FIRST matching activator decides; an unresolvable
+                // intent falls through as ignored, it does not try later
+                // activators.
                 let Some((_, intent)) = shortcuts
                     .iter()
                     .find(|(activator, _)| activator.matches(event))
@@ -389,8 +377,8 @@ impl ViewState<Shortcuts> for ShortcutsState {
                 let intent: &dyn Any = &**intent;
                 match resolve(&chain, intent) {
                     // One call: invoke and read `to_key_event_result` off what
-                    // it actually did (`actions.dart:312-314`), so the key
-                    // result cannot disagree with the invocation.
+                    // it actually did, so the key result cannot disagree with
+                    // the invocation.
                     Some(action) => action.invoke_for_key(cx, intent),
                     None => KeyEventResult::Ignored,
                 }
@@ -408,9 +396,8 @@ impl ViewState<Shortcuts> for ShortcutsState {
 /// iOS) copy, cut and paste in the focused text field
 /// ([`CopySelectionTextIntent`], [`PasteTextIntent`]).
 ///
-/// Flutter's `WidgetsApp` supplies the focus bindings at the application root
-/// (`app.dart:1263-1276`, tag `3.44.0`), and its `DefaultTextEditingShortcuts`
-/// the clipboard ones. Numpad Enter reaches FLUI as the
+/// The application root is where these bindings are meant to be installed.
+/// Numpad Enter reaches FLUI as the
 /// same logical `Enter`, so one binding covers both; `GameButtonA` has no
 /// logical key in FLUI's key model and is not bound. The arrow-key
 /// directional traversal and `Escape` → dismiss bindings are not installed
@@ -461,8 +448,7 @@ enum ClipboardBinding {
 }
 
 /// The clipboard chords `platform` uses: Cmd on macOS and iOS, Control
-/// everywhere else — Flutter's `DefaultTextEditingShortcuts` split
-/// (`default_text_editing_shortcuts.dart`, tag `3.44.0`).
+/// everywhere else.
 fn clipboard_activators(platform: TargetPlatform) -> [(SingleActivator, ClipboardBinding); 3] {
     let chord = |key: &str| {
         let activator = SingleActivator::character(key);

@@ -2,22 +2,19 @@
 //! a floating action button, and drawer/end-drawer slots, laid out by the
 //! private `ScaffoldLayoutDelegate` defined further down in this module.
 //!
-//! # Flutter parity
+//! # Scope
 //!
-//! `material/scaffold.dart`'s `Scaffold` (oracle tag `3.44.0`). Implemented
-//! subset: the `app_bar`, `body`, `floating_action_button`, `snack_bar`,
-//! `bottom_navigation_bar`, `drawer`, and `end_drawer` slots of
-//! `_ScaffoldLayout.performLayout` (`scaffold.dart:1027-1296`) — the
-//! remaining four slots (`persistentFooter`, `materialBanner`, `bodyScrim`,
-//! `bottomSheet`, `statusBar`) are not ported; a future slot extends
+//! Implemented slots: `app_bar`, `body`, `floating_action_button`,
+//! `snack_bar`, `bottom_navigation_bar`, `drawer`, and `end_drawer` — the
+//! remaining slots (`persistentFooter`, `materialBanner`, `bodyScrim`,
+//! `bottomSheet`, `statusBar`) are not implemented; a future slot extends
 //! `ScaffoldLayoutDelegate`, it does not restructure it. The `snack_bar` slot
 //! only ever carries `SnackBarBehavior.fixed` content — see
 //! `crate::snack_bar`'s module docs for the V1 scope that narrowing implies.
-//! `resize_to_avoid_bottom_inset` defaults to `true`, same as the oracle.
-//! `background_color` falls back to `ColorScheme.surface` (the oracle's
-//! `themeData.scaffoldBackgroundColor`, which this substrate has not ported
-//! onto [`crate::ThemeData`] yet — `ColorScheme.surface` is the closer M3
-//! analogue in the meantime).
+//! `resize_to_avoid_bottom_inset` defaults to `true`.
+//! `background_color` falls back to `ColorScheme.surface` (there is no
+//! `scaffoldBackgroundColor` on [`crate::ThemeData`] yet — `ColorScheme.surface`
+//! is the closer M3 analogue in the meantime).
 //!
 //! ## `bottom_navigation_bar` slot: pads itself, like the app bar
 //!
@@ -41,9 +38,7 @@
 //!   body reading the un-reduced value would double-pad.
 //!
 //! `ScaffoldLayoutDelegate` measures the bar first (full width, loose
-//! height, Flutter parity: `_ScaffoldLayout.performLayout`'s
-//! `bottomNavigationBarHeight`/`bottomWidgetsHeight`, `scaffold.dart:1048-1055`)
-//! and folds its measured height into `content_bottom` (`max(minInsets.bottom,
+//! height) and folds its measured height into `content_bottom` (`max(minInsets.bottom,
 //! bottomWidgetsHeight)` — the greater of the keyboard inset or the bar's
 //! height wins), so the body shrinks above it and the floating action
 //! button's `content_bottom`-relative position (see below) lifts above it
@@ -57,9 +52,8 @@
 //! `GlobalKey` bridge and why [`DrawerHandle`] is `!Send`. The state tracks
 //! each drawer's opened bool (`crate::drawer::DrawerController::on_open_changed`
 //! updates it and reschedules this build), which drives BOTH the dynamic
-//! child order — Flutter parity: `Scaffold.build`'s `if (_endDrawerOpened.value)
-//! { buildDrawer, buildEndDrawer } else { buildEndDrawer, buildDrawer }`
-//! (`scaffold.dart:3211-3217`) — added last, an open end-drawer's scrim/panel
+//! child order (`if end_drawer_opened { drawer, end_drawer } else {
+//! end_drawer, drawer }`) — added last, an open end-drawer's scrim/panel
 //! must paint on top of, and hit-test before, a closed start-drawer's edge
 //! strip — and `on_drawer_changed`/`on_end_drawer_changed`'s relay to the
 //! app author.
@@ -195,9 +189,6 @@ const SLOT_END_DRAWER: &str = "end_drawer";
 
 /// The margin between a floating action button and the scaffold edge it
 /// floats near.
-///
-/// Flutter parity: `floating_action_button_location.dart`'s
-/// `kFloatingActionButtonMargin` (oracle tag `3.44.0`).
 const FLOATING_ACTION_BUTTON_MARGIN: f64 = 16.0;
 
 /// The top-level Material page structure: an app bar, a body, and a floating
@@ -281,8 +272,8 @@ impl Scaffold {
     }
 
     /// Sets the floating action button, positioned at the bottom-right of
-    /// the content area (Flutter's `FloatingActionButtonLocation.endFloat` —
-    /// the only location this substrate implements).
+    /// the content area (the "end float" location — the only one this
+    /// substrate implements).
     #[must_use]
     pub fn floating_action_button(mut self, floating_action_button: impl IntoView) -> Self {
         self.floating_action_button = Some(floating_action_button.into_view().boxed());
@@ -408,9 +399,9 @@ impl std::fmt::Debug for Scaffold {
 }
 
 /// Publishes a [`DrawerHandle`] to a [`Scaffold`]'s subtree — the runtime
-/// capability to open/close its drawer/end-drawer. Flutter parity:
-/// `_ScaffoldScope`/`Scaffold.of`, narrowed to the drawer runtime API (this
-/// substrate's `ScaffoldState` has no snack-bar/bottom-sheet API yet).
+/// capability to open/close its drawer/end-drawer. Narrowed to the drawer
+/// runtime API (this substrate's `ScaffoldState` has no snack-bar/bottom-sheet
+/// API yet).
 #[derive(Clone, Debug)]
 pub struct ScaffoldScope {
     handle: DrawerHandle,
@@ -643,8 +634,7 @@ impl ViewState<Scaffold> for ScaffoldState {
             )
         });
 
-        // Flutter parity: `Scaffold.build` (`scaffold.dart:3211-3217`) — with
-        // the end drawer open, the start drawer is added first so the open
+        // With the end drawer open, the start drawer is added first so the open
         // end drawer's scrim/panel paint on top of, and hit-test before, the
         // closed start drawer's edge strip; otherwise the reverse.
         if self.handle.is_end_drawer_open() {
@@ -655,10 +645,8 @@ impl ViewState<Scaffold> for ScaffoldState {
             children.extend(drawer_slot);
         }
 
-        // Flutter oracle: `minInsets = MediaQuery.paddingOf(context).copyWith(
-        // bottom: resizeToAvoidBottomInset ? viewInsetsOf(context).bottom : 0.0)`
-        // (`scaffold.dart:3220-3222`) — the safe-area padding on every edge,
-        // with the bottom edge swapped for the keyboard inset when resizing.
+        // The safe-area padding on every edge, with the bottom edge swapped
+        // for the keyboard inset when resizing.
         let min_insets = EdgeInsets::new(
             media_query.padding.top,
             media_query.padding.right,
@@ -670,10 +658,7 @@ impl ViewState<Scaffold> for ScaffoldState {
             media_query.padding.left,
         );
 
-        // Flutter oracle: `minViewPadding = MediaQuery.viewPaddingOf(context)
-        // .copyWith(bottom: resizeToAvoidBottomInset && viewInsetsOf(context)
-        // .bottom != 0.0 ? 0.0 : null)` (`scaffold.dart:3226-3230`) — the raw
-        // safe-area bottom inset (e.g. the home-indicator area on iOS),
+        // The raw safe-area bottom inset (e.g. the home-indicator area on iOS),
         // zeroed only while the keyboard is actually up and being resized
         // around. `MediaQueryData` has no `viewPadding` field distinct from
         // `padding` (both name the same "safe area from the OS" concept
@@ -784,8 +769,7 @@ impl ScaffoldState {
 /// `floating_action_button` / `snack_bar` / `bottom_navigation_bar` /
 /// `drawer` / `end_drawer` slots.
 ///
-/// Flutter parity: `_ScaffoldLayout` (`scaffold.dart:991-1308`), narrowed to
-/// the seven slots this substrate ports — see the module docs for the full
+/// Narrowed to the seven slots this substrate implements — see the module docs for the full
 /// deferred-slot list and the inset contract this delegate enforces.
 #[derive(Debug, Clone, PartialEq)]
 struct ScaffoldLayoutDelegate {
@@ -914,8 +898,7 @@ impl MultiChildLayoutDelegate for ScaffoldLayoutDelegate {
             ctx.position_child(SLOT_FLOATING_ACTION_BUTTON, Offset::new(fab_x, fab_y));
         }
 
-        // Flutter oracle: `_ScaffoldLayout.performLayout` (`scaffold.dart:1282-1289`)
-        // — both drawer slots are laid out tight at the scaffold's full size,
+        // Both drawer slots are laid out tight at the scaffold's full size,
         // pinned to the origin; each `DrawerController` handles its own
         // internal open/closed sizing (an edge strip when closed, the full
         // area when open).

@@ -342,11 +342,12 @@ fn an_action_on_a_node_that_left_the_tree_is_gone_not_retargeted() {
     );
 }
 
-/// The record that tells `gone` from `unknown_handle` grows with the render
-/// slots a presentation uses, not with every element that came and went: a
-/// slot reused under ever newer generations is one entry.
+/// The record that tells `gone` from `unknown_handle` knows exactly which
+/// generations of a slot this agent's reads reported, and grows with the
+/// render slots a presentation uses and the separate runs of generations
+/// reported at each, not with every element that came and went.
 #[test]
-fn the_record_of_issued_handles_is_bounded_by_render_slots() {
+fn the_record_of_issued_handles_is_exact_and_bounded_by_render_slots() {
     let at = |slot: u32, generation: u32| {
         element(RenderId::new_gen(
             slot,
@@ -354,20 +355,51 @@ fn the_record_of_issued_handles_is_bounded_by_render_slots() {
         ))
     };
     let mut issued = super::super::agent::IssuedHandles::default();
+
+    // The first read sees generation 10: 1 to 9 existed, but no read
+    // reported them to this agent.
+    issued.record(at(3, 10));
+    assert!(issued.was_issued(at(3, 10)), "a reported generation");
+    assert!(
+        !issued.was_issued(at(3, 9)),
+        "an older generation no read reported was never issued"
+    );
+    // A later read sees generation 12: 11 came and went between the reads.
+    issued.record(at(3, 12));
+    assert!(issued.was_issued(at(3, 10)), "reported, then removed: gone");
+    assert!(
+        !issued.was_issued(at(3, 11)),
+        "a generation between two reads that neither reported"
+    );
+    assert!(!issued.was_issued(at(3, 13)), "a newer generation");
+
+    // Every generation reported, one read each: one run, one slot.
     for generation in 1..=10_000 {
         issued.record(at(7, generation));
     }
-    assert_eq!(issued.slots(), 1);
-    assert!(
-        issued.was_issued(at(7, 1)),
-        "an older generation was issued"
-    );
+    assert_eq!(issued.slots(), 2);
+    assert_eq!(issued.runs(), 3, "two runs at slot 3, one at slot 7");
+    assert!(issued.was_issued(at(7, 1)));
     assert!(issued.was_issued(at(7, 10_000)));
     assert!(
         !issued.was_issued(at(7, 10_001)),
         "a newer generation than any read reported was not"
     );
     assert!(!issued.was_issued(at(8, 1)), "nor a slot no read reported");
+
+    // Every other generation reported: the runs a slot keeps are bounded,
+    // and past the bound its oldest gaps count as issued.
+    for generation in (1..=10_000).step_by(2) {
+        issued.record(at(9, generation));
+    }
+    assert!(issued.runs() <= 3 + super::super::agent::IssuedHandles::MAX_RUNS);
+    assert!(issued.was_issued(at(9, 9_999)));
+    assert!(!issued.was_issued(at(9, 9_998)), "a recent gap stays exact");
+    assert!(
+        issued.was_issued(at(9, 2)),
+        "an old gap past the bound counts as issued"
+    );
+    assert!(!issued.was_issued(at(9, 10_000)));
 }
 
 /// A panic before the handler is reached (here, the pipeline already borrowed
@@ -422,8 +454,77 @@ fn an_agent_for_a_closed_presentation_answers_gone() {
     let agent = realm
         .semantics_agent(second)
         .expect("the realm hosts the second presentation");
+    let dev_window = realm
+        .dev_agent_window(second)
+        .expect("the realm hosts the second presentation");
+    let again = realm
+        .dev_agent_window(second)
+        .expect("the realm hosts the second presentation");
+    assert_eq!(dev_window.id(), again.id());
+    assert!(dev_window.is_open());
+    // A call on another thread that upgraded the window's port and is still
+    // enqueueing when the presentation closes.
+    let in_flight = {
+        let state = realm
+            .presentations
+            .get(second)
+            .expect("the realm hosts the second presentation");
+        let slot = state.dev_agent.borrow();
+        Arc::clone(&slot.as_ref().expect("a window was vended").agent)
+    };
     assert!(realm.close_presentation_entered(second));
     assert!(realm.semantics_agent(second).is_none());
+    assert!(realm.dev_agent_window(second).is_none());
+    assert!(
+        !again.is_open(),
+        "the development agent went with its presentation"
+    );
+    let fault = dev_window
+        .read(ReadQuery::new())
+        .expect_err("a closed window answers at once");
+    assert_eq!(
+        (fault.code(), fault.kind()),
+        (
+            ErrorCode::Gone,
+            Some(flui_view::dev_agent::HandleKind::Window)
+        )
+    );
+    assert!(
+        !dev_window.is_open(),
+        "closed, though the in-flight call still holds the port"
+    );
+    let element = ElementId::from_u64(1).expect("non-zero");
+    let fault = dev_window
+        .act(ActionRequest::new(element, ActionName::Invoke))
+        .expect_err("an action on a closed window answers at once");
+    assert_eq!(fault.code(), ErrorCode::Gone);
+    // The in-flight call, past the window's own check, reaches the port only
+    // now: the port admits nothing either.
+    {
+        use flui_view::__runtime::AgentPort as _;
+        let read = in_flight
+            .read(ReadQuery::new())
+            .expect_err("a closed port admits no read");
+        let act = in_flight
+            .act(ActionRequest::new(element, ActionName::Invoke))
+            .expect_err("a closed port admits no action");
+        for fault in [read, act] {
+            assert_eq!(
+                (fault.code(), fault.kind()),
+                (
+                    ErrorCode::Gone,
+                    Some(flui_view::dev_agent::HandleKind::Window)
+                )
+            );
+        }
+        let report = realm.drain_commands();
+        assert_eq!(
+            (report.invoked, report.dropped_stale),
+            (0, 0),
+            "nothing was enqueued"
+        );
+    }
+    drop(in_flight);
 
     let reply = agent.read(ReadQuery::new()).expect("the inbox has room");
     let report = realm.drain_commands();

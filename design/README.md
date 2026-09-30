@@ -39,7 +39,7 @@ argue with it.
 
 ## The target in one paragraph
 
-FLUI is positioned as a UI runtime trusted by people and agents; the Flutter model is the familiar
+FLUI is positioned as a UI runtime trusted by people and agents; the declarative widget model is the familiar
 shape, not the headline promise. Numbered layers become tiers (values, contracts, substrate, render machine, spine and runtime,
 hosts, official packages) with a direction rule and **reach facts**: a gate over the resolved
 dependency graph proves that nothing below the hosts reaches an OS crate, winit or wgpu. The

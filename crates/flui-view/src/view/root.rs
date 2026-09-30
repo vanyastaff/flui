@@ -2,11 +2,6 @@
 //!
 //! This module provides the root View that connects the Element tree
 //! to the RenderObject tree through PipelineOwner.
-//!
-//! # Flutter Equivalent
-//!
-//! This corresponds to Flutter's `_RawViewInternal` and `_RawViewElement`
-//! which bootstrap the render tree for a FlutterView.
 
 use std::any::TypeId;
 
@@ -31,12 +26,8 @@ use crate::{
 ///
 /// `RootRenderView` wraps the application's widget tree and:
 /// 1. Creates a `RenderViewObject` (the root RenderObject)
-/// 2. Sets it as `pipelineOwner.rootNode`
+/// 2. Sets it as the pipeline owner's root node
 /// 3. Renders child widgets into the RenderView
-///
-/// # Flutter Equivalent
-///
-/// This corresponds to Flutter's `_RawViewInternal` widget.
 #[derive(Clone)]
 pub struct RootRenderView<V: View + Clone> {
     /// The child widget to render
@@ -81,11 +72,6 @@ impl<V: View + Clone + 'static> View for RootRenderView<V> {
 /// 2. Creates RenderViewObject as the root RenderObject in RenderTree
 /// 3. Sets `pipelineOwner.root_id = render_id`
 /// 4. Builds child widgets
-///
-/// # Flutter Equivalent
-///
-/// This corresponds to Flutter's `_RawViewElement` which extends
-/// `RenderTreeRootElement`.
 pub struct RootRenderElement<V: View + Clone> {
     /// The View configuration
     view: RootRenderView<V>,

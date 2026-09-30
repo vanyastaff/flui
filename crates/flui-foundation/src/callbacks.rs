@@ -1,7 +1,7 @@
 //! Common callback type aliases
 //!
 //! This module provides type aliases for commonly used callback patterns
-//! in the FLUI framework, similar to Flutter's `basic_types.dart`.
+//! in the FLUI framework.
 //!
 //! # Thread Safety
 //!

@@ -2,24 +2,18 @@
 //! the same `ButtonStyleButtonCore` machinery the text-label button family
 //! uses.
 //!
-//! # Flutter parity
+//! # Scope
 //!
-//! `material/icon_button.dart`'s `IconButton` (oracle tag `3.44.0`),
-//! standard variant only. In M3 mode the oracle's own `IconButton.build`
-//! delegates to `_IconButtonM3 extends ButtonStyleButton` — confirming
-//! `IconButton` really does ride the same button-style machinery
-//! `ElevatedButton`/`FilledButton`/`OutlinedButton`/`TextButton` do, unlike
+//! Standard variant only. `IconButton` rides the same button-style machinery
+//! as `ElevatedButton`/`FilledButton`/`OutlinedButton`/`TextButton`, unlike
 //! [`crate::floating_action_button::FloatingActionButton`] (which composes
-//! `Material`+`InkWell` directly because its own oracle, `RawMaterialButton`,
-//! is a *sibling* of `ButtonStyleButton`, not a subclass built on it). This
-//! type is therefore a thin [`StatelessView`] over
-//! `ButtonStyleButtonCore`, exactly mirroring `elevated_button.rs`'s own
-//! shape.
+//! `Material`+`InkWell` directly). This type is therefore a thin
+//! [`StatelessView`] over `ButtonStyleButtonCore`, with the same shape as
+//! `elevated_button.rs`.
 //!
-//! # `default_style`: `_IconButtonDefaultsM3`, standard variant
+//! # `default_style`: standard variant
 //!
-//! Field-by-field port of `_IconButtonDefaultsM3` (`icon_button.dart`'s
-//! generated token block, tag `3.44.0`), narrowed to the V1
+//! The M3 standard icon-button defaults, narrowed to the V1
 //! [`ButtonStyle`] slots (see that module's docs for the omitted-slot list
 //! every button in this crate shares):
 //!
@@ -134,12 +128,10 @@ use crate::elevated_button::pressed_hovered_focused_overlay;
 use crate::shape::MaterialShape;
 use crate::theme::Theme;
 
-/// The standard variant's icon side length. Flutter parity:
-/// `_IconButtonDefaultsM3.iconSize`.
+/// The standard variant's icon side length.
 pub const ICON_BUTTON_ICON_SIZE: f64 = 24.0;
 
-/// A small M3 button wrapping a single icon child — Flutter's standard
-/// `IconButton`. Use for a single, low-emphasis action (an app bar action, a
+/// A small M3 button wrapping a single icon child. Use for a single, low-emphasis action (an app bar action, a
 /// list-item trailing control, …) — see
 /// <https://m3.material.io/components/icon-buttons/overview>.
 ///

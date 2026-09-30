@@ -5,15 +5,12 @@ use std::fmt;
 /// Deprecated ISO 639 language subtags mapped to their IANA "preferred value"
 /// replacement.
 ///
-/// Oracle: `dart:ui`'s `Locale._deprecatedLanguageSubtagMap`
-/// (`engine/src/flutter/lib/ui/platform_dispatcher.dart`, oracle tag
-/// `3.44.0`, table comment "Mappings generated for language subtag registry
-/// as of 2019-02-27"). The oracle table lists ~90 historical ISO 639-3
-/// retirements; only the three that are reachable through FLUI's RTL
+/// Derived from the IANA language subtag registry, which lists ~90 historical
+/// ISO 639-3 retirements; only the three that are reachable through FLUI's RTL
 /// detection and locale-resolution surfaces today (`iw`/`in`/`ji`, all
-/// three-letter-vs-two-letter Bidi-relevant subtags) are ported. The rest are
-/// deferred — a future full-CLDR canonicalizer can extend this table without
-/// changing its shape.
+/// three-letter-vs-two-letter Bidi-relevant subtags) are included. The rest
+/// are deferred — a future full-CLDR canonicalizer can extend this table
+/// without changing its shape.
 const DEPRECATED_LANGUAGE_SUBTAGS: &[(&str, &str)] = &[
     ("in", "id"), // Indonesian; deprecated 1989-01-01
     ("iw", "he"), // Hebrew; deprecated 1989-01-01
@@ -23,9 +20,8 @@ const DEPRECATED_LANGUAGE_SUBTAGS: &[(&str, &str)] = &[
 /// Deprecated ISO 3166 region subtags mapped to their IANA "preferred value"
 /// replacement.
 ///
-/// Oracle: `dart:ui`'s `Locale._deprecatedRegionSubtagMap` (same file/tag as
-/// [`DEPRECATED_LANGUAGE_SUBTAGS`]). Ported in full — six entries, no scope
-/// cut needed.
+/// Derived from the same registry as [`DEPRECATED_LANGUAGE_SUBTAGS`], and
+/// complete — six entries, no scope cut needed.
 const DEPRECATED_REGION_SUBTAGS: &[(&str, &str)] = &[
     ("BU", "MM"), // Burma; deprecated 1989-12-05
     ("DD", "DE"), // German Democratic Republic; deprecated 1990-10-30
@@ -57,7 +53,7 @@ fn canonicalize_region_subtag(code: &str) -> &str {
 
 /// An identifier for a user's language and regional preferences.
 ///
-/// Mirrors Flutter's `Locale`: a language code plus optional country
+/// A language code plus optional country
 /// and script subtags (e.g. `en_US`, `zh_Hans_CN`), used for
 /// localization and text-direction resolution.
 ///
@@ -66,10 +62,8 @@ fn canonicalize_region_subtag(code: &str) -> &str {
 /// Deprecated language/region subtags are canonicalized to their preferred
 /// form at construction time (`Locale::new("iw", None::<&str>).language() ==
 /// "he"`), so two `Locale`s built from different historical spellings of the
-/// same subtag compare equal and hash identically — mirroring `dart:ui`'s
-/// `Locale` (see this module's deprecated-subtag tables for the oracle
-/// citation). The script subtag is passed through unchanged; the oracle
-/// does not canonicalize scripts.
+/// same subtag compare equal and hash identically. The script subtag is
+/// passed through unchanged; scripts are not canonicalized.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 // Deserialize is routed through `LocaleShadow` (below) so the derive cannot

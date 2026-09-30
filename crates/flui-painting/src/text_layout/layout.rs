@@ -624,7 +624,7 @@ fn style_to_attrs<'a>(
 }
 
 /// The colour a style paints its glyphs with: `foreground` wins over
-/// `color`, as in Flutter's `TextStyle`.
+/// `color`.
 pub(crate) fn paint_color(style: &TextStyle) -> Option<crate::styling::Color> {
     style.foreground.or(style.color)
 }
@@ -666,8 +666,7 @@ impl TextLayout {
     /// paint output all agree — lines beyond the limit do not exist,
     /// they are not merely skipped at paint. With an `ellipsis`, glyphs
     /// are dropped from the last kept line until the ellipsis fits the
-    /// width constraint, then it is appended (Flutter
-    /// `ParagraphStyle.maxLines` + `ellipsis` semantics); without one,
+    /// width constraint, then it is appended; without one,
     /// the text is cut at the last kept line's end (clip semantics).
     ///
     /// Worst case the fit loop re-shapes once per dropped glyph on the

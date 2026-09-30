@@ -2,9 +2,6 @@
 //! extent as the viewport scrolls, in four combinations of "does it scroll
 //! off?" and "does it float back into view on reverse scroll?".
 //!
-//! Flutter parity: `rendering/sliver_persistent_header.dart`. Oracle line
-//! numbers below refer to `.flutter/flutter-master/packages/flutter/lib/src/rendering/sliver_persistent_header.dart`.
-//!
 //! # The four variants
 //!
 //! | Type | Scrolls off? | Floats back in on reverse scroll? |
@@ -16,11 +13,8 @@
 //!
 //! # Rust shape — two families, not one generic
 //!
-//! Flutter's hierarchy is a straight chain (`RenderSliverPersistentHeader` ->
-//! `RenderSliverFloatingPersistentHeader` -> `RenderSliverFloatingPinnedPersistentHeader`,
-//! plus the sibling `RenderSliverScrollingPersistentHeader` /
-//! `RenderSliverPinnedPersistentHeader`). The Rust translation splits along
-//! where the *state*, not just the *behavior*, actually diverges:
+//! The four variants split along where the *state*, not just the
+//! *behavior*, actually diverges:
 //!
 //! - **Scrolling / Pinned** (this module's [`RenderSliverScrollingPersistentHeader`]
 //!   and [`RenderSliverPinnedPersistentHeader`]) carry no animation state at
@@ -33,9 +27,7 @@
 //!   directly.
 //! - **Floating / FloatingPinned** ([`RenderSliverFloatingPersistentHeader`],
 //!   [`RenderSliverFloatingPinnedPersistentHeader`]) share the ~40-line
-//!   re-reveal state machine in `perform_layout` **verbatim** (the oracle's
-//!   own comment on `RenderSliverFloatingPinnedPersistentHeader`, `:797-836`,
-//!   says as much: "Everything else ... is verbatim identical"). Hand-copying
+//!   re-reveal state machine in `perform_layout` **verbatim**. Hand-copying
 //!   that state machine into two structs is a real duplication-bug risk, so
 //!   this pair follows the `RenderClip<S: ClipGeometry>` pattern instead:
 //!   [`RenderSliverFloatingHeaderBase<M>`] is generic over the sealed
@@ -48,24 +40,20 @@
 //!
 //! - `update_scroll_start_direction` / `maybe_start_snap_animation` /
 //!   `maybe_stop_snap_animation` are implemented on
-//!   [`RenderSliverFloatingHeaderBase`] (real oracle methods, harness-testable
-//!   directly) but **no caller is wired** — in the oracle these are driven by
-//!   `_FloatingHeaderState`/`_isScrollingListener` (`widgets/sliver_persistent_header.dart:202-244`),
-//!   which listens to a `Scrollable`'s `ScrollPosition.isScrollingNotifier`.
-//!   That `Scrollable`/`SliverAppBar`-layer wiring is a separate future pass.
+//!   [`RenderSliverFloatingHeaderBase`] (harness-testable directly) but
+//!   **no caller is wired** — they are meant to be driven by a listener on a
+//!   `Scrollable`'s `ScrollPosition.isScrollingNotifier`. That
+//!   `Scrollable`/`SliverAppBar`-layer wiring is a separate future pass.
 //! - `show_on_screen` overrides are omitted entirely: `RenderObject::show_on_screen`
 //!   does not exist anywhere in `flui-rendering` yet, so there is no base
-//!   method to override. Whoever adds that infrastructure should note the
-//!   oracle's `show_on_screen` trims in **sliver space** for Pinned but
-//!   **child space** for Floating (`:709-714`) — the two are not
-//!   interchangeable.
+//!   method to override. Whoever adds that infrastructure should note that
+//!   `show_on_screen` trims in **sliver space** for Pinned but
+//!   **child space** for Floating — the two are not interchangeable.
 //! - The widget-layer `SliverPersistentHeader` + its delegate + `SliverAppBar`
-//!   are out of scope. Flutter's own newer sibling widgets (`PinnedHeaderSliver`,
-//!   `SliverFloatingHeader`) bypass the delegate+rebuild-in-layout design
-//!   entirely in favor of an ordinary `Child` — model the eventual FLUI widget
-//!   on those, not on the original delegate, per the plan behind this pass.
+//!   are out of scope. The eventual FLUI widget should take an ordinary child
+//!   rather than a delegate that rebuilds in layout.
 //!
-//! # Traps ported around
+//! # Traps
 //!
 //! 1. `update_child` is called only under a three-way change-detection guard
 //!    (needs-update / shrink-offset changed / overlaps-content changed), never
@@ -85,23 +73,16 @@
 //!    consumes it: it feeds `RenderViewport::max_scroll_obstruction_extent_before`
 //!    (`crates/flui-objects/src/sliver/viewport.rs:190-200`), which
 //!    `RenderViewport::get_offset_to_reveal`-style scroll-into-view machinery
-//!    would use. **Correction to the source plan**: the plan's own citation
-//!    described this as feeding the *next sibling's* `SliverConstraints.overlap`
-//!    inside `layoutChildSequence` — tracing both the oracle
-//!    (`rendering/viewport.dart:828` computes `overlap` from an accumulated
-//!    `maxPaintOffset` built from `paintExtent`, not `maxScrollObstructionExtent`)
-//!    and FLUI's own `viewport.rs` (same `paint_extent`-based accumulation,
-//!    `:410-411`) shows that is not the actual consumer.
-//!    `maxScrollObstructionExtent`'s real, oracle-confirmed consumer is
-//!    `maxScrollObstructionExtentBefore` (`rendering/viewport.dart:1352,1905,2223`),
-//!    used by `getOffsetToReveal` for `showOnScreen` — exactly mirrored by
-//!    FLUI's `RenderViewport::max_scroll_obstruction_extent_before`. The
-//!    requirement to report the field correctly stands; only the described
-//!    mechanism was corrected.
+//!    would use. It does **not** feed the *next sibling's*
+//!    `SliverConstraints.overlap`: the viewport computes `overlap` from an
+//!    accumulated paint offset built from `paint_extent`
+//!    (`viewport.rs:410-411`), not from the obstruction extent. Its real
+//!    consumer is `max_scroll_obstruction_extent_before`, used to compute the
+//!    offset to reveal a child.
 //! 6. The stretch-trigger signal is **edge-triggered** (`stretch_offset >=
 //!    trigger && last_stretch_offset <= trigger`), firing once per crossing,
 //!    not once per frame spent above the trigger.
-//! 7. A trap the oracle itself doesn't call out: `layout_child`'s own
+//! 7. `layout_child`'s own
 //!    stretch-offset formula (used for the child's box constraints, gated on
 //!    `constraints.scroll_offset == 0.0`) is a **different formula** from
 //!    `update_geometry`'s stretch-offset (used for `max_paint_extent`, gated
@@ -191,9 +172,7 @@ pub struct SnapCommand {
     pub action: SnapAction,
 }
 
-/// The two things a scroll edge asks of a floating header's snap machinery —
-/// mirroring the two calls Flutter's `_isScrollingListener` makes
-/// (`widgets/sliver_persistent_header.dart:202-244`).
+/// The two things a scroll edge asks of a floating header's snap machinery.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SnapAction {
     /// A user scroll ended moving in `ScrollDirection`: settle the reveal
@@ -206,8 +185,7 @@ pub enum SnapAction {
 
 /// Specifies how a stretched header reports overscroll trigger crossings.
 ///
-/// Flutter parity: `OverScrollHeaderStretchConfiguration` (`:33-46`). The
-/// signal fires **edge-triggered** — exactly once per crossing of
+/// The signal fires **edge-triggered** — exactly once per crossing of
 /// `stretch_trigger_offset` — see `PersistentHeaderCore::layout_child`.
 #[derive(Clone)]
 pub struct OverScrollHeaderStretchConfiguration {
@@ -250,7 +228,7 @@ impl fmt::Debug for OverScrollHeaderStretchConfiguration {
 
 /// Specifies how a floating header snaps (animates) into or out of view.
 ///
-/// Flutter parity: `FloatingHeaderSnapConfiguration` (`:659-671`). Consumed by
+/// Consumed by
 /// `RenderSliverFloatingHeaderBase::maybe_start_snap_animation` — see the
 /// module docs for why no caller is wired in this pass.
 #[derive(Debug, Clone)]
@@ -282,24 +260,19 @@ impl Default for FloatingHeaderSnapConfiguration {
 // PersistentHeaderCore — shared by all four variants
 // =============================================================================
 
-/// State and layout math shared by every persistent-header variant, mirroring
-/// the abstract base class `RenderSliverPersistentHeader` (`:120-345`).
+/// State and layout math shared by every persistent-header variant.
 ///
-/// `min_extent`/`max_extent` are plain fields here, not a delegate: the base
-/// oracle class only ever sees them as abstract getters implemented by the
-/// concrete subclass (`:136,144`), and Flutter's own delegate (which supplies
-/// them at the *widget* layer) is a `build`-producing, View-shaped concept
-/// that doesn't belong in `flui-rendering` — see this module's parent plan.
+/// `min_extent`/`max_extent` are plain fields here, not a delegate: a
+/// delegate that supplies them at the *widget* layer is a `build`-producing,
+/// View-shaped concept that doesn't belong in `flui-rendering`.
 #[derive(Debug)]
 struct PersistentHeaderCore {
     stretch_configuration: Option<OverScrollHeaderStretchConfiguration>,
-    /// Mirrors `_lastStretchOffset` (`:130`). The oracle leaves this `late`
-    /// (uninitialized until first write); FLUI initializes it to `0.0`, the
-    /// natural "not yet triggered" value — a documented, harmless divergence
-    /// that only differs from the oracle in the corner case of a first-ever
-    /// layout whose overscroll already exceeds the trigger threshold.
+    /// Initialized to `0.0`, the natural "not yet triggered" value; this only
+    /// matters in the corner case of a first-ever layout whose overscroll
+    /// already exceeds the trigger threshold.
     last_stretch_offset: f64,
-    /// Starts `true` (`:159`) — the very first `layout_child` call always
+    /// Starts `true` — the very first `layout_child` call always
     /// invokes `update_child` regardless of shrink-offset/overlap history.
     needs_update_child: bool,
     last_shrink_offset: f64,
@@ -335,9 +308,8 @@ impl PersistentHeaderCore {
             return false;
         }
         self.min_extent = min_extent;
-        // Mirrors the oracle's `markNeedsLayout` override (`:203-209`), which
-        // forces `_needsUpdateChild = true` on every dirtying event, not just
-        // a shrink-offset change — a future delegate-driven child rebuild
+        // Every dirtying event forces `needs_update_child`, not just a
+        // shrink-offset change — a future delegate-driven child rebuild
         // must see the extent change even if the shrink offset happens to
         // land on the same numeric value as before.
         self.needs_update_child = true;
@@ -367,7 +339,7 @@ impl PersistentHeaderCore {
     /// `stretch_configuration.is_some()`, with **no** `scroll_offset == 0.0`
     /// check. This is a genuinely different formula from
     /// [`Self::layout_child`]'s own stretch-offset computation (trap #7 in
-    /// the module docs); conflating them is an easy, plan-uncalled-out bug.
+    /// the module docs); conflating them is an easy bug.
     fn stretch_offset_for_geometry(&self, constraints: &SliverConstraints) -> f64 {
         if self.stretch_configuration.is_some() {
             constraints.overlap.abs()
@@ -376,8 +348,7 @@ impl PersistentHeaderCore {
         }
     }
 
-    /// Lays out the child, mirroring `layoutChild` (`:220-262`) exactly,
-    /// including:
+    /// Lays out the child, including:
     /// - the three-way change-detection guard before calling `update_child`
     ///   (trap #1);
     /// - the `min_extent <= max_extent` invariant check;
@@ -387,7 +358,7 @@ impl PersistentHeaderCore {
     /// - the edge-triggered stretch trigger signal (trap #6).
     ///
     /// Returns the child's post-layout main-axis extent (`0.0` if there is no
-    /// child, matching the oracle's `childExtent` getter for a `null` child).
+    /// child).
     /// Attaches the build-during-layout mailbox this header publishes into.
     ///
     /// Set once by the element that owns the delegate, at mount. A header with
@@ -598,13 +569,11 @@ macro_rules! header_core_accessors {
 
 /// A header that shrinks to `min_extent` as it hits the leading edge of the
 /// viewport, then scrolls off normally.
-///
-/// Flutter parity: `RenderSliverScrollingPersistentHeader` (`:352-397`).
 #[derive(Debug)]
 pub struct RenderSliverScrollingPersistentHeader {
     core: PersistentHeaderCore,
-    /// Cached return value of `update_geometry`, mirroring `_childPosition`
-    /// (`:361`) — read back by `child_main_axis_position`.
+    /// Cached return value of `update_geometry` — read back by
+    /// `child_main_axis_position`.
     child_position: f64,
 }
 
@@ -620,10 +589,9 @@ impl RenderSliverScrollingPersistentHeader {
         }
     }
 
-    /// Mirrors `updateGeometry` (`:365-383`) exactly: the return value uses
-    /// the **raw**, pre-clamp `paint_extent` local — not the clamped value
-    /// stored on `SliverGeometry` — matching the oracle's own
-    /// `paintExtent - childExtent` (not `geometry.paintExtent - childExtent`).
+    /// The child position uses the **raw**, pre-clamp `paint_extent` local
+    /// (`raw_paint_extent - child_extent`), not the clamped value stored on
+    /// `SliverGeometry`.
     fn update_geometry(
         &self,
         constraints: &SliverConstraints,
@@ -634,10 +602,9 @@ impl RenderSliverScrollingPersistentHeader {
         let raw_paint_extent = max_extent - constraints.scroll_offset;
         let cache_extent = self.calculate_cache_offset(constraints, 0.0, max_extent);
         let paint_extent = raw_paint_extent.clamp(0.0, constraints.remaining_paint_extent);
-        // The oracle (`sliver_persistent_header.dart:374-381`) passes only
-        // scrollExtent/paintOrigin/paintExtent/maxPaintExtent/cacheExtent, so
-        // every other field takes `SliverGeometry`'s constructor default
-        // (`sliver.dart:662-665`). Going through `new` + `with_*` rather than
+        // Only scroll extent, paint origin, paint extent, max paint extent and
+        // cache extent are set, so every other field takes
+        // `SliverGeometry`'s constructor default. Going through `new` + `with_*` rather than
         // a `..ZERO` struct literal is what makes those defaults apply: the
         // struct-update form substitutes zero/false for whatever it omits,
         // which is how `layout_extent`, `visible` and `hit_test_extent` were
@@ -670,8 +637,7 @@ impl RenderSliver for RenderSliverScrollingPersistentHeader {
         ctx: &mut SliverLayoutContext<'_, Single, Self::ParentData>,
     ) -> SliverGeometry {
         let constraints = *ctx.constraints();
-        // Mirrors `performLayout` (`:385-389`): no `overlaps_content` arg,
-        // defaults to `false`.
+        // No `overlaps_content` arg, defaults to `false`.
         let child_extent = self.core.layout_child(
             ctx,
             &constraints,
@@ -715,8 +681,7 @@ impl RenderSliver for RenderSliverScrollingPersistentHeader {
 /// A header that shrinks to `min_extent` as it hits the leading edge of the
 /// viewport, then stays pinned there.
 ///
-/// Flutter parity: `RenderSliverPinnedPersistentHeader` (`:404-473`), minus
-/// the `show_on_screen` override — see the module docs.
+/// There is no `show_on_screen` override — see the module docs.
 #[derive(Debug)]
 pub struct RenderSliverPinnedPersistentHeader {
     core: PersistentHeaderCore,
@@ -770,13 +735,12 @@ impl RenderSliver for RenderSliverPinnedPersistentHeader {
         let paint_extent = child_extent.min(effective_remaining_paint_extent);
         // `paint_origin` is `constraints.overlap` UNMODIFIED here — unlike the
         // scrolling/floating variants, which clamp it with `.min(0.0)`. That
-        // is the pinned contract (oracle `:435-444`), not a transcription slip.
+        // is the pinned contract, not a slip.
         //
         // `layout_extent` is deliberately narrower than `paint_extent`: a
         // pinned header keeps painting at the edge after it has stopped
-        // consuming layout space. Everything the oracle omits takes the
-        // constructor default via `new` (`sliver.dart:662-665`) rather than
-        // `..ZERO`'s zero/false.
+        // consuming layout space. Everything not set here takes the
+        // constructor default via `new` rather than `..ZERO`'s zero/false.
         let geometry = SliverGeometry::new(max_extent, paint_extent, constraints.overlap)
             .with_layout_extent(layout_extent)
             .with_max_paint_extent(max_extent + stretch_offset)
@@ -823,11 +787,11 @@ mod sealed {
 /// Sealed: [`FloatingMode`] (scrolls off) and [`FloatingPinnedMode`] (stays
 /// pinned) are the only implementors. This trait exists purely to
 /// deduplicate the ~40-line re-reveal state machine in
-/// [`RenderSliverFloatingHeaderBase::perform_layout`], which the oracle
-/// itself documents as verbatim-identical between the two subclasses
-/// (`:797-836`) — everything else about the two types is shared.
+/// [`RenderSliverFloatingHeaderBase::perform_layout`], which is
+/// verbatim-identical between the two variants — everything else about the
+/// two types is shared.
 pub trait FloatingHeaderMode: sealed::Sealed + Send + Sync + 'static {
-    /// Flutter-parity diagnostics label.
+    /// Diagnostics label.
     const DIAGNOSTIC_NAME: &'static str;
 
     /// Computes this variant's [`SliverGeometry`] and the child's main-axis
@@ -900,18 +864,16 @@ impl FloatingHeaderMode for FloatingMode {
         let raw_layout_extent = max_extent - constraints.scroll_offset;
         let paint_extent = raw_paint_extent.clamp(0.0, constraints.remaining_paint_extent);
         let layout_extent = raw_layout_extent.clamp(0.0, constraints.remaining_paint_extent);
-        // The oracle (`:588-595`) omits `visible` and `hitTestExtent`, so both
-        // take `new`'s constructor defaults (`sliver.dart:662-665`).
-        // `cacheExtent` is also omitted there and falls back to `layoutExtent`
-        // per the same chain, which is narrower than `new`'s `paint_extent`
-        // default here — hence the explicit setter.
+        // `visible` and `hit_test_extent` take `new`'s constructor defaults.
+        // The cache extent follows `layout_extent`, which is narrower than
+        // `new`'s `paint_extent` default — hence the explicit setter.
         let geometry = SliverGeometry::new(max_extent, paint_extent, constraints.overlap.min(0.0))
             .with_layout_extent(layout_extent)
             .with_max_paint_extent(max_extent + stretch_offset)
             .with_cache_extent(layout_extent)
             .with_visual_overflow();
-        // Uses the RAW (pre-clamp) `paint_extent` local, matching the
-        // oracle's `paintExtent - childExtent` — not `geometry.paintExtent`.
+        // Uses the RAW (pre-clamp) `paint_extent` local, not the clamped
+        // `geometry.paint_extent`.
         let child_position = if stretch_offset > 0.0 {
             0.0
         } else {
@@ -944,9 +906,8 @@ impl FloatingHeaderMode for FloatingPinnedMode {
         let layout_extent =
             (max_extent - constraints.scroll_offset).clamp(0.0, clamped_paint_extent);
         let stretch_offset = core.stretch_offset_for_geometry(constraints);
-        // As above: `visible` and `hitTestExtent` are omitted by the oracle
-        // (`:825-833`) and take `new`'s defaults; `cacheExtent` follows
-        // `layoutExtent`.
+        // As above: `visible` and `hit_test_extent` take `new`'s defaults;
+        // the cache extent follows `layout_extent`.
         let geometry = SliverGeometry::new(
             max_extent,
             clamped_paint_extent,
@@ -969,9 +930,6 @@ impl FloatingHeaderMode for FloatingPinnedMode {
 /// (`M = FloatingMode`) or [`RenderSliverPinnedPersistentHeader`]
 /// (`M = FloatingPinnedMode`), but immediately floats back into view when
 /// the user scrolls in the reverse direction.
-///
-/// Flutter parity: `RenderSliverFloatingPersistentHeader` (`:508-787`) and
-/// `RenderSliverFloatingPinnedPersistentHeader` (`:797-836`).
 ///
 /// # Snap-animation controller injection
 ///
@@ -996,17 +954,15 @@ pub struct RenderSliverFloatingHeaderBase<M: FloatingHeaderMode> {
     /// inert no-op.
     controller: Option<AnimationController>,
     /// Lazily (re)built by [`Self::update_animation`] on the first retarget —
-    /// mirrors the oracle's `_animation`, rebuilt fresh per
-    /// `_updateAnimation` call (`:599-614`), not fixed at construction.
+    /// rebuilt fresh per call, not fixed at construction.
     animation: Option<CurvedAnimation<ArcCurve>>,
     /// The begin/end span the animation interpolates over. Rebuilt alongside
     /// `animation` in [`Self::update_animation`].
     float_tween: FloatTween,
     /// The animation-driven value already folded into `effective_scroll_offset`
-    /// as of the last `perform_layout` — mirrors the oracle's listener guard
-    /// (`if (_effectiveScrollOffset == _animation.value) return;`,
-    /// `:601-603`) without needing `&mut self` access from inside the
-    /// `Arc<dyn Fn>` `attach` callback. Deliberately a **separate** field from
+    /// as of the last `perform_layout` — a listener guard that needs no
+    /// `&mut self` access from inside the `Arc<dyn Fn>` `attach` callback.
+    /// Deliberately a **separate** field from
     /// `effective_scroll_offset`, not a direct comparison against it: once a
     /// drive settles, `effective_scroll_offset` legitimately keeps moving via
     /// later *real-scroll*-driven `perform_layout` calls, and comparing
@@ -1026,7 +982,7 @@ pub struct RenderSliverFloatingHeaderBase<M: FloatingHeaderMode> {
     /// The last [`SnapCommand::epoch`] applied — see
     /// [`Self::apply_snap_command`]'s idempotency contract.
     last_snap_epoch: u64,
-    /// Cached return value of `update_geometry`, mirroring `_childPosition`.
+    /// Cached return value of `update_geometry`.
     child_position: Option<f64>,
     /// Value-change subscription on `controller`, torn down in `detach`.
     listener_id: Option<ListenerId>,
@@ -1064,8 +1020,7 @@ impl<M: FloatingHeaderMode> RenderSliverFloatingHeaderBase<M> {
         self
     }
 
-    /// Replaces the snap configuration. Inert setter (matches the oracle's
-    /// plain-assignment `snapConfiguration` field) — no dirty-marking.
+    /// Replaces the snap configuration. Inert setter — no dirty-marking.
     pub fn set_snap_configuration(&mut self, snap: Option<FloatingHeaderSnapConfiguration>) {
         self.snap_configuration = snap;
     }
@@ -1091,9 +1046,9 @@ impl<M: FloatingHeaderMode> RenderSliverFloatingHeaderBase<M> {
                 self.maybe_start_snap_animation(direction);
             }
             SnapAction::Stop => {
-                // The direction parameter mirrors the oracle's signature but
-                // is unused by the stop path — Idle is the honest value for
-                // "a new gesture, direction not yet known".
+                // The direction parameter is unused by the stop path — Idle
+                // is the honest value for "a new gesture, direction not yet
+                // known".
                 self.maybe_stop_snap_animation(ScrollDirection::Idle);
             }
         }
@@ -1122,8 +1077,7 @@ impl<M: FloatingHeaderMode> RenderSliverFloatingHeaderBase<M> {
     }
 
     /// Records the scroll direction active when the current scroll gesture
-    /// started. Mirrors `updateScrollStartDirection` (`:616-620`) — a pure
-    /// setter with **no internal caller** in this pass (see module docs); it
+    /// started. A pure setter with **no internal caller** in this pass (see module docs); it
     /// exists so a future `Scrollable`/`SliverAppBar` integration (or a test)
     /// can feed [`Self::maybe_start_snap_animation`]'s
     /// `allow_floating_expansion` disjunct (trap #4).
@@ -1158,9 +1112,8 @@ impl<M: FloatingHeaderMode> RenderSliverFloatingHeaderBase<M> {
     }
 
     /// Stops an in-flight snap (or `show_on_screen` expand) animation.
-    /// Mirrors `maybeStopSnapAnimation` (`:643-647`) — the oracle itself never
-    /// reads `direction` either; kept for signature parity with a future
-    /// caller.
+    /// `direction` is not read; it is kept so the signature matches
+    /// [`Self::maybe_start_snap_animation`] for a future caller.
     pub fn maybe_stop_snap_animation(&mut self, _direction: ScrollDirection) {
         if let Some(controller) = self.controller.as_ref() {
             let _ = controller.stop();
@@ -1168,15 +1121,12 @@ impl<M: FloatingHeaderMode> RenderSliverFloatingHeaderBase<M> {
     }
 
     /// Rebuilds `float_tween`/`animation` targeting `end_value` over
-    /// `duration` with `curve`, mirroring `_updateAnimation` (`:599-614`).
+    /// `duration` with `curve`.
     ///
-    /// Diverges from the oracle in one respect: the oracle's controller is
-    /// lazily built on the FIRST call (`_controller ??= AnimationController(
-    /// ..., duration: duration)`), so `duration` is silently ignored on every
-    /// later call. FLUI's controller is always already-built —
-    /// there is no "first creation" moment to gate on, so this method
-    /// applies `duration` via `set_duration` on every call instead —
-    /// documented divergence, not a silent behavior change.
+    /// Unlike a controller that is lazily built on the FIRST call (so
+    /// `duration` is silently ignored on every later call), this controller is
+    /// always already-built — there is no "first creation" moment to gate on,
+    /// so this method applies `duration` via `set_duration` on every call.
     fn update_animation(&mut self, duration: Duration, end_value: f64, curve: ArcCurve) {
         let Some(controller) = self.controller.as_ref() else {
             return;
@@ -1241,13 +1191,11 @@ impl<M: FloatingHeaderMode> RenderSliver for RenderSliverFloatingHeaderBase<M> {
         let constraints = *ctx.constraints();
         let max_extent = self.core.max_extent;
 
-        // Mirrors the oracle's animation-value listener (`_controller
-        // .addListener` writes `_effectiveScrollOffset = _animation.value` on
-        // every tick, before the next `performLayout` runs, guarded by
-        // `if (_effectiveScrollOffset == _animation.value) return;`,
-        // `:601-603`). FLUI's `attach` listener can only call
+        // The animation value must reach `effective_scroll_offset` on every
+        // tick, before the next layout runs, guarded so an unchanged value
+        // does nothing. The `attach` listener can only call
         // `mark_needs_layout` — ADR-0013's dirty handle grants no `&mut self`
-        // access from inside the `Arc<dyn Fn>` callback — so the mirrored
+        // access from inside the `Arc<dyn Fn>` callback — so the
         // read+guard happens here instead, at the top of the very layout that
         // listener's `mark_needs_layout` triggered. `last_synced_animation_value`
         // (not `is_animating()`) is the guard: it changes on every tick
@@ -1349,9 +1297,8 @@ impl<M: FloatingHeaderMode> RenderSliver for RenderSliverFloatingHeaderBase<M> {
 
     fn detach(&mut self) {
         // Deliberately does NOT stop/dispose `self.controller` — the same
-        // FLUI divergence `RenderAnimatedSize::detach` documents: FLUI's
-        // `detach` fires only on structural tree removal (not Flutter's
-        // far-more-frequent offstage/onstage toggling), and controller
+        // as `RenderAnimatedSize::detach`: `detach` fires only on structural
+        // tree removal (not on offstage/onstage toggling), and controller
         // lifecycle belongs to the owning widget/`State`, not this render
         // object. Stopping here would also race a fresh `attach` on a
         // remove+insert reparent.

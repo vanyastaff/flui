@@ -1,11 +1,9 @@
 //! Table layout types
 //!
 //! Types for configuring table column widths and cell alignment.
-//! Based on Flutter's Table widget API.
 
 /// How one table column's width is decided.
 ///
-/// Mirrors Flutter's `TableColumnWidth` hierarchy (`rendering/table.dart`).
 /// The leaf variants (`Fixed`/`Flex`/`Intrinsic`/`Fraction`) are cheap value
 /// specs; [`Max`](Self::Max)/[`Min`](Self::Min) are *combinators* that wrap
 /// two other specs — which is why this enum owns them behind [`Box`] and is
@@ -31,9 +29,6 @@ pub enum TableColumnWidth {
     /// column ALSO participates in leftover-space distribution once the
     /// non-flexible columns are sized — its intrinsic width acts as a floor.
     /// `None` means it never takes extra space.
-    ///
-    /// Flutter parity: `IntrinsicColumnWidth({double? flex})`
-    /// (`rendering/table.dart:94`).
     Intrinsic {
         /// Optional flex factor for distributing leftover space;
         /// `None` means the column never takes extra space.
@@ -50,16 +45,14 @@ pub enum TableColumnWidth {
     ///
     /// For "10% of the container width or 100px, whichever is bigger", use
     /// `TableColumnWidth::max(Fixed(100.0), Fraction(0.1))`. Both `a` and `b`
-    /// are evaluated (so if either is expensive, so is this). Flutter parity:
-    /// `MaxColumnWidth` (`rendering/table.dart:235`).
+    /// are evaluated (so if either is expensive, so is this).
     Max(Box<TableColumnWidth>, Box<TableColumnWidth>),
 
     /// The smaller of two column-width specs, evaluated independently.
     ///
     /// For "10% of the container width but never bigger than 100px", use
     /// `TableColumnWidth::min(Fixed(100.0), Fraction(0.1))`. Both `a` and `b`
-    /// are evaluated. Flutter parity: `MinColumnWidth`
-    /// (`rendering/table.dart:287`).
+    /// are evaluated.
     Min(Box<TableColumnWidth>, Box<TableColumnWidth>),
 }
 

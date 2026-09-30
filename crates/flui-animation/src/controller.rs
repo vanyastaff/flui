@@ -35,9 +35,8 @@ const FLING_TOLERANCE: Tolerance = Tolerance {
 /// run-starting calls change `status` but not `value` at the call itself
 /// (the value only moves once ticks arrive) — but `repeat_with` snaps
 /// `value` to the repeat range's lower endpoint and `drive_simulation`
-/// snaps it to `simulation.x(0.0)`, and both still pass `Unchanged`: Flutter
-/// parity is `_startSimulation` setting `_value` directly, without
-/// `notifyListeners()` (`animation_controller.dart:865` @ 3.44.0) — the jump
+/// snaps it to `simulation.x(0.0)`, and both still pass `Unchanged`: the run
+/// start sets the value directly, without notifying listeners — the jump
 /// is real but reported on the run's first tick, not synchronously at the
 /// call. A settle or a tick always changes both.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -272,16 +271,14 @@ struct AnimationControllerInner {
     /// `animate_back_curved` run (`None` = linear). Cleared by
     /// [`clear_run_modes`](AnimationControllerInner::clear_run_modes) so a
     /// later plain `forward`/`reverse`/`animate_to` run does not inherit a
-    /// stale curve. Flutter parity: `AnimationController._animateToInternal`
-    /// threads `curve` straight into `_InterpolationSimulation`.
+    /// stale curve.
     run_curve: Option<Arc<dyn Curve + Send + Sync>>,
 
     /// Status most recently delivered to status listeners. The emission seam
     /// ([`take_status_change`](AnimationControllerInner::take_status_change))
     /// compares against this before firing, so a call that leaves `status`
     /// unchanged (e.g. `set_value` re-asserting the same directional status
-    /// every frame of a gesture drag) does not re-notify. Flutter parity:
-    /// `AnimationController._lastReportedStatus` / `_checkStatusChanged`.
+    /// every frame of a gesture drag) does not re-notify.
     last_reported_status: AnimationStatus,
 
     /// The write half of the current run's [`TickerFuture`], if a run is
@@ -373,7 +370,7 @@ impl AnimationController {
     ///
     /// [`Self::without_ticker`] skips the `Ticker` field entirely, and
     /// [`AnimationController::is_animating`] is intentionally ticker-based
-    /// (Flutter parity: mirrors `Ticker.isActive`, not this controller's own
+    /// (it reflects the ticker being active, not this controller's own
     /// status), so a `without_ticker` controller can never report
     /// `is_animating() == true`, even mid-run. Some call sites need
     /// `is_animating()` to report correctly but never actually need a live
@@ -524,9 +521,7 @@ impl AnimationController {
     /// bounds, infallible (there is no bound input to reject).
     ///
     /// Initial `value = 0.0` (not `lower_bound`, which would be `-inf` and
-    /// leak into [`AnimationController::velocity`]) — Flutter parity:
-    /// `AnimationController.unbounded`'s own doc (`animation_controller.dart`
-    /// @ 3.44.0) fixes the initial value at `0.0`.
+    /// leak into [`AnimationController::velocity`]).
     fn unbounded_inner(duration: Duration, ticker: Option<Ticker>) -> Self {
         Self::new_inner(duration, ticker, f64::NEG_INFINITY, f64::INFINITY, 0.0)
     }
@@ -536,8 +531,8 @@ impl AnimationController {
     /// (`lower_bound` for a bounded controller, `0.0` for an unbounded one),
     /// and `status`/`last_reported_status` are BOTH set from
     /// [`AnimationControllerInner::settled_status_keep_direction`] at that
-    /// value — Flutter parity: `_internalSetValue`'s status rule applies at
-    /// construction too, not only to a later `set_value` (a bounded
+    /// value — the status rule applies at construction too, not only to a
+    /// later `set_value` (a bounded
     /// controller at `lower_bound` stays `Dismissed`; an unbounded one at
     /// `0.0`, direction defaulted `Forward`, reports `Forward` — see
     /// `docs/ARCHITECTURE.md`'s mapping entry for the recorded cost). Both
@@ -609,7 +604,7 @@ impl AnimationController {
     /// Bounds are fixed at `f64::NEG_INFINITY..f64::INFINITY`: unboundedness
     /// is this constructor, not a bound value — [`Self::with_bounds`] and
     /// its siblings reject a non-finite bound. Initial `value = 0.0`
-    /// (Flutter parity: `AnimationController.unbounded`'s own doc), and
+    /// and
     /// initial [`status`](Animation::status) is
     /// [`AnimationStatus::Forward`] — [`AnimationDirection`] defaults
     /// `Forward` and `0.0` is not "at a bound" on an infinite range, so the
@@ -630,7 +625,7 @@ impl AnimationController {
     /// [`Simulation`]), [`set_value`](Self::set_value), or
     /// [`repeat_with`](Self::repeat_with) with an explicit finite range
     /// instead. [`reset`](Self::reset) resets to `0.0` (the defined
-    /// beginning — flutter/flutter#76014), not `-inf`.
+    /// beginning), not `-inf`.
     #[must_use]
     pub fn unbounded_without_ticker(duration: Duration) -> Self {
         Self::unbounded_inner(duration, None)
@@ -653,10 +648,8 @@ impl AnimationController {
 
     /// Set the base forward duration.
     ///
-    /// Mirrors Flutter's `controller.duration = newDuration`, which an
-    /// [`ImplicitlyAnimatedWidget`](https://api.flutter.dev/flutter/widgets/ImplicitlyAnimatedWidget-class.html)
-    /// assigns on every `didUpdateWidget` so a duration change takes effect on
-    /// the *next* run. It does not retime an in-flight run (the active run keeps
+    /// An implicitly animated widget assigns this on every update so a
+    /// duration change takes effect on the *next* run. It does not retime an in-flight run (the active run keeps
     /// the duration it started with, since `tick_at` scales against the
     /// already-captured `run_duration`/`duration`); the new value is read when
     /// the next `forward`/`reverse` begins the run at elapsed zero.
@@ -715,15 +708,11 @@ impl AnimationController {
     ///
     /// The run covers the REMAINING distance at the full-range velocity:
     /// its duration is the forward duration scaled by
-    /// `(upper_bound - value) / (upper_bound - lower_bound)` (Flutter
-    /// parity — `AnimationController._animateToInternal` scales the
-    /// simulation duration by the remaining fraction). A zero DISTANCE
+    /// `(upper_bound - value) / (upper_bound - lower_bound)`. A zero DISTANCE
     /// (starting at the upper bound) or a zero DURATION (the scaled run
     /// duration is `Duration::ZERO`) settles SYNCHRONOUSLY, before this
     /// call returns, with [`AnimationStatus::Completed`] and an
-    /// already-complete [`TickerFuture`] — Flutter parity:
-    /// `_animateToInternal`'s `simulationDuration == Duration.zero` branch
-    /// (`animation_controller.dart:674-684` @ 3.44.0). See
+    /// already-complete [`TickerFuture`]. See
     /// [`forward`](Self::forward) for the returned future's contract.
     ///
     /// # Errors
@@ -781,10 +770,8 @@ impl AnimationController {
         inner.status = AnimationStatus::Forward;
         inner.run_duration = Some(run_duration);
         // `from` may have jumped `value` above without a settle (a real run
-        // still starts). Flutter's `forward`'s `if (from != null) { value =
-        // from; }` goes through the `value=` setter, which notifies
-        // UNCONDITIONALLY — FLUI narrows that to "iff it actually moved"
-        // (the same entry-value rule `settle_at_target` uses), so
+        // still starts). Notification fires "iff it actually moved" (the
+        // same entry-value rule `settle_at_target` uses), so
         // `forward_from(Some(x))` from `x` itself does not fire a spurious
         // notification for a value that never changed.
         let value_change = if (inner.value - entry_value).abs() < BOUND_EPSILON {
@@ -829,12 +816,10 @@ impl AnimationController {
     /// The run covers the REMAINING distance at the full-range velocity:
     /// its duration is the reverse duration (falling back to the forward
     /// duration) scaled by `(value - lower_bound) / (upper_bound -
-    /// lower_bound)` (Flutter parity — see [`forward_from`](Self::forward_from)).
-    /// A zero DISTANCE (starting at the lower bound) or a zero DURATION
+    /// lower_bound)`. A zero DISTANCE (starting at the lower bound) or a zero DURATION
     /// settles SYNCHRONOUSLY, before this call returns, with
-    /// [`AnimationStatus::Dismissed`] — see [`forward_from`](Self::forward_from)'s
-    /// doc for the Flutter citation. See [`forward`](Self::forward) for the
-    /// returned future's contract.
+    /// [`AnimationStatus::Dismissed`] — see [`forward_from`](Self::forward_from).
+    /// See [`forward`](Self::forward) for the returned future's contract.
     ///
     /// # Errors
     ///
@@ -891,7 +876,7 @@ impl AnimationController {
         inner.status = AnimationStatus::Reverse;
         inner.run_duration = Some(run_duration);
         // See `forward_from`'s own comment: notify iff `from` actually moved
-        // the value, narrower than Flutter's unconditional `value=` notify.
+        // the value.
         let value_change = if (inner.value - entry_value).abs() < BOUND_EPSILON {
             ValueChange::Unchanged
         } else {
@@ -952,8 +937,7 @@ impl AnimationController {
     ///
     /// Sets the value to the beginning — `lower_bound` on a bounded
     /// controller, `0.0` on an [`unbounded`](Self::unbounded) one (there is
-    /// no `lower_bound` to return to: flutter/flutter#76014 asks for
-    /// exactly this defined beginning) — and the status to
+    /// no `lower_bound` to return to) — and the status to
     /// [`AnimationStatus::Dismissed`]. Never fails for non-finiteness: a
     /// reset always has a value to land on. Cancels the active run's
     /// [`TickerFuture`] with
@@ -995,9 +979,8 @@ impl AnimationController {
     ///
     /// [`status`](Animation::status) is reported as
     /// [`AnimationStatus::Forward`] **regardless of whether `target` is above
-    /// or below the current value**, ending [`AnimationStatus::Completed`] —
-    /// Flutter parity: `AnimationController.animateTo`'s own doc
-    /// (`animation_controller.dart:574-577` @ 3.44.0). If `target` is
+    /// or below the current value**, ending [`AnimationStatus::Completed`].
+    /// If `target` is
     /// already the current value (or `duration` resolves to
     /// `Duration::ZERO`), this settles synchronously; see
     /// [`forward_from`](Self::forward_from)'s doc.
@@ -1044,8 +1027,7 @@ impl AnimationController {
     /// [`status`](Animation::status) is reported as
     /// [`AnimationStatus::Reverse`] regardless of whether `target` is above
     /// or below the current value, ending [`AnimationStatus::Dismissed`] —
-    /// the mirror of [`animate_to`](Self::animate_to)'s own contract
-    /// (`animation_controller.dart:611-614` @ 3.44.0).
+    /// the mirror of [`animate_to`](Self::animate_to)'s own contract.
     ///
     /// # Errors
     ///
@@ -1061,9 +1043,7 @@ impl AnimationController {
     }
 
     /// Like [`animate_to`](Self::animate_to), but eases the run through
-    /// `curve` instead of running linearly. Flutter parity:
-    /// `AnimationController.animateTo(target, duration: ..., curve: ...)`,
-    /// which threads `curve` into `_InterpolationSimulation`.
+    /// `curve` instead of running linearly.
     ///
     /// # Errors
     ///
@@ -1080,8 +1060,7 @@ impl AnimationController {
     }
 
     /// Like [`animate_back`](Self::animate_back), but eases the run through
-    /// `curve` instead of running linearly. Flutter parity:
-    /// `AnimationController.animateBack(target, duration: ..., curve: ...)`.
+    /// `curve` instead of running linearly.
     ///
     /// # Errors
     ///
@@ -1102,16 +1081,12 @@ impl AnimationController {
     /// `target`, easing through `curve` (`None` = linear).
     ///
     /// `direction` is the METHOD's, not derived from `target`'s relation to
-    /// the current value — Flutter parity: `AnimationController.animateTo`/
-    /// `animateBack` (`animation_controller.dart` @ 3.44.0) assign
-    /// `_direction` from which method was called, before `target` is even
-    /// looked at. It drives both the run's status (Forward/Reverse while
+    /// the current value: it is fixed by which method was called, before
+    /// `target` is even looked at. It drives both the run's status (Forward/Reverse while
     /// running, Completed/Dismissed at the end —
     /// [`AnimationDirection::settled_status`]) and, when `duration` is
     /// `None`, which base duration (`self.duration`/`self.reverse_duration`)
-    /// the remaining-fraction scaling starts from — again Flutter parity:
-    /// `_animateToInternal`'s `directionDuration` local (same file) picks it
-    /// off `_direction`, which by that point is already the method's
+    /// the remaining-fraction scaling starts from — again the method's
     /// choice, not a travel comparison.
     fn drive_to(
         &self,
@@ -1173,8 +1148,7 @@ impl AnimationController {
         // zero. Starting the ticker would run for the full duration,
         // re-notifying value listeners every frame while the value never
         // changes, so settle immediately with a single notification instead
-        // — Flutter's `simulationDuration == Duration.zero` gate
-        // (`forward_from`'s doc has the citation).
+        // (see `forward_from`).
         if (target - inner.value).abs() < BOUND_EPSILON || run_duration.is_zero() {
             return Ok(self.settle_at_target(entry_value, inner));
         }
@@ -1203,17 +1177,14 @@ impl AnimationController {
     /// for the (trivial) run this call represents. The single settle
     /// chokepoint for zero-DISTANCE (`forward()` already at the upper bound)
     /// and zero-DURATION (`forward(..., Some(Duration::ZERO))`) runs alike
-    /// (issue #1171) — Flutter parity: `_animateToInternal`'s
-    /// `simulationDuration == Duration.zero` branch covers both the same way
-    /// (`animation_controller.dart:674-684` @ 3.44.0).
+    /// (issue #1171).
     ///
     /// `entry_value` is the value at the METHOD's entry, before
     /// `forward_from(Some(x))`/`reverse_from(Some(x))` apply `from` —
     /// comparing against the post-`from` value here would miss a jump
     /// (`forward_from(Some(1.0))` from `0.3` would report no value change).
     /// Value listeners fire only when `entry_value` actually differs from
-    /// where this settle lands (Flutter: `if (value != target) { …
-    /// notifyListeners(); }`, `:675-678`).
+    /// where this settle lands.
     fn settle_at_target(
         &self,
         entry_value: f64,
@@ -1271,14 +1242,14 @@ impl AnimationController {
     /// not from `min` — so a `repeat()` issued every build (a common pattern
     /// for a looping indicator) progresses instead of freezing at the start
     /// each time; to start at `min`, call [`set_value`](Self::set_value)
-    /// first (flutter#67507). `value`/`status`/`direction` at any later
+    /// first. `value`/`status`/`direction` at any later
     /// [`tick_at`](Self::tick_at) are a pure function of the elapsed time
     /// since this call, the range, `period`, `reverse`, and `count` — the
     /// frame partition never changes the answer. `count` boundaries are
     /// measured from that phase origin, not from a fresh cycle 0: a run
     /// started mid-cycle ends `count` boundaries later, not `count` full
-    /// periods (Flutter: `_exitTimeInSeconds = count*period - _initialT`;
-    /// Compose: `iterations*duration - initialOffset`), and a finite run
+    /// periods (`count*period - initial_offset`; Compose:
+    /// `iterations*duration - initialOffset`), and a finite run
     /// lands on the END of its last cycle.
     ///
     /// # Arguments
@@ -1292,15 +1263,13 @@ impl AnimationController {
     ///   A zero EFFECTIVE period (an explicit [`Duration::ZERO`], or a
     ///   defaulted zero `duration`) settles SYNCHRONOUSLY at the call instead
     ///   of installing a run that could never advance (Android's rule for a
-    ///   0-duration animator: skip to the end; Compose rejects it, Flutter
-    ///   asserts)
+    ///   0-duration animator: skip to the end; Compose rejects it)
     /// * `count` - Number of cycles; `None` repeats indefinitely (see
     ///   [`repeat`](Self::repeat) for what that means for the returned
     ///   future). `Some(0)` also settles SYNCHRONOUSLY at the call, at the
     ///   CURRENT (clamped) value with no landing jump — zero cycles run, so
     ///   there is nothing to land on (Web Animations semantics for an
-    ///   empty active interval; Flutter asserts `count > 0`, Compose throws
-    ///   for `iterations < 1`)
+    ///   empty active interval; Compose throws for `iterations < 1`)
     ///
     /// # Errors
     ///
@@ -1341,8 +1310,8 @@ impl AnimationController {
         // Clamp the repeat range into the controller's bounds and reject an
         // empty/inverted range, so a repeat run can never start `value` (or its
         // ticks) outside `[lower_bound, upper_bound]` — consistent with
-        // [`with_bounds`]'s `InvalidBounds` contract. Flutter permits
-        // `min == max`; FLUI does not: a repeat that can structurally never
+        // [`with_bounds`]'s `InvalidBounds` contract.
+        // `min == max` is refused: a repeat that can structurally never
         // change value is a caller error that would hold the frame loop open
         // doing nothing, the same contract `with_bounds` already applies to
         // an empty range.
@@ -1372,7 +1341,7 @@ impl AnimationController {
         }
 
         // A leftover per-run mode (an `animate_to_curved` curve, a fling
-        // simulation) must not shape a following repeat — Flutter's `repeat`
+        // simulation) must not shape a following repeat — a repeat
         // applies no curve at all, and `tick_repeat` applies none either.
         // The curve specifically can never leak (`tick_repeat` never reads
         // `run_curve`), but a leftover `simulation`/`run_duration` would
@@ -1381,8 +1350,7 @@ impl AnimationController {
 
         // The value at the call is the pure function sampled at elapsed
         // time zero — NOT a bare `lo`: from `value == max` in restart mode
-        // that is `lo` (the phase wraps), exactly Flutter's
-        // `_startSimulation` setting `_value = x(0.0)`; in bounce mode a
+        // that is `lo` (the phase wraps); in bounce mode a
         // value starting at `max` reports the reverse leg. Widen to f64
         // before subtracting — near `max` the f64 difference loses bits,
         // ~60ns of quantization at a 1s period, harmless to the phase this
@@ -1401,8 +1369,8 @@ impl AnimationController {
         }
 
         // Resolved ONCE, not read live on every tick: a later `set_duration`
-        // must not retime an active repeat (Flutter parity — `period ??=
-        // duration`, captured by the simulation at the call), and one period
+        // must not retime an active repeat (the period is captured at the
+        // call), and one period
         // for both legs of a bounce keeps the modular-nanosecond arithmetic
         // in `tick_repeat` exact.
         let period = period.unwrap_or(inner.duration);
@@ -1413,7 +1381,7 @@ impl AnimationController {
             // call instead of installing a run that can never advance —
             // Android's rule ("0 duration animator, ignore the repeat count
             // and skip to the end", `ValueAnimator.animateBasedOnTime`);
-            // Compose rejects it, Flutter asserts. An infinite zero-period
+            // Compose rejects it. An infinite zero-period
             // repeat ticking once per frame would hold the frame loop open
             // forever doing nothing, so it settles instead — a documented
             // exception to "an infinite repeat's future resolves only by
@@ -1459,10 +1427,9 @@ impl AnimationController {
             .replace(completer)
             .map(TickerCompleter::cancel);
 
-        // Flutter parity: `_startSimulation` sets `_value` directly, without
-        // `notifyListeners()` (`AnimationController._startSimulation` @
-        // 3.44.0) — the value-at-the-call jump is real but reported on the
-        // run's first tick, not synchronously here.
+        // The value is set directly, without notifying listeners — the
+        // value-at-the-call jump is real but reported on the run's first
+        // tick, not synchronously here.
         let status = inner.status;
         self.finish(status, ValueChange::Unchanged, displaced_delivery, inner);
         Self::warn_if_no_ticker(has_ticker);
@@ -1731,8 +1698,8 @@ impl AnimationController {
     ///   (see its own doc), so a controller disposed mid-run keeps whatever
     ///   running status it had.
     /// - [`set_value`](Self::set_value) reports a *directional* running
-    ///   status at an interior value (Flutter parity —
-    ///   [`settled_status_keep_direction`](AnimationControllerInner::settled_status_keep_direction))
+    ///   status at an interior value
+    ///   ([`settled_status_keep_direction`](AnimationControllerInner::settled_status_keep_direction))
     ///   even though it already called `stop_running()` and cleared
     ///   `active_run`. A `Vsync`-driven controller that receives a
     ///   `set_value` mid-run would otherwise still read `status.is_running()
@@ -1850,8 +1817,7 @@ impl AnimationController {
     /// last finite point — the caller already decided not to write the bad
     /// sample through). Clears `simulation`, stops the ticker, settles
     /// `status` by direction, and publishes the completion BEFORE `finish`
-    /// unlocks (Flutter parity: `_tick` completes its `Completer` before
-    /// `notifyListeners()`), so a panicking value/status listener still
+    /// unlocks (the completer resolves before listeners are notified), so a panicking value/status listener still
     /// leaves the run `Ok` — the unwind drops the delivery, which delivers
     /// the already-published outcome. `complete`, not `cancel`: both paths
     /// are the run ending on its own terms, never a cancellation.
@@ -1884,9 +1850,8 @@ impl AnimationController {
         } else {
             (cycle / duration.as_secs_f64()).clamp(0.0, 1.0)
         };
-        // Flutter parity: `_InterpolationSimulation.x` special-cases the
-        // endpoints to the exact begin/end value and only runs the curve
-        // through the interior, so a curve that overshoots slightly at its
+        // The endpoints map to the exact begin/end value and only the
+        // interior runs through the curve, so a curve that overshoots slightly at its
         // bounds (e.g. an elastic curve) never reports outside
         // `[start, target]`. Reading `start_value`/`target_value` directly
         // at the endpoints (rather than `start + range * eased_t` with
@@ -1917,8 +1882,7 @@ impl AnimationController {
         // `inner.value` is already `target_value` — set above by the
         // `t >= 1.0` arm.
 
-        // Non-repeating completion. Flutter parity: `AnimationController._tick`
-        // (`animation_controller.dart` @ 3.44.0) reports the settled status
+        // Non-repeating completion reports the settled status
         // BY DIRECTION — completed after a forward run, dismissed after a
         // reverse one — with no at-a-bound requirement. Keeping the running
         // status for a mid-range stop (the previous behavior) starved every
@@ -2014,8 +1978,7 @@ impl AnimationController {
         // flip fires exactly one status change and an even number of
         // skipped bounce cycles in one long frame fires none. Value
         // listeners fire on every tick, as they do for the time-based and
-        // simulation branches (Flutter's `_tick` calls `notifyListeners()`
-        // unconditionally): a tick is a frame, and a listener that repaints
+        // simulation branches (unconditionally): a tick is a frame, and a listener that repaints
         // per frame must not be starved by a sample that happens to repeat
         // the previous value.
         inner.value = sample.value;
@@ -2026,8 +1989,7 @@ impl AnimationController {
 
     /// Set the value directly without animating; recomputes status and notifies.
     ///
-    /// Stops any active run first (Flutter parity: `AnimationController`'s
-    /// `value=` setter calls `stop()` before `_internalSetValue`) — otherwise
+    /// Stops any active run first — otherwise
     /// a live ticker keeps re-registering itself with the scheduler and the
     /// next frame recomputes the value from the stale run's `start_value`/
     /// `target_value`, silently overwriting what was just set.
@@ -2122,7 +2084,7 @@ impl AnimationController {
     /// and letting it through would poison every downstream curve/tween
     /// evaluation for the rest of the run (`clamp` propagates `NaN`
     /// unchanged rather than rejecting it). `+-inf` clamps to whichever
-    /// bound it points at when that bound is finite — Flutter's own "go to
+    /// bound it points at when that bound is finite — the "go to
     /// the end" idiom, e.g. `animate_to(f64::INFINITY)` on a bounded
     /// controller — and is refused when that bound is itself non-finite: an
     /// unbounded controller has no end in that direction to go to.
@@ -2324,10 +2286,8 @@ impl AnimationControllerInner {
     /// Halt any active run at the current value: stop the ticker, clear
     /// simulation/repeat/curve state, and cancel the displaced run's
     /// completer — without touching `status` or emitting any notification.
-    /// Flutter parity: the raw `AnimationController.stop()` that the
-    /// `value=` setter calls before `_internalSetValue` — it only clears
-    /// `_simulation`/`_lastElapsedDuration` and stops the ticker, it does
-    /// not recompute status (the caller does that separately).
+    /// This is the raw halt that `set_value` performs first; it does not
+    /// recompute status (the caller does that separately).
     ///
     /// The returned [`TickerDelivery`] must be handed to
     /// [`AnimationController::finish`]; nothing else in this file may call
@@ -2344,7 +2304,7 @@ impl AnimationControllerInner {
     /// Snapshot the callbacks to fire **iff** `self.status` differs from the
     /// last-reported status, updating the marker so a later same-status
     /// emission is suppressed. Every status-emission site in this file
-    /// funnels through this seam — Flutter parity: `_checkStatusChanged`.
+    /// funnels through this seam.
     fn take_status_change(&mut self) -> Option<SmallVec<[StatusCallback; 4]>> {
         if self.status == self.last_reported_status {
             return None;
@@ -2377,12 +2337,10 @@ impl AnimationControllerInner {
     /// Duration for a run covering `|target_value - start_value|` of the
     /// range at the full-range velocity implied by `base`.
     ///
-    /// Flutter parity: `AnimationController._animateToInternal` scales the
-    /// simulation duration by the remaining fraction, so a mid-flight
+    /// The duration is scaled by the remaining fraction, so a mid-flight
     /// `forward()`/`reverse()` keeps constant velocity instead of stretching
     /// the leftover distance over the full duration. Degenerate ranges
-    /// (zero, non-finite) fall back to the unscaled base, like Flutter's
-    /// `range.isFinite ? ... : 1.0`.
+    /// (zero, non-finite) fall back to the unscaled base.
     fn scaled_run_duration(&self, base: Duration) -> Duration {
         let range = self.upper_bound - self.lower_bound;
         if !range.is_finite() || range <= 0.0 {
@@ -2435,8 +2393,7 @@ impl AnimationControllerInner {
     /// Status at a settled value, mapping non-bound stops by direction.
     ///
     /// Used only by [`stop`](AnimationController::stop) — FLUI's own
-    /// frame-driver contract, not a Flutter one (Flutter's `stop()` changes
-    /// no status at all): a bound reached mid-frame must report the bound it
+    /// frame-driver contract: a bound reached mid-frame must report the bound it
     /// actually reached, not the run's nominal direction, so a driver
     /// polling `status().is_running()` sees a real settle rather than a
     /// direction that never touched the value. Every RUN END instead uses
@@ -2544,9 +2501,7 @@ impl AnimationDirection {
 
     /// The status a run in this direction ends at, with **no bound check**.
     ///
-    /// Flutter parity: `AnimationController._tick` reports
-    /// `completed`/`dismissed` purely by `_direction`
-    /// (`animation_controller.dart:948-950` @ 3.44.0) — so
+    /// The end status follows purely from the run's direction, so
     /// `animate_to(lower_bound)` from mid-range ends `Completed`, not
     /// `Dismissed`. Used at every RUN END: `tick_time_based`'s non-repeat
     /// and repeat-exhaustion ends, `tick_simulation`'s `is_done`, and
@@ -2591,12 +2546,10 @@ impl Animation<f64> for AnimationController {
 
     /// Whether the controller is currently driving a run.
     ///
-    /// Flutter parity: `AnimationController.isAnimating` is ticker-based
-    /// (`_ticker!.isActive`), not status-based. `set_value` at an interior
-    /// value reports a directional status (per `_internalSetValue`) while the
-    /// controller is stopped, so the trait's status-derived default would
-    /// wrongly report `true` there. A muted ticker still counts as animating,
-    /// matching `Ticker.isActive`.
+    /// This is ticker-based, not status-based. `set_value` at an interior
+    /// value reports a directional status while the controller is stopped,
+    /// so the trait's status-derived default would wrongly report `true`
+    /// there. A muted ticker still counts as animating.
     #[inline]
     fn is_animating(&self) -> bool {
         self.inner

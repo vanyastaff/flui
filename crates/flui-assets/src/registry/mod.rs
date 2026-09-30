@@ -26,10 +26,10 @@ use bridge::BridgeRuntime;
 /// # Examples
 ///
 /// ```rust,ignore
-/// use flui_assets::{AssetRegistry, ImageAsset};
+/// use flui_assets::{AssetRegistryBuilder, ImageAsset};
 ///
-/// // Get the global registry
-/// let registry = AssetRegistry::global();
+/// // Create a registry
+/// let registry = AssetRegistryBuilder::new().with_default_capacity().build();
 ///
 /// // Load an image
 /// let image = ImageAsset::file("logo.png");
@@ -72,23 +72,6 @@ impl std::fmt::Debug for AssetRegistry {
 }
 
 impl AssetRegistry {
-    /// Returns the global asset registry instance.
-    ///
-    /// # Examples
-    ///
-    /// ```rust,ignore
-    /// let registry = AssetRegistry::global();
-    /// let image = registry.load(ImageAsset::file("logo.png")).await?;
-    /// ```
-    pub fn global() -> &'static Self {
-        static REGISTRY: std::sync::LazyLock<AssetRegistry> = std::sync::LazyLock::new(|| {
-            AssetRegistryBuilder::new()
-                .with_capacity(100 * 1024 * 1024) // 100 MB default
-                .build()
-        });
-        &REGISTRY
-    }
-
     /// Creates a new empty registry with the given default capacity.
     fn new(default_capacity: usize) -> Self {
         Self {

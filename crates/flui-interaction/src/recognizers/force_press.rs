@@ -7,8 +7,6 @@
 //! - Pressure increases past the start threshold (0.4 by default)
 //! - Optional pressure updates as finger presses harder/softer
 //! - Pressure decreases below end threshold or pointer up/cancel
-//!
-//! Flutter reference: <https://api.flutter.dev/flutter/gestures/ForcePressGestureRecognizer-class.html>
 
 use std::{cell::RefCell, rc::Rc, sync::Arc};
 
@@ -96,7 +94,7 @@ pub struct ForcePressGestureRecognizer {
     peak_pressure: f64,
 }
 
-// Field names keep Flutter's `onForcePressStart`-style callback names (parity).
+// Field names keep the `on_start`/`on_update`-style callback names.
 #[expect(clippy::struct_field_names)]
 #[derive(Default)]
 struct ForcePressCallbacks {
@@ -312,8 +310,7 @@ impl ForcePressGestureRecognizer {
         // Check slop - if moved too far, cancel
         if let Some(initial_pos) = self.state.initial_position() {
             let delta = position - initial_pos;
-            // Kind-aware, matching `computeHitSlop(event.kind, gestureSettings)`
-            // at `force_press.dart:252`. Reading `touch_slop()` unconditionally
+            // Kind-aware: reading `touch_slop()` unconditionally
             // gave a mouse the touch threshold, which is 18 logical pixels
             // against the 1 a precise pointer should get -- so a force press
             // survived eighteen times more drift with a mouse than with a
@@ -333,9 +330,8 @@ impl ForcePressGestureRecognizer {
                         self.state.stop_tracking();
                     }
                     // Not yet recognised, and now it never can be: the
-                    // reference resolves a `possible` force press as
-                    // *rejected* the moment it crosses hit slop
-                    // (`force_press.dart:252`). Returning without doing so
+                    // a `possible` force press resolves as
+                    // *rejected* the moment it crosses hit slop. Returning without doing so
                     // leaves the recognizer holding its arena entry, so it
                     // both blocks competitors until the pointer lifts and can
                     // still start the press if the pointer wanders back inside
@@ -546,9 +542,8 @@ impl GestureRecognizer for ForcePressGestureRecognizer {
 
     fn dispose(&self) {
         self.state.mark_disposed();
-        // Reject arena entries + clear tracked pointer (Flutter parity:
-        // gestures/recognizer.dart:485-493 disposing GestureRecognizer
-        // clears arena state for tracked pointers).
+        // Reject arena entries + clear tracked pointer, so a disposed
+        // recognizer never lingers in the arena for a tracked pointer.
         self.state.reject();
         let mut callbacks = self.callbacks.borrow_mut();
         callbacks.on_start = None;
@@ -566,8 +561,7 @@ impl GestureRecognizer for ForcePressGestureRecognizer {
 // Canonical trait hierarchy adoption
 // =============================================================================
 //
-// Flutter parity: `force_press.dart:117 ForcePressGestureRecognizer extends
-// OneSequenceGestureRecognizer`.
+// A force press tracks a single pointer sequence.
 
 impl crate::recognizers::OneSequenceGestureRecognizer for ForcePressGestureRecognizer {
     fn tracked_pointers(&self) -> Vec<PointerId> {

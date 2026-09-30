@@ -16,20 +16,18 @@ use crate::support::generic_render_view_element;
 /// Lays children out sequentially along one axis, stretching them in the cross
 /// axis.
 ///
-/// Flutter parity: `widgets/basic.dart` `ListBody` over `RenderListBody`.
-/// `ListBody` expects its parent to provide unbounded space along the main axis
-/// and a bounded cross axis, typically inside a matching scrollable.
+/// Backed by `RenderListBody`. `ListBody` expects its parent to provide
+/// unbounded space along the main axis and a bounded cross axis, typically
+/// inside a matching scrollable.
 ///
-/// Resolves its `AxisDirection` the way Flutter's
-/// `getAxisDirectionFromAxisReverseAndDirectionality` does (`widgets/
-/// basic.dart`): a horizontal `ListBody` reads the ambient [`Directionality`]
+/// Resolves its `AxisDirection` from the axis, `reverse` and the ambient
+/// text direction: a horizontal `ListBody` reads the ambient [`Directionality`]
 /// and picks `LeftToRight`/`RightToLeft` accordingly (defaulting to `Ltr` with
 /// no ancestor, matching every other FLUI widget that consults
 /// `Directionality`), then `reverse` flips the result to its opposite. A
 /// vertical `ListBody` never consults `Directionality` — `reverse` alone
-/// decides `TopToBottom` vs. `BottomToTop`, mirroring `_getDirection`'s own
-/// `Axis.vertical` arm. That ambient read only exists inside a
-/// `BuildContext`, so `ListBody` is a composing widget: `build` resolves the
+/// decides `TopToBottom` vs. `BottomToTop`. That ambient read only exists
+/// inside a `BuildContext`, so `ListBody` is a composing widget: `build` resolves the
 /// direction once and hands the *already-resolved* `AxisDirection` to a
 /// private render-object widget — `flui_view::RenderObjectContext` (the only
 /// context `RenderView::create_render_object`/`update_render_object` ever
@@ -66,9 +64,7 @@ impl<C> ListBody<C> {
         self
     }
 
-    /// Resolve the render object's `AxisDirection`: Flutter's
-    /// `getAxisDirectionFromAxisReverseAndDirectionality` (`widgets/
-    /// basic.dart`) — only `Axis::Horizontal` consults `text_direction`;
+    /// Resolve the render object's `AxisDirection`: only `Axis::Horizontal` consults `text_direction`;
     /// `reverse` flips either axis's base direction to its opposite.
     fn resolve_axis_direction(&self, text_direction: TextDirection) -> AxisDirection {
         match self.main_axis {
@@ -113,10 +109,7 @@ where
         // vertical arm of `resolve_axis_direction` discards it. Looking it up
         // regardless would register an inherited dependency the widget cannot
         // act on, so every vertical `ListBody` would rebuild on a direction
-        // change that cannot move it. The reference keeps the lookup inside
-        // the horizontal case for the same reason
-        // (`getAxisDirectionFromAxisReverseAndDirectionality`,
-        // `widgets/basic.dart:4513-4527`).
+        // change that cannot move it.
         let text_direction = match self.main_axis {
             Axis::Horizontal => Directionality::maybe_of(ctx).unwrap_or(TextDirection::Ltr),
             Axis::Vertical => TextDirection::Ltr,

@@ -2,28 +2,12 @@
 //!
 //! Private; nothing here is exported.
 //!
-//! # Flutter parity
-//!
-//! `navigator.dart:777-839` (`class NavigatorObserver`) and `:4621-4636`
-//! (`_flushObserverNotifications`).
-//!
 //! # The queues are asymmetric, and that is not an accident
-//!
-//! ```dart
-//! while (_observedRouteAdditions.isNotEmpty) {
-//!   final observation = _observedRouteAdditions.removeLast();   // LIFO
-//!   _effectiveObservers.forEach(observation.notify);
-//! }
-//! while (_observedRouteDeletions.isNotEmpty) {
-//!   final observation = _observedRouteDeletions.removeFirst();  // FIFO
-//!   _effectiveObservers.forEach(observation.notify);
-//! }
-//! ```
 //!
 //! Additions drain **last-in-first-out**, deletions **first-in-first-out**, and
 //! every addition precedes every deletion. Observations are enqueued during the
 //! flush's reverse walk and never fire inline. With no observers registered both
-//! queues are simply cleared (`:4623-4626`), so registering an observer never
+//! queues are simply cleared, so registering an observer never
 //! changes route lifecycle — only whether anyone hears about it.
 //!
 //! # Nothing here is notified under a lock
@@ -34,15 +18,11 @@
 //! the [`NavigatorHandle`] an observer holds usable from `did_push`: it can read the
 //! stack, and it can mutate it.
 //!
-//! Oracles: `test/widgets/navigator_test.dart` — `'initial route trigger observer
-//! in the right order'`, `'Push and pop should trigger the observers'`.
+//! # Observers receive [`RouteId`], not route objects
 //!
-//! # Divergence: observers receive [`RouteId`], not route objects
-//!
-//! Flutter hands observers the `Route` itself. Handing out `&mut dyn ErasedRoute`
+//! Handing out `&mut dyn ErasedRoute`
 //! while the history holds it is not expressible, and this layer is pure data by
-//! design. Ids preserve identity, ordering and arity — everything
-//! the oracles assert. An observer that needs more resolves the id through the
+//! design. Ids preserve identity, ordering and arity. An observer that needs more resolves the id through the
 //! [`NavigatorHandle`] it is handed at [`did_attach`] — which is what
 //! `HeroController` will do.
 //!
@@ -54,8 +34,7 @@ use std::sync::Arc;
 use super::navigator::NavigatorHandle;
 use super::route::RouteId;
 
-/// Observes route-stack mutations. Flutter's `NavigatorObserver`
-/// (`navigator.dart:777`). Every method has a no-op default, as there.
+/// Observes route-stack mutations. Every method has a no-op default.
 ///
 /// `&self`, not `&mut self`: an observer is shared (`Arc`) and outlives any one
 /// flush. Implementations that accumulate use interior mutability, exactly as the
@@ -63,22 +42,19 @@ use super::route::RouteId;
 ///
 /// # The handle
 ///
-/// [`did_attach`](Self::did_attach) hands over an owned [`NavigatorHandle`], the
-/// FLUI shape of Flutter's `NavigatorObserver.navigator` getter
-/// (`navigator.dart:779`, backed by an `Expando`). No `GlobalKey`, no element-tree
-/// lookup: the navigator pushes the capability at the observer, in registration
-/// order, from its own `init_state`.
+/// [`did_attach`](Self::did_attach) hands over an owned [`NavigatorHandle`]. No
+/// `GlobalKey`, no element-tree lookup: the navigator pushes the capability at the
+/// observer, in registration order, from its own `init_state`.
 ///
 /// **Every callback here runs with no navigator lock held.** The flush computes its
 /// notifications as owned data and `NavigatorShared::apply` delivers them once the
 /// history mutex is released, so `current()`, `route_ids()`, `can_pop()` — and even
 /// `push()` / `pop()` — are all safe from `did_push` and friends. A mutation raised
 /// from a callback runs a *fresh* flush whose notifications are delivered after this
-/// one finishes draining; Flutter would `assert(!_debugLocked)` on the same move
-/// (`navigator.dart:4452`), so treat it as defined but unusual.
+/// one finishes draining, so treat it as defined but unusual.
 ///
-/// The one ordering divergence: `Route::did_change_next` / `did_change_previous`
-/// (Flutter's `_flushRouteAnnouncement`) now run *before* these callbacks rather
+/// Ordering note: `Route::did_change_next` / `did_change_previous`
+/// run *before* these callbacks rather
 /// than between them and `did_change_top`, because they need the history borrow.
 /// They are route-internal — they drive secondary animations, which no observer
 /// surface exposes — so an observer sees a strictly more settled stack, never a
@@ -87,9 +63,7 @@ use super::route::RouteId;
 pub trait NavigatorObserver {
     /// This observer was registered on a navigator that is now mounted.
     ///
-    /// Flutter's `NavigatorObserver._navigators[observer] = this`
-    /// (`navigator.dart:3836`, `:4060`, `:4121`). Called once per attachment, in
-    /// registration order, with no lock held.
+    /// Called once per attachment, in registration order, with no lock held.
     ///
     /// Store the handle if you need it; it is `'static` and cloneable. It is
     /// **not** valid after [`did_detach`](Self::did_detach) — a detached handle
@@ -100,8 +74,7 @@ pub trait NavigatorObserver {
     /// The navigator this observer was attached to left the tree, or the observer
     /// was removed from it.
     ///
-    /// Flutter's `NavigatorObserver._navigators[observer] = null`
-    /// (`navigator.dart:4034`, `:4056`, `:4108`). Drop the handle here.
+    /// Drop the handle here.
     fn did_detach(&self) {}
 
     /// Whether this observer is a hero controller — i.e. whether it drives hero
@@ -128,7 +101,6 @@ pub trait NavigatorObserver {
     fn did_change_top(&self, top: RouteId, previous_top: Option<RouteId>) {}
 
     /// A user gesture (e.g. an edge swipe-back) started manipulating `route`.
-    /// Flutter's `NavigatorObserver.didStartUserGesture` (`navigator.dart:811`).
     ///
     /// Fires once per navigator when the in-progress gesture count goes from
     /// zero to one — [`NavigatorHandle::did_start_user_gesture`] paired with
@@ -138,12 +110,10 @@ pub trait NavigatorObserver {
     fn did_start_user_gesture(&self, route: RouteId, previous: Option<RouteId>) {}
     /// The user gesture reported by the most recent
     /// [`did_start_user_gesture`](Self::did_start_user_gesture) finished.
-    /// Flutter's `NavigatorObserver.didStopUserGesture` (`navigator.dart:816`).
     fn did_stop_user_gesture(&self) {}
 }
 
-/// One queued notification. Flutter's `_NavigatorObservation` hierarchy
-/// (`navigator.dart:3690+`).
+/// One queued notification.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Observation {
     /// `_NavigatorPushObservation` — from `handle_push` and `handle_add`.
@@ -172,7 +142,7 @@ pub(crate) enum Observation {
 
 impl Observation {
     /// Whether this belongs on the additions queue (LIFO) or the deletions queue
-    /// (FIFO). Mirrors which queue Flutter's producer pushes onto.
+    /// (FIFO).
     pub(crate) fn is_addition(self) -> bool {
         matches!(self, Self::Push { .. } | Self::Replace { .. })
     }
@@ -193,14 +163,14 @@ impl Observation {
 /// One thing a flush decided to tell the observers, in delivery order.
 ///
 /// `didChangeTop` is not an [`Observation`]: it never enters either queue, and it
-/// fires *after* both have drained (`navigator.dart:4590-4596`). Keeping it a
+/// fires *after* both have drained. Keeping it a
 /// separate variant rather than a fifth `Observation` makes enqueueing it
 /// unrepresentable.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Notification {
     /// A queued observation, already ordered by [`ObservationQueues::drain`].
     Observed(Observation),
-    /// Flutter's `didChangeTop` (`navigator.dart:4590-4596`).
+    /// The topmost present route changed.
     TopChanged {
         top: RouteId,
         previous_top: Option<RouteId>,
@@ -246,11 +216,10 @@ impl ObservationQueues {
         }
     }
 
-    /// Flutter's `_flushObserverNotifications` (`navigator.dart:4621-4636`),
-    /// transcribed — but as *ordering*, not as delivery: additions LIFO, then
-    /// deletions FIFO, returned as owned data so the caller can notify with no
+    /// Computes the delivery *ordering*, not the delivery itself: additions LIFO,
+    /// then deletions FIFO, returned as owned data so the caller can notify with no
     /// lock held. Both queues are emptied either way, so registering an observer
-    /// still never changes route lifecycle (`:4623-4626`).
+    /// still never changes route lifecycle.
     pub(crate) fn drain(&mut self) -> Vec<Observation> {
         let mut ordered = Vec::with_capacity(self.additions.len() + self.deletions.len());
         while let Some(observation) = self.additions.pop_back() {

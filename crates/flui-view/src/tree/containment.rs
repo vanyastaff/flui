@@ -62,7 +62,7 @@ pub(crate) struct ChildHookPanic {
     /// substitute mount succeeds; any earlier unwind drops it automatically.
     pub(crate) staged: Option<StagedRecoveredPanic>,
     /// The caught panic payload, unconverted — the primitive builds the
-    /// `FlutterError`/`RecoveredPanic` from it exactly once.
+    /// `FrameworkError`/`RecoveredPanic` from it exactly once.
     pub(crate) payload: Box<dyn Any + Send>,
 }
 
@@ -93,7 +93,7 @@ impl ElementTree {
     /// Never writes `parent`'s `child_ids` — same contract as
     /// [`insert`](Self::insert); its caller owns the child collection.
     ///
-    /// `context` becomes the `FlutterError`/`RecoveredPanic` breadcrumb
+    /// `context` becomes the `FrameworkError`/`RecoveredPanic` breadcrumb
     /// (e.g. `"mounting lazy sliver child 3"`) — never user data.
     #[must_use = "a substitute mount re-points whatever id the caller was tracking"]
     pub(crate) fn mount_or_substitute(
@@ -125,12 +125,12 @@ impl ElementTree {
                     None => None,
                 };
 
-                // Build the FlutterError ONCE: it renders the substitute
+                // Build the FrameworkError ONCE: it renders the substitute
                 // view below, and — when this window turns out to be the
                 // one staging the panic — is reused for the committed
                 // record too (`RecoveredPanic::with_error`), never
                 // re-derived from the payload a second time.
-                let error = crate::view::FlutterError::from_panic(payload.as_ref(), context);
+                let error = crate::view::FrameworkError::from_panic(payload.as_ref(), context);
                 let substitute_view = recovery_view_for(&error);
                 // Deliberately unbounded: if the registered error-view
                 // factory panics on mount too, there is nothing left to
@@ -191,7 +191,7 @@ impl ElementTree {
     /// than a visible error. At most one [`RecoveredPanic`] is published
     /// through `owner`: an owned staged token is committed only after the
     /// substitute mounts, otherwise this seam constructs the one coarser
-    /// record after that same commit. `context` becomes its `FlutterError`
+    /// record after that same commit. `context` becomes its `FrameworkError`
     /// breadcrumb.
     #[must_use = "a substitute mount re-points whatever id the caller was tracking"]
     #[inline]
@@ -241,7 +241,7 @@ impl ElementTree {
 
         self.remove_subtree(id, owner, SubtreeRemoval::Finalize);
 
-        let error = crate::view::FlutterError::from_panic(payload.as_ref(), context);
+        let error = crate::view::FrameworkError::from_panic(payload.as_ref(), context);
         let substitute_view = recovery_view_for(&error);
         let substitute_id = self
             .try_insert_with_provisional_order(

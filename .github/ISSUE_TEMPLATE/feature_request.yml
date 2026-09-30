@@ -37,7 +37,7 @@ body:
     id: references
     attributes:
       label: References
-      description: Flutter, GPUI, Xilem, browser, native toolkit, or research references.
+      description: Other UI frameworks (Compose, GPUI, Xilem, ...), browser, native toolkit, or research references.
   - type: textarea
     id: compatibility
     attributes:

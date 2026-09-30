@@ -14,11 +14,6 @@
 //! siblings down. Wrapping that child here takes it out of the baseline
 //! computation: the parent sees no baseline, so it neither aligns the child
 //! nor lets it grow the row, and the child sits flush at the cross start.
-//!
-//! Flutter parity: `RenderIgnoreBaseline` in `rendering/proxy_box.dart`
-//! (tag `3.44.0`), which overrides `computeDistanceToActualBaseline` and
-//! `computeDryBaseline` to return null and inherits everything else from
-//! `RenderProxyBox`.
 
 use flui_foundation::Single;
 use flui_foundation::geometry::{Offset, Size};
@@ -36,8 +31,6 @@ use flui_rendering::{
 /// child; both baseline queries answer `None` regardless of what the child
 /// reports, so a baseline-aligning parent treats this subtree as having no
 /// baseline at all.
-///
-/// Flutter parity: `RenderIgnoreBaseline` (`proxy_box.dart`, tag `3.44.0`).
 #[derive(Debug, Clone, Default)]
 pub struct RenderIgnoreBaseline;
 

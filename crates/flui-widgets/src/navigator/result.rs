@@ -2,27 +2,17 @@
 //!
 //! Private; nothing here is exported.
 //!
-//! # Flutter parity
-//!
-//! `navigator.dart:433-434`:
-//!
-//! ```dart
-//! Future<T?> get popped => _popCompleter.future;
-//! final Completer<T?> _popCompleter = Completer<T?>();
-//! ```
-//!
-//! `Navigator.push` returns `route.popped` *before* any lifecycle runs
-//! (`:5060-5063`), and `didComplete` (`:480-482`) completes it with
-//! `result ?? currentResult`.
+//! `Navigator::push` returns the [`RouteResult`] *before* any lifecycle runs, and
+//! completing the route resolves it with `result ?? current_result`.
 //!
 //! # Exactly once
 //!
-//! Dart's `Completer.complete` **throws** when called twice. FLUI's
-//! [`Completer::complete`] returns `false` instead: double completion is a
+//! [`Completer::complete`] returns `false` on a second call rather than
+//! panicking: double completion is a
 //! caller/framework-ordering error, not an internal invariant, so
 //! [`PANIC-POLICY`](../../../../../docs/PANIC-POLICY.md) forbids a panic. In
 //! practice `RouteEntry::complete` already refuses to re-enter the completion
-//! path once the state has passed `Remove` (`navigator.dart:3431`); the guard
+//! path once the state has passed `Remove`; the guard
 //! here is what makes `double_pop_or_double_remove_does_not_double_complete`
 //! true rather than merely likely.
 //!
@@ -40,7 +30,7 @@ use std::task::{Context, Poll, Waker};
 use parking_lot::Mutex;
 
 /// Completed-ness and the value are distinct: a route may legitimately complete
-/// with `None` (Dart's `T?`), which is not the same as "not completed".
+/// with `None`, which is not the same as "not completed".
 enum Completion<T> {
     Pending,
     /// The route completed, with this result.
@@ -63,16 +53,15 @@ pub(crate) struct Completer<T> {
     shared: Arc<Mutex<Shared<T>>>,
 }
 
-/// The read half — Flutter's `Route.popped`.
+/// The read half: the route's `popped` future.
 ///
 /// Resolves to the value passed to `pop`/`remove_route`, or the route's
 /// `current_result()` fallback, or `None`. **Dropping it does not cancel
-/// anything**: the route completes regardless, exactly as a Dart `Future` that
+/// anything**: the route completes regardless, as any future that
 /// nobody awaits still completes.
 // Deliberately **not** `#[must_use]` (raised in the 2026-07-11 API review,
 // rejected with evidence): ignoring the handle is the *documented* contract
-// above — the route completes regardless, exactly as an unawaited Dart
-// `Future` does — and it is what 169 of this crate's own call sites correctly
+// above — the route completes regardless, as an unawaited future does — and it is what 169 of this crate's own call sites correctly
 // do (`seed_initial` for a bootstrap route, a `push` whose result nobody
 // wants). A `must_use` here would be a false positive by construction.
 pub struct RouteResult<T> {
@@ -147,7 +136,7 @@ impl<T> RouteResult<T> {
     ///
     /// The nesting is meaningful, not accidental: the **outer** `Option` is
     /// "has it completed?", the **inner** one is the result, which is
-    /// legitimately absent (Dart's `T?`).
+    /// legitimately absent.
     #[must_use]
     pub fn try_take(&self) -> Option<Option<T>> {
         let completion = core::mem::replace(&mut self.shared.lock().value, Completion::Pending);

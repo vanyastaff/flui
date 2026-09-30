@@ -6,8 +6,6 @@
 //! - **Vertical**: Movement constrained to vertical axis
 //! - **Horizontal**: Movement constrained to horizontal axis
 //! - **Pan**: Free movement in any direction
-//!
-//! Flutter reference: <https://api.flutter.dev/flutter/gestures/DragGestureRecognizer-class.html>
 
 use std::{cell::RefCell, rc::Rc, sync::Arc};
 
@@ -29,8 +27,6 @@ use crate::{
 
 /// Configures when the drag's initial position is reported.
 ///
-/// Flutter parity: `gestures/recognizer.dart:48` `DragStartBehavior`.
-///
 /// - [`Down`](Self::Down): the initial position reported in
 ///   [`DragStartDetails`] is the pointer's position at the down event.
 /// - [`Start`](Self::Start): the initial position is the pointer's position
@@ -43,7 +39,7 @@ pub enum DragStartBehavior {
     /// Use the pointer's down position as the drag's initial position.
     Down,
     /// Use the position at arena acceptance as the drag's initial position.
-    /// Flutter default — matches `DragGestureRecognizer.dragStartBehavior`.
+    /// The default.
     #[default]
     Start,
 }
@@ -81,10 +77,9 @@ pub struct DragUpdateDetails {
     pub local_position: Offset<f64>,
     /// Delta since last update
     pub delta: Offset<f64>,
-    /// `delta` projected onto the recognizer's primary axis. Flutter parity:
-    /// `DragUpdateDetails.primaryDelta` — "the amount the pointer has moved
-    /// along the primary axis **since the previous call to onUpdate**", i.e.
-    /// per-event, not cumulative since the drag started.
+    /// `delta` projected onto the recognizer's primary axis: the amount the
+    /// pointer has moved along the primary axis **since the previous
+    /// update**, i.e. per-event, not cumulative since the drag started.
     pub primary_delta: f64,
     /// Pointer device kind
     pub kind: PointerType,
@@ -152,7 +147,7 @@ pub struct DragGestureRecognizer {
     ///
     /// - [`DragStartBehavior::Down`]: position is the down-event position.
     /// - [`DragStartBehavior::Start`]: position is where arena acceptance
-    ///   happens (Flutter default).
+    ///   happens (the default).
     start_behavior: DragStartBehavior,
 
     /// Callbacks
@@ -177,7 +172,7 @@ impl std::fmt::Debug for DragGestureRecognizer {
     }
 }
 
-// Field names keep Flutter's `onDragStart`-style callback names (parity).
+// Field names keep the `on_drag_start`-style callback names.
 #[expect(clippy::struct_field_names)]
 #[derive(Default)]
 struct DragCallbacks {
@@ -307,14 +302,12 @@ impl DragGestureRecognizer {
 
     /// Minimum drag distance for the current axis and pointer `kind`.
     ///
-    /// Flutter parity: `gestures/events.dart` `computeHitSlop`/`computePanSlop`
-    /// (tag `3.44.0`) special-case exactly `PointerDeviceKind.mouse` as
-    /// "precise" — stylus, trackpad, and unknown all still resolve through
-    /// the configured settings profile alongside touch. A precise (mouse)
-    /// pointer always gets the fixed, much smaller constant, unconditionally
-    /// — [`with_settings`](Self::with_settings) customization has no effect
-    /// on it, matching `computeHitSlop`'s mouse arm never consulting
-    /// `gestureSettings`. For every other kind, per-axis slop:
+    /// Exactly `PointerDeviceKind::Mouse` counts as "precise" — stylus,
+    /// trackpad, and unknown all still resolve through the configured
+    /// settings profile alongside touch. A precise (mouse) pointer always
+    /// gets the fixed, much smaller constant, unconditionally —
+    /// [`with_settings`](Self::with_settings) customization has no effect on
+    /// it. For every other kind, per-axis slop:
     /// - [`DragAxis::Vertical`][]: [`GestureSettings::pan_slop_vertical`]
     /// - [`DragAxis::Horizontal`][]: [`GestureSettings::pan_slop_horizontal`]
     /// - [`DragAxis::Free`][]: [`GestureSettings::pan_slop`]
@@ -460,12 +453,10 @@ impl DragGestureRecognizer {
                     state.velocity_tracker.add_position(now, position);
 
                     // Per-event, matching `delta` above — not accumulated
-                    // across the whole drag. Flutter's `primaryDelta` reports
-                    // movement "since the previous call to onUpdate"; an
-                    // earlier revision passed a running total here, making
-                    // every update after the first report the wrong
-                    // magnitude (and, once the drag reverses direction, the
-                    // wrong sign) for any drag with 3+ move events.
+                    // across the whole drag. Passing a running total here
+                    // would make every update after the first report the
+                    // wrong magnitude (and, once the drag reverses direction,
+                    // the wrong sign) for any drag with 3+ move events.
                     let primary_delta = self.calculate_primary_delta(delta);
 
                     drop(state); // Release lock before calling callback
@@ -528,7 +519,7 @@ impl DragGestureRecognizer {
                 timestamp,
             };
 
-            // Flutter's `_checkDrag`: `Down` preserves the contact position
+            // `Down` preserves the contact position
             // for onStart and immediately flushes movement accumulated while
             // the arena was unresolved. `Start` re-anchors at acceptance and
             // deliberately emits no synthetic first update.
@@ -593,9 +584,9 @@ impl DragGestureRecognizer {
             }
         } else {
             // A pointer that lifts before this recognizer wins is no longer a
-            // candidate. Flutter's didStopTrackingLastPointer resolves
-            // rejected and emits onCancel; leaving the entry live lets sweep
-            // incorrectly choose this drag over a competing tap.
+            // candidate: resolve rejected and emit the cancel callback;
+            // leaving the entry live lets sweep incorrectly choose this drag
+            // over a competing tap.
             let callback = self.callbacks.borrow().on_cancel.clone();
             *state = DragState::default();
             drop(state);
@@ -623,8 +614,8 @@ impl DragGestureRecognizer {
                 }
             }
             DragPhase::Started => {
-                // Flutter's `didStopTrackingLastPointer` ends an accepted
-                // drag even when the terminal event is PointerCancel.
+                // An accepted drag ends even when the terminal event is
+                // PointerCancel.
                 let position = state.last_position.unwrap_or(Offset::ZERO);
                 let global_position = state.last_global_position.unwrap_or(position);
                 let velocity = state.velocity_tracker.get_velocity();
@@ -648,8 +639,8 @@ impl DragGestureRecognizer {
 
     /// Project movement onto the recognizer's configured axis.
     ///
-    /// Flutter's horizontal and vertical recognizers report an axis-pure
-    /// `DragUpdateDetails.delta`; only a pan recognizer retains both axes.
+    /// Horizontal and vertical recognizers report an axis-pure delta; only a
+    /// pan recognizer retains both axes.
     fn project_delta(&self, delta: Offset<f64>) -> Offset<f64> {
         match self.axis {
             DragAxis::Vertical => Offset::new(0.0, delta.dy),
@@ -751,9 +742,8 @@ impl GestureRecognizer for DragGestureRecognizer {
 
     fn dispose(&self) {
         self.state.mark_disposed();
-        // Reject arena entries + clear tracked pointer (Flutter parity:
-        // gestures/recognizer.dart:485-493 disposing GestureRecognizer
-        // clears arena state for tracked pointers).
+        // Reject arena entries + clear tracked pointer (disposing a
+        // recognizer clears arena state for tracked pointers).
         self.state.reject();
         let mut callbacks = self.callbacks.borrow_mut();
         callbacks.on_down = None;
@@ -772,10 +762,9 @@ impl GestureRecognizer for DragGestureRecognizer {
 // Canonical trait hierarchy adoption
 // =============================================================================
 //
-// Flutter parity: `monodrag.dart:81 sealed class DragGestureRecognizer
-// extends OneSequenceGestureRecognizer`. Drag is OneSequence (NOT
-// PrimaryPointer) — it tracks a single sequence but doesn't have the
-// pre-acceptance deadline semantics of PrimaryPointer recognizers.
+// Drag is OneSequence (NOT PrimaryPointer) — it tracks a single sequence but
+// doesn't have the pre-acceptance deadline semantics of PrimaryPointer
+// recognizers.
 
 impl crate::recognizers::OneSequenceGestureRecognizer for DragGestureRecognizer {
     fn tracked_pointers(&self) -> Vec<PointerId> {
@@ -954,19 +943,15 @@ mod tests {
     // ========================================================================
     // Precise-pointer slop (mouse vs. touch)
     //
-    // Flutter parity: `gestures/events.dart` `computeHitSlop` (tag `3.44.0`)
-    // returns `kPrecisePointerHitSlop` (1.0 logical px) for
-    // `PointerDeviceKind.mouse`, not `kTouchSlop` (18.0) — every other kind
-    // (stylus, trackpad, unknown, touch) still resolves through the
-    // touch-tier settings. `VerticalDragGestureRecognizer` /
-    // `HorizontalDragGestureRecognizer` (`DragAxis::Vertical` /
-    // `DragAxis::Horizontal` here) call `computeHitSlop` directly.
+    // A mouse gets the precise-pointer hit slop (1.0 logical px), not the
+    // touch slop (18.0) — every other kind (stylus, trackpad, unknown,
+    // touch) still resolves through the touch-tier settings.
     // ========================================================================
 
     // ========================================================================
     // H/V/Pan split tests
     //
-    // Verifies Flutter parity for:
+    // Verifies:
     // - per-axis slop (Vertical/Horizontal pick their own slop, Free uses
     //   the generic `pan_slop`),
     // - `DragStartBehavior::Down` vs `Start` (start_position differs).

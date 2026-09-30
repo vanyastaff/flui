@@ -145,7 +145,7 @@ ADR-0091's deadline, "no later than the H3 freeze".
 
 ### 9. `LayoutCallbackScope` against ADR-0017
 
-The architecture report proposes Flutter's `invokeLayoutCallback` contract so that a lazy band
+The architecture report proposes a layout-callback contract (build invoked from inside layout) so that a lazy band
 converges in one pass; [ADR-0017](../docs/adr/ADR-0017-build-during-layout-callback-seam.md) §3
 says build never runs during layout.
 
@@ -224,8 +224,8 @@ The manifest comments keep the `signals` feature opt-in until "the #1090 field-m
 
 ### 15. Pageless routes
 
-The research synthesis had "every push produces a URL-addressable entry", Flutter's Navigator 1/2
-lesson; the final decision dropped it without a reason.
+The research synthesis had "every push produces a URL-addressable entry", the lesson of pageless
+routes; the final decision dropped it without a reason.
 
 - **Status:** Resolved by the owner on 2026-09-25.
 - **Decision:** adopted. Every push is URL-addressable; dialogs and overlays are excluded.

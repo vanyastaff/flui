@@ -52,11 +52,10 @@ use super::virtualized_band::walk_virtualizer_band;
 /// [`SliverLayoutContext::request_child_build`]. The element tree services
 /// them between layout passes of the same frame (see the module doc).
 ///
-/// # Flutter parity
+/// # Child manager
 ///
-/// Corresponds to Flutter's `RenderSliverList` whose `childManager`
-/// (`SliverMultiBoxAdaptorElement`) services `createChild` calls. In FLUI the
-/// manager is `SliverAdaptorElement<RenderSliverList>` (`flui-view`); this object is the
+/// The manager that services child-build requests is
+/// `SliverAdaptorElement<RenderSliverList>` (`flui-view`); this object is the
 /// render half of that split.
 ///
 /// # Construction

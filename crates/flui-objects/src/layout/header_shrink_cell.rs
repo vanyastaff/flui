@@ -18,7 +18,7 @@
 //!
 //! `overlaps_content` changes independently of `shrink_offset` — a pinned
 //! header at rest keeps a constant shrink offset while content scrolls under
-//! it, and Flutter's delegates use that flag to raise an elevation or draw a
+//! it, and header delegates use that flag to raise an elevation or draw a
 //! divider. Publishing only the offset would leave those rebuilds unscheduled,
 //! and the bug would look like "the shadow appears one scroll late".
 

@@ -2,23 +2,16 @@
 //! with both auto-aligned ("non-positioned") and `Positioned`-decorated
 //! ("positioned") layout flows.
 //!
-//! # Flutter equivalence
+//! # Typed positioning
 //!
-//! Behavior-faithful port of Flutter's
-//! [`RenderStack`](https://api.flutter.dev/flutter/rendering/RenderStack-class.html)
-//! (`packages/flutter/lib/src/rendering/stack.dart`).
+//! A child's layout could be decided by reading raw optional
+//! `top` / `right` / `bottom` / `left` / `width` / `height`
+//! fields off its `StackParentData` at every site that needs
+//! the position decision; "did the caller actually opt into
+//! positioning?" would then be a property that re-reads the same optional
+//! fields.
 //!
-//! # Rust-native improvements
-//!
-//! Flutter's `RenderStack` decides each child's layout by reading raw
-//! optional `top` / `right` / `bottom` / `left` / `width` / `height`
-//! fields off the child's `StackParentData` at every site that needs
-//! the position decision. Those fields are all `double?`; "did the
-//! caller actually opt into positioning?" lives in
-//! `StackParentData.isPositioned`, a property that re-reads the same
-//! optional fields.
-//!
-//! The Rust port lifts that bimodal decision to a **typed view** —
+//! Instead the bimodal decision is lifted to a **typed view** —
 //! [`PositionedSpec`] — that is constructed once via
 //! [`PositionedSpec::from_parent_data`] and *cannot exist for a
 //! non-positioned child*. The compiler then forces every call site
@@ -31,13 +24,11 @@
 //!
 //! * `const fn` builders (`with_fit`, `with_alignment`,
 //!   `with_clip_behavior`) compose at compile time.
-//! * Setters return `bool` to signal change (mirrors Wave 1 / Wave 3a
-//!   discipline for pipeline `mark_needs_layout` short-circuit).
-//! * `has_visual_overflow()` is a post-layout query method; Flutter
-//!   keeps the same flag as a private field that the framework reads
-//!   only through `clipBehavior`-dependent paint code. Exposing the
-//!   flag makes the overflow signal observable for tests and
-//!   diagnostics without touching painting.
+//! * Setters return `bool` to signal change, so the pipeline's
+//!   `mark_needs_layout` can short-circuit.
+//! * `has_visual_overflow()` is a post-layout query method, which makes the
+//!   overflow signal observable for tests and diagnostics without touching
+//!   painting.
 
 pub use super::stack_fit::StackFit;
 use flui_foundation::Variable;
@@ -104,8 +95,7 @@ impl PositionedSpec {
     /// Computes the constraints that should be passed to the positioned
     /// child, given the stack's resolved `size`.
     ///
-    /// Matches Flutter's `RenderStack.layoutPositionedChild` constraint
-    /// derivation: a paired-edge (left+right or top+bottom) tightens
+    /// A paired-edge (left+right or top+bottom) tightens
     /// the corresponding dimension to the remaining gap; otherwise an
     /// explicit `width`/`height` tightens; otherwise the child is loose.
     pub fn child_constraints(&self, stack_size: Size) -> BoxConstraints {
@@ -134,7 +124,6 @@ impl PositionedSpec {
     /// Computes the child's top-left offset within `stack_size`, given
     /// the laid-out `child_size` and the stack's fallback `alignment`.
     ///
-    /// Matches Flutter:
     /// * x = left, OR stack.width − right − child.width, OR
     ///   `alignment.along_offset(stack − child).dx`.
     /// * y = top, OR stack.height − bottom − child.height, OR
@@ -233,7 +222,7 @@ pub struct RenderStack {
 
 impl RenderStack {
     /// Creates a stack with `StackFit::Loose`, `Alignment::TOP_LEFT`,
-    /// and `Clip::HardEdge` — matching Flutter's `Stack()` defaults.
+    /// and `Clip::HardEdge`.
     pub const fn new() -> Self {
         Self {
             fit: StackFit::Loose,
@@ -341,7 +330,7 @@ impl RenderStack {
     /// Core of the stack sizing pass, shared between `perform_layout` and
     /// `compute_dry_layout`.
     ///
-    /// Mirrors Flutter's `_computeSize` (stack.dart:625-675): measures ONLY
+    /// Measures ONLY
     /// non-positioned children (those with `specs[i].is_none()`), accumulates
     /// the maximum child extents, and resolves the container size from
     /// [`StackFit`] and the incoming constraints.
@@ -399,7 +388,7 @@ impl RenderStack {
         StackSizes { size, child_sizes }
     }
 
-    /// Flutter stack.dart: each intrinsic dimension is the max of the children.
+    /// Each intrinsic dimension is the max of the children.
     fn max_child_intrinsic(
         ctx: &mut BoxIntrinsicsCtx<'_>,
         extent: f64,
@@ -460,7 +449,7 @@ impl RenderBox for RenderStack {
         }
 
         // -----------------------------------------------------------------
-        // Sizing pass (= Flutter's _computeSize): measure NON-positioned
+        // Sizing pass: measure NON-positioned
         // children, resolve the stack's own size. Delegates to compute_size
         // so dry layout can reuse identical logic.
         // -----------------------------------------------------------------
@@ -579,7 +568,7 @@ impl RenderBox for RenderStack {
 
 /// A stack that lays out all children but paints and hit-tests only one child.
 ///
-/// Flutter parity: `RenderIndexedStack` uses the same layout algorithm as
+/// `RenderIndexedStack` uses the same layout algorithm as
 /// [`RenderStack`] and keeps the layout cost O(N), but only the child at
 /// [`index`](Self::index) participates in paint, hit testing, semantics, and
 /// baseline reporting. `None` means no child is displayed.
@@ -592,8 +581,7 @@ pub struct RenderIndexedStack {
 }
 
 impl RenderIndexedStack {
-    /// Creates an indexed stack that displays child `0`, matching Flutter's
-    /// `IndexedStack(index: 0)` default.
+    /// Creates an indexed stack that displays child `0`.
     pub const fn new() -> Self {
         Self {
             stack: RenderStack::new(),

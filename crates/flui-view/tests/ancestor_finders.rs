@@ -10,11 +10,7 @@
 //!
 //! Test fixtures use the same `mount_root` / `insert` shape as
 //! `inherited_dependency.rs`. The dependent-tracking concerns of the
-//! inherited-lookup APIs are out of scope here: these finders are read-only walks per Flutter
-//! parity (`framework.dart:5122-5160` —
-//! `findAncestorWidgetOfExactType<T>`,
-//! `findAncestorStateOfType<T>`, `findRootAncestorStateOfType<T>`,
-//! `findAncestorRenderObjectOfType<T>`).
+//! inherited-lookup APIs are out of scope here: these finders are read-only walks.
 
 // ADR-0027: ElementBuildContext's current test/prod seam still takes
 // Arc<RwLock<ElementTree/BuildOwner>>. The owner graph is !Send; do not restore

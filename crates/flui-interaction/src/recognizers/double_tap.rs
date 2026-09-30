@@ -7,8 +7,6 @@
 //! - Second tap starts within DOUBLE_TAP_TIMEOUT_MS (300ms)
 //! - Second tap within DOUBLE_TAP_SLOP (100px) of first tap
 //! - Second tap completes successfully
-//!
-//! Flutter reference: <https://api.flutter.dev/flutter/gestures/DoubleTapGestureRecognizer-class.html>
 
 use std::{cell::RefCell, rc::Rc, sync::Arc};
 
@@ -77,7 +75,7 @@ pub struct DoubleTapGestureRecognizer {
     first_entry: Arc<Mutex<Option<GestureArenaEntry>>>,
 }
 
-// Field names keep Flutter's `onDoubleTap`-style callback names (parity).
+// Field names keep the `on_double_tap`-style callback names.
 #[expect(clippy::struct_field_names)]
 #[derive(Default)]
 struct DoubleTapCallbacks {
@@ -185,8 +183,7 @@ impl DoubleTapGestureRecognizer {
 
     /// Set the double-tap-DOWN callback — fires the instant the second
     /// contact goes down (validated by timing/slop against the first tap),
-    /// not after it lifts. Flutter parity:
-    /// `DoubleTapGestureRecognizer.onDoubleTapDown` — exists for exactly
+    /// not after it lifts. It exists for exactly
     /// the case `on_double_tap` cannot serve: a consumer (double-tap word
     /// selection, say) that wants the tap's position as soon as the
     /// gesture is confirmed, without waiting the extra down-to-up round
@@ -246,10 +243,9 @@ impl DoubleTapGestureRecognizer {
                         return;
                     }
 
-                    // Out-of-slop contact: Flutter ignores it, keeps the first
-                    // entry held, and stays in WaitingForSecond (Flutter parity:
-                    // `addAllowedPointer` filters out-of-slop contacts before
-                    // they compete). Do NOT reset to FirstDown — that would
+                    // Out-of-slop contact: ignore it, keep the first entry held,
+                    // and stay in WaitingForSecond (out-of-slop contacts are
+                    // filtered before they compete). Do NOT reset to FirstDown — that would
                     // orphan the held first entry on the next up.
                     if let Some(first_pos) = state.first_tap_position {
                         let distance = (position - first_pos).distance();
@@ -328,7 +324,7 @@ impl DoubleTapGestureRecognizer {
                 drop(state); // Release before touching the arena.
 
                 // Capture the first contact and HOLD its arena entry across the
-                // window (Flutter `_registerFirstTap` -> `gestureArena.hold`).
+                // window (the arena `hold`).
                 // The binding's first-up sweep then sees the entry held and
                 // defers, so a competing front-member tap cannot win yet. Do
                 // NOT stop tracking — the recognizer stays live for the second
@@ -345,8 +341,8 @@ impl DoubleTapGestureRecognizer {
                 drop(state);
 
                 // Resolve BOTH contended entries in favour of the double-tap so
-                // neither single tap fires (Flutter `_registerSecondTap`'s two
-                // `entry.resolve(accepted)` calls): the held first entry wins for
+                // neither single tap fires (two `accepted` resolutions): the
+                // held first entry wins for
                 // its captured member (rejecting tap1), and the current entry
                 // wins for the second contact's tracked member (rejecting tap2).
                 // Resolving in *favour of* the double-tap — not `resolve(p,
@@ -368,7 +364,7 @@ impl DoubleTapGestureRecognizer {
                 }
 
                 // Release the first entry's hold (drains any deferred sweep) and
-                // reset (Flutter `_reset` -> `gestureArena.release`).
+                // reset.
                 if let Some(entry) = first_entry {
                     entry.release();
                 }
@@ -441,10 +437,9 @@ impl DoubleTapGestureRecognizer {
         {
             let elapsed = self.state.now().duration_since(first_time);
             if elapsed > self.double_tap_timeout() {
-                // Window expired with no second contact. Flutter parity:
-                // `DoubleTapGestureRecognizer._reset` fires `onDoubleTapCancel`,
-                // withdraws the double-tap from the held first entry, and
-                // releases the hold.
+                // Window expired with no second contact: fire the cancel
+                // callback, withdraw the double-tap from the held first entry,
+                // and release the hold.
                 let position = state.first_tap_position.take().unwrap_or(Offset::ZERO);
                 let global_position = state.first_tap_global_position.take().unwrap_or(position);
                 let kind = state.device_kind.unwrap_or(PointerType::Touch);
@@ -515,8 +510,7 @@ impl DoubleTapGestureRecognizer {
         }
 
         // Pre-registration checks for contacts arriving while we hold the first
-        // entry. Mirror Flutter `addAllowedPointer`: expired-window and
-        // out-of-slop contacts are handled *before* the new pointer is registered
+        // entry. Expired-window and out-of-slop contacts are handled *before* the new pointer is registered
         // in the arena so that `reject`/`release` on the first entry runs while
         // `primary_pointer` is still the first pointer — not yet updated by
         // `start_tracking` for the new contact.
@@ -546,8 +540,8 @@ impl DoubleTapGestureRecognizer {
                     self.check_timeout();
                     // Fall through: phase is now Ready.
                 } else if out_of_slop {
-                    // Flutter parity: out-of-slop contacts are ignored — keep
-                    // the first entry held and stay in WaitingForSecond.
+                    // Out-of-slop contacts are ignored — keep the first entry
+                    // held and stay in WaitingForSecond.
                     return;
                 }
                 // In-window + in-slop: fall through to register normally.
@@ -605,8 +599,7 @@ impl GestureRecognizer for DoubleTapGestureRecognizer {
 
     fn dispose(&self) {
         self.state.mark_disposed();
-        // Reject arena entries + clear tracked pointer (Flutter parity:
-        // gestures/recognizer.dart:485-493 disposing GestureRecognizer
+        // Reject arena entries + clear tracked pointer (disposing a recognizer
         // clears arena state for tracked pointers). reject_gesture (fired by
         // state.reject) also drains the inter-tap hold via first_entry, but
         // that relies on the entry still being active.

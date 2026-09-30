@@ -2,54 +2,44 @@
 //! that lets a widget's visual properties (color, overlay, border, …) depend
 //! on whether it's hovered, focused, pressed, and so on.
 //!
-//! # Flutter parity
+//! # Where it lives
 //!
-//! `widgets/widget_state.dart` (oracle tag `3.44.0`): the `WidgetState` enum,
-//! `WidgetStatesConstraint` mixin, `WidgetStateProperty<T>` interface, and
-//! `WidgetStatesController`. This is the split Flutter made when it promoted
-//! the mechanism out of the Material package (`MaterialState` →
-//! `WidgetState`) — FLUI copies that split and hosts it in `flui-widgets`
-//! rather than `flui-material`, since nothing about the vocabulary is
-//! Material-specific (`ink_well.dart` reads `statesController.value`
-//! directly, justifying the widgets-layer home for `flui-material`'s
-//! `InkWell`).
+//! The vocabulary is [`WidgetState`], [`WidgetStateConstraint`],
+//! [`WidgetStateProperty`] and [`WidgetStatesController`]. It is hosted in
+//! `flui-widgets` rather than `flui-material`, since nothing about it is
+//! Material-specific (`flui-material`'s `InkWell` reads a
+//! [`WidgetStatesController`] directly).
 //!
 //! # Set representation: bitflags, not `HashSet`
 //!
-//! Flutter represents a widget's active states as `Set<WidgetState>`. FLUI
-//! uses [`WidgetStates`], a [`bitflags`] bitset over a `u8` — the crate is
+//! A widget's active states are a [`WidgetStates`], a [`bitflags`] bitset over
+//! a `u8` rather than a `HashSet<WidgetState>` — the crate is
 //! already a workspace dependency (`flui-rendering`'s dirty-flag storage
 //! uses the same house style for a small, closed set of boolean flags). Eight
 //! states fit in one byte; a bitset is `Copy`, allocation-free, and
 //! trivially compared/combined, none of which a `HashSet<WidgetState>` gives
 //! for free. The trade-off: adding a ninth [`WidgetState`] variant is a
 //! breaking change to the flag layout, not just an enum growth — acceptable
-//! here because the oracle enum has been stable across major Flutter
-//! versions.
+//! here because the set of interaction states is small and stable.
 //!
 //! # Named deferrals (not silently dropped)
 //!
 //! - **`WidgetStateProperty::lerp` / `WidgetStateBorderSide::lerp`** —
 //!   arrives when a component first needs `ButtonStyle.lerp`/`AnimatedTheme`;
 //!   nothing in this substrate consumes an interpolated property yet.
-//! - **The Dart typed-subtype trick** (`WidgetStateColor extends Color`,
-//!   `WidgetStateMouseCursor extends MouseCursor`, `WidgetStateBorderSide
-//!   extends BorderSide`, `WidgetStateOutlinedBorder extends OutlinedBorder`,
-//!   `WidgetStateTextStyle extends TextStyle`) — Dart lets one object satisfy
-//!   both "the plain value" and "a property that resolves to it" via
-//!   subclassing a concrete value type. Rust has no equivalent (the value
-//!   types here are not open to inheritance, and blanket-implementing both
-//!   roles on one type is not the goal). A call site that wants either a
-//!   plain `Color` or a `WidgetStateProperty<Color>` needs an explicit
-//!   enum/variant of its own — a documented, permanent divergence, not a
-//!   deferral. No such enum ships from this module yet (an earlier
+//! - **One type that is both a plain value and a property** (a color that
+//!   is also a `WidgetStateProperty<Color>`) — that needs subclassing a
+//!   concrete value type, which Rust lacks (the value types here are not
+//!   open to inheritance, and blanket-implementing both roles on one type
+//!   is not the goal). A call site that wants either a plain `Color` or a
+//!   `WidgetStateProperty<Color>` needs an explicit enum/variant of its
+//!   own — permanent, not a deferral. No such enum ships from this module yet (an earlier
 //!   `ResolveAs<T>`/`resolve_as` pair was removed for having no consumer);
 //!   add one against the first real call site that needs it instead of
 //!   speculating on its shape here.
-//! - **The full `&`/`|`/`~` `WidgetStatesConstraint` algebra** — the oracle's
-//!   `WidgetStatesConstraint` mixin supports arbitrary boolean combinations
-//!   (`WidgetState.focused | WidgetState.hovered`, `~WidgetState.disabled`,
-//!   nested `&`/`|`). [`WidgetStateConstraint`] V1 ships only a single-state
+//! - **The full `&`/`|`/`~` constraint algebra** — arbitrary boolean
+//!   combinations (`focused | hovered`, `~disabled`, nested `&`/`|`).
+//!   [`WidgetStateConstraint`] ships only a single-state
 //!   match plus [`WidgetStateConstraint::Any`] — enough to express
 //!   first-match-wins resolution with a catch-all. The combinator algebra is
 //!   a named deferral, not a rejected design; `WidgetStateConstraint` is
@@ -58,24 +48,18 @@
 //!
 //! # The `Option<V>` fallthrough contract
 //!
-//! [`WidgetStateProperty::Map`]'s oracle counterpart
-//! (`WidgetStateMapper.resolve`) throws `ArgumentError` when no map entry
-//! matches and `T` is non-nullable — a runtime failure mode Dart's type
-//! system cannot rule out statically. FLUI makes that failure mode
-//! unrepresentable instead of documenting around it: [`resolve`] requires
-//! `T: Default`, and a `Map` with no matching entry (or an empty `Map`)
-//! resolves to `T::default()`. For `T = Option<V>` that default is `None`,
-//! which is exactly the oracle's nullable-fallthrough behavior
-//! (`WidgetStateBorderSide.resolve` returning `null` "to defer to the
-//! default value of the widget or theme"). A future button-style consumer
+//! A [`WidgetStateProperty::Map`] with no matching entry has no value to
+//! produce, and a runtime failure there would be a mode the type system
+//! cannot rule out. FLUI makes that failure unrepresentable instead of
+//! documenting around it: [`resolve`] requires `T: Default`, and a `Map`
+//! with no matching entry (or an empty `Map`) resolves to `T::default()`.
+//! For `T = Option<V>` that default is `None`, meaning "defer to the default
+//! value of the widget or theme". A button-style consumer
 //! reads a `WidgetStateProperty<Option<Color>>` (or similar) and chains
-//! `widget_style.prop.resolve(&states) ?? theme_value ?? component_default`
-//! — the Rust expression of the oracle's
-//! `widget_style?.prop.resolve(states) ?? theme ?? default` cascade. Callers
-//! whose `T` is not `Option`-shaped still get a total, panic-free `resolve`
-//! by relying on that type's own `Default` (e.g. a plain `f64` elevation
-//! resolves to `0.0` with no matching entry) rather than the oracle's
-//! type-erased "throw or don't" split.
+//! `widget_style.prop.resolve(&states).or(theme_value).unwrap_or(component_default)`.
+//! Callers whose `T` is not `Option`-shaped still get a total, panic-free
+//! `resolve` by relying on that type's own `Default` (e.g. a plain `f64`
+//! elevation resolves to `0.0` with no matching entry).
 //!
 //! [`resolve`]: WidgetStateProperty::resolve
 
@@ -92,13 +76,12 @@ use parking_lot::Mutex;
 /// One interactive state a widget can be in, per the M3 interaction-states
 /// spec (<https://m3.material.io/foundations/interaction/states>).
 ///
-/// Flutter parity: `WidgetState` (`widget_state.dart`, oracle tag `3.44.0`).
 /// Not limited to Material widgets — any widget can track a subset of these
 /// in a [`WidgetStates`] set.
 ///
-/// `#[non_exhaustive]`: the oracle enum has grown new members across Flutter
-/// releases (`scrolledUnder` and `error` are both later additions); treat
-/// this the same way and avoid exhaustive `match` outside this module.
+/// `#[non_exhaustive]`: interaction-state vocabularies grow over time
+/// (`ScrolledUnder` and `Error` are late additions to the usual set); avoid
+/// exhaustive `match` outside this module.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum WidgetState {
@@ -140,8 +123,8 @@ impl WidgetState {
 bitflags::bitflags! {
     /// A set of [`WidgetState`]s a widget is currently in.
     ///
-    /// Flutter parity: `Set<WidgetState>`. See the module doc for why this
-    /// is a bitset rather than a `HashSet<WidgetState>`.
+    /// See the module doc for why this is a bitset rather than a
+    /// `HashSet<WidgetState>`.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
     pub struct WidgetStates: u8 {
         /// See [`WidgetState::Hovered`].
@@ -164,7 +147,7 @@ bitflags::bitflags! {
 }
 
 impl WidgetStates {
-    /// The empty set — no active states (Flutter's default `<WidgetState>{}`).
+    /// The empty set — no active states.
     pub const NONE: Self = Self::empty();
 
     /// Whether `state` is a member of this set.
@@ -205,19 +188,16 @@ impl FromIterator<WidgetState> for WidgetStates {
 /// A predicate a [`WidgetStates`] set either satisfies or doesn't — the key
 /// type for [`WidgetStateProperty::Map`] entries.
 ///
-/// Flutter parity: `WidgetStatesConstraint` (`widget_state.dart`). The
-/// oracle mixin supports an arbitrary `&`/`|`/`~` boolean algebra over
-/// `WidgetState` combinations; V1 here ships only the two cases needed for
-/// first-match-wins resolution with a catch-all — see the module doc's
-/// "Named deferrals" section. `#[non_exhaustive]` leaves room to add
+/// Only the two cases needed for first-match-wins resolution with a catch-all
+/// exist today, not an arbitrary `&`/`|`/`~` boolean algebra — see the module
+/// doc's "Named deferrals" section. `#[non_exhaustive]` leaves room to add
 /// `And`/`Or`/`Not` variants later without a breaking change.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum WidgetStateConstraint {
     /// Satisfied exactly when the states set contains this one state.
     Is(WidgetState),
-    /// Always satisfied — Flutter's `WidgetState.any`, meant as the final
-    /// entry in a [`WidgetStateProperty::Map`] to guarantee a match.
+    /// Always satisfied — meant as the final entry in a [`WidgetStateProperty::Map`] to guarantee a match.
     Any,
 }
 
@@ -244,11 +224,8 @@ impl From<WidgetState> for WidgetStateConstraint {
 
 /// A value of type `T` that depends on a widget's [`WidgetStates`].
 ///
-/// Flutter parity: `WidgetStateProperty<T>` (`widget_state.dart`). The
-/// oracle is an abstract interface with several concrete implementations
-/// (`_WidgetStatePropertyWith`, `WidgetStatePropertyAll`,
-/// `WidgetStateMapper`); FLUI collapses them into one enum since Rust has no
-/// need for the separate allocation Dart's class hierarchy implies.
+/// One enum covers the constant, closure and map forms, with no separate
+/// allocation per kind.
 ///
 /// See the module doc for the `T: Default` requirement on
 /// [`resolve`](Self::resolve) and the constraint-algebra deferral on
@@ -263,30 +240,25 @@ impl From<WidgetState> for WidgetStateConstraint {
 #[derive(Clone)]
 #[non_exhaustive]
 pub enum WidgetStateProperty<T> {
-    /// Resolves to the same value regardless of state. Flutter's
-    /// `WidgetStatePropertyAll`.
+    /// Resolves to the same value regardless of state.
     All(T),
-    /// Resolves via an arbitrary function of the current states. Flutter's
-    /// `WidgetStateProperty.resolveWith` /
-    /// `WidgetPropertyResolver<T>`. `Send + Sync` so a property built on one
+    /// Resolves via an arbitrary function of the current states.
+    /// `Send + Sync` so a property built on one
     /// thread can be handed to a render/paint path on another.
     Resolver(Arc<dyn Fn(&WidgetStates) -> T + Send + Sync>),
     /// Resolves via first-match-wins lookup over an ordered list of
-    /// constraints. Flutter's `WidgetStateMapper`/`WidgetStateProperty.fromMap`.
-    /// An empty map, or a states set matching none of the entries, resolves
+    /// constraints. An empty map, or a states set matching none of the entries, resolves
     /// to `T::default()` — see the module doc.
     Map(Vec<(WidgetStateConstraint, T)>),
 }
 
 impl<T> WidgetStateProperty<T> {
-    /// A property that always resolves to `value`. Flutter's
-    /// `WidgetStateProperty.all`/`WidgetStatePropertyAll`.
+    /// A property that always resolves to `value`.
     pub const fn all(value: T) -> Self {
         Self::All(value)
     }
 
-    /// A property that resolves via `resolver`. Flutter's
-    /// `WidgetStateProperty.resolveWith`.
+    /// A property that resolves via `resolver`.
     pub fn resolve_with<F>(resolver: F) -> Self
     where
         F: Fn(&WidgetStates) -> T + Send + Sync + 'static,
@@ -295,7 +267,6 @@ impl<T> WidgetStateProperty<T> {
     }
 
     /// A property that resolves by first-match-wins lookup over `entries`.
-    /// Flutter's `WidgetStateProperty.fromMap`.
     pub fn from_map<I>(entries: I) -> Self
     where
         I: IntoIterator<Item = (WidgetStateConstraint, T)>,
@@ -308,7 +279,7 @@ impl<T: Clone + Default> WidgetStateProperty<T> {
     /// Resolves this property against `states`.
     ///
     /// Total and panic-free for every `T: Default` — see the module doc for
-    /// why this diverges from the oracle's throw-on-no-match `WidgetStateMapper`.
+    /// why a `Map` with no matching entry resolves to `T::default()`.
     #[must_use]
     pub fn resolve(&self, states: &WidgetStates) -> T {
         match self {
@@ -333,16 +304,10 @@ impl<T: fmt::Debug> fmt::Debug for WidgetStateProperty<T> {
 }
 
 impl<T: PartialEq> PartialEq for WidgetStateProperty<T> {
-    /// Flutter parity note: the oracle documents that two `WidgetStateProperty`
-    /// objects are only recognized as equal when they are `const` or define
-    /// `operator==` themselves — otherwise comparisons (e.g. `ThemeData`
-    /// equality) silently fall back to identity. FLUI makes that fallback
-    /// explicit rather than ambient: [`Resolver`](Self::Resolver) compares by
-    /// [`Arc::ptr_eq`] (closure identity, matching Dart's own closure-identity
-    /// semantics for non-const resolvers), while [`All`](Self::All) and
-    /// [`Map`](Self::Map) compare structurally since `T: PartialEq` makes
-    /// that possible in Rust (unlike Dart, which needs a hand-written
-    /// `operator==`).
+    /// Closures have no structural equality, so [`Resolver`](Self::Resolver)
+    /// compares by [`Arc::ptr_eq`] (closure identity), while
+    /// [`All`](Self::All) and [`Map`](Self::Map) compare structurally since
+    /// `T: PartialEq` makes that possible.
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::All(a), Self::All(b)) => a == b,
@@ -359,21 +324,18 @@ impl<T: PartialEq> PartialEq for WidgetStateProperty<T> {
 
 /// Manages a [`WidgetStates`] set and notifies listeners when it changes.
 ///
-/// Flutter parity: `WidgetStatesController extends ValueNotifier<Set<WidgetState>>`
-/// (`widget_state.dart`). FLUI does not reuse [`flui_foundation::ValueNotifier`]
-/// here: that type is single-owner (`&mut self` mutation), but a states
+/// This does not reuse [`flui_foundation::ValueNotifier`]:
+/// that type is single-owner (`&mut self` mutation), but a states
 /// controller must be a shared, `Clone`-able handle — an app hands the same
 /// controller to a custom widget and an `InkWell`/button below it
-/// simultaneously (`ink_well.dart`'s `statesController` parameter is exactly
-/// this). Instead this composes `flui-foundation`'s `ChangeNotifier` (already
+/// simultaneously. Instead this composes `flui-foundation`'s `ChangeNotifier` (already
 /// `Arc`-backed and `Clone`-shared) with a `parking_lot`-guarded
 /// [`WidgetStates`] cell — "a value cell of `WidgetStates` over
 /// `flui-foundation`'s `ChangeNotifier` idiom."
 ///
 /// [`update`](Self::update) is the only mutator, and notifies listeners only
-/// when the set actually changes — Flutter parity: `ValueNotifier`
-/// (`update`'s oracle, `WidgetStatesController.update`) only calls
-/// `notifyListeners()` when `Set.add`/`Set.remove` reports a real change.
+/// when the set actually changes, so a redundant `update` never wakes
+/// listeners.
 #[derive(Clone)]
 pub struct WidgetStatesController {
     value: Arc<Mutex<WidgetStates>>,
@@ -381,9 +343,8 @@ pub struct WidgetStatesController {
 }
 
 impl WidgetStatesController {
-    /// Creates a controller starting at `initial` (Flutter's optional
-    /// constructor argument; pass [`WidgetStates::NONE`] for the oracle's
-    /// default empty set).
+    /// Creates a controller starting at `initial` (pass
+    /// [`WidgetStates::NONE`] for the empty set).
     #[must_use]
     pub fn new(initial: WidgetStates) -> Self {
         Self {
@@ -408,8 +369,7 @@ impl WidgetStatesController {
     /// `WidgetStatesController` on rebuild" (a `Some` -> `Some` change to a
     /// *different* controller, as opposed to a rebuild re-cloning the same
     /// one) — see `flui_material::InkWell`'s `did_update_view`, which
-    /// mirrors Flutter's own `didUpdateWidget` re-homing
-    /// (`widget.statesController != oldWidget.statesController`).
+    /// re-homes its listener on such a swap.
     #[must_use]
     pub fn is_same(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.value, &other.value)
@@ -417,8 +377,6 @@ impl WidgetStatesController {
 
     /// Adds `state` to the set if `add` is `true`, removes it otherwise.
     /// Notifies listeners only if the set actually changed.
-    ///
-    /// Flutter parity: `WidgetStatesController.update`.
     pub fn update(&self, state: WidgetState, add: bool) {
         let changed = {
             let mut guard = self.value.lock();

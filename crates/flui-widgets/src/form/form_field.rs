@@ -11,14 +11,12 @@ use super::{AutovalidateMode, Form, FormFieldEntry, FormHandle, FormInner};
 use crate::interaction::Focus;
 use crate::support::{EventCallback, event_callback, ref_callback};
 
-/// Checks a value; `Some(message)` is the error to show — Flutter's
-/// `FormFieldValidator<T>`.
+/// Checks a value; `Some(message)` is the error to show.
 pub type FormFieldValidator<T> = Rc<dyn Fn(&T) -> Option<String>>;
-/// Receives the value on `save` — Flutter's `FormFieldSetter<T>` — with the
+/// Receives the value on `save`, with the
 /// `&mut EventCx<'_>` the caller of [`FormHandle::save`] passed (ADR-0086).
 pub type FormFieldSetter<T> = Rc<dyn Fn(&mut EventCx<'_>, &T)>;
-/// Builds the field's content from its handle — Flutter's
-/// `FormFieldBuilder<T>`, which receives the `FormFieldState`.
+/// Builds the field's content from its handle.
 type FormFieldBuilder<T> = Rc<dyn Fn(&dyn BuildContext, &FormFieldHandle<T>) -> BoxedView>;
 
 /// The field's state, shared by its handle, its widget state and its form.
@@ -157,8 +155,7 @@ impl<T: Clone + 'static> FieldInner<T> {
         }
     }
 
-    /// Validate and show the result — Flutter's `_validate` inside a
-    /// `setState`. Rebuilds only when the shown error changed.
+    /// Validate and show the result. Rebuilds only when the shown error changed.
     fn run_validate(&self) {
         let error = self.verdict();
         let changed = *self.error.borrow() != error;
@@ -168,7 +165,7 @@ impl<T: Clone + 'static> FieldInner<T> {
         }
     }
 
-    /// The field-level autovalidation of Flutter's `FormFieldState.build`.
+    /// The field-level autovalidation.
     /// The field's own mode only: it does not fall back to the form's.
     fn autovalidate(&self) {
         if !self.enabled.get() {
@@ -188,8 +185,7 @@ impl<T: Clone + 'static> FieldInner<T> {
     }
 
     /// Whether losing focus validates: the field's mode is `OnUnfocus`, or
-    /// the form's is and the field's is not `Always` (Flutter's
-    /// `FormFieldState.build`).
+    /// the form's is and the field's is not `Always`.
     fn validates_on_unfocus(&self) -> bool {
         let own = self.mode.get();
         own == AutovalidateMode::OnUnfocus
@@ -287,7 +283,7 @@ impl<T: Clone + 'static> FormFieldEntry for FieldInner<T> {
 // FormFieldHandle
 // ============================================================================
 
-/// One field's imperative surface — Flutter's `FormFieldState<T>`, reached
+/// One field's imperative surface, reached
 /// by a handle the caller creates and passes to [`FormField::handle`], and
 /// handed to the field's builder.
 ///
@@ -311,7 +307,6 @@ impl<T: Clone + 'static> FormFieldEntry for FieldInner<T> {
 /// shows a field's state — a submit button enabled by [`Self::is_valid`] —
 /// is rebuilt by the caller, for example from [`Form::on_changed`]. The
 /// getters are meant for event handlers and the field's own builder.
-/// Flutter's `FormFieldState` is not listenable either.
 pub struct FormFieldHandle<T> {
     inner: Rc<FieldInner<T>>,
 }
@@ -402,8 +397,7 @@ impl<T: Clone + 'static> FormFieldHandle<T> {
         self.inner.error.borrow().is_some()
     }
 
-    /// Whether the value passes validation, without showing the result —
-    /// Flutter's `FormFieldState.isValid`.
+    /// Whether the value passes validation, without showing the result.
     #[must_use]
     pub fn is_valid(&self) -> bool {
         self.inner.verdict().is_none()
@@ -417,7 +411,7 @@ impl<T: Clone + 'static> FormFieldHandle<T> {
 
     /// A user edit: set the value, mark the field interacted, run the
     /// field's and the form's autovalidation, and report the change to the
-    /// form — Flutter's `FormFieldState.didChange`.
+    /// form.
     ///
     /// Takes the `&mut EventCx<'_>` of the event callback that made the edit
     /// and passes it to [`Form::on_changed`] (ADR-0086 §6).
@@ -429,25 +423,22 @@ impl<T: Clone + 'static> FormFieldHandle<T> {
         self.inner.did_change(cx, value)
     }
 
-    /// Set the value without marking interaction, validating or rebuilding
-    /// — Flutter's `FormFieldState.setValue`.
+    /// Set the value without marking interaction, validating or rebuilding.
     ///
     /// A text form field's value is its controller's text, so there this
-    /// writes the text into the controller too; Flutter's `setValue` leaves
-    /// the controller alone and the two disagree until the next edit.
+    /// writes the text into the controller too, so the two never disagree.
     pub fn set_value(&self, value: T) {
         *self.inner.value.borrow_mut() = Some(value.clone());
         self.inner.push_to_sink(&value);
     }
 
-    /// Validate, show the result, and report whether it passed — Flutter's
-    /// `FormFieldState.validate`.
+    /// Validate, show the result, and report whether it passed.
     pub fn validate(&self) -> bool {
         FormFieldEntry::validate(&*self.inner)
     }
 
     /// Back to the initial value, error and interaction cleared, then
-    /// `on_reset` — Flutter's `FormFieldState.reset`. The caller's
+    /// `on_reset`. The caller's
     /// `&mut EventCx<'_>` reaches `on_reset` and [`Form::on_changed`].
     ///
     /// # Errors
@@ -471,7 +462,7 @@ impl<T: Clone + 'static> FormFieldHandle<T> {
 // FormField
 // ============================================================================
 
-/// One validated value in a [`Form`] — Flutter's `FormField<T>`.
+/// One validated value in a [`Form`].
 ///
 /// The builder receives the field's [`FormFieldHandle`] and reads the value
 /// and error from it; an edit reports back through
@@ -791,8 +782,7 @@ impl<T: Clone + 'static> ViewState<FormField<T>> for FormFieldState<T> {
                 .borrow_mut()
                 .clone_from(&new_view.force_error_text);
         }
-        // Flutter's field rebuilds on a new configuration, and its build
-        // runs the field-level autovalidation.
+        // A new configuration re-runs the field-level autovalidation.
         self.handle.inner.autovalidate();
     }
 

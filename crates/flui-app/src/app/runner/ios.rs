@@ -200,11 +200,15 @@ where
         }
         let reload = WorkerReload::from_config(&config);
         let watcher = reload.spawn_watcher(runtime_wake_callback());
+        let agent = config
+            .dev_agent
+            .as_ref()
+            .and_then(crate::app::dev_agent::DevAgent::attach);
         let installer = Box::new(move |window| {
             bootstrap_ios(root.clone(), config.clone(), reload.clone(), window)
         });
         APP_RUNTIME.with(|slot| {
-            slot.borrow_mut().ios_controller = Some(IOSController::new(installer, watcher));
+            slot.borrow_mut().ios_controller = Some(IOSController::new(installer, watcher, agent));
         });
         Ok(())
     }));
@@ -305,6 +309,12 @@ where
         return Err(anyhow::anyhow!(e).context("Root widget attach failed"));
     }
     worker_reload.register_realm(&ui_realm);
+    // Vended while the realm is still ours, handed over once the install
+    // commits: a failed install drops it with the realm.
+    let agent_window = config
+        .dev_agent
+        .as_ref()
+        .and_then(|agent| agent.vend(&ui_realm, ui_realm.presentation_id()));
     let realm_dispatch = install_realm_alongside(ui_realm, &window)?;
     struct ProvisionalRealm(Option<RealmDispatcher>);
     impl Drop for ProvisionalRealm {
@@ -539,5 +549,8 @@ where
 
     tracing::info!("iOS platform initialized with callbacks");
     provisional.0 = None;
+    if let (Some(agent), Some(window)) = (config.dev_agent.as_ref(), agent_window) {
+        agent.window_opened(window);
+    }
     Ok(realm_dispatch)
 }

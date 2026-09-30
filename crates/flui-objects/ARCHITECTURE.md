@@ -1,23 +1,21 @@
 # flui-objects Architecture
 
 Per-crate ledger for the concrete `RenderBox` / `RenderSliver` catalog.
-Mapping decisions that span more than one module in this crate land
-here so later parity work does not treat a deliberate divergence as accidental
-drift. Module-level `//! # Mapping decisions` comments may repeat a local note
+Decisions that span more than one module in this crate land
+here. Module-level `//! # Mapping decisions` comments may repeat a local note
 and should cite this file when the contract is shared.
 
 Adopted incrementally: sections below cover the decisions this crate has
-recorded so far; Flutter source mapping for the full catalog grows as objects
-are touched.
+recorded so far.
 
 ---
 
-## Flutter source mapping
+## Module map
 
-| Flutter source | FLUI module | Notes |
+| Object | FLUI module | Notes |
 |---|---|---|
-| `rendering/sliver_fixed_extent_list.dart` `RenderSliverFixedExtentBoxAdaptor` | [`src/sliver/sliver_fixed_extent_list.rs`](src/sliver/sliver_fixed_extent_list.rs) | Index math + request-strategy retain band; see mapping decision below. |
-| `rendering/sliver_grid.dart` `RenderSliverGrid` | [`src/sliver/sliver_grid.rs`](src/sliver/sliver_grid.rs) | Delegate-windowed geometry + the same finite-domain scroll-window policy. |
+| `RenderSliverFixedExtentList` | [`src/sliver/sliver_fixed_extent_list.rs`](src/sliver/sliver_fixed_extent_list.rs) | Index math + request-strategy retain band; see mapping decision below. |
+| `RenderSliverGrid` | [`src/sliver/sliver_grid.rs`](src/sliver/sliver_grid.rs) | Delegate-windowed geometry + the same finite-domain scroll-window policy. |
 
 ---
 
@@ -25,10 +23,8 @@ are touched.
 
 ### Non-finite scroll-window edges never reach `f32 as usize`
 
-**Rule:** Flutter's fixed-extent adaptor converts scroll/cache floats with
-`toInt`, which throws on `Infinity` / `NaN` (flutter/flutter#105630). Rust's
-`f32 as usize` saturates instead (`+∞ → usize::MAX`, `NaN → 0`), so the same
-malformed constraints can silently mint a retain band or build window at
+**Rule:** Rust's `f32 as usize` saturates (`+∞ → usize::MAX`, `NaN → 0`), so
+malformed scroll/cache constraints can silently mint a retain band or build window at
 `usize::MAX` and freeze the viewport without a crisp error.
 
 **Choice:** `RenderSliverFixedExtentList` and `RenderSliverGrid` share one
@@ -56,11 +52,10 @@ single offset (`NaN`/`+∞` → `0` + error; `−∞` → `0` without error).
 
 **Trade-off:** malformed constraints that previously continued with a
 saturated index now produce an empty window and a structured error log.
-That is louder than silent saturation and quieter than Flutter's release
-crash; diagnostics name the sliver type and the offending fields so production
+That is louder than silent saturation and quieter than a crash; diagnostics name the sliver type and the offending fields so production
 reports identify the bad window.
 
-**Replacement coverage:** unit tests on
+**Tests:** unit tests on
 `sliver_fixed_extent_list::window` / index helpers and on
 `sliver_grid::classify_cache_window` / poison geometry prove the contract;
 a healthy viewport cannot inject non-finite scroll edges into the harness.
@@ -69,36 +64,26 @@ a healthy viewport cannot inject non-finite scroll edges into the harness.
 
 ### `RenderParagraph` publishes no semantics node for empty text
 
-**Rule:** Flutter's `RenderParagraph.describeSemanticsConfiguration`
-(`rendering/paragraph.dart`, oracle tag `3.44.0`) sets `config.attributedLabel`
-and `config.textDirection` unconditionally in its plain-text branch (no inline
-recognizers/placeholders — the only branch this object's V1 scope supports;
-see `src/text/paragraph.rs`'s module doc "Out of scope"), including for an
-empty string.
+**Rule:** a text-less paragraph contributes no semantics (plain-text branch only,
+the only one this object's V1 scope supports; see `src/text/paragraph.rs`'s
+module doc "Out of scope").
 
 **Choice:** `RenderParagraph::describe_semantics_configuration` sets neither
 `label` nor `text_direction` when `TextPainter`'s plain text is empty, leaving
 the configuration un-annotated.
 
-**Why the divergence:** `SemanticsConfiguration::set_text_direction` (like
+**Why:** `SemanticsConfiguration::set_text_direction` (like
 every other setter in `flui-semantics`) calls `mark_annotated()` on its own,
-with no emptiness check — so mirroring the oracle exactly would mark *every*
+with no emptiness check — so setting them unconditionally would mark *every*
 text-less paragraph in a tree as contributing semantics (`has_been_annotated
 == true`), which forms or merges an empty, unlabelled node wherever a
 `RenderParagraph` sits directly under a semantics boundary or an
-explicit-child-node ancestor. Flutter's own `SemanticsConfiguration` has the
-same unconditional setters; whether the oracle ever surfaces an empty node
-this way was not traced — its `Text` widgets normally carry text, and this
-document makes no claim about the rest of its call graph. FLUI's headless
-test harness does construct the empty case (see
-`crates/flui-widgets/tests/semantics.rs`), so the divergence is
-made explicit here instead of leaking into the merge pipeline as an
-undocumented empty-label node.
+explicit-child-node ancestor. The headless test harness constructs the empty
+case (see `crates/flui-widgets/tests/semantics.rs`).
 
 **Alternatives considered:**
 
-- Set `label`/`text_direction` unconditionally, matching the oracle
-  byte-for-byte — rejected: publishes a spurious node (or spurious merge
+- Set `label`/`text_direction` unconditionally — rejected: publishes a spurious node (or spurious merge
   input) for any empty-text paragraph, which is strictly worse for an
   assistive-technology consumer than publishing nothing.
 - Fix `set_text_direction` to skip `mark_annotated()` for a "no-op" value —
@@ -107,13 +92,12 @@ undocumented empty-label node.
   rather than the setter, which is what this decision does instead, kept
   local to `RenderParagraph`.
 
-**Trade-off:** an empty-text `RenderParagraph` that Flutter would still tag
-with a (redundant) text direction publishes nothing at all here. No known
+**Trade-off:** an empty-text `RenderParagraph` publishes nothing at all, not even a (redundant) text direction. No known
 consumer depends on an empty-labelled paragraph node's `text_direction`
 alone; the alternative (a phantom node with no label) is the actively worse
 default.
 
-**Replacement coverage:** `crates/flui-widgets/tests/semantics.rs` mounts a
+**Tests:** `crates/flui-widgets/tests/semantics.rs` mounts a
 `Text` with empty content and asserts no node forms; a `Text("hello")` mount
 asserts the label does.
 
@@ -128,8 +112,7 @@ a slot cannot have its publication erased by the previous publisher. Before atta
 publishes nothing. Reusing the same slot is a no-op. This identity-only operation
 does not invalidate geometry or replace the child. `AnchoredBox` calls it during
 render-object updates, so reconciliation preserves child state when its anchor changes.
-This extends FLUI's identity proxy contract; there is no direct Flutter render-object
-counterpart. The `harness_subtree_anchor_attach_*` and `harness_subtree_anchor_detach_*` rows of
+This extends FLUI's identity proxy contract. The `harness_subtree_anchor_attach_*` and `harness_subtree_anchor_detach_*` rows of
 `family_layer_links` cover publication lifetime, and the widgets `anchored_box` regression rebuilds the
 real element tree and checks preserved render IDs and child state.
 
@@ -142,8 +125,7 @@ real element tree and checks preserved render IDs and child state.
 `compute_dry_layout` and `compute_dry_baseline`. The context is the realm's
 `TextContext`, lent by the pipeline (flui-rendering's "Layout contexts lend the
 realm's text context"), so a paragraph measures with its own realm's fonts
-rather than an ambient collection, which is where Flutter's `TextPainter`
-reaches (ADR-0092 §10 step 3; flui-painting mapping decision 14). The default
+rather than an ambient collection (ADR-0092 §10 step 3; flui-painting mapping decision 14). The default
 build measures on cosmic-text and the numbers are unchanged; every
 `harness_*` test for both objects runs through the lent context. flui-runtime's
 `two_realms_measure_text_through_their_own_contexts` shows the loan reaches a
@@ -162,5 +144,4 @@ through `PipelineOwner`; they hold no shared mutable state of their own.
 
 | Item | Notes |
 |------|-------|
-| Full Flutter source mapping table | Deferred; fill as individual objects are re-touched. |
 | Shared `classify_cache_window` helper across list + grid | Grid owns its classify today; list uses `finite_leading_cache_edge`. Consolidating into one module is optional follow-up once a third consumer appears. |

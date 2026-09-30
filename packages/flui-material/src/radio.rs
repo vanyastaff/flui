@@ -1,25 +1,14 @@
 //! [`Radio`] — a mutually-exclusive-group M3 selection control.
 //!
-//! # Flutter parity
+//! # API shape: the direct `value`/`group_value`/`on_changed` triple, not a
+//! `RadioGroup` ancestor
 //!
-//! `material/radio.dart`, `material/radio_theme.dart`, and
-//! `widgets/toggleable.dart`'s `ToggleableStateMixin`/`ToggleablePainter`
-//! (oracle tag `3.44.0`).
-//!
-//! # API shape: the deprecated-but-functional direct `value`/`groupValue`/
-//! `onChanged` triple, not the `RadioGroup` ancestor
-//!
-//! At the oracle tag, `Radio<T>`'s own `groupValue`/`onChanged` constructor
-//! parameters are marked `@Deprecated` in favor of an ancestor `RadioGroup`
-//! `InheritedModel` that centralizes group value + change routing for every
-//! `Radio<T>` beneath it (`widgets/radio_group.dart`). Both shapes are still
-//! present and functional at `3.44.0` — this port targets the direct triple
-//! (`value`/`group_value`/`on_changed`), matching Checkbox's/Switch's own
-//! self-contained (no ambient-registry) shape, and named as a divergence
-//! rather than silently treated as "the whole oracle API": a `RadioGroup`
-//! equivalent is a separate, larger feature (an `InheritedModel`-shaped
-//! group registry this crate has no precedent for yet), not a narrowing of
-//! this type's own scope.
+//! `Radio<T>` takes the direct triple (`value`/`group_value`/`on_changed`),
+//! matching Checkbox's/Switch's own self-contained (no ambient-registry)
+//! shape. An ancestor `RadioGroup` that centralizes group value + change
+//! routing for every `Radio<T>` beneath it is a separate, larger feature
+//! (an `InheritedModel`-shaped group registry this crate has no precedent
+//! for yet), not a narrowing of this type's own scope.
 //!
 //! # Generics: `Radio<T>` ships as written, not a monomorphic fallback
 //!
@@ -122,22 +111,19 @@ use crate::shape::MaterialShape;
 use crate::state_color::resolve_state_color;
 use crate::theme::Theme;
 
-/// The outer ring's radius. Flutter parity: `_kOuterRadius` (`radio.dart`,
-/// oracle tag `3.44.0`), `8.0`.
+/// The outer ring's radius, `8.0`.
 const OUTER_RADIUS: f64 = 8.0;
 
-/// The inner (selected) dot's radius. Flutter parity: `_kInnerRadius`,
-/// `4.5`.
+/// The inner (selected) dot's radius, `4.5`.
 const INNER_RADIUS: f64 = 4.5;
 
-/// The outer ring's centered stroke width. Flutter parity: the oracle's
-/// default `activeSide`/`inactiveSide`, `BorderSide(width: 2.0, strokeAlign:
-/// BorderSide.strokeAlignCenter)` (`radio.dart` `:749-764`).
+/// The outer ring's centered stroke width: `BorderSide(width: 2.0,
+/// strokeAlign: BorderSide.strokeAlignCenter)`.
 const RING_STROKE_WIDTH: f64 = 2.0;
 
-/// The M3 tap-target side length. Flutter parity: `kMinInteractiveDimension`
-/// (`constants.dart`, `48.0`), the `MaterialTapTargetSize.padded` branch
-/// `_RadioState.build` always takes in V1 — same deferral
+/// The M3 tap-target side length (`48.0`, the minimum interactive
+/// dimension), the `MaterialTapTargetSize.padded` branch this V1 always
+/// takes — same deferral
 /// [`crate::Checkbox`]/[`crate::Switch`] already make.
 pub const RADIO_TAP_TARGET_SIZE: f64 = 48.0;
 
@@ -204,8 +190,7 @@ impl<T: PartialEq + Clone + 'static> Radio<T> {
     /// radio interactive — `None` (the default) renders disabled and
     /// swallows taps. Fires with a clone of [`Self::new`]'s `value` when
     /// tapped while NOT already selected; a no-op tap on an already-selected
-    /// radio (see the module docs' `toggleable` deferral). Flutter parity:
-    /// `Radio.onChanged`.
+    /// radio (see the module docs' `toggleable` deferral).
     #[must_use]
     pub fn on_changed<R: flui_sdk::view::EventOutcome>(
         mut self,
@@ -216,23 +201,19 @@ impl<T: PartialEq + Clone + 'static> Radio<T> {
     }
 
     /// Overrides the ring/dot color used when this radio is selected (and
-    /// enabled). Flutter parity: `Radio.activeColor`.
+    /// enabled).
     #[must_use]
     pub fn active_color(mut self, color: Color) -> Self {
         self.active_color = Some(color);
         self
     }
 
-    /// Whether this radio responds to taps. Flutter parity:
-    /// `ToggleableStateMixin.isInteractive` (`onChanged != null`).
+    /// Whether this radio responds to taps (`on_changed` is set).
     fn is_interactive(&self) -> bool {
         self.on_changed.is_some()
     }
 
-    /// Whether `value` matches the group's current value. Flutter parity:
-    /// the selection test `RawRadio`'s `_RawRadioState` applies internally
-    /// (`value == groupValue`, via `RadioGroupRegistry`/direct `groupValue`
-    /// comparison).
+    /// Whether `value` matches the group's current value.
     fn is_selected(&self) -> bool {
         self.group_value.as_ref() == Some(&self.value)
     }
@@ -427,9 +408,8 @@ fn radio_default_overlay_color(colors: &ColorScheme, states: WidgetStates) -> Op
 }
 
 /// Paints the radio's concentric circles, always at the fully-settled shape
-/// (see the module docs' V1-scope section). Flutter parity: `_RadioPainter`
-/// (`radio.dart` `:797-877`), evaluated at `position ∈ {0.0, 1.0}`
-/// throughout with no `ToggleablePainter.paintRadialReaction` call (the
+/// (see the module docs' V1-scope section), evaluated at
+/// `position ∈ {0.0, 1.0}` throughout with no radial-reaction paint (the
 /// overlay comes from [`InkWell`] instead).
 #[derive(Debug, Clone, PartialEq)]
 struct RadioPainter {

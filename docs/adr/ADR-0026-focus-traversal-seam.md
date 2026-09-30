@@ -58,10 +58,10 @@ focused, Tab falls back to the policy-ordered first or last node.
 
 ### 3. Edge behavior
 
-`TraversalEdgeBehavior { ClosedLoop (default), Stop, ParentScope, LeaveFlutterView }` lives on
+`TraversalEdgeBehavior { ClosedLoop (default), Stop, ParentScope, LeaveView }` lives on
 `FocusScopeNode`. `ParentScope` answers `RetryInParent`, and the caller re-resolves in the
 enclosing scope with the same cursor. That works because FLUI's candidate walk crosses scope
-boundaries, so the step lands on the first node outside the inner scope. `LeaveFlutterView`
+boundaries, so the step lands on the first node outside the inner scope. `LeaveView`
 unfocuses and reports the key unconsumed; the embedder handoff has no channel yet.
 
 ### 4. Tab is an intent, and `Action::invoke` reports an outcome

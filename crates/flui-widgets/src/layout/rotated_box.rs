@@ -11,8 +11,7 @@ use flui_view::{Child, IntoView, RenderView, impl_render_view};
 /// height axes so the child is laid out in a rotated coordinate frame.  The
 /// parent sees the swapped dimensions.
 ///
-/// Flutter parity: `widgets/basic.dart` `RotatedBox` over
-/// [`RenderRotatedBox`].
+/// Backed by [`RenderRotatedBox`].
 #[derive(Clone, Debug)]
 pub struct RotatedBox {
     /// Number of clockwise 90° rotations.  Negative values rotate

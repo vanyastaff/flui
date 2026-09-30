@@ -1,6 +1,5 @@
 //! RenderImage — renders bitmap images with aspect preservation and alignment.
 //!
-//! Implements the RenderImage protocol object following Flutter's image.dart (22-404).
 //! Supports aspect-ratio preservation, fit modes (Fill/Contain/Cover/ScaleDown/None),
 //! and alignment.
 
@@ -96,24 +95,23 @@ pub struct RenderImage {
     /// but paints nothing.
     image: Option<Image>,
     /// Natural (intrinsic) size of the image, in image pixels. Divided by
-    /// [`scale`](Self::scale) to obtain the logical aspect source. flui keeps
-    /// this stored (Flutter derives it live from the image) so a not-yet-loaded
-    /// image can still reserve layout space — a superset of Flutter, which
-    /// returns `constraints.smallest` while the image is null.
+    /// [`scale`](Self::scale) to obtain the logical aspect source. It is kept
+    /// stored rather than derived live from the image, so a not-yet-loaded
+    /// image can still reserve layout space instead of collapsing to
+    /// `constraints.smallest`.
     intrinsic_size: Size,
     /// Optional forced logical width. Folded into the constraints during
-    /// sizing (Flutter `RenderImage.width`); `None` means derive from the
-    /// image aspect.
+    /// sizing; `None` means derive from the image aspect.
     width: Option<f64>,
-    /// Optional forced logical height (Flutter `RenderImage.height`).
+    /// Optional forced logical height.
     height: Option<f64>,
-    /// Number of image pixels per logical pixel (Flutter `RenderImage.scale`).
+    /// Number of image pixels per logical pixel.
     /// The intrinsic size is divided by this to get the logical aspect source,
     /// so a 2x asset renders at half its pixel dimensions.
     scale: f64,
     /// How to fit the image into available space. Affects paint only (where
-    /// the image is fitted into the laid-out box), not the box size — matching
-    /// Flutter, whose `_sizeForConstraints` never reads `fit`.
+    /// the image is fitted into the laid-out box), not the box size: sizing
+    /// never reads `fit`.
     fit: ImageFit,
     /// How to align the image within the box. Paint-only, like `fit`.
     alignment: ImageAlignment,
@@ -260,7 +258,7 @@ impl RenderImage {
     /// Returns `None` when the intrinsic size is degenerate (zero in either
     /// dimension), in which case there is nothing to paint.
     pub fn paint_rect_in(&self, box_size: Size) -> Option<Rect> {
-        // Logical image size (Flutter `ImageInfo.scale`): the fit math operates
+        // Logical image size: the fit math operates
         // on the same `intrinsic / scale` dimensions the box was laid out
         // against, so a high-DPI asset paints at its logical size — without the
         // divide, `ImageFit::None`/`ScaleDown` would draw a 2x asset at its full
@@ -301,8 +299,7 @@ impl RenderImage {
         ))
     }
 
-    /// Computes the box size for the given constraints — a direct port of
-    /// Flutter's `RenderImage._sizeForConstraints` (`image.dart`).
+    /// Computes the box size for the given constraints.
     ///
     /// The box size is **independent of [`fit`](ImageFit)**: the explicit
     /// `width`/`height` are folded into the constraints, then the box takes the
@@ -312,13 +309,13 @@ impl RenderImage {
     ///
     /// The logical aspect source is `intrinsic_size / scale`; when it is
     /// degenerate (zero in either dimension) the box falls back to the
-    /// constraints' smallest size, mirroring Flutter's null-image branch.
+    /// constraints' smallest size.
     ///
     /// Public so that callers can reproduce layout sizing without driving a
     /// full layout pass (tests, demos).
     pub fn compute_size(&self, constraints: &BoxConstraints) -> Size {
         // Fold the explicit width/height into the constraints so all three are
-        // treated uniformly (Flutter `tightFor(w, h).enforce(constraints)`).
+        // treated uniformly.
         // `tighten` clamps each forced dimension INTO the parent's range, so a
         // forced size outside the parent's min/max can never commit a size that
         // violates the incoming constraints.
@@ -383,7 +380,7 @@ impl RenderBox for RenderImage {
         }
     }
 
-    // Intrinsics mirror Flutter `RenderImage` (`image.dart`): the size the box
+    // Intrinsics report the size the box
     // would take with the cross-axis extent tightened. With no forced
     // width/height the min-intrinsics report 0 (the image can scale to nothing),
     // while max-intrinsics always report the aspect-preserved extent. A leaf,
@@ -432,7 +429,7 @@ impl RenderBox for RenderImage {
     }
 
     /// Dry layout is the exact box size `perform_layout` commits — both go
-    /// through `compute_size` (Flutter `computeDryLayout == _sizeForConstraints`).
+    /// through `compute_size`.
     fn compute_dry_layout(
         &self,
         constraints: BoxConstraints,

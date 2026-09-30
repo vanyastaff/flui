@@ -1,7 +1,4 @@
 //! [`IconThemeData`] and [`IconTheme`] — ambient defaults for [`Icon`](crate::Icon).
-//!
-//! Flutter parity: `widgets/icon_theme_data.dart` `IconThemeData`,
-//! `widgets/icon_theme.dart` `IconTheme`.
 
 use std::fmt;
 
@@ -15,11 +12,9 @@ use flui_view::{BoxedView, InheritedView, impl_inherited_view};
 /// ancestor.
 ///
 /// Every field is optional: `None` means "not specified at this level, defer
-/// to whatever is further up" — Flutter's per-field inheritance.
+/// to whatever is further up" (per-field inheritance).
 /// [`IconTheme::of`] resolves the ambient theme down to
 /// [`IconThemeData::fallback`] so callers always get a fully-populated value.
-///
-/// Flutter parity: `widgets/icon_theme_data.dart` `IconThemeData`.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct IconThemeData {
     /// Icon side length in logical pixels (icons are square: this sizes both
@@ -68,8 +63,6 @@ impl IconThemeData {
     /// Reasonable defaults for an unstyled subtree: 24px, opaque black,
     /// unfilled/regular-weight/neutral-grade glyphs at optical size 48, no
     /// shadows, no text-scaling.
-    ///
-    /// Flutter parity: `IconThemeData.fallback()` (icon_theme_data.dart:51-60).
     #[must_use]
     pub const fn fallback() -> Self {
         Self {
@@ -105,12 +98,9 @@ impl IconThemeData {
 /// Provides [`IconThemeData`] to its subtree via FLUI's inherited-data
 /// mechanism.
 ///
-/// Flutter parity: `widgets/icon_theme.dart` `IconTheme`.
-///
-/// **Divergence:** Flutter's `IconTheme` is an `InheritedTheme` that also
-/// rewraps itself across `Navigator` route boundaries (`wrap`). FLUI's
-/// `InheritedView` mechanism has no route-boundary concept yet, so only the
-/// plain ambient-lookup behavior (`IconTheme.of`) is ported.
+/// `IconTheme` does not rewrap itself across `Navigator` route boundaries:
+/// the `InheritedView` mechanism has no route-boundary concept yet, so only
+/// the plain ambient-lookup behavior ([`IconTheme::of`]) exists.
 #[derive(Clone)]
 pub struct IconTheme {
     /// The data this node provides to descendants.
@@ -135,8 +125,6 @@ impl IconTheme {
     /// [`IconThemeData::fallback`], or `fallback()` outright when there is no
     /// ancestor. Registers a dependency so this element rebuilds when the
     /// ambient theme changes.
-    ///
-    /// Flutter parity: `IconTheme.of(context)`.
     #[must_use]
     pub fn of(ctx: &dyn BuildContext) -> IconThemeData {
         Self::maybe_of(ctx)

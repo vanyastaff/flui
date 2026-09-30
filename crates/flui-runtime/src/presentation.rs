@@ -43,7 +43,7 @@ use crate::epoch::{FrameCommitState, TreeRevision};
 use crate::frame_failure::SegmentPhase;
 use crate::held_input::HeldPointerQueue;
 use crate::performance_stats::PerformanceStats;
-use crate::renderer_binding::RenderingFlutterBinding;
+use crate::renderer_binding::RenderingBinding;
 use crate::semantics_host::SemanticsHost;
 
 fn format_millis(duration: Duration) -> String {
@@ -71,7 +71,7 @@ pub(crate) struct RealmCapabilities<'a> {
     /// The realm's interaction dispatch lane.
     pub(crate) interaction_dispatch_handle: InteractionDispatchHandle,
     /// The realm's own scheduler — borrowed only for the duration of
-    /// assembly; the constructed [`RenderingFlutterBinding`] keeps just a
+    /// assembly; the constructed [`RenderingBinding`] keeps just a
     /// `WeakUpdateScheduler` derived from it.
     pub(crate) scheduler: &'a UpdateScheduler,
     /// The realm's platform wake capability. It is wired as the realm
@@ -260,6 +260,13 @@ pub struct PresentationState {
     /// renderer fan-out (production read) — announce/event delivery itself
     /// still has no production caller.
     semantics: SemanticsHost,
+    /// The semantics agent a development agent hook reads this presentation
+    /// through, once `UiRealm::dev_agent_window` has vended it. The hook's
+    /// `AgentWindow`s hold it weakly, so dropping it here (at close, or with
+    /// the presentation) turns every handle `gone`; they hold the semantics
+    /// handle themselves, so collection lasts while the hook keeps one.
+    /// Owner thread only.
+    pub(crate) dev_agent: RefCell<Option<crate::ui_realm::DevAgentSlot>>,
     /// Owner-local widget framework state. One instance per presentation
     /// (ADR-0043) — the realm-level singular binding this used to be
     /// dissolves here; every widget-tree operation for this surface enters
@@ -273,7 +280,7 @@ pub struct PresentationState {
     /// `first_frame_sent`, and the semantics-enabled listener are
     /// per-presentation-window facts, not shareable once a realm hosts more
     /// than one presentation.
-    renderer: RenderingFlutterBinding,
+    renderer: RenderingBinding,
     /// Total frames rendered successfully for this presentation. Moved here
     /// from the retired `AppBinding`: per-window frame accounting, beside
     /// its consumer [`Self::performance_overlay`].
@@ -330,10 +337,10 @@ pub struct PresentationState {
     /// `FrameClock`/raster three-owner split. `UiRealm::draw_frame_entered`'s
     /// per-presentation segment loop polls this instead of the old
     /// `take_redraw_pending() || has_pending_work()` predicate directly;
-    /// first-frame deferral (`RenderingFlutterBinding::send_frames_to_engine`'s
+    /// first-frame deferral (`RenderingBinding::send_frames_to_engine`'s
     /// old counter) folds into this same clock, withholding only the
-    /// submit — see `FrameClock`'s own module doc for the `.flutter/`
-    /// citation that pins this.
+    /// submit — see `FrameClock`'s own module doc for the reasoning that
+    /// pins this.
     clock: FrameClock,
     /// (segment start, segment end) for the most recently completed
     /// build+layout+paint segment `UiRealm::draw_frame_entered`'s
@@ -407,8 +414,7 @@ impl PresentationState {
     ///   [`SemanticsActionRequest`]s stamped for this exact presentation
     ///   and resolve at the next Idle drain. Requests FLUI cannot route (a
     ///   zero node id, an action with no counterpart, a full inbox) are
-    ///   traced drops, mirroring how Flutter tolerates screen readers
-    ///   acting on a stale snapshot. Typed action payloads
+    ///   traced drops, since screen readers may act on a stale snapshot. Typed action payloads
     ///   (`accesskit::ActionData`) translate via
     ///   [`semantics_action_args_for`]; a payload kind FLUI cannot express
     ///   routes the action argument-free with a trace rather than killing
@@ -561,7 +567,7 @@ impl PresentationState {
     /// Assemble a presentation wired into a realm (ADR-0043 §1): installs
     /// `capabilities.global_key_scope` FIRST, then the realm's shared
     /// dispatch handles, before this presentation's own focus/IME are
-    /// wired to its fresh [`WidgetsBinding`] and [`RenderingFlutterBinding`]
+    /// wired to its fresh [`WidgetsBinding`] and [`RenderingBinding`]
     /// — all before the caller ever attaches/mounts a root widget.
     ///
     /// Builds the presentation's pipeline here, from the realm's text
@@ -616,7 +622,7 @@ impl PresentationState {
         });
 
         let renderer =
-            RenderingFlutterBinding::new_with_pipeline(pipeline.clone(), capabilities.scheduler);
+            RenderingBinding::new_with_pipeline(pipeline.clone(), capabilities.scheduler);
 
         // Idle-wake wiring: a dirty mark (mark_needs_layout / mark_needs_paint)
         // fires this callback so a quiescent event loop produces the frame.
@@ -694,6 +700,7 @@ impl PresentationState {
             focus,
             text_input,
             semantics,
+            dev_agent: RefCell::new(None),
             widgets,
             renderer,
             frames_rendered: Cell::new(0),
@@ -721,8 +728,8 @@ impl PresentationState {
     /// Standalone assembly with no realm above it: this presentation's
     /// `WidgetsBinding` lazily self-owns a private `GlobalKeyScope` on first
     /// `GlobalKey` registration (never shared, so it never conflicts with
-    /// anything), and its `RenderingFlutterBinding` owns its own throwaway
-    /// `UpdateScheduler` (see [`RenderingFlutterBinding::new_for_test_with_pipeline`]).
+    /// anything), and its `RenderingBinding` owns its own throwaway
+    /// `UpdateScheduler` (see [`RenderingBinding::new_for_test_with_pipeline`]).
     /// Used only by this module's own unit tests, which exercise
     /// presentation-local behavior (gestures/focus/haptics/overlay) in
     /// isolation; realm-backed tests use [`Self::new`] through
@@ -741,7 +748,7 @@ impl PresentationState {
         let widgets = WidgetsBinding::with_focus_manager(Rc::clone(&focus));
         widgets.set_pipeline_owner(pipeline.clone());
 
-        let renderer = RenderingFlutterBinding::new_for_test_with_pipeline(pipeline.clone());
+        let renderer = RenderingBinding::new_for_test_with_pipeline(pipeline.clone());
         // This path wires no platform accessibility (see the doc above).
         let accessibility: Option<Arc<dyn PlatformAccessibility>> = None;
 
@@ -770,6 +777,7 @@ impl PresentationState {
             focus,
             text_input,
             semantics,
+            dev_agent: RefCell::new(None),
             widgets,
             renderer,
             frames_rendered: Cell::new(0),
@@ -812,7 +820,7 @@ impl PresentationState {
 
     /// This presentation's own render tree / pipeline coordination binding.
     #[must_use]
-    pub(crate) fn renderer(&self) -> &RenderingFlutterBinding {
+    pub(crate) fn renderer(&self) -> &RenderingBinding {
         &self.renderer
     }
 
@@ -966,9 +974,8 @@ impl PresentationState {
     ///
     /// Silent no-op — no panic, no error — when the window is gone, or the
     /// window's backend has no [`PlatformHaptics`](flui_platform_api::PlatformHaptics)
-    /// capability (desktop winit targets, for instance). Mirrors Flutter's own `HapticFeedback`
-    /// degradation contract: every call is fire-and-forget best-effort, with
-    /// no availability-discovery API to check first.
+    /// capability (desktop winit targets, for instance). Every call is fire-and-forget
+    /// best-effort, with no availability-discovery API to check first.
     #[cfg_attr(
         not(test),
         expect(
@@ -1454,6 +1461,9 @@ impl PresentationState {
             // announce-after-close decision this pins.
             self.semantics.clear_announce_callback();
             self.semantics.clear_event_callback();
+            // The development agent goes with the window: its handles answer
+            // `gone` from here on.
+            drop(self.dev_agent.take());
             // Withdraw from the platform accessibility bridge: detach both
             // listeners so an activation flip or action request arriving after
             // close is dropped at the platform seam (an action that slips

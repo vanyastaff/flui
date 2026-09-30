@@ -1,10 +1,8 @@
 //! `RenderCustomSingleChildLayoutBox` — delegates size, child constraints, and
 //! child position to a [`SingleChildLayoutDelegate`].
 //!
-//! Flutter parity: `rendering/shifted_box.dart`
-//! `RenderCustomSingleChildLayoutBox`. The render object keeps Flutter's
-//! contract: the delegate's parent size is always constrained by incoming
-//! constraints, intrinsics probe `_getSize(tightForFinite(...))`, dry layout
+//! The contract: the delegate's parent size is always constrained by incoming
+//! constraints, intrinsics probe `get_size(tight_for_finite(...))`, dry layout
 //! never touches the child, and live/dry baselines add the delegated child
 //! offset to the child's baseline.
 
@@ -50,7 +48,7 @@ impl RenderCustomSingleChildLayoutBox {
 
     /// Replaces the delegate and returns whether layout must be recomputed.
     ///
-    /// Mirrors Flutter's setter: the identical delegate instance is a no-op;
+    /// The identical delegate instance is a no-op;
     /// changing the concrete delegate type forces relayout; otherwise the new
     /// delegate's `should_relayout(old_delegate)` decides.
     pub fn set_delegate(
@@ -70,7 +68,7 @@ impl RenderCustomSingleChildLayoutBox {
         }
     }
 
-    /// Flutter's private `_getSize`: delegate size, then incoming constraints.
+    /// Delegate size, then incoming constraints.
     fn get_size(&self, constraints: BoxConstraints) -> Size {
         constraints.constrain(self.delegate.get_size(constraints))
     }

@@ -1,27 +1,21 @@
 //! Haptic feedback vocabulary.
 //!
-//! [`HapticFeedback`] mirrors Flutter's `HapticFeedback` static methods
-//! 1:1 (`packages/flutter/lib/src/services/haptic_feedback.dart` @ 3.44.0):
-//! `vibrate()`, `lightImpact()`, `mediumImpact()`, `heavyImpact()`,
-//! `selectionClick()`, and `successNotification()`/`warningNotification()`/
-//! `errorNotification()` — three more plain statics, added later, each
-//! sending its own `'HapticFeedbackType.*Notification'` platform-channel
-//! payload string (there is no `notification(type)` method upstream to
-//! group them under) — Flutter's own vocabulary grew once already after
-//! the original five landed. [`HapticFeedback`] is `#[non_exhaustive]` for
-//! the same reason: a future upstream or platform-specific style is an
-//! additive variant here, not a breaking change.
+//! [`HapticFeedback`] names each kind of feedback a caller can request:
+//! vibrate, light/medium/heavy impact, selection click, and the
+//! success/warning/error notifications. Haptic vocabularies grow over time
+//! (the notification kinds arrived after the original five on the
+//! platforms that offer them), so [`HapticFeedback`] is `#[non_exhaustive]`:
+//! a future platform-specific style is an additive variant, not a breaking
+//! change.
 //!
 //! # Fire-and-forget, best-effort semantics
 //!
 //! Every variant is a **silent no-op** on a platform, OS version, or
 //! device that has no corresponding haptic hardware or permission —
-//! this is Flutter's own degradation contract (`HapticFeedback`'s
-//! platform channel calls are fire-and-forget; the Dart API returns
-//! `Future<void>` and never surfaces "unsupported" as an error). There is
-//! deliberately no availability-discovery API upstream, and none is added
-//! here: a caller cannot ask "can this device vibrate?" before calling,
-//! matching Flutter's `HapticFeedback` exactly. See `PlatformHaptics` in
+//! this is the degradation contract (a request is fire-and-forget and
+//! never surfaces "unsupported" as an error). There is
+//! deliberately no availability-discovery API: a caller cannot ask "can
+//! this device vibrate?" before calling. See `PlatformHaptics` in
 //! `flui-platform-api` for the capability trait a backend implements.
 //!
 //! # Why this type lives in the contract crate, not `flui-platform`
@@ -34,35 +28,27 @@
 //! layer itself. Only the trait that actually *performs* feedback
 //! (`PlatformHaptics`) needs `flui-platform`.
 
-/// A single haptic feedback request, matching Flutter's `HapticFeedback`
-/// static method vocabulary.
+/// A single haptic feedback request.
 ///
 /// See the module docs for the fire-and-forget degradation contract every
 /// variant shares.
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum HapticFeedback {
-    /// A generic device vibration. Mirrors `HapticFeedback.vibrate()`.
+    /// A generic device vibration.
     Vibrate,
     /// A light tactile impact, e.g. a small/light UI element change.
-    /// Mirrors `HapticFeedback.lightImpact()`.
     LightImpact,
     /// A medium tactile impact, e.g. a medium-weight UI element change.
-    /// Mirrors `HapticFeedback.mediumImpact()`.
     MediumImpact,
     /// A heavy tactile impact, e.g. a large/heavy UI element change.
-    /// Mirrors `HapticFeedback.heavyImpact()`.
     HeavyImpact,
     /// A selection change, e.g. scrolling through a picker.
-    /// Mirrors `HapticFeedback.selectionClick()`.
     SelectionClick,
     /// A successful action/operation notification.
-    /// Mirrors `HapticFeedback.successNotification()`.
     SuccessNotification,
     /// A warning notification.
-    /// Mirrors `HapticFeedback.warningNotification()`.
     WarningNotification,
     /// An error notification.
-    /// Mirrors `HapticFeedback.errorNotification()`.
     ErrorNotification,
 }

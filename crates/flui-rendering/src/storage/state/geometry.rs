@@ -10,9 +10,8 @@
 //!   `RenderState<SliverProtocol>`
 //!
 //! The prior `OnceCell`-backed `set_geometry` panicked on second invocation,
-//! which made frame-2 re-layout a crash. Flutter `.flutter/.../object.dart`
-//! straight-assigns `_size` each layout pass; we mirror that semantics via
-//! `Option<T>`. `set_geometry`, `set_size`, `set_sliver_geometry` take
+//! which made frame-2 re-layout a crash. Each layout pass
+//! now straight-assigns the size via `Option<T>`. `set_geometry`, `set_size`, `set_sliver_geometry` take
 //! `&mut self`; production callers (`RenderEntry::layout`, RenderBox/RenderSliver
 //! impls) already hold a mut state borrow.
 
@@ -55,8 +54,7 @@ impl<P: Protocol> RenderState<P> {
 
     /// Sets (or replaces) the computed geometry after layout.
     ///
-    /// Idempotent — overwrites any prior value. Flutter `_size = size`
-    /// straight-assignment semantics.
+    /// Idempotent — overwrites any prior value (straight assignment).
     ///
     /// The prior `OnceCell`-backed implementation panicked on second
     /// invocation, which made re-layout a crash. See module-level doc
@@ -100,25 +98,10 @@ impl RenderState<BoxProtocol> {
     /// Computes and updates the relayout boundary status based on layout
     /// parameters.
     ///
-    /// This implements Flutter's exact relayout boundary detection logic for
-    /// Box protocol:
+    /// Relayout boundary detection for the Box protocol:
     ///
     /// ```text
     /// is_boundary = !parent_uses_size || sized_by_parent || constraints.is_tight() || has_no_parent
-    /// ```
-    ///
-    /// # Flutter Protocol
-    ///
-    /// From Flutter's `RenderObject.layout()`:
-    /// ```dart
-    /// void layout(Constraints constraints, { bool parentUsesSize = false }) {
-    ///   // ...
-    ///   _relayoutBoundary = _isRelayoutBoundary(constraints, parentUsesSize);
-    /// }
-    ///
-    /// bool _isRelayoutBoundary(Constraints constraints, bool parentUsesSize) {
-    ///   return !parentUsesSize || sizedByParent || constraints.isTight || parent == null;
-    /// }
     /// ```
     ///
     /// # Parameters
@@ -177,7 +160,6 @@ impl RenderState<BoxProtocol> {
         sized_by_parent: bool,
         has_parent: bool,
     ) {
-        // Flutter's exact logic:
         // is_boundary = !parent_uses_size || sized_by_parent || constraints.is_tight()
         // || !has_parent
 
@@ -309,7 +291,7 @@ impl RenderState<SliverProtocol> {
     ///
     /// Maps the main-axis `paint_extent` to width/height per the
     /// laid-out `axis_direction`, with the cross axis taken from
-    /// `cross_axis_extent` (Flutter `RenderSliver.getAbsoluteSize`).
+    /// `cross_axis_extent`.
     /// Returns `Size::ZERO` before the first layout (no committed
     /// geometry or constraints).
     ///

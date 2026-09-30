@@ -14,7 +14,7 @@ pub trait View: Downcast + DynClone + 'static { /* ... */ }
 ```
 
 *(`crates/flui-view/src/view/view.rs`)* — an immutable, cheap-to-clone description of a piece of
-UI, exactly like a Flutter `Widget`. Two flavors, matching Flutter's own split:
+UI. Two flavors:
 
 - `StatelessView` (`crates/flui-view/src/view/stateless.rs`) — `fn build(&self, ctx: &dyn
   BuildContext) -> impl IntoView`, no persistent state.
@@ -22,8 +22,7 @@ UI, exactly like a Flutter `Widget`. Two flavors, matching Flutter's own split:
   produces a `ViewState` that owns mutable data and rebuilds independently of its parent.
 
 Both are usually written via `#[derive(StatelessView)]` / the `StatefulView`+`ViewState` pair
-rather than by hand — see the [Flutter → FLUI mapping](../mapping.md) table and
-`examples/counter.rs` for the shape.
+rather than by hand — see `examples/counter.rs` for the shape.
 
 ## `Element`
 
@@ -35,8 +34,8 @@ pub struct Element<V, A, B> { /* ... */ }
 holds the `View` it was built from, its position in the tree, and its
 [lifecycle state](lifecycle.md). Rebuilding the tree reconciles new `View`s against existing
 `Element`s by [key](keys.md) and type, reusing an `Element` (and the `State`/`RenderObject` it
-owns) wherever the reconciliation matches — the same "elements are the retained half, views are
-the ephemeral half" split as Flutter's `Element`/`Widget`.
+owns) wherever the reconciliation matches: elements are the retained half, views the ephemeral
+half.
 
 ## `RenderObject`
 
@@ -62,6 +61,5 @@ pub enum Layer { /* Canvas, Picture, Texture, PlatformView, ... */ }
 
 *(`crates/flui-layer/src/layer/mod.rs`)* — the compositing tree that paint builds fresh each frame,
 consumed by `flui-engine`'s compositor. Unlike `View` and `RenderObject`, `Layer` is a closed
-`enum` rather than a trait — FLUI's layer set is a known, fixed vocabulary rather than an extensible hierarchy,
-which is one of the deliberate divergences from Flutter's `Layer` class hierarchy (see the
-crate's own `ARCHITECTURE.md` for the reasoning).
+`enum` rather than a trait — FLUI's layer set is a known, fixed vocabulary rather than an
+extensible hierarchy (see the crate's own `ARCHITECTURE.md` for the reasoning).

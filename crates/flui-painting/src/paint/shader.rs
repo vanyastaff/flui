@@ -8,7 +8,7 @@ use flui_foundation::geometry::Offset;
 
 /// A shader (or gradient) to use when filling a shape.
 ///
-/// Similar to Flutter's `Shader`. This is a placeholder type that will be
+/// This is a placeholder type that will be
 /// implemented more fully when we have actual rendering capabilities.
 ///
 /// # Examples
@@ -435,8 +435,6 @@ impl Shader {
 
 /// A shader that tiles an image.
 ///
-/// Similar to Flutter's `ImageShader`.
-///
 /// # Examples
 ///
 /// ```
@@ -508,8 +506,6 @@ impl ImageShader {
 }
 
 /// A mask filter to apply to a shape or image.
-///
-/// Similar to Flutter's `MaskFilter`.
 ///
 /// # Examples
 ///

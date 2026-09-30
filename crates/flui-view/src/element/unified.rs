@@ -416,7 +416,7 @@ where
         &mut self.behavior.state
     }
 
-    /// Mark as needing rebuild (like Flutter's `setState`), flipping only
+    /// Mark as needing rebuild, flipping only
     /// the dirty flag.
     ///
     /// E3 (atomic box→arena swap): marking dirty alone is necessary but

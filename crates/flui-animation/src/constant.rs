@@ -20,8 +20,6 @@ static LISTENER_ID_COUNTER: AtomicUsize = AtomicUsize::new(1);
 /// want to animate anything. Using a constant animation involves less overhead
 /// than building an [`AnimationController`] with a fixed value.
 ///
-/// Similar to Flutter's `AlwaysStoppedAnimation<T>`.
-///
 /// # Examples
 ///
 /// ```
@@ -161,8 +159,6 @@ where
 /// This is useful when an API expects an animation but you want to show
 /// the final state immediately.
 ///
-/// Similar to Flutter's `kAlwaysCompleteAnimation`.
-///
 /// # Examples
 ///
 /// ```
@@ -181,8 +177,6 @@ pub static ALWAYS_COMPLETE: ConstantAnimation<f64> = ConstantAnimation {
 ///
 /// This is useful when an API expects an animation but you want to show
 /// the initial state.
-///
-/// Similar to Flutter's `kAlwaysDismissedAnimation`.
 ///
 /// # Examples
 ///

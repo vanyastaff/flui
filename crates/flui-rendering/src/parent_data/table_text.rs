@@ -69,9 +69,8 @@ pub struct TableCellParentData {
 
     /// Vertical alignment within the cell.
     ///
-    /// `None` defers to `RenderTable::default_vertical_alignment` — Flutter
-    /// parity: `TableCellParentData.verticalAlignment` is `TableCellVerticalAlignment?`
-    /// (`table.dart:20`), not a value that forces `Top` on every unset cell.
+    /// `None` defers to `RenderTable::default_vertical_alignment`, rather
+    /// than forcing `Top` on every unset cell.
     pub vertical_alignment: Option<TableCellVerticalAlignment>,
 }
 

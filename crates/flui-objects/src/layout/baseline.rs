@@ -1,6 +1,4 @@
 //! RenderBaseline — positions a child so its baseline sits at a fixed offset.
-//!
-//! Flutter parity: `shifted_box.dart` `RenderBaseline`.
 
 use flui_foundation::Single;
 use flui_foundation::geometry::{Offset, Size};
@@ -82,16 +80,13 @@ impl RenderBox for RenderBaseline {
         }
 
         self.has_child = true;
-        // Flutter parity (`RenderBaseline.performLayout`, shifted_box.dart):
-        // the child is laid out under *loosened* constraints
-        // (`childConstraints = constraints.loosen()`), so a tight incoming axis
-        // does not force the child to fill it.
+        // The child is laid out under *loosened* constraints, so a tight
+        // incoming axis does not force the child to fill it.
         let child_size = ctx.layout_child(0, constraints.loosen());
 
-        // Flutter parity (`RenderBaseline.performLayout`): the effective baseline
-        // is the child's real baseline distance, or — when the child reports none
-        // (e.g. a plain box) — the child's full height (`childBaseline ??
-        // child.size.height`). The child is shifted down so that baseline sits
+        // The effective baseline is the child's real baseline distance, or —
+        // when the child reports none (e.g. a plain box) — the child's full
+        // height. The child is shifted down so that baseline sits
         // `baseline_offset` below the top; the box's height becomes `top +
         // child.height` (= `baseline_offset` plus any descent below the baseline).
         let baseline_distance = ctx
@@ -122,13 +117,11 @@ impl RenderBox for RenderBaseline {
         if ctx.child_count() == 0 {
             return None;
         }
-        // Flutter RenderBaseline.computeDryBaseline (shifted_box.dart): probe the
-        // child under *loosened* constraints for BOTH the requested baseline kind
-        // and the box's own baseline type, returning
-        // `baseline_offset + requested - own`. For a same-kind query the two
-        // terms cancel to `baseline_offset`. The prior code returned `None` for
-        // any cross-kind query, ignored the child's actual baseline value, and
-        // used un-loosened constraints (inconsistent with the live path).
+        // Probe the child under *loosened* constraints (consistent with the
+        // live path) for BOTH the requested baseline kind and the box's own
+        // baseline type, returning `baseline_offset + requested - own`. For a
+        // same-kind query the two terms cancel to `baseline_offset`; a
+        // cross-kind query still resolves through the child's actual values.
         let loosened = constraints.loosen();
         let requested = ctx.child_dry_baseline(0, loosened, baseline)?;
         let own = ctx.child_dry_baseline(0, loosened, self.baseline)?;

@@ -145,7 +145,7 @@ host.
   `PresentationState` and their methods are `pub` only where `flui-app`
   calls them; what only `flui-app`'s tests call is `pub` under
   `test-support`; the rest is `pub(crate)`. `flui-app` re-exports none of
-  them, only `frame_failure`'s report types and `RenderingFlutterBinding`,
+  them, only `frame_failure`'s report types and `RenderingBinding`,
   at their old `flui_app` paths. `flui-testing` hosts a realm in its
   `HeadlessRealm` and keeps it crate-private, so `flui::testing` does not
   reach it either.
@@ -188,17 +188,14 @@ host.
 
 ## Mapping decisions
 
-### Flutter's binding mixins become a runtime crate below the hosts
+### The frame runtime is a crate below the hosts
 
-Flutter composes its frame runtime from `WidgetsBinding`, `RendererBinding`,
-`SemanticsBinding` and `SchedulerBinding` mixins on one process-wide
-singleton that the embedder drives. FLUI's runtime is per realm and per
-presentation (ADR-0027), and its host is not the only thing that drives
+The frame runtime is per realm and per presentation (ADR-0027, no process-wide
+singleton), and its host is not the only thing that drives
 frames: a test driver pumps the same realm on a virtual clock. The runtime
 therefore lives in its own crate that names no host type, and the hosts depend
-on it. Semantics enablement follows: `SemanticsHost` is one per presentation
-instead of `SemanticsBinding`'s single instance, so two windows never share an
-enablement count or a platform callback. Pinned by
+on it. Semantics enablement follows: `SemanticsHost` is one per presentation,
+so two windows never share an enablement count or a platform callback. Pinned by
 `presentation::tests::semantics_host_is_exclusive_to_this_presentation`.
 
 ### The owner host is scheduling state, not a fourth physical owner
@@ -222,22 +219,18 @@ and destruction outside mutable `OwnerHost` and `APP_RUNTIME` borrows.
 
 ### A submit returns a verdict
 
-Flutter's `FlutterView.render(scene)` returns nothing: whether the engine
-presented the frame, dropped it for a lost surface or lost the device is the
-engine's business, and the framework never retries. `FrameSink::submit`
-returns a `SubmitVerdict` instead, and the realm classifies it: a stale surface
+Whether the engine presented a frame, dropped it for a lost surface or lost
+the device is something the realm must know in order to retry.
+`FrameSink::submit` returns a `SubmitVerdict`, and the realm classifies it: a stale surface
 or a lost device arms a retry and keeps the frame's input epochs, a frame that
 rendered but could not be shown is retained rather than counted as done, and a
 frame with nothing to present falls back to no-present pacing (ADR-0068). The
-divergence predates this crate; it is recorded here because the verdict is now
-a crate contract. Pinned by `flui-app`'s raster-lane classification tests, for
+verdict is a crate contract. Pinned by `flui-app`'s raster-lane classification tests, for
 example `app::raster_lane::tests::a_withheld_frame_is_not_collapsed_into_no_present`.
 
 ### `Vsync` controllers tick at the frame's timestamp
 
-Flutter's tickers see the frame's timestamp: `SchedulerBinding.handleBeginFrame`
-hands its `timeStamp` to every transient callback, and `Ticker._tick` measures
-elapsed time from it. The realm's `Vsync` registry ticks at the timestamp the
+The realm's `Vsync` registry ticks at the timestamp the
 pump's `FrameClockSource` returned (`now_secs` reads it for the frame's
 duration, relative to the realm's start), so a controller advances by frame
 time, not by whenever the tick happened to read the wall clock. A frame
@@ -250,16 +243,16 @@ This covers the realm's `Vsync` registry only. A controller built on the
 scheduler (`AnimationController::new(d, realm.scheduler())`) is ticked by a
 `flui_scheduler::Ticker`, which ignores the timestamp it is handed and
 measures elapsed time on the wall clock, so a pump driven on a manual clock
-does not advance it. That divergence is recorded and pinned in
+does not advance it. That behaviour is recorded and pinned in
 `flui-scheduler`'s `ARCHITECTURE.md` ("A ticker's elapsed time is wall-clock
 time, not the frame timestamp"); `pump_advances_a_scheduler_ticker_between_two_pumps`
 therefore lets real time pass between its pumps.
 
 ### `Vsync` ticks in the persistent phase, not among the transient callbacks
 
-Flutter's tickers are transient frame callbacks, so they run in begin frame,
-before the microtask flush and before any persistent callback. The realm's
-`Vsync` registry is ticked by `draw_frame_entered` at the start of the draw
+Tickers registered with a scheduler are transient frame callbacks, so they run
+in begin frame, before the microtask flush and before any persistent callback.
+The realm's `Vsync` registry is ticked by `draw_frame_entered` at the start of the draw
 step, which runs in the scheduler's persistent phase: after the transient
 callbacks and microtasks, and after any persistent callback registered before
 the pipeline. A controller's listener that schedules a microtask therefore
@@ -305,9 +298,8 @@ still leaves the dispatch boundary, and arbitrary external effects remain the
 application's responsibility. Pinned by the panicking secondary-presentation
 signal command, command-capture destructor, and addressed keyboard/IME tests.
 
-`execution` has no Flutter counterpart to map: runtime and scheduling
-topology, including background execution, is outside Flutter's reference
-(ADR-0027), and ADR-0047 records its design.
+Runtime and scheduling topology, including background execution
+(`execution`), is designed for Rust (ADR-0027); ADR-0047 records its design.
 
 ### Agents read the committed tree through the owner inbox
 
@@ -343,6 +335,41 @@ there belongs to that frame. A reply whose receiver is gone
 is traced by element id and error code only, never a label or a value, and the drain goes on.
 Pinned by `src/ui_realm/tests/agent_semantics.rs`.
 
-**Wiring.** Nothing calls `semantics_agent` in production yet. The planned follow-up has
-`flui-app` vend it through its development hook and `flui-devtools` serve it over a local
-endpoint ([migration plan](../../docs/plans/2026-09-25-architecture-migration-plan.md)).
+**Wiring.** Production reaches the agent through the development-agent hook
+(`flui_view::dev_agent::DevAgentHook`, ADR-0095 §3). `UiRealm::dev_agent_window` vends one
+agent per presentation, keeps it on the `PresentationState`, and hands out
+`flui_view::dev_agent::AgentWindow`s that hold it weakly through the hidden
+`flui_view::__runtime::AgentPort`, so the hook never keeps a closed window alive: closing the
+presentation drops the agent and every call on a window answers `gone` (kind `window`), at once
+and before anything is enqueued, even while another thread's call still holds the port: the port
+carries an open flag the presentation clears as it closes, and a call enqueues under the flag's
+read lock while the close takes its write lock, so nothing is admitted for a closed window. The
+windows hold the presentation's semantics handle strongly instead of the presentation, so the
+cost lasts exactly as long as the hook keeps a window: a hook that does not serve is handed none,
+and one that detaches or panics drops its windows, and collection stops on the next frame. `flui-app`'s desktop and iOS runners
+and `flui_testing::HeadlessDevAgent` drive the hook through `dev_agent::DevAgentHost`; the
+endpoint that serves it is `flui-devtools`' `agent` feature. Pinned by
+`an_agent_for_a_closed_presentation_answers_gone`, `dev_agent_host_contains_its_hook` and
+`flui-devtools`' `the_endpoint_contains_every_failure`.
+
+### The development agent host lives in the runtime
+
+**Rule.** `dev_agent::DevAgentHost` is the only code that calls an installed `DevAgentHook`:
+attach once per loop (a second attach while attached is refused, and a hook whose `attach`
+answers that it does not serve stays unattached and is never detached), hand over each window with
+content, detach when the loop's `DevAgentAttachment` drops. The attachment is `!Send + !Sync`,
+so that detach runs on the owner thread like every other call. Each call lends the hook out of its
+slot with no lock held, so a hook that re-enters the host finds the slot empty, and a detach that
+arrives meanwhile runs when the call returns; a panic drops the hook (its `Drop` contained too,
+its payload forgotten, a deferred detach's included) and every later call does nothing; a hook
+still held when the last host clone goes is dropped under the same containment; nothing
+is vended while the hook is not attached, so a hook that does not serve or failed to attach costs
+no semantics work, and a window's semantics work ends once the hook drops its `AgentWindow`.
+
+**Why here.** Two hosts drive it, `flui-app`'s windowed runners and `flui-testing`'s headless
+realm, and the headless one is the only one CI executes (a windowed install creates a GPU
+renderer first). Writing the containment once below both keeps the tested path and the shipped
+path the same code. The devtools server cannot name the runtime (an official package depends on
+`flui-sdk` and the contract crates only), so the hook trait is `flui-view`'s and reaches it
+through the SDK; the runtime holds no transport. Flutter has no counterpart: its service
+extensions are the VM's. Pinned by `dev_agent_host_contains_its_hook` (`src/dev_agent/tests.rs`).

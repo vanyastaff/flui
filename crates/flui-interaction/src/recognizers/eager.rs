@@ -3,9 +3,7 @@
 //! Wins the gesture arena on the first `add_pointer` call, before any pointer
 //! event arrives.
 //!
-//! Flutter parity: [`eager.dart:42-68`](https://github.com/flutter/flutter/blob/master/packages/flutter/lib/src/gestures/eager.dart)
-//! `EagerGestureRecognizer.acceptGesture` is called from `_addPointer` (line
-//! 42-68) — the recogniser declares victory during pointer-down dispatch
+//! The recogniser declares victory during pointer-down dispatch
 //! rather than waiting for the user to lift their finger.
 //!
 //! # When to use
@@ -14,11 +12,11 @@
 //! hit regions that must unconditionally win the arena for a pointer:
 //!
 //! - `AndroidView` / `UiKitView` (HybridComposition) — the embedded platform
-//!   view absorbs all input and no Flutter recogniser should compete.
+//!   view absorbs all input and no other recogniser should compete.
 //! - `TextField` / `EditableText` focus rings in pre-IME / focus-only
 //!   implementations.
-//! - Any opaque hit-test region that delegates input handling to a non-Flutter
-//!   sink.
+//! - Any opaque hit-test region that delegates input handling to a sink
+//!   outside the gesture arena.
 //!
 //! For the common case of "win on release", prefer
 //! [`TapGestureRecognizer`](super::TapGestureRecognizer) or
@@ -75,8 +73,7 @@ use crate::{
 
 /// Eager gesture recognizer — wins the arena on `add_pointer`.
 ///
-/// See [module-level docs](self) for use cases, ownership, and Flutter parity
-/// notes (`eager.dart:42-68`).
+/// See [module-level docs](self) for use cases and ownership.
 #[derive(Debug, Clone)]
 pub struct EagerGestureRecognizer {
     /// Base state (arena, primary-pointer tracking, disposal).
@@ -177,8 +174,8 @@ impl GestureRecognizer for EagerGestureRecognizer {
     fn dispose(&self) {
         self.state.mark_disposed();
         // Reject arena entries + clear the tracked primary pointer
-        // (Flutter parity with `recognizer.dart:485-493`: disposing a
-        // recogniser clears its arena state for tracked pointers).
+        // (a disposed recogniser must not linger in the arena for tracked
+        // pointers).
         self.state.reject();
     }
 
@@ -200,8 +197,7 @@ impl crate::recognizers::OneSequenceGestureRecognizer for EagerGestureRecognizer
         // arena-side `resolve` call from `OneSequenceGestureRecognizer`
         // is therefore a no-op for the accepted branch (we already won
         // inline). For the rejected branch we clear our tracking so a
-        // later `add_pointer` starts fresh — matches the Flutter
-        // `EagerGestureRecognizer.rejectGesture` cleanup (eager.dart:64-67).
+        // later `add_pointer` starts fresh.
         if matches!(disposition, GestureDisposition::Rejected) {
             self.state.stop_tracking();
         }
@@ -229,13 +225,11 @@ impl GestureArenaMember for EagerGestureRecognizer {
     fn accept_gesture(&self, _pointer: PointerId) {
         // v2 may mark an `accepted` flag here; for v1 the arena win is
         // declared in `add_pointer` via `state.accept`, so this hook is
-        // a no-op (matches Flutter's empty `EagerGestureRecognizer.
-        // acceptGesture` body at eager.dart:42-43).
+        // a no-op.
     }
 
     fn reject_gesture(&self, _pointer: PointerId) {
-        // Mirror Flutter `EagerGestureRecognizer.rejectGesture`
-        // (eager.dart:64-67): clear the tracked primary pointer and
+        // Clear the tracked primary pointer and
         // initial position so the recogniser is ready for a fresh
         // sequence. We do NOT re-enter the arena here (no `state.reject`
         // call) — the dispatch path that called us is already holding

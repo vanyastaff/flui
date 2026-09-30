@@ -13,8 +13,7 @@ use flui_rendering::{
 /// A sliver that sizes each direct Box child to a fraction of the viewport's
 /// main-axis extent.
 ///
-/// This is the direct-child FLUI counterpart of Flutter's
-/// `RenderSliverFillViewport`. Lazy child creation remains deferred to the
+/// Children are direct: lazy child creation remains deferred to the
 /// future multi-box-adaptor layer; attached children are laid out eagerly.
 ///
 /// 2B field dedup: incoming constraints live only in `perform_layout` and

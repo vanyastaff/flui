@@ -1,31 +1,21 @@
 //! [`PopScope`] — veto back-navigation and observe pop attempts.
 //!
-//! # Flutter parity
-//!
-//! `.flutter/packages/flutter/lib/src/widgets/pop_scope.dart`, master
-//! `3.33.0-0.0.pre-6280-g88e87cd963f` (`PopScope`, `:83`), plus the
-//! `ModalRoute` side: `registerPopEntry`/`unregisterPopEntry`
-//! (`routes.dart:2117-2131`), the `_popEntries` veto in `popDisposition`
-//! (`:2033-2042`), and the `onPopInvokedWithResult` fan-out (`:2045-2050`).
-//!
 //! A `can_pop = false` scope blocks **`maybe_pop` / back-navigation only**: a
-//! programmatic `pop()` still pops, exactly as in Flutter — `canPop` guards
+//! programmatic `pop()` still pops — `can_pop` guards
 //! the routes the *user* can leave, not the ones code can. Either way, every
 //! registered scope hears the outcome through
 //! [`on_pop_invoked`](PopScope::on_pop_invoked) with `did_pop` saying whether
 //! the route actually left.
 //!
-//! # Divergences, named
+//! # Scope of the surface
 //!
-//! * `on_pop_invoked` carries no `result` — FLUI's `Route::on_pop_invoked` is
-//!   result-less today; the `WithResult` variant joins when a consumer needs
+//! * `on_pop_invoked` carries no `result` — `Route::on_pop_invoked` is
+//!   result-less today; a result-carrying variant joins when a consumer needs
 //!   the popped value.
-//! * No `NavigationNotification` re-dispatch on registration
-//!   (`routes.dart:2119-2120`) — FLUI has no `NavigationNotification`.
-//! * Registration happens once, in `init_state` — FLUI routes cannot change
+//! * There is no navigation-notification re-dispatch on registration.
+//! * Registration happens once, in `init_state` — routes cannot change
 //!   over a widget's lifetime (no `GlobalKey` reparenting across routes), so
-//!   Flutter's re-register-on-route-change `didChangeDependencies` dance
-//!   (`pop_scope.dart:150-166`) collapses.
+//!   there is no re-registration on route change.
 
 use std::rc::Rc;
 use std::sync::Arc;
@@ -46,14 +36,14 @@ type BoundPopCallback = Rc<dyn Fn(bool)>;
 // The registry (route side)
 // ============================================================================
 
-/// One mounted [`PopScope`]'s live state — Flutter's `PopEntry` (`routes.dart:2137`).
+/// One mounted [`PopScope`]'s live state.
 struct PopEntry {
     can_pop: AtomicBool,
     on_pop_invoked: Mutex<Option<BoundPopCallback>>,
 }
 
 /// Every [`PopScope`] mounted inside one route. The route's `ModalInner` owns
-/// one — Flutter's `ModalRoute._popEntries` (`routes.dart:1980`) — and the
+/// one, and the
 /// route's `vetoes_pop` / `on_pop_invoked` consult it.
 #[derive(Clone, Default)]
 pub(crate) struct PopEntryRegistry {
@@ -75,8 +65,7 @@ impl PopEntryRegistry {
         let _prev = std::mem::replace(&mut *self.entries.lock(), entries);
     }
 
-    /// `ModalRoute.popDisposition`'s veto half (`routes.dart:2034-2038`): any
-    /// entry with `can_pop = false`.
+    /// The veto half of a pop: any entry with `can_pop = false`.
     pub(crate) fn any_vetoes(&self) -> bool {
         self.entries
             .lock()
@@ -84,7 +73,7 @@ impl PopEntryRegistry {
             .any(|entry| !entry.can_pop.load(Ordering::Relaxed))
     }
 
-    /// `ModalRoute.onPopInvokedWithResult`'s fan-out (`routes.dart:2045-2050`).
+    /// Fan a pop attempt's outcome out to every registered scope.
     pub(crate) fn notify_pop_invoked(&self, did_pop: bool) {
         // Clone out so a callback may mount/unmount scopes without deadlock.
         let entries = self.entries.lock().clone();
@@ -154,7 +143,7 @@ impl_inherited_view!(PopEntryScope);
 // ============================================================================
 
 /// Vetoes attempts by the **user** to dismiss the enclosing route, and reports
-/// every pop attempt's outcome — Flutter's `PopScope` (`pop_scope.dart:83`).
+/// every pop attempt's outcome.
 ///
 /// While [`can_pop`](Self::can_pop) is `false`, `NavigatorHandle::maybe_pop`
 /// (and anything routed through it) refuses and reports `handled`; the
@@ -183,8 +172,8 @@ pub struct PopScope {
 }
 
 impl PopScope {
-    /// A scope that allows popping — `can_pop` defaults to `true`
-    /// (`pop_scope.dart:145`), so a bare `PopScope` only observes.
+    /// A scope that allows popping — `can_pop` defaults to `true`, so a bare
+    /// `PopScope` only observes.
     pub fn new(child: impl IntoView) -> Self {
         Self {
             child: BoxedView(Box::new(child.into_view())),
@@ -193,7 +182,7 @@ impl PopScope {
         }
     }
 
-    /// Whether the user may dismiss the enclosing route (`pop_scope.dart:142`).
+    /// Whether the user may dismiss the enclosing route.
     #[must_use]
     pub fn can_pop(mut self, can_pop: bool) -> Self {
         self.can_pop = can_pop;
@@ -201,8 +190,7 @@ impl PopScope {
     }
 
     /// Called after every pop attempt on the enclosing route: `true` when it
-    /// actually popped, `false` when a veto refused it — Flutter's
-    /// `onPopInvokedWithResult` minus the result (`pop_scope.dart:106`).
+    /// actually popped, `false` when a veto refused it. Carries no popped value.
     #[must_use]
     pub fn on_pop_invoked<R: EventOutcome>(
         mut self,
@@ -261,8 +249,7 @@ impl std::fmt::Debug for PopScopeState {
 }
 
 impl ViewState<PopScope> for PopScopeState {
-    /// `ModalRoute.registerPopEntry` (`routes.dart:2117`), through the route's
-    /// ambient registry. A `PopScope` outside any route finds none and stays
+    /// Registers with the route's ambient registry. A `PopScope` outside any route finds none and stays
     /// inert.
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         self.writer = Some(ctx.writer_source());
@@ -273,8 +260,7 @@ impl ViewState<PopScope> for PopScopeState {
         }
     }
 
-    /// Keep the live entry current — Flutter re-reads `widget.canPop` through
-    /// the entry's notifier (`pop_scope.dart:171-179`).
+    /// Keep the live entry current with the new `can_pop` and callback.
     fn did_update_view(&mut self, _old: &PopScope, new_view: &PopScope) {
         self.entry
             .can_pop
@@ -283,7 +269,7 @@ impl ViewState<PopScope> for PopScopeState {
         self.install_callback();
     }
 
-    /// `unregisterPopEntry` (`routes.dart:2126`).
+    /// Unregister from the route's registry.
     fn dispose(&mut self) {
         if let Some(registry) = self.registry.take() {
             registry.deregister(&self.entry);

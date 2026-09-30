@@ -8,7 +8,7 @@ use flui_scheduler::AppLifecycleState;
 // Lifecycle derivation and ladder synthesis (see ADR-0035)
 // ============================================================================
 
-/// Derives the Flutter-parity [`AppLifecycleState`] from the two window
+/// Derives the [`AppLifecycleState`] from the two window
 /// signals FLUI tracks per window: visibility (occlusion) and focus.
 ///
 /// Pure and order-insensitive: the result depends only on the final
@@ -28,27 +28,20 @@ pub(crate) fn derive_lifecycle_state(visible: bool, focused: bool) -> AppLifecyc
 /// The intermediate `AppLifecycleState` steps between `old` and `new`,
 /// inclusive of `new`, exclusive of `old`.
 ///
-/// Faithful port of `ServicesBinding._generateStateTransitions`
-/// (`packages/flutter/lib/src/services/binding.dart` @ 3.44.0) — NOT a walk
-/// over this enum's own `#[repr(u8)]` discriminants, which exist for
-/// FLUI's `frames_enabled` derivation and do not match Flutter's ladder
-/// order. Flutter's `dart:ui` `AppLifecycleState` enum declares `detached`
-/// **first** (`engine/.../platform_dispatcher.dart`: `detached, resumed,
-/// inactive, hidden, paused` — `detached` is the state the engine starts in
-/// *before* initialization, not a terminal "highest" state), which is
-/// exactly [`AppLifecycleState::ALL`]'s order — the array this function
-/// walks, not `as u8`.
+/// The walk is over [`AppLifecycleState::ALL`]'s order — NOT over this
+/// enum's own `#[repr(u8)]` discriminants, which exist for FLUI's
+/// `frames_enabled` derivation and do not match the ladder order. `ALL`
+/// lists `Detached` **first** (it is the state a window starts in *before*
+/// initialization, not a terminal "highest" state).
 ///
-/// Three cases, mirroring the oracle exactly:
+/// Three cases:
 /// - **Target is `Detached`**: walk forward from `old` to the end of `ALL`
 ///   (through every remaining non-detached state), then append `Detached`
-///   itself. This is Flutter's dedicated `state == detached` branch — going
-///   to `Detached` always visits every state after `old`, regardless of
-///   where `old` sits.
+///   itself — going to `Detached` always visits every state after `old`,
+///   regardless of where `old` sits.
 /// - **Going backward** (`old`'s index > `new`'s index, e.g. `Paused` ->
 ///   `Resumed`): the intermediate states in *descending* index order,
-///   ending at `new` (Flutter's `insert(0, ...)` loop, which prepends and
-///   so reverses the ascending walk).
+///   ending at `new`.
 /// - **Going forward** (otherwise): the intermediate states in ascending
 ///   index order, ending at `new`.
 ///
