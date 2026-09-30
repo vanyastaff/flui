@@ -161,9 +161,6 @@ struct Packages {
     /// manifest for (the Android examples are excluded from the workspace),
     /// each with its version when the manifest states one.
     local: BTreeMap<String, BTreeSet<String>>,
-    /// The directory of each checkout package, repository-relative (`""` is
-    /// the root), for a `path+file://…` source to name.
-    dirs: BTreeMap<String, Vec<String>>,
     /// Every package in `Cargo.lock`, each locked version with its source,
     /// for a [`GRAPH_SUBCOMMANDS`] command.
     locked: BTreeMap<String, Vec<LockedVersion>>,
@@ -214,19 +211,10 @@ impl Packages {
                     return versions.is_empty() || versions.iter().any(|known| version_ok(known));
                 }
             }
-            // a path source names a checkout package by its directory
+            // a path source names one machine's absolute directory: cargo
+            // resolves it on that machine only, so a doc cannot rely on it
             Some(source) if source.starts_with("path+") || source.starts_with("file:") => {
-                let path = source.strip_prefix("path+").unwrap_or(source);
-                let path = path.strip_prefix("file://").unwrap_or(path);
-                let path = path.trim_end_matches('/');
-                let in_dir = self.dirs.get(&selected.name).is_some_and(|dirs| {
-                    dirs.iter()
-                        .any(|dir| dir.is_empty() || path.ends_with(&format!("/{dir}")))
-                });
-                let versioned = self.local.get(&selected.name).is_some_and(|versions| {
-                    versions.is_empty() || versions.iter().any(|known| version_ok(known))
-                });
-                return in_dir && versioned;
+                return false;
             }
             Some(_) => {}
         }
@@ -329,7 +317,6 @@ fn packages(root: &std::path::Path, known: &Known) -> anyhow::Result<Packages> {
         version: Option<toml::Value>,
     }
     let mut names: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
-    let mut dirs: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for package in crate::util::metadata(root)?.workspace_packages() {
         names
             .entry(package.name.to_string())
@@ -348,11 +335,6 @@ fn packages(root: &std::path::Path, known: &Known) -> anyhow::Result<Packages> {
             package: Some(package),
         }) = toml::from_str(&text)
         {
-            let dir = manifest
-                .strip_suffix("/Cargo.toml")
-                .unwrap_or_default()
-                .to_owned();
-            dirs.entry(package.name.clone()).or_default().push(dir);
             let versions = names.entry(package.name).or_default();
             if let Some(version) = package.version.as_ref().and_then(toml::Value::as_str) {
                 versions.insert(version.to_owned());
@@ -370,7 +352,6 @@ fn packages(root: &std::path::Path, known: &Known) -> anyhow::Result<Packages> {
     }
     Ok(Packages {
         local: names,
-        dirs,
         locked,
     })
 }

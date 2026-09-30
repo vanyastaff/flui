@@ -295,6 +295,9 @@ const RESERVED: [&str; 9] = [
     "{", "!", "if", "then", "else", "elif", "while", "until", "do",
 ];
 
+/// `sudo`'s options that take a value in the next word.
+const SUDO_VALUE_OPTIONS: [&str; 10] = ["-u", "-g", "-C", "-D", "-h", "-p", "-r", "-t", "-U", "-T"];
+
 /// GNU `time`'s options that take a value in the next word.
 const TIME_VALUE_OPTIONS: [&str; 4] = ["-f", "--format", "-o", "--output"];
 
@@ -377,6 +380,20 @@ fn cargo_command(words: &mut VecDeque<(usize, String)>) -> bool {
         };
         if is_cargo(&program) {
             return true;
+        }
+        // `sudo [OPTION]... COMMAND` runs it as another user
+        if program == "sudo" || program.ends_with("/sudo") {
+            while let Some((line, word)) = words.pop_front() {
+                if word == "--" {
+                    break;
+                } else if SUDO_VALUE_OPTIONS.contains(&word.as_str()) {
+                    words.pop_front();
+                } else if !word.starts_with('-') && !assignment(&word) {
+                    words.push_front((line, word));
+                    break;
+                }
+            }
+            continue;
         }
         // `exec [-cl] [-a NAME] COMMAND` runs it in the shell's place
         if program == "exec" {
@@ -486,11 +503,13 @@ fn package_flag(word: &str) -> PackageFlag<'_> {
     PackageFlag::None
 }
 
-/// Whether `word` is a `NAME=value` assignment before a command (PowerShell's
+/// Whether `word` is a `NAME=value` or `NAME+=value` assignment before a command (PowerShell's
 /// `$env:NAME=value` too).
 fn assignment(word: &str) -> bool {
     word.split_once('=').is_some_and(|(name, _)| {
         let name = name.strip_prefix("$env:").unwrap_or(name);
+        // `NAME+=value` appends
+        let name = name.strip_suffix('+').unwrap_or(name);
         !name.is_empty() && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
     })
 }

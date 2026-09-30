@@ -187,6 +187,17 @@ fn packages_are_read_only_from_cargo_commands() {
         ("cat <<EOF\nx $(cargo test -p a)\nEOF", &[(1, test, "a")]),
         ("cat <<EOF\n`cargo build -p a`\nEOF", &[(1, build, "a")]),
         ("cat <<'EOF'\n$(cargo test -p gone)\nEOF", &[]),
+        // a quoted `)` does not close a substitution
+        (
+            "cat <<EOF\n$(printf '%s' ')' ; cargo test -p a)\nEOF",
+            &[(1, test, "a")],
+        ),
+        ("echo $(printf ')' ; cargo build -p a)", &[(0, build, "a")]),
+        // ANSI-C quoting, `sudo`, and an appending assignment
+        ("cargo test -p $'a'", &[(0, test, "a")]),
+        ("sudo cargo test -p a", &[(0, test, "a")]),
+        ("sudo -u root -E cargo build -p a", &[(0, build, "a")]),
+        ("X+=y cargo test -p a", &[(0, test, "a")]),
         ("cat <<\\EOF\n$(cargo test -p gone)\nEOF", &[]),
         (
             "cat <<'END MARK'\ncargo test -p gone\nEND MARK\ncargo build -p a",
@@ -326,7 +337,6 @@ fn a_lockfile_package_is_selected_only_by_update_and_tree() {
             ("flui-app", "0.2.0"),
             ("alpha", "1.2.3+meta"),
         ]),
-        dirs: [("flui-app".to_owned(), vec!["crates/flui-app".to_owned()])].into(),
         locked: lockfile(&[
             ("wgpu", "25.0.0", Some(CRATES_IO)),
             ("bitflags", "1.3.2", Some(CRATES_IO)),
@@ -373,20 +383,10 @@ fn a_lockfile_package_is_selected_only_by_update_and_tree() {
             "cargo pkgid -p 'https://github.com/rust-lang/crates.io-index#bitflags@2.13.2'",
             true,
         ),
-        // a path source names a checkout package
-        ("cargo pkgid -p 'path+file:///repo/crates/flui-app'", true),
-        ("cargo pkgid -p 'path+file:///repo/crates/gone'", false),
-        // a path source must be the package's directory, at its version
+        // a path source is one machine's absolute directory: never portable
+        ("cargo pkgid -p 'path+file:///repo/crates/flui-app'", false),
         (
             "cargo pkgid -p 'file:///repo/crates/flui-app#flui-app@0.2.0'",
-            true,
-        ),
-        (
-            "cargo pkgid -p 'file:///definitely/missing#flui-app@0.2.0'",
-            false,
-        ),
-        (
-            "cargo pkgid -p 'file:///repo/crates/flui-app#flui-app@9'",
             false,
         ),
         // a source's scheme and host match in any case, its path does not
@@ -592,7 +592,6 @@ fn a_doc_reports_each_stale_name_once() {
     let known = known();
     let packages = Packages {
         local: locked(&[("flui-view", "0.2.0"), ("flui-app", "0.2.0")]),
-        dirs: BTreeMap::new(),
         locked: lockfile(&[("wgpu", "25.0.0", Some(CRATES_IO))]),
     };
     let read = |path: &str| (path == "docs/testing.md").then(|| "# The harness\n".to_owned());

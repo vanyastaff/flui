@@ -1,7 +1,7 @@
 //! Shell code split into commands and words the way a POSIX shell splits
 //! them, as far as finding the commands a doc runs needs:
 //!
-//! - quotes (`'…'`, `"…"`) join and are removed, `\` escapes a character and
+//! - quotes (`'…'`, `"…"`, ANSI-C `$'…'`) join and are removed, `\` escapes a character and
 //!   continues a line, `#` at the start of a word comments out the line;
 //! - `&&`, `||`, `|`, `&`, `;`, `(`, `)` and a newline end a command,
 //!   attached to a word or not;
@@ -132,6 +132,7 @@ impl Lexer<'_> {
                     self.chars.next();
                     self.substitution(')');
                 }
+                '$' if self.chars.next_if_eq(&'\'').is_some() => self.ansi_c_quoted(),
                 '`' => self.substitution('`'),
                 c => self.push(c),
             }
@@ -170,35 +171,29 @@ impl Lexer<'_> {
     /// stands for a `$` in the word around it.
     fn substitution(&mut self, closing: char) {
         let start = self.line;
-        let mut text = String::new();
-        let mut depth = 0_usize;
-        let mut quote: Option<char> = None;
-        // the text keeps its quotes: the nested lexing reads them
-        while let Some(c) = self.chars.next() {
-            if let Some(open) = quote {
-                if c == open {
-                    quote = None;
-                }
-                text.push(c);
-                continue;
-            }
-            match c {
-                '\\' => {
-                    text.push(c);
-                    text.extend(self.chars.next());
-                    continue;
-                }
-                '\'' | '"' => quote = Some(c),
-                c if c == closing && depth == 0 => break,
-                '(' if closing == ')' => depth += 1,
-                ')' if closing == ')' => depth -= 1,
-                _ => {}
-            }
-            text.push(c);
-        }
+        let text = substitution_text(&mut self.chars, closing);
         self.line += text.matches('\n').count();
         self.nest(&text, start);
         self.push('$');
+    }
+
+    /// The rest of an ANSI-C `$'…'` string, its escapes applied.
+    fn ansi_c_quoted(&mut self) {
+        self.start_word();
+        while let Some(c) = self.chars.next() {
+            let c = match c {
+                '\'' => break,
+                '\\' => match self.chars.next() {
+                    Some('n') => '\n',
+                    Some('t') => '\t',
+                    Some('r') => '\r',
+                    Some(escaped) => escaped,
+                    None => break,
+                },
+                c => c,
+            };
+            self.push_counting(c);
+        }
     }
 
     /// The commands of a substitution's `text`, which starts on `line`.
@@ -377,6 +372,38 @@ impl Lexer<'_> {
     }
 }
 
+/// The text of a command substitution up to its `closing` (`)` of `$(`, or
+/// `` ` ``), quotes and escapes honoured and kept for the nested lexing: a `)`
+/// inside quotes does not close it.
+fn substitution_text(chars: &mut Peekable<Chars<'_>>, closing: char) -> String {
+    let mut text = String::new();
+    let mut depth = 0_usize;
+    let mut quote: Option<char> = None;
+    while let Some(c) = chars.next() {
+        if let Some(open) = quote {
+            if c == open {
+                quote = None;
+            }
+            text.push(c);
+            continue;
+        }
+        match c {
+            '\\' => {
+                text.push(c);
+                text.extend(chars.next());
+                continue;
+            }
+            '\'' | '"' => quote = Some(c),
+            c if c == closing && depth == 0 => break,
+            '(' if closing == ')' => depth += 1,
+            ')' if closing == ')' => depth -= 1,
+            _ => {}
+        }
+        text.push(c);
+    }
+    text
+}
+
 /// The command substitutions (`$(…)`, `` `…` ``) of a here-document body the
 /// shell expands, each with the 0-based line of the body it starts on.
 fn substitutions(body: &str) -> Vec<(usize, String)> {
@@ -392,28 +419,15 @@ fn substitutions(body: &str) -> Vec<(usize, String)> {
                 }
             }
             '$' if chars.next_if_eq(&'(').is_some() => {
-                let (start, mut depth, mut text) = (line, 0_usize, String::new());
-                for c in chars.by_ref() {
-                    match c {
-                        ')' if depth == 0 => break,
-                        '(' => depth += 1,
-                        ')' => depth -= 1,
-                        '\n' => line += 1,
-                        _ => {}
-                    }
-                    text.push(c);
-                }
+                let text = substitution_text(&mut chars, ')');
+                let start = line;
+                line += text.matches('\n').count();
                 found.push((start, text));
             }
             '`' => {
-                let (start, mut text) = (line, String::new());
-                for c in chars.by_ref() {
-                    if c == '`' {
-                        break;
-                    }
-                    line += usize::from(c == '\n');
-                    text.push(c);
-                }
+                let text = substitution_text(&mut chars, '`');
+                let start = line;
+                line += text.matches('\n').count();
                 found.push((start, text));
             }
             _ => {}
