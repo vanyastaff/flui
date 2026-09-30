@@ -204,6 +204,7 @@ graph TD
     layer --> painting
     animation --> scheduler
     animation --> painting
+    animation --> macros
     platform --> platformapi
     platform --> semantics
     rendering --> interaction
