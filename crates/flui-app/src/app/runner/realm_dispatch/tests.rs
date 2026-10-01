@@ -790,10 +790,12 @@ fn a_registration_notifies_every_realm_window() {
 }
 
 /// The host font feed landing off the owner thread tells every realm window
-/// at the next owner turn, which the feed's wake brings: each draws its next
-/// frame, where its pipeline lays out again the text measured before. Fails
-/// if an owner turn does not announce a generation that moved without a
-/// registration on this thread.
+/// at the next owner turn, which the feed's wake brings: the wake, called on
+/// the feed's thread, asks the loop for a turn, and at that turn each window
+/// draws its next frame, where its pipeline lays out again the text measured
+/// before. Fails if the feed is launched with a wake that does not reach the
+/// loop, or if an owner turn does not announce a generation that moved
+/// without a registration on this thread.
 fn a_landed_host_feed_wakes_every_realm_window() {
     use flui_painting::testing::{PROBE_MONO_100, feed_with_host, host_fonts_from};
 
@@ -802,15 +804,23 @@ fn a_landed_host_feed_wakes_every_realm_window() {
         clear_redraw(dispatcher);
     }
     let generation = super::super::host::runtime_font_collection().generation();
-    let feed = crate::app::runtime::take_parked_host_feeds()
-        .pop()
-        .expect("the runtime launched its host feed when its services resolved");
+    let crate::app::runtime::ParkedHostFeed { feed, wake } =
+        crate::app::runtime::take_parked_host_feeds()
+            .pop()
+            .expect("the runtime launched its host feed when its services resolved");
+    let loop_redraw = super::super::host::runtime_needs_redraw_handle();
+    loop_redraw.store(false, std::sync::atomic::Ordering::Relaxed);
 
     std::thread::spawn(move || {
         feed_with_host(feed, host_fonts_from(&[PROBE_MONO_100])).run();
+        wake();
     })
     .join()
     .expect("the feed lands");
+    assert!(
+        loop_redraw.load(std::sync::atomic::Ordering::Relaxed),
+        "the feed's wake asks the loop for the turn that tells the realms"
+    );
     assert_eq!(
         super::super::host::runtime_font_collection().generation(),
         generation + 1,

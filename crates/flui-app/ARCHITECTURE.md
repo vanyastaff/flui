@@ -64,10 +64,15 @@ the dispatch layer moves there too.
   runtime whether the collection's generation moved since the realms were
   last told (`AppRuntime::take_font_change`) and, if so, sends every realm
   `UiRealm::fonts_changed`; a registration is announced the same way
-  (`runner::fonts::announce_font_change`). The scan is a value dropped once
+  (`runner::fonts::announce_font_change`). A notice a realm refuses because
+  its presentation is closing or stale is not retried: its pipelines still
+  see the new generation at their next frame. The feed's thread is detached
+  and outside the runtime's execution services, which may refuse a job and
+  drop it, while the feed must run once (ADR-0092 §7). The scan is a value dropped once
   the feed is done, and no font state is process-global. Every realm the
   runners build gets a clone of that one collection. This crate's unit tests
-  park the feed (`park_host_feed`), so none lands in the middle of a test
+  park the feed with its wake (`park_host_feed`), so none lands in the middle
+  of a test, and a test runs both
   (`the_runtime_launches_one_host_feed_for_every_realm`,
   `the_host_feed_runs_off_the_owner_thread_and_wakes_once`,
   `a_landed_host_feed_wakes_every_realm_window`).

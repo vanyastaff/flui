@@ -1728,24 +1728,32 @@ const LAUNCH_HOST_FEED: fn(HostFontFeed, Arc<dyn Fn() + Send + Sync>) = spawn_ho
 #[cfg(test)]
 const LAUNCH_HOST_FEED: fn(HostFontFeed, Arc<dyn Fn() + Send + Sync>) = park_host_feed;
 
+/// A feed [`park_host_feed`] held, with the wake the runtime launched it
+/// with: a test runs the feed, then calls the wake as the launcher would.
+#[cfg(test)]
+pub(super) struct ParkedHostFeed {
+    pub(super) feed: HostFontFeed,
+    pub(super) wake: Arc<dyn Fn() + Send + Sync>,
+}
+
 #[cfg(test)]
 thread_local! {
     /// The feeds [`park_host_feed`] held on this thread, in launch order.
-    static PARKED_HOST_FEEDS: RefCell<Vec<HostFontFeed>> = const { RefCell::new(Vec::new()) };
+    static PARKED_HOST_FEEDS: RefCell<Vec<ParkedHostFeed>> = const { RefCell::new(Vec::new()) };
 }
 
-/// A launcher that runs nothing: it keeps the feed on this thread for
-/// [`take_parked_host_feeds`], so a test decides when, and whether, the
-/// host's faces land.
+/// A launcher that runs nothing: it keeps the feed and its wake on this
+/// thread for [`take_parked_host_feeds`], so a test decides when, and
+/// whether, the host's faces land.
 #[cfg(test)]
-pub(super) fn park_host_feed(feed: HostFontFeed, _wake: Arc<dyn Fn() + Send + Sync>) {
-    PARKED_HOST_FEEDS.with(|parked| parked.borrow_mut().push(feed));
+pub(super) fn park_host_feed(feed: HostFontFeed, wake: Arc<dyn Fn() + Send + Sync>) {
+    PARKED_HOST_FEEDS.with(|parked| parked.borrow_mut().push(ParkedHostFeed { feed, wake }));
 }
 
 /// Every feed [`park_host_feed`] has held on this thread since the last
 /// call, in launch order.
 #[cfg(test)]
-pub(super) fn take_parked_host_feeds() -> Vec<HostFontFeed> {
+pub(super) fn take_parked_host_feeds() -> Vec<ParkedHostFeed> {
     PARKED_HOST_FEEDS.with(|parked| std::mem::take(&mut *parked.borrow_mut()))
 }
 
@@ -1821,10 +1829,13 @@ mod font_collection_tests {
     /// (ADR-0092 §2), and the host's faces are fed into it once, off the
     /// owner thread (ADR-0092 §7): repeated service and collection requests
     /// hand out clones of the same collection, the runtime launches one
-    /// feed for it, and that collection is host-fed once the feed runs.
-    /// Fails if the services feed the host on the owner thread (the
-    /// collection is host-fed before the launch), launch a feed per
-    /// request, or build a new collection per request.
+    /// feed for it, and that collection is host-fed once the feed runs. The
+    /// wake the feed is launched with is the runtime's own: calling it asks
+    /// the loop for the turn that announces the landing. Fails if the
+    /// services feed the host on the owner thread (the collection is
+    /// host-fed before the launch), launch a feed per request, build a new
+    /// collection per request, or launch the feed with a wake that does not
+    /// reach the loop.
     fn the_runtime_launches_one_host_feed_for_every_realm() {
         let _ = take_parked_host_feeds();
         let mut runtime = AppRuntime::new();
@@ -1845,9 +1856,16 @@ mod font_collection_tests {
         );
         let mut feeds = take_parked_host_feeds();
         assert_eq!(feeds.len(), 1, "one feed per app");
+        let ParkedHostFeed { feed, wake } = feeds.remove(0);
+        runtime.needs_redraw.store(false, Ordering::Relaxed);
 
-        feed_with_host(feeds.remove(0), host_fonts_from(&[PROBE_MONO_100])).run();
+        feed_with_host(feed, host_fonts_from(&[PROBE_MONO_100])).run();
+        wake();
 
+        assert!(
+            runtime.needs_redraw.load(Ordering::Relaxed),
+            "the feed's wake asks the runtime's loop for a turn"
+        );
         assert!(host_fed(&first), "the feed fed the app's collection");
         assert!(runtime.take_font_change(), "the landing is announced");
         assert!(!runtime.take_font_change(), "and announced once");
