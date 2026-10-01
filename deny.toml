@@ -118,6 +118,13 @@ deny = [
     # Security concerns
     { crate = "openssl" },    # Prefer rustls
     { crate = "native-tls" }, # Prefer rustls
+
+    # One Unicode source (ADR-0092 §6): FLUI segments through ICU4X, the data
+    # Parley shapes with. Only the third-party crates that bring it may name it.
+    { crate = "unicode-segmentation", wrappers = [
+        "winit",
+        "convert_case",
+    ], reason = "FLUI segments text through ICU4X (ADR-0092 §6)" },
 ]
 
 # Crates whose job std or core now does (once_cell → OnceLock/LazyLock,

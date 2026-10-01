@@ -112,6 +112,7 @@ fn text_editing() {
             ("editable_text::a_drag_selects_from_its_start_to_the_pointer", crate::editable_text::a_drag_selects_from_its_start_to_the_pointer),
             ("editable_text::a_tap_places_the_caret_where_it_landed", crate::editable_text::a_tap_places_the_caret_where_it_landed),
             ("editable_text::an_obscured_field_never_hands_its_real_text_to_the_render_object", crate::editable_text::an_obscured_field_never_hands_its_real_text_to_the_render_object),
+            ("editable_text::the_editor_steps_the_graphemes_the_painter_snaps_to", crate::editable_text::the_editor_steps_the_graphemes_the_painter_snaps_to),
             ("editable_text::focus_gain_attaches_an_ime_client_and_routes_preedit_to_the_controller", crate::editable_text::focus_gain_attaches_an_ime_client_and_routes_preedit_to_the_controller),
             ("editable_text::text_store::store_offsets_match_controller_bytes_across_surrogates_and_graphemes", crate::editable_text::text_store::store_offsets_match_controller_bytes_across_surrogates_and_graphemes),
             ("editable_text::text_store::typing_after_a_deferred_commit_lands_after_the_commit", crate::editable_text::text_store::typing_after_a_deferred_commit_lands_after_the_commit),

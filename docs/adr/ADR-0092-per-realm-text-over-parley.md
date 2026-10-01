@@ -1,8 +1,10 @@
 # ADR-0092: Text shapes per realm over Parley and crosses the display list as neutral shaped runs
 
-- **Status:** Accepted (§§1–5 and §7); §6 Proposed until §10 step 6c lands. Every gate (§8) is
-  met: gate 1 by a prototype on 2026-09-26, gates 2, 6 and 7 on 2026-09-30 (see Context). §10
-  steps 1 to 5, 6a and 6b landed. Each realm owns a
+- **Status:** Accepted. Every gate (§8) is met: gate 1 by a prototype on 2026-09-26, gates 2, 6
+  and 7 on 2026-09-30 (see Context). Every step of §10 landed. Two things this record leaves to
+  others: the bidi base direction (Parley 0.11.1 takes it from the first strong character;
+  flui-painting mapping decision 12), and how a hot-reload plugin's font bytes cross its FFI
+  boundary ([ADR-0094](ADR-0094-hot-reload-through-subsecond.md)). Each realm owns a
   `TextContext` over the app's one `FontCollection` (one per owner thread, which is one per
   process while [ADR-0091](ADR-0091-one-owner-thread-isolated-realms-raster-thread.md) fixes one
   owner thread), lent to every pipeline; Parley measures, paint draws the runs of the layout
@@ -15,8 +17,9 @@
   feed on a thread of its own, which scans the host once with fontdb (`HostFonts::scan`) and
   adds its faces with fallback tables FLUI owns; the first frame does not wait for it, and its
   faces arrive as a registration's do. cosmic-text, `unicode-script` and `FONT_SYSTEM` are
-  gone. Open: 6c (the editor's grapheme and word steps on ICU4X). The supersessions below have
-  taken effect and their back-links are written.
+  gone, and the editor steps through the same ICU4X boundaries the painter clusters by, with no
+  `unicode-segmentation` in any FLUI crate. The supersessions below have taken effect and their
+  back-links are written.
 - **Date:** 2026-09-25
 - **Revised:** 2026-09-26 (rasterization prototype; see Context); 2026-09-29 (§10 step 3
   split into 3a and 3b; the realm lends its context through a shared handle; Parley
@@ -33,7 +36,8 @@
   6c; §7: the app's shared engine services own one fontdb scan and FLUI owns the fallback
   lists; gates 2, 6 and 7 closed with the findings in Context); 2026-09-30 (§10 step 6b: the
   host feed runs off the owner thread and registers one file at a time; §3, §7, gate 6 and
-  Context rewritten for it)
+  Context rewritten for it); 2026-09-30 (§10 step 6c: the editor's boundaries are ICU4X's, §6
+  accepted, and the record Accepted)
 - **Supersedes:** [ADR-0077](ADR-0077-migrate-to-parley.md) (absorbed: its direction, its
   preconditions and its "If later Rejected" branch are carried here)
 - **Supersedes:** [ADR-0016](ADR-0016-unified-font-system-registration.md),
@@ -373,9 +377,10 @@ vello_cpu.
 Grapheme and word segmentation for editing, bidi and line breaking use the ICU4X data Parley
 already brings. `unicode-segmentation` and `unicode-script` leave FLUI's crates, and no
 `unicode-bidi` is added. `unicode-script` left at §10 step 6a; flui-painting's boundaries are
-ICU4X's since step 5, and the editor in `flui-widgets` keeps `unicode-segmentation` until step
-6c. The crate stays in the lockfile after that, through `winit` and `convert_case`; what this
-section binds is that no FLUI crate depends on it.
+ICU4X's since step 5, and since step 6c the editor in `flui-widgets` steps through them too
+(`flui_painting::text_boundaries`). `unicode-segmentation` stays in the lockfile, through
+`winit` and `convert_case`; what this section binds is that no FLUI crate depends on it, which
+`deny.toml` enforces: it bans the crate with those two as its only allowed dependents.
 
 ### 7. System fonts come from one discovery, resolve by one rule and fall back in one order
 
@@ -783,11 +788,21 @@ that wires what it adds.
      `font_collection_contract` (`the_runtime_launches_one_host_feed_for_every_realm`,
      `the_host_feed_runs_off_the_owner_thread_and_wakes_once`) and the row
      `a_landed_host_feed_wakes_every_realm_window` of `realm_dispatch_matrix`.
-   - (6c) Open. The editor's grapheme and word steps in `flui-widgets` (`controller.rs`,
+   - (6c) Landed. The editor's grapheme and word steps in `flui-widgets` (`controller.rs`,
      `editable_text.rs`, `text_store.rs`) move to the ICU4X boundaries in flui-painting, and
      `flui-widgets` drops its direct `unicode-segmentation` dependency, which completes §6.
+     The boundaries are public as `flui_painting::text_boundaries` (grapheme steps, cluster
+     ranges and word segments, each query segmenting from the start of its line), and
+     `deny.toml` bans `unicode-segmentation` for every crate but `winit` and `convert_case`.
      *Acceptance (6c):* no FLUI crate depends on `unicode-segmentation`; `text_store_kit` and the
-     editor's tap, drag, double-tap and keyboard tests pass unchanged.
+     editor's tap, drag, double-tap and keyboard tests pass unchanged. Met: `cargo tree -i
+     unicode-segmentation` names only `winit` and `convert_case`, and `cargo deny check bans`
+     fails if a FLUI crate names it again; the `text_editing` table, the controller's unit
+     tests and `text_store_kit` pass unchanged. The new row
+     `the_editor_steps_the_graphemes_the_painter_snaps_to` compares the editor's stops with
+     the painter's clusters over a ZWJ family, flags, stacked combining marks, CR LF and the
+     conjunct "क्षि"; `unicode-segmentation` 1.13.3 clusters each of those the same way, so the
+     row pins the shared contract rather than a difference.
 
 ## Alternatives considered
 
@@ -826,8 +841,9 @@ that wires what it adds.
   any more: one fewer upstream type on a public path
   ([ADR-0089](ADR-0089-upstream-types-in-stable-signatures.md)).
 - The engine names no shaper crate; its glyph atlas moves from each painter to the `GpuContext`.
-- The editor's segmentation changes data source; word and grapheme boundaries may shift at the
-  edges where `unicode-segmentation` and ICU4X disagree, which gate 3's tests expose.
+- The editor's segmentation changed data source at §10 step 6c: its grapheme steps and word
+  jumps walk ICU4X's boundaries, the ones hit-testing snaps to. No editor test moved; where
+  `unicode-segmentation` and ICU4X would disagree, the editor now follows the painter.
 - **Every gate is met (§8), so the fallback this record kept no longer applies:** cosmic-text
   staying the shaper, with ADR-0016 and ADR-0059 in force and §§2–5 re-scoped over it. cosmic-text
   is gone (§10 step 6a).

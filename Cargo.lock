@@ -2430,7 +2430,6 @@ dependencies = [
  "tokio",
  "tracing",
  "trybuild",
- "unicode-segmentation",
 ]
 
 [[package]]

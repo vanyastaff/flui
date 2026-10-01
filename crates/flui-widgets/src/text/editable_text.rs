@@ -1,13 +1,13 @@
 //! [`EditableText`] — single-line editable text backed by a
 //! [`TextEditingController`].
 
+use flui_painting::text_boundaries::graphemes;
 use std::{
     cell::{Cell, RefCell},
     ops::Range,
     rc::Rc,
     sync::Arc,
 };
-use unicode_segmentation::UnicodeSegmentation;
 
 use flui_foundation::ListenerId;
 use flui_foundation::geometry::{Bounds, Offset, Point, Rect};
@@ -95,9 +95,9 @@ pub(super) fn obscure(text: &str, offsets: &mut [usize], mask: char) -> String {
     let mask_len = mask.len_utf8();
     let mut masked = String::with_capacity(text.len());
     let mut mapped = vec![0_usize; offsets.len()];
-    for (byte_offset, _) in text.grapheme_indices(true) {
+    for cluster in graphemes(text) {
         for (slot, source) in mapped.iter_mut().zip(offsets.iter()) {
-            if byte_offset < *source {
+            if cluster.start < *source {
                 *slot += mask_len;
             }
         }
@@ -160,20 +160,17 @@ fn source_offset_at_global(
 /// and masked/source distinction, both shared verbatim here.
 ///
 /// Delegates to [`RenderEditable::word_range_at_local_offset`]
-/// (`flui-objects`), which itself delegates to `flui-painting`'s
-/// `TextPainter::get_word_boundary` (not a doc link: `flui-painting` is a
-/// dev-dependency of this crate, not a regular one, so the path would not
-/// resolve in a normal `cargo doc` build) — ICU4X word segmentation over
-/// the laid-out text. This widget's own Ctrl/Alt+Arrow word-jump
-/// (`controller.rs`'s private `next_word_boundary`/`prev_word_boundary`)
-/// uses `unicode-segmentation`'s UAX #29 data instead, until ADR-0092 §10
-/// step 6 moves it onto the same ICU4X boundaries, and answers a different
-/// question: a directional "next/previous stop" with its own asymmetric
-/// tie-break (see the controller's `# Word unit` doc), where this one
-/// answers "which segment is under this exact position". A double-tap and
-/// a keyboard word-jump can therefore land on different boundaries for the
-/// same buffer in edge cases (a caret sitting exactly on a segment
-/// boundary, or where the two segmenters' data disagree).
+/// (`flui-objects`), which itself delegates to
+/// [`flui_painting::TextPainter::get_word_boundary`] — ICU4X word
+/// segmentation over the laid-out text. This widget's own Ctrl/Alt+Arrow
+/// word-jump (`controller.rs`'s private `next_word_boundary`/
+/// `prev_word_boundary`) walks the same ICU4X segments
+/// ([`flui_painting::text_boundaries`]) but answers a different question: a
+/// directional "next/previous stop" with its own asymmetric tie-break (see
+/// the controller's `# Word unit` doc), where this one answers "which
+/// segment is under this exact position". A double-tap and a keyboard
+/// word-jump can therefore land on different boundaries of the same
+/// segments, such as for a caret sitting exactly on a segment boundary.
 ///
 /// `source_text` must be the CONTROLLER's own source string — see
 /// [`source_offset_at_global`]'s doc for why `RenderEditable::plain_text()`
@@ -224,10 +221,9 @@ pub(super) fn source_offset_for_masked_offset(
     mask: char,
 ) -> usize {
     let cluster_index = masked_offset / mask.len_utf8();
-    source
-        .grapheme_indices(true)
+    graphemes(source)
         .nth(cluster_index)
-        .map_or(source.len(), |(byte_offset, _)| byte_offset)
+        .map_or(source.len(), |cluster| cluster.start)
 }
 
 /// A single-line text field that accepts keyboard input when focused.

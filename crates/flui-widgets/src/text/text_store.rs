@@ -44,13 +44,13 @@ use flui_foundation::geometry::{Bounds, Point};
 use flui_foundation::geometry::{Matrix4, Offset, Rect};
 use flui_interaction::TextInputHandle;
 use flui_objects::{RenderEditable, SubtreeAnchor};
+use flui_painting::text_boundaries::graphemes;
 use flui_platform_api::text_store::{
     CommitGate, Composition, LockArbiter, LockGrant, LockOutcome, LockTiming, PointMode, RangeRect,
     Selection, TextChange, TextStore, TextStoreEdit, TextStoreError, TextStoreObserver,
     TextStoreRead, TextStoreStatus, Utf16Offset, Utf16Range, utf16,
 };
 use flui_rendering::pipeline::PipelineCell;
-use unicode_segmentation::UnicodeSegmentation;
 
 use super::controller::{self, ComposingState, TextEditingController};
 use super::editable_text::{EditObserver, bounds_from_rect, obscure};
@@ -378,11 +378,11 @@ impl EditableTextStore {
         }
         let width = self.obscuring_character.get().len_utf8();
         let (mut first, mut last) = (0, 0);
-        for (index, (start, cluster)) in source.grapheme_indices(true).enumerate() {
-            if start + cluster.len() <= bytes.start {
+        for (index, cluster) in graphemes(source).enumerate() {
+            if cluster.end <= bytes.start {
                 first = index + 1;
             }
-            if start < bytes.end {
+            if cluster.start < bytes.end {
                 last = index + 1;
             }
         }

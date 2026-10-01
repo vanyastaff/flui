@@ -7,7 +7,9 @@
 use std::ops::Range;
 use std::sync::{Arc, Mutex, PoisonError};
 
-use unicode_segmentation::{GraphemeCursor, UnicodeSegmentation};
+use flui_painting::text_boundaries::{
+    is_grapheme_boundary, next_grapheme_boundary, previous_grapheme_boundary, word_segments_from,
+};
 
 use flui_foundation::ListenerId;
 use flui_foundation::notifier::{ChangeNotifier, Listenable, ListenerCallback};
@@ -205,7 +207,9 @@ pub(super) struct ComposingState {
 /// [`Self::extend_selection_left`]/[`Self::extend_selection_right`]) and
 /// single-character deletion ([`Self::backspace`]/[`Self::delete_forward`])
 /// step by **extended grapheme cluster** (UAX #29), the user-perceived
-/// character. A
+/// character, as ICU4X segments it
+/// ([`flui_painting::text_boundaries`]), the same boundaries a tap snaps to
+/// and the painted text is clustered by. A
 /// Zero-Width-Joiner sequence (`'👨‍👩‍👦'`), a regional-indicator flag (`'🇺🇸'`)
 /// or a base letter with combining marks (`"e\u{301}"`) is one step and one
 /// deletion; stepping by Unicode scalar instead would leave a dangling joiner
@@ -219,8 +223,9 @@ pub(super) struct ComposingState {
 /// [`Self::move_caret_word_right`], [`Self::extend_selection_word_left`]/
 /// [`Self::extend_selection_word_right`]) and word deletion
 /// ([`Self::delete_word_backward`]/[`Self::delete_word_forward`]) step by
-/// UAX #29 **word** segments (`unicode-segmentation`'s
-/// `split_word_bound_indices`), not ASCII whitespace runs: a
+/// UAX #29 **word** segments (ICU4X's, through
+/// [`flui_painting::text_boundaries::word_segments_from`]), not ASCII
+/// whitespace runs: a
 /// straight/curly apostrophe inside a word (`"don't"`) and a letter-digit
 /// run (`"foo123"`) each stay one segment per the standard's own rules,
 /// and a run of plain whitespace is skipped as a whole rather than
@@ -241,16 +246,12 @@ pub(super) struct ComposingState {
 /// to its edge without a further jump, the same rule
 /// [`Self::move_caret_left`] documents for character movement.
 ///
-/// This is a SEPARATE implementation from `flui-painting`'s
-/// `TextPainter::get_word_boundary` (neither is a doc link here:
-/// `flui-painting` is a dev-dependency of this crate, not a regular one,
-/// and `EditableTextState::wrap_double_tap_word_select`, which calls it,
-/// is private to `editable_text.rs`), which backs double-tap word
-/// selection one layer up with ICU4X's word segmenter, where this uses
-/// `unicode-segmentation` until ADR-0092 §10 step 6 moves it onto the same
-/// ICU4X boundaries. The tie-breaks differ by design, because the two
-/// answer different questions: a directional jump here, a positional
-/// lookup there, not expected to agree at every boundary.
+/// The segments are the ones
+/// [`flui_painting::TextPainter::get_word_boundary`] picks from for a
+/// double-tap (through `EditableTextState::wrap_double_tap_word_select`,
+/// private to `editable_text.rs`); only the tie-breaks differ, by design,
+/// because the two answer different questions: a directional jump here, a
+/// positional lookup there.
 #[derive(Clone)]
 pub struct TextEditingController {
     /// Shared text buffer + caret state.
@@ -548,7 +549,7 @@ impl TextEditingController {
                     false
                 } else {
                     // Walk back to the previous grapheme boundary.
-                    let prev_boundary = prev_grapheme_boundary(&guard.text, caret);
+                    let prev_boundary = previous_grapheme_boundary(&guard.text, caret);
                     guard.text.drain(prev_boundary..caret);
                     guard.selection = Selection::collapsed(prev_boundary);
                     guard.composing = None;
@@ -609,7 +610,7 @@ impl TextEditingController {
     pub fn extend_selection_left(&self) {
         self.extend_to(|guard| {
             let caret = guard.selection.caret;
-            (caret != 0).then(|| prev_grapheme_boundary(&guard.text, caret))
+            (caret != 0).then(|| previous_grapheme_boundary(&guard.text, caret))
         });
     }
 
@@ -678,7 +679,7 @@ impl TextEditingController {
                 if caret == 0 {
                     false
                 } else {
-                    let prev_boundary = prev_grapheme_boundary(&guard.text, caret);
+                    let prev_boundary = previous_grapheme_boundary(&guard.text, caret);
                     guard.selection = Selection::collapsed(prev_boundary);
                     true
                 }
@@ -1045,46 +1046,6 @@ fn clear_caret_hidden(guard: &mut ControllerInner) -> bool {
     }
 }
 
-/// The byte offset where the extended grapheme cluster ending at `caret`
-/// begins — one user-perceived character to the left. `0` at the start.
-///
-/// `caret` must be a char boundary of `text` (every caller holds one: the
-/// controller clamps every offset it stores). It need not be a grapheme
-/// boundary: the cursor walks the WHOLE string, so a caret that landed
-/// strictly inside a cluster — a platform-supplied IME offset, say — is
-/// resolved with the cluster's full context (UAX #29 rules such as the
-/// ZWJ-sequence and regional-indicator-pair rules look at what precedes the
-/// caret) and steps to that cluster's start, the nearest boundary a user can
-/// see. Segmenting only the slice on one side of the caret would lose that
-/// context and could answer a boundary that is not one.
-fn prev_grapheme_boundary(text: &str, caret: usize) -> usize {
-    let mut cursor = GraphemeCursor::new(caret, text.len(), true);
-    // The whole string is the one chunk, starting at 0, so the cursor never
-    // needs more context and the `Err` arms (`PreContext`/`NextChunk`, asked
-    // for only when a chunk is partial) are unreachable.
-    cursor.prev_boundary(text, 0).ok().flatten().unwrap_or(0)
-}
-
-/// The byte offset where the extended grapheme cluster starting at (or
-/// containing) `caret` ends — one user-perceived character to the right.
-/// `caret` itself at the end.
-///
-/// Same precondition and full-context walk as [`prev_grapheme_boundary`].
-fn next_grapheme_boundary(text: &str, caret: usize) -> usize {
-    let mut cursor = GraphemeCursor::new(caret, text.len(), true);
-    cursor
-        .next_boundary(text, 0)
-        .ok()
-        .flatten()
-        .unwrap_or(text.len())
-}
-
-/// Whether a UAX #29 word segment contains nothing but whitespace —
-/// Used to decide which segments a word jump skips over versus stops on.
-fn is_whitespace_only_word(segment: &str) -> bool {
-    segment.chars().all(char::is_whitespace)
-}
-
 /// The byte offset of the next word-jump stop forward from `offset` — see
 /// [`TextEditingController`]'s `# Word unit` doc section for the full
 /// forward/backward contract this implements.
@@ -1092,27 +1053,23 @@ fn is_whitespace_only_word(segment: &str) -> bool {
 /// Finds the segment `offset` currently touches (the first one whose end
 /// is past `offset`) and returns the start of the first non-whitespace
 /// segment strictly after it, or `text.len()` if none remains. Streamed,
-/// not collected: `split_word_bound_indices` is walked once, forward,
-/// with no intermediate `Vec` — this runs on every Ctrl/Alt+Right and
-/// must not allocate a segment list for the whole buffer on every
-/// keystroke.
+/// not collected, and started at the line that holds `offset`: this runs
+/// on every Ctrl/Alt+Right and must not segment, or allocate a segment
+/// list for, the whole buffer on every keystroke.
 fn next_word_boundary(text: &str, offset: usize) -> usize {
     let total = text.len();
     if text.is_empty() || offset >= total {
         return total;
     }
     let offset = clamp_to_char_boundary(text, offset);
-    let mut segments = text
-        .split_word_bound_indices()
-        .map(|(idx, word)| (idx, idx + word.len(), is_whitespace_only_word(word)))
-        .skip_while(|&(_, end, _)| end <= offset);
+    let mut segments = word_segments_from(text, offset).skip_while(|segment| segment.end <= offset);
     // Consume the segment `offset` touches (already skipped-to by the
     // `skip_while` above) without inspecting it — a word-jump always
     // clears whatever segment it started in/on.
     segments.next();
     segments
-        .find(|&(_, _, whitespace_only)| !whitespace_only)
-        .map_or(total, |(start, _, _)| start)
+        .find(|segment| !segment.whitespace)
+        .map_or(total, |segment| segment.start)
 }
 
 /// The byte offset of the previous word-jump stop backward from `offset`
@@ -1123,10 +1080,12 @@ fn next_word_boundary(text: &str, offset: usize) -> usize {
 /// is before `offset`). If that segment is a word, returns ITS OWN start
 /// without skipping it; if it is whitespace (or `offset` already sits at
 /// a word's start), continues back to the start of the previous
-/// non-whitespace segment, or `0` if none remains. Streamed backward via
-/// `unicode_segmentation`'s `DoubleEndedIterator` support
-/// (`SplitWordBoundIndices::rev`) — same no-`Vec` reasoning as
-/// [`next_word_boundary`].
+/// non-whitespace segment, or `0` if none remains.
+///
+/// The segmenter walks forward only, so each pass scans one line forward,
+/// from its start up to the bound, and a pass that finds no word moves to
+/// the line before: the cost is the lines walked back over, not the
+/// buffer, and nothing is collected.
 fn prev_word_boundary(text: &str, offset: usize) -> usize {
     if text.is_empty() || offset == 0 {
         return 0;
@@ -1135,20 +1094,34 @@ fn prev_word_boundary(text: &str, offset: usize) -> usize {
     if offset == 0 {
         return 0;
     }
-    let mut segments = text
-        .split_word_bound_indices()
-        .map(|(idx, word)| (idx, idx + word.len(), is_whitespace_only_word(word)))
-        .rev()
-        .skip_while(|&(start, _, _)| start >= offset);
-    let Some(touching) = segments.next() else {
+    let Some(touching) = word_segments_from(text, offset - 1)
+        .take_while(|segment| segment.start < offset)
+        .last()
+    else {
         return 0;
     };
-    if !touching.2 {
-        return touching.0;
+    if !touching.whitespace {
+        return touching.start;
     }
-    segments
-        .find(|&(_, _, whitespace_only)| !whitespace_only)
-        .map_or(0, |(start, _, _)| start)
+    // The last word before `bound`, one line at a time.
+    let mut bound = touching.start;
+    while bound > 0 {
+        let mut line_start = bound;
+        let mut word = None;
+        for segment in
+            word_segments_from(text, bound - 1).take_while(|segment| segment.start < bound)
+        {
+            line_start = line_start.min(segment.start);
+            if !segment.whitespace {
+                word = Some(segment.start);
+            }
+        }
+        if let Some(start) = word {
+            return start;
+        }
+        bound = line_start;
+    }
+    0
 }
 
 /// Clamp `offset` to the nearest extended-grapheme-cluster boundary of `s`,
@@ -1166,14 +1139,11 @@ fn prev_word_boundary(text: &str, offset: usize) -> usize {
 /// stays where it was reported.
 fn clamp_to_grapheme_boundary(s: &str, offset: usize) -> usize {
     let offset = clamp_to_char_boundary(s, offset);
-    let mut cursor = GraphemeCursor::new(offset, s.len(), true);
-    // `Err` is unreachable with the whole string as the one chunk; a char
-    // boundary is the safe answer if it ever were.
-    if cursor.is_boundary(s, 0) == Ok(false) {
+    if is_grapheme_boundary(s, offset) {
+        offset
+    } else {
         // Not a boundary: the next one forward is the cluster's end.
         next_grapheme_boundary(s, offset)
-    } else {
-        offset
     }
 }
 

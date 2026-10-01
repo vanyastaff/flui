@@ -259,6 +259,71 @@ pub(crate) fn a_double_tap_selects_the_word_under_it() {
     );
 }
 
+/// The arrow keys stop on the grapheme boundaries the painter clusters text
+/// by and snaps a tap to (`flui_painting::text_boundaries`, ICU4X): right
+/// arrow from the start stops at each cluster's end, left arrow from the
+/// end at each cluster's start, and one Backspace removes one cluster. The
+/// texts hold a ZWJ family, two regional-indicator flags, stacked combining
+/// marks, a CR LF and the Devanagari conjunct "क्षि", one cluster since
+/// UAX #29's conjunct rule (GB9c). Fails if the editor clusters by another
+/// segmenter that splits any of them differently: then a caret can stop
+/// where a tap never lands, or a Backspace leaves part of what was drawn as
+/// one character.
+pub(crate) fn the_editor_steps_the_graphemes_the_painter_snaps_to() {
+    use flui_painting::text_boundaries::graphemes;
+
+    let texts = [
+        "a\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F466}b",
+        "\u{1F1FA}\u{1F1F8}\u{1F1EB}\u{1F1F7}",
+        "e\u{301}\u{302}x",
+        "a\r\nb",
+        "\u{915}\u{94D}\u{937}\u{93F}",
+    ];
+    let mut failures = Vec::new();
+    for text in texts {
+        let clusters: Vec<_> = graphemes(text).collect();
+        let controller = TextEditingController::with_text(text);
+
+        controller.set_caret_byte_offset(0);
+        let mut right = Vec::new();
+        for _ in 0..text.len() {
+            controller.move_caret_right();
+            right.push(controller.caret_byte_offset());
+            if controller.caret_byte_offset() == text.len() {
+                break;
+            }
+        }
+        let ends: Vec<usize> = clusters.iter().map(|cluster| cluster.end).collect();
+
+        controller.set_caret_byte_offset(text.len());
+        let mut left = Vec::new();
+        for _ in 0..text.len() {
+            controller.move_caret_left();
+            left.push(controller.caret_byte_offset());
+            if controller.caret_byte_offset() == 0 {
+                break;
+            }
+        }
+        let starts: Vec<usize> = clusters.iter().rev().map(|cluster| cluster.start).collect();
+
+        let mut backspaces = 0;
+        while !controller.text().is_empty() && backspaces <= text.len() {
+            controller.move_caret_end();
+            controller.backspace();
+            backspaces += 1;
+        }
+
+        if right != ends || left != starts || backspaces != clusters.len() {
+            failures.push(format!(
+                "{text:?}: right {right:?} vs {ends:?}, left {left:?} vs {starts:?}, \
+                 {backspaces} backspaces for {} clusters",
+                clusters.len()
+            ));
+        }
+    }
+    assert!(failures.is_empty(), "{failures:#?}");
+}
+
 // ------------------------------------------------------------------
 // The field as a text store (ADR-0090)
 //
