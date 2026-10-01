@@ -38,12 +38,20 @@ impl GradientKind {
     }
 }
 
+// The fragment shaders scan stops linearly. Bound per-pixel work independently
+// of frame storage admission; retain gradients beyond the former eight-stop cap.
+const MAX_GRADIENT_STOPS: usize = 256;
+
 /// Checked indexing for the immutable table; failures remain authoritative at seal.
 fn reserve_gradient_stops(
     segment: &mut DrawSegment,
     kind: GradientKind,
     stops: &[GradientStop],
 ) -> Option<u32> {
+    if stops.len() > MAX_GRADIENT_STOPS {
+        segment.record_limit("gradient stops per draw", stops.len(), MAX_GRADIENT_STOPS);
+        return None;
+    }
     let current_len = segment.current_gradient_stops.len();
     let Some(total) = current_len.checked_add(stops.len()) else {
         segment.record_limit(kind.operation(), usize::MAX, u32::MAX as usize);
@@ -353,6 +361,16 @@ impl DrawBatcher {
             return false;
         };
 
+        let color_count = match shader {
+            Shader::LinearGradient { colors, .. }
+            | Shader::RadialGradient { colors, .. }
+            | Shader::SweepGradient { colors, .. } => colors.len(),
+            _ => 0,
+        };
+        if color_count > MAX_GRADIENT_STOPS {
+            segment.record_limit("gradient stops per draw", color_count, MAX_GRADIENT_STOPS);
+            return true;
+        }
         let stops = Self::shader_to_gradient_stops(shader, &segment.budget);
         if stops.is_empty() {
             return false;

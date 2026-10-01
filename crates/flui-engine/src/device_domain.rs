@@ -446,6 +446,10 @@ impl DeviceDomain {
         }
     }
 
+    pub(crate) fn is_lost(&self) -> bool {
+        self.ledger.state().lifecycle == Lifecycle::Lost
+    }
+
     /// Rejects submission without releasing outstanding completion-owned charges.
     pub(crate) fn mark_lost(&self) {
         let _gate = self

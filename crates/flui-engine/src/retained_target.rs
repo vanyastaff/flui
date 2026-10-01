@@ -93,6 +93,23 @@ impl RetainedTarget {
             .checked_mul(size.1.div_ceil(block_height) as usize)
             .and_then(|blocks| blocks.checked_mul(block_bytes))
             .ok_or(EngineError::PreparedResourceOverflow)?;
+        // Validate the committed source before taking ownership of the spare:
+        // a stale partial plan must leave both live allocations intact for retry.
+        let source = if partial {
+            let source = self
+                .slot
+                .as_ref()
+                .ok_or(EngineError::MissingRetainedSource)?;
+            if !Arc::ptr_eq(&source.domain, domain) {
+                return Err(EngineError::DeviceDomainMismatch);
+            }
+            if !self.valid || source.size != size || source.format != format {
+                return Err(EngineError::MissingRetainedSource);
+            }
+            Some(source)
+        } else {
+            None
+        };
         // Only a submitted previous candidate becomes spare. All subsequent
         // writes are ordered on the same queue, never to the committed image.
         let reusable = self.spare.take().filter(|slot| {
@@ -103,21 +120,6 @@ impl RetainedTarget {
         if reusable.is_none() {
             domain.poll()?;
         }
-        let source = if partial {
-            Some(
-                self.slot
-                    .as_ref()
-                    .filter(|slot| {
-                        self.valid
-                            && slot.size == size
-                            && slot.format == format
-                            && Arc::ptr_eq(&slot.domain, domain)
-                    })
-                    .ok_or(EngineError::DeviceDomainMismatch)?,
-            )
-        } else {
-            None
-        };
         let previous_bytes = self
             .slot
             .as_ref()

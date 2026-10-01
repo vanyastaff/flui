@@ -241,14 +241,31 @@ impl DrawBatcher {
         // batch's clip is what its draw binds.
         segment.current_pipeline_key = Some(key);
         let batch_index = segment.tess_batches.len();
-        segment.tess_batches.push(TessellatedBatch {
-            pipeline_key: key,
-            scissor: state.current_scissor(),
-            index_start,
-            index_count,
-            clip,
-        });
-        segment.record_run(DrawRun::Tess(batch_index..batch_index + 1));
+        let adjacent_tess = matches!(segment.runs.last(), Some(DrawRun::Tess(range))
+            if range.end == batch_index);
+        let merged = adjacent_tess
+            && segment.tess_batches.last_mut().is_some_and(|batch| {
+                if batch.pipeline_key == key
+                    && batch.scissor == state.current_scissor()
+                    && batch.clip == clip
+                    && batch.index_start.checked_add(batch.index_count) == Some(index_start)
+                    && let Some(count) = batch.index_count.checked_add(index_count)
+                {
+                    batch.index_count = count;
+                    return true;
+                }
+                false
+            });
+        if !merged {
+            segment.tess_batches.push(TessellatedBatch {
+                pipeline_key: key,
+                scissor: state.current_scissor(),
+                index_start,
+                index_count,
+                clip,
+            });
+            segment.record_run(DrawRun::Tess(batch_index..batch_index + 1));
+        }
 
         // Draw-order contract: close the segment after any non-SrcOver blend.
         if key.blend_mode() != BlendMode::SrcOver {

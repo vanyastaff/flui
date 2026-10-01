@@ -49,11 +49,15 @@ shader modules directly from static WGSL; subsequent draws reuse the pipelines.
 
 ## Embedder-owned frames
 
-Public `WgpuPainter` embedders call `begin_frame` before recording, may flush
+Public `WgpuPainter` embedders check `begin_frame`'s result before recording, may flush
 with `render_to_view` several times, then call `finish_frame` once after the
 final encoder submission (or after discarding an encoder on error). This makes
 state reset and resource maintenance reachable without exposing the internal
 renderer. The window renderer retains its existing private multi-pass calls.
+The public frame owns the device-domain submission scope until `finish_frame`;
+retiring intermediate submissions does not renew its cumulative work allowance.
+Nested begin is rejected. Internal child painters reset recording inside their
+owner's existing scope instead of opening another frame.
 `examples/embedded_gpu_scene.rs` exercises the public lifecycle with an external
 GPU texture, a depth-tested producer pass and foreground 2D drawing on the same
 device; its `--capture` mode asserts fixed-angle pixels after two frames.
@@ -230,6 +234,41 @@ loom backend or the mailbox moves to `std::sync`.
 ---
 
 ## Mapping decisions
+
+### Bounded gradient work and failed frame diagnostics
+
+Linear, radial and sweep shaders currently scan stops linearly. Each draw accepts
+at most 256 stops, independently of the recording memory budget; exceeding this
+returns `PreparedResourceLimit` when rendering, never silent truncation. The
+`gradients_read_back_as_specified` family covers nine-stop output, rejection of
+100,000 stops for each kind, and the next valid frame. This bound limits one
+fragment loop, not total frame work or a guaranteed GPU execution duration.
+
+`painter_images_and_offscreen_results_read_back_as_specified` covers immutable
+viewport bindings for resized offscreen-only flushes and cumulative public frame
+submission limits after GPU retirement. Recording admission uses atomic counters
+to preserve `Send` without a mutex in the successful recording path; exact-size
+index batches charge once. The first failed admission remains authoritative.
+
+`renderer_surface_selection_and_layer_compositing_read_back_as_specified` checks
+that domain quarantine reaches the actual backend recovery predicate even without
+the driver's callback. With `gpu-profiler`, its failure matrix discards incomplete
+query frames on error or unwind, then checks that repeated successful frames
+contain only their own scopes. An abort only marks profiler state; the next frame
+replaces it before recording, without making GPU calls during unwind cleanup.
+
+Headless capture serializes each renderer's complete render/readback operation
+under a host-level mutex, so concurrent `&self` callers wait rather than collide
+on the domain's active frame. `twin_renderers_tear_down_without_blocking` also
+covers overlap and the next capture after a poisoned gate. `FrameAlreadyActive`
+is a caller protocol error, distinct from transient GPU backpressure.
+An invalidated partial source returns recoverable `MissingRetainedSource` before
+taking the spare target; the invalid-target family checks the retry and quota.
+
+Adjacent tessellated geometry merges only when the last recorded run is tessellated
+and pipeline, scissor, resolved clip and contiguous index ranges match. A solid
+draw between two paths is an ordering barrier. The painter readback family checks
+this under a bounded budget and with intervening solids and different clips.
 
 ### Encoded sRGB surface presentation
 
@@ -540,6 +579,11 @@ the previous committed pixels and forces a full retry. Two BGRA8 targets require
 16.6 MB at 1920×1080, excluding driver overhead. Resize, reconfigure and surface
 recreation invalidate the retained content; `release_surface` and device recovery
 drop the targets. Submitted uses keep their resource charges until completion.
+No named Flutter test is replaced by this wgpu-specific ownership decision:
+swapchain buffer-age assertions do not apply to this API. FLUI's
+`damage_readback_tests::an_invalid_target_promotes_to_full`, including its
+`bounded_reused_targets_preserve_pixels` row, pins failed-candidate preservation,
+two-slot reuse and resize recovery.
 
 A partial frame clears its damage with an opaque fill inside the scissor
 (`damage::begin_partial`) before the content, not with the full clear pass,

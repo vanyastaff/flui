@@ -1,24 +1,28 @@
 //! Bounds requested DrawSegment arena capacity and live element count only.
 //! Allocator slack, DrawItem metadata, caches, and tessellator output are excluded.
 use crate::command_ir::RecordError;
-use std::sync::{Arc, Mutex};
+use std::sync::{
+    Arc, OnceLock,
+    atomic::{AtomicUsize, Ordering},
+};
 
+// Recording has one mutator per painter. Immutable segments may cross threads,
+// so atomic counters preserve Send without a lock in draw admission. The sticky
+// diagnostic is initialized only on rejection, never on the successful hot path.
 #[derive(Debug)]
 pub(crate) struct RecordingBudget {
-    state: Mutex<State>,
+    used_bytes: AtomicUsize,
+    used_elements: AtomicUsize,
+    error: OnceLock<RecordError>,
     bytes: usize,
     elements: usize,
-}
-#[derive(Debug, Default)]
-struct State {
-    bytes: usize,
-    elements: usize,
-    error: Option<RecordError>,
 }
 impl RecordingBudget {
     pub(crate) fn new(bytes: usize, elements: usize) -> Arc<Self> {
         Arc::new(Self {
-            state: Mutex::new(State::default()),
+            used_bytes: AtomicUsize::new(0),
+            used_elements: AtomicUsize::new(0),
+            error: OnceLock::new(),
             bytes,
             elements,
         })
@@ -27,66 +31,52 @@ impl RecordingBudget {
         Self::new(128 * 1024 * 1024, 1_000_000)
     }
     pub(crate) fn error(&self) -> Option<RecordError> {
-        self.state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .error
-            .clone()
+        self.error.get().cloned()
     }
     fn charge(&self, bytes: usize, elements: usize) -> bool {
-        let mut state = self
-            .state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if state.error.is_some() {
+        if self.error.get().is_some() {
             return false;
         }
-        let next_bytes = state.bytes.checked_add(bytes);
-        let next_elements = state.elements.checked_add(elements);
-        let error = if next_bytes.is_none_or(|n| n > self.bytes) {
-            Some(RecordError::Limit {
+        if let Err(used) =
+            self.used_bytes
+                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |used| {
+                    used.checked_add(bytes).filter(|next| *next <= self.bytes)
+                })
+        {
+            let _ = self.error.set(RecordError::Limit {
                 resource: "recorded arena requested capacity bytes",
-                requested: next_bytes.unwrap_or(usize::MAX),
+                requested: used.saturating_add(bytes),
                 limit: self.bytes,
-            })
-        } else if next_elements.is_none_or(|n| n > self.elements) {
-            Some(RecordError::Limit {
-                resource: "recorded arena live elements",
-                requested: next_elements.unwrap_or(usize::MAX),
-                limit: self.elements,
-            })
-        } else {
-            None
-        };
-        if error.is_some() {
-            state.error = error;
+            });
             return false;
         }
-        state.bytes = next_bytes.expect("BUG: checked recording byte addition");
-        state.elements = next_elements.expect("BUG: checked recording count addition");
+        if let Err(used) =
+            self.used_elements
+                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |used| {
+                    used.checked_add(elements)
+                        .filter(|next| *next <= self.elements)
+                })
+        {
+            self.used_bytes.fetch_sub(bytes, Ordering::Relaxed);
+            let _ = self.error.set(RecordError::Limit {
+                resource: "recorded arena live elements",
+                requested: used.saturating_add(elements),
+                limit: self.elements,
+            });
+            return false;
+        }
         true
     }
     fn available_bytes(&self) -> usize {
-        let state = self
-            .state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        self.bytes.saturating_sub(state.bytes)
+        self.bytes
+            .saturating_sub(self.used_bytes.load(Ordering::Relaxed))
     }
     fn release(&self, bytes: usize, elements: usize) {
-        let mut state = self
-            .state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        state.bytes = state.bytes.saturating_sub(bytes);
-        state.elements = state.elements.saturating_sub(elements);
+        self.used_bytes.fetch_sub(bytes, Ordering::Relaxed);
+        self.used_elements.fetch_sub(elements, Ordering::Relaxed);
     }
     fn allocation_failed(&self) {
-        let mut state = self
-            .state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        state.error.get_or_insert(RecordError::Limit {
+        let _ = self.error.set(RecordError::Limit {
             resource: "recorded arena allocation",
             requested: usize::MAX,
             limit: self.bytes,
@@ -213,8 +203,20 @@ impl<T: Clone> Clone for BudgetVec<T> {
 }
 impl<T> Extend<T> for BudgetVec<T> {
     fn extend<I: IntoIterator<Item = T>>(&mut self, values: I) {
+        let mut values = values.into_iter();
+        let (lower, upper) = values.size_hint();
+        if upper == Some(lower) {
+            if !self.admit(lower) {
+                return;
+            }
+            // Size hints are not a trusted length contract: cap the admitted
+            // batch and account any unexpected trailing elements individually.
+            self.values.extend(values.by_ref().take(lower));
+        }
+        // Unknown-length sources remain bounded; exact-size tessellation/index
+        // iterators above charge and reserve once for their whole batch.
         for value in values {
-            if self.budget.as_ref().is_some_and(|b| b.error().is_some()) {
+            if self.failed() {
                 break;
             }
             self.push(value);

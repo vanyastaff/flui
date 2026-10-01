@@ -75,6 +75,12 @@ pub enum EngineError {
     /// The device owner is closing or no longer accepts preparation.
     #[error("GPU preparation is unavailable")]
     GpuUnavailable,
+    /// The caller tried to open another frame before finishing the active one.
+    #[error("a frame is already active on this device domain")]
+    FrameAlreadyActive,
+    /// Partial rendering needs a valid committed image; retry with a full frame.
+    #[error("partial frame has no compatible committed retained source")]
+    MissingRetainedSource,
     /// Outstanding submissions must complete before another may be admitted.
     #[error("GPU submission capacity exhausted")]
     GpuBackpressure,
@@ -285,9 +291,10 @@ impl EngineError {
     #[must_use]
     pub fn recoverability(&self) -> Recoverability {
         match self {
-            Self::SurfaceLost | Self::Timeout | Self::GpuBackpressure => {
-                Recoverability::Recoverable
-            }
+            Self::SurfaceLost
+            | Self::Timeout
+            | Self::GpuBackpressure
+            | Self::MissingRetainedSource => Recoverability::Recoverable,
             // `raw_window_handle::HandleError` is itself `#[non_exhaustive]`,
             // so this inner match's wildcard is deliberate: a variant this
             // crate has not classified yet is treated as `Fatal` rather than
@@ -316,6 +323,7 @@ impl EngineError {
             | Self::PreparedResourceLimit { .. }
             | Self::PreparedResourceOverflow
             | Self::DeviceDomainMismatch
+            | Self::FrameAlreadyActive
             | Self::ResourceIo { .. }
             | Self::UnsupportedSurfaceColorConfiguration { .. } => Recoverability::Unrecoverable,
         }
@@ -436,9 +444,8 @@ impl From<crate::device_domain::DomainError> for EngineError {
                 limit,
             },
             DomainError::Unavailable => Self::GpuUnavailable,
-            DomainError::SubmissionBudget
-            | DomainError::Backpressure
-            | DomainError::FrameAlreadyActive => Self::GpuBackpressure,
+            DomainError::FrameAlreadyActive => Self::FrameAlreadyActive,
+            DomainError::SubmissionBudget | DomainError::Backpressure => Self::GpuBackpressure,
             DomainError::Poll(source) => Self::GpuProgress { source },
         }
     }

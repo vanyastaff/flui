@@ -202,6 +202,41 @@ impl GpuReplay {
         self.uniform_size = (width, height);
     }
 
+    /// Freeze group zero before any kind of composite, including offscreen-only work.
+    fn prepare_viewport_binding(
+        &mut self,
+        device: &Arc<wgpu::Device>,
+        pipelines: &PipelineSet,
+        resources: &mut GpuResources,
+    ) -> EngineResult<()> {
+        resources.reserve_prepared(crate::device_domain::PreparedCost {
+            gpu_bytes: 16,
+            cpu_bytes: 16,
+            objects: 2,
+        })?;
+        use wgpu::util::DeviceExt;
+        let viewport = [
+            self.uniform_size.0 as f32,
+            self.uniform_size.1 as f32,
+            0.0,
+            0.0,
+        ];
+        let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Immutable Target Viewport"),
+            contents: bytemuck::cast_slice(&viewport),
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
+        self.viewport_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Immutable Target Viewport"),
+            layout: pipelines.viewport_bind_group_layout(),
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: buffer.as_entire_binding(),
+            }],
+        });
+        Ok(())
+    }
+
     // =========================================================================
     // Top-level dispatch loop
     // =========================================================================
@@ -241,6 +276,7 @@ impl GpuReplay {
         encoder: &mut wgpu::CommandEncoder,
         target: RenderTarget<'_>,
     ) -> EngineResult<()> {
+        self.prepare_viewport_binding(device, pipelines, resources)?;
         // Recording is complete, so the atlas' pages are final for this
         // submit; every segment flushed below binds them.
         self.glyph_bind_group = Some(glyphs.bind_group().clone());

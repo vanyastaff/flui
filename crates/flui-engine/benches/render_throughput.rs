@@ -211,7 +211,7 @@ fn render_throughput(c: &mut Criterion) {
     // Warm-up frame: ensures pipeline caches (path, text buffer, gradient-stop
     // SmallVec) are in steady state before criterion starts measurement.
     {
-        painter.begin_frame();
+        painter.begin_frame().expect("benchmark frame begins");
         build_frame(&mut painter, &label);
         let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("bench-warmup"),
@@ -231,7 +231,7 @@ fn render_throughput(c: &mut Criterion) {
     // which is what the Phase-1 allocation-reduction work optimised.
     c.bench_function("painter_render_50rects_gradient_text", |b| {
         b.iter(|| {
-            painter.begin_frame();
+            painter.begin_frame().expect("benchmark frame begins");
             build_frame(&mut painter, &label);
             let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("bench-frame"),
@@ -342,7 +342,7 @@ fn damage_scissor(c: &mut Criterion) {
     // the one a scissor can actually cull. A UI's own layers are smaller, so
     // treat these as an upper bound on the saving per layer, not a forecast.
     fn build(painter: &mut WgpuPainter, layers: u32, damage: Option<f32>, w: f32, h: f32) {
-        painter.begin_frame();
+        painter.begin_frame().expect("benchmark frame begins");
         painter.save();
         if let Some(side) = damage {
             painter.clip_rect(
@@ -478,7 +478,7 @@ fn damage_retained_target(c: &mut Criterion) {
         flui_engine::OffscreenRenderer::new(Arc::clone(&device), Arc::clone(&queue), format);
 
     fn record(painter: &mut WgpuPainter, layers: u32, damage: Option<f64>, w: f64, h: f64) {
-        painter.begin_frame();
+        painter.begin_frame().expect("benchmark frame begins");
         painter.save();
         if let Some(side) = damage {
             let rect = Rect::from_xywh(0.0, 0.0, side, side);
@@ -796,7 +796,7 @@ fn ordered_primitives(c: &mut Criterion) {
                 }
             };
             // Warm each workload's pipeline and allocation state explicitly.
-            painter.begin_frame();
+            painter.begin_frame().expect("benchmark frame begins");
             record(&mut painter);
             let mut encoder =
                 device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
@@ -813,7 +813,7 @@ fn ordered_primitives(c: &mut Criterion) {
                 b.iter_custom(|iterations| {
                     let mut measured = std::time::Duration::ZERO;
                     for _ in 0..iterations {
-                        painter.begin_frame();
+                        painter.begin_frame().expect("benchmark frame begins");
                         let started = std::time::Instant::now();
                         record(&mut painter);
                         measured += started.elapsed();
@@ -838,7 +838,7 @@ fn ordered_primitives(c: &mut Criterion) {
                 format!("{pattern}/{count}/cpu_observed_record_encode_submit_completion"),
                 |b| {
                     b.iter(|| {
-                        painter.begin_frame();
+                        painter.begin_frame().expect("benchmark frame begins");
                         record(&mut painter);
                         let mut encoder = device
                             .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());

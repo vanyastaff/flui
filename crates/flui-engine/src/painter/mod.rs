@@ -26,6 +26,7 @@ use flui_foundation::geometry::Rect;
 /// Manages instanced batching, tessellation, text rendering, and offscreen compositing.
 pub struct WgpuPainter {
     domain: Arc<crate::device_domain::DeviceDomain>,
+    frame_scope: Option<crate::device_domain::FrameSubmissionScope>,
     // ===== GPU State =====
     /// wgpu device (Arc for sharing with text renderer)
     device: Arc<wgpu::Device>,
@@ -116,7 +117,17 @@ impl WgpuPainter {
     ///
     /// Pair this with [`Self::finish_frame`] after submitting the final encoder.
     /// Intermediate `render_to_view` flushes belong to the same frame.
-    pub fn begin_frame(&mut self) {
+    /// # Errors
+    /// Rejects a nested frame or a closing/lost device domain.
+    pub fn begin_frame(&mut self) -> crate::error::EngineResult<()> {
+        let scope = self.domain.begin_frame_scope()?;
+        self.frame_scope = Some(scope);
+        self.reset_frame_state();
+        Ok(())
+    }
+
+    /// Recording reset inside an outer managed DeviceDomain frame scope.
+    pub(crate) fn begin_frame_in_scope(&mut self) {
         self.reset_frame_state();
     }
 
@@ -133,6 +144,7 @@ impl WgpuPainter {
         self.draw_order.clear();
         self.state.reset();
         self.compositor.reset();
+        self.frame_scope = None;
     }
     /// Create a new GPU painter
     ///
@@ -209,6 +221,7 @@ impl WgpuPainter {
 
         Self {
             domain,
+            frame_scope: None,
             device,
             queue,
             surface_format,

@@ -238,3 +238,38 @@ platform typechecks, Android app, desktop-mcp Windows/macOS и wasm checks пр�
 за CI. Android C dependency проверена с установленными LLVM clang/llvm-ar через
 локальное окружение команды, без изменения gate. Журнал:
 `target/engine-audit/foundation-check-changed.log`.
+
+## Исправления после inline review
+
+Проверены [Codex review](https://github.com/vanyastaff/flui/pull/1407#pullrequestreview-5376817247)
+и [CodeRabbit review](https://github.com/vanyastaff/flui/pull/1407#pullrequestreview-5376889314).
+Одинаковое замечание viewport в двух reviews учитывается как одна проблема.
+
+| Замечание | Исправление и проверяемый результат |
+|---|---|
+| Composite-only viewport после resize | Immutable binding создаётся до replay; две offscreen-only записи разных размеров до одного submit читаются в правильных координатах |
+| Public painter обходит cumulative submit limit | Fallible begin владеет scope до finish; 64 завершённых submissions не разрешают 65-й, следующий frame работает |
+| Большой gradient может перегрузить fragment loop | Явный предел 256 stops на draw; 100,000 stops отвергаются до submission для linear/radial/sweep; девятый stop сохранён |
+| Quarantine не виден recovery loop | Реальный RasterBackend predicate учитывает domain loss независимо от callback atomic; новая generation снова принимает работу |
+| Mutex на каждом recording element | Atomic accounting сохраняет Send без mutex на успешном draw path; exact-size index batches получают одно admission |
+| Profiler смешивает failed и следующий frame | Abort/unwind помечает query state; следующий frame пересоздаёт его; восемь успешных кадров после каждого failure содержат только собственные scopes |
+| Concurrent headless capture сталкивается с active frame | Общая capture-операция сериализуется до readback; тест проверяет overlap и следующий capture после poison/unwind |
+| Missing retained source ошибочно считается foreign domain и теряет spare | Проверка source выполняется до spare.take; отсутствующий/устаревший source recoverable, реальный другой domain — отдельная ошибка; пиксели и две зарезервированные texture сохраняются |
+| Adjacent tessellation merge потерян | Merge разрешён только для соседнего Tess run с одинаковыми pipeline/scissor/clip и непрерывными indices; interleaved solid и разные clips сохраняют результат |
+| Старый review плана выглядит актуальным | Документ помечен историческим снимком до реализации и связан с текущим планом |
+
+Просьба назвать заменённый Flutter test неприменима буквально: решение о
+candidate ownership принято для wgpu и не заменяет именованный Flutter test.
+В ARCHITECTURE добавлена точная ссылка на собственную FLUI failure/reuse проверку,
+без выдуманной связи с upstream тестами.
+
+`review-gpu-final.log`: 58/58, 0 skipped с `testing,gpu-profiler`.
+`review-clippy.log`: clippy all-targets с этими features прошёл.
+В `review-mutations-render.log` возврат дефектов вызывает реальные отказы
+viewport, gradient admission, public frame scope, tess merge, concurrent capture
+и profiler. В `review-mutations-recovery.log` отдельно падают actual recovery
+predicate и сохранение spare. Скрипт восстанавливает исходные bytes в `finally`.
+Это доказательство чувствительности тестов, не выполнение повреждённых shaders:
+проверка 100,000 stops останавливается до queue submission.
+
+Финальный review-check-changed.log: cargo xtask check-changed завершился с exit 0; 608/608 общих тестов, 10 skipped, strict docs/doctests, platform/Android app/wasm checks прошли. Host-only Linux/xvfb suite и iOS runner остаются за CI.

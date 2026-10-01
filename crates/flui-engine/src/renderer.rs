@@ -1091,7 +1091,7 @@ impl Renderer {
         if lost {
             self.painter.domain().mark_lost();
         }
-        lost
+        lost || self.painter.domain().is_lost()
     }
 
     /// Whether the intermediate-texture present path is active for this frame.
@@ -1884,6 +1884,9 @@ impl Renderer {
         // render. A failed content pass is the frame's failure: nothing below
         // presents it.
         let domain = Arc::clone(self.painter.domain());
+        #[cfg(feature = "gpu-profiler")]
+        let mut profile_frame =
+            crate::profiler::ProfileFrame::begin(&mut self.gpu_profiler, &self.device);
         let mut steps = SwapchainFrame {
             device: &self.device,
             painter: &mut self.painter,
@@ -1892,7 +1895,7 @@ impl Renderer {
             supports_copy_src: self.supports_copy_src,
             format: surface_format,
             #[cfg(feature = "gpu-profiler")]
-            gpu_profiler: &mut self.gpu_profiler,
+            gpu_profiler: profile_frame.profiler(),
         };
         self.frame.run(
             plan,
@@ -1902,6 +1905,8 @@ impl Renderer {
             (&view, &output.texture),
             &mut steps,
         )?;
+        #[cfg(feature = "gpu-profiler")]
+        profile_frame.complete();
 
         // The platform's frame-pacing signal, armed strictly before the
         // present that follows (see `RasterBackend::set_pre_present_hook`).
@@ -1935,12 +1940,12 @@ impl Renderer {
             "surface frame submitted and presented"
         );
 
-        // Signal end of frame to the profiler and harvest the oldest completed
-        // result (if the pipeline has warmed up). Both calls are no-ops when
+        // Harvest the oldest completed result (if the pipeline has warmed up).
+        // Profiling is already closed before the potentially panicking present hook.
+        // This is a no-op when
         // `gpu_profiler` is `None`.
         #[cfg(feature = "gpu-profiler")]
         if let Some(profiler) = self.gpu_profiler.as_mut() {
-            profiler.end_frame();
             let timestamp_period = self.queue.get_timestamp_period();
             profiler.process_finished_frame(timestamp_period);
         }
@@ -2041,7 +2046,7 @@ impl Renderer {
         // Reset per-frame clip/transform/opacity/layer state so that
         // partial-damage scissors from frame N cannot leak into frame N+1.
         // This must happen BEFORE the damage clip_rect below.
-        backend.painter_mut().begin_frame();
+        backend.painter_mut().begin_frame_in_scope();
 
         // A partial frame scissors every draw to its damage and repaints the
         // background there first (`damage::begin_partial`); `partial_damage`
@@ -2291,7 +2296,7 @@ impl Renderer {
         // with the coordinate-frame-correct transform (see doc comment
         // above).
         let offscreen_painter = offscreen.mask_painter((dev_width, dev_height));
-        offscreen_painter.begin_frame();
+        offscreen_painter.begin_frame_in_scope();
         let recorded = {
             let mut temp_backend = crate::layer_dispatcher::LayerDispatcher::new(offscreen_painter);
 
@@ -2693,6 +2698,108 @@ mod tests {
                 assert_eq!(raw[3], 255, "opaque black underlay");
             }
         }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn quarantined_domain_reaches_the_backend_recovery_predicate() {
+        struct ReleasedWindow;
+        impl raw_window_handle::HasWindowHandle for ReleasedWindow {
+            fn window_handle(
+                &self,
+            ) -> Result<raw_window_handle::WindowHandle<'_>, raw_window_handle::HandleError>
+            {
+                Err(raw_window_handle::HandleError::Unavailable)
+            }
+        }
+        impl raw_window_handle::HasDisplayHandle for ReleasedWindow {
+            fn display_handle(
+                &self,
+            ) -> Result<raw_window_handle::DisplayHandle<'_>, raw_window_handle::HandleError>
+            {
+                Err(raw_window_handle::HandleError::Unavailable)
+            }
+        }
+        // This tests the actual backend predicate in the released-surface state;
+        // it needs no fabricated native handles and never creates a surface.
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        let adapter = pollster::block_on(instance.request_adapter(
+            &crate::adapter::trusted_adapter_options(wgpu::PowerPreference::LowPower, None),
+        ))
+        .expect("GPU adapter for recovery predicate");
+        let capabilities = GpuCapabilities::detect(&adapter);
+        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            label: Some("Quarantine recovery predicate"),
+            ..wgpu::DeviceDescriptor::default()
+        }))
+        .expect("GPU device for recovery predicate");
+        let device = Arc::new(device);
+        let queue = Arc::new(queue);
+        let format = wgpu::TextureFormat::Rgba8Unorm;
+        let domain =
+            crate::device_domain::DeviceDomain::new(Arc::clone(&device), Arc::clone(&queue));
+        let (painter, offscreen) =
+            Renderer::build_format_consumers(Arc::clone(&domain), format, (16, 16));
+        let callback_flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let mut renderer = Renderer {
+            instance,
+            adapter,
+            device,
+            queue,
+            config: wgpu::SurfaceConfiguration {
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                format,
+                color_space: wgpu::SurfaceColorSpace::Srgb,
+                width: 16,
+                height: 16,
+                present_mode: wgpu::PresentMode::Fifo,
+                alpha_mode: wgpu::CompositeAlphaMode::Auto,
+                view_formats: vec![],
+                desired_maximum_frame_latency: 2,
+            },
+            capabilities,
+            painter,
+            offscreen,
+            supports_copy_src: false,
+            device_lost: Arc::clone(&callback_flag),
+            frame: crate::frame_protocol::FrameProtocol::new(),
+            pre_present_hook: None,
+            lease: SurfaceLease::released_for_test(Arc::new(ReleasedWindow)),
+            _single_mutator: PhantomData,
+            #[cfg(feature = "gpu-profiler")]
+            gpu_profiler: None,
+            force_intermediate: false,
+        };
+        assert!(!crate::RasterBackend::is_device_lost(&renderer));
+        // Domain quarantine can happen without a wgpu device-lost callback.
+        domain.mark_lost();
+        assert!(!callback_flag.load(std::sync::atomic::Ordering::Relaxed));
+        assert!(
+            crate::RasterBackend::is_device_lost(&renderer),
+            "native lane must enter recovery"
+        );
+        assert!(matches!(
+            domain.reserve(crate::device_domain::PreparedCost::default()),
+            Err(crate::device_domain::DomainError::Unavailable)
+        ));
+        // Recovery replaces the generation. This deliberately does not claim
+        // Renderer::recover succeeded with an unavailable native window.
+        let fresh = crate::device_domain::DeviceDomain::new(
+            Arc::clone(&renderer.device),
+            Arc::clone(&renderer.queue),
+        );
+        (renderer.painter, renderer.offscreen) =
+            Renderer::build_format_consumers(Arc::clone(&fresh), format, (16, 16));
+        assert!(!crate::RasterBackend::is_device_lost(&renderer));
+        let encoder = renderer
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+        fresh
+            .submit(
+                fresh
+                    .prepare(vec![encoder.finish()], vec![])
+                    .expect("fresh prepared submission"),
+            )
+            .expect("fresh generation progresses after quarantine");
     }
 
     /// Acquire a real device/queue for the HiDPI backdrop regression below.
@@ -3240,10 +3347,14 @@ mod tests {
     /// DPR, followers across repaint boundaries, and the shader-mask layer root.
     #[test]
     fn renderer_surface_selection_and_layer_compositing_read_back_as_specified() {
+        #[cfg(not(target_arch = "wasm32"))]
+        quarantined_domain_reaches_the_backend_recovery_predicate();
         sdr_surface_selection_rejects_incompatible_pairs();
         sdr_surface_selection_painter_readback_preserves_swatches_and_blending();
         backdrop_filter_path_a_composites_at_device_rect_under_dpr();
         follower_gpu_renders_at_resolved_position_across_repaint_boundaries();
         shader_mask_layer_root_gpu_pixel_readback_reflects_mask();
+        #[cfg(feature = "gpu-profiler")]
+        crate::profiler::tests::failed_frames_do_not_pollute_the_next_profile();
     }
 }

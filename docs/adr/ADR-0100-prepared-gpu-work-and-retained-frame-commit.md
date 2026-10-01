@@ -65,6 +65,12 @@ not promise continued polling of raw device clones after their owner disappears.
 
 ## Verification
 
+Public `WgpuPainter::begin_frame` is fallible and owns the same cumulative
+submission scope until `finish_frame`; callback retirement cannot renew that
+allowance mid-frame. Internal child painters only reset recording under their
+parent's scope. Domain quarantine participates directly in the backend loss
+predicate used by the native recovery loop, independently of the driver callback.
+
 - Fail after an early submitted write to a candidate; previous committed readback
   stays unchanged, then a valid frame progresses with the owed damage.
 - A candidate and its submitted uses keep one charge through resize, replacement,

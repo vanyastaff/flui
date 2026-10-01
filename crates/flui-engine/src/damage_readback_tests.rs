@@ -282,6 +282,7 @@ fn bounded_reused_targets_preserve_pixels() {
             submissions: 64,
         },
     );
+    missing_partial_source_preserves_both_targets(&device, domain.queue());
     let mut target = RetainedTarget::default();
     for (size, fail, red) in [
         ((8, 8), false, false),
@@ -343,6 +344,93 @@ fn bounded_reused_targets_preserve_pixels() {
             "failed clear must not replace committed pixels"
         );
     }
+}
+
+#[cfg(feature = "testing")]
+fn missing_partial_source_preserves_both_targets(
+    device: &std::sync::Arc<wgpu::Device>,
+    queue: &std::sync::Arc<wgpu::Queue>,
+) {
+    use crate::device_domain::{DeviceDomain, DomainError, PreparedCost, PreparedIrLimits};
+    use crate::error::{EngineError, Recoverability};
+    use crate::retained_target::RetainedTarget;
+    use std::sync::Arc;
+    let limits = PreparedIrLimits {
+        cost: PreparedCost {
+            gpu_bytes: 8 * 8 * 4 * 2,
+            cpu_bytes: 0,
+            objects: 4,
+        },
+        submissions: 64,
+    };
+    let domain = DeviceDomain::with_limits(Arc::clone(device), Arc::clone(queue), limits);
+    let foreign = DeviceDomain::new(Arc::clone(device), Arc::clone(queue));
+    let format = wgpu::TextureFormat::Rgba8Unorm;
+    let mut target = RetainedTarget::default();
+    let Err(missing) = target.begin(&domain, (8, 8), format, true) else {
+        panic!("partial preparation requires a committed source");
+    };
+    assert!(matches!(missing, EngineError::MissingRetainedSource));
+    assert_eq!(missing.recoverability(), Recoverability::Recoverable);
+    for color in [wgpu::Color::GREEN, wgpu::Color::RED] {
+        let candidate = target
+            .begin(&domain, (8, 8), format, false)
+            .expect("bounded candidate");
+        crate::test_support::clear_target(device, queue, candidate.view(), color);
+        target.commit(candidate);
+    }
+    for (owner, size, expected_missing) in [(&foreign, (8, 8), false), (&domain, (4, 4), true)] {
+        let Err(error) = target.begin(owner, size, format, true) else {
+            panic!("incompatible partial source must fail");
+        };
+        if expected_missing {
+            assert!(matches!(error, EngineError::MissingRetainedSource));
+            assert_eq!(error.recoverability(), Recoverability::Recoverable);
+        } else {
+            assert!(matches!(error, EngineError::DeviceDomainMismatch));
+            assert_eq!(error.recoverability(), Recoverability::Unrecoverable);
+        }
+    }
+    // Acquire/reconfigure can invalidate the source after planning a partial.
+    target.invalidate();
+    assert!(matches!(
+        target.begin(&domain, (8, 8), format, true),
+        Err(EngineError::MissingRetainedSource)
+    ));
+    let pixels = crate::test_support::readback_bytes(
+        device,
+        queue,
+        target.texture().expect("previous committed image"),
+        8,
+        8,
+    );
+    assert_eq!(&pixels[0..4], &[255, 0, 0, 255]);
+    domain
+        .poll()
+        .expect("retirement progress after rejected preparation");
+    // Both allocations must remain owned: polling must not free a spare that
+    // failed source validation never had authority to consume.
+    assert!(matches!(
+        domain.reserve(PreparedCost {
+            gpu_bytes: 1,
+            cpu_bytes: 0,
+            objects: 0
+        }),
+        Err(DomainError::Budget { .. })
+    ));
+    let candidate = target
+        .begin(&domain, (8, 8), format, false)
+        .expect("full retry reuses spare within two-target quota");
+    crate::test_support::clear_target(device, queue, candidate.view(), wgpu::Color::GREEN);
+    target.commit(candidate);
+    let pixels = crate::test_support::readback_bytes(
+        device,
+        queue,
+        target.texture().expect("retried committed image"),
+        8,
+        8,
+    );
+    assert_eq!(&pixels[0..4], &[0, 255, 0, 255]);
 }
 
 /// A retained target that is not known to hold the last frame is never

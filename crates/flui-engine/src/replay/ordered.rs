@@ -65,31 +65,7 @@ impl super::GpuReplay {
                 limit,
             });
         }
-        resources.reserve_prepared(crate::device_domain::PreparedCost {
-            gpu_bytes: 16,
-            cpu_bytes: 16,
-            objects: 2,
-        })?;
-        use wgpu::util::DeviceExt;
-        let viewport = [
-            self.uniform_size.0 as f32,
-            self.uniform_size.1 as f32,
-            0.0,
-            0.0,
-        ];
-        let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Immutable Target Viewport"),
-            contents: bytemuck::cast_slice(&viewport),
-            usage: wgpu::BufferUsages::UNIFORM,
-        });
-        self.viewport_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Immutable Target Viewport"),
-            layout: pipelines.viewport_bind_group_layout(),
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: buffer.as_entire_binding(),
-            }],
-        });
+        self.prepare_viewport_binding(device, pipelines, resources)?;
         let stops = bytemuck::cast_slice(&segment.current_gradient_stops);
         let stop_binding = if stops.is_empty() {
             None

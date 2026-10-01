@@ -32,7 +32,7 @@
 //! [`Layer::ShaderMask`]: flui_layer::Layer::ShaderMask
 //! [`Layer::Follower`]: flui_layer::Layer::Follower
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use flui_layer::{LayerId, LayerTree};
 
@@ -63,6 +63,8 @@ thread_local! {
 #[expect(missing_debug_implementations)]
 pub struct HeadlessRenderer {
     domain: Arc<crate::device_domain::DeviceDomain>,
+    // Host capture edge only: one complete render/readback per device domain.
+    capture_gate: Mutex<()>,
     /// Kept so a test's feature-reduced twin comes from this same adapter and
     /// instance (see [`Self::without_dual_source_blending`]).
     #[cfg(test)]
@@ -156,6 +158,7 @@ impl HeadlessRenderer {
             crate::device_domain::DeviceDomain::new(Arc::clone(&device), Arc::clone(&queue));
         Ok(Self {
             domain,
+            capture_gate: Mutex::new(()),
             #[cfg(test)]
             adapter,
             device,
@@ -180,6 +183,9 @@ impl HeadlessRenderer {
     /// (no row padding) RGBA8 pixels, top row first — ready for
     /// `image::save_buffer(.., ColorType::Rgba8)`.
     ///
+    /// Concurrent calls on this renderer serialize the complete capture and
+    /// readback; separate renderers remain independent.
+    ///
     /// The surface is cleared to opaque white before the tree is drawn, so any
     /// area the tree does not paint reads as white rather than uninitialized
     /// GPU memory.
@@ -187,6 +193,22 @@ impl HeadlessRenderer {
     /// # Errors
     /// Returns [`EngineError`] when the render pass fails.
     pub fn render_layer_tree(&self, tree: &LayerTree, size: (u32, u32)) -> EngineResult<Vec<u8>> {
+        self.with_capture_gate(|| self.render_layer_tree_locked(tree, size))
+    }
+
+    fn with_capture_gate<T>(&self, capture: impl FnOnce() -> EngineResult<T>) -> EngineResult<T> {
+        let _capture = self
+            .capture_gate
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        capture()
+    }
+
+    fn render_layer_tree_locked(
+        &self,
+        tree: &LayerTree,
+        size: (u32, u32),
+    ) -> EngineResult<Vec<u8>> {
         let _submission_scope = self.domain.begin_frame_scope()?;
         let (width, height) = size;
         // wgpu rejects a zero-byte buffer by PANICKING (`wgpu-core`'s
@@ -832,6 +854,74 @@ mod twin_readback_tests {
     /// A renderer and its feature-reduced twin, created, used and dropped over
     /// and over, never block.
     ///
+    fn concurrent_capture_and_unwind_recovery() {
+        let Some(renderer) = crate::test_support::renderer_or_skip() else {
+            return;
+        };
+        let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let (finished_tx, finished_rx) = std::sync::mpsc::channel();
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        std::thread::scope(|threads| {
+            let renderer = &renderer;
+            let first = threads.spawn(move || {
+                renderer
+                    .with_capture_gate(|| {
+                        let _scope = renderer.domain.begin_frame_scope()?;
+                        entered_tx.send(()).expect("announce overlapping capture");
+                        release_rx.recv().expect("release first capture");
+                        Ok(())
+                    })
+                    .expect("first capture finishes");
+            });
+            entered_rx.recv().expect("first capture owns scope");
+            let second = threads.spawn(|| {
+                started_tx.send(()).expect("second capture starts");
+                let result = renderer.render_layer_tree(&LayerTree::default(), (8, 8));
+                finished_tx.send(result).expect("capture result delivered");
+            });
+            started_rx
+                .recv()
+                .expect("second thread reached capture call");
+            let early = finished_rx.recv_timeout(std::time::Duration::from_millis(100));
+            release_tx.send(()).expect("release first capture");
+            first.join().expect("first capture thread");
+            second.join().expect("second capture thread");
+            assert!(
+                matches!(early, Err(std::sync::mpsc::RecvTimeoutError::Timeout)),
+                "overlapping capture must wait rather than fail admission"
+            );
+            let pixels = finished_rx
+                .recv()
+                .expect("completed capture")
+                .expect("same-renderer concurrent capture succeeds");
+            assert!(
+                pixels
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .all(|pixel| *pixel == [255, 255, 255, 255])
+            );
+        });
+        let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _result: crate::error::EngineResult<()> = renderer.with_capture_gate(|| {
+                let _scope = renderer.domain.begin_frame_scope()?;
+                panic!("capture edge fault");
+            });
+        }));
+        assert!(failed.is_err());
+        let pixels = renderer
+            .render_layer_tree(&LayerTree::default(), (4, 4))
+            .expect("poisoned capture gate and scope recover after unwind");
+        assert!(
+            pixels
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .all(|pixel| *pixel == [255, 255, 255, 255])
+        );
+    }
+
     /// The twin used to come from a `wgpu::Instance` of its own, which left two
     /// instances' devices on one adapter; on a Windows host tearing such a pair
     /// down blocked inside the driver about once in eight, until nextest killed
@@ -850,6 +940,7 @@ mod twin_readback_tests {
         // Also here, so the one headless GPU test carries both contracts: a
         // zero-sized or overflowing capture is a typed error, not a panic.
         super::target_size_tests::zero_sized_capture_is_a_typed_error();
+        concurrent_capture_and_unwind_recovery();
         let instances = || super::INSTANCES_CREATED.with(std::cell::Cell::get);
         for _ in 0..12 {
             let before = instances();

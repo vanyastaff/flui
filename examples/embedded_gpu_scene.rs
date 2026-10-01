@@ -325,7 +325,7 @@ impl Gpu {
         let side = (width - 64.0).min(height - 112.0).max(1.0);
         let left = (width - side) / 2.0;
         let top = (height - side) / 2.0;
-        self.painter.begin_frame();
+        self.painter.begin_frame()?;
         self.painter.draw_rect(
             Rect::from_ltrb(left - 8.0, top - 8.0, left + side + 8.0, top + side + 8.0),
             &Paint::fill(Color::rgb(35, 46, 67)),

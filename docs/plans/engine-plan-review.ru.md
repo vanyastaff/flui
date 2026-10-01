@@ -1,7 +1,10 @@
 # Критическая проверка и исправление плана engine
 
-Дата: 2026-10-01. Статус: review выполнен, план исправлен; foundation migration
-ещё не реализована. Ранее выполненные audit fixes и demonstrations не являются
+Дата: 2026-10-01. Исторический снимок review до реализации: план был исправлен,
+foundation migration на тот момент ещё не была реализована. Текущее состояние
+описано в [плане внедрения](engine-foundation-implementation.ru.md) и
+[измерениях реализации](../research/engine-foundation-measurements.ru.md).
+Ранее выполненные audit fixes и demonstrations не являются
 доказательством новых lifecycle/color/clip guarantees.
 
 ## Вердикт

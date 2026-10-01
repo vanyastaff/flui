@@ -522,6 +522,11 @@ fn run_gradient_cases(cases: &[(&str, fn())]) {
 #[test]
 fn gradients_read_back_as_specified() {
     run_gradient_cases(&[
+        #[cfg(feature = "testing")]
+        (
+            "large_stop_refusal_recovery",
+            excessive_gradient_work_refuses_then_next_frame_renders,
+        ),
         ("ninth_stop", ninth_gradient_stop_is_not_silently_clamped),
         (
             "porter_duff_modes",
@@ -543,4 +548,84 @@ fn gradients_read_back_as_specified() {
             repeated_gradient_kinds_keep_distinct_tables_and_order,
         ),
     ]);
+}
+
+#[cfg(feature = "testing")]
+fn excessive_gradient_work_refuses_then_next_frame_renders() {
+    let (device, queue) = crate::test_support::test_device_and_queue("gradient work limit");
+    let (target, view) = crate::test_support::create_target(
+        &device,
+        "bounded gradient work",
+        SIDE,
+        SIDE,
+        wgpu::TextureFormat::Rgba8Unorm,
+        wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+    );
+    crate::test_support::clear_target(&device, &queue, &view, wgpu::Color::BLACK);
+    let mut painter = crate::WgpuPainter::with_shared_device(
+        std::sync::Arc::clone(&device),
+        std::sync::Arc::clone(&queue),
+        wgpu::TextureFormat::Rgba8Unorm,
+        (SIDE, SIDE),
+    );
+    for kind in GRADIENT_KINDS {
+        painter
+            .begin_frame()
+            .expect("bounded gradient frame begins");
+        let mut shader = constant_gradient(kind, Color::rgb(255, 0, 0));
+        match &mut shader {
+            Shader::LinearGradient { colors, stops, .. }
+            | Shader::RadialGradient { colors, stops, .. }
+            | Shader::SweepGradient { colors, stops, .. } => {
+                *colors = vec![Color::rgb(255, 0, 0); 100_000];
+                *stops = None;
+            }
+            _ => unreachable!("gradient fixture always supplies a gradient"),
+        }
+        painter.draw_rect(full_surface(), &shader_paint(shader, BlendMode::SrcOver));
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+        assert!(
+            matches!(
+                painter.render_to_view(&view, &mut encoder),
+                Err(crate::EngineError::PreparedResourceLimit {
+                    resource: "gradient stops per draw",
+                    requested: 100_000,
+                    ..
+                })
+            ),
+            "{kind:?} must reject costly per-fragment work before submission"
+        );
+        drop(encoder);
+        painter.finish_frame();
+        let unchanged = crate::test_support::readback_bytes(&device, &queue, &target, SIDE, SIDE);
+        assert_eq!(
+            pixel_at(&unchanged, CENTRE),
+            [0, 0, 0, 255],
+            "refused gradient leaves target untouched"
+        );
+    }
+    painter
+        .begin_frame()
+        .expect("valid gradient frame begins after refusals");
+    painter.draw_rect(
+        full_surface(),
+        &shader_paint(
+            constant_gradient(GradientKind::Linear, Color::rgb(0, 255, 0)),
+            BlendMode::SrcOver,
+        ),
+    );
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+    painter
+        .render_to_view(&view, &mut encoder)
+        .expect("next valid gradient encodes");
+    painter
+        .submit_encoder(encoder)
+        .expect("next valid gradient submits");
+    painter.finish_frame();
+    let pixels = crate::test_support::readback_bytes(&device, &queue, &target, SIDE, SIDE);
+    assert_eq!(
+        pixel_at(&pixels, CENTRE),
+        [0, 255, 0, 255],
+        "valid frame progresses after gradient work refusal"
+    );
 }
