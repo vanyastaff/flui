@@ -537,8 +537,9 @@ developer machine: CI has no surface.
 
 ### 19. A layer composites its whole region with its recorded mode
 
-A save layer, an opacity layer and a shader mask composite their whole
-region with the blend mode they record. The region is the layer's bounds
+A save layer and an opacity layer composite their whole region with the
+blend mode they record ([ADR-0099](../../docs/adr/ADR-0099-save-layer-region-and-blend.md)
+states the cross-crate contract). The region is the layer's bounds
 mapped through the transform current at `save_layer`, cut by the clip in
 force there (ancestor clip rects, a rounded clip, and a partial frame's
 damage scissor); an unbounded layer's region is the clip itself. The
@@ -565,9 +566,9 @@ Why this and not "replace only under the content":
 - Clips still clip: a layer never changes a pixel its clip excludes, the one
   limit the author cannot reach from inside the layer.
 - It is the extent the damage producer already reports (`DrawOp`'s damage
-  extent for a bounded save layer is its mapped bounds; `LayerDiffer` takes a
-  shader mask's whole bounds and an opacity layer in such a mode as the
-  viewport), so a partial frame repaints everything the composite changes.
+  extent for a bounded save layer is its mapped bounds; `LayerDiffer` takes an
+  opacity layer in such a mode as the viewport), so a partial frame repaints
+  everything the composite changes.
 
 Edge cases:
 
@@ -586,13 +587,21 @@ Edge cases:
   `texture_instanced.wgsl`); only a fragment the clip excludes is dropped.
 - A shader mask's and a backdrop filter's offscreen is drawn outside the
   ancestor clips, so their composite carries the scissor and the rounded clip
-  in force when they were queued, whatever their mode.
+  in force when they were queued, whatever their mode, at the top level and
+  inside an opacity layer's offscreen alike.
+- A shader mask is not such a layer. Its mode combines its shader with its
+  child, which the mask pass does, and its result composites `SrcOver`:
+  applied again at the composite, the default `Modulate` (or the gradient-text
+  `SrcIn`) would multiply the child by the backdrop and erase the backdrop
+  around it. The mask pass applies the shader's alpha alone for now (Open
+  items).
 
 Locked by `layer_blend_tests::gpu_tests::a_layer_composites_its_whole_region_with_its_mode`
 (mapped, scaled and rotated bounds, an empty `Clear` layer, rect and rounded
 clips, a translucent translated layer, an opaque `DstOver` layer),
 `damage_readback_tests::an_effect_layer_composites_its_whole_region_with_its_mode`
-(opacity layers and a clipped shader mask in the layer tree), and the damage
+(opacity layers, a clipped `Modulate` shader mask that keeps the backdrop
+around its child, and a clipped mask inside an opacity layer), and the damage
 rows `a_removed_translated_src_save_layer_leaves_nothing_behind`,
 `a_removed_destination_affecting_layer_leaves_nothing_behind` and
 `a_change_beside_a_viewport_compositing_layer_matches_a_full_frame`.
@@ -610,11 +619,18 @@ rows `a_removed_translated_src_save_layer_leaves_nothing_behind`,
   19).** The texture composite has no coverage-correct path (ADR-0057 covers
   shapes only), so along a rounded clip's fringe a `Src` or `Clear` layer
   scales the destination by the coverage instead of mixing the layer with
-  it. Hard clips are exact; the readbacks sample inside the fringe.
+  it. The content inside a save layer went through the same clip, so at the
+  fringe it is scaled by the coverage twice. Hard clips are exact; the
+  readbacks sample inside the fringe.
 - **A rotated destination-replacing layer under a rounded clip (decision
   19).** The composite instance has one clip slot, which the ambient clip
   takes, so the layer replaces the bounding box of its rotated bounds within
   that clip rather than the rotated quad.
+- **A shader mask's blend mode (decision 19, ADR-0099).** The mask pass
+  multiplies the child by the shader's alpha whatever `ShaderMaskLayer`'s
+  `blend_mode()` says, and the result composites `SrcOver`. Applying the
+  mode between shader and child (`SrcIn` taking the shader's colour,
+  `Modulate` its colour and alpha) belongs in the mask pass.
 - **`catch_unwind` around `render_scene`.** A panic inside a layer's paint
   poisons the frame rather than isolating the layer; changing that is a
   contract change that needs its own ADR.

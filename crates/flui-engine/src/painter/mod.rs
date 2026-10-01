@@ -339,20 +339,16 @@ impl WgpuPainter {
     /// `bounds` is the device rect the texture covers. The composite is cut by
     /// the clip in force now — the scissor (ancestor clip rects and a partial
     /// frame's damage) and an ambient rounded clip — because the offscreen was
-    /// drawn outside them. `local_bounds`, the same rect in the current
-    /// transform's local space, lets a rotated or skewed destination-replacing
-    /// result replace exactly its rotated bounds rather than their bounding
-    /// box; `None` when the texture is already a device-space rect.
+    /// drawn outside them.
     pub(crate) fn queue_offscreen_result(
         &mut self,
         texture: crate::texture_pool::PooledTexture,
         bounds: Rect<f64>,
         blend: flui_painting::paint::BlendMode,
-        local_bounds: Option<Rect<f64>>,
     ) {
         let scissor = self.state.current_scissor();
         let clip = self
-            .composite_clip(local_bounds, blend, false)
+            .composite_clip(None, blend, false)
             .unwrap_or(crate::state_stack::ResolvedClip::NONE);
         // Finalize the current segment and start a new one
         self.finish_current_segment();

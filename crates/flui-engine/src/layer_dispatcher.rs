@@ -457,7 +457,7 @@ impl<'frame> LayerDispatcher<'frame> {
             f64::from(h as f32),
         );
         self.painter
-            .queue_offscreen_result(blurred, clamped_composite_rect, blend, None);
+            .queue_offscreen_result(blurred, clamped_composite_rect, blend);
         true
     }
 }

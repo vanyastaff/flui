@@ -609,15 +609,23 @@ impl GpuReplay {
                     // A nested OffscreenTexture (shader-mask / backdrop-blur
                     // result) is itself premultiplied — composite with the
                     // premultiplied pipeline and an identity tint so it is not
-                    // re-multiplied by its own alpha.
+                    // re-multiplied by its own alpha. It composites exactly as
+                    // the top-level replay does: with its recorded mode, under
+                    // the scissor and clip in force when it was queued. This
+                    // offscreen shares the viewport's coordinates, so those
+                    // apply unchanged; without them a mask inside an opacity
+                    // layer paints past its clip.
+                    use crate::instancing::ClippableInstance as _;
                     let instance = crate::instancing::TextureInstance::new(
                         p.bounds,
                         flui_painting::styling::Color::WHITE,
-                    );
+                    )
+                    .with_clip(p.clip);
                     let _ = self.texture_batch.add(instance);
-                    // R2: flush_texture_batch_premultiplied drains + clears
-                    // texture_batch before returning.
-                    self.flush_texture_batch_premultiplied(
+                    // The flush drains and clears texture_batch before
+                    // returning.
+                    self.flush_texture_batch_premultiplied_with_mode(
+                        p.blend,
                         device,
                         queue,
                         pipelines,
@@ -626,7 +634,7 @@ impl GpuReplay {
                         encoder,
                         offscreen_view,
                         p.texture.view(),
-                        None,
+                        p.scissor,
                     );
                 }
                 DrawItem::OpacityLayer(nested) => {

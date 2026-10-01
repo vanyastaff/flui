@@ -304,10 +304,12 @@ impl GpuReplay {
                     // consistently here).
                     //
                     // The mode the producer recorded rides on the item rather
-                    // than being assumed SrcOver: a `ShaderMaskLayer` may carry
+                    // than being assumed SrcOver: a backdrop filter may carry
                     // any blend, and accepting it then compositing SrcOver is
                     // the accept-and-discard contract violation mapping
-                    // decision 8 names. `flush_texture_batch_premultiplied_with_mode`
+                    // decision 8 names. A shader mask queues SrcOver, because
+                    // its own mode belongs between its shader and its child
+                    // (ADR-0099). `flush_texture_batch_premultiplied_with_mode`
                     // builds the exact per-mode pipeline; the source is a
                     // finished, full-coverage offscreen, so every mode
                     // `blend_state_for` names is expressible here.

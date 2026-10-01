@@ -1580,9 +1580,15 @@ fn a_removed_destination_affecting_layer_leaves_nothing_behind() {
 ///   content: half-opaque red under the child, transparent elsewhere.
 /// - An opaque `DstOver` opacity layer keeps the backdrop on top of its
 ///   child; an opacity layer that skipped the group would paint red.
-/// - A `Src` shader mask under a rect clip replaces its bounds inside the
-///   clip, the pixels its child left transparent included, and nothing
-///   outside the clip.
+/// - A shader mask in its default `Modulate` mode under a rect clip
+///   composites its masked child `SrcOver`: the child shows unmultiplied by
+///   the backdrop, the backdrop stays where the child left the mask's bounds
+///   transparent, and nothing changes outside the clip. The mask's mode
+///   belongs between its shader and its child; applied again at the
+///   composite it would multiply the child by the backdrop and erase the
+///   backdrop around it.
+/// - A shader mask inside a translucent opacity layer composites under the
+///   clip it was queued with, not over the opacity layer's whole region.
 #[test]
 fn an_effect_layer_composites_its_whole_region_with_its_mode() {
     use flui_layer::{ClipRectLayer, OpacityLayer, ShaderMaskLayer};
@@ -1617,7 +1623,7 @@ fn an_effect_layer_composites_its_whole_region_with_its_mode() {
     let dst_over_opacity = opacity(1.0, BlendMode::DstOver);
     // Device: the clip is (20, 20)-(50, 50), the mask (20, 20)-(80, 80), the
     // child (20, 20)-(36, 36).
-    let clipped_src_mask = |tree: &mut LayerTree, root_id| {
+    let clipped_mask = |tree: &mut LayerTree, root_id| {
         let card = boundary(tree, root_id, Offset::new(20.0, 20.0));
         let clipped = tree.push_child(
             card,
@@ -1629,11 +1635,35 @@ fn an_effect_layer_composites_its_whole_region_with_its_mode() {
             clipped,
             Layer::from(ShaderMaskLayer::new(
                 Shader::solid(Color::WHITE),
-                BlendMode::Src,
+                BlendMode::Modulate,
                 Rect::from_xywh(0.0, 0.0, 60.0, 60.0),
             )),
         );
         tree.push_child(mask, red_child());
+    };
+    // Device: the opacity layer holds a clip of (20, 20)-(50, 50) and a mask
+    // of (20, 20)-(80, 80) whose child fills it.
+    let mask_in_opacity = |tree: &mut LayerTree, root_id| {
+        let card = boundary(tree, root_id, Offset::new(20.0, 20.0));
+        let faded = tree.push_child(card, Layer::from(OpacityLayer::new(0.5)));
+        let clipped = tree.push_child(
+            faded,
+            Layer::from(ClipRectLayer::hard_edge(Rect::from_xywh(
+                0.0, 0.0, 30.0, 30.0,
+            ))),
+        );
+        let mask = tree.push_child(
+            clipped,
+            Layer::from(ShaderMaskLayer::new(
+                Shader::solid(Color::WHITE),
+                BlendMode::SrcOver,
+                Rect::from_xywh(0.0, 0.0, 60.0, 60.0),
+            )),
+        );
+        tree.push_child(
+            mask,
+            rect_picture(Rect::from_xywh(0.0, 0.0, 60.0, 60.0), Color::RED),
+        );
     };
     // Name, the layers the row adds under the root, the samples it must read.
     type Row<'a> = (
@@ -1641,7 +1671,7 @@ fn an_effect_layer_composites_its_whole_region_with_its_mode() {
         &'a dyn Fn(&mut LayerTree, flui_layer::LayerId),
         &'static [((u32, u32), [u8; 4])],
     );
-    let rows: [Row<'_>; 3] = [
+    let rows: [Row<'_>; 4] = [
         (
             "half-opaque Src opacity layer",
             &src_opacity,
@@ -1653,14 +1683,19 @@ fn an_effect_layer_composites_its_whole_region_with_its_mode() {
             &[((44, 44), GREEN), ((100, 100), GREEN)],
         ),
         (
-            "Src shader mask under a clip",
-            &clipped_src_mask,
+            "Modulate shader mask under a clip",
+            &clipped_mask,
             &[
                 ((24, 24), RED),
-                ((45, 45), [0, 0, 0, 0]),
+                ((45, 45), GREEN),
                 ((70, 70), GREEN),
                 ((10, 10), GREEN),
             ],
+        ),
+        (
+            "shader mask under a clip inside an opacity layer",
+            &mask_in_opacity,
+            &[((30, 30), [128, 127, 0, 255]), ((70, 70), GREEN)],
         ),
     ];
     let mut failed = Vec::new();
@@ -1826,14 +1861,14 @@ fn a_change_beside_a_viewport_compositing_layer_matches_a_full_frame() {
             )))],
         ),
         (
-            "shader mask Src under a clip",
+            "Modulate shader mask under a clip",
             vec![
                 Layer::from(ClipRectLayer::hard_edge(Rect::from_xywh(
                     0.0, 0.0, 30.0, 30.0,
                 ))),
                 Layer::from(ShaderMaskLayer::new(
                     Shader::solid(Color::WHITE),
-                    BlendMode::Src,
+                    BlendMode::Modulate,
                     Rect::from_xywh(-20.0, -20.0, 60.0, 60.0),
                 )),
             ],
