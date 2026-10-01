@@ -1,40 +1,21 @@
 # ADR-0092: Text shapes per realm over Parley and crosses the display list as neutral shaped runs
 
-- **Status:** Proposed — gate 1 (§8) met by a prototype on 2026-09-26 (see Context); §10 step 1
-  landed (the raster seam), and step 2a, the flui-painting half of step 2, landed
-  (`FontCollection` and `TextContext` behind `parley`, the lock lint). Step 2b landed:
-  flui-app's `SharedEngineServices` builds the collection (one per owner thread, which is one
-  per process while [ADR-0091](ADR-0091-one-owner-thread-isolated-realms-raster-thread.md)
-  fixes one owner thread), `UiRealm::new` takes it, and each realm owns a `TextContext` over
-  it. §10 step 3a landed: layout, intrinsics and dry queries measure through the realm's
-  `TextContext`, lent through each presentation's pipeline; Parley measures behind
-  `parley-layout`; registration re-layout is 3b. §10 step 3b's pipeline half landed: every
-  `PipelineOwner` is built with a `TextContextHandle`, nothing in layout, intrinsics or dry
-  queries builds a context of its own, and the hot-reload plugin pipeline measures over its own
-  image's collection. Its registration half landed too: a face registered on the collection is
-  loaded into the process font system as well (for carets), and every pipeline that measured
-  text on it lays that text out again at its next frame, so the face reaches measurement, paint
-  and carets together (§2). §7's host-face feed
-  landed ahead of step 4 as step 3c: the app's collection holds the faces, generic families and
-  fallback order of the process font system, fed synchronously before the first frame
-  (asynchronously once step 3b's event exists). §10 step 4 landed on top of it, 4a and 4b
-  together as the owner decided: Parley measures in the default build and paint draws the
-  runs of the layout that measured (`DrawOp::Paragraph` carries a `ShapedParagraph`, the
-  engine's atlas rasterizes through `SwashRasterizer`); the `parley` and `parley-layout`
-  features are gone; the line-break gate is closed by that decision. The performance overlay's
-  labels are shaped through the realm's `TextContext` at scene assembly too, so the engine
-  shapes no text at all. §10 step 5 landed:
-  carets, selection boxes, hit-testing, line metrics and word boundaries read the Parley layout
-  that measured and painted, the cosmic-text `TextLayout` is gone with no rollback flag, and a
-  registration loads the collection alone. §10 step 6 is split in three (Revised 2026-09-30).
-  6a landed: cosmic-text and `unicode-script` are gone, and with them `FONT_SYSTEM`,
-  `SharedFontSystem` and the test doors that pinned it; the app's shared engine services scan
-  the host once with fontdb (`HostFonts::scan`) and feed the collection from that scan,
-  synchronously on the owner thread; FLUI owns the per-platform fallback tables. 6b (the feed
-  off the owner thread, with its first-frame test) and 6c (the editor's grapheme and word steps
-  on ICU4X, which completes §6) are open. Gates 2, 6 and 7 are closed (§8), so every gate is
-  met. §§1–5 are accepted, and §7 but for the off-thread feed (6b); §6 is accepted when 6c
-  lands. The supersessions below have taken effect and their back-links are written.
+- **Status:** Accepted (§§1–5, and §7 but for the off-thread feed of §10 step 6b); §6 Proposed
+  until §10 step 6c lands. Every gate (§8) is met: gate 1 by a prototype on 2026-09-26, gates 2,
+  6 and 7 on 2026-09-30 (see Context). §10 steps 1 to 5 and 6a landed. Each realm owns a
+  `TextContext` over the app's one `FontCollection` (one per owner thread, which is one per
+  process while [ADR-0091](ADR-0091-one-owner-thread-isolated-realms-raster-thread.md) fixes one
+  owner thread), lent to every pipeline; Parley measures, paint draws the runs of the layout
+  that measured (`DrawOp::Paragraph` carries a `ShapedParagraph`, the engine's atlas rasterizes
+  through `SwashRasterizer`), and carets, selection boxes, hit-testing, line metrics and word
+  boundaries read that same layout. The performance overlay's labels are shaped through the
+  realm's `TextContext`, so the engine shapes no text. A face registered on the collection
+  reaches measurement, paint and carets together at each pipeline's next frame (§2). The app's
+  shared engine services scan the host once with fontdb (`HostFonts::scan`) and feed the
+  collection from that scan, synchronously on the owner thread, with fallback tables FLUI
+  owns; cosmic-text, `unicode-script` and `FONT_SYSTEM` are gone. Open: 6b (the feed off the
+  owner thread, with its first-frame test) and 6c (the editor's grapheme and word steps on
+  ICU4X). The supersessions below have taken effect and their back-links are written.
 - **Date:** 2026-09-25
 - **Revised:** 2026-09-26 (rasterization prototype; see Context); 2026-09-29 (§10 step 3
   split into 3a and 3b; the realm lends its context through a shared handle; Parley
@@ -206,7 +187,11 @@ and the rule FLUI ships.
 
 Measured by `cargo bench -p flui-painting --bench text_startup` on the Windows development host
 (release build, 168 faces in 145 files), criterion medians of 10 samples, and a counting global
-allocator for the heap figures:
+allocator for the heap figures. The heap figures count allocations only: font files the
+collection maps are not in them, so they are not resident memory. The "before" column ran the same bench
+on the tree before step 6a (`main` at `b76144dd3`), where the scan is
+`cosmic_text::FontSystem::new()` and the feed `FontCollection::with_host_faces` over the
+`shared_font_system()` handle; every other line of the bench is the same:
 
 | What | Before §10 step 6a | After |
 |---|---|---|
