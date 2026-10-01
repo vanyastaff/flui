@@ -167,6 +167,10 @@ impl HostFonts {
     /// generic's family, the chain's list for the character's script, or the
     /// chain's common list. There is no walk over every other face (mapping
     /// decision 17).
+    ///
+    /// With `bundled-fonts` the fed collection keeps the bundled Roboto as its
+    /// sans-serif family and every fallback ends in it, so that face is the
+    /// one asked, not the family the host's own generic names.
     pub(crate) fn chain_covers(&self, text: &str) -> bool {
         use icu_properties::props::Script as IcuScript;
         use icu_properties::{CodePointMapData, PropertyNamesShort};
@@ -179,13 +183,14 @@ impl HostFonts {
                     .script(parley::fontique::Script::from_str_unchecked(tag))
             });
             let reachable = |name: &str| {
-                name == self.generics.sans_serif
+                (!cfg!(feature = "bundled-fonts") && name == self.generics.sans_serif)
                     || script.contains(&name)
                     || self.chain.common().contains(&name)
             };
-            self.db.faces().any(|face| {
-                face.families.iter().any(|(name, _)| reachable(name)) && self.face_maps(face, c)
-            })
+            bundled_sans_serif_maps(c)
+                || self.db.faces().any(|face| {
+                    face.families.iter().any(|(name, _)| reachable(name)) && self.face_maps(face, c)
+                })
         })
     }
 
@@ -196,6 +201,19 @@ impl HostFonts {
                 .map(|font| font.charmap().map(c) != 0)
         }) == Some(Some(true))
     }
+}
+
+/// Whether the bundled Roboto, a bundled build's sans-serif family, maps `c`.
+#[cfg(all(any(test, feature = "testing"), feature = "bundled-fonts"))]
+fn bundled_sans_serif_maps(c: char) -> bool {
+    swash::FontRef::from_index(crate::fonts::ROBOTO_REGULAR, 0)
+        .is_some_and(|font| font.charmap().map(c) != 0)
+}
+
+/// Without bundled faces the host's sans-serif family is the one asked.
+#[cfg(all(any(test, feature = "testing"), not(feature = "bundled-fonts")))]
+fn bundled_sans_serif_maps(_: char) -> bool {
+    false
 }
 
 impl fmt::Debug for HostFonts {
@@ -239,4 +257,41 @@ pub(crate) enum HostData {
     Path(std::path::PathBuf),
     /// Bytes held in memory.
     Blob(Arc<dyn AsRef<[u8]> + Send + Sync>),
+}
+
+#[cfg(all(test, feature = "bundled-fonts"))]
+mod tests {
+    use super::{FallbackChain, HostFonts, HostGenerics};
+
+    /// A bundled build's fed collection keeps the bundled Roboto as its
+    /// sans-serif family, so coverage asks that face, not the face the
+    /// host's own sans-serif generic names: Arabic only the host's generic
+    /// family maps is never reached, and Latin the host lacks but Roboto
+    /// maps is.
+    #[test]
+    fn chain_coverage_asks_the_bundled_sans_serif_face() {
+        const ARABIC: &str = "FLUI Probe Arabic";
+        let mut db = fontdb::Database::new();
+        db.load_font_data(include_bytes!("../../assets/fonts/probe-arabic-ligature.ttf").to_vec());
+        let host = HostFonts {
+            db,
+            generics: HostGenerics {
+                sans_serif: ARABIC.to_owned(),
+                serif: ARABIC.to_owned(),
+                monospace: ARABIC.to_owned(),
+                cursive: ARABIC.to_owned(),
+                fantasy: ARABIC.to_owned(),
+            },
+            chain: FallbackChain::from_lists(&[], &[]),
+        };
+        assert!(host.covers("\u{0644}"), "the host face maps lam");
+        assert!(
+            !host.chain_covers("\u{0644}"),
+            "the fed collection never reaches the host's sans-serif family"
+        );
+        assert!(
+            host.chain_covers("a"),
+            "the bundled Roboto maps Latin the host lacks"
+        );
+    }
 }
