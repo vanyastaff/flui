@@ -8,9 +8,14 @@ from pathlib import Path
 
 def bytes_under(root):
     total = 0
+    seen = set()
     for current, _, files in os.walk(root):
         for name in files:
-            total += (Path(current) / name).stat().st_size
+            metadata = (Path(current) / name).stat()
+            identity = (metadata.st_dev, metadata.st_ino)
+            if identity not in seen:
+                seen.add(identity)
+                total += metadata.st_size
     return total
 
 
@@ -30,5 +35,5 @@ if __name__ == "__main__":
         "cargo_build_jobs": os.environ.get("CARGO_BUILD_JOBS", "default"),
         "file_bytes": {key: bytes_under(path) for key, path in roots.items()},
         "disk_free_bytes": shutil.disk_usage(Path.cwd()).free,
-        "note": "Uncompressed build products before rust-cache dependency cleanup, not cache archive sizes",
+        "note": "Unique-file logical bytes per root before rust-cache dependency cleanup, not allocated disk bytes or cache archive sizes",
     }, indent=2))
