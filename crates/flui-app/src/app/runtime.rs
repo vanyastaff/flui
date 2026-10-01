@@ -1721,7 +1721,7 @@ impl AppRuntime {
 /// How [`AppRuntime::resolved_services`] starts the host font feed, given
 /// the feed and the wake to call once it has landed: on a thread of its own
 /// ([`spawn_host_feed`]). This crate's unit tests park it instead
-/// ([`park_host_feed`]), so no feed lands in the middle of a test that
+/// (`park_host_feed`), so no feed lands in the middle of a test that
 /// counts generations or redraws; `spawn_host_feed` has its own test.
 #[cfg(not(test))]
 const LAUNCH_HOST_FEED: fn(HostFontFeed, Arc<dyn Fn() + Send + Sync>) = spawn_host_feed;
