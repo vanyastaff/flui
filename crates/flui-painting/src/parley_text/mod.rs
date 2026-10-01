@@ -14,9 +14,7 @@
 //!   `TextContext::shape`.
 //! - `caret` — the caret, selection, hit-test, line and word queries on a
 //!   [`ParagraphLayout`], in the painted box's coordinates.
-//! - `boundaries` — grapheme and word boundaries over ICU4X.
 
-mod boundaries;
 mod caret;
 mod shape;
 

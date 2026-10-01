@@ -14,8 +14,8 @@ use flui_foundation::geometry::{Offset, Rect};
 use parley::layout::BreakReason;
 
 use super::ParagraphLayout;
-use super::boundaries::{grapheme_bounds, word_at};
 use super::shape::is_hard_break as is_break;
+use crate::text_boundaries::{grapheme_bounds, word_at};
 use crate::typography::{
     LineMetrics, TextAffinity, TextBox, TextDirection, TextPosition, TextRange,
 };
@@ -391,7 +391,7 @@ mod tests {
     use crate::text_layout::{FontCollection, TextContext};
     use crate::typography::{TextDirection, TextStyle};
 
-    use super::super::boundaries::word_segments;
+    use crate::text_boundaries::word_segments;
 
     /// Word boundaries come from ICU4X's segmenter over the text rather
     /// than from the layout's cluster flags, because the layout holds a
@@ -432,10 +432,8 @@ mod tests {
                     }
                 }
             }
-            let segmented: BTreeSet<usize> = word_segments(text)
-                .into_iter()
-                .map(|(start, _, _)| start)
-                .collect();
+            let segmented: BTreeSet<usize> =
+                word_segments(text).map(|segment| segment.start).collect();
             assert_eq!(segmented, marked, "{text:?}");
         }
     }

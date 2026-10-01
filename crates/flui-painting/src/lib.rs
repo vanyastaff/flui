@@ -81,6 +81,7 @@ pub mod styling;
 pub mod typography;
 
 pub mod table_border;
+pub mod text_boundaries;
 pub mod text_layout;
 pub mod text_painter;
 
