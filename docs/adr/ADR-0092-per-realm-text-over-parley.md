@@ -418,9 +418,17 @@ app's shared engine services build the collection with the bundled faces
 file per registration, so fontique's lock is held for one file at a time, and each source is
 first read on a scratch collection inside `catch_unwind`: a source that panics or holds no
 family is skipped, since a panic under fontique's lock would poison it and every realm's next
-query would panic. When the feed ends, however it ends, the collection's generation rises
-once, the feed wakes the owner, and the owner's next turn tells every realm, as after a
-registration (§2): text measured before lays out again in the host's faces. An app family
+query would panic. The registration reads a path source again, so the guard covers a file that
+panics on every read, not one replaced between the trial and the registration. When the feed
+ends, the collection's generation rises once if the feed added a source, bound a generic or
+reordered a fallback list, and also if the feed unwound; a feed that changed nothing leaves it
+alone, so no realm lays its text out again for nothing. The feed then wakes the owner, and the
+owner's next turn tells every realm, as after a registration (§2): text measured before lays
+out again in the host's faces. The thread is the app's own, not a job on the runtime's compute
+lane or the host's executors: a lane may refuse a job and drop it, and the feed must run
+exactly once, so a refusal would need a way to hand the feed back. The thread is detached; one
+still feeding when the loop exits only adds faces to a collection no realm reads any more and
+sets a redraw flag no loop polls. An app family
 registered while the feed runs may end up with the host's faces of the same name too,
 depending on which comes first; that is accepted. Without `bundled-fonts` the collection would
 have no face for the first frame, so it is fed before it is handed out, as
@@ -775,15 +783,16 @@ that wires what it adds.
      registered before the start are in, and every top-level owner turn
      (`dispatch_platform_realm`) tells every realm when the generation moved since the last
      notice, which is also how a registration is announced. The feed registers one file at a
-     time, reads each source on a scratch collection first and raises the generation once, even
-     on unwind (§7).
+     time, reads each source on a scratch collection first and raises the generation once if it
+     changed the collection, and on unwind (§7).
      *Acceptance (6b):* a first-frame test renders bundled text before the scan completes, and
      text styled with a host-only family re-lays out when the feed lands. Met by the rows
      `the_first_frame_renders_bundled_text_before_the_host_feed_lands` and
      `text_in_a_host_only_family_re_lays_out_when_the_feed_lands` of flui-runtime's
      `font_registration_matrix`, with flui-painting's `host_feed_contract`
      (`a_host_feed_raises_the_generation_once`,
-     `a_family_held_before_the_feed_is_not_fed_again`) and
+     `a_family_held_before_the_feed_is_not_fed_again`,
+     `a_feed_that_adds_nothing_leaves_the_generation_alone`) and
      `a_source_that_panics_is_skipped_and_the_collection_stays_usable`, flui-app's
      `font_collection_contract` (`the_runtime_launches_one_host_feed_for_every_realm`,
      `the_host_feed_runs_off_the_owner_thread_and_wakes_once`) and the row
