@@ -16,9 +16,6 @@
 //! measure the lines and height they paint, and hard breaks lay out the lines
 //! Parley gives them.
 
-#[path = "support/cases.rs"]
-mod cases;
-
 use flui_foundation::geometry::Offset;
 use flui_painting::glyphs::FontRegistry;
 use flui_painting::typography::{FontWeight, TextDirection, TextSpan, TextStyle};
@@ -284,7 +281,7 @@ fn zero_max_lines_keeps_every_line() {
 /// hard-break rows also paint the number of lines they name.
 #[test]
 fn measured_lines_are_painted_lines() {
-    cases::run_cases(
+    crate::cases::run_cases(
         "measured_lines_are_painted_lines",
         &[
             (

@@ -1,6 +1,6 @@
 # flui-painting
 
-Records 2D drawing into a `DisplayList` and shapes text with cosmic-text.
+Records 2D drawing into a `DisplayList` and shapes text with Parley.
 Nothing is rasterised here — `flui-engine` replays the list on the GPU.
 
 ```rust

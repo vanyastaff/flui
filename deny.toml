@@ -43,12 +43,13 @@ ignore = [
     { id = "RUSTSEC-2025-0057" },
 
     # RUSTSEC-2026-0192: ttf-parser is unmaintained (author archived the
-    # repo).  Sources: ttf-parser ← fontdb ← cosmic-text (the text stack pins
-    # it; no maintained alternative exposes the same face-parsing surface yet),
-    # and ttf-parser ← owned_ttf_parser ← ab_glyph ← sctk-adwaita ← winit (the
-    # Wayland window decorations).  Parsing happens on locally installed
-    # fonts, not remote input.  Revisit when cosmic-text migrates (skrifa is
-    # the ecosystem successor).
+    # repo).  Sources: ttf-parser ← fontdb ← flui-painting (host font
+    # discovery, `HostFonts::scan`: fontdb reads each installed file's name and
+    # style tables), and ttf-parser ← owned_ttf_parser ← ab_glyph ←
+    # sctk-adwaita ← winit (the Wayland window decorations).  Parsing happens
+    # on locally installed fonts, not remote input.  Revisit with a
+    # skrifa-based host discovery (skrifa, which Parley already builds, is the
+    # ecosystem successor), which would drop fontdb.
     { id = "RUSTSEC-2026-0192" },
 ]
 

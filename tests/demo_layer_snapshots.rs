@@ -44,12 +44,8 @@
 //!
 //! Text is measured and painted on the realm's font collection, which holds
 //! only the bundled faces, so the geometry and the recorded paragraphs do not
-//! depend on the host; carets come from the same layout. The process-wide
-//! font system resolves against the *host's* fonts (before measurement
-//! moved, the Cupertino demo's button came out 61.18 px wide on a host with
-//! fonts installed and 129.55 px on one without), and
-//! [`pin_font_faces`] builds it from the faces this repository ships, once per
-//! process, so nothing that reaches it resolves against this machine. Everything else in the serialized form is
+//! depend on the host; carets come from the same layout. Nothing in the test
+//! host scans this machine's fonts. Everything else in the serialized form is
 //! documented stable: two-decimal floats, insertion-ordered children, no
 //! hash-map iteration.
 //!
@@ -88,12 +84,9 @@ mod vertical_slice_demo;
 #[path = "../examples/widgets_gallery.rs"]
 mod widgets_gallery;
 
-use std::sync::Once;
-
 use flui_rendering::testing::{collect_commands, serialize_layer_tree};
 use flui_testing::HeadlessBinding;
 use flui_testing::bootstrap::{MountOptions, MountOwners};
-use flui_testing::fonts::pin_font_faces;
 use flui_view::IntoView;
 use flui_widgets::{FocusRoot, GestureArenaScope, VsyncScope};
 
@@ -103,25 +96,6 @@ use flui_widgets::{FocusRoot, GestureArenaScope, VsyncScope};
 const SHOT_WIDTH: f64 = 900.0;
 const SHOT_HEIGHT: f64 = 760.0;
 
-/// Pins the shared font database to the faces this repository ships.
-///
-/// Once per process: `cosmic-text` caches shaping per `FontSystem`, so the
-/// face set has to be settled before the first paragraph is shaped, and every
-/// test in this binary shares that process.
-fn pin_fonts() {
-    static PIN: Once = Once::new();
-    PIN.call_once(|| {
-        pin_font_faces(
-            &[
-                flui_painting::fonts::ROBOTO_REGULAR,
-                flui_painting::fonts::MATERIAL_ICONS_REGULAR,
-                flui_painting::fonts::CUPERTINO_ICONS,
-            ],
-            "Roboto",
-        );
-    });
-}
-
 /// Mounts `root_view` headless and serializes the layer tree its bootstrap
 /// frame commits.
 ///
@@ -130,8 +104,6 @@ fn pin_fonts() {
 /// layout↔build fixpoint and the lazy-sliver service pass — so a demo whose
 /// content is built during layout is snapshotted built, not empty.
 fn snapshot_of<V: IntoView + 'static>(root_view: V, min_commands: usize) -> String {
-    pin_fonts();
-
     let mut binding = HeadlessBinding::new();
 
     // The presentation scopes the widget layer supplies; everything below them

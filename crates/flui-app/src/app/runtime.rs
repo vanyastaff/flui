@@ -43,7 +43,7 @@ use std::sync::atomic::AtomicBool;
 use std::thread::ThreadId;
 
 use flui_foundation::PresentationAddress;
-use flui_painting::FontCollection;
+use flui_painting::{FontCollection, HostFonts};
 use flui_platform::OwnerPlatform;
 #[cfg(target_os = "android")]
 use flui_platform::traits::WindowExecutionState;
@@ -68,10 +68,10 @@ use flui_runtime::execution::{ExecutionServices, HostExecutors};
 ///
 /// Owns the process-level accessibility flags and the app's one
 /// [`FontCollection`] (ADR-0092 §2), which every realm builds its own
-/// `TextContext` from. It initializes the shared font system through
-/// [`flui_painting::shared_font_system`] and feeds the collection from it
-/// ([`FontCollection::with_host_faces`], ADR-0092 §7), so text measures,
-/// paints and places its carets in the host's faces. "Per owner thread" is per app while
+/// `TextContext` from. It scans the host's fonts once ([`HostFonts::scan`])
+/// and feeds the collection from the scan ([`FontCollection::with_host_fonts`],
+/// ADR-0092 §7), so text measures, paints and places its carets in the host's
+/// faces wherever the bundled ones lack a family. "Per owner thread" is per app while
 /// ADR-0091 fixes one owner thread per process. Semantics state belongs
 /// to each presentation's `SemanticsHost`; scheduling belongs to each realm
 /// (see `flui_runtime`'s `RealmServices::construct`). The retired `SemanticsBinding`
@@ -94,7 +94,7 @@ pub(crate) struct SharedEngineServices {
                       change wires the first real consumer"
     )]
     pub(super) accessibility_features: RwLock<AccessibilityFeatures>,
-    /// The app's font collection, fed from the host's faces. Every realm
+    /// The app's font collection, fed from one host scan. Every realm
     /// built on this thread gets a clone (`UiRealm::new`'s `fonts`) and owns
     /// a `TextContext` over it, so a face registered here reaches every
     /// realm, and the host's faces are read once per app, not per realm.
@@ -108,27 +108,20 @@ impl SharedEngineServices {
     /// idempotent guarantee the retired `AppBinding::instance()`'s
     /// thread-local initializer gave.
     fn resolve() -> Self {
-        // `SharedEngineServices::resolve()` -- reached only through
-        // `AppRuntime::ensure_services()` and `AppRuntime::font_collection()`,
-        // just before the first realm is built -- is
-        // the CONSTRUCTING owner of the free-standing `FONT_SYSTEM`
-        // `OnceLock` slot (`flui-painting/src/text_layout/layout.rs`):
-        // initialize it explicitly, here, at a known point, rather than
-        // leaving it to whatever happens to reach it first on this thread.
-        // It is host font discovery and nothing else: layout, intrinsics,
-        // dry queries and carets read each realm's `TextContext` over
-        // `fonts` below, and paint draws that layout's runs.
-        //
-        // The collection is fed from that font system's discovery here, on
-        // the owner thread before the first frame: text measured before a
-        // later feed would stay measured in other faces until something
-        // re-laid it out. A face registered later goes through the collection
-        // (`AppRuntime::register_font`), which re-lays out what it changes.
-        let host = flui_painting::shared_font_system();
+        // Reached only through `AppRuntime::ensure_services()` and
+        // `AppRuntime::font_collection()`, just before the first realm is
+        // built. The host is scanned and the collection fed here, on the owner
+        // thread before the first frame: text measured before a later feed
+        // would stay measured in other faces until something re-laid it out.
+        // The scan is a value dropped once the collection is fed; nothing
+        // process-global keeps it. A face registered later goes through the
+        // collection (`AppRuntime::register_font`), which re-lays out what it
+        // changes.
+        let host = HostFonts::scan();
 
         Self {
             accessibility_features: RwLock::new(AccessibilityFeatures::default()),
-            fonts: FontCollection::with_host_faces(&host),
+            fonts: FontCollection::with_host_fonts(&host),
         }
     }
 }
@@ -1715,14 +1708,12 @@ mod font_collection_tests {
 
     /// Every realm builds its `TextContext` over the app's one collection
     /// (ADR-0092 §2), and that collection is fed from the host's faces
-    /// exactly once (ADR-0092 §7): repeated service and collection requests
-    /// hand out clones of the same one, never a fresh or re-fed collection.
-    /// Fails if the services build a bundled-only collection (no feed) or
-    /// feed on every request. `host_face_feeds` counts per process, which
-    /// nextest gives each test.
+    /// once (ADR-0092 §7): repeated service and collection requests hand out
+    /// clones of the same host-fed one, never a fresh or re-fed collection.
+    /// Fails if the services build a bundled-only collection (no feed) or a
+    /// new collection per request.
     #[test]
     fn the_runtime_feeds_host_faces_once_for_every_realm() {
-        let before = flui_painting::testing::host_face_feeds();
         let mut runtime = AppRuntime::new();
         let first = runtime.font_collection();
         let _ = runtime.ensure_services();
@@ -1735,10 +1726,9 @@ mod font_collection_tests {
             FontCollection::ptr_eq(&first, &runtime.ensure_services().fonts),
             "the collection handed to realms is the one the services own"
         );
-        assert_eq!(
-            flui_painting::testing::host_face_feeds() - before,
-            1,
-            "the host's faces are fed into the app's collection once"
+        assert!(
+            flui_painting::testing::host_fed(&first),
+            "the app's collection is fed from the host"
         );
     }
 }

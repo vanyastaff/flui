@@ -11,7 +11,8 @@
 //! - `key` — [`GlyphKey`] and its parts.
 //! - `registry` — [`FontRegistry`]: faces and interned variation instances.
 //! - `swash` — [`SwashRasterizer`], swash's scaler with the sources, format
-//!   and offsets cosmic-text's rasterizer drew with.
+//!   and offsets cosmic-text's rasterizer drew with (`parley_oracle` holds
+//!   the recorded bitmaps).
 //!
 //! Everything here is owned and used through `&mut`: no `static`, no lock.
 

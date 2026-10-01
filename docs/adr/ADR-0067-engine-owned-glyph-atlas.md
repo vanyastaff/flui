@@ -7,6 +7,8 @@ wire are gone.*
 ---
 
 - **Status:** Accepted (landed 2026-09-18)
+- **Amended by:** [ADR-0092](ADR-0092-per-realm-text-over-parley.md) (`GlyphKey` names a font
+  blob and face, and the atlas rasterizes through `SwashRasterizer` behind `GlyphRasterizer`)
 - **Date:** 2026-09-18
 - **Deciders:** @vanyastaff
 - **Scope:** `flui_painting::{TextLayout::placed_glyphs, SharedFontSystem::rasterize, GlyphKey, PlacedGlyph, GlyphImage}`;

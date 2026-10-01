@@ -22,8 +22,8 @@ fn sample(pixels: &[u8], x: u32, y: u32) -> [u8; 4] {
     ]
 }
 
-/// The engine neither shapes nor names a shaper: none of cosmic-text's,
-/// Parley's, fontique's or swash's entry points — nor the crates themselves —
+/// The engine neither shapes nor names a shaper: none of a shaper's entry
+/// points (cosmic-text's, Parley's, fontique's or swash's) — nor the crates themselves —
 /// appears in the text path's source or the manifest. Every glyph a recorder
 /// hands it comes from a `ShapedParagraph` built from the layout that
 /// measured it, placed through `ShapedRun::placed_glyphs` and rasterised
@@ -324,7 +324,7 @@ fn synthetic_bold_inks_more_than_regular(renderer: &crate::headless::HeadlessRen
 
 /// CJK over the host's faces breaks at U+2028 as Latin does.
 fn cjk_breaks_at_a_line_separator(renderer: &crate::headless::HeadlessRenderer) {
-    let fonts = FontCollection::with_host_faces(&flui_painting::shared_font_system());
+    let fonts = FontCollection::with_host_fonts(&flui_painting::HostFonts::scan());
     let painter = laid_out(
         &fonts,
         "你好\u{2028}世界",
@@ -347,7 +347,7 @@ fn cjk_breaks_at_a_line_separator(renderer: &crate::headless::HeadlessRenderer) 
 /// A colour emoji after U+2028 paints its colour on line 2, and nothing
 /// colourful on line 1.
 fn colour_emoji_on_line_two(renderer: &crate::headless::HeadlessRenderer) {
-    let fonts = FontCollection::with_host_faces(&flui_painting::shared_font_system());
+    let fonts = FontCollection::with_host_fonts(&flui_painting::HostFonts::scan());
     let painter = laid_out(
         &fonts,
         "A\u{2028}😀",
@@ -375,7 +375,7 @@ fn colour_emoji_on_line_two(renderer: &crate::headless::HeadlessRenderer) {
 /// is aligned in the paragraph's own box, which the paint offset places at
 /// the right of the width it was laid out at.
 fn arabic_rtl_right_aligns_each_line(renderer: &crate::headless::HeadlessRenderer) {
-    let fonts = FontCollection::with_host_faces(&flui_painting::shared_font_system());
+    let fonts = FontCollection::with_host_fonts(&flui_painting::HostFonts::scan());
     let max_width = f64::from(WIDE.0) - 16.0;
     let painter = laid_out(
         &fonts,

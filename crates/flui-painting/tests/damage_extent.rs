@@ -69,7 +69,8 @@ pub(crate) fn paragraph_extent_covers_every_rasterized_glyph() {
     use flui_painting::{FontCollection, GlyphRasterizer, TextPainter};
 
     let bundled = FontCollection::new();
-    let host = FontCollection::with_host_faces(&flui_painting::shared_font_system());
+    let scan = flui_painting::HostFonts::scan();
+    let host = FontCollection::with_host_fonts(&scan);
     let size = TextStyle::new().with_font_size(40.0);
     let rows: [(&str, &str, TextStyle, bool); 6] = [
         ("latin", "Hello, FLUI!", size.clone(), false),
@@ -101,7 +102,7 @@ pub(crate) fn paragraph_extent_covers_every_rasterized_glyph() {
         ("cjk_and_emoji", "你好 😀", size, true),
     ];
     for (name, text, style, on_host) in rows {
-        if on_host && !flui_painting::testing::host_chain_covers(text) {
+        if on_host && !flui_painting::testing::host_chain_covers(&scan, text) {
             println!("{name}: skipped, no host face covers {text:?}");
             continue;
         }

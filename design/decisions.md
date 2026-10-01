@@ -328,7 +328,7 @@ did not challenge this decision; ADR-0081 §4 owns it. The facade and `flui-sdk`
 ### D12. Text shapes per realm over Parley
 
 **Context.** Text layout goes through one process-global `static FONT_SYSTEM`
-(`crates/flui-painting/src/text_layout/layout.rs:124`), and glyph keys are cosmic-text's
+(flui-painting's `text_layout/layout.rs:124`), and glyph keys are cosmic-text's
 process-global keys (flui-painting's `text_layout/glyphs.rs:23`, until ADR-0092 §10 step 4
 removed them).
 [ADR-0077](../docs/adr/ADR-0077-migrate-to-parley.md) proposed Parley on shaping evidence alone.

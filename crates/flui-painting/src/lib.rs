@@ -1,5 +1,5 @@
 //! Recording 2D drawing into a [`DisplayList`], and shaping text with
-//! cosmic-text.
+//! Parley.
 //!
 //! [`Canvas`] is where a render object (or a `CustomPaint`
 //! painter) draws: every command is recorded with the current
@@ -48,9 +48,9 @@
 //! Every type here is `Send + Sync` value data; a `Canvas` is mutated through
 //! `&mut self` by one owner. Text shaping takes no shared lock: each realm
 //! shapes through its own [`TextContext`], used through `&mut`, over the
-//! app's [`FontCollection`]. The process font system behind
-//! [`SharedFontSystem`] is read once per app, to feed that collection from
-//! the host.
+//! app's [`FontCollection`]. The host's fonts are scanned once per app, as a
+//! [`HostFonts`] value the collection is fed from; no font state is
+//! process-global.
 //!
 //! The paint vocabulary (`Paint`, `Shader`, `BlendMode`, …) is defined in
 //! [`paint`] and re-exported here; the style values live in [`styling`] and
@@ -60,8 +60,7 @@
 #![warn(rustdoc::broken_intra_doc_links)]
 #![warn(rustdoc::private_intra_doc_links)]
 #![forbid(unsafe_code)]
-// The lock discipline around the font system is the one place a panic
-// would matter; every `expect` on a shipped path names its invariant.
+// Every `expect` on a shipped path names its invariant.
 #![warn(clippy::expect_used)]
 #![warn(clippy::panic)]
 #![expect(clippy::uninlined_format_args)]
@@ -102,9 +101,7 @@ pub use display_list::{DamageExtent, DisplayList, DrawCommand, DrawOp, ShapedPar
 pub use error::RegisterFontError;
 pub use glyphs::{GlyphContent, GlyphImage, GlyphKey, GlyphRasterizer, PlacedGlyph};
 pub use table_border::paint_table_border;
-pub use text_layout::{
-    FontCollection, SharedFontSystem, TextContext, TextLayoutResult, shared_font_system,
-};
+pub use text_layout::{FontCollection, HostFonts, TextContext, TextLayoutResult};
 pub use text_painter::{Invalidation, TextBaseline, TextPainter};
 
 // The paint vocabulary, defined in `crate::paint`.

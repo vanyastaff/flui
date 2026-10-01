@@ -13,11 +13,11 @@
 //! load otherwise. A context is owner-thread state used through `&mut`.
 //!
 //! The app's collection is fed from the host
-//! ([`FontCollection::with_host_faces`]): the faces the process font system
-//! discovered, its generic families and its fallback order (ADR-0092 §7).
-//! Measurement, paint and carets all read the one layout shaped on the
-//! collection, so a face registered on it reaches all three together; the
-//! process font system is read once, to feed it, and never again.
+//! ([`FontCollection::with_host_fonts`]): the faces one scan of the host
+//! found, its generic families and FLUI's fallback lists for the host
+//! (ADR-0092 §7). Measurement, paint and carets all read the one layout
+//! shaped on the collection, so a face registered on it reaches all three
+//! together; the scan is read once, to feed it, and never again.
 //! [`FontCollection::new`] holds the bundled faces alone; without
 //! `bundled-fonts` it starts empty, text shapes with no face until one is
 //! registered, and the first registered family that can set Latin text
@@ -27,7 +27,7 @@ use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Weak};
 
-use super::layout::{HostFaces, SharedFontSystem};
+use super::host::{HostFaces, HostFonts};
 use crate::error::RegisterFontError;
 use crate::parley_text::SpanBrush;
 
@@ -44,10 +44,14 @@ struct FontCollectionInner {
     /// cached against an older value is stale.
     generation: AtomicU64,
     /// fontique's collection in shared mode. It never scans the host itself:
-    /// host faces come from the process font system's discovery.
+    /// host faces come from a [`HostFonts`] scan.
     collection: parley::fontique::Collection,
     /// One source cache shared by every context built from the collection.
     source_cache: parley::fontique::SourceCache,
+    /// Whether the collection was fed from a host scan; read by tests
+    /// through `testing::host_fed`.
+    #[cfg(any(test, feature = "testing"))]
+    host_fed: bool,
 }
 
 impl FontCollection {
@@ -66,24 +70,22 @@ impl FontCollection {
     }
 
     /// A collection fed from the host: [`FontCollection::new`]'s faces, then
-    /// every face `fonts` holds whose families the collection does not
-    /// already hold, with the generic families bound to the families `fonts`
-    /// binds them to (system-ui to sans-serif's) and the fallback order
-    /// `fonts` was built with.
+    /// every face `host` found whose families the collection does not
+    /// already hold, every generic family the collection leaves unbound
+    /// bound to the family `host` picked for it (system-ui to sans-serif's),
+    /// and `host`'s fallback lists past a style's family.
     ///
-    /// Text measured on it resolves families by the rule the process font
-    /// system resolves them by, and falls back in its order past them
-    /// (ADR-0092 §7). The app's composition root builds one per app, before
-    /// the first frame; it reads the font files again, outside `fonts`'
-    /// lock, so it costs a second scan of the host's fonts. A file that
-    /// cannot be read is skipped. The collection keeps no handle on `fonts`:
-    /// a face registered on it later reaches the collection alone.
+    /// With `bundled-fonts` the bundled Roboto keeps every generic and a
+    /// host copy of a bundled family is never fed, so text naming no family
+    /// measures alike on every host; the host's faces serve families only it
+    /// has and the fallback past them (ADR-0092 §7). The app's composition
+    /// root builds one per app, before the first frame; it parses each font
+    /// file the scan found, so it costs more than the scan itself. A file
+    /// that cannot be read is skipped. The collection keeps no handle on
+    /// `host`: a face registered on it later reaches the collection alone.
     #[must_use]
-    pub fn with_host_faces(fonts: &SharedFontSystem) -> Self {
-        fonts.count_host_feed();
-        Self(Arc::new(FontCollectionInner::build(Some(
-            &fonts.host_faces(),
-        ))))
+    pub fn with_host_fonts(host: &HostFonts) -> Self {
+        Self(Arc::new(FontCollectionInner::build(Some(&host.faces()))))
     }
 
     /// Whether `a` and `b` are the same collection.
@@ -118,6 +120,13 @@ impl FontCollection {
     #[cfg(any(test, feature = "testing"))]
     pub(crate) fn holders(&self) -> usize {
         Arc::strong_count(&self.0)
+    }
+
+    /// Whether the collection was fed from a host scan
+    /// ([`FontCollection::with_host_fonts`]).
+    #[cfg(any(test, feature = "testing"))]
+    pub(crate) fn host_fed(&self) -> bool {
+        self.0.host_fed
     }
 
     /// Whether the collection holds a family named `family`.
@@ -276,6 +285,8 @@ impl FontCollectionInner {
             generation: AtomicU64::new(0),
             collection,
             source_cache: SourceCache::new_shared(),
+            #[cfg(any(test, feature = "testing"))]
+            host_fed: host.is_some(),
         }
     }
 }
@@ -283,8 +294,10 @@ impl FontCollectionInner {
 /// Adds `host`'s faces, generics and fallback order to `collection`.
 ///
 /// A source any of whose families the collection already holds is left out,
-/// so a host copy never joins a bundled family. Generics bind only to a
-/// family the collection then holds; one that is absent keeps its binding.
+/// so a host copy never joins a bundled family. A generic the collection
+/// already binds keeps its binding (with `bundled-fonts`, Roboto keeps every
+/// one); an unbound generic binds to the host's family for it when the
+/// collection then holds that family.
 #[tracing::instrument(skip_all, fields(sources = host.sources.len()))]
 fn feed_host_faces(collection: &mut parley::fontique::Collection, host: &HostFaces) {
     use std::collections::HashSet;
@@ -292,7 +305,7 @@ fn feed_host_faces(collection: &mut parley::fontique::Collection, host: &HostFac
     use parley::fontique::{Blob, GenericFamily};
 
     use super::fallback_chain::install_into;
-    use super::layout::HostData;
+    use super::host::HostData;
 
     let held: HashSet<String> = collection.family_names().map(str::to_lowercase).collect();
     let mut paths = Vec::new();
@@ -322,6 +335,9 @@ fn feed_host_faces(collection: &mut parley::fontique::Collection, host: &HostFac
         (GenericFamily::Cursive, &host.cursive),
         (GenericFamily::Fantasy, &host.fantasy),
     ] {
+        if collection.generic_families(generic).next().is_some() {
+            continue;
+        }
         if let Some(id) = collection.family_id(name) {
             collection.set_generic_families(generic, std::iter::once(id));
         }
@@ -363,9 +379,9 @@ fn bind_unbound_generics(
 ///
 /// fontique has no last resort past a style's families and its script's
 /// fallbacks, so without the fallback a glyph the style's family lacks (a
-/// Cyrillic letter in an icon font) would measure and paint as `.notdef`,
-/// where cosmic-text shapes it in Roboto. A host feed replaces the fallbacks with
-/// the host's order (`install_into`).
+/// Cyrillic letter in an icon font) would measure and paint as `.notdef`.
+/// A host feed replaces the fallbacks with the host's order, which ends in
+/// Roboto too (`install_into`).
 #[cfg(feature = "bundled-fonts")]
 fn bind_bundled_faces(collection: &mut parley::fontique::Collection) {
     use parley::fontique::{Blob, FallbackKey};
@@ -477,7 +493,7 @@ mod tests {
     use parley::fontique::{FallbackKey, GenericFamily, Script};
 
     use super::super::fallback_chain::FallbackChain;
-    use super::super::layout::{HostData, HostFaces, HostSource};
+    use super::super::host::{HostData, HostFaces, HostSource};
     use super::{FontCollection, FontCollectionInner, TextContext};
     use crate::parley_text::ParagraphSpec;
     use crate::typography::{TextDirection, TextStyle};
@@ -500,6 +516,7 @@ mod tests {
             generation: std::sync::atomic::AtomicU64::new(0),
             collection,
             source_cache: SourceCache::new_shared(),
+            host_fed: false,
         }))
     }
 
@@ -594,27 +611,64 @@ mod tests {
         }
     }
 
-    struct CommonIsRoboto;
+    const PROBE_SANS: &[u8] = include_bytes!("../../assets/fonts/probe-sans-400.ttf");
 
-    impl cosmic_text::Fallback for CommonIsRoboto {
-        fn common_fallback(&self) -> &[&'static str] {
-            &["Roboto"]
+    /// A font's bytes with the family names (name IDs 1 and 16) rewritten to
+    /// `family` and, when given, the `OS/2` weight class set to `weight`.
+    /// Checksums are left stale, which neither fontique nor swash checks.
+    fn renamed(bytes: &[u8], family: &str, weight: Option<u16>) -> Vec<u8> {
+        let mut out = bytes.to_vec();
+        let be16 =
+            |data: &[u8], at: usize| usize::from(u16::from_be_bytes([data[at], data[at + 1]]));
+        let table = |data: &[u8], tag: &[u8; 4]| {
+            (0..be16(data, 4))
+                .map(|index| 12 + index * 16)
+                .find(|&record| &data[record..record + 4] == tag)
+                .map(|record| {
+                    u32::from_be_bytes([
+                        data[record + 8],
+                        data[record + 9],
+                        data[record + 10],
+                        data[record + 11],
+                    ]) as usize
+                })
+                .expect("the probe face has the table")
+        };
+        let name = table(&out, b"name");
+        let storage = name + be16(&out, name + 4);
+        for index in 0..be16(&out, name + 2) {
+            let record = name + 6 + index * 12;
+            if !matches!(be16(&out, record + 6), 1 | 16) {
+                continue;
+            }
+            let encoded: Vec<u8> = if be16(&out, record) == 1 {
+                family.bytes().collect()
+            } else {
+                family.encode_utf16().flat_map(u16::to_be_bytes).collect()
+            };
+            assert!(encoded.len() <= be16(&out, record + 8), "the new name fits");
+            let at = storage + be16(&out, record + 10);
+            out[at..at + encoded.len()].copy_from_slice(&encoded);
+            let length = u16::try_from(encoded.len()).expect("a short name");
+            out[record + 8..record + 10].copy_from_slice(&length.to_be_bytes());
         }
-
-        fn forbidden_fallback(&self) -> &[&'static str] {
-            &[]
+        if let Some(weight) = weight {
+            let os2 = table(&out, b"OS/2");
+            out[os2 + 4..os2 + 6].copy_from_slice(&weight.to_be_bytes());
         }
-
-        fn script_fallback(&self, _: unicode_script::Script, _: &str) -> &[&'static str] {
-            &[]
-        }
+        out
     }
 
     /// A font file that is gone by the time the collection reads it is
     /// skipped, and the feed still completes: the other sources are added,
-    /// the generics bound and the fallback order installed.
+    /// the generics the collection already binds (the bundled Roboto) keep
+    /// their binding though the host names another family for them, and the
+    /// host's fallback order is installed, ending in the sans-serif family.
+    /// Fails if the feed rebinds a bound generic, stops at the missing file,
+    /// or skips the fallback order.
     #[test]
     fn a_missing_path_is_skipped_and_the_feed_completes() {
+        const PROBE: &str = "FLUI Probe Mono";
         let host = HostFaces {
             sources: vec![
                 HostSource {
@@ -622,46 +676,112 @@ mod tests {
                     families: vec!["Ghost Family".to_owned()],
                 },
                 HostSource {
-                    data: HostData::Blob(Arc::new(ROBOTO)),
-                    families: vec!["Roboto".to_owned()],
+                    data: HostData::Blob(Arc::new(PROBE_MONO)),
+                    families: vec![PROBE.to_owned()],
                 },
             ],
-            sans_serif: "Roboto".to_owned(),
+            sans_serif: PROBE.to_owned(),
             serif: "Ghost Family".to_owned(),
-            monospace: "Roboto".to_owned(),
-            cursive: "Roboto".to_owned(),
-            fantasy: "Roboto".to_owned(),
-            chain: Arc::new(FallbackChain::new("en-US".to_owned(), CommonIsRoboto)),
+            monospace: PROBE.to_owned(),
+            cursive: PROBE.to_owned(),
+            fantasy: PROBE.to_owned(),
+            chain: FallbackChain::from_lists(&[PROBE], &[]),
         };
         let mut collection = FontCollectionInner::build(Some(&host)).collection;
 
-        let roboto = collection
-            .family_id("Roboto")
+        let probe = collection
+            .family_id(PROBE)
             .expect("the readable source is fed");
+        let roboto = collection.family_id("Roboto").expect("Roboto is bundled");
         assert!(collection.family_id("Ghost Family").is_none());
         for generic in [
             GenericFamily::SansSerif,
             GenericFamily::SystemUi,
             GenericFamily::Monospace,
+            GenericFamily::Serif,
         ] {
             assert_eq!(
                 collection.generic_families(generic).collect::<Vec<_>>(),
                 [roboto],
-                "{generic:?} binds to the host's family"
+                "{generic:?} keeps the bundled Roboto"
             );
         }
         assert_eq!(
             collection
                 .fallback_families(FallbackKey::new(Script::from_str_unchecked("Latn"), None))
                 .collect::<Vec<_>>(),
-            [roboto],
-            "the fallback order is installed"
+            [probe, roboto],
+            "the host's order is installed, ending in the sans-serif family"
         );
         assert_eq!(
             collection
                 .generic_families(GenericFamily::Emoji)
                 .collect::<Vec<_>>(),
-            [roboto]
+            [probe]
+        );
+    }
+
+    /// A host copy of a bundled family never joins it: a host whose "Roboto"
+    /// is another face, at 400 and at 700, is fed, and "Roboto", sans-serif
+    /// and a style naming no family still measure in the bundled bytes at
+    /// 400, 500 and 700, as on a bundled-only collection. Fails if the feed
+    /// stops skipping a family the collection holds: the host's 700 face
+    /// then serves bold Roboto.
+    #[test]
+    fn a_host_copy_of_a_bundled_family_is_not_fed() {
+        use crate::typography::FontWeight;
+
+        let host = HostFaces {
+            sources: [None, Some(700)]
+                .into_iter()
+                .map(|weight| HostSource {
+                    data: HostData::Blob(Arc::new(renamed(PROBE_SANS, "Roboto", weight))),
+                    families: vec!["Roboto".to_owned()],
+                })
+                .collect(),
+            sans_serif: "Roboto".to_owned(),
+            serif: "Roboto".to_owned(),
+            monospace: "Roboto".to_owned(),
+            cursive: "Roboto".to_owned(),
+            fantasy: "Roboto".to_owned(),
+            chain: FallbackChain::from_lists(&["Roboto"], &[]),
+        };
+        let fed = FontCollection(Arc::new(FontCollectionInner::build(Some(&host))));
+        let bundled = FontCollection::new();
+        let width = |fonts: &FontCollection, family: Option<&str>, weight: FontWeight| {
+            let style = TextStyle {
+                font_family: family.map(str::to_owned),
+                font_weight: Some(weight),
+                ..TextStyle::default()
+            };
+            let spans: Vec<(String, Option<TextStyle>)> =
+                vec![("Hamburgefonstiv".to_owned(), Some(style))];
+            TextContext::new(fonts)
+                .shape(&ParagraphSpec {
+                    spans: &spans,
+                    default_style: None,
+                    font_size: 20.0,
+                    max_width: None,
+                    line_height: None,
+                    direction: TextDirection::Ltr,
+                    max_lines: None,
+                    ellipsis: None,
+                })
+                .metrics()
+                .width
+        };
+        let mut failures = Vec::new();
+        for family in [Some("Roboto"), Some("sans-serif"), None] {
+            for weight in [FontWeight::W400, FontWeight::W500, FontWeight::W700] {
+                let (got, want) = (width(&fed, family, weight), width(&bundled, family, weight));
+                if (got - want).abs() > 1e-6 {
+                    failures.push(format!("{family:?} at {weight:?}: {got} vs {want}"));
+                }
+            }
+        }
+        assert!(
+            failures.is_empty(),
+            "measured in a host face, not the bundled Roboto: {failures:?}"
         );
     }
 
@@ -695,6 +815,7 @@ mod tests {
                 generation: std::sync::atomic::AtomicU64::new(0),
                 collection,
                 source_cache: SourceCache::new_shared(),
+                host_fed: false,
             }));
             (fonts, path)
         };
@@ -751,27 +872,26 @@ mod tests {
     }
 
     /// Registration adds a face to the collection alone: measurement, paint
-    /// and carets all read the layout shaped on it. Driven on a font system
-    /// of the test's own (`SharedFontSystem::pinned`), so no row touches the
-    /// process-wide one.
+    /// and carets all read the layout shaped on it. Driven on a host scan of
+    /// the test's own, over a database holding Roboto alone.
     mod registration_contract {
-        use super::super::super::layout::{SharedFontSystem, font_system_initialized};
+        use super::super::super::host::HostFonts;
         use super::super::FontCollection;
         use super::{PROBE_MONO, ROBOTO};
 
         const PROBE: &str = "FLUI Probe Mono";
 
-        fn host() -> SharedFontSystem {
-            SharedFontSystem::pinned(&[ROBOTO], "Roboto")
+        fn host() -> HostFonts {
+            let mut db = fontdb::Database::new();
+            db.load_font_data(ROBOTO.to_vec());
+            HostFonts::from_database(db, "en-US")
         }
 
-        /// A face registered on a collection fed from a font system reaches
-        /// the collection, whose generation rises by one, and not the font
-        /// system, which nothing reads after the feed. Fails if registration
-        /// still loads faces into the font system, or skips the collection.
-        fn a_registration_reaches_the_collection_alone() {
-            let host = host();
-            let fonts = FontCollection::with_host_faces(&host);
+        /// A face registered on a collection fed from a host scan reaches
+        /// the collection, whose generation rises by one. Fails if
+        /// registration skips the collection.
+        fn a_registration_reaches_the_collection() {
+            let fonts = FontCollection::with_host_fonts(&host());
             let before = fonts.generation();
             assert!(!fonts.holds(PROBE));
 
@@ -783,17 +903,13 @@ mod tests {
 
             assert!(fonts.holds(PROBE), "the collection holds the face");
             assert_eq!(fonts.generation(), before + 1);
-            assert!(
-                !host.family_names().iter().any(|name| name == PROBE),
-                "the font system the collection was fed from gains nothing"
-            );
         }
 
         /// Bytes with no face are refused and move nothing. Fails if a
         /// refused registration bumps the generation, which would lay out
         /// every realm's text again for nothing.
         fn bytes_with_no_face_are_refused() {
-            let fonts = FontCollection::with_host_faces(&host());
+            let fonts = FontCollection::with_host_fonts(&host());
             let before = fonts.generation();
 
             for bytes in [&b"not a font"[..], &[]] {
@@ -823,7 +939,7 @@ mod tests {
         /// Bytes that parse as a font but hold no family the collection can
         /// measure are refused, by `check_font` too, and move nothing.
         fn bytes_with_no_family_are_refused() {
-            let fonts = FontCollection::with_host_faces(&host());
+            let fonts = FontCollection::with_host_fonts(&host());
             let before = fonts.generation();
             let bytes = probe_without_cmap();
 
@@ -834,9 +950,8 @@ mod tests {
             assert_eq!(fonts.generation(), before);
         }
 
-        /// A collection built without a font system registers without ever
-        /// building the process-wide one.
-        fn a_bundled_only_collection_registers_without_the_process_font_system() {
+        /// A collection fed from no host scan registers too.
+        fn a_bundled_only_collection_registers() {
             let fonts = FontCollection::new();
 
             assert_eq!(
@@ -847,18 +962,14 @@ mod tests {
 
             assert!(fonts.holds(PROBE));
             assert_eq!(fonts.generation(), 1);
-            assert!(
-                !font_system_initialized(),
-                "registration does not build the process font system"
-            );
         }
 
         #[test]
         fn registration_contract() {
             let cases: &[(&str, fn())] = &[
                 (
-                    "a_registration_reaches_the_collection_alone",
-                    a_registration_reaches_the_collection_alone,
+                    "a_registration_reaches_the_collection",
+                    a_registration_reaches_the_collection,
                 ),
                 (
                     "bytes_with_no_face_are_refused",
@@ -869,8 +980,8 @@ mod tests {
                     bytes_with_no_family_are_refused,
                 ),
                 (
-                    "a_bundled_only_collection_registers_without_the_process_font_system",
-                    a_bundled_only_collection_registers_without_the_process_font_system,
+                    "a_bundled_only_collection_registers",
+                    a_bundled_only_collection_registers,
                 ),
             ];
             let failed: Vec<&str> = cases
@@ -890,12 +1001,11 @@ mod tests {
     mod family_resolution {
         use std::sync::Arc;
 
-        use cosmic_text::fontdb::Family;
         use parley::fontique::{Blob, Collection, CollectionOptions};
 
         use super::super::super::fallback_chain::FallbackChain;
-        use super::super::super::font_resolve::resolve_family_name;
-        use super::super::super::layout::{HostData, HostFaces, HostSource};
+        use super::super::super::font_resolve::{Family, resolve_family_name};
+        use super::super::super::host::{HostData, HostFaces, HostSource};
         use super::super::{FontCollection, FontCollectionInner, TextContext};
         use super::ROBOTO;
         use crate::parley_text::{ParagraphSpec, holds_exactly};
@@ -975,28 +1085,10 @@ mod tests {
             }
         }
 
-        /// Only the decoy is on the common fallback list: the host shape of
-        /// issue #927, a unix host whose only listed family is its emoji
-        /// face.
-        struct EmojiFirst;
-
-        impl cosmic_text::Fallback for EmojiFirst {
-            fn common_fallback(&self) -> &[&'static str] {
-                &["FLUI Decoy Emoji"]
-            }
-
-            fn forbidden_fallback(&self) -> &[&'static str] {
-                &[]
-            }
-
-            fn script_fallback(&self, _: unicode_script::Script, _: &str) -> &[&'static str] {
-                &[]
-            }
-        }
-
         /// A style naming a family the collection lacks never takes its space
         /// from an emoji face (issue #927). On a collection fed from a host
-        /// whose fallback order puts an emoji face before Roboto, `"Ao Bo"`
+        /// whose only listed fallback family is its emoji face (the host
+        /// shape of issue #927), ahead of Roboto, `"Ao Bo"`
         /// styled `CupertinoSystemText` shapes letters and space in one face,
         /// the space under half an em. Fails if the family reaches Parley
         /// unresolved: Parley then walks the fallback order per cluster, and
@@ -1020,7 +1112,7 @@ mod tests {
                 monospace: "Roboto".to_owned(),
                 cursive: "Roboto".to_owned(),
                 fantasy: "Roboto".to_owned(),
-                chain: Arc::new(FallbackChain::new("en-US".to_owned(), EmojiFirst)),
+                chain: FallbackChain::from_lists(&["FLUI Decoy Emoji"], &[]),
             };
             let fonts = FontCollection(Arc::new(FontCollectionInner::build(Some(&host))));
             let style = TextStyle {

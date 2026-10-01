@@ -150,9 +150,9 @@ pub(crate) fn an_empty_paragraph_measures_a_line_of_its_style() {
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
-/// Measurement is Parley on the lent context in the default build: the probe
-/// face is registered only on a collection, never on the process font system,
-/// so a painter measuring on cosmic-text would never see it.
+/// Measurement is Parley on the lent context: the probe face is registered on
+/// one collection only, so a painter that measured anywhere else would never
+/// see it.
 pub(crate) mod parley_measurement {
     use flui_painting::parley_text::ParagraphSpec;
     use flui_painting::typography::{FontWeight, TextDirection, TextSpan, TextStyle};

@@ -1,6 +1,8 @@
 # ADR-0066: Display-list command representation
 
 - **Status:** Accepted
+- **Amended by:** [ADR-0092](ADR-0092-per-realm-text-over-parley.md) (`DrawOp::Paragraph`
+  carries an `Arc<ShapedParagraph>`)
 - **Date:** 2026-09-18
 - **Related:** follows [ADR-0065](ADR-0065-painting-owns-shaping-text-crosses-the-display-list-shaped.md)
 

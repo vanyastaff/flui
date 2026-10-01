@@ -1,9 +1,9 @@
 # ADR-0059: FLUI stays on cosmic-text and owns its own family resolution
 
-- **Status:** Accepted — to be superseded by ADR-0092, which absorbs ADR-0077
+- **Status:** Superseded by ADR-0092 (2026-09-30), which absorbs ADR-0077: FLUI shapes on
+  Parley and cosmic-text is gone; the family rule this record set carries over (ADR-0092 §7)
 - **Date:** 2026-09-06
-- **Superseded by (when ADR-0092 §§1–5 are accepted):**
-  [ADR-0092](ADR-0092-per-realm-text-over-parley.md), which absorbs ADR-0077
+- **Superseded by:** [ADR-0092](ADR-0092-per-realm-text-over-parley.md), which absorbs ADR-0077
 
 ## Context
 

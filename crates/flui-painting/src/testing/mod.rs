@@ -15,7 +15,7 @@
 //! assert_eq!(list.len(), 1);
 //! ```
 
-use crate::{Canvas, DisplayList, FontCollection, TextContext};
+use crate::{Canvas, DisplayList, FontCollection, HostFonts, TextContext};
 
 /// The FLUI Probe Mono face at weight 100: a generated family no host
 /// carries, which maps `A` one em wide. A consumer's tests register it on a
@@ -48,44 +48,44 @@ pub fn text_context_lends(text: &TextContext) -> u64 {
     text.lends()
 }
 
-/// How many collections were built from the process font system's host
-/// faces ([`FontCollection::with_host_faces`]) in this process. A composition root's
-/// tests use it to show the feed runs once per app, not per realm.
+/// Whether `fonts` was fed from a host scan
+/// ([`FontCollection::with_host_fonts`]). A composition root's tests use it
+/// to show the collection its realms share is the host-fed one.
 #[must_use]
-pub fn host_face_feeds() -> u64 {
-    crate::shared_font_system().host_feeds()
+pub fn host_fed(fonts: &FontCollection) -> bool {
+    fonts.host_fed()
 }
 
-/// Whether the process font system holds a face mapping each character of
-/// `text` that is not whitespace. A test comparing measurement with paint on
-/// host faces skips text no host face can draw.
+/// Whether some face `host` found maps each character of `text` that is not
+/// whitespace. A test comparing measurement with paint on host faces skips
+/// text no host face can draw.
 #[must_use]
-pub fn host_covers(text: &str) -> bool {
-    crate::shared_font_system().covers(text)
+pub fn host_covers(host: &HostFonts, text: &str) -> bool {
+    host.covers(text)
 }
 
 /// Whether every character of `text` that is not whitespace is mapped by a
-/// face both shapers fall back to: one of the sans-serif generic's family,
-/// the fallback chain's list for the character's script, or its common list.
-/// A test comparing Parley measurement with paint on host faces skips text
-/// only cosmic-text's last resort reaches, which the Parley path does not
-/// have.
+/// face a collection fed from `host` falls back to: one of the sans-serif
+/// generic's family, the fallback list for the character's script, or the
+/// common list. A test comparing measurement with paint on host faces skips
+/// text only a face outside those lists covers, which the collection never
+/// reaches.
 #[must_use]
-pub fn host_chain_covers(text: &str) -> bool {
-    crate::shared_font_system().chain_covers(text)
+pub fn host_chain_covers(host: &HostFonts, text: &str) -> bool {
+    host.chain_covers(text)
 }
 
-/// The family the process font system's sans-serif generic names.
+/// The family `host`'s sans-serif generic names.
 #[must_use]
-pub fn host_sans_serif_family() -> String {
-    crate::shared_font_system().sans_serif_family()
+pub fn host_sans_serif_family(host: &HostFonts) -> String {
+    host.sans_serif_family().to_owned()
 }
 
-/// The family names the process font system's faces carry first, each once:
-/// the families a collection fed from it can hold.
+/// The family names `host`'s faces carry first, each once: the families a
+/// collection fed from it can hold.
 #[must_use]
-pub fn host_family_names() -> Vec<String> {
-    crate::shared_font_system().family_names()
+pub fn host_family_names(host: &HostFonts) -> Vec<String> {
+    host.family_names()
 }
 
 /// Whether `fonts` holds a family named `family`: the check the Parley

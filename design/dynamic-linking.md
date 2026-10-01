@@ -319,7 +319,7 @@ Reading the worker path turned up two more. Both are **hypotheses that were not 
    (`crates/flui-hot-reload/src/dispatch.rs:24,78-85`); the host registers its hook only in the
    host's copy, so the tap would log "called before host registered a hook" and nothing would
    rebuild. It is the same class of problem as the worker's separate `FONT_SYSTEM`
-   (`docs/hot-reload.md:213`, `crates/flui-painting/src/text_layout/layout.rs:124`).
+   (`docs/hot-reload.md:213`, flui-painting's `text_layout/layout.rs:124`).
 
 A shared framework dylib with a dynamic std, as Fyrox builds it, would remove the duplicated
 globals of issue 2 but not issue 1, and Fyrox itself calls code reloading "based on wildly

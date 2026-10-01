@@ -150,7 +150,7 @@ The maintainer usually hands over a whole task and comes back later.
 | Toolchain | `rust-toolchain.toml` is the source of truth; pre-1.0 the MSRV tracks latest stable. `cargo xtask toolchain` keeps every copy in sync |
 
 Gotchas: nextest doesn't run doctests (`cargo test --doc`). A flaky test that isn't yours usually
-mutates a genuinely process-global resource (`Registry::global`, `FONT_SYSTEM`) — scope a lock
+mutates a genuinely process-global resource (`Registry::global`) — scope a lock
 to that test module rather than serializing the suite. The dev host is shared and
 memory-limited: one compiling worker, a shared `CARGO_TARGET_DIR`; a docs-only change needs only
 `cargo xtask checks`, which builds xtask and not the workspace.
@@ -289,7 +289,7 @@ script gates already run in CI, so style and anything they catch is not worth a 
   through a harness helper that dirties the root itself, or narrowing an assertion to what a
   partial implementation handles. A regenerated `*.snap` is a claim the new output is correct —
   the PR must say what changed and why. A test that mutates genuinely process-global state
-  (`Registry::global`, `FONT_SYSTEM`) needs a module-scoped lock, because nextest runs one
+  (`Registry::global`) needs a module-scoped lock, because nextest runs one
   process per test in parallel.
 - **Failure paths and recovery:** do not stop at the first reported error or panic. Inventory
   every owned value, guard, callback and deferred obligation still live at each failure boundary,

@@ -1,9 +1,9 @@
 //! The app's font registration door (ADR-0092 §2, §10 step 3b).
 //!
 //! A face registered here goes into the app's one `FontCollection`, which
-//! loads it into the process font system paint shapes with, and every realm
-//! the runtime hosts is told so on its owner turn: its next frame lays out
-//! again the text measured before the face existed.
+//! every realm measures, paints and places carets with, and every realm the
+//! runtime hosts is told so on its owner turn: its next frame lays out again
+//! the text measured before the face existed.
 
 use flui_painting::RegisterFontError;
 

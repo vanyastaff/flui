@@ -16,7 +16,6 @@ use crate::display_list::{FontBlob, FontFace, ShapedGlyph, ShapedParagraph};
 use crate::glyphs::{Synthesis, fake_bold_width};
 use crate::styling::Color;
 use crate::typography::{FontStyle, TextDirection, TextStyle};
-use cosmic_text::fontdb::Family;
 use flui_foundation::geometry::{Rect, Size};
 use parley::fontique::Collection;
 use parley::layout::PositionedLayoutItem;
@@ -26,7 +25,7 @@ use parley::style::{
 };
 use parley::{Alignment, AlignmentOptions, FontData, Layout};
 
-use crate::text_layout::font_resolve::resolve_family_name;
+use crate::text_layout::font_resolve::{Family, resolve_family_name};
 use crate::text_layout::{TextContext, TextLayoutResult, paint_color};
 
 /// What one paragraph is shaped from.
@@ -603,7 +602,7 @@ impl TextContext {
         let breaks = one_break_per_crlf(&text);
 
         // Families are resolved against the collection before the builder
-        // borrows it: the same rule the process font system resolves with.
+        // borrows it (`resolve_family_name`).
         let collection = &mut self.font_cx.collection;
         let (default_family, default_family_name) = family(collection, None);
         let default_properties = paragraph
@@ -746,9 +745,9 @@ fn span_info(len: usize, family: String, style: Option<&TextStyle>) -> SpanInfo 
 /// it: FLUI's family rule (`resolve_family_name`) over the families
 /// `collection` holds, so an absent name never reaches Parley's fallback
 /// walk (flui-painting `ARCHITECTURE.md`, mapping decision 8). Nothing follows it in the list: past that family,
-/// Parley walks the collection's fallback families, which mirror the process
-/// font system's fallback order in a collection fed from the host
-/// (`FontCollection::with_host_faces`).
+/// Parley walks the collection's fallback families, which a collection fed
+/// from the host takes from FLUI's lists for it
+/// (`FontCollection::with_host_fonts`).
 fn family(
     collection: &mut Collection,
     style: Option<&TextStyle>,
@@ -772,7 +771,7 @@ fn family(
 /// Whether `collection` holds a family spelled exactly `name`.
 ///
 /// fontique looks family names up without regard to case; the rule asks for
-/// the exact spelling, as it did of the process font system's database, so a
+/// the exact spelling, as fontdb matches names, so a
 /// style naming `"segoe ui"` degrades to the sans-serif generic rather than
 /// shaping in Segoe UI on one host and in the generic's family on another.
 pub(crate) fn holds_exactly(collection: &mut Collection, name: &str) -> bool {
@@ -889,9 +888,9 @@ mod tests {
     }
 
     /// On a collection holding only the bundled faces, a glyph the style's
-    /// family lacks measures in Roboto, the face cosmic-text's last resort
-    /// paints it with, not as `.notdef`: Cyrillic in Material Icons measures
-    /// exactly as Cyrillic in Roboto.
+    /// family lacks measures in Roboto, the collection's last fallback, not as
+    /// `.notdef`: Cyrillic in Material Icons measures exactly as Cyrillic in
+    /// Roboto.
     #[test]
     fn a_glyph_the_named_family_lacks_measures_in_roboto_on_the_bundled_collection() {
         let fonts = FontCollection::new();

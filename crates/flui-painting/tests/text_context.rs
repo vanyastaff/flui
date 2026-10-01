@@ -1,8 +1,7 @@
 //! Per-realm text contexts over one shared font collection (ADR-0092 §2–§3).
 //!
 //! Two contexts built from one [`FontCollection`] shape on two threads at
-//! once and see a face registered after they were built. Its own binary:
-//! nothing else in it touches the cosmic-text path's process font system.
+//! once and see a face registered after they were built.
 
 use std::sync::Barrier;
 use std::thread;
@@ -12,9 +11,6 @@ use flui_painting::parley_text::{ParagraphLayout, ParagraphSpec};
 use flui_painting::testing::font_collection_holders;
 use flui_painting::typography::{FontWeight, TextDirection, TextStyle};
 use flui_painting::{FontCollection, TextContext, TextLayoutResult};
-
-#[path = "support/cases.rs"]
-mod cases;
 
 const PROBE_MONO: &[u8] = include_bytes!("../assets/fonts/probe-mono-100.ttf");
 /// Every word is narrower than the widths the tests break at, so no line
@@ -57,13 +53,12 @@ const fn assert_send<T: Send>() {}
 const _: () = assert_send::<TextContext>();
 
 /// Two realms' contexts, each moved to its own thread, shape at the same
-/// time and agree with each other. On the cosmic-text path every shape takes
-/// one process-wide lock; here each context is used through `&mut` and shares
-/// no FLUI lock with the other. The overlap of the two threads' intervals
+/// time and agree with each other. Each context is used through `&mut` and
+/// shares no FLUI lock with the other. The overlap of the two threads' intervals
 /// shows they really ran at once; that neither waited on the other rests on
 /// the structure (no lock in the API, the crate's `disallowed_types` lint),
 /// not on a timing measurement.
-fn two_realms_shape_in_parallel() {
+pub(crate) fn two_realms_shape_in_parallel() {
     const SHAPES: usize = 200;
     let fonts = FontCollection::new();
     let mut a = TextContext::new(&fonts);
@@ -109,7 +104,7 @@ fn two_realms_shape_in_parallel() {
 /// in both. The probe face maps only the space and `A`, each one em wide, so
 /// four `A`s in it are exactly four em; Roboto, the fallback a context that
 /// never saw the face shapes with, draws a narrower `A`.
-fn a_face_registered_after_the_fork_shapes_in_every_realm() {
+pub(crate) fn a_face_registered_after_the_fork_shapes_in_every_realm() {
     const SIZE: f32 = 20.0;
     let fonts = FontCollection::new();
     let mut a = TextContext::new(&fonts);
@@ -152,7 +147,7 @@ fn a_face_registered_after_the_fork_shapes_in_every_realm() {
 /// A clone is the same collection and a new one is not; every clone and
 /// every context built from it counts as a holder until it drops; bytes with
 /// no face are refused.
-fn collection_handles_are_shared_and_counted() {
+pub(crate) fn collection_handles_are_shared_and_counted() {
     let fonts = FontCollection::new();
     assert!(FontCollection::ptr_eq(&fonts, &fonts.clone()));
     assert!(!FontCollection::ptr_eq(&fonts, &FontCollection::new()));
@@ -166,55 +161,4 @@ fn collection_handles_are_shared_and_counted() {
 
     assert!(fonts.register_font(b"not a font").is_err());
     assert!(fonts.register_font(&[]).is_err());
-}
-
-/// A laid-out painter answers every caret, selection, hit-test, line and
-/// word query from the layout that measured it, so none of them builds the
-/// process font system.
-fn caret_queries_never_build_the_process_font_system() {
-    use flui_foundation::geometry::Offset;
-    use flui_painting::TextPainter;
-    use flui_painting::typography::{TextPosition, TextSpan};
-
-    let mut context = TextContext::new(&FontCollection::new());
-    let mut painter = TextPainter::new()
-        .with_text(TextSpan::new("one two\nthree"))
-        .with_text_direction(TextDirection::Ltr);
-    painter.layout(&mut context, 0.0, 200.0);
-    let caret = painter.get_offset_for_caret(TextPosition::downstream(9));
-    let hit = painter.get_position_for_offset(Offset::new(5.0, caret.dy + 1.0));
-    assert!(!painter.get_boxes_for_selection(0, 9).is_empty());
-    assert_eq!(painter.get_line_metrics().len(), 2);
-    let word = painter.get_word_boundary(TextPosition::downstream(1));
-    assert_eq!((word.start, word.end), (0, 3));
-    assert!(
-        hit.offset >= 8,
-        "a hit on the second line answers it, got {hit:?}"
-    );
-    assert!(
-        !flui_painting::text_layout::font_system_initialized(),
-        "a caret query built the process font system"
-    );
-}
-
-#[test]
-fn text_context_contract() {
-    cases::run_cases(
-        "text_context",
-        &[
-            (
-                "collection_handles_are_shared_and_counted",
-                collection_handles_are_shared_and_counted,
-            ),
-            ("two_realms_shape_in_parallel", two_realms_shape_in_parallel),
-            (
-                "a_face_registered_after_the_fork_shapes_in_every_realm",
-                a_face_registered_after_the_fork_shapes_in_every_realm,
-            ),
-            (
-                "caret_queries_never_build_the_process_font_system",
-                caret_queries_never_build_the_process_font_system,
-            ),
-        ],
-    );
 }

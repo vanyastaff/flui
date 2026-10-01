@@ -104,3 +104,12 @@ source = "repository:tools/decoy-face/generate.py"
 generator = "tools/decoy-face/generate.py"
 license = "MIT OR Apache-2.0"
 notices = ["licenses/FLUI-MIT.txt", "licenses/FLUI-Apache-2.0.txt", "licenses/ATTRIBUTIONS.txt"]
+
+[[font]]
+file = "probe-arabic-ligature.ttf"
+sha256 = "c8dbe672284118bae1fa9850823121c0e317a48e8fcd4028e7002afab11f34f5"
+kind = "generated"
+source = "repository:tools/decoy-face/generate.py"
+generator = "tools/decoy-face/generate.py"
+license = "MIT OR Apache-2.0"
+notices = ["licenses/FLUI-MIT.txt", "licenses/FLUI-Apache-2.0.txt", "licenses/ATTRIBUTIONS.txt"]

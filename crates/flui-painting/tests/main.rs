@@ -11,9 +11,8 @@
 //!
 //! Convention (mirrors `flui-view/tests/main.rs`): tests that WRITE
 //! process-global state get their own [[test]] target instead. None of
-//! flui-painting's integration tests do — the crate's only process-global
-//! is the lazily initialized `FONT_SYSTEM` `OnceLock` (benign once-init,
-//! never replaced or reset by tests).
+//! flui-painting's integration tests do: the crate keeps no process-global
+//! font state.
 
 #[path = "caret_contract.rs"]
 mod caret_contract;
@@ -29,10 +28,20 @@ mod compile_fail;
 mod damage_extent;
 #[path = "decoration_unit.rs"]
 mod decoration_unit;
+#[path = "font_registration.rs"]
+mod font_registration;
+#[path = "host_faces_oracle.rs"]
+mod host_faces_oracle;
+#[path = "parley_metrics_oracle.rs"]
+mod parley_metrics_oracle;
+#[path = "parley_oracle.rs"]
+mod parley_oracle;
 #[path = "recording.rs"]
 mod recording;
 #[path = "rich_text_example.rs"]
 mod rich_text_example;
+#[path = "text_context.rs"]
+mod text_context;
 #[path = "text_layout_pipeline.rs"]
 mod text_layout_pipeline;
 #[path = "text_overflow_unit.rs"]
@@ -43,6 +52,23 @@ mod text_painter_unit;
 mod values;
 
 use cases::run_cases;
+
+#[test]
+fn parley_oracle_contract() {
+    run_cases(
+        "parley_oracle",
+        &[
+            (
+                "swash_matches_the_recorded_reference",
+                parley_oracle::swash_matches_the_recorded_reference,
+            ),
+            (
+                "rasterizing_a_key_twice_draws_the_same_bitmap",
+                parley_oracle::rasterizing_a_key_twice_draws_the_same_bitmap,
+            ),
+        ],
+    );
+}
 
 #[test]
 fn color_contract() {
@@ -280,12 +306,18 @@ fn caret_contract() {
                 "line_metrics_index_each_line",
                 cc::line_metrics_index_each_line,
             ),
+            (
+                "a_lam_alef_ligature_is_one_glyph_and_two_caret_stops",
+                cc::a_lam_alef_ligature_is_one_glyph_and_two_caret_stops,
+            ),
         ],
     );
 }
 
 /// A painter measures on Parley through the context it is lent, and its cache
-/// answers only for the fonts that measured it (ADR-0092 §10 steps 3a and 4a).
+/// answers only for the fonts that measured it (ADR-0092 §10 steps 3a and 4a);
+/// realms' contexts over one collection shape in parallel and share its faces
+/// (§2–§3).
 #[test]
 fn text_context_contract() {
     use text_painter_unit::parley_measurement as pm;
@@ -303,6 +335,18 @@ fn text_context_contract() {
             (
                 "a_registration_on_the_collection_invalidates_the_painter_cache",
                 pm::a_registration_on_the_collection_invalidates_the_painter_cache,
+            ),
+            (
+                "collection_handles_are_shared_and_counted",
+                text_context::collection_handles_are_shared_and_counted,
+            ),
+            (
+                "two_realms_shape_in_parallel",
+                text_context::two_realms_shape_in_parallel,
+            ),
+            (
+                "a_face_registered_after_the_fork_shapes_in_every_realm",
+                text_context::a_face_registered_after_the_fork_shapes_in_every_realm,
             ),
         ],
     );

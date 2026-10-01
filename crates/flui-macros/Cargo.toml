@@ -21,7 +21,7 @@ proc-macro = true
 [dependencies]
 # proc-macro2 / quote / syn 2.x is the standard derive-macro stack. These
 # crates are already pulled into the workspace `Cargo.lock` transitively
-# (`syn 2.0` via `bytemuck_derive`, `cosmic-text`, the wgpu chain), so
+# (`syn 2.0` via `bytemuck_derive` and the wgpu chain), so
 # promoting them to direct deps of a workspace-owned crate adds zero new
 # lockfile entries.
 proc-macro-crate = "3.5"
