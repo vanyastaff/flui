@@ -1,7 +1,9 @@
 //! The app's fonts and the per-realm text context Parley shapes through.
 //!
-//! - `context` — [`FontCollection`], the app's add-only font collection, and
-//!   [`TextContext`], the per-realm service built from it (ADR-0092 §2–§3).
+//! - `context` — [`FontCollection`], the app's add-only font collection,
+//!   [`HostFontFeed`], which adds the host's faces to it off the owner
+//!   thread, and [`TextContext`], the per-realm service built from it
+//!   (ADR-0092 §2–§3, §7).
 //! - `host` — [`HostFonts`], the one scan of the host's installed fonts a
 //!   collection is fed from, with its generic families and fallback lists.
 //! - `fallback_chain` — the fallback order a host-fed collection walks past
@@ -21,7 +23,7 @@ pub(crate) mod font_resolve;
 mod host;
 
 pub(crate) use context::FontsKey;
-pub use context::{FontCollection, TextContext};
+pub use context::{FontCollection, HostFontFeed, TextContext};
 pub use host::HostFonts;
 
 /// The colour a style paints its glyphs with: `foreground` wins over

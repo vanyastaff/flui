@@ -5,6 +5,9 @@
 //!
 //! - building the bundled-only collection, scanning the host's fonts, and
 //!   feeding a collection from that scan (criterion, 10 samples each);
+//! - the app's start-up path: what the owner thread pays to build the
+//!   collection and its host feed, and what the feed costs on its own
+//!   thread once the host is scanned;
 //! - the heap a host-fed collection keeps;
 //! - the heap one laid-out `TextPainter` keeps, per paragraph shape: 1,000
 //!   painters laid out and held, the live-bytes delta divided by 1,000.
@@ -17,7 +20,8 @@ use std::alloc::{GlobalAlloc, Layout, System};
 use std::hint::black_box;
 use std::sync::atomic::{AtomicIsize, Ordering};
 
-use criterion::Criterion;
+use criterion::{BatchSize, Criterion};
+use flui_painting::testing::feed_with_host;
 use flui_painting::typography::{TextDirection, TextSpan};
 use flui_painting::{FontCollection, HostFonts, TextContext, TextPainter};
 
@@ -129,6 +133,22 @@ fn main() {
     let host = HostFonts::scan();
     criterion.bench_function("FontCollection::with_host_fonts", |b| {
         b.iter(|| black_box(FontCollection::with_host_fonts(&host)));
+    });
+    criterion.bench_function("FontCollection::with_host_feed", |b| {
+        b.iter(|| black_box(FontCollection::with_host_feed()));
+    });
+    criterion.bench_function("HostFontFeed::run", |b| {
+        b.iter_batched(
+            || {
+                let (fonts, feed) = FontCollection::with_host_feed();
+                (fonts, feed_with_host(feed, HostFonts::scan()))
+            },
+            |(fonts, feed)| {
+                feed.run();
+                fonts
+            },
+            BatchSize::PerIteration,
+        );
     });
     criterion.final_summary();
 

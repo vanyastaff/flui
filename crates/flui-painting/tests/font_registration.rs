@@ -118,3 +118,85 @@ fn a_face_registered_on_the_collection_reaches_measurement_paint_and_carets() {
         caret_line_width(&painter)
     );
 }
+
+const PROBE_SANS: &[u8] = include_bytes!("../assets/fonts/probe-sans-400.ttf");
+/// "FLUI Probe Mono" at weight 600: a second face of the probe family.
+const PROBE_MONO_600: &[u8] = include_bytes!("../assets/fonts/probe-mono-600.ttf");
+
+/// The faces `fonts` paints `AAAA` in, styled `FLUI Probe Mono` at `weight`.
+fn probe_faces(fonts: &FontCollection, weight: FontWeight) -> Vec<FaceKey> {
+    let style = TextStyle {
+        font_family: Some("FLUI Probe Mono".to_string()),
+        font_weight: Some(weight),
+        ..TextStyle::default()
+    };
+    let mut painter = TextPainter::new()
+        .with_text(TextSpan::new("AAAA").with_style(style))
+        .with_text_direction(TextDirection::Ltr);
+    painter.layout(&mut TextContext::new(fonts), 0.0, WIDTH);
+    painted_faces(&painted_paragraph(&painter))
+}
+
+/// A host feed adds the host's faces and then raises the collection's
+/// generation exactly once, however many sources it added, so each
+/// pipeline lays its text out once more when the feed lands. Before it
+/// runs the collection holds the bundled faces alone. Fails if the feed
+/// announces each file (the generation rises twice here) or nothing.
+fn a_host_feed_raises_the_generation_once() {
+    use flui_painting::testing::{collection_holds, feed_with_host, host_fed, host_fonts_from};
+
+    let (fonts, feed) = FontCollection::with_host_feed();
+    let before = fonts.generation();
+    assert!(!host_fed(&fonts));
+    assert!(!collection_holds(&fonts, "FLUI Probe Mono"));
+
+    feed_with_host(feed, host_fonts_from(&[PROBE_MONO, PROBE_SANS])).run();
+
+    assert!(collection_holds(&fonts, "FLUI Probe Mono"));
+    assert!(collection_holds(&fonts, "FLUI Probe Sans"));
+    assert!(host_fed(&fonts));
+    assert_eq!(
+        fonts.generation(),
+        before + 1,
+        "two sources fed, one announcement"
+    );
+}
+
+/// A family the collection holds when the feed starts (here registered by
+/// the app) is not fed again: the host's weight-600 face of it stays out,
+/// so a weight-600 style keeps painting in the registered face. Fails if
+/// the feed adds a host copy to a family the app already has.
+fn a_family_held_before_the_feed_is_not_fed_again() {
+    use flui_painting::testing::{feed_with_host, host_fonts_from};
+
+    let (fonts, feed) = FontCollection::with_host_feed();
+    fonts
+        .register_font(PROBE_MONO)
+        .expect("the probe face loads");
+    let registered = probe_faces(&fonts, FontWeight::W600);
+
+    feed_with_host(feed, host_fonts_from(&[PROBE_MONO_600])).run();
+
+    assert_eq!(
+        probe_faces(&fonts, FontWeight::W600),
+        registered,
+        "the family keeps only the face the app registered"
+    );
+}
+
+#[test]
+fn host_feed_contract() {
+    crate::cases::run_cases(
+        "host_feed_contract",
+        &[
+            (
+                "a_host_feed_raises_the_generation_once",
+                a_host_feed_raises_the_generation_once,
+            ),
+            (
+                "a_family_held_before_the_feed_is_not_fed_again",
+                a_family_held_before_the_feed_is_not_fed_again,
+            ),
+        ],
+    );
+}
