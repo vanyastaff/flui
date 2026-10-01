@@ -346,14 +346,18 @@ alone; an offscreen would buy nothing there.
 
 `PendingOffscreenTexture` carries the producer's `BlendMode`;
 `queue_offscreen_result` takes it; replay routes every mode through
-`PipelineSet::ensure_texture_composite`'s per-mode pipeline. Shader-mask and
-backdrop-filter results go through it, and `flush_opacity_layer` composites a
-save layer's Porter-Duff mode through the same pipelines (an advanced mode
-takes the backdrop-reading path), so a mask layer composited `Clear` erases
-instead of drawing. `an_offscreen_result_composites_with_its_own_blend_mode`
-fails on the `SrcOver`-always code. `OffscreenRenderer::render_masked` takes
-no blend mode: it produces a premultiplied full-coverage offscreen, and the
-mode belongs to the step that draws it back. The result also carries the
+`PipelineSet::ensure_texture_composite`'s per-mode pipeline. Backdrop-filter
+results go through it, and `flush_opacity_layer` composites a save layer's
+Porter-Duff mode through the same pipelines (an advanced mode takes the
+backdrop-reading path), so a save layer composited `Clear` erases instead of
+drawing. `an_offscreen_result_composites_with_its_own_blend_mode` fails on
+the `SrcOver`-always code. A shader mask is the exception (decision 19,
+ADR-0099 §4): its mode combines its shader with its child, so
+`handle_shader_mask` queues its result `SrcOver` and the mode is not applied
+a second time at the draw-back; a white `Clear` mask over a red child
+therefore draws the masked child, it does not erase the backdrop.
+`OffscreenRenderer::render_masked` takes no blend mode yet (decision 19's
+open item). The result also carries the
 scissor and clip in force when it was queued, since its offscreen was drawn
 outside them (decision 19).
 
