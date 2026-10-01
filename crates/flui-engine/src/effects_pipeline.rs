@@ -246,7 +246,7 @@ pub(crate) fn create_shadow_pipeline(
         &QuadPipelineSpec {
             shader_label: "Shadow Shader",
             pipeline_label: "Shadow Pipeline",
-            shader_source: include_str!("shaders/effects/shadow.wgsl"),
+            shader_source: crate::shaders::SHADOW,
             instance_layout: crate::instancing::ShadowInstance::desc(),
             blend: wgpu::BlendState::ALPHA_BLENDING,
             constants: &[],

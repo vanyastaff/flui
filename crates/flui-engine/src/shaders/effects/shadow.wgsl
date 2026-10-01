@@ -102,7 +102,7 @@ fn boxShadow2D(p: vec2<f32>, box_size: vec2<f32>, sigma: f32) -> f32 {
 }
 
 /// Rounded rectangle SDF (same as rect shader)
-fn sdRoundedBox(p: vec2<f32>, b: vec2<f32>, r: f32) -> f32 {
+fn shadowRoundedBoxDistance(p: vec2<f32>, b: vec2<f32>, r: f32) -> f32 {
     let q = abs(p) - b + vec2<f32>(r);
     return min(max(q.x, q.y), 0.0) + length(max(q, vec2<f32>(0.0))) - r;
 }
@@ -116,7 +116,7 @@ fn roundedRectShadow(
     sigma: f32
 ) -> f32 {
     // Compute distance to rounded rect
-    let dist = sdRoundedBox(p, rect_size * 0.5, corner_radius);
+    let dist = shadowRoundedBoxDistance(p, rect_size * 0.5, corner_radius);
 
     // Early reject if too far from shadow
     if (dist > 3.0 * sigma) {
@@ -183,7 +183,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     );
 
     // Return shadow color with computed alpha
-    return vec4<f32>(in.shadow_color.rgb, in.shadow_color.a * shadow_alpha);
+    return vec4<f32>(in.shadow_color.rgb, in.shadow_color.a * shadow_alpha * finalClipCoverage(in.clip_position.xy));
 }
 
 // =============================================================================

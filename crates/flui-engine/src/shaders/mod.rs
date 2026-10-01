@@ -81,8 +81,7 @@ pub(crate) const SWEEP_GRADIENT: crate::pipeline_cache::CoverageShaderSources =
 // the same `ClipRRect` would then round different primitives by different
 // amounts with nothing failing.
 //
-// `arc_instanced` is NOT prepended: `ArcInstance` carries no clip slot, and
-// adding unused functions to a shader is noise, not symmetry.
+// Arcs also consume the final clip mask through the shared viewport group.
 //
 // `concat!` takes the `include_str!` calls directly rather than a named
 // `CLIP_SDF` const: it concatenates literals, and a `const` is not one.
@@ -98,7 +97,15 @@ pub(crate) const CIRCLE_INSTANCED: &str = concat!(
     include_str!("circle_instanced.wgsl")
 );
 /// Instanced arc rendering shader.
-pub(crate) const ARC_INSTANCED: &str = include_str!("arc_instanced.wgsl");
+pub(crate) const ARC_INSTANCED: &str = concat!(
+    include_str!("common/clip.wgsl"),
+    include_str!("arc_instanced.wgsl")
+);
+/// Analytical shadow shader with shared final clip coverage.
+pub(crate) const SHADOW: &str = concat!(
+    include_str!("common/clip.wgsl"),
+    include_str!("effects/shadow.wgsl")
+);
 /// Instanced texture rendering shader.
 pub(crate) const TEXTURE_INSTANCED: &str = concat!(
     include_str!("common/clip.wgsl"),

@@ -249,6 +249,9 @@ mod batches;
 /// morphology pipeline (`NonFiltering` nearest).
 pub(crate) mod blur;
 mod buffer_pool;
+mod clip_chain;
+mod clip_geometry;
+mod clip_mask;
 /// Per-pixel 5×4 color-matrix filter pass: [`color_matrix::apply_color_matrix`]
 /// applies a [`command_ir::LayerFilter::ColorMatrix`] to a premultiplied layer
 /// offscreen via ping-pong into a 2nd pooled texture, then returns the filtered
@@ -453,7 +456,7 @@ mod blur_filter_tests;
 // ============================================================================
 
 // Abstract traits and errors
-pub use error::{EngineError, EngineResult, ExternalTextureError, Recoverability};
+pub use error::{EngineError, EngineResult, ExternalTextureError, GeometryError, Recoverability};
 pub use external_texture_registry::{
     ExternalAlpha, ExternalColorEncoding, ExternalSampling, ExternalTextureDescriptor,
     ExternalTextureEntry, ExternalTextureRegistry,

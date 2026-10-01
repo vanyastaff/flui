@@ -13,6 +13,7 @@ use std::sync::{
 pub(crate) struct RecordingBudget {
     used_bytes: AtomicUsize,
     used_elements: AtomicUsize,
+    clip_work: AtomicUsize,
     error: OnceLock<RecordError>,
     bytes: usize,
     elements: usize,
@@ -22,6 +23,7 @@ impl RecordingBudget {
         Arc::new(Self {
             used_bytes: AtomicUsize::new(0),
             used_elements: AtomicUsize::new(0),
+            clip_work: AtomicUsize::new(0),
             error: OnceLock::new(),
             bytes,
             elements,
@@ -36,7 +38,7 @@ impl RecordingBudget {
     pub(crate) fn record_error(&self, error: RecordError) {
         let _ = self.error.set(error);
     }
-    fn charge(&self, bytes: usize, elements: usize) -> bool {
+    pub(crate) fn charge(&self, bytes: usize, elements: usize) -> bool {
         if self.error.get().is_some() {
             return false;
         }
@@ -70,11 +72,25 @@ impl RecordingBudget {
         }
         true
     }
+    /// Work is cumulative for a frame: restore and dropping masks do not refund it.
+    pub(crate) fn admit_clip_work(&self, work: usize) -> crate::error::EngineResult<()> {
+        const LIMIT: usize = 1_000_000_000;
+        self.clip_work
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |used| {
+                used.checked_add(work).filter(|next| *next <= LIMIT)
+            })
+            .map(|_| ())
+            .map_err(|used| crate::error::EngineError::PreparedResourceLimit {
+                resource: "cumulative clip membership work",
+                requested: used.saturating_add(work),
+                limit: LIMIT,
+            })
+    }
     fn available_bytes(&self) -> usize {
         self.bytes
             .saturating_sub(self.used_bytes.load(Ordering::Relaxed))
     }
-    fn release(&self, bytes: usize, elements: usize) {
+    pub(crate) fn release(&self, bytes: usize, elements: usize) {
         self.used_bytes.fetch_sub(bytes, Ordering::Relaxed);
         self.used_elements.fetch_sub(elements, Ordering::Relaxed);
     }

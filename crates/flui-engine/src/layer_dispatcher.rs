@@ -14,9 +14,9 @@ use smallvec::SmallVec;
 use std::sync::Arc;
 
 use crate::{
+    command_ir::GroupClip,
     command_ir::{GammaDirection, ImageFilterPass, ImageFilterSpec, LayerFilter, MorphOp},
     painter::WgpuPainter,
-    state_stack::ResolvedClip,
 };
 use crate::{command_renderer::CommandRenderer, layer_state_stack::LayerStateStack};
 
@@ -206,15 +206,15 @@ impl<'frame> LayerDispatcher<'frame> {
     ///
     /// `Some(clip)` means the push wants the offscreen and `clip` is the
     /// coverage its group composite applies — see
-    /// [`WgpuPainter::save_layer_clipped`], and note that `ResolvedClip::NONE`
-    /// is a legitimate payload. `None` means the push installed its clip per
-    /// draw and wants no layer.
+    /// [`WgpuPainter::save_layer_clipped`]. The group's complete inherited
+    /// expression applies at composite; child runs carry their local suffix.
+    /// `None` means the push installed its clip per draw and wants no layer.
     ///
     /// The only writer of `clip_frames`. The open and the record happen here, on
     /// the two sides of one `if`, so they cannot be set apart: no caller can
     /// record a `SaveLayer` without opening one, or open one without recording
     /// it.
-    fn open_clip_frame(&mut self, composite_clip: Option<ResolvedClip>) {
+    fn open_clip_frame(&mut self, composite_clip: Option<GroupClip>) {
         let frame = if let Some(clip) = composite_clip {
             // The clip's own scissor, which the caller has just installed: the
             // clip's device-space bounds already intersected with every
@@ -467,46 +467,11 @@ const fn clip_is_disabled(behavior: flui_painting::paint::Clip) -> bool {
     matches!(behavior, flui_painting::paint::Clip::None)
 }
 
-/// Whether this clip op can be expressed by the primitives this backend has.
-///
-/// `ClipOp::Difference` keeps the shape's COMPLEMENT. A scissor cannot express
-/// a complement — it is one rectangle — and the per-draw SDF slot evaluates the
-/// shape rather than its inverse, so no clip primitive here can honour it.
-///
-/// Installing the shape as an intersect instead is not an approximation of the
-/// request, it is its inverse: a caller punching a hole gets everything OUTSIDE
-/// the hole erased. That is destructive, where refusing is merely permissive —
-/// the caller sees content the clip should have removed, rather than losing
-/// content it asked to keep. Three of the four shapes did the first thing until
-/// issue #941; `clip_path` already did the second, because #934 forced the
-/// question for a bounding-box clip whose complement's bounding box is the
-/// whole surface.
-///
-/// Honouring it needs the machinery an exact path clip needs: a stencil pass,
-/// or a shader carrying a clip STACK that can evaluate `1 − coverage`. Both are
-/// tracked with path clipping itself.
-const fn clip_op_is_expressible(clip_op: flui_painting::paint::ClipOp) -> bool {
-    matches!(clip_op, flui_painting::paint::ClipOp::Intersect)
-}
-
-/// Report a clip this backend cannot express, and go on without installing it.
-///
-/// Release level, not debug: an unhonoured clip renders content the caller
-/// asked to remove, which is a visible defect a production scrape must be able
-/// to see — the same reasoning that raised `WgpuPainter::clip_path`'s own
-/// message from `trace!` to `warn!`.
-///
-/// Per call rather than latched. `ClipOp::Difference` has no in-tree producer,
-/// so this cannot spam a frame loop today; if one appears, the fix is the
-/// once-per-painter latch `clip_path` already carries, not a level downgrade.
-fn warn_unexpressible_clip_op(shape: &str) {
-    tracing::warn!(
-        "LayerDispatcher::{shape}: ClipOp::Difference keeps the shape's complement, \
-         which no clip primitive here can express; the clip is NOT applied. \
-         Installing the shape as an intersect instead would invert the request \
-         and erase the content it asked to keep. Honouring it needs the stencil \
-         pass exact path clipping needs."
-    );
+fn recorded_clip_op(op: flui_painting::paint::ClipOp) -> crate::clip_chain::ClipOp {
+    match op {
+        flui_painting::paint::ClipOp::Intersect => crate::clip_chain::ClipOp::Intersect,
+        flui_painting::paint::ClipOp::Difference => crate::clip_chain::ClipOp::Difference,
+    }
 }
 
 impl CommandRenderer for LayerDispatcher<'_> {
@@ -765,14 +730,10 @@ impl CommandRenderer for LayerDispatcher<'_> {
         if clip_is_disabled(clip_behavior) {
             return;
         }
-        if !clip_op_is_expressible(clip_op) {
-            warn_unexpressible_clip_op("clip_rect");
-            return;
-        }
         // The `Clip` MODE rides through; the painter decides how each shape
         // honours it (see `WgpuPainter::clip_rect` for the one that cannot).
         self.with_transform(transform, |painter| {
-            painter.clip_rect(rect, clip_behavior);
+            painter.clip_rect_operation(rect, clip_behavior, recorded_clip_op(clip_op));
         });
     }
 
@@ -786,12 +747,8 @@ impl CommandRenderer for LayerDispatcher<'_> {
         if clip_is_disabled(clip_behavior) {
             return;
         }
-        if !clip_op_is_expressible(clip_op) {
-            warn_unexpressible_clip_op("clip_rrect");
-            return;
-        }
         self.with_transform(transform, |painter| {
-            painter.clip_rrect(rrect, clip_behavior);
+            painter.clip_rrect_operation(rrect, clip_behavior, recorded_clip_op(clip_op));
         });
     }
 
@@ -810,12 +767,12 @@ impl CommandRenderer for LayerDispatcher<'_> {
         if clip_is_disabled(clip_behavior) {
             return;
         }
-        if !clip_op_is_expressible(clip_op) {
-            warn_unexpressible_clip_op("clip_rsuperellipse");
-            return;
-        }
         self.with_transform(transform, |painter| {
-            painter.clip_rsuperellipse(rsuperellipse, clip_behavior);
+            painter.clip_rsuperellipse_operation(
+                rsuperellipse,
+                clip_behavior,
+                recorded_clip_op(clip_op),
+            );
         });
     }
 
@@ -837,12 +794,8 @@ impl CommandRenderer for LayerDispatcher<'_> {
         if clip_is_disabled(clip_behavior) {
             return;
         }
-        if !clip_op_is_expressible(clip_op) {
-            warn_unexpressible_clip_op("clip_path");
-            return;
-        }
         self.with_transform(transform, |painter| {
-            painter.clip_path(path);
+            painter.clip_path_operation(path, clip_behavior, recorded_clip_op(clip_op));
         });
     }
 
@@ -899,29 +852,29 @@ impl LayerStateStack for LayerDispatcher<'_> {
     // before changing a scope, leaving captured command clips untouched.
 
     fn push_clip_rect(&mut self, rect: &Rect<f64>, clip_behavior: flui_painting::paint::Clip) {
+        if clip_is_disabled(clip_behavior) {
+            return;
+        }
         self.flush_active_transform();
         self.painter.save();
         self.painter.clip_rect(*rect, clip_behavior);
-        // A rect clip is the hardware scissor under every mode, and the scissor
-        // has already clipped every draw that goes into the offscreen. It is
-        // binary, so re-applying it to the group would change nothing — hence
-        // `ResolvedClip::NONE`. The layer is still opened, for the half of the
-        // mode a scissor cannot give: isolation from the backdrop.
-        let composite_clip = Self::opens_offscreen(clip_behavior).then_some(ResolvedClip::NONE);
+        // Move inherited coverage to the finished group.
+        let composite_clip =
+            Self::opens_offscreen(clip_behavior).then(|| self.painter.captured_group_clip());
         self.open_clip_frame(composite_clip);
     }
 
     fn push_clip_rrect(&mut self, rrect: &RRect, clip_behavior: flui_painting::paint::Clip) {
+        if clip_is_disabled(clip_behavior) {
+            return;
+        }
         self.flush_active_transform();
         self.painter.save();
         // Decided BEFORE installing anything: the two calls below clip the
         // content differently, and picking the wrong one because the layer was
         // refused afterwards would drop the rounded coverage entirely.
         let composite_clip = if Self::opens_offscreen(clip_behavior) {
-            // Bounding scissor only: the rounded coverage is what the group
-            // composite applies, once. Installing the SDF slot as well would
-            // apply it a second time, per draw — the defect the mode exists to
-            // avoid.
+            // Child runs start with an empty inherited prefix.
             Some(self.painter.clip_rrect_at_composite(*rrect))
         } else {
             self.painter.clip_rrect(*rrect, clip_behavior);
@@ -935,6 +888,9 @@ impl LayerStateStack for LayerDispatcher<'_> {
         rse: &flui_foundation::geometry::RSuperellipse,
         clip_behavior: flui_painting::paint::Clip,
     ) {
+        if clip_is_disabled(clip_behavior) {
+            return;
+        }
         self.flush_active_transform();
         self.painter.save();
         // The rrect shape exactly: decided BEFORE installing anything, because
@@ -956,16 +912,15 @@ impl LayerStateStack for LayerDispatcher<'_> {
     }
 
     fn push_clip_path(&mut self, path: &Path, clip_behavior: flui_painting::paint::Clip) {
+        if clip_is_disabled(clip_behavior) {
+            return;
+        }
         self.flush_active_transform();
         self.painter.save();
-        // The clip installed is the path's BOUNDING BOX, not the path — see
-        // `WgpuPainter::clip_path`. That makes this exactly the rect case: the
-        // scissor is binary and has already clipped every draw going into the
-        // offscreen, so re-applying it to the group would change nothing, hence
-        // `ResolvedClip::NONE`. The layer is still opened for the half a
-        // scissor cannot give — isolation from the backdrop.
-        self.painter.clip_path(path);
-        let composite_clip = Self::opens_offscreen(clip_behavior).then_some(ResolvedClip::NONE);
+        self.painter
+            .clip_path_operation(path, clip_behavior, crate::clip_chain::ClipOp::Intersect);
+        let composite_clip =
+            Self::opens_offscreen(clip_behavior).then(|| self.painter.captured_group_clip());
         self.open_clip_frame(composite_clip);
     }
 

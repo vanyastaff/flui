@@ -85,9 +85,12 @@ impl DrawBatcher {
                     }
                     let instance = state.apply_active_clip(instance);
                     let _ = segment.rect_batch.add(instance);
-                    segment.record_run(DrawRun::Rect(
-                        segment.rect_batch.len().saturating_sub(1)..segment.rect_batch.len(),
-                    ));
+                    segment.record_run(
+                        DrawRun::Rect(
+                            segment.rect_batch.len().saturating_sub(1)..segment.rect_batch.len(),
+                        ),
+                        state.clip_chain(),
+                    );
                     DrawSegment::push_scissor_region(
                         &mut segment.rect_scissors,
                         state.current_scissor(),
@@ -115,9 +118,12 @@ impl DrawBatcher {
                     }
                     let instance = state.apply_active_clip(instance);
                     let _ = segment.rect_batch.add(instance);
-                    segment.record_run(DrawRun::Rect(
-                        segment.rect_batch.len().saturating_sub(1)..segment.rect_batch.len(),
-                    ));
+                    segment.record_run(
+                        DrawRun::Rect(
+                            segment.rect_batch.len().saturating_sub(1)..segment.rect_batch.len(),
+                        ),
+                        state.clip_chain(),
+                    );
                     // Scissor = the active damage/clip region, exactly as the
                     // axis-aligned path. The shape is bounded by its own quad +
                     // SDF; a per-shape AABB scissor is unnecessary and (because
@@ -327,9 +333,12 @@ impl DrawBatcher {
                         radius_bottom_left as f32,
                     ));
                 let _ = segment.rect_batch.add(instance);
-                segment.record_run(DrawRun::Rect(
-                    segment.rect_batch.len().saturating_sub(1)..segment.rect_batch.len(),
-                ));
+                segment.record_run(
+                    DrawRun::Rect(
+                        segment.rect_batch.len().saturating_sub(1)..segment.rect_batch.len(),
+                    ),
+                    state.clip_chain(),
+                );
                 DrawSegment::push_scissor_region(
                     &mut segment.rect_scissors,
                     state.current_scissor(),
@@ -366,9 +375,12 @@ impl DrawBatcher {
                     ),
                 );
                 let _ = segment.rect_batch.add(instance);
-                segment.record_run(DrawRun::Rect(
-                    segment.rect_batch.len().saturating_sub(1)..segment.rect_batch.len(),
-                ));
+                segment.record_run(
+                    DrawRun::Rect(
+                        segment.rect_batch.len().saturating_sub(1)..segment.rect_batch.len(),
+                    ),
+                    state.clip_chain(),
+                );
                 // Scissor = the active damage/clip region (same as the axis-aligned
                 // path); the shape is bounded by its own quad + SDF, so a per-shape
                 // AABB scissor is unnecessary and would clip the AA fringe.
@@ -465,9 +477,13 @@ impl DrawBatcher {
                         [sx, sy],
                     ));
                     let _ = segment.circle_batch.add(instance);
-                    segment.record_run(DrawRun::Circle(
-                        segment.circle_batch.len().saturating_sub(1)..segment.circle_batch.len(),
-                    ));
+                    segment.record_run(
+                        DrawRun::Circle(
+                            segment.circle_batch.len().saturating_sub(1)
+                                ..segment.circle_batch.len(),
+                        ),
+                        state.clip_chain(),
+                    );
                     DrawSegment::push_scissor_region(
                         &mut segment.circle_scissors,
                         state.current_scissor(),
@@ -502,9 +518,13 @@ impl DrawBatcher {
                         ),
                     );
                     let _ = segment.circle_batch.add(instance);
-                    segment.record_run(DrawRun::Circle(
-                        segment.circle_batch.len().saturating_sub(1)..segment.circle_batch.len(),
-                    ));
+                    segment.record_run(
+                        DrawRun::Circle(
+                            segment.circle_batch.len().saturating_sub(1)
+                                ..segment.circle_batch.len(),
+                        ),
+                        state.clip_chain(),
+                    );
                     DrawSegment::push_scissor_region(
                         &mut segment.circle_scissors,
                         state.current_scissor(),
@@ -637,9 +657,12 @@ impl DrawBatcher {
                     [tx, ty],
                 ));
             let _ = segment.circle_batch.add(instance);
-            segment.record_run(DrawRun::Circle(
-                segment.circle_batch.len().saturating_sub(1)..segment.circle_batch.len(),
-            ));
+            segment.record_run(
+                DrawRun::Circle(
+                    segment.circle_batch.len().saturating_sub(1)..segment.circle_batch.len(),
+                ),
+                state.clip_chain(),
+            );
             DrawSegment::push_scissor_region(&mut segment.circle_scissors, state.current_scissor());
         } else if paint.style == PaintStyle::Fill {
             // Non-SrcOver fill — PR-4: tile-safe and advanced modes → SSAA (AA'd);
@@ -840,9 +863,12 @@ impl DrawBatcher {
                     [tx, ty],
                 );
                 let _ = segment.arc_batch.add(instance);
-                segment.record_run(DrawRun::Arc(
-                    segment.arc_batch.len().saturating_sub(1)..segment.arc_batch.len(),
-                ));
+                segment.record_run(
+                    DrawRun::Arc(
+                        segment.arc_batch.len().saturating_sub(1)..segment.arc_batch.len(),
+                    ),
+                    state.clip_chain(),
+                );
                 DrawSegment::push_scissor_region(
                     &mut segment.arc_scissors,
                     state.current_scissor(),

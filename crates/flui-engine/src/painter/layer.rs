@@ -331,42 +331,43 @@ impl WgpuPainter {
         }
     }
 
-    /// The clip a composite over [`Self::composite_region`] must carry beyond
-    /// that rectangle, or `None` when the rectangle is the whole region.
-    ///
-    /// - Bounds under a rotation or skew are carried as a hard clip, whatever
-    ///   the mode: the composite quad is their bounding box, and without the
-    ///   clip a destination-replacing mode would change all of it and any
-    ///   other mode would show the content that reached its corners.
-    /// - An active rounded or superellipse clip goes on the composite, so the
-    ///   composite changes nothing the clip excludes. `content_was_clipped`
-    ///   says whether the content inside already went through it: the draws
-    ///   in a save layer did, so a mode that keeps the destination under a
-    ///   transparent source needs only the bounds clip, while a shader mask's
-    ///   or a backdrop's offscreen was drawn outside it.
-    ///
-    /// A rotated or skewed composite that needs the rounded clip keeps only
-    /// that clip (one clip slot per instance), so it composites the bounding
-    /// box of its bounds within that clip.
+    /// Capture inherited clip coverage, optionally intersecting local group bounds.
+    /// Children record only their local suffix; inherited coverage is applied
+    /// once to the finished group, after its effects.
     pub(super) fn composite_clip(
-        &self,
+        &mut self,
         local_bounds: Option<Rect<f64>>,
-        blend: flui_painting::paint::BlendMode,
-        content_was_clipped: bool,
-    ) -> Option<crate::state_stack::ResolvedClip> {
-        let ctm = self.state.current_transform_matrix();
-        let bounds_clip = local_bounds
-            .filter(|_| !self.state.is_axis_aligned() && !is_projective(&ctm))
-            .map(|bounds| {
-                self.state
-                    .resolve_rrect_clip(flui_foundation::geometry::RRect::from_rect(bounds), true)
-            });
-        let active = self.state.active_clip();
-        let replaces = !blend.keeps_destination_under_transparent_source();
-        if active != crate::state_stack::ResolvedClip::NONE && (replaces || !content_was_clipped) {
-            return Some(active);
+        _blend: flui_painting::paint::BlendMode,
+        _content_was_clipped: bool,
+    ) -> Option<crate::command_ir::GroupClip> {
+        let mut chain = self.state.clip_chain();
+        if let Some(bounds) = local_bounds {
+            let result = crate::clip_geometry::ValidatedClip::rect(bounds)
+                .map_err(crate::command_ir::RecordError::Geometry)
+                .and_then(|shape| {
+                    crate::clip_geometry::ValidatedAffine::new(glam::DMat4::from_cols_array(
+                        &self.state.current_transform_matrix().m,
+                    ))
+                    .map_err(crate::command_ir::RecordError::Geometry)
+                    .and_then(|affine| {
+                        chain.append(
+                            shape,
+                            affine,
+                            crate::clip_chain::ClipOp::Intersect,
+                            true,
+                            &self.current_segment.budget,
+                        )
+                    })
+                });
+            match result {
+                Ok(updated) => chain = updated,
+                Err(error) => self.current_segment.budget.record_error(error),
+            }
         }
-        bounds_clip
+        (!chain.is_unclipped()).then_some(crate::command_ir::GroupClip {
+            legacy: crate::state_stack::ResolvedClip::NONE,
+            chain,
+        })
     }
 
     // ===== Layer Operations (Opacity) =====
@@ -419,40 +420,11 @@ impl WgpuPainter {
         );
     }
 
-    /// Open an offscreen whose COMPOSITE carries `clip`.
-    ///
-    /// This is `Clip::AntiAliasWithSaveLayer`, which renders the clipped
-    /// subtree into an offscreen so the group composites against the clip edge
-    /// ONCE; applying the coverage per draw instead makes the edge darker or
-    /// more opaque wherever the content overlaps itself, because each draw is
-    /// attenuated by the clip and then blended over an already-attenuated one.
-    ///
-    /// So the caller must NOT also install `clip` in the per-draw SDF slot —
-    /// `Painter::clip_rrect_at_composite` is the paired call that installs the
-    /// bounding scissor and hands the clip here instead.
-    ///
-    /// `ResolvedClip::NONE` is a legitimate argument: a rectangular clip is the
-    /// hardware scissor, which is binary and has already been applied to every
-    /// draw inside the offscreen, so its composite carries no SDF. The layer is
-    /// still opened — the offscreen is what the mode asks for, and it is what
-    /// isolates a destructive blend inside the clip from the backdrop behind
-    /// it.
-    ///
-    /// Opacity 1.0, white tint, `SrcOver`, no filter chain: the layer exists to
-    /// group, not to tint. `LayerCompositor::pop_layer` still routes it through
-    /// the composite path rather than `Reintegrate`, keyed on the clip being
-    /// present.
-    ///
-    /// `bounds` is the clip's DEVICE-space rect, and it is not optional the way
-    /// [`Self::save_layer`]'s is. Left at the viewport fallback, every
-    /// clipped group composites as a full-screen textured quad running the
-    /// clip SDF per fragment, however small the clip. Pass the SCISSOR the
-    /// clip just installed: it is already intersected with every ancestor
-    /// clip, and no content can exist outside it, so it cannot cut anything
-    /// the offscreen actually holds.
+    /// Open an isolated group whose inherited coverage is applied at composite.
+    /// Child-local clip operations remain inside the group.
     pub(crate) fn save_layer_clipped(
         &mut self,
-        clip: crate::state_stack::ResolvedClip,
+        clip: crate::command_ir::GroupClip,
         bounds: Rect<f64>,
     ) {
         let layer_opacity = self.compositor.effective_layer_opacity(1.0);
@@ -548,8 +520,42 @@ impl WgpuPainter {
         layer_tint_rgb: [f32; 3],
         layer_blend: flui_painting::paint::BlendMode,
         filters: LayerFilterChain,
-        composite_clip: Option<crate::state_stack::ResolvedClip>,
+        composite_clip: Option<crate::command_ir::GroupClip>,
     ) {
+        // A damage-only hardware scissor belongs to the composite prefix too.
+        let inherited_scissor = self.state.current_scissor();
+        let inherited = self.state.begin_clip_group();
+        let mut composite_clip = composite_clip.or_else(|| {
+            (!inherited.is_unclipped()).then_some(crate::command_ir::GroupClip {
+                legacy: crate::state_stack::ResolvedClip::NONE,
+                chain: inherited,
+            })
+        });
+
+        if let Some((x, y, w, h)) = inherited_scissor {
+            let clip = composite_clip.get_or_insert_with(|| crate::command_ir::GroupClip {
+                legacy: crate::state_stack::ResolvedClip::NONE,
+                chain: crate::clip_chain::ClipChain::default(),
+            });
+            let rect = Rect::from_xywh(f64::from(x), f64::from(y), f64::from(w), f64::from(h));
+            let result = crate::clip_geometry::ValidatedClip::rect(rect)
+                .map_err(crate::command_ir::RecordError::Geometry)
+                .and_then(|shape| {
+                    clip.chain.append(
+                        shape,
+                        crate::clip_geometry::ValidatedAffine::new(glam::DMat4::IDENTITY)
+                            .expect("BUG: identity is an admitted clip transform"),
+                        crate::clip_chain::ClipOp::Intersect,
+                        true,
+                        &self.current_segment.budget,
+                    )
+                });
+            match result {
+                Ok(chain) => clip.chain = chain,
+                Err(error) => self.current_segment.budget.record_error(error),
+            }
+        }
+
         // Convert bounds to [x, y, w, h] if provided.
         let bounds_array = bounds.map(|r| [r.left(), r.top(), r.width(), r.height()]);
 
@@ -634,6 +640,9 @@ impl WgpuPainter {
             self.compositor
                 .pop_layer(offscreen_final_segment, offscreen_items, composite_bounds);
 
+        if !matches!(&outcome, RestoreOutcome::Underflow { .. }) {
+            self.state.end_clip_group();
+        }
         match outcome {
             RestoreOutcome::Composite {
                 offscreen_items,
@@ -668,12 +677,6 @@ impl WgpuPainter {
                 // separate entry points and neither sets the other's field. The
                 // arms below would silently drop a clip if they ever met, so say
                 // so here rather than leaving it to be discovered in pixels.
-                debug_assert!(
-                    composite_clip.is_none() || image_filter.is_none(),
-                    "BUG: a clip-opened layer carries no image filter — the \
-                     DrawItem::Filter arms cannot apply a composite clip"
-                );
-
                 // Route to DrawItem::Filter for bounds-growing image filters
                 // (Morph/Blur); fall through to DrawItem::OpacityLayer for
                 // plain opacity/tint/blend-mode layers.
@@ -729,6 +732,7 @@ impl WgpuPainter {
                             "WgpuPainter::restore_layer: queued DrawItem::Filter (Morph)"
                         );
                         self.draw_order.push(DrawItem::Filter(FilterOp {
+                            composite_clip,
                             input: offscreen_final_segment.seal(),
                             items: offscreen_items,
                             passes: smallvec![single_pass],
@@ -778,6 +782,7 @@ impl WgpuPainter {
                             "WgpuPainter::restore_layer: queued DrawItem::Filter (Blur)"
                         );
                         self.draw_order.push(DrawItem::Filter(FilterOp {
+                            composite_clip,
                             input: offscreen_final_segment.seal(),
                             items: offscreen_items,
                             passes: smallvec![single_pass],
@@ -823,6 +828,7 @@ impl WgpuPainter {
                             "WgpuPainter::restore_layer: queued DrawItem::Filter (Chain)"
                         );
                         self.draw_order.push(DrawItem::Filter(FilterOp {
+                            composite_clip,
                             input: offscreen_final_segment.seal(),
                             items: offscreen_items,
                             passes,

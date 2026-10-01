@@ -397,23 +397,24 @@ fixture `renderer_new_rejects_borrowed_window` pins that a borrow cannot be
 handed in; `surface_lease.rs`'s tests pin the drop order and that a released
 lease cannot present.
 
-### 4. Clip coverage on a second blend source, capability-gated — [ADR-0057](../../docs/adr/ADR-0057-coverage-correct-blending-is-capability-gated.md)
+### 4. Clip coverage mixes the complete operator result with the destination
 
-The tessellated shape shader and the three instanced gradients emit clip
-coverage as `@blend_src(1)`, and the seven blend modes whose destination
-factor cannot absorb `1 − coverage` (`Clear`, `Src`, `SrcIn`, `SrcOut`,
-`Modulate`, `DstIn`, `DstATop`) take `dst_factor = OneMinusSrc1`.
-`pipeline_cache::destination_alpha_scale_for` classifies the modes — a
-property of the factor pair, the same partition `is_tile_safe_for_ssaa`
-draws. Where `DUAL_SOURCE_BLENDING` is absent (WebGPU), `PipelineCache`
-compiles only the folded assembly and those modes keep a hard anti-aliased
-clip edge; both halves are pinned by the readback suite. The rect and circle
-instanced quads are not corrected because they are wired to `SrcOver` only,
-which absorbs partial coverage already. The texture quads are not corrected
-either, though a layer or offscreen result composites through them with any
-Porter-Duff mode (decisions 10 and 19): under an anti-aliased clip a
-destination-replacing composite scales the destination by the fringe's
-coverage instead of mixing it (see Open items).
+Coverage is independent of source alpha. Destination-destructive operators
+must mix the fully evaluated operator result with the prior destination using
+the final clip coverage; transparent source texels inside the group region
+remain meaningful. The portable destination-read composite path provides this
+mix without requiring dual-source blending. Capability-specific dual-source
+shape pipelines remain an optimization, not the contract for group coverage.
+Direct Tess/Gradient draws whose blend cannot fold an AA expression into source
+alpha require dual-source blending; otherwise ordered admission returns the
+nonretryable `UnsupportedCoverageBlend` before the segment emits GPU work.
+This supersedes ADR-0057's former incorrect folded fallback under ADR-0102.
+`featureless_direct_aa_refusal_recovers` checks refusal and the next valid public
+painter frame. Portable direct geometric coverage remains required work; it
+cannot be reconstructed from paint alpha, especially for transparent Clear.
+`grouped_clip_prefix_and_destructive_coverage` asserts Clear, Src and DstIn
+on a fractional clip edge. The current implementation and new readbacks await
+the task's GPU and cross-platform gates; this text is not a passing-test claim.
 
 ### 5. A gradient's blend mode is pipeline state, keyed per draw run
 
@@ -428,49 +429,41 @@ straight-alpha path (below one part in 255; the readback tolerances absorb
 it). A gradient with more than eight stops is truncated and warned about
 once per process, not silently.
 
-### 6. A path clip installs the path's bounding box, not nothing
+### 6. Path clips use bounded geometric membership
 
-`WgpuPainter::clip_path` installs `Path::compute_bounds()` as a hardware
-scissor, grown outward to whole pixels *after* the transform
-(`GpuStateStack::clip_rect_enclosing`; growing in local space is re-fractioned
-by any fractional translation and buys nothing). It does not clip to the
-shape: a bounding box is a superset, so it can only remove what the exact
-clip also removes, and what still renders — inside the box, outside the
-shape — is the whole remaining gap, pinned by
-`a_path_clip_lets_through_what_lies_inside_the_box_but_outside_the_shape`
-so that a future stencil pass changes a named promise rather than closing
-the gap unnoticed. An empty path clips everything (the one exact case,
-`an_empty_clip_path_clips_everything`). Installing nothing, the previous
-answer, is not a smaller approximation — it is the absence of a clip, and a
-`draw_paint` inside a `Material`'s clip painted the whole window.
+Path commands lower through Lyon's mature path representation and curve
+flattening into a bounded edge tape. The GPU evaluates the admitted fill rule;
+the transformed bounding box only limits work and does not replace membership.
+An empty intersection path clips everything. The historical test name
+`a_path_clip_lets_through_what_lies_inside_the_box_but_outside_the_shape` is
+preserved for existing references, but its assertion now requires the triangle
+exterior to retain the backdrop; it no longer promises bounding-box leakage.
+`an_empty_clip_path_clips_everything` retains the empty-input contract.
 
-### 7. The squircle is an SDF only; the CPU generator is its oracle
+### 7. Superellipse clips use analytic sample membership
 
-`push_clip_rsuperellipse` clips through the superellipse SDF in the shape
-shader (`shaders/common/clip.wgsl`). The tessellating route, its cache, and
-the trait method that reached it are gone; `superellipse.rs`'s generator
-stays because it is the only CPU statement of the same `n = 4` parametric
-form, and the shader's correctness argument is tested against it. The scissor
-behind any SDF clip is the AABB of the transformed box under a rotation
-(`painter/transform_clip.rs`), so the approximation loosens, never tightens.
+The mask shader evaluates the n=4 superellipse at the common membership samples,
+with independent elliptical corner radii. This is analytic Boolean membership,
+not the old single SDF slot and not tessellation of the rounded clip itself.
+`the_squircle_sdf_agrees_with_the_cpu_path_across_the_whole_boundary` keeps its
+historical name and independent geometric oracle. New elliptical and nested
+witnesses are in `nested_exact_clip_geometry_and_coverage`.
 
-### 8. A clip op this backend cannot express is refused, never inverted
+### 8. Difference is the exact complement within the inherited clip
 
-`ClipOp::Difference` keeps a shape's complement; a scissor is one rectangle
-and the per-draw SDF slot evaluates the shape, not its inverse, so no
-primitive here can honour it. `clip_op_is_expressible` refuses it on all four
-clip shapes — no clip installed, one `tracing::warn!` naming the shape.
-Three of the four used to bind the op as `_clip_op` and install an
-*intersect*, erasing everything outside the hole the caller asked to punch:
-refusing is permissive (extra content the caller can see), inverting was
-destructive (content gone with nothing left to look at). Honouring it needs a
-clip stack that can evaluate `1 − coverage`, and waits for that.
+Clip expressions preserve ordered Intersect and Difference operations. A
+Difference subtracts its shape from the inherited membership; it is neither
+ignored nor installed as Intersect. The historically named
+`every_canvas_clip_shape_refuses_difference_rather_than_inverting` now asserts
+both retained exterior and removed interior for rect, rrect, superellipse and
+path. Invalid geometry returns a typed error instead of silently installing a
+different operation.
 
 ### 9. Clip offscreens and nested image filters preserve ordered content
 
 `Clip::AntiAliasWithSaveLayer` opens an offscreen bounded by the clip's own
 scissor, including inside image filters. Coverage applies once to the finished
-group. A rect clip needs only its hardware scissor.
+group. Rect AA also resolves geometric membership; a hard rectangular scissor remains a work bound.
 
 `FilterOp` retains every ordered draw item plus the final segment. Flat input
 uses a grown-bounds cropped intermediate. Input with nested compositing uses
@@ -498,7 +491,7 @@ a second time at the draw-back; a white `Clear` mask over a red child
 therefore draws the masked child, it does not erase the backdrop.
 `OffscreenRenderer::render_masked` takes no blend mode yet (decision 19's
 open item). The result also carries the
-scissor and clip in force when it was queued, since its offscreen was drawn
+scissor and immutable clip expression captured when it was queued, since its offscreen was drawn
 outside them (decision 19).
 
 ### 11. The shader-mask painter is cached across frames
@@ -561,7 +554,7 @@ a run whose blob holds no face is warned and skipped), each glyph the run
 places (`ShapedRun::placed_glyphs`, a `GlyphKey` per glyph) is looked up in
 the atlas, rasterised on first use through `SwashRasterizer`, and pushed as a
 `GlyphInstance` into
-`DrawSegment::glyph_batch` under the same scissor run, SDF clip, and layer
+`DrawSegment::glyph_batch` under the same scissor run, immutable clip expression, and layer
 opacity every other instance gets. `DrawRun::Glyph` preserves its recorded
 position among the other primitive families; adjacent compatible runs may share
 a render pass, without moving a glyph across an intervening draw.
@@ -737,14 +730,10 @@ Edge cases:
   corners. The clip also routes an opaque `SrcOver` layer through the
   composite instead of splicing its content into the parent, and the
   advanced-blend composite carries it as a hard rectangle in the bounds'
-  local space. Under a rounded ambient clip as well, a mode that keeps the
-  destination keeps the bounds clip (its content already went through the
-  ambient clip), while a destination-replacing composite's one clip slot
-  holds the ambient clip and its region falls back to the bounding box (Open
-  items). Under a projective transform the layer is treated as unbounded, as
-  `DamageExtent::transformed` treats it. Clipping only narrows what the
-  composite changes, so the damage extent, the mapped bounds' bounding box,
-  still covers it.
+  local space. Ambient and transformed bounds membership combine in the
+  immutable composite expression instead of competing for one clip slot.
+  Captured transforms are validated affine geometry; unsupported projective
+  input is a typed refusal. The conservative bounding extent still bounds damage.
 - Composite quads are not anti-aliased: a pixel is in the region when its
   centre is. Damage rounds outward by a pixel (`DamageRect::covering`), so
   every changed pixel stays covered.
@@ -752,7 +741,7 @@ Edge cases:
   transparent texels instead of discarding them (`replaces_destination` in
   `texture_instanced.wgsl`); only a fragment the clip excludes is dropped.
 - A shader mask's and a backdrop filter's offscreen is drawn outside the
-  ancestor clips, so their composite carries the scissor and the rounded clip
+  ancestor clips, so their composite carries the scissor and complete inherited expression
   in force when they were queued, whatever their mode, at the top level and
   inside an opacity layer's offscreen alike.
 - A shader mask is not such a layer. Its mode combines its shader with its
@@ -784,17 +773,6 @@ opaque layer among them, its full frame against its partial one),
   not yet drive; whether the lane ships or the direct path is the only path
   decides whether this family stays. Until decided, it is tested but not
   wired.
-- **A destination-replacing composite under an anti-aliased clip (decision
-  19).** The texture composite has no coverage-correct path (ADR-0057 covers
-  shapes only), so along a rounded clip's fringe a `Src` or `Clear` layer
-  scales the destination by the coverage instead of mixing the layer with
-  it. The content inside a save layer went through the same clip, so at the
-  fringe it is scaled by the coverage twice. Hard clips are exact; the
-  readbacks sample inside the fringe.
-- **A rotated destination-replacing layer under a rounded clip (decision
-  19).** The composite instance has one clip slot, which the ambient clip
-  takes, so the layer replaces the bounding box of its rotated bounds within
-  that clip rather than the rotated quad.
 - **An axis-aligned opaque `SrcOver` save layer is spliced, not composited
   (decision 19).** With nothing to apply at the composite, its content goes
   straight into the parent's draw order, so content drawn past its bounds is
@@ -817,3 +795,38 @@ opaque layer among them, its full frame against its partial one),
   stroke widths resolved to whole device pixels in layout
   (`geometry::resolve_stroke_width`) and a text run's baseline snap belong to
   the same change.
+
+### 20. Immutable clip expressions resolve Boolean membership before coverage
+
+Clip geometry captures the validated f64 affine transform at record time.
+Singular Intersect is empty; singular Difference leaves prior membership intact.
+Non-finite geometry, negative extents/radii, unsupported transforms and GPU
+coordinates outside the admitted magnitude (2^20) return typed errors; values
+are not silently clamped into another shape. `clip_failures_and_singular_membership_recover`
+asserts refusal and the next valid capture.
+
+A persistent expression lowers to portable fixed uniforms: at most 64 nodes and
+512 edges. Boolean membership runs on a common 8x8 sample grid before one R8
+coverage resolve. An entirely HardEdge expression checks the pixel center once,
+with the work allowance charged for that single Boolean fold. Repeating a shape
+is idempotent; multiplying already-resolved
+R8 masks is not the expression algebra. Each encoded target gets frozen mapping,
+mask and consumer uniforms. A scaled SSAA/offscreen attachment resamples geometry
+in its attachment sample domain rather than resizing a root-resolution R8 mask.
+Conservative regional crop limits allocation, while cumulative membership work
+is admitted across the frame with a 1 billion unit ceiling. Both lowering CPU
+scratch and GPU allocations enter existing admission/completion ownership.
+
+SaveLayer separates inherited composite membership from membership introduced
+inside its input. A prefix belongs to one group boundary and must not attenuate
+both child pixels and their final composite. `grouped_clip_prefix_and_destructive_coverage`
+pins the repeated-prefix case. `nested_exact_clip_geometry_and_coverage` pins
+nested rounded geometry, repeated AA, independent rx/ry and fractional rects.
+The native Windows GPU suite passes with `FLUI_REQUIRE_GPU=1` (59 tests, no
+skips). This is execution evidence for this host, not every target/backend.
+
+Future optimizations include bounded mask atlases, reuse keyed by immutable
+expression plus target mapping, and workload benchmarks. These require measured
+benefit and completion-safe resource ownership. The clip quotas do not constitute
+a whole-engine memory cap: DrawItem allocation metadata and other previously
+excluded recording payloads remain known admission limits to address.

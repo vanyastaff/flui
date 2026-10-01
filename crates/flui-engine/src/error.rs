@@ -30,6 +30,44 @@ use std::error::Error;
 
 use thiserror::Error;
 
+/// Geometry rejected before recording or GPU packing.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[non_exhaustive]
+pub enum GeometryError {
+    /// A geometry input or accumulated result is not finite.
+    #[error("non-finite geometry: {context}")]
+    NonFinite {
+        /// The failed operation.
+        context: &'static str,
+    },
+    /// The current renderer admits only two-dimensional affine transforms.
+    #[error("only two-dimensional affine transforms are supported")]
+    UnsupportedTransform,
+    /// An invertible transform could not produce a finite inverse.
+    #[error("geometry inverse cannot be represented")]
+    NonFiniteInverse,
+    /// Rectangle edges are reversed or their difference overflows.
+    #[error("invalid clip rectangle extent")]
+    InvalidExtent,
+    /// Corner radii must be finite and nonnegative.
+    #[error("invalid clip corner radius")]
+    InvalidRadius,
+    /// A path exceeds its input command allowance.
+    #[error("clip path has {requested} commands, limit {limit}")]
+    PathCommandLimit {
+        /// Input command count.
+        requested: usize,
+        /// Admitted command count.
+        limit: usize,
+    },
+    /// Finite geometry cannot be represented by the GPU payload.
+    #[error("geometry cannot be packed: {context}")]
+    Unrepresentable {
+        /// The failed payload.
+        context: &'static str,
+    },
+}
+
 /// Typed failures of trusted external registration and draw validation.
 #[derive(Debug, Clone, Error)]
 #[non_exhaustive]
@@ -138,6 +176,18 @@ pub enum ExternalTextureError {
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum EngineError {
+    /// A direct draw cannot separate paint alpha from soft clip coverage on this device.
+    #[error("direct {mode:?} drawing under an antialiased clip requires dual-source blending")]
+    UnsupportedCoverageBlend {
+        /// Destination-sensitive blend mode whose coverage cannot be represented.
+        mode: flui_painting::paint::BlendMode,
+    },
+    /// Coverage-correct compositing requires a sampleable destination.
+    #[error("compositing requires a sampleable destination target")]
+    CompositeBackdropUnavailable,
+    /// Geometry violated the admitted rendering contract.
+    #[error(transparent)]
+    InvalidGeometry(#[from] GeometryError),
     /// External registration or drawing violated its explicit contract.
     #[error(transparent)]
     ExternalTexture(#[from] ExternalTextureError),
@@ -413,7 +463,10 @@ impl EngineError {
             | Self::InvalidTargetSize { .. }
             | Self::ReadbackTimedOut { .. }
             | Self::NotInitialized => Recoverability::Fatal,
-            Self::ExternalTexture(_)
+            Self::UnsupportedCoverageBlend { .. }
+            | Self::CompositeBackdropUnavailable
+            | Self::InvalidGeometry(_)
+            | Self::ExternalTexture(_)
             | Self::SurfaceValidation
             | Self::PreparedResourceLimit { .. }
             | Self::PreparedResourceOverflow

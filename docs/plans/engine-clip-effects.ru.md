@@ -1,11 +1,15 @@
 # Точная композиция clips и effects
 
+Статус exact clips: native GPU suite проходит (59/59, FLUI_REQUIRE_GPU=1),
+clippy и source checks проходят. Whole-workspace check-changed проходит: 609 passed, 10 interactive MCP skips;
+выполнение на browser/mobile не заявлено.
+
 Основание: аудит production paths после merge resource contract в
 `e8909cfca`. Breaking changes разрешены до 1.0. Это уточнение третьей поставки
 [engine foundation plan](engine-foundation-implementation.ru.md), а не обещание
 уже работающей точной композиции. Контракты и fixtures принадлежат FLUI.
 
-## Найденные failure scenarios
+## Исходные failure scenarios до реализации
 
 | Граница | Сценарий и ожидаемый результат | Текущий путь |
 |---|---|---|
@@ -90,8 +94,8 @@ Lowered coverage различает All, Empty, Scissor, Analytic и owned MaskL
 mask alpha нарушает это свойство. Difference использует complement membership
 в том же sample domain. Geometry conditioning, projective cases, nonfinite и
 f64-to-f32 overflow получают явную policy до upload/allocation. Для inverse
-использовать имеющийся glam::DMat4::try_inverse с проверкой finite/precision,
-а не новый собственный algebra stack.
+использовать glam для inverse после power-of-two conditioning и проверки rank;
+finite/representability проверяются до GPU packing.
 
 Effect input footprint, expanded output и composite clip различаются.
 Coverage owner определяет, где clip применяется: content или group composite,
@@ -124,3 +128,56 @@ cross-crate Scene/paint semantics получает ADR; private engine ownership
 фиксируется Mapping decision. Для каждого исправления negative mutation должна
 сломать его behavior test. Используются существующие readback families;
 перенос тестов другого framework и сравнение 1:1 не являются приёмкой.
+
+
+## Внесённая реализация geometric clips
+
+Immutable expression сохраняет все Intersect/Difference, f64 affine capture,
+независимые rx/ry и bounded Lyon path lowering. Общий 8x8 membership domain
+разрешается один раз в R8; повтор clip не перемножает coverage. 64 nodes/512 edges,
+числовая граница 2^20, cumulative 1 billion work units и региональный crop дают
+явные typed refusals; это не полный memory cap всего DrawItem payload.
+Scaled attachment повторно вычисляет membership геометрии, не масштабирует R8.
+Group boundary отделяет inherited composite prefix от clips внутри input;
+destructive blend смешивает полный результат оператора с destination.
+
+Новые consumer readback строки в существующей семье:
+`nested_exact_clip_geometry_and_coverage`,
+`clip_failures_and_singular_membership_recover`,
+`grouped_clip_prefix_and_destructive_coverage`. Исторические имена path/Difference
+строк сохранены, но oracle заменён на exact geometry/complement. Удаление старых
+single-SDF shortcomings в ARCHITECTURE отражает внесённый дизайн, а не заранее
+объявленный зелёный gate. Контракт закреплён в ADR-0102, superseding ADR-0099/0057.
+
+До признания завершения нужны discriminating GPU readbacks, mutation proof,
+SSAA/cropped target mappings, отказ → следующий валидный кадр и доступные
+cross-platform shader/type checks. Atlas/cache fusion и benchmark-informed
+оптимизации остаются будущей работой; текущие quotas не покрывают всю metadata
+аллоцируемых DrawItem. Проверка только compile не доказывает coverage.
+
+
+## Проверка чувствительности readbacks
+
+Три временные production mutations обнаружены GPU-тестами:
+
+- lower только последнего clip leaf ломает grouped Clear edge: alpha 0 вместо 64;
+- замена Difference на Intersect оставляет синий центр вместо исключённого белого;
+- снятие inherited damage scissor с composite prefix меняет пиксель вне damage
+  после самостоятельного blur с [255,127,127] на [255,63,63].
+
+Все mutations восстановлены перед финальным прогоном. Damage fixture сначала
+заполняет retained target: первый Direct frame не доказывает RetainedPartial.
+`cargo clippy -p flui-engine --features testing,gpu-profiler --all-targets --locked -- -D warnings`
+и source checks проходят. Engine GPU run проходит: 59/59, без skips. `cargo xtask check-changed`
+проходит (609 passed, 10 interactive MCP skips). Platform/MCP и wasm type-checks
+прошли; native platform event suite требует Linux/xvfb, iOS runner требует macOS.
+Выполнение приложений на browser/mobile не заявлено.
+
+
+## Requested device limits
+
+Clip pipeline проверяет фактические requested device limits до lazy создания
+layout: три fragment uniform bindings, 8192 bytes на binding и buffer.
+Недостаточные capabilities возвращают `PreparedResourceLimit`, а не validation panic.
+`limited_fragment_uniforms_clip_refusal_recovers` проверяет обычный кадр, отказ
+clip без изменения target и следующий обычный кадр тем же public painter.

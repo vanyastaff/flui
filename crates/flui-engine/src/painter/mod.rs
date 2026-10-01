@@ -92,22 +92,6 @@ pub struct WgpuPainter {
 
     /// Ordered list of completed draw items (segments and offscreen textures)
     draw_order: Vec<DrawItem>,
-
-    /// Whether this painter has already reported that a path clip was
-    /// approximated by its bounding box.
-    ///
-    /// `WgpuPainter::clip_path` cannot clip to the exact shape, and that gap is
-    /// worth a release-level signal — but paint is a full-tree descent every
-    /// frame, so an unconditional warn fires once per clip per frame and trains
-    /// an operator to filter the channel it is trying to reach.
-    ///
-    /// The latch is per painter, which is once per run for the one that
-    /// matters: `Renderer` builds its painter with the GPU stack and keeps it.
-    /// The two other construction sites are per-use — `HeadlessRenderer`
-    /// builds one per capture, and an offscreen pass builds its own — so those
-    /// report once each rather than once ever. That is the right side to err
-    /// on: a capture that silently approximated a clip is worth one line.
-    path_clip_approximated: bool,
 }
 
 // GPU rendering routinely converts between numeric types for pixel coordinates,
@@ -241,7 +225,6 @@ impl WgpuPainter {
             compositor: LayerCompositor::new(),
             current_segment: DrawSegment::new(),
             draw_order: Vec::new(),
-            path_clip_approximated: false,
         }
     }
 
@@ -401,9 +384,13 @@ impl WgpuPainter {
         blend: flui_painting::paint::BlendMode,
     ) {
         let scissor = self.state.current_scissor();
-        let clip = self
-            .composite_clip(None, blend, false)
-            .unwrap_or(crate::state_stack::ResolvedClip::NONE);
+        let clip =
+            self.composite_clip(None, blend, false)
+                .unwrap_or(crate::command_ir::GroupClip {
+                    legacy: crate::state_stack::ResolvedClip::NONE,
+                    chain: crate::clip_chain::ClipChain::default(),
+                });
+        let budget = self.current_segment.budget.clone();
         // Finalize the current segment and start a new one
         self.finish_current_segment();
         self.draw_order
@@ -413,6 +400,7 @@ impl WgpuPainter {
                 blend,
                 scissor,
                 clip,
+                budget,
             }));
     }
 

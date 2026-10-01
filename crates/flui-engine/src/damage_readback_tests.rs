@@ -1418,6 +1418,96 @@ fn green_background(canvas: &mut Canvas) {
 
 const GREEN_COLOR: Color = Color::rgba(0, 255, 0, 255);
 
+/// A damage scissor belongs to the group's output, even when recording the
+/// group's input temporarily clears it. Failed geometry must not commit a
+/// candidate, and the same capture must accept the following valid frame.
+#[test]
+fn save_layer_output_preserves_damage_and_recovers_after_invalid_clip() {
+    let Some(renderer) = crate::test_support::renderer_or_skip() else {
+        return;
+    };
+    let mut failures = Vec::new();
+    for (name, opacity, blur_prefix) in [
+        ("opaque SrcOver", 1.0, false),
+        ("translucent SrcOver", 0.5, false),
+        ("translucent SrcOver after blur", 0.5, true),
+    ] {
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let build = |invalid: bool| {
+                let mut tree = LayerTree::new(LayerNode::new(Layer::from(TransformLayer::new(
+                    Matrix4::IDENTITY,
+                ))));
+                let root = tree.root();
+                if blur_prefix {
+                    let filter =
+                        tree.push_child(root, Layer::from(flui_layer::ImageFilterLayer::blur(1.0)));
+                    tree.push_child(
+                        filter,
+                        rect_picture(Rect::from_xywh(8.0, 8.0, 12.0, 12.0), Color::BLUE),
+                    );
+                }
+                let mut canvas = Canvas::new();
+                green_background(&mut canvas);
+                if invalid {
+                    canvas.clip_rect(Rect::from_xywh(f64::NAN, 0.0, 20.0, 20.0));
+                }
+                canvas.save_layer(None, &Paint::fill(Color::WHITE).with_opacity(opacity));
+                canvas.draw_rect(
+                    Rect::from_xywh(0.0, 0.0, f64::from(SIDE), f64::from(SIDE)),
+                    &Paint::fill(Color::RED),
+                );
+                canvas.restore();
+                tree.push_child(root, Layer::from(PictureLayer::new(canvas.finish())));
+                Scene::new(tree)
+            };
+            let valid = build(false);
+            let mut capture = renderer.retained_capture((SIDE, SIDE)).expect("capture");
+            capture.require_intermediate();
+            capture
+                .render_scene(&valid)
+                .expect("initial committed frame");
+            let mut full = renderer
+                .retained_capture((SIDE, SIDE))
+                .expect("full capture");
+            full.require_intermediate();
+            full.render_scene(&valid).expect("fresh full frame");
+            let expected = full.read_rgba().expect("full readback");
+
+            capture.paint_retained((96, 96, 8, 8), BLUE);
+            capture.mark_dirty(Rect::from_xywh(40.0, 40.0, 16.0, 16.0));
+            capture.render_scene(&valid).expect("partial group frame");
+            assert!(matches!(
+                capture.last_plan(),
+                Some(FramePlan::RetainedPartial(_))
+            ));
+            let partial = capture.read_rgba().expect("partial readback");
+            assert_eq!(px(&partial, 100, 100), BLUE, "outside damage is untouched");
+            assert_eq!(px(&partial, 48, 48), px(&expected, 48, 48));
+            assert_eq!(px(&partial, 20, 80), px(&expected, 20, 80));
+
+            let committed = capture.read_retained_rgba().expect("committed readback");
+            capture.mark_dirty(Rect::from_xywh(40.0, 40.0, 16.0, 16.0));
+            assert!(matches!(
+                capture.render_scene(&build(true)),
+                Err(crate::EngineError::InvalidGeometry(_))
+            ));
+            assert_eq!(
+                capture
+                    .read_retained_rgba()
+                    .expect("failed candidate readback"),
+                committed
+            );
+            capture.mark_full_repaint();
+            capture.render_scene(&valid).expect("same painter recovers");
+            assert_eq!(capture.read_rgba().expect("recovered readback"), expected);
+        }));
+        if result.is_err() {
+            failures.push(name);
+        }
+    }
+    assert!(failures.is_empty(), "failed rows: {failures:?}");
+}
+
 /// `translate(4, 0)`, a `Src` layer over local `(0, 0, 32, 32)`, red ink
 /// over its first 16×16. At the boundary's `(40, 40)` the layer covers
 /// device `(44, 40)-(76, 72)` and the ink `(44, 40)-(60, 56)`.
@@ -2248,6 +2338,63 @@ fn a_change_beside_a_viewport_compositing_layer_matches_a_full_frame() {
         let stale = mismatches(&partial, &full, 0);
         if !stale.is_empty() {
             failed.push(format!("{name}: stale pixels at {stale:?}"));
+        }
+    }
+    // Force a genuine partial replay of unchanged translucent filtered content.
+    // A full-frame fallback would hide loss of the damage prefix at save-layer.
+    for (name, effect) in [
+        (
+            "partial standalone colour matrix",
+            Layer::from(ColorFilterLayer::new(ColorFilter::Matrix(
+                ColorMatrix::identity(),
+            ))),
+        ),
+        (
+            "partial standalone blur",
+            Layer::from(ImageFilterLayer::new(ImageFilter::blur(1.0))),
+        ),
+    ] {
+        let mut tree = LayerTree::new(Layer::from(TransformLayer::new(Matrix4::IDENTITY)));
+        let root_id = tree.root();
+        let filtered = tree.push_child(root_id, effect);
+        tree.push_child(
+            filtered,
+            rect_picture(
+                Rect::from_xywh(0.0, 0.0, f64::from(SIDE), f64::from(SIDE)),
+                Color::rgba(255, 0, 0, 128),
+            ),
+        );
+        let scene = Scene::new(tree);
+        let mut capture = renderer
+            .retained_capture((SIDE, SIDE))
+            .expect("capture target");
+        capture.mark_full_repaint();
+        capture
+            .render_scene(&scene)
+            .expect("initial filtered frame");
+        // A direct first frame has not seeded the retained target yet.
+        warm(&mut capture, &scene);
+        let before = capture.read_rgba().expect("initial readback");
+        capture.mark_dirty(Rect::from_xywh(8.0, 8.0, 8.0, 8.0));
+        capture
+            .render_scene(&scene)
+            .expect("partial filtered frame");
+        let plan = capture.last_plan();
+        let partial = capture.read_rgba().expect("partial readback");
+        let full = full_frame_pixels(&renderer, &scene);
+        let stale = mismatches(&partial, &full, 2);
+        // This interior sample is far from blur and damage edges. Reapplying
+        // half-opaque red outside damage changes pink to approximately (255,63,63).
+        if !matches!(plan, Some(FramePlan::RetainedPartial(_)))
+            || !near(px(&before, 80, 80), [255, 127, 127, 255], 2)
+            || !near(px(&partial, 80, 80), px(&before, 80, 80), 2)
+            || !stale.is_empty()
+        {
+            failed.push(format!(
+                "{name}: plan {plan:?}, outside before {:?}, after {:?}, stale {stale:?}",
+                px(&before, 80, 80),
+                px(&partial, 80, 80),
+            ));
         }
     }
     assert!(failed.is_empty(), "{failed:#?}");

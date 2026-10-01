@@ -311,6 +311,7 @@ pub(crate) enum ImageFilterPass {
 /// `replay` + nested in `opacity_layer.rs`) re-read ONE source — eliminating
 /// drift between the two composite arms.
 pub(crate) struct FilterOp {
+    pub(crate) composite_clip: Option<GroupClip>,
     /// Foreground content the filter consumes, rendered to an offscreen
     /// intermediate at replay time.
     pub(crate) input: SealedSegment,
@@ -470,7 +471,8 @@ pub(crate) struct PendingOffscreenTexture {
     /// The clip the composite carries beyond the scissor: the ambient rounded
     /// clip, or the bounds of a rotated destination-replacing result as a
     /// hard clip. `ResolvedClip::NONE` when the scissor is the whole clip.
-    pub(crate) clip: crate::state_stack::ResolvedClip,
+    pub(crate) clip: GroupClip,
+    pub(crate) budget: std::sync::Arc<crate::recording_budget::RecordingBudget>,
 }
 
 /// Saved render state for `save_layer`/`restore_layer` offscreen compositing.
@@ -540,7 +542,7 @@ pub(crate) struct SavedLayer {
     /// rectangular clip is the hardware scissor, which already applied to every
     /// draw inside the offscreen and is binary, so the composite carries no SDF
     /// of its own. `None` means the composite needs no clip beyond its region.
-    pub(crate) composite_clip: Option<crate::state_stack::ResolvedClip>,
+    pub(crate) composite_clip: Option<GroupClip>,
 }
 
 // ─── Draw segment ─────────────────────────────────────────────────────────────
@@ -619,13 +621,16 @@ pub(crate) struct DrawSegment {
         crate::external_texture_registry::ExternalSampling,
     )>,
 
-    pub(crate) runs: crate::recording_budget::BudgetVec<DrawRun>,
+    /// Actual attachment samples map back to immutable root/device clip coordinates.
+    pub(crate) attachment_to_root: [f64; 6],
+    pub(crate) runs: crate::recording_budget::BudgetVec<RecordedRun>,
     pub(crate) record_error: Option<RecordError>,
 }
 
 #[derive(Debug, Clone)]
 pub(crate) enum RecordError {
     External(crate::error::ExternalTextureError),
+    Geometry(crate::error::GeometryError),
     Limit {
         resource: &'static str,
         requested: usize,
@@ -641,6 +646,20 @@ impl std::ops::Deref for SealedSegment {
     fn deref(&self) -> &DrawSegment {
         &self.0
     }
+}
+
+/// Geometric coverage owned by an effect/group composite, never by its children.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct GroupClip {
+    pub(crate) legacy: crate::state_stack::ResolvedClip,
+    pub(crate) chain: crate::clip_chain::ClipChain,
+}
+
+/// A compatible ordered run owns the exact clip snapshot active at recording.
+#[derive(Debug, Clone)]
+pub(crate) struct RecordedRun {
+    pub(crate) kind: DrawRun,
+    pub(crate) clip: crate::clip_chain::ClipChain,
 }
 
 /// Painter-order typed ranges, each indexing only its corresponding arena.
@@ -694,6 +713,7 @@ impl DrawSegment {
             external_images: crate::recording_budget::BudgetVec::new(),
             glyph_batch: InstanceBatch::new(0),
             glyph_scissors: crate::recording_budget::BudgetVec::new(),
+            attachment_to_root: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
             runs: crate::recording_budget::BudgetVec::new(),
             record_error: None,
         };
@@ -727,9 +747,21 @@ impl DrawSegment {
             crate::recording_budget::BudgetVec::with_budget(&self.budget);
         self.glyph_batch.instances = crate::recording_budget::BudgetVec::with_budget(&self.budget);
     }
+    pub(crate) fn rebase_attachment(&mut self, x: f64, y: f64, sx: f64, sy: f64) {
+        let [xx, yx, xy, yy, tx, ty] = self.attachment_to_root;
+        self.attachment_to_root = [
+            xx * sx,
+            yx * sx,
+            xy * sy,
+            yy * sy,
+            xx * x + xy * y + tx,
+            yx * x + yy * y + ty,
+        ];
+    }
     pub(crate) fn recording_result(&self) -> crate::error::EngineResult<()> {
         match self.record_error.clone().or_else(|| self.budget.error()) {
             Some(RecordError::External(error)) => Err(error.into()),
+            Some(RecordError::Geometry(error)) => Err(error.into()),
             Some(RecordError::Limit {
                 resource,
                 requested,
@@ -761,7 +793,7 @@ impl DrawSegment {
         SealedSegment(self)
     }
 
-    pub(crate) fn record_run(&mut self, run: DrawRun) {
+    pub(crate) fn record_run(&mut self, run: DrawRun, clip: crate::clip_chain::ClipChain) {
         if self.budget.error().is_some() {
             return;
         }
@@ -769,7 +801,11 @@ impl DrawSegment {
             Arc, CachedImage, Circle, ExternalImage, Glyph, LinearGradient, RadialGradient, Rect,
             Shadow, SweepGradient, Tess,
         };
-        let merge = match (self.runs.last_mut(), &run) {
+        let previous = self
+            .runs
+            .last_mut()
+            .filter(|previous| previous.clip == clip);
+        let merge = match (previous.map(|previous| &mut previous.kind), &run) {
             (Some(Rect(a)), Rect(b))
             | (Some(Circle(a)), Circle(b))
             | (Some(Arc(a)), Arc(b))
@@ -789,7 +825,7 @@ impl DrawSegment {
             _ => false,
         };
         if !merge {
-            self.runs.push(run);
+            self.runs.push(RecordedRun { kind: run, clip });
         }
     }
 
@@ -1063,5 +1099,5 @@ pub(crate) struct PendingOpacityLayer {
     /// Forwarded from [`SavedLayer::composite_clip`] at restore time and
     /// attached to the composite's `TextureInstance` in `flush_opacity_layer`,
     /// so the clip's coverage multiplies the finished group exactly once.
-    pub(crate) composite_clip: Option<crate::state_stack::ResolvedClip>,
+    pub(crate) composite_clip: Option<GroupClip>,
 }

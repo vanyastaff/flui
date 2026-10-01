@@ -207,6 +207,7 @@ fn shadeFragment(in: VertexOutput) -> ShadedFragment {
     let edge_alpha = sdfToAlpha(dist);
     // Clip coverage — see `clipAlpha` in `common/clip.wgsl`.
     let clip_alpha = clipAlpha(
+        in.clip_position.xy,
         in.world_pos,
         in.clip_bounds,
         in.clip_radii,

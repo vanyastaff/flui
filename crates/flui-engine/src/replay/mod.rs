@@ -75,7 +75,9 @@ pub(super) struct GpuReplay {
     /// the wgpu identity requirement: bind group and pipeline must share the
     /// exact same layout object.
     uniform_size: (u32, u32),
-    viewport_bind_group: wgpu::BindGroup,
+    pub(super) viewport_bind_group: wgpu::BindGroup,
+    dummy_mask_view: wgpu::TextureView,
+    clip_mask_pipeline: Option<crate::clip_mask::ClipMaskPipeline>,
 
     /// Shared unit-quad vertex buffer (0,0 to 1,1) reused by all instanced
     /// pipelines.
@@ -153,13 +155,44 @@ impl GpuReplay {
 
         // ── Viewport bind group ───────────────────────────────────────────────
         // Must be built against the layout from `PipelineSet` — see module doc.
+        let dummy_mask_view = device
+            .create_texture(&wgpu::TextureDescriptor {
+                label: Some("Disabled clip placeholder"),
+                size: wgpu::Extent3d {
+                    width: 1,
+                    height: 1,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::R8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            })
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        let disabled_clip = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Disabled clip consumer"),
+            contents: bytemuck::cast_slice(&[0_i32; 4]),
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
         let viewport_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Viewport Bind Group"),
             layout: pipelines.viewport_bind_group_layout(),
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: viewport_buffer.as_entire_binding(),
-            }],
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: viewport_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&dummy_mask_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: disabled_clip.as_entire_binding(),
+                },
+            ],
         });
 
         // ── Shared unit quad geometry ─────────────────────────────────────────
@@ -203,6 +236,8 @@ impl GpuReplay {
 
         Self {
             viewport_bind_group,
+            dummy_mask_view,
+            clip_mask_pipeline: None,
             uniform_size: (initial_width, initial_height),
             unit_quad_buffer,
             unit_quad_index_buffer,
@@ -239,37 +274,20 @@ impl GpuReplay {
     }
 
     /// Freeze group zero before any kind of composite, including offscreen-only work.
-    fn prepare_viewport_binding(
+    pub(super) fn prepare_viewport_binding(
         &mut self,
         device: &Arc<wgpu::Device>,
         pipelines: &PipelineSet,
         resources: &mut GpuResources,
     ) -> EngineResult<()> {
-        resources.reserve_prepared(crate::device_domain::PreparedCost {
-            gpu_bytes: 16,
-            cpu_bytes: 16,
-            objects: 2,
-        })?;
-        use wgpu::util::DeviceExt;
-        let viewport = [
-            self.uniform_size.0 as f32,
-            self.uniform_size.1 as f32,
-            0.0,
-            0.0,
-        ];
-        let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Immutable Target Viewport"),
-            contents: bytemuck::cast_slice(&viewport),
-            usage: wgpu::BufferUsages::UNIFORM,
-        });
-        self.viewport_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Immutable Target Viewport"),
-            layout: pipelines.viewport_bind_group_layout(),
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: buffer.as_entire_binding(),
-            }],
-        });
+        self.viewport_bind_group = self.create_target_binding(
+            device,
+            pipelines,
+            resources,
+            &self.dummy_mask_view,
+            (0, 0),
+            false,
+        )?;
         Ok(())
     }
 
@@ -332,52 +350,26 @@ impl GpuReplay {
                     )?;
                 }
                 DrawItem::OffscreenTexture(p) => {
-                    use crate::instancing::ClippableInstance as _;
-                    let instance = crate::instancing::TextureInstance::new(
+                    let context = DrawSegment::with_budget(Arc::clone(&p.budget));
+                    self.composite_group_texture(
+                        p.texture,
                         p.bounds,
-                        flui_painting::styling::Color::WHITE,
-                    )
-                    .with_clip(p.clip);
-                    let _ = self.texture_batch.add(instance);
-                    // The composite runs under the scissor and clip in force
-                    // when the result was queued: the offscreen was drawn
-                    // outside the ancestor clips and a partial frame's damage,
-                    // so this is where they apply. Without them a mask paints
-                    // past its clip, and a translucent one blends a second
-                    // time over retained pixels outside the damage.
-                    //
-                    // These are shader-mask / backdrop-blur results from
-                    // `OffscreenRenderer`, which clears its target transparent
-                    // and draws with straight `ALPHA_BLENDING` — leaving the
-                    // result *premultiplied*, exactly like an opacity-layer
-                    // offscreen.  Composite with the premultiplied pipeline and
-                    // an identity (white) tint so it is not re-multiplied by
-                    // its own alpha (same defect class as BUG 2; fixed
-                    // consistently here).
-                    //
-                    // The mode the producer recorded rides on the item rather
-                    // than being assumed SrcOver: a backdrop filter may carry
-                    // any blend, and accepting it then compositing SrcOver is
-                    // the accept-and-discard contract violation mapping
-                    // decision 8 names. A shader mask queues SrcOver, because
-                    // its own mode belongs between its shader and its child
-                    // (ADR-0099). `flush_texture_batch_premultiplied_with_mode`
-                    // builds the exact per-mode pipeline; the source is a
-                    // finished, full-coverage offscreen, so every mode
-                    // `blend_state_for` names is expressible here.
-                    self.flush_texture_batch_premultiplied_with_mode(
+                        [0.0, 0.0, 1.0, 1.0],
+                        1.0,
+                        [1.0; 3],
                         p.blend,
+                        Some(&p.clip),
+                        &context,
+                        viewport_size,
+                        surface_format,
                         device,
                         queue,
                         pipelines,
                         resources,
-                        viewport_size,
                         encoder,
-                        target.view,
-                        p.texture.view(),
+                        target,
                         p.scissor,
-                    );
-                    // p.texture dropped here, returns to pool
+                    )?;
                 }
                 DrawItem::OpacityLayer(layer) => {
                     self.flush_opacity_layer(
@@ -454,6 +446,7 @@ impl GpuReplay {
                             ],
                             clip: None,
                         };
+                        self.prepare_viewport_binding(device, pipelines, resources)?;
                         flush_advanced_layer(
                             blend_op,
                             surface_texture,
@@ -464,6 +457,7 @@ impl GpuReplay {
                             resources,
                             device,
                             encoder,
+                            Some(&self.viewport_bind_group),
                         );
                         tracing::trace!(
                             mode = ?op.mode,
@@ -591,6 +585,20 @@ impl GpuReplay {
                         f64::from(fb_w as f32),
                         f64::from(fb_h as f32),
                     );
+                    let unclipped = crate::clip_chain::ClipChain::default();
+                    let prefix = op
+                        .composite_clip
+                        .as_ref()
+                        .map_or(&unclipped, |clip| &clip.chain);
+                    self.viewport_bind_group = self.prepare_clip_binding(
+                        &op.input,
+                        prefix,
+                        viewport_size,
+                        device,
+                        pipelines,
+                        resources,
+                        encoder,
+                    )?;
                     let instance = crate::instancing::TextureInstance::with_uv(
                         dst_rect,
                         [0.0, 0.0, 1.0, 1.0],
@@ -651,3 +659,7 @@ impl GpuReplay {
 // The ordered segment-flush machinery (flush_segment + typed-arena
 // flush helper it drives) is split out to restore the C1 <1500-LOC cap.
 mod flush;
+
+mod clip;
+
+mod composite;

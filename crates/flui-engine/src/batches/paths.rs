@@ -206,6 +206,7 @@ impl DrawBatcher {
         let params = crate::effects::ShadowParams::new(offset, blur_sigma, shadow_color);
         Self::draw_shadow_rect(
             segment,
+            state,
             (rect_pos).map(|v| v as f32),
             (rect_size).map(|v| v as f32),
             corner_radius as f32,

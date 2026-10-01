@@ -1,6 +1,6 @@
 //! Readback evidence that partial clip coverage feathers a blend instead of
 //! applying it at full strength — one oracle per mode that needs the
-//! correction, plus the fallback each keeps without a second blend source.
+//! correction, plus explicit refusal without a second blend source.
 //!
 //! ## Why this file exists rather than more cases in the clip suite
 //!
@@ -28,18 +28,11 @@
 //!
 //! ## What makes a sample point evidence
 //!
-//! Each oracle renders the same scene twice — once on a device with
-//! `DUAL_SOURCE_BLENDING`, once on a device built with it deliberately withheld
-//! — and asserts three points against a CPU model of the fixed-function
-//! blender:
-//!
-//! - **fully covered**: both renders must equal the mode at full strength. The
-//!   two predictions are identical here by construction, so this is the check
-//!   that the correction changed nothing it was not supposed to.
-//! - **partially covered**: the two predictions DIFFER, and each render must
-//!   match its own. The test asserts they differ before comparing anything, so
-//!   it cannot pass by both formulas agreeing.
-//! - **outside the clip**: both must leave the destination untouched.
+//! Each oracle renders on a device with DUAL_SOURCE_BLENDING and checks full,
+//! partial and excluded samples against the coverage-correct definition. The
+//! same scene on a device with the feature deliberately withheld must return
+//! UnsupportedCoverageBlend; the folded prediction remains a witness showing
+//! why accepting that operation would change its fringe.
 //!
 //! The CPU model lives in `crate::blend_oracle`, shared with the gradient
 //! path's suite: it is built from `blend_state_for`'s factors — production's
@@ -79,6 +72,14 @@ const SOURCE: Color = Color::rgba(0, 220, 40, 128);
 /// Paints `DESTINATION` over the surface, then `SOURCE` with `mode` through an
 /// anti-aliased rounded clip whose left edge falls mid-column.
 fn blend_through_an_anti_aliased_clip(renderer: &HeadlessRenderer, mode: BlendMode) -> EdgeSamples {
+    try_blend_through_an_anti_aliased_clip(renderer, mode)
+        .expect("the admitted capture must rasterize the scene")
+}
+
+fn try_blend_through_an_anti_aliased_clip(
+    renderer: &HeadlessRenderer,
+    mode: BlendMode,
+) -> crate::EngineResult<EdgeSamples> {
     let full_surface = Rect::from_xywh(0.0, 0.0, f64::from(SIDE as f32), f64::from(SIDE as f32));
 
     let tree = {
@@ -113,10 +114,8 @@ fn blend_through_an_anti_aliased_clip(renderer: &HeadlessRenderer, mode: BlendMo
         builder.build()
     };
 
-    let pixels = renderer
-        .render_layer_tree(&tree, (SIDE, SIDE))
-        .expect("the headless capture path must rasterize the scene");
-    sample_the_clip_edge(&pixels)
+    let pixels = renderer.render_layer_tree(&tree, (SIDE, SIDE))?;
+    Ok(sample_the_clip_edge(&pixels))
 }
 
 // ── This scene's bindings of the shared CPU blender ──────────────────────────
@@ -155,32 +154,18 @@ fn assert_partial_coverage_feathers(mode: BlendMode) {
     let untouched_destination = premultiplied(DESTINATION, 1.0);
     let at_full_coverage = coverage_correct(mode, 1.0);
 
-    let folded_samples = blend_through_an_anti_aliased_clip(&folded, mode);
-    assert_pixel(
-        folded_samples.outside_the_clip,
-        untouched_destination,
-        &format!("{mode:?} without a second blend source, outside the clip"),
-    );
-    assert_pixel(
-        folded_samples.fully_covered,
-        at_full_coverage,
-        &format!("{mode:?} without a second blend source, fully covered"),
-    );
-    assert_pixel(
-        folded_samples.partially_covered,
-        folded_fringe,
-        &format!(
-            "{mode:?} without a second blend source, partially covered: coverage \
-             has nowhere to ride but the source alpha, so the mode applies at a \
-             strength this pixel's coverage never asked for. This is the \
-             documented fallback, not the contract"
+    assert!(
+        matches!(
+            try_blend_through_an_anti_aliased_clip(&folded, mode),
+            Err(crate::EngineError::UnsupportedCoverageBlend { mode: refused }) if refused == mode
         ),
+        "{mode:?} must refuse unsupported coverage rather than return the folded fringe"
     );
 
     if !feathering.supports_dual_source_blending() {
         eprintln!(
             "skipping the feathered half of {mode:?}: this adapter does not expose \
-             DUAL_SOURCE_BLENDING, so both renderers take the folded path"
+             DUAL_SOURCE_BLENDING, so the direct operation is refused"
         );
         return;
     }

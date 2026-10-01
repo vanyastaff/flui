@@ -191,10 +191,13 @@ impl DrawBatcher {
                         instance,
                         state.current_scissor(),
                     ));
-                    shape_segment.record_run(DrawRun::CachedImage(
-                        shape_segment.cached_images.len().saturating_sub(1)
-                            ..shape_segment.cached_images.len(),
-                    ));
+                    shape_segment.record_run(
+                        DrawRun::CachedImage(
+                            shape_segment.cached_images.len().saturating_sub(1)
+                                ..shape_segment.cached_images.len(),
+                        ),
+                        state.clip_chain(),
+                    );
 
                     // Step 3: push as AdvancedShape.
                     draw_order.push(DrawItem::AdvancedShape(AdvancedShapeOp {
@@ -214,9 +217,12 @@ impl DrawBatcher {
                 segment
                     .cached_images
                     .push((texture_id, instance, state.current_scissor()));
-                segment.record_run(DrawRun::CachedImage(
-                    segment.cached_images.len().saturating_sub(1)..segment.cached_images.len(),
-                ));
+                segment.record_run(
+                    DrawRun::CachedImage(
+                        segment.cached_images.len().saturating_sub(1)..segment.cached_images.len(),
+                    ),
+                    state.clip_chain(),
+                );
             }
             Err(e) => {
                 tracing::error!("Failed to load image texture: {}", e);
@@ -346,10 +352,13 @@ impl DrawBatcher {
                             instance,
                             state.current_scissor(),
                         ));
-                        shape_seg.record_run(DrawRun::CachedImage(
-                            shape_seg.cached_images.len().saturating_sub(1)
-                                ..shape_seg.cached_images.len(),
-                        ));
+                        shape_seg.record_run(
+                            DrawRun::CachedImage(
+                                shape_seg.cached_images.len().saturating_sub(1)
+                                    ..shape_seg.cached_images.len(),
+                            ),
+                            state.clip_chain(),
+                        );
 
                         // Grow overall AABB.
                         *bounds = Some(match *bounds {
@@ -752,10 +761,13 @@ impl DrawBatcher {
                                 instance,
                                 state.current_scissor(),
                             ));
-                            shape_segment.record_run(DrawRun::CachedImage(
-                                shape_segment.cached_images.len().saturating_sub(1)
-                                    ..shape_segment.cached_images.len(),
-                            ));
+                            shape_segment.record_run(
+                                DrawRun::CachedImage(
+                                    shape_segment.cached_images.len().saturating_sub(1)
+                                        ..shape_segment.cached_images.len(),
+                                ),
+                                state.clip_chain(),
+                            );
 
                             overall_bounds = Some(match overall_bounds {
                                 None => tr,
@@ -1232,10 +1244,13 @@ impl DrawBatcher {
                             instance,
                             state.current_scissor(),
                         ));
-                        shape_segment.record_run(DrawRun::CachedImage(
-                            shape_segment.cached_images.len().saturating_sub(1)
-                                ..shape_segment.cached_images.len(),
-                        ));
+                        shape_segment.record_run(
+                            DrawRun::CachedImage(
+                                shape_segment.cached_images.len().saturating_sub(1)
+                                    ..shape_segment.cached_images.len(),
+                            ),
+                            state.clip_chain(),
+                        );
 
                         // Grow the union AABB in device space.
                         overall_bounds = Some(match overall_bounds {
@@ -1308,9 +1323,13 @@ impl DrawBatcher {
                         instance,
                         state.current_scissor(),
                     ));
-                    segment.record_run(DrawRun::CachedImage(
-                        segment.cached_images.len().saturating_sub(1)..segment.cached_images.len(),
-                    ));
+                    segment.record_run(
+                        DrawRun::CachedImage(
+                            segment.cached_images.len().saturating_sub(1)
+                                ..segment.cached_images.len(),
+                        ),
+                        state.clip_chain(),
+                    );
                 }
             }
             Err(e) => {
@@ -1382,9 +1401,12 @@ impl DrawBatcher {
         segment
             .external_images
             .push((lease, instance, state.current_scissor(), sampling));
-        segment.record_run(DrawRun::ExternalImage(
-            segment.external_images.len().saturating_sub(1)..segment.external_images.len(),
-        ));
+        segment.record_run(
+            DrawRun::ExternalImage(
+                segment.external_images.len().saturating_sub(1)..segment.external_images.len(),
+            ),
+            state.clip_chain(),
+        );
     }
 }
 

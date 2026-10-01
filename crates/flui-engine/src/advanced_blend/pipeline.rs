@@ -4,10 +4,8 @@
 //! [`super::flush_advanced_layer`].  It is format-parametric so the same pipeline
 //! serves both the windowed surface format and any offscreen target format.
 //!
-//! [`mode_to_u32`] is the canonical mapping from the 15 advanced [`BlendMode`]
-//! variants to the `u32` discriminants the WGSL `switch` consumes.  Passing a
-//! non-advanced mode (Porter-Duff or Modulate) to `mode_to_u32` is a caller
-//! contract violation; the function panics with an invariant message.
+//! [`mode_to_u32`] maps every [`BlendMode`] to the WGSL switch. The shader
+//! computes the full composite before applying geometric clip coverage.
 
 use flui_painting::paint::BlendMode;
 
@@ -69,16 +67,7 @@ const _GENERATED_BLEND_FIELD_OFFSET_CHECKS: () = {
 
 // ── Mode discriminant mapping ─────────────────────────────────────────────────
 
-/// Map an advanced [`BlendMode`] to the `u32` discriminant consumed by the
-/// WGSL `separable_blend` / `nonseparable_blend` switch statements.
-///
-/// ## Invariant
-///
-/// The caller **must** only pass one of the 15 advanced modes (Multiply through
-/// Luminosity).  Passing a Porter-Duff or Modulate mode is a contract violation:
-/// the function panics with a message naming the illegal mode, because those
-/// modes must be dispatched through the Porter-Duff / Modulate paths — not the
-/// advanced-blend shader.
+/// Map every blend mode to its composite shader discriminant.
 ///
 /// The discriminant assignment (0–14) is an engine-internal contract shared
 /// only between this function and `advanced_blend.wgsl`.  It is NOT derived
@@ -102,30 +91,25 @@ pub(crate) fn mode_to_u32(mode: BlendMode) -> u32 {
         BlendMode::Saturation => 12,
         BlendMode::Color => 13,
         BlendMode::Luminosity => 14,
-        // ── Non-advanced (Porter-Duff + Modulate) modes: caller contract violation ──
+        // Porter-Duff and Modulate share the masked destination-reading path.
         //
         // Listed exhaustively so adding a new BlendMode variant is a *compile error*,
         // not a silent runtime panic.  A wildcard arm would compile fine and only
         // panic at runtime — that defeats the static-exhaustiveness guarantee.
-        BlendMode::Clear
-        | BlendMode::Src
-        | BlendMode::Dst
-        | BlendMode::SrcOver
-        | BlendMode::DstOver
-        | BlendMode::SrcIn
-        | BlendMode::DstIn
-        | BlendMode::SrcOut
-        | BlendMode::DstOut
-        | BlendMode::SrcATop
-        | BlendMode::DstATop
-        | BlendMode::Xor
-        | BlendMode::Plus
-        | BlendMode::Modulate => unreachable!(
-            "mode_to_u32 called with non-advanced blend mode {:?}; \
-             Porter-Duff and Modulate modes must be dispatched through their \
-             own fixed-function paths, not the advanced-blend shader",
-            mode
-        ),
+        BlendMode::Clear => 15,
+        BlendMode::Src => 16,
+        BlendMode::Dst => 17,
+        BlendMode::SrcOver => 18,
+        BlendMode::DstOver => 19,
+        BlendMode::SrcIn => 20,
+        BlendMode::DstIn => 21,
+        BlendMode::SrcOut => 22,
+        BlendMode::DstOut => 23,
+        BlendMode::SrcATop => 24,
+        BlendMode::DstATop => 25,
+        BlendMode::Xor => 26,
+        BlendMode::Plus => 27,
+        BlendMode::Modulate => 28,
     }
 }
 
@@ -169,13 +153,17 @@ impl AdvancedBlendPipeline {
     /// Compilation of the WGSL shader module happens here; a wgpu validation
     /// error surfaces at this call site, which the synthetic-op GPU test
     /// exercises before any production caller exists.
-    pub(crate) fn new(device: &wgpu::Device, surface_format: wgpu::TextureFormat) -> Self {
+    pub(crate) fn new(
+        device: &wgpu::Device,
+        surface_format: wgpu::TextureFormat,
+        mask_layout: &wgpu::BindGroupLayout,
+    ) -> Self {
         // The bind-group layout is sourced from the generated bindings, which
         // derive it directly from the WGSL source — no hand-maintained descriptor.
         let bind_group_layout = advanced_blend::WgpuBindGroup0::get_bind_group_layout(device);
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Advanced Blend Pipeline Layout"),
-            bind_group_layouts: &[Some(&bind_group_layout)],
+            bind_group_layouts: &[Some(&bind_group_layout), Some(mask_layout)],
             immediate_size: 0,
         });
 

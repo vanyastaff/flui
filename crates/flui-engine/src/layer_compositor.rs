@@ -70,8 +70,8 @@ pub(super) enum RestoreOutcome {
         /// `Clip::AntiAliasWithSaveLayer` layer opened this one.
         ///
         /// Forwarded from [`SavedLayer::composite_clip`]; see that field for
-        /// why `Some(ResolvedClip::NONE)` is meaningful.
-        composite_clip: Option<crate::state_stack::ResolvedClip>,
+        /// why explicit composite isolation is meaningful.
+        composite_clip: Option<crate::command_ir::GroupClip>,
         /// Parent segment saved before `save_layer` — splice back into `current_segment`.
         saved_segment: DrawSegment,
         /// Parent draw order saved before `save_layer` — splice back into `draw_order`.
@@ -224,7 +224,7 @@ impl LayerCompositor {
         layer_blend: BlendMode,
         bounds: Option<[f32; 4]>,
         filters: LayerFilterChain,
-        composite_clip: Option<crate::state_stack::ResolvedClip>,
+        composite_clip: Option<crate::command_ir::GroupClip>,
     ) {
         let saved = SavedLayer {
             saved_draw_order,

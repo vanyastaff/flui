@@ -282,7 +282,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     }
 
     // ── Combine ───────────────────────────────────────────────────────────
-    let alpha = radial_alpha * angular_alpha;
+    let alpha = radial_alpha * angular_alpha * finalClipCoverage(in.position.xy);
     if alpha < 0.001 {
         discard;
     }
