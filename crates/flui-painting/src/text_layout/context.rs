@@ -12,22 +12,28 @@
 //! each context re-reads the data on its next query after a bump, one atomic
 //! load otherwise. A context is owner-thread state used through `&mut`.
 //!
-//! The app's collection is fed from the host
-//! ([`FontCollection::with_host_fonts`]): the faces one scan of the host
+//! The app's collection is fed from the host: the faces one scan of the host
 //! found, its generic families and FLUI's fallback lists for the host
-//! (ADR-0092 §7). Measurement, paint and carets all read the one layout
-//! shaped on the collection, so a face registered on it reaches all three
-//! together; the scan is read once, to feed it, and never again.
+//! (ADR-0092 §7). The app builds it with [`FontCollection::with_host_feed`],
+//! which holds the bundled faces at once, and runs the returned
+//! [`HostFontFeed`] off the owner thread; the host's faces then arrive as a
+//! registration's do, through the collection's generation.
+//! [`FontCollection::with_host_fonts`] feeds synchronously instead.
+//! Measurement, paint and carets all read the one layout shaped on the
+//! collection, so a face registered on it reaches all three together; the
+//! scan is read once, to feed it, and never again.
 //! [`FontCollection::new`] holds the bundled faces alone; without
 //! `bundled-fonts` it starts empty, text shapes with no face until one is
 //! registered, and the first registered family that can set Latin text
 //! becomes every generic family ([`FontCollection::register_font`]).
 
 use std::fmt;
+#[cfg(any(test, feature = "testing"))]
+use std::sync::atomic::AtomicBool;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Weak};
 
-use super::host::{HostFaces, HostFonts};
+use super::host::{HostData, HostFaces, HostFonts};
 use crate::error::RegisterFontError;
 use crate::parley_text::SpanBrush;
 
@@ -48,10 +54,10 @@ struct FontCollectionInner {
     collection: parley::fontique::Collection,
     /// One source cache shared by every context built from the collection.
     source_cache: parley::fontique::SourceCache,
-    /// Whether the collection was fed from a host scan; read by tests
+    /// Whether a host feed has finished on the collection; read by tests
     /// through `testing::host_fed`.
     #[cfg(any(test, feature = "testing"))]
-    host_fed: bool,
+    host_fed: AtomicBool,
 }
 
 impl FontCollection {
@@ -88,6 +94,46 @@ impl FontCollection {
         Self(Arc::new(FontCollectionInner::build(Some(&host.faces()))))
     }
 
+    /// [`FontCollection::new`]'s collection, and the feed that adds the
+    /// host's faces to it.
+    ///
+    /// The collection holds the bundled faces at once, so a first frame
+    /// renders before the host is scanned. [`HostFontFeed::run`], on a thread
+    /// other than the owner's, scans the host and adds what
+    /// [`FontCollection::with_host_fonts`] would: every face whose families
+    /// the collection does not hold when the feed starts, the generics it
+    /// leaves unbound, and the host's fallback order. If that changed the
+    /// collection it then raises [`Self::generation`] by one, so text laid
+    /// out before measures again at each pipeline's next frame, as after a
+    /// registration; a feed that added nothing leaves it alone.
+    ///
+    /// Without `bundled-fonts` the collection would start with no face, and
+    /// a first frame would draw no text at all; this then feeds the host's
+    /// faces before it returns, and the returned feed has nothing left to
+    /// do.
+    pub fn with_host_feed() -> (Self, HostFontFeed) {
+        #[cfg(feature = "bundled-fonts")]
+        {
+            let fonts = Self::new();
+            let feed = HostFontFeed {
+                fonts: Some(fonts.clone()),
+                #[cfg(any(test, feature = "testing"))]
+                host: None,
+            };
+            (fonts, feed)
+        }
+        #[cfg(not(feature = "bundled-fonts"))]
+        {
+            let fonts = Self::with_host_fonts(&HostFonts::scan());
+            let feed = HostFontFeed {
+                fonts: None,
+                #[cfg(any(test, feature = "testing"))]
+                host: None,
+            };
+            (fonts, feed)
+        }
+    }
+
     /// Whether `a` and `b` are the same collection.
     #[must_use]
     pub fn ptr_eq(a: &Self, b: &Self) -> bool {
@@ -122,11 +168,12 @@ impl FontCollection {
         Arc::strong_count(&self.0)
     }
 
-    /// Whether the collection was fed from a host scan
-    /// ([`FontCollection::with_host_fonts`]).
+    /// Whether the collection was fed from a host scan: built by
+    /// [`FontCollection::with_host_fonts`], or a [`HostFontFeed`] on it
+    /// finished.
     #[cfg(any(test, feature = "testing"))]
     pub(crate) fn host_fed(&self) -> bool {
-        self.0.host_fed
+        self.0.host_fed.load(Ordering::Acquire)
     }
 
     /// Whether the collection holds a family named `family`.
@@ -278,7 +325,9 @@ impl FontCollectionInner {
         #[cfg(feature = "bundled-fonts")]
         bind_bundled_faces(&mut collection);
         if let Some(host) = host {
-            feed_host_faces(&mut collection, host);
+            // A private build starts at generation zero whatever it holds,
+            // so whether the feed changed anything does not matter here.
+            let _changed = feed_host_faces(&mut collection, host, Registration::Private);
         }
         collection.make_shared();
         Self {
@@ -286,29 +335,145 @@ impl FontCollectionInner {
             collection,
             source_cache: SourceCache::new_shared(),
             #[cfg(any(test, feature = "testing"))]
-            host_fed: host.is_some(),
+            host_fed: AtomicBool::new(host.is_some()),
         }
     }
 }
 
+/// The host's faces, still to be added to a collection built by
+/// [`FontCollection::with_host_feed`].
+///
+/// `Send`: built on the owner thread and run on another. Dropping it unrun
+/// leaves the collection with the faces it had.
+#[must_use = "the host's faces reach the collection only when the feed runs"]
+pub struct HostFontFeed {
+    /// The collection to feed; `None` once nothing is left to do.
+    fonts: Option<FontCollection>,
+    /// The host the feed reads instead of scanning; set by
+    /// `testing::feed_with_host`.
+    #[cfg(any(test, feature = "testing"))]
+    host: Option<HostFonts>,
+}
+
+impl HostFontFeed {
+    /// Scans the host's fonts and adds them to the collection, then raises
+    /// its generation by one if that changed the collection.
+    ///
+    /// Blocking, and meant for a thread other than the owner's: the scan
+    /// takes a few milliseconds and the feed, which reads every font file
+    /// the scan found, tens. Each file is added on its own, so a realm
+    /// shaping meanwhile waits at most for one file's registration, and may
+    /// see some of the host's faces before the feed ends; the generation
+    /// rises once, at the end, however many sources were added, and not at
+    /// all when the feed added no source, bound no generic and left every
+    /// fallback list as it was. A source that panics or holds no family on
+    /// a trial read is skipped before the collection sees it; the trial
+    /// guards a file that panics on every read, not one replaced between
+    /// the trial and the registration, which reads it again. If the feed
+    /// itself unwinds, the generation still rises, so the faces already
+    /// added are not left unannounced.
+    pub fn run(self) {
+        let Some(fonts) = self.fonts else {
+            return;
+        };
+        #[cfg(any(test, feature = "testing"))]
+        let host = self.host.unwrap_or_else(HostFonts::scan);
+        #[cfg(not(any(test, feature = "testing")))]
+        let host = HostFonts::scan();
+        let faces = host.faces();
+        drop(host);
+        fonts.feed_shared(&faces);
+    }
+
+    /// The feed, reading `host` instead of scanning.
+    #[cfg(any(test, feature = "testing"))]
+    pub(crate) fn with_host(mut self, host: HostFonts) -> Self {
+        self.host = Some(host);
+        self
+    }
+}
+
+impl fmt::Debug for HostFontFeed {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("HostFontFeed")
+            .field("fonts", &self.fonts)
+            .finish_non_exhaustive()
+    }
+}
+
+impl FontCollection {
+    /// Adds `host`'s faces to this shared collection, one source per
+    /// registration, and raises the generation once if the feed changed the
+    /// collection. A feed that unwinds raises it too: what it added before
+    /// the panic is not left unannounced.
+    fn feed_shared(&self, host: &HostFaces) {
+        /// Announces the feed when it ends, unless it ended having changed
+        /// nothing.
+        struct Landed<'a> {
+            inner: &'a FontCollectionInner,
+            /// Whether to raise the generation; stays set while the feed
+            /// runs, so an unwind announces.
+            announce: bool,
+        }
+
+        impl Drop for Landed<'_> {
+            fn drop(&mut self) {
+                #[cfg(any(test, feature = "testing"))]
+                self.inner.host_fed.store(true, Ordering::Release);
+                if self.announce {
+                    self.inner.generation.fetch_add(1, Ordering::AcqRel);
+                }
+            }
+        }
+
+        let mut landed = Landed {
+            inner: &self.0,
+            announce: true,
+        };
+        let mut collection = self.0.collection.clone();
+        landed.announce = feed_host_faces(&mut collection, host, Registration::Shared);
+    }
+}
+
+/// How [`feed_host_faces`] registers each source.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Registration {
+    /// On a collection no one else reads yet: each source is registered
+    /// directly.
+    Private,
+    /// On the shared collection, under fontique's lock: each source is first
+    /// read on a scratch collection, where a panic poisons nothing, and is
+    /// skipped if that read panics or finds no family.
+    Shared,
+}
+
 /// Adds `host`'s faces, generics and fallback order to `collection`.
 ///
-/// A source any of whose families the collection already holds is left out,
-/// so a host copy never joins a bundled family. A generic the collection
+/// A source any of whose families the collection holds when the feed starts
+/// is left out, so a host copy never joins a bundled or registered family.
+/// Each source is registered on its own, so on a shared collection
+/// fontique's lock is held for one file at a time. A generic the collection
 /// already binds keeps its binding (with `bundled-fonts`, Roboto keeps every
 /// one); an unbound generic binds to the host's family for it when the
 /// collection then holds that family.
+///
+/// Returns whether the collection changed: a source was registered, a
+/// generic bound, or a fallback list rewritten with a different order.
 #[tracing::instrument(skip_all, fields(sources = host.sources.len()))]
-fn feed_host_faces(collection: &mut parley::fontique::Collection, host: &HostFaces) {
+fn feed_host_faces(
+    collection: &mut parley::fontique::Collection,
+    host: &HostFaces,
+    registration: Registration,
+) -> bool {
     use std::collections::HashSet;
 
-    use parley::fontique::{Blob, GenericFamily};
+    use parley::fontique::GenericFamily;
 
     use super::fallback_chain::install_into;
-    use super::host::HostData;
 
     let held: HashSet<String> = collection.family_names().map(str::to_lowercase).collect();
-    let mut paths = Vec::new();
+    let mut fed = 0_usize;
+    let mut bound = false;
     for source in &host.sources {
         if source
             .families
@@ -317,15 +482,12 @@ fn feed_host_faces(collection: &mut parley::fontique::Collection, host: &HostFac
         {
             continue;
         }
-        match &source.data {
-            HostData::Path(path) => paths.push(path.as_path()),
-            HostData::Blob(data) => {
-                collection.register_fonts(Blob::new(Arc::clone(data)), None);
-            }
+        if registration == Registration::Shared && !reads_a_family(&source.data) {
+            continue;
         }
+        register_source(collection, &source.data);
+        fed += 1;
     }
-    let files = paths.len();
-    collection.load_fonts_from_paths(paths);
 
     for (generic, name) in [
         (GenericFamily::SansSerif, &host.sans_serif),
@@ -340,12 +502,56 @@ fn feed_host_faces(collection: &mut parley::fontique::Collection, host: &HostFac
         }
         if let Some(id) = collection.family_id(name) {
             collection.set_generic_families(generic, std::iter::once(id));
+            bound = true;
         }
     }
-    install_into(&host.chain, collection);
+    let reordered = install_into(&host.chain, collection);
     // The span above records how long the feed took; no clock is read here,
     // since `std::time::Instant` panics on wasm32-unknown-unknown.
-    tracing::debug!(files, "fed the host's faces into the font collection");
+    tracing::debug!(
+        sources = fed,
+        "fed the host's faces into the font collection"
+    );
+    fed > 0 || bound || reordered
+}
+
+/// Registers one source's faces on `collection`. A file that cannot be read
+/// adds nothing.
+fn register_source(collection: &mut parley::fontique::Collection, data: &HostData) {
+    use parley::fontique::Blob;
+
+    match data {
+        HostData::Path(path) => collection.load_fonts_from_paths([path.as_path()]),
+        HostData::Blob(bytes) => {
+            collection.register_fonts(Blob::new(Arc::clone(bytes)), None);
+        }
+    }
+}
+
+/// Whether `data` holds a family, read on a scratch collection that shares
+/// nothing. A read that panics answers no: under the shared collection's
+/// lock the same panic would poison it, and every realm would panic at its
+/// next query.
+fn reads_a_family(data: &HostData) -> bool {
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+
+    let read = catch_unwind(AssertUnwindSafe(|| {
+        let mut scratch = parley::fontique::Collection::new(parley::fontique::CollectionOptions {
+            shared: false,
+            system_fonts: false,
+        });
+        register_source(&mut scratch, data);
+        scratch.family_names().next().is_some()
+    }));
+    if let Ok(holds) = read {
+        if !holds {
+            tracing::debug!(source = ?data, "a host font source holds no family; skipped");
+        }
+        holds
+    } else {
+        tracing::warn!(source = ?data, "a host font source panicked when read; skipped");
+        false
+    }
 }
 
 /// Every generic family a style can name, `system-ui` included.
@@ -516,7 +722,7 @@ mod tests {
             generation: std::sync::atomic::AtomicU64::new(0),
             collection,
             source_cache: SourceCache::new_shared(),
-            host_fed: false,
+            host_fed: std::sync::atomic::AtomicBool::new(false),
         }))
     }
 
@@ -721,6 +927,69 @@ mod tests {
         );
     }
 
+    /// A host source that panics when read is skipped by the off-thread
+    /// feed, which goes on: the source after it is fed, the generation rises
+    /// once, a context still shapes and a later registration succeeds.
+    /// Fails without the trial read: the panic then happens under fontique's
+    /// shared lock, which it poisons, so the feed stops there and every
+    /// later query or registration on the collection panics.
+    #[test]
+    fn a_source_that_panics_is_skipped_and_the_collection_stays_usable() {
+        struct Unreadable;
+
+        impl AsRef<[u8]> for Unreadable {
+            #[expect(clippy::panic, reason = "a read that panics is the failure under test")]
+            fn as_ref(&self) -> &[u8] {
+                panic!("a font source that panics when read")
+            }
+        }
+
+        const PROBE: &str = "FLUI Probe Mono";
+        let host = HostFaces {
+            sources: vec![
+                HostSource {
+                    data: HostData::Blob(Arc::new(Unreadable)),
+                    families: vec!["Unreadable Family".to_owned()],
+                },
+                HostSource {
+                    data: HostData::Blob(Arc::new(PROBE_MONO)),
+                    families: vec![PROBE.to_owned()],
+                },
+            ],
+            sans_serif: PROBE.to_owned(),
+            serif: PROBE.to_owned(),
+            monospace: PROBE.to_owned(),
+            cursive: PROBE.to_owned(),
+            fantasy: PROBE.to_owned(),
+            chain: FallbackChain::from_lists(&[PROBE], &[]),
+        };
+        let (fonts, _unused) = FontCollection::with_host_feed();
+        let before = fonts.generation();
+
+        let fed =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| fonts.feed_shared(&host)));
+
+        assert!(fed.is_ok(), "the feed contains the source's panic");
+        assert!(fonts.holds(PROBE), "the source after it is fed");
+        assert_eq!(fonts.generation(), before + 1);
+        let spans: Vec<(String, Option<TextStyle>)> = vec![("Shaped".to_owned(), None)];
+        let width = TextContext::new(&fonts)
+            .shape(&ParagraphSpec {
+                spans: &spans,
+                default_style: None,
+                font_size: 20.0,
+                max_width: None,
+                line_height: None,
+                direction: TextDirection::Ltr,
+                max_lines: None,
+                ellipsis: None,
+            })
+            .metrics()
+            .width;
+        assert!(width > 1.0, "a context still shapes, got {width}");
+        assert_eq!(fonts.register_font(ROBOTO), Ok(()));
+    }
+
     /// A host copy of a bundled family never joins it: a host whose "Roboto"
     /// is another face, at 400 and at 700, is fed, and "Roboto", sans-serif
     /// and a style naming no family still measure in the bundled bytes at
@@ -815,7 +1084,7 @@ mod tests {
                 generation: std::sync::atomic::AtomicU64::new(0),
                 collection,
                 source_cache: SourceCache::new_shared(),
-                host_fed: false,
+                host_fed: std::sync::atomic::AtomicBool::new(false),
             }));
             (fonts, path)
         };

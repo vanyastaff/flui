@@ -81,6 +81,7 @@ pub mod styling;
 pub mod typography;
 
 pub mod table_border;
+pub mod text_boundaries;
 pub mod text_layout;
 pub mod text_painter;
 
@@ -101,7 +102,7 @@ pub use display_list::{DamageExtent, DisplayList, DrawCommand, DrawOp, ShapedPar
 pub use error::RegisterFontError;
 pub use glyphs::{GlyphContent, GlyphImage, GlyphKey, GlyphRasterizer, PlacedGlyph};
 pub use table_border::paint_table_border;
-pub use text_layout::{FontCollection, HostFonts, TextContext, TextLayoutResult};
+pub use text_layout::{FontCollection, HostFontFeed, HostFonts, TextContext, TextLayoutResult};
 pub use text_painter::{Invalidation, TextBaseline, TextPainter};
 
 // The paint vocabulary, defined in `crate::paint`.

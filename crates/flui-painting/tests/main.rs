@@ -40,6 +40,8 @@ mod parley_oracle;
 mod recording;
 #[path = "rich_text_example.rs"]
 mod rich_text_example;
+#[path = "text_boundaries.rs"]
+mod text_boundaries;
 #[path = "text_context.rs"]
 mod text_context;
 #[path = "text_layout_pipeline.rs"]

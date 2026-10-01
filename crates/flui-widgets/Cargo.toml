@@ -44,10 +44,6 @@ flui-foundation = { path = "../flui-foundation", version = "=0.2.0-dev" }
 # (flui-rendering's dirty-flag storage); same house style for a small,
 # closed set of boolean flags.
 bitflags = { workspace = true }
-# `TextEditingController` moves and deletes by extended grapheme cluster
-# (Flutter's `characters`/`CharacterRange` unit), and the obscuring mask
-# counts the same unit so the two stay in step.
-unicode-segmentation = { workspace = true }
 # `RoutePath` percent-encodes each segment it joins and decodes each segment it
 # yields, with the URL path-segment set.
 percent-encoding = { workspace = true }
@@ -56,7 +52,9 @@ flui-macros = { workspace = true }
 # Gesture recognizers + arena that `GestureDetector` drives.
 flui-interaction = { path = "../flui-interaction", version = "=0.2.0-dev" }
 # Styling + typography + layout value types (Alignment, Color, BoxDecoration,
-# TextStyle, …).
+# TextStyle, …), and the ICU4X grapheme and word boundaries
+# (`text_boundaries`) `TextEditingController` moves and deletes by, which the
+# obscuring mask counts too.
 flui-painting = { path = "../flui-painting", version = "=0.2.0-dev" }
 # Geometry primitives (EdgeInsets, Matrix4, Pixels, px).
 # `Overlay`'s entry list and its published `RebuildHandle` live behind private

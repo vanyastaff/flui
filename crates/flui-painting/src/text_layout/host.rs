@@ -259,6 +259,17 @@ pub(crate) enum HostData {
     Blob(Arc<dyn AsRef<[u8]> + Send + Sync>),
 }
 
+impl fmt::Debug for HostData {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Path(path) => f.debug_tuple("Path").field(path).finish(),
+            // The bytes are not read: a source is logged when reading it
+            // failed.
+            Self::Blob(_) => f.write_str("Blob"),
+        }
+    }
+}
+
 #[cfg(all(test, feature = "bundled-fonts"))]
 mod tests {
     use super::{FallbackChain, HostFonts, HostGenerics};

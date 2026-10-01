@@ -15,7 +15,7 @@
 //! assert_eq!(list.len(), 1);
 //! ```
 
-use crate::{Canvas, DisplayList, FontCollection, HostFonts, TextContext};
+use crate::{Canvas, DisplayList, FontCollection, HostFontFeed, HostFonts, TextContext};
 
 /// The FLUI Probe Mono face at weight 100: a generated family no host
 /// carries, which maps `A` one em wide. A consumer's tests register it on a
@@ -48,12 +48,32 @@ pub fn text_context_lends(text: &TextContext) -> u64 {
     text.lends()
 }
 
-/// Whether `fonts` was fed from a host scan
-/// ([`FontCollection::with_host_fonts`]). A composition root's tests use it
-/// to show the collection its realms share is the host-fed one.
+/// Whether `fonts` was fed from a host scan: built by
+/// [`FontCollection::with_host_fonts`], or a [`HostFontFeed`] on it has
+/// finished. A composition root's tests use it to show the collection its
+/// realms share is the host-fed one.
 #[must_use]
 pub fn host_fed(fonts: &FontCollection) -> bool {
     fonts.host_fed()
+}
+
+/// A host whose installed fonts are exactly `faces`, in memory, with the
+/// generic families and fallback lists [`HostFonts::scan`] would pick for
+/// them under `en-US`. A test feeds a collection from it to control what
+/// the feed adds.
+#[must_use]
+pub fn host_fonts_from(faces: &[&'static [u8]]) -> HostFonts {
+    let mut db = fontdb::Database::new();
+    for bytes in faces {
+        db.load_font_source(fontdb::Source::Binary(std::sync::Arc::new(*bytes)));
+    }
+    HostFonts::from_database(db, "en-US")
+}
+
+/// `feed`, reading `host` when it runs instead of scanning the machine's
+/// fonts.
+pub fn feed_with_host(feed: HostFontFeed, host: HostFonts) -> HostFontFeed {
+    feed.with_host(host)
 }
 
 /// Whether some face `host` found maps each character of `text` that is not

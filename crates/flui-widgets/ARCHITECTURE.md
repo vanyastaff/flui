@@ -1314,19 +1314,27 @@ inherited flight, and clears both heroes' placeholders; deleting the
 `finish_all` call from `did_detach` would leave the overlay count one entry high
 and both placeholders set. **Unasserted:** no test pins this.
 
-### 19. Word-boundary movement uses `unicode-segmentation` (UAX #29), not ICU dictionary segmentation
+### 19. Word and grapheme movement use ICU4X (UAX #29), not dictionary segmentation
 
 **Rule:** Design stance ("Look around before settling") — search the market/existing dependency graph
 before adding one, and cite what an unmatched reference actually needs.
 
-**Since ADR-0092 §10 step 5** double-tap word selection
-(`TextPainter::get_word_boundary`, flui-painting mapping decision 15) segments
-with ICU4X's word segmenter for non-complex scripts, the data Parley already
-brings, with the same tie-break and the same limits as below: no dictionary
-or LSTM data, so CJK and Thai stay per character. The controller's keyboard
-word jumps and grapheme steps below still use `unicode-segmentation` until
-ADR-0092 §10 step 6 moves them onto the same ICU4X boundaries; until then a
-double-tap and a word jump can disagree where the two data sets do.
+**Choice:** the controller's grapheme steps (arrow keys, Backspace, Delete,
+the selection setters' snap) and keyboard word jumps walk the boundaries in
+`flui_painting::text_boundaries`: ICU4X's grapheme segmenter and its word
+segmenter for non-complex scripts, the data Parley already brings and clusters
+the painted text by (ADR-0092 §6). The obscuring mask and the text store's
+obscured ranges count the same clusters. Double-tap word selection
+(`TextPainter::get_word_boundary`, flui-painting mapping decision 15) picks
+from the same word segments with its own tie-break. So a caret an arrow key
+places is one a tap can place, and a Backspace removes what was drawn as one
+character. `flui-widgets` has no `unicode-segmentation` dependency, and
+`deny.toml` bans it for every FLUI crate.
+
+A query segments from the start of the line that holds its offset (a break
+after LF is mandatory for graphemes and words), so a step costs the length of
+its line, not of the buffer; the backward word jump walks forward one line at
+a time and allocates nothing.
 
 **Background:** ICU's word-mode break iterator (the usual backing for Ctrl+Arrow
 word-jump and double-tap word selection) is **dictionary-based**
@@ -1339,22 +1347,21 @@ correct boundary on its own), and separately Chinese/Japanese, via ICU's
 does not fail outright the way it does for the first group — it just
 segments per character/script-run rather than per linguistic word).
 
-**Choice:** `unicode-segmentation`'s `split_word_bound_indices` — pure UAX
-#29, no dictionary data. It was already a workspace dependency (pulled in
-for extended-grapheme-cluster caret/Backspace/Delete, landed before this
-change) and pure Rust, so wiring it into word-boundary movement too adds
-no new dependency, no C binding, and no data-table download — unlike an
-ICU binding (`rust_icu`, `icu4x`), which would be a materially heavier
-addition for the one feature this touches.
+**Why no dictionary.** The dictionary and LSTM data — both the
+Thai/Lao/Khmer/Myanmar lexicons and `cjdict` — are the expensive part,
+megabytes of data, not an algorithm, and Parley's `complex-scripts` feature,
+which would bring them, stays off (ADR-0092 gate 4). Every script with
+UAX #29-recognized boundaries (Latin, Cyrillic, Greek, Arabic, Hebrew,
+Hangul, and more) already works without it.
 
-**Why not ICU.** ICU's dictionary data
-— both the Thai/Lao/Khmer/Myanmar lexicons and `cjdict` — is the expensive
-part, megabytes of data, not an algorithm,
-and nothing else in this workspace needs it. Bringing in a full ICU
-dependency to correct word-jump behavior for a handful of scripts, when
-every script with UAX #29-recognized boundaries (Latin, Cyrillic, Greek,
-Arabic, Hebrew, Hangul, and more) already works correctly for free, is
-the wrong trade for what this feature is worth today.
+**Tests:** `the_editor_steps_the_graphemes_the_painter_snaps_to`
+(`tests/editable_text.rs`, the `text_editing` table) steps the arrow keys and
+Backspace through a ZWJ family, two flags, stacked combining marks, CR LF and
+the conjunct "क्षि", and compares the stops with
+`flui_painting::text_boundaries::graphemes`. `unicode-segmentation` 1.13.3
+clusters every one of those cases the same way, so the row passes on the
+earlier controller too: it pins the shared contract, and the `deny.toml` ban
+is what fails if the second segmenter comes back.
 
 **Consequences, named rather than left to be discovered:**
 
@@ -1376,8 +1383,8 @@ the wrong trade for what this feature is worth today.
   claim is made about Hebrew.
 - **Grapheme-cluster correctness is unaffected.** The dictionary gap is
   specific to WORD boundaries; cluster boundaries (caret, Backspace,
-  Delete) use `GraphemeCursor`, a different UAX #29 mode with no
-  dictionary dependency, and are correct for
+  Delete) come from ICU4X's grapheme segmenter, a different UAX #29 mode
+  with no dictionary dependency, and are correct for
   every script including all the ones named above.
 - **The word-jump modifier's platform source is compile-time only, and
   that is already known wrong for at least one real target.**
@@ -1437,10 +1444,9 @@ contact) and its `on_double_tap_down` callback — a genuine new capability
 this change adds to `GestureDetector`/`DoubleTapGestureRecognizer`, not
 previously exposed — widens the caret `Listener` just placed into the
 enclosing word, via
-[`TextPainter::get_word_boundary`](#19-word-boundary-movement-uses-unicode-segmentation-uax-29-not-icu-dictionary-segmentation)
-— ICU4X word segmentation, where Ctrl/Alt+Arrow word-jump uses
-`unicode-segmentation` one layer down until ADR-0092 §10 step 6, and NOT
-the same function either: the keyboard
+[`TextPainter::get_word_boundary`](#19-word-and-grapheme-movement-use-icu4x-uax-29-not-dictionary-segmentation)
+— ICU4X word segmentation, over the same segments Ctrl/Alt+Arrow word-jump
+walks, and NOT the same function: the keyboard
 path's `next_word_boundary`/`prev_word_boundary`
 (`crates/flui-widgets/src/text/controller.rs`) answer a directional
 "next/previous stop" query with their own asymmetric tie-break, while
@@ -1803,13 +1809,13 @@ A tap, a drag and the arrow keys keep snapping to extended grapheme clusters
 through the controller (its "Character unit"); a tap and a drag land where
 `TextPainter::get_position_for_offset` answers, which snaps to an ICU4X
 grapheme boundary while a caret query stays per scalar (flui-painting mapping
-decision 15). Until the editor's grapheme steps move to ICU4X (ADR-0092 §10
-step 6), the arrow keys step `unicode-segmentation` graphemes and a hit snaps
-to ICU4X ones; where the two disagree, an arrow key can land on an offset no
-hit answers. **Tests:** the kit's
+decision 15). The arrow keys step the same ICU4X graphemes a hit snaps to
+(decision 19), so an arrow key lands only on offsets a hit can answer.
+**Tests:** the kit's
 `selection_inside_a_grapheme_is_kept_exactly`, for the platform half; for the
 tap half, the painter's `a_combining_mark_is_one_hit_target` and
-`a_zwj_family_is_one_hit_target` rows of flui-painting's `caret_contract`.
+`a_zwj_family_is_one_hit_target` rows of flui-painting's `caret_contract`;
+for the arrow keys, `the_editor_steps_the_graphemes_the_painter_snaps_to`.
 
 ### 36. `WidgetsApp::router`: a bare Router as the routing subtree, and a form without navigator builders
 

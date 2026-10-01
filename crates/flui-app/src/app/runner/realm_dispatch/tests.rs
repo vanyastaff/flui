@@ -424,8 +424,8 @@ fn two_realms_via_separate_windows_policy_share_nothing() {
 /// from `UiRealm::for_test`, which builds its own collection, so it is not
 /// asserted on. Fails if that call hands a realm a fresh collection (a realm
 /// fed from the host again would be one), or if the runtime resolves a new one
-/// per call. `the_runtime_feeds_host_faces_once_for_every_realm` pins that
-/// the runtime's collection is the host-fed one.
+/// per call. `the_runtime_launches_one_host_feed_for_every_realm` pins that
+/// the runtime's collection is the one its host feed feeds.
 fn separate_realm_windows_shape_over_the_runtimes_font_collection() {
     let (dispatcher_a, _clear_guard) = install_realm_a_through_a_real_owner_platform();
 
@@ -789,6 +789,57 @@ fn a_registration_notifies_every_realm_window() {
     teardown_platform_realm();
 }
 
+/// The host font feed landing off the owner thread tells every realm window
+/// at the next owner turn, which the feed's wake brings: the wake, called on
+/// the feed's thread, asks the loop for a turn, and at that turn each window
+/// draws its next frame, where its pipeline lays out again the text measured
+/// before. Fails if the feed is launched with a wake that does not reach the
+/// loop, or if an owner turn does not announce a generation that moved
+/// without a registration on this thread.
+fn a_landed_host_feed_wakes_every_realm_window() {
+    use flui_painting::testing::{PROBE_MONO_100, feed_with_host, host_fonts_from};
+
+    let (dispatcher_a, dispatcher_b) = install_two_test_realms();
+    for dispatcher in [dispatcher_a, dispatcher_b] {
+        clear_redraw(dispatcher);
+    }
+    let generation = super::super::host::runtime_font_collection().generation();
+    let crate::app::runtime::ParkedHostFeed { feed, wake } =
+        crate::app::runtime::take_parked_host_feeds()
+            .pop()
+            .expect("the runtime launched its host feed when its services resolved");
+    let loop_redraw = super::super::host::runtime_needs_redraw_handle();
+    loop_redraw.store(false, std::sync::atomic::Ordering::Relaxed);
+
+    std::thread::spawn(move || {
+        feed_with_host(feed, host_fonts_from(&[PROBE_MONO_100])).run();
+        wake();
+    })
+    .join()
+    .expect("the feed lands");
+    assert!(
+        loop_redraw.load(std::sync::atomic::Ordering::Relaxed),
+        "the feed's wake asks the loop for the turn that tells the realms"
+    );
+    assert_eq!(
+        super::super::host::runtime_font_collection().generation(),
+        generation + 1,
+        "the feed landed on the app's collection"
+    );
+    // The owner turn the wake brings; the notices queue behind its event.
+    dispatch_platform_realm(dispatcher_a, RealmTask::Frame(Box::new(|_| {})))
+        .expect("the realm dispatches");
+
+    for dispatcher in [dispatcher_a, dispatcher_b] {
+        assert!(
+            redraw_requested(dispatcher),
+            "{dispatcher:?} draws its next frame"
+        );
+    }
+
+    teardown_platform_realm();
+}
+
 /// The same bytes registered twice are refused the second time: the
 /// collection does not change and no realm is woken. Fails if a repeated
 /// registration adds the face again or lays text out again for nothing.
@@ -969,6 +1020,10 @@ fn realm_dispatch_matrix() {
             (
                 "a_registration_notifies_every_realm_window",
                 a_registration_notifies_every_realm_window as fn(),
+            ),
+            (
+                "a_landed_host_feed_wakes_every_realm_window",
+                a_landed_host_feed_wakes_every_realm_window as fn(),
             ),
             (
                 "a_duplicate_registration_is_refused_and_notifies_nothing",

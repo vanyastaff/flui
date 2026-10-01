@@ -35,7 +35,7 @@ use std::sync::atomic::Ordering;
 use flui_foundation::{PresentationId, RealmId};
 use flui_scheduler::UpdateScheduler;
 
-use std::cell::{OnceCell, RefCell};
+use std::cell::{Cell, OnceCell, RefCell};
 use std::collections::{HashSet, VecDeque};
 use std::rc::Rc;
 use std::sync::Arc;
@@ -43,7 +43,7 @@ use std::sync::atomic::AtomicBool;
 use std::thread::ThreadId;
 
 use flui_foundation::PresentationAddress;
-use flui_painting::{FontCollection, HostFonts};
+use flui_painting::{FontCollection, HostFontFeed};
 use flui_platform::OwnerPlatform;
 #[cfg(target_os = "android")]
 use flui_platform::traits::WindowExecutionState;
@@ -68,10 +68,11 @@ use flui_runtime::execution::{ExecutionServices, HostExecutors};
 ///
 /// Owns the process-level accessibility flags and the app's one
 /// [`FontCollection`] (ADR-0092 §2), which every realm builds its own
-/// `TextContext` from. It scans the host's fonts once ([`HostFonts::scan`])
-/// and feeds the collection from the scan ([`FontCollection::with_host_fonts`],
-/// ADR-0092 §7), so text measures, paints and places its carets in the host's
-/// faces wherever the bundled ones lack a family. "Per owner thread" is per app while
+/// `TextContext` from. The collection holds the bundled faces from the
+/// start; the host's are added off the owner thread by the feed it was
+/// built with ([`FontCollection::with_host_feed`], ADR-0092 §7), so text
+/// measures, paints and places its carets in the host's faces wherever the
+/// bundled ones lack a family once that feed lands. "Per owner thread" is per app while
 /// ADR-0091 fixes one owner thread per process. Semantics state belongs
 /// to each presentation's `SemanticsHost`; scheduling belongs to each realm
 /// (see `flui_runtime`'s `RealmServices::construct`). The retired `SemanticsBinding`
@@ -99,6 +100,9 @@ pub(crate) struct SharedEngineServices {
     /// a `TextContext` over it, so a face registered here reaches every
     /// realm, and the host's faces are read once per app, not per realm.
     pub(super) fonts: FontCollection,
+    /// The feed that adds the host's faces to `fonts`, until
+    /// [`AppRuntime::resolved_services`] launches it.
+    host_feed: Cell<Option<HostFontFeed>>,
 }
 
 impl SharedEngineServices {
@@ -110,18 +114,19 @@ impl SharedEngineServices {
     fn resolve() -> Self {
         // Reached only through `AppRuntime::ensure_services()` and
         // `AppRuntime::font_collection()`, just before the first realm is
-        // built. The host is scanned and the collection fed here, on the owner
-        // thread before the first frame: text measured before a later feed
-        // would stay measured in other faces until something re-laid it out.
-        // The scan is a value dropped once the collection is fed; nothing
-        // process-global keeps it. A face registered later goes through the
-        // collection (`AppRuntime::register_font`), which re-lays out what it
-        // changes.
-        let host = HostFonts::scan();
+        // built. The collection holds the bundled faces now; the host scan
+        // and the feed run later, off the owner thread
+        // (`AppRuntime::resolved_services` launches them), and the faces they
+        // add are announced like a registration's: the collection's
+        // generation rises once, and every realm lays out again the text it
+        // measured before. The scan is a value the feed drops once it has
+        // fed the collection; nothing process-global keeps it.
+        let (fonts, feed) = FontCollection::with_host_feed();
 
         Self {
             accessibility_features: RwLock::new(AccessibilityFeatures::default()),
-            fonts: FontCollection::with_host_fonts(&host),
+            fonts,
+            host_feed: Cell::new(Some(feed)),
         }
     }
 }
@@ -675,6 +680,9 @@ pub(crate) struct AppRuntime {
     /// The fonts registered through [`Self::register_font`], and those still
     /// waiting for `services`.
     fonts: RefCell<FontRegistrations>,
+    /// The collection's generation the realms were last told of
+    /// ([`Self::take_font_change`]).
+    fonts_announced: Cell<u64>,
     /// The loop-scoped background execution services (issue #557): both
     /// background work-class lanes, their bounded admission, and the
     /// shutdown protocol. Built at realm install
@@ -814,6 +822,7 @@ impl AppRuntime {
             pending_realm_mutations: Vec::new(),
             services: OnceCell::new(),
             fonts: RefCell::new(FontRegistrations::default()),
+            fonts_announced: Cell::new(0),
             execution: OnceCell::new(),
             #[cfg(not(target_arch = "wasm32"))]
             service_registry: ServiceRegistry::new(),
@@ -855,6 +864,12 @@ impl AppRuntime {
     /// The services, resolved on first call, with every font registered
     /// before then added to their collection: a realm built over the
     /// collection measures with those faces from its first frame.
+    ///
+    /// The first call also launches the host font feed, after those fonts:
+    /// a family the app registered before the start is then already held,
+    /// and the feed adds no host copy of it. The generation the realms know
+    /// is taken before the launch, so the feed's landing is announced
+    /// ([`Self::take_font_change`]) even if it lands at once.
     fn resolved_services(&self) -> &SharedEngineServices {
         let services = self.services.get_or_init(SharedEngineServices::resolve);
         let pending = std::mem::take(&mut self.fonts.borrow_mut().pending);
@@ -865,7 +880,25 @@ impl AppRuntime {
                 tracing::warn!(%error, "a font registered before the first realm was refused");
             }
         }
+        if let Some(feed) = services.host_feed.take() {
+            self.fonts_announced.set(services.fonts.generation());
+            LAUNCH_HOST_FEED(feed, self.frame_wake_callback());
+        }
         services
+    }
+
+    /// Whether the app's font collection changed since the realms were last
+    /// told, and records that they are told now.
+    ///
+    /// A change is a registration or the host feed landing; either raises
+    /// the collection's generation. `false` until the services resolve. One
+    /// atomic load when nothing changed.
+    pub(super) fn take_font_change(&self) -> bool {
+        let Some(services) = self.services.get() else {
+            return false;
+        };
+        let now = services.fonts.generation();
+        self.fonts_announced.replace(now) != now
     }
 
     /// The app's font collection, for `UiRealm::new`'s `fonts`: a clone of
@@ -886,32 +919,28 @@ impl AppRuntime {
     /// Before this thread has built a realm, the bytes are checked and held,
     /// and registered when the first realm resolves the services: a thread
     /// that never runs the app never scans the host's fonts for them.
-    /// Returns whether the collection gained the face now, so that the
-    /// realms must be told.
     ///
     /// Telling the realms is the caller's work, outside this borrow
-    /// (`runner::register_font`).
+    /// (`runner::register_font`, through [`Self::take_font_change`]).
     ///
     /// # Errors
     ///
     /// [`FontRegistrationError::AlreadyRegistered`] for bytes registered
     /// before, [`FontRegistrationError::Font`] for bytes with no face; either
     /// way nothing changes.
-    pub(super) fn register_font(&self, font_bytes: &[u8]) -> Result<bool, FontRegistrationError> {
+    pub(super) fn register_font(&self, font_bytes: &[u8]) -> Result<(), FontRegistrationError> {
         let digest = font_digest(font_bytes);
         if self.fonts.borrow().digests.contains(&digest) {
             return Err(FontRegistrationError::AlreadyRegistered);
         }
-        let registered_now = if let Some(services) = self.services.get() {
+        if let Some(services) = self.services.get() {
             services.fonts.register_font(font_bytes)?;
-            true
         } else {
             FontCollection::check_font(font_bytes)?;
             self.fonts.borrow_mut().pending.push(font_bytes.to_vec());
-            false
-        };
+        }
         self.fonts.borrow_mut().digests.insert(digest);
-        Ok(registered_now)
+        Ok(())
     }
 
     /// Stash the host's executors ahead of the first realm install (the
@@ -1689,6 +1718,94 @@ impl AppRuntime {
     }
 }
 
+/// How [`AppRuntime::resolved_services`] starts the host font feed, given
+/// the feed and the wake to call once it has landed: on a thread of its own
+/// ([`spawn_host_feed`]). This crate's unit tests park it instead
+/// (`park_host_feed`), so no feed lands in the middle of a test that
+/// counts generations or redraws; `spawn_host_feed` has its own test.
+#[cfg(not(test))]
+const LAUNCH_HOST_FEED: fn(HostFontFeed, Arc<dyn Fn() + Send + Sync>) = spawn_host_feed;
+#[cfg(test)]
+const LAUNCH_HOST_FEED: fn(HostFontFeed, Arc<dyn Fn() + Send + Sync>) = park_host_feed;
+
+/// A feed [`park_host_feed`] held, with the wake the runtime launched it
+/// with: a test runs the feed, then calls the wake as the launcher would.
+#[cfg(test)]
+pub(super) struct ParkedHostFeed {
+    pub(super) feed: HostFontFeed,
+    pub(super) wake: Arc<dyn Fn() + Send + Sync>,
+}
+
+#[cfg(test)]
+thread_local! {
+    /// The feeds [`park_host_feed`] held on this thread, in launch order.
+    static PARKED_HOST_FEEDS: RefCell<Vec<ParkedHostFeed>> = const { RefCell::new(Vec::new()) };
+}
+
+/// A launcher that runs nothing: it keeps the feed and its wake on this
+/// thread for [`take_parked_host_feeds`], so a test decides when, and
+/// whether, the host's faces land.
+#[cfg(test)]
+pub(super) fn park_host_feed(feed: HostFontFeed, wake: Arc<dyn Fn() + Send + Sync>) {
+    PARKED_HOST_FEEDS.with(|parked| parked.borrow_mut().push(ParkedHostFeed { feed, wake }));
+}
+
+/// Every feed [`park_host_feed`] has held on this thread since the last
+/// call, in launch order.
+#[cfg(test)]
+pub(super) fn take_parked_host_feeds() -> Vec<ParkedHostFeed> {
+    PARKED_HOST_FEEDS.with(|parked| std::mem::take(&mut *parked.borrow_mut()))
+}
+
+/// Runs the host font feed on a thread of its own, named `flui-host-fonts`,
+/// then wakes the owner, whose next turn tells every realm.
+///
+/// The wake is called even if the feed panics, since the generation still
+/// rises then. If no thread can be started the feed runs here, before the
+/// first frame; on wasm32, which has no threads (and where fontdb finds no
+/// host fonts), it always does.
+fn spawn_host_feed(feed: HostFontFeed, wake: Arc<dyn Fn() + Send + Sync>) {
+    fn feed_then_wake(feed: HostFontFeed, wake: &(dyn Fn() + Send + Sync)) {
+        use std::panic::{AssertUnwindSafe, catch_unwind};
+
+        if catch_unwind(AssertUnwindSafe(|| feed.run())).is_err() {
+            tracing::error!("the host font feed panicked; the faces it added are kept");
+        }
+        if catch_unwind(AssertUnwindSafe(wake)).is_err() {
+            tracing::error!("the wake after the host font feed panicked");
+        }
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    feed_then_wake(feed, &*wake);
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        // The feed goes to the thread only once it has started, so a failed
+        // start leaves it here to run inline.
+        let (send, receive) = std::sync::mpsc::channel::<HostFontFeed>();
+        let thread_wake = Arc::clone(&wake);
+        let spawned = std::thread::Builder::new()
+            .name("flui-host-fonts".to_owned())
+            .spawn(move || {
+                if let Ok(feed) = receive.recv() {
+                    feed_then_wake(feed, &*thread_wake);
+                }
+            });
+        match spawned {
+            Ok(_) => {
+                if let Err(std::sync::mpsc::SendError(feed)) = send.send(feed) {
+                    tracing::warn!("the host font thread ended before its feed; feeding here");
+                    feed_then_wake(feed, &*wake);
+                }
+            }
+            Err(error) => {
+                tracing::warn!(%error, "no thread for the host font feed; feeding here");
+                feed_then_wake(feed, &*wake);
+            }
+        }
+    }
+}
+
 impl Drop for AppRuntime {
     /// The third, last-resort clipboard clear: the deterministic path is the explicit
     /// `teardown_platform_realm` clear; this is only a backstop for
@@ -1704,16 +1821,23 @@ impl Drop for AppRuntime {
 
 #[cfg(all(test, not(target_os = "ios")))]
 mod font_collection_tests {
+    use flui_painting::testing::{PROBE_MONO_100, feed_with_host, host_fed, host_fonts_from};
+
     use super::*;
 
     /// Every realm builds its `TextContext` over the app's one collection
-    /// (ADR-0092 §2), and that collection is fed from the host's faces
-    /// once (ADR-0092 §7): repeated service and collection requests hand out
-    /// clones of the same host-fed one, never a fresh or re-fed collection.
-    /// Fails if the services build a bundled-only collection (no feed) or a
-    /// new collection per request.
-    #[test]
-    fn the_runtime_feeds_host_faces_once_for_every_realm() {
+    /// (ADR-0092 §2), and the host's faces are fed into it once, off the
+    /// owner thread (ADR-0092 §7): repeated service and collection requests
+    /// hand out clones of the same collection, the runtime launches one
+    /// feed for it, and that collection is host-fed once the feed runs. The
+    /// wake the feed is launched with is the runtime's own: calling it asks
+    /// the loop for the turn that announces the landing. Fails if the
+    /// services feed the host on the owner thread (the collection is
+    /// host-fed before the launch), launch a feed per request, build a new
+    /// collection per request, or launch the feed with a wake that does not
+    /// reach the loop.
+    fn the_runtime_launches_one_host_feed_for_every_realm() {
+        let _ = take_parked_host_feeds();
         let mut runtime = AppRuntime::new();
         let first = runtime.font_collection();
         let _ = runtime.ensure_services();
@@ -1727,8 +1851,86 @@ mod font_collection_tests {
             "the collection handed to realms is the one the services own"
         );
         assert!(
-            flui_painting::testing::host_fed(&first),
-            "the app's collection is fed from the host"
+            !host_fed(&first),
+            "the first frame does not wait for the host's faces"
+        );
+        let mut feeds = take_parked_host_feeds();
+        assert_eq!(feeds.len(), 1, "one feed per app");
+        let ParkedHostFeed { feed, wake } = feeds.remove(0);
+        runtime.needs_redraw.store(false, Ordering::Relaxed);
+
+        feed_with_host(feed, host_fonts_from(&[PROBE_MONO_100])).run();
+        wake();
+
+        assert!(
+            runtime.needs_redraw.load(Ordering::Relaxed),
+            "the feed's wake asks the runtime's loop for a turn"
+        );
+        assert!(host_fed(&first), "the feed fed the app's collection");
+        assert!(runtime.take_font_change(), "the landing is announced");
+        assert!(!runtime.take_font_change(), "and announced once");
+    }
+
+    /// The production launcher runs the feed on another thread and then
+    /// calls the wake once, from that thread. Fails if the launcher feeds
+    /// on the calling thread, which is the owner's.
+    fn the_host_feed_runs_off_the_owner_thread_and_wakes_once() {
+        let (fonts, feed) = FontCollection::with_host_feed();
+        let feed = feed_with_host(feed, host_fonts_from(&[PROBE_MONO_100]));
+        let (send, woken) = std::sync::mpsc::channel();
+        let wake: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+            let _ = send.send(std::thread::current().id());
+        });
+
+        spawn_host_feed(feed, wake);
+
+        let waker = woken
+            .recv_timeout(std::time::Duration::from_secs(60))
+            .expect("the feed wakes the owner once it lands");
+        assert_ne!(
+            waker,
+            std::thread::current().id(),
+            "the feed ran off the owner thread"
+        );
+        assert!(host_fed(&fonts), "the wake comes after the feed");
+        assert!(
+            woken.recv().is_err(),
+            "the thread ends without a second wake"
+        );
+    }
+
+    /// Two runtimes, as on two owner threads, each hold a collection of
+    /// their own. Fails if the services share one collection between
+    /// runtimes.
+    fn two_runtimes_hold_different_collections() {
+        let one = AppRuntime::new();
+        let two = AppRuntime::new();
+
+        assert!(!FontCollection::ptr_eq(
+            &one.font_collection(),
+            &two.font_collection()
+        ));
+        let _ = take_parked_host_feeds();
+    }
+
+    #[test]
+    fn font_collection_contract() {
+        crate::table_test::run_table(
+            "font_collection_contract",
+            &[
+                (
+                    "the_runtime_launches_one_host_feed_for_every_realm",
+                    the_runtime_launches_one_host_feed_for_every_realm as fn(),
+                ),
+                (
+                    "the_host_feed_runs_off_the_owner_thread_and_wakes_once",
+                    the_host_feed_runs_off_the_owner_thread_and_wakes_once as fn(),
+                ),
+                (
+                    "two_runtimes_hold_different_collections",
+                    two_runtimes_hold_different_collections as fn(),
+                ),
+            ],
         );
     }
 }
