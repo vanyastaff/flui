@@ -57,25 +57,20 @@ name: CI
 #                    (verified: GET /branches/main/protection -> 404), so
 #                    nothing here actually blocks a merge yet; that's a repo-
 #                    settings decision for the maintainer, not this file
-# Caches: the repository gets 10 GB, least-recently-used entries evicted past
-# it, and every job that saves from main writes a new entry whenever
-# Cargo.lock moves. So a job keeps a target cache only when its cold run
-# would outlast its lane's longest jobs (`test`, `test-nested`, about 9 min
-# warm, on a pull request; `gpu-test`, 23 min, on main): `test` (shared
-# with `test-nested`), `wasm-check`, `test-features`, `live-smoke` and
-# `gpu-test`. Cold, `test` took 18 min, `test-nested` 27, `wasm-check` 13
-# (run 36776652181) and `test-features` about 17. Every other job builds
-# cold: the pull-request ones in under 9 min, the main-only ones (a
-# `feature-matrix` shard 19 min) inside `gpu-test`'s 23. One key per job: a key shared across jobs with
-# different build modes lost time (clippy restoring `test`'s build-mode
-# artifacts re-checked every crate). Saved on main only.
+# Caches: isolated dependency families, saved only by successful trusted-main
+# runs. The active toolchain is installed in an isolated rustup home so rolling
+# runner toolchains cannot change rust-cache's environment fingerprint. Keep
+# Cargo's environment/config/dependency keys and freshness checks intact.
+# Native extended jobs retain their own dependencies and nested consumer roots;
+# GPU, workspace tests, wasm and feature graphs keep separate target families.
+# cache-bin is off: taiki-e installs tools, not dependency caches. Budget and
+# measured baseline: docs/research/ci-cache-policy-2026-10.md. GitHub's 10 GB LRU
+# remains the global bound; no workflow deletes entries or changes settings.
 # Runners: named images (`ubuntu-26.04`), not `-latest`, so an image change
 # is a commit here and not a mid-rollout surprise in the apt steps.
-# Toolchain: every job compiles with rust-toolchain.toml's pinned channel;
-# `dtolnay/rust-toolchain@stable` only installs rustup and components, and
-# rustup then overrides to the pin (each job's log says so). `cargo xtask
-# toolchain`, in `checks`, holds `rust-version` to that channel's minor, so
-# every job is also the MSRV build; there is no separate msrv job.
+# Toolchain: the local setup action reads rust-toolchain.toml and installs that
+# exact release plus requested targets once. No rolling stable installation.
+# `cargo xtask toolchain` keeps workspace/template MSRV declarations in sync.
 # Patterns borrowed from linebender/xilem (gated `checks` job, cargo-hack
 # feature matrix, Swatinem cache + taiki-e/install-action for pinned tool
 # versions) and tokio (aggregator `ci` job; nextest as primary runner).
@@ -113,6 +108,9 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
+  # A fresh hosted-runner home excludes unrelated preinstalled toolchains from
+  # rust-cache keys. Keep it outside the checkout (manifest/config globbing).
+  RUSTUP_HOME: ${{ github.workspace }}/../flui-rustup
   # Strict workspace-wide; matches the local `cargo xtask ci`.
   #
   # `build.warnings` (Cargo 1.97+) rather than `RUSTFLAGS: -D warnings`:
@@ -168,8 +166,8 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install Rust stable + rustfmt
-        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+      - name: Install pinned Rust + rustfmt
+        uses: ./.github/actions/rust-toolchain # zizmor: ignore[self-repository] (actionlint 1.7.12 requires ./ syntax)
         with:
           components: rustfmt
 
@@ -268,6 +266,7 @@ jobs:
       - name: Rust cache (xtask)
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
+          cache-bin: false
           shared-key: xtask
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
@@ -333,12 +332,13 @@ jobs:
           # The merge base with the PR's base branch has to be in the clone.
           fetch-depth: 0
 
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+      - name: Install pinned Rust
+        uses: ./.github/actions/rust-toolchain # zizmor: ignore[self-repository] (actionlint 1.7.12 requires ./ syntax)
 
       - name: Rust cache (xtask)
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
+          cache-bin: false
           shared-key: xtask
           save-if: false
 
@@ -383,14 +383,11 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install Rust stable + clippy (+ iOS target)
-        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+      - name: Install pinned Rust + clippy (+ iOS target)
+        uses: ./.github/actions/rust-toolchain # zizmor: ignore[self-repository] (actionlint 1.7.12 requires ./ syntax)
         with:
           components: clippy
           targets: aarch64-apple-ios
-
-      - name: Add the iOS target to the pinned toolchain
-        run: rustup target add aarch64-apple-ios
 
 
       - name: cargo clippy (ios runner)
@@ -419,8 +416,8 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+      - name: Install pinned Rust
+        uses: ./.github/actions/rust-toolchain # zizmor: ignore[self-repository] (actionlint 1.7.12 requires ./ syntax)
 
       - name: cargo check (each changed standalone crate)
         run: |
@@ -450,11 +447,10 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install Rust stable + clippy
-        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+      - name: Install pinned Rust + clippy
+        uses: ./.github/actions/rust-toolchain # zizmor: ignore[self-repository] (actionlint 1.7.12 requires ./ syntax)
         with:
           components: clippy
-
 
       - name: cargo clippy
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
@@ -488,16 +484,16 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+      - name: Install pinned Rust
+        uses: ./.github/actions/rust-toolchain # zizmor: ignore[self-repository] (actionlint 1.7.12 requires ./ syntax)
 
       - name: Cache cargo registry + target
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          cache-on-failure: true
-          # `test-nested` restores this entry: the same TEST_SCOPE build.
+          cache-bin: false
+          # Same TEST_SCOPE as test-nested, which is the sole main writer.
           shared-key: workspace-tests-v2
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          save-if: false
 
       - name: Install cargo-nextest
         uses: taiki-e/install-action@76c2e6406e52637deed7160d77bded76bd83e06e # v2.87.14
@@ -543,6 +539,10 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+      - name: Target size and disk headroom
+        if: always()
+        run: python .github/scripts/cache-metrics.py
+
   # ─────────────────────────────────────────────────────────────────────────
   # test-nested — the nested tests (`cargo xtask test --nested`: the trybuild
   # compile_fail suites, flui-cli's generated projects, the facade consumers;
@@ -562,17 +562,17 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+      - name: Install pinned Rust
+        uses: ./.github/actions/rust-toolchain # zizmor: ignore[self-repository] (actionlint 1.7.12 requires ./ syntax)
 
       - name: Cache cargo registry + target
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          cache-on-failure: true
-          # `test`'s entry: the same TEST_SCOPE build. Restore only, so the
-          # nested-cargo builds add no cache entry of their own.
+          cache-bin: false
+          # Sole writer for this TEST_SCOPE family: unlike test --fast,
+          # it populates the nested consumer dependency roots as well.
           shared-key: workspace-tests-v2
-          save-if: false
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Install cargo-nextest
         uses: taiki-e/install-action@76c2e6406e52637deed7160d77bded76bd83e06e # v2.87.14
@@ -590,6 +590,10 @@ jobs:
           path: "**/wip/*.stderr"
           if-no-files-found: ignore
           retention-days: 7
+
+      - name: Target size and disk headroom
+        if: always()
+        run: python .github/scripts/cache-metrics.py
 
   # ─────────────────────────────────────────────────────────────────────────
   # gpu-test (PILOT) — actually RUN the `testing` readback/oracle
@@ -636,15 +640,14 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+      - name: Install pinned Rust
+        uses: ./.github/actions/rust-toolchain # zizmor: ignore[self-repository] (actionlint 1.7.12 requires ./ syntax)
 
       - name: Cache cargo registry + target
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          cache-on-failure: true
+          cache-bin: false
           save-if: ${{ github.ref == 'refs/heads/main' }}
-
 
       - name: Install cargo-nextest
         uses: taiki-e/install-action@76c2e6406e52637deed7160d77bded76bd83e06e # v2.87.14
@@ -727,15 +730,14 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+      - name: Install pinned Rust
+        uses: ./.github/actions/rust-toolchain # zizmor: ignore[self-repository] (actionlint 1.7.12 requires ./ syntax)
 
       - name: Cache cargo registry + target
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          cache-on-failure: true
+          cache-bin: false
           save-if: ${{ github.ref == 'refs/heads/main' }}
-
 
       # xvfb for the virtual display; libxkbcommon-x11 because winit's X11
       # backend dlopens it at startup (`xkbcommon-dl` panics without it, so
@@ -808,12 +810,13 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+      - name: Install pinned Rust
+        uses: ./.github/actions/rust-toolchain # zizmor: ignore[self-repository] (actionlint 1.7.12 requires ./ syntax)
 
       - name: Cache cargo registry + target
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
+          cache-bin: false
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Install cargo-nextest
@@ -845,6 +848,10 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+      - name: Target size and disk headroom
+        if: always()
+        run: python .github/scripts/cache-metrics.py
+
   # ─────────────────────────────────────────────────────────────────────────
   # platform-windows — flui-platform's own suite on a real Windows host:
   # the Win32 backend's unit tests (clipboard, events, window extensions,
@@ -868,9 +875,8 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
-
+      - name: Install pinned Rust
+        uses: ./.github/actions/rust-toolchain # zizmor: ignore[self-repository] (actionlint 1.7.12 requires ./ syntax)
 
       - name: Install cargo-nextest
         uses: taiki-e/install-action@76c2e6406e52637deed7160d77bded76bd83e06e # v2.87.14
@@ -902,9 +908,8 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
-
+      - name: Install pinned Rust
+        uses: ./.github/actions/rust-toolchain # zizmor: ignore[self-repository] (actionlint 1.7.12 requires ./ syntax)
 
       - name: cargo bench --no-run
         run: cargo bench -p flui-rendering --no-run --locked
@@ -930,9 +935,8 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
-
+      - name: Install pinned Rust
+        uses: ./.github/actions/rust-toolchain # zizmor: ignore[self-repository] (actionlint 1.7.12 requires ./ syntax)
 
       - name: cargo doc --no-deps (every `testing` feature on)
         run: cargo xtask doc-strict
@@ -970,8 +974,8 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+      - name: Install pinned Rust
+        uses: ./.github/actions/rust-toolchain # zizmor: ignore[self-repository] (actionlint 1.7.12 requires ./ syntax)
 
       - name: Install cargo-deny and cargo-shear
         uses: taiki-e/install-action@76c2e6406e52637deed7160d77bded76bd83e06e # v2.87.14
@@ -983,6 +987,7 @@ jobs:
       - name: Rust cache (xtask)
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
+          cache-bin: false
           shared-key: xtask
           save-if: false
 
@@ -1013,9 +1018,8 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
-
+      - name: Install pinned Rust
+        uses: ./.github/actions/rust-toolchain # zizmor: ignore[self-repository] (actionlint 1.7.12 requires ./ syntax)
 
       - name: cargo test --doc
         run: cargo test --workspace --locked --doc
@@ -1064,7 +1068,6 @@ jobs:
         uses: dtolnay/rust-toolchain@4fd1da8b0805d2d2e936788875a7d65dbd677dc2 # nightly
         with:
           components: miri
-
 
       # `+nightly` is required: the committed rust-toolchain.toml pin overrides
       # the job's installed default toolchain, and the pinned stable has no
@@ -1134,11 +1137,10 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install Rust stable + clippy
-        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+      - name: Install pinned Rust + clippy
+        uses: ./.github/actions/rust-toolchain # zizmor: ignore[self-repository] (actionlint 1.7.12 requires ./ syntax)
         with:
           components: clippy
-
 
       - name: Install cargo-hack
         uses: taiki-e/install-action@76c2e6406e52637deed7160d77bded76bd83e06e # v2.87.14
@@ -1177,23 +1179,16 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install Rust stable + wasm32 target
-        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+      - name: Install pinned Rust + wasm32 target
+        uses: ./.github/actions/rust-toolchain # zizmor: ignore[self-repository] (actionlint 1.7.12 requires ./ syntax)
         with:
           targets: wasm32-unknown-unknown
 
       - name: Cache cargo registry + target
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
+          cache-bin: false
           save-if: ${{ github.ref == 'refs/heads/main' }}
-
-      # `dtolnay/rust-toolchain@stable` installs the target for the toolchain
-      # named `stable`, but the committed `rust-toolchain.toml` makes `1.98.1`
-      # the ACTIVE toolchain — a separate rustup install even at the same
-      # version — so the target has to be added again against the pin. Without
-      # this the build fails with E0463 "can't find crate for `core`".
-      - name: Add wasm32 target to the pinned toolchain
-        run: rustup target add wasm32-unknown-unknown
 
       - name: cargo xtask wasm-check
         run: cargo xtask wasm-check
@@ -1268,17 +1263,10 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install Rust stable (+ iOS target for the runner lint below)
-        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+      - name: Install pinned Rust (+ iOS target for the runner lint below)
+        uses: ./.github/actions/rust-toolchain # zizmor: ignore[self-repository] (actionlint 1.7.12 requires ./ syntax)
         with:
           targets: aarch64-apple-ios
-
-      # Same pitfall as `cross-typecheck`: the action adds the target to the
-      # `stable` toolchain, but the committed rust-toolchain.toml makes the
-      # pinned patch release the active one, and that install needs the
-      # target too (E0463 "can't find crate for `std`" otherwise).
-      - name: Add the iOS target to the pinned toolchain
-        run: rustup target add aarch64-apple-ios
 
 
       - name: Install cargo-nextest
@@ -1312,19 +1300,11 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install Rust stable + windows/macos/android targets
-        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+      - name: Install pinned Rust + windows/macos/android targets
+        uses: ./.github/actions/rust-toolchain # zizmor: ignore[self-repository] (actionlint 1.7.12 requires ./ syntax)
         with:
           targets: x86_64-pc-windows-msvc,aarch64-apple-darwin,aarch64-linux-android,aarch64-apple-ios
 
-
-      # `dtolnay/rust-toolchain@stable` installs the target for the toolchain
-      # named `stable`, but the committed `rust-toolchain.toml` makes `1.98.1`
-      # the ACTIVE toolchain — a separate rustup install even at the same
-      # version — so the target has to be added again against the pin. Without
-      # this the build fails with E0463 "can't find crate for `core`".
-      - name: Add cross targets to the pinned toolchain
-        run: rustup target add x86_64-pc-windows-msvc aarch64-apple-darwin aarch64-linux-android aarch64-apple-ios
 
       # `--features a11y` on every line: the UIA/NSAccessibility bridges are
       # feature-gated and this job is the ONLY gate that compiles them at all
@@ -1410,30 +1390,33 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install Rust stable + clippy + rustfmt (+ iOS target)
-        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+      - name: Install pinned Rust + clippy + rustfmt (+ iOS target)
+        uses: ./.github/actions/rust-toolchain # zizmor: ignore[self-repository] (actionlint 1.7.12 requires ./ syntax)
         with:
           components: clippy, rustfmt
           targets: aarch64-apple-ios
 
-      # The action adds the target to `stable`; the committed
-      # rust-toolchain.toml makes the pinned release the active one, and that
-      # install needs the target too.
-      - name: Add the iOS target to the pinned toolchain
-        run: rustup target add aarch64-apple-ios
-
       - name: Cache cargo registry + target
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          cache-on-failure: true
-          shared-key: macos-ci
-          # Restore only: the repository's caches are already past the 10 GB
-          # eviction limit (design/ci.md §4.4), and a new entry from this
-          # nightly job would evict the ones every pull request restores.
-          # Saving on main waits for a `gh cache list` showing room.
-          save-if: false
-          # Per tokio: binary caching breaks on macOS.
           cache-bin: false
+          # Cache native dependency artifacts, not iOS/clippy-only targets,
+          # rustdoc, examples, readback output or every incidental target root.
+          # rust-cache still cleans these using the root workspace metadata.
+          cache-targets: false
+          cache-directories: |
+            target/debug/build
+            target/debug/.fingerprint
+            target/debug/deps
+            target/cli-template-check/debug/build
+            target/cli-template-check/debug/.fingerprint
+            target/cli-template-check/debug/deps
+            target/facade-consumer-check/debug/build
+            target/facade-consumer-check/debug/.fingerprint
+            target/facade-consumer-check/debug/deps
+          shared-key: macos-ci
+          # Native dependencies and nested consumers have their own family.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Install cargo-nextest
         uses: taiki-e/install-action@76c2e6406e52637deed7160d77bded76bd83e06e # v2.87.14
@@ -1445,6 +1428,10 @@ jobs:
 
       - name: cargo clippy (ios runner)
         run: cargo clippy -p flui-app -p flui --locked --target aarch64-apple-ios -- -D warnings
+
+      - name: Target size and disk headroom
+        if: always()
+        run: python .github/scripts/cache-metrics.py
 
   # ─────────────────────────────────────────────────────────────────────────
   # test-windows — `cargo xtask test --no-trybuild` on windows-latest: the workspace
@@ -1464,16 +1451,30 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+      - name: Install pinned Rust
+        uses: ./.github/actions/rust-toolchain # zizmor: ignore[self-repository] (actionlint 1.7.12 requires ./ syntax)
 
       - name: Cache cargo registry + target
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          cache-on-failure: true
+          cache-bin: false
+          # Cache native dependency artifacts, not iOS/clippy-only targets,
+          # rustdoc, examples, readback output or every incidental target root.
+          # rust-cache still cleans these using the root workspace metadata.
+          cache-targets: false
+          cache-directories: |
+            target/debug/build
+            target/debug/.fingerprint
+            target/debug/deps
+            target/cli-template-check/debug/build
+            target/cli-template-check/debug/.fingerprint
+            target/cli-template-check/debug/deps
+            target/facade-consumer-check/debug/build
+            target/facade-consumer-check/debug/.fingerprint
+            target/facade-consumer-check/debug/deps
           shared-key: test-windows
-          # Restore only, as macos-ci: no new entry past the eviction limit.
-          save-if: false
+          # Separate from GPU: different features and consumer profiles.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Install cargo-nextest
         uses: taiki-e/install-action@76c2e6406e52637deed7160d77bded76bd83e06e # v2.87.14
@@ -1487,6 +1488,10 @@ jobs:
       # (group `trybuild`) do not depend on the host.
       - name: cargo xtask test --no-trybuild
         run: cargo xtask test --no-trybuild
+
+      - name: Target size and disk headroom
+        if: always()
+        run: python .github/scripts/cache-metrics.py
 
   # ─────────────────────────────────────────────────────────────────────────
   # ci — aggregator over every job above (tokio pattern), designed so that a
@@ -1510,12 +1515,13 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+      - name: Install pinned Rust
+        uses: ./.github/actions/rust-toolchain # zizmor: ignore[self-repository] (actionlint 1.7.12 requires ./ syntax)
 
       - name: Rust cache (xtask)
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
+          cache-bin: false
           shared-key: xtask
           save-if: false
 
