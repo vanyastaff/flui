@@ -63,9 +63,9 @@ name: CI
 # Cargo's environment/config/dependency keys and freshness checks intact.
 # Native extended jobs retain their own dependencies and nested consumer roots;
 # GPU, workspace tests, wasm and feature graphs keep separate target families.
-# cache-bin is off: taiki-e installs tools, not dependency caches. Budget and
-# measured baseline: docs/research/ci-cache-policy-2026-10.md. GitHub's 10 GB LRU
-# remains the global bound; no workflow deletes entries or changes settings.
+# cache-bin is off: taiki-e installs tools, not dependency caches. Keep only
+# these selected families within GitHub's 10 GB LRU budget; new native archive
+# sizes need main-run measurement. No workflow deletes entries or changes settings.
 # Runners: named images (`ubuntu-26.04`), not `-latest`, so an image change
 # is a commit here and not a mid-rollout surprise in the apt steps.
 # Toolchain: the local setup action reads rust-toolchain.toml and installs that
