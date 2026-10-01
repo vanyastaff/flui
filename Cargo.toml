@@ -704,6 +704,10 @@ parking_lot.workspace = true
 flui-engine = { path = "crates/flui-engine", version = "=0.2.0-dev", features = ["dx12"] }
 pollster = { workspace = true }
 wgpu = { workspace = true }
+winit.workspace = true
+reqwest.workspace = true
+tokio = { workspace = true, features = ["sync", "time"] }
+futures-util.workspace = true
 
 # === Error Handling (for examples) ===
 anyhow.workspace = true

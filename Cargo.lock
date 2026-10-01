@@ -1764,6 +1764,7 @@ dependencies = [
  "flui-testing",
  "flui-view",
  "flui-widgets",
+ "futures-util",
  "image",
  "insta",
  "objc2 0.6.4",
@@ -1771,13 +1772,16 @@ dependencies = [
  "objc2-foundation 0.3.2",
  "parking_lot",
  "pollster",
+ "reqwest",
  "serde",
  "serde_json",
  "tempfile",
+ "tokio",
  "toml",
  "tracing",
  "tracing-subscriber",
  "wgpu",
+ "winit",
 ]
 
 [[package]]
