@@ -15,7 +15,14 @@
 - The `flui_painting::testing` helpers `host_covers`, `host_chain_covers`,
   `host_sans_serif_family` and `host_family_names` take the `&HostFonts` they answer for.
 - The app scans the host's fonts itself and feeds its collection from that scan; the fallback
-  lists are FLUI's own, per platform, and match what cosmic-text 0.19 used.
+  lists are FLUI's own, per platform, and match what cosmic-text 0.19 used but for the Han
+  list's locale match (see Fixed).
+
+### Fixed
+
+- Han text on a Japanese, Korean, Hong Kong or Taiwan host falls back to that locale's faces: the
+  host locale is read by its language, script and region subtags (`ja-JP`, `zh-Hant-HK`), where
+  cosmic-text matched the whole tag and gave every regional locale the Simplified Chinese faces.
 
 ### Removed
 

@@ -255,6 +255,10 @@ mod tests {
     /// the common list, and for every recorded locale every script's list,
     /// a script it names no list for included. Every table is checked on any
     /// host, so a transcription slip in a platform CI never runs fails here.
+    ///
+    /// One deliberate divergence: cosmic-text matched the locale whole, so
+    /// its `ja-JP` lists were its Simplified Chinese ones. FLUI reads the
+    /// language subtag, so `ja-JP` is checked against the recorded `ja` lists.
     #[test]
     fn platform_tables_match_the_recorded_lists() {
         use super::super::fallback_recorded::RECORDED;
@@ -271,7 +275,12 @@ mod tests {
             if common(platform) != recorded_common {
                 failures.push(format!("{name}: common list"));
             }
-            for (locale, lists) in locales {
+            for (locale, _) in locales {
+                let reference = if *locale == "ja-JP" { "ja" } else { *locale };
+                let (_, lists) = locales
+                    .iter()
+                    .find(|(held, _)| *held == reference)
+                    .expect("BUG: the recording holds every bare locale it diverges to");
                 let tags = lists
                     .iter()
                     .map(|(tag, _)| (*tag).to_owned())
@@ -293,9 +302,11 @@ mod tests {
         );
     }
 
-    /// A host chain keeps a list only for a script fontique names, the
-    /// locale picks the Han list, and a locale no table names takes the
-    /// Simplified Chinese one.
+    /// A host chain keeps a list only for a script fontique names, and the
+    /// locale picks the Han list by its language, script and region subtags:
+    /// a host reports a full tag (`sys_locale` gives `ja-JP`, never `ja`), so
+    /// a Japanese, Korean, Hong Kong or Taiwan host gets its own faces, and a
+    /// locale naming none of them takes the Simplified Chinese ones.
     #[test]
     fn a_platform_chain_picks_han_by_locale() {
         let hani = Script::from_str_unchecked("Hani");
@@ -309,5 +320,27 @@ mod tests {
         );
         assert!(us.script(Script::from_str_unchecked("Latn")).is_empty());
         assert_eq!(us.common().first(), Some(&"Noto Sans"));
+        for (platform, locale, expected) in [
+            (Platform::Unix, "ja-JP", "Noto Sans CJK JP"),
+            (Platform::Unix, "ja_JP.UTF-8", "Noto Sans CJK JP"),
+            (Platform::Unix, "ko-KR", "Noto Sans CJK KR"),
+            (Platform::Unix, "zh-TW", "Noto Sans CJK TC"),
+            (Platform::Unix, "zh-Hant", "Noto Sans CJK TC"),
+            (Platform::Unix, "zh-Hant-HK", "Noto Sans CJK HK"),
+            (Platform::Unix, "zh-MO", "Noto Sans CJK HK"),
+            (Platform::Unix, "zh-Hans-TW", "Noto Sans CJK SC"),
+            (Platform::Unix, "zh-CN", "Noto Sans CJK SC"),
+            (Platform::Unix, "JA", "Noto Sans CJK JP"),
+            (Platform::Windows, "ja-JP", "Yu Gothic"),
+            (Platform::Windows, "zh-HK", "MingLiU_HKSCS"),
+            (Platform::MacOs, "ko-KR", "Apple SD Gothic Neo"),
+            (Platform::MacOs, "zh-Hant-TW", "PingFang TC"),
+        ] {
+            assert_eq!(
+                FallbackChain::of(platform, locale).script(hani),
+                [expected],
+                "{platform:?} {locale}"
+            );
+        }
     }
 }

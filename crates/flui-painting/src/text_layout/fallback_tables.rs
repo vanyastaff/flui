@@ -70,36 +70,93 @@ pub(crate) const fn common(platform: Platform) -> &'static [&'static str] {
 
 /// The families tried first for the script whose ISO 15924 code is
 /// `script`, for `locale`. `locale` picks the Han list (Japanese, Korean,
-/// Hong Kong and Taiwan faces; Simplified Chinese otherwise) and is matched
-/// whole, as cosmic-text matched it.
+/// Hong Kong and Taiwan faces; Simplified Chinese otherwise) by its
+/// subtags ([`Han::of`]).
 pub(crate) fn script(platform: Platform, script: &str, locale: &str) -> &'static [&'static str] {
+    let han = Han::of(locale);
     match platform {
-        Platform::Windows => windows(script, locale),
-        Platform::Unix => unix(script, locale),
-        Platform::MacOs => macos(script, locale),
+        Platform::Windows => windows(script, han),
+        Platform::Unix => unix(script, han),
+        Platform::MacOs => macos(script, han),
         Platform::Other => &[],
     }
 }
 
-fn windows_han(locale: &str) -> &'static [&'static str] {
-    match locale {
-        "ja" => &["Yu Gothic"],
-        "ko" => &["Malgun Gothic"],
-        "zh-HK" => &["MingLiU_HKSCS"],
-        "zh-TW" => &["Microsoft JhengHei UI"],
-        _ => &["Microsoft YaHei UI"],
+/// Which Han faces a locale reads: the glyph forms differ between
+/// Japanese, Korean, Hong Kong, Taiwan and Simplified Chinese text.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Han {
+    /// Japanese.
+    Jp,
+    /// Korean.
+    Kr,
+    /// Traditional Chinese as written in Hong Kong and Macau.
+    Hk,
+    /// Traditional Chinese as written in Taiwan.
+    Tw,
+    /// Simplified Chinese, and every locale that names no other.
+    Sc,
+}
+
+impl Han {
+    /// The Han faces for a BCP-47 tag or a POSIX locale (`ja-JP`,
+    /// `ja_JP.UTF-8`, `zh-Hant-HK`), read case-insensitively from its
+    /// language, script and region subtags. A Chinese tag's script subtag
+    /// wins over its region: `zh-Hans-TW` is Simplified, `zh-Hant` with no
+    /// region is Taiwan's.
+    fn of(locale: &str) -> Self {
+        let tag = locale.split(['.', '@']).next().unwrap_or_default();
+        let mut subtags = tag.split(['-', '_']);
+        let language = subtags.next().unwrap_or_default();
+        if language.eq_ignore_ascii_case("ja") {
+            return Self::Jp;
+        }
+        if language.eq_ignore_ascii_case("ko") {
+            return Self::Kr;
+        }
+        if !language.eq_ignore_ascii_case("zh") {
+            return Self::Sc;
+        }
+        let mut script = None;
+        let mut hong_kong = false;
+        let mut taiwan = false;
+        for subtag in subtags {
+            if subtag.eq_ignore_ascii_case("hant") || subtag.eq_ignore_ascii_case("hans") {
+                script.get_or_insert(subtag.eq_ignore_ascii_case("hant"));
+            } else if subtag.eq_ignore_ascii_case("hk") || subtag.eq_ignore_ascii_case("mo") {
+                hong_kong = true;
+            } else if subtag.eq_ignore_ascii_case("tw") {
+                taiwan = true;
+            }
+        }
+        match (script, hong_kong, taiwan) {
+            (Some(false), ..) => Self::Sc,
+            (_, true, _) => Self::Hk,
+            (Some(true), ..) | (None, _, true) => Self::Tw,
+            (None, false, false) => Self::Sc,
+        }
     }
 }
 
-fn windows(script: &str, locale: &str) -> &'static [&'static str] {
+fn windows_han(han: Han) -> &'static [&'static str] {
+    match han {
+        Han::Jp => &["Yu Gothic"],
+        Han::Kr => &["Malgun Gothic"],
+        Han::Hk => &["MingLiU_HKSCS"],
+        Han::Tw => &["Microsoft JhengHei UI"],
+        Han::Sc => &["Microsoft YaHei UI"],
+    }
+}
+
+fn windows(script: &str, han: Han) -> &'static [&'static str] {
     match script {
         "Adlm" | "Ethi" | "Tfng" | "Vaii" => &["Ebrima"],
         "Beng" | "Cakm" | "Deva" | "Gujr" | "Guru" | "Knda" | "Mlym" | "Orya" | "Sinh" | "Taml"
         | "Telu" => &["Nirmala UI"],
         "Cans" | "Cher" => &["Gadugi"],
-        "Hani" => windows_han(locale),
-        "Hang" => windows_han("ko"),
-        "Hira" | "Kana" => windows_han("ja"),
+        "Hani" => windows_han(han),
+        "Hang" => windows_han(Han::Kr),
+        "Hira" | "Kana" => windows_han(Han::Jp),
         "Java" => &["Javanese Text"],
         "Khmr" | "Laoo" | "Thai" => &["Leelawadee UI"],
         "Mong" => &["Mongolian Baiti"],
@@ -111,23 +168,23 @@ fn windows(script: &str, locale: &str) -> &'static [&'static str] {
     }
 }
 
-fn unix_han(locale: &str) -> &'static [&'static str] {
-    match locale {
-        "ja" => &["Noto Sans CJK JP"],
-        "ko" => &["Noto Sans CJK KR"],
-        "zh-HK" => &["Noto Sans CJK HK"],
-        "zh-TW" => &["Noto Sans CJK TC"],
-        _ => &["Noto Sans CJK SC"],
+fn unix_han(han: Han) -> &'static [&'static str] {
+    match han {
+        Han::Jp => &["Noto Sans CJK JP"],
+        Han::Kr => &["Noto Sans CJK KR"],
+        Han::Hk => &["Noto Sans CJK HK"],
+        Han::Tw => &["Noto Sans CJK TC"],
+        Han::Sc => &["Noto Sans CJK SC"],
     }
 }
 
-fn unix(script: &str, locale: &str) -> &'static [&'static str] {
+fn unix(script: &str, han: Han) -> &'static [&'static str] {
     match script {
         "Adlm" => &["Noto Sans Adlam", "Noto Sans Adlam Unjoined"],
         "Arab" => &["Noto Sans Arabic"],
         "Armn" => &["Noto Sans Armenian"],
         "Beng" => &["Noto Sans Bengali"],
-        "Bopo" | "Hani" => unix_han(locale),
+        "Bopo" | "Hani" => unix_han(han),
         // FreeMono before DejaVu Sans keeps braille aligned beside
         // monospaced text.
         "Brai" => &["FreeMono"],
@@ -142,10 +199,10 @@ fn unix(script: &str, locale: &str) -> &'static [&'static str] {
         "Gran" => &["Noto Sans Grantha"],
         "Gujr" => &["Noto Sans Gujarati"],
         "Guru" => &["Noto Sans Gurmukhi"],
-        "Hang" => unix_han("ko"),
+        "Hang" => unix_han(Han::Kr),
         "Hano" => &["Noto Sans Hanunoo"],
         "Hebr" => &["Noto Sans Hebrew"],
-        "Hira" | "Kana" => unix_han("ja"),
+        "Hira" | "Kana" => unix_han(Han::Jp),
         "Java" => &["Noto Sans Javanese"],
         "Knda" => &["Noto Sans Kannada"],
         "Khmr" => &["Noto Sans Khmer"],
@@ -174,17 +231,17 @@ fn unix(script: &str, locale: &str) -> &'static [&'static str] {
     }
 }
 
-fn macos_han(locale: &str) -> &'static [&'static str] {
-    match locale {
-        "ja" => &["Hiragino Sans"],
-        "ko" => &["Apple SD Gothic Neo"],
-        "zh-HK" => &["PingFang HK"],
-        "zh-TW" => &["PingFang TC"],
-        _ => &["PingFang SC"],
+fn macos_han(han: Han) -> &'static [&'static str] {
+    match han {
+        Han::Jp => &["Hiragino Sans"],
+        Han::Kr => &["Apple SD Gothic Neo"],
+        Han::Hk => &["PingFang HK"],
+        Han::Tw => &["PingFang TC"],
+        Han::Sc => &["PingFang SC"],
     }
 }
 
-fn macos(script: &str, locale: &str) -> &'static [&'static str] {
+fn macos(script: &str, han: Han) -> &'static [&'static str] {
     match script {
         "Adlm" => &["Noto Sans Adlam"],
         "Arab" => &["Geeza Pro"],
@@ -199,11 +256,11 @@ fn macos(script: &str, locale: &str) -> &'static [&'static str] {
         "Gran" => &["Grantha Sangam MN"],
         "Gujr" => &["Gujarati Sangam MN"],
         "Guru" => &["Gurmukhi Sangam MN"],
-        "Hani" => macos_han(locale),
-        "Hang" => macos_han("ko"),
+        "Hani" => macos_han(han),
+        "Hang" => macos_han(Han::Kr),
         "Hano" => &["Noto Sans Hanunoo"],
         "Hebr" => &["Arial"],
-        "Hira" | "Kana" => macos_han("ja"),
+        "Hira" | "Kana" => macos_han(Han::Jp),
         "Java" => &["Noto Sans Javanese"],
         "Knda" => &["Noto Sans Kannada"],
         "Khmr" => &["Khmer Sangam MN"],

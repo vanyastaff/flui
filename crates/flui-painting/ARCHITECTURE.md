@@ -701,8 +701,13 @@ paint and carets, so one set of lists, FLUI's, decides the face everywhere.
   fallback face.
 - Only each script's default key is set, with no locale: the Parley path
   passes none. A change that passes one must set locale keys too.
-- The Han list is picked for the whole process from the host locale, matched
-  whole (`"ja"`, not `"ja-JP"`) as cosmic-text matched it.
+- The Han list is picked for the whole process from the host locale, by its
+  language, script and region subtags: `ja-JP` gets the Japanese faces,
+  `zh-Hant` and `zh-TW` Taiwan's, `zh-HK` and `zh-MO` Hong Kong's, and every
+  other locale the Simplified Chinese ones. cosmic-text matched the tag whole,
+  so a host reporting `ja-JP` (every real one: `sys_locale` gives a region)
+  got Simplified Chinese glyph forms; FLUI does not keep that. A document's
+  own language does not pick the list.
 - Android's platform common list is empty, so the collection falls back to the
   sans-serif family alone there; unverified, since Android is clippy-only here.
 - A family name fontdb records in another language only (fontique keeps the

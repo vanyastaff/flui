@@ -378,8 +378,9 @@ Measurement and paint read one layout, so one set of rules picks a face:
 - **one fallback order**: past that family, each script's fallback families are FLUI's list for
   the script on the host platform, then the platform's common list, then the family the
   sans-serif generic names (`FallbackChain`, over `fallback_tables`: per-platform lists FLUI
-  owns, ported from cosmic-text 0.19 and keyed by ISO 15924 code; the host locale picks the Han
-  list). The common list is the emoji generic. fontique has no walk over every other face, so a
+  owns, ported from cosmic-text 0.19 and keyed by ISO 15924 code; the host locale's language,
+  script and region subtags pick the Han list, where cosmic-text matched the tag whole and gave
+  `ja-JP` the Simplified Chinese faces). The common list is the emoji generic. fontique has no walk over every other face, so a
   character no listed family covers is `.notdef`;
 - **one set of generics**: with `bundled-fonts` the collection binds every generic to Roboto and
   a host feed rebinds none; without it an unbound generic takes the scan's pick, a carried family
@@ -721,7 +722,9 @@ that wires what it adds.
      empty; the globals allowlist is shorter by `text_layout::layout::FONT_SYSTEM`; the
      `disallowed_types` `#[expect]` is gone; swash on Parley's keys draws every recorded
      cosmic-text bitmap (`swash_matches_the_recorded_reference`); every platform's fallback
-     table equals the recorded lists on any host (`platform_tables_match_the_recorded_lists`);
+     table equals the recorded lists on any host (`platform_tables_match_the_recorded_lists`),
+     but for a regional locale's Han list, picked by its subtags
+     (`a_platform_chain_picks_han_by_locale`);
      a host copy of a bundled family is never fed and a bound generic never rebound
      (`a_host_copy_of_a_bundled_family_is_not_fed`,
      `a_missing_path_is_skipped_and_the_feed_completes`); the app's collection is the host-fed
@@ -915,7 +918,8 @@ the first-frame test, which is §10 step 6b's.
 - Host fonts scanned by the app, cosmic-text gone (§10 step 6a): in
   `crates/flui-painting/src/text_layout/fallback_chain.rs`,
   `platform_tables_match_the_recorded_lists` (every platform's table against the lists recorded
-  from cosmic-text 0.19, on any host) and `a_platform_chain_picks_han_by_locale`; in
+  from cosmic-text 0.19, on any host) and `a_platform_chain_picks_han_by_locale` (a regional
+  tag such as `ja-JP` picks its language's Han list); in
   `crates/flui-painting/src/text_layout/context.rs`, `a_host_copy_of_a_bundled_family_is_not_fed`
   and `a_missing_path_is_skipped_and_the_feed_completes`, which fail if the feed adds a host copy
   of a held family or rebinds a bound generic; `swash_matches_the_recorded_reference`; the demo
