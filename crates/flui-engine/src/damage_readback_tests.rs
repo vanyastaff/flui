@@ -1267,11 +1267,13 @@ fn a_removed_translated_src_save_layer_leaves_nothing_behind() {
     assert!(failed.is_empty(), "{failed:#?}");
 }
 
-/// A removed shader mask under a destination-replacing `Clear` blend leaves
-/// nothing behind: the boundary's damage covers the mask's whole bounds,
-/// which contain every pixel its composite can replace.
+/// A removed shader mask leaves nothing behind: the boundary's damage covers
+/// the mask's whole bounds, which contain every pixel its composite writes.
+/// The mask records `Clear`, which combines its shader with its child and is
+/// not applied at the composite (ADR-0099 §4): the child shows and the
+/// backdrop around it stays.
 #[test]
-fn a_removed_clear_shader_mask_leaves_nothing_behind() {
+fn a_removed_shader_mask_leaves_nothing_behind() {
     use flui_layer::ShaderMaskLayer;
     use flui_painting::paint::Shader;
 
@@ -1325,9 +1327,9 @@ fn a_removed_clear_shader_mask_leaves_nothing_behind() {
 
     let drawn = full_frame_pixels(&renderer, &before);
     assert_eq!(
-        px(&drawn, 24, 24),
-        [0, 0, 0, 0],
-        "precondition: the Clear mask replaced the backdrop under its child"
+        (px(&drawn, 24, 24), px(&drawn, 45, 45)),
+        (RED, GREEN),
+        "precondition: the mask composited its child over the backdrop"
     );
 
     let (partial, full) = partial_and_full(&renderer, &before, &after);
