@@ -143,8 +143,8 @@ fn main() {
     );
     for (name, text) in [
         ("12-char label", LABEL),
-        ("60-char sentence", SENTENCE),
-        ("600-char paragraph", &SENTENCE.repeat(10)),
+        ("57-char sentence", SENTENCE),
+        ("570-char paragraph", &SENTENCE.repeat(10)),
         ("arabic_mixed", ARABIC_MIXED),
         ("cjk", CJK),
     ] {
