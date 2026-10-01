@@ -1,28 +1,16 @@
-//! The render target a partial frame repaints into (ADR-0087 §4).
-//!
-//! wgpu does not expose a swapchain image's age (gfx-rs/wgpu#682), so a
-//! scissored repaint straight into a freshly acquired swapchain image would
-//! leave the pixels outside the scissor showing whatever older frame last
-//! used that image. A [`RetainedTarget`] holds the last rendered frame
-//! instead: a partial frame repaints only its damage into it, and the whole
-//! target is then blitted to the swapchain.
-//!
-//! The target is allocated lazily, by the first frame that renders through
-//! it, so a renderer whose frames are all full (damage switched off, or
-//! every frame over the threshold) never pays its memory. It costs
-//! `width × height × 4` bytes per window while held.
+//! Candidate/committed retained images (ADR-0100, superseding ADR-0087 §4).
+//! Preparation never writes the previous committed image. A partial candidate
+//! is seeded by an ordered copy and promoted only after the whole frame submits.
 
-/// A persistent texture in the surface format, and whether it holds the
-/// last frame this renderer presented.
-///
-/// Validity is the whole protocol: [`Self::begin`] clears it before a frame
-/// renders into the target and [`Self::commit`] sets it only once that frame
-/// was submitted, so a frame that errors or unwinds in between leaves the
-/// target invalid and the next partial frame renders in full instead of
-/// trusting half-written pixels.
+use std::sync::Arc;
+
+use crate::device_domain::{DeviceDomain, PreparedCost, PreparedPermit};
+use crate::error::{EngineError, EngineResult};
+
 #[derive(Default)]
 pub(crate) struct RetainedTarget {
     slot: Option<Slot>,
+    spare: Option<Slot>,
     valid: bool,
 }
 
@@ -31,57 +19,129 @@ struct Slot {
     view: wgpu::TextureView,
     size: (u32, u32),
     format: wgpu::TextureFormat,
+    domain: Arc<DeviceDomain>,
+    permit: Arc<PreparedPermit>,
+    bytes: usize,
+}
+
+impl Drop for Slot {
+    fn drop(&mut self) {
+        // Earlier clear/content/copy/blit submissions may still use this image.
+        // Only the charge is captured; no Domain/Device ownership cycle.
+        self.domain
+            .retire_after_previous_submissions(vec![Arc::clone(&self.permit)]);
+    }
+}
+
+pub(crate) struct CandidateTarget(Slot);
+
+impl CandidateTarget {
+    pub(crate) fn texture(&self) -> &wgpu::Texture {
+        &self.0.texture
+    }
+    pub(crate) fn view(&self) -> &wgpu::TextureView {
+        &self.0.view
+    }
 }
 
 impl std::fmt::Debug for RetainedTarget {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RetainedTarget")
             .field("size", &self.slot.as_ref().map(|slot| slot.size))
+            .field("spare_size", &self.spare.as_ref().map(|slot| slot.size))
             .field("valid", &self.valid)
             .finish()
     }
 }
 
 impl RetainedTarget {
-    /// Whether the target holds the last presented frame, so a partial
-    /// frame may repaint only its damage into it.
-    #[must_use]
     pub(crate) fn is_valid(&self) -> bool {
         self.valid
     }
-
-    /// Stops trusting the target's pixels (a frame rendered elsewhere, a
-    /// surface reconfigured). The texture is kept for reuse.
     pub(crate) fn invalidate(&mut self) {
         self.valid = false;
     }
-
-    /// Drops the texture as well: its device is gone, or the surface was
-    /// released and the memory should go with it.
     pub(crate) fn release(&mut self) {
         self.slot = None;
+        self.spare = None;
         self.valid = false;
     }
 
-    /// Prepares the target for a frame at `size` in `format` and returns the
-    /// texture and view to render into.
-    ///
-    /// Reallocates when the size or format changed, and always leaves the
-    /// target invalid until [`Self::commit`].
     pub(crate) fn begin(
         &mut self,
-        device: &wgpu::Device,
+        domain: &Arc<DeviceDomain>,
         size: (u32, u32),
         format: wgpu::TextureFormat,
-    ) -> (wgpu::Texture, wgpu::TextureView) {
-        self.valid = false;
-        let reusable = self
+        partial: bool,
+    ) -> EngineResult<CandidateTarget> {
+        domain.poll()?;
+        let limit = domain.device().limits().max_texture_dimension_2d;
+        for dimension in [size.0, size.1] {
+            if dimension == 0 || dimension > limit {
+                return Err(EngineError::PreparedResourceLimit {
+                    resource: "retained target dimension",
+                    requested: dimension as usize,
+                    limit: limit as usize,
+                });
+            }
+        }
+        let (block_width, block_height) = format.block_dimensions();
+        let block_bytes = format
+            .block_copy_size(None)
+            .ok_or(EngineError::PreparedResourceOverflow)? as usize;
+        let bytes = (size.0.div_ceil(block_width) as usize)
+            .checked_mul(size.1.div_ceil(block_height) as usize)
+            .and_then(|blocks| blocks.checked_mul(block_bytes))
+            .ok_or(EngineError::PreparedResourceOverflow)?;
+        // Validate the committed source before taking ownership of the spare:
+        // a stale partial plan must leave both live allocations intact for retry.
+        let source = if partial {
+            let source = self
+                .slot
+                .as_ref()
+                .ok_or(EngineError::MissingRetainedSource)?;
+            if !Arc::ptr_eq(&source.domain, domain) {
+                return Err(EngineError::DeviceDomainMismatch);
+            }
+            if !self.valid || source.size != size || source.format != format {
+                return Err(EngineError::MissingRetainedSource);
+            }
+            Some(source)
+        } else {
+            None
+        };
+        // Only a submitted previous candidate becomes spare. All subsequent
+        // writes are ordered on the same queue, never to the committed image.
+        let reusable = self.spare.take().filter(|slot| {
+            slot.size == size && slot.format == format && Arc::ptr_eq(&slot.domain, domain)
+        });
+        // Discarded incompatible spare may have registered an already-ready
+        // retirement callback; offer nonblocking progress before fresh admission.
+        if reusable.is_none() {
+            domain.poll()?;
+        }
+        let previous_bytes = self
             .slot
             .as_ref()
-            .is_some_and(|slot| slot.size == size && slot.format == format);
-        if !reusable {
-            let texture = device.create_texture(&wgpu::TextureDescriptor {
-                label: Some("FLUI Retained Frame Target"),
+            .filter(|slot| Arc::ptr_eq(&slot.domain, domain))
+            .map_or(0, |slot| slot.bytes);
+        domain.check_footprint(PreparedCost {
+            gpu_bytes: bytes
+                .checked_add(previous_bytes)
+                .ok_or(EngineError::PreparedResourceOverflow)?,
+            cpu_bytes: 0,
+            objects: if previous_bytes == 0 { 2 } else { 4 },
+        })?;
+        let candidate = CandidateTarget(if let Some(slot) = reusable {
+            slot
+        } else {
+            let permit = domain.reserve(PreparedCost {
+                gpu_bytes: bytes,
+                cpu_bytes: 0,
+                objects: 2,
+            })?;
+            let texture = domain.device().create_texture(&wgpu::TextureDescriptor {
+                label: Some("FLUI Candidate Frame Target"),
                 size: wgpu::Extent3d {
                     width: size.0,
                     height: size.1,
@@ -91,8 +151,6 @@ impl RetainedTarget {
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
                 format,
-                // Rendered into, sampled by the blit and by backdrop filters,
-                // copied from by dst-reading blends, copied into by tests.
                 usage: wgpu::TextureUsages::RENDER_ATTACHMENT
                     | wgpu::TextureUsages::TEXTURE_BINDING
                     | wgpu::TextureUsages::COPY_SRC
@@ -100,41 +158,55 @@ impl RetainedTarget {
                 view_formats: &[],
             });
             let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-            tracing::debug!(
-                target: "flui.gpu",
-                event = "retained_target_allocated",
-                width = size.0,
-                height = size.1,
-                // Every surface format this engine selects is 4 bytes a pixel.
-                bytes = u64::from(size.0) * u64::from(size.1) * 4,
-                ?format,
-                "retained frame target allocated"
-            );
-            self.slot = Some(Slot {
+            Slot {
                 texture,
                 view,
                 size,
                 format,
-            });
+                domain: Arc::clone(domain),
+                permit,
+                bytes,
+            }
+        });
+        if let Some(source) = source {
+            let mut encoder =
+                domain
+                    .device()
+                    .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                        label: Some("Seed Partial Candidate"),
+                    });
+            encoder.copy_texture_to_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &source.texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::TexelCopyTextureInfo {
+                    texture: candidate.texture(),
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::Extent3d {
+                    width: size.0,
+                    height: size.1,
+                    depth_or_array_layers: 1,
+                },
+            );
+            domain.submit(domain.prepare(
+                vec![encoder.finish()],
+                vec![Arc::clone(&source.permit), Arc::clone(&candidate.0.permit)],
+            )?)?;
         }
-        let slot = self
-            .slot
-            .as_ref()
-            .expect("BUG: the retained target slot was filled just above");
-        (slot.texture.clone(), slot.view.clone())
+        Ok(candidate)
     }
 
-    /// Records that the frame begun by [`Self::begin`] was submitted in full:
-    /// the target now holds it.
-    pub(crate) fn commit(&mut self) {
-        debug_assert!(
-            self.slot.is_some(),
-            "BUG: RetainedTarget::commit without a begun frame"
-        );
-        self.valid = self.slot.is_some();
+    pub(crate) fn commit(&mut self, candidate: CandidateTarget) {
+        self.spare = self.slot.replace(candidate.0);
+        self.valid = true;
     }
 
-    /// The target's texture, when one is allocated.
     #[cfg(test)]
     pub(crate) fn texture(&self) -> Option<&wgpu::Texture> {
         self.slot.as_ref().map(|slot| &slot.texture)

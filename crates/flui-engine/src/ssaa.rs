@@ -294,7 +294,7 @@ impl GpuReplay {
         // Surface texture for advanced (dst-read) blend composite.
         // Pass `None` for view-only targets (advanced falls back to SrcOver).
         surface_texture: Option<&wgpu::Texture>,
-    ) {
+    ) -> crate::error::EngineResult<()> {
         let (vp_w, vp_h) = viewport_size;
 
         // ── Step 1: integer tile rect, covering ceil(right)−floor(left) ──────
@@ -346,7 +346,7 @@ impl GpuReplay {
                  to avoid silent truncation"
             );
             self.flush_segment(
-                &mut op.segment,
+                &op.segment,
                 viewport_size,
                 device,
                 queue,
@@ -354,8 +354,8 @@ impl GpuReplay {
                 resources,
                 encoder,
                 target_view,
-            );
-            return;
+            )?;
+            return Ok(());
         }
 
         // ── Step 2: acquire a 2× pooled texture (bucketed) ───────────────────
@@ -427,7 +427,7 @@ impl GpuReplay {
         let scale_x = vp_w as f32 / tile_w as f32;
         let scale_y = vp_h as f32 / tile_h as f32;
 
-        let mut remapped_segment = op.segment.clone();
+        let mut remapped_segment = op.segment.try_clone_for_remap()?;
         for v in &mut remapped_segment.vertices {
             v.position[0] = (v.position[0] - tile_origin_x) * scale_x;
             v.position[1] = (v.position[1] - tile_origin_y) * scale_y;
@@ -503,7 +503,7 @@ impl GpuReplay {
         // `(vp_w, vp_h)` combined with the pre-scaled positions produces NDC that
         // fills the tile, rendering it into the 2× texture → supersampled.
         self.flush_segment(
-            &mut remapped_segment,
+            &remapped_segment,
             (supersample_w, supersample_h),
             device,
             queue,
@@ -511,7 +511,7 @@ impl GpuReplay {
             resources,
             encoder,
             super_view,
-        );
+        )?;
 
         // ── Step 4: box-downsample 2× → 1× premultiplied tile ────────────────
         //
@@ -642,6 +642,7 @@ impl GpuReplay {
             );
             // one_x_tile drops here → returns to pool (RAII).
         }
+        Ok(())
     }
 
     /// Box-downsample a 2× pooled `source_texture` into a fresh 1× tile.

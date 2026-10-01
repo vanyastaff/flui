@@ -31,6 +31,10 @@ impl DrawBatcher {
         p2: Point<f64>,
         paint: &Paint,
     ) {
+        if segment.recording_result().is_err() {
+            return;
+        }
+
         self.prime_tessellator_scale(state);
         match self.tessellator.tessellate_line(p1, p2, paint) {
             Ok((vertices, indices)) => {
@@ -84,6 +88,10 @@ impl DrawBatcher {
         color: Color,
         elevation: f32,
     ) {
+        if segment.recording_result().is_err() {
+            return;
+        }
+
         let blur_radius = elevation.max(0.0);
         let offset_y = elevation / 2.0;
 
@@ -98,7 +106,7 @@ impl DrawBatcher {
         // a 1.0-elevation card otherwise gets a single ~0.75px-offset copy,
         // i.e. no visible soft shadow at all.
         if let Some(rrect) = path.rrect_hint() {
-            Self::draw_analytic_rrect_shadow(segment, draw_order, state, &rrect, color, elevation);
+            Self::draw_analytic_rrect_shadow(segment, state, &rrect, color, elevation);
             return;
         }
 
@@ -169,7 +177,6 @@ impl DrawBatcher {
     /// reproduction — shadow shaping is a sanctioned leapfrog area.
     fn draw_analytic_rrect_shadow(
         segment: &mut DrawSegment,
-        draw_order: &mut Vec<crate::command_ir::DrawItem>,
         state: &GpuStateStack,
         rrect: &flui_foundation::geometry::RRect,
         color: Color,
@@ -199,7 +206,6 @@ impl DrawBatcher {
         let params = crate::effects::ShadowParams::new(offset, blur_sigma, shadow_color);
         Self::draw_shadow_rect(
             segment,
-            draw_order,
             (rect_pos).map(|v| v as f32),
             (rect_size).map(|v| v as f32),
             corner_radius as f32,
@@ -231,6 +237,10 @@ impl DrawBatcher {
         path: &Path,
         paint: &Paint,
     ) {
+        if segment.recording_result().is_err() {
+            return;
+        }
+
         // Snapshot world scale once: it drives flatten-tolerance in the tessellator
         // AND the cache-key bucket, so a single read guarantees they can never desync
         // (scale-1 geometry must not be reused at scale 8, which would facet).
@@ -400,6 +410,10 @@ impl DrawBatcher {
         indices: &[u32],
         blend: BlendMode,
     ) {
+        if segment.recording_result().is_err() {
+            return;
+        }
+
         let transform = state.current_transform();
         for v in &mut vertices {
             let transformed = transform * glam::vec4(v.position[0], v.position[1], 0.0, 1.0);
@@ -443,6 +457,10 @@ impl DrawBatcher {
         indices: &[u16],
         paint: &Paint,
     ) {
+        if segment.recording_result().is_err() {
+            return;
+        }
+
         #[cfg(debug_assertions)]
         tracing::trace!(
             "DrawBatcher::draw_vertices: vertices={}, indices={}",

@@ -14,6 +14,8 @@ use std::{collections::HashMap, sync::Arc};
 use bytemuck::{Pod, Zeroable};
 use wgpu::util::DeviceExt;
 
+use crate::device_domain::{DeviceDomain, PreparedCost};
+use crate::error::EngineResult;
 use crate::texture_pool::{PooledTexture, TexturePool};
 
 use self::shader::ShaderType;
@@ -22,13 +24,6 @@ mod blit;
 mod blur;
 mod mask;
 mod shader;
-
-/// Maximum number of Dual Kawase blur iterations.
-///
-/// Matches the `.clamp(1, 5)` in `render_blur`; used to pre-allocate the
-/// reusable uniform buffer pool so `render_blur` never calls `create_buffer_init`
-/// inside its hot loop.
-const MAX_BLUR_ITERATIONS: usize = 5;
 
 /// Offscreen renderer for shader mask effects
 ///
@@ -65,12 +60,11 @@ pub struct OffscreenRenderer {
     /// [`Self::texture_pool_mut`]. The pool is single-mutator by
     /// construction (see `texture_pool.rs`'s module doc).
     texture_pool: TexturePool,
+    // Legacy targets/pipelines remain outside the prepared-IR quota.
+    domain: Arc<DeviceDomain>,
 
     /// wgpu device for GPU operations
     device: Arc<wgpu::Device>,
-
-    /// wgpu queue for command submission
-    queue: Arc<wgpu::Queue>,
 
     /// Surface texture format
     surface_format: wgpu::TextureFormat,
@@ -108,22 +102,6 @@ pub struct OffscreenRenderer {
     /// Created once in the constructor; eliminates one `create_buffer_init` per
     /// `render_masked` invocation and one per `render_blur` invocation.
     fullscreen_quad_vb: wgpu::Buffer,
-
-    /// Pre-allocated `BlurParams` uniform buffers — one slot per possible
-    /// Dual Kawase iteration (`MAX_BLUR_ITERATIONS = 5`).
-    ///
-    /// Both the downsample pass (iterations 0..N) and the upsample pass
-    /// (iterations N-1..0) index into this pool, so the pool needs
-    /// `MAX_BLUR_ITERATIONS` slots.  Each slot is updated with
-    /// `queue.write_buffer` before the pass that uses it, replacing the
-    /// previous `create_buffer_init` call that allocated a fresh GPU buffer
-    /// every iteration.
-    ///
-    /// Soundness: each buffer is written before it is used in the same
-    /// submission, and `queue.submit` is called once at the end of
-    /// `render_blur` — so a write at iteration `i` is always visible to the
-    /// draw call that references slot `i`.
-    blur_uniform_buffers: Vec<wgpu::Buffer>,
 }
 
 // ---------------------------------------------------------------------------
@@ -162,21 +140,28 @@ impl OffscreenRenderer {
     // `pub` under `testing`: the `offscreen_resource_cache` bench
     // (a separate crate target) constructs one. Private otherwise.
     #[cfg_attr(not(feature = "testing"), expect(unreachable_pub))]
+    #[cfg(feature = "testing")]
     pub fn new(
         device: Arc<wgpu::Device>,
         queue: Arc<wgpu::Queue>,
         surface_format: wgpu::TextureFormat,
     ) -> Self {
+        Self::with_domain(DeviceDomain::new(device, queue), surface_format)
+    }
+
+    pub(crate) fn with_domain(
+        domain: Arc<DeviceDomain>,
+        surface_format: wgpu::TextureFormat,
+    ) -> Self {
+        let device = Arc::clone(domain.device());
         let bind_group_layout = Self::create_bind_group_layout(&device);
         let blur_bind_group_layout = Self::create_blur_bind_group_layout(&device);
         let linear_sampler = Self::create_linear_sampler(&device);
         let fullscreen_quad_vb = Self::create_fullscreen_quad_vb(&device);
-        let blur_uniform_buffers = Self::create_blur_uniform_buffers(&device);
 
         Self {
             texture_pool: TexturePool::new(Arc::clone(&device)),
             device,
-            queue,
             surface_format,
             pipelines: HashMap::new(),
             bind_group_layout,
@@ -186,7 +171,7 @@ impl OffscreenRenderer {
             blit_pipeline: None,
             linear_sampler,
             fullscreen_quad_vb,
-            blur_uniform_buffers,
+            domain,
         }
     }
 
@@ -305,34 +290,9 @@ impl OffscreenRenderer {
         })
     }
 
-    /// Pre-allocate `MAX_BLUR_ITERATIONS` reusable `BlurParams` uniform buffers.
-    ///
-    /// Each buffer is sized for one `BlurParams` struct and flagged
-    /// `UNIFORM | COPY_DST` so `queue.write_buffer` can update it in-place
-    /// before each pass.  This eliminates the per-iteration `create_buffer_init`
-    /// call inside `render_blur`.
-    fn create_blur_uniform_buffers(device: &wgpu::Device) -> Vec<wgpu::Buffer> {
-        let buf_size = std::mem::size_of::<BlurParams>() as u64;
-        (0..MAX_BLUR_ITERATIONS)
-            .map(|i| {
-                device.create_buffer(&wgpu::BufferDescriptor {
-                    label: Some(&format!("Blur Uniform Buffer {i}")),
-                    size: buf_size,
-                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                    mapped_at_creation: false,
-                })
-            })
-            .collect()
-    }
-
     /// Access the wgpu device
     pub(crate) fn device(&self) -> &Arc<wgpu::Device> {
         &self.device
-    }
-
-    /// Access the wgpu queue
-    pub(crate) fn queue(&self) -> &Arc<wgpu::Queue> {
-        &self.queue
     }
 
     /// Get the surface texture format
@@ -350,7 +310,7 @@ impl OffscreenRenderer {
         {
             self.mask_painter = None;
         }
-        let (device, queue, format) = (&self.device, &self.queue, self.surface_format);
+        let (domain, format) = (&self.domain, self.surface_format);
         self.mask_painter.get_or_insert_with(|| {
             tracing::debug!(
                 width = size.0,
@@ -358,12 +318,7 @@ impl OffscreenRenderer {
                 ?format,
                 "creating the offscreen mask painter"
             );
-            crate::painter::WgpuPainter::with_shared_device(
-                Arc::clone(device),
-                Arc::clone(queue),
-                format,
-                size,
-            )
+            crate::painter::WgpuPainter::with_domain(Arc::clone(domain), format, size)
         })
     }
 

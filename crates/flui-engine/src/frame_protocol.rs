@@ -8,7 +8,9 @@
 //! texture ([`FrameSteps`](crate::frame_protocol::FrameSteps)) live with each caller; everything a readback test
 //! pins about partial frames runs through this one implementation.
 
+use crate::device_domain::DeviceDomain;
 use flui_foundation::geometry::Rect;
+use std::sync::Arc;
 
 use crate::damage::{DamageTracker, FramePlan, plan_frame};
 use crate::error::EngineResult;
@@ -35,7 +37,7 @@ pub(crate) fn background_clear_value() -> wgpu::Color {
 /// The parts of a frame that depend on where it is presented.
 pub(crate) trait FrameSteps {
     /// Clears `view` to [`BACKGROUND`] and submits the pass.
-    fn clear(&mut self, view: &wgpu::TextureView);
+    fn clear(&mut self, view: &wgpu::TextureView) -> EngineResult<()>;
 
     /// Records and submits the frame's content into `(view, texture)`;
     /// `retained` says the target is the retained texture rather than the
@@ -54,7 +56,7 @@ pub(crate) trait FrameSteps {
     ) -> EngineResult<bool>;
 
     /// Copies the whole retained texture onto the surface's view.
-    fn blit(&mut self, retained: &wgpu::Texture, surface: &wgpu::TextureView);
+    fn blit(&mut self, retained: &wgpu::Texture, surface: &wgpu::TextureView) -> EngineResult<()>;
 }
 
 /// A renderer's damage, its retained target and the one-frame promotion to a
@@ -137,9 +139,8 @@ impl FrameProtocol {
     ///
     /// - [`FramePlan::Direct`] renders into the surface; the retained target
     ///   does not see the frame and stops being valid.
-    /// - A retained plan renders into the target, which stays invalid from
-    ///   `begin` until the blit has been recorded, so a frame that fails or
-    ///   unwinds in between leaves the next partial frame rendering in full.
+    /// - A retained plan renders into a separate candidate. Failure or unwind
+    ///   preserves the committed pixels and forces a full retry.
     /// - Only a partial frame skips the full clear: it clears inside its
     ///   damage instead (`damage::begin_partial`), keeping the retained
     ///   pixels outside it.
@@ -149,37 +150,47 @@ impl FrameProtocol {
     pub(crate) fn run(
         &mut self,
         plan: FramePlan,
-        device: &wgpu::Device,
+        domain: &Arc<DeviceDomain>,
         size: (u32, u32),
         format: wgpu::TextureFormat,
         (surface_view, surface_texture): (&wgpu::TextureView, &wgpu::Texture),
         steps: &mut impl FrameSteps,
     ) -> EngineResult<()> {
+        // A failure or unwind leaves damage owed and forces a deliberate full
+        // retry; the previous committed allocation itself remains untouched.
+        if matches!(plan, FramePlan::Skip) {
+            return Ok(());
+        }
+        self.force_full_next_frame = true;
+        let _submission_scope = domain.begin_frame_scope()?;
         let (retained, partial) = match plan {
             FramePlan::Skip => return Ok(()),
             FramePlan::Direct => {
                 self.retained.invalidate();
                 (None, None)
             }
-            FramePlan::RetainedFull => (Some(self.retained.begin(device, size, format)), None),
+            FramePlan::RetainedFull => (
+                Some(self.retained.begin(domain, size, format, false)?),
+                None,
+            ),
             FramePlan::RetainedPartial(damage) => (
-                Some(self.retained.begin(device, size, format)),
+                Some(self.retained.begin(domain, size, format, true)?),
                 Some(damage),
             ),
         };
         let (view, texture) = match retained.as_ref() {
-            Some((texture, view)) => (view, texture),
+            Some(candidate) => (candidate.view(), candidate.texture()),
             None => (surface_view, surface_texture),
         };
         if partial.is_none() {
-            steps.clear(view);
+            steps.clear(view)?;
         }
         let straddled = steps.content(view, texture, retained.is_some(), partial)?;
-        self.force_full_next_frame |= straddled;
-        if let Some((texture, _)) = retained.as_ref() {
-            steps.blit(texture, surface_view);
-            self.retained.commit();
+        if let Some(candidate) = retained {
+            steps.blit(candidate.texture(), surface_view)?;
+            self.retained.commit(candidate);
         }
+        self.force_full_next_frame = straddled;
         Ok(())
     }
 

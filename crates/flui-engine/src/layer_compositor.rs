@@ -255,30 +255,6 @@ impl LayerCompositor {
         self.layer_stack.last().and_then(|saved| saved.bounds)
     }
 
-    /// Whether ANY currently-open layer routes through a bounds-growing image
-    /// filter.
-    ///
-    /// Those layers' restore arms carry only the layer's final `DrawSegment`
-    /// into `FilterOp::input` and discard `offscreen_items` wholesale — so a
-    /// `DrawItem::OpacityLayer` opened anywhere inside one takes not just its
-    /// own subtree but every sibling already flushed into the enclosing
-    /// layer's draw order. `LayerDispatcher::push_clip_*` consults this and declines
-    /// the offscreen rather than open one that will be thrown away; degrading
-    /// `Clip::AntiAliasWithSaveLayer` to per-draw coverage loses an edge, and
-    /// opening it here loses the content.
-    ///
-    /// ANY open layer, not just the innermost: an intervening opacity layer
-    /// composites into its own `DrawItem::OpacityLayer`, which the filter arm
-    /// then discards just the same.
-    ///
-    /// The lifting of this is widening `FilterOp::input` to `Vec<DrawItem>` —
-    /// the same change the arms' own warnings ask for.
-    pub(super) fn inside_image_filter_layer(&self) -> bool {
-        self.layer_stack
-            .iter()
-            .any(|saved| saved.image_filter.is_some())
-    }
-
     /// Mark the top-of-stack `SavedLayer` with an image filter spec.
     ///
     /// Called by `WgpuPainter::save_layer_with_image_filter` immediately after

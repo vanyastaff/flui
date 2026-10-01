@@ -1178,7 +1178,7 @@ impl ShadowInstance {
 #[derive(Debug, Clone)]
 pub(crate) struct InstanceBatch<T> {
     /// Instance data
-    pub instances: Vec<T>,
+    pub(crate) instances: crate::recording_budget::BudgetVec<T>,
 
     /// Maximum instances before auto-flush
     pub max_instances: usize,
@@ -1189,7 +1189,7 @@ impl<T> InstanceBatch<T> {
     #[must_use]
     pub(crate) fn new(max_instances: usize) -> Self {
         Self {
-            instances: Vec::with_capacity(max_instances),
+            instances: crate::recording_budget::BudgetVec::unbounded_capacity(max_instances),
             max_instances,
         }
     }

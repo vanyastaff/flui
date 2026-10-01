@@ -1,3 +1,4 @@
+use super::{EngineResult, PreparedCost};
 // Fullscreen intermediate→surface blit pipeline creation and blit_to_surface execution.
 //
 // Moved from `offscreen.rs` into `offscreen/blit.rs` as part of the C1 LOC-cap
@@ -186,14 +187,21 @@ impl OffscreenRenderer {
     // `pub` under `testing`: the `render_throughput` bench measures the
     // retained-target blit. Private otherwise.
     #[cfg_attr(not(feature = "testing"), expect(unreachable_pub))]
+    /// # Errors
+    /// Returns admission, submission-backpressure or device-progress failures.
     pub fn blit_to_surface(
         &mut self,
         intermediate_texture: &wgpu::Texture,
         surface_view: &wgpu::TextureView,
         surface_format: wgpu::TextureFormat,
-    ) {
+    ) -> EngineResult<()> {
+        self.domain.poll()?;
+        let permit = self.domain.reserve(PreparedCost {
+            objects: 1,
+            ..PreparedCost::default()
+        })?;
         // Clone all Arc handles out so the `&mut self` borrow ends before we
-        // use `self.device`/`self.queue` below (wgpu handle types are not
+        // use `self.device` below (wgpu handle types are not
         // `Clone`; Arc makes this borrow-check-safe without unsafe).
         // The sampler and vertex buffer are frame-invariant and were cached in
         // `get_or_create_blit_pipeline` — no per-frame GPU allocation needed.
@@ -253,8 +261,12 @@ impl OffscreenRenderer {
             blit_pass.set_vertex_buffer(0, vertex_buffer.slice(..));
             blit_pass.draw(0..6, 0..1);
         }
-        self.queue.submit(std::iter::once(blit_encoder.finish()));
+        self.domain.submit(
+            self.domain
+                .prepare(vec![blit_encoder.finish()], vec![permit])?,
+        )?;
 
         tracing::trace!("Intermediate blit submitted to swapchain");
+        Ok(())
     }
 }

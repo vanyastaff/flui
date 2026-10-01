@@ -45,6 +45,8 @@ use crate::{
 /// Provides `pub(crate)` accessors for each sub-pool so call sites reach them
 /// without coupling to the other pools.
 pub(crate) struct GpuResources {
+    domain: Arc<crate::device_domain::DeviceDomain>,
+    prepared: Vec<Arc<crate::device_domain::PreparedPermit>>,
     /// Per-frame vertex/index buffer pool.
     ///
     /// Resets `in_use` markers on `BufferPool::reset()` at frame end. Slice
@@ -88,7 +90,9 @@ impl GpuResources {
     /// value (`TexturePool::with_capacity(device, …)`); the other three clone
     /// the `Arc` first. This mirrors the construction previously inline in
     /// `WgpuPainter::with_shared_device`.
-    pub(crate) fn new(device: Arc<wgpu::Device>, queue: Arc<wgpu::Queue>) -> Self {
+    pub(crate) fn new(domain: Arc<crate::device_domain::DeviceDomain>) -> Self {
+        let device = Arc::clone(domain.device());
+        let queue = Arc::clone(domain.queue());
         let buffer_pool = BufferPool::new();
         // Built before `texture_cache` consumes `queue` (and `layer_texture_pool`
         // consumes `device`): the uniform pool keeps its own `Arc` clones.
@@ -98,6 +102,8 @@ impl GpuResources {
         let layer_texture_pool = TexturePool::with_capacity(device, 4);
 
         Self {
+            domain,
+            prepared: Vec::new(),
             buffer_pool,
             texture_cache,
             layer_texture_pool,
@@ -109,6 +115,22 @@ impl GpuResources {
     // -------------------------------------------------------------------------
     // BufferPool accessors
     // -------------------------------------------------------------------------
+
+    /// Admit new prepared resources before allocation; submission owns their retirement.
+    pub(crate) fn reserve_prepared(
+        &mut self,
+        cost: crate::device_domain::PreparedCost,
+    ) -> crate::error::EngineResult<()> {
+        let permit = self.domain.reserve(cost)?;
+        self.prepared.push(permit);
+        Ok(())
+    }
+
+    pub(crate) fn take_prepared_permits(
+        &mut self,
+    ) -> Vec<Arc<crate::device_domain::PreparedPermit>> {
+        std::mem::take(&mut self.prepared)
+    }
 
     /// Exclusive reference to the per-frame vertex/index buffer pool.
     pub(crate) fn buffer_pool_mut(&mut self) -> &mut BufferPool {

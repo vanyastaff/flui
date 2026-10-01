@@ -397,6 +397,18 @@ impl<B: RasterBackend> RasterLane<B> {
             }
             PumpOutcome::DeviceLost { .. } => SubmitVerdict::DeviceLost,
             PumpOutcome::Dropped { reason, .. } => {
+                // Completion is the reliable retry authority. Telemetry acks
+                // can be dropped, and a stale completion cannot retry this epoch.
+                if self
+                    .handle
+                    .surface_state()
+                    .last_completion
+                    .is_some_and(|completion| {
+                        completion.epoch == epoch && completion.retry_required
+                    })
+                {
+                    return SubmitVerdict::Retry;
+                }
                 debug_assert!(
                     !matches!(reason, FrameDropReason::Superseded),
                     "BUG: an inline submit-then-pump cannot be superseded — nothing else \
@@ -444,7 +456,7 @@ impl<B: RasterBackend> FrameSink for RasterLane<B> {
 /// does not yet accommodate) and by tests that pin the realm's frame
 /// transaction against scripted backends.
 #[cfg_attr(
-    not(target_arch = "wasm32"),
+    not(any(target_arch = "wasm32", test)),
     expect(
         dead_code,
         reason = "the web runner's production sink (wasm32) and the scripted-backend test \
@@ -457,7 +469,7 @@ pub(crate) struct DirectSink<'a, R: RasterBackend> {
 
 impl<'a, R: RasterBackend> DirectSink<'a, R> {
     #[cfg_attr(
-        not(target_arch = "wasm32"),
+        not(any(target_arch = "wasm32", test)),
         expect(
             dead_code,
             reason = "see DirectSink's own expectation: no native production caller"
@@ -489,7 +501,14 @@ impl<R: RasterBackend> FrameSink for DirectSink<'_, R> {
                 tracing::error!("surface validation error - surface misconfig");
                 SubmitVerdict::SurfaceStale
             }
-            Err(EngineError::DeviceLost) => SubmitVerdict::DeviceLost,
+            Err(
+                EngineError::DeviceLost
+                | EngineError::GpuUnavailable
+                | EngineError::GpuProgress { .. },
+            ) => SubmitVerdict::DeviceLost,
+            Err(error) if error.recoverability() == flui_engine::Recoverability::Recoverable => {
+                SubmitVerdict::Retry
+            }
             Err(error) => {
                 tracing::error!(?error, "render error (non-recoverable this frame)");
                 SubmitVerdict::Failed
@@ -772,11 +791,46 @@ mod tests {
         });
     }
 
+    fn transient_and_hard_failures_map_consistently_in_lane_and_direct_sink() {
+        for (make_error, expected) in [
+            (
+                (|| EngineError::GpuBackpressure) as fn() -> EngineError,
+                SubmitVerdict::Retry,
+            ),
+            (|| EngineError::MissingRetainedSource, SubmitVerdict::Retry),
+            (|| EngineError::Timeout, SubmitVerdict::Retry),
+            (|| EngineError::GpuUnavailable, SubmitVerdict::DeviceLost),
+            (|| EngineError::DeviceDomainMismatch, SubmitVerdict::Failed),
+            (
+                || EngineError::PreparedResourceLimit {
+                    resource: "test",
+                    requested: 2,
+                    limit: 1,
+                },
+                SubmitVerdict::Failed,
+            ),
+        ] {
+            let backend = ScriptedBackend::presenting().queue(Err(make_error()));
+            let mut lane = RasterLane::new(backend, test_address(), 100, 100);
+            assert_eq!(lane.submit_and_pump(test_scene()), expected);
+            assert_eq!(lane.submit_and_pump(test_scene()), SubmitVerdict::Presented);
+            lane.with_backend(|backend| assert_eq!(backend.render_calls, 2));
+            let mut backend = ScriptedBackend::presenting().queue(Err(make_error()));
+            let mut direct = DirectSink::new(&mut backend);
+            assert_eq!(direct.submit(test_scene()), expected);
+            assert_eq!(direct.submit(test_scene()), SubmitVerdict::Presented);
+        }
+    }
+
     #[test]
     fn raster_lane_outcome_matrix() {
         crate::table_test::run_table(
             "raster_lane_outcome_matrix",
             &[
+                (
+                    "transient_and_hard_failures_map_consistently_in_lane_and_direct_sink",
+                    transient_and_hard_failures_map_consistently_in_lane_and_direct_sink as fn(),
+                ),
                 (
                     "a_presented_frame_classifies_presented_and_renders_through_the_mailbox",
                     a_presented_frame_classifies_presented_and_renders_through_the_mailbox

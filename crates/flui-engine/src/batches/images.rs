@@ -73,7 +73,7 @@ use flui_painting::{paint::Image, styling::Color};
 
 use super::{
     super::{
-        command_ir::{AdvancedShapeOp, DrawItem, DrawSegment, Phase},
+        command_ir::{AdvancedShapeOp, DrawItem, DrawRun, DrawSegment},
         state_stack::GpuStateStack,
         texture_cache::TextureCache,
     },
@@ -92,10 +92,10 @@ impl DrawBatcher {
     /// to what it was before advanced-blend support existed.
     ///
     /// Keys the cache on the image's `Arc` pointer identity (O(1), no hashing).
-    /// This is safe for real images, whose allocation is content-stable for the
-    /// lifetime of the `Arc`. **Short-lived temporaries (e.g. CPU-filtered
-    /// images) must NOT use this path** — their pointer is freed on drop and can
-    /// be reused by a different image, colliding in the cache; route those
+    /// The key owns a cloned handle, keeping its allocation content-stable for the
+    /// lifetime of the cached entry. Short-lived temporaries (e.g. CPU-filtered
+    /// images) use content keys instead, so identical output can be reused
+    /// across allocations; route those
     /// through [`Self::draw_image_with_id`] with a content-derived key instead.
     ///
     /// # AA note
@@ -111,7 +111,11 @@ impl DrawBatcher {
         dst_rect: Rect<f64>,
         blend_mode: BlendMode,
     ) {
-        let texture_id = crate::texture_cache::TextureKey::from_ptr(image.data_ptr());
+        if segment.recording_result().is_err() {
+            return;
+        }
+
+        let texture_id = crate::texture_cache::TextureKey::from_image(image);
         Self::draw_image_with_id(
             segment,
             draw_order,
@@ -183,16 +187,20 @@ impl DrawBatcher {
                     Self::finish_current_segment(segment, draw_order);
 
                     // Step 2: build an isolated DrawSegment with this one image.
-                    let mut shape_segment = DrawSegment::new();
+                    let mut shape_segment = segment.empty_sibling();
                     shape_segment.cached_images.push((
                         texture_id,
                         instance,
                         state.current_scissor(),
                     ));
+                    shape_segment.record_run(DrawRun::CachedImage(
+                        shape_segment.cached_images.len().saturating_sub(1)
+                            ..shape_segment.cached_images.len(),
+                    ));
 
                     // Step 3: push as AdvancedShape.
                     draw_order.push(DrawItem::AdvancedShape(AdvancedShapeOp {
-                        segment: shape_segment,
+                        segment: shape_segment.seal(),
                         mode: blend_mode,
                         device_bounds: transformed_rect,
                     }));
@@ -205,10 +213,12 @@ impl DrawBatcher {
                 // Keep cached image draws in segment order for correct layer compositing.
                 // Capture the active scissor so flush_segment_cached_images can clip
                 // images that live inside a clip_rect region.
-                Self::begin_phase(segment, draw_order, Phase::CachedImage);
                 segment
                     .cached_images
                     .push((texture_id, instance, state.current_scissor()));
+                segment.record_run(DrawRun::CachedImage(
+                    segment.cached_images.len().saturating_sub(1)..segment.cached_images.len(),
+                ));
             }
             Err(e) => {
                 tracing::error!("Failed to load image texture: {}", e);
@@ -217,14 +227,11 @@ impl DrawBatcher {
     }
 
     /// Draw a freshly produced (CPU-filtered) RGBA buffer, keyed on a content
-    /// hash of its bytes.
+    /// hash of its dimensions and bytes.
     ///
-    /// A filtered buffer is a short-lived temporary: its `Arc` allocation is
-    /// freed when this returns, so [`Self::draw_image`]'s pointer-identity key
-    /// could be reused by a later image and collide in the cache (the cache
-    /// returns a hit on key alone, never re-comparing bytes — see
-    /// `TextureCache::load_from_rgba`). Hashing the bytes is collision-free and
-    /// lets identical filtered output reuse its cached texture across frames.
+    /// Content keys let identical filtered output reuse its cached texture
+    /// across allocations and frames. Dimensions are part of the hash because
+    /// equal bytes with different row layouts describe different textures.
     #[expect(
         clippy::too_many_arguments,
         reason = "borrow-seam design: segment/draw_order/state/texture_cache are disjoint \
@@ -242,7 +249,7 @@ impl DrawBatcher {
         dst: Rect<f64>,
         blend_mode: BlendMode,
     ) {
-        let texture_id = crate::texture_cache::TextureKey::from_data(&pixels);
+        let texture_id = crate::texture_cache::TextureKey::from_data(width, height, &pixels);
         let filtered = Image::from_rgba8(width, height, pixels);
         Self::draw_image_with_id(
             segment,
@@ -281,6 +288,10 @@ impl DrawBatcher {
         repeat: flui_painting::paint::image::ImageRepeat,
         blend_mode: BlendMode,
     ) {
+        if segment.recording_result().is_err() {
+            return;
+        }
+
         use flui_painting::paint::image::ImageRepeat;
 
         let img_w = image.width() as f32;
@@ -295,12 +306,12 @@ impl DrawBatcher {
             // Seal prior content first (Z-order guarantee).
             Self::finish_current_segment(segment, draw_order);
 
-            let mut shape_segment = DrawSegment::new();
+            let mut shape_segment = segment.empty_sibling();
             let mut overall_bounds: Option<Rect<f64>> = None;
 
             // Helper: load the image into the texture cache and push one tile
             // entry into shape_segment.
-            let texture_id = crate::texture_cache::TextureKey::from_ptr(image.data_ptr());
+            let texture_id = crate::texture_cache::TextureKey::from_image(image);
 
             match texture_cache.load_from_rgba(
                 texture_id.clone(),
@@ -336,6 +347,10 @@ impl DrawBatcher {
                             texture_id.clone(),
                             instance,
                             state.current_scissor(),
+                        ));
+                        shape_seg.record_run(DrawRun::CachedImage(
+                            shape_seg.cached_images.len().saturating_sub(1)
+                                ..shape_seg.cached_images.len(),
                         ));
 
                         // Grow overall AABB.
@@ -412,7 +427,7 @@ impl DrawBatcher {
             let device_bounds = overall_bounds
                 .expect("invariant: non-empty cached_images implies overall_bounds is Some");
             draw_order.push(DrawItem::AdvancedShape(AdvancedShapeOp {
-                segment: shape_segment,
+                segment: shape_segment.seal(),
                 mode: blend_mode,
                 device_bounds,
             }));
@@ -531,6 +546,10 @@ impl DrawBatcher {
         dst: Rect<f64>,
         blend_mode: BlendMode,
     ) {
+        if segment.recording_result().is_err() {
+            return;
+        }
+
         let img_w = f64::from(image.width());
         let img_h = f64::from(image.height());
         if img_w <= 0.0 || img_h <= 0.0 {
@@ -687,7 +706,7 @@ impl DrawBatcher {
             // ── Advanced: collect all slices into one segment → one AdvancedShape ──
             Self::finish_current_segment(segment, draw_order);
 
-            let mut shape_segment = DrawSegment::new();
+            let mut shape_segment = segment.empty_sibling();
             let mut overall_bounds: Option<Rect<f64>> = None;
 
             for (sx, sy, sw, sh, dx, dy, dw, dh) in slices {
@@ -704,7 +723,11 @@ impl DrawBatcher {
                     let tr =
                         Rect::from_ltrb(top_left.x, top_left.y, bottom_right.x, bottom_right.y);
 
-                    let texture_id = crate::texture_cache::TextureKey::from_data(sub_image.data());
+                    let texture_id = crate::texture_cache::TextureKey::from_data(
+                        sub_image.width(),
+                        sub_image.height(),
+                        sub_image.data(),
+                    );
                     match texture_cache.load_from_rgba(
                         texture_id.clone(),
                         sub_image.width(),
@@ -731,6 +754,10 @@ impl DrawBatcher {
                                 instance,
                                 state.current_scissor(),
                             ));
+                            shape_segment.record_run(DrawRun::CachedImage(
+                                shape_segment.cached_images.len().saturating_sub(1)
+                                    ..shape_segment.cached_images.len(),
+                            ));
 
                             overall_bounds = Some(match overall_bounds {
                                 None => tr,
@@ -756,7 +783,7 @@ impl DrawBatcher {
             let device_bounds = overall_bounds
                 .expect("invariant: non-empty cached_images implies overall_bounds is Some");
             draw_order.push(DrawItem::AdvancedShape(AdvancedShapeOp {
-                segment: shape_segment,
+                segment: shape_segment.seal(),
                 mode: blend_mode,
                 device_bounds,
             }));
@@ -832,6 +859,10 @@ impl DrawBatcher {
         // operation). See the method doc for the boundary explanation.
         paint_blend_mode: BlendMode,
     ) {
+        if segment.recording_result().is_err() {
+            return;
+        }
+
         use flui_painting::paint::image::ColorFilter;
 
         match filter {
@@ -1071,6 +1102,10 @@ impl DrawBatcher {
         colors: Option<&[flui_painting::styling::Color]>,
         blend_mode: BlendMode,
     ) {
+        if segment.recording_result().is_err() {
+            return;
+        }
+
         #[cfg(debug_assertions)]
         tracing::trace!(
             "DrawBatcher::draw_atlas: image={}x{}, sprites={}, blend_mode={:?}",
@@ -1106,7 +1141,7 @@ impl DrawBatcher {
         // Use Arc pointer identity for O(1) cache lookup instead of hashing all pixels.
         // Clone the id: `load_from_rgba` takes ownership, but we need the same key
         // for per-sprite `cached_images` pushes below.
-        let texture_id = crate::texture_cache::TextureKey::from_ptr(image.data_ptr());
+        let texture_id = crate::texture_cache::TextureKey::from_image(image);
         let cache_id = texture_id.clone();
 
         match texture_cache.load_from_rgba(texture_id, image.width(), image.height(), image.data())
@@ -1153,7 +1188,7 @@ impl DrawBatcher {
                     // surface before the backdrop is copied for the atlas blend).
                     Self::finish_current_segment(segment, draw_order);
 
-                    let mut shape_segment = DrawSegment::new();
+                    let mut shape_segment = segment.empty_sibling();
                     let mut overall_bounds: Option<Rect<f64>> = None;
 
                     for (i, (sprite_rect, origin)) in
@@ -1199,6 +1234,10 @@ impl DrawBatcher {
                             instance,
                             state.current_scissor(),
                         ));
+                        shape_segment.record_run(DrawRun::CachedImage(
+                            shape_segment.cached_images.len().saturating_sub(1)
+                                ..shape_segment.cached_images.len(),
+                        ));
 
                         // Grow the union AABB in device space.
                         overall_bounds = Some(match overall_bounds {
@@ -1220,7 +1259,7 @@ impl DrawBatcher {
                         "invariant: non-empty cached_images implies overall_bounds is Some",
                     );
                     draw_order.push(DrawItem::AdvancedShape(AdvancedShapeOp {
-                        segment: shape_segment,
+                        segment: shape_segment.seal(),
                         mode: blend_mode,
                         device_bounds,
                     }));
@@ -1266,11 +1305,13 @@ impl DrawBatcher {
                     let instance = state.apply_active_clip(
                         crate::instancing::TextureInstance::with_uv(dst_rect, src_uv, tint),
                     );
-                    Self::begin_phase(segment, draw_order, Phase::CachedImage);
                     segment.cached_images.push((
                         cache_id.clone(),
                         instance,
                         state.current_scissor(),
+                    ));
+                    segment.record_run(DrawRun::CachedImage(
+                        segment.cached_images.len().saturating_sub(1)..segment.cached_images.len(),
                     ));
                 }
             }
@@ -1309,7 +1350,6 @@ impl DrawBatcher {
     )]
     pub(in super::super) fn draw_texture(
         segment: &mut DrawSegment,
-        draw_order: &mut Vec<DrawItem>,
         state: &GpuStateStack,
         src_uv_registry: Option<(u32, u32)>,
         texture_id: flui_painting::paint::TextureId,
@@ -1318,6 +1358,10 @@ impl DrawBatcher {
         _filter_quality: flui_painting::paint::FilterQuality,
         opacity: f32,
     ) {
+        if segment.recording_result().is_err() {
+            return;
+        }
+
         #[cfg(debug_assertions)]
         tracing::trace!(
             "DrawBatcher::draw_texture: id={}, dst={:?}, src={:?}, opacity={}",
@@ -1368,10 +1412,12 @@ impl DrawBatcher {
 
         // Push the ID into the IR. Resolution to a `wgpu::TextureView` happens
         // at replay time in flush_segment_external_images.
-        Self::begin_phase(segment, draw_order, Phase::ExternalImage);
         segment
             .external_images
             .push((texture_id, instance, state.current_scissor()));
+        segment.record_run(DrawRun::ExternalImage(
+            segment.external_images.len().saturating_sub(1)..segment.external_images.len(),
+        ));
     }
 }
 

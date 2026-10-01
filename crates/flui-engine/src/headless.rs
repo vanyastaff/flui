@@ -32,7 +32,7 @@
 //! [`Layer::ShaderMask`]: flui_layer::Layer::ShaderMask
 //! [`Layer::Follower`]: flui_layer::Layer::Follower
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use flui_layer::{LayerId, LayerTree};
 
@@ -62,11 +62,15 @@ thread_local! {
 /// [`Self::render_layer_tree`] per capture.
 #[expect(missing_debug_implementations)]
 pub struct HeadlessRenderer {
+    domain: Arc<crate::device_domain::DeviceDomain>,
+    // Host capture edge only: one complete render/readback per device domain.
+    capture_gate: Mutex<()>,
     /// Kept so a test's feature-reduced twin comes from this same adapter and
     /// instance (see [`Self::without_dual_source_blending`]).
     #[cfg(test)]
     adapter: wgpu::Adapter,
     device: Arc<wgpu::Device>,
+    #[cfg(test)]
     queue: Arc<wgpu::Queue>,
 }
 
@@ -148,11 +152,18 @@ impl HeadlessRenderer {
             .await
             .map_err(EngineError::device_creation)?;
 
+        let device = Arc::new(device);
+        let queue = Arc::new(queue);
+        let domain =
+            crate::device_domain::DeviceDomain::new(Arc::clone(&device), Arc::clone(&queue));
         Ok(Self {
+            domain,
+            capture_gate: Mutex::new(()),
             #[cfg(test)]
             adapter,
-            device: Arc::new(device),
-            queue: Arc::new(queue),
+            device,
+            #[cfg(test)]
+            queue,
         })
     }
 
@@ -172,6 +183,9 @@ impl HeadlessRenderer {
     /// (no row padding) RGBA8 pixels, top row first — ready for
     /// `image::save_buffer(.., ColorType::Rgba8)`.
     ///
+    /// Concurrent calls on this renderer serialize the complete capture and
+    /// readback; separate renderers remain independent.
+    ///
     /// The surface is cleared to opaque white before the tree is drawn, so any
     /// area the tree does not paint reads as white rather than uninitialized
     /// GPU memory.
@@ -179,6 +193,23 @@ impl HeadlessRenderer {
     /// # Errors
     /// Returns [`EngineError`] when the render pass fails.
     pub fn render_layer_tree(&self, tree: &LayerTree, size: (u32, u32)) -> EngineResult<Vec<u8>> {
+        self.with_capture_gate(|| self.render_layer_tree_locked(tree, size))
+    }
+
+    fn with_capture_gate<T>(&self, capture: impl FnOnce() -> EngineResult<T>) -> EngineResult<T> {
+        let _capture = self
+            .capture_gate
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        capture()
+    }
+
+    fn render_layer_tree_locked(
+        &self,
+        tree: &LayerTree,
+        size: (u32, u32),
+    ) -> EngineResult<Vec<u8>> {
+        let _submission_scope = self.domain.begin_frame_scope()?;
         let (width, height) = size;
         // wgpu rejects a zero-byte buffer by PANICKING (`wgpu-core`'s
         // `BufferSize::new(..).unwrap()`), and a zero-sized texture is
@@ -198,14 +229,10 @@ impl HeadlessRenderer {
         let texture = self.create_capture_texture(width, height);
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
 
-        self.clear_to_background(&view);
+        self.clear_to_background(&view)?;
 
-        let mut painter = WgpuPainter::with_shared_device(
-            Arc::clone(&self.device),
-            Arc::clone(&self.queue),
-            CAPTURE_FORMAT,
-            (width, height),
-        );
+        let mut painter =
+            WgpuPainter::with_domain(Arc::clone(&self.domain), CAPTURE_FORMAT, (width, height));
         {
             let mut backend = LayerDispatcher::new(&mut painter);
             let mut visitor = CaptureVisitor {
@@ -221,7 +248,8 @@ impl HeadlessRenderer {
                 label: Some("FLUI Headless Capture Render Encoder"),
             });
         painter.render(RenderTarget::sampleable(&view, &texture), &mut encoder)?;
-        self.queue.submit(std::iter::once(encoder.finish()));
+        painter.submit_encoder(encoder)?;
+        painter.finish_frame();
 
         self.readback_rgba(&texture, width, height)
     }
@@ -246,8 +274,8 @@ impl HeadlessRenderer {
         })
     }
 
-    fn clear_to_background(&self, view: &wgpu::TextureView) {
-        clear_to_background(&self.device, &self.queue, view);
+    fn clear_to_background(&self, view: &wgpu::TextureView) -> EngineResult<()> {
+        clear_to_background(&self.domain, view)
     }
 
     /// [`readback_rgba`] on this renderer's device.
@@ -257,7 +285,7 @@ impl HeadlessRenderer {
         width: u32,
         height: u32,
     ) -> EngineResult<Vec<u8>> {
-        readback_rgba(&self.device, &self.queue, texture, width, height)
+        readback_rgba(&self.domain, texture, width, height)
     }
 
     /// A capture that keeps its frames: see [`RetainedCapture`].
@@ -274,17 +302,12 @@ impl HeadlessRenderer {
         let surface = self.create_capture_texture(width, height);
         let surface_view = surface.create_view(&wgpu::TextureViewDescriptor::default());
         Ok(RetainedCapture {
+            domain: Arc::clone(&self.domain),
             device: Arc::clone(&self.device),
             queue: Arc::clone(&self.queue),
-            painter: WgpuPainter::with_shared_device(
-                Arc::clone(&self.device),
-                Arc::clone(&self.queue),
-                CAPTURE_FORMAT,
-                size,
-            ),
-            offscreen: crate::offscreen::OffscreenRenderer::new(
-                Arc::clone(&self.device),
-                Arc::clone(&self.queue),
+            painter: WgpuPainter::with_domain(Arc::clone(&self.domain), CAPTURE_FORMAT, size),
+            offscreen: crate::offscreen::OffscreenRenderer::with_domain(
+                Arc::clone(&self.domain),
                 CAPTURE_FORMAT,
             ),
             surface,
@@ -299,7 +322,12 @@ impl HeadlessRenderer {
 }
 
 /// Clears `view` to the frame background with one submitted pass.
-fn clear_to_background(device: &wgpu::Device, queue: &wgpu::Queue, view: &wgpu::TextureView) {
+fn clear_to_background(
+    domain: &crate::device_domain::DeviceDomain,
+    view: &wgpu::TextureView,
+) -> EngineResult<()> {
+    domain.poll()?;
+    let device = domain.device();
     let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
         label: Some("FLUI Headless Capture Clear Encoder"),
     });
@@ -321,7 +349,8 @@ fn clear_to_background(device: &wgpu::Device, queue: &wgpu::Queue, view: &wgpu::
             multiview_mask: None,
         });
     }
-    queue.submit(std::iter::once(encoder.finish()));
+    domain.submit(domain.prepare(vec![encoder.finish()], Vec::new())?)?;
+    Ok(())
 }
 
 /// Copies `texture` to a mappable buffer and de-pads the 256-byte-aligned
@@ -337,12 +366,13 @@ fn clear_to_background(device: &wgpu::Device, queue: &wgpu::Queue, view: &wgpu::
 /// re-enter the `wgpu-core` panic, which is worth one conversion not to have
 /// to re-derive later.
 fn readback_rgba(
-    device: &wgpu::Device,
-    queue: &wgpu::Queue,
+    domain: &crate::device_domain::DeviceDomain,
     texture: &wgpu::Texture,
     width: u32,
     height: u32,
 ) -> EngineResult<Vec<u8>> {
+    domain.poll()?;
+    let device = domain.device();
     const BYTES_PER_PIXEL: u64 = 4;
     let align = u64::from(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
     let unpadded_row_bytes = u64::from(width) * BYTES_PER_PIXEL;
@@ -386,7 +416,7 @@ fn readback_rgba(
             depth_or_array_layers: 1,
         },
     );
-    let copied = queue.submit(std::iter::once(encoder.finish()));
+    let copied = domain.submit(domain.prepare(vec![encoder.finish()], Vec::new())?)?;
 
     staging.slice(..).map_async(wgpu::MapMode::Read, |_| {});
     // Wait for THIS copy, not the whole queue: the renderer is `&self`, so
@@ -433,6 +463,7 @@ fn readback_rgba(
 /// [`FrameSteps`]: crate::frame_protocol::FrameSteps
 #[cfg(test)]
 pub(crate) struct RetainedCapture {
+    domain: Arc<crate::device_domain::DeviceDomain>,
     device: Arc<wgpu::Device>,
     queue: Arc<wgpu::Queue>,
     painter: WgpuPainter,
@@ -458,13 +489,15 @@ impl RetainedCapture {
     /// # Errors
     /// [`EngineError::ReadbackTimedOut`] when the GPU stalls.
     pub(crate) fn read_rgba(&self) -> EngineResult<Vec<u8>> {
-        readback_rgba(
-            &self.device,
-            &self.queue,
-            &self.surface,
-            self.size.0,
-            self.size.1,
-        )
+        readback_rgba(&self.domain, &self.surface, self.size.0, self.size.1)
+    }
+
+    pub(crate) fn read_retained_rgba(&self) -> EngineResult<Vec<u8>> {
+        let texture = self
+            .frame
+            .retained_texture()
+            .expect("a committed frame exists");
+        readback_rgba(&self.domain, texture, self.size.0, self.size.1)
     }
 
     /// Writes `rgba` into `(x, y, width, height)` of the retained target, as
@@ -593,7 +626,6 @@ impl RetainedCapture {
 #[cfg(test)]
 struct CaptureFrame<'a> {
     device: &'a wgpu::Device,
-    queue: &'a wgpu::Queue,
     painter: &'a mut WgpuPainter,
     offscreen: &'a mut crate::offscreen::OffscreenRenderer,
     scene: &'a flui_layer::Scene,
@@ -602,8 +634,8 @@ struct CaptureFrame<'a> {
 
 #[cfg(test)]
 impl crate::frame_protocol::FrameSteps for CaptureFrame<'_> {
-    fn clear(&mut self, view: &wgpu::TextureView) {
-        clear_to_background(self.device, self.queue, view);
+    fn clear(&mut self, view: &wgpu::TextureView) -> EngineResult<()> {
+        clear_to_background(self.painter.domain(), view)
     }
 
     fn content(
@@ -627,6 +659,13 @@ impl crate::frame_protocol::FrameSteps for CaptureFrame<'_> {
             },
             partial,
         );
+        let straddled = match straddled {
+            Ok(straddled) => straddled,
+            Err(error) => {
+                self.painter.finish_frame();
+                return Err(error);
+            }
+        };
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -635,16 +674,14 @@ impl crate::frame_protocol::FrameSteps for CaptureFrame<'_> {
         let rendered = self
             .painter
             .render(RenderTarget::sampleable(view, texture), &mut encoder);
-        if rendered.is_ok() {
-            self.queue.submit(std::iter::once(encoder.finish()));
-        }
-        self.painter.end_frame_maintenance();
+        let rendered = rendered.and_then(|()| self.painter.submit_encoder(encoder).map(|_| ()));
+        self.painter.finish_frame();
         rendered.map(|()| straddled)
     }
 
-    fn blit(&mut self, retained: &wgpu::Texture, surface: &wgpu::TextureView) {
+    fn blit(&mut self, retained: &wgpu::Texture, surface: &wgpu::TextureView) -> EngineResult<()> {
         self.offscreen
-            .blit_to_surface(retained, surface, CAPTURE_FORMAT);
+            .blit_to_surface(retained, surface, CAPTURE_FORMAT)
     }
 }
 
@@ -664,7 +701,6 @@ impl crate::raster::RasterBackend for RetainedCapture {
         }
         let mut steps = CaptureFrame {
             device: &self.device,
-            queue: &self.queue,
             painter: &mut self.painter,
             offscreen: &mut self.offscreen,
             scene,
@@ -672,7 +708,7 @@ impl crate::raster::RasterBackend for RetainedCapture {
         };
         self.frame.run(
             plan,
-            &self.device,
+            &self.domain,
             self.size,
             CAPTURE_FORMAT,
             (&self.surface_view, &self.surface),
@@ -818,6 +854,74 @@ mod twin_readback_tests {
     /// A renderer and its feature-reduced twin, created, used and dropped over
     /// and over, never block.
     ///
+    fn concurrent_capture_and_unwind_recovery() {
+        let Some(renderer) = crate::test_support::renderer_or_skip() else {
+            return;
+        };
+        let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let (finished_tx, finished_rx) = std::sync::mpsc::channel();
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        std::thread::scope(|threads| {
+            let renderer = &renderer;
+            let first = threads.spawn(move || {
+                renderer
+                    .with_capture_gate(|| {
+                        let _scope = renderer.domain.begin_frame_scope()?;
+                        entered_tx.send(()).expect("announce overlapping capture");
+                        release_rx.recv().expect("release first capture");
+                        Ok(())
+                    })
+                    .expect("first capture finishes");
+            });
+            entered_rx.recv().expect("first capture owns scope");
+            let second = threads.spawn(|| {
+                started_tx.send(()).expect("second capture starts");
+                let result = renderer.render_layer_tree(&LayerTree::default(), (8, 8));
+                finished_tx.send(result).expect("capture result delivered");
+            });
+            started_rx
+                .recv()
+                .expect("second thread reached capture call");
+            let early = finished_rx.recv_timeout(std::time::Duration::from_millis(100));
+            release_tx.send(()).expect("release first capture");
+            first.join().expect("first capture thread");
+            second.join().expect("second capture thread");
+            assert!(
+                matches!(early, Err(std::sync::mpsc::RecvTimeoutError::Timeout)),
+                "overlapping capture must wait rather than fail admission"
+            );
+            let pixels = finished_rx
+                .recv()
+                .expect("completed capture")
+                .expect("same-renderer concurrent capture succeeds");
+            assert!(
+                pixels
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .all(|pixel| *pixel == [255, 255, 255, 255])
+            );
+        });
+        let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _result: crate::error::EngineResult<()> = renderer.with_capture_gate(|| {
+                let _scope = renderer.domain.begin_frame_scope()?;
+                panic!("capture edge fault");
+            });
+        }));
+        assert!(failed.is_err());
+        let pixels = renderer
+            .render_layer_tree(&LayerTree::default(), (4, 4))
+            .expect("poisoned capture gate and scope recover after unwind");
+        assert!(
+            pixels
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .all(|pixel| *pixel == [255, 255, 255, 255])
+        );
+    }
+
     /// The twin used to come from a `wgpu::Instance` of its own, which left two
     /// instances' devices on one adapter; on a Windows host tearing such a pair
     /// down blocked inside the driver about once in eight, until nextest killed
@@ -836,6 +940,7 @@ mod twin_readback_tests {
         // Also here, so the one headless GPU test carries both contracts: a
         // zero-sized or overflowing capture is a typed error, not a panic.
         super::target_size_tests::zero_sized_capture_is_a_typed_error();
+        concurrent_capture_and_unwind_recovery();
         let instances = || super::INSTANCES_CREATED.with(std::cell::Cell::get);
         for _ in 0..12 {
             let before = instances();

@@ -3,6 +3,9 @@
 - **Status:** Accepted in part (2026-09-29): §3 and §4, as amended below; §1, §2 and §5 remain
   Proposed
 - **Date:** 2026-09-25
+- **Superseded-by:** [ADR-0100](ADR-0100-prepared-gpu-work-and-retained-frame-commit.md)
+  for §4's retained-image update/failure policy; candidate isolation replaces
+  modification of the previous committed image during an incomplete frame.
 - **Amends (on acceptance):** [ADR-0006](ADR-0006-c-ir-record-replay-seam.md) §5 (the scene-level backend trait
   and the GPU-free lowering move to `flui-layer`; the Command IR stays in the engine),
   [ADR-0061](ADR-0061-damage-needs-layer-identity.md) (names the producer: retained boundary

@@ -102,6 +102,9 @@ pub struct RasterCompletion {
     /// has work left to retry, and a consumer that merges them ends the
     /// loop on a frame that was never drawn. See [`PresentDisposition`].
     pub disposition: PresentDisposition,
+    /// The completed attempt failed temporarily and requires a paced retry.
+    /// This fact survives a full telemetry acknowledgement lane.
+    pub retry_required: bool,
 }
 
 /// Reliable, coalesced surface state — read directly via
@@ -371,6 +374,7 @@ impl Drop for WakeGuard {
             self.mailbox.set_last_completion(RasterCompletion {
                 epoch: frame.snapshot.stamp.epoch,
                 disposition: PresentDisposition::NotShown,
+                retry_required: false,
             });
             drop(frame);
         }
@@ -671,6 +675,9 @@ pub enum FrameDropReason {
     /// device loss nor a surface-outdated condition (those get their own
     /// acks — [`RasterAck::DeviceLost`] / [`RasterAck::SurfaceOutdated`]).
     RenderFailed,
+    /// Rendering failed temporarily; the producer retains epochs and retries
+    /// through the ordinary frame wake without rebuilding the device.
+    RetryableRenderError,
 }
 
 // ---------------------------------------------------------------------------
@@ -1501,6 +1508,13 @@ impl<B: RasterBackend> RasterOwner<B> {
         self.mailbox.set_last_completion(RasterCompletion {
             epoch: frame.snapshot.stamp.epoch,
             disposition,
+            retry_required: matches!(
+                outcome,
+                PumpOutcome::Dropped {
+                    reason: FrameDropReason::RetryableRenderError,
+                    ..
+                }
+            ),
         });
 
         // `outcome` computed without unwinding: disarm `wake_guard` so the
@@ -1553,7 +1567,9 @@ impl<B: RasterBackend> RasterOwner<B> {
         error: EngineError,
     ) -> PumpOutcome {
         match error {
-            EngineError::DeviceLost => {
+            EngineError::DeviceLost
+            | EngineError::GpuUnavailable
+            | EngineError::GpuProgress { .. } => {
                 tracing::warn!(?epoch, "raster owner: GPU device lost");
                 // Reliable, not just the (possibly-full) ack lane: device
                 // loss is exactly the kind of recovery-critical state a
@@ -1598,6 +1614,21 @@ impl<B: RasterBackend> RasterOwner<B> {
                     address,
                     stale,
                     current,
+                }
+            }
+            retryable
+                if retryable.recoverability() == crate::error::Recoverability::Recoverable =>
+            {
+                tracing::debug!(?epoch, error = %retryable, "raster owner: transient render failure");
+                self.mailbox.send_ack(RasterAck::Dropped {
+                    epoch,
+                    address,
+                    reason: FrameDropReason::RetryableRenderError,
+                });
+                PumpOutcome::Dropped {
+                    epoch,
+                    address,
+                    reason: FrameDropReason::RetryableRenderError,
                 }
             }
             other => {
@@ -1994,6 +2025,67 @@ mod tests {
     // 5. render failure acks Dropped { RenderFailed }
     // -----------------------------------------------------------------------
 
+    fn transient_render_failure_is_durable_without_a_telemetry_ack() {
+        for make_error in [
+            (|| EngineError::GpuBackpressure) as fn() -> EngineError,
+            || EngineError::MissingRetainedSource,
+        ] {
+            let backend =
+                FakeBackend::with_planned([Err(make_error()), Ok(PresentDisposition::Presented)]);
+            let (mut owner, handle, ack_rx, _shutdown) = new_owner(backend);
+            let generation = handle.resize(1, 1).expect("configured generation");
+            let epoch = FrameEpoch::ZERO.next();
+            for _ in 0..ACK_CHANNEL_CAPACITY {
+                owner.mailbox.send_ack(RasterAck::Presented {
+                    epoch: FrameEpoch::ZERO,
+                    address: test_address(),
+                });
+            }
+            let woken = Arc::new(AtomicBool::new(false));
+            let signal = Arc::clone(&woken);
+            handle.set_wake_hook(Some(Arc::new(move || signal.store(true, Ordering::SeqCst))));
+            handle
+                .submit(test_frame(epoch, generation))
+                .expect("transient frame");
+            assert!(matches!(
+                owner.pump(),
+                PumpOutcome::Dropped {
+                    reason: FrameDropReason::RetryableRenderError,
+                    ..
+                }
+            ));
+            assert_eq!(
+                ack_rx.len(),
+                ACK_CHANNEL_CAPACITY,
+                "retry ack was dropped by saturated telemetry"
+            );
+            let completion = handle
+                .surface_state()
+                .last_completion
+                .expect("reliable completion");
+            assert_eq!(completion.epoch, epoch);
+            assert!(completion.retry_required);
+            assert_eq!(handle.in_flight(), 0);
+            assert!(
+                woken.load(Ordering::SeqCst),
+                "completion itself requests the next delivery"
+            );
+            handle
+                .submit(test_frame(epoch.next(), generation))
+                .expect("unchanged retry frame");
+            assert!(matches!(owner.pump(), PumpOutcome::Presented { .. }));
+            let completion = handle
+                .surface_state()
+                .last_completion
+                .expect("next completion");
+            assert_eq!(completion.epoch, epoch.next());
+            assert!(
+                !completion.retry_required,
+                "successful retry clears the old debt"
+            );
+        }
+    }
+
     fn render_failure_acks_dropped_render_failed() {
         let backend = FakeBackend::with_planned([Err(EngineError::NotInitialized)]);
         let (mut owner, handle, ack_rx, _shutdown_complete_rx) = new_owner(backend);
@@ -2241,7 +2333,15 @@ mod tests {
     // -----------------------------------------------------------------------
 
     fn device_lost_completion_retires_the_ticket() {
-        let backend = FakeBackend::with_planned([Err(EngineError::DeviceLost)]);
+        assert_device_failure_retires_ticket(EngineError::DeviceLost);
+    }
+
+    fn quarantined_domain_requests_device_recovery() {
+        assert_device_failure_retires_ticket(EngineError::GpuUnavailable);
+    }
+
+    fn assert_device_failure_retires_ticket(error: EngineError) {
+        let backend = FakeBackend::with_planned([Err(error)]);
         let (mut owner, handle, ack_rx, _shutdown_complete_rx) = new_owner(backend);
         let epoch = FrameEpoch::ZERO.next();
         let generation = handle
@@ -2265,6 +2365,7 @@ mod tests {
             "device loss must retire the in-flight frame, never strand it -- recovery \
              must not be stalled behind a phantom permit"
         );
+        assert!(handle.surface_state().device_lost);
         assert_eq!(
             ack_rx.try_recv().unwrap(),
             RasterAck::DeviceLost {
@@ -2348,7 +2449,9 @@ mod tests {
     #[test]
     fn every_failure_boundary_retires_its_ticket() {
         render_failure_acks_dropped_render_failed();
+        transient_render_failure_is_durable_without_a_telemetry_ack();
         device_lost_completion_retires_the_ticket();
+        quarantined_domain_requests_device_recovery();
         panic_mid_render_retires_the_ticket_and_capacity_is_usable_again();
         owner_dropped_with_a_still_pending_frame_retires_it_instead_of_leaking();
     }

@@ -46,7 +46,7 @@ use flui_foundation::geometry::Rect;
 use flui_painting::BlendMode;
 
 use crate::{
-    command_ir::{AdvancedShapeOp, DrawItem, DrawSegment, Phase, SsaaPathOp, TessellatedBatch},
+    command_ir::{AdvancedShapeOp, DrawItem, DrawRun, DrawSegment, SsaaPathOp, TessellatedBatch},
     path_cache::PathCache,
     pipeline_cache::PipelineKey,
     state_stack::GpuStateStack,
@@ -99,9 +99,9 @@ impl DrawBatcher {
     /// contract in [`DrawBatcher::add_tessellated_with_key`], or by the final
     /// flush before GPU submission — routes through here.
     ///
-    /// # Allocation strategy — `mem::take` over `mem::replace(…, DrawSegment::new())`
+    /// # Allocation strategy — `mem::take` over `mem::replace(…, segment.empty_sibling())`
     ///
-    /// The previous implementation called `mem::replace(segment, DrawSegment::new())`
+    /// The previous implementation called `mem::replace(segment, segment.empty_sibling())`
     /// on every seal, which triggered 7 `InstanceBatch::new(1024)` allocation calls
     /// (7 × `Vec::with_capacity(1024 × sizeof(T))`) plus 11 more `Vec::new()` calls.
     /// `mem::take` leaves the slot as `DrawSegment::default()` (zero-capacity Vecs)
@@ -113,53 +113,14 @@ impl DrawBatcher {
     ) {
         // `mem::take` moves completed data out in O(1); `segment` becomes a
         // zero-capacity `DrawSegment::default()` — no allocation at seal time.
-        let completed = std::mem::take(segment);
+        let replacement = segment.empty_sibling();
+        let completed = std::mem::replace(segment, replacement);
         if !completed.is_empty() {
-            draw_order.push(DrawItem::Segment(completed));
+            draw_order.push(DrawItem::Segment(completed.seal()));
         }
         // If the segment was empty `completed` is dropped immediately (no data,
         // no capacity worth recycling). `segment` already holds the zero-cap
         // default from `take`.
-    }
-
-    /// Declare that the next primitive recorded into `segment` belongs to
-    /// `phase`, sealing the segment first if the fixed replay order would put
-    /// it BEFORE something already recorded.
-    ///
-    /// Call this immediately before every push into a `DrawSegment` batch —
-    /// with one deliberate exception: the gradient recorders do NOT call it.
-    /// See `DrawBatcher::gradient_rect` for why, and do not "fix" that by
-    /// following this sentence literally.
-    /// Together the calls make `flush_segment`'s fixed phase order equal record
-    /// order within each segment, which is what gives the painter's algorithm
-    /// back across primitive kinds — a circle followed by an overlapping rect
-    /// previously drew the rect first and let the circle paint over it.
-    ///
-    /// A forward transition (rect then circle) never seals, so correctly
-    /// ordered content costs nothing: it stays in one segment and one pass.
-    /// Only genuinely interleaved content splits, and that is exactly the
-    /// content whose output was wrong before.
-    pub(super) fn begin_phase(
-        segment: &mut DrawSegment,
-        draw_order: &mut Vec<DrawItem>,
-        phase: Phase,
-    ) {
-        // Never split gradient-bearing content. Gradients skip this seal
-        // entirely (see `DrawBatcher::gradient_rect`), but skipping it is not
-        // enough on its own: a backward transition between two OTHER kinds —
-        // gradient, circle, rect — would still finalize a segment that carries
-        // gradient stops, and every segment's table is uploaded to the same
-        // buffer at offset 0, so the earlier gradient would sample the later
-        // table. Holding the segment together keeps such content at exactly
-        // today's ordering rather than making it newly wrong.
-        //
-        // This gives up kind-ordering for the rest of a segment once a
-        // gradient is in it. That is the conservative half of the trade and it
-        // disappears once stop tables are per-segment.
-        if segment.would_reorder(phase) && segment.current_gradient_stops.is_empty() {
-            Self::finish_current_segment(segment, draw_order);
-        }
-        segment.last_phase = Some(phase);
     }
 
     /// Append tessellated vertices/indices to `segment` under the given pipeline
@@ -198,6 +159,10 @@ impl DrawBatcher {
         indices: &[u32],
         key: PipelineKey,
     ) {
+        if segment.recording_result().is_err() {
+            return;
+        }
+
         if indices.is_empty() {
             return;
         }
@@ -221,7 +186,7 @@ impl DrawBatcher {
 
             // Step 3: build an isolated DrawSegment containing only this shape.
             let clip_for_isolated = state.active_clip();
-            let mut shape_segment = DrawSegment::new();
+            let mut shape_segment = segment.empty_sibling();
             // Indices reference vertices[0..], so base_index = 0.
             shape_segment.vertices.extend_from_slice(&vertices);
             shape_segment.indices.extend(indices.iter().copied()); // already 0-based
@@ -242,9 +207,10 @@ impl DrawBatcher {
                 // unchanged — there is no rebase to compose in.
                 clip: clip_for_isolated,
             });
+            shape_segment.record_run(DrawRun::Tess(0..1));
 
             draw_order.push(DrawItem::AdvancedShape(AdvancedShapeOp {
-                segment: shape_segment,
+                segment: shape_segment.seal(),
                 mode: key.blend_mode(),
                 device_bounds,
             }));
@@ -258,7 +224,6 @@ impl DrawBatcher {
         // are offsets into THIS segment's vertex/index buffers, so sealing
         // after reading them would rebase the appended geometry onto a fresh,
         // empty segment while the offsets still describe the sealed one.
-        Self::begin_phase(segment, draw_order, Phase::Tess);
 
         let base_index = segment.vertices.len() as u32;
         let index_start = segment.indices.len() as u32;
@@ -274,13 +239,24 @@ impl DrawBatcher {
         // Merging also requires the SAME clip: two different rounded clips can
         // share one bounding scissor (same rect, different radii), and the
         // batch's clip is what its draw binds.
-        let mergeable = segment.tess_batches.last().is_some_and(|last| {
-            last.pipeline_key == key && last.scissor == state.current_scissor() && last.clip == clip
-        });
-        if mergeable && let Some(last) = segment.tess_batches.last_mut() {
-            last.index_count += index_count;
-        } else {
-            segment.current_pipeline_key = Some(key);
+        segment.current_pipeline_key = Some(key);
+        let batch_index = segment.tess_batches.len();
+        let adjacent_tess = matches!(segment.runs.last(), Some(DrawRun::Tess(range))
+            if range.end == batch_index);
+        let merged = adjacent_tess
+            && segment.tess_batches.last_mut().is_some_and(|batch| {
+                if batch.pipeline_key == key
+                    && batch.scissor == state.current_scissor()
+                    && batch.clip == clip
+                    && batch.index_start.checked_add(batch.index_count) == Some(index_start)
+                    && let Some(count) = batch.index_count.checked_add(index_count)
+                {
+                    batch.index_count = count;
+                    return true;
+                }
+                false
+            });
+        if !merged {
             segment.tess_batches.push(TessellatedBatch {
                 pipeline_key: key,
                 scissor: state.current_scissor(),
@@ -288,6 +264,7 @@ impl DrawBatcher {
                 index_count,
                 clip,
             });
+            segment.record_run(DrawRun::Tess(batch_index..batch_index + 1));
         }
 
         // Draw-order contract: close the segment after any non-SrcOver blend.
@@ -331,6 +308,10 @@ impl DrawBatcher {
         indices: &[u32],
         blend: BlendMode,
     ) {
+        if segment.recording_result().is_err() {
+            return;
+        }
+
         if indices.is_empty() {
             return;
         }
@@ -346,7 +327,7 @@ impl DrawBatcher {
         // rendered into a transparent offscreen tile.  The SSAA blend mode is stored
         // in `SsaaPathOp::blend` and applied at composite time, not at raster time.
         let clip_for_isolated = state.active_clip();
-        let mut path_segment = DrawSegment::new();
+        let mut path_segment = segment.empty_sibling();
         path_segment.vertices.extend_from_slice(vertices);
         path_segment.indices.extend(indices.iter().copied());
         path_segment.current_pipeline_key = Some(PipelineKey::alpha_blend());
@@ -357,9 +338,10 @@ impl DrawBatcher {
             index_count: indices.len() as u32,
             clip: clip_for_isolated,
         });
+        path_segment.record_run(DrawRun::Tess(0..1));
 
         draw_order.push(DrawItem::SsaaPath(SsaaPathOp {
-            segment: path_segment,
+            segment: path_segment.seal(),
             device_bounds,
             blend,
         }));
@@ -378,6 +360,10 @@ impl DrawBatcher {
         indices: &[u32],
         key: PipelineKey,
     ) {
+        if segment.recording_result().is_err() {
+            return;
+        }
+
         let transform = state.current_transform();
         for v in &mut vertices {
             let transformed = transform * glam::vec4(v.position[0], v.position[1], 0.0, 1.0);
@@ -397,7 +383,8 @@ impl DrawBatcher {
     /// Called by `DrawBatcher::dispatch_shader_rect` which lives in the same module.
     pub(super) fn shader_to_gradient_stops(
         shader: &flui_painting::paint::Shader,
-    ) -> Vec<crate::effects::GradientStop> {
+        budget: &std::sync::Arc<crate::recording_budget::RecordingBudget>,
+    ) -> crate::recording_budget::BudgetVec<crate::effects::GradientStop> {
         let (colors, stops) = match shader {
             flui_painting::paint::Shader::LinearGradient { colors, stops, .. }
             | flui_painting::paint::Shader::RadialGradient { colors, stops, .. }
@@ -405,25 +392,27 @@ impl DrawBatcher {
                 (colors.as_slice(), stops.as_deref())
             }
             flui_painting::paint::Shader::Solid { color } => {
-                return vec![
+                let mut values = crate::recording_budget::BudgetVec::with_budget(budget);
+                values.extend_from_slice(&[
                     crate::effects::GradientStop::new(*color, 0.0),
                     crate::effects::GradientStop::new(*color, 1.0),
-                ];
+                ]);
+                return values;
             }
-            _ => return vec![],
+            _ => return crate::recording_budget::BudgetVec::with_budget(budget),
         };
 
-        let count = colors.len().min(8);
-        (0..count)
-            .map(|i| {
-                let even = i as f32 / (count - 1).max(1) as f32;
-                // Stop positions are logical f64; the GPU stop is f32.
-                let position = stops
-                    .and_then(|s| s.get(i).copied())
-                    .map_or(even, |p| p as f32);
-                crate::effects::GradientStop::new(colors[i], position)
-            })
-            .collect()
+        let count = colors.len();
+        let mut values = crate::recording_budget::BudgetVec::with_budget(budget);
+        values.extend((0..count).map(|i| {
+            let even = i as f32 / (count - 1).max(1) as f32;
+            // Stop positions are logical f64; the GPU stop is f32.
+            let position = stops
+                .and_then(|s| s.get(i).copied())
+                .map_or(even, |p| p as f32);
+            crate::effects::GradientStop::new(colors[i], position)
+        }));
+        values
     }
 }
 

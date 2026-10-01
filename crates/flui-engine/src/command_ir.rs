@@ -310,11 +310,12 @@ pub(crate) enum ImageFilterPass {
 /// `restore_layer` and stored here so BOTH composite arms (top-level in
 /// `replay` + nested in `opacity_layer.rs`) re-read ONE source — eliminating
 /// drift between the two composite arms.
-#[derive(Debug, Clone)]
 pub(crate) struct FilterOp {
     /// Foreground content the filter consumes, rendered to an offscreen
     /// intermediate at replay time.
-    pub(crate) input: DrawSegment,
+    pub(crate) input: SealedSegment,
+    /// Ordered draws flushed before the final input segment.
+    pub(crate) items: Vec<DrawItem>,
     /// Flattened pass chain, applied left-to-right (index 0 = innermost pass).
     ///
     /// Inline capacity 4 covers realistic Compose depth
@@ -560,6 +561,7 @@ pub(crate) struct SavedLayer {
 /// leaves the IR unchanged.
 #[derive(Debug, Clone)]
 pub(crate) struct DrawSegment {
+    pub(crate) budget: std::sync::Arc<crate::recording_budget::RecordingBudget>,
     /// Rectangle instance batch
     pub(crate) rect_batch: InstanceBatch<RectInstance>,
     /// Circle instance batch
@@ -575,38 +577,39 @@ pub(crate) struct DrawSegment {
     /// Sweep gradient instance batch
     pub(crate) sweep_gradient_batch: InstanceBatch<SweepGradientInstance>,
     /// Accumulated gradient stops for this segment
-    pub(crate) current_gradient_stops: Vec<GradientStop>,
+    pub(crate) current_gradient_stops: crate::recording_budget::BudgetVec<GradientStop>,
     /// Batched vertices for tessellation path
-    pub(crate) vertices: Vec<Vertex>,
+    pub(crate) vertices: crate::recording_budget::BudgetVec<Vertex>,
     /// Batched indices for tessellation path
-    pub(crate) indices: Vec<u32>,
+    pub(crate) indices: crate::recording_budget::BudgetVec<u32>,
     /// Recorded tessellated batches for this segment
-    pub(crate) tess_batches: Vec<TessellatedBatch>,
+    pub(crate) tess_batches: crate::recording_budget::BudgetVec<TessellatedBatch>,
     /// Glyph quads, sampled from the painter's glyph atlas. Text is a batch
     /// like any other, so it takes its place in the segment's phase order
     /// and in every offscreen path a segment can replay through.
     pub(crate) glyph_batch: InstanceBatch<GlyphInstance>,
     /// Scissor regions for the glyph batch.
-    pub(crate) glyph_scissors: Vec<ScissorRegion>,
+    pub(crate) glyph_scissors: crate::recording_budget::BudgetVec<ScissorRegion>,
     /// Current pipeline key (for batching draws with same pipeline)
     pub(crate) current_pipeline_key: Option<PipelineKey>,
     /// Scissor regions for rect instanced batch
-    pub(crate) rect_scissors: Vec<ScissorRegion>,
+    pub(crate) rect_scissors: crate::recording_budget::BudgetVec<ScissorRegion>,
     /// Scissor regions for circle instanced batch
-    pub(crate) circle_scissors: Vec<ScissorRegion>,
+    pub(crate) circle_scissors: crate::recording_budget::BudgetVec<ScissorRegion>,
     /// Scissor regions for arc instanced batch
-    pub(crate) arc_scissors: Vec<ScissorRegion>,
+    pub(crate) arc_scissors: crate::recording_budget::BudgetVec<ScissorRegion>,
     /// Draw runs for the linear gradient batch, split by scissor and blend mode.
-    pub(crate) linear_gradient_runs: Vec<GradientRun>,
+    pub(crate) linear_gradient_runs: crate::recording_budget::BudgetVec<GradientRun>,
     /// Draw runs for the radial gradient batch, split by scissor and blend mode.
-    pub(crate) radial_gradient_runs: Vec<GradientRun>,
+    pub(crate) radial_gradient_runs: crate::recording_budget::BudgetVec<GradientRun>,
     /// Draw runs for the sweep gradient batch, split by scissor and blend mode.
-    pub(crate) sweep_gradient_runs: Vec<GradientRun>,
+    pub(crate) sweep_gradient_runs: crate::recording_budget::BudgetVec<GradientRun>,
     /// Cached image draws queued for this segment.
     ///
     /// The third element is the scissor rect active at draw time, forwarded to
     /// `flush_texture_batch` so clipped images don't spill outside their clip region.
-    pub(crate) cached_images: Vec<(TextureKey, TextureInstance, ScissorRect)>,
+    pub(crate) cached_images:
+        crate::recording_budget::BudgetVec<(TextureKey, TextureInstance, ScissorRect)>,
     /// External-texture draws queued for this segment.
     ///
     /// Each entry carries a `flui_painting::paint::TextureId`
@@ -620,116 +623,208 @@ pub(crate) struct DrawSegment {
     /// semantics documented in [`crate::external_texture_registry`].
     ///
     /// The third element is the scissor rect active at draw time.
-    pub(crate) external_images: Vec<(
+    pub(crate) external_images: crate::recording_budget::BudgetVec<(
         flui_painting::paint::TextureId,
         TextureInstance,
         ScissorRect,
     )>,
 
-    /// The replay phase of the most recent primitive recorded into this
-    /// segment, or `None` while it is still geometry-empty.
-    ///
-    /// Record-time only: `flush_segment` never reads it, so it changes no
-    /// replayed output. It IS carried by `Clone` and therefore visible to
-    /// anything that inspects a whole `DrawSegment` (test helpers, `Debug`).
-    pub(crate) last_phase: Option<Phase>,
+    pub(crate) runs: crate::recording_budget::BudgetVec<DrawRun>,
+    pub(crate) record_error: Option<RecordError>,
 }
 
-/// Where a primitive lands in `flush_segment`'s replay order.
-///
-/// `flush_segment` drains a `DrawSegment` in a FIXED sequence — instanced
-/// (shadows, then rects, then circles, then arcs), gradients, tessellated
-/// geometry, cached images, external images, glyphs — so a segment's contents
-/// replay in *kind* order, not in the order they were recorded. The discriminants
-/// below ARE that sequence, which is what lets [`DrawSegment::would_reorder`]
-/// detect a recording that the fixed order would invert.
-///
-/// Keep these in lockstep with `replay/flush.rs::flush_segment` and its
-/// instanced sub-order; the variants are ordered, not arbitrary.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) enum Phase {
-    /// `shadow_batch` — drawn first inside the instanced pass.
-    Shadow,
-    /// `rect_batch`.
-    Rect,
-    /// `circle_batch`.
-    Circle,
-    /// `arc_batch` — last inside the instanced pass.
-    Arc,
-    /// The three gradient batches, which share one pass.
-    ///
-    /// Deliberately never constructed: gradients are excluded from the
-    /// draw-order seal because every segment's stop table is uploaded to one
-    /// shared buffer at offset 0, so two gradient-bearing segments in a frame
-    /// would both sample the last one written. The variant stays so this enum
-    /// remains a faithful mirror of `flush_segment`'s replay order, and so the
-    /// ordinals either side of it are the real ones. See
-    /// `DrawBatcher::gradient_rect`.
-    #[expect(
-        dead_code,
-        reason = "ordinal placeholder; constructing it requires per-segment gradient stop tables first"
-    )]
-    Gradient,
-    /// `vertices`/`indices`/`tess_batches`.
-    Tess,
-    /// `cached_images`.
-    CachedImage,
-    /// `external_images`.
-    ExternalImage,
-    /// `glyph_batch` — drawn last: a label sits on its background in the
-    /// common case, so text is the phase that costs the fewest seals.
-    Glyph,
+#[derive(Debug, Clone)]
+pub(crate) enum RecordError {
+    Limit {
+        resource: &'static str,
+        requested: usize,
+        limit: usize,
+    },
+}
+
+/// Ownership handoff from mutable recording to immutable replay.
+#[derive(Debug, Clone)]
+pub(crate) struct SealedSegment(DrawSegment);
+impl std::ops::Deref for SealedSegment {
+    type Target = DrawSegment;
+    fn deref(&self) -> &DrawSegment {
+        &self.0
+    }
+}
+
+/// Painter-order typed ranges, each indexing only its corresponding arena.
+#[derive(Debug, Clone)]
+pub(crate) enum DrawRun {
+    Rect(std::ops::Range<usize>),
+    Circle(std::ops::Range<usize>),
+    Arc(std::ops::Range<usize>),
+    Shadow(std::ops::Range<usize>),
+    LinearGradient(std::ops::Range<usize>),
+    RadialGradient(std::ops::Range<usize>),
+    SweepGradient(std::ops::Range<usize>),
+    Tess(std::ops::Range<usize>),
+    CachedImage(std::ops::Range<usize>),
+    ExternalImage(std::ops::Range<usize>),
+    Glyph(std::ops::Range<usize>),
 }
 
 impl DrawSegment {
     /// Create an empty draw segment with pre-allocated batch capacities.
     pub(crate) fn new() -> Self {
-        Self {
-            rect_batch: InstanceBatch::new(1024),
-            circle_batch: InstanceBatch::new(1024),
-            arc_batch: InstanceBatch::new(1024),
-            shadow_batch: InstanceBatch::new(1024),
-            linear_gradient_batch: InstanceBatch::new(512),
-            radial_gradient_batch: InstanceBatch::new(512),
-            sweep_gradient_batch: InstanceBatch::new(512),
-            current_gradient_stops: Vec::new(),
-            vertices: Vec::new(),
-            indices: Vec::new(),
-            tess_batches: Vec::new(),
+        Self::with_budget(crate::recording_budget::RecordingBudget::default_frame())
+    }
+    pub(crate) fn empty_sibling(&self) -> Self {
+        Self::with_budget(std::sync::Arc::clone(&self.budget))
+    }
+    pub(crate) fn with_budget(
+        budget: std::sync::Arc<crate::recording_budget::RecordingBudget>,
+    ) -> Self {
+        let mut segment = Self {
+            budget,
+            rect_batch: InstanceBatch::new(0),
+            circle_batch: InstanceBatch::new(0),
+            arc_batch: InstanceBatch::new(0),
+            shadow_batch: InstanceBatch::new(0),
+            linear_gradient_batch: InstanceBatch::new(0),
+            radial_gradient_batch: InstanceBatch::new(0),
+            sweep_gradient_batch: InstanceBatch::new(0),
+            current_gradient_stops: crate::recording_budget::BudgetVec::new(),
+            vertices: crate::recording_budget::BudgetVec::new(),
+            indices: crate::recording_budget::BudgetVec::new(),
+            tess_batches: crate::recording_budget::BudgetVec::new(),
             current_pipeline_key: None,
-            rect_scissors: Vec::new(),
-            circle_scissors: Vec::new(),
-            arc_scissors: Vec::new(),
-            linear_gradient_runs: Vec::new(),
-            radial_gradient_runs: Vec::new(),
-            sweep_gradient_runs: Vec::new(),
-            cached_images: Vec::new(),
-            external_images: Vec::new(),
-            glyph_batch: InstanceBatch::new(1024),
-            glyph_scissors: Vec::new(),
-            last_phase: None,
+            rect_scissors: crate::recording_budget::BudgetVec::new(),
+            circle_scissors: crate::recording_budget::BudgetVec::new(),
+            arc_scissors: crate::recording_budget::BudgetVec::new(),
+            linear_gradient_runs: crate::recording_budget::BudgetVec::new(),
+            radial_gradient_runs: crate::recording_budget::BudgetVec::new(),
+            sweep_gradient_runs: crate::recording_budget::BudgetVec::new(),
+            cached_images: crate::recording_budget::BudgetVec::new(),
+            external_images: crate::recording_budget::BudgetVec::new(),
+            glyph_batch: InstanceBatch::new(0),
+            glyph_scissors: crate::recording_budget::BudgetVec::new(),
+            runs: crate::recording_budget::BudgetVec::new(),
+            record_error: None,
+        };
+        segment.attach_budget();
+        segment
+    }
+    fn attach_budget(&mut self) {
+        self.current_gradient_stops = crate::recording_budget::BudgetVec::with_budget(&self.budget);
+        self.vertices = crate::recording_budget::BudgetVec::with_budget(&self.budget);
+        self.indices = crate::recording_budget::BudgetVec::with_budget(&self.budget);
+        self.tess_batches = crate::recording_budget::BudgetVec::with_budget(&self.budget);
+        self.glyph_scissors = crate::recording_budget::BudgetVec::with_budget(&self.budget);
+        self.rect_scissors = crate::recording_budget::BudgetVec::with_budget(&self.budget);
+        self.circle_scissors = crate::recording_budget::BudgetVec::with_budget(&self.budget);
+        self.arc_scissors = crate::recording_budget::BudgetVec::with_budget(&self.budget);
+        self.linear_gradient_runs = crate::recording_budget::BudgetVec::with_budget(&self.budget);
+        self.radial_gradient_runs = crate::recording_budget::BudgetVec::with_budget(&self.budget);
+        self.sweep_gradient_runs = crate::recording_budget::BudgetVec::with_budget(&self.budget);
+        self.cached_images = crate::recording_budget::BudgetVec::with_budget(&self.budget);
+        self.external_images = crate::recording_budget::BudgetVec::with_budget(&self.budget);
+        self.runs = crate::recording_budget::BudgetVec::with_budget(&self.budget);
+        self.rect_batch.instances = crate::recording_budget::BudgetVec::with_budget(&self.budget);
+        self.circle_batch.instances = crate::recording_budget::BudgetVec::with_budget(&self.budget);
+        self.arc_batch.instances = crate::recording_budget::BudgetVec::with_budget(&self.budget);
+        self.shadow_batch.instances = crate::recording_budget::BudgetVec::with_budget(&self.budget);
+        self.linear_gradient_batch.instances =
+            crate::recording_budget::BudgetVec::with_budget(&self.budget);
+        self.radial_gradient_batch.instances =
+            crate::recording_budget::BudgetVec::with_budget(&self.budget);
+        self.sweep_gradient_batch.instances =
+            crate::recording_budget::BudgetVec::with_budget(&self.budget);
+        self.glyph_batch.instances = crate::recording_budget::BudgetVec::with_budget(&self.budget);
+    }
+    pub(crate) fn recording_result(&self) -> crate::error::EngineResult<()> {
+        if let Some(RecordError::Limit {
+            resource,
+            requested,
+            limit,
+        }) = self.record_error.clone().or_else(|| self.budget.error())
+        {
+            return Err(crate::error::EngineError::PreparedResourceLimit {
+                resource,
+                requested,
+                limit,
+            });
+        }
+        Ok(())
+    }
+    pub(crate) fn try_clone_for_remap(&self) -> crate::error::EngineResult<Self> {
+        let cloned = self.clone();
+        if let Some(RecordError::Limit {
+            resource,
+            requested,
+            limit,
+        }) = self.budget.error()
+        {
+            return Err(crate::error::EngineError::PreparedResourceLimit {
+                resource,
+                requested,
+                limit,
+            });
+        }
+        Ok(cloned)
+    }
+    pub(crate) fn seal(mut self) -> SealedSegment {
+        if self.record_error.is_none() {
+            self.record_error = self.budget.error();
+        }
+        SealedSegment(self)
+    }
+
+    pub(crate) fn record_run(&mut self, run: DrawRun) {
+        if self.budget.error().is_some() {
+            return;
+        }
+        use DrawRun::{
+            Arc, CachedImage, Circle, ExternalImage, Glyph, LinearGradient, RadialGradient, Rect,
+            Shadow, SweepGradient, Tess,
+        };
+        let merge = match (self.runs.last_mut(), &run) {
+            (Some(Rect(a)), Rect(b))
+            | (Some(Circle(a)), Circle(b))
+            | (Some(Arc(a)), Arc(b))
+            | (Some(Shadow(a)), Shadow(b))
+            | (Some(LinearGradient(a)), LinearGradient(b))
+            | (Some(RadialGradient(a)), RadialGradient(b))
+            | (Some(SweepGradient(a)), SweepGradient(b))
+            | (Some(Tess(a)), Tess(b))
+            | (Some(CachedImage(a)), CachedImage(b))
+            | (Some(ExternalImage(a)), ExternalImage(b))
+            | (Some(Glyph(a)), Glyph(b))
+                if a.end == b.start =>
+            {
+                a.end = b.end;
+                true
+            }
+            _ => false,
+        };
+        if !merge {
+            self.runs.push(run);
         }
     }
 
-    /// Whether recording `next` now would replay BEFORE something already in
-    /// this segment.
-    ///
-    /// `flush_segment` drains by kind, so a segment holding a circle that then
-    /// receives a rect would draw the rect first and let the circle — recorded
-    /// EARLIER — paint over it. Sealing on this predicate makes the fixed
-    /// phase order equal record order within every segment, which is the whole
-    /// mechanism: no new IR, no ordered op list, just a boundary in the right
-    /// place.
-    ///
-    /// Returns `false` for a forward transition (rect then circle), so
-    /// correctly-ordered content is never split and pays nothing.
-    pub(crate) fn would_reorder(&self, next: Phase) -> bool {
-        self.last_phase.is_some_and(|prev| next < prev)
+    pub(crate) fn record_limit(&mut self, resource: &'static str, requested: usize, limit: usize) {
+        if self.record_error.is_none() {
+            self.record_error = Some(RecordError::Limit {
+                resource,
+                requested,
+                limit,
+            });
+        }
     }
 
     /// Record an instance addition for a given scissor region tracker.
     /// Extends the last region if the scissor matches, or creates a new one.
-    pub(crate) fn push_scissor_region(regions: &mut Vec<ScissorRegion>, scissor: ScissorRect) {
+    pub(crate) fn push_scissor_region(
+        regions: &mut crate::recording_budget::BudgetVec<ScissorRegion>,
+        scissor: ScissorRect,
+    ) {
+        if regions.failed() {
+            return;
+        }
         if let Some(last) = regions.last_mut()
             && last.scissor == scissor
         {
@@ -750,10 +845,13 @@ impl DrawSegment {
     /// with one more component in the key, because a run is exactly the span of
     /// instances one `set_scissor_rect` + `set_pipeline` pair can draw.
     pub(crate) fn push_gradient_run(
-        runs: &mut Vec<GradientRun>,
+        runs: &mut crate::recording_budget::BudgetVec<GradientRun>,
         scissor: ScissorRect,
         blend: BlendMode,
     ) {
+        if runs.failed() {
+            return;
+        }
         if let Some(last) = runs.last_mut()
             && last.scissor == scissor
             && last.blend == blend
@@ -771,7 +869,9 @@ impl DrawSegment {
 
     /// Whether this segment records nothing at all.
     pub(crate) fn is_empty(&self) -> bool {
-        self.rect_batch.is_empty()
+        self.record_error.is_none()
+            && self.budget.error().is_none()
+            && self.rect_batch.is_empty()
             && self.circle_batch.is_empty()
             && self.arc_batch.is_empty()
             && self.shadow_batch.is_empty()
@@ -787,42 +887,10 @@ impl DrawSegment {
 }
 
 impl Default for DrawSegment {
-    /// Constructs a zero-capacity `DrawSegment`.
-    ///
-    /// Used by `std::mem::take` in `DrawBatcher::finish_current_segment` so
-    /// that sealing a segment does NOT trigger the `InstanceBatch::new(1024)`
-    /// allocation burst that `DrawSegment::new()` would cause — the slot is
-    /// left empty and its constituent `Vec`s grow lazily on first push.
     fn default() -> Self {
-        Self {
-            rect_batch: InstanceBatch::new(0),
-            circle_batch: InstanceBatch::new(0),
-            arc_batch: InstanceBatch::new(0),
-            shadow_batch: InstanceBatch::new(0),
-            linear_gradient_batch: InstanceBatch::new(0),
-            radial_gradient_batch: InstanceBatch::new(0),
-            sweep_gradient_batch: InstanceBatch::new(0),
-            current_gradient_stops: Vec::new(),
-            vertices: Vec::new(),
-            indices: Vec::new(),
-            tess_batches: Vec::new(),
-            current_pipeline_key: None,
-            rect_scissors: Vec::new(),
-            circle_scissors: Vec::new(),
-            arc_scissors: Vec::new(),
-            linear_gradient_runs: Vec::new(),
-            radial_gradient_runs: Vec::new(),
-            sweep_gradient_runs: Vec::new(),
-            cached_images: Vec::new(),
-            external_images: Vec::new(),
-            glyph_batch: InstanceBatch::new(0),
-            glyph_scissors: Vec::new(),
-            last_phase: None,
-        }
+        Self::with_budget(crate::recording_budget::RecordingBudget::default_frame())
     }
 }
-
-// ─── Advanced-shape op ────────────────────────────────────────────────────────
 
 /// A single tessellated shape that requires a dst-read (advanced) blend.
 ///
@@ -849,7 +917,7 @@ impl Default for DrawSegment {
 pub(crate) struct AdvancedShapeOp {
     /// Tessellated geometry for this shape (vertices already baked to device
     /// space; indices relative to segment-local base).
-    pub(crate) segment: DrawSegment,
+    pub(crate) segment: SealedSegment,
     /// Advanced blend mode to apply when compositing the shape onto the surface.
     pub(crate) mode: BlendMode,
     /// Device-space AABB of the producer's coverage in device pixels.
@@ -904,7 +972,7 @@ pub(crate) struct AdvancedShapeOp {
 pub(crate) struct SsaaPathOp {
     /// Tessellated geometry for this path (vertices already baked to device
     /// space; indices relative to a fresh segment starting at base 0).
-    pub(crate) segment: DrawSegment,
+    pub(crate) segment: SealedSegment,
     /// Device-space AABB of the path's coverage in device pixels.
     ///
     /// Used to size the SSAA tile: `ceil(device_bounds.width) × ceil(device_bounds.height)`,
@@ -928,7 +996,7 @@ pub(crate) struct SsaaPathOp {
 // because `PooledTexture` wraps a `wgpu::Texture`.
 pub(crate) enum DrawItem {
     /// A segment of instanced/tessellated/gradient draw commands.
-    Segment(DrawSegment),
+    Segment(SealedSegment),
     /// An offscreen texture to composite at its bounds.
     OffscreenTexture(PendingOffscreenTexture),
     /// An opacity layer: a group of draw items to render offscreen and composite
@@ -977,7 +1045,7 @@ pub(crate) struct PendingOpacityLayer {
     /// Draw items accumulated between save_layer and restore_layer
     pub(crate) items: Vec<DrawItem>,
     /// Final segment at the time of restore_layer (may have content)
-    pub(crate) final_segment: DrawSegment,
+    pub(crate) final_segment: SealedSegment,
     /// Group opacity to apply during compositing (0.0–1.0)
     pub(crate) opacity: f32,
     /// Per-channel chroma tint for ColorFilter layers; white for plain opacity.

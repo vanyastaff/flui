@@ -15,6 +15,11 @@ the dispatch layer moves there too.
   and `DirectSink` (the web runner). `DirectSink` alone maps `EngineError`s to
   `SubmitVerdict`s for the web runner; the realm's own tests script verdicts
   and never reach it.
+- **Transient render failure retains demand.** Both sinks distinguish `Retry`
+  from terminal `Failed` and device recovery. The raster completion publishes
+  retry debt reliably even when telemetry acks are full; the realm retains epochs
+  and requests a paced full repaint (ADR-0101). Pinned by
+  `transient_and_hard_failures_map_consistently_in_lane_and_direct_sink`.
 - **A runner's frame is gate → pump → pacing.** Each runner's frame wake is a
   `RealmTask::Pump`: one `UiRealm::enter` holds the owner-inbox drain
   (`UiRealm::drain_owner_inbox`), the pre-frame runner work and the wake gate

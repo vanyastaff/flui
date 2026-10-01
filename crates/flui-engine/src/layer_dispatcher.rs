@@ -186,24 +186,16 @@ impl<'frame> LayerDispatcher<'frame> {
     /// clipped by its bounding box with the coverage dropped on the floor —
     /// worse than either answer.
     ///
-    /// Two things must both hold:
-    ///
-    /// - the mode asks for it ([`clip_opens_a_layer`]);
-    /// - no enclosing layer routes through a bounds-growing image filter. Those
-    ///   layers discard nested `DrawItem::OpacityLayer`s, and everything already
-    ///   flushed beside them, so opening one there deletes content rather than
-    ///   improving an edge. Degrading the mode to per-draw coverage loses an
-    ///   edge; opening the layer loses the subtree. See
-    ///   `LayerCompositor::inside_image_filter_layer`.
+    /// The mode must ask for it ([`clip_opens_a_layer`]).
     ///
     /// Every one of the four `push_clip_*` sites installs a clip, so there is no
-    /// third condition asking whether one landed: a mode that asks for NO clip
+    /// additional condition asking whether one landed: a mode that asks for NO clip
     /// is refused a layer earlier, by [`clip_is_disabled`] on the canvas route
     /// and by the layer's own `clips()` gate on the layer route. See
     /// `ARCHITECTURE.md` for why that condition once existed and what removing
     /// it proved.
-    fn opens_offscreen(&self, behavior: flui_painting::paint::Clip) -> bool {
-        clip_opens_a_layer(behavior) && !self.painter.inside_image_filter_layer()
+    fn opens_offscreen(behavior: flui_painting::paint::Clip) -> bool {
+        clip_opens_a_layer(behavior)
     }
 
     /// Open the offscreen a clip asked for, if it asked for one, and record the
@@ -339,7 +331,7 @@ impl<'frame> LayerDispatcher<'frame> {
         blend: BlendMode,
         surface_texture: &wgpu::Texture,
         surface_view: &wgpu::TextureView,
-    ) -> bool {
+    ) -> crate::error::EngineResult<bool> {
         if self.offscreen.is_none() {
             // No offscreen renderer → no blur, and no mid-frame flush either: any
             // painter batches queued before this backdrop still draw in the
@@ -348,22 +340,18 @@ impl<'frame> LayerDispatcher<'frame> {
             // regardless of submit boundaries). Don't "restore" a mid-frame flush
             // here — it would only split one submit into two with no blur to feed.
             tracing::warn!("Backdrop blur skipped: no offscreen renderer available");
-            return false;
+            return Ok(false);
         }
 
         // device/queue/format come from the offscreen renderer (the same device
         // the surface was created on); later mutation borrows `offscreen` again
         // sequentially for the texture pool and the blur.
-        let (device, queue, format) = {
+        let (device, format) = {
             let off = self
                 .offscreen
                 .as_deref_mut()
                 .expect("BUG: apply_backdrop_blur returned above when self.offscreen was None; nothing clears it before this borrow");
-            (
-                Arc::clone(off.device()),
-                Arc::clone(off.queue()),
-                off.surface_format(),
-            )
+            (Arc::clone(off.device()), off.surface_format())
         };
 
         // The copy region covers every pixel the device rect touches (floor of
@@ -392,7 +380,7 @@ impl<'frame> LayerDispatcher<'frame> {
                 surface_h,
                 "Backdrop blur skipped: clamped device region is empty (entirely off-screen)"
             );
-            return false;
+            return Ok(false);
         }
 
         // Flush painter batches so the backdrop pixels are present on the surface
@@ -409,9 +397,7 @@ impl<'frame> LayerDispatcher<'frame> {
         });
         let flush_target =
             crate::render_target::RenderTarget::sampleable(surface_view, surface_texture);
-        if let Err(e) = self.painter.render(flush_target, &mut flush_encoder) {
-            tracing::error!("Backdrop flush failed: {}", e);
-        }
+        self.painter.render(flush_target, &mut flush_encoder)?;
 
         // Copy the clamped device region from the surface into a pooled blur input.
         let blur_input = self
@@ -439,7 +425,7 @@ impl<'frame> LayerDispatcher<'frame> {
                 depth_or_array_layers: 1,
             },
         );
-        queue.submit(std::iter::once(flush_encoder.finish()));
+        self.painter.submit_encoder(flush_encoder)?;
 
         // Dual-Kawase blur, then queue for compositing at the CLAMPED rect — the
         // copy used origin (x,y) extent (w,h), so the composite rect must match
@@ -449,7 +435,7 @@ impl<'frame> LayerDispatcher<'frame> {
             .offscreen
             .as_deref_mut()
             .expect("BUG: apply_backdrop_blur returned above when self.offscreen was None; nothing clears it before this borrow")
-            .render_blur(&blur_input, sigma);
+            .render_blur(&blur_input, sigma)?;
         let clamped_composite_rect = Rect::from_xywh(
             f64::from(x as f32),
             f64::from(y as f32),
@@ -458,7 +444,7 @@ impl<'frame> LayerDispatcher<'frame> {
         );
         self.painter
             .queue_offscreen_result(blurred, clamped_composite_rect, blend);
-        true
+        Ok(true)
     }
 }
 
@@ -516,9 +502,8 @@ impl Drop for LayerDispatcher<'_> {
 /// is also what isolates a destructive or advanced blend inside the clip from
 /// the backdrop behind it — a semantic change, not a side effect.
 ///
-/// This answers only the MODE half of the question. Whether a layer is actually
-/// opened is [`LayerDispatcher::opens_offscreen`], which also requires that no
-/// enclosing image-filter layer would discard it.
+/// Image filters preserve ordered nested layers, so this mode also opens an
+/// offscreen inside a filter.
 const fn clip_opens_a_layer(behavior: flui_painting::paint::Clip) -> bool {
     matches!(behavior, flui_painting::paint::Clip::AntiAliasWithSaveLayer)
 }
@@ -984,9 +969,7 @@ impl LayerStateStack for LayerDispatcher<'_> {
         // binary, so re-applying it to the group would change nothing — hence
         // `ResolvedClip::NONE`. The layer is still opened, for the half of the
         // mode a scissor cannot give: isolation from the backdrop.
-        let composite_clip = self
-            .opens_offscreen(clip_behavior)
-            .then_some(ResolvedClip::NONE);
+        let composite_clip = Self::opens_offscreen(clip_behavior).then_some(ResolvedClip::NONE);
         self.open_clip_frame(composite_clip);
     }
 
@@ -996,7 +979,7 @@ impl LayerStateStack for LayerDispatcher<'_> {
         // Decided BEFORE installing anything: the two calls below clip the
         // content differently, and picking the wrong one because the layer was
         // refused afterwards would drop the rounded coverage entirely.
-        let composite_clip = if self.opens_offscreen(clip_behavior) {
+        let composite_clip = if Self::opens_offscreen(clip_behavior) {
             // Bounding scissor only: the rounded coverage is what the group
             // composite applies, once. Installing the SDF slot as well would
             // apply it a second time, per draw — the defect the mode exists to
@@ -1025,7 +1008,7 @@ impl LayerStateStack for LayerDispatcher<'_> {
         // rounded rectangle sharing this squircle's outer rect and radii is
         // INSCRIBED in it, so substituting one would clip corner content the
         // squircle keeps.
-        let composite_clip = if self.opens_offscreen(clip_behavior) {
+        let composite_clip = if Self::opens_offscreen(clip_behavior) {
             Some(self.painter.clip_rsuperellipse_at_composite(*rse))
         } else {
             self.painter.clip_rsuperellipse(*rse, clip_behavior);
@@ -1044,9 +1027,7 @@ impl LayerStateStack for LayerDispatcher<'_> {
         // `ResolvedClip::NONE`. The layer is still opened for the half a
         // scissor cannot give — isolation from the backdrop.
         self.painter.clip_path(path);
-        let composite_clip = self
-            .opens_offscreen(clip_behavior)
-            .then_some(ResolvedClip::NONE);
+        let composite_clip = Self::opens_offscreen(clip_behavior).then_some(ResolvedClip::NONE);
         self.open_clip_frame(composite_clip);
     }
 

@@ -53,6 +53,60 @@ use crate::{
 
 #[expect(clippy::too_many_arguments)]
 impl GpuReplay {
+    /// Flat input uses a cropped intermediate; ordered nested input keeps the
+    /// viewport coordinate system so all child effects and clips remain valid.
+    pub(crate) fn render_filter_input(
+        &mut self,
+        op: &mut crate::command_ir::FilterOp,
+        viewport_size: (u32, u32),
+        surface_format: wgpu::TextureFormat,
+        device: &Arc<wgpu::Device>,
+        queue: &Arc<wgpu::Queue>,
+        pipelines: &mut PipelineSet,
+        resources: &mut GpuResources,
+        encoder: &mut wgpu::CommandEncoder,
+    ) -> EngineResult<PooledTexture> {
+        if op.items.is_empty() {
+            return self.render_segment_to_grown_offscreen(
+                &op.input,
+                op.fb_origin,
+                op.fb_dim,
+                viewport_size,
+                surface_format,
+                device,
+                queue,
+                pipelines,
+                resources,
+                encoder,
+            );
+        }
+        debug_assert_eq!(op.fb_origin, (0, 0));
+        debug_assert_eq!(op.fb_dim, viewport_size);
+        let mut layer = PendingOpacityLayer {
+            items: std::mem::take(&mut op.items),
+            final_segment: {
+                let replacement = op.input.empty_sibling();
+                std::mem::replace(&mut op.input, replacement.seal())
+            },
+            opacity: 1.0,
+            tint_rgb: [1.0; 3],
+            bounds: op.content_bounds,
+            blend: flui_painting::paint::BlendMode::SrcOver,
+            filters: LayerFilterChain::default(),
+            composite_clip: None,
+        };
+        self.render_layer_to_offscreen(
+            &mut layer,
+            viewport_size,
+            surface_format,
+            device,
+            queue,
+            pipelines,
+            resources,
+            encoder,
+        )
+    }
+
     /// Render a single [`DrawSegment`] into a fresh full-viewport pooled
     /// offscreen texture.
     ///
@@ -73,7 +127,7 @@ impl GpuReplay {
     /// The caller must composite or otherwise use the texture before dropping it.
     pub(crate) fn render_segment_to_offscreen(
         &mut self,
-        segment: &mut DrawSegment,
+        segment: &DrawSegment,
         viewport_size: (u32, u32),
         surface_format: wgpu::TextureFormat,
         device: &Arc<wgpu::Device>,
@@ -81,7 +135,7 @@ impl GpuReplay {
         pipelines: &mut PipelineSet,
         resources: &mut GpuResources,
         encoder: &mut wgpu::CommandEncoder,
-    ) -> PooledTexture {
+    ) -> EngineResult<PooledTexture> {
         let (vp_w, vp_h) = viewport_size;
 
         // Acquire a full-viewport pooled texture for the foreground.
@@ -123,9 +177,9 @@ impl GpuReplay {
             resources,
             encoder,
             offscreen_view,
-        );
+        )?;
 
-        offscreen
+        Ok(offscreen)
     }
 
     /// Render a single [`DrawSegment`] into a **grown-bounds** pooled offscreen
@@ -287,7 +341,7 @@ impl GpuReplay {
 
     pub(crate) fn render_segment_to_grown_offscreen(
         &mut self,
-        segment: &mut DrawSegment,
+        segment: &DrawSegment,
         fb_origin: (u32, u32),
         fb_dim: (u32, u32),
         viewport_size: (u32, u32),
@@ -297,7 +351,7 @@ impl GpuReplay {
         pipelines: &mut PipelineSet,
         resources: &mut GpuResources,
         encoder: &mut wgpu::CommandEncoder,
-    ) -> PooledTexture {
+    ) -> EngineResult<PooledTexture> {
         let (vp_w, vp_h) = viewport_size;
         let (fb_x, fb_y) = fb_origin;
         let (fb_w, fb_h) = fb_dim;
@@ -342,7 +396,7 @@ impl GpuReplay {
         let origin_x = fb_x as f32;
         let origin_y = fb_y as f32;
 
-        let mut remapped_segment = segment.clone();
+        let mut remapped_segment = segment.try_clone_for_remap()?;
         for v in &mut remapped_segment.vertices {
             v.position[0] = (v.position[0] - origin_x) * scale_x;
             v.position[1] = (v.position[1] - origin_y) * scale_y;
@@ -504,7 +558,7 @@ impl GpuReplay {
         // fb attachment; the static viewport uniform (vp_w, vp_h) combined with
         // the pre-scaled positions yields correct NDC.
         self.flush_segment(
-            &mut remapped_segment,
+            &remapped_segment,
             fb_dim,
             device,
             queue,
@@ -512,9 +566,9 @@ impl GpuReplay {
             resources,
             encoder,
             offscreen_view,
-        );
+        )?;
 
-        offscreen
+        Ok(offscreen)
     }
 
     /// Render a pending opacity layer's content to a pooled offscreen texture.
@@ -593,9 +647,9 @@ impl GpuReplay {
         let offscreen_target = RenderTarget::sampleable(offscreen_view, offscreen.texture());
         for item in layer.items.drain(..) {
             match item {
-                DrawItem::Segment(mut seg) => {
+                DrawItem::Segment(seg) => {
                     self.flush_segment(
-                        &mut seg,
+                        &seg,
                         viewport_size,
                         device,
                         queue,
@@ -603,7 +657,7 @@ impl GpuReplay {
                         resources,
                         encoder,
                         offscreen_view,
-                    );
+                    )?;
                 }
                 DrawItem::OffscreenTexture(p) => {
                     // A nested OffscreenTexture (shader-mask / backdrop-blur
@@ -652,14 +706,14 @@ impl GpuReplay {
                         offscreen_target,
                     )?;
                 }
-                DrawItem::AdvancedShape(mut op) => {
+                DrawItem::AdvancedShape(op) => {
                     // An advanced shape nested inside a layer: the backdrop is the
                     // offscreen_target (pool texture with COPY_SRC ).
                     // `flush_advanced_layer` copies the backdrop from
                     // `offscreen_target.texture` (always Some for pool targets).
                     if let Some(backdrop_texture) = offscreen_target.texture {
                         let foreground = self.render_segment_to_offscreen(
-                            &mut op.segment,
+                            &op.segment,
                             viewport_size,
                             surface_format,
                             device,
@@ -667,7 +721,7 @@ impl GpuReplay {
                             pipelines,
                             resources,
                             encoder,
-                        );
+                        )?;
                         let viewport_width_f32 = vp_w as f32;
                         let viewport_height_f32 = vp_h as f32;
                         let blend_op = AdvancedBlendOp {
@@ -714,7 +768,7 @@ impl GpuReplay {
                              should always have COPY_SRC)"
                         );
                         self.flush_segment(
-                            &mut op.segment,
+                            &op.segment,
                             viewport_size,
                             device,
                             queue,
@@ -722,7 +776,7 @@ impl GpuReplay {
                             resources,
                             encoder,
                             offscreen_view,
-                        );
+                        )?;
                     }
                 }
                 // ── Image-filter path nested inside a layer ───────────────────
@@ -738,10 +792,8 @@ impl GpuReplay {
                 // compile here rather than be silently skipped during folding.
                 DrawItem::Filter(mut op) => {
                     // 1. Render content to the grown-bounds intermediate.
-                    let content_tex = self.render_segment_to_grown_offscreen(
-                        &mut op.input,
-                        op.fb_origin,
-                        op.fb_dim,
+                    let content_tex = self.render_filter_input(
+                        &mut op,
                         viewport_size,
                         surface_format,
                         device,
@@ -749,7 +801,7 @@ impl GpuReplay {
                         pipelines,
                         resources,
                         encoder,
-                    );
+                    )?;
                     // 2. Fold the pass chain over the grown-bounds intermediate.
                     let filtered_tex = apply_image_filter_passes(
                         &op.passes,
@@ -832,7 +884,7 @@ impl GpuReplay {
                         encoder,
                         offscreen_view,
                         offscreen_target.texture, // sampleable pool texture for advanced dst-read
-                    );
+                    )?;
                     tracing::trace!(
                         mode = ?op.blend,
                         bounds = ?op.device_bounds,
@@ -845,7 +897,7 @@ impl GpuReplay {
         // Flush the final segment (content drawn after the last draw-order item).
         if !layer.final_segment.is_empty() {
             self.flush_segment(
-                &mut layer.final_segment,
+                &layer.final_segment,
                 viewport_size,
                 device,
                 queue,
@@ -853,7 +905,7 @@ impl GpuReplay {
                 resources,
                 encoder,
                 offscreen_view,
-            );
+            )?;
         }
 
         Ok(offscreen)

@@ -15,7 +15,7 @@ use flui_painting::styling::Color;
 
 use super::DrawBatcher;
 use crate::{
-    command_ir::{DrawItem, DrawSegment, Phase},
+    command_ir::{DrawItem, DrawRun, DrawSegment},
     glyph_atlas::TextAtlas,
     instancing::GlyphInstance,
     state_stack::GpuStateStack,
@@ -50,7 +50,7 @@ impl DrawBatcher {
     )]
     pub(in super::super) fn draw_paragraph(
         segment: &mut DrawSegment,
-        draw_order: &mut Vec<DrawItem>,
+        _draw_order: &mut Vec<DrawItem>,
         state: &GpuStateStack,
         atlas: &mut TextAtlas,
         opacity: f32,
@@ -58,6 +58,10 @@ impl DrawBatcher {
         position: Point<f64>,
         color: Color,
     ) {
+        if segment.recording_result().is_err() {
+            return;
+        }
+
         let scale = state.max_scale();
         let scissor = state.current_scissor();
         let origin = state.apply_transform(position);
@@ -77,7 +81,6 @@ impl DrawBatcher {
             Placement::Affine { .. } => (0.0, 0.0),
         };
         let raster_origin = (raster_origin.0 as f32, raster_origin.1 as f32);
-        let mut began = false;
 
         for run in paragraph.runs() {
             // The face first, in a statement of its own: the placement below
@@ -118,13 +121,10 @@ impl DrawBatcher {
                 }
                 let instance = state.apply_active_clip(instance);
 
-                if !began {
-                    // One seal decision per paragraph: every glyph of it lands in
-                    // the same segment, in record order.
-                    Self::begin_phase(segment, draw_order, Phase::Glyph);
-                    began = true;
-                }
                 let _ = segment.glyph_batch.add(instance);
+                segment.record_run(DrawRun::Glyph(
+                    segment.glyph_batch.len().saturating_sub(1)..segment.glyph_batch.len(),
+                ));
                 DrawSegment::push_scissor_region(&mut segment.glyph_scissors, scissor);
             }
         }

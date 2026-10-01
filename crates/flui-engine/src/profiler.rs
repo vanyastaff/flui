@@ -152,6 +152,9 @@ fn flatten_timer_results(
 #[cfg(feature = "gpu-profiler")]
 pub(crate) struct GpuFrameProfiler {
     inner: wgpu_profiler::GpuProfiler,
+    /// An aborted frame may contain queries in encoders that were never submitted.
+    /// Discard that profiler before the next frame instead of mapping those queries.
+    abandoned: bool,
     /// The most recently harvested completed-frame profile, if any.
     latest_profile: Option<GpuFrameProfile>,
 }
@@ -196,6 +199,7 @@ impl GpuFrameProfiler {
         };
         Ok(Self {
             inner: wgpu_profiler::GpuProfiler::new(device, settings)?,
+            abandoned: false,
             latest_profile: None,
         })
     }
@@ -235,6 +239,7 @@ impl GpuFrameProfiler {
     /// error must never abort a frame.
     pub(crate) fn end_frame(&mut self) {
         if let Err(err) = self.inner.end_frame() {
+            self.abandoned = true;
             tracing::warn!(
                 error = ?err,
                 "GpuFrameProfiler::end_frame reported an error; \
@@ -255,6 +260,9 @@ impl GpuFrameProfiler {
         &mut self,
         timestamp_period: f32,
     ) -> Option<&GpuFrameProfile> {
+        if self.abandoned {
+            return self.latest_profile.as_ref();
+        }
         if let Some(raw_results) = self.inner.process_finished_frame(timestamp_period) {
             let mut passes = Vec::with_capacity(raw_results.len());
             flatten_timer_results(&raw_results, 0, &mut passes);
@@ -267,6 +275,54 @@ impl GpuFrameProfiler {
     #[must_use]
     pub(crate) fn latest_completed_frame(&self) -> Option<&GpuFrameProfile> {
         self.latest_profile.as_ref()
+    }
+}
+
+/// Owns a rendered frame's profiling obligation, including error and unwind exits.
+/// Dropping an incomplete frame only marks it abandoned: no GPU calls or allocation
+/// can replace the original failure during unwinding. The next frame replaces the
+/// abandoned query state before opening scopes; earlier valid diagnostics survive.
+#[cfg(feature = "gpu-profiler")]
+pub(crate) struct ProfileFrame<'a> {
+    profiler: &'a mut Option<GpuFrameProfiler>,
+    complete: bool,
+}
+
+#[cfg(feature = "gpu-profiler")]
+impl<'a> ProfileFrame<'a> {
+    pub(crate) fn begin(profiler: &'a mut Option<GpuFrameProfiler>, device: &wgpu::Device) -> Self {
+        if let Some(previous) = profiler.as_mut().filter(|value| value.abandoned) {
+            let latest = previous.latest_profile.take();
+            *previous =
+                GpuFrameProfiler::new(device).expect("BUG: fixed profiler settings remain valid");
+            previous.latest_profile = latest;
+        }
+        Self {
+            profiler,
+            complete: false,
+        }
+    }
+
+    pub(crate) fn profiler(&mut self) -> &mut Option<GpuFrameProfiler> {
+        self.profiler
+    }
+
+    pub(crate) fn complete(mut self) {
+        if let Some(profiler) = self.profiler.as_mut() {
+            profiler.end_frame();
+        }
+        self.complete = true;
+    }
+}
+
+#[cfg(feature = "gpu-profiler")]
+impl Drop for ProfileFrame<'_> {
+    fn drop(&mut self) {
+        if !self.complete
+            && let Some(profiler) = self.profiler.as_mut()
+        {
+            profiler.abandoned = true;
+        }
     }
 }
 
@@ -301,5 +357,95 @@ impl ScopeGuard<'_> {
     /// access to the encoder outside this scope.
     pub(crate) fn recorder(&mut self) -> &mut wgpu::CommandEncoder {
         self.inner.recorder
+    }
+}
+
+#[cfg(all(test, feature = "testing", feature = "gpu-profiler"))]
+pub(crate) mod tests {
+    use super::{GpuFrameProfiler, ProfileFrame};
+
+    /// Private failure seam: abandoned encoders and unwind exits cannot be
+    /// manufactured through the public diagnostic snapshot API.
+    pub(crate) fn failed_frames_do_not_pollute_the_next_profile() {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            apply_limit_buckets: false,
+            ..Default::default()
+        }))
+        .expect("profiler recovery requires a GPU adapter");
+        let timestamps =
+            wgpu::Features::TIMESTAMP_QUERY | wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS;
+        let required_features = if adapter.features().contains(timestamps) {
+            timestamps
+        } else {
+            // Labels still expose frame contamination on timestamp-less adapters.
+            wgpu::Features::empty()
+        };
+        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            required_features,
+            ..Default::default()
+        }))
+        .expect("profiler recovery device");
+        let mut profiler = Some(GpuFrameProfiler::new(&device).expect("valid profiler settings"));
+        let mut failed = Vec::new();
+        for (name, resolve, submit, unwind) in [
+            ("unresolved content", false, false, false),
+            ("resolved encoder refused", true, false, false),
+            ("submitted work then blit failure", true, true, false),
+            ("unwind after query resolve", true, false, true),
+        ] {
+            let row = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    let mut frame = ProfileFrame::begin(&mut profiler, &device);
+                    let active = frame.profiler().as_mut().expect("profiler enabled");
+                    let mut encoder =
+                        device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+                    drop(active.scope("aborted", &mut encoder));
+                    if resolve {
+                        active.resolve_queries(&mut encoder);
+                    }
+                    if submit {
+                        queue.submit([encoder.finish()]);
+                    } else {
+                        drop(encoder);
+                    }
+                    assert!(!unwind, "injected frame failure");
+                    // Return without completing, just like a managed submission error.
+                }));
+                assert_eq!(failure.is_err(), unwind);
+                // Repeated good frames also prove that pending query bookkeeping
+                // does not keep a failed frame alive or eventually exhaust its ring.
+                for _ in 0..8 {
+                    let mut frame = ProfileFrame::begin(&mut profiler, &device);
+                    let active = frame.profiler().as_mut().expect("profiler stays enabled");
+                    let mut encoder =
+                        device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+                    drop(active.scope("successful retry", &mut encoder));
+                    active.resolve_queries(&mut encoder);
+                    queue.submit([encoder.finish()]);
+                    frame.complete();
+                    device
+                        .poll(wgpu::PollType::Wait {
+                            submission_index: None,
+                            timeout: Some(std::time::Duration::from_secs(10)),
+                        })
+                        .expect("profiler query completion");
+                    let snapshot = profiler
+                        .as_mut()
+                        .expect("profiler remains available")
+                        .process_finished_frame(queue.get_timestamp_period())
+                        .expect("a submitted frame produces diagnostics");
+                    assert_eq!(snapshot.passes.len(), 1, "failed frame must not add scopes");
+                    assert_eq!(snapshot.passes[0].label, "successful retry");
+                }
+            }));
+            if row.is_err() {
+                failed.push(name);
+            }
+        }
+        assert!(
+            failed.is_empty(),
+            "profiler recovery cases failed: {failed:?}"
+        );
     }
 }

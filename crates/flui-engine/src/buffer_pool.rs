@@ -27,12 +27,10 @@
 //!
 //! # Reset vs eviction
 //!
-//! [`BufferPool::reset`] (per `WgpuPainter::render`) only flips `in_use` flags so
-//! the next pass may reuse a buffer. Cross-pass reuse within a frame is sound
-//! because the engine submits per pass (each `render`'s `write_buffer`s attach
-//! to that pass's own submit, and submits are serialized) — so a reused buffer's
-//! prior read completes before its next write executes. Eviction is the separate
-//! per-frame budget pass.
+//! [`BufferPool::reset`] runs at `WgpuPainter::finish_frame`, after submission or
+//! encoder discard. Every encoded flush in that frame keeps separate buffers,
+//! including multiple flushes recorded before one submission. Later frames reuse
+//! buffers through ordered queue writes. Eviction is the separate budget pass.
 
 use wgpu::{Buffer, BufferDescriptor, BufferUsages, Device};
 
@@ -273,8 +271,8 @@ impl BufferPool {
 
     /// Reset pool for next pass/frame.
     ///
-    /// Marks all buffers available for reuse. Called per `WgpuPainter::render`
-    /// (which runs multiple times per frame); only flips `in_use` flags and frees
+    /// Marks all buffers available for reuse after the frame's encoders have been
+    /// submitted or discarded; only flips `in_use` flags and frees
     /// nothing — see [`evict_over_budget`](Self::evict_over_budget) for reclaim.
     pub(crate) fn reset(&mut self) {
         for entry in &mut self.vertex_buffers {

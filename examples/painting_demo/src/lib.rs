@@ -98,8 +98,6 @@ pub async fn main() {
         (width, height),
     );
 
-    draw_all_demos(&mut painter);
-
     let output = match surface.get_current_texture() {
         wgpu::CurrentSurfaceTexture::Success(frame)
         | wgpu::CurrentSurfaceTexture::Suboptimal(frame) => frame,
@@ -108,6 +106,12 @@ pub async fn main() {
             return;
         }
     };
+    if let Err(error) = painter.begin_frame() {
+        web_sys::console::error_1(&format!("Painter frame error: {error}").into());
+        return;
+    }
+    draw_all_demos(&mut painter);
+
     let view = output
         .texture
         .create_view(&wgpu::TextureViewDescriptor::default());
@@ -143,9 +147,17 @@ pub async fn main() {
 
     if let Err(e) = painter.render_to_view(&view, &mut encoder) {
         web_sys::console::error_1(&format!("Painter render error: {e}").into());
+        drop(encoder);
+        painter.finish_frame();
+        return;
     }
 
-    queue.submit(std::iter::once(encoder.finish()));
+    if let Err(error) = painter.submit_encoder(encoder) {
+        web_sys::console::error_1(&format!("Painter submission error: {error}").into());
+        painter.finish_frame();
+        return;
+    }
+    painter.finish_frame();
     queue.present(output);
 
     web_sys::console::log_1(&"FLUI Painting Demo rendered successfully!".into());

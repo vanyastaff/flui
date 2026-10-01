@@ -262,15 +262,245 @@ fn the_partial_clear_runs_before_content() {
     );
 }
 
+// Private quota seam is necessary: public capture uses the default profile.
+// Assertions observe rendered pixels and admission, never slot/texture identity.
+#[cfg(feature = "testing")]
+fn bounded_reused_targets_preserve_pixels() {
+    use crate::device_domain::{DeviceDomain, PreparedCost, PreparedIrLimits};
+    use crate::retained_target::RetainedTarget;
+    use std::sync::Arc;
+    let (device, queue) = crate::test_support::test_device_and_queue("Bounded retained reuse");
+    let domain = DeviceDomain::with_limits(
+        Arc::clone(&device),
+        queue,
+        PreparedIrLimits {
+            cost: PreparedCost {
+                gpu_bytes: 8 * 8 * 4 * 2,
+                cpu_bytes: 4096,
+                objects: 5,
+            },
+            submissions: 64,
+            frame_submissions: 64,
+        },
+    );
+    missing_partial_source_preserves_both_targets(&device, domain.queue());
+    let mut target = RetainedTarget::default();
+    for (size, fail, red) in [
+        ((8, 8), false, false),
+        ((8, 8), false, true),
+        ((8, 8), false, false),
+        ((8, 8), true, true),
+        ((8, 8), false, true),
+        ((4, 4), false, false),
+    ] {
+        let candidate = target
+            .begin(&domain, size, wgpu::TextureFormat::Rgba8Unorm, false)
+            .expect("two-slot quota admits reused candidate");
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+        {
+            let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: candidate.view(),
+                    resolve_target: None,
+                    depth_slice: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(if red {
+                            wgpu::Color::RED
+                        } else {
+                            wgpu::Color::GREEN
+                        }),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                ..Default::default()
+            });
+        }
+        domain
+            .submit(
+                domain
+                    .prepare(vec![encoder.finish()], vec![])
+                    .expect("prepare clear"),
+            )
+            .expect("candidate clear submits");
+        if fail {
+            drop(candidate);
+        } else {
+            target.commit(candidate);
+        }
+        let expected = if red && !fail {
+            [255, 0, 0, 255]
+        } else {
+            [0, 255, 0, 255]
+        };
+        let pixels = crate::test_support::readback_bytes(
+            &device,
+            domain.queue(),
+            target.texture().expect("committed image"),
+            size.0,
+            size.1,
+        );
+        assert_eq!(
+            &pixels[0..4],
+            &expected,
+            "failed clear must not replace committed pixels"
+        );
+    }
+}
+
+#[cfg(feature = "testing")]
+fn missing_partial_source_preserves_both_targets(
+    device: &std::sync::Arc<wgpu::Device>,
+    queue: &std::sync::Arc<wgpu::Queue>,
+) {
+    use crate::device_domain::{DeviceDomain, DomainError, PreparedCost, PreparedIrLimits};
+    use crate::error::{EngineError, Recoverability};
+    use crate::retained_target::RetainedTarget;
+    use std::sync::Arc;
+    let limits = PreparedIrLimits {
+        cost: PreparedCost {
+            gpu_bytes: 8 * 8 * 4 * 2,
+            cpu_bytes: 4096,
+            objects: 5,
+        },
+        submissions: 64,
+        frame_submissions: 64,
+    };
+    let domain = DeviceDomain::with_limits(Arc::clone(device), Arc::clone(queue), limits);
+    let foreign = DeviceDomain::new(Arc::clone(device), Arc::clone(queue));
+    let format = wgpu::TextureFormat::Rgba8Unorm;
+    let mut target = RetainedTarget::default();
+    let Err(missing) = target.begin(&domain, (8, 8), format, true) else {
+        panic!("partial preparation requires a committed source");
+    };
+    assert!(matches!(missing, EngineError::MissingRetainedSource));
+    assert_eq!(missing.recoverability(), Recoverability::Recoverable);
+    for color in [wgpu::Color::GREEN, wgpu::Color::RED] {
+        let candidate = target
+            .begin(&domain, (8, 8), format, false)
+            .expect("bounded candidate");
+        crate::test_support::clear_target(device, queue, candidate.view(), color);
+        target.commit(candidate);
+    }
+    for (owner, size, expected_missing) in [(&foreign, (8, 8), false), (&domain, (4, 4), true)] {
+        let Err(error) = target.begin(owner, size, format, true) else {
+            panic!("incompatible partial source must fail");
+        };
+        if expected_missing {
+            assert!(matches!(error, EngineError::MissingRetainedSource));
+            assert_eq!(error.recoverability(), Recoverability::Recoverable);
+        } else {
+            assert!(matches!(error, EngineError::DeviceDomainMismatch));
+            assert_eq!(error.recoverability(), Recoverability::Unrecoverable);
+        }
+    }
+    // Acquire/reconfigure can invalidate the source after planning a partial.
+    target.invalidate();
+    assert!(matches!(
+        target.begin(&domain, (8, 8), format, true),
+        Err(EngineError::MissingRetainedSource)
+    ));
+    let pixels = crate::test_support::readback_bytes(
+        device,
+        queue,
+        target.texture().expect("previous committed image"),
+        8,
+        8,
+    );
+    assert_eq!(&pixels[0..4], &[255, 0, 0, 255]);
+    domain
+        .poll()
+        .expect("retirement progress after rejected preparation");
+    // Both allocations must remain owned: polling must not free a spare that
+    // failed source validation never had authority to consume.
+    assert!(matches!(
+        domain.reserve(PreparedCost {
+            gpu_bytes: 1,
+            cpu_bytes: 0,
+            objects: 0
+        }),
+        Err(DomainError::Budget { .. })
+    ));
+    let candidate = target
+        .begin(&domain, (8, 8), format, false)
+        .expect("full retry reuses spare within two-target quota");
+    crate::test_support::clear_target(device, queue, candidate.view(), wgpu::Color::GREEN);
+    target.commit(candidate);
+    let pixels = crate::test_support::readback_bytes(
+        device,
+        queue,
+        target.texture().expect("retried committed image"),
+        8,
+        8,
+    );
+    assert_eq!(&pixels[0..4], &[0, 255, 0, 255]);
+}
+
+fn many_backdrops_and_mask_render_with_default_profile(renderer: &crate::HeadlessRenderer) {
+    use flui_layer::ShaderMaskLayer;
+    use flui_painting::paint::Shader;
+    let mut tree = LayerTree::new(Layer::from(TransformLayer::new(Matrix4::IDENTITY)));
+    let root = tree.root();
+    let mut background = Canvas::new();
+    background.draw_rect(
+        Rect::from_xywh(0.0, 0.0, f64::from(SIDE), f64::from(SIDE)),
+        &Paint::fill(Color::rgb(0, 255, 0)),
+    );
+    tree.push_child(root, Layer::from(PictureLayer::new(background.finish())));
+    for _ in 0..40 {
+        tree.push_child(
+            root,
+            Layer::from(BackdropFilterLayer::new(
+                ImageFilter::blur(1.0),
+                BlendMode::SrcOver,
+                Rect::from_xywh(8.0, 8.0, 16.0, 16.0),
+            )),
+        );
+    }
+    let mask = tree.push_child(
+        root,
+        Layer::from(ShaderMaskLayer::new(
+            Shader::solid(Color::WHITE),
+            BlendMode::Modulate,
+            Rect::from_xywh(64.0, 64.0, 16.0, 16.0),
+        )),
+    );
+    let mut child = Canvas::new();
+    child.draw_rect(
+        Rect::from_xywh(64.0, 64.0, 16.0, 16.0),
+        &Paint::fill(Color::RED),
+    );
+    tree.push_child(mask, Layer::from(PictureLayer::new(child.finish())));
+    let scene = Scene::new(tree);
+    let mut capture = renderer
+        .retained_capture((SIDE, SIDE))
+        .expect("many-effects capture");
+    capture.require_intermediate();
+    capture
+        .render_scene(&scene)
+        .expect("default profile admits forty backdrop cards plus mask");
+    let pixels = capture.read_rgba().expect("many-effects readback");
+    assert_eq!(
+        px(&pixels, 40, 40),
+        [0, 255, 0, 255],
+        "backdrop processing preserves exterior"
+    );
+    assert_eq!(
+        px(&pixels, 72, 72),
+        [255, 0, 0, 255],
+        "last shader mask is actually rendered"
+    );
+}
+
 /// A retained target that is not known to hold the last frame is never
-/// trusted: a partial frame after a resize, or after a frame that failed
-/// between beginning the target and submitting, renders in full, so the
-/// sentinel standing for stale pixels is overwritten.
+/// trusted after resize. A failed candidate preserves the committed image
+/// and leaves a full retry owed; the retry then overwrites stale pixels.
 #[test]
 fn an_invalid_target_promotes_to_full() {
     let Some(renderer) = crate::test_support::renderer_or_skip() else {
         return;
     };
+    #[cfg(feature = "testing")]
+    bounded_reused_targets_preserve_pixels();
     let root = ContentToken::mint();
     let token = ContentToken::mint();
     let red = square(Color::RED);
@@ -295,18 +525,41 @@ fn an_invalid_target_promotes_to_full() {
     capture.render_scene(&still).expect("first frame");
     warm(&mut capture, &still);
     capture.paint_retained(sentinel, GREEN);
+    // Alternate candidates repeatedly: reuse must seed from the latest committed
+    // image rather than exposing stale contents from the spare slot.
+    for _ in 0..4 {
+        capture.mark_dirty(small);
+        capture
+            .render_scene(&still)
+            .expect("reused partial candidate");
+        let pixels = capture.read_rgba().expect("reused candidate readback");
+        assert_eq!(
+            px(&pixels, 84, 84),
+            GREEN,
+            "copy preserves undamaged pixels across slot swaps"
+        );
+        assert_eq!(px(&pixels, 16, 16), [255, 0, 0, 255]);
+    }
     capture.fail_next_frame_after_begin();
     capture.mark_dirty(small);
     assert!(
         capture.render_scene(&still).is_err(),
         "the injected failure"
     );
+    let committed = capture
+        .read_retained_rgba()
+        .expect("committed readback after failure");
+    assert_eq!(
+        px(&committed, 84, 84),
+        GREEN,
+        "failed candidate must preserve the previous committed pixels"
+    );
     capture.mark_dirty(small);
     capture.render_scene(&still).expect("the retry renders");
     assert_eq!(
         capture.last_plan(),
-        Some(FramePlan::RetainedFull),
-        "a target begun by a failed frame is not valid"
+        Some(FramePlan::Direct),
+        "full retry uses the direct surface when no intermediate is required"
     );
     let pixels = capture.read_rgba().expect("readback");
     assert_eq!(
@@ -314,6 +567,23 @@ fn an_invalid_target_promotes_to_full() {
         WHITE,
         "the stale sentinel is repainted"
     );
+    capture.mark_dirty(small);
+    capture
+        .render_scene(&still)
+        .expect("retained target is rewarmed after direct retry");
+    assert_eq!(capture.last_plan(), Some(FramePlan::RetainedFull));
+    let committed = capture
+        .read_retained_rgba()
+        .expect("committed retry readback");
+    assert_eq!(px(&committed, 84, 84), WHITE);
+    capture.mark_dirty(small);
+    capture
+        .render_scene(&still)
+        .expect("next partial frame progresses");
+    assert!(matches!(
+        capture.last_plan(),
+        Some(FramePlan::RetainedPartial(_))
+    ));
 
     // A resize.
     let mut capture = renderer
@@ -1327,6 +1597,8 @@ fn a_removed_shader_mask_leaves_nothing_behind() {
     let Some(renderer) = crate::test_support::renderer_or_skip() else {
         return;
     };
+
+    many_backdrops_and_mask_render_with_default_profile(&renderer);
     let (root, background, card) = (
         ContentToken::mint(),
         ContentToken::mint(),

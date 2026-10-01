@@ -22,8 +22,6 @@
 //! | `shadow_pipeline`                        | `PipelineSet::shadow`                   |
 //! | `texture_bind_group_layout`              | `PipelineSet::texture_bind_group_layout`|
 //! | `gradient_bind_group_layout`             | `PipelineSet::gradient_bind_group_layout` (private) |
-//! | `gradient_stops_buffer`                  | `PipelineSet::gradient_stops_buffer` (private) |
-//! | `gradient_bind_group`                    | `PipelineSet::gradient_bind_group`      |
 //!
 //! ## Disambiguation from the deleted `pipelines.rs`
 //!
@@ -53,7 +51,7 @@
 //! ## Borrow-split safety
 //!
 //! The gradient bind-group update is encapsulated in
-//! [`PipelineSet::refresh_gradient_bind_group`](crate::pipeline_set::PipelineSet::refresh_gradient_bind_group),
+//! [`PipelineSet::prepare_gradient_bind_group`](crate::pipeline_set::PipelineSet::prepare_gradient_bind_group),
 //! which takes `device` and `queue`
 //! as shared references and manages both the buffer write and bind-group
 //! recreation internally. This prevents a borrow conflict that would arise if the
@@ -156,21 +154,9 @@ pub(crate) struct PipelineSet {
 
     /// Bind group layout for gradient pipelines (gradient-stops buffer at binding 0).
     ///
-    /// Private: callers reach it via [`Self::refresh_gradient_bind_group`] to
+    /// Private: callers reach it via [`Self::prepare_gradient_bind_group`] to
     /// avoid the borrow-split described in the module doc.
     gradient_bind_group_layout: wgpu::BindGroupLayout,
-
-    /// Persistent gradient-stops storage buffer shared across all gradient pipelines.
-    ///
-    /// Written on every frame that has gradient draws via
-    /// [`Self::refresh_gradient_bind_group`].
-    gradient_stops_buffer: wgpu::Buffer,
-
-    /// Current gradient-stops bind group, or `None` before the first gradient frame.
-    ///
-    /// Recreated each frame by [`Self::refresh_gradient_bind_group`] when
-    /// `current_gradient_stops` is non-empty.
-    pub(crate) gradient_bind_group: Option<wgpu::BindGroup>,
 
     // ── Advanced-blend composite pipeline ────────────────────────────────────
     /// Backdrop-read advanced-blend pipeline used by `flush_opacity_layer`
@@ -345,7 +331,6 @@ impl PipelineSet {
         );
 
         // ── Gradient + shadow pipelines ───────────────────────────────────────
-        let gradient_stops_buffer = crate::effects_pipeline::create_gradient_stops_buffer(device);
         let gradient_bind_group_layout =
             crate::effects_pipeline::create_gradient_bind_group_layout(device);
         let gradients = GradientPipelines::new(
@@ -397,8 +382,6 @@ impl PipelineSet {
             texture_bind_group_layout,
             glyph_atlas_bind_group_layout,
             gradient_bind_group_layout,
-            gradient_stops_buffer,
-            gradient_bind_group: None,
             advanced_blend,
             color_matrix,
             morphology,
@@ -437,32 +420,27 @@ impl PipelineSet {
 
     // ── Gradient bind-group refresh ────────────────────────────────────────────
 
-    /// Upload `stops_bytes` to the persistent gradient-stops buffer and
-    /// recreate the gradient bind group.
-    ///
-    /// Must be called once per frame before any gradient pipeline draw, whenever
-    /// the current frame has gradient draws. Encapsulates the write + rebind so
-    /// that the caller holds neither `&mut gradient_bind_group` nor
-    /// `&gradient_bind_group_layout` simultaneously — preventing the borrow
-    /// conflict described in the module doc.
-    pub(crate) fn refresh_gradient_bind_group(
-        &mut self,
+    /// Every encoded segment owns a distinct immutable stop table binding.
+    pub(crate) fn prepare_gradient_bind_group(
+        &self,
         device: &wgpu::Device,
-        queue: &wgpu::Queue,
         stops_bytes: &[u8],
-    ) {
-        queue.write_buffer(&self.gradient_stops_buffer, 0, stops_bytes);
-        self.gradient_bind_group = Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
+    ) -> wgpu::BindGroup {
+        use wgpu::util::DeviceExt;
+        let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Immutable Gradient Stops"),
+            contents: stops_bytes,
+            usage: wgpu::BufferUsages::STORAGE,
+        });
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Gradient Stops Bind Group"),
             layout: &self.gradient_bind_group_layout,
             entries: &[wgpu::BindGroupEntry {
                 binding: 0,
-                resource: self.gradient_stops_buffer.as_entire_binding(),
+                resource: buffer.as_entire_binding(),
             }],
-        }));
+        })
     }
-
-    // ── Premultiplied texture-composite pipeline cache ───────────────────────
 
     /// Ensure the premultiplied composite pipeline for `mode` is in the cache.
     ///

@@ -137,6 +137,13 @@ impl<S> SurfaceLease<S> {
             target,
         }
     }
+    #[cfg(all(test, feature = "testing", not(target_arch = "wasm32")))]
+    pub(crate) fn released_for_test(target: Arc<dyn WindowTarget>) -> Self {
+        Self {
+            surface: None,
+            target,
+        }
+    }
 }
 
 /// Probe the owner for a live handle, mapping a reported

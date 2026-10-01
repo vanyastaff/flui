@@ -7,7 +7,8 @@ use flui_painting::{BlendMode, Paint};
 
 use super::{
     super::{
-        command_ir::DrawSegment, effects::GradientStop, effects_pipeline,
+        command_ir::{DrawRun, DrawSegment},
+        effects::GradientStop,
         state_stack::GpuStateStack,
     },
     DrawBatcher,
@@ -35,56 +36,29 @@ impl GradientKind {
             Self::Sweep => "sweep_gradient_rect",
         }
     }
-
-    const fn description(self) -> &'static str {
-        match self {
-            Self::Linear => "linear",
-            Self::Radial => "radial",
-            Self::Sweep => "sweep",
-        }
-    }
 }
 
-/// Check the shared gradient-stop budget for one more instance of `kind`.
-///
-/// Returns the offset to write the stop at, or `None` when the budget is
-/// exhausted — in which case the instance is dropped and the overflow is
-/// warned about once per process (a frame over the limit would otherwise
-/// spam this for every overflowing instance, every frame).
+// The fragment shaders scan stops linearly. Bound per-pixel work independently
+// of frame storage admission; retain gradients beyond the former eight-stop cap.
+const MAX_GRADIENT_STOPS: usize = 256;
+
+/// Checked indexing for the immutable table; failures remain authoritative at seal.
 fn reserve_gradient_stops(
-    segment: &DrawSegment,
+    segment: &mut DrawSegment,
     kind: GradientKind,
     stops: &[GradientStop],
 ) -> Option<u32> {
-    // The gradient shaders index a fixed 8-stop window per instance. A
-    // longer list is truncated to its first 8 stops — said once per process
-    // rather than silently, since the tail of the gradient then goes missing.
-    let stop_count = stops.len().min(8);
-    if stops.len() > 8 {
-        static WARNED_TRUNCATION: std::sync::atomic::AtomicBool =
-            std::sync::atomic::AtomicBool::new(false);
-        if !WARNED_TRUNCATION.swap(true, std::sync::atomic::Ordering::Relaxed) {
-            tracing::warn!(
-                operation = kind.operation(),
-                requested = stops.len(),
-                "gradient has more than 8 stops; drawing the first 8 only (further \
-                 truncations this process will not be logged)"
-            );
-        }
+    if stops.len() > MAX_GRADIENT_STOPS {
+        segment.record_limit("gradient stops per draw", stops.len(), MAX_GRADIENT_STOPS);
+        return None;
     }
     let current_len = segment.current_gradient_stops.len();
-    if current_len + stop_count > effects_pipeline::MAX_GRADIENT_STOPS {
-        static WARNED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-        if !WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
-            tracing::warn!(
-                operation = kind.operation(),
-                current_stops = current_len,
-                requested = stop_count,
-                limit = effects_pipeline::MAX_GRADIENT_STOPS,
-                "gradient stop buffer full; dropping {} gradient instance; further                  overflows this process will not be logged",
-                kind.description(),
-            );
-        }
+    let Some(total) = current_len.checked_add(stops.len()) else {
+        segment.record_limit(kind.operation(), usize::MAX, u32::MAX as usize);
+        return None;
+    };
+    if total > u32::MAX as usize {
+        segment.record_limit(kind.operation(), total, u32::MAX as usize);
         return None;
     }
     Some(current_len as u32)
@@ -103,7 +77,7 @@ impl DrawBatcher {
     /// * `bounds`          — rectangle bounds (already in transformed space)
     /// * `gradient_start`  — gradient start point (local to `bounds`)
     /// * `gradient_end`    — gradient end point (local to `bounds`)
-    /// * `stops`           — gradient color stops (max 8)
+    /// * `stops`           — validated gradient color stops
     /// * `corner_radii`    — per-corner radii `[tl, tr, br, bl]` (0.0 = sharp)
     /// * `blend`           — the paint's fixed-function blend mode (never advanced)
     #[expect(
@@ -121,32 +95,16 @@ impl DrawBatcher {
         corner_radii: [f32; 4],
         blend: BlendMode,
     ) {
-        use crate::instancing::LinearGradientInstance;
+        if segment.recording_result().is_err() {
+            return;
+        }
 
-        // Append gradient stops to global buffer (max 8 per gradient).
-        // NOT sealed by kind. Gradients are deliberately excluded from
-        // `DrawBatcher::begin_phase`'s draw-order seal, because two segments in
-        // one frame cannot both carry gradient stops today: every segment's
-        // table is uploaded to the SAME `gradient_stops_buffer` at offset 0
-        // (`PipelineSet::refresh_gradient_bind_group`), and since all passes
-        // are recorded into one `CommandEncoder` before submission, the last
-        // `write_buffer` wins and every gradient pass in the frame samples that
-        // one table.
-        //
-        // Sealing here would turn a rare latent bug into a common one, so
-        // gradients keep exactly today's ordering — wrong relative to earlier
-        // primitives, but not newly wrong. Making them orderable means giving
-        // each segment its own slice of the stop buffer (a dynamic offset, or
-        // one buffer per segment). Until then `begin_phase` additionally
-        // refuses to seal a segment that already carries stops, because
-        // skipping the seal HERE does not stop a backward transition between
-        // two other kinds from splitting this segment anyway.
-        // The gradient readback suite guards this.
+        use crate::instancing::LinearGradientInstance;
 
         let Some(stop_offset) = reserve_gradient_stops(segment, GradientKind::Linear, stops) else {
             return;
         };
-        let stop_count = stops.len().min(8);
+        let stop_count = stops.len();
         segment
             .current_gradient_stops
             .extend_from_slice(&stops[..stop_count]);
@@ -167,6 +125,10 @@ impl DrawBatcher {
         let instance = state.apply_active_clip(instance);
 
         let _ = segment.linear_gradient_batch.add(instance);
+        segment.record_run(DrawRun::LinearGradient(
+            segment.linear_gradient_batch.len().saturating_sub(1)
+                ..segment.linear_gradient_batch.len(),
+        ));
         DrawSegment::push_gradient_run(
             &mut segment.linear_gradient_runs,
             state.current_scissor(),
@@ -185,7 +147,7 @@ impl DrawBatcher {
     /// * `bounds`         — rectangle bounds (already in transformed space)
     /// * `center`         — gradient center (local to `bounds`)
     /// * `radius`         — gradient radius
-    /// * `stops`          — gradient color stops (max 8)
+    /// * `stops`          — validated gradient color stops
     /// * `corner_radii`   — per-corner radii `[tl, tr, br, bl]` (0.0 = sharp)
     /// * `blend`          — the paint's fixed-function blend mode (never advanced)
     #[expect(
@@ -203,31 +165,16 @@ impl DrawBatcher {
         corner_radii: [f32; 4],
         blend: BlendMode,
     ) {
-        use crate::instancing::RadialGradientInstance;
+        if segment.recording_result().is_err() {
+            return;
+        }
 
-        // NOT sealed by kind. Gradients are deliberately excluded from
-        // `DrawBatcher::begin_phase`'s draw-order seal, because two segments in
-        // one frame cannot both carry gradient stops today: every segment's
-        // table is uploaded to the SAME `gradient_stops_buffer` at offset 0
-        // (`PipelineSet::refresh_gradient_bind_group`), and since all passes
-        // are recorded into one `CommandEncoder` before submission, the last
-        // `write_buffer` wins and every gradient pass in the frame samples that
-        // one table.
-        //
-        // Sealing here would turn a rare latent bug into a common one, so
-        // gradients keep exactly today's ordering — wrong relative to earlier
-        // primitives, but not newly wrong. Making them orderable means giving
-        // each segment its own slice of the stop buffer (a dynamic offset, or
-        // one buffer per segment). Until then `begin_phase` additionally
-        // refuses to seal a segment that already carries stops, because
-        // skipping the seal HERE does not stop a backward transition between
-        // two other kinds from splitting this segment anyway.
-        // The gradient readback suite guards this.
+        use crate::instancing::RadialGradientInstance;
 
         let Some(stop_offset) = reserve_gradient_stops(segment, GradientKind::Radial, stops) else {
             return;
         };
-        let stop_count = stops.len().min(8);
+        let stop_count = stops.len();
         segment
             .current_gradient_stops
             .extend_from_slice(&stops[..stop_count]);
@@ -248,6 +195,10 @@ impl DrawBatcher {
         let instance = state.apply_active_clip(instance);
 
         let _ = segment.radial_gradient_batch.add(instance);
+        segment.record_run(DrawRun::RadialGradient(
+            segment.radial_gradient_batch.len().saturating_sub(1)
+                ..segment.radial_gradient_batch.len(),
+        ));
         DrawSegment::push_gradient_run(
             &mut segment.radial_gradient_runs,
             state.current_scissor(),
@@ -267,7 +218,7 @@ impl DrawBatcher {
     /// * `center`       — gradient center (local to `bounds`)
     /// * `start_angle`  — start angle in radians
     /// * `end_angle`    — end angle in radians
-    /// * `stops`        — gradient color stops (max 8)
+    /// * `stops`        — validated gradient color stops
     /// * `corner_radii` — per-corner radii `[tl, tr, br, bl]` (0.0 = sharp)
     /// * `blend`        — the paint's fixed-function blend mode (never advanced)
     #[expect(
@@ -286,31 +237,16 @@ impl DrawBatcher {
         corner_radii: [f32; 4],
         blend: BlendMode,
     ) {
-        use crate::instancing::SweepGradientInstance;
+        if segment.recording_result().is_err() {
+            return;
+        }
 
-        // NOT sealed by kind. Gradients are deliberately excluded from
-        // `DrawBatcher::begin_phase`'s draw-order seal, because two segments in
-        // one frame cannot both carry gradient stops today: every segment's
-        // table is uploaded to the SAME `gradient_stops_buffer` at offset 0
-        // (`PipelineSet::refresh_gradient_bind_group`), and since all passes
-        // are recorded into one `CommandEncoder` before submission, the last
-        // `write_buffer` wins and every gradient pass in the frame samples that
-        // one table.
-        //
-        // Sealing here would turn a rare latent bug into a common one, so
-        // gradients keep exactly today's ordering — wrong relative to earlier
-        // primitives, but not newly wrong. Making them orderable means giving
-        // each segment its own slice of the stop buffer (a dynamic offset, or
-        // one buffer per segment). Until then `begin_phase` additionally
-        // refuses to seal a segment that already carries stops, because
-        // skipping the seal HERE does not stop a backward transition between
-        // two other kinds from splitting this segment anyway.
-        // The gradient readback suite guards this.
+        use crate::instancing::SweepGradientInstance;
 
         let Some(stop_offset) = reserve_gradient_stops(segment, GradientKind::Sweep, stops) else {
             return;
         };
-        let stop_count = stops.len().min(8);
+        let stop_count = stops.len();
         segment
             .current_gradient_stops
             .extend_from_slice(&stops[..stop_count]);
@@ -332,6 +268,10 @@ impl DrawBatcher {
         let instance = state.apply_active_clip(instance);
 
         let _ = segment.sweep_gradient_batch.add(instance);
+        segment.record_run(DrawRun::SweepGradient(
+            segment.sweep_gradient_batch.len().saturating_sub(1)
+                ..segment.sweep_gradient_batch.len(),
+        ));
         DrawSegment::push_gradient_run(
             &mut segment.sweep_gradient_runs,
             state.current_scissor(),
@@ -353,17 +293,22 @@ impl DrawBatcher {
     /// * `params`         — shadow offset, blur sigma, and color
     pub(in super::super) fn draw_shadow_rect(
         segment: &mut DrawSegment,
-        draw_order: &mut Vec<crate::command_ir::DrawItem>,
         rect_pos: [f32; 2],
         rect_size: [f32; 2],
         corner_radius: f32,
         params: &crate::effects::ShadowParams,
     ) {
+        if segment.recording_result().is_err() {
+            return;
+        }
+
         use crate::instancing::ShadowInstance;
 
         let instance = ShadowInstance::new(rect_pos, rect_size, corner_radius, params);
-        Self::begin_phase(segment, draw_order, crate::command_ir::Phase::Shadow);
         let _ = segment.shadow_batch.add(instance);
+        segment.record_run(DrawRun::Shadow(
+            segment.shadow_batch.len().saturating_sub(1)..segment.shadow_batch.len(),
+        ));
     }
 
     /// Dispatch a filled rect/rrect/circle with a shader paint to the correct
@@ -408,11 +353,25 @@ impl DrawBatcher {
         paint: &Paint,
         corner_radii: [f32; 4],
     ) -> bool {
+        if segment.recording_result().is_err() {
+            return true;
+        }
+
         let Some(shader) = &paint.shader else {
             return false;
         };
 
-        let stops = Self::shader_to_gradient_stops(shader);
+        let color_count = match shader {
+            Shader::LinearGradient { colors, .. }
+            | Shader::RadialGradient { colors, .. }
+            | Shader::SweepGradient { colors, .. } => colors.len(),
+            _ => 0,
+        };
+        if color_count > MAX_GRADIENT_STOPS {
+            segment.record_limit("gradient stops per draw", color_count, MAX_GRADIENT_STOPS);
+            return true;
+        }
+        let stops = Self::shader_to_gradient_stops(shader, &segment.budget);
         if stops.is_empty() {
             return false;
         }
@@ -445,8 +404,8 @@ impl DrawBatcher {
 
             // Step 2: build an isolated DrawSegment carrying exactly this gradient.
             // Stop offsets in the fresh segment start at 0.
-            let stop_count = stops.len().min(8);
-            let mut shape_segment = DrawSegment::new();
+            let stop_count = stops.len();
+            let mut shape_segment = segment.empty_sibling();
             shape_segment
                 .current_gradient_stops
                 .extend_from_slice(&stops[..stop_count]);
@@ -477,6 +436,10 @@ impl DrawBatcher {
                     .with_stop_offset(0);
                     let instance = state.apply_active_clip(instance);
                     let _ = shape_segment.linear_gradient_batch.add(instance);
+                    shape_segment.record_run(DrawRun::LinearGradient(
+                        shape_segment.linear_gradient_batch.len().saturating_sub(1)
+                            ..shape_segment.linear_gradient_batch.len(),
+                    ));
                     // `SrcOver` inside the isolated segment, not the paint's
                     // mode: `flush_advanced_layer` renders this segment into an
                     // offscreen and applies the advanced mode when compositing
@@ -510,6 +473,10 @@ impl DrawBatcher {
                     .with_stop_offset(0);
                     let instance = state.apply_active_clip(instance);
                     let _ = shape_segment.radial_gradient_batch.add(instance);
+                    shape_segment.record_run(DrawRun::RadialGradient(
+                        shape_segment.radial_gradient_batch.len().saturating_sub(1)
+                            ..shape_segment.radial_gradient_batch.len(),
+                    ));
                     // `SrcOver` inside the isolated segment, not the paint's
                     // mode: `flush_advanced_layer` renders this segment into an
                     // offscreen and applies the advanced mode when compositing
@@ -549,6 +516,10 @@ impl DrawBatcher {
                     .with_stop_offset(0);
                     let instance = state.apply_active_clip(instance);
                     let _ = shape_segment.sweep_gradient_batch.add(instance);
+                    shape_segment.record_run(DrawRun::SweepGradient(
+                        shape_segment.sweep_gradient_batch.len().saturating_sub(1)
+                            ..shape_segment.sweep_gradient_batch.len(),
+                    ));
                     // `SrcOver` inside the isolated segment, not the paint's
                     // mode: `flush_advanced_layer` renders this segment into an
                     // offscreen and applies the advanced mode when compositing
@@ -567,7 +538,7 @@ impl DrawBatcher {
             // Step 3: wrap and push as AdvancedShape.
             draw_order.push(crate::command_ir::DrawItem::AdvancedShape(
                 crate::command_ir::AdvancedShapeOp {
-                    segment: shape_segment,
+                    segment: shape_segment.seal(),
                     mode: paint.blend_mode,
                     device_bounds: transformed,
                 },
