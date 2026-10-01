@@ -338,11 +338,209 @@ fn gradient_rrect_keeps_per_corner_radii() {
     );
 }
 
+fn gradient_and_solid_follow_painter_order(gradient_first: bool) {
+    let Some(renderer) = crate::test_support::renderer_or_skip() else {
+        return;
+    };
+    {
+        let mut builder = SceneBuilder::new();
+        let mut canvas = Canvas::new();
+        let red = shader_paint(
+            constant_gradient(GradientKind::Linear, Color::rgb(255, 0, 0)),
+            BlendMode::SrcOver,
+        );
+        let blue = Paint::fill(Color::rgb(0, 0, 255)).with_anti_alias(false);
+        let red_bounds = Rect::from_xywh(0.0, 0.0, 48.0, 48.0);
+        let blue_bounds = Rect::from_xywh(16.0, 16.0, 48.0, 48.0);
+        if gradient_first {
+            canvas.draw_rect(red_bounds, &red);
+            canvas.draw_rect(blue_bounds, &blue);
+        } else {
+            canvas.draw_rect(blue_bounds, &blue);
+            canvas.draw_rect(red_bounds, &red);
+        }
+        builder.add_picture(canvas.finish());
+        let pixels = renderer
+            .render_layer_tree(&builder.build(), (SIDE, SIDE))
+            .expect("ordered gradient and solid scene must render");
+        assert_pixel(
+            pixel_at(&pixels, (8, 8)),
+            [1.0, 0.0, 0.0, 1.0],
+            "red-only region",
+        );
+        assert_pixel(
+            pixel_at(&pixels, (56, 56)),
+            [0.0, 0.0, 1.0, 1.0],
+            "blue-only region",
+        );
+        let expected = if gradient_first {
+            [0.0, 0.0, 1.0, 1.0]
+        } else {
+            [1.0, 0.0, 0.0, 1.0]
+        };
+        assert_pixel(
+            pixel_at(&pixels, (24, 24)),
+            expected,
+            &format!("overlap follows recorded order; gradient_first={gradient_first}"),
+        );
+    }
+}
+
+fn gradient_before_solid() {
+    gradient_and_solid_follow_painter_order(true);
+}
+
+fn solid_before_gradient() {
+    gradient_and_solid_follow_painter_order(false);
+}
+
+fn distinct_gradient_tables_survive_opacity_boundary() {
+    let Some(renderer) = crate::test_support::renderer_or_skip() else {
+        return;
+    };
+    let mut builder = SceneBuilder::new();
+    let mut left = Canvas::new();
+    left.draw_rect(
+        Rect::from_xywh(0.0, 0.0, 24.0, 64.0),
+        &shader_paint(
+            constant_gradient(GradientKind::Linear, Color::rgb(255, 0, 0)),
+            BlendMode::SrcOver,
+        ),
+    );
+    builder.add_picture(left.finish());
+    builder.push_opacity(0.5);
+    let mut right = Canvas::new();
+    right.draw_rect(
+        Rect::from_xywh(40.0, 0.0, 24.0, 64.0),
+        &shader_paint(
+            constant_gradient(GradientKind::Linear, Color::rgb(0, 0, 255)),
+            BlendMode::SrcOver,
+        ),
+    );
+    builder.add_picture(right.finish());
+    builder.pop();
+    let pixels = renderer
+        .render_layer_tree(&builder.build(), (SIDE, SIDE))
+        .expect("distinct gradient tables across opacity must render");
+    assert_pixel(
+        pixel_at(&pixels, (8, 32)),
+        [1.0, 0.0, 0.0, 1.0],
+        "left table remains red after later blue table upload",
+    );
+    assert_pixel(
+        pixel_at(&pixels, (56, 32)),
+        [0.5, 0.5, 1.0, 1.0],
+        "half-opacity blue over the white capture background",
+    );
+    assert_pixel(
+        pixel_at(&pixels, (32, 32)),
+        [1.0, 1.0, 1.0, 1.0],
+        "gap stays white",
+    );
+}
+
+fn repeated_gradient_kinds_keep_distinct_tables_and_order() {
+    let Some(renderer) = crate::test_support::renderer_or_skip() else {
+        return;
+    };
+    let mut builder = SceneBuilder::new();
+    let mut canvas = Canvas::new();
+    for (kind, color, bounds) in [
+        (GradientKind::Linear, Color::rgb(255, 0, 0), full_surface()),
+        (
+            GradientKind::Radial,
+            Color::rgb(0, 255, 0),
+            Rect::from_xywh(16.0, 16.0, 48.0, 48.0),
+        ),
+        (
+            GradientKind::Linear,
+            Color::rgb(0, 0, 255),
+            Rect::from_xywh(32.0, 32.0, 32.0, 32.0),
+        ),
+    ] {
+        canvas.draw_rect(
+            bounds,
+            &shader_paint(constant_gradient(kind, color), BlendMode::SrcOver),
+        );
+    }
+    builder.add_picture(canvas.finish());
+    let pixels = renderer
+        .render_layer_tree(&builder.build(), (SIDE, SIDE))
+        .expect("repeated gradient kinds must render in recorded order");
+    for (point, expected, label) in [
+        ((8, 8), [1.0, 0.0, 0.0, 1.0], "first linear only"),
+        ((24, 24), [0.0, 1.0, 0.0, 1.0], "radial over first linear"),
+        ((48, 48), [0.0, 0.0, 1.0, 1.0], "last linear over radial"),
+    ] {
+        assert_pixel(pixel_at(&pixels, point), expected, label);
+    }
+}
+
+fn ninth_gradient_stop_is_not_silently_clamped() {
+    let Some(renderer) = crate::test_support::renderer_or_skip() else {
+        return;
+    };
+    let mut colors = vec![Color::rgb(255, 0, 0); 8];
+    colors.push(Color::rgb(0, 0, 255));
+    let shader = Shader::LinearGradient {
+        from: Offset::new(0.0, 0.0),
+        to: Offset::new(f64::from(SIDE), 0.0),
+        colors,
+        stops: Some(vec![0.0, 0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.5]),
+        tile_mode: TileMode::Clamp,
+    };
+    let pixels = render_gradient_over_destination(&renderer, shader, BlendMode::SrcOver);
+    assert_pixel(
+        pixel_at(&pixels, (48, 32)),
+        [0.0, 0.0, 1.0, 1.0],
+        "past ninth stop must clamp to blue, not the eighth red stop",
+    );
+    assert_pixel(
+        pixel_at(&pixels, (8, 32)),
+        [1.0, 0.0, 0.0, 1.0],
+        "early stops stay red",
+    );
+}
+
+/// Runs every contract row even after an ordinary assertion panic.
+fn run_gradient_cases(cases: &[(&str, fn())]) {
+    let mut failed = Vec::new();
+    for &(name, case) in cases {
+        if std::panic::catch_unwind(case).is_err() {
+            failed.push(name);
+        }
+    }
+    assert!(
+        failed.is_empty(),
+        "failed gradient contract rows: {failed:?}"
+    );
+}
+
 /// Gradient contract, read back from the GPU: every Porter-Duff mode, each
-/// gradient kind through its own pipeline, and per-corner rrect radii.
+/// gradient kind through its own pipeline, per-corner rrect radii, painter order,
+/// and distinct stop-table ownership across composition boundaries.
 #[test]
 fn gradients_read_back_as_specified() {
-    a_linear_gradient_renders_every_porter_duff_mode();
-    each_gradient_kind_paints_through_its_own_pipeline();
-    gradient_rrect_keeps_per_corner_radii();
+    run_gradient_cases(&[
+        ("ninth_stop", ninth_gradient_stop_is_not_silently_clamped),
+        (
+            "porter_duff_modes",
+            a_linear_gradient_renders_every_porter_duff_mode,
+        ),
+        (
+            "gradient_pipeline_kinds",
+            each_gradient_kind_paints_through_its_own_pipeline,
+        ),
+        ("per_corner_radii", gradient_rrect_keeps_per_corner_radii),
+        ("gradient_before_solid", gradient_before_solid),
+        ("solid_before_gradient", solid_before_gradient),
+        (
+            "distinct_tables_opacity",
+            distinct_gradient_tables_survive_opacity_boundary,
+        ),
+        (
+            "linear_radial_linear",
+            repeated_gradient_kinds_keep_distinct_tables_and_order,
+        ),
+    ]);
 }

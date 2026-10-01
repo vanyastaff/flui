@@ -211,12 +211,16 @@ fn render_throughput(c: &mut Criterion) {
     // Warm-up frame: ensures pipeline caches (path, text buffer, gradient-stop
     // SmallVec) are in steady state before criterion starts measurement.
     {
+        painter.begin_frame();
         build_frame(&mut painter, &label);
         let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("bench-warmup"),
         });
-        let _ = painter.render_to_view(&view, &mut enc);
+        painter
+            .render_to_view(&view, &mut enc)
+            .expect("warm frame encodes");
         queue.submit([enc.finish()]);
+        painter.finish_frame();
         // wait_indefinitely() blocks until the most recent submission completes.
         let _ = device.poll(wgpu::PollType::wait_indefinitely());
     }
@@ -227,16 +231,19 @@ fn render_throughput(c: &mut Criterion) {
     // which is what the Phase-1 allocation-reduction work optimised.
     c.bench_function("painter_render_50rects_gradient_text", |b| {
         b.iter(|| {
+            painter.begin_frame();
             build_frame(&mut painter, &label);
             let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("bench-frame"),
             });
-            let result = painter.render_to_view(&view, &mut enc);
+            painter
+                .render_to_view(&view, &mut enc)
+                .expect("benchmark frame encodes");
             queue.submit([enc.finish()]);
+            painter.finish_frame();
             let _ = device.poll(wgpu::PollType::wait_indefinitely());
             // black_box the result so the compiler cannot prove the render
             // call is a no-op and eliminate it.
-            black_box(result)
         });
     });
 }
@@ -335,6 +342,7 @@ fn damage_scissor(c: &mut Criterion) {
     // the one a scissor can actually cull. A UI's own layers are smaller, so
     // treat these as an upper bound on the saving per layer, not a forecast.
     fn build(painter: &mut WgpuPainter, layers: u32, damage: Option<f32>, w: f32, h: f32) {
+        painter.begin_frame();
         painter.save();
         if let Some(side) = damage {
             painter.clip_rect(
@@ -373,8 +381,11 @@ fn damage_scissor(c: &mut Criterion) {
                 let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
                     label: Some("damage-warmup"),
                 });
-                let _ = painter.render_to_view(&view, &mut enc);
+                painter
+                    .render_to_view(&view, &mut enc)
+                    .expect("warm frame encodes");
                 queue.submit([enc.finish()]);
+                painter.finish_frame();
                 let _ = device.poll(wgpu::PollType::wait_indefinitely());
             }
         }
@@ -386,10 +397,12 @@ fn damage_scissor(c: &mut Criterion) {
                     let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
                         label: Some("damage-frame"),
                     });
-                    let result = painter.render_to_view(&view, &mut enc);
+                    painter
+                        .render_to_view(&view, &mut enc)
+                        .expect("benchmark frame encodes");
                     queue.submit([enc.finish()]);
+                    painter.finish_frame();
                     let _ = device.poll(wgpu::PollType::wait_indefinitely());
-                    black_box(result)
                 });
             });
         }
@@ -406,6 +419,10 @@ fn damage_scissor(c: &mut Criterion) {
 ///   to a 128 px damage, into the retained target, then the full-surface
 ///   blit onto the "swapchain" texture — the path a partial frame takes.
 /// - `blit_only`: the blit alone, the fixed cost every retained frame adds.
+/// - `candidate_copy_partial_blit_128px/N`: fresh candidate allocation, full
+///   committed-image copy, partial draw and surface blit. This models the
+///   transactional target cost with public painter operations; it does not
+///   exercise the private FrameProtocol or DeviceDomain admission itself.
 ///
 /// The retained target's memory is printed once: it is the per-window cost
 /// ADR-0087 §4 asks to record. Bandwidth on tile-based mobile GPUs is not
@@ -461,6 +478,7 @@ fn damage_retained_target(c: &mut Criterion) {
         flui_engine::OffscreenRenderer::new(Arc::clone(&device), Arc::clone(&queue), format);
 
     fn record(painter: &mut WgpuPainter, layers: u32, damage: Option<f64>, w: f64, h: f64) {
+        painter.begin_frame();
         painter.save();
         if let Some(side) = damage {
             let rect = Rect::from_xywh(0.0, 0.0, side, side);
@@ -497,8 +515,11 @@ fn damage_retained_target(c: &mut Criterion) {
                 f64::from(height),
             );
             let mut enc = encoder("retained-warmup");
-            let _ = painter.render_to_view(&surface_view, &mut enc);
+            painter
+                .render_to_view(&surface_view, &mut enc)
+                .expect("warm direct frame encodes");
             finish(enc);
+            painter.finish_frame();
             record(
                 &mut painter,
                 layers,
@@ -507,9 +528,14 @@ fn damage_retained_target(c: &mut Criterion) {
                 f64::from(height),
             );
             let mut enc = encoder("retained-warmup");
-            let _ = painter.render_to_view(&retained_view, &mut enc);
+            painter
+                .render_to_view(&retained_view, &mut enc)
+                .expect("warm retained frame encodes");
             finish(enc);
-            offscreen.blit_to_surface(&retained, &surface_view, format);
+            painter.finish_frame();
+            offscreen
+                .blit_to_surface(&retained, &surface_view, format)
+                .expect("retained blit");
         }
         group.bench_function(format!("full_direct/{layers}"), |b| {
             b.iter(|| {
@@ -521,9 +547,11 @@ fn damage_retained_target(c: &mut Criterion) {
                     f64::from(height),
                 );
                 let mut enc = encoder("retained-full");
-                let result = painter.render_to_view(&surface_view, &mut enc);
+                painter
+                    .render_to_view(&surface_view, &mut enc)
+                    .expect("benchmark frame encodes");
                 finish(enc);
-                black_box(result)
+                painter.finish_frame();
             });
         });
         group.bench_function(format!("partial_blit_128px/{layers}"), |b| {
@@ -536,24 +564,301 @@ fn damage_retained_target(c: &mut Criterion) {
                     f64::from(height),
                 );
                 let mut enc = encoder("retained-partial");
-                let result = painter.render_to_view(&retained_view, &mut enc);
+                painter
+                    .render_to_view(&retained_view, &mut enc)
+                    .expect("benchmark frame encodes");
                 finish(enc);
-                offscreen.blit_to_surface(&retained, &surface_view, format);
+                painter.finish_frame();
+                offscreen
+                    .blit_to_surface(&retained, &surface_view, format)
+                    .expect("retained blit");
                 let _ = device.poll(wgpu::PollType::wait_indefinitely());
-                black_box(result)
             });
         });
+        // Matched queue/wait control for candidate_copy_partial_blit below:
+        // one final wait, same recording and blit, no candidate allocation/copy.
+        group.bench_function(format!("partial_queued_blit_128px/{layers}"), |b| {
+            b.iter(|| {
+                record(
+                    &mut painter,
+                    layers,
+                    Some(128.0),
+                    f64::from(width),
+                    f64::from(height),
+                );
+                let mut enc = encoder("retained-queued-partial");
+                painter
+                    .render_to_view(&retained_view, &mut enc)
+                    .expect("matched partial frame encodes");
+                queue.submit([enc.finish()]);
+                painter.finish_frame();
+                offscreen
+                    .blit_to_surface(&retained, &surface_view, format)
+                    .expect("matched retained blit admitted");
+                device
+                    .poll(wgpu::PollType::wait_indefinitely())
+                    .expect("matched partial GPU round trip");
+            });
+        });
+        // Texture::clone shares a GPU allocation, not a CPU pixel copy.
+        // Candidate lifetime is queue-ordered here; this model excludes the
+        // production target permit ledger and its admission/retirement costs.
+        let mut committed = retained.clone();
+        group.bench_function(format!("candidate_copy_partial_blit_128px/{layers}"), |b| {
+            b.iter(|| {
+                let (candidate, candidate_view) = target(
+                    "retained-bench-candidate",
+                    wgpu::TextureUsages::RENDER_ATTACHMENT
+                        | wgpu::TextureUsages::TEXTURE_BINDING
+                        | wgpu::TextureUsages::COPY_SRC
+                        | wgpu::TextureUsages::COPY_DST,
+                );
+                let mut copy = encoder("candidate-seed-copy");
+                copy.copy_texture_to_texture(
+                    wgpu::TexelCopyTextureInfo {
+                        texture: &committed,
+                        mip_level: 0,
+                        origin: wgpu::Origin3d::ZERO,
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    wgpu::TexelCopyTextureInfo {
+                        texture: &candidate,
+                        mip_level: 0,
+                        origin: wgpu::Origin3d::ZERO,
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    wgpu::Extent3d {
+                        width,
+                        height,
+                        depth_or_array_layers: 1,
+                    },
+                );
+                // Same queue ordering as candidate seeding before partial work.
+                queue.submit([copy.finish()]);
+                record(
+                    &mut painter,
+                    layers,
+                    Some(128.0),
+                    f64::from(width),
+                    f64::from(height),
+                );
+                let mut enc = encoder("candidate-partial");
+                painter
+                    .render_to_view(&candidate_view, &mut enc)
+                    .expect("benchmark frame encodes");
+                queue.submit([enc.finish()]);
+                painter.finish_frame();
+                offscreen
+                    .blit_to_surface(&candidate, &surface_view, format)
+                    .expect("candidate blit admitted");
+                device
+                    .poll(wgpu::PollType::wait_indefinitely())
+                    .expect("candidate GPU round trip");
+                committed = candidate;
+            });
+        });
+        // Matched two-slot model: same copy/partial/blit, texture allocations outside timing.
+        let (mut reusable, mut reusable_view) = target(
+            "reusable-candidate",
+            wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_SRC
+                | wgpu::TextureUsages::COPY_DST,
+        );
+        let mut committed = retained.clone();
+        let mut committed_view = retained_view.clone();
+        group.bench_function(
+            format!("reused_candidate_copy_partial_blit_128px/{layers}"),
+            |b| {
+                b.iter(|| {
+                    let candidate = reusable.clone();
+                    let candidate_view = reusable_view.clone();
+                    let mut copy = encoder("candidate-seed-copy");
+                    copy.copy_texture_to_texture(
+                        wgpu::TexelCopyTextureInfo {
+                            texture: &committed,
+                            mip_level: 0,
+                            origin: wgpu::Origin3d::ZERO,
+                            aspect: wgpu::TextureAspect::All,
+                        },
+                        wgpu::TexelCopyTextureInfo {
+                            texture: &candidate,
+                            mip_level: 0,
+                            origin: wgpu::Origin3d::ZERO,
+                            aspect: wgpu::TextureAspect::All,
+                        },
+                        wgpu::Extent3d {
+                            width,
+                            height,
+                            depth_or_array_layers: 1,
+                        },
+                    );
+                    // Same queue ordering as candidate seeding before partial work.
+                    queue.submit([copy.finish()]);
+                    record(
+                        &mut painter,
+                        layers,
+                        Some(128.0),
+                        f64::from(width),
+                        f64::from(height),
+                    );
+                    let mut enc = encoder("candidate-partial");
+                    painter
+                        .render_to_view(&candidate_view, &mut enc)
+                        .expect("benchmark frame encodes");
+                    queue.submit([enc.finish()]);
+                    painter.finish_frame();
+                    offscreen
+                        .blit_to_surface(&candidate, &surface_view, format)
+                        .expect("candidate blit admitted");
+                    device
+                        .poll(wgpu::PollType::wait_indefinitely())
+                        .expect("candidate GPU round trip");
+                    reusable = std::mem::replace(&mut committed, candidate);
+                    reusable_view = std::mem::replace(&mut committed_view, candidate_view);
+                });
+            },
+        );
     }
     group.bench_function("blit_only", |b| {
         b.iter(|| {
-            offscreen.blit_to_surface(&retained, &surface_view, format);
+            offscreen
+                .blit_to_surface(&retained, &surface_view, format)
+                .expect("retained blit");
             let _ = device.poll(wgpu::PollType::wait_indefinitely());
         });
     });
     group.finish();
 }
 
-criterion_group!(benches, render_throughput);
+/// CPU-observed record/encode/submit/completion costs on a warm device.
+/// These timings are wall-clock round trips, not GPU timestamp measurements.
+fn ordered_primitives(c: &mut Criterion) {
+    let (device, queue) = try_create_gpu()
+        .expect("ordered_primitives requires an available GPU; absence is not a benchmark result");
+    let format = wgpu::TextureFormat::Rgba8UnormSrgb;
+    let target = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("ordered-primitives-target"),
+        size: wgpu::Extent3d {
+            width: 800,
+            height: 600,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        view_formats: &[],
+    });
+    let view = target.create_view(&wgpu::TextureViewDescriptor::default());
+    let mut painter = WgpuPainter::with_shared_device(
+        Arc::clone(&device),
+        Arc::clone(&queue),
+        format,
+        (800, 600),
+    );
+    let solid = Paint::fill(Color::rgb(0, 0, 255));
+    let linear = Paint::fill(Color::WHITE).with_shader(Shader::simple_linear(
+        Offset::new(0.0, 0.0),
+        Offset::new(800.0, 600.0),
+        vec![Color::rgb(255, 0, 0), Color::rgb(255, 255, 0)],
+    ));
+    let radial = Paint::fill(Color::WHITE).with_shader(Shader::simple_radial(
+        Offset::new(400.0, 300.0),
+        500.0,
+        vec![Color::rgb(0, 255, 0), Color::rgb(0, 255, 255)],
+    ));
+    let mut group = c.benchmark_group("ordered_primitives");
+    for count in [32_u32, 256] {
+        for pattern in ["solid", "solid_linear", "linear_radial"] {
+            // Reuse paints so source Vec allocation is outside measured recording.
+            // 96x96 quads on a 40px grid overlap across category boundaries.
+            let draws: Vec<_> = (0..count)
+                .map(|i| {
+                    let rect = Rect::from_xywh(
+                        f64::from(i % 16) * 40.0,
+                        f64::from((i / 16) % 12) * 40.0,
+                        96.0,
+                        96.0,
+                    );
+                    let paint = match (pattern, i % 2) {
+                        ("solid_linear", 1) | ("linear_radial", 0) => &linear,
+                        ("linear_radial", _) => &radial,
+                        _ => &solid,
+                    };
+                    (rect, paint)
+                })
+                .collect();
+            let record = |painter: &mut WgpuPainter| {
+                for &(rect, paint) in &draws {
+                    painter.draw_rect(black_box(rect), black_box(paint));
+                }
+            };
+            // Warm each workload's pipeline and allocation state explicitly.
+            painter.begin_frame();
+            record(&mut painter);
+            let mut encoder =
+                device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+            painter
+                .render_to_view(&view, &mut encoder)
+                .expect("warm ordered scene must encode");
+            queue.submit([encoder.finish()]);
+            device
+                .poll(wgpu::PollType::wait_indefinitely())
+                .expect("warm GPU completion must succeed");
+            painter.finish_frame();
+
+            group.bench_function(format!("{pattern}/{count}/cpu_record_drained"), |b| {
+                b.iter_custom(|iterations| {
+                    let mut measured = std::time::Duration::ZERO;
+                    for _ in 0..iterations {
+                        painter.begin_frame();
+                        let started = std::time::Instant::now();
+                        record(&mut painter);
+                        measured += started.elapsed();
+                        // Drain every recording; begin/finish alone do not discard arenas.
+                        // Encoding, submission, completion and maintenance are excluded
+                        // from the returned CPU recording duration.
+                        let mut encoder = device
+                            .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+                        painter
+                            .render_to_view(&view, &mut encoder)
+                            .expect("record benchmark scene must drain");
+                        queue.submit([encoder.finish()]);
+                        device
+                            .poll(wgpu::PollType::wait_indefinitely())
+                            .expect("record benchmark completion must succeed");
+                        painter.finish_frame();
+                    }
+                    measured
+                });
+            });
+            group.bench_function(
+                format!("{pattern}/{count}/cpu_observed_record_encode_submit_completion"),
+                |b| {
+                    b.iter(|| {
+                        painter.begin_frame();
+                        record(&mut painter);
+                        let mut encoder = device
+                            .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+                        painter
+                            .render_to_view(&view, &mut encoder)
+                            .expect("ordered benchmark scene must encode");
+                        queue.submit([encoder.finish()]);
+                        device
+                            .poll(wgpu::PollType::wait_indefinitely())
+                            .expect("GPU completion must succeed");
+                        painter.finish_frame();
+                    });
+                },
+            );
+        }
+    }
+    group.finish();
+}
+
+criterion_group!(benches, render_throughput, ordered_primitives);
 criterion_group!(alloc_benches, alloc_micro);
 criterion_group!(damage_benches, damage_scissor, damage_retained_target);
 criterion_main!(benches, damage_benches, alloc_benches);

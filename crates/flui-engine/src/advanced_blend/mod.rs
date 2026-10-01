@@ -538,7 +538,10 @@ mod synthetic_op_tests {
 
         let pipeline = AdvancedBlendPipeline::new(&device, TEST_FORMAT);
         let mut pool = TexturePool::new(Arc::clone(&device));
-        let mut resources = GpuResources::new(Arc::clone(&device), Arc::clone(&queue));
+        let mut resources = GpuResources::new(crate::device_domain::DeviceDomain::new(
+            Arc::clone(&device),
+            Arc::clone(&queue),
+        ));
 
         // Build the foreground pooled texture (solid src, full target size).
         // The texture pool uses RENDER_ATTACHMENT | TEXTURE_BINDING | COPY_SRC | COPY_DST.

@@ -1,3 +1,4 @@
+use super::{EngineResult, PreparedCost};
 // Shader-mask pipeline creation and render_masked execution.
 //
 // Moved from `offscreen.rs` into `offscreen/mask.rs` as part of the C1 LOC-cap
@@ -152,6 +153,9 @@ impl OffscreenRenderer {
     /// 3. Setup render pass targeting offscreen texture
     /// 4. Execute shader mask pipeline
     /// 5. Return masked texture
+    ///
+    /// # Errors
+    /// Returns admission, submission-backpressure or device-progress failures.
     // `pub` under `testing` for the `offscreen_resource_cache` bench.
     #[cfg_attr(not(feature = "testing"), expect(unreachable_pub))]
     pub fn render_masked(
@@ -160,7 +164,8 @@ impl OffscreenRenderer {
         result_size: Size<f64>,
         shader: &Shader,
         child_texture: &wgpu::Texture,
-    ) -> MaskedRenderResult {
+    ) -> EngineResult<MaskedRenderResult> {
+        self.domain.poll()?;
         // Get shader type for this shader
         let shader_type = ShaderType::from_shader(shader);
 
@@ -182,6 +187,13 @@ impl OffscreenRenderer {
 
         // Reuse the cached fullscreen-quad vertex buffer (content is invariant).
         // The uniform buffer is per-call (depends on child_bounds + shader type).
+        // Shader's mask ABI is 16 bytes for solid/image or 48 for gradients.
+        // Reserve before the CPU Vec and GPU buffer; conservative 48-byte charge.
+        let permit = self.domain.reserve(PreparedCost {
+            gpu_bytes: 48,
+            cpu_bytes: 48,
+            objects: 2,
+        })?;
         let uniform_data = shader.to_mask_uniform_data(child_bounds);
         let uniform_buffer = self
             .device
@@ -260,7 +272,8 @@ impl OffscreenRenderer {
         }
 
         // Submit commands
-        self.queue.submit(std::iter::once(encoder.finish()));
+        self.domain
+            .submit(self.domain.prepare(vec![encoder.finish()], vec![permit])?)?;
 
         tracing::trace!(
             "Shader mask rendering complete: {:?}, size: {}x{}",
@@ -269,6 +282,6 @@ impl OffscreenRenderer {
             result_size.height
         );
 
-        MaskedRenderResult { texture }
+        Ok(MaskedRenderResult { texture })
     }
 }

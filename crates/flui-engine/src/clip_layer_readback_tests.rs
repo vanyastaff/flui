@@ -15,11 +15,9 @@
 //!   and exactness (`Painter::clip_rect` has the full reasoning);
 //! - `AntiAliasWithSaveLayer` renders the clipped subtree into an offscreen and
 //!   applies the clip's coverage ONCE, to the finished group. The offscreen
-//!   is declined in one case, and it is not keyed on the clip's shape: inside a
-//!   bounds-growing image-filter layer, which would discard the offscreen along
-//!   with its siblings
-//!   (`a_clip_inside_an_image_filter_layer_keeps_its_content_and_its_siblings`,
-//!   reasoned in the crate's `ARCHITECTURE.md`).
+//!   remains active inside image filters; ordered filter input preserves the
+//!   offscreen and its siblings
+//!   (`a_clip_inside_an_image_filter_layer_keeps_its_content_and_its_siblings`).
 
 use flui_foundation::geometry::Rect;
 use flui_layer::{LayerTree, SceneBuilder};
@@ -380,9 +378,7 @@ fn a_clip_beside_a_sibling(with_filter: bool) -> LayerTree {
         builder.push_image_filter(flui_painting::paint::ImageFilter::blur(1.0));
     }
 
-    // A sibling FLUSHED BEFORE the clip. Opening an offscreen finalises the
-    // enclosing layer's pending segment into its draw order, so this is
-    // discarded alongside the clip's own subtree, not just beside it.
+    // The sibling is flushed into ordered filter input before the clip group.
     let mut canvas = Canvas::new();
     canvas.draw_rect(
         Rect::from_xywh(0.0, 0.0, 24.0, f64::from(SIDE as f32)),
@@ -390,8 +386,11 @@ fn a_clip_beside_a_sibling(with_filter: bool) -> LayerTree {
     );
     builder.add_picture(canvas.finish());
 
-    builder.push_clip_rect(
-        Rect::from_xywh(32.0, 0.0, 32.0, f64::from(SIDE as f32)),
+    builder.push_clip_rrect(
+        flui_foundation::geometry::RRect::from_rect_circular(
+            Rect::from_xywh(32.0, 0.0, 32.0, f64::from(SIDE as f32)),
+            8.0,
+        ),
         Clip::AntiAliasWithSaveLayer,
     );
     let mut canvas = Canvas::new();
@@ -405,31 +404,9 @@ fn a_clip_beside_a_sibling(with_filter: bool) -> LayerTree {
     builder.build()
 }
 
-/// Inside a bounds-growing image-filter layer the mode DEGRADES; it does not
-/// delete the content.
-///
-/// Those layers carry only their final `DrawSegment` into `FilterOp::input` and
-/// discard `offscreen_items`. A `DrawItem::OpacityLayer` opened inside one is
-/// therefore thrown away — and so is every sibling already flushed into the
-/// enclosing layer's draw order, because opening the layer finalises the pending
-/// segment first. `LayerDispatcher::opens_offscreen` declines the offscreen there and
-/// falls back to per-draw coverage: losing an edge beats losing the picture.
-///
-/// Both samples matter. The blue is the clip's own subtree; the red is the
-/// sibling drawn BEFORE it, which is the half that makes this a data-loss bug
-/// rather than a clipping one. The red sample doubles as the pin that the
-/// degraded path still CLIPS: blue is `(0, 0, 255)`, so a leak past the clip
-/// rect would take the red channel down with it.
-///
-/// The other direction — that the refusal is narrow, and an offscreen is still
-/// opened everywhere else — is not pinned: no test fails if `opens_offscreen`
-/// declines unconditionally.
-///
-/// What is NOT pinned, deliberately: that the degraded content inside a filter
-/// layer takes per-draw coverage rather than group coverage. The two differ
-/// only along a clip's fractional edge under overlapping translucency, and a
-/// blur pass smears exactly that edge — there is no sample point here that
-/// could tell them apart, so no assertion pretends to.
+/// A filter preserves the rounded clip group and the sibling flushed before it.
+/// Interior samples pin content preservation; the red sample also catches blue
+/// leaking past the clip. These samples do not pin fractional edge coverage.
 fn a_clip_inside_an_image_filter_layer_keeps_its_content_and_its_siblings() {
     let Some(renderer) = crate::test_support::renderer_or_skip() else {
         return;

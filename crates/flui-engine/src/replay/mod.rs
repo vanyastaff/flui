@@ -6,21 +6,11 @@
 //! `submit` dispatch loop, and opacity-layer recursion. The split keeps record
 //! and replay ownership explicit while each implementation unit stays bounded.
 //!
-//! ## Flush order — R1 invariant
+//! ## Recorded order invariant
 //!
-//! `GpuReplay::flush_segment` orchestrates a fixed five-phase submit order:
-//!
-//! ```text
-//! 1. flush_all_instanced_batches   (rect / circle / arc / shadow)
-//! 2. flush_gradient_batches        (linear / radial / sweep)
-//! 3. flush_tessellated_geometry    (lyon tessellated paths / vertices)
-//! 4. flush_segment_cached_images   (texture-cache images, grouped by TextureId)
-//! 5. flush_segment_external_images (external textures, resolved at replay time)
-//! ```
-//!
-//! This order is **load-bearing** for z-ordering correctness — a reorder
-//! silently corrupts draw results with no compile error.  Do not change it
-//! without an explicit architecture review.
+//! Each sealed segment replays its typed ranges in insertion order. Contiguous
+//! quad runs share a render pass; tessellation and texture runs remain barriers.
+//! Uploading arenas once does not regroup or reorder their recorded ranges.
 //!
 //! ## Viewport bind-group layout identity
 //!
@@ -69,7 +59,6 @@ pub(super) struct GpuReplay {
     // ── Static GPU plumbing moved from WgpuPainter ───────────────────────────
     /// Viewport uniform buffer (updated on resize, read by all instanced
     /// and gradient pipelines as group 0 binding 0).
-    viewport_buffer: wgpu::Buffer,
 
     /// Viewport bind group (group 0 for all instanced / gradient / shadow
     /// pipelines).
@@ -77,6 +66,7 @@ pub(super) struct GpuReplay {
     /// Created against `PipelineSet::viewport_bind_group_layout` to satisfy
     /// the wgpu identity requirement: bind group and pipeline must share the
     /// exact same layout object.
+    uniform_size: (u32, u32),
     viewport_bind_group: wgpu::BindGroup,
 
     /// Shared unit-quad vertex buffer (0,0 to 1,1) reused by all instanced
@@ -197,8 +187,8 @@ impl GpuReplay {
         });
 
         Self {
-            viewport_buffer,
             viewport_bind_group,
+            uniform_size: (initial_width, initial_height),
             unit_quad_buffer,
             unit_quad_index_buffer,
             default_sampler,
@@ -207,18 +197,9 @@ impl GpuReplay {
         }
     }
 
-    /// Write new viewport dimensions into the GPU uniform buffer.
-    ///
-    /// Must be called from `WgpuPainter::resize` whenever the window size
-    /// changes.  The write is byte-identical to what the painter previously
-    /// did directly: `[width, height, 0.0, 0.0]` as four `f32` values.
-    pub(super) fn update_viewport(&self, queue: &wgpu::Queue, width: u32, height: u32) {
-        let viewport_data = [width as f32, height as f32, 0.0_f32, 0.0_f32];
-        queue.write_buffer(
-            &self.viewport_buffer,
-            0,
-            bytemuck::cast_slice(&viewport_data),
-        );
+    /// Update CPU target state; previously encoded bindings remain immutable.
+    pub(super) fn update_viewport(&mut self, width: u32, height: u32) {
+        self.uniform_size = (width, height);
     }
 
     // =========================================================================
@@ -232,7 +213,7 @@ impl GpuReplay {
     ///
     /// Items are processed in the order they were drained from `draw_order`:
     ///
-    /// - `DrawItem::Segment`          → `flush_segment` (R1 five-phase order)
+    /// - `DrawItem::Segment`          → `flush_segment` (recorded range order)
     /// - `DrawItem::OffscreenTexture` → premultiplied texture composite
     /// - `DrawItem::OpacityLayer`     → `flush_opacity_layer` (recursive)
     ///
@@ -263,13 +244,12 @@ impl GpuReplay {
         // Recording is complete, so the atlas' pages are final for this
         // submit; every segment flushed below binds them.
         self.glyph_bind_group = Some(glyphs.bind_group().clone());
-        // R1: arm order (Segment / OffscreenTexture / OpacityLayer /
-        // AdvancedShape) is load-bearing for z-ordering — do not reorder.
+        // Item insertion order determines compositing order, independently of match arm order.
         for item in items {
             match item {
-                DrawItem::Segment(mut seg) => {
+                DrawItem::Segment(seg) => {
                     self.flush_segment(
-                        &mut seg,
+                        &seg,
                         viewport_size,
                         device,
                         queue,
@@ -277,7 +257,7 @@ impl GpuReplay {
                         resources,
                         encoder,
                         target.view,
-                    );
+                    )?;
                 }
                 DrawItem::OffscreenTexture(p) => {
                     use crate::instancing::ClippableInstance as _;
@@ -367,11 +347,11 @@ impl GpuReplay {
                 // outside the damage is the correct previous frame and the
                 // stale slice lasts one frame; a this-frame re-record or a
                 // precomputed Scene bit is the upgrade if that ever shows.
-                DrawItem::AdvancedShape(mut op) => {
+                DrawItem::AdvancedShape(op) => {
                     if let Some(surface_texture) = target.texture {
                         // Render the shape into a full-viewport offscreen foreground.
                         let foreground = self.render_segment_to_offscreen(
-                            &mut op.segment,
+                            &op.segment,
                             viewport_size,
                             surface_format,
                             device,
@@ -379,7 +359,7 @@ impl GpuReplay {
                             pipelines,
                             resources,
                             encoder,
-                        );
+                        )?;
                         let (vp_w, vp_h) = viewport_size;
                         let (viewport_width_f32, viewport_height_f32) = (vp_w as f32, vp_h as f32);
 
@@ -431,7 +411,7 @@ impl GpuReplay {
                              falling back to SrcOver (caller must pass sampleable target)"
                         );
                         self.flush_segment(
-                            &mut op.segment,
+                            &op.segment,
                             viewport_size,
                             device,
                             queue,
@@ -439,7 +419,7 @@ impl GpuReplay {
                             resources,
                             encoder,
                             target.view,
-                        );
+                        )?;
                     }
                 }
                 // ── SSAA-supersampled path — PR-3 (SrcOver) / PR-4 (all modes) ──
@@ -467,7 +447,7 @@ impl GpuReplay {
                         encoder,
                         target.view,
                         target.texture,
-                    );
+                    )?;
                     tracing::trace!(
                         mode = ?op.blend,
                         bounds = ?op.device_bounds,
@@ -493,10 +473,8 @@ impl GpuReplay {
                     //    Vertex positions are pre-transformed to fb-local NDC so that
                     //    dividing by the unchanged viewport uniform yields correct NDC
                     //    inside the smaller render target.
-                    let content_tex = self.render_segment_to_grown_offscreen(
-                        &mut op.input,
-                        op.fb_origin,
-                        op.fb_dim,
+                    let content_tex = self.render_filter_input(
+                        &mut op,
                         viewport_size,
                         surface_format,
                         device,
@@ -504,7 +482,7 @@ impl GpuReplay {
                         pipelines,
                         resources,
                         encoder,
-                    );
+                    )?;
 
                     // 2. Fold the pass chain over the grown-bounds intermediate.
                     //    Identity returns content_tex unchanged.
@@ -593,11 +571,11 @@ impl GpuReplay {
             draw_order.push(item);
         }
         if !offscreen_segment.is_empty() {
-            draw_order.push(DrawItem::Segment(offscreen_segment));
+            draw_order.push(DrawItem::Segment(offscreen_segment.seal()));
         }
     }
 }
 
-// The five-phase segment-flush machinery (flush_segment + every per-bucket
+// The ordered segment-flush machinery (flush_segment + typed-arena
 // flush helper it drives) is split out to restore the C1 <1500-LOC cap.
 mod flush;

@@ -262,6 +262,7 @@ pub(crate) mod color_matrix;
 pub(crate) mod command_ir;
 /// Per-frame dirty-rect accumulator behind the `render_scene` scissor.
 mod damage;
+mod device_domain;
 /// Gradient, shadow, and blur instance descriptors: the batch payloads the
 /// shader-paint and shadow dispatch build from a `Paint`/`DrawOp`.
 mod effects;
@@ -322,6 +323,7 @@ mod pipeline_cache;
 /// half.
 pub(crate) mod pipeline_set;
 mod profiler;
+mod recording_budget;
 /// Frame render-target descriptor: `view` + optional back-reference `texture`
 /// for dst-read blend passes.  Frame-scoped borrow, never stored in IR types.
 pub(crate) mod render_target;

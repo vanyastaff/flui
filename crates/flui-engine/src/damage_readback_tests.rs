@@ -262,15 +262,99 @@ fn the_partial_clear_runs_before_content() {
     );
 }
 
+// Private quota seam is necessary: public capture uses the default profile.
+// Assertions observe rendered pixels and admission, never slot/texture identity.
+#[cfg(feature = "testing")]
+fn bounded_reused_targets_preserve_pixels() {
+    use crate::device_domain::{DeviceDomain, PreparedCost, PreparedIrLimits};
+    use crate::retained_target::RetainedTarget;
+    use std::sync::Arc;
+    let (device, queue) = crate::test_support::test_device_and_queue("Bounded retained reuse");
+    let domain = DeviceDomain::with_limits(
+        Arc::clone(&device),
+        queue,
+        PreparedIrLimits {
+            cost: PreparedCost {
+                gpu_bytes: 8 * 8 * 4 * 2,
+                cpu_bytes: 0,
+                objects: 4,
+            },
+            submissions: 64,
+        },
+    );
+    let mut target = RetainedTarget::default();
+    for (size, fail, red) in [
+        ((8, 8), false, false),
+        ((8, 8), false, true),
+        ((8, 8), false, false),
+        ((8, 8), true, true),
+        ((8, 8), false, true),
+        ((4, 4), false, false),
+    ] {
+        let candidate = target
+            .begin(&domain, size, wgpu::TextureFormat::Rgba8Unorm, false)
+            .expect("two-slot quota admits reused candidate");
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+        {
+            let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: candidate.view(),
+                    resolve_target: None,
+                    depth_slice: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(if red {
+                            wgpu::Color::RED
+                        } else {
+                            wgpu::Color::GREEN
+                        }),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                ..Default::default()
+            });
+        }
+        domain
+            .submit(
+                domain
+                    .prepare(vec![encoder.finish()], vec![])
+                    .expect("prepare clear"),
+            )
+            .expect("candidate clear submits");
+        if fail {
+            drop(candidate);
+        } else {
+            target.commit(candidate);
+        }
+        let expected = if red && !fail {
+            [255, 0, 0, 255]
+        } else {
+            [0, 255, 0, 255]
+        };
+        let pixels = crate::test_support::readback_bytes(
+            &device,
+            domain.queue(),
+            target.texture().expect("committed image"),
+            size.0,
+            size.1,
+        );
+        assert_eq!(
+            &pixels[0..4],
+            &expected,
+            "failed clear must not replace committed pixels"
+        );
+    }
+}
+
 /// A retained target that is not known to hold the last frame is never
-/// trusted: a partial frame after a resize, or after a frame that failed
-/// between beginning the target and submitting, renders in full, so the
-/// sentinel standing for stale pixels is overwritten.
+/// trusted after resize. A failed candidate preserves the committed image
+/// and leaves a full retry owed; the retry then overwrites stale pixels.
 #[test]
 fn an_invalid_target_promotes_to_full() {
     let Some(renderer) = crate::test_support::renderer_or_skip() else {
         return;
     };
+    #[cfg(feature = "testing")]
+    bounded_reused_targets_preserve_pixels();
     let root = ContentToken::mint();
     let token = ContentToken::mint();
     let red = square(Color::RED);
@@ -295,18 +379,41 @@ fn an_invalid_target_promotes_to_full() {
     capture.render_scene(&still).expect("first frame");
     warm(&mut capture, &still);
     capture.paint_retained(sentinel, GREEN);
+    // Alternate candidates repeatedly: reuse must seed from the latest committed
+    // image rather than exposing stale contents from the spare slot.
+    for _ in 0..4 {
+        capture.mark_dirty(small);
+        capture
+            .render_scene(&still)
+            .expect("reused partial candidate");
+        let pixels = capture.read_rgba().expect("reused candidate readback");
+        assert_eq!(
+            px(&pixels, 84, 84),
+            GREEN,
+            "copy preserves undamaged pixels across slot swaps"
+        );
+        assert_eq!(px(&pixels, 16, 16), [255, 0, 0, 255]);
+    }
     capture.fail_next_frame_after_begin();
     capture.mark_dirty(small);
     assert!(
         capture.render_scene(&still).is_err(),
         "the injected failure"
     );
+    let committed = capture
+        .read_retained_rgba()
+        .expect("committed readback after failure");
+    assert_eq!(
+        px(&committed, 84, 84),
+        GREEN,
+        "failed candidate must preserve the previous committed pixels"
+    );
     capture.mark_dirty(small);
     capture.render_scene(&still).expect("the retry renders");
     assert_eq!(
         capture.last_plan(),
-        Some(FramePlan::RetainedFull),
-        "a target begun by a failed frame is not valid"
+        Some(FramePlan::Direct),
+        "full retry uses the direct surface when no intermediate is required"
     );
     let pixels = capture.read_rgba().expect("readback");
     assert_eq!(
@@ -314,6 +421,23 @@ fn an_invalid_target_promotes_to_full() {
         WHITE,
         "the stale sentinel is repainted"
     );
+    capture.mark_dirty(small);
+    capture
+        .render_scene(&still)
+        .expect("retained target is rewarmed after direct retry");
+    assert_eq!(capture.last_plan(), Some(FramePlan::RetainedFull));
+    let committed = capture
+        .read_retained_rgba()
+        .expect("committed retry readback");
+    assert_eq!(px(&committed, 84, 84), WHITE);
+    capture.mark_dirty(small);
+    capture
+        .render_scene(&still)
+        .expect("next partial frame progresses");
+    assert!(matches!(
+        capture.last_plan(),
+        Some(FramePlan::RetainedPartial(_))
+    ));
 
     // A resize.
     let mut capture = renderer

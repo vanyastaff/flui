@@ -25,6 +25,7 @@ use flui_foundation::geometry::Rect;
 ///
 /// Manages instanced batching, tessellation, text rendering, and offscreen compositing.
 pub struct WgpuPainter {
+    domain: Arc<crate::device_domain::DeviceDomain>,
     // ===== GPU State =====
     /// wgpu device (Arc for sharing with text renderer)
     device: Arc<wgpu::Device>,
@@ -111,6 +112,28 @@ pub struct WgpuPainter {
 // GPU rendering routinely converts between numeric types for pixel coordinates,
 // color channels, buffer indices, and instance counts.
 impl WgpuPainter {
+    /// Start an embedder-owned frame before recording any drawing commands.
+    ///
+    /// Pair this with [`Self::finish_frame`] after submitting the final encoder.
+    /// Intermediate `render_to_view` flushes belong to the same frame.
+    pub fn begin_frame(&mut self) {
+        self.reset_frame_state();
+    }
+
+    /// Finish an embedder-owned frame after submitting its final encoder.
+    ///
+    /// Call once, including when rendering failed and the encoder was discarded.
+    /// Advances resource reclamation and releases frame-local uniform allocations.
+    /// Do not call between flushes of one frame: later passes can still reference
+    /// resources used by earlier passes.
+    pub fn finish_frame(&mut self) {
+        self.retire_prepared_after_external_submit();
+        self.end_frame_maintenance();
+        self.current_segment = DrawSegment::default();
+        self.draw_order.clear();
+        self.state.reset();
+        self.compositor.reset();
+    }
     /// Create a new GPU painter
     ///
     /// # Arguments
@@ -137,6 +160,20 @@ impl WgpuPainter {
         surface_format: wgpu::TextureFormat,
         size: (u32, u32),
     ) -> Self {
+        Self::with_domain(
+            crate::device_domain::DeviceDomain::new(device, queue),
+            surface_format,
+            size,
+        )
+    }
+
+    pub(crate) fn with_domain(
+        domain: Arc<crate::device_domain::DeviceDomain>,
+        surface_format: wgpu::TextureFormat,
+        size: (u32, u32),
+    ) -> Self {
+        let device = Arc::clone(domain.device());
+        let queue = Arc::clone(domain.queue());
         #[cfg(debug_assertions)]
         tracing::trace!(
             "WgpuPainter::new: format={:?}, size=({}, {})",
@@ -168,9 +205,10 @@ impl WgpuPainter {
         );
 
         // ===== Resource managers =====
-        let resources = GpuResources::new(Arc::clone(&device), Arc::clone(&queue));
+        let resources = GpuResources::new(Arc::clone(&domain));
 
         Self {
+            domain,
             device,
             queue,
             surface_format,
@@ -364,14 +402,14 @@ impl WgpuPainter {
 
     /// Render all batched geometry to a texture view.
     ///
-    /// Called once per frame after all drawing operations.  Draw items are
+    /// Called for each encoded flush after its drawing operations. Draw items are
     /// replayed in the order they were recorded, with offscreen textures
     /// interleaved at the correct Z-position.
     ///
     /// The dispatch loop and opacity-layer recursion live in
     /// `GpuReplay::submit` (see `replay.rs`); `render` is responsible only for
     /// the record-finish steps (cache advance, stats trace,
-    /// `finish_current_segment`) and the post-submit buffer-pool reset.
+    /// `finish_current_segment`). Buffer-pool reuse waits for `finish_frame`.
     ///
     /// # Arguments
     /// * `view`    - Texture view to render to
@@ -383,6 +421,7 @@ impl WgpuPainter {
         target: crate::render_target::RenderTarget<'_>,
         encoder: &mut wgpu::CommandEncoder,
     ) -> crate::error::EngineResult<()> {
+        self.current_segment.recording_result()?;
         // Advance batcher cache frame counters and evict stale entries.
         self.batcher.path_cache.advance_frame();
 
@@ -424,9 +463,6 @@ impl WgpuPainter {
             target,
         )?;
 
-        // Reset buffer pool for next frame.
-        self.resources.buffer_pool_mut().reset();
-
         // NOTE: texture-cache maintenance is intentionally NOT done here.
         // `render` runs multiple times per frame — each backdrop-filter flush
         // (backend.rs / renderer.rs) plus the final flush — on the SAME cache.
@@ -462,6 +498,9 @@ impl WgpuPainter {
     /// flushes invoke it mid-frame), so per-call maintenance would reset
     /// use-counters between passes and drop textures still in use this frame.
     pub(crate) fn end_frame_maintenance(&mut self) {
+        // Every encoded flush in this frame must retain distinct writable buffers
+        // until the final submission. Resetting after a render aliases encoders.
+        self.resources.buffer_pool_mut().reset();
         // Close the glyph atlas' frame: slots this frame did not touch become
         // reclaimable. Must run here (the once-per-frame seam), not per
         // `render` pass — advancing mid-frame would let an earlier
@@ -505,9 +544,9 @@ impl WgpuPainter {
     /// Call this when the window is resized.
     pub fn resize(&mut self, width: u32, height: u32) {
         self.size = (width, height);
+        self.replay.update_viewport(width, height);
         // Delegate the GPU uniform-buffer write to GpuReplay, which owns the
         // buffer.  The write is byte-identical: [width, height, 0.0, 0.0].
-        self.replay.update_viewport(&self.queue, width, height);
     }
 
     // ===== External Texture Registry Access =====
@@ -606,6 +645,7 @@ impl WgpuPainter {
 // modules of `painter`, so they retain access to WgpuPainter's private fields.
 mod draw;
 mod layer;
+mod submission;
 mod transform_clip;
 
 // ─── Shared growth helper ─────────────────────────────────────────────────────

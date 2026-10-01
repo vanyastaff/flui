@@ -176,21 +176,32 @@ fn atlas_image_is_sharp_at_one_to_one() {
 /// zero, so the centre must come back transparent. `SrcOver` (the pre-fix
 /// behaviour) would leave red.
 fn an_offscreen_result_composites_with_its_own_blend_mode() {
+    clear_offscreen_result(false);
+    clear_offscreen_result(true);
+}
+
+fn clear_offscreen_result(nested: bool) {
     use flui_painting::Paint;
 
     const SIZE: u32 = 64;
     let (device, queue) = test_device_and_queue();
 
     let rgba = render_to_rgba(&device, &queue, SIZE, wgpu::Color::BLACK, |painter| {
+        if nested {
+            painter.save_layer(
+                None,
+                &Paint::fill(flui_painting::styling::Color::rgba(255, 255, 255, 128)),
+            );
+        }
         // Step 1: opaque red, so the frame has something to erase.
         painter.draw_rect(
             Rect::from_xywh(0.0, 0.0, f64::from(SIZE as f32), f64::from(SIZE as f32)),
             &Paint::fill(flui_painting::styling::Color::rgb(255, 0, 0)),
         );
 
-        // Step 2: an all-zero offscreen texture, composited with Clear. A
-        // `Clear` composite ignores the source colour, which makes this the
-        // discriminating case: SrcOver leaves the red, Clear erases it.
+        // Step 2: a transparent offscreen texture, composited with Clear.
+        // Clear must erase even when the source has zero alpha; discarding
+        // transparent fragments would incorrectly preserve the destination.
         let mut pool = crate::texture_pool::TexturePool::new(Arc::clone(&device));
         let texture = pool.acquire(SIZE, SIZE, READBACK_FORMAT);
         {
@@ -205,7 +216,7 @@ fn an_offscreen_result_composites_with_its_own_blend_mode() {
                         resolve_target: None,
                         depth_slice: None,
                         ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(wgpu::Color::GREEN),
+                            load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
                             store: wgpu::StoreOp::Store,
                         },
                     })],
@@ -223,14 +234,17 @@ fn an_offscreen_result_composites_with_its_own_blend_mode() {
             Rect::from_xywh(0.0, 0.0, f64::from(SIZE as f32), f64::from(SIZE as f32)),
             BlendMode::Clear,
         );
+        if nested {
+            painter.restore_layer();
+        }
     });
 
     let center = pixel_at(&rgba, SIZE, SIZE / 2, SIZE / 2);
     assert_eq!(
         center,
-        [0, 0, 0, 0],
-        "centre pixel = {center:?}; a Clear composite of a GREEN offscreen \
-         must erase the red frame to transparent."
+        [0, 0, 0, if nested { 255 } else { 0 }],
+        "centre pixel = {center:?}; a Clear composite of a transparent offscreen \
+         must erase the red content (nested={nested})."
     );
 }
 
@@ -238,6 +252,343 @@ fn an_offscreen_result_composites_with_its_own_blend_mode() {
 /// composites with its own blend mode.
 #[test]
 fn painter_images_and_offscreen_results_read_back_as_specified() {
-    atlas_image_is_sharp_at_one_to_one();
-    an_offscreen_result_composites_with_its_own_blend_mode();
+    let cases: [(&str, fn()); 10] = [
+        (
+            "recording quota shared by layers",
+            recording_quota_is_shared_by_isolated_layers,
+        ),
+        (
+            "recording clone peak",
+            recording_quota_charges_filter_remap_clone,
+        ),
+        (
+            "recording admission recovery",
+            recording_quota_refuses_then_next_frame_renders,
+        ),
+        (
+            "cached image scissor changes",
+            cached_image_draws_keep_their_own_scissors,
+        ),
+        (
+            "frozen viewport between flushes",
+            viewport_bindings_survive_resize_before_submit,
+        ),
+        ("atlas sharpness", atlas_image_is_sharp_at_one_to_one),
+        (
+            "transient image lifetime",
+            transient_images_keep_their_own_pixels,
+        ),
+        (
+            "filtered image dimensions",
+            filtered_images_keep_their_dimensions,
+        ),
+        (
+            "low-alpha images",
+            low_alpha_images_preserve_their_contribution,
+        ),
+        (
+            "offscreen blend",
+            an_offscreen_result_composites_with_its_own_blend_mode,
+        ),
+    ];
+    let mut failures = Vec::new();
+    for (name, case) in cases {
+        if std::panic::catch_unwind(case).is_err() {
+            failures.push(name);
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "painter image rows failed: {failures:?}"
+    );
+}
+
+fn low_alpha_images_preserve_their_contribution() {
+    use flui_painting::paint::Image;
+
+    const SIZE: u32 = 4;
+    let (device, queue) = test_device_and_queue();
+    let rgba = render_to_rgba(&device, &queue, SIZE, wgpu::Color::WHITE, |painter| {
+        for alpha in 1..=3u8 {
+            let image = Image::from_rgba8(1, 1, vec![255, 0, 0, alpha]);
+            painter.draw_image(
+                &image,
+                Rect::from_xywh(f64::from(alpha - 1), 0.0, 1.0, 1.0),
+                BlendMode::SrcOver,
+            );
+        }
+    });
+    for alpha in 1..=3u8 {
+        assert_eq!(
+            pixel_at(&rgba, SIZE, u32::from(alpha - 1), 0),
+            [255, 255 - alpha, 255 - alpha, 255],
+            "alpha {alpha}/255 must contribute to the destination"
+        );
+    }
+}
+
+/// Equal bytes can describe different row layouts. A CPU filter must not make
+/// the vertical image reuse the horizontal image's uploaded texture.
+fn filtered_images_keep_their_dimensions() {
+    use flui_painting::paint::{Image, image::ColorFilter};
+
+    const SIZE: u32 = 4;
+    let (device, queue) = test_device_and_queue();
+    let pixels = vec![255, 0, 0, 255, 0, 255, 0, 255];
+    let horizontal = Image::from_rgba8(2, 1, pixels.clone());
+    let vertical = Image::from_rgba8(1, 2, pixels);
+    let rgba = render_to_rgba(&device, &queue, SIZE, wgpu::Color::BLACK, |painter| {
+        for (image, dst) in [
+            (&horizontal, Rect::from_xywh(0.0, 0.0, 2.0, 1.0)),
+            (&vertical, Rect::from_xywh(3.0, 0.0, 1.0, 2.0)),
+        ] {
+            painter.draw_image_filtered(
+                image,
+                dst,
+                ColorFilter::Mode {
+                    color: flui_painting::styling::Color::TRANSPARENT,
+                    blend_mode: BlendMode::Dst,
+                },
+                BlendMode::SrcOver,
+            );
+        }
+    });
+    assert_eq!(pixel_at(&rgba, SIZE, 1, 0), [0, 255, 0, 255]);
+    assert_eq!(pixel_at(&rgba, SIZE, 3, 1), [0, 255, 0, 255]);
+}
+
+/// Recording may outlive the caller's image handle. Each short-lived image
+/// must still sample its own pixels when the accumulated commands replay.
+fn transient_images_keep_their_own_pixels() {
+    use flui_painting::paint::Image;
+
+    const SIZE: u32 = 16;
+    let (device, queue) = test_device_and_queue();
+    let rgba = render_to_rgba(&device, &queue, SIZE, wgpu::Color::BLACK, |painter| {
+        for index in 0..SIZE * SIZE {
+            let image = Image::from_rgba8(1, 1, vec![index as u8, 255, 0, 255]);
+            painter.draw_image(
+                &image,
+                Rect::from_xywh(f64::from(index % SIZE), f64::from(index / SIZE), 1.0, 1.0),
+                BlendMode::SrcOver,
+            );
+        }
+    });
+    for index in 0..SIZE * SIZE {
+        assert_eq!(
+            pixel_at(&rgba, SIZE, index % SIZE, index / SIZE),
+            [index as u8, 255, 0, 255],
+            "image {index} must survive its caller dropping the CPU handle"
+        );
+    }
+}
+
+fn viewport_bindings_survive_resize_before_submit() {
+    use flui_painting::{Paint, styling::Color};
+    let (device, queue) = test_device_and_queue();
+    let (first, first_view) = crate::test_support::create_target(
+        &device,
+        "first viewport",
+        64,
+        64,
+        READBACK_FORMAT,
+        wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+    );
+    let (second, second_view) = crate::test_support::create_target(
+        &device,
+        "second viewport",
+        128,
+        128,
+        READBACK_FORMAT,
+        wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+    );
+    crate::test_support::clear_target(&device, &queue, &first_view, wgpu::Color::BLACK);
+    crate::test_support::clear_target(&device, &queue, &second_view, wgpu::Color::BLACK);
+    let mut painter = WgpuPainter::with_shared_device(
+        Arc::clone(&device),
+        Arc::clone(&queue),
+        READBACK_FORMAT,
+        (64, 64),
+    );
+    painter.begin_frame();
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+    painter.draw_rect(
+        Rect::from_xywh(40.0, 8.0, 16.0, 16.0),
+        &Paint::fill(Color::rgb(255, 0, 0)).with_anti_alias(false),
+    );
+    painter
+        .render_to_view(&first_view, &mut encoder)
+        .expect("first viewport encodes");
+    painter.resize(128, 128);
+    painter.draw_rect(
+        Rect::from_xywh(80.0, 16.0, 32.0, 32.0),
+        &Paint::fill(Color::rgb(0, 0, 255)).with_anti_alias(false),
+    );
+    painter
+        .render_to_view(&second_view, &mut encoder)
+        .expect("second viewport encodes");
+    painter
+        .submit_encoder(encoder)
+        .expect("both viewport flushes submit together");
+    painter.finish_frame();
+    let first_pixels = crate::test_support::readback_bytes(&device, &queue, &first, 64, 64);
+    let second_pixels = crate::test_support::readback_bytes(&device, &queue, &second, 128, 128);
+    assert_eq!(
+        pixel_at(&first_pixels, 64, 48, 16),
+        [255, 0, 0, 255],
+        "first flush retains 64px viewport after resize"
+    );
+    assert_eq!(
+        pixel_at(&first_pixels, 64, 24, 8),
+        [0, 0, 0, 255],
+        "first geometry must not shrink under later viewport"
+    );
+    assert_eq!(
+        pixel_at(&second_pixels, 128, 96, 32),
+        [0, 0, 255, 255],
+        "second flush uses resized viewport"
+    );
+    assert_eq!(
+        pixel_at(&second_pixels, 128, 48, 16),
+        [0, 0, 0, 255],
+        "second geometry stays offcenter"
+    );
+}
+
+fn cached_image_draws_keep_their_own_scissors() {
+    use flui_painting::paint::{Clip, Image};
+    let (device, queue) = test_device_and_queue();
+    // A large solid source keeps sample points far from atlas gutter filtering.
+    // A 1x1 source mixes its single texel with transparent gutter under linear sampling.
+    let image = Image::from_rgba8(32, 32, [255, 0, 0, 255].repeat(32 * 32));
+    let pixels = render_to_rgba(&device, &queue, 64, wgpu::Color::BLACK, |painter| {
+        for clip in [
+            Rect::from_xywh(0.0, 0.0, 24.0, 64.0),
+            Rect::from_xywh(40.0, 0.0, 24.0, 64.0),
+        ] {
+            painter.save();
+            painter.clip_rect(clip, Clip::HardEdge);
+            painter.draw_image(
+                &image,
+                Rect::from_xywh(0.0, 0.0, 64.0, 64.0),
+                BlendMode::SrcOver,
+            );
+            painter.restore();
+        }
+    });
+    assert_eq!(
+        pixel_at(&pixels, 64, 8, 32),
+        [255, 0, 0, 255],
+        "first draw retains left scissor instead of last right scissor"
+    );
+    assert_eq!(
+        pixel_at(&pixels, 64, 56, 32),
+        [255, 0, 0, 255],
+        "second draw fills right scissor"
+    );
+    assert_eq!(
+        pixel_at(&pixels, 64, 32, 32),
+        [0, 0, 0, 255],
+        "neither draw may fill the gap between scissors"
+    );
+}
+
+fn recording_quota_case(bytes: usize, elements: usize, draw: fn(&mut WgpuPainter)) {
+    use flui_painting::{Paint, styling::Color};
+    let (device, queue) = test_device_and_queue();
+    let (target, view) = crate::test_support::create_target(
+        &device,
+        "recording recovery",
+        64,
+        64,
+        READBACK_FORMAT,
+        wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+    );
+    crate::test_support::clear_target(&device, &queue, &view, wgpu::Color::BLACK);
+    let mut painter = WgpuPainter::with_shared_device(
+        Arc::clone(&device),
+        Arc::clone(&queue),
+        READBACK_FORMAT,
+        (64, 64),
+    );
+    painter.begin_frame();
+    // Private admission seam, but recording/rendering are the consumer's public API.
+    painter.current_segment = crate::command_ir::DrawSegment::with_budget(
+        crate::recording_budget::RecordingBudget::new(bytes, elements),
+    );
+    draw(&mut painter);
+    let mut failed = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+    assert!(
+        matches!(
+            painter.render_to_view(&view, &mut failed),
+            Err(crate::error::EngineError::PreparedResourceLimit { .. })
+        ),
+        "recording quota refusal must reach render, not silently skip"
+    );
+    drop(failed);
+    painter.finish_frame();
+    let unchanged = crate::test_support::readback_bytes(&device, &queue, &target, 64, 64);
+    assert_eq!(
+        pixel_at(&unchanged, 64, 32, 32),
+        [0, 0, 0, 255],
+        "failed unsubmitted frame leaves target untouched"
+    );
+    painter.begin_frame();
+    painter.draw_rect(
+        Rect::from_xywh(0.0, 0.0, 64.0, 64.0),
+        &Paint::fill(Color::rgb(0, 255, 0)).with_anti_alias(false),
+    );
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+    painter
+        .render_to_view(&view, &mut encoder)
+        .expect("next admitted frame encodes");
+    painter
+        .submit_encoder(encoder)
+        .expect("next admitted frame submits");
+    painter.finish_frame();
+    let pixels = crate::test_support::readback_bytes(&device, &queue, &target, 64, 64);
+    assert_eq!(
+        pixel_at(&pixels, 64, 32, 32),
+        [0, 255, 0, 255],
+        "next frame makes visible progress after quota refusal"
+    );
+}
+
+fn recording_quota_refuses_then_next_frame_renders() {
+    recording_quota_case(0, 0, |painter| {
+        painter.draw_rect(
+            Rect::from_xywh(0.0, 0.0, 64.0, 64.0),
+            &flui_painting::Paint::fill(flui_painting::styling::Color::RED),
+        );
+    });
+}
+fn recording_quota_is_shared_by_isolated_layers() {
+    recording_quota_case(1024 * 1024, 3, |painter| {
+        use flui_painting::{Paint, styling::Color};
+        painter.draw_rect(
+            Rect::from_xywh(0.0, 0.0, 24.0, 64.0),
+            &Paint::fill(Color::RED).with_anti_alias(false),
+        );
+        painter.save_layer(None, &Paint::fill(Color::rgba(255, 255, 255, 128)));
+        painter.draw_rect(
+            Rect::from_xywh(40.0, 0.0, 24.0, 64.0),
+            &Paint::fill(Color::BLUE).with_anti_alias(false),
+        );
+        painter.restore_layer();
+    });
+}
+fn recording_quota_charges_filter_remap_clone() {
+    recording_quota_case(1024 * 1024, 3, |painter| {
+        use crate::layer_state_stack::LayerStateStack;
+        use flui_painting::{Paint, paint::effects::ImageFilter, styling::Color};
+        {
+            let mut dispatcher = crate::layer_dispatcher::LayerDispatcher::new(painter);
+            dispatcher.push_image_filter(&ImageFilter::blur(1.0));
+        }
+        painter.draw_rect(
+            Rect::from_xywh(16.0, 16.0, 24.0, 24.0),
+            &Paint::fill(Color::RED).with_anti_alias(false),
+        );
+        painter.restore_layer();
+    });
 }

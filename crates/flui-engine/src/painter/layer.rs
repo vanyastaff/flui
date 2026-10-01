@@ -466,15 +466,6 @@ impl WgpuPainter {
         );
     }
 
-    /// Whether an enclosing `save_layer` routes through a bounds-growing image
-    /// filter, whose restore discards nested layers wholesale.
-    ///
-    /// See `LayerCompositor::inside_image_filter_layer` for what is discarded
-    /// and why a clip asks before opening an offscreen.
-    pub(crate) fn inside_image_filter_layer(&self) -> bool {
-        self.compositor.inside_image_filter_layer()
-    }
-
     /// Like [`Self::save_layer`] but routes the layer through a per-pixel GPU
     /// filter (currently only [`LayerFilter::ColorMatrix`]) before compositing.
     ///
@@ -565,7 +556,10 @@ impl WgpuPainter {
         // Hand the current draw-record accumulators to the compositor; it wraps
         // them in a SavedLayer and resets current_opacity to 1.0 for the subtree.
         let saved_draw_order = std::mem::take(&mut self.draw_order);
-        let saved_segment = std::mem::replace(&mut self.current_segment, DrawSegment::new());
+        let saved_segment = {
+            let replacement = self.current_segment.empty_sibling();
+            std::mem::replace(&mut self.current_segment, replacement)
+        };
         tracing::trace!(
             "WgpuPainter::save_layer: layer_opacity={:.3}, tint={:?}, blend={:?}, \
              filters={:?}, bounds={:?}",
@@ -584,36 +578,6 @@ impl WgpuPainter {
             (bounds_array).map(|a| a.map(|v| v as f32)),
             filters, // moved here after the trace
             composite_clip,
-        );
-    }
-
-    /// Warn that a bounds-growing image-filter layer is dropping nested draw
-    /// items.
-    ///
-    /// `FilterOp::input` is one `DrawSegment`, not a `Vec<DrawItem>`, so the
-    /// Morph / Blur / Chain arms of [`Self::restore_layer`] carry only the
-    /// layer's final segment and discard everything else — which is not just
-    /// the nested layer's own subtree but every sibling already flushed into
-    /// the enclosing layer's draw order beside it.
-    ///
-    /// One function rather than three near-copies differing by a literal: they
-    /// drifted apart once already, and the loss they describe is the same loss.
-    ///
-    /// `LayerDispatcher::opens_offscreen` declines to open a clip's offscreen inside
-    /// one of these layers precisely so a `Clip::AntiAliasWithSaveLayer` clip
-    /// cannot reach this path; what remains is an explicitly nested opacity
-    /// layer, which is the pre-existing limitation `FilterOp::input` has to
-    /// grow a `Vec<DrawItem>` to lift.
-    fn warn_discarded_offscreen_items(filter_kind: &str, offscreen_items: &[DrawItem]) {
-        if offscreen_items.is_empty() {
-            return;
-        }
-        tracing::warn!(
-            filter_kind,
-            item_count = offscreen_items.len(),
-            "restore_layer: offscreen_items discarded; FilterOp::input only \
-             captures the final DrawSegment, so a nested opacity layer and \
-             everything flushed beside it inside this filter layer is lost"
         );
     }
 
@@ -642,8 +606,10 @@ impl WgpuPainter {
     /// (`RestoreOutcome::Underflow`).
     pub fn restore_layer(&mut self) {
         // Capture the offscreen content drawn since save_layer.
-        let offscreen_final_segment =
-            std::mem::replace(&mut self.current_segment, DrawSegment::new());
+        let offscreen_final_segment = {
+            let replacement = self.current_segment.empty_sibling();
+            std::mem::replace(&mut self.current_segment, replacement)
+        };
         let offscreen_items = std::mem::take(&mut self.draw_order);
 
         // Determine compositing bounds before calling pop_layer so the painter
@@ -688,10 +654,13 @@ impl WgpuPainter {
 
                 // Finalize the current parent segment so the new draw item is
                 // inserted at the correct Z-position in the draw order.
-                let parent_segment =
-                    std::mem::replace(&mut self.current_segment, DrawSegment::new());
+                let parent_segment = {
+                    let replacement = self.current_segment.empty_sibling();
+                    std::mem::replace(&mut self.current_segment, replacement)
+                };
                 if !parent_segment.is_empty() {
-                    self.draw_order.push(DrawItem::Segment(parent_segment));
+                    self.draw_order
+                        .push(DrawItem::Segment(parent_segment.seal()));
                 }
 
                 // A clip and an image filter never open the same layer:
@@ -710,19 +679,6 @@ impl WgpuPainter {
                 // plain opacity/tint/blend-mode layers.
                 match image_filter {
                     Some(ImageFilterSpec::Morph { radius, op }) => {
-                        // Package the offscreen content as a FilterOp.
-                        //
-                        // `FilterOp::input` is a flat `DrawSegment` consumed by
-                        // `render_segment_to_offscreen` at replay time.  For a
-                        // morphology layer opened with `save_layer_with_image_filter`,
-                        // callers do not nest opacity layers inside, so
-                        // `offscreen_items` is empty and `offscreen_final_segment`
-                        // holds all the content.  If `offscreen_items` is non-empty
-                        // (e.g., a nested texture from a draw_image call), log a
-                        // debug trace — the items are silently ignored because the
-                        // current FilterOp::input is a single DrawSegment; a future
-                        // task can extend FilterOp::input to Vec<DrawItem> if needed.
-                        Self::warn_discarded_offscreen_items("Morph", &offscreen_items);
                         // `_ = layer_opacity` — morphology is applied as a DrawItem::Filter
                         // that composites directly; the opacity field is inherited via
                         // `effective_layer_opacity(1.0)` in `save_layer_with_image_filter`
@@ -741,7 +697,10 @@ impl WgpuPainter {
                         // viewport if the segment is empty or contains an un-boundable kind.
                         let composite_bounds = {
                             let vp = self.viewport_bounds();
-                            Self::content_aabb(&offscreen_final_segment)
+                            offscreen_items
+                                .is_empty()
+                                .then(|| Self::content_aabb(&offscreen_final_segment))
+                                .flatten()
                                 .and_then(|aabb| aabb.intersect(&vp))
                                 .unwrap_or(vp)
                         };
@@ -770,7 +729,8 @@ impl WgpuPainter {
                             "WgpuPainter::restore_layer: queued DrawItem::Filter (Morph)"
                         );
                         self.draw_order.push(DrawItem::Filter(FilterOp {
-                            input: offscreen_final_segment,
+                            input: offscreen_final_segment.seal(),
+                            items: offscreen_items,
                             passes: smallvec![single_pass],
                             content_bounds: composite_bounds,
                             grown_bounds,
@@ -785,13 +745,15 @@ impl WgpuPainter {
                         //
                         // Growth via the shared `cumulative_growth` helper (one source
                         // of truth for Blur; `kernel_radius` uses Impeller's √3·σ rule).
-                        Self::warn_discarded_offscreen_items("Blur", &offscreen_items);
                         let _ = (layer_opacity, tint_rgb, layer_blend, layer_filter);
 
                         // Content-AABB override (same rationale as the Morph arm above).
                         let composite_bounds = {
                             let vp = self.viewport_bounds();
-                            Self::content_aabb(&offscreen_final_segment)
+                            offscreen_items
+                                .is_empty()
+                                .then(|| Self::content_aabb(&offscreen_final_segment))
+                                .flatten()
                                 .and_then(|aabb| aabb.intersect(&vp))
                                 .unwrap_or(vp)
                         };
@@ -816,7 +778,8 @@ impl WgpuPainter {
                             "WgpuPainter::restore_layer: queued DrawItem::Filter (Blur)"
                         );
                         self.draw_order.push(DrawItem::Filter(FilterOp {
-                            input: offscreen_final_segment,
+                            input: offscreen_final_segment.seal(),
+                            items: offscreen_items,
                             passes: smallvec![single_pass],
                             content_bounds: composite_bounds,
                             grown_bounds,
@@ -828,14 +791,15 @@ impl WgpuPainter {
                         // Multi-pass Compose chain: the passes vec is already flattened
                         // at record time by `flatten_compose` in `backend.rs`.
                         //
-                        // Identical offscreen_items guard as Morph/Blur arms above.
-                        Self::warn_discarded_offscreen_items("Chain", &offscreen_items);
                         let _ = (layer_opacity, tint_rgb, layer_blend, layer_filter);
 
                         // Content-AABB override (same rationale as the Morph/Blur arms above).
                         let composite_bounds = {
                             let vp = self.viewport_bounds();
-                            Self::content_aabb(&offscreen_final_segment)
+                            offscreen_items
+                                .is_empty()
+                                .then(|| Self::content_aabb(&offscreen_final_segment))
+                                .flatten()
                                 .and_then(|aabb| aabb.intersect(&vp))
                                 .unwrap_or(vp)
                         };
@@ -859,7 +823,8 @@ impl WgpuPainter {
                             "WgpuPainter::restore_layer: queued DrawItem::Filter (Chain)"
                         );
                         self.draw_order.push(DrawItem::Filter(FilterOp {
-                            input: offscreen_final_segment,
+                            input: offscreen_final_segment.seal(),
+                            items: offscreen_items,
                             passes,
                             content_bounds: composite_bounds,
                             grown_bounds,
@@ -889,7 +854,7 @@ impl WgpuPainter {
                         self.draw_order
                             .push(DrawItem::OpacityLayer(PendingOpacityLayer {
                                 items: offscreen_items,
-                                final_segment: offscreen_final_segment,
+                                final_segment: offscreen_final_segment.seal(),
                                 opacity: layer_opacity,
                                 tint_rgb,
                                 bounds: composite_bounds,
@@ -914,10 +879,13 @@ impl WgpuPainter {
                 // Finalize the parent's pre-save content into the draw order
                 // BEFORE re-integrating the offscreen items so that parent
                 // content renders beneath the layer subtree (correct Z-order).
-                let parent_segment =
-                    std::mem::replace(&mut self.current_segment, DrawSegment::new());
+                let parent_segment = {
+                    let replacement = self.current_segment.empty_sibling();
+                    std::mem::replace(&mut self.current_segment, replacement)
+                };
                 if !parent_segment.is_empty() {
-                    self.draw_order.push(DrawItem::Segment(parent_segment));
+                    self.draw_order
+                        .push(DrawItem::Segment(parent_segment.seal()));
                 }
                 crate::replay::GpuReplay::reintegrate_offscreen_content(
                     offscreen_final_segment,

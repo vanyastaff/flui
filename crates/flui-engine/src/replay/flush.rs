@@ -1,9 +1,9 @@
 //! `GpuReplay` segment-flush machinery, split out of `replay.rs` for the C1 cap.
 //!
-//! Holds `flush_segment` (the canonical five-phase entry point) and every
-//! per-bucket flush helper it drives (instanced batches, gradients, tessellated
+//! Holds ordered `flush_segment` and every
+//! typed-arena replay helper it drives (instanced batches, gradients, tessellated
 //! geometry, cached/external images, and the texture-batch blend variants). The
-//! dispatch core (`new` / `update_viewport` / `submit` /
+//! dispatch core (`new` / `submit` /
 //! `reintegrate_offscreen_content`) stays in the parent `replay` module.
 //!
 //! These are inherent `impl GpuReplay` methods on a descendant module of
@@ -13,12 +13,18 @@ use std::sync::Arc;
 
 use super::GpuReplay;
 use crate::{
-    command_ir::{DrawSegment, ScissorRect},
+    command_ir::{DrawRun, DrawSegment, ScissorRect},
     effects_pipeline::GradientKind,
     pipeline_cache::PipelineKey,
     pipeline_set::PipelineSet,
     resources::GpuResources,
 };
+
+struct PreparedTess {
+    vertex_buffer: wgpu::Buffer,
+    index_buffer: wgpu::Buffer,
+    clip_bind_groups: Vec<wgpu::BindGroup>,
+}
 
 // =============================================================================
 // Scissor clamping
@@ -74,10 +80,8 @@ fn clamp_scissor_to_attachment(
 /// visible area, in which case the caller must skip its `draw_indexed` call
 /// rather than pass a possibly out-of-bounds rect to wgpu.
 ///
-/// This is the only place in this module that calls
-/// `RenderPass::set_scissor_rect` — every batch and texture flush path below
-/// routes through it. No test pins that invariant, so a new direct call would
-/// silently reintroduce an unclamped scissor.
+/// Texture and tessellation replay use this helper directly; ordered quad
+/// replay caches the same normalized rectangle within its render pass.
 fn set_clamped_scissor(
     render_pass: &mut wgpu::RenderPass<'_>,
     scissor: ScissorRect,
@@ -104,595 +108,23 @@ impl GpuReplay {
     // Segment-flush entry point
     // =========================================================================
 
-    /// Flush a single `DrawSegment` to the GPU in the canonical six-phase order.
-    ///
-    /// ## R1 — flush order invariant
-    ///
-    /// The six phases are executed in this exact sequence.  This order is
-    /// **load-bearing** for z-ordering correctness — a reorder silently corrupts
-    /// draw results with no compile error — and it is what
-    /// [`crate::command_ir::Phase`] mirrors:
-    ///
-    /// 1. `flush_all_instanced_batches`   — rect / circle / arc / shadow
-    /// 2. `flush_gradient_batches`        — linear / radial / sweep
-    /// 3. `flush_tessellated_geometry`    — lyon tessellated paths / vertices
-    /// 4. `flush_segment_cached_images`   — texture-cache images
-    /// 5. `flush_segment_external_images` — external (registered) textures
-    /// 6. `flush_glyphs`                  — text
-    pub(crate) fn flush_segment(
-        &mut self,
-        segment: &mut DrawSegment,
-        viewport_size: (u32, u32),
+    fn prepare_tessellated_geometry(
+        segment: &DrawSegment,
         device: &Arc<wgpu::Device>,
         queue: &Arc<wgpu::Queue>,
         pipelines: &mut PipelineSet,
         resources: &mut GpuResources,
-        encoder: &mut wgpu::CommandEncoder,
-        view: &wgpu::TextureView,
-    ) {
-        // R1: six-phase order is load-bearing — do not reorder.
-        self.flush_all_instanced_batches(
-            segment,
-            viewport_size,
-            device,
-            queue,
-            pipelines,
-            resources,
-            encoder,
-            view,
-        );
-        self.flush_gradient_batches(
-            segment,
-            viewport_size,
-            device,
-            queue,
-            pipelines,
-            resources,
-            encoder,
-            view,
-        );
-        self.flush_tessellated_geometry(
-            segment,
-            viewport_size,
-            device,
-            queue,
-            pipelines,
-            resources,
-            encoder,
-            view,
-        );
-        self.flush_segment_cached_images(
-            segment,
-            viewport_size,
-            device,
-            queue,
-            pipelines,
-            resources,
-            encoder,
-            view,
-        );
-        self.flush_segment_external_images(
-            segment,
-            viewport_size,
-            device,
-            queue,
-            pipelines,
-            resources,
-            encoder,
-            view,
-        );
-        self.flush_glyphs(
-            segment,
-            viewport_size,
-            device,
-            queue,
-            pipelines,
-            resources,
-            encoder,
-            view,
-        );
-    }
-
-    // =========================================================================
-    // Phase 6: glyphs
-    // =========================================================================
-
-    /// Flush the segment's glyph quads: one instanced draw per scissor run,
-    /// sampling the atlas pages bound for this submit. A no-op when the
-    /// instanced pass already drew them (see `flush_all_instanced_batches`).
-    #[expect(clippy::too_many_arguments)]
-    fn flush_glyphs(
-        &mut self,
-        segment: &mut DrawSegment,
-        viewport_size: (u32, u32),
-        device: &Arc<wgpu::Device>,
-        queue: &Arc<wgpu::Queue>,
-        pipelines: &PipelineSet,
-        resources: &mut GpuResources,
-        encoder: &mut wgpu::CommandEncoder,
-        view: &wgpu::TextureView,
-    ) {
-        if segment.glyph_batch.is_empty() {
-            return;
-        }
-        let Some(atlas_bind_group) = self.glyph_bind_group.as_ref() else {
-            debug_assert!(false, "BUG: a segment with glyphs flushed outside a submit");
-            segment.glyph_batch.clear();
-            segment.glyph_scissors.clear();
-            return;
-        };
-
-        let instance_buffer = resources.buffer_pool_mut().get_vertex_buffer(
-            device,
-            queue,
-            "Glyph Instance Buffer",
-            segment.glyph_batch.as_bytes(),
-        );
-
-        let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("Instanced Glyph Pass"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view,
-                resolve_target: None,
-                depth_slice: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Load,
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: None,
-            timestamp_writes: None,
-            occlusion_query_set: None,
-            multiview_mask: None,
-        });
-        render_pass.set_pipeline(&pipelines.instanced_glyph);
-        render_pass.set_bind_group(0, &self.viewport_bind_group, &[]);
-        render_pass.set_bind_group(1, atlas_bind_group, &[]);
-        render_pass.set_vertex_buffer(0, self.unit_quad_buffer.slice(..));
-        render_pass.set_vertex_buffer(1, instance_buffer.slice(..));
-        render_pass.set_index_buffer(
-            self.unit_quad_index_buffer.slice(..),
-            wgpu::IndexFormat::Uint16,
-        );
-        let (full_w, full_h) = viewport_size;
-        for region in &segment.glyph_scissors {
-            if set_clamped_scissor(&mut render_pass, region.scissor, full_w, full_h) {
-                render_pass.draw_indexed(0..6, 0, region.start..region.start + region.count);
-            }
-        }
-        drop(render_pass);
-
-        segment.glyph_batch.clear();
-        segment.glyph_scissors.clear();
-    }
-
-    // =========================================================================
-    // Phase 1: instanced batches (rect / circle / arc / shadow)
-    // =========================================================================
-
-    /// Flush all instanced batches in a single render pass (Phase 9 optimisation).
-    ///
-    /// Combines shadow → rect → circle → arc into one combined instance buffer
-    /// and one render pass, switching pipelines dynamically.  The shadow
-    /// instances are prepended first for correct z-ordering (background →
-    /// foreground).
-    ///
-    /// Before (Phase 8): 1 buffer upload + 3 render passes + 3 draw calls.
-    /// After  (Phase 9): 1 buffer upload + 1 render pass  + 3 draw calls.
-    fn flush_all_instanced_batches(
-        &mut self,
-        segment: &mut DrawSegment,
-        viewport_size: (u32, u32),
-        device: &Arc<wgpu::Device>,
-        queue: &Arc<wgpu::Queue>,
-        pipelines: &mut PipelineSet,
-        resources: &mut GpuResources,
-        encoder: &mut wgpu::CommandEncoder,
-        view: &wgpu::TextureView,
-    ) {
-        let has_rects = !segment.rect_batch.is_empty();
-        let has_circles = !segment.circle_batch.is_empty();
-        let has_arcs = !segment.arc_batch.is_empty();
-        let has_shadows = !segment.shadow_batch.is_empty();
-
-        if !has_rects && !has_circles && !has_arcs && !has_shadows {
-            return;
-        }
-
-        // Glyphs are the LAST phase, so they may ride in this pass — after
-        // the arcs — exactly when no phase between the two has content:
-        // the phase order is then preserved and a label over its background
-        // costs one render pass instead of two. Otherwise `flush_glyphs`
-        // opens its own pass after the images.
-        let glyphs_here = !segment.glyph_batch.is_empty()
-            && segment.linear_gradient_batch.is_empty()
-            && segment.radial_gradient_batch.is_empty()
-            && segment.sweep_gradient_batch.is_empty()
-            && segment.vertices.is_empty()
-            && segment.tess_batches.is_empty()
-            && segment.cached_images.is_empty()
-            && segment.external_images.is_empty();
-        let glyph_bind_group = if glyphs_here {
-            self.glyph_bind_group.clone()
-        } else {
-            None
-        };
-
-        let rect_size =
-            segment.rect_batch.len() * std::mem::size_of::<crate::instancing::RectInstance>();
-        let circle_size =
-            segment.circle_batch.len() * std::mem::size_of::<crate::instancing::CircleInstance>();
-        let arc_size =
-            segment.arc_batch.len() * std::mem::size_of::<crate::instancing::ArcInstance>();
-        let shadow_size =
-            segment.shadow_batch.len() * std::mem::size_of::<crate::instancing::ShadowInstance>();
-
-        // IMPORTANT: Shadows FIRST for correct z-ordering (background → foreground).
-        let mut combined_buffer =
-            Vec::with_capacity(shadow_size + rect_size + circle_size + arc_size);
-
-        let shadow_offset = combined_buffer.len() as u64;
-        if has_shadows {
-            combined_buffer.extend_from_slice(segment.shadow_batch.as_bytes());
-        }
-
-        let rect_offset = combined_buffer.len() as u64;
-        if has_rects {
-            combined_buffer.extend_from_slice(segment.rect_batch.as_bytes());
-        }
-
-        let circle_offset = combined_buffer.len() as u64;
-        if has_circles {
-            combined_buffer.extend_from_slice(segment.circle_batch.as_bytes());
-        }
-
-        let arc_offset = combined_buffer.len() as u64;
-        if has_arcs {
-            combined_buffer.extend_from_slice(segment.arc_batch.as_bytes());
-        }
-
-        let glyph_offset = combined_buffer.len() as u64;
-        let glyph_size =
-            segment.glyph_batch.len() * std::mem::size_of::<crate::instancing::GlyphInstance>();
-        if glyph_bind_group.is_some() {
-            combined_buffer.extend_from_slice(segment.glyph_batch.as_bytes());
-        }
-
-        #[cfg(debug_assertions)]
-        {
-            let draws = usize::from(has_shadows)
-                + usize::from(has_rects)
-                + usize::from(has_circles)
-                + usize::from(has_arcs);
-            let instances = segment.shadow_batch.len()
-                + segment.rect_batch.len()
-                + segment.circle_batch.len()
-                + segment.arc_batch.len();
-            tracing::trace!(
-                "GpuReplay::flush_all_instanced_batches: draws={draws}, instances={instances}, buffer={}B",
-                combined_buffer.len()
-            );
-        }
-
-        let instance_buffer = resources.buffer_pool_mut().get_vertex_buffer(
-            device,
-            queue,
-            "Combined Instance Buffer",
-            &combined_buffer,
-        );
-
-        // ===== SINGLE RENDER PASS FOR ALL PRIMITIVES =====
-        let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("Combined Instanced Primitives Pass"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view,
-                resolve_target: None,
-                depth_slice: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Load,
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: None,
-            timestamp_writes: None,
-            occlusion_query_set: None,
-            multiview_mask: None,
-        });
-
-        render_pass.set_bind_group(0, &self.viewport_bind_group, &[]);
-        render_pass.set_vertex_buffer(0, self.unit_quad_buffer.slice(..));
-        render_pass.set_index_buffer(
-            self.unit_quad_index_buffer.slice(..),
-            wgpu::IndexFormat::Uint16,
-        );
-
-        let (full_w, full_h) = viewport_size;
-
-        // --- Shadows (rendered first for correct z-ordering) ---
-        if has_shadows {
-            render_pass.set_pipeline(&pipelines.shadow);
-            let buf_start = shadow_offset;
-            let buf_end = buf_start + shadow_size as u64;
-            render_pass.set_vertex_buffer(1, instance_buffer.slice(buf_start..buf_end));
-            if set_clamped_scissor(&mut render_pass, None, full_w, full_h) {
-                render_pass.draw_indexed(0..6, 0, 0..segment.shadow_batch.len() as u32);
-            }
-        }
-
-        // --- Rectangles (per-scissor-region) ---
-        if has_rects {
-            render_pass.set_pipeline(&pipelines.instanced_rect);
-            let buf_start = rect_offset;
-            let buf_end = buf_start + rect_size as u64;
-            render_pass.set_vertex_buffer(1, instance_buffer.slice(buf_start..buf_end));
-
-            for region in &segment.rect_scissors {
-                if set_clamped_scissor(&mut render_pass, region.scissor, full_w, full_h) {
-                    render_pass.draw_indexed(0..6, 0, region.start..region.start + region.count);
-                }
-            }
-        }
-
-        // --- Circles (per-scissor-region) ---
-        if has_circles {
-            render_pass.set_pipeline(&pipelines.instanced_circle);
-            let buf_start = circle_offset;
-            let buf_end = buf_start + circle_size as u64;
-            render_pass.set_vertex_buffer(1, instance_buffer.slice(buf_start..buf_end));
-
-            for region in &segment.circle_scissors {
-                if set_clamped_scissor(&mut render_pass, region.scissor, full_w, full_h) {
-                    render_pass.draw_indexed(0..6, 0, region.start..region.start + region.count);
-                }
-            }
-        }
-
-        // --- Arcs (per-scissor-region) ---
-        if has_arcs {
-            render_pass.set_pipeline(&pipelines.instanced_arc);
-            let buf_start = arc_offset;
-            let buf_end = buf_start + arc_size as u64;
-            render_pass.set_vertex_buffer(1, instance_buffer.slice(buf_start..buf_end));
-
-            for region in &segment.arc_scissors {
-                if set_clamped_scissor(&mut render_pass, region.scissor, full_w, full_h) {
-                    render_pass.draw_indexed(0..6, 0, region.start..region.start + region.count);
-                }
-            }
-        }
-
-        // --- Glyphs (per-scissor-region), when nothing sits between them and the arcs ---
-        if let Some(atlas_bind_group) = glyph_bind_group.as_ref() {
-            render_pass.set_pipeline(&pipelines.instanced_glyph);
-            render_pass.set_bind_group(1, atlas_bind_group, &[]);
-            let buf_start = glyph_offset;
-            let buf_end = buf_start + glyph_size as u64;
-            render_pass.set_vertex_buffer(1, instance_buffer.slice(buf_start..buf_end));
-
-            for region in &segment.glyph_scissors {
-                if set_clamped_scissor(&mut render_pass, region.scissor, full_w, full_h) {
-                    render_pass.draw_indexed(0..6, 0, region.start..region.start + region.count);
-                }
-            }
-        }
-
-        drop(render_pass);
-
-        // Clear batches for next frame.
-        segment.rect_batch.clear();
-        segment.circle_batch.clear();
-        segment.arc_batch.clear();
-        segment.shadow_batch.clear();
-        segment.rect_scissors.clear();
-        segment.circle_scissors.clear();
-        segment.arc_scissors.clear();
-        if glyph_bind_group.is_some() {
-            segment.glyph_batch.clear();
-            segment.glyph_scissors.clear();
-        }
-    }
-
-    // =========================================================================
-    // Phase 2: gradient batches (linear / radial / sweep)
-    // =========================================================================
-
-    /// Flush all gradient batches (linear, radial, sweep) in a single render pass.
-    ///
-    /// Uploads gradient stops and the combined instance buffer, then renders
-    /// all three gradient types in one render pass with pipeline switches.
-    fn flush_gradient_batches(
-        &mut self,
-        segment: &mut DrawSegment,
-        viewport_size: (u32, u32),
-        device: &Arc<wgpu::Device>,
-        queue: &Arc<wgpu::Queue>,
-        pipelines: &mut PipelineSet,
-        resources: &mut GpuResources,
-        encoder: &mut wgpu::CommandEncoder,
-        view: &wgpu::TextureView,
-    ) {
-        let has_linear = !segment.linear_gradient_batch.is_empty();
-        let has_radial = !segment.radial_gradient_batch.is_empty();
-        let has_sweep = !segment.sweep_gradient_batch.is_empty();
-
-        if !has_linear && !has_radial && !has_sweep {
-            return;
-        }
-
-        #[cfg(debug_assertions)]
-        tracing::trace!(
-            "GpuReplay::flush_gradient_batches: linear={}, radial={}, sweep={}, stops={}",
-            segment.linear_gradient_batch.len(),
-            segment.radial_gradient_batch.len(),
-            segment.sweep_gradient_batch.len(),
-            segment.current_gradient_stops.len()
-        );
-
-        // ===== Upload gradient stops to GPU =====
-        if !segment.current_gradient_stops.is_empty() {
-            pipelines.refresh_gradient_bind_group(
-                device,
-                queue,
-                bytemuck::cast_slice(&segment.current_gradient_stops),
-            );
-        }
-
-        let linear_size = segment.linear_gradient_batch.len()
-            * std::mem::size_of::<crate::instancing::LinearGradientInstance>();
-        let radial_size = segment.radial_gradient_batch.len()
-            * std::mem::size_of::<crate::instancing::RadialGradientInstance>();
-        let sweep_size = segment.sweep_gradient_batch.len()
-            * std::mem::size_of::<crate::instancing::SweepGradientInstance>();
-
-        let mut combined_buffer = Vec::with_capacity(linear_size + radial_size + sweep_size);
-
-        let linear_offset = 0;
-        if has_linear {
-            combined_buffer.extend_from_slice(segment.linear_gradient_batch.as_bytes());
-        }
-
-        let radial_offset = combined_buffer.len();
-        if has_radial {
-            combined_buffer.extend_from_slice(segment.radial_gradient_batch.as_bytes());
-        }
-
-        let sweep_offset = combined_buffer.len();
-        if has_sweep {
-            combined_buffer.extend_from_slice(segment.sweep_gradient_batch.as_bytes());
-        }
-
-        let instance_buffer = resources.buffer_pool_mut().get_vertex_buffer(
-            device,
-            queue,
-            "Gradient Instance Buffer",
-            &combined_buffer,
-        );
-
-        // ===== Build every pipeline this pass will bind =====
-        //
-        // Before the pass, because the pass borrows `pipelines` immutably for
-        // its whole life and pipeline creation needs `&mut`. Same split, same
-        // reason, as `ensure_ssaa_tile_composite`.
-        for (kind, runs) in [
-            (GradientKind::Linear, &segment.linear_gradient_runs),
-            (GradientKind::Radial, &segment.radial_gradient_runs),
-            (GradientKind::Sweep, &segment.sweep_gradient_runs),
-        ] {
-            for run in runs {
-                pipelines.gradients.ensure(device, kind, run.blend);
-            }
-        }
-
-        // ===== SINGLE RENDER PASS FOR ALL GRADIENTS =====
-        let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("Gradient Render Pass"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view,
-                resolve_target: None,
-                depth_slice: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Load,
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: None,
-            timestamp_writes: None,
-            occlusion_query_set: None,
-            multiview_mask: None,
-        });
-
-        render_pass.set_vertex_buffer(0, self.unit_quad_buffer.slice(..));
-        render_pass.set_index_buffer(
-            self.unit_quad_index_buffer.slice(..),
-            wgpu::IndexFormat::Uint16,
-        );
-
-        let (full_w, full_h) = viewport_size;
-
-        // ===== Draw each kind's runs, per scissor region and blend mode =====
-        //
-        // A run is the span of instances one `set_scissor_rect` +
-        // `set_pipeline` pair can draw, so the pipeline is bound inside the
-        // loop rather than once per kind: two gradients of the same kind with
-        // different blend modes are two runs and two pipelines.
-        for (kind, runs, offset, size) in [
-            (
-                GradientKind::Linear,
-                &segment.linear_gradient_runs,
-                linear_offset,
-                linear_size,
-            ),
-            (
-                GradientKind::Radial,
-                &segment.radial_gradient_runs,
-                radial_offset,
-                radial_size,
-            ),
-            (
-                GradientKind::Sweep,
-                &segment.sweep_gradient_runs,
-                sweep_offset,
-                sweep_size,
-            ),
-        ] {
-            if runs.is_empty() {
-                continue;
-            }
-            let start = offset as u64;
-            render_pass.set_vertex_buffer(1, instance_buffer.slice(start..start + size as u64));
-
-            for run in runs {
-                render_pass.set_pipeline(pipelines.gradients.get(kind, run.blend));
-                // Re-set bind groups after every pipeline switch: WebGPU
-                // invalidates them when the new pipeline's `PipelineLayout` is
-                // a different object, and the two gradient assemblies are
-                // separate modules behind separate pipelines.
-                render_pass.set_bind_group(0, &self.viewport_bind_group, &[]);
-                if let Some(ref gradient_bind_group) = pipelines.gradient_bind_group {
-                    render_pass.set_bind_group(1, gradient_bind_group, &[]);
-                }
-
-                if set_clamped_scissor(&mut render_pass, run.scissor, full_w, full_h) {
-                    render_pass.draw_indexed(0..6, 0, run.start..run.start + run.count);
-                }
-            }
-        }
-
-        drop(render_pass);
-
-        // Clear batches for next frame.
-        segment.linear_gradient_batch.clear();
-        segment.radial_gradient_batch.clear();
-        segment.sweep_gradient_batch.clear();
-        segment.current_gradient_stops.clear();
-        segment.linear_gradient_runs.clear();
-        segment.radial_gradient_runs.clear();
-        segment.sweep_gradient_runs.clear();
-    }
-
-    // =========================================================================
-    // Phase 3: tessellated geometry
-    // =========================================================================
-
-    /// Flush tessellated geometry from the segment.
-    ///
-    /// Uploads vertices/indices and renders all recorded tessellated batches in
-    /// a single render pass, switching pipelines as needed.
-    fn flush_tessellated_geometry(
-        &mut self,
-        segment: &mut DrawSegment,
-        viewport_size: (u32, u32),
-        device: &Arc<wgpu::Device>,
-        queue: &Arc<wgpu::Queue>,
-        pipelines: &mut PipelineSet,
-        resources: &mut GpuResources,
-        encoder: &mut wgpu::CommandEncoder,
-        view: &wgpu::TextureView,
-    ) {
+    ) -> crate::error::EngineResult<Option<PreparedTess>> {
         if segment.vertices.is_empty() || segment.tess_batches.is_empty() {
-            return;
+            return Ok(None);
         }
 
+        resources.reserve_prepared(crate::device_domain::PreparedCost {
+            gpu_bytes: segment.tess_batches.len()
+                * std::mem::size_of::<crate::command_ir::ClipUniform>(),
+            cpu_bytes: segment.tess_batches.len() * std::mem::size_of::<wgpu::BindGroup>(),
+            objects: segment.tess_batches.len() * 2,
+        })?;
         // Build every batch's clip bind group BEFORE the vertex/index buffers.
         //
         // Two reasons it cannot happen inside the loop: `alloc` needs the
@@ -730,6 +162,28 @@ impl GpuReplay {
                 bytemuck::cast_slice(&segment.indices),
             );
 
+        Ok(Some(PreparedTess {
+            vertex_buffer: vertex_buffer.clone(),
+            index_buffer: index_buffer.clone(),
+            clip_bind_groups,
+        }))
+    }
+
+    #[expect(clippy::too_many_arguments)]
+    fn flush_tessellated_geometry(
+        &mut self,
+        segment: &DrawSegment,
+        range: std::ops::Range<usize>,
+        prepared: Option<&PreparedTess>,
+        viewport_size: (u32, u32),
+        device: &Arc<wgpu::Device>,
+        pipelines: &mut PipelineSet,
+        encoder: &mut wgpu::CommandEncoder,
+        view: &wgpu::TextureView,
+    ) {
+        let Some(prepared) = prepared else {
+            return;
+        };
         let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("Shape Render Pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -748,8 +202,8 @@ impl GpuReplay {
         });
 
         render_pass.set_bind_group(0, &self.viewport_bind_group, &[]);
-        render_pass.set_vertex_buffer(0, vertex_buffer.slice(..));
-        render_pass.set_index_buffer(index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+        render_pass.set_vertex_buffer(0, prepared.vertex_buffer.slice(..));
+        render_pass.set_index_buffer(prepared.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
 
         let (full_w, full_h) = viewport_size;
 
@@ -763,7 +217,10 @@ impl GpuReplay {
         render_pass.set_viewport(0.0, 0.0, full_w as f32, full_h as f32, 0.0, 1.0);
 
         let mut active_key: Option<PipelineKey> = None;
-        for (batch, clip_bind_group) in segment.tess_batches.iter().zip(&clip_bind_groups) {
+        for (batch, clip_bind_group) in segment.tess_batches[range.clone()]
+            .iter()
+            .zip(&prepared.clip_bind_groups[range])
+        {
             if active_key != Some(batch.pipeline_key) {
                 // `pipelines` and `device` are disjoint from the encoder/render_pass
                 // borrows — no borrow conflict.
@@ -788,11 +245,6 @@ impl GpuReplay {
         }
 
         drop(render_pass);
-
-        segment.vertices.clear();
-        segment.indices.clear();
-        segment.tess_batches.clear();
-        segment.current_pipeline_key = None;
     }
 
     // =========================================================================
@@ -806,7 +258,8 @@ impl GpuReplay {
     /// submitted before the new `TextureKey` takes over.
     fn flush_segment_cached_images(
         &mut self,
-        segment: &mut DrawSegment,
+        segment: &DrawSegment,
+        range: std::ops::Range<usize>,
         viewport_size: (u32, u32),
         device: &Arc<wgpu::Device>,
         queue: &Arc<wgpu::Queue>,
@@ -815,11 +268,7 @@ impl GpuReplay {
         encoder: &mut wgpu::CommandEncoder,
         view: &wgpu::TextureView,
     ) {
-        let mut pending_images: Vec<(
-            crate::texture_cache::TextureKey,
-            crate::instancing::TextureInstance,
-            ScissorRect,
-        )> = std::mem::take(&mut segment.cached_images);
+        let pending_images = &segment.cached_images[range];
 
         if pending_images.is_empty() {
             return;
@@ -831,8 +280,8 @@ impl GpuReplay {
         // texture-change forces an early flush.
         let mut active_scissor: ScissorRect = None;
 
-        for (texture_id, instance, scissor) in pending_images.drain(..) {
-            if active_texture_id.as_ref() != Some(&texture_id) {
+        for (texture_id, instance, scissor) in pending_images.iter().cloned() {
+            if active_texture_id.as_ref() != Some(&texture_id) || active_scissor != scissor {
                 if let Some(texture_view) = active_texture_view.as_ref() {
                     self.flush_texture_batch(
                         device,
@@ -905,7 +354,8 @@ impl GpuReplay {
     /// calls are not a hot path.
     fn flush_segment_external_images(
         &mut self,
-        segment: &mut DrawSegment,
+        segment: &DrawSegment,
+        range: std::ops::Range<usize>,
         viewport_size: (u32, u32),
         device: &Arc<wgpu::Device>,
         queue: &Arc<wgpu::Queue>,
@@ -921,13 +371,9 @@ impl GpuReplay {
         // Move into a local vec so we can call `&mut self` methods
         // (`flush_texture_batch`) while iterating without holding a borrow on
         // `segment.external_images`.
-        let pending: Vec<(
-            flui_painting::paint::TextureId,
-            crate::instancing::TextureInstance,
-            ScissorRect,
-        )> = std::mem::take(&mut segment.external_images);
+        let pending = &segment.external_images[range];
 
-        for (texture_id, instance, scissor) in pending {
+        for (texture_id, instance, scissor) in pending.iter().copied() {
             // Resolve ID → view at replay time.  Clone the view to release the
             // borrow on `resources` before calling `flush_texture_batch` (which
             // takes `&mut resources`).  External textures are uncommon; the
@@ -1229,3 +675,6 @@ impl GpuReplay {
         self.texture_batch.clear();
     }
 }
+
+#[path = "ordered.rs"]
+mod ordered;

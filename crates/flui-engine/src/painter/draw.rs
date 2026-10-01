@@ -503,7 +503,6 @@ impl super::WgpuPainter {
         });
         crate::batches::DrawBatcher::draw_texture(
             &mut self.current_segment,
-            &mut self.draw_order,
             &self.state,
             src_dimensions,
             texture_id,

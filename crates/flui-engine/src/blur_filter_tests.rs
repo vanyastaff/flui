@@ -48,6 +48,172 @@ mod gpu_tests {
     const SURFACE_HEIGHT: u32 = 64;
     const SURFACE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
+    #[test]
+    fn kawase_calls_keep_parameters_and_recover_after_admission_failure() {
+        use crate::device_domain::{DeviceDomain, PreparedCost, PreparedIrLimits};
+        use crate::offscreen::OffscreenRenderer;
+
+        let (device, queue) = acquire_test_device_and_queue();
+        let domain = DeviceDomain::new(Arc::clone(&device), Arc::clone(&queue));
+        let mut shared = OffscreenRenderer::with_domain(Arc::clone(&domain), SURFACE_FORMAT);
+        for (width, height, sigma) in [(64, 32, 5.0), (32, 64, 10.0), (64, 64, 2.0)] {
+            let mut isolated = OffscreenRenderer::with_domain(Arc::clone(&domain), SURFACE_FORMAT);
+            let input = shared
+                .texture_pool_mut()
+                .acquire(width, height, SURFACE_FORMAT);
+            let mut pixels = vec![0u8; width as usize * height as usize * 4];
+            for y in height / 4..height * 3 / 4 {
+                for x in width / 4..width * 3 / 4 {
+                    let index = ((y * width + x) * 4) as usize;
+                    pixels[index..index + 4].copy_from_slice(&[255, 64, 0, 255]);
+                }
+            }
+            queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: input.texture(),
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                &pixels,
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(width * 4),
+                    rows_per_image: Some(height),
+                },
+                wgpu::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
+            );
+            let actual = shared
+                .render_blur(&input, sigma)
+                .expect("shared blur admitted");
+            let expected = isolated
+                .render_blur(&input, sigma)
+                .expect("isolated blur admitted");
+            let actual = crate::test_support::readback_bytes(
+                &device,
+                &queue,
+                actual.texture(),
+                width,
+                height,
+            );
+            let expected = crate::test_support::readback_bytes(
+                &device,
+                &queue,
+                expected.texture(),
+                width,
+                height,
+            );
+            assert!(
+                actual
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .any(|pixel| pixel[0] > 0 && pixel[3] > 0),
+                "blur must preserve nonempty patterned source, sigma={sigma}"
+            );
+            assert_eq!(actual, expected, "source {width}x{height}, sigma={sigma}");
+        }
+        let limited = DeviceDomain::with_limits(
+            Arc::clone(&device),
+            Arc::clone(&queue),
+            PreparedIrLimits {
+                cost: PreparedCost::default(),
+                submissions: 4,
+            },
+        );
+        let mut rejected = OffscreenRenderer::with_domain(limited, SURFACE_FORMAT);
+        let input = rejected.texture_pool_mut().acquire(32, 32, SURFACE_FORMAT);
+        assert!(rejected.render_blur(&input, 5.0).is_err());
+        let passthrough = rejected
+            .render_blur(&input, 0.0)
+            .expect("next valid no-uniform operation");
+        assert_eq!((passthrough.width(), passthrough.height()), (32, 32));
+        let next_pixels =
+            crate::test_support::readback_bytes(&device, &queue, passthrough.texture(), 32, 32);
+        assert!(next_pixels.iter().all(|channel| *channel == 0));
+    }
+
+    /// An image filter consumes the whole ordered subtree, including children
+    /// isolated by another compositing layer and siblings flushed before it.
+    #[test]
+    fn image_filters_keep_nested_opacity_and_both_siblings() {
+        use flui_layer::SceneBuilder;
+        use flui_painting::{Canvas, paint::ImageFilter};
+
+        let Some(renderer) = crate::test_support::renderer_or_skip() else {
+            return;
+        };
+        let cases = [
+            ("blur", ImageFilter::blur(1.0)),
+            ("dilate", ImageFilter::dilate(1.0)),
+            (
+                "compose",
+                ImageFilter::Compose(vec![ImageFilter::blur(1.0), ImageFilter::dilate(1.0)]),
+            ),
+        ];
+        let mut failures = Vec::new();
+        for (name, filter) in cases {
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let picture = |x, color| {
+                    let mut canvas = Canvas::new();
+                    canvas.draw_rect(Rect::from_xywh(x, 16.0, 12.0, 32.0), &Paint::fill(color));
+                    canvas.finish()
+                };
+                let mut builder = SceneBuilder::new();
+                builder.push_image_filter(filter);
+                builder.add_picture(picture(4.0, Color::rgb(255, 0, 0)));
+                builder.push_opacity(0.5);
+                builder.add_picture(picture(24.0, Color::rgb(0, 0, 255)));
+                let _ = builder.pop();
+                builder.add_picture(picture(44.0, Color::rgb(0, 255, 0)));
+                let pixels = renderer
+                    .render_layer_tree(&builder.build(), (64, 64))
+                    .expect("an image-filter subtree must rasterize");
+                crate::readback_dump::dump_rgba_png(
+                    &format!("nested_image_filter_{name}"),
+                    64,
+                    64,
+                    &pixels,
+                );
+                let sample = |x: usize| {
+                    let offset = (32 * 64 + x) * 4;
+                    [
+                        pixels[offset],
+                        pixels[offset + 1],
+                        pixels[offset + 2],
+                        pixels[offset + 3],
+                    ]
+                };
+                let before = sample(10);
+                let nested = sample(30);
+                let after = sample(50);
+                assert!(
+                    before[0] > 240 && before[1] < 16,
+                    "first sibling vanished: {before:?}"
+                );
+                assert!(
+                    nested[0] > 110 && nested[0] < 145 && nested[2] > 240,
+                    "nested group opacity was lost: {nested:?}"
+                );
+                assert!(
+                    after[0] < 16 && after[1] > 240,
+                    "last sibling vanished: {after:?}"
+                );
+            }));
+            if result.is_err() {
+                failures.push(name);
+            }
+        }
+        assert!(
+            failures.is_empty(),
+            "image-filter rows failed: {failures:?}"
+        );
+    }
+
     // ── Harness helpers ───────────────────────────────────────────────────────
 
     fn acquire_test_device_and_queue() -> (Arc<wgpu::Device>, Arc<wgpu::Queue>) {

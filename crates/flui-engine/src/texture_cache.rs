@@ -61,7 +61,7 @@ pub(crate) const IMAGE_TEXTURE_FORMAT: TextureFormat = TextureFormat::Rgba8Unorm
 
 /// Cache key for a texture: what a caller asks for, not an external texture
 /// identity (that is `flui_painting::paint::TextureId`).
-#[derive(Debug, Clone, Hash, Eq, PartialEq)]
+#[derive(Debug, Clone)]
 pub(crate) enum TextureKey {
     /// Data-based texture with hash
     Data(u64),
@@ -69,30 +69,57 @@ pub(crate) enum TextureKey {
     ///
     /// O(1) identity derived from `Arc::as_ptr()`. Images sharing the same
     /// `Arc<Vec<u8>>` allocation produce the same key, avoiding expensive
-    /// full-data hashing on every frame.
-    Pointer(usize),
+    /// full-data hashing on every frame. The handle pins the allocation while
+    /// a cache entry or recorded command can still reference that identity.
+    Pointer(flui_painting::paint::Image),
+}
+
+impl PartialEq for TextureKey {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Data(a), Self::Data(b)) => a == b,
+            (Self::Pointer(a), Self::Pointer(b)) => a.data_ptr() == b.data_ptr(),
+            _ => false,
+        }
+    }
+}
+
+impl Eq for TextureKey {}
+
+impl std::hash::Hash for TextureKey {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        std::mem::discriminant(self).hash(state);
+        match self {
+            Self::Data(hash) => hash.hash(state),
+            Self::Pointer(image) => image.data_ptr().hash(state),
+        }
+    }
 }
 
 impl TextureKey {
     /// Create from raw bytes with hash
-    pub(crate) fn from_data(data: &[u8]) -> Self {
+    pub(crate) fn from_data(width: u32, height: u32, data: &[u8]) -> Self {
         use std::{
             collections::hash_map::DefaultHasher,
             hash::{Hash, Hasher},
         };
 
         let mut hasher = DefaultHasher::new();
+        width.hash(&mut hasher);
+        height.hash(&mut hasher);
         data.hash(&mut hasher);
         Self::Data(hasher.finish())
     }
 
-    /// Create from an `Arc` data pointer address (O(1) identity).
+    /// Create an owned allocation-identity key (O(1), without copying pixels).
     ///
     /// Use with [`flui_painting::paint::Image::data_ptr()`] so that images
     /// sharing the same underlying allocation are deduplicated without
     /// hashing the full pixel buffer.
-    pub(crate) fn from_ptr(ptr: usize) -> Self {
-        Self::Pointer(ptr)
+    pub(crate) fn from_image(image: &flui_painting::paint::Image) -> Self {
+        // The cache and recorded commands must pin this allocation until their
+        // keys retire; otherwise an allocator can reuse its address for new pixels.
+        Self::Pointer(image.clone_handle())
     }
 }
 

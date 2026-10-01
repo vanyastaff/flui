@@ -56,6 +56,35 @@ use thiserror::Error;
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum EngineError {
+    /// Preparing a frame would exceed an explicit resource or device limit.
+    #[error("prepared {resource} exceeds limit: requested {requested}, limit {limit}")]
+    PreparedResourceLimit {
+        /// The resource whose admission failed.
+        resource: &'static str,
+        /// Required amount, including resources already charged where applicable.
+        requested: usize,
+        /// Maximum admitted amount.
+        limit: usize,
+    },
+    /// A resource size cannot be represented without arithmetic overflow.
+    #[error("prepared resource size overflow")]
+    PreparedResourceOverflow,
+    /// A prepared submission or reservation belongs to a different device owner.
+    #[error("prepared submission belongs to another device domain")]
+    DeviceDomainMismatch,
+    /// The device owner is closing or no longer accepts preparation.
+    #[error("GPU preparation is unavailable")]
+    GpuUnavailable,
+    /// Outstanding submissions must complete before another may be admitted.
+    #[error("GPU submission capacity exhausted")]
+    GpuBackpressure,
+    /// Nonblocking progress on the device failed.
+    #[error("GPU progress failed: {source}")]
+    GpuProgress {
+        /// The wgpu progress failure.
+        #[source]
+        source: wgpu::PollError,
+    },
     // ========================================================================
     // Surface/Window errors
     // ========================================================================
@@ -256,7 +285,9 @@ impl EngineError {
     #[must_use]
     pub fn recoverability(&self) -> Recoverability {
         match self {
-            Self::SurfaceLost | Self::Timeout => Recoverability::Recoverable,
+            Self::SurfaceLost | Self::Timeout | Self::GpuBackpressure => {
+                Recoverability::Recoverable
+            }
             // `raw_window_handle::HandleError` is itself `#[non_exhaustive]`,
             // so this inner match's wildcard is deliberate: a variant this
             // crate has not classified yet is treated as `Fatal` rather than
@@ -273,6 +304,8 @@ impl EngineError {
                 raw_window_handle::HandleError::NotSupported | _ => Recoverability::Fatal,
             },
             Self::DeviceLost
+            | Self::GpuProgress { .. }
+            | Self::GpuUnavailable
             | Self::SurfaceCreation(_)
             | Self::AdapterRequest(_)
             | Self::DeviceCreation(_)
@@ -280,6 +313,9 @@ impl EngineError {
             | Self::ReadbackTimedOut { .. }
             | Self::NotInitialized => Recoverability::Fatal,
             Self::SurfaceValidation
+            | Self::PreparedResourceLimit { .. }
+            | Self::PreparedResourceOverflow
+            | Self::DeviceDomainMismatch
             | Self::ResourceIo { .. }
             | Self::UnsupportedSurfaceColorConfiguration { .. } => Recoverability::Unrecoverable,
         }
@@ -349,3 +385,61 @@ impl EngineError {
 
 /// A Result type alias for engine operations.
 pub type EngineResult<T> = Result<T, EngineError>;
+
+impl From<crate::device_domain::DomainError> for EngineError {
+    fn from(error: crate::device_domain::DomainError) -> Self {
+        use crate::device_domain::DomainError;
+        match error {
+            DomainError::Overflow => Self::PreparedResourceOverflow,
+            DomainError::Budget {
+                requested,
+                used,
+                limit,
+            } => {
+                let dimensions = [
+                    (
+                        "GPU payload bytes",
+                        requested.gpu_bytes,
+                        used.gpu_bytes,
+                        limit.gpu_bytes,
+                    ),
+                    (
+                        "CPU preparation bytes",
+                        requested.cpu_bytes,
+                        used.cpu_bytes,
+                        limit.cpu_bytes,
+                    ),
+                    (
+                        "prepared objects",
+                        requested.objects,
+                        used.objects,
+                        limit.objects,
+                    ),
+                ];
+                let (resource, requested, limit) = dimensions
+                    .into_iter()
+                    .find_map(|(name, requested, used, limit)| {
+                        let total = requested.saturating_add(used);
+                        (total > limit).then_some((name, total, limit))
+                    })
+                    .expect("BUG: budget rejection must exceed a resource limit");
+                Self::PreparedResourceLimit {
+                    resource,
+                    requested,
+                    limit,
+                }
+            }
+            DomainError::ForeignOwner => Self::DeviceDomainMismatch,
+            DomainError::FrameSubmissionBudget { limit } => Self::PreparedResourceLimit {
+                resource: "frame submissions",
+                requested: limit.saturating_add(1),
+                limit,
+            },
+            DomainError::Unavailable => Self::GpuUnavailable,
+            DomainError::SubmissionBudget
+            | DomainError::Backpressure
+            | DomainError::FrameAlreadyActive => Self::GpuBackpressure,
+            DomainError::Poll(source) => Self::GpuProgress { source },
+        }
+    }
+}

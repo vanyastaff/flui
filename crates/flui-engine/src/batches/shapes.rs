@@ -5,7 +5,7 @@ use flui_painting::{BlendMode, Paint, PaintStyle};
 
 use super::{
     super::{
-        command_ir::DrawItem, command_ir::DrawSegment, command_ir::Phase, pipeline_cache,
+        command_ir::DrawItem, command_ir::DrawRun, command_ir::DrawSegment, pipeline_cache,
         state_stack::GpuStateStack, vertex::Vertex,
     },
     DrawBatcher,
@@ -35,6 +35,10 @@ impl DrawBatcher {
         rect: Rect<f64>,
         paint: &Paint,
     ) {
+        if segment.recording_result().is_err() {
+            return;
+        }
+
         // Shader/gradient fill — dispatch before any opacity or color work.
         // Advanced blend modes are handled inside dispatch_shader_rect:
         // an isolated DrawSegment is pushed as DrawItem::AdvancedShape so the
@@ -80,8 +84,10 @@ impl DrawBatcher {
                         instance = instance.aliased();
                     }
                     let instance = state.apply_active_clip(instance);
-                    Self::begin_phase(segment, draw_order, Phase::Rect);
                     let _ = segment.rect_batch.add(instance);
+                    segment.record_run(DrawRun::Rect(
+                        segment.rect_batch.len().saturating_sub(1)..segment.rect_batch.len(),
+                    ));
                     DrawSegment::push_scissor_region(
                         &mut segment.rect_scissors,
                         state.current_scissor(),
@@ -108,8 +114,10 @@ impl DrawBatcher {
                         instance = instance.aliased();
                     }
                     let instance = state.apply_active_clip(instance);
-                    Self::begin_phase(segment, draw_order, Phase::Rect);
                     let _ = segment.rect_batch.add(instance);
+                    segment.record_run(DrawRun::Rect(
+                        segment.rect_batch.len().saturating_sub(1)..segment.rect_batch.len(),
+                    ));
                     // Scissor = the active damage/clip region, exactly as the
                     // axis-aligned path. The shape is bounded by its own quad +
                     // SDF; a per-shape AABB scissor is unnecessary and (because
@@ -207,6 +215,10 @@ impl DrawBatcher {
         rrect: RRect,
         paint: &Paint,
     ) {
+        if segment.recording_result().is_err() {
+            return;
+        }
+
         // Shader/gradient fill — dispatch before any opacity or color work.
         // Advanced blend modes are handled inside dispatch_shader_rect.
         if paint.style == PaintStyle::Fill && paint.has_shader() {
@@ -314,8 +326,10 @@ impl DrawBatcher {
                         radius_bottom_right as f32,
                         radius_bottom_left as f32,
                     ));
-                Self::begin_phase(segment, draw_order, Phase::Rect);
                 let _ = segment.rect_batch.add(instance);
+                segment.record_run(DrawRun::Rect(
+                    segment.rect_batch.len().saturating_sub(1)..segment.rect_batch.len(),
+                ));
                 DrawSegment::push_scissor_region(
                     &mut segment.rect_scissors,
                     state.current_scissor(),
@@ -351,8 +365,10 @@ impl DrawBatcher {
                         translation,
                     ),
                 );
-                Self::begin_phase(segment, draw_order, Phase::Rect);
                 let _ = segment.rect_batch.add(instance);
+                segment.record_run(DrawRun::Rect(
+                    segment.rect_batch.len().saturating_sub(1)..segment.rect_batch.len(),
+                ));
                 // Scissor = the active damage/clip region (same as the axis-aligned
                 // path); the shape is bounded by its own quad + SDF, so a per-shape
                 // AABB scissor is unnecessary and would clip the AA fringe.
@@ -400,6 +416,10 @@ impl DrawBatcher {
         radius: f32,
         paint: &Paint,
     ) {
+        if segment.recording_result().is_err() {
+            return;
+        }
+
         // Shader/gradient fill — dispatch before any opacity or color work.
         // Advanced blend modes are handled inside dispatch_shader_rect.
         if paint.style == PaintStyle::Fill && paint.has_shader() {
@@ -444,8 +464,10 @@ impl DrawBatcher {
                         color,
                         [sx, sy],
                     ));
-                    Self::begin_phase(segment, draw_order, Phase::Circle);
                     let _ = segment.circle_batch.add(instance);
+                    segment.record_run(DrawRun::Circle(
+                        segment.circle_batch.len().saturating_sub(1)..segment.circle_batch.len(),
+                    ));
                     DrawSegment::push_scissor_region(
                         &mut segment.circle_scissors,
                         state.current_scissor(),
@@ -479,8 +501,10 @@ impl DrawBatcher {
                             [tx, ty],
                         ),
                     );
-                    Self::begin_phase(segment, draw_order, Phase::Circle);
                     let _ = segment.circle_batch.add(instance);
+                    segment.record_run(DrawRun::Circle(
+                        segment.circle_batch.len().saturating_sub(1)..segment.circle_batch.len(),
+                    ));
                     DrawSegment::push_scissor_region(
                         &mut segment.circle_scissors,
                         state.current_scissor(),
@@ -560,12 +584,7 @@ impl DrawBatcher {
     ///
     /// Non-SrcOver and stroked ovals remain tessellated (aliased) until PR-4.
     ///
-    /// Paint-order note: like all instanced shapes (rect, circle), an instanced
-    /// oval flushes in the engine's fixed bucket order, NOT strict painter order
-    /// relative to overlapping *tessellated* SrcOver geometry in the same segment.
-    /// This is a pre-existing engine characteristic (bucket order ≠ draw order),
-    /// now extended consistently to ovals/rotated circles for the AA win; true
-    /// painter-order compositing is a separate, engine-wide concern.
+    /// Instanced ovals keep their recorded position in the ordered run stream.
     pub(in super::super) fn draw_oval(
         &mut self,
         segment: &mut DrawSegment,
@@ -575,6 +594,10 @@ impl DrawBatcher {
         rect: Rect<f64>,
         paint: &Paint,
     ) {
+        if segment.recording_result().is_err() {
+            return;
+        }
+
         let center = rect.center();
         let rx = rect.width() / 2.0;
         let ry = rect.height() / 2.0;
@@ -613,8 +636,10 @@ impl DrawBatcher {
                     color,
                     [tx, ty],
                 ));
-            Self::begin_phase(segment, draw_order, Phase::Circle);
             let _ = segment.circle_batch.add(instance);
+            segment.record_run(DrawRun::Circle(
+                segment.circle_batch.len().saturating_sub(1)..segment.circle_batch.len(),
+            ));
             DrawSegment::push_scissor_region(&mut segment.circle_scissors, state.current_scissor());
         } else if paint.style == PaintStyle::Fill {
             // Non-SrcOver fill — PR-4: tile-safe and advanced modes → SSAA (AA'd);
@@ -677,6 +702,10 @@ impl DrawBatcher {
         inner: RRect,
         paint: &Paint,
     ) {
+        if segment.recording_result().is_err() {
+            return;
+        }
+
         self.prime_tessellator_scale(state);
         match self.tessellator.tessellate_drrect(&outer, &inner, paint) {
             Ok((vertices, indices)) => {
@@ -751,6 +780,10 @@ impl DrawBatcher {
         use_center: bool,
         paint: &Paint,
     ) {
+        if segment.recording_result().is_err() {
+            return;
+        }
+
         let center = rect.center();
         let rx = rect.width() / 2.0;
         let ry = rect.height() / 2.0;
@@ -806,8 +839,10 @@ impl DrawBatcher {
                     color,
                     [tx, ty],
                 );
-                Self::begin_phase(segment, draw_order, Phase::Arc);
                 let _ = segment.arc_batch.add(instance);
+                segment.record_run(DrawRun::Arc(
+                    segment.arc_batch.len().saturating_sub(1)..segment.arc_batch.len(),
+                ));
                 DrawSegment::push_scissor_region(
                     &mut segment.arc_scissors,
                     state.current_scissor(),

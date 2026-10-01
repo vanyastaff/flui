@@ -3,7 +3,9 @@
 // Moved from `offscreen.rs` into `offscreen/blur.rs` as part of the C1 LOC-cap
 // concern-separation split.  Zero behaviour changes.
 
+use super::{EngineResult, PreparedCost};
 use std::sync::Arc;
+use wgpu::util::DeviceExt;
 
 use super::shader::ShaderType;
 use super::{BlurParams, BlurPipelines, FullscreenVertex, OffscreenRenderer};
@@ -166,9 +168,17 @@ impl OffscreenRenderer {
     /// # Returns
     ///
     /// A new `PooledTexture` containing the blurred result at the original resolution.
+    ///
+    /// # Errors
+    /// Returns admission, submission-backpressure or device-progress failures.
     // `pub` under `testing` for the `offscreen_resource_cache` bench.
     #[cfg_attr(not(feature = "testing"), expect(unreachable_pub))]
-    pub fn render_blur(&mut self, input: &PooledTexture, sigma: f32) -> PooledTexture {
+    pub fn render_blur(
+        &mut self,
+        input: &PooledTexture,
+        sigma: f32,
+    ) -> EngineResult<PooledTexture> {
+        self.domain.poll()?;
         // sigma ≤ 0 means "no blur" — copy the input through without running
         // any Kawase passes. Without this guard sigma=0 would produce one
         // downsample+upsample pass (iterations=1 from the clamp below), visibly
@@ -208,8 +218,9 @@ impl OffscreenRenderer {
                     depth_or_array_layers: 1,
                 },
             );
-            self.queue.submit(std::iter::once(encoder.finish()));
-            return out;
+            self.domain
+                .submit(self.domain.prepare(vec![encoder.finish()], Vec::new())?)?;
+            return Ok(out);
         }
 
         // `sigma` flows in from public APIs (BlurFilter constructors) that do
@@ -220,6 +231,13 @@ impl OffscreenRenderer {
         let sigma_nonneg = sigma.max(0.0);
         let iterations = ((sigma_nonneg / 2.0).ceil() as u32).clamp(1, 5);
         let offset = sigma.max(1.0);
+        let uniform_count = iterations as usize + 1;
+        let bytes = uniform_count * std::mem::size_of::<BlurParams>();
+        let permit = self.domain.reserve(PreparedCost {
+            gpu_bytes: bytes,
+            cpu_bytes: bytes + uniform_count * std::mem::size_of::<wgpu::Buffer>(),
+            objects: uniform_count + 2 * iterations as usize,
+        })?;
 
         tracing::debug!(
             "Rendering Dual Kawase blur: sigma={}, iterations={}, offset={}, input={}x{}",
@@ -284,30 +302,27 @@ impl OffscreenRenderer {
             },
         );
 
+        // Immutable per-call slots preserve parameters across later submissions.
+        let uniform_buffers: Vec<_> = mip_chain
+            .iter()
+            .map(|mip| {
+                let params = BlurParams {
+                    texture_size: [mip.width() as f32, mip.height() as f32],
+                    offset,
+                    _padding: 0.0,
+                };
+                self.device
+                    .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                        label: Some("Frozen Blur Uniform"),
+                        contents: bytemuck::bytes_of(&params),
+                        usage: wgpu::BufferUsages::UNIFORM,
+                    })
+            })
+            .collect();
         // === Downsample passes ===
-        // Uniform buffer index `i` is written before it is consumed by the draw
-        // call at iteration `i`.  All writes and draws land in the same command
-        // buffer that is submitted once at the end of this method, so there is
-        // no hazard: the GPU processes the commands in order within a submission.
         for i in 0..iterations {
             let src_index = i as usize;
             let dst_index = (i + 1) as usize;
-
-            let src_w = mip_chain[src_index].width() as f32;
-            let src_h = mip_chain[src_index].height() as f32;
-
-            let params = BlurParams {
-                texture_size: [src_w, src_h],
-                offset,
-                _padding: 0.0,
-            };
-
-            // Update the pre-allocated uniform slot instead of allocating a new buffer.
-            self.queue.write_buffer(
-                &self.blur_uniform_buffers[src_index],
-                0,
-                bytemuck::bytes_of(&params),
-            );
 
             let src_view = mip_chain[src_index].view();
             let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -316,7 +331,7 @@ impl OffscreenRenderer {
                 entries: &[
                     wgpu::BindGroupEntry {
                         binding: 0,
-                        resource: self.blur_uniform_buffers[src_index].as_entire_binding(),
+                        resource: uniform_buffers[src_index].as_entire_binding(),
                     },
                     wgpu::BindGroupEntry {
                         binding: 1,
@@ -356,21 +371,10 @@ impl OffscreenRenderer {
         }
 
         // === Upsample passes ===
-        // Reuse the same pre-allocated uniform buffer slots (one per mip level).
-        // The downsample loop already updated slots 0..iterations-1; the upsample
-        // loop processes the same `src_index` range in reverse with the same `params`
-        // values (same `texture_size` and `offset`), so we can re-read the buffers
-        // that were written during the downsample phase without overwriting them.
-        // This is safe because both phases use the same `src_w/src_h` calculation
-        // for a given `src_index`, and `offset` is constant for the whole `render_blur`
-        // call.
         for i in (0..iterations).rev() {
             let src_index = (i + 1) as usize;
             let dst_index = i as usize;
 
-            // The uniform slot for `src_index` was already written during the
-            // downsample phase (same params: texture_size of mip[src_index] +
-            // the same `offset`).  Re-use it directly — no write needed.
             let src_view = mip_chain[src_index].view();
             let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("Blur Upsample Bind Group"),
@@ -378,7 +382,7 @@ impl OffscreenRenderer {
                 entries: &[
                     wgpu::BindGroupEntry {
                         binding: 0,
-                        resource: self.blur_uniform_buffers[src_index].as_entire_binding(),
+                        resource: uniform_buffers[src_index].as_entire_binding(),
                     },
                     wgpu::BindGroupEntry {
                         binding: 1,
@@ -418,7 +422,8 @@ impl OffscreenRenderer {
         }
 
         // Submit all blur passes
-        self.queue.submit(std::iter::once(encoder.finish()));
+        self.domain
+            .submit(self.domain.prepare(vec![encoder.finish()], vec![permit])?)?;
 
         tracing::debug!("Blur rendering complete: {} iterations", iterations);
 
@@ -426,6 +431,6 @@ impl OffscreenRenderer {
         // Drop the rest of the mip chain (returned to pool automatically).
         let result = mip_chain.remove(0);
         drop(mip_chain);
-        result
+        Ok(result)
     }
 }

@@ -178,7 +178,9 @@ fn bench_render_masked(c: &mut Criterion) {
     // Warm-up: one render pass ensures pipeline compilation is excluded.
     {
         let source = make_source_texture(&device, format);
-        let _ = offscreen.render_masked(child_bounds, result_size, &mask_shader, &source);
+        let _ = offscreen
+            .render_masked(child_bounds, result_size, &mask_shader, &source)
+            .expect("masked warm-up admitted");
         let _ = device.poll(wgpu::PollType::wait_indefinitely());
     }
 
@@ -189,12 +191,14 @@ fn bench_render_masked(c: &mut Criterion) {
             // `black_box` on all inputs prevents the compiler from constant-folding
             // the call.  The returned result is black_boxed so the compiler cannot
             // prove the call is a no-op and eliminate it.
-            let masked_result = offscreen.render_masked(
-                black_box(child_bounds),
-                black_box(result_size),
-                black_box(&mask_shader),
-                black_box(&source),
-            );
+            let masked_result = offscreen
+                .render_masked(
+                    black_box(child_bounds),
+                    black_box(result_size),
+                    black_box(&mask_shader),
+                    black_box(&source),
+                )
+                .expect("masked frame admitted");
             let _ = device.poll(wgpu::PollType::wait_indefinitely());
             // Dropping `masked_result` here returns the texture to the pool,
             // keeping the pool in a warm steady state for every iteration.
@@ -218,8 +222,9 @@ fn bench_render_masked(c: &mut Criterion) {
 /// Formerly per-call GPU allocations eliminated in this path:
 /// - 1× `create_sampler` (now a cached struct field)
 /// - 1× `create_buffer_init` for the fullscreen-quad VB (now a cached struct field)
-/// - 6× `create_buffer_init` for `BlurParams` uniform buffers (now `queue.write_buffer`
-///   into pre-allocated `COPY_DST` buffers)
+///
+/// Blur parameters now use admitted immutable per-call source-mip buffers;
+/// their cost is intentionally included in this benchmark.
 fn bench_render_blur(c: &mut Criterion) {
     let Some((device, queue)) = try_create_gpu() else {
         // GPU unavailability was already printed by bench_render_masked.
@@ -242,14 +247,18 @@ fn bench_render_blur(c: &mut Criterion) {
 
     // Warm-up: one blur call so pipeline compilation is excluded.
     {
-        let blur_output = offscreen.render_blur(&blur_input, blur_sigma);
+        let blur_output = offscreen
+            .render_blur(&blur_input, blur_sigma)
+            .expect("blur warm-up admitted");
         let _ = device.poll(wgpu::PollType::wait_indefinitely());
         drop(blur_output);
     }
 
     c.bench_function("render_blur_256x256_sigma5_3passes", |b| {
         b.iter(|| {
-            let blur_output = offscreen.render_blur(black_box(&blur_input), black_box(blur_sigma));
+            let blur_output = offscreen
+                .render_blur(black_box(&blur_input), black_box(blur_sigma))
+                .expect("blur frame admitted");
             let _ = device.poll(wgpu::PollType::wait_indefinitely());
             // Drop returns the output texture to the pool — pool stays warm.
             black_box(blur_output)

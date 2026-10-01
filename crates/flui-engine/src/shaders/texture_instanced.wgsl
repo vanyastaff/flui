@@ -188,15 +188,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let rgb_scale = select(1.0, clip_alpha, premultiplied_source);
     tex_color = vec4<f32>(tex_color.rgb * rgb_scale, tex_color.a * clip_alpha);
 
-    // Alpha test (discard fully transparent pixels for better performance).
-    // Runs after the clip so fully clipped-out texels cost nothing downstream.
-    // A destination-replacing pipeline writes transparent texels and drops
-    // only what the clip excludes; see `replaces_destination`.
-    if (replaces_destination) {
-        if (clip_alpha <= 0.0) {
-            discard;
-        }
-    } else if (tex_color.a < 0.01) {
+    // Preserve low-alpha fades. Destination-replacing modes also write zero-
+    // alpha sources, but must leave fully clipped-out pixels untouched.
+    if (replaces_destination && clip_alpha <= 0.0) {
         discard;
     }
 

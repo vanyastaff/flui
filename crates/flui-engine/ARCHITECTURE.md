@@ -47,6 +47,17 @@ shader modules directly from static WGSL; subsequent draws reuse the pipelines.
 
 ---
 
+## Embedder-owned frames
+
+Public `WgpuPainter` embedders call `begin_frame` before recording, may flush
+with `render_to_view` several times, then call `finish_frame` once after the
+final encoder submission (or after discarding an encoder on error). This makes
+state reset and resource maintenance reachable without exposing the internal
+renderer. The window renderer retains its existing private multi-pass calls.
+`examples/embedded_gpu_scene.rs` exercises the public lifecycle with an external
+GPU texture, a depth-tested producer pass and foreground 2D drawing on the same
+device; its `--capture` mode asserts fixed-angle pixels after two frames.
+
 ## One frame
 
 ```text
@@ -71,7 +82,8 @@ LayerDispatcher                   routes each DrawCommand { transform, op }
 WgpuPainter (record)              DrawBatcher writes the Command IR:
     │                             DrawSegment + draw_order: Vec<DrawItem>
     ▼
-GpuReplay::submit (replay)        Command IR → render passes, one queue.submit
+GpuReplay::submit (replay)        ordered Command IR → render passes
+    │                             DeviceDomain owns each queue submission
     │
     ▼
 present                           the pre-present hook runs only for a frame
@@ -91,6 +103,21 @@ Two IRs sit in a strict producer/consumer chain (governing decision:
 |---|---|---|---|
 | Scene IR | `flui_painting::DisplayList` / `DrawCommand { transform, op: DrawOp }` | the widget tree's `Canvas` | `LayerDispatcher` |
 | Command IR | `command_ir::{DrawSegment, DrawItem}` | `DrawBatcher` (`batches/`) | `GpuReplay::submit` (`replay/`) |
+
+Recording appends typed `DrawRun` ranges in painter order. Sealing consumes the
+mutable segment into `SealedSegment`; nested filters, opacity, advanced shapes
+and SSAA carry the same read-only boundary. Replay remaps an independently
+charged scratch copy when an offscreen coordinate system requires it. Gradient
+tables and viewport uniforms are immutable per encoded flush, and buffer-pool
+slots stay distinct until the frame's encoders are submitted or discarded.
+
+`RecordingBudget` bounds requested arena capacity and live element count for a
+painter recording session, shared across sealed, isolated and remapped segments.
+Admission precedes growth; the first failure stays latched until a new frame.
+It excludes allocator slack, `DrawItem` container metadata, Lyon output, caches,
+image decoding and separate painters. `DeviceDomain` separately admits the
+listed prepared GPU payloads and retains submission charges until callbacks.
+Neither quota is a whole-process memory or physical VRAM limit.
 
 The Command IR is GPU-lowered (baked instance arrays, pixel-space transforms,
 opaque `TextureId`s) and holds no pooled texture: textures are acquired at
@@ -327,20 +354,21 @@ refusing is permissive (extra content the caller can see), inverting was
 destructive (content gone with nothing left to look at). Honouring it needs a
 clip stack that can evaluate `1 − coverage`, and waits for that.
 
-### 9. `Clip::AntiAliasWithSaveLayer` opens an offscreen bounded by the clip's own scissor, and declines it inside an image filter
+### 9. Clip offscreens and nested image filters preserve ordered content
 
-`LayerDispatcher::opens_offscreen` grants the offscreen when the mode asks
-and no enclosing layer routes through a bounds-growing image filter; the
-layer's bounds are the scissor the clip just installed (already intersected
-with every ancestor clip), which cannot cut content and keeps the composite
-to one textured quad. Inside an image-filter layer the offscreen is declined:
-those layers carry only their final `DrawSegment` into `FilterOp::input`, so
-an opacity layer opened inside one would be discarded together with every
-sibling already flushed — degrading to per-draw coverage loses an edge,
-opening the layer loses the picture.
+`Clip::AntiAliasWithSaveLayer` opens an offscreen bounded by the clip's own
+scissor, including inside image filters. Coverage applies once to the finished
+group. A rect clip needs only its hardware scissor.
+
+`FilterOp` retains every ordered draw item plus the final segment. Flat input
+uses a grown-bounds cropped intermediate. Input with nested compositing uses
+a full-viewport intermediate, so child effects keep their coordinate system
+without rebasing nested command IR. This costs a larger allocation for nested
+content but preserves siblings, group opacity, child filters and clip coverage.
+`image_filters_keep_nested_opacity_and_both_siblings` pins Blur, Dilate and
+Compose through the public scene/capture API;
 `a_clip_inside_an_image_filter_layer_keeps_its_content_and_its_siblings`
-pins both halves. A rect clip under this mode is honoured by the scissor
-alone; an offscreen would buy nothing there.
+pins the clip case.
 
 ### 10. An offscreen result composites with the mode its producer recorded
 
@@ -422,9 +450,9 @@ places (`ShapedRun::placed_glyphs`, a `GlyphKey` per glyph) is looked up in
 the atlas, rasterised on first use through `SwashRasterizer`, and pushed as a
 `GlyphInstance` into
 `DrawSegment::glyph_batch` under the same scissor run, SDF clip, and layer
-opacity every other instance gets. `Phase::Glyph` is the last phase, and
-`flush_segment` draws the batch either at the end of the instanced pass
-(when no gradient/tessellated/image phase sits between) or in its own pass.
+opacity every other instance gets. `DrawRun::Glyph` preserves its recorded
+position among the other primitive families; adjacent compatible runs may share
+a render pass, without moving a glyph across an intervening draw.
 What that deleted: the per-segment glyph ranges (`text_start..text_end`),
 the "claimed text" bookkeeping and the trailing gap passes that drew text
 captured by a filter or advanced shape over everything, `seal_text_tail`,
@@ -504,10 +532,14 @@ leaves the target invalid; the first partial frame after it renders in full
 into the target (the warm-up), and only later ones are scissored. On a
 surface without `COPY_SRC` every frame goes through the target, which
 replaces the pooled intermediate that path used to take. The target is
-allocated by the first frame that needs it (`width × height × 4` bytes: 8.3 MB
-at 1920×1080), invalid from `begin` to `commit`, invalidated by a resize,
-a reconfigure or a surface recreation, and dropped by `release_surface` and
-by recovery (its device is gone).
+allocated by the first frame that needs it. A replacement uses a distinct
+candidate ([ADR-0100](../../docs/adr/ADR-0100-prepared-gpu-work-and-retained-frame-commit.md));
+a partial candidate first copies the committed pixels, then repaints the damage.
+Only a successful submission sequence promotes it. A failed candidate preserves
+the previous committed pixels and forces a full retry. Two BGRA8 targets require
+16.6 MB at 1920×1080, excluding driver overhead. Resize, reconfigure and surface
+recreation invalidate the retained content; `release_surface` and device recovery
+drop the targets. Submitted uses keep their resource charges until completion.
 
 A partial frame clears its damage with an opaque fill inside the scissor
 (`damage::begin_partial`) before the content, not with the full clear pass,
@@ -523,16 +555,18 @@ plugin's scene): it renders in full, invalidates the target and makes the
 next frame full, because the owner's differ compares against scenes it
 submitted and would otherwise scissor over pixels it never saw.
 
-FLUI has no per-buffer damage accumulation (buffer age), so it keeps one
-retained target instead; it rounds damage outward with a 1 px anti-aliasing
+FLUI has no per-buffer damage accumulation (buffer age), so it keeps a committed
+retained image and prepares a candidate; it rounds damage outward with a 1 px anti-aliasing
 margin (`DamageRect::covering`) rather than aligning to tiles; and a frame with
 nothing damaged does not present (`PresentDisposition::NoDamage`).
 
-Measured by `render_throughput`'s `damage_retained_target` group (1920×1080,
+Before candidate isolation, `render_throughput`'s `damage_retained_target` group (1920×1080,
 translucent full-surface layers, 128 px damage, one desktop adapter): full
 direct 343 µs / 1.07 ms / 3.39 ms at 4 / 16 / 64 layers against partial plus
 blit 340 µs / 262 µs / 301 µs; the blit alone 144 µs. The blit's bandwidth on
-tile-based mobile GPUs is not measured. Locked by `damage_readback_tests.rs`
+tile-based mobile GPUs is not measured. Those figures exclude candidate allocation
+and copy; see the [measurement record](../../docs/research/engine-foundation-measurements.ru.md)
+for the current comparison and its limits. Locked by `damage_readback_tests.rs`
 (through the crate-private `RetainedCapture`, which runs the renderer's own
 `FrameProtocol` and `record_frame_content`; only the clear, the content
 submission and the blit are its own), `damage::tests::plan_frame_table` and

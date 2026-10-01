@@ -145,6 +145,7 @@ fn submit_frame(
     let result = painter.render_to_view(view, &mut enc);
     queue.submit([enc.finish()]);
     let _ = device.poll(wgpu::PollType::wait_indefinitely());
+    painter.finish_frame();
     black_box(result).expect("the frame must render");
 }
 

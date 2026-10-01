@@ -65,7 +65,7 @@ pub(crate) struct LinearGradientInstance {
     pub gradient_end: [f32; 2],
     /// Corner radii [top-left, top-right, bottom-right, bottom-left]
     pub corner_radii: [f32; 4],
-    /// Number of gradient stops (1-8)
+    /// Number of validated gradient stops
     pub stop_count: u32,
     /// Offset into the shared gradient stops buffer
     pub stop_offset: u32,
@@ -111,7 +111,7 @@ impl LinearGradientInstance {
             gradient_start: [start.x, start.y],
             gradient_end: [end.x, end.y],
             corner_radii,
-            stop_count: stop_count.min(8),
+            stop_count,
             stop_offset: 0,
             padding: [0; 2],
             clip_rrect: [0.0; 8],
@@ -142,7 +142,7 @@ pub(crate) struct RadialGradientInstance {
     pub padding1: f32,
     /// Corner radii [top-left, top-right, bottom-right, bottom-left]
     pub corner_radii: [f32; 4],
-    /// Number of gradient stops (1-8)
+    /// Number of validated gradient stops
     pub stop_count: u32,
     /// Offset into the shared gradient stops buffer
     pub stop_offset: u32,
@@ -189,7 +189,7 @@ impl RadialGradientInstance {
             radius,
             padding1: 0.0,
             corner_radii,
-            stop_count: stop_count.min(8),
+            stop_count,
             stop_offset: 0,
             padding2: [0; 2],
             clip_rrect: [0.0; 8],
@@ -221,7 +221,7 @@ pub(crate) struct SweepGradientInstance {
     pub angles: [f32; 2],
     /// Corner radii [top-left, top-right, bottom-right, bottom-left]
     pub corner_radii: [f32; 4],
-    /// Number of gradient stops (1-8)
+    /// Number of validated gradient stops
     pub stop_count: u32,
     /// Offset into the shared gradient stops buffer
     pub stop_offset: u32,
@@ -268,7 +268,7 @@ impl SweepGradientInstance {
             center: [center.x, center.y],
             angles: [start_angle, end_angle],
             corner_radii,
-            stop_count: stop_count.min(8),
+            stop_count,
             stop_offset: 0,
             padding: [0; 2],
             clip_rrect: [0.0; 8],

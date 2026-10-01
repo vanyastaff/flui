@@ -234,6 +234,31 @@ mod new_probes_before_gpu_work_tests {
     fn renderer_construction_fails_before_gpu_work_and_surface_acquisition_shares_one_retry() {
         super::surface_acquisition_tests::outdated_and_lost_still_share_the_single_retry_budget();
         renderer_new_fails_before_instance_creation_when_target_is_unavailable();
+        device_request_uses_only_advertised_features();
+    }
+
+    fn device_request_uses_only_advertised_features() {
+        for features in [
+            wgpu::Features::empty(),
+            wgpu::Features::DUAL_SOURCE_BLENDING,
+            wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES,
+            wgpu::Features::IMMEDIATES,
+            wgpu::Features::TIMESTAMP_QUERY,
+            wgpu::Features::TIMESTAMP_QUERY | wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS,
+        ] {
+            let capabilities = super::GpuCapabilities {
+                backend: wgpu::Backend::BrowserWebGpu,
+                adapter_name: String::new(),
+                vendor: String::new(),
+                features,
+                limits: wgpu::Limits::default(),
+            };
+            let requested = Renderer::required_features(&capabilities);
+            assert!(
+                features.contains(requested),
+                "device request {requested:?} exceeds adapter features {features:?}"
+            );
+        }
     }
 
     fn renderer_new_fails_before_instance_creation_when_target_is_unavailable() {
@@ -377,6 +402,7 @@ pub(crate) struct RenderContext {
 /// exit — so the sequence stays `render → children → cleanup`, and the
 /// walk's own stack supplies the children-then-exit ordering.
 struct RenderLayerVisitor<'a, 'b> {
+    error: Option<EngineError>,
     backend: &'a mut crate::layer_dispatcher::LayerDispatcher<'b>,
     ctx: &'a RenderContext,
     surface_texture: &'a wgpu::Texture,
@@ -407,6 +433,10 @@ impl crate::layer_walk::LayerVisitor for RenderLayerVisitor<'_, '_> {
     ) -> crate::layer_walk::Step {
         use crate::layer_render::LayerRender;
 
+        if self.error.is_some() {
+            return crate::layer_walk::Step::SkipSubtree;
+        }
+
         // BackdropFilter requires mid-frame flush + copy. The gate passes
         // when EITHER the swapchain surface itself has COPY_SRC (common
         // path), OR the intermediate texture is active (COPY_SRC-less
@@ -415,12 +445,18 @@ impl crate::layer_walk::LayerVisitor for RenderLayerVisitor<'_, '_> {
         if let flui_layer::Layer::BackdropFilter(bf_layer) = layer
             && (self.ctx.supports_copy_src || self.ctx.intermediate_active)
         {
-            return Renderer::handle_backdrop_filter(
+            return match Renderer::handle_backdrop_filter(
                 bf_layer,
                 self.backend,
                 self.surface_texture,
                 self.surface_view,
-            );
+            ) {
+                Ok(step) => step,
+                Err(error) => {
+                    self.error = Some(error);
+                    crate::layer_walk::Step::SkipSubtree
+                }
+            };
         }
 
         // ShaderMask captures children to an offscreen texture, applies
@@ -435,7 +471,11 @@ impl crate::layer_walk::LayerVisitor for RenderLayerVisitor<'_, '_> {
             let Some(node) = tree.get(id) else {
                 return crate::layer_walk::Step::SkipSubtree;
             };
-            Renderer::handle_shader_mask(sm_layer, node, tree, self.backend, self.ctx);
+            if let Err(error) =
+                Renderer::handle_shader_mask(sm_layer, node, tree, self.backend, self.ctx)
+            {
+                self.error = Some(error);
+            }
             return crate::layer_walk::Step::SkipSubtree;
         }
 
@@ -878,22 +918,15 @@ impl Renderer {
     /// rebuild exists to remove. A third consumer belongs in this function,
     /// where both callers pick it up together.
     fn build_format_consumers(
-        device: &Arc<wgpu::Device>,
-        queue: &Arc<wgpu::Queue>,
+        domain: Arc<crate::device_domain::DeviceDomain>,
         format: wgpu::TextureFormat,
         size: (u32, u32),
     ) -> (
         crate::painter::WgpuPainter,
         crate::offscreen::OffscreenRenderer,
     ) {
-        let painter = crate::painter::WgpuPainter::with_shared_device(
-            Arc::clone(device),
-            Arc::clone(queue),
-            format,
-            size,
-        );
-        let offscreen =
-            crate::offscreen::OffscreenRenderer::new(Arc::clone(device), Arc::clone(queue), format);
+        let painter = crate::painter::WgpuPainter::with_domain(Arc::clone(&domain), format, size);
+        let offscreen = crate::offscreen::OffscreenRenderer::with_domain(domain, format);
         (painter, offscreen)
     }
 
@@ -998,8 +1031,7 @@ impl Renderer {
         surface.configure(&device, &config);
 
         let (painter, offscreen) = Self::build_format_consumers(
-            &device,
-            &queue,
+            crate::device_domain::DeviceDomain::new(Arc::clone(&device), Arc::clone(&queue)),
             config.format,
             (config.width, config.height),
         );
@@ -1055,7 +1087,11 @@ impl Renderer {
     pub fn is_device_lost(&self) -> bool {
         // `Relaxed`: see the store in `install_device_diagnostics` — the flag
         // carries no data, so there is nothing for an acquire to pair with.
-        self.device_lost.load(std::sync::atomic::Ordering::Relaxed)
+        let lost = self.device_lost.load(std::sync::atomic::Ordering::Relaxed);
+        if lost {
+            self.painter.domain().mark_lost();
+        }
+        lost
     }
 
     /// Whether the intermediate-texture present path is active for this frame.
@@ -1292,8 +1328,9 @@ impl Renderer {
     pub(super) fn required_features(capabilities: &GpuCapabilities) -> wgpu::Features {
         let mut features = wgpu::Features::empty();
 
-        // Always enable texture adapter-specific formats.
-        features |= wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES;
+        // Native format extensions are optional, and unavailable on WebGPU.
+        features |=
+            capabilities.features & wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES;
 
         // Immediates (formerly push constants): only request if adapter supports them.
         // Some mobile GPUs (especially older Android devices) don't support this.
@@ -1726,8 +1763,7 @@ impl Renderer {
             // lane — the startup cost, paid again. It neither submits nor
             // waits on the GPU; shader compilation is the whole of it.
             let (painter, offscreen) = Self::build_format_consumers(
-                &self.device,
-                &self.queue,
+                Arc::clone(self.painter.domain()),
                 fresh_config.format,
                 (width, height),
             );
@@ -1847,9 +1883,9 @@ impl Renderer {
         // (no blend equation), so the surface is pixel-identical to a direct
         // render. A failed content pass is the frame's failure: nothing below
         // presents it.
+        let domain = Arc::clone(self.painter.domain());
         let mut steps = SwapchainFrame {
             device: &self.device,
-            queue: &self.queue,
             painter: &mut self.painter,
             offscreen: &mut self.offscreen,
             scene,
@@ -1860,7 +1896,7 @@ impl Renderer {
         };
         self.frame.run(
             plan,
-            &self.device,
+            &domain,
             (self.config.width, self.config.height),
             surface_format,
             (&view, &output.texture),
@@ -1930,7 +1966,7 @@ impl Renderer {
         // attempting to acquire a surface texture. If the device is gone, we
         // cannot proceed with the current device — return an error that the
         // caller can handle by recreating the renderer.
-        if self.device_lost.load(std::sync::atomic::Ordering::Relaxed) {
+        if self.is_device_lost() {
             tracing::warn!("Device lost detected; returning DeviceLost error");
             return Err(EngineError::DeviceLost);
         }
@@ -1990,7 +2026,7 @@ impl Renderer {
         (render_view, render_texture): (&wgpu::TextureView, &wgpu::Texture),
         ctx: RenderContext,
         partial_damage: Option<flui_foundation::geometry::Rect<f64>>,
-    ) -> bool {
+    ) -> EngineResult<bool> {
         use crate::layer_dispatcher::LayerDispatcher;
 
         let mut backend = LayerDispatcher::with_offscreen(painter, offscreen);
@@ -2005,7 +2041,7 @@ impl Renderer {
         // Reset per-frame clip/transform/opacity/layer state so that
         // partial-damage scissors from frame N cannot leak into frame N+1.
         // This must happen BEFORE the damage clip_rect below.
-        backend.painter_mut().reset_frame_state();
+        backend.painter_mut().begin_frame();
 
         // A partial frame scissors every draw to its damage and repaints the
         // background there first (`damage::begin_partial`); `partial_damage`
@@ -2032,7 +2068,7 @@ impl Renderer {
             &ctx,
             render_texture,
             render_view,
-        );
+        )?;
 
         // Damage-straddle self-healing: if a partial scissor was applied AND
         // `draw_order` now contains an advanced shape whose `device_bounds`
@@ -2057,7 +2093,7 @@ impl Renderer {
         // which balances any deferred lazy-coalescing save left by
         // `with_transform`, before the caller renders the painter's batches.
         drop(backend);
-        straddled
+        Ok(straddled)
     }
 
     /// Recursively render a layer and its children (depth-first, back-to-front /
@@ -2092,8 +2128,9 @@ impl Renderer {
         ctx: &RenderContext,
         surface_texture: &wgpu::Texture,
         surface_view: &wgpu::TextureView,
-    ) {
+    ) -> EngineResult<()> {
         let mut visitor = RenderLayerVisitor {
+            error: None,
             backend,
             ctx,
             surface_texture,
@@ -2101,6 +2138,7 @@ impl Renderer {
             pushed_follower_offsets: Vec::new(),
         };
         crate::layer_walk::walk_layer_tree(tree, layer_id, &mut visitor);
+        visitor.error.map_or(Ok(()), Err)
     }
 
     /// Handle a `BackdropFilterLayer` via mid-frame flush and Dual Kawase blur.
@@ -2116,7 +2154,7 @@ impl Renderer {
         backend: &mut crate::layer_dispatcher::LayerDispatcher<'_>,
         surface_texture: &wgpu::Texture,
         surface_view: &wgpu::TextureView,
-    ) -> crate::layer_walk::Step {
+    ) -> EngineResult<crate::layer_walk::Step> {
         use flui_painting::paint::ImageFilter;
 
         let bounds = bf_layer.bounds();
@@ -2135,7 +2173,7 @@ impl Renderer {
             tracing::warn!(
                 "Backdrop filter type not supported for GPU blur, rendering children only"
             );
-            return crate::layer_walk::Step::Descend;
+            return Ok(crate::layer_walk::Step::Descend);
         };
 
         // Map the layer's local-space `bounds` to a device-space rect using the
@@ -2158,13 +2196,13 @@ impl Renderer {
             bf_layer.blend_mode(),
             surface_texture,
             surface_view,
-        );
+        )?;
 
         // Children render on top of the (maybe-)blurred backdrop. No push/pop
         // state to clean up in this path, so the walk descends normally: the
         // blur is already composited onto the surface and the child subtrees
         // are ordinary layer content.
-        crate::layer_walk::Step::Descend
+        Ok(crate::layer_walk::Step::Descend)
     }
 
     /// Handle a `ShaderMaskLayer` subtree by capturing its children to a
@@ -2215,7 +2253,7 @@ impl Renderer {
         tree: &flui_layer::LayerTree,
         backend: &mut crate::layer_dispatcher::LayerDispatcher<'_>,
         ctx: &RenderContext,
-    ) {
+    ) -> EngineResult<()> {
         use crate::layer_state_stack::LayerStateStack;
         use flui_foundation::geometry::Size;
 
@@ -2243,7 +2281,6 @@ impl Renderer {
             .offscreen_mut()
             .expect("gated by caller: offscreen_mut().is_some()");
         let device = Arc::clone(offscreen.device());
-        let queue = Arc::clone(offscreen.queue());
         let format = offscreen.surface_format();
         let child_tex = offscreen
             .texture_pool_mut()
@@ -2254,15 +2291,15 @@ impl Renderer {
         // with the coordinate-frame-correct transform (see doc comment
         // above).
         let offscreen_painter = offscreen.mask_painter((dev_width, dev_height));
-        offscreen_painter.reset_frame_state();
-        {
+        offscreen_painter.begin_frame();
+        let recorded = {
             let mut temp_backend = crate::layer_dispatcher::LayerDispatcher::new(offscreen_painter);
 
             let mut seed_transform = ambient_ctm;
             seed_transform.translate(-device_bounds.left(), -device_bounds.top(), 0.0);
             temp_backend.push_transform(&seed_transform);
 
-            for &child_id in node.children() {
+            let recorded = node.children().iter().try_for_each(|&child_id| {
                 Self::render_layer_recursive(
                     tree,
                     child_id,
@@ -2270,11 +2307,16 @@ impl Renderer {
                     ctx,
                     child_tex.texture(),
                     child_tex.view(),
-                );
-            }
+                )
+            });
             temp_backend.pop_transform();
             // temp_backend drops here -> Drop calls flush_active_transform(),
             // balancing the push_transform save before the render below.
+            recorded
+        };
+        if let Err(error) = recorded {
+            offscreen_painter.finish_frame();
+            return Err(error);
         }
 
         // Flush the mask painter's batches into the child texture (clear
@@ -2303,10 +2345,15 @@ impl Renderer {
         }
         let child_target =
             crate::render_target::RenderTarget::sampleable(child_tex.view(), child_tex.texture());
-        if let Err(e) = offscreen_painter.render(child_target, &mut encoder) {
-            tracing::error!("Failed to render ShaderMask layer child content: {}", e);
+        let result = offscreen_painter.render(child_target, &mut encoder);
+        if let Err(error) = result {
+            drop(encoder);
+            offscreen_painter.finish_frame();
+            return Err(error);
         }
-        queue.submit(std::iter::once(encoder.finish()));
+        let submitted = offscreen_painter.submit_encoder(encoder);
+        offscreen_painter.finish_frame();
+        submitted?;
 
         // Apply the shader as a GPU mask against the captured child content,
         // then queue the masked result for compositing on the main target at
@@ -2320,7 +2367,7 @@ impl Renderer {
         // pass applies the shader's alpha alone for now (ADR-0099).
         let result_size = Size::new(f64::from(dev_width), f64::from(dev_height));
         let masked_texture = offscreen
-            .render_masked(bounds, result_size, shader, child_tex.texture())
+            .render_masked(bounds, result_size, shader, child_tex.texture())?
             .into_texture();
 
         backend.painter_mut().queue_offscreen_result(
@@ -2338,6 +2385,7 @@ impl Renderer {
             dev_width,
             dev_height
         );
+        Ok(())
     }
 }
 
@@ -2348,7 +2396,6 @@ impl Renderer {
 /// [`FrameProtocol::run`]: crate::frame_protocol::FrameProtocol::run
 struct SwapchainFrame<'a> {
     device: &'a wgpu::Device,
-    queue: &'a wgpu::Queue,
     painter: &'a mut crate::painter::WgpuPainter,
     offscreen: &'a mut crate::offscreen::OffscreenRenderer,
     scene: &'a flui_layer::Scene,
@@ -2361,7 +2408,7 @@ struct SwapchainFrame<'a> {
 impl crate::frame_protocol::FrameSteps for SwapchainFrame<'_> {
     /// Submits the clear pass at once, so mid-frame copies (backdrop blur
     /// reads the target) see a cleared target.
-    fn clear(&mut self, render_view: &wgpu::TextureView) {
+    fn clear(&mut self, render_view: &wgpu::TextureView) -> EngineResult<()> {
         let mut clear_encoder =
             self.device
                 .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -2415,7 +2462,8 @@ impl crate::frame_protocol::FrameSteps for SwapchainFrame<'_> {
         if let Some(profiler) = self.gpu_profiler.as_mut() {
             profiler.resolve_queries(&mut clear_encoder);
         }
-        self.queue.submit(std::iter::once(clear_encoder.finish()));
+        self.painter.submit_encoder(clear_encoder)?;
+        Ok(())
     }
 
     /// Traverses the scene's layer tree and flushes all painter batches to
@@ -2438,6 +2486,13 @@ impl crate::frame_protocol::FrameSteps for SwapchainFrame<'_> {
             },
             partial_damage,
         );
+        let straddled = match straddled {
+            Ok(straddled) => straddled,
+            Err(error) => {
+                self.painter.finish_frame();
+                return Err(error);
+            }
+        };
         let painter = &mut *self.painter;
 
         // Final flush — submit remaining painter batches.
@@ -2482,7 +2537,8 @@ impl crate::frame_protocol::FrameSteps for SwapchainFrame<'_> {
             // still reset so the next frame starts clean, and the caller's
             // classifier (`Recoverability`, `RasterOwner::handle_render_failure`)
             // finally sees the error `render_scene` documents.
-            painter.end_frame_maintenance();
+            drop(final_encoder);
+            painter.finish_frame();
             return Err(error);
         }
         // Resolve before finishing the encoder.
@@ -2490,19 +2546,20 @@ impl crate::frame_protocol::FrameSteps for SwapchainFrame<'_> {
         if let Some(profiler) = self.gpu_profiler.as_mut() {
             profiler.resolve_queries(&mut final_encoder);
         }
-        self.queue.submit(std::iter::once(final_encoder.finish()));
+        let submitted = painter.submit_encoder(final_encoder);
 
         // Frame boundary: run texture-cache maintenance ONCE, after the
         // final flush. `painter.render` runs per-pass (backdrop-filter
         // flushes call it mid-frame), so maintenance lives here — not inside
         // `render` — to avoid resetting use-counters between passes.
-        painter.end_frame_maintenance();
+        painter.finish_frame();
+        submitted?;
         Ok(straddled)
     }
 
-    fn blit(&mut self, retained: &wgpu::Texture, surface: &wgpu::TextureView) {
+    fn blit(&mut self, retained: &wgpu::Texture, surface: &wgpu::TextureView) -> EngineResult<()> {
         self.offscreen
-            .blit_to_surface(retained, surface, self.format);
+            .blit_to_surface(retained, surface, self.format)
     }
 }
 
@@ -2720,7 +2777,8 @@ mod tests {
             unreachable!("inserted a BackdropFilter layer");
         };
 
-        Renderer::handle_backdrop_filter(bf_layer, &mut backend, &surface_texture, &surface_view);
+        Renderer::handle_backdrop_filter(bf_layer, &mut backend, &surface_texture, &surface_view)
+            .expect("backdrop filter records");
 
         // The blurred backdrop must be queued for compositing at the DEVICE
         // rect — logical bounds (x=100, y=100, w=200, h=200) under scale(2)
@@ -3030,7 +3088,8 @@ mod tests {
             &ctx,
             &render_texture,
             &render_view,
-        );
+        )
+        .expect("layer tree records");
         drop(backend);
 
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -3152,7 +3211,8 @@ mod tests {
             &ctx,
             &render_texture,
             &render_view,
-        );
+        )
+        .expect("layer tree records");
         drop(backend);
 
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {

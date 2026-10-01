@@ -1553,7 +1553,9 @@ impl<B: RasterBackend> RasterOwner<B> {
         error: EngineError,
     ) -> PumpOutcome {
         match error {
-            EngineError::DeviceLost => {
+            EngineError::DeviceLost
+            | EngineError::GpuUnavailable
+            | EngineError::GpuProgress { .. } => {
                 tracing::warn!(?epoch, "raster owner: GPU device lost");
                 // Reliable, not just the (possibly-full) ack lane: device
                 // loss is exactly the kind of recovery-critical state a
@@ -2241,7 +2243,15 @@ mod tests {
     // -----------------------------------------------------------------------
 
     fn device_lost_completion_retires_the_ticket() {
-        let backend = FakeBackend::with_planned([Err(EngineError::DeviceLost)]);
+        assert_device_failure_retires_ticket(EngineError::DeviceLost);
+    }
+
+    fn quarantined_domain_requests_device_recovery() {
+        assert_device_failure_retires_ticket(EngineError::GpuUnavailable);
+    }
+
+    fn assert_device_failure_retires_ticket(error: EngineError) {
+        let backend = FakeBackend::with_planned([Err(error)]);
         let (mut owner, handle, ack_rx, _shutdown_complete_rx) = new_owner(backend);
         let epoch = FrameEpoch::ZERO.next();
         let generation = handle
@@ -2265,6 +2275,7 @@ mod tests {
             "device loss must retire the in-flight frame, never strand it -- recovery \
              must not be stalled behind a phantom permit"
         );
+        assert!(handle.surface_state().device_lost);
         assert_eq!(
             ack_rx.try_recv().unwrap(),
             RasterAck::DeviceLost {
@@ -2349,6 +2360,7 @@ mod tests {
     fn every_failure_boundary_retires_its_ticket() {
         render_failure_acks_dropped_render_failed();
         device_lost_completion_retires_the_ticket();
+        quarantined_domain_requests_device_recovery();
         panic_mid_render_retires_the_ticket_and_capacity_is_usable_again();
         owner_dropped_with_a_still_pending_frame_retires_it_instead_of_leaking();
     }
