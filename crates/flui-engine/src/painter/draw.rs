@@ -490,13 +490,25 @@ impl super::WgpuPainter {
         filter_quality: flui_painting::paint::FilterQuality,
         opacity: f32,
     ) {
+        self.draw_texture_from_registry(texture_id, dst, src, filter_quality, opacity, None);
+    }
+
+    pub(crate) fn draw_texture_from_registry(
+        &mut self,
+        texture_id: flui_painting::paint::TextureId,
+        dst: flui_foundation::geometry::Rect<f64>,
+        src: Option<flui_foundation::geometry::Rect<f64>>,
+        filter_quality: flui_painting::paint::FilterQuality,
+        opacity: f32,
+        registry: Option<&crate::external_texture_registry::ExternalTextureRegistry>,
+    ) {
         let sampling = match filter_quality {
             flui_painting::paint::FilterQuality::None => {
                 crate::external_texture_registry::ExternalSampling::Nearest
             }
             _ => crate::external_texture_registry::ExternalSampling::Linear,
         };
-        self.record_external_texture(texture_id, dst, src, Some(sampling), opacity);
+        self.record_external_texture(texture_id, dst, src, Some(sampling), opacity, registry);
     }
 
     /// Draw using the resource's registered sampling policy.
@@ -509,7 +521,7 @@ impl super::WgpuPainter {
         src: Option<flui_foundation::geometry::Rect<f64>>,
         opacity: f32,
     ) {
-        self.record_external_texture(texture_id, dst, src, None, opacity);
+        self.record_external_texture(texture_id, dst, src, None, opacity, None);
     }
 
     fn record_external_texture(
@@ -519,15 +531,15 @@ impl super::WgpuPainter {
         src: Option<flui_foundation::geometry::Rect<f64>>,
         sampling: Option<crate::external_texture_registry::ExternalSampling>,
         opacity: f32,
+        registry: Option<&crate::external_texture_registry::ExternalTextureRegistry>,
     ) {
         use crate::error::ExternalTextureError;
         if self.current_segment.recording_result().is_err() {
             return;
         }
         let result = (|| {
-            let lease = self
-                .resources
-                .external_texture_registry()
+            let lease = registry
+                .unwrap_or_else(|| self.resources.external_texture_registry())
                 .get(texture_id)
                 .map(|entry| entry.lease().clone())
                 .ok_or(ExternalTextureError::UnknownTexture {

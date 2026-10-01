@@ -88,6 +88,31 @@ assertion о владении второго submit после CPU finish.
 texels дало `[183, 0, 72, 255]` вместо чистого красного. Оба запуска завершились
 exit 100 именно на pixel assertions; source восстановлен byte-for-byte.
 
+## External textures в shader-mask capture
+
+Inline review выявило отдельный production path: shader-mask subtree записывается
+cached child painter, чей собственный registry пуст. Теперь child dispatcher
+заимствует registry родителя только на время lowering; копирования HashMap и
+новых locks нет. Domain check и completion-owned leases остаются теми же.
+Readback реального `ShaderMaskLayer` проверяет half-alpha mask, замену allocation
+при повторном использовании child painter, смену размеров и пиксели следующего
+исправного кадра после `UnknownTexture`. Отключение forwarding возвращает
+exit 100 с `UnknownTexture { id: 73 }`, source восстановлен в finally.
+После исправления полный GPU suite: 58 passed, 0 skipped, 88.044 s;
+clippy с testing/gpu-profiler прошёл. Повторные `check-changed` и `checks`
+прошли после исправления: workspace 608 passed, 10 skipped; doctests, strict
+rustdoc, cross-typecheck и wasm32. iOS runner и Linux platform run локально
+не выполнялись по указанным выше ограничениям.
+
+## Alpha contract embedded producer
+
+Inline review также выявило неверный Opaque descriptor в embedded GPU example:
+producer очищает target прозрачным цветом. Descriptor исправлен на Straight.
+Capture теперь проверяет пиксель (150,100): прозрачный texel сохраняет панель
+`[35, 46, 67, 255]`. Возврат только descriptor к Opaque даёт
+`[0, 0, 0, 255]` и exit 1; source восстановлен в finally. Исправленный capture
+прошёл на DX12 и визуально проверен.
+
 ## CPU recording и encoding
 
 Benchmark `render_throughput::external_bindings`: target 256x256, 32/256

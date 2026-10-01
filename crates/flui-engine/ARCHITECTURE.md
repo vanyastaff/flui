@@ -271,6 +271,16 @@ wide-gamut and HDR inputs are rejected rather than silently reinterpreted.
 The painter readback family
 `painter_images_and_offscreen_results_read_back_as_specified` pins sampling,
 allocation replacement, alpha, validation, first-error preservation and recovery.
+Allocation identity is pinned, while producer writes to that allocation remain
+visible. The engine's behavior tests cover nearest/linear overrides, transparent
+texels with hidden RGB, half opacity, RGBA/BGRA sources, update/rebind after
+recording, incompatible updates, competing errors and the next valid frame.
+Shader-mask captures borrow their parent's external registry only while lowering
+the child subtree; their cached painter owns no copied registrations. Captured
+leases follow the same domain and completion protocol as direct draws. The
+`renderer_surface_selection_and_layer_compositing_read_back_as_specified`
+family pins masked external draws, replacement with a reused painter, resize
+and recovery after a failed lookup.
 Bindings reuse the actual pipeline layout within a frame and retain their quota
 charge through cache ownership and submitted work. Imported GPU allocation bytes
 are excluded from prepared-resource quotas; a managed producer factory and the

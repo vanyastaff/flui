@@ -19,8 +19,9 @@ callbacks, конкурирующие panics и следующий кадр им
 [Измерения](../research/engine-foundation-measurements.ru.md) содержат baseline,
 стоимость правильного порядка, candidate copy/reuse и mutation failures.
 Это завершение конкретного первого фундамента, а не всей программы ниже:
-Engine-local resource descriptors и allocation leases доставляются следующим
-изменением; это не snapshot texels и не managed producer. Tagged color/linear
+Engine-local resource descriptors и allocation leases уже реализованы;
+[проверки resource contract](../research/engine-resource-contract-validation.ru.md)
+фиксируют их поведение. Это не snapshot texels и не managed producer. Tagged color/linear
 working space, managed producer capabilities, bounded diagnostic resolver и
 closing service ещё требуют реализации. Текущие квоты явно исключают legacy caches/pools,
 некоторые CPU intermediates и raw external allocations.

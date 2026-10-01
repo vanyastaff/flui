@@ -113,7 +113,7 @@ impl Gpu {
             texture,
             ExternalTextureDescriptor {
                 sampling: ExternalSampling::Linear,
-                alpha: ExternalAlpha::Opaque,
+                alpha: ExternalAlpha::Straight,
                 color: ExternalColorEncoding::EncodedSrgb,
             },
         )?;
@@ -546,6 +546,13 @@ fn capture(path: &std::path::Path) -> anyhow::Result<()> {
         "animated FLUI progress",
     )?;
     check(&initial, 20, 20, [10, 14, 20, 255], "background")?;
+    check(
+        &initial,
+        150,
+        100,
+        [35, 46, 67, 255],
+        "transparent producer texels preserve the viewport panel",
+    )?;
     gpu.encode_frame(&view, std::f32::consts::FRAC_PI_2)?;
     let rotated = readback(&mut gpu)?;
     check(

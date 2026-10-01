@@ -5,4 +5,6 @@
 
 ### Fixed
 
+- External textures under shader-mask layers resolve through the parent registry, including after allocation replacement or mask resize.
+
 - Linear filtering of straight-alpha external textures premultiplies texels before interpolation, preventing dark halos and hidden colors from transparent texels.
