@@ -600,7 +600,7 @@ impl GpuStateStack {
     /// The `kind` lane layout is shared with [`Self::active_clip`], which builds
     /// the same value from the stored slots; a lane added to one belongs in the
     /// other.
-    fn resolve_rrect_clip(&self, rrect: RRect, hard: bool) -> ResolvedClip {
+    pub(super) fn resolve_rrect_clip(&self, rrect: RRect, hard: bool) -> ResolvedClip {
         let rect = rrect.rect;
 
         // LOCAL bounds and radii — exactly what the caller asked for. The

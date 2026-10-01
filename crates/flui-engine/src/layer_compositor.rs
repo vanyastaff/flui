@@ -33,8 +33,10 @@ use crate::command_ir::{DrawItem, DrawSegment, ImageFilterSpec, LayerFilterChain
 /// can mutate its own fields after the compositor call returns — no aliasing.
 // `DrawSegment` / `Vec<DrawItem>` contain `wgpu::TextureView` which is not `Debug`.
 pub(super) enum RestoreOutcome {
-    /// The layer had content AND needs a premultiplied offscreen composite
-    /// (opacity ≠ 1.0, non-white tint, or advanced blend mode).  The painter
+    /// The layer needs a premultiplied offscreen composite (opacity ≠ 1.0,
+    /// non-white tint, a blend mode other than `SrcOver`, a filter or a
+    /// composite clip) and either has content or a mode that replaces the
+    /// destination under its empty, transparent offscreen.  The painter
     /// should finalize the parent segment, then queue a `DrawItem::OpacityLayer`.
     Composite {
         /// Offscreen draw items accumulated inside the layer.
@@ -49,8 +51,8 @@ pub(super) enum RestoreOutcome {
         composite_bounds: Rect<f64>,
         /// Blend mode to apply when compositing this layer onto its parent.
         ///
-        /// `SrcOver` for plain opacity layers; an advanced mode (e.g. Multiply)
-        /// for layers opened with an explicit blend mode via `save_layer`.
+        /// `SrcOver` for plain opacity layers; the paint's mode, Porter-Duff
+        /// or advanced, for layers opened with one via `save_layer`.
         layer_blend: BlendMode,
         /// Color-filter chain to apply before compositing.
         ///
@@ -88,7 +90,8 @@ pub(super) enum RestoreOutcome {
         saved_draw_order: Vec<DrawItem>,
     },
     /// The layer was empty (both `offscreen_items` and `offscreen_final_segment`
-    /// had no content).  The painter restores draw-record state but emits nothing.
+    /// had no content) and its mode keeps the destination under a transparent
+    /// source.  The painter restores draw-record state but emits nothing.
     Empty {
         /// Parent segment saved before `save_layer` — splice back into `current_segment`.
         saved_segment: DrawSegment,
@@ -200,8 +203,9 @@ impl LayerCompositor {
     /// fields via `mem::take`/`mem::replace` before calling this, then passes
     /// the owned values in so the compositor can store them in the `SavedLayer`.
     ///
-    /// `layer_blend` is `SrcOver` for plain opacity layers and an advanced mode
-    /// (e.g. Multiply) for `saveLayer` calls with an explicit blend mode.
+    /// `layer_blend` is `SrcOver` for plain opacity layers and the paint's
+    /// mode for `saveLayer` calls with an explicit one. `bounds` is the
+    /// layer's device region, already mapped and clipped by the painter.
     ///
     /// After this call `current_opacity` is `1.0`; children inside the layer
     /// draw at full opacity and group opacity is applied during compositing.
@@ -336,7 +340,16 @@ impl LayerCompositor {
         let has_offscreen_content =
             !offscreen_final_segment.is_empty() || !offscreen_items.is_empty();
 
-        if !has_offscreen_content {
+        // An empty layer composites nothing only when its mode leaves the
+        // destination alone under a transparent source. A destination-
+        // replacing one (`Clear`, `Src`, …) still changes its whole region:
+        // its offscreen is cleared transparent, and compositing that is the
+        // result the mode asks for.
+        if !has_offscreen_content
+            && saved
+                .layer_blend
+                .keeps_destination_under_transparent_source()
+        {
             return RestoreOutcome::Empty {
                 saved_segment: saved.saved_segment,
                 saved_draw_order: saved.saved_draw_order,
@@ -350,10 +363,12 @@ impl LayerCompositor {
         // chroma — otherwise the hue shift is silently dropped.  White tint
         // (plain opacity) at ~1.0 AND SrcOver blend keeps the cheap reintegrate path.
         //
-        // An advanced blend mode (Multiply, Screen, …) ALWAYS forces the composite
-        // path even at opacity=1.0 and white tint, because the reintegrate path
-        // splices children unchanged into the parent draw order — silently dropping
-        // the blend.
+        // Any mode but SrcOver ALWAYS forces the composite path even at
+        // opacity=1.0 and white tint, because the reintegrate path splices
+        // children unchanged into the parent draw order — silently compositing
+        // them SrcOver. That holds for the advanced modes (Multiply, Screen, …)
+        // and the Porter-Duff ones alike (`Src` replaces its region, `DstOver`
+        // puts the layer under the backdrop).
         //
         // A LayerFilter ALWAYS forces the composite path: the filter must run on
         // the rendered offscreen before pixels reach the parent, which the
@@ -374,7 +389,7 @@ impl LayerCompositor {
         // isolation and, for a rounded clip, the clip itself.
         let needs_composite = (1.0 - saved.layer_opacity).abs() > f32::EPSILON
             || has_chroma
-            || saved.layer_blend.is_advanced()
+            || saved.layer_blend != BlendMode::SrcOver
             || !saved.filters.is_empty()
             || saved.image_filter.is_some()
             || saved.composite_clip.is_some();

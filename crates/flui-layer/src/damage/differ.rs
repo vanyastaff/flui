@@ -298,14 +298,13 @@ impl Frame {
                 ctx.owner = Some(render_id);
             }
 
-            // Whether the composite this extent describes honours the clips
-            // above it. An offscreen effect's result (a shader mask, a
-            // backdrop filter) is composited over its bounds with no scissor
-            // and captured without the ancestor clip, and a save layer over
-            // the viewport (an opacity layer whose blend changes pixels a
-            // transparent source covers, a colour filter that paints
-            // transparent pixels) is taken as reaching past the clip too:
-            // the unclipped answer can only repaint more.
+            // Whether this extent is cut by the clips above it. The renderer
+            // composites an offscreen effect's result (a shader mask, a
+            // backdrop filter) and a save layer whose blend changes pixels a
+            // transparent source covers inside the ancestor clips, but the
+            // unclipped answer is kept for them, and for a colour filter that
+            // paints transparent pixels: it is a superset of what the
+            // composite writes, and can only repaint more.
             let mut clipped = true;
             let extent = match layer {
                 Layer::Picture(picture) => {
@@ -345,8 +344,8 @@ impl Frame {
                     clipped = false;
                     Some(DamageExtent::rect(mask.bounds()))
                 }
-                // Such a layer composites over the whole viewport, and every
-                // pixel of it can change.
+                // Such a layer composites over the whole viewport within its
+                // clip, and every pixel of it can change.
                 Layer::Opacity(opacity)
                     if !opacity.blend().keeps_destination_under_transparent_source() =>
                 {

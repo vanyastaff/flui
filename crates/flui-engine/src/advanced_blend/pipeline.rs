@@ -37,12 +37,16 @@ use crate::shader_composer::{ComposableSource, compose_wgsl_shader};
 // | 60          | 4    | `mode`          | `u32`                  |
 // | 64          | 8    | `src_uv_min`    | `vec2<f32>`            |
 // | 72          | 8    | `src_uv_max`    | `vec2<f32>`            |
+// | 80          | 16   | `clip_rect`     | `vec4<f32>`            |
+// | 96          | 16   | `clip_inv`      | `vec4<f32>`            |
+// | 112         | 8    | `clip_origin`   | `vec2<f32>`            |
+// | 120         | 8    | `_pad1`         | `vec2<f32>` (size gap) |
 //
-// Total = 80 bytes (multiple of 16).
+// Total = 128 bytes (multiple of 16).
 
-/// The generated `BlendUniforms` must be exactly 80 bytes.
+/// The generated `BlendUniforms` must be exactly 128 bytes.
 const _GENERATED_BLEND_UNIFORMS_SIZE_CHECK: () = {
-    assert!(std::mem::size_of::<advanced_blend::BlendUniforms>() == 80);
+    assert!(std::mem::size_of::<advanced_blend::BlendUniforms>() == 128);
 };
 
 /// Field offsets must match the WGSL uniform-block layout exactly.  The
@@ -58,6 +62,9 @@ const _GENERATED_BLEND_FIELD_OFFSET_CHECKS: () = {
     assert!(std::mem::offset_of!(advanced_blend::BlendUniforms, mode) == 60);
     assert!(std::mem::offset_of!(advanced_blend::BlendUniforms, src_uv_min) == 64);
     assert!(std::mem::offset_of!(advanced_blend::BlendUniforms, src_uv_max) == 72);
+    assert!(std::mem::offset_of!(advanced_blend::BlendUniforms, clip_rect) == 80);
+    assert!(std::mem::offset_of!(advanced_blend::BlendUniforms, clip_inv) == 96);
+    assert!(std::mem::offset_of!(advanced_blend::BlendUniforms, clip_origin) == 112);
 };
 
 // ── Mode discriminant mapping ─────────────────────────────────────────────────

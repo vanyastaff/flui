@@ -16,7 +16,7 @@
 //! | morphology.wgsl     | morphology_generated.rs       | 48 bytes     | —              |
 //! | color_matrix.wgsl   | color_matrix_generated.rs     | 80 bytes     | —              |
 //! | effects/mode.wgsl   | mode_generated.rs             | 32 bytes     | blend_helpers  |
-//! | advanced_blend.wgsl | advanced_blend_generated.rs   | 80 bytes     | blend_helpers  |
+//! | advanced_blend.wgsl | advanced_blend_generated.rs   | 128 bytes    | blend_helpers  |
 //!
 //! ## `#import` resolution for the composed shaders
 //!

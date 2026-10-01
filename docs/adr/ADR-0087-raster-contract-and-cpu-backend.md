@@ -244,7 +244,7 @@ platform-contract and frame-transaction changes (ADR-0082, ADR-0083); ordering i
   `a_removed_atlas_sprite_leaves_nothing_at_its_destination`,
   `removed_fill_style_lines_and_points_leave_nothing`,
   `a_removed_translated_src_save_layer_leaves_nothing_behind`,
-  `a_removed_clear_shader_mask_leaves_nothing_behind`,
+  `a_removed_shader_mask_leaves_nothing_behind`,
   `a_removed_offscreen_effect_under_a_clip_leaves_nothing_behind`,
   `a_change_beside_a_foreground_blur_matches_a_full_frame`,
   `a_change_in_a_shrunk_blurs_halo_matches_a_full_frame`,

@@ -261,9 +261,9 @@ impl WgpuPainter {
     ///   footprint written to the surface.
     ///
     /// `DrawItem::Filter` and `DrawItem::OffscreenTexture` are intentionally
-    /// excluded: they composite their offscreen via premultiplied SrcOver and never
-    /// read the surface backdrop, so they carry no stale-pixel hazard outside the
-    /// scissor.
+    /// excluded: they never read the surface backdrop, so they carry no
+    /// stale-pixel hazard outside the scissor, and an offscreen texture
+    /// composites under the scissor it was queued with.
     ///
     /// "Straddle" means the bounds intersect the damage rect AND are NOT fully
     /// contained by it — i.e., part of the item falls outside the scissored
@@ -297,6 +297,12 @@ impl WgpuPainter {
                 // damage rect means unscissored pixels outside the damage may be
                 // written with a stale-backdrop blend result.
                 //
+                // `op.bounds` is the layer's region, which the painter already
+                // cut to the scissor, and a partial frame's damage is part of
+                // that scissor, so a layer recorded in a partial frame lies
+                // inside the damage and this arm does not fire for it. It stays
+                // as the guard for a layer whose bounds were not cut that way.
+                //
                 // `DrawItem::Filter` and `DrawItem::OffscreenTexture` are excluded:
                 // they composite via premultiplied SrcOver from an offscreen texture
                 // and do not read the surface backdrop.
@@ -329,12 +335,21 @@ impl WgpuPainter {
     /// into the draw order. Content drawn before this call will render before
     /// the offscreen texture, and content drawn after will render after it,
     /// preserving correct Z-ordering.
+    ///
+    /// `bounds` is the device rect the texture covers. The composite is cut by
+    /// the clip in force now — the scissor (ancestor clip rects and a partial
+    /// frame's damage) and an ambient rounded clip — because the offscreen was
+    /// drawn outside them.
     pub(crate) fn queue_offscreen_result(
         &mut self,
         texture: crate::texture_pool::PooledTexture,
         bounds: Rect<f64>,
         blend: flui_painting::paint::BlendMode,
     ) {
+        let scissor = self.state.current_scissor();
+        let clip = self
+            .composite_clip(None, blend, false)
+            .unwrap_or(crate::state_stack::ResolvedClip::NONE);
         // Finalize the current segment and start a new one
         self.finish_current_segment();
         self.draw_order
@@ -342,6 +357,8 @@ impl WgpuPainter {
                 texture,
                 bounds,
                 blend,
+                scissor,
+                clip,
             }));
     }
 

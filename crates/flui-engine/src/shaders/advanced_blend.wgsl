@@ -67,6 +67,17 @@ struct BlendUniforms {
     // Foreground UV max corner [u_max, v_max].
     // Pass [1,1] for a full-viewport foreground. offset 72, size 8.
     src_uv_max:   vec2<f32>,
+    // Hard clip rectangle [x, y, w, h] in CLIP-LOCAL space; a zero width or
+    // height means no clip. It is the bounds of a rotated or skewed layer,
+    // whose quad is their bounding box. offset 80, size 16.
+    clip_rect:    vec4<f32>,
+    // Device-to-clip-local mapping, columns first: [a, b, c, d].
+    // offset 96, size 16.
+    clip_inv:     vec4<f32>,
+    // Translation of the device-to-clip-local mapping. offset 112, size 8.
+    clip_origin:  vec2<f32>,
+    // Pads the block to a multiple of 16. offset 120, size 8.
+    _pad1:        vec2<f32>,
 }
 
 @group(0) @binding(0)
@@ -266,6 +277,22 @@ fn fs_main(in: VsOutput) -> @location(0) vec4<f32> {
                    + as_ * ab         * blended
                    + (1.0 - as_) * ab * cb;
     let out_a = as_ + ab * (1.0 - as_);
+
+    // ── Hard clip ──────────────────────────────────────────────────────────
+    //
+    // A fragment outside the clip rectangle is discarded, leaving the
+    // destination as it was. Tested after both samples, so the samples stay
+    // in uniform control flow.
+    let local = vec2<f32>(
+        blend.clip_inv.x * in.frag_pos.x + blend.clip_inv.z * in.frag_pos.y + blend.clip_origin.x,
+        blend.clip_inv.y * in.frag_pos.x + blend.clip_inv.w * in.frag_pos.y + blend.clip_origin.y,
+    );
+    let clip_on = blend.clip_rect.z > 0.0 && blend.clip_rect.w > 0.0;
+    let inside = all(local >= blend.clip_rect.xy)
+        && all(local <= blend.clip_rect.xy + blend.clip_rect.zw);
+    if clip_on && !inside {
+        discard;
+    }
 
     // ── out_a <= 0 → transparent (color.rs:945) ───────────────────────────
     if out_a <= 0.0 {

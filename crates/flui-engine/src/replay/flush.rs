@@ -1133,11 +1133,12 @@ impl GpuReplay {
     /// [`PipelineSet::texture_composite_for`] to obtain a pipeline whose
     /// `wgpu::BlendState` matches `mode` exactly.
     ///
-    /// Two callers share it: [`Self::render_ssaa_path`], compositing the SSAA
-    /// 1× tile (whose source is a box-downsample output, premultiplied), and
+    /// Three callers share it: [`Self::render_ssaa_path`], compositing the
+    /// SSAA 1× tile (whose source is a box-downsample output, premultiplied);
     /// the `DrawItem::OffscreenTexture` arm in `submit`, compositing a
-    /// shader-mask / backdrop-blur result with the layer's own blend mode.
-    /// Both sources are premultiplied, so `src_factor = One` is correct.
+    /// shader-mask / backdrop-blur result with the layer's own blend mode; and
+    /// `flush_opacity_layer`, compositing a save layer with its mode. Every
+    /// source is premultiplied, so `src_factor = One` is correct.
     ///
     /// Takes `pipelines: &mut PipelineSet` because lazy pipeline creation may
     /// be needed on the first call for a given mode.

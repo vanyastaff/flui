@@ -182,6 +182,10 @@ fn damage_extent_contract() {
                 damage_extent::atlas_extent_covers_the_sprite_destination,
             ),
             (
+                "a_bounded_save_layer_extent_is_its_mapped_bounds",
+                damage_extent::a_bounded_save_layer_extent_is_its_mapped_bounds,
+            ),
+            (
                 "transparent_source_and_transparent_black_predicates",
                 damage_extent::transparent_source_and_transparent_black_predicates,
             ),

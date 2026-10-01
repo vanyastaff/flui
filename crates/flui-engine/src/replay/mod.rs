@@ -280,12 +280,19 @@ impl GpuReplay {
                     );
                 }
                 DrawItem::OffscreenTexture(p) => {
+                    use crate::instancing::ClippableInstance as _;
                     let instance = crate::instancing::TextureInstance::new(
                         p.bounds,
                         flui_painting::styling::Color::WHITE,
-                    );
+                    )
+                    .with_clip(p.clip);
                     let _ = self.texture_batch.add(instance);
-                    // Offscreen compositing is always full-viewport — no scissor.
+                    // The composite runs under the scissor and clip in force
+                    // when the result was queued: the offscreen was drawn
+                    // outside the ancestor clips and a partial frame's damage,
+                    // so this is where they apply. Without them a mask paints
+                    // past its clip, and a translucent one blends a second
+                    // time over retained pixels outside the damage.
                     //
                     // These are shader-mask / backdrop-blur results from
                     // `OffscreenRenderer`, which clears its target transparent
@@ -297,10 +304,12 @@ impl GpuReplay {
                     // consistently here).
                     //
                     // The mode the producer recorded rides on the item rather
-                    // than being assumed SrcOver: a `ShaderMaskLayer` may carry
+                    // than being assumed SrcOver: a backdrop filter may carry
                     // any blend, and accepting it then compositing SrcOver is
                     // the accept-and-discard contract violation mapping
-                    // decision 8 names. `flush_texture_batch_premultiplied_with_mode`
+                    // decision 8 names. A shader mask queues SrcOver, because
+                    // its own mode belongs between its shader and its child
+                    // (ADR-0099). `flush_texture_batch_premultiplied_with_mode`
                     // builds the exact per-mode pipeline; the source is a
                     // finished, full-coverage offscreen, so every mode
                     // `blend_state_for` names is expressible here.
@@ -314,7 +323,7 @@ impl GpuReplay {
                         encoder,
                         target.view,
                         p.texture.view(),
-                        None,
+                        p.scissor,
                     );
                     // p.texture dropped here, returns to pool
                 }
@@ -391,6 +400,7 @@ impl GpuReplay {
                                 (op.device_bounds.right() / f64::from(viewport_width_f32)) as f32,
                                 (op.device_bounds.bottom() / f64::from(viewport_height_f32)) as f32,
                             ],
+                            clip: None,
                         };
                         flush_advanced_layer(
                             blend_op,

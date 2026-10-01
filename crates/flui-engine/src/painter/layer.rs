@@ -15,6 +15,15 @@ use crate::command_ir::{
 };
 use crate::layer_compositor::RestoreOutcome;
 
+/// Whether `matrix` maps the plane projectively rather than affinely, so
+/// `Matrix4::transform_rect` does not bound the image of a rect. The same
+/// test `flui-painting`'s damage extents apply, which treat such a layer as
+/// unbounded as well.
+fn is_projective(matrix: &flui_foundation::geometry::Matrix4) -> bool {
+    let m = &matrix.m;
+    m[3].abs() > f64::EPSILON || m[7].abs() > f64::EPSILON || (m[15] - 1.0).abs() > f64::EPSILON
+}
+
 impl WgpuPainter {
     // ===== Viewport Information =====
 
@@ -297,6 +306,69 @@ impl WgpuPainter {
         ))
     }
 
+    // ===== Composite region =====
+
+    /// The device region a layer or an offscreen result composites over:
+    /// `local_bounds` mapped through the current transform, cut by the clip
+    /// bounds (the viewport, every ancestor scissor and a partial frame's
+    /// damage scissor).
+    ///
+    /// `None` bounds, and any bounds under a projective transform, whose
+    /// image of a rect is not bounded here, give the clip bounds themselves.
+    /// Bounds that miss the clip give a zero-size rect, which composites
+    /// nothing.
+    ///
+    /// See mapping decision 19 in `ARCHITECTURE.md`.
+    pub(super) fn composite_region(&self, local_bounds: Option<Rect<f64>>) -> Rect<f64> {
+        let clip = self.clip_bounds();
+        let ctm = self.state.current_transform_matrix();
+        match local_bounds {
+            Some(bounds) if !is_projective(&ctm) => ctm
+                .transform_rect(&bounds)
+                .intersect(&clip)
+                .unwrap_or_else(|| Rect::from_xywh(clip.left(), clip.top(), 0.0, 0.0)),
+            _ => clip,
+        }
+    }
+
+    /// The clip a composite over [`Self::composite_region`] must carry beyond
+    /// that rectangle, or `None` when the rectangle is the whole region.
+    ///
+    /// - Bounds under a rotation or skew are carried as a hard clip, whatever
+    ///   the mode: the composite quad is their bounding box, and without the
+    ///   clip a destination-replacing mode would change all of it and any
+    ///   other mode would show the content that reached its corners.
+    /// - An active rounded or superellipse clip goes on the composite, so the
+    ///   composite changes nothing the clip excludes. `content_was_clipped`
+    ///   says whether the content inside already went through it: the draws
+    ///   in a save layer did, so a mode that keeps the destination under a
+    ///   transparent source needs only the bounds clip, while a shader mask's
+    ///   or a backdrop's offscreen was drawn outside it.
+    ///
+    /// A rotated or skewed composite that needs the rounded clip keeps only
+    /// that clip (one clip slot per instance), so it composites the bounding
+    /// box of its bounds within that clip.
+    pub(super) fn composite_clip(
+        &self,
+        local_bounds: Option<Rect<f64>>,
+        blend: flui_painting::paint::BlendMode,
+        content_was_clipped: bool,
+    ) -> Option<crate::state_stack::ResolvedClip> {
+        let ctm = self.state.current_transform_matrix();
+        let bounds_clip = local_bounds
+            .filter(|_| !self.state.is_axis_aligned() && !is_projective(&ctm))
+            .map(|bounds| {
+                self.state
+                    .resolve_rrect_clip(flui_foundation::geometry::RRect::from_rect(bounds), true)
+            });
+        let active = self.state.active_clip();
+        let replaces = !blend.keeps_destination_under_transparent_source();
+        if active != crate::state_stack::ResolvedClip::NONE && (replaces || !content_was_clipped) {
+            return Some(active);
+        }
+        bounds_clip
+    }
+
     // ===== Layer Operations (Opacity) =====
 
     /// Open a compositing layer for group opacity or blend mode.
@@ -310,11 +382,19 @@ impl WgpuPainter {
     /// `ColorFilter` on the layer (the color-filter layer path), never
     /// the layer paint's own chroma.
     ///
-    /// `bounds` hints the maximum bounds of the offscreen; `None` defaults to
-    /// the full viewport.  This is a hint only — the compositor may expand it.
+    /// `bounds` are in the current transform's local space, like every draw,
+    /// and define the layer's region: the bounds mapped through the transform
+    /// and cut by the clip (`None`: the clip alone). On restore the layer
+    /// composites its whole region with its mode, the pixels its content left
+    /// transparent included, so a mode that replaces the destination under a
+    /// transparent source (`Src`, `Clear`, …) changes every pixel of the
+    /// region, even for an empty layer (mapping decision 19 in
+    /// `ARCHITECTURE.md`).
     pub fn save_layer(&mut self, bounds: Option<Rect<f64>>, paint: &Paint) {
         let paint_alpha = f32::from(paint.color.a) / 255.0;
         let layer_opacity = self.compositor.effective_layer_opacity(paint_alpha);
+        let region = self.composite_region(bounds);
+        let composite_clip = self.composite_clip(bounds, paint.blend_mode, true);
 
         // A saveLayer paint's RGB is NOT a compositing tint. The layer's group
         // opacity comes from the paint's *alpha*,
@@ -327,17 +407,15 @@ impl WgpuPainter {
         // arrives explicitly via `save_layer_with_tint` from
         // `push_color_filter`.
         //
-        // The blend mode IS propagated: an advanced blend mode (e.g. Multiply)
-        // on the saveLayer paint means the entire layer composites onto its
-        // parent with that mode — the dominant real-world use case for
-        // advanced blend.
+        // The blend mode IS propagated: the entire layer composites onto its
+        // parent with that mode, over its whole region.
         self.save_layer_impl(
-            bounds,
+            Some(region),
             layer_opacity,
             [1.0, 1.0, 1.0],
             paint.blend_mode,
             LayerFilterChain::new(),
-            None, // no clip layer opened this one
+            composite_clip,
         );
     }
 
@@ -546,12 +624,16 @@ impl WgpuPainter {
     /// The layer's offscreen content is routed to the appropriate
     /// `DrawItem` variant:
     ///
-    /// - **Empty layer** → nothing emitted (`RestoreOutcome::Empty`).
-    /// - **Opacity ≈ 1.0 + white tint** → content re-integrated directly into the
-    ///   parent draw order without an offscreen blit
+    /// - **Empty layer whose mode keeps the destination** → nothing emitted
+    ///   (`RestoreOutcome::Empty`). An empty layer whose mode replaces the
+    ///   destination still composites: its transparent region is what the
+    ///   mode writes.
+    /// - **Opacity ≈ 1.0 + white tint + `SrcOver`** → content re-integrated
+    ///   directly into the parent draw order without an offscreen blit
     ///   (`RestoreOutcome::Reintegrate`).
-    /// - **Opacity-/tint-/blend-mode layer** → `DrawItem::OpacityLayer`
-    ///   (`RestoreOutcome::Composite`).
+    /// - **Opacity-/tint-/blend-mode layer** → `DrawItem::OpacityLayer` over
+    ///   the layer's region (`RestoreOutcome::Composite`), or nothing when the
+    ///   region has no area.
     /// - **Image filter layer** (opened via `save_layer_with_image_filter`) →
     ///   `DrawItem::Filter` with the computed `grown_bounds` and pass chain.
     ///
@@ -784,6 +866,14 @@ impl WgpuPainter {
                             fb_origin,
                             fb_dim,
                         }));
+                    }
+                    None if composite_bounds.width() <= 0.0 || composite_bounds.height() <= 0.0 => {
+                        // The region missed the clip: there is nothing the
+                        // composite may change, whatever its mode.
+                        tracing::trace!(
+                            bounds = ?composite_bounds,
+                            "WgpuPainter::restore_layer: empty region, layer dropped"
+                        );
                     }
                     None => {
                         // Plain opacity/tint/blend-mode composite — existing path.

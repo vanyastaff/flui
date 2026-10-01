@@ -906,6 +906,8 @@ impl CommandRenderer for LayerDispatcher<'_> {
     }
 
     fn save_layer(&mut self, bounds: Option<Rect<f64>>, paint: &Paint, transform: &Matrix4) {
+        // `bounds` are in the command's local space; the painter maps them
+        // through the transform installed here into the layer's device region.
         self.with_transform(transform, |painter| {
             painter.save_layer(bounds, paint);
         });
@@ -1106,8 +1108,9 @@ impl LayerStateStack for LayerDispatcher<'_> {
     fn push_opacity_blend(&mut self, alpha: f32, blend: flui_painting::paint::BlendMode) {
         self.flush_active_transform();
         // Propagate the explicit blend mode into the saveLayer paint so the
-        // compositor reads it from `paint.blend_mode` and routes the layer
-        // through the dst-read advanced compositor path when needed.
+        // compositor reads it from `paint.blend_mode`: an advanced mode takes
+        // the dst-read path, and any other mode composites the layer's whole
+        // region (the clip, as the layer is unbounded) with its own factors.
         let alpha_u8 = (alpha.clamp(0.0, 1.0) * 255.0) as u8;
         let paint = Paint::fill(Color::WHITE)
             .with_alpha(alpha_u8)

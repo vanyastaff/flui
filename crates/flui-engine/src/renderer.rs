@@ -2221,7 +2221,6 @@ impl Renderer {
 
         let bounds = sm_layer.bounds();
         let shader = sm_layer.shader();
-        let blend_mode = sm_layer.blend_mode();
 
         // Live ambient CTM/DPR, read exactly as `handle_backdrop_filter` and
         // `LayerDispatcher::render_shader_mask` do — before anything below could
@@ -2312,14 +2311,23 @@ impl Renderer {
         // Apply the shader as a GPU mask against the captured child content,
         // then queue the masked result for compositing on the main target at
         // the device-space rect.
+        //
+        // The result composites `SrcOver` whatever the layer's
+        // `blend_mode()`: that mode combines the shader with the child, which
+        // is the mask pass's job, and applied again here a `Modulate` or
+        // `SrcIn` mask would multiply its child by the backdrop and replace
+        // the backdrop around the child with transparent black. The mask
+        // pass applies the shader's alpha alone for now (ADR-0099).
         let result_size = Size::new(f64::from(dev_width), f64::from(dev_height));
         let masked_texture = offscreen
             .render_masked(bounds, result_size, shader, child_tex.texture())
             .into_texture();
 
-        backend
-            .painter_mut()
-            .queue_offscreen_result(masked_texture, device_bounds, blend_mode);
+        backend.painter_mut().queue_offscreen_result(
+            masked_texture,
+            device_bounds,
+            flui_painting::paint::BlendMode::SrcOver,
+        );
 
         tracing::debug!(
             "ShaderMask layer GPU pipeline complete: bounds={:?}, device_bounds={:?}, \
