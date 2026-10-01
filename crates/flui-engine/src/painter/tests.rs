@@ -688,15 +688,21 @@ fn offscreen_only_flushes_freeze_viewport_after_resize() {
 
 fn cumulative_frame_submit_limit_survives_gpu_retirement() {
     let (device, queue) = test_device_and_queue();
-    let mut painter = WgpuPainter::with_shared_device(
+    let domain = crate::device_domain::DeviceDomain::with_limits(
         Arc::clone(&device),
         Arc::clone(&queue),
-        READBACK_FORMAT,
-        (64, 64),
+        crate::device_domain::PreparedIrLimits {
+            frame_submissions: 64,
+            ..Default::default()
+        },
     );
+    let mut painter = WgpuPainter::with_domain(domain, READBACK_FORMAT, (64, 64));
     painter.begin_frame().expect("first frame begins");
     assert!(
-        painter.begin_frame().is_err(),
+        matches!(
+            painter.begin_frame(),
+            Err(crate::EngineError::FrameAlreadyActive)
+        ),
         "nested begin cannot reset an active frame's submission allowance"
     );
     for _ in 0..64 {

@@ -54,6 +54,21 @@ fit. Such refusal is a hard resource error; still-pending earlier frames may cau
 transient backpressure. The initial scope also bounds total frame submissions,
 independently of callbacks that happen to complete during native polling.
 
+The prior-work backlog window is checked before a frame starts, not against every
+submission of that frame. Its default is 64 pending submissions. The independent
+cumulative frame allowance derives from the prepared object and CPU metadata
+profile (65,536 objects and 128 MiB by default). Each submission additionally
+reserves one metadata object and checked CPU bookkeeping bytes until completion.
+This permits ordinary effect-heavy scenes while still bounding an endless public
+frame even when callbacks retire continuously. These are requested bookkeeping
+charges, not allocator or driver memory measurements. Transient refusal preserves
+runtime frame demand under ADR-0101.
+Allocation-retirement callbacks also count as pending release independently of
+submission callbacks: on WebGPU, dropping an incompatible spare after resize may
+register a callback that cannot run until the current synchronous turn ends. A
+footprint that fits after this release is transient pressure; a known impossible
+committed-plus-candidate footprint is still rejected before admission.
+
 Submission and callback-registration panics quarantine accounting on the owner
 and invalidate its domain. An early callback is latched until registration
 succeeds. The first panic stays authoritative if both operations fail. Normal

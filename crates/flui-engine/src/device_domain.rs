@@ -30,18 +30,27 @@ impl PreparedCost {
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct PreparedIrLimits {
     pub(crate) cost: PreparedCost,
+    /// Prior queued-work backlog window, not the active frame work allowance.
     pub(crate) submissions: usize,
+    pub(crate) frame_submissions: usize,
 }
 
 impl Default for PreparedIrLimits {
     fn default() -> Self {
+        let cost = PreparedCost {
+            gpu_bytes: 256 * 1024 * 1024,
+            cpu_bytes: 128 * 1024 * 1024,
+            objects: 65_536,
+        };
         Self {
-            cost: PreparedCost {
-                gpu_bytes: 256 * 1024 * 1024,
-                cpu_bytes: 128 * 1024 * 1024,
-                objects: 65_536,
-            },
+            cost,
             submissions: 64,
+            // One callback metadata object per submission; cumulative work
+            // cannot exceed the prepared object/CPU metadata profile even if
+            // callbacks retire while recording continues.
+            frame_submissions: cost
+                .objects
+                .min(cost.cpu_bytes / submission_metadata_base()),
         }
     }
 }
@@ -83,6 +92,7 @@ enum Lifecycle {
 struct LedgerState {
     used: PreparedCost,
     submissions: usize,
+    retirements: usize,
     lifecycle: Lifecycle,
     frame: Option<(u64, usize, usize)>,
     next_frame: u64,
@@ -101,6 +111,7 @@ impl Ledger {
             state: Mutex::new(LedgerState {
                 used: PreparedCost::default(),
                 submissions: 0,
+                retirements: 0,
                 lifecycle: Lifecycle::Open,
                 frame: None,
                 next_frame: 0,
@@ -124,7 +135,8 @@ impl Ledger {
         let next = state.used.checked_add(cost).ok_or(DomainError::Overflow)?;
         if !next.fits(self.limits.cost) {
             let current = state.frame.map_or(0, |(_, _, live)| live);
-            if cost.fits(self.limits.cost) && state.submissions > current {
+            if cost.fits(self.limits.cost) && (state.submissions > current || state.retirements > 0)
+            {
                 return Err(DomainError::Backpressure);
             }
             return Err(DomainError::Budget {
@@ -147,13 +159,13 @@ impl Ledger {
         }
         if state
             .frame
-            .is_some_and(|(_, count, _)| count >= self.limits.submissions)
+            .is_some_and(|(_, count, _)| count >= self.limits.frame_submissions)
         {
             return Err(DomainError::FrameSubmissionBudget {
-                limit: self.limits.submissions,
+                limit: self.limits.frame_submissions,
             });
         }
-        if state.submissions >= self.limits.submissions {
+        if state.frame.is_none() && state.submissions >= self.limits.submissions {
             return Err(DomainError::SubmissionBudget);
         }
         state.submissions += 1;
@@ -165,6 +177,15 @@ impl Ledger {
         Ok(SubmissionPermit(Arc::clone(self), frame))
     }
 
+    fn retirement(self: &Arc<Self>) -> Result<RetirementPermit, DomainError> {
+        let mut state = self.state();
+        state.retirements = state
+            .retirements
+            .checked_add(1)
+            .ok_or(DomainError::Overflow)?;
+        Ok(RetirementPermit(Arc::clone(self)))
+    }
+
     fn begin_frame(self: &Arc<Self>) -> Result<FrameSubmissionScope, DomainError> {
         let mut state = self.state();
         if state.lifecycle != Lifecycle::Open {
@@ -172,6 +193,9 @@ impl Ledger {
         }
         if state.frame.is_some() {
             return Err(DomainError::FrameAlreadyActive);
+        }
+        if state.submissions >= self.limits.submissions {
+            return Err(DomainError::SubmissionBudget);
         }
         let id = state
             .next_frame
@@ -234,9 +258,21 @@ impl Drop for SubmissionPermit {
 }
 
 #[derive(Debug)]
+struct RetirementPermit(Arc<Ledger>);
+
+impl Drop for RetirementPermit {
+    fn drop(&mut self) {
+        let mut state = self.0.state();
+        state.retirements = state.retirements.saturating_sub(1);
+    }
+}
+
+#[derive(Debug)]
 struct CompletionPayload {
     _permits: Vec<Arc<PreparedPermit>>,
     _submission: Option<SubmissionPermit>,
+    _metadata: Option<Arc<PreparedPermit>>,
+    _retirement: Option<RetirementPermit>,
 }
 
 #[derive(Debug)]
@@ -245,7 +281,12 @@ struct CompletionHold {
 }
 
 impl CompletionHold {
-    fn new(permits: Vec<Arc<PreparedPermit>>, submission: Option<SubmissionPermit>) -> Arc<Self> {
+    fn new(
+        permits: Vec<Arc<PreparedPermit>>,
+        submission: Option<SubmissionPermit>,
+        metadata: Option<Arc<PreparedPermit>>,
+        retirement: Option<RetirementPermit>,
+    ) -> Arc<Self> {
         Arc::new(Self {
             state: Mutex::new((
                 true,
@@ -253,6 +294,8 @@ impl CompletionHold {
                 Some(CompletionPayload {
                     _permits: permits,
                     _submission: submission,
+                    _metadata: metadata,
+                    _retirement: retirement,
                 }),
             )),
         })
@@ -291,17 +334,25 @@ fn quarantine(ledger: &Ledger, holds: &Mutex<Vec<Arc<CompletionHold>>>, hold: Ar
         .push(hold);
 }
 
+// Conservative requested bookkeeping model, not a physical allocator charge.
+fn submission_metadata_base() -> usize {
+    std::mem::size_of::<CompletionHold>()
+        + 2 * std::mem::size_of::<usize>()
+        + std::mem::size_of::<Arc<CompletionHold>>()
+}
+
 /// Shared production/private-failure seam. Submit panic may follow partial GPU
 /// acceptance, so no callback is taken as proof for that failed invocation.
 fn submit_and_track<T>(
     ledger: &Arc<Ledger>,
     holds: &Mutex<Vec<Arc<CompletionHold>>>,
     permits: Vec<Arc<PreparedPermit>>,
+    metadata: Option<Arc<PreparedPermit>>,
     submit: impl FnOnce() -> T,
     register: impl FnOnce(Arc<CompletionHold>),
 ) -> Result<T, DomainError> {
     let submitted = ledger.submission()?;
-    let hold = CompletionHold::new(permits, Some(submitted));
+    let hold = CompletionHold::new(permits, Some(submitted), metadata, None);
     let result = catch_unwind(AssertUnwindSafe(submit));
     let registration = catch_unwind(AssertUnwindSafe(|| register(Arc::clone(&hold))));
     if result.is_err() || registration.is_err() {
@@ -370,6 +421,7 @@ impl DeviceDomain {
     }
 
     pub(crate) fn begin_frame_scope(&self) -> Result<FrameSubmissionScope, DomainError> {
+        self.poll()?;
         let _gate = self
             .submit_gate
             .lock()
@@ -419,6 +471,27 @@ impl DeviceDomain {
         if !Arc::ptr_eq(&prepared.ledger, &self.ledger) {
             return Err(DomainError::ForeignOwner);
         }
+        // Progress must precede admission and stay outside submit_gate: a full
+        // prior backlog must be able to retire on scheduled native retries.
+        self.poll()?;
+        let cpu_bytes = prepared
+            .permits
+            .capacity()
+            .checked_mul(std::mem::size_of::<Arc<PreparedPermit>>())
+            .and_then(|bytes| {
+                prepared
+                    .buffers
+                    .capacity()
+                    .checked_mul(std::mem::size_of::<wgpu::CommandBuffer>())
+                    .and_then(|buffers| bytes.checked_add(buffers))
+            })
+            .and_then(|bytes| bytes.checked_add(submission_metadata_base()))
+            .ok_or(DomainError::Overflow)?;
+        let metadata = self.reserve(PreparedCost {
+            gpu_bytes: 0,
+            cpu_bytes,
+            objects: 1,
+        })?;
         let _gate = self
             .submit_gate
             .lock()
@@ -427,6 +500,7 @@ impl DeviceDomain {
             &self.ledger,
             &self.quarantine,
             prepared.permits,
+            Some(metadata),
             || self.queue.submit(prepared.buffers),
             |hold| self.queue.on_submitted_work_done(move || hold.complete()),
         )
@@ -434,8 +508,15 @@ impl DeviceDomain {
 
     /// Native nonblocking progress; on WebGPU the browser supplies progress.
     pub(crate) fn poll(&self) -> Result<(), DomainError> {
-        self.device.poll(wgpu::PollType::Poll)?;
-        Ok(())
+        match self.device.poll(wgpu::PollType::Poll) {
+            Ok(_) => Ok(()),
+            Err(source) => {
+                // GpuProgress is classified as device-fatal; expose the same
+                // loss to the native recovery predicate even before a callback.
+                self.mark_lost();
+                Err(DomainError::Poll(source))
+            }
+        }
     }
 
     /// Stops new preparation; already admitted work may still be submitted/drained.
@@ -463,11 +544,20 @@ impl DeviceDomain {
     /// Used by persistent target Drop, including discarded candidates. This is
     /// accounting retirement, not a promise that driver memory is released.
     pub(crate) fn retire_after_previous_submissions(&self, permits: Vec<Arc<PreparedPermit>>) {
+        if permits.is_empty() {
+            return;
+        }
         let _gate = self
             .submit_gate
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let hold = CompletionHold::new(permits, None);
+        let retirement = if let Ok(retirement) = self.ledger.retirement() {
+            Some(retirement)
+        } else {
+            self.ledger.state().lifecycle = Lifecycle::Lost;
+            None
+        };
+        let hold = CompletionHold::new(permits, None, None, retirement);
         let callback = Arc::clone(&hold);
         if let Err(payload) = catch_unwind(AssertUnwindSafe(|| {
             self.queue
@@ -514,6 +604,7 @@ mod tests {
                 objects: 2,
             },
             submissions: 1,
+            frame_submissions: 1,
         };
         let cost = PreparedCost {
             gpu_bytes: 8,
@@ -567,9 +658,82 @@ mod tests {
         real_gpu_completion_releases_charge();
         competing_submit_faults_keep_charges();
         bounded_frame_work_is_not_transient_backpressure();
+        active_frame_work_is_separate_from_prior_backlog();
+        delayed_allocation_retirement_keeps_retry_durable();
         current_frame_resource_shortage_is_hard();
         registration_completion_races();
         contain_final_progress(|| panic!("final progress fault"));
+    }
+
+    fn delayed_allocation_retirement_keeps_retry_durable() {
+        let cost = PreparedCost {
+            gpu_bytes: 8,
+            cpu_bytes: 0,
+            objects: 1,
+        };
+        let ledger = Ledger::new(PreparedIrLimits {
+            cost,
+            ..Default::default()
+        });
+        let allocation = Arc::new(ledger.reserve(cost).expect("old spare allocation"));
+        let retirement = ledger.retirement().expect("nonempty allocation retirement");
+        let hold = CompletionHold::new(vec![allocation], None, None, Some(retirement));
+        hold.arm();
+        let frame = ledger
+            .begin_frame()
+            .expect("resize frame has no GPU backlog");
+        assert_eq!(ledger.state().submissions, 0);
+        assert!(matches!(
+            ledger.reserve(cost),
+            Err(DomainError::Backpressure)
+        ));
+        // An intrinsically too-large allocation still fails hard, irrespective
+        // of pending retirement. Known simultaneous footprints are preflighted.
+        assert!(matches!(
+            ledger.reserve(PreparedCost {
+                gpu_bytes: 9,
+                ..cost
+            }),
+            Err(DomainError::Budget { .. })
+        ));
+        hold.complete();
+        hold.complete();
+        assert_eq!(ledger.state().retirements, 0);
+        drop(
+            ledger
+                .reserve(cost)
+                .expect("next allocation after browser callback"),
+        );
+        drop(frame);
+    }
+
+    fn active_frame_work_is_separate_from_prior_backlog() {
+        let ledger = Ledger::new(PreparedIrLimits {
+            frame_submissions: 128,
+            ..Default::default()
+        });
+        let frame = ledger.begin_frame().expect("first scene frame");
+        let mut pending = Vec::new();
+        // No callbacks run: models synchronous browser execution, not native
+        // polling which can conceal the old fixed in-flight window failure.
+        for _ in 0..100 {
+            pending.push(
+                ledger
+                    .submission()
+                    .expect("active frame exceeds prior backlog window"),
+            );
+        }
+        drop(frame);
+        assert!(matches!(
+            ledger.begin_frame(),
+            Err(DomainError::SubmissionBudget)
+        ));
+        drop(pending);
+        let next = ledger
+            .begin_frame()
+            .expect("retired backlog permits next scene");
+        drop(ledger.submission().expect("next scene work"));
+        drop(next);
     }
 
     fn current_frame_resource_shortage_is_hard() {
@@ -581,6 +745,7 @@ mod tests {
         let ledger = Ledger::new(PreparedIrLimits {
             cost,
             submissions: 4,
+            frame_submissions: 4,
         });
         let permit = ledger.reserve(cost).expect("initial allocation");
         let previous = ledger.submission().expect("previous frame work");
@@ -612,6 +777,7 @@ mod tests {
             let ledger = Ledger::new(PreparedIrLimits {
                 cost,
                 submissions: 1,
+                frame_submissions: 1,
             });
             let holds = Mutex::new(Vec::new());
             let permit = Arc::new(ledger.reserve(cost).expect("initial charge"));
@@ -620,6 +786,7 @@ mod tests {
                     &ledger,
                     &holds,
                     vec![permit],
+                    None,
                     || (),
                     |hold| {
                         hold.complete();
@@ -651,6 +818,7 @@ mod tests {
         let ledger = Ledger::new(PreparedIrLimits {
             cost: PreparedCost::default(),
             submissions: 1,
+            frame_submissions: 1,
         });
         let frame = ledger.begin_frame().expect("outer scope");
         assert!(matches!(
@@ -679,6 +847,7 @@ mod tests {
             let ledger = Ledger::new(PreparedIrLimits {
                 cost,
                 submissions: 1,
+                frame_submissions: 1,
             });
             let holds = Mutex::new(Vec::new());
             let permit = Arc::new(ledger.reserve(cost).expect("initial charge"));
@@ -688,6 +857,7 @@ mod tests {
                     &ledger,
                     &holds,
                     vec![permit],
+                    None,
                     || {
                         assert!(!submit_fault, "submit fault");
                     },
@@ -724,6 +894,7 @@ mod tests {
             let recovered = Ledger::new(PreparedIrLimits {
                 cost,
                 submissions: 1,
+                frame_submissions: 1,
             });
             let next = recovered
                 .reserve(cost)
@@ -745,8 +916,13 @@ mod tests {
             Arc::clone(&device),
             queue,
             PreparedIrLimits {
-                cost,
+                cost: PreparedCost {
+                    cpu_bytes: 4096,
+                    objects: 2,
+                    ..cost
+                },
                 submissions: 1,
+                frame_submissions: 1,
             },
         );
         let charge = domain.reserve(cost).expect("GPU allocation admitted");
@@ -766,6 +942,14 @@ mod tests {
             )
             .expect("GPU submission");
         // Callback has not been pumped: only actual completion may release it.
+        assert!(matches!(
+            domain.reserve(PreparedCost {
+                gpu_bytes: 0,
+                cpu_bytes: 0,
+                objects: 1,
+            }),
+            Err(DomainError::Backpressure)
+        ));
         assert!(matches!(
             domain.reserve(cost),
             Err(DomainError::Backpressure)

@@ -725,47 +725,22 @@ impl UiRealm {
                         );
                     }
                 }
-                SubmitVerdict::SurfaceStale => {
+                SubmitVerdict::Retry | SubmitVerdict::SurfaceStale => {
                     producer.record_frame_dropped();
-                    // `Retain`, not `Drain`: this arm arms a retry
-                    // (`retry_needed = true` below) via `wake_frame()`, and
-                    // the eventual real submit that retry produces must
-                    // still find the epochs that arrived before this
-                    // failure -- see `record_submit_telemetry`'s own doc.
                     Self::record_submit_telemetry(
                         producer,
                         submit_at,
                         PresentOutcome::Errored,
                         EpochDisposition::Retain,
                     );
+                    // The failed submit consumed painting work. A wake alone
+                    // cannot repaint a clean static tree, so retain its epochs
+                    // and dirty the producer for the ordinary paced retry.
                     retry_needed = true;
-                    // See `retry_needs_repaint`'s own binding above for why
-                    // this arm (a genuine submit failure, not a pipeline
-                    // error) is one of the arms that also re-dirties
-                    // `producer`'s pipeline via
-                    // `mark_needs_full_repaint_for` below.
-                    //
-                    // Covers a lost surface, a validation failure, and (on
-                    // the raster-lane path) a stale surface-generation
-                    // stamp — the lane has already restamped itself from
-                    // the mailbox's required generation, so the retry armed
-                    // here submits against the reconfigured surface. NOTE:
-                    // the wgpu backend does NOT yet reconfigure the surface
-                    // before a validation-failure retry's own acquire
-                    // attempt (`Renderer::acquire_surface_texture`'s
-                    // `Validation` arm gaining reconfigure-and-retry-once
-                    // ships separately, issue #626) — until it lands, that
-                    // flavor of armed retry re-attempts the identical
-                    // acquire and may keep failing, at the runner's
-                    // no-present throttle (~62 Hz), indefinitely; arming it
-                    // anyway is still strictly better than a permanently
-                    // dropped frame nothing ever retries. Whether that
-                    // steady state deserves its own backoff (like
-                    // `DeviceRecoveryBackoff` gates device recovery) is a
-                    // real question this arm does not answer.
                     retry_needs_repaint = true;
                     tracing::debug!(
-                        "Surface stale/lost; frame dropped — retry armed via wake_frame()"
+                        ?render_verdict,
+                        "Transient render failure; paced retry armed"
                     );
                 }
                 SubmitVerdict::DeviceLost => {

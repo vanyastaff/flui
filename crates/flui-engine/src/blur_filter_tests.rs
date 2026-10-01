@@ -121,8 +121,13 @@ mod gpu_tests {
             Arc::clone(&device),
             Arc::clone(&queue),
             PreparedIrLimits {
-                cost: PreparedCost::default(),
+                cost: PreparedCost {
+                    gpu_bytes: 0,
+                    cpu_bytes: 4096,
+                    objects: 8,
+                },
                 submissions: 4,
+                frame_submissions: 4,
             },
         );
         let mut rejected = OffscreenRenderer::with_domain(limited, SURFACE_FORMAT);

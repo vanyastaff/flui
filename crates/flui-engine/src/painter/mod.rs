@@ -115,10 +115,15 @@ pub struct WgpuPainter {
 impl WgpuPainter {
     /// Start an embedder-owned frame before recording any drawing commands.
     ///
-    /// Pair this with [`Self::finish_frame`] after submitting the final encoder.
-    /// Intermediate `render_to_view` flushes belong to the same frame.
+    /// After success, record draws, encode them with [`Self::render_to_view`],
+    /// submit with [`Self::submit_encoder`], then call [`Self::finish_frame`].
+    /// Intermediate flushes and submissions share the same cumulative frame quota.
+    /// If encoding or submission fails, discard any unsubmitted encoders and
+    /// still finish the frame. A failed begin does not start a frame; do not finish
+    /// an already active frame just because a nested begin was rejected.
     /// # Errors
-    /// Rejects a nested frame or a closing/lost device domain.
+    /// Rejects a nested frame, pending-work backpressure, a device-progress
+    /// failure, or a closing/lost device domain.
     pub fn begin_frame(&mut self) -> crate::error::EngineResult<()> {
         let scope = self.domain.begin_frame_scope()?;
         self.frame_scope = Some(scope);
@@ -488,6 +493,14 @@ impl WgpuPainter {
 
     /// Convenience wrapper: render to a plain `TextureView` with no backdrop
     /// sampling back-reference (write-only target).
+    ///
+    /// This encodes work; it neither submits nor finishes the frame. Begin with
+    /// [`Self::begin_frame`] before recording, submit every encoder containing
+    /// prepared draws through [`Self::submit_encoder`], then finish with
+    /// [`Self::finish_frame`]. Multiple flushes may share one encoder. On error,
+    /// discard that encoder and finish the frame; do not submit its partial work.
+    /// Direct queue submission bypasses the painter's submission admission and
+    /// cumulative frame quota and is outside this managed lifecycle.
     ///
     /// Use this for benchmarks and callers that do not own a backing
     /// `wgpu::Texture` to supply.  Internal callers should prefer

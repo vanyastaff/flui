@@ -12,6 +12,11 @@ impl WgpuPainter {
 
     /// Submit the encoder containing this painter's prepared draws.
     ///
+    /// Call inside a successful [`Self::begin_frame`] / [`Self::finish_frame`]
+    /// pair, after [`Self::render_to_view`]. This does not finish the frame or
+    /// wait for GPU completion. On failure discard other unsubmitted encoders
+    /// and call `finish_frame`; already submitted work remains owned until retirement.
+    ///
     /// Transfers prepared resource charges to GPU completion. The encoder must
     /// contain every draw prepared since the previous submission. Raw device,
     /// queue and encoder access is a trusted embedder contract; arbitrary external

@@ -266,70 +266,54 @@ pub(crate) fn surface_lost_retry_preserves_the_original_input_epoch_for_the_pres
     use flui_foundation::geometry::Offset;
     use flui_interaction::events::{PointerType, make_down_event};
 
-    let realm = mount_root_here();
-    let primary_id = realm.presentations.primary().id();
+    for verdict in [SubmitVerdict::SurfaceStale, SubmitVerdict::Retry] {
+        let realm = mount_root_here();
+        let primary_id = realm.presentations.primary().id();
 
-    let down = make_down_event(Offset::new(0.0, 0.0), PointerType::Mouse);
-    realm.enter(|realm| {
-        realm.handle_input_addressed(primary_id, PlatformInput::Pointer(down));
-    });
+        let down = make_down_event(Offset::new(0.0, 0.0), PointerType::Mouse);
+        realm.enter(|realm| {
+            realm.handle_input_addressed(primary_id, PlatformInput::Pointer(down));
+        });
 
-    // First attempt: the surface is lost. A retry is armed, and the
-    // failed attempt's own snapshot must still see the epoch that
-    // was pending (diagnostic value), but must NOT consume it.
-    let mut failing_backend = ScriptedSink::new(|_, _| SubmitVerdict::SurfaceStale);
-    let presented = realm.render_frame(&mut failing_backend);
-    assert!(!presented, "SurfaceLost never reaches present()");
-    let after_failure = realm.presentations.primary().clock().frames_since(None);
-    assert_eq!(
-        after_failure.len(),
-        1,
-        "the failed attempt is still recorded, for diagnostics"
-    );
-    assert_eq!(
-        after_failure[0].latencies().count(),
-        1,
-        "the failed attempt's own snapshot still reports the pending epoch"
-    );
+        // First attempt fails temporarily. A retry is armed, and the
+        // failed attempt's own snapshot must still see the epoch that
+        // was pending (diagnostic value), but must NOT consume it.
+        let mut failing_backend = ScriptedSink::new(move |_, _| verdict);
+        let presented = realm.render_frame(&mut failing_backend);
+        assert!(!presented, "a failed attempt never reaches present()");
+        let after_failure = realm.presentations.primary().clock().frames_since(None);
+        assert_eq!(
+            after_failure.len(),
+            1,
+            "the failed attempt is still recorded, for diagnostics"
+        );
+        assert_eq!(
+            after_failure[0].latencies().count(),
+            1,
+            "the failed attempt's own snapshot still reports the pending epoch"
+        );
 
-    // Retry: as of #637's fix, `render_frame`'s own
-    // `retry_needed` arm already marks the root needs-paint (see
-    // `mark_primary_needs_full_repaint`), so this hand mark is no
-    // longer load-bearing for getting `render_scene` reached again
-    // -- `a_mid_frame_submit_failure_retry_actually_reaches_
-    // render_scene_again_on_a_static_tree` covers THAT invariant
-    // without any hand-dirtying at all. This mark stays here to
-    // isolate a DIFFERENT invariant this test is actually about
-    // (epoch attribution across the retry), standing in for the
-    // genuinely new external cause (input, animation, resize) a
-    // real driver loop would eventually supply on top of the
-    // fix's own repaint.
-    let primary = realm.presentations.primary();
-    primary.renderer().root_pipeline_owner().with_mut(|owner| {
-        if let Some(root_id) = owner.root_id() {
-            owner.mark_needs_layout(root_id);
-        }
-    });
-    primary.mark_redraw_pending();
-    let mut succeeding_backend = ScriptedSink::always_presents();
-    let presented = realm.render_frame(&mut succeeding_backend);
-    assert!(presented, "the retry must actually reach present()");
+        assert!(realm.needs_redraw(), "retry must wake without new input");
+        let mut succeeding_backend = ScriptedSink::always_presents();
+        let presented = realm.render_frame(&mut succeeding_backend);
+        assert!(presented, "the retry must actually reach present()");
 
-    let after_retry = realm.presentations.primary().clock().frames_since(None);
-    assert_eq!(
-        after_retry.len(),
-        2,
-        "the retry adds a second snapshot alongside the failed attempt's"
-    );
-    let retry_snapshot = &after_retry[1];
-    assert_eq!(
-        retry_snapshot.present_outcome,
-        flui_scheduler::PresentOutcome::Presented
-    );
-    assert_eq!(
-        retry_snapshot.latencies().count(),
-        1,
-        "the presented retry frame must carry the ORIGINAL input epoch -- retaining \
-         it across the failed attempt must not have lost it"
-    );
+        let after_retry = realm.presentations.primary().clock().frames_since(None);
+        assert_eq!(
+            after_retry.len(),
+            2,
+            "the retry adds a second snapshot alongside the failed attempt's"
+        );
+        let retry_snapshot = &after_retry[1];
+        assert_eq!(
+            retry_snapshot.present_outcome,
+            flui_scheduler::PresentOutcome::Presented
+        );
+        assert_eq!(
+            retry_snapshot.latencies().count(),
+            1,
+            "the presented retry frame must carry the ORIGINAL input epoch -- retaining \
+             it across the failed attempt must not have lost it"
+        );
+    }
 }

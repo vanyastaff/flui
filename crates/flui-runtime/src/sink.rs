@@ -28,6 +28,7 @@ use flui_layer::Scene;
 ///         SubmitVerdict::Presented => false,
 ///         SubmitVerdict::NoPresent => false,
 ///         SubmitVerdict::NotShown => false,
+///         SubmitVerdict::Retry => true,
 ///         SubmitVerdict::SurfaceStale => true,
 ///         SubmitVerdict::DeviceLost => true,
 ///         SubmitVerdict::Failed => false,
@@ -54,6 +55,9 @@ pub enum SubmitVerdict {
     /// as done. The engine's `RasterBackend::render_scene` draws the same
     /// distinction at the backend boundary with its `PresentDisposition`.
     NotShown,
+    /// Rendering was temporarily deferred. Retry on the ordinary paced frame
+    /// wake, retaining input epochs; no surface restamp or device rebuild is owed.
+    Retry,
     /// The surface this frame was produced against is gone, outdated, or
     /// misconfigured (surface lost, validation failure, or a stale
     /// [`flui_foundation::SurfaceGeneration`] stamp). A retry against the

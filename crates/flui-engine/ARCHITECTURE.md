@@ -58,6 +58,13 @@ The public frame owns the device-domain submission scope until `finish_frame`;
 retiring intermediate submissions does not renew its cumulative work allowance.
 Nested begin is rejected. Internal child painters reset recording inside their
 owner's existing scope instead of opening another frame.
+The default prior-work backlog window is checked before opening the scope. Its
+64-submission threshold is independent of a frame's cumulative allowance, which
+derives from prepared object and CPU metadata budgets. Submission bookkeeping is
+charged through completion. Native admission first polls nonblockingly so rejected
+frames cannot starve completion callbacks; browser progress uses its event loop.
+Recoverable failure publishes reliable retry debt to the application and realm
+(ADR-0101), while an impossible frame footprint remains a terminal error.
 `examples/embedded_gpu_scene.rs` exercises the public lifecycle with an external
 GPU texture, a depth-tested producer pass and foreground 2D drawing on the same
 device; its `--capture` mode asserts fixed-angle pixels after two frames.

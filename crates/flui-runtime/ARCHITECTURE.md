@@ -223,7 +223,10 @@ and destruction outside mutable `OwnerHost` and `APP_RUNTIME` borrows.
 Whether the engine presented a frame, dropped it for a lost surface or lost
 the device is something the realm must know in order to retry.
 `FrameSink::submit` returns a `SubmitVerdict`, and the realm classifies it: a stale surface
-or a lost device arms a retry and keeps the frame's input epochs, a frame that
+or a lost device arms a retry and keeps the frame's input epochs. `Retry` does the
+same for transient rendering failure without a surface restamp or device rebuild:
+it marks full repaint as well as waking, so a static scene progresses without new
+input (ADR-0101). A frame that
 rendered but could not be shown is retained rather than counted as done, and a
 frame with nothing to present falls back to no-present pacing (ADR-0068). The
 verdict is a crate contract. Pinned by `flui-app`'s raster-lane classification tests, for

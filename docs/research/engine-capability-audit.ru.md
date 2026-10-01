@@ -248,7 +248,7 @@ platform typechecks, Android app, desktop-mcp Windows/macOS и wasm checks пр�
 | Замечание | Исправление и проверяемый результат |
 |---|---|
 | Composite-only viewport после resize | Immutable binding создаётся до replay; две offscreen-only записи разных размеров до одного submit читаются в правильных координатах |
-| Public painter обходит cumulative submit limit | Fallible begin владеет scope до finish; 64 завершённых submissions не разрешают 65-й, следующий frame работает |
+| Public painter обходит cumulative submit limit | Fallible begin владеет scope до finish; явный тестовый профиль 64 submissions запрещает 65-й даже после callbacks, следующий frame работает; default отдельно учитывает ресурсы и prior backlog |
 | Большой gradient может перегрузить fragment loop | Явный предел 256 stops на draw; 100,000 stops отвергаются до submission для linear/radial/sweep; девятый stop сохранён |
 | Quarantine не виден recovery loop | Реальный RasterBackend predicate учитывает domain loss независимо от callback atomic; новая generation снова принимает работу |
 | Mutex на каждом recording element | Atomic accounting сохраняет Send без mutex на успешном draw path; exact-size index batches получают одно admission |
@@ -273,3 +273,44 @@ predicate и сохранение spare. Скрипт восстанавлива
 проверка 100,000 stops останавливается до queue submission.
 
 Финальный review-check-changed.log: cargo xtask check-changed завершился с exit 0; 608/608 общих тестов, 10 skipped, strict docs/doctests, platform/Android app/wasm checks прошли. Host-only Linux/xvfb suite и iOS runner остаются за CI.
+
+## Дополнительные замечания о бюджете и повторе кадра
+
+Проверены [замечания maintainer](https://github.com/vanyastaff/flui/pull/1407#pullrequestreview-5377227507)
+и [дополнительный Codex review](https://github.com/vanyastaff/flui/pull/1407#pullrequestreview-5377243087).
+
+- Фиксированные 64 submissions больше не ограничивают содержимое одного frame:
+  prior backlog проверяется до начала, cumulative allowance выведен из prepared
+  object/CPU profile, metadata каждой отправки учитывается до completion. Реальная
+  сцена содержит 40 backdrop blur и shader mask; readback проверяет последний mask
+  и фон. Отдельный ledger case запрещает полагаться на native callbacks внутри
+  synchronous frame и проверяет следующий frame после retirement.
+- Recoverable failure проходит через reliable completion в `SubmitVerdict::Retry`.
+  Realm сохраняет input epochs, ставит полный repaint и paced wake. Проверки
+  разделяют потерю telemetry ack, wake и успешный следующий кадр без нового dirty.
+  Cross-crate решение зафиксировано в ADR-0101.
+- `render_to_view` прямо описывает begin/managed submit/finish и cleanup при ошибке;
+  прежний raw queue flow в painting_demo переведён на этот lifecycle.
+- Утверждение об отсутствии production callers `submit_encoder` не подтвердилось:
+  `rg -n 'submit_encoder' crates/flui-engine/src` показывает headless, renderer и
+  layer dispatcher. Public begin остаётся embedder convenience над тем же domain
+  scope, который production открывает до allocation. Headless удерживает его до
+  readback; перенос begin к painter нарушил бы этот порядок. Полноценный managed
+  producer/SDK capability остаётся явно названным follow-up в разделе 5
+  `docs/plans/engine-foundation-implementation.ru.md`, без объявления raw wgpu
+  interface изолированной или безопасной песочницей.
+
+Проверка чувствительности: временный возврат default cap 64 ломает реальную
+40-blur сцену на 65-й submission; удаление transient классификации ломает
+`every_failure_boundary_retires_its_ticket`, а возврат terminal verdict в runtime
+ломает сохранение input epoch/автоматический repaint. Оба запуска дали ожидаемый
+nextest exit 100, исходники восстановлены в finally. Журналы:
+`target/engine-audit/review-followup-mutation-engine.log` и
+`target/engine-audit/review-followup-mutation-runtime.log`.
+
+Итоговый `review-followup-gpu-final.log`: 58/58, 0 skipped, features
+`testing,gpu-profiler`; clippy с теми же features прошёл.
+`review-followup-check-changed.log`: exit 0, 608/608 общих тестов, 10 skipped;
+strict docs/doctests, platform/Android app и wasm typechecks прошли. Live WebGPU,
+Linux/xvfb platform suite и iOS app runner локально не запускались. Отложенный
+browser retirement проверен детерминированной моделью без синхронных callbacks.

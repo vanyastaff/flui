@@ -276,10 +276,11 @@ fn bounded_reused_targets_preserve_pixels() {
         PreparedIrLimits {
             cost: PreparedCost {
                 gpu_bytes: 8 * 8 * 4 * 2,
-                cpu_bytes: 0,
-                objects: 4,
+                cpu_bytes: 4096,
+                objects: 5,
             },
             submissions: 64,
+            frame_submissions: 64,
         },
     );
     missing_partial_source_preserves_both_targets(&device, domain.queue());
@@ -358,10 +359,11 @@ fn missing_partial_source_preserves_both_targets(
     let limits = PreparedIrLimits {
         cost: PreparedCost {
             gpu_bytes: 8 * 8 * 4 * 2,
-            cpu_bytes: 0,
-            objects: 4,
+            cpu_bytes: 4096,
+            objects: 5,
         },
         submissions: 64,
+        frame_submissions: 64,
     };
     let domain = DeviceDomain::with_limits(Arc::clone(device), Arc::clone(queue), limits);
     let foreign = DeviceDomain::new(Arc::clone(device), Arc::clone(queue));
@@ -431,6 +433,62 @@ fn missing_partial_source_preserves_both_targets(
         8,
     );
     assert_eq!(&pixels[0..4], &[0, 255, 0, 255]);
+}
+
+fn many_backdrops_and_mask_render_with_default_profile(renderer: &crate::HeadlessRenderer) {
+    use flui_layer::ShaderMaskLayer;
+    use flui_painting::paint::Shader;
+    let mut tree = LayerTree::new(Layer::from(TransformLayer::new(Matrix4::IDENTITY)));
+    let root = tree.root();
+    let mut background = Canvas::new();
+    background.draw_rect(
+        Rect::from_xywh(0.0, 0.0, f64::from(SIDE), f64::from(SIDE)),
+        &Paint::fill(Color::rgb(0, 255, 0)),
+    );
+    tree.push_child(root, Layer::from(PictureLayer::new(background.finish())));
+    for _ in 0..40 {
+        tree.push_child(
+            root,
+            Layer::from(BackdropFilterLayer::new(
+                ImageFilter::blur(1.0),
+                BlendMode::SrcOver,
+                Rect::from_xywh(8.0, 8.0, 16.0, 16.0),
+            )),
+        );
+    }
+    let mask = tree.push_child(
+        root,
+        Layer::from(ShaderMaskLayer::new(
+            Shader::solid(Color::WHITE),
+            BlendMode::Modulate,
+            Rect::from_xywh(64.0, 64.0, 16.0, 16.0),
+        )),
+    );
+    let mut child = Canvas::new();
+    child.draw_rect(
+        Rect::from_xywh(64.0, 64.0, 16.0, 16.0),
+        &Paint::fill(Color::RED),
+    );
+    tree.push_child(mask, Layer::from(PictureLayer::new(child.finish())));
+    let scene = Scene::new(tree);
+    let mut capture = renderer
+        .retained_capture((SIDE, SIDE))
+        .expect("many-effects capture");
+    capture.require_intermediate();
+    capture
+        .render_scene(&scene)
+        .expect("default profile admits forty backdrop cards plus mask");
+    let pixels = capture.read_rgba().expect("many-effects readback");
+    assert_eq!(
+        px(&pixels, 40, 40),
+        [0, 255, 0, 255],
+        "backdrop processing preserves exterior"
+    );
+    assert_eq!(
+        px(&pixels, 72, 72),
+        [255, 0, 0, 255],
+        "last shader mask is actually rendered"
+    );
 }
 
 /// A retained target that is not known to hold the last frame is never
@@ -1539,6 +1597,8 @@ fn a_removed_shader_mask_leaves_nothing_behind() {
     let Some(renderer) = crate::test_support::renderer_or_skip() else {
         return;
     };
+
+    many_backdrops_and_mask_render_with_default_profile(&renderer);
     let (root, background, card) = (
         ContentToken::mint(),
         ContentToken::mint(),
