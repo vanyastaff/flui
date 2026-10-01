@@ -564,10 +564,157 @@ fn every_canvas_clip_shape_refuses_difference_rather_than_inverting() {
 /// image-filter layer, difference refusal).
 #[test]
 fn clip_layers_read_back_as_the_clip_contract_specifies() {
+    command_transform_changes_preserve_captured_clips();
+    display_list_and_save_layer_scopes_own_their_clips();
     a_clip_rect_layer_clips_its_content_and_its_absence_does_not();
     the_squircle_sdf_agrees_with_the_cpu_path_across_the_whole_boundary();
     a_path_clip_lets_through_what_lies_inside_the_box_but_outside_the_shape();
     an_empty_clip_path_clips_everything();
     a_clip_inside_an_image_filter_layer_keeps_its_content_and_its_siblings();
     every_canvas_clip_shape_refuses_difference_rather_than_inverting();
+}
+
+fn display_list_and_save_layer_scopes_own_their_clips() {
+    use flui_foundation::geometry::Offset;
+    let Some(renderer) = crate::test_support::renderer_or_skip() else {
+        return;
+    };
+    for layer in [false, true] {
+        let mut canvas = Canvas::new();
+        if layer {
+            canvas.save_layer(None, &Paint::fill(Color::rgba(255, 255, 255, 128)));
+        }
+        canvas.translate(10.0, 10.0);
+        canvas.clip_rect(Rect::from_xywh(0.0, 0.0, 20.0, 20.0));
+        canvas.draw_rect(
+            Rect::from_xywh(0.0, 0.0, 20.0, 20.0),
+            &Paint::fill(Color::RED),
+        );
+        if layer {
+            canvas.restore();
+            canvas.draw_rect(
+                Rect::from_xywh(0.0, 40.0, 8.0, 8.0),
+                &Paint::fill(Color::BLUE),
+            );
+        }
+        let mut builder = SceneBuilder::new();
+        builder.push_offset(Offset::new(2.0, 3.0));
+        builder.add_picture(canvas.finish());
+        let mut sibling = Canvas::new();
+        sibling.draw_rect(
+            Rect::from_xywh(40.0, 40.0, 8.0, 8.0),
+            &Paint::fill(Color::GREEN),
+        );
+        builder.add_picture(sibling.finish());
+        let pixels = renderer
+            .render_layer_tree(&builder.build(), (SIDE, SIDE))
+            .expect("isolated display lists");
+        assert_eq!(
+            sample(&pixels, 46, 47),
+            [0, 255, 0, 255],
+            "sibling picture does not inherit clip or command CTM (layer={layer})"
+        );
+        if layer {
+            assert_eq!(
+                sample(&pixels, 6, 47),
+                [0, 0, 255, 255],
+                "SaveLayer restore removes child clip"
+            );
+            let actual = sample(&pixels, 18, 19);
+            for (&actual, expected) in actual.iter().zip([255_u8, 127, 127, 255]) {
+                assert!(
+                    actual.abs_diff(expected) <= 2,
+                    "group opacity remains applied once"
+                );
+            }
+        } else {
+            assert_eq!(sample(&pixels, 18, 19), [255, 0, 0, 255]);
+        }
+    }
+}
+
+fn command_transform_changes_preserve_captured_clips() {
+    use flui_foundation::geometry::{Matrix4, Offset, RRect, RSuperellipse, Radius};
+    use flui_painting::paint::Path;
+
+    let Some(renderer) = crate::test_support::renderer_or_skip() else {
+        return;
+    };
+    type PushClip = fn(&mut Canvas, Rect<f64>);
+    let shapes: [(&str, PushClip); 4] = [
+        ("rect", |canvas, rect| {
+            canvas.clip_rect_ext(
+                rect,
+                flui_painting::paint::ClipOp::Intersect,
+                Clip::HardEdge,
+            );
+        }),
+        ("rrect", |canvas, rect| {
+            canvas.clip_rrect(RRect::from_rect_and_radius(rect, Radius::circular(4.0)));
+        }),
+        ("superellipse", |canvas, rect| {
+            canvas.clip_rsuperellipse(RSuperellipse::from_rect_and_radius(
+                rect,
+                Radius::circular(4.0),
+            ));
+        }),
+        ("rectangular path", |canvas, rect| {
+            let mut path = Path::new();
+            path.add_rect(rect);
+            canvas.clip_path(&path);
+        }),
+    ];
+    for (name, push_clip) in shapes {
+        for identity in [false, true] {
+            let mut canvas = Canvas::new();
+            canvas.save();
+            canvas.translate(10.0, 10.0);
+            push_clip(&mut canvas, Rect::from_xywh(0.0, 0.0, 20.0, 20.0));
+            // Same-transform recording must keep the original clip as well.
+            canvas.draw_rect(
+                Rect::from_xywh(6.0, 6.0, 4.0, 4.0),
+                &Paint::fill(Color::RED),
+            );
+            if identity {
+                canvas.set_transform(Matrix4::IDENTITY);
+                canvas.draw_rect(
+                    Rect::from_xywh(0.0, 0.0, 32.0, 32.0),
+                    &Paint::fill(Color::RED),
+                );
+            } else {
+                canvas.translate(40.0, 0.0);
+                canvas.draw_rect(
+                    Rect::from_xywh(0.0, 0.0, 12.0, 12.0),
+                    &Paint::fill(Color::RED),
+                );
+            }
+            canvas.restore();
+            canvas.draw_rect(
+                Rect::from_xywh(0.0, 40.0, 8.0, 8.0),
+                &Paint::fill(Color::BLUE),
+            );
+            let mut builder = SceneBuilder::new();
+            builder.push_offset(Offset::new(2.0, 3.0));
+            builder.add_picture(canvas.finish());
+            let pixels = renderer
+                .render_layer_tree(&builder.build(), (SIDE, SIDE))
+                .expect("transformed clip capture");
+            assert_eq!(
+                sample(&pixels, 18, 19),
+                [255, 0, 0, 255],
+                "{name}: same-transform content"
+            );
+            let (x, y) = if identity { (6, 7) } else { (56, 17) };
+            assert_eq!(
+                sample(&pixels, x, y),
+                [255, 255, 255, 255],
+                "{name}: clip must survive command transform change (identity={identity})"
+            );
+            assert_eq!(
+                sample(&pixels, 6, 47),
+                [0, 0, 255, 255],
+                "{name}: explicit restore removes the clip and preserves the parent offset"
+            );
+        }
+    }
 }

@@ -202,6 +202,9 @@ Scene-level lease/TextureId contract меняется отдельным ADR и 
 
 ### 3. Привести clip и effects к одной ordered композиции
 
+Уточнённые failure scenarios, внешние исследования и порядок приёмки:
+[точная композиция clips/effects](engine-clip-effects.ru.md).
+
 **Владелец: flui-engine; зависит от 1/2.** `state_stack.rs`, layer traversal,
 `layer_offscreen.rs`, `offscreen/`, replay: immutable clip dependency chain,
 содержащая shape, transform, fill rule и intersection/difference. Scissor лишь

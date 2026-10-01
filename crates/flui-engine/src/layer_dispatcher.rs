@@ -57,39 +57,11 @@ pub(crate) struct LayerDispatcher<'frame> {
     /// `COPY_TEXTURE_TO_TEXTURE` operations during backdrop-filter
     /// dispatch.
     surface_texture: Option<&'frame wgpu::Texture>,
-    /// The matrix that is currently applied to
-    /// [`painter`](Self::painter) via a `save() + apply` pair that
-    /// has not yet been balanced with `restore()`. `with_transform`
-    /// uses this to coalesce consecutive same-matrix calls into a
-    /// single push/pop: when the incoming transform equals
-    /// `active_transform`, the draw closure runs directly on the
-    /// already-applied state rather than paying another stack push.
-    ///
-    /// [`flush_active_transform`](Self::flush_active_transform)
-    /// balances the deferred `restore()`. It is called eagerly at every
-    /// point where the painter save stack could be mutated outside
-    /// `with_transform`'s coalescing path -- the identity /
-    /// transform-mismatch arms inside `with_transform` itself, every
-    /// `LayerStateStack` method on `LayerDispatcher` (`push_clip_*`,
-    /// `pop_clip`, `push_offset`, `push_transform`, `pop_transform`,
-    /// `push_opacity`, `pop_opacity`, `push_color_filter`,
-    /// `pop_color_filter`, `push_image_filter`, `pop_image_filter`).
-    /// These `LayerStateStack` flush points are required: without
-    /// them, a `push_clip → with_transform → pop_clip` sequence would pop
-    /// the lazy save instead of the clip, corrupting state across sibling
-    /// layers.
-    ///
-    /// `None` means the painter is at the default state and no
-    /// balance is owed.
-    ///
-    /// The `Drop` impl provides a final safety-net flush: if a future
-    /// code path forgets to call `flush_active_transform()` before
-    /// the LayerDispatcher goes out of scope, Drop balances the deferred save
-    /// so the borrowed painter is left in a clean state. The eager call
-    /// sites are NOT replaced by Drop — they flush at precisely the right
-    /// point for correctness; Drop is the backstop for any site that is
-    /// missed.
-    active_transform: Option<Matrix4>,
+    /// Cached command matrix and the ambient CTM it temporarily replaces.
+    /// Switching commands restores only the CTM: clips captured by commands
+    /// remain active until an explicit scope restore. Layer boundaries flush
+    /// the command transform before changing their ambient state.
+    active_transform: Option<CommandTransform>,
     /// One entry per clip layer that is currently open, innermost last.
     ///
     /// [`LayerStateStack::pop_clip`] serves all three `push_clip_*` variants
@@ -99,6 +71,11 @@ pub(crate) struct LayerDispatcher<'frame> {
     /// the open and records it in the same call, so a push cannot open a layer
     /// it did not record or record one it did not open.
     clip_frames: Vec<ClipFrame>,
+}
+
+struct CommandTransform {
+    matrix: Matrix4,
+    parent: Matrix4,
 }
 
 /// What one `push_clip_*` did to the painter, and therefore what the matching
@@ -251,44 +228,10 @@ impl<'frame> LayerDispatcher<'frame> {
         self.clip_frames.push(frame);
     }
 
-    /// Get or create a cached offscreen painter for shader mask rendering.
-    ///
-    /// On first call, creates a new `WgpuPainter` with shared device/queue.
-    /// On subsequent calls, returns the cached painter, resizing if needed.
-    ///
-    /// Dispatch a draw closure under the given
-    /// transform, coalescing consecutive same-matrix calls so that
-    /// the `painter.save()` + matrix-decompose + apply + restore
-    /// pipeline runs once per RUN of identical transforms rather
-    /// than once per shape.
-    ///
-    /// Three fast paths plus the cold path:
-    /// 1. `transform.is_identity()` -- if a non-identity transform
-    ///    is still active from a prior run, balance the deferred
-    ///    `restore()` first; then dispatch on a clean painter.
-    /// 2. `Some(transform) == active_transform` -- the painter is
-    ///    already in the right state; just run the closure (one
-    ///    bit-exact `Matrix4` compare = 16 floats, well under the
-    ///    cost of a stack push).
-    /// 3. Transform changed -- balance the prior active (if any),
-    ///    save, decompose + apply, mark active. The next call with
-    ///    the same matrix will hit path 2.
-    ///
-    /// The lazy save is balanced at every site that mutates the
-    /// painter save stack outside this method: each `LayerStateStack`
-    /// trait method (push_clip_* / pop_clip / push_offset /
-    /// push_transform / pop_transform / push_opacity / pop_opacity
-    /// / push_color_filter / pop_color_filter / push_image_filter
-    /// / pop_image_filter) and the `Drop` impl (so the borrowed painter is
-    /// balanced when the LayerDispatcher leaves scope). See
-    /// [`Self::active_transform`] for the full list of flush points and why
-    /// each one is needed.
-    ///
-    /// Measured effect: a render pass batching 1000 same-transform
-    /// shapes used to pay 2000 stack ops + 1000 mat-decomposes
-    /// (each pair `save + apply + restore`). After this change the
-    /// run pays one `save + apply` plus one `restore` at the next
-    /// transform change -- (N-1) push/pops eliminated per run.
+    /// Install a command's absolute matrix relative to the ambient layer CTM.
+    /// Consecutive equal matrices reuse the installed CTM. This changes no
+    /// clip or save-stack state: a clip is frozen at its command's transform,
+    /// independently of transforms used by subsequent drawing commands.
     fn with_transform<F>(&mut self, transform: &Matrix4, draw_fn: F)
     where
         F: FnOnce(&mut WgpuPainter),
@@ -299,40 +242,25 @@ impl<'frame> LayerDispatcher<'frame> {
             return;
         }
 
-        if self.active_transform.as_ref() == Some(transform) {
-            // Path 2: same matrix as the currently-applied one --
-            // skip the push entirely; the painter is already in the
-            // right state.
+        if self.active_transform.as_ref().map(|active| &active.matrix) == Some(transform) {
             draw_fn(self.painter);
             return;
         }
 
-        // Path 3: incoming transform differs from active (or no
-        // active). Balance the prior `save()` if any, then push
-        // the new transform — the whole matrix, never a TRS
-        // decomposition, which drops skew and perspective.
         self.flush_active_transform();
-        self.painter.save();
+        let parent = self.painter.current_transform_matrix();
         self.painter.transform(transform);
-
-        self.active_transform = Some(*transform);
+        self.active_transform = Some(CommandTransform {
+            matrix: *transform,
+            parent,
+        });
         draw_fn(self.painter);
     }
 
-    /// Balance the deferred `save()` left by a
-    /// prior `with_transform` run with a `restore()`, clearing
-    /// `active_transform`. No-op if no transform is active.
-    ///
-    /// Called from every site that mutates the painter save stack
-    /// outside the coalescing path: `with_transform`'s identity /
-    /// mismatch arms, every `LayerStateStack` method on `LayerDispatcher`,
-    /// and the `Drop` impl. See the
-    /// [`active_transform`](Self::active_transform) field doc for
-    /// the full list of flush points and why each one is needed.
+    /// Return to the ambient layer CTM without restoring captured clips.
     fn flush_active_transform(&mut self) {
-        if self.active_transform.is_some() {
-            self.painter.restore();
-            self.active_transform = None;
+        if let Some(active) = self.active_transform.take() {
+            self.painter.restore_transform(&active.parent);
         }
     }
 
@@ -475,13 +403,7 @@ impl<'frame> LayerDispatcher<'frame> {
 }
 
 impl Drop for LayerDispatcher<'_> {
-    /// Safety-net: balance any deferred lazy-coalescing save that was left on
-    /// the painter stack by `with_transform`. Every `LayerStateStack` method and
-    /// both arms of `with_transform` flush at the correct semantic point. This
-    /// `Drop` impl is a backstop for any future call
-    /// path that forgets to flush: when the LayerDispatcher goes out of scope the painter is
-    /// left balanced and ready for its next use (`painter.render`,
-    /// `end_frame_maintenance`, or the next frame's LayerDispatcher).
+    /// Restore the ambient CTM before returning the borrowed painter.
     fn drop(&mut self) {
         self.flush_active_transform();
     }
@@ -925,6 +847,7 @@ impl CommandRenderer for LayerDispatcher<'_> {
     }
 
     fn save_layer(&mut self, bounds: Option<Rect<f64>>, paint: &Paint, transform: &Matrix4) {
+        self.save_state();
         // `bounds` are in the command's local space; the painter maps them
         // through the transform installed here into the layer's device region.
         self.with_transform(transform, |painter| {
@@ -933,25 +856,19 @@ impl CommandRenderer for LayerDispatcher<'_> {
     }
 
     fn restore_layer(&mut self, _transform: &Matrix4) {
+        self.flush_active_transform();
         self.painter.restore_layer();
+        self.restore_state();
     }
 
     fn save_state(&mut self) {
-        // Both of these push/pop the SAME painter stack the lazy
-        // `active_transform` save uses, so the deferred save has to be settled
-        // before the scope moves the stack under it. Otherwise a later
-        // `flush_active_transform` pops whichever save happens to be on top —
-        // the scope's, not its own — and the absolute matrix lands on the wrong
-        // CTM while the scope silently never closes.
+        // A scope captures ambient state, not a preceding command's CTM.
         self.flush_active_transform();
         self.painter.save();
     }
 
     fn restore_state(&mut self) {
-        // Symmetric, and the ordering matters in the other direction: the lazy
-        // save was pushed *inside* this scope, so it must come off first or the
-        // pop below takes it and leaves `active_transform` pointing at a save
-        // that is already gone.
+        // Clear the command override before restoring the saved scope.
         self.flush_active_transform();
         self.painter.restore();
     }
@@ -978,21 +895,8 @@ impl CommandRenderer for LayerDispatcher<'_> {
 // for the trait-split rationale.
 
 impl LayerStateStack for LayerDispatcher<'_> {
-    // Every method on this trait must call `self.flush_active_transform()`
-    // BEFORE any `painter.save` / `painter.restore` / `painter.save_layer`
-    // / `painter.restore_layer` op. `with_transform`'s coalescing leaves
-    // a deferred `save()` active across consecutive same-matrix
-    // calls; if a layer-tree boundary (push_clip etc.) intervened
-    // without flushing first, the layer's matched
-    // `pop_clip`/`pop_layer` would pop the lazy save instead of
-    // its own, leaking state across sibling layers. Flushing here
-    // re-establishes the invariant that `active_transform == Some`
-    // implies the painter has that transform at the TOP of its
-    // save stack.
-    //
-    // The flush is a no-op when no lazy transform is active, so
-    // the cost is one branch per layer-stack call -- negligible
-    // versus the save_layer/clip_path GPU work that follows.
+    // Layer scopes operate on the ambient CTM. Flush the command override
+    // before changing a scope, leaving captured command clips untouched.
 
     fn push_clip_rect(&mut self, rect: &Rect<f64>, clip_behavior: flui_painting::paint::Clip) {
         self.flush_active_transform();

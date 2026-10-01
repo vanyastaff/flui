@@ -9,6 +9,10 @@ use flui_painting::paint::Path;
 use super::WgpuPainter;
 
 impl WgpuPainter {
+    pub(crate) fn restore_transform(&mut self, matrix: &flui_foundation::geometry::Matrix4) {
+        self.state.restore_transform(matrix);
+    }
+
     // ===== Transform Stack =====
 
     /// Save the current transform, scissor, and SDF-clip state onto the stack.

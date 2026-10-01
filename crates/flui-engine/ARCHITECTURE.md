@@ -247,6 +247,28 @@ loom backend or the mailbox moves to `std::sync`.
 
 ## Mapping decisions
 
+### Command transforms do not own clips
+
+The dispatcher caches a command matrix separately from its ambient layer CTM.
+Switching to another command matrix, identity, or a layer boundary restores
+only the ambient CTM. A clip captures its geometry under the CTM at recording
+and persists until its explicit state scope is restored; the transform cache
+does not save or restore the clip stack. The public headless readback row
+`command_transform_changes_preserve_captured_clips` in
+`clip_layers_read_back_as_the_clip_contract_specifies` covers all current clip
+shapes, same/different/identity command matrices, an ambient layer offset and
+explicit save/restore. This fixes clip lifetime, not exact path clipping or
+nested analytic intersections; those remain in the clip/effect implementation
+plan.
+
+Each display list dispatch opens and closes a state scope, so its local clips
+and CTM do not escape into sibling pictures. Command SaveLayer owns a state
+scope as well as compositor state; RestoreLayer closes both. The same readback
+family's `display_list_and_save_layer_scopes_own_their_clips` pins sibling
+isolation, restoration after a clipped group and group opacity. These scopes
+assume a balanced recorded list; they do not introduce an unwind containment
+boundary or validation of malformed manually assembled command streams.
+
 ### External texture interpretation and allocation identity
 
 Registration admits only one-layer D2, single-sample, texture-bindable
