@@ -291,9 +291,8 @@ pub(crate) fn atlas_extent_covers_the_sprite_destination() {
 /// `translate(4, 0) scale(2)`, local `(0, 0, 16, 16)` is `(4, 0)-(36, 32)`.
 ///
 /// This pins the extent the damage producer already reported before the
-/// engine honoured it; it is the damage half of mapping decision 19 in
-/// `flui-engine`'s `ARCHITECTURE.md`, whose pixels the engine's readbacks
-/// pin.
+/// engine honoured it; it is the damage half of ADR-0099, whose pixels
+/// `flui-engine`'s readbacks pin.
 pub(crate) fn a_bounded_save_layer_extent_is_its_mapped_bounds() {
     let list = flui_painting::testing::record(|canvas| {
         canvas.translate(4.0, 0.0);
