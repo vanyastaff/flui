@@ -70,11 +70,6 @@ class = "pr-label"
 count = 2
 
 [[allow]]
-path = "crates/flui-engine/src/layer_blend_tests.rs"
-class = "pr-label"
-count = 1
-
-[[allow]]
 path = "crates/flui-engine/src/layer_offscreen.rs"
 class = "slice"
 count = 3

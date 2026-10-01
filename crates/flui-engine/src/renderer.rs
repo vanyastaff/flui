@@ -2317,9 +2317,12 @@ impl Renderer {
             .render_masked(bounds, result_size, shader, child_tex.texture())
             .into_texture();
 
-        backend
-            .painter_mut()
-            .queue_offscreen_result(masked_texture, device_bounds, blend_mode);
+        backend.painter_mut().queue_offscreen_result(
+            masked_texture,
+            device_bounds,
+            blend_mode,
+            Some(bounds),
+        );
 
         tracing::debug!(
             "ShaderMask layer GPU pipeline complete: bounds={:?}, device_bounds={:?}, \

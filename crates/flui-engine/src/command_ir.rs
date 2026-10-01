@@ -462,6 +462,14 @@ pub(crate) struct PendingOffscreenTexture {
     /// premultiplied identity and every other mode routes through the
     /// per-mode composite pipeline.
     pub(crate) blend: BlendMode,
+    /// The scissor in force when the result was queued: every ancestor clip
+    /// rect and a partial frame's damage. The offscreen was drawn outside
+    /// them, so the composite is where they apply.
+    pub(crate) scissor: ScissorRect,
+    /// The clip the composite carries beyond the scissor: the ambient rounded
+    /// clip, or the bounds of a rotated destination-replacing result as a
+    /// hard clip. `ResolvedClip::NONE` when the scissor is the whole clip.
+    pub(crate) clip: crate::state_stack::ResolvedClip,
 }
 
 /// Saved render state for `save_layer`/`restore_layer` offscreen compositing.
@@ -489,7 +497,10 @@ pub(crate) struct SavedLayer {
     /// carries the ColorFilter chroma (`filter.apply([1,1,1,1])` RGB) so hue
     /// shifts survive compositing. Captured from `paint.color` in `save_layer`.
     pub(crate) layer_tint_rgb: [f32; 3],
-    /// Bounds of the layer in screen space [x, y, w, h], or `None` for full viewport
+    /// The layer's region in device space `[x, y, w, h]`: its bounds mapped
+    /// through the transform and already cut by the clip, which a composite
+    /// changes in full (mapping decision 19). `None` falls back to the full
+    /// viewport, which only filter layers ask for.
     pub(crate) bounds: Option<[f32; 4]>,
     /// Blend mode to apply when compositing this layer onto its parent.
     ///
@@ -512,18 +523,22 @@ pub(crate) struct SavedLayer {
     /// The `Reintegrate` fast-path is gated on `image_filter.is_none()` — a
     /// filter layer always routes through the offscreen composite path (G3).
     pub(crate) image_filter: Option<ImageFilterSpec>,
-    /// The clip a `Clip::AntiAliasWithSaveLayer` layer applies to its COMPOSITE
-    /// rather than to the draws inside it.
+    /// The clip a layer applies to its COMPOSITE rather than to the draws
+    /// inside it: a `Clip::AntiAliasWithSaveLayer` layer's own clip, or, for a
+    /// layer whose mode replaces the destination, the ambient rounded clip or
+    /// its rotated bounds as a hard clip, without which the composite would
+    /// change pixels outside its region.
     ///
-    /// `Some` marks the layer as one a clip opened, and forces the composite
-    /// path: the whole point of the mode is that the offscreen exists, so the
-    /// `Reintegrate` fast-path — which splices the children straight back into
-    /// the parent draw order — must not swallow it.
+    /// `Some` marks the layer as one that must composite, and forces the
+    /// composite path: for a clip-opened layer the whole point of the mode is
+    /// that the offscreen exists, so the `Reintegrate` fast-path — which
+    /// splices the children straight back into the parent draw order — must
+    /// not swallow it.
     ///
     /// `Some(ResolvedClip::NONE)` is a real value, not an empty one: a
     /// rectangular clip is the hardware scissor, which already applied to every
     /// draw inside the offscreen and is binary, so the composite carries no SDF
-    /// of its own. `None` means no clip opened this layer at all.
+    /// of its own. `None` means the composite needs no clip beyond its region.
     pub(crate) composite_clip: Option<crate::state_stack::ResolvedClip>,
 }
 
@@ -968,13 +983,16 @@ pub(crate) struct PendingOpacityLayer {
     /// Per-channel chroma tint for ColorFilter layers; white for plain opacity.
     /// See [`SavedLayer::layer_tint_rgb`].
     pub(crate) tint_rgb: [f32; 3],
-    /// Compositing bounds in screen coordinates
+    /// The layer's region in device coordinates, already cut by the clip:
+    /// the composite quad, every pixel of which the composite writes with
+    /// [`Self::blend`].
     pub(crate) bounds: Rect<f64>,
     /// Blend mode to apply when compositing this layer onto its parent.
     ///
     /// Stored on the pending layer so the flush path can read it without
     /// coupling it to the record path.  `SrcOver` for plain opacity layers;
-    /// an advanced mode for `saveLayer` with an explicit blend mode.
+    /// the paint's mode, Porter-Duff or advanced, for `saveLayer` with an
+    /// explicit one.
     pub(crate) blend: BlendMode,
     /// Color-filter chain applied to the rendered layer before compositing.
     ///
@@ -982,8 +1000,9 @@ pub(crate) struct PendingOpacityLayer {
     /// plain tint-only composite (the common fast-path). Folded left-to-right
     /// in `flush_opacity_layer` via ping-pong texture acquire/drop.
     pub(crate) filters: LayerFilterChain,
-    /// The SDF clip applied to this layer's COMPOSITE, when a
-    /// `Clip::AntiAliasWithSaveLayer` layer opened it.
+    /// The SDF clip applied to this layer's COMPOSITE: a
+    /// `Clip::AntiAliasWithSaveLayer` layer's clip, or the clip a
+    /// destination-replacing layer's region needs beyond its rectangle.
     ///
     /// Forwarded from [`SavedLayer::composite_clip`] at restore time and
     /// attached to the composite's `TextureInstance` in `flush_opacity_layer`,

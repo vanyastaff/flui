@@ -280,12 +280,19 @@ impl GpuReplay {
                     );
                 }
                 DrawItem::OffscreenTexture(p) => {
+                    use crate::instancing::ClippableInstance as _;
                     let instance = crate::instancing::TextureInstance::new(
                         p.bounds,
                         flui_painting::styling::Color::WHITE,
-                    );
+                    )
+                    .with_clip(p.clip);
                     let _ = self.texture_batch.add(instance);
-                    // Offscreen compositing is always full-viewport — no scissor.
+                    // The composite runs under the scissor and clip in force
+                    // when the result was queued: the offscreen was drawn
+                    // outside the ancestor clips and a partial frame's damage,
+                    // so this is where they apply. Without them a mask paints
+                    // past its clip, and a translucent one blends a second
+                    // time over retained pixels outside the damage.
                     //
                     // These are shader-mask / backdrop-blur results from
                     // `OffscreenRenderer`, which clears its target transparent
@@ -314,7 +321,7 @@ impl GpuReplay {
                         encoder,
                         target.view,
                         p.texture.view(),
-                        None,
+                        p.scissor,
                     );
                     // p.texture dropped here, returns to pool
                 }

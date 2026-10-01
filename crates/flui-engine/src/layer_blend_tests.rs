@@ -1,13 +1,11 @@
-//! PR-3 acceptance gate: saveLayer/layer-level advanced-blend.
+//! Save layers composited with a blend mode, read back from the GPU.
 //!
-//! ## Test inventory
-//!
-//! | # | Gate  | Requirement |
-//! |---|-------|-------------|
-//! | T6 | GPU  | Opaque Multiply saveLayer: GPU readback ≈ oracle (display-list path) |
-//! | T7 | GPU  | SrcOver saveLayer: GPU readback byte-identical to direct draw (byte-identity) |
-//! | T9 | GPU  | Nested advanced layers (Multiply inside Screen): no panic, non-zero alpha |
-//! | T10 | GPU  | Sibling-Z: Multiply layer left-half, SrcOver right-half — no cross-bleed |
+//! - An opaque `Multiply` layer matches the CPU oracle.
+//! - A layer composites its whole region with its recorded mode
+//!   (`ARCHITECTURE.md` mapping decision 19): the region is the bounds mapped
+//!   through the transform, cut by the clip, and a destination-replacing mode
+//!   changes every pixel of it, the ones the content left transparent
+//!   included.
 
 // ─── GPU readback tests ───────────────────────────────────────────────────────
 
@@ -208,9 +206,229 @@ mod gpu_tests {
         }
     }
 
-    // ── T7: SrcOver saveLayer — byte-identity ────────────────────────────────
+    // ── A layer composites its whole region ──────────────────────────────────
 
-    // ── T9: Nested advanced layers — no panic, non-zero alpha ────────────────
+    const GREEN: [u8; 4] = [0, 255, 0, 255];
+    const RED: [u8; 4] = [255, 0, 0, 255];
+    const CLEARED: [u8; 4] = [0, 0, 0, 0];
 
-    // ── T10: Sibling-Z — advanced layer does not bleed into sibling ───────────
+    /// One sample of a row: `(x, y, expected, tolerance)`.
+    type Sample = (u32, u32, [u8; 4], u8);
+
+    /// One row: its name, the scene it draws, the samples it must read.
+    type RegionRow = (&'static str, fn(&mut WgpuPainter), &'static [Sample]);
+
+    /// Draws `scene` over a surface cleared to opaque green and reads it back.
+    fn render_over_green(
+        device: &Arc<wgpu::Device>,
+        queue: &Arc<wgpu::Queue>,
+        scene: fn(&mut WgpuPainter),
+    ) -> Vec<[u8; 4]> {
+        let (surface_texture, surface_view) = create_sampleable_surface(device);
+        clear_surface_to_color(device, queue, &surface_view, wgpu::Color::GREEN);
+        let mut painter = build_painter(Arc::clone(device), Arc::clone(queue));
+        scene(&mut painter);
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Layer Region Test Encoder"),
+        });
+        painter
+            .render(
+                RenderTarget::sampleable(&surface_view, &surface_texture),
+                &mut encoder,
+            )
+            .expect("painter.render must succeed on a GPU-enabled host");
+        queue.submit(std::iter::once(encoder.finish()));
+        readback_pixels(device, queue, &surface_texture)
+    }
+
+    fn layer_paint(blend: BlendMode) -> Paint {
+        Paint::fill(Color::WHITE).with_blend_mode(blend)
+    }
+
+    fn red_ink(painter: &mut WgpuPainter, rect: Rect<f64>) {
+        painter.draw_rect(rect, &Paint::fill(Color::RED));
+    }
+
+    fn translate(painter: &mut WgpuPainter, dx: f64, dy: f64) {
+        painter.translate(flui_foundation::geometry::Offset::new(dx, dy));
+    }
+
+    /// `translate(20, 16)`, a `Src` layer over local `(0, 0, 24, 24)` (device
+    /// `(20, 16)-(44, 40)`), red ink over its first 8×8.
+    fn a_bounded_src_layer_replaces_its_whole_mapped_bounds(painter: &mut WgpuPainter) {
+        translate(painter, 20.0, 16.0);
+        painter.save_layer(
+            Some(Rect::from_xywh(0.0, 0.0, 24.0, 24.0)),
+            &layer_paint(BlendMode::Src),
+        );
+        red_ink(painter, Rect::from_xywh(0.0, 0.0, 8.0, 8.0));
+        painter.restore_layer();
+    }
+
+    /// `translate(8, 8) scale(2)`: local bounds `(0, 0, 12, 12)` are device
+    /// `(8, 8)-(32, 32)`; the unscaled bounds would stop at 20.
+    fn a_scaled_src_layer_replaces_its_scaled_bounds(painter: &mut WgpuPainter) {
+        translate(painter, 8.0, 8.0);
+        painter.scale(2.0, 2.0);
+        painter.save_layer(
+            Some(Rect::from_xywh(0.0, 0.0, 12.0, 12.0)),
+            &layer_paint(BlendMode::Src),
+        );
+        red_ink(painter, Rect::from_xywh(0.0, 0.0, 4.0, 4.0));
+        painter.restore_layer();
+    }
+
+    /// A half-transparent `SrcOver` layer under a translation shows its
+    /// content where the content landed.
+    fn a_translucent_translated_layer_shows_its_content(painter: &mut WgpuPainter) {
+        translate(painter, 20.0, 16.0);
+        painter.save_layer(
+            Some(Rect::from_xywh(0.0, 0.0, 24.0, 24.0)),
+            &Paint::fill(Color::WHITE).with_alpha(128),
+        );
+        red_ink(painter, Rect::from_xywh(0.0, 0.0, 8.0, 8.0));
+        painter.restore_layer();
+    }
+
+    /// A `Clear` layer with nothing in it, over device `(10, 10)-(30, 30)`.
+    fn an_empty_clear_layer_clears_its_bounds(painter: &mut WgpuPainter) {
+        translate(painter, 10.0, 10.0);
+        painter.save_layer(
+            Some(Rect::from_xywh(0.0, 0.0, 20.0, 20.0)),
+            &layer_paint(BlendMode::Clear),
+        );
+        painter.restore_layer();
+    }
+
+    /// An unbounded `Src` layer under a rect clip `(16, 16)-(48, 48)`.
+    fn an_unbounded_src_layer_replaces_only_its_clip(painter: &mut WgpuPainter) {
+        painter.clip_rect(
+            Rect::from_xywh(16.0, 16.0, 32.0, 32.0),
+            flui_painting::paint::Clip::HardEdge,
+        );
+        painter.save_layer(None, &layer_paint(BlendMode::Src));
+        red_ink(painter, Rect::from_xywh(16.0, 16.0, 8.0, 8.0));
+        painter.restore_layer();
+    }
+
+    /// An empty unbounded `Src` layer under a rounded clip `(8, 8)-(56, 56)`
+    /// with radius 16.
+    fn a_src_layer_under_a_rounded_clip_keeps_the_corners(painter: &mut WgpuPainter) {
+        painter.clip_rrect(
+            flui_foundation::geometry::RRect::from_rect_circular(
+                Rect::from_xywh(8.0, 8.0, 48.0, 48.0),
+                16.0,
+            ),
+            flui_painting::paint::Clip::AntiAlias,
+        );
+        painter.save_layer(None, &layer_paint(BlendMode::Src));
+        painter.restore_layer();
+    }
+
+    /// An empty `Src` layer over local `(-12, -12)-(12, 12)` rotated 45°
+    /// about `(32, 32)`: a diamond whose bounding box reaches `(15, 15)`.
+    fn a_rotated_src_layer_replaces_the_rotated_square(painter: &mut WgpuPainter) {
+        translate(painter, 32.0, 32.0);
+        painter.rotate(std::f32::consts::FRAC_PI_4);
+        painter.save_layer(
+            Some(Rect::from_xywh(-12.0, -12.0, 24.0, 24.0)),
+            &layer_paint(BlendMode::Src),
+        );
+        painter.restore_layer();
+    }
+
+    /// An opaque `DstOver` layer puts its red content under the green
+    /// backdrop, which therefore stays on top.
+    fn an_opaque_dst_over_layer_keeps_the_backdrop_on_top(painter: &mut WgpuPainter) {
+        painter.save_layer(None, &layer_paint(BlendMode::DstOver));
+        red_ink(painter, Rect::from_xywh(16.0, 16.0, 16.0, 16.0));
+        painter.restore_layer();
+    }
+
+    /// Each row: a scene, then the samples it must read. A row samples where
+    /// the broken behaviours disagree with the rule: inside the mapped bounds
+    /// but outside the content (a dropped mode leaves green there), inside the
+    /// unmapped bounds (unmapped bounds clear it), outside the clip (an
+    /// unclipped region clears it), inside the bounding box of a rotated
+    /// region but outside the region (a bounding-box composite clears it).
+    const REGION_ROWS: &[RegionRow] = &[
+        (
+            "a_bounded_src_layer_replaces_its_whole_mapped_bounds",
+            a_bounded_src_layer_replaces_its_whole_mapped_bounds,
+            &[
+                (24, 20, RED, 0),
+                (36, 34, CLEARED, 0),
+                (8, 8, GREEN, 0),
+                (46, 20, GREEN, 0),
+                (50, 50, GREEN, 0),
+            ],
+        ),
+        (
+            "a_scaled_src_layer_replaces_its_scaled_bounds",
+            a_scaled_src_layer_replaces_its_scaled_bounds,
+            &[(12, 12, RED, 0), (28, 28, CLEARED, 0), (34, 34, GREEN, 0)],
+        ),
+        (
+            "a_translucent_translated_layer_shows_its_content",
+            a_translucent_translated_layer_shows_its_content,
+            &[(24, 20, [128, 127, 0, 255], 2), (36, 34, GREEN, 0)],
+        ),
+        (
+            "an_empty_clear_layer_clears_its_bounds",
+            an_empty_clear_layer_clears_its_bounds,
+            &[(15, 15, CLEARED, 0), (35, 35, GREEN, 0)],
+        ),
+        (
+            "an_unbounded_src_layer_replaces_only_its_clip",
+            an_unbounded_src_layer_replaces_only_its_clip,
+            &[(20, 20, RED, 0), (40, 40, CLEARED, 0), (8, 8, GREEN, 0)],
+        ),
+        (
+            "a_src_layer_under_a_rounded_clip_keeps_the_corners",
+            a_src_layer_under_a_rounded_clip_keeps_the_corners,
+            &[(10, 10, GREEN, 0), (32, 32, CLEARED, 0)],
+        ),
+        (
+            "a_rotated_src_layer_replaces_the_rotated_square",
+            a_rotated_src_layer_replaces_the_rotated_square,
+            &[
+                (17, 17, GREEN, 0),
+                (32, 20, CLEARED, 0),
+                (32, 32, CLEARED, 0),
+            ],
+        ),
+        (
+            "an_opaque_dst_over_layer_keeps_the_backdrop_on_top",
+            an_opaque_dst_over_layer_keeps_the_backdrop_on_top,
+            &[(20, 20, GREEN, 0), (40, 40, GREEN, 0)],
+        ),
+    ];
+
+    /// A layer composites its whole region with its recorded mode: one row
+    /// per case in [`REGION_ROWS`], every row run, every failing sample named.
+    #[test]
+    fn a_layer_composites_its_whole_region_with_its_mode() {
+        let Some((device, queue)) =
+            crate::test_support::try_test_device_and_queue("Layer Region Test Device")
+        else {
+            return;
+        };
+        let mut failed = Vec::new();
+        for &(name, scene, samples) in REGION_ROWS {
+            let pixels = render_over_green(&device, &queue, scene);
+            for &(x, y, expected, tolerance) in samples {
+                let actual = pixels[(y * SURFACE_WIDTH + x) as usize];
+                let close = actual
+                    .iter()
+                    .zip(expected)
+                    .all(|(&a, e)| a.abs_diff(e) <= tolerance);
+                if !close {
+                    failed.push(format!(
+                        "{name}: ({x}, {y}) is {actual:?}, expected {expected:?} ±{tolerance}"
+                    ));
+                }
+            }
+        }
+        assert!(failed.is_empty(), "{failed:#?}");
+    }
 }

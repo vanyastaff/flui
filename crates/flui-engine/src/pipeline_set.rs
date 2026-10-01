@@ -501,6 +501,7 @@ impl PipelineSet {
                 self.ssaa_tile_surface_format,
                 &self.ssaa_tile_composite_layout,
                 blend_state,
+                !mode.keeps_destination_under_transparent_source(),
             )
         });
     }
@@ -785,6 +786,12 @@ fn create_instanced_arc_pipeline(
 /// `premultiplied_source_override_matches_the_shader` pins the two together.
 const PREMULTIPLIED_SOURCE_OVERRIDE: &str = "premultiplied_source";
 
+/// The name of the overridable constant through which a premultiplied texture
+/// pipeline tells the shader its blend replaces the destination under a
+/// transparent source, so a transparent texel is written rather than
+/// discarded. Pinned to the WGSL like [`PREMULTIPLIED_SOURCE_OVERRIDE`].
+const REPLACES_DESTINATION_OVERRIDE: &str = "replaces_destination";
+
 /// How a texture pipeline's source texels carry their alpha.
 ///
 /// One value, because it decides TWO things that must agree — the blend state
@@ -804,7 +811,18 @@ enum TextureSourceAlpha {
     /// own state — every premultiplied consumer supplies one, and `src_factor`
     /// is not a reliable witness of premultiplication (`Clear` is `(Zero,
     /// Zero)`), which is why this is stated rather than inferred.
-    Premultiplied { blend: wgpu::BlendState },
+    ///
+    /// `replaces_destination` is the mode's
+    /// `!keeps_destination_under_transparent_source()`: the shader then
+    /// writes transparent texels instead of discarding them, because the mode
+    /// changes the destination there. It travels with `blend` for the same
+    /// reason premultiplication does: a destination-replacing blend whose
+    /// shader still discards transparent texels keeps the destination exactly
+    /// where the mode asks to replace it, and nothing reports it.
+    Premultiplied {
+        blend: wgpu::BlendState,
+        replaces_destination: bool,
+    },
 }
 
 impl TextureSourceAlpha {
@@ -812,7 +830,7 @@ impl TextureSourceAlpha {
     const fn blend(self) -> wgpu::BlendState {
         match self {
             Self::Straight => wgpu::BlendState::ALPHA_BLENDING,
-            Self::Premultiplied { blend } => blend,
+            Self::Premultiplied { blend, .. } => blend,
         }
     }
 
@@ -822,7 +840,17 @@ impl TextureSourceAlpha {
             // The shader's own default is the straight-alpha case, so it needs
             // nothing said.
             Self::Straight => &[],
-            Self::Premultiplied { .. } => &[(PREMULTIPLIED_SOURCE_OVERRIDE, 1.0)],
+            Self::Premultiplied {
+                replaces_destination: false,
+                ..
+            } => &[(PREMULTIPLIED_SOURCE_OVERRIDE, 1.0)],
+            Self::Premultiplied {
+                replaces_destination: true,
+                ..
+            } => &[
+                (PREMULTIPLIED_SOURCE_OVERRIDE, 1.0),
+                (REPLACES_DESTINATION_OVERRIDE, 1.0),
+            ],
         }
     }
 }
@@ -891,6 +919,7 @@ fn create_instanced_texture_premul_pipeline(
         "Instanced Texture Premultiplied Pipeline",
         TextureSourceAlpha::Premultiplied {
             blend: wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING,
+            replaces_destination: false,
         },
     )
 }
@@ -906,12 +935,16 @@ fn create_instanced_texture_premul_pipeline(
 ///
 /// `blend_state` must be appropriate for premultiplied source — callers should
 /// derive it from [`crate::pipeline_cache::blend_state_for`] using the desired
-/// [`flui_painting::paint::BlendMode`].
+/// [`flui_painting::paint::BlendMode`], and `replaces_destination` from the
+/// same mode (see [`TextureSourceAlpha::Premultiplied`]). The SSAA tile only
+/// ever asks for modes that keep the destination, so its transparent border
+/// is still discarded.
 fn create_instanced_texture_with_blend_state(
     device: &wgpu::Device,
     surface_format: wgpu::TextureFormat,
     layout: &wgpu::PipelineLayout,
     blend_state: wgpu::BlendState,
+    replaces_destination: bool,
 ) -> wgpu::RenderPipeline {
     create_instanced_texture_pipeline_for(
         device,
@@ -919,7 +952,10 @@ fn create_instanced_texture_with_blend_state(
         layout,
         "SSAA Tile Composite Shader",
         "SSAA Tile Composite Pipeline",
-        TextureSourceAlpha::Premultiplied { blend: blend_state },
+        TextureSourceAlpha::Premultiplied {
+            blend: blend_state,
+            replaces_destination,
+        },
     )
 }
 
@@ -929,11 +965,13 @@ fn create_instanced_texture_with_blend_state(
 /// reaches a device.
 #[cfg(test)]
 pub(crate) fn premultiplied_source_override_matches_the_shader() {
-    let declaration = format!("override {PREMULTIPLIED_SOURCE_OVERRIDE}:");
-    assert!(
-        crate::shaders::TEXTURE_INSTANCED.contains(&declaration),
-        "no `{declaration}` in the instanced texture shader"
-    );
+    for name in [PREMULTIPLIED_SOURCE_OVERRIDE, REPLACES_DESTINATION_OVERRIDE] {
+        let declaration = format!("override {name}:");
+        assert!(
+            crate::shaders::TEXTURE_INSTANCED.contains(&declaration),
+            "no `{declaration}` in the instanced texture shader"
+        );
+    }
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────────────

@@ -268,9 +268,13 @@ factor cannot absorb `1 − coverage` (`Clear`, `Src`, `SrcIn`, `SrcOut`,
 property of the factor pair, the same partition `is_tile_safe_for_ssaa`
 draws. Where `DUAL_SOURCE_BLENDING` is absent (WebGPU), `PipelineCache`
 compiles only the folded assembly and those modes keep a hard anti-aliased
-clip edge; both halves are pinned by the readback suite. The rect / circle /
-texture instanced quads are not corrected because they are wired to `SrcOver`
-only, which absorbs partial coverage already.
+clip edge; both halves are pinned by the readback suite. The rect and circle
+instanced quads are not corrected because they are wired to `SrcOver` only,
+which absorbs partial coverage already. The texture quads are not corrected
+either, though a layer or offscreen result composites through them with any
+Porter-Duff mode (decisions 10 and 19): under an anti-aliased clip a
+destination-replacing composite scales the destination by the fringe's
+coverage instead of mixing it (see Open items).
 
 ### 5. A gradient's blend mode is pipeline state, keyed per draw run
 
@@ -342,13 +346,16 @@ alone; an offscreen would buy nothing there.
 
 `PendingOffscreenTexture` carries the producer's `BlendMode`;
 `queue_offscreen_result` takes it; replay routes every mode through
-`PipelineSet::ensure_texture_composite`'s per-mode pipeline. Shader-mask,
-backdrop-filter, and opacity-layer results all go through it, so a mask layer
-composited `Clear` erases instead of drawing.
-`an_offscreen_result_composites_with_its_own_blend_mode` fails on the
-`SrcOver`-always code. `OffscreenRenderer::render_masked` takes no blend
-mode: it produces a premultiplied full-coverage offscreen, and the mode
-belongs to the step that draws it back.
+`PipelineSet::ensure_texture_composite`'s per-mode pipeline. Shader-mask and
+backdrop-filter results go through it, and `flush_opacity_layer` composites a
+save layer's Porter-Duff mode through the same pipelines (an advanced mode
+takes the backdrop-reading path), so a mask layer composited `Clear` erases
+instead of drawing. `an_offscreen_result_composites_with_its_own_blend_mode`
+fails on the `SrcOver`-always code. `OffscreenRenderer::render_masked` takes
+no blend mode: it produces a premultiplied full-coverage offscreen, and the
+mode belongs to the step that draws it back. The result also carries the
+scissor and clip in force when it was queued, since its offscreen was drawn
+outside them (decision 19).
 
 ### 11. The shader-mask painter is cached across frames
 
@@ -528,6 +535,68 @@ submission and the blit are its own), `damage::tests::plan_frame_table` and
 the `raster_owner` damage tests. The windowed path itself runs only on a
 developer machine: CI has no surface.
 
+### 19. A layer composites its whole region with its recorded mode
+
+A save layer, an opacity layer and a shader mask composite their whole
+region with the blend mode they record. The region is the layer's bounds
+mapped through the transform current at `save_layer`, cut by the clip in
+force there (ancestor clip rects, a rounded clip, and a partial frame's
+damage scissor); an unbounded layer's region is the clip itself. The
+pixels the content left transparent are part of the layer, so a mode whose
+`keeps_destination_under_transparent_source()` is false (`Clear`, `Src`,
+`SrcIn`, `DstIn`, `SrcOut`, `DstATop`, `Modulate`) changes every pixel of the
+region, and an empty layer in such a mode still composites. The modes that
+keep the destination (`SrcOver`, `DstOver`, `Xor`, `Plus`, the advanced ones)
+look the same outside the content either way, but are now honoured as
+recorded rather than collapsed to `SrcOver`.
+
+Why this and not "replace only under the content":
+
+- `save_layer(bounds, Src)` reads as "this region becomes exactly the layer".
+  Replacing only under the content would make `Src` depend on how far the
+  content happens to reach, and make an empty `Clear` layer do nothing.
+- It is what a paint-level mode already does: a `Src` rect with a partly
+  transparent shader replaces every pixel of the rect. Restoring a layer is
+  a draw of its buffer over its region.
+- The region is the bounds the author wrote, in their own space, moved by
+  the same transform as the content, so it lands where the content does.
+  Bounds left unmapped composited a translated or scaled translucent layer
+  over the wrong rectangle and lost its content outside it.
+- Clips still clip: a layer never changes a pixel its clip excludes, the one
+  limit the author cannot reach from inside the layer.
+- It is the extent the damage producer already reports (`DrawOp`'s damage
+  extent for a bounded save layer is its mapped bounds; `LayerDiffer` takes a
+  shader mask's whole bounds and an opacity layer in such a mode as the
+  viewport), so a partial frame repaints everything the composite changes.
+
+Edge cases:
+
+- Under a transform that keeps axes aligned (translation, scale, flips,
+  quarter turns) the region is exactly the mapped rectangle. Under a rotation
+  or skew it is the exact quad: the composite runs over its bounding box with
+  the local bounds as a hard clip. Under a rounded ambient clip as well, the
+  composite's one clip slot holds the ambient clip and the region falls back
+  to the bounding box (Open items). Under a projective transform the layer is
+  treated as unbounded, as `DamageExtent::transformed` treats it.
+- Composite quads are not anti-aliased: a pixel is in the region when its
+  centre is. Damage rounds outward by a pixel (`DamageRect::covering`), so
+  every changed pixel stays covered.
+- The composite pipelines of the destination-replacing modes write
+  transparent texels instead of discarding them (`replaces_destination` in
+  `texture_instanced.wgsl`); only a fragment the clip excludes is dropped.
+- A shader mask's and a backdrop filter's offscreen is drawn outside the
+  ancestor clips, so their composite carries the scissor and the rounded clip
+  in force when they were queued, whatever their mode.
+
+Locked by `layer_blend_tests::gpu_tests::a_layer_composites_its_whole_region_with_its_mode`
+(mapped, scaled and rotated bounds, an empty `Clear` layer, rect and rounded
+clips, a translucent translated layer, an opaque `DstOver` layer),
+`damage_readback_tests::an_effect_layer_composites_its_whole_region_with_its_mode`
+(opacity layers and a clipped shader mask in the layer tree), and the damage
+rows `a_removed_translated_src_save_layer_leaves_nothing_behind`,
+`a_removed_destination_affecting_layer_leaves_nothing_behind` and
+`a_change_beside_a_viewport_compositing_layer_matches_a_full_frame`.
+
 ---
 
 ## Open items
@@ -537,6 +606,15 @@ developer machine: CI has no surface.
   not yet drive; whether the lane ships or the direct path is the only path
   decides whether this family stays. Until decided, it is tested but not
   wired.
+- **A destination-replacing composite under an anti-aliased clip (decision
+  19).** The texture composite has no coverage-correct path (ADR-0057 covers
+  shapes only), so along a rounded clip's fringe a `Src` or `Clear` layer
+  scales the destination by the coverage instead of mixing the layer with
+  it. Hard clips are exact; the readbacks sample inside the fringe.
+- **A rotated destination-replacing layer under a rounded clip (decision
+  19).** The composite instance has one clip slot, which the ambient clip
+  takes, so the layer replaces the bounding box of its rotated bounds within
+  that clip rather than the rotated quad.
 - **`catch_unwind` around `render_scene`.** A panic inside a layer's paint
   poisons the frame rather than isolating the layer; changing that is a
   contract change that needs its own ADR.

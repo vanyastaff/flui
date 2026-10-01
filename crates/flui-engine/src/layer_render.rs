@@ -256,10 +256,13 @@ impl<R: CommandRenderer + LayerStateStack + ?Sized> LayerRender<R> for Transform
 // ============================================================================
 
 /// Whether an opacity layer's composite is the identity — opaque, SrcOver —
-/// so no opacity group is pushed. An opaque advanced-blend layer MUST still
-/// be pushed so the compositor applies the dst-read blend to its children.
+/// so no opacity group is pushed. An opaque layer in any other mode MUST
+/// still be pushed: an advanced mode reads the backdrop, a Porter-Duff mode
+/// such as `Src` or `DstOver` composites its whole region with its own
+/// factors, and neither is what painting the children straight onto the
+/// parent does.
 fn opacity_is_identity(layer: &OpacityLayer) -> bool {
-    layer.is_opaque() && !layer.blend().is_advanced()
+    layer.is_opaque() && layer.blend() == flui_painting::paint::BlendMode::SrcOver
 }
 
 impl<R: CommandRenderer + LayerStateStack + ?Sized> LayerRender<R> for OpacityLayer {

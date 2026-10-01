@@ -68,6 +68,17 @@ struct VertexOutput {
 // the straight-alpha pipeline, which passes no constants.
 override premultiplied_source: bool = false;
 
+// Whether the pipeline's blend replaces the destination under a transparent
+// source (`Clear`, `Src`, `SrcIn`, `DstIn`, `SrcOut`, `DstATop`, `Modulate`).
+//
+// A layer composited with such a mode changes every pixel of its region, the
+// ones its content left transparent included, so a transparent texel is a
+// write, not a skip: discarding it would keep the destination exactly where
+// the mode asks to replace it. Only a fragment the clip excludes outright is
+// discarded then. Every other pipeline discards transparent texels, which
+// leaves the destination as the blend would.
+override replaces_destination: bool = false;
+
 // Viewport uniform (for screen-space to clip-space conversion)
 struct Viewport {
     size: vec2<f32>,      // Viewport size in pixels
@@ -179,7 +190,13 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
     // Alpha test (discard fully transparent pixels for better performance).
     // Runs after the clip so fully clipped-out texels cost nothing downstream.
-    if (tex_color.a < 0.01) {
+    // A destination-replacing pipeline writes transparent texels and drops
+    // only what the clip excludes; see `replaces_destination`.
+    if (replaces_destination) {
+        if (clip_alpha <= 0.0) {
+            discard;
+        }
+    } else if (tex_color.a < 0.01) {
         discard;
     }
 

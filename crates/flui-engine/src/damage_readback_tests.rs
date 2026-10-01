@@ -1148,10 +1148,54 @@ fn green_background(canvas: &mut Canvas) {
 
 const GREEN_COLOR: Color = Color::rgba(0, 255, 0, 255);
 
-/// A `Src` save layer recorded under a translation leaves nothing behind
-/// when removed: its content lands at the translated position, the backdrop
-/// elsewhere (inside its bounds, mapped or not) is untouched, and the
-/// damage, which covers the mapped bounds, covers every pixel it changed.
+/// `translate(4, 0)`, a `Src` layer over local `(0, 0, 32, 32)`, red ink
+/// over its first 16×16. At the boundary's `(40, 40)` the layer covers
+/// device `(44, 40)-(76, 72)` and the ink `(44, 40)-(60, 56)`.
+fn translated_src_layer(canvas: &mut Canvas) {
+    canvas.translate(4.0, 0.0);
+    canvas.save_layer(
+        Some(Rect::from_xywh(0.0, 0.0, 32.0, 32.0)),
+        &Paint::fill(Color::WHITE).with_blend_mode(BlendMode::Src),
+    );
+    canvas.draw_rect(
+        Rect::from_xywh(0.0, 0.0, 16.0, 16.0),
+        &Paint::fill(Color::RED),
+    );
+    canvas.restore();
+}
+
+/// The same device rectangles as [`translated_src_layer`], reached through
+/// `translate(4, 0) scale(2)` over half-size local bounds and ink.
+fn translated_scaled_src_layer(canvas: &mut Canvas) {
+    canvas.translate(4.0, 0.0);
+    canvas.scale(2.0, 2.0);
+    canvas.save_layer(
+        Some(Rect::from_xywh(0.0, 0.0, 16.0, 16.0)),
+        &Paint::fill(Color::WHITE).with_blend_mode(BlendMode::Src),
+    );
+    canvas.draw_rect(
+        Rect::from_xywh(0.0, 0.0, 8.0, 8.0),
+        &Paint::fill(Color::RED),
+    );
+    canvas.restore();
+}
+
+/// An empty `Clear` layer over the same device rectangle as
+/// [`translated_src_layer`].
+fn translated_empty_clear_layer(canvas: &mut Canvas) {
+    canvas.translate(4.0, 0.0);
+    canvas.save_layer(
+        Some(Rect::from_xywh(0.0, 0.0, 32.0, 32.0)),
+        &Paint::fill(Color::WHITE).with_blend_mode(BlendMode::Clear),
+    );
+    canvas.restore();
+}
+
+/// A destination-replacing save layer recorded under a transform leaves
+/// nothing behind when removed. While present it replaces its whole bounds,
+/// mapped through the transform, the pixels its content left transparent
+/// included, and nothing outside them; the damage, which covers the mapped
+/// bounds, covers every pixel it changed.
 #[test]
 fn a_removed_translated_src_save_layer_leaves_nothing_behind() {
     let Some(renderer) = crate::test_support::renderer_or_skip() else {
@@ -1162,56 +1206,65 @@ fn a_removed_translated_src_save_layer_leaves_nothing_behind() {
         ContentToken::mint(),
         ContentToken::mint(),
     );
-    let layered = |canvas: &mut Canvas| {
-        canvas.translate(4.0, 0.0);
-        canvas.save_layer(
-            Some(Rect::from_xywh(0.0, 0.0, 32.0, 32.0)),
-            &Paint::fill(Color::WHITE).with_blend_mode(BlendMode::Src),
+    // Name, the boundary's picture, whether the layer inks red.
+    type Row = (&'static str, fn(&mut Canvas), bool);
+    let rows: [Row; 3] = [
+        ("translated Src", translated_src_layer, true),
+        (
+            "translated and scaled Src",
+            translated_scaled_src_layer,
+            true,
+        ),
+        ("empty Clear", translated_empty_clear_layer, false),
+    ];
+    let mut failed = Vec::new();
+    for (name, layered, inked) in rows {
+        let backdrop = Boundary {
+            id: 3,
+            token: &background,
+            at: Offset::ZERO,
+            paint: &green_background,
+        };
+        let before = scene(
+            &root,
+            &[
+                backdrop,
+                Boundary {
+                    id: 2,
+                    token: &card,
+                    at: Offset::new(40.0, 40.0),
+                    paint: &layered,
+                },
+            ],
+            None,
         );
-        canvas.draw_rect(
-            Rect::from_xywh(0.0, 0.0, 16.0, 16.0),
-            &Paint::fill(Color::RED),
-        );
-        canvas.restore();
-    };
-    let backdrop = Boundary {
-        id: 3,
-        token: &background,
-        at: Offset::ZERO,
-        paint: &green_background,
-    };
-    let before = scene(
-        &root,
-        &[
-            backdrop,
-            Boundary {
-                id: 2,
-                token: &card,
-                at: Offset::new(40.0, 40.0),
-                paint: &layered,
-            },
-        ],
-        None,
-    );
-    let after = scene(&root, &[backdrop], None);
+        let after = scene(&root, &[backdrop], None);
 
-    let drawn = full_frame_pixels(&renderer, &before);
-    assert_eq!(
-        px(&drawn, 50, 46),
-        RED,
-        "the layer's content lands at its translated position"
-    );
-    for (x, y) in [(10, 10), (70, 66), (100, 100)] {
-        assert_eq!(
-            px(&drawn, x, y),
-            GREEN,
-            "the backdrop outside the layer's content is untouched at ({x}, {y})"
-        );
+        let drawn = full_frame_pixels(&renderer, &before);
+        let mut expected = vec![
+            ((70, 66), [0, 0, 0, 0]),
+            ((42, 50), GREEN),
+            ((10, 10), GREEN),
+            ((78, 74), GREEN),
+            ((100, 100), GREEN),
+        ];
+        expected.push(((50, 46), if inked { RED } else { [0, 0, 0, 0] }));
+        for ((x, y), want) in expected {
+            let got = px(&drawn, x, y);
+            if got != want {
+                failed.push(format!(
+                    "{name}: ({x}, {y}) drawn {got:?}, expected {want:?}"
+                ));
+            }
+        }
+
+        let (partial, full) = partial_and_full(&renderer, &before, &after);
+        let stale = mismatches(&partial, &full, 0);
+        if !stale.is_empty() {
+            failed.push(format!("{name}: stale pixels at {stale:?}"));
+        }
     }
-
-    let (partial, full) = partial_and_full(&renderer, &before, &after);
-    let stale = mismatches(&partial, &full, 0);
-    assert!(stale.is_empty(), "stale pixels at {stale:?}");
+    assert!(failed.is_empty(), "{failed:#?}");
 }
 
 /// A removed shader mask under a destination-replacing `Clear` blend leaves
@@ -1452,10 +1505,14 @@ fn a_removed_destination_affecting_layer_leaves_nothing_behind() {
         ContentToken::mint(),
         ContentToken::mint(),
     );
+    // The third field is what the drawn frame holds at (100, 100), far from
+    // the child, when the composite is known to reach it: an unbounded
+    // destination-replacing opacity layer replaces the whole viewport.
     let effects = [
         (
             "opacity Src",
             Layer::from(OpacityLayer::with_blend(1.0, Offset::ZERO, BlendMode::Src)),
+            Some([0, 0, 0, 0]),
         ),
         (
             "opacity Clear",
@@ -1464,6 +1521,7 @@ fn a_removed_destination_affecting_layer_leaves_nothing_behind() {
                 Offset::ZERO,
                 BlendMode::Clear,
             )),
+            Some([0, 0, 0, 0]),
         ),
         (
             "color filter Src",
@@ -1471,9 +1529,10 @@ fn a_removed_destination_affecting_layer_leaves_nothing_behind() {
                 color: Color::rgba(255, 0, 255, 255),
                 blend_mode: BlendMode::Src,
             })),
+            None,
         ),
     ];
-    for (name, effect) in effects {
+    for (name, effect, far_from_the_child) in effects {
         let build = |present: bool| {
             backdrop_scene(&root, &background, &green_background, &|tree, root_id| {
                 if !present {
@@ -1493,6 +1552,13 @@ fn a_removed_destination_affecting_layer_leaves_nothing_behind() {
         };
         let (before, after) = (build(true), build(false));
         let drawn = full_frame_pixels(&renderer, &before);
+        if let Some(expected) = far_from_the_child {
+            assert_eq!(
+                px(&drawn, 100, 100),
+                expected,
+                "{name}: precondition: the composite replaced the viewport"
+            );
+        }
         let (partial, full) =
             damaged_and_full(&renderer, &before, &after, |plan| plan != FramePlan::Skip);
         let stale = mismatches(&partial, &full, 0);
@@ -1505,6 +1571,114 @@ fn a_removed_destination_affecting_layer_leaves_nothing_behind() {
             px(&drawn, 100, 100)
         );
     }
+}
+
+/// An effect layer in the layer tree composites its whole region with the
+/// mode it records, cut by its ancestors' clips.
+///
+/// - A half-opaque `Src` opacity layer replaces the viewport with half its
+///   content: half-opaque red under the child, transparent elsewhere.
+/// - An opaque `DstOver` opacity layer keeps the backdrop on top of its
+///   child; an opacity layer that skipped the group would paint red.
+/// - A `Src` shader mask under a rect clip replaces its bounds inside the
+///   clip, the pixels its child left transparent included, and nothing
+///   outside the clip.
+#[test]
+fn an_effect_layer_composites_its_whole_region_with_its_mode() {
+    use flui_layer::{ClipRectLayer, OpacityLayer, ShaderMaskLayer};
+    use flui_painting::paint::Shader;
+
+    let Some(renderer) = crate::test_support::renderer_or_skip() else {
+        return;
+    };
+    let (root, background, card) = (
+        ContentToken::mint(),
+        ContentToken::mint(),
+        ContentToken::mint(),
+    );
+    let red_child = || rect_picture(Rect::from_xywh(0.0, 0.0, 16.0, 16.0), Color::RED);
+    let boundary = |tree: &mut LayerTree, root_id, at: Offset<f64>| {
+        tree.push_child(
+            root_id,
+            LayerNode::new(Layer::from(OffsetLayer::new(at))).with_boundary(id(2), card.clone()),
+        )
+    };
+    let opacity = |alpha: f64, blend: BlendMode| {
+        move |tree: &mut LayerTree, root_id| {
+            let card = boundary(tree, root_id, Offset::new(40.0, 40.0));
+            let layer = tree.push_child(
+                card,
+                Layer::from(OpacityLayer::with_blend(alpha, Offset::ZERO, blend)),
+            );
+            tree.push_child(layer, red_child());
+        }
+    };
+    let src_opacity = opacity(0.5, BlendMode::Src);
+    let dst_over_opacity = opacity(1.0, BlendMode::DstOver);
+    // Device: the clip is (20, 20)-(50, 50), the mask (20, 20)-(80, 80), the
+    // child (20, 20)-(36, 36).
+    let clipped_src_mask = |tree: &mut LayerTree, root_id| {
+        let card = boundary(tree, root_id, Offset::new(20.0, 20.0));
+        let clipped = tree.push_child(
+            card,
+            Layer::from(ClipRectLayer::hard_edge(Rect::from_xywh(
+                0.0, 0.0, 30.0, 30.0,
+            ))),
+        );
+        let mask = tree.push_child(
+            clipped,
+            Layer::from(ShaderMaskLayer::new(
+                Shader::solid(Color::WHITE),
+                BlendMode::Src,
+                Rect::from_xywh(0.0, 0.0, 60.0, 60.0),
+            )),
+        );
+        tree.push_child(mask, red_child());
+    };
+    // Name, the layers the row adds under the root, the samples it must read.
+    type Row<'a> = (
+        &'static str,
+        &'a dyn Fn(&mut LayerTree, flui_layer::LayerId),
+        &'static [((u32, u32), [u8; 4])],
+    );
+    let rows: [Row<'_>; 3] = [
+        (
+            "half-opaque Src opacity layer",
+            &src_opacity,
+            &[((44, 44), [128, 0, 0, 128]), ((100, 100), [0, 0, 0, 0])],
+        ),
+        (
+            "opaque DstOver opacity layer",
+            &dst_over_opacity,
+            &[((44, 44), GREEN), ((100, 100), GREEN)],
+        ),
+        (
+            "Src shader mask under a clip",
+            &clipped_src_mask,
+            &[
+                ((24, 24), RED),
+                ((45, 45), [0, 0, 0, 0]),
+                ((70, 70), GREEN),
+                ((10, 10), GREEN),
+            ],
+        ),
+    ];
+    let mut failed = Vec::new();
+    for (name, extra, samples) in rows {
+        let drawn = full_frame_pixels(
+            &renderer,
+            &backdrop_scene(&root, &background, &green_background, extra),
+        );
+        for &((x, y), expected) in samples {
+            let got = px(&drawn, x, y);
+            if !near(got, expected, 2) {
+                failed.push(format!(
+                    "{name}: ({x}, {y}) is {got:?}, expected {expected:?}"
+                ));
+            }
+        }
+    }
+    assert!(failed.is_empty(), "{failed:#?}");
 }
 
 /// A change in the halo of a foreground blur under a shrinking transform
@@ -1576,11 +1750,18 @@ fn a_change_in_a_shrunk_blurs_halo_matches_a_full_frame() {
 /// the damage scissor but its result composites over the viewport, so a
 /// partial frame would composite a truncated input over retained pixels
 /// that already hold its result, and over a later sibling it would wipe.
+///
+/// A shader mask, which composites an offscreen of its own, keeps its
+/// composite inside the damage scissor the same way: a translucent one
+/// composited past it blends a second time over retained pixels that
+/// already hold its result.
 #[test]
 fn a_change_beside_a_viewport_compositing_layer_matches_a_full_frame() {
-    use flui_layer::{ColorFilterLayer, ImageFilterLayer, OpacityLayer};
-    use flui_painting::paint::ColorFilter;
+    use flui_layer::{
+        ClipRectLayer, ColorFilterLayer, ImageFilterLayer, OpacityLayer, ShaderMaskLayer,
+    };
     use flui_painting::paint::effects::{ColorAdjustment, ColorMatrix};
+    use flui_painting::paint::{ColorFilter, Shader};
 
     let Some(renderer) = crate::test_support::renderer_or_skip() else {
         return;
@@ -1600,50 +1781,74 @@ fn a_change_beside_a_viewport_compositing_layer_matches_a_full_frame() {
     let effects = [
         (
             "opacity Src",
-            Layer::from(OpacityLayer::with_blend(0.5, Offset::ZERO, BlendMode::Src)),
+            vec![Layer::from(OpacityLayer::with_blend(
+                0.5,
+                Offset::ZERO,
+                BlendMode::Src,
+            ))],
         ),
         (
             "opacity Clear",
-            Layer::from(OpacityLayer::with_blend(
+            vec![Layer::from(OpacityLayer::with_blend(
                 1.0,
                 Offset::ZERO,
                 BlendMode::Clear,
-            )),
+            ))],
         ),
         (
             "color filter SrcOver",
-            Layer::from(ColorFilterLayer::new(ColorFilter::Mode {
+            vec![Layer::from(ColorFilterLayer::new(ColorFilter::Mode {
                 color: Color::rgba(255, 0, 255, 128),
                 blend_mode: BlendMode::SrcOver,
-            })),
+            }))],
         ),
         (
             "color filter Src",
-            Layer::from(ColorFilterLayer::new(ColorFilter::Mode {
+            vec![Layer::from(ColorFilterLayer::new(ColorFilter::Mode {
                 color: Color::rgba(255, 0, 255, 128),
                 blend_mode: BlendMode::Src,
-            })),
+            }))],
         ),
         (
             "image filter matrix",
-            Layer::from(ImageFilterLayer::matrix(offset)),
+            vec![Layer::from(ImageFilterLayer::matrix(offset))],
         ),
         (
             "image filter colour adjustment",
-            Layer::from(ImageFilterLayer::new(ImageFilter::ColorAdjust(
-                ColorAdjustment::Matrix(offset),
-            ))),
+            vec![Layer::from(ImageFilterLayer::new(
+                ImageFilter::ColorAdjust(ColorAdjustment::Matrix(offset)),
+            ))],
         ),
         (
             "image filter composing a matrix",
-            Layer::from(ImageFilterLayer::new(ImageFilter::Compose(vec![
-                ImageFilter::blur(1.0),
-                ImageFilter::Matrix(offset),
-            ]))),
+            vec![Layer::from(ImageFilterLayer::new(ImageFilter::Compose(
+                vec![ImageFilter::blur(1.0), ImageFilter::Matrix(offset)],
+            )))],
+        ),
+        (
+            "shader mask Src under a clip",
+            vec![
+                Layer::from(ClipRectLayer::hard_edge(Rect::from_xywh(
+                    0.0, 0.0, 30.0, 30.0,
+                ))),
+                Layer::from(ShaderMaskLayer::new(
+                    Shader::solid(Color::WHITE),
+                    BlendMode::Src,
+                    Rect::from_xywh(-20.0, -20.0, 60.0, 60.0),
+                )),
+            ],
+        ),
+        (
+            "translucent SrcOver shader mask",
+            vec![Layer::from(ShaderMaskLayer::new(
+                Shader::solid(Color::rgba(255, 255, 255, 128)),
+                BlendMode::SrcOver,
+                Rect::from_xywh(0.0, 0.0, 30.0, 30.0),
+            ))],
         ),
     ];
     let mut failed = Vec::new();
-    for (name, effect) in effects {
+    for (name, chain) in effects {
         let build = |at: Offset<f64>| {
             backdrop_scene(&root, &background, &green_background, &|tree, root_id| {
                 let boundary = tree.push_child(
@@ -1651,7 +1856,9 @@ fn a_change_beside_a_viewport_compositing_layer_matches_a_full_frame() {
                     LayerNode::new(Layer::from(OffsetLayer::new(Offset::new(40.0, 40.0))))
                         .with_boundary(id(2), card.clone()),
                 );
-                let layer = tree.push_child(boundary, effect.clone());
+                let layer = chain.iter().fold(boundary, |parent, effect| {
+                    tree.push_child(parent, effect.clone())
+                });
                 tree.push_child(
                     layer,
                     rect_picture(Rect::from_xywh(0.0, 0.0, 16.0, 16.0), Color::RED),

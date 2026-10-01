@@ -222,6 +222,7 @@ fn an_offscreen_result_composites_with_its_own_blend_mode() {
             texture,
             Rect::from_xywh(0.0, 0.0, f64::from(SIZE as f32), f64::from(SIZE as f32)),
             BlendMode::Clear,
+            None,
         );
     });
 

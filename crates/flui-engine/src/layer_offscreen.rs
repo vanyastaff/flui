@@ -900,9 +900,11 @@ impl GpuReplay {
 
         // The advanced-blend arm below composites through `flush_advanced_layer`,
         // whose instance carries no clip slot — a clipped layer taking it would
-        // paint the whole offscreen unclipped. Only `save_layer_clipped` sets
-        // `composite_clip`, and it always asks for `SrcOver`, so the two are
-        // disjoint by construction; this is the assertion that keeps them so.
+        // paint the whole offscreen unclipped. `composite_clip` is set by
+        // `save_layer_clipped`, which always asks for `SrcOver`, and by a
+        // `save_layer` whose mode replaces the destination, which no advanced
+        // mode does, so the two are disjoint by construction; this is the
+        // assertion that keeps them so.
         debug_assert!(
             layer.composite_clip.is_none() || !layer.blend.is_advanced(),
             "BUG: a clip-opened layer must composite with SrcOver — the advanced-blend \
@@ -1047,7 +1049,10 @@ impl GpuReplay {
         // A `Clip::AntiAliasWithSaveLayer` layer applies its clip HERE, to the
         // finished group, and nowhere else — the draws inside the offscreen
         // were left unclipped by `clip_rrect_at_composite` precisely so this
-        // multiply happens once. Every other layer kind leaves the slot clear.
+        // multiply happens once. A layer whose mode replaces the destination
+        // carries the ambient rounded clip, or its rotated bounds as a hard
+        // clip, so the composite changes nothing outside its region. Every
+        // other layer kind leaves the slot clear.
         let instance = match layer.composite_clip {
             Some(clip) => {
                 use crate::instancing::ClippableInstance as _;
@@ -1056,10 +1061,26 @@ impl GpuReplay {
             None => instance,
         };
         let _ = self.texture_batch.add(instance);
-        // Opacity-layer composite onto main surface — full-viewport, no scissor.
+        // Opacity-layer composite onto main surface. No scissor: the quad is
+        // the layer's region, which the painter already cut to the clip (the
+        // damage scissor included).
         // Premultiplied: offscreen texels are premultiplied (see above).
-        // R2: flush_texture_batch_premultiplied drains + clears texture_batch.
-        self.flush_texture_batch_premultiplied(
+        // R2: both flushes drain + clear texture_batch.
+        //
+        // The layer's own mode composites the whole region (mapping decision
+        // 19): `Src` replaces it with the layer at its opacity, `Clear`
+        // clears it, and a destination-replacing pipeline writes the texels
+        // the content left transparent instead of discarding them. `SrcOver`
+        // resolves to the pre-baked premultiplied pipeline, and so does an
+        // advanced mode that reached here on a target with no backdrop to
+        // read (the warning above).
+        let mode = if layer.blend.is_advanced() {
+            flui_painting::paint::BlendMode::SrcOver
+        } else {
+            layer.blend
+        };
+        self.flush_texture_batch_premultiplied_with_mode(
+            mode,
             device,
             queue,
             pipelines,
