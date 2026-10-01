@@ -95,6 +95,19 @@ impl Canvas {
     /// layer is composited back using the specified paint settings
     /// (opacity, blend mode, color filter, etc.).
     ///
+    /// # Region
+    ///
+    /// `bounds` are in the current transform's local space, like a draw's
+    /// geometry. The layer's region is `bounds` mapped through the current
+    /// transform and cut by the current clip; `None` makes the region the
+    /// clip alone. On `restore()` the layer composites its whole region with
+    /// the paint's blend mode, the pixels its content left transparent
+    /// included: under a mode that replaces the destination where the source
+    /// is transparent (`Src`, `Clear`, `SrcIn`, `DstIn`, `SrcOut`,
+    /// `DstATop`, `Modulate`) every pixel of the region changes, even when
+    /// nothing was drawn into the layer. A layer never changes a pixel its
+    /// clip excludes.
+    ///
     /// # Performance
     ///
     /// `save_layer` is relatively expensive because it:
@@ -148,6 +161,11 @@ impl Canvas {
     /// (alpha = 1.0).  The engine derives layer opacity from `paint.color.a`, so
     /// this method sets alpha = 255 — not the zero produced by `Color::TRANSPARENT`.
     /// RGB channels are ignored for saveLayer compositing; only alpha matters.
+    ///
+    /// The layer composites its whole region with `blend_mode`, as
+    /// [`Self::save_layer`] describes: `save_layer_blend(Some(r), BlendMode::Src)`
+    /// makes the mapped `r` (within the clip) exactly the layer's content,
+    /// transparent where nothing was drawn.
     pub fn save_layer_blend(&mut self, bounds: Option<Rect<f64>>, blend_mode: BlendMode) {
         // Alpha=255 (opaque) — blend-only layer.  `Color::TRANSPARENT` has alpha=0,
         // which would make the engine treat the layer as invisible (a no-op).

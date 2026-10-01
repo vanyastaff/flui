@@ -285,6 +285,28 @@ pub(crate) fn atlas_extent_covers_the_sprite_destination() {
     );
 }
 
+/// An empty bounded save layer's extent is its bounds mapped through the
+/// transform it was recorded under: the region the engine composites it
+/// over, which a destination-replacing mode changes in full. Under
+/// `translate(4, 0) scale(2)`, local `(0, 0, 16, 16)` is `(4, 0)-(36, 32)`.
+///
+/// This pins the extent the damage producer already reported before the
+/// engine honoured it; it is the damage half of mapping decision 19 in
+/// `flui-engine`'s `ARCHITECTURE.md`, whose pixels the engine's readbacks
+/// pin.
+pub(crate) fn a_bounded_save_layer_extent_is_its_mapped_bounds() {
+    let list = flui_painting::testing::record(|canvas| {
+        canvas.translate(4.0, 0.0);
+        canvas.scale(2.0, 2.0);
+        canvas.save_layer(
+            Some(Rect::from_xywh(0.0, 0.0, 16.0, 16.0)),
+            &Paint::fill(Color::WHITE).with_blend_mode(flui_painting::paint::BlendMode::Src),
+        );
+        canvas.restore();
+    });
+    assert_eq!(bounded(&list), Rect::from_ltrb(4.0, 0.0, 36.0, 32.0));
+}
+
 /// Which blends change a destination their source leaves transparent, and
 /// which colour filters paint a transparent pixel: the two answers a damage
 /// producer widens a layer's composite by.
