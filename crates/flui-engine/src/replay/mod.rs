@@ -400,6 +400,7 @@ impl GpuReplay {
                                 (op.device_bounds.right() / f64::from(viewport_width_f32)) as f32,
                                 (op.device_bounds.bottom() / f64::from(viewport_height_f32)) as f32,
                             ],
+                            clip: None,
                         };
                         flush_advanced_layer(
                             blend_op,

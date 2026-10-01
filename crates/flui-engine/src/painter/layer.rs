@@ -334,42 +334,39 @@ impl WgpuPainter {
     /// The clip a composite over [`Self::composite_region`] must carry beyond
     /// that rectangle, or `None` when the rectangle is the whole region.
     ///
+    /// - Bounds under a rotation or skew are carried as a hard clip, whatever
+    ///   the mode: the composite quad is their bounding box, and without the
+    ///   clip a destination-replacing mode would change all of it and any
+    ///   other mode would show the content that reached its corners.
     /// - An active rounded or superellipse clip goes on the composite, so the
     ///   composite changes nothing the clip excludes. `content_was_clipped`
     ///   says whether the content inside already went through it: the draws
     ///   in a save layer did, so a mode that keeps the destination under a
-    ///   transparent source needs nothing more, while a shader mask's or a
-    ///   backdrop's offscreen was drawn outside it.
-    /// - Otherwise, a destination-replacing mode under a rotation or skew
-    ///   carries the bounds themselves as a hard clip, since the composite
-    ///   quad is their bounding box and the mode would change all of it.
+    ///   transparent source needs only the bounds clip, while a shader mask's
+    ///   or a backdrop's offscreen was drawn outside it.
     ///
-    /// A rotated or skewed destination-replacing composite under a rounded
-    /// clip keeps only the rounded clip (one clip slot per instance), so it
-    /// replaces the bounding box of its bounds within that clip.
+    /// A rotated or skewed composite that needs the rounded clip keeps only
+    /// that clip (one clip slot per instance), so it composites the bounding
+    /// box of its bounds within that clip.
     pub(super) fn composite_clip(
         &self,
         local_bounds: Option<Rect<f64>>,
         blend: flui_painting::paint::BlendMode,
         content_was_clipped: bool,
     ) -> Option<crate::state_stack::ResolvedClip> {
-        let replaces = !blend.keeps_destination_under_transparent_source();
-        let active = self.state.active_clip();
-        if active != crate::state_stack::ResolvedClip::NONE {
-            return (replaces || !content_was_clipped).then_some(active);
-        }
         let ctm = self.state.current_transform_matrix();
-        match local_bounds {
-            Some(bounds) if replaces && !self.state.is_axis_aligned() && !is_projective(&ctm) => {
-                Some(
-                    self.state.resolve_rrect_clip(
-                        flui_foundation::geometry::RRect::from_rect(bounds),
-                        true,
-                    ),
-                )
-            }
-            _ => None,
+        let bounds_clip = local_bounds
+            .filter(|_| !self.state.is_axis_aligned() && !is_projective(&ctm))
+            .map(|bounds| {
+                self.state
+                    .resolve_rrect_clip(flui_foundation::geometry::RRect::from_rect(bounds), true)
+            });
+        let active = self.state.active_clip();
+        let replaces = !blend.keeps_destination_under_transparent_source();
+        if active != crate::state_stack::ResolvedClip::NONE && (replaces || !content_was_clipped) {
+            return Some(active);
         }
+        bounds_clip
     }
 
     // ===== Layer Operations (Opacity) =====

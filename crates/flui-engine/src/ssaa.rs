@@ -560,6 +560,7 @@ impl GpuReplay {
                     // 1× tile exactly covers composite_bounds; UV is identity.
                     src_uv_min: [0.0, 0.0],
                     src_uv_max: [1.0, 1.0],
+                    clip: None,
                 };
                 flush_advanced_layer(
                     blend_op,

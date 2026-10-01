@@ -18,3 +18,6 @@
   applies a second time between the masked child and the backdrop, which multiplied the child by
   the backdrop under the default `Modulate`. The mask pass still applies the shader's alpha
   alone, whatever the mode (ADR-0099).
+- **A rotated or skewed save layer keeps its content inside its bounds** (`flui-engine`): the
+  composite carries the bounds as a hard clip for every blend mode, the advanced ones included,
+  so content drawn past them no longer shows in the corners of their bounding box.

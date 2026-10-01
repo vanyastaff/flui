@@ -337,6 +337,31 @@ mod gpu_tests {
         painter.restore_layer();
     }
 
+    /// A layer in `paint` over local `(-12, -12)-(12, 12)` rotated 45° about
+    /// `(32, 32)`, holding red ink over local `(-30, -30)-(30, 30)`, which
+    /// reaches through the corners of the diamond's bounding box.
+    fn rotated_layer_with_oversized_ink(painter: &mut WgpuPainter, paint: &Paint) {
+        translate(painter, 32.0, 32.0);
+        painter.rotate(std::f32::consts::FRAC_PI_4);
+        painter.save_layer(Some(Rect::from_xywh(-12.0, -12.0, 24.0, 24.0)), paint);
+        red_ink(painter, Rect::from_xywh(-30.0, -30.0, 60.0, 60.0));
+        painter.restore_layer();
+    }
+
+    fn a_rotated_translucent_layer_keeps_its_ink_inside_the_rotated_square(
+        painter: &mut WgpuPainter,
+    ) {
+        rotated_layer_with_oversized_ink(painter, &Paint::fill(Color::WHITE).with_alpha(128));
+    }
+
+    fn a_rotated_opaque_layer_keeps_its_ink_inside_the_rotated_square(painter: &mut WgpuPainter) {
+        rotated_layer_with_oversized_ink(painter, &Paint::fill(Color::WHITE));
+    }
+
+    fn a_rotated_multiply_layer_keeps_its_ink_inside_the_rotated_square(painter: &mut WgpuPainter) {
+        rotated_layer_with_oversized_ink(painter, &layer_paint(BlendMode::Multiply));
+    }
+
     /// An opaque `DstOver` layer puts its red content under the green
     /// backdrop, which therefore stays on top.
     fn an_opaque_dst_over_layer_keeps_the_backdrop_on_top(painter: &mut WgpuPainter) {
@@ -350,7 +375,8 @@ mod gpu_tests {
     /// but outside the content (a dropped mode leaves green there), inside the
     /// unmapped bounds (unmapped bounds clear it), outside the clip (an
     /// unclipped region clears it), inside the bounding box of a rotated
-    /// region but outside the region (a bounding-box composite clears it).
+    /// region but outside the region (a bounding-box composite clears it, or
+    /// shows the content that reached there).
     const REGION_ROWS: &[RegionRow] = &[
         (
             "a_bounded_src_layer_replaces_its_whole_mapped_bounds",
@@ -395,6 +421,31 @@ mod gpu_tests {
                 (17, 17, GREEN, 0),
                 (32, 20, CLEARED, 0),
                 (32, 32, CLEARED, 0),
+            ],
+        ),
+        // (17, 17) is inside the diamond's bounding box but outside the
+        // diamond, where the ink reaches; (6, 32) is past the bounding box.
+        (
+            "a_rotated_translucent_layer_keeps_its_ink_inside_the_rotated_square",
+            a_rotated_translucent_layer_keeps_its_ink_inside_the_rotated_square,
+            &[
+                (17, 17, GREEN, 0),
+                (6, 32, GREEN, 0),
+                (32, 32, [128, 127, 0, 255], 2),
+            ],
+        ),
+        (
+            "a_rotated_opaque_layer_keeps_its_ink_inside_the_rotated_square",
+            a_rotated_opaque_layer_keeps_its_ink_inside_the_rotated_square,
+            &[(17, 17, GREEN, 0), (6, 32, GREEN, 0), (32, 32, RED, 0)],
+        ),
+        (
+            "a_rotated_multiply_layer_keeps_its_ink_inside_the_rotated_square",
+            a_rotated_multiply_layer_keeps_its_ink_inside_the_rotated_square,
+            &[
+                (17, 17, GREEN, 0),
+                (6, 32, GREEN, 0),
+                (32, 32, [0, 0, 0, 255], 2),
             ],
         ),
         (

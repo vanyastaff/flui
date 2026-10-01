@@ -576,13 +576,24 @@ Why this and not "replace only under the content":
 
 Edge cases:
 
-- Under a transform that keeps axes aligned (translation, scale, flips,
-  quarter turns) the region is exactly the mapped rectangle. Under a rotation
-  or skew it is the exact quad: the composite runs over its bounding box with
-  the local bounds as a hard clip. Under a rounded ambient clip as well, the
-  composite's one clip slot holds the ambient clip and the region falls back
-  to the bounding box (Open items). Under a projective transform the layer is
-  treated as unbounded, as `DamageExtent::transformed` treats it.
+- The region bounds the content as well as the mode: a composited layer
+  shows nothing it holds outside its region, whatever its mode. Under a
+  transform that keeps axes aligned (translation, scale, flips, quarter
+  turns) the region is exactly the mapped rectangle, which is the composite
+  quad. Under a rotation or skew it is the exact quad: the composite runs
+  over its bounding box with the local bounds as a hard clip, for every mode,
+  so content reaching past the bounds never shows in the bounding box's
+  corners. The clip also routes an opaque `SrcOver` layer through the
+  composite instead of splicing its content into the parent, and the
+  advanced-blend composite carries it as a hard rectangle in the bounds'
+  local space. Under a rounded ambient clip as well, a mode that keeps the
+  destination keeps the bounds clip (its content already went through the
+  ambient clip), while a destination-replacing composite's one clip slot
+  holds the ambient clip and its region falls back to the bounding box (Open
+  items). Under a projective transform the layer is treated as unbounded, as
+  `DamageExtent::transformed` treats it. Clipping only narrows what the
+  composite changes, so the damage extent, the mapped bounds' bounding box,
+  still covers it.
 - Composite quads are not anti-aliased: a pixel is in the region when its
   centre is. Damage rounds outward by a pixel (`DamageRect::covering`), so
   every changed pixel stays covered.
@@ -602,11 +613,14 @@ Edge cases:
 
 Locked by `layer_blend_tests::gpu_tests::a_layer_composites_its_whole_region_with_its_mode`
 (mapped, scaled and rotated bounds, an empty `Clear` layer, rect and rounded
-clips, a translucent translated layer, an opaque `DstOver` layer),
+clips, a translucent translated layer, rotated translucent, opaque and
+`Multiply` layers whose content overruns their bounds, an opaque `DstOver`
+layer),
 `damage_readback_tests::an_effect_layer_composites_its_whole_region_with_its_mode`
 (opacity layers, a clipped `Modulate` shader mask that keeps the backdrop
 around its child, and a clipped mask inside an opacity layer), and the damage
-rows `a_removed_translated_src_save_layer_leaves_nothing_behind`,
+rows `a_removed_translated_src_save_layer_leaves_nothing_behind` (a rotated
+opaque layer among them, its full frame against its partial one),
 `a_removed_destination_affecting_layer_leaves_nothing_behind` and
 `a_change_beside_a_viewport_compositing_layer_matches_a_full_frame`.
 
@@ -630,6 +644,11 @@ rows `a_removed_translated_src_save_layer_leaves_nothing_behind`,
   19).** The composite instance has one clip slot, which the ambient clip
   takes, so the layer replaces the bounding box of its rotated bounds within
   that clip rather than the rotated quad.
+- **An axis-aligned opaque `SrcOver` save layer is spliced, not composited
+  (decision 19).** With nothing to apply at the composite, its content goes
+  straight into the parent's draw order, so content drawn past its bounds is
+  cut only by the clip. Cutting it means compositing such a layer whenever its
+  content may overrun its bounds, which the splice exists to avoid.
 - **A shader mask's blend mode (decision 19, ADR-0099).** The mask pass
   multiplies the child by the shader's alpha whatever `ShaderMaskLayer`'s
   `blend_mode()` says, and the result composites `SrcOver`. Applying the

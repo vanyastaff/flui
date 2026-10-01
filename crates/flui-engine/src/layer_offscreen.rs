@@ -686,6 +686,7 @@ impl GpuReplay {
                                 (op.device_bounds.right() / f64::from(viewport_width_f32)) as f32,
                                 (op.device_bounds.bottom() / f64::from(viewport_height_f32)) as f32,
                             ],
+                            clip: None,
                         };
                         flush_advanced_layer(
                             blend_op,
@@ -907,16 +908,19 @@ impl GpuReplay {
         }
 
         // The advanced-blend arm below composites through `flush_advanced_layer`,
-        // whose instance carries no clip slot — a clipped layer taking it would
-        // paint the whole offscreen unclipped. `composite_clip` is set by
-        // `save_layer_clipped`, which always asks for `SrcOver`, and by a
-        // `save_layer` whose mode replaces the destination, which no advanced
-        // mode does, so the two are disjoint by construction; this is the
-        // assertion that keeps them so.
+        // which carries a hard rectangle in the clip's local space and nothing
+        // rounder. An advanced layer's `composite_clip` is the hard bounds clip
+        // of a rotated or skewed `save_layer`: `save_layer_clipped` always asks
+        // for `SrcOver`, and the ambient rounded clip goes on the composite
+        // only for a mode that replaces the destination, which no advanced
+        // mode does. This is the assertion that keeps it so.
         debug_assert!(
-            layer.composite_clip.is_none() || !layer.blend.is_advanced(),
-            "BUG: a clip-opened layer must composite with SrcOver — the advanced-blend \
-             path cannot carry its clip"
+            !layer.blend.is_advanced()
+                || layer.composite_clip.is_none_or(|clip| {
+                    clip.kind == [1, 0, 1, 0] && clip.rrect[4..].iter().all(|&r| r == 0.0)
+                }),
+            "BUG: an advanced-blend layer's composite clip must be a hard rectangle — \
+             the advanced-blend path cannot carry a rounded or soft clip"
         );
 
         let layer_tex = self.render_layer_to_offscreen(
@@ -982,6 +986,7 @@ impl GpuReplay {
                     tint: layer.tint_rgb,
                     src_uv_min: [(uv_left as f32), (uv_top as f32)],
                     src_uv_max: [(uv_right as f32), (uv_bottom as f32)],
+                    clip: layer.composite_clip,
                 };
                 flush_advanced_layer(
                     op,
@@ -1057,10 +1062,11 @@ impl GpuReplay {
         // A `Clip::AntiAliasWithSaveLayer` layer applies its clip HERE, to the
         // finished group, and nowhere else — the draws inside the offscreen
         // were left unclipped by `clip_rrect_at_composite` precisely so this
-        // multiply happens once. A layer whose mode replaces the destination
-        // carries the ambient rounded clip, or its rotated bounds as a hard
-        // clip, so the composite changes nothing outside its region. Every
-        // other layer kind leaves the slot clear.
+        // multiply happens once. A rotated or skewed layer carries its bounds
+        // as a hard clip, whatever its mode, and a layer whose mode replaces
+        // the destination carries the ambient rounded clip instead, so the
+        // composite changes nothing outside its region. Every other layer
+        // kind leaves the slot clear.
         let instance = match layer.composite_clip {
             Some(clip) => {
                 use crate::instancing::ClippableInstance as _;

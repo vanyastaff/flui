@@ -62,6 +62,13 @@ pub(crate) struct AdvancedBlendOp {
     ///
     /// Pass `[1.0, 1.0]` for a full-viewport foreground (identity).
     pub(crate) src_uv_max: [f32; 2],
+    /// A hard rectangular clip, in its own local space, that the composite
+    /// leaves the destination alone outside: the bounds of a rotated or
+    /// skewed layer, whose `device_bounds` are their bounding box. Its corner
+    /// radii and its `kind` lanes are not read, so only the clip
+    /// `WgpuPainter::composite_clip` builds from a layer's bounds belongs
+    /// here. `None` for no clip.
+    pub(crate) clip: Option<crate::state_stack::ResolvedClip>,
 }
 
 // ── Backdrop copy ─────────────────────────────────────────────────────────────
@@ -209,6 +216,14 @@ pub(crate) fn flush_advanced_layer(
     let (copy_origin_x, copy_origin_y) = backdrop.copy_origin;
     let (copy_extent_w, copy_extent_h) = backdrop.copy_extent;
     let (vp_w, vp_h) = viewport_size;
+    // A zero-size rectangle is the shader's "no clip".
+    let (clip_rect, clip_inv, clip_origin) =
+        op.clip
+            .map_or(([0.0; 4], [1.0, 0.0, 0.0, 1.0], [0.0; 2]), |clip| {
+                let [left, top, width, height, ..] = clip.rrect;
+                let [m0, m1, m2, m3, tx, ty] = clip.device_to_local;
+                ([left, top, width, height], [m0, m1, m2, m3], [tx, ty])
+            });
 
     // The generated `BlendUniforms::new` zero-fills the WGSL alignment padding
     // (`_pad0`); fields are passed in WGSL declaration order minus the pad.
@@ -227,6 +242,9 @@ pub(crate) fn flush_advanced_layer(
         mode_to_u32(op.mode),
         op.src_uv_min,
         op.src_uv_max,
+        clip_rect,
+        clip_inv,
+        clip_origin,
     );
 
     let uniform_buffer = resources.uniform_pool_mut().alloc(cast_slice(&[uniforms]));
@@ -625,6 +643,7 @@ mod synthetic_op_tests {
                 // Full-viewport foreground: identity UV remap.
                 src_uv_min: [0.0, 0.0],
                 src_uv_max: [1.0, 1.0],
+                clip: None,
             };
 
             let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {

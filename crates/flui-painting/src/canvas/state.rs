@@ -106,14 +106,16 @@ impl Canvas {
     /// is transparent (`Src`, `Clear`, `SrcIn`, `DstIn`, `SrcOut`,
     /// `DstATop`, `Modulate`) every pixel of the region changes, even when
     /// nothing was drawn into the layer. A layer never changes a pixel its
-    /// clip excludes. ADR-0099 records the contract.
+    /// clip excludes, and whatever its mode, nothing it holds shows outside
+    /// its region. ADR-0099 records the contract.
     ///
-    /// Two limits of the `wgpu` engine: under a rotation or skew inside a
-    /// rounded clip, the region is the bounding box of the mapped `bounds`
-    /// within that clip, not the rotated `bounds` themselves; and in the
-    /// anti-aliased edge of a rounded clip, a destination-replacing mode
-    /// scales the destination by the edge's coverage rather than mixing it
-    /// with the layer's content.
+    /// Three limits of the `wgpu` engine: under a rotation or skew inside a
+    /// rounded clip, a destination-replacing layer's region is the bounding
+    /// box of the mapped `bounds` within that clip, not the rotated `bounds`
+    /// themselves; an axis-aligned opaque `SrcOver` layer's content is cut by
+    /// the clip alone, not by `bounds`; and in the anti-aliased edge of a
+    /// rounded clip, a destination-replacing mode scales the destination by
+    /// the edge's coverage rather than mixing it with the layer's content.
     ///
     /// # Performance
     ///

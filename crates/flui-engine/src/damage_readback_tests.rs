@@ -1191,11 +1191,40 @@ fn translated_empty_clear_layer(canvas: &mut Canvas) {
     canvas.restore();
 }
 
-/// A destination-replacing save layer recorded under a transform leaves
-/// nothing behind when removed. While present it replaces its whole bounds,
-/// mapped through the transform, the pixels its content left transparent
-/// included, and nothing outside them; the damage, which covers the mapped
-/// bounds, covers every pixel it changed.
+/// An opaque `SrcOver` layer over local `(-12, -12, 24, 24)` rotated 45°
+/// about the boundary's `(20, 20)`, device `(60, 60)`: a diamond whose
+/// bounding box reaches `(43, 43)`. Its red ink, local `(-30, -30, 60, 60)`,
+/// reaches far past the diamond, through the bounding box's corners.
+fn rotated_opaque_layer_with_oversized_ink(canvas: &mut Canvas) {
+    canvas.translate(20.0, 20.0);
+    canvas.rotate(std::f64::consts::FRAC_PI_4);
+    canvas.save_layer(
+        Some(Rect::from_xywh(-12.0, -12.0, 24.0, 24.0)),
+        &Paint::fill(Color::WHITE),
+    );
+    canvas.draw_rect(
+        Rect::from_xywh(-30.0, -30.0, 60.0, 60.0),
+        &Paint::fill(Color::RED),
+    );
+    canvas.restore();
+}
+
+/// The samples of the translated rows: the layer covers device
+/// `(44, 40)-(76, 72)`, its ink `(44, 40)-(60, 56)`.
+const TRANSLATED_LAYER_SAMPLES: &[((u32, u32), [u8; 4])] = &[
+    ((70, 66), [0, 0, 0, 0]),
+    ((42, 50), GREEN),
+    ((10, 10), GREEN),
+    ((78, 74), GREEN),
+    ((100, 100), GREEN),
+    ((50, 46), RED),
+];
+
+/// A save layer recorded under a transform leaves nothing behind when
+/// removed. While present it composites its whole bounds, mapped through the
+/// transform, the pixels its content left transparent included, and nothing
+/// outside them, the corners of a rotated layer's bounding box included; the
+/// damage, which covers the mapped bounds, covers every pixel it changed.
 #[test]
 fn a_removed_translated_src_save_layer_leaves_nothing_behind() {
     let Some(renderer) = crate::test_support::renderer_or_skip() else {
@@ -1206,19 +1235,45 @@ fn a_removed_translated_src_save_layer_leaves_nothing_behind() {
         ContentToken::mint(),
         ContentToken::mint(),
     );
-    // Name, the boundary's picture, whether the layer inks red.
-    type Row = (&'static str, fn(&mut Canvas), bool);
-    let rows: [Row; 3] = [
-        ("translated Src", translated_src_layer, true),
+    // Name, the boundary's picture, what the full frame must read.
+    type Row = (
+        &'static str,
+        fn(&mut Canvas),
+        &'static [((u32, u32), [u8; 4])],
+    );
+    let rows: [Row; 4] = [
+        (
+            "translated Src",
+            translated_src_layer,
+            TRANSLATED_LAYER_SAMPLES,
+        ),
         (
             "translated and scaled Src",
             translated_scaled_src_layer,
-            true,
+            TRANSLATED_LAYER_SAMPLES,
         ),
-        ("empty Clear", translated_empty_clear_layer, false),
+        (
+            "empty Clear",
+            translated_empty_clear_layer,
+            &[
+                ((70, 66), [0, 0, 0, 0]),
+                ((42, 50), GREEN),
+                ((10, 10), GREEN),
+                ((78, 74), GREEN),
+                ((100, 100), GREEN),
+                ((50, 46), [0, 0, 0, 0]),
+            ],
+        ),
+        (
+            "rotated opaque SrcOver",
+            rotated_opaque_layer_with_oversized_ink,
+            // The centre, then a bounding-box corner the ink covers but the
+            // diamond does not, then a point past the bounding box.
+            &[((60, 60), RED), ((46, 46), GREEN), ((40, 60), GREEN)],
+        ),
     ];
     let mut failed = Vec::new();
-    for (name, layered, inked) in rows {
+    for (name, layered, expected) in rows {
         let backdrop = Boundary {
             id: 3,
             token: &background,
@@ -1241,15 +1296,7 @@ fn a_removed_translated_src_save_layer_leaves_nothing_behind() {
         let after = scene(&root, &[backdrop], None);
 
         let drawn = full_frame_pixels(&renderer, &before);
-        let mut expected = vec![
-            ((70, 66), [0, 0, 0, 0]),
-            ((42, 50), GREEN),
-            ((10, 10), GREEN),
-            ((78, 74), GREEN),
-            ((100, 100), GREEN),
-        ];
-        expected.push(((50, 46), if inked { RED } else { [0, 0, 0, 0] }));
-        for ((x, y), want) in expected {
+        for &((x, y), want) in expected {
             let got = px(&drawn, x, y);
             if got != want {
                 failed.push(format!(

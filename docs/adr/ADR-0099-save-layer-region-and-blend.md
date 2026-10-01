@@ -33,7 +33,10 @@ covers.
    blend mode it records, the pixels its content left transparent included. A mode whose
    `BlendMode::keeps_destination_under_transparent_source()` is false (`Clear`, `Src`, `SrcIn`,
    `DstIn`, `SrcOut`, `DstATop`, `Modulate`) changes every pixel of the region, and an empty
-   layer in such a mode still composites. A layer never changes a pixel its clip excludes.
+   layer in such a mode still composites. A layer never changes a pixel its clip excludes,
+   and the region bounds its content for every mode, not only the destination-replacing
+   ones: nothing the layer holds shows outside its region, under a rotation or skew the
+   exact quad rather than its bounding box.
 3. **Damage.** A damage producer reports at least the region of (1) for a layer in a mode of
    (2): `DrawOp`'s extent for a bounded save layer is its mapped bounds, an unbounded one is
    unbounded, and `LayerDiffer` takes such an opacity layer as the viewport.
@@ -56,10 +59,12 @@ covers.
 
 ## Limits
 
-The `wgpu` engine has two, recorded as Open items in `crates/flui-engine/ARCHITECTURE.md`:
+The `wgpu` engine has three, recorded as Open items in `crates/flui-engine/ARCHITECTURE.md`:
 
-- Under a rotation or skew inside a rounded clip, the region is the bounding box of the mapped
-  bounds within that clip (the composite carries one clip).
+- Under a rotation or skew inside a rounded clip, a destination-replacing layer's region is
+  the bounding box of the mapped bounds within that clip (the composite carries one clip).
+- An axis-aligned opaque `SrcOver` layer has nothing to apply at the composite, so its
+  content is spliced into the parent and cut by the clip alone, not by its bounds.
 - In the anti-aliased edge of a rounded clip, a destination-replacing mode scales the
   destination by the edge's coverage instead of mixing it.
 
