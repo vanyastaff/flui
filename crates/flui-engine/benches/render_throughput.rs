@@ -858,7 +858,117 @@ fn ordered_primitives(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, render_throughput, ordered_primitives);
+/// CPU recording plus encoding for repeated imported allocations. Completion
+/// is drained outside measured time; this is not a GPU timestamp benchmark.
+fn external_bindings(c: &mut Criterion) {
+    use flui_engine::{
+        ExternalAlpha, ExternalColorEncoding, ExternalSampling, ExternalTextureDescriptor,
+    };
+    use flui_painting::paint::{FilterQuality, TextureId};
+    let Some((device, queue)) = try_create_gpu() else {
+        return;
+    };
+    let format = wgpu::TextureFormat::Rgba8Unorm;
+    let make_texture = |label, usage, side| {
+        device.create_texture(&wgpu::TextureDescriptor {
+            label: Some(label),
+            size: wgpu::Extent3d {
+                width: side,
+                height: side,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage,
+            view_formats: &[],
+        })
+    };
+    let target = make_texture(
+        "External bench target",
+        wgpu::TextureUsages::RENDER_ATTACHMENT,
+        256,
+    );
+    let view = target.create_view(&wgpu::TextureViewDescriptor::default());
+    let mut painter = WgpuPainter::with_shared_device(
+        Arc::clone(&device),
+        Arc::clone(&queue),
+        format,
+        (256, 256),
+    );
+    for id in 1..=16 {
+        let texture = make_texture(
+            "External bench allocation",
+            wgpu::TextureUsages::TEXTURE_BINDING,
+            16,
+        );
+        painter
+            .external_texture_registry_mut()
+            .register(
+                TextureId::new(id),
+                texture,
+                ExternalTextureDescriptor {
+                    sampling: ExternalSampling::Linear,
+                    alpha: ExternalAlpha::Straight,
+                    color: ExternalColorEncoding::EncodedSrgb,
+                },
+            )
+            .expect("benchmark import");
+    }
+    let mut group = c.benchmark_group("external_bindings");
+    for allocations in [1_u64, 16] {
+        for count in [32_u32, 256] {
+            group.bench_function(
+                format!("allocations_{allocations}/draws_{count}/cpu_record_encode"),
+                |b| {
+                    b.iter_custom(|iterations| {
+                        let mut measured = std::time::Duration::ZERO;
+                        for _ in 0..iterations {
+                            painter.begin_frame().expect("benchmark frame");
+                            let mut encoder = device
+                                .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+                            let started = std::time::Instant::now();
+                            for i in 0..count {
+                                painter.draw_texture(
+                                    TextureId::new(1 + u64::from(i) % allocations),
+                                    Rect::from_xywh(
+                                        f64::from(i % 16) * 16.0,
+                                        f64::from((i / 16) % 16) * 16.0,
+                                        16.0,
+                                        16.0,
+                                    ),
+                                    None,
+                                    FilterQuality::Low,
+                                    1.0,
+                                );
+                            }
+                            painter
+                                .render_to_view(&view, &mut encoder)
+                                .expect("benchmark encode");
+                            measured += started.elapsed();
+                            // Trusted raw-submit path keeps the baseline and new lifecycle identical.
+                            queue.submit([encoder.finish()]);
+                            painter.finish_frame();
+                            device
+                                .poll(wgpu::PollType::wait_indefinitely())
+                                .expect("benchmark completion");
+                        }
+                        measured
+                    });
+                },
+            );
+        }
+    }
+    group.finish();
+}
+
+criterion_group!(
+    benches,
+    render_throughput,
+    ordered_primitives,
+    external_bindings
+);
 criterion_group!(alloc_benches, alloc_micro);
 criterion_group!(damage_benches, damage_scissor, damage_retained_target);
 criterion_main!(benches, damage_benches, alloc_benches);

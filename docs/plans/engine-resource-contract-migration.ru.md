@@ -1,6 +1,6 @@
 # Контракт GPU-ресурсов engine: производственная миграция
 
-Первое изменение ограничено flui-engine. Единственный rasterizer и allocator API — wgpu. Работающий `embedded_gpu_scene` является consumer публичного painter lifecycle; это не доказательство существования managed GpuView. Ниже план, production изменения и сборки в рамках его подготовки не выполнялись.
+Первое изменение ограничено flui-engine. Единственный rasterizer и allocator API — wgpu. Работающий `embedded_gpu_scene` является consumer публичного painter lifecycle; это не доказательство существования managed GpuView. Документ описывает целевой контракт и последовательность доставки. Admission/retirement и ordered IR уже реализованы; Engine-local descriptors, sampling/alpha и захваченные allocation leases реализованы; [проверки и границы](../research/engine-resource-contract-validation.ru.md) отделяют их от managed producer и остальных требований ниже.
 
 ## Предусловие первого immutable IR delivery
 

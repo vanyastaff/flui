@@ -4,13 +4,12 @@
 //! to a sampled GPU texture, then FLUI paints that texture between 2D UI shapes.
 //! This is an engine embedder example, not a managed widget or a 3D scene API.
 
-use flui_engine::{WgpuPainter, wgpu};
-use flui_foundation::geometry::Rect;
-use flui_painting::{
-    Paint,
-    paint::{FilterQuality, TextureId},
-    styling::Color,
+use flui_engine::{
+    ExternalAlpha, ExternalColorEncoding, ExternalSampling, ExternalTextureDescriptor, WgpuPainter,
+    wgpu,
 };
+use flui_foundation::geometry::Rect;
+use flui_painting::{Paint, paint::TextureId, styling::Color};
 use std::{sync::Arc, time::Instant};
 use winit::{
     application::ApplicationHandler,
@@ -112,11 +111,12 @@ impl Gpu {
         painter.external_texture_registry_mut().register(
             TextureId::new(1),
             texture,
-            SIDE,
-            SIDE,
-            true,
-            true,
-        );
+            ExternalTextureDescriptor {
+                sampling: ExternalSampling::Linear,
+                alpha: ExternalAlpha::Opaque,
+                color: ExternalColorEncoding::EncodedSrgb,
+            },
+        )?;
         let depth_texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("cube depth"),
             size: wgpu::Extent3d {
@@ -330,11 +330,10 @@ impl Gpu {
             Rect::from_ltrb(left - 8.0, top - 8.0, left + side + 8.0, top + side + 8.0),
             &Paint::fill(Color::rgb(35, 46, 67)),
         );
-        self.painter.draw_texture(
+        self.painter.draw_texture_with_resource_sampling(
             TextureId::new(1),
             Rect::from_ltrb(left, top, left + side, top + side),
             None,
-            FilterQuality::Medium,
             1.0,
         );
         // Foreground UI overlaps the GPU viewport: ordering is observable.

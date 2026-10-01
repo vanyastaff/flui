@@ -33,6 +33,9 @@ impl RecordingBudget {
     pub(crate) fn error(&self) -> Option<RecordError> {
         self.error.get().cloned()
     }
+    pub(crate) fn record_error(&self, error: RecordError) {
+        let _ = self.error.set(error);
+    }
     fn charge(&self, bytes: usize, elements: usize) -> bool {
         if self.error.get().is_some() {
             return false;

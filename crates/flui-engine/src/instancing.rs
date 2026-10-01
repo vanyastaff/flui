@@ -267,7 +267,7 @@ impl RectInstance {
             6 => Float32x4,
             // Clip rrect part 2: [radius_tl, radius_tr, radius_br, radius_bl] (location 7)
             7 => Float32x4,
-            // Clip kind: [kind, _pad, _pad, _pad] (location 8) — 0=none, 1=rrect, 2=rsuperellipse
+            // Clip/source flags: [kind, source mode, hard, _pad] (location 8)
             8 => Uint32x4,
             // Device-to-clip-local linear part (location 9)
             9 => Float32x4,
@@ -649,7 +649,9 @@ pub(crate) struct TextureInstance {
     /// Clip-kind flag selecting which SDF to evaluate against `clip_rrect`.
     /// `0` none, `1` rounded box, `2` rounded superellipse — identical
     /// encoding to [`RectInstance::clip_kind`], including the `[u32; 4]`
-    /// padding for 16-byte vec4 alignment.
+    /// padding for 16-byte vec4 alignment. Slot 1 is the texture source mode:
+    /// 0 unchanged, 1 ignore sampled alpha, 2 premultiply straight texel taps
+    /// before bilinear filtering. Slot 2 retains the clip hard-edge flag.
     pub clip_kind: [u32; 4],
     /// Device-to-clip-local linear part: `[a, b, c, d]`, columns first.
     ///
@@ -663,6 +665,26 @@ pub(crate) struct TextureInstance {
 }
 
 impl TextureInstance {
+    /// Declare an opaque source whose sampled alpha channel is ignored.
+    /// Apply after recording the clip, which populates the same packed slot.
+    pub(crate) fn with_opaque_source(mut self) -> Self {
+        self.clip_kind[1] = 1;
+        self
+    }
+
+    /// Bilinear straight sources interpolate premultiplied coverage, so the
+    /// shader output and opacity tint must both use the premultiplied path.
+    /// Apply after recording the clip, which populates this packed slot.
+    pub(crate) fn with_linear_straight_source(mut self) -> Self {
+        self.clip_kind[1] = 2;
+        self.tint = [self.tint[3]; 4];
+        self
+    }
+
+    pub(crate) fn filters_straight_as_premultiplied(&self) -> bool {
+        self.clip_kind[1] == 2
+    }
+
     /// Create a simple textured quad instance
     ///
     /// # Arguments
@@ -770,7 +792,7 @@ impl TextureInstance {
             6 => Float32x4,
             // Clip rrect part 2: [radius_tl, radius_tr, radius_br, radius_bl] (location 7)
             7 => Float32x4,
-            // Clip kind: [kind, _pad, _pad, _pad] (location 8) — 0=none, 1=rrect, 2=rsuperellipse
+            // Clip/source flags: [kind, source mode, hard, _pad] (location 8)
             8 => Uint32x4,
             // Device-to-clip-local linear part (location 9)
             9 => Float32x4,

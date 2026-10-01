@@ -31,15 +31,18 @@ impl WgpuPainter {
     ) -> EngineResult<wgpu::SubmissionIndex> {
         self.domain.poll()?;
         let permits = self.resources.take_prepared_permits();
-        let prepared = self.domain.prepare(vec![encoder.finish()], permits)?;
+        let leases = self.resources.take_external_leases();
+        let prepared =
+            self.domain
+                .prepare_with_external_leases(vec![encoder.finish()], permits, leases)?;
         Ok(self.domain.submit(prepared)?)
     }
 
     /// Preserve accounting for trusted callers that submit directly to the queue.
     pub(super) fn retire_prepared_after_external_submit(&mut self) {
         let permits = self.resources.take_prepared_permits();
-        if !permits.is_empty() {
-            self.domain.retire_after_previous_submissions(permits);
-        }
+        let leases = self.resources.take_external_leases();
+        self.domain
+            .retire_resources_after_previous_submissions(permits, leases);
     }
 }

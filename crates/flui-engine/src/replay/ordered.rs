@@ -50,21 +50,7 @@ impl super::GpuReplay {
         encoder: &mut wgpu::CommandEncoder,
         view: &wgpu::TextureView,
     ) -> crate::error::EngineResult<()> {
-        if let Some(crate::command_ir::RecordError::Limit {
-            resource,
-            requested,
-            limit,
-        }) = segment
-            .record_error
-            .clone()
-            .or_else(|| segment.budget.error())
-        {
-            return Err(crate::error::EngineError::PreparedResourceLimit {
-                resource,
-                requested,
-                limit,
-            });
-        }
+        segment.recording_result()?;
         self.prepare_viewport_binding(device, pipelines, resources)?;
         let stops = bytemuck::cast_slice(&segment.current_gradient_stops);
         let stop_binding = if stops.is_empty() {
@@ -151,7 +137,7 @@ impl super::GpuReplay {
                     resources,
                     encoder,
                     view,
-                ),
+                )?,
                 _ => {
                     let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                         label: Some("Ordered Quad Runs"),

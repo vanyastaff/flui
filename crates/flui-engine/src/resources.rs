@@ -36,8 +36,11 @@
 use std::sync::Arc;
 
 use crate::{
-    buffer_pool::BufferPool, external_texture_registry::ExternalTextureRegistry,
-    texture_cache::TextureCache, texture_pool::TexturePool, uniform_pool::UniformPool,
+    buffer_pool::BufferPool,
+    external_texture_registry::{ExternalAllocationLease, ExternalTextureRegistry},
+    texture_cache::TextureCache,
+    texture_pool::TexturePool,
+    uniform_pool::UniformPool,
 };
 
 /// Single owner of the four GPU resource managers used by [`crate::painter::WgpuPainter`].
@@ -47,6 +50,10 @@ use crate::{
 pub(crate) struct GpuResources {
     domain: Arc<crate::device_domain::DeviceDomain>,
     prepared: Vec<Arc<crate::device_domain::PreparedPermit>>,
+    // Identifies the pending ownership bundle, not a frame or content revision.
+    // Exhaustion disables cache enrollment reuse rather than wrapping identity.
+    prepared_epoch: Option<u64>,
+    pending_external_leases: Vec<ExternalAllocationLease>,
     /// Per-frame vertex/index buffer pool.
     ///
     /// Resets `in_use` markers on `BufferPool::reset()` at frame end. Slice
@@ -98,12 +105,14 @@ impl GpuResources {
         // consumes `device`): the uniform pool keeps its own `Arc` clones.
         let uniform_pool = UniformPool::new(device.clone(), queue.clone());
         let texture_cache = TextureCache::new(device.clone(), queue);
-        let external_texture_registry = ExternalTextureRegistry::new(device.clone());
+        let external_texture_registry = ExternalTextureRegistry::new(&domain);
         let layer_texture_pool = TexturePool::with_capacity(device, 4);
 
         Self {
             domain,
             prepared: Vec::new(),
+            prepared_epoch: Some(0),
+            pending_external_leases: Vec::new(),
             buffer_pool,
             texture_cache,
             layer_texture_pool,
@@ -122,14 +131,135 @@ impl GpuResources {
         cost: crate::device_domain::PreparedCost,
     ) -> crate::error::EngineResult<()> {
         let permit = self.domain.reserve(cost)?;
-        self.prepared.push(permit);
-        Ok(())
+        self.retain_external_binding_charge(&permit)
+    }
+
+    pub(crate) fn prepared_epoch(&self) -> Option<u64> {
+        self.prepared_epoch
     }
 
     pub(crate) fn take_prepared_permits(
         &mut self,
     ) -> Vec<Arc<crate::device_domain::PreparedPermit>> {
-        std::mem::take(&mut self.prepared)
+        let permits = std::mem::take(&mut self.prepared);
+        self.prepared_epoch = self.prepared_epoch.and_then(|epoch| epoch.checked_add(1));
+        permits
+    }
+
+    pub(crate) fn retain_external_lease(
+        &mut self,
+        lease: ExternalAllocationLease,
+    ) -> crate::error::EngineResult<()> {
+        if !lease.is_for_domain(&self.domain) {
+            return Err(crate::error::ExternalTextureError::ForeignOwner.into());
+        }
+        // Adjacent uses of one allocation need only one completion reference.
+        if self
+            .pending_external_leases
+            .last()
+            .is_some_and(|previous| previous.same_allocation(&lease))
+        {
+            return Ok(());
+        }
+        let capacity = self.pending_external_leases.capacity();
+        let needed = self
+            .pending_external_leases
+            .len()
+            .checked_add(1)
+            .ok_or(crate::error::EngineError::PreparedResourceOverflow)?;
+        let target = if needed > capacity {
+            capacity
+                .checked_mul(2)
+                .ok_or(crate::error::EngineError::PreparedResourceOverflow)?
+                .max(needed)
+                .max(4)
+        } else {
+            capacity
+        };
+        let bytes = target
+            .saturating_sub(capacity)
+            .checked_mul(std::mem::size_of::<ExternalAllocationLease>())
+            .ok_or(crate::error::EngineError::PreparedResourceOverflow)?;
+        self.reserve_prepared(crate::device_domain::PreparedCost {
+            gpu_bytes: 0,
+            cpu_bytes: bytes,
+            objects: 1,
+        })?;
+        if target > capacity {
+            self.pending_external_leases
+                .try_reserve_exact(target - self.pending_external_leases.len())
+                .map_err(
+                    |source| crate::error::EngineError::PreparedResourceAllocation {
+                        resource: "external lease references",
+                        source,
+                    },
+                )?;
+        }
+        self.pending_external_leases.push(lease);
+        Ok(())
+    }
+
+    pub(crate) fn reserve_external_binding(
+        &mut self,
+        cost: crate::device_domain::PreparedCost,
+    ) -> crate::error::EngineResult<Arc<crate::device_domain::PreparedPermit>> {
+        let permit = self.domain.reserve(cost)?;
+        self.retain_external_binding_charge(&permit)?;
+        Ok(permit)
+    }
+
+    pub(crate) fn retain_external_binding_charge(
+        &mut self,
+        permit: &Arc<crate::device_domain::PreparedPermit>,
+    ) -> crate::error::EngineResult<()> {
+        if self
+            .prepared
+            .last()
+            .is_some_and(|previous| Arc::ptr_eq(previous, permit))
+        {
+            return Ok(());
+        }
+        let capacity = self.prepared.capacity();
+        let needed = self
+            .prepared
+            .len()
+            .checked_add(1)
+            .ok_or(crate::error::EngineError::PreparedResourceOverflow)?;
+        if needed > capacity {
+            // Growth also needs a slot for its own infallible retirement charge.
+            let target = capacity
+                .checked_mul(2)
+                .and_then(|grown| {
+                    needed
+                        .checked_add(1)
+                        .map(|minimum| grown.max(minimum).max(4))
+                })
+                .ok_or(crate::error::EngineError::PreparedResourceOverflow)?;
+            let bytes = target
+                .saturating_sub(capacity)
+                .checked_mul(std::mem::size_of::<Arc<crate::device_domain::PreparedPermit>>())
+                .ok_or(crate::error::EngineError::PreparedResourceOverflow)?;
+            let metadata = self.domain.reserve(crate::device_domain::PreparedCost {
+                gpu_bytes: 0,
+                cpu_bytes: bytes,
+                objects: 0,
+            })?;
+            self.prepared
+                .try_reserve_exact(target - self.prepared.len())
+                .map_err(
+                    |source| crate::error::EngineError::PreparedResourceAllocation {
+                        resource: "prepared external binding references",
+                        source,
+                    },
+                )?;
+            self.prepared.push(metadata);
+        }
+        self.prepared.push(Arc::clone(permit));
+        Ok(())
+    }
+
+    pub(crate) fn take_external_leases(&mut self) -> Vec<ExternalAllocationLease> {
+        std::mem::take(&mut self.pending_external_leases)
     }
 
     /// Exclusive reference to the per-frame vertex/index buffer pool.

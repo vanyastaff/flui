@@ -144,6 +144,7 @@ impl WgpuPainter {
     /// resources used by earlier passes.
     pub fn finish_frame(&mut self) {
         self.retire_prepared_after_external_submit();
+        self.replay.finish_external_frame();
         self.end_frame_maintenance();
         self.current_segment = DrawSegment::default();
         self.draw_order.clear();
@@ -577,37 +578,22 @@ impl WgpuPainter {
 
     // ===== External Texture Registry Access =====
 
-    /// Get a reference to the external texture registry
+    /// Access registered external allocations and declared sampling/alpha policy.
     ///
-    /// Use this to register external textures (video frames, camera preview,
-    /// etc.) that can be rendered via `Canvas::draw_texture()`.
-    ///
-    /// # Example
-    ///
-    /// ```rust,no_run
-    /// use flui_painting::paint::TextureId;
-    ///
-    /// # fn wire(painter: &mut flui_engine::WgpuPainter, gpu_texture: wgpu::Texture) {
-    /// let texture_id = TextureId::new(42);
-    /// painter.external_texture_registry_mut().register(
-    ///     texture_id,
-    ///     gpu_texture,
-    ///     1920,
-    ///     1080,
-    ///     true,
-    ///     true,
-    /// );
-    /// # }
-    /// ```
+    /// Imports remain a trusted same-device raw wgpu contract; the registry
+    /// cannot prove foreign-device provenance. Recorded draws hold allocation
+    /// leases, so update/unregister cannot replace already recorded work.
     pub fn external_texture_registry(
         &self,
     ) -> &crate::external_texture_registry::ExternalTextureRegistry {
         self.resources.external_texture_registry()
     }
 
-    /// Get a mutable reference to the external texture registry
+    /// Register, replace, or unregister external allocations.
     ///
-    /// Use this to register, update, or unregister external textures.
+    /// Update preserves descriptor and dimensions. Use unregister/register to
+    /// change policy. Writes into the same allocation stay visible to recorded
+    /// draws; allocation ownership does not copy texel contents.
     pub fn external_texture_registry_mut(
         &mut self,
     ) -> &mut crate::external_texture_registry::ExternalTextureRegistry {
