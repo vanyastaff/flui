@@ -1,9 +1,12 @@
-//! The app's font registration door (ADR-0092 §2, §10 step 3b).
+//! The app's font registration door, and the notice every realm gets when
+//! the app's fonts change (ADR-0092 §2, §7).
 //!
 //! A face registered here goes into the app's one `FontCollection`, which
-//! every realm measures, paints and places carets with, and every realm the
-//! runtime hosts is told so on its owner turn: its next frame lays out again
-//! the text measured before the face existed.
+//! every realm measures, paints and places carets with. The host's faces
+//! reach the same collection from the feed the runtime started off the owner
+//! thread. Either change raises the collection's generation, and every realm
+//! the runtime hosts is told so on an owner turn ([`announce_font_change`]):
+//! its next frame lays out again the text measured before the change.
 
 use flui_painting::RegisterFontError;
 
@@ -59,28 +62,51 @@ pub enum FontRegistrationError {
 /// - [`FontRegistrationError::RuntimeBusy`] if the runtime is borrowed on
 ///   this thread; nothing is added.
 pub fn register_font(font_bytes: &[u8]) -> Result<(), FontRegistrationError> {
-    let realms = APP_RUNTIME.with(|slot| {
+    APP_RUNTIME.with(|slot| {
         let runtime = slot
             .try_borrow()
             .map_err(|_| FontRegistrationError::RuntimeBusy)?;
-        // Held for the first realm, or no owner thread (no realm installed
-        // yet): whichever realm comes first is built over the collection
-        // and measures with the face from the start.
-        let registered_now = runtime.register_font(font_bytes)?;
-        let (true, Some(owner_thread)) = (registered_now, runtime.owner_thread) else {
-            return Ok(Vec::new());
-        };
-        Ok::<_, FontRegistrationError>(
-            runtime
-                .realms
-                .iter()
-                .map(|(_, realm)| RealmDispatcher {
-                    owner_thread,
-                    address: realm.address,
-                })
-                .collect::<Vec<_>>(),
-        )
+        // Held for the first realm when the services are not resolved yet:
+        // whichever realm comes first is built over the collection and
+        // measures with the face from the start, and nothing is announced.
+        runtime.register_font(font_bytes)
     })?;
+    announce_font_change();
+    Ok(())
+}
+
+/// Tells every realm the runtime hosts that the app's fonts changed, if they
+/// did since the last notice: a registration, or the host feed landing.
+///
+/// Called after a registration and at the start of every top-level owner
+/// turn, where the host feed's wake leads. Each realm gets
+/// [`UiRealm::fonts_changed`](crate::app::ui_realm::UiRealm::fonts_changed)
+/// on its own owner turn: a realm that is idle runs it at once, one that is
+/// running (a registration from inside its own callback) after its task
+/// returns. With the runtime borrowed, nothing is taken, and the next turn
+/// announces the change.
+pub(super) fn announce_font_change() {
+    let realms = APP_RUNTIME.with(|slot| {
+        let Ok(runtime) = slot.try_borrow() else {
+            return Vec::new();
+        };
+        if !runtime.take_font_change() {
+            return Vec::new();
+        }
+        // No owner thread means no realm installed: a realm built later is
+        // built over the collection as it is then.
+        let Some(owner_thread) = runtime.owner_thread else {
+            return Vec::new();
+        };
+        runtime
+            .realms
+            .iter()
+            .map(|(_, realm)| RealmDispatcher {
+                owner_thread,
+                address: realm.address,
+            })
+            .collect::<Vec<_>>()
+    });
     for dispatcher in realms {
         // Outside the runtime borrow: a realm that is idle runs the notice
         // now, one that is checked out (the caller's own) gets it queued
@@ -93,5 +119,4 @@ pub fn register_font(font_bytes: &[u8]) -> Result<(), FontRegistrationError> {
             tracing::debug!(?dispatcher, ?error, "font change notice not delivered");
         }
     }
-    Ok(())
 }

@@ -1,8 +1,8 @@
 # ADR-0092: Text shapes per realm over Parley and crosses the display list as neutral shaped runs
 
-- **Status:** Accepted (§§1–5, and §7 but for the off-thread feed of §10 step 6b); §6 Proposed
-  until §10 step 6c lands. Every gate (§8) is met: gate 1 by a prototype on 2026-09-26, gates 2,
-  6 and 7 on 2026-09-30 (see Context). §10 steps 1 to 5 and 6a landed. Each realm owns a
+- **Status:** Accepted (§§1–5 and §7); §6 Proposed until §10 step 6c lands. Every gate (§8) is
+  met: gate 1 by a prototype on 2026-09-26, gates 2, 6 and 7 on 2026-09-30 (see Context). §10
+  steps 1 to 5, 6a and 6b landed. Each realm owns a
   `TextContext` over the app's one `FontCollection` (one per owner thread, which is one per
   process while [ADR-0091](ADR-0091-one-owner-thread-isolated-realms-raster-thread.md) fixes one
   owner thread), lent to every pipeline; Parley measures, paint draws the runs of the layout
@@ -11,11 +11,12 @@
   boundaries read that same layout. The performance overlay's labels are shaped through the
   realm's `TextContext`, so the engine shapes no text. A face registered on the collection
   reaches measurement, paint and carets together at each pipeline's next frame (§2). The app's
-  shared engine services scan the host once with fontdb (`HostFonts::scan`) and feed the
-  collection from that scan, synchronously on the owner thread, with fallback tables FLUI
-  owns; cosmic-text, `unicode-script` and `FONT_SYSTEM` are gone. Open: 6b (the feed off the
-  owner thread, with its first-frame test) and 6c (the editor's grapheme and word steps on
-  ICU4X). The supersessions below have taken effect and their back-links are written.
+  shared engine services build the collection with the bundled faces and hand the host's to a
+  feed on a thread of its own, which scans the host once with fontdb (`HostFonts::scan`) and
+  adds its faces with fallback tables FLUI owns; the first frame does not wait for it, and its
+  faces arrive as a registration's do. cosmic-text, `unicode-script` and `FONT_SYSTEM` are
+  gone. Open: 6c (the editor's grapheme and word steps on ICU4X). The supersessions below have
+  taken effect and their back-links are written.
 - **Date:** 2026-09-25
 - **Revised:** 2026-09-26 (rasterization prototype; see Context); 2026-09-29 (§10 step 3
   split into 3a and 3b; the realm lends its context through a shared handle; Parley
@@ -30,7 +31,9 @@
   rollback flag, the base direction and the off-thread host scan moved to later steps, and
   Parley's `complex-scripts` feature stays off); 2026-09-30 (§10 step 6 split into 6a, 6b and
   6c; §7: the app's shared engine services own one fontdb scan and FLUI owns the fallback
-  lists; gates 2, 6 and 7 closed with the findings in Context)
+  lists; gates 2, 6 and 7 closed with the findings in Context); 2026-09-30 (§10 step 6b: the
+  host feed runs off the owner thread and registers one file at a time; §3, §7, gate 6 and
+  Context rewritten for it)
 - **Supersedes:** [ADR-0077](ADR-0077-migrate-to-parley.md) (absorbed: its direction, its
   preconditions and its "If later Rejected" branch are carried here)
 - **Supersedes:** [ADR-0016](ADR-0016-unified-font-system-registration.md),
@@ -208,10 +211,38 @@ divided by 1,000), the same before and after: a 12-char label 3.0 KB, a 57-char 
 - Memory is acceptable: 2.4 MiB for the collection, and a painter's cost linear in its text.
   A document of 10,000 laid-out 570-char paragraphs would keep about 380 MB, so long text is
   laid out by a virtualized list, not held whole.
-- The startup cost is not acceptable on the owner thread for good: about 43 ms of scan and feed
-  run before the first frame, and the feed, which parses every file the scan found, is 86% of
-  it. That is §10 step 6b. Dropping fontdb for a hand-rolled scan would save at most the 6 ms
-  scan, so fontdb stays.
+- The startup cost was not acceptable on the owner thread for good: about 43 ms of scan and
+  feed ran before the first frame, and the feed, which parses every file the scan found, was
+  86% of it. §10 step 6b took both off the owner thread. Dropping fontdb for a hand-rolled scan
+  would save at most the scan's few milliseconds, so fontdb stays.
+
+After §10 step 6b (`HostFontFeed`, the same bench and host, same day; the host was under other
+load, so the scan read slower than above):
+
+| What | Time |
+|---|---|
+| `FontCollection::new()` (bundled faces) | 19.3 µs |
+| Host scan (`HostFonts::scan`) | 14.3 ms |
+| Synchronous feed, one file per registration (`FontCollection::with_host_fonts`) | 16.3 ms |
+| Owner thread at start (`FontCollection::with_host_feed`) | 16.9 µs |
+| Off-thread feed on the shared collection (`HostFontFeed::run`, scan excluded) | 45.4 ms |
+| Heap a host-fed collection keeps | 0.15 MiB |
+
+- The owner thread now pays about 17 µs before the first frame: the bundled collection and a
+  feed handle.
+- Registering one file per call is what made the synchronous feed and its heap smaller.
+  fontique 0.11.1's `load_fonts_from_paths` (`collection/mod.rs:682-697`) calls
+  `register_font_impl` once per face found under the paths, with one accumulator shared by the
+  whole call, and each call merges the whole accumulator into the families again, so a call
+  over many files adds each earlier face once more per later face: quadratic in the call's
+  faces, and the 2.42 MiB above was mostly those duplicate entries. One file per call bounds
+  that to the faces of one font collection file. Measured on this tree with only that line
+  changed back: 57.0 ms and 2.42 MiB for the batch call, 16.3 ms and 0.15 MiB per file.
+  Upstream report: not filed yet; re-check on the next fontique release.
+- The off-thread feed costs more than the synchronous one: each source is first read on a
+  scratch collection (§7), and each registration and fallback write on the shared collection
+  takes fontique's lock, bumps its version and deep-copies its data into the feed's clone at
+  the next write. That runs on the feed's own thread.
 
 ### The upstream `Item`-boundary report (gate 7, 2026-09-30)
 
@@ -271,7 +302,10 @@ builds the collection:
   which takes the shared source cache's lock on a cache miss (`source_cache.rs`).
 
 So the one lock left is one shared-mutex acquisition per realm on its first query after a
-registration; a frame with no registration behind it takes none. That is a reading of fontique's
+registration; a frame with no registration behind it takes none. While the host feed runs off
+the owner thread (§7), each file it adds is one registration: it moves fontique's version, so a
+realm's next query re-reads the data, and a query that comes while a file is being added waits
+for that one file's registration, never for the whole feed. That is a reading of fontique's
 code, not a measurement.
 
 ### 4. A neutral shaped-run contract on the display list
@@ -371,10 +405,22 @@ Measurement and paint read one layout, so one set of rules picks a face:
   a host feed rebinds none; without it an unbound generic takes the scan's pick, a carried family
   that sets Latin text, preferring the platform's common list; system-ui names sans-serif's.
 
-A face whose family the collection already holds (the bundled faces) is not fed again. The feed
-runs synchronously on the owner thread before the first frame. The font-collection-changed event
-exists (§2, §10 step 3b), so the feed can move off the owner thread, its faces arriving as a
-registration's do; that move is §10 step 6b. On wasm32 fontdb finds no host fonts and the
+A face whose family the collection holds when the feed starts (the bundled faces, and a face
+the app registered before the start) is not fed again. The feed runs off the owner thread: the
+app's shared engine services build the collection with the bundled faces
+(`FontCollection::with_host_feed`), the first frame renders with them, and a thread of its own
+(`flui-host-fonts`) scans the host and runs the feed (`HostFontFeed::run`). The feed adds one
+file per registration, so fontique's lock is held for one file at a time, and each source is
+first read on a scratch collection inside `catch_unwind`: a source that panics or holds no
+family is skipped, since a panic under fontique's lock would poison it and every realm's next
+query would panic. When the feed ends, however it ends, the collection's generation rises
+once, the feed wakes the owner, and the owner's next turn tells every realm, as after a
+registration (§2): text measured before lays out again in the host's faces. An app family
+registered while the feed runs may end up with the host's faces of the same name too,
+depending on which comes first; that is accepted. Without `bundled-fonts` the collection would
+have no face for the first frame, so it is fed before it is handed out, as
+`FontCollection::with_host_fonts` does, and the feed has nothing left to do. If no thread can
+be started, the feed runs on the owner thread. On wasm32 fontdb finds no host fonts and the
 platform has no common list, so the collection holds the bundled and registered faces and every
 script falls back to the sans-serif family alone. A bundled-only collection
 (`FontCollection::new()`) falls back to Roboto for every script.
@@ -407,8 +453,9 @@ Context). Gates 2–8 are conditions on the migration changes; every one is met 
    Parley's `sans-serif` is Arial on Windows.
 6. **Initialization cost.** Init time and memory measured against FLUI's real initialization,
    not a default one (ADR-0077 precondition 5). Closed: measured by the `text_startup` bench,
-   before and after §10 step 6a (Context). Memory is accepted; the 43 ms before the first frame
-   is accepted until §10 step 6b takes the feed off the owner thread.
+   before and after §10 steps 6a and 6b (Context). Memory is accepted; since step 6b the owner
+   thread pays about 17 µs before the first frame, and the scan and the feed run on a thread of
+   their own.
 7. **Upstream report.** The `Item`-boundary issue is filed upstream (ADR-0077 precondition 6).
    Closed as recorded (Context): Parley's unreleased `main` no longer has the quadratic count, so
    there is nothing to file; re-check after the next Parley release by bumping Parley and
@@ -713,13 +760,29 @@ that wires what it adds.
      a host copy of a bundled family is never fed and a bound generic never rebound
      (`a_host_copy_of_a_bundled_family_is_not_fed`,
      `a_missing_path_is_skipped_and_the_feed_completes`); the app's collection is the host-fed
-     one (`the_runtime_feeds_host_faces_once_for_every_realm`); the demo snapshots and the perf
+     one (`the_runtime_launches_one_host_feed_for_every_realm`); the demo snapshots and the perf
      counts are unchanged without the pin; `cargo xtask deps`, `reach`, `globals` and the wasm32
      lane are green; §§1–5 are accepted and the back-links in Consequences are written.
-   - (6b) Open. The feed moves off the owner thread: the first frame renders with the bundled
+   - (6b) Landed. The feed moves off the owner thread: the first frame renders with the bundled
      faces, and the host's arrive as a registration's do, through the collection's generation.
+     `FontCollection::with_host_feed` returns the bundled collection and a `HostFontFeed`; the
+     app's shared engine services launch it on a `flui-host-fonts` thread once the fonts the app
+     registered before the start are in, and every top-level owner turn
+     (`dispatch_platform_realm`) tells every realm when the generation moved since the last
+     notice, which is also how a registration is announced. The feed registers one file at a
+     time, reads each source on a scratch collection first and raises the generation once, even
+     on unwind (§7).
      *Acceptance (6b):* a first-frame test renders bundled text before the scan completes, and
-     text styled with a host-only family re-lays out when the feed lands.
+     text styled with a host-only family re-lays out when the feed lands. Met by the rows
+     `the_first_frame_renders_bundled_text_before_the_host_feed_lands` and
+     `text_in_a_host_only_family_re_lays_out_when_the_feed_lands` of flui-runtime's
+     `font_registration_matrix`, with flui-painting's `host_feed_contract`
+     (`a_host_feed_raises_the_generation_once`,
+     `a_family_held_before_the_feed_is_not_fed_again`) and
+     `a_source_that_panics_is_skipped_and_the_collection_stays_usable`, flui-app's
+     `font_collection_contract` (`the_runtime_launches_one_host_feed_for_every_realm`,
+     `the_host_feed_runs_off_the_owner_thread_and_wakes_once`) and the row
+     `a_landed_host_feed_wakes_every_realm_window` of `realm_dispatch_matrix`.
    - (6c) Open. The editor's grapheme and word steps in `flui-widgets` (`controller.rs`,
      `editable_text.rs`, `text_store.rs`) move to the ICU4X boundaries in flui-painting, and
      `flui-widgets` drops its direct `unicode-segmentation` dependency, which completes §6.
@@ -750,11 +813,13 @@ that wires what it adds.
   once the collection is fed.
 - Every capability context that measures text gains an explicit font-context handle; test
   bootstraps construct one.
-- The first frame already has the host's faces: the scan and the feed are synchronous until
-  §10 step 6b, and cost about 43 ms before the first frame on the Windows development host,
-  86% of it the feed parsing each file (Context, gate 6). Once the feed moves off the owner
-  thread, a text run styled with a system-only family may re-lay out when it completes; that
-  visible swap is the price of taking the scan off the startup path.
+- The first frame has the bundled faces only: since §10 step 6b the scan and the feed run off
+  the owner thread, which pays about 17 µs for them before the first frame (Context, gate 6).
+  A text run styled with a host-only family, or in a script only a host face covers, is laid
+  out in a fallback face first and again when the feed lands; that visible swap is the price of
+  taking the scan off the startup path. Every text node is laid out once more when it lands,
+  including text whose face did not change, and while the feed runs some host faces may
+  already shape before the generation rises.
 - A laid-out paragraph keeps about 66 bytes per char (Context, gate 6), so a long document is
   laid out by a virtualized list, not held whole.
 - `pub use cosmic_text::fontdb::Family` left at §10 step 5, when no public signature named it
@@ -772,8 +837,7 @@ that wires what it adds.
 
 ## Verification
 
-The gate 1 prototype exists on `spike/parley_atlas` (not merged). Everything below exists but
-the first-frame test, which is §10 step 6b's.
+The gate 1 prototype exists on `spike/parley_atlas` (not merged). Everything below exists.
 
 - The raster seam, `GlyphKey`, `FontRegistry` and `SwashRasterizer` (`flui_painting::glyphs`),
   with the oracle (`crates/flui-painting/tests/parley_oracle.rs`): since §10 step 6a,
@@ -793,10 +857,11 @@ the first-frame test, which is §10 step 6b's.
   `two_realms_hold_contexts_over_the_one_collection_they_were_given`,
   `dropping_a_realm_releases_its_text_context` and `a_second_presentation_adds_no_text_context`;
   in flui-app, `separate_realm_windows_shape_over_the_runtimes_font_collection` (through
-  `build_runtime_realm`, the one call every runner site builds its realm with) and
-  `the_runtime_feeds_host_faces_once_for_every_realm` (repeated calls on one runtime return the
-  collection the services own, and it is the host-fed one, `testing::host_fed`; that two
-  runtimes hold different ones is **Unasserted:** no test pins this).
+  `build_runtime_realm`, the one call every runner site builds its realm with) and the rows of
+  `font_collection_contract`: `the_runtime_launches_one_host_feed_for_every_realm` (repeated
+  calls on one runtime return the collection the services own, one feed is launched for it,
+  and it is host-fed once that feed runs, `testing::host_fed`) and
+  `two_runtimes_hold_different_collections`.
 - Layout measures through the realm's context (§10 step 3a): in
   `crates/flui-runtime/src/ui_realm/tests/text_context.rs`,
   `two_realms_measure_text_through_their_own_contexts` and
@@ -824,7 +889,7 @@ the first-frame test, which is §10 step 6b's.
   `a_glyph_the_named_family_lacks_measures_in_roboto_on_the_bundled_collection`; the row
   `a_style_resolves_by_the_family_rule` of `family_resolution` (`context.rs`);
   `a_missing_path_is_skipped_and_the_feed_completes` (`context.rs`); in
-  flui-app, `the_runtime_feeds_host_faces_once_for_every_realm` (`runtime.rs`).
+  flui-app, `the_runtime_launches_one_host_feed_for_every_realm` (`runtime.rs`).
 - Registration re-lays out text (§10 step 3b): in flui-runtime's `font_registration_matrix`,
   `a_face_registered_after_start_re_lays_out_text_in_every_realm_on_the_next_frame`,
   `a_face_registered_before_the_realm_is_built_measures_on_its_first_frame` and
@@ -855,8 +920,13 @@ the first-frame test, which is §10 step 6b's.
   engine's source and manifest name no Parley, fontique, skrifa, swash or cosmic-text crate.
 - The process-global state gate ([ADR-0097](ADR-0097-no-process-global-state-gate.md)) with
   `FONT_SYSTEM` removed from its allowlist (§10 step 6a).
-- A first-frame test that renders bundled text before the system scan completes. **Unasserted:**
-  it is §10 step 6b's.
+- The feed off the owner thread (§10 step 6b): in flui-runtime's `font_registration_matrix`,
+  `the_first_frame_renders_bundled_text_before_the_host_feed_lands` and
+  `text_in_a_host_only_family_re_lays_out_when_the_feed_lands`; flui-painting's
+  `host_feed_contract` (`tests/font_registration.rs`) and
+  `a_source_that_panics_is_skipped_and_the_collection_stays_usable` (`context.rs`); in
+  flui-app, `the_host_feed_runs_off_the_owner_thread_and_wakes_once` (`runtime.rs`) and
+  `a_landed_host_feed_wakes_every_realm_window` (`realm_dispatch_matrix`).
 - Parley measures in the default build (§10 step 4a): the rows of `text_context_contract`
   (`crates/flui-painting/tests/main.rs`); in `crates/flui-painting/tests/font_registration.rs`,
   `a_face_registered_on_the_collection_reaches_measurement_paint_and_carets`; in

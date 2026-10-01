@@ -53,15 +53,24 @@ the dispatch layer moves there too.
 - **A window reaches a realm with its bridge.** `runner::presentation_window`
   reads a host window's accessibility bridge once and pairs it with the
   window in a `PresentationWindow`.
-- **The app's fonts are one host scan and one collection.**
-  `SharedEngineServices::resolve`, reached before the first realm is built,
-  scans the host's fonts once (`HostFonts::scan`, fontdb) and feeds the app's
-  `FontCollection` from the scan (`FontCollection::with_host_fonts`); the scan
-  is a value dropped once the feed is done, and no font state is
-  process-global. Every realm the runners build gets a clone of that one
-  collection. The feed runs synchronously on the owner thread, about 43 ms on
-  the Windows development host, until ADR-0092 §10 step 6b moves it off
-  (`the_runtime_feeds_host_faces_once_for_every_realm`).
+- **The app's fonts are one host scan and one collection, fed off the owner
+  thread.** `SharedEngineServices::resolve`, reached before the first realm is
+  built, builds the app's `FontCollection` with the bundled faces and a
+  `HostFontFeed` (`FontCollection::with_host_feed`); once the fonts the app
+  registered before the start are in, the runtime launches the feed on a
+  `flui-host-fonts` thread, which scans the host once (`HostFonts::scan`,
+  fontdb), adds its faces and wakes the owner. The first frame does not wait
+  for it. Every top-level owner turn (`dispatch_platform_realm`) asks the
+  runtime whether the collection's generation moved since the realms were
+  last told (`AppRuntime::take_font_change`) and, if so, sends every realm
+  `UiRealm::fonts_changed`; a registration is announced the same way
+  (`runner::fonts::announce_font_change`). The scan is a value dropped once
+  the feed is done, and no font state is process-global. Every realm the
+  runners build gets a clone of that one collection. This crate's unit tests
+  park the feed (`park_host_feed`), so none lands in the middle of a test
+  (`the_runtime_launches_one_host_feed_for_every_realm`,
+  `the_host_feed_runs_off_the_owner_thread_and_wakes_once`,
+  `a_landed_host_feed_wakes_every_realm_window`).
 
 ## Mapping decisions
 

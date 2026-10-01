@@ -1023,6 +1023,10 @@ pub(super) fn dispatch_platform_realm(
     }
 
     let _guard = OwnerTurnDrainGuard;
+    // A top-level turn: tell every realm if the app's fonts changed since
+    // the last notice (the host feed landing, whose wake brings this turn).
+    // The notices queue behind this turn's event and run in this drain.
+    super::fonts::announce_font_change();
     if queued_fallback {
         drain_owner_turn_queue(OWNER_TURN_BUDGET);
         return Ok(());

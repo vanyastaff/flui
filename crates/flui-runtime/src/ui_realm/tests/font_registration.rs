@@ -1,9 +1,10 @@
-//! A face registered on the app's font collection reaches every realm's
-//! layout at its next frame (ADR-0092 §2, §10 step 3b).
+//! A face registered on the app's font collection, or fed into it from the
+//! host, reaches every realm's layout at its next frame (ADR-0092 §2, §7).
 //!
-//! The rows register on a collection fed from a scan of the host's fonts, as
-//! the app's is. Every row names a family no other test in this crate names,
-//! and the rows run in this one table.
+//! The registration rows register on a collection fed from a scan of the
+//! host's fonts; the feed rows build the collection as the app does and feed
+//! it from a host of their own. Every row names a family no other test in
+//! this crate names, and the rows run in this one table.
 
 use flui_painting::{DrawOp, FontCollection, HostFonts};
 
@@ -160,6 +161,70 @@ fn a_face_registered_before_the_realm_is_built_measures_on_its_first_frame() {
     assert_near(paragraph_width(&realm), 40.0, "four half-em `A`s at 20 px");
 }
 
+/// The first frame renders before the host's fonts are scanned: on the
+/// collection the app builds, whose host feed has not run, a realm draws its
+/// first frame, and text in the bundled Roboto measures as on a bundled-only
+/// collection. Fails if the collection is fed from the host before it is
+/// handed out, which makes the first frame wait for the scan and the feed.
+fn the_first_frame_renders_bundled_text_before_the_host_feed_lands() {
+    let (fonts, feed) = FontCollection::with_host_feed();
+    let realm = realm_over(&fonts);
+    let bundled = realm_over(&FontCollection::new());
+    for realm in [&realm, &bundled] {
+        show_probe_text(realm, "Roboto", flui_painting::typography::FontWeight::W400);
+    }
+
+    assert!(
+        !flui_painting::testing::host_fed(&fonts),
+        "no host face has been read"
+    );
+    assert_eq!(fonts.generation(), 0);
+    let width = paragraph_width(&realm);
+    assert!(
+        width > 1.0,
+        "the first frame laid the text out, got {width}"
+    );
+    assert_near(width, paragraph_width(&bundled), "the bundled Roboto");
+    drop(feed);
+}
+
+/// Text styled with a family only the host carries measures in a fallback
+/// face until the host feed lands, and is laid out again in that family at
+/// the next frame after it lands, painted too, with nothing dirtied by hand;
+/// the frame after that is idle. The feed runs on another thread, as the
+/// app runs it. Fails if the feed's faces reach the collection without
+/// raising its generation (the text keeps its fallback width), or never
+/// reach it.
+fn text_in_a_host_only_family_re_lays_out_when_the_feed_lands() {
+    use flui_painting::testing::{feed_with_host, host_fonts_from};
+    use flui_painting::typography::FontWeight;
+
+    let (fonts, feed) = FontCollection::with_host_feed();
+    let feed = feed_with_host(feed, host_fonts_from(&[PROBE_MONO]));
+    let realm = realm_over(&fonts);
+    show_probe_text(&realm, "FLUI Probe Mono", FontWeight::W100);
+    let before = paragraph_width(&realm);
+    assert!(
+        (before - 80.0).abs() > 1.0,
+        "before the feed the text measures in a fallback face, got {before}"
+    );
+    assert!(frame(&realm).is_none(), "the realm is idle before the feed");
+
+    std::thread::spawn(move || feed.run())
+        .join()
+        .expect("the feed lands");
+
+    let scene = frame(&realm).expect("the landed feed makes the next frame paint");
+    assert_near(paragraph_width(&realm), 80.0, "four one-em `A`s at 20 px");
+    let painted = painted_widths(&scene);
+    assert_eq!(painted.len(), 1, "the realm paints its one paragraph");
+    assert_near(painted[0], 80.0, "the painted paragraph");
+    assert!(
+        frame(&realm).is_none(),
+        "a feed already applied lays nothing out again"
+    );
+}
+
 /// The realm's notice wakes every presentation it hosts, not only the
 /// primary: each draws its next frame, where its pipeline applies the
 /// change. Fails if the notice addresses one presentation, or none.
@@ -202,6 +267,14 @@ fn font_registration_matrix() {
             (
                 "a_face_registered_before_the_realm_is_built_measures_on_its_first_frame",
                 a_face_registered_before_the_realm_is_built_measures_on_its_first_frame as fn(),
+            ),
+            (
+                "the_first_frame_renders_bundled_text_before_the_host_feed_lands",
+                the_first_frame_renders_bundled_text_before_the_host_feed_lands as fn(),
+            ),
+            (
+                "text_in_a_host_only_family_re_lays_out_when_the_feed_lands",
+                text_in_a_host_only_family_re_lays_out_when_the_feed_lands as fn(),
             ),
             (
                 "a_font_change_notice_requests_a_redraw_for_every_presentation",

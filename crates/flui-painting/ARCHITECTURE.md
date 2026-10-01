@@ -657,10 +657,11 @@ the host face); and by `a_missing_path_is_skipped_and_the_feed_completes`
 
 ### 17. The app's collection is fed from one host scan, with FLUI's fallback lists
 
-**Rule:** the app's `FontCollection` is built with
-`FontCollection::with_host_fonts` over one `HostFonts::scan`, once per app
-(flui-app's shared engine services, synchronously before the first frame
-until ADR-0092 §10 step 6b). The scan is fontdb's: the platform's font
+**Rule:** the app's `FontCollection` is fed from one `HostFonts::scan`, once
+per app: flui-app's shared engine services build it with the bundled faces
+(`FontCollection::with_host_feed`) and run the returned `HostFontFeed` on a
+thread of its own, which scans and feeds what `FontCollection::with_host_fonts`
+would, then raises the generation once (ADR-0092 §7). The scan is fontdb's: the platform's font
 directories, and fontconfig's configuration where there is one. The
 collection holds the bundled faces, then every face the scan found whose
 family it does not already hold, read from the same files. A generic it
@@ -715,9 +716,16 @@ paint and carets, so one set of lists, FLUI's, decides the face everywhere.
 - A host copy of a bundled family (Roboto, Material Icons, CupertinoIcons) is
   not fed, so one family never mixes two copies; an app that wants a host's
   own icon font registers it under another family name.
-- The scan and the feed cost about 43 ms before the first frame on the
-  Windows development host, until the feed runs off the owner thread at
-  ADR-0092 §10 step 6b.
+- The first frame renders with the bundled faces; the host's arrive when
+  the feed lands, and text measured before is laid out again then, as after
+  a registration. A family the collection holds when the feed starts is not
+  fed; one the app registers while it runs may also take the host's faces
+  of that name.
+- The feed adds one file per registration, so fontique's lock is held for
+  one file at a time, and reads each source on a scratch collection inside
+  `catch_unwind` first: a source that panics or holds no family is skipped
+  instead of poisoning the shared lock. The generation rises once when the
+  feed ends, even on unwind.
 - A face registered after the feed reaches the collection alone, through
   `FontCollection::register_font` (decision 11).
 
@@ -735,9 +743,12 @@ host names exactly among them, never are),
 (`src/parley_text/shape.rs`),
 the table `family_resolution` (`src/text_layout/context.rs`: the rule's
 answers over a collection, and the emoji face a host fallback order puts
-first kept out of a Latin run), and
-`a_missing_path_is_skipped_and_the_feed_completes`
-(`src/text_layout/context.rs`).
+first kept out of a Latin run),
+`a_missing_path_is_skipped_and_the_feed_completes` and
+`a_source_that_panics_is_skipped_and_the_collection_stays_usable`
+(`src/text_layout/context.rs`), and the table `host_feed_contract`
+(`tests/font_registration.rs`: one generation step per feed, and no host
+face added to a family held when the feed starts).
 
 ### 18. Text crosses the display list as `ShapedParagraph`, with its own face table
 
