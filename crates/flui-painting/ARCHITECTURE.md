@@ -662,7 +662,11 @@ the host face); and by `a_missing_path_is_skipped_and_the_feed_completes`
 per app: flui-app's shared engine services build it with the bundled faces
 (`FontCollection::with_host_feed`) and run the returned `HostFontFeed` on a
 thread of its own, which scans and feeds what `FontCollection::with_host_fonts`
-would, then raises the generation once (ADR-0092 §7). The scan is fontdb's: the platform's font
+would, then raises the generation once if that changed the collection, and on
+unwind (ADR-0092 §7; `a_feed_that_adds_nothing_leaves_the_generation_alone`).
+Each source is read once on a scratch collection before it is registered, so
+a file that panics on every read is skipped; a file replaced between that
+read and the registration is not covered. The scan is fontdb's: the platform's font
 directories, and fontconfig's configuration where there is one. The
 collection holds the bundled faces, then every face the scan found whose
 family it does not already hold, read from the same files. A generic it

@@ -184,6 +184,32 @@ fn a_family_held_before_the_feed_is_not_fed_again() {
     );
 }
 
+/// A feed that changes nothing leaves the generation alone, so no
+/// pipeline lays its text out again for it: a host with no fonts (as on
+/// wasm32), and a host whose only family the collection already holds.
+/// Fails if the feed announces every landing whatever it added.
+fn a_feed_that_adds_nothing_leaves_the_generation_alone() {
+    use flui_painting::testing::{feed_with_host, host_fed, host_fonts_from};
+
+    let (fonts, feed) = FontCollection::with_host_feed();
+    let before = fonts.generation();
+    feed_with_host(feed, host_fonts_from(&[])).run();
+    assert!(host_fed(&fonts), "the feed ran");
+    assert_eq!(fonts.generation(), before, "an empty host adds nothing");
+
+    let (fonts, feed) = FontCollection::with_host_feed();
+    fonts
+        .register_font(PROBE_MONO)
+        .expect("the probe face loads");
+    let registered = fonts.generation();
+    feed_with_host(feed, host_fonts_from(&[PROBE_MONO_600])).run();
+    assert_eq!(
+        fonts.generation(),
+        registered,
+        "a host holding only a family the app registered adds nothing"
+    );
+}
+
 #[test]
 fn host_feed_contract() {
     crate::cases::run_cases(
@@ -196,6 +222,10 @@ fn host_feed_contract() {
             (
                 "a_family_held_before_the_feed_is_not_fed_again",
                 a_family_held_before_the_feed_is_not_fed_again,
+            ),
+            (
+                "a_feed_that_adds_nothing_leaves_the_generation_alone",
+                a_feed_that_adds_nothing_leaves_the_generation_alone,
             ),
         ],
     );

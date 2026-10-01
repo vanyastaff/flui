@@ -102,9 +102,10 @@ impl FontCollection {
     /// other than the owner's, scans the host and adds what
     /// [`FontCollection::with_host_fonts`] would: every face whose families
     /// the collection does not hold when the feed starts, the generics it
-    /// leaves unbound, and the host's fallback order. It then raises
-    /// [`Self::generation`] by one, so text laid out before measures again
-    /// at each pipeline's next frame, as after a registration.
+    /// leaves unbound, and the host's fallback order. If that changed the
+    /// collection it then raises [`Self::generation`] by one, so text laid
+    /// out before measures again at each pipeline's next frame, as after a
+    /// registration; a feed that added nothing leaves it alone.
     ///
     /// Without `bundled-fonts` the collection would start with no face, and
     /// a first frame would draw no text at all; this then feeds the host's
@@ -324,7 +325,9 @@ impl FontCollectionInner {
         #[cfg(feature = "bundled-fonts")]
         bind_bundled_faces(&mut collection);
         if let Some(host) = host {
-            feed_host_faces(&mut collection, host, Registration::Private);
+            // A private build starts at generation zero whatever it holds,
+            // so whether the feed changed anything does not matter here.
+            let _changed = feed_host_faces(&mut collection, host, Registration::Private);
         }
         collection.make_shared();
         Self {
@@ -354,17 +357,21 @@ pub struct HostFontFeed {
 
 impl HostFontFeed {
     /// Scans the host's fonts and adds them to the collection, then raises
-    /// its generation by one.
+    /// its generation by one if that changed the collection.
     ///
     /// Blocking, and meant for a thread other than the owner's: the scan
     /// takes a few milliseconds and the feed, which reads every font file
     /// the scan found, tens. Each file is added on its own, so a realm
     /// shaping meanwhile waits at most for one file's registration, and may
     /// see some of the host's faces before the feed ends; the generation
-    /// rises once, at the end, whatever was added. A source that panics or
-    /// holds no family on a trial read is skipped before the collection
-    /// sees it. If the feed itself unwinds, the generation still rises, so
-    /// the faces already added are not left unannounced.
+    /// rises once, at the end, however many sources were added, and not at
+    /// all when the feed added no source, bound no generic and left every
+    /// fallback list as it was. A source that panics or holds no family on
+    /// a trial read is skipped before the collection sees it; the trial
+    /// guards a file that panics on every read, not one replaced between
+    /// the trial and the registration, which reads it again. If the feed
+    /// itself unwinds, the generation still rises, so the faces already
+    /// added are not left unannounced.
     pub fn run(self) {
         let Some(fonts) = self.fonts else {
             return;
@@ -396,22 +403,35 @@ impl fmt::Debug for HostFontFeed {
 
 impl FontCollection {
     /// Adds `host`'s faces to this shared collection, one source per
-    /// registration, and raises the generation once, even on unwind.
+    /// registration, and raises the generation once if the feed changed the
+    /// collection. A feed that unwinds raises it too: what it added before
+    /// the panic is not left unannounced.
     fn feed_shared(&self, host: &HostFaces) {
-        /// Announces the feed when it ends, however it ends.
-        struct Landed<'a>(&'a FontCollectionInner);
+        /// Announces the feed when it ends, unless it ended having changed
+        /// nothing.
+        struct Landed<'a> {
+            inner: &'a FontCollectionInner,
+            /// Whether to raise the generation; stays set while the feed
+            /// runs, so an unwind announces.
+            announce: bool,
+        }
 
         impl Drop for Landed<'_> {
             fn drop(&mut self) {
                 #[cfg(any(test, feature = "testing"))]
-                self.0.host_fed.store(true, Ordering::Release);
-                self.0.generation.fetch_add(1, Ordering::AcqRel);
+                self.inner.host_fed.store(true, Ordering::Release);
+                if self.announce {
+                    self.inner.generation.fetch_add(1, Ordering::AcqRel);
+                }
             }
         }
 
-        let _landed = Landed(&self.0);
+        let mut landed = Landed {
+            inner: &self.0,
+            announce: true,
+        };
         let mut collection = self.0.collection.clone();
-        feed_host_faces(&mut collection, host, Registration::Shared);
+        landed.announce = feed_host_faces(&mut collection, host, Registration::Shared);
     }
 }
 
@@ -436,12 +456,15 @@ enum Registration {
 /// already binds keeps its binding (with `bundled-fonts`, Roboto keeps every
 /// one); an unbound generic binds to the host's family for it when the
 /// collection then holds that family.
+///
+/// Returns whether the collection changed: a source was registered, a
+/// generic bound, or a fallback list rewritten with a different order.
 #[tracing::instrument(skip_all, fields(sources = host.sources.len()))]
 fn feed_host_faces(
     collection: &mut parley::fontique::Collection,
     host: &HostFaces,
     registration: Registration,
-) {
+) -> bool {
     use std::collections::HashSet;
 
     use parley::fontique::GenericFamily;
@@ -450,6 +473,7 @@ fn feed_host_faces(
 
     let held: HashSet<String> = collection.family_names().map(str::to_lowercase).collect();
     let mut fed = 0_usize;
+    let mut bound = false;
     for source in &host.sources {
         if source
             .families
@@ -478,15 +502,17 @@ fn feed_host_faces(
         }
         if let Some(id) = collection.family_id(name) {
             collection.set_generic_families(generic, std::iter::once(id));
+            bound = true;
         }
     }
-    install_into(&host.chain, collection);
+    let reordered = install_into(&host.chain, collection);
     // The span above records how long the feed took; no clock is read here,
     // since `std::time::Instant` panics on wasm32-unknown-unknown.
     tracing::debug!(
         sources = fed,
         "fed the host's faces into the font collection"
     );
+    fed > 0 || bound || reordered
 }
 
 /// Registers one source's faces on `collection`. A file that cannot be read

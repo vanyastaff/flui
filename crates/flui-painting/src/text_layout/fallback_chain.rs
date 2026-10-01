@@ -93,9 +93,16 @@ pub(crate) fn fontique_scripts() -> impl Iterator<Item = Script> {
 /// of each script is set (no locale): the Parley path shapes with no locale
 /// today. A script with no held family at all gets no entry, so it keeps
 /// whatever it had.
-pub(crate) fn install_into(chain: &FallbackChain, collection: &mut parley::fontique::Collection) {
+///
+/// Returns whether any list it wrote differs from the one the collection
+/// had; a list equal to the one already there is not written again.
+pub(crate) fn install_into(
+    chain: &FallbackChain,
+    collection: &mut parley::fontique::Collection,
+) -> bool {
     use parley::fontique::{FallbackKey, GenericFamily};
 
+    let mut changed = false;
     let common = held(collection, chain.common(), Vec::new());
     let sans_serif: Vec<_> = collection
         .generic_families(GenericFamily::SansSerif)
@@ -107,13 +114,25 @@ pub(crate) fn install_into(chain: &FallbackChain, collection: &mut parley::fonti
                 families.push(*id);
             }
         }
-        if !families.is_empty() {
-            collection.set_fallbacks(FallbackKey::new(script, None), families.into_iter());
+        let key = FallbackKey::new(script, None);
+        if !families.is_empty()
+            && !collection
+                .fallback_families(key)
+                .eq(families.iter().copied())
+        {
+            collection.set_fallbacks(key, families.into_iter());
+            changed = true;
         }
     }
-    if !common.is_empty() {
+    if !common.is_empty()
+        && !collection
+            .generic_families(GenericFamily::Emoji)
+            .eq(common.iter().copied())
+    {
         collection.set_generic_families(GenericFamily::Emoji, common.into_iter());
+        changed = true;
     }
+    changed
 }
 
 /// `into` extended with the ids of the `names` `collection` holds, in
