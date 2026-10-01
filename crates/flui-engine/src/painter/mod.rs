@@ -287,10 +287,7 @@ impl WgpuPainter {
     pub(crate) fn reset_frame_state(&mut self) {
         // Assert save/restore balance at the frame boundary BEFORE clearing.
         //
-        // Not placed in `GpuStateStack::Drop` because the LayerDispatcher
-        // implicit-single-save (a lazy `active_transform` save, balanced by
-        // `LayerDispatcher`'s own `Drop`) must not false-positive-panic here, and a
-        // Drop panic during unwind aborts the process.
+        // Not placed in `GpuStateStack::Drop`: a panic during unwind would abort.
         //
         // The assertion logic lives in `GpuStateStack::debug_assert_balanced`
         // so it can be exercised by unit tests without a GPU.

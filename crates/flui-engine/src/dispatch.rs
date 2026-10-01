@@ -242,7 +242,7 @@ pub(crate) fn dispatch_command<R: CommandRenderer + ?Sized>(
     }
 }
 
-/// Batch dispatch for multiple commands
+/// Dispatch one display list in its own transform and clip scope.
 ///
 /// This is a convenience function for rendering entire display lists.
 /// It's more efficient than calling dispatch_command in a loop due to
@@ -255,7 +255,9 @@ where
     I: IntoIterator<Item = &'a DrawCommand>,
     R: CommandRenderer + ?Sized,
 {
+    renderer.save_state();
     for command in commands {
         dispatch_command(command, renderer);
     }
+    renderer.restore_state();
 }

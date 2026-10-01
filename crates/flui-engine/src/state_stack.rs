@@ -8,9 +8,7 @@
 //! `self.state.debug_assert_balanced()` **before** calling `self.state.reset()`.
 //! The assertion logic lives in `GpuStateStack::debug_assert_balanced` so it
 //! can be exercised in unit tests without a GPU.
-//! No `Drop` impl is provided: the LayerDispatcher implicit-single-save (a lazy
-//! `active_transform` save, balanced by `LayerDispatcher`'s own `Drop`) must not
-//! false-positive-panic, and a `Drop` panic during unwind would trigger an abort.
+//! No `Drop` assertion is provided: a panic during unwind would abort the process.
 
 use flui_foundation::geometry::{self, Offset, Point, RRect, Rect};
 
@@ -247,6 +245,11 @@ impl GpuStateStack {
         tracing::trace!("GpuStateStack::concat: matrix={:?}", matrix);
 
         self.current_transform *= glam::DMat4::from_cols_array(&matrix.m);
+    }
+
+    /// Restore a command override without undoing clip mutations made under it.
+    pub(super) fn restore_transform(&mut self, matrix: &geometry::Matrix4) {
+        self.current_transform = glam::DMat4::from_cols_array(&matrix.m);
     }
 
     /// Post-multiply the CTM by a uniform scale.
