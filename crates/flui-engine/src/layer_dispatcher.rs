@@ -44,6 +44,9 @@ use crate::{command_renderer::CommandRenderer, layer_state_stack::LayerStateStac
 pub(crate) struct LayerDispatcher<'frame> {
     painter: &'frame mut WgpuPainter,
     offscreen: Option<&'frame mut crate::offscreen::OffscreenRenderer>,
+    /// A child capture resolves IDs against its parent while recording. The
+    /// resulting IR owns leases; the cached child painter retains no registry.
+    external_textures: Option<&'frame crate::external_texture_registry::ExternalTextureRegistry>,
     /// Bound surface view for the current frame. `None` outside a
     /// frame, or when the construction site cannot supply it
     /// (e.g. shader-mask offscreen render). Backdrop-filter
@@ -124,6 +127,7 @@ impl<'frame> LayerDispatcher<'frame> {
         Self {
             painter,
             offscreen: None,
+            external_textures: None,
             surface_view: None,
             surface_texture: None,
             active_transform: None,
@@ -139,6 +143,7 @@ impl<'frame> LayerDispatcher<'frame> {
         Self {
             painter,
             offscreen: Some(offscreen),
+            external_textures: None,
             surface_view: None,
             surface_texture: None,
             active_transform: None,
@@ -164,6 +169,27 @@ impl<'frame> LayerDispatcher<'frame> {
     /// Access the offscreen renderer mutably (for shader mask, backdrop filter).
     pub(crate) fn offscreen_mut(&mut self) -> Option<&mut crate::offscreen::OffscreenRenderer> {
         self.offscreen.as_deref_mut()
+    }
+
+    pub(crate) fn with_external_textures(
+        painter: &'frame mut WgpuPainter,
+        registry: &'frame crate::external_texture_registry::ExternalTextureRegistry,
+    ) -> Self {
+        let mut dispatcher = Self::new(painter);
+        dispatcher.external_textures = Some(registry);
+        dispatcher
+    }
+
+    pub(crate) fn mask_context(
+        &mut self,
+    ) -> Option<(
+        &crate::external_texture_registry::ExternalTextureRegistry,
+        &mut crate::offscreen::OffscreenRenderer,
+    )> {
+        let registry = self
+            .external_textures
+            .unwrap_or_else(|| self.painter.external_texture_registry());
+        Some((registry, self.offscreen.as_deref_mut()?))
     }
 
     /// Get a reference to the underlying painter.
@@ -757,8 +783,16 @@ impl CommandRenderer for LayerDispatcher<'_> {
         opacity: f32,
         transform: &Matrix4,
     ) {
+        let registry = self.external_textures;
         self.with_transform(transform, |painter| {
-            painter.draw_texture(texture_id, dst, src, filter_quality, opacity);
+            painter.draw_texture_from_registry(
+                texture_id,
+                dst,
+                src,
+                filter_quality,
+                opacity,
+                registry,
+            );
         });
     }
 

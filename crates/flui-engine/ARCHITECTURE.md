@@ -130,14 +130,19 @@ image decoding and separate painters. `DeviceDomain` separately admits the
 listed prepared GPU payloads and retains submission charges until callbacks.
 Neither quota is a whole-process memory or physical VRAM limit.
 
-The Command IR is GPU-lowered (baked instance arrays, pixel-space transforms,
-opaque `TextureId`s) and holds no pooled texture: textures are acquired at
-replay, never stored at record. `DrawSegment` derives `Clone` and the derive
-is what bars a `PooledTexture` field (it is `!Clone`, returning its slot on
-`Drop`). That is all the derive proves — wgpu 30's own handles are `Clone`
-ref-counts — so "the IR holds no GPU handle" is a reading of `command_ir`'s
-field types, not a compiler theorem, and no test checks that replay is a pure
-function of the IR.
+The Scene IR remains GPU-free and names logical `TextureId`s. At engine lowering,
+an external draw captures an immutable allocation lease: view, validated
+interpretation and weak device-domain owner. Replacing or unregistering that ID
+cannot redirect an already recorded draw. A later lowering resolves the new
+allocation. The lease does not snapshot texels: ordered producer writes to the
+same allocation remain visible to subsequent GPU execution.
+
+Command IR carries cloneable external leases but no `PooledTexture`; offscreen
+pool slots are still acquired at replay and returned by their non-cloneable
+owners. Recorded, remapped and submitted references retain imported allocations.
+Managed submission transfers leases and their bookkeeping charges to completion;
+CPU `finish_frame` is not evidence of GPU completion. The weak domain stamp avoids
+a queue/callback/domain cycle and checks engine routing, not raw wgpu provenance.
 
 `WgpuPainter` is a coordinator, not a recorder: it holds `GpuStateStack`
 (transform / scissor / SDF-clip stacks), `LayerCompositor` (save-layer
@@ -241,6 +246,45 @@ loom backend or the mailbox moves to `std::sync`.
 ---
 
 ## Mapping decisions
+
+### External texture interpretation and allocation identity
+
+Registration admits only one-layer D2, single-sample, texture-bindable
+`Rgba8Unorm` or `Bgra8Unorm` allocations. The view selects mip zero explicitly.
+Dimensions come from wgpu metadata. Duplicate registration and incompatible
+replacement return typed errors before view creation and preserve the old entry.
+Replacement preserves the descriptor; rebinding requires unregister/register.
+Raw imports remain trusted: wgpu does not expose a device-provenance or destroyed
+state query, and an external alias can still destroy its allocation.
+
+Explicit per-draw filtering selects nearest for `FilterQuality::None` and
+bilinear mip-zero sampling for Low/Medium/High. Resource-sampling draws use the
+registered default. Straight, premultiplied and opaque alpha have separate
+interpretation; opacity scales premultiplied RGB and alpha together.
+Straight-alpha linear path premultiplies four mip-zero texel loads before
+interpolation, then uses premultiplied compositing and clip coverage. Filtering
+unmultiplied RGB and alpha separately would darken translucent edges and leak
+hidden colors. Nearest, opaque and premultiplied sources use hardware sampling.
+The current color contract is encoded sRGB blended in encoded space. SRGB views, linear-light,
+wide-gamut and HDR inputs are rejected rather than silently reinterpreted.
+
+The painter readback family
+`painter_images_and_offscreen_results_read_back_as_specified` pins sampling,
+allocation replacement, alpha, validation, first-error preservation and recovery.
+Allocation identity is pinned, while producer writes to that allocation remain
+visible. The engine's behavior tests cover nearest/linear overrides, transparent
+texels with hidden RGB, half opacity, RGBA/BGRA sources, update/rebind after
+recording, incompatible updates, competing errors and the next valid frame.
+Shader-mask captures borrow their parent's external registry only while lowering
+the child subtree; their cached painter owns no copied registrations. Captured
+leases follow the same domain and completion protocol as direct draws. The
+`renderer_surface_selection_and_layer_compositing_read_back_as_specified`
+family pins masked external draws, replacement with a reused painter, resize
+and recovery after a failed lookup.
+Bindings reuse the actual pipeline layout within a frame and retain their quota
+charge through cache ownership and submitted work. Imported GPU allocation bytes
+are excluded from prepared-resource quotas; a managed producer factory and the
+whole-engine ledger remain follow-ups in the resource migration plan.
 
 ### Bounded gradient work and failed frame diagnostics
 

@@ -453,7 +453,11 @@ mod blur_filter_tests;
 // ============================================================================
 
 // Abstract traits and errors
-pub use error::{EngineError, EngineResult, Recoverability};
+pub use error::{EngineError, EngineResult, ExternalTextureError, Recoverability};
+pub use external_texture_registry::{
+    ExternalAlpha, ExternalColorEncoding, ExternalSampling, ExternalTextureDescriptor,
+    ExternalTextureEntry, ExternalTextureRegistry,
+};
 // RasterBackend: the frame-driver swap point. The trait is unconditional;
 // only the wgpu impl is feature-gated.
 pub use raster::{PrePresentHook, PresentDisposition, RasterBackend};

@@ -472,18 +472,16 @@ impl super::WgpuPainter {
         );
     }
 
-    /// Draw a registered external texture, optionally cropped to a source sub-rect.
+    /// Draw a registered external texture with explicit per-draw sampling.
     ///
-    /// `texture_id` must have been registered via
-    /// [`Self::external_texture_registry_mut`] before this call.
-    ///
-    /// `dst` is the destination rect in device pixels.  `src`, when `Some`,
-    /// selects a sub-rectangle of the texture in texel coordinates; the batcher
-    /// normalises these to UV space `[0,1]` using the registered dimensions.
-    /// When `src` is `None` the full texture is used (`UV [0,1]×[0,1]`).
-    ///
-    /// `filter_quality` controls the GPU sampler (Linear vs Nearest).
-    /// `opacity` is pre-multiplied into the instance alpha before submission.
+    /// `FilterQuality::None` uses nearest; Low, Medium and High currently use
+    /// linear filtering (no mipmap or anisotropy promise). Registration metadata
+    /// never overrides this choice. Allocation, dimensions and alpha policy are
+    /// captured now; later update/unregister affects subsequent recording only.
+    /// Writes into that same allocation remain visible (this is not a texel copy).
+    /// Invalid ID, nonfinite/invalid rectangles or opacity outside `[0, 1]` latch
+    /// a typed frame error returned by rendering. Finish the failed frame before
+    /// beginning another. `src` is an optional positive in-bounds texel rectangle.
     pub fn draw_texture(
         &mut self,
         texture_id: flui_painting::paint::TextureId,
@@ -492,24 +490,104 @@ impl super::WgpuPainter {
         filter_quality: flui_painting::paint::FilterQuality,
         opacity: f32,
     ) {
-        // Read dimensions only when a `src` sub-rect was supplied, so the
-        // batcher can normalize pixel coordinates to UV in [0,1].  The
-        // TextureView stays in the registry until replay time.
-        let src_dimensions = src.and_then(|_| {
-            self.resources
-                .external_texture_registry()
+        self.draw_texture_from_registry(texture_id, dst, src, filter_quality, opacity, None);
+    }
+
+    pub(crate) fn draw_texture_from_registry(
+        &mut self,
+        texture_id: flui_painting::paint::TextureId,
+        dst: flui_foundation::geometry::Rect<f64>,
+        src: Option<flui_foundation::geometry::Rect<f64>>,
+        filter_quality: flui_painting::paint::FilterQuality,
+        opacity: f32,
+        registry: Option<&crate::external_texture_registry::ExternalTextureRegistry>,
+    ) {
+        let sampling = match filter_quality {
+            flui_painting::paint::FilterQuality::None => {
+                crate::external_texture_registry::ExternalSampling::Nearest
+            }
+            _ => crate::external_texture_registry::ExternalSampling::Linear,
+        };
+        self.record_external_texture(texture_id, dst, src, Some(sampling), opacity, registry);
+    }
+
+    /// Draw using the resource's registered sampling policy.
+    ///
+    /// Alpha, crop, opacity and allocation lifetime follow [`Self::draw_texture`].
+    pub fn draw_texture_with_resource_sampling(
+        &mut self,
+        texture_id: flui_painting::paint::TextureId,
+        dst: flui_foundation::geometry::Rect<f64>,
+        src: Option<flui_foundation::geometry::Rect<f64>>,
+        opacity: f32,
+    ) {
+        self.record_external_texture(texture_id, dst, src, None, opacity, None);
+    }
+
+    fn record_external_texture(
+        &mut self,
+        texture_id: flui_painting::paint::TextureId,
+        dst: flui_foundation::geometry::Rect<f64>,
+        src: Option<flui_foundation::geometry::Rect<f64>>,
+        sampling: Option<crate::external_texture_registry::ExternalSampling>,
+        opacity: f32,
+        registry: Option<&crate::external_texture_registry::ExternalTextureRegistry>,
+    ) {
+        use crate::error::ExternalTextureError;
+        if self.current_segment.recording_result().is_err() {
+            return;
+        }
+        let result = (|| {
+            let lease = registry
+                .unwrap_or_else(|| self.resources.external_texture_registry())
                 .get(texture_id)
-                .map(|entry| (entry.width, entry.height))
-        });
-        crate::batches::DrawBatcher::draw_texture(
-            &mut self.current_segment,
-            &self.state,
-            src_dimensions,
-            texture_id,
-            dst,
-            src,
-            filter_quality,
-            opacity,
-        );
+                .map(|entry| entry.lease().clone())
+                .ok_or(ExternalTextureError::UnknownTexture {
+                    id: texture_id.get(),
+                })?;
+            if !lease.is_for_domain(&self.domain) {
+                return Err(ExternalTextureError::ForeignOwner);
+            }
+            if !opacity.is_finite() || !(0.0..=1.0).contains(&opacity) {
+                return Err(ExternalTextureError::InvalidOpacity);
+            }
+            let valid_rect = |rect: flui_foundation::geometry::Rect<f64>| {
+                [rect.left(), rect.top(), rect.right(), rect.bottom()]
+                    .into_iter()
+                    .all(f64::is_finite)
+                    && rect.width().is_finite()
+                    && rect.height().is_finite()
+                    && rect.width() > 0.0
+                    && rect.height() > 0.0
+            };
+            if !valid_rect(dst) {
+                return Err(ExternalTextureError::InvalidDestination);
+            }
+            if let Some(rect) = src {
+                let (width, height) = lease.size();
+                if !valid_rect(rect)
+                    || rect.left() < 0.0
+                    || rect.top() < 0.0
+                    || rect.right() > f64::from(width)
+                    || rect.bottom() > f64::from(height)
+                {
+                    return Err(ExternalTextureError::InvalidSourceRect);
+                }
+            }
+            let effective = sampling.unwrap_or(lease.descriptor().sampling);
+            Ok((lease, effective))
+        })();
+        match result {
+            Ok((lease, effective)) => crate::batches::DrawBatcher::draw_texture(
+                &mut self.current_segment,
+                &self.state,
+                lease,
+                effective,
+                dst,
+                src,
+                opacity,
+            ),
+            Err(error) => self.current_segment.record_external_error(error),
+        }
     }
 }

@@ -339,19 +339,9 @@ impl GpuReplay {
     // Phase 5: external (registered) textures
     // =========================================================================
 
-    /// Flush all external-texture draws recorded in the segment.
-    ///
-    /// Each entry carries a `flui_painting::paint::TextureId` stored at
-    /// record time.  Here, at replay time, each ID is resolved to a
-    /// `wgpu::TextureView` via the external texture registry.  If an ID is not
-    /// found (texture was unregistered between record and flush), a warning is
-    /// emitted and the entry is skipped — identical behavior to before, now on
-    /// the correct replay side of the record/replay seam.
-    ///
-    /// Because `wgpu::TextureView` is not `PartialEq`, instances are flushed
-    /// individually (one draw call per instance) rather than grouped by view
-    /// equality.  External textures are uncommon in typical UI; the extra draw
-    /// calls are not a hot path.
+    /// Replay captured allocations in order. Bindings are cached per frame by
+    /// allocation identity and effective sampling, using the active pipeline
+    /// layout. Strong leases survive both recorder disposal and GPU completion.
     fn flush_segment_external_images(
         &mut self,
         segment: &DrawSegment,
@@ -363,34 +353,76 @@ impl GpuReplay {
         resources: &mut GpuResources,
         encoder: &mut wgpu::CommandEncoder,
         view: &wgpu::TextureView,
-    ) {
-        if segment.external_images.is_empty() {
-            return;
-        }
-
-        // Move into a local vec so we can call `&mut self` methods
-        // (`flush_texture_batch`) while iterating without holding a borrow on
-        // `segment.external_images`.
-        let pending = &segment.external_images[range];
-
-        for (texture_id, instance, scissor) in pending.iter().copied() {
-            // Resolve ID → view at replay time.  Clone the view to release the
-            // borrow on `resources` before calling `flush_texture_batch` (which
-            // takes `&mut resources`).  External textures are uncommon; the
-            // clone is not a hot-path concern.
-            let tex_view =
-                if let Some(entry) = resources.external_texture_registry().get(texture_id) {
-                    entry.view.clone()
-                } else {
-                    tracing::warn!(
-                        "External texture {} not found at flush time — skipping draw",
-                        texture_id.get()
-                    );
-                    continue;
+    ) -> crate::error::EngineResult<()> {
+        for (lease, instance, scissor, sampling) in &segment.external_images[range] {
+            let epoch = resources.prepared_epoch();
+            let key = (lease.allocation_key(), *sampling);
+            if !self.external_bindings.contains_key(&key) {
+                // Owner rejection and completion enrollment precede binding allocation.
+                resources.retain_external_lease(lease.clone())?;
+                let requested = std::mem::size_of::<(
+                    super::CapturedExternalBinding,
+                    (usize, crate::external_texture_registry::ExternalSampling),
+                )>();
+                let charge =
+                    resources.reserve_external_binding(crate::device_domain::PreparedCost {
+                        gpu_bytes: 0,
+                        cpu_bytes: requested,
+                        objects: 1,
+                    })?;
+                self.external_bindings.try_reserve(1).map_err(|source| {
+                    crate::error::EngineError::PreparedResourceAllocation {
+                        resource: "external binding cache",
+                        source,
+                    }
+                })?;
+                let sampler = match sampling {
+                    crate::external_texture_registry::ExternalSampling::Nearest => {
+                        &self.nearest_sampler
+                    }
+                    crate::external_texture_registry::ExternalSampling::Linear => {
+                        &self.external_linear_sampler
+                    }
                 };
-
-            let _ = self.texture_batch.add(instance);
-            self.flush_texture_batch(
+                let binding = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("Captured External Texture Binding"),
+                    layout: &pipelines.texture_bind_group_layout,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: wgpu::BindingResource::Sampler(sampler),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: wgpu::BindingResource::TextureView(lease.view()),
+                        },
+                    ],
+                });
+                self.external_bindings.insert(
+                    key,
+                    super::CapturedExternalBinding {
+                        _lease: lease.clone(),
+                        binding,
+                        charge,
+                        last_enrolled_epoch: epoch,
+                    },
+                );
+            }
+            let captured = self
+                .external_bindings
+                .get_mut(&key)
+                .expect("BUG: external binding was inserted");
+            // Every pending submission must own both references; repeated draws
+            // in that same batch need no extra permit allocation or ledger lock.
+            // Exhausted epochs disable the optimization instead of wrapping.
+            if epoch.is_none() || captured.last_enrolled_epoch != epoch {
+                resources.retain_external_lease(lease.clone())?;
+                resources.retain_external_binding_charge(&captured.charge)?;
+                captured.last_enrolled_epoch = epoch;
+            }
+            let binding = captured.binding.clone();
+            let _ = self.texture_batch.add(*instance);
+            self.flush_texture_batch_with_blend(
                 device,
                 queue,
                 pipelines,
@@ -398,10 +430,16 @@ impl GpuReplay {
                 viewport_size,
                 encoder,
                 view,
-                &tex_view,
-                scissor,
+                lease.view(),
+                *scissor,
+                matches!(
+                    lease.descriptor().alpha,
+                    crate::external_texture_registry::ExternalAlpha::Premultiplied
+                ) || instance.filters_straight_as_premultiplied(),
+                Some(&binding),
             );
         }
+        Ok(())
     }
 
     // =========================================================================
@@ -439,6 +477,7 @@ impl GpuReplay {
             texture_view,
             scissor,
             false,
+            None,
         );
     }
 
@@ -475,6 +514,7 @@ impl GpuReplay {
             texture_view,
             scissor,
             true,
+            None,
         );
     }
 
@@ -495,6 +535,7 @@ impl GpuReplay {
         texture_view: &wgpu::TextureView,
         scissor: ScissorRect,
         premultiplied: bool,
+        captured_binding: Option<&wgpu::BindGroup>,
     ) {
         if self.texture_batch.is_empty() {
             return;
@@ -506,19 +547,21 @@ impl GpuReplay {
             self.texture_batch.len()
         );
 
-        let texture_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Texture Instance Bind Group"),
-            layout: &pipelines.texture_bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::Sampler(&self.default_sampler),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::TextureView(texture_view),
-                },
-            ],
+        let texture_bind_group = captured_binding.cloned().unwrap_or_else(|| {
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("Texture Instance Bind Group"),
+                layout: &pipelines.texture_bind_group_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::Sampler(&self.default_sampler),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::TextureView(texture_view),
+                    },
+                ],
+            })
         });
 
         let instance_buffer = resources.buffer_pool_mut().get_vertex_buffer(

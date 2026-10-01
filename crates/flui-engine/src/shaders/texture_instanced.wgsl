@@ -19,7 +19,7 @@ struct InstanceInput {
     @location(5) transform: vec4<f32>,     // [cos(angle), sin(angle), tx, ty]
     @location(6) clip_bounds: vec4<f32>,   // [x, y, width, height] of clip
     @location(7) clip_radii: vec4<f32>,    // [tl, tr, br, bl] of clip
-    @location(8) clip_kind: vec4<u32>,           // [kind, _, _, _]: 0=none, 1=rrect, 2=rsuperellipse
+    @location(8) clip_kind: vec4<u32>,           // [kind, source mode, hard clip, _]
     @location(9) clip_device_to_local: vec4<f32>,  // [a, b, c, d], columns first
     @location(10) clip_local_origin: vec4<f32>,    // [tx, ty, 0, 0]
 }
@@ -35,6 +35,7 @@ struct VertexOutput {
     @location(5) @interpolate(flat) clip_kind: u32, // 0=none, 1=rrect, 2=rsuperellipse
     @location(6) clip_device_to_local: vec4<f32>,
     @location(7) clip_local_origin: vec4<f32>,
+    @location(8) @interpolate(flat) source_mode: u32,
 }
 
 // =============================================================================
@@ -161,14 +162,47 @@ fn vs_main(
     out.clip_local_origin = instance.clip_local_origin;
     // Bit 2 carries the clip layer's Clip mode; `clipAlpha` unpacks it.
     out.clip_kind = instance.clip_kind.x | (instance.clip_kind.z << 2u);
+    out.source_mode = instance.clip_kind.y;
 
     return out;
 }
 
+// Straight-alpha coverage must be premultiplied BEFORE filtering; multiplying
+// the hardware-filtered RGB by its filtered alpha compounds edge attenuation.
+fn load_premultiplied_straight(coord: vec2<i32>, size: vec2<i32>) -> vec4<f32> {
+    let clamped = clamp(coord, vec2<i32>(0), size - vec2<i32>(1));
+    let texel = textureLoad(texture_view, clamped, 0);
+    return vec4<f32>(texel.rgb * texel.a, texel.a);
+}
+
+fn filter_straight_coverage(uv: vec2<f32>) -> vec4<f32> {
+    let size = vec2<i32>(textureDimensions(texture_view, 0));
+    let position = uv * vec2<f32>(size) - vec2<f32>(0.5);
+    let base = vec2<i32>(floor(position));
+    let weight = fract(position);
+    let tl = load_premultiplied_straight(base, size);
+    let tr = load_premultiplied_straight(base + vec2<i32>(1, 0), size);
+    let bl = load_premultiplied_straight(base + vec2<i32>(0, 1), size);
+    let br = load_premultiplied_straight(base + vec2<i32>(1, 1), size);
+    return mix(mix(tl, tr, weight.x), mix(bl, br, weight.x), weight.y);
+}
+
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    // Sample texture
-    var tex_color = textureSample(texture_view, texture_sampler, in.uv);
+    // Derivatives are computed in uniform control flow; source mode is per
+    // instance and does not justify implicit derivatives inside either branch.
+    let uv_dx = dpdx(in.uv);
+    let uv_dy = dpdy(in.uv);
+    var tex_color: vec4<f32>;
+    if (in.source_mode == 2u) {
+        tex_color = filter_straight_coverage(in.uv);
+    } else {
+        // Preserve hardware sampling and LOD for all existing image paths.
+        tex_color = textureSampleGrad(texture_view, texture_sampler, in.uv, uv_dx, uv_dy);
+        if (in.source_mode == 1u) {
+            tex_color.a = 1.0;
+        }
+    }
 
     // Apply tint (multiply)
     tex_color = tex_color * in.tint;

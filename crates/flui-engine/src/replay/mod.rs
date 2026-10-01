@@ -44,6 +44,14 @@ use crate::{
     resources::GpuResources,
 };
 
+struct CapturedExternalBinding {
+    // Strong identity prevents allocation-pointer ABA while the cache lives.
+    _lease: crate::external_texture_registry::ExternalAllocationLease,
+    binding: wgpu::BindGroup,
+    charge: Arc<crate::device_domain::PreparedPermit>,
+    last_enrolled_epoch: Option<u64>,
+}
+
 /// Owns the five GPU plumbing fields, the per-frame texture-instance scratch
 /// batch, all segment-flush methods, the top-level `submit` dispatch loop,
 /// and opacity-layer recursion.
@@ -82,6 +90,13 @@ pub(super) struct GpuReplay {
     /// reuse this sampler for the box-downsample bind group without adding a
     /// second sampler field.  The `wgpu` module boundary is `super` here.
     pub(super) default_sampler: wgpu::Sampler,
+    nearest_sampler: wgpu::Sampler,
+    external_linear_sampler: wgpu::Sampler,
+    // Frame-local strong leases prevent pointer reuse while bindings are cached.
+    external_bindings: std::collections::HashMap<
+        (usize, crate::external_texture_registry::ExternalSampling),
+        CapturedExternalBinding,
+    >,
 
     // ── Per-frame texture-instance scratch batch ─────────────────────────────
     /// Per-frame scratch batch for texture instances.
@@ -192,9 +207,30 @@ impl GpuReplay {
             unit_quad_buffer,
             unit_quad_index_buffer,
             default_sampler,
+            nearest_sampler: device.create_sampler(&wgpu::SamplerDescriptor {
+                label: Some("External Nearest Sampler"),
+                mag_filter: wgpu::FilterMode::Nearest,
+                min_filter: wgpu::FilterMode::Nearest,
+                mipmap_filter: wgpu::MipmapFilterMode::Nearest,
+                lod_max_clamp: 0.0,
+                ..Default::default()
+            }),
+            external_linear_sampler: device.create_sampler(&wgpu::SamplerDescriptor {
+                label: Some("External Linear Mip-zero Sampler"),
+                mag_filter: wgpu::FilterMode::Linear,
+                min_filter: wgpu::FilterMode::Linear,
+                mipmap_filter: wgpu::MipmapFilterMode::Nearest,
+                lod_max_clamp: 0.0,
+                ..Default::default()
+            }),
+            external_bindings: std::collections::HashMap::new(),
             texture_batch: InstanceBatch::new(1024),
             glyph_bind_group: None,
         }
+    }
+
+    pub(super) fn finish_external_frame(&mut self) {
+        self.external_bindings = std::collections::HashMap::new();
     }
 
     /// Update CPU target state; previously encoded bindings remain immutable.

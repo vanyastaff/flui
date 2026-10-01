@@ -66,11 +66,15 @@ fn render_to_rgba(
         });
     }
 
+    painter.begin_frame().expect("public painter frame begins");
     draw(&mut painter);
     painter
         .render_to_view(&target_view, &mut encoder)
         .expect("painter.render must succeed for readback");
-    queue.submit(std::iter::once(encoder.finish()));
+    painter
+        .submit_encoder(encoder)
+        .expect("managed painter submission");
+    painter.finish_frame();
 
     crate::test_support::readback_bytes(device, queue, &target, size, size)
 }
@@ -252,7 +256,51 @@ fn clear_offscreen_result(nested: bool) {
 /// composites with its own blend mode.
 #[test]
 fn painter_images_and_offscreen_results_read_back_as_specified() {
-    let cases: [(&str, fn()); 13] = [
+    let cases: [(&str, fn()); 24] = [
+        (
+            "external completion after repeated submit",
+            external_repeated_submission_keeps_allocation,
+        ),
+        (
+            "external competing recording failures",
+            external_competing_recording_failures,
+        ),
+        (
+            "external nested opacity allocation",
+            external_nested_opacity_preserves_recorded_allocation,
+        ),
+        (
+            "external resource sampling update",
+            external_resource_sampling_survives_update,
+        ),
+        (
+            "external straight linear filtering has no halo",
+            external_straight_linear_filtering_has_no_halo,
+        ),
+        (
+            "external alpha and opacity",
+            external_alpha_contract_scales_opacity,
+        ),
+        (
+            "external invalid imports preserve old draw",
+            external_invalid_registration_and_update_preserve_old_resource,
+        ),
+        (
+            "external missing ID next frame",
+            external_missing_id_and_unregister_recover,
+        ),
+        (
+            "external latest same allocation",
+            external_contents_are_live_within_the_same_allocation,
+        ),
+        (
+            "external per-draw sampling",
+            external_draw_sampling_overrides_registration,
+        ),
+        (
+            "external recorded allocation",
+            external_recorded_draw_survives_update_and_rebind,
+        ),
         (
             "tess adjacent merge boundaries",
             tess_merge_preserves_order_and_clip_boundaries,
@@ -506,6 +554,15 @@ fn cached_image_draws_keep_their_own_scissors() {
 }
 
 fn recording_quota_case(bytes: usize, elements: usize, draw: fn(&mut WgpuPainter)) {
+    recording_failure_case(bytes, elements, false, draw);
+}
+
+fn recording_failure_case(
+    bytes: usize,
+    elements: usize,
+    external_first: bool,
+    draw: fn(&mut WgpuPainter),
+) {
     use flui_painting::{Paint, styling::Color};
     let (device, queue) = test_device_and_queue();
     let (target, view) = crate::test_support::create_target(
@@ -530,13 +587,25 @@ fn recording_quota_case(bytes: usize, elements: usize, draw: fn(&mut WgpuPainter
     );
     draw(&mut painter);
     let mut failed = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
-    assert!(
-        matches!(
-            painter.render_to_view(&view, &mut failed),
-            Err(crate::error::EngineError::PreparedResourceLimit { .. })
-        ),
-        "recording quota refusal must reach render, not silently skip"
-    );
+    let error = painter
+        .render_to_view(&view, &mut failed)
+        .expect_err("recording refusal reaches render");
+    if external_first {
+        assert!(
+            matches!(
+                error,
+                crate::EngineError::ExternalTexture(crate::ExternalTextureError::UnknownTexture {
+                    id: 99
+                })
+            ),
+            "first missing resource remains authoritative: {error:?}"
+        );
+    } else {
+        assert!(
+            matches!(error, crate::EngineError::PreparedResourceLimit { .. }),
+            "first quota refusal remains authoritative: {error:?}"
+        );
+    }
     drop(failed);
     painter.finish_frame();
     let unchanged = crate::test_support::readback_bytes(&device, &queue, &target, 64, 64);
@@ -816,4 +885,785 @@ fn tess_merge_preserves_order_and_clip_boundaries() {
     });
     assert_eq!(pixel_at(&pixels, 64, 2, 2), [255, 0, 0, 255]);
     assert_eq!(pixel_at(&pixels, 64, 32, 32), [0, 255, 0, 255]);
+}
+
+fn external_pixels(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    width: u32,
+    pixels: &[u8],
+) -> wgpu::Texture {
+    external_pixels_in_format(device, queue, width, pixels, READBACK_FORMAT)
+}
+
+fn external_pixels_in_format(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    width: u32,
+    pixels: &[u8],
+    format: wgpu::TextureFormat,
+) -> wgpu::Texture {
+    let mut upload = pixels.to_vec();
+    if format == wgpu::TextureFormat::Bgra8Unorm {
+        for pixel in upload.as_chunks_mut::<4>().0 {
+            pixel.swap(0, 2);
+        }
+    }
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("External contract texels"),
+        size: wgpu::Extent3d {
+            width,
+            height: 1,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    queue.write_texture(
+        wgpu::TexelCopyTextureInfo {
+            texture: &texture,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        &upload,
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(width * 4),
+            rows_per_image: Some(1),
+        },
+        wgpu::Extent3d {
+            width,
+            height: 1,
+            depth_or_array_layers: 1,
+        },
+    );
+    texture
+}
+
+fn external_draw_sampling_overrides_registration() {
+    use flui_painting::paint::{FilterQuality, TextureId};
+    let (device, queue) = test_device_and_queue();
+    for (quality, default_linear, expected) in [
+        (FilterQuality::None, true, [255, 0, 0, 255]),
+        (FilterQuality::Low, false, [183, 0, 72, 255]),
+    ] {
+        let texture = external_pixels(&device, &queue, 2, &[255, 0, 0, 255, 0, 0, 255, 255]);
+        let pixels = render_to_rgba(&device, &queue, 32, wgpu::Color::BLACK, |painter| {
+            painter
+                .external_texture_registry_mut()
+                .register(
+                    TextureId::new(10),
+                    texture,
+                    external_descriptor(
+                        crate::ExternalAlpha::Straight,
+                        if default_linear {
+                            crate::ExternalSampling::Linear
+                        } else {
+                            crate::ExternalSampling::Nearest
+                        },
+                    ),
+                )
+                .expect("valid external texture");
+            painter.draw_texture(
+                TextureId::new(10),
+                Rect::from_xywh(0.0, 0.0, 32.0, 32.0),
+                None,
+                quality,
+                1.0,
+            );
+        });
+        let actual = pixel_at(&pixels, 32, 12, 16);
+        for channel in 0..4 {
+            assert!(
+                (i32::from(actual[channel]) - expected[channel]).abs() <= 1,
+                "{quality:?}: {actual:?}, expected {expected:?}"
+            );
+        }
+    }
+}
+
+fn external_recorded_draw_survives_update_and_rebind() {
+    use flui_painting::paint::{FilterQuality, TextureId};
+    let (device, queue) = test_device_and_queue();
+    for rebind in [false, true] {
+        let red = external_pixels(&device, &queue, 1, &[255, 0, 0, 255]);
+        let blue = external_pixels(&device, &queue, 1, &[0, 0, 255, 255]);
+        let pixels = render_to_rgba(&device, &queue, 32, wgpu::Color::BLACK, |painter| {
+            painter
+                .external_texture_registry_mut()
+                .register(
+                    TextureId::new(11),
+                    red,
+                    external_descriptor(
+                        crate::ExternalAlpha::Straight,
+                        crate::ExternalSampling::Linear,
+                    ),
+                )
+                .expect("valid external texture");
+            painter.draw_texture(
+                TextureId::new(11),
+                Rect::from_xywh(0.0, 0.0, 16.0, 32.0),
+                None,
+                FilterQuality::None,
+                1.0,
+            );
+            let registry = painter.external_texture_registry_mut();
+            if rebind {
+                registry.unregister(TextureId::new(11));
+                registry
+                    .register(
+                        TextureId::new(11),
+                        blue,
+                        external_descriptor(
+                            crate::ExternalAlpha::Straight,
+                            crate::ExternalSampling::Linear,
+                        ),
+                    )
+                    .expect("explicit rebind");
+            } else {
+                registry
+                    .update(TextureId::new(11), blue)
+                    .expect("compatible update");
+            }
+            painter.draw_texture(
+                TextureId::new(11),
+                Rect::from_xywh(16.0, 0.0, 16.0, 32.0),
+                None,
+                FilterQuality::None,
+                1.0,
+            );
+        });
+        assert_eq!(
+            pixel_at(&pixels, 32, 8, 16),
+            [255, 0, 0, 255],
+            "recorded A must survive allocation replacement (rebind={rebind})"
+        );
+        assert_eq!(
+            pixel_at(&pixels, 32, 24, 16),
+            [0, 0, 255, 255],
+            "later draw resolves B"
+        );
+    }
+}
+
+fn external_descriptor(
+    alpha: crate::ExternalAlpha,
+    sampling: crate::ExternalSampling,
+) -> crate::ExternalTextureDescriptor {
+    crate::ExternalTextureDescriptor {
+        sampling,
+        alpha,
+        color: crate::ExternalColorEncoding::EncodedSrgb,
+    }
+}
+
+fn external_resource_sampling_survives_update() {
+    use flui_painting::paint::TextureId;
+    let (device, queue) = test_device_and_queue();
+    for (sampling, expected) in [
+        (crate::ExternalSampling::Nearest, [255, 0, 0, 255]),
+        (crate::ExternalSampling::Linear, [183, 0, 72, 255]),
+    ] {
+        for update in [false, true] {
+            let pixels = render_to_rgba(&device, &queue, 32, wgpu::Color::BLACK, |painter| {
+                let registry = painter.external_texture_registry_mut();
+                registry
+                    .register(
+                        TextureId::new(12),
+                        external_pixels(&device, &queue, 2, &[255, 0, 0, 255, 0, 0, 255, 255]),
+                        external_descriptor(crate::ExternalAlpha::Straight, sampling),
+                    )
+                    .expect("resource sampler registration");
+                if update {
+                    registry
+                        .update(
+                            TextureId::new(12),
+                            external_pixels(&device, &queue, 2, &[255, 0, 0, 255, 0, 0, 255, 255]),
+                        )
+                        .expect("update preserves resource sampler");
+                }
+                painter.draw_texture_with_resource_sampling(
+                    TextureId::new(12),
+                    Rect::from_xywh(0.0, 0.0, 32.0, 32.0),
+                    None,
+                    1.0,
+                );
+            });
+            assert_external_pixel(pixel_at(&pixels, 32, 12, 16), expected);
+        }
+    }
+}
+
+fn assert_external_pixel(actual: [u8; 4], expected: [u8; 4]) {
+    for channel in 0..4 {
+        assert!(
+            (i32::from(actual[channel]) - i32::from(expected[channel])).abs() <= 1,
+            "{actual:?}, expected {expected:?}"
+        );
+    }
+}
+
+fn external_alpha_contract_scales_opacity() {
+    use flui_painting::paint::{FilterQuality, TextureId};
+    let (device, queue) = test_device_and_queue();
+    for (alpha, source_alpha, opacity, expected) in [
+        (
+            crate::ExternalAlpha::Premultiplied,
+            128,
+            1.0,
+            [128, 0, 127, 255],
+        ),
+        (
+            crate::ExternalAlpha::Premultiplied,
+            128,
+            0.5,
+            [64, 0, 191, 255],
+        ),
+        (crate::ExternalAlpha::Straight, 128, 1.0, [64, 0, 127, 255]),
+        (crate::ExternalAlpha::Straight, 128, 0.5, [32, 0, 191, 255]),
+        // Opaque metadata means source alpha is ignored, even if its byte is zero.
+        (crate::ExternalAlpha::Opaque, 0, 1.0, [128, 0, 0, 255]),
+        (crate::ExternalAlpha::Opaque, 0, 0.5, [64, 0, 128, 255]),
+    ] {
+        let pixels = render_to_rgba(&device, &queue, 32, wgpu::Color::BLUE, |painter| {
+            painter
+                .external_texture_registry_mut()
+                .register(
+                    TextureId::new(13),
+                    external_pixels(&device, &queue, 1, &[128, 0, 0, source_alpha]),
+                    external_descriptor(alpha, crate::ExternalSampling::Nearest),
+                )
+                .expect("alpha source registration");
+            painter.draw_texture(
+                TextureId::new(13),
+                Rect::from_xywh(0.0, 0.0, 32.0, 32.0),
+                None,
+                FilterQuality::None,
+                opacity,
+            );
+        });
+        assert_external_pixel(pixel_at(&pixels, 32, 16, 16), expected);
+    }
+}
+
+fn external_invalid_registration_and_update_preserve_old_resource() {
+    use crate::{EngineError, ExternalTextureError};
+    use flui_painting::paint::{FilterQuality, TextureId};
+    let (device, queue) = test_device_and_queue();
+    let descriptor = external_descriptor(
+        crate::ExternalAlpha::Straight,
+        crate::ExternalSampling::Nearest,
+    );
+    let pixels = render_to_rgba(&device, &queue, 32, wgpu::Color::BLACK, |painter| {
+        let registry = painter.external_texture_registry_mut();
+        registry
+            .register(
+                TextureId::new(14),
+                external_pixels(&device, &queue, 2, &[255, 0, 0, 255, 0, 0, 255, 255]),
+                descriptor,
+            )
+            .expect("original crop source");
+        assert!(matches!(
+            registry.register(
+                TextureId::new(14),
+                external_pixels(&device, &queue, 2, &[0, 0, 255, 255, 0, 0, 255, 255]),
+                descriptor
+            ),
+            Err(EngineError::ExternalTexture(
+                ExternalTextureError::DuplicateTexture { .. }
+            ))
+        ));
+        assert!(matches!(
+            registry.update(
+                TextureId::new(14),
+                external_pixels(&device, &queue, 1, &[0, 0, 255, 255])
+            ),
+            Err(EngineError::ExternalTexture(
+                ExternalTextureError::IncompatibleReplacement { .. }
+            ))
+        ));
+        assert!(matches!(
+            registry.update(
+                TextureId::new(99),
+                external_pixels(&device, &queue, 1, &[0, 0, 255, 255])
+            ),
+            Err(EngineError::ExternalTexture(
+                ExternalTextureError::UnknownTexture { .. }
+            ))
+        ));
+        for (dimension, layers, samples, format, usage) in [
+            (
+                wgpu::TextureDimension::D2,
+                1,
+                1,
+                wgpu::TextureFormat::Rgba8UnormSrgb,
+                wgpu::TextureUsages::TEXTURE_BINDING,
+            ),
+            (
+                wgpu::TextureDimension::D2,
+                1,
+                1,
+                READBACK_FORMAT,
+                wgpu::TextureUsages::COPY_DST,
+            ),
+            (
+                wgpu::TextureDimension::D2,
+                2,
+                1,
+                READBACK_FORMAT,
+                wgpu::TextureUsages::TEXTURE_BINDING,
+            ),
+            (
+                wgpu::TextureDimension::D3,
+                1,
+                1,
+                READBACK_FORMAT,
+                wgpu::TextureUsages::TEXTURE_BINDING,
+            ),
+            (
+                wgpu::TextureDimension::D2,
+                1,
+                4,
+                READBACK_FORMAT,
+                wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::RENDER_ATTACHMENT,
+            ),
+        ] {
+            let make_texture = || {
+                device.create_texture(&wgpu::TextureDescriptor {
+                    label: Some("Rejected import descriptor"),
+                    size: wgpu::Extent3d {
+                        width: 2,
+                        height: 1,
+                        depth_or_array_layers: layers,
+                    },
+                    mip_level_count: 1,
+                    sample_count: samples,
+                    dimension,
+                    format,
+                    usage,
+                    view_formats: &[],
+                })
+            };
+            let error = registry
+                .register(TextureId::new(15), make_texture(), descriptor)
+                .expect_err("unsupported import must be rejected before binding");
+            assert_eq!(error.recoverability(), crate::Recoverability::Unrecoverable);
+            assert!(matches!(error, EngineError::ExternalTexture(_)));
+            registry
+                .update(TextureId::new(14), make_texture())
+                .expect_err("invalid update cannot replace original source");
+        }
+        // The fresh lookup and crop must still sample A after every rejected operation.
+        painter.draw_texture(
+            TextureId::new(14),
+            Rect::from_xywh(0.0, 0.0, 32.0, 32.0),
+            Some(Rect::from_xywh(0.0, 0.0, 1.0, 1.0)),
+            FilterQuality::None,
+            1.0,
+        );
+    });
+    assert_eq!(pixel_at(&pixels, 32, 16, 16), [255, 0, 0, 255]);
+}
+
+fn external_missing_id_and_unregister_recover() {
+    use crate::{EngineError, ExternalTextureError};
+    use flui_painting::paint::{FilterQuality, TextureId};
+    let (device, queue) = test_device_and_queue();
+    let (target, view) = crate::test_support::create_target(
+        &device,
+        "External failure recovery",
+        32,
+        32,
+        READBACK_FORMAT,
+        wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+    );
+    let mut painter = WgpuPainter::with_shared_device(
+        Arc::clone(&device),
+        Arc::clone(&queue),
+        READBACK_FORMAT,
+        (32, 32),
+    );
+    painter.begin_frame().expect("recorded allocation frame");
+    painter
+        .external_texture_registry_mut()
+        .register(
+            TextureId::new(16),
+            external_pixels(&device, &queue, 1, &[255, 0, 0, 255]),
+            external_descriptor(
+                crate::ExternalAlpha::Straight,
+                crate::ExternalSampling::Nearest,
+            ),
+        )
+        .expect("initial source");
+    painter.draw_texture(
+        TextureId::new(16),
+        Rect::from_xywh(0.0, 0.0, 32.0, 32.0),
+        None,
+        FilterQuality::None,
+        1.0,
+    );
+    assert!(
+        painter
+            .external_texture_registry_mut()
+            .unregister(TextureId::new(16))
+    );
+    crate::test_support::clear_target(&device, &queue, &view, wgpu::Color::BLACK);
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+    painter
+        .render_to_view(&view, &mut encoder)
+        .expect("recorded lease survives unregister");
+    painter
+        .submit_encoder(encoder)
+        .expect("managed external texture submission");
+    painter.finish_frame();
+    assert_eq!(
+        pixel_at(
+            &crate::test_support::readback_bytes(&device, &queue, &target, 32, 32),
+            32,
+            16,
+            16
+        ),
+        [255, 0, 0, 255]
+    );
+    painter.begin_frame().expect("missing-ID frame");
+    painter.draw_texture(
+        TextureId::new(16),
+        Rect::from_xywh(0.0, 0.0, 32.0, 32.0),
+        None,
+        FilterQuality::None,
+        1.0,
+    );
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+    assert!(matches!(
+        painter.render_to_view(&view, &mut encoder),
+        Err(EngineError::ExternalTexture(
+            ExternalTextureError::UnknownTexture { .. }
+        ))
+    ));
+    drop(encoder);
+    painter.finish_frame();
+    painter
+        .begin_frame()
+        .expect("valid frame after missing-ID error");
+    painter
+        .external_texture_registry_mut()
+        .register(
+            TextureId::new(16),
+            external_pixels(&device, &queue, 1, &[0, 0, 255, 255]),
+            external_descriptor(
+                crate::ExternalAlpha::Straight,
+                crate::ExternalSampling::Nearest,
+            ),
+        )
+        .expect("fresh valid registration");
+    painter.draw_texture(
+        TextureId::new(16),
+        Rect::from_xywh(0.0, 0.0, 32.0, 32.0),
+        None,
+        FilterQuality::None,
+        1.0,
+    );
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+    painter
+        .render_to_view(&view, &mut encoder)
+        .expect("next valid frame renders");
+    painter
+        .submit_encoder(encoder)
+        .expect("managed external texture submission");
+    painter.finish_frame();
+    assert_eq!(
+        pixel_at(
+            &crate::test_support::readback_bytes(&device, &queue, &target, 32, 32),
+            32,
+            16,
+            16
+        ),
+        [0, 0, 255, 255]
+    );
+}
+
+fn external_contents_are_live_within_the_same_allocation() {
+    use flui_painting::paint::{FilterQuality, TextureId};
+    let (device, queue) = test_device_and_queue();
+    let texture = external_pixels(&device, &queue, 1, &[255, 0, 0, 255]);
+    let write_handle = texture.clone();
+    let pixels = render_to_rgba(&device, &queue, 32, wgpu::Color::BLACK, |painter| {
+        painter
+            .external_texture_registry_mut()
+            .register(
+                TextureId::new(17),
+                texture,
+                external_descriptor(
+                    crate::ExternalAlpha::Straight,
+                    crate::ExternalSampling::Nearest,
+                ),
+            )
+            .expect("live source registration");
+        painter.draw_texture(
+            TextureId::new(17),
+            Rect::from_xywh(0.0, 0.0, 32.0, 32.0),
+            None,
+            FilterQuality::None,
+            1.0,
+        );
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &write_handle,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &[0, 0, 255, 255],
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(4),
+                rows_per_image: Some(1),
+            },
+            wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+        );
+    });
+    assert_eq!(
+        pixel_at(&pixels, 32, 16, 16),
+        [0, 0, 255, 255],
+        "allocation lease does not snapshot producer texels"
+    );
+}
+
+fn external_nested_opacity_preserves_recorded_allocation() {
+    use flui_painting::{
+        Paint,
+        paint::{FilterQuality, TextureId},
+        styling::Color,
+    };
+    let (device, queue) = test_device_and_queue();
+    let red = external_pixels(&device, &queue, 1, &[255, 0, 0, 255]);
+    let blue = external_pixels(&device, &queue, 1, &[0, 0, 255, 255]);
+    let pixels = render_to_rgba(&device, &queue, 32, wgpu::Color::BLACK, |painter| {
+        painter
+            .external_texture_registry_mut()
+            .register(
+                TextureId::new(18),
+                red,
+                external_descriptor(
+                    crate::ExternalAlpha::Straight,
+                    crate::ExternalSampling::Nearest,
+                ),
+            )
+            .expect("nested source registration");
+        painter.save_layer(None, &Paint::fill(Color::rgba(255, 255, 255, 128)));
+        painter.save_layer(None, &Paint::fill(Color::rgba(255, 255, 255, 128)));
+        painter.draw_texture(
+            TextureId::new(18),
+            Rect::from_xywh(0.0, 0.0, 32.0, 32.0),
+            None,
+            FilterQuality::None,
+            1.0,
+        );
+        painter
+            .external_texture_registry_mut()
+            .update(TextureId::new(18), blue)
+            .expect("future allocation replacement");
+        painter.restore_layer();
+        painter.restore_layer();
+    });
+    assert_external_pixel(pixel_at(&pixels, 32, 16, 16), [64, 0, 0, 255]);
+}
+
+fn external_competing_recording_failures() {
+    use flui_painting::{
+        Paint,
+        paint::{FilterQuality, TextureId},
+        styling::Color,
+    };
+    fn missing(painter: &mut WgpuPainter) {
+        painter.draw_texture(
+            TextureId::new(99),
+            Rect::from_xywh(0.0, 0.0, 64.0, 64.0),
+            None,
+            FilterQuality::None,
+            1.0,
+        );
+    }
+    fn exceed(painter: &mut WgpuPainter) {
+        painter.draw_rect(
+            Rect::from_xywh(0.0, 0.0, 64.0, 64.0),
+            &Paint::fill(Color::RED),
+        );
+    }
+    recording_failure_case(0, 0, false, |painter| {
+        exceed(painter);
+        missing(painter);
+    });
+    recording_failure_case(0, 0, true, |painter| {
+        missing(painter);
+        exceed(painter);
+    });
+    fn excessive_gradient(painter: &mut WgpuPainter) {
+        use flui_painting::paint::{Shader, TileMode};
+        painter.draw_rect(
+            Rect::from_xywh(0.0, 0.0, 64.0, 64.0),
+            &Paint::fill(Color::RED).with_shader(Shader::LinearGradient {
+                from: flui_foundation::geometry::Offset::new(0.0, 0.0),
+                to: flui_foundation::geometry::Offset::new(64.0, 0.0),
+                colors: vec![Color::RED; 257],
+                stops: None,
+                tile_mode: TileMode::Clamp,
+            }),
+        );
+    }
+    fn isolate(painter: &mut WgpuPainter) {
+        // The preceding recorder is sealed before subsequent recording begins.
+        painter.save_layer(None, &Paint::fill(Color::rgba(255, 255, 255, 128)));
+    }
+    recording_failure_case(1024 * 1024, 1024, false, |painter| {
+        excessive_gradient(painter);
+        isolate(painter);
+        missing(painter);
+        painter.restore_layer();
+    });
+    recording_failure_case(1024 * 1024, 1024, true, |painter| {
+        missing(painter);
+        isolate(painter);
+        excessive_gradient(painter);
+        painter.restore_layer();
+    });
+}
+
+// Private lifetime observation is required here: wgpu itself retaining a texture
+// backing would let a pixel-only test pass without the engine's completion lease.
+fn external_repeated_submission_keeps_allocation() {
+    use flui_painting::paint::{FilterQuality, TextureId};
+    let (device, queue) = test_device_and_queue();
+    let (_, view) = crate::test_support::create_target(
+        &device,
+        "Repeated external submit",
+        32,
+        32,
+        READBACK_FORMAT,
+        wgpu::TextureUsages::RENDER_ATTACHMENT,
+    );
+    let mut painter = WgpuPainter::with_shared_device(
+        Arc::clone(&device),
+        Arc::clone(&queue),
+        READBACK_FORMAT,
+        (32, 32),
+    );
+    painter.begin_frame().expect("managed frame");
+    let id = TextureId::new(24);
+    painter
+        .external_texture_registry_mut()
+        .register(
+            id,
+            external_pixels(&device, &queue, 1, &[255, 0, 0, 255]),
+            external_descriptor(
+                crate::ExternalAlpha::Straight,
+                crate::ExternalSampling::Nearest,
+            ),
+        )
+        .expect("external allocation");
+    let probe = painter
+        .external_texture_registry()
+        .get(id)
+        .expect("registered texture")
+        .lease()
+        .lifetime_probe();
+    for submit in 0..2 {
+        painter.draw_texture(
+            id,
+            Rect::from_xywh(0.0, 0.0, 32.0, 32.0),
+            None,
+            FilterQuality::None,
+            1.0,
+        );
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+        painter
+            .render_to_view(&view, &mut encoder)
+            .expect("encoded draw");
+        let index = painter.submit_encoder(encoder).expect("managed submission");
+        if submit == 1 {
+            painter.external_texture_registry_mut().unregister(id);
+            painter.finish_frame();
+            assert!(
+                probe.is_alive(),
+                "second submit owns a fresh lease after CPU finish"
+            );
+        }
+        device
+            .poll(wgpu::PollType::Wait {
+                submission_index: Some(index),
+                timeout: Some(std::time::Duration::from_secs(10)),
+            })
+            .expect("bounded completion");
+        assert_eq!(
+            probe.is_alive(),
+            submit == 0,
+            "only registry/cache retain allocation after first completed submit"
+        );
+    }
+}
+
+fn external_straight_linear_filtering_has_no_halo() {
+    use flui_painting::paint::{FilterQuality, TextureId};
+    let (device, queue) = test_device_and_queue();
+    // Pixel centre x=12.5 on a 32px quad gives source coordinate 0.28125:
+    // the opaque red texel contributes 0.71875, hence 183 red (92 at half opacity).
+    // A straight-alpha interpolation followed by multiplication gives 132 red.
+    for format in [
+        wgpu::TextureFormat::Rgba8Unorm,
+        wgpu::TextureFormat::Bgra8Unorm,
+    ] {
+        for (opacity, expected_red) in [(1.0, 183), (0.5, 92)] {
+            for (alpha, transparent_rgb) in [
+                (crate::ExternalAlpha::Premultiplied, [0, 0, 0]),
+                (crate::ExternalAlpha::Straight, [0, 0, 0]),
+                (crate::ExternalAlpha::Straight, [0, 0, 255]),
+                (crate::ExternalAlpha::Straight, [0, 255, 0]),
+                (crate::ExternalAlpha::Straight, [255, 255, 255]),
+            ] {
+                let source = external_pixels_in_format(
+                    &device,
+                    &queue,
+                    2,
+                    &[
+                        255,
+                        0,
+                        0,
+                        255,
+                        transparent_rgb[0],
+                        transparent_rgb[1],
+                        transparent_rgb[2],
+                        0,
+                    ],
+                    format,
+                );
+                let pixels = render_to_rgba(&device, &queue, 32, wgpu::Color::BLACK, |painter| {
+                    painter
+                        .external_texture_registry_mut()
+                        .register(
+                            TextureId::new(19),
+                            source,
+                            external_descriptor(alpha, crate::ExternalSampling::Linear),
+                        )
+                        .expect("filtered alpha source registration");
+                    painter.draw_texture(
+                        TextureId::new(19),
+                        Rect::from_xywh(0.0, 0.0, 32.0, 32.0),
+                        None,
+                        FilterQuality::Low,
+                        opacity,
+                    );
+                });
+                assert_external_pixel(pixel_at(&pixels, 32, 12, 16), [expected_red, 0, 0, 255]);
+            }
+        }
+    }
 }

@@ -610,23 +610,13 @@ pub(crate) struct DrawSegment {
     /// `flush_texture_batch` so clipped images don't spill outside their clip region.
     pub(crate) cached_images:
         crate::recording_budget::BudgetVec<(TextureKey, TextureInstance, ScissorRect)>,
-    /// External-texture draws queued for this segment.
-    ///
-    /// Each entry carries a `flui_painting::paint::TextureId`
-    /// so the IR is comparable by value and free of non-`PartialEq` wgpu handles.
-    /// Resolution from ID to `wgpu::TextureView` happens at replay time in
-    /// `flush_segment_external_images`, which calls
-    /// `ExternalTextureRegistry::get(id)` immediately before the draw call.
-    ///
-    /// This means a texture `update()`d between the `draw_texture`/`texture`
-    /// call and the frame flush resolves to the newer view — the latest-frame
-    /// semantics documented in [`crate::external_texture_registry`].
-    ///
-    /// The third element is the scissor rect active at draw time.
+    /// Allocation, alpha and sampling are frozen at recording. Texel contents
+    /// remain live: writes into the same allocation are visible at submission.
     pub(crate) external_images: crate::recording_budget::BudgetVec<(
-        flui_painting::paint::TextureId,
+        crate::external_texture_registry::ExternalAllocationLease,
         TextureInstance,
         ScissorRect,
+        crate::external_texture_registry::ExternalSampling,
     )>,
 
     pub(crate) runs: crate::recording_budget::BudgetVec<DrawRun>,
@@ -635,6 +625,7 @@ pub(crate) struct DrawSegment {
 
 #[derive(Debug, Clone)]
 pub(crate) enum RecordError {
+    External(crate::error::ExternalTextureError),
     Limit {
         resource: &'static str,
         requested: usize,
@@ -737,34 +728,30 @@ impl DrawSegment {
         self.glyph_batch.instances = crate::recording_budget::BudgetVec::with_budget(&self.budget);
     }
     pub(crate) fn recording_result(&self) -> crate::error::EngineResult<()> {
-        if let Some(RecordError::Limit {
-            resource,
-            requested,
-            limit,
-        }) = self.record_error.clone().or_else(|| self.budget.error())
-        {
-            return Err(crate::error::EngineError::PreparedResourceLimit {
+        match self.record_error.clone().or_else(|| self.budget.error()) {
+            Some(RecordError::External(error)) => Err(error.into()),
+            Some(RecordError::Limit {
                 resource,
                 requested,
                 limit,
-            });
+            }) => Err(crate::error::EngineError::PreparedResourceLimit {
+                resource,
+                requested,
+                limit,
+            }),
+            None => Ok(()),
         }
-        Ok(())
+    }
+    pub(crate) fn record_external_error(&mut self, error: crate::error::ExternalTextureError) {
+        self.budget.record_error(RecordError::External(error));
+        if self.record_error.is_none() {
+            self.record_error = self.budget.error();
+        }
     }
     pub(crate) fn try_clone_for_remap(&self) -> crate::error::EngineResult<Self> {
+        self.recording_result()?;
         let cloned = self.clone();
-        if let Some(RecordError::Limit {
-            resource,
-            requested,
-            limit,
-        }) = self.budget.error()
-        {
-            return Err(crate::error::EngineError::PreparedResourceLimit {
-                resource,
-                requested,
-                limit,
-            });
-        }
+        cloned.recording_result()?;
         Ok(cloned)
     }
     pub(crate) fn seal(mut self) -> SealedSegment {
@@ -807,12 +794,13 @@ impl DrawSegment {
     }
 
     pub(crate) fn record_limit(&mut self, resource: &'static str, requested: usize, limit: usize) {
+        self.budget.record_error(RecordError::Limit {
+            resource,
+            requested,
+            limit,
+        });
         if self.record_error.is_none() {
-            self.record_error = Some(RecordError::Limit {
-                resource,
-                requested,
-                limit,
-            });
+            self.record_error = self.budget.error();
         }
     }
 

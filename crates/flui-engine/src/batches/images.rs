@@ -9,8 +9,7 @@
 //!
 //! | Method(s)                                    | Resources borrow                                  |
 //! |----------------------------------------------|---------------------------------------------------|
-//! | `texture`                                    | none — ID stored directly in IR                   |
-//! | `draw_texture`                               | `Option<(u32, u32)>` (width/height from registry, for src UV normalization only) |
+//! | `draw_texture`                               | resolved allocation lease and effective sampling |
 //! | `draw_image`, `draw_atlas`                   | `&mut TextureCache`                               |
 //! | `draw_image_repeat`, `draw_image_nine_slice` | `&mut TextureCache` (delegate to `draw_image`)    |
 //! | `draw_image_filtered`                        | `&mut TextureCache` (all branches CPU-recolor then delegate to `draw_image`) |
@@ -42,9 +41,9 @@
 //!   `draw_image_filtered` delegates to `draw_image`, verifying that the
 //!   delegate receives `paint.blend_mode` — NOT the `ColorFilter` mode.
 //!
-//! # DrawTexture / draw_texture: advanced blend is unreachable here
+//! # External textures: advanced blend is unreachable here
 //!
-//! `draw_texture` and `texture` record external-texture draws (platform
+//! `draw_texture` records external-texture draws (platform
 //! surfaces registered via `ExternalTextureRegistry`).  Their callers in the
 //! display-list dispatch path carry NO `Paint` — they receive only
 //! `texture_id`, `dst`, `src`, `filter_quality`, and `opacity`.  Therefore
@@ -54,9 +53,8 @@
 //! # Invariants preserved
 //!
 //! - `cached_images` entries are `(TextureKey, TextureInstance, ScissorRect)`.
-//! - `external_images` entries are `(flui_painting::paint::TextureId, TextureInstance,
-//!   ScissorRect)` — no `wgpu::TextureView` in the IR; resolution to a view
-//!   happens in `flush_segment_external_images` at replay time.
+//! - External draws capture immutable allocation leases while recording;
+//!   replay consumes those handles without another registry lookup.
 //! - The SrcOver `draw_image_repeat`/`draw_image_nine_slice` → `draw_image`
 //!   delegation produces identical per-tile/per-region calls; loop bounds and
 //!   dst rects are byte-identical to the painter originals.
@@ -1321,100 +1319,69 @@ impl DrawBatcher {
         }
     }
 
-    /// Record a draw from an external (platform-registered) texture by ID, with
-    /// optional source UV sub-rect, filter quality hint, and opacity.
-    ///
-    /// - `src` rect is normalized to the texture dimensions to produce UV
-    ///   coordinates; `None` means full texture (`[0,0,1,1]`). When `src` is
-    ///   `Some`, the registry is consulted for dimensions at record time (only
-    ///   `width`/`height` — not the view). Dimensions do not change via
-    ///   [`crate::external_texture_registry::ExternalTextureRegistry::update`],
-    ///   so this read is stable across `update()` calls.
-    /// - `opacity` is baked into the tint color alpha.
-    /// - `_filter_quality` is accepted for API compatibility but currently unused
-    ///   (the sampler is determined at pipeline level, not per-draw).
-    ///
-    /// Resolution of the `texture_id` to a `wgpu::TextureView` happens at
-    /// replay time in `flush_segment_external_images`. A not-found ID at replay
-    /// emits a `tracing::warn!` and skips the draw.
-    ///
-    /// # Advanced blend note
-    ///
-    /// `draw_texture` carries no `blend_mode` parameter. External-texture draws
-    /// enter via the `DrawTexture` display-list command which carries no `Paint`
-    /// upstream — advanced blend is unreachable here by construction.
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "borrow-seam design: segment/state/src_uv_registry are disjoint parameters; \
-                  src/filter_quality/opacity are distinct per-draw parameters with no natural grouping"
-    )]
+    /// Record an already resolved allocation and effective sampling policy.
     pub(in super::super) fn draw_texture(
         segment: &mut DrawSegment,
         state: &GpuStateStack,
-        src_uv_registry: Option<(u32, u32)>,
-        texture_id: flui_painting::paint::TextureId,
+        lease: crate::external_texture_registry::ExternalAllocationLease,
+        sampling: crate::external_texture_registry::ExternalSampling,
         dst: Rect<f64>,
         src: Option<Rect<f64>>,
-        _filter_quality: flui_painting::paint::FilterQuality,
         opacity: f32,
     ) {
         if segment.recording_result().is_err() {
             return;
         }
-
-        #[cfg(debug_assertions)]
-        tracing::trace!(
-            "DrawBatcher::draw_texture: id={}, dst={:?}, src={:?}, opacity={}",
-            texture_id.get(),
-            dst,
-            src,
-            opacity
-        );
-
-        // Compute UV coordinates from the source rect.
-        //
-        // `src=None` → full texture `[0,0,1,1]` (no registry needed).
-        // `src=Some(rect)` → normalize using dimensions passed as `src_uv_registry`
-        // (`(width, height)` read by the painter shim from the registry at record
-        // time). Dimensions are stable across `update()` calls. If the texture
-        // wasn't registered at record time, `src_uv_registry` is `None` and we
-        // fall back to full UV; the replay-side not-found warn+skip will fire.
-        let src_uv = match (src, src_uv_registry) {
-            (Some(src_rect), Some((tex_width, tex_height))) => {
-                let w = tex_width as f32;
-                let h = tex_height as f32;
-                [
-                    (src_rect.left() / f64::from(w)),
-                    (src_rect.top() / f64::from(h)),
-                    (src_rect.right() / f64::from(w)),
-                    (src_rect.bottom() / f64::from(h)),
-                ]
-            }
-            // src=None or dimensions unavailable: full UV.
-            _ => [0.0, 0.0, 1.0, 1.0],
+        let (width, height) = lease.size();
+        let src_uv = src.map_or([0.0, 0.0, 1.0, 1.0], |rect| {
+            [
+                rect.left() / f64::from(width),
+                rect.top() / f64::from(height),
+                rect.right() / f64::from(width),
+                rect.bottom() / f64::from(height),
+            ]
+        });
+        let tint = match lease.descriptor().alpha {
+            crate::external_texture_registry::ExternalAlpha::Premultiplied => [opacity; 4],
+            _ => [1.0, 1.0, 1.0, opacity],
         };
-
-        // Apply opacity via tint color alpha.
-        let tint = flui_painting::styling::Color::rgba(255, 255, 255, (opacity * 255.0) as u8);
-
-        // Apply the current transform to dst corners (translation + scale; rotation
-        // collapses to AABB — same accepted limitation as `texture()` and `draw_image`).
         let top_left = state.apply_transform(Point::new(dst.left(), dst.top()));
         let bottom_right = state.apply_transform(Point::new(dst.right(), dst.bottom()));
         let transformed_dst =
             Rect::from_ltrb(top_left.x, top_left.y, bottom_right.x, bottom_right.y);
-
-        let instance = state.apply_active_clip(crate::instancing::TextureInstance::with_uv(
-            transformed_dst,
-            (src_uv).map(|v| v as f32),
-            tint,
-        ));
-
-        // Push the ID into the IR. Resolution to a `wgpu::TextureView` happens
-        // at replay time in flush_segment_external_images.
+        if ![
+            top_left.x,
+            top_left.y,
+            bottom_right.x,
+            bottom_right.y,
+            transformed_dst.width(),
+            transformed_dst.height(),
+        ]
+        .into_iter()
+        .all(|value| value.is_finite() && value.abs() <= f64::from(f32::MAX))
+        {
+            segment.record_external_error(crate::error::ExternalTextureError::InvalidDestination);
+            return;
+        }
+        let instance =
+            state.apply_active_clip(crate::instancing::TextureInstance::with_uv_tint_f32(
+                transformed_dst,
+                src_uv.map(|v| v as f32),
+                tint,
+            ));
+        let instance = match (lease.descriptor().alpha, sampling) {
+            (crate::external_texture_registry::ExternalAlpha::Opaque, _) => {
+                instance.with_opaque_source()
+            }
+            (
+                crate::external_texture_registry::ExternalAlpha::Straight,
+                crate::external_texture_registry::ExternalSampling::Linear,
+            ) => instance.with_linear_straight_source(),
+            _ => instance,
+        };
         segment
             .external_images
-            .push((texture_id, instance, state.current_scissor()));
+            .push((lease, instance, state.current_scissor(), sampling));
         segment.record_run(DrawRun::ExternalImage(
             segment.external_images.len().saturating_sub(1)..segment.external_images.len(),
         ));

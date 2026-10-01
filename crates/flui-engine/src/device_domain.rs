@@ -1,6 +1,8 @@
 //! Instance-owned admission and submission retirement for prepared IR resources.
 //! This quota excludes existing pools/caches and is not a physical VRAM cap.
 
+use crate::external_texture_registry::ExternalAllocationLease;
+
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::sync::{Arc, Mutex, MutexGuard};
 
@@ -270,6 +272,7 @@ impl Drop for RetirementPermit {
 #[derive(Debug)]
 struct CompletionPayload {
     _permits: Vec<Arc<PreparedPermit>>,
+    _external_leases: Vec<ExternalAllocationLease>,
     _submission: Option<SubmissionPermit>,
     _metadata: Option<Arc<PreparedPermit>>,
     _retirement: Option<RetirementPermit>,
@@ -286,6 +289,7 @@ impl CompletionHold {
         submission: Option<SubmissionPermit>,
         metadata: Option<Arc<PreparedPermit>>,
         retirement: Option<RetirementPermit>,
+        external_leases: Vec<ExternalAllocationLease>,
     ) -> Arc<Self> {
         Arc::new(Self {
             state: Mutex::new((
@@ -293,6 +297,7 @@ impl CompletionHold {
                 false,
                 Some(CompletionPayload {
                     _permits: permits,
+                    _external_leases: external_leases,
                     _submission: submission,
                     _metadata: metadata,
                     _retirement: retirement,
@@ -348,11 +353,12 @@ fn submit_and_track<T>(
     holds: &Mutex<Vec<Arc<CompletionHold>>>,
     permits: Vec<Arc<PreparedPermit>>,
     metadata: Option<Arc<PreparedPermit>>,
+    external_leases: Vec<ExternalAllocationLease>,
     submit: impl FnOnce() -> T,
     register: impl FnOnce(Arc<CompletionHold>),
 ) -> Result<T, DomainError> {
     let submitted = ledger.submission()?;
-    let hold = CompletionHold::new(permits, Some(submitted), metadata, None);
+    let hold = CompletionHold::new(permits, Some(submitted), metadata, None, external_leases);
     let result = catch_unwind(AssertUnwindSafe(submit));
     let registration = catch_unwind(AssertUnwindSafe(|| register(Arc::clone(&hold))));
     if result.is_err() || registration.is_err() {
@@ -378,6 +384,7 @@ pub(crate) struct PreparedSubmission {
     ledger: Arc<Ledger>,
     buffers: Vec<wgpu::CommandBuffer>,
     permits: Vec<Arc<PreparedPermit>>,
+    external_leases: Vec<ExternalAllocationLease>,
 }
 
 /// Shared by managed painters for one device generation, never process-global.
@@ -389,7 +396,8 @@ pub(crate) struct DeviceDomain {
     // Serialize submit + callback registration, whose API targets previous submit.
     submit_gate: Mutex<()>,
     // Owner teardown drops bookkeeping, not a claim of GPU/driver completion.
-    // No hold references DeviceDomain or Device, including quarantined holds.
+    // Imported allocations carry only a weak Domain owner; completion holds
+    // must not form a Domain -> queue -> callback -> Domain ownership cycle.
     quarantine: Mutex<Vec<Arc<CompletionHold>>>,
 }
 
@@ -451,6 +459,21 @@ impl DeviceDomain {
         buffers: Vec<wgpu::CommandBuffer>,
         permits: Vec<Arc<PreparedPermit>>,
     ) -> Result<PreparedSubmission, DomainError> {
+        self.prepare_with_external_leases(buffers, permits, Vec::new())
+    }
+
+    pub(crate) fn prepare_with_external_leases(
+        &self,
+        buffers: Vec<wgpu::CommandBuffer>,
+        permits: Vec<Arc<PreparedPermit>>,
+        external_leases: Vec<ExternalAllocationLease>,
+    ) -> Result<PreparedSubmission, DomainError> {
+        if external_leases
+            .iter()
+            .any(|lease| !lease.is_for_domain(self))
+        {
+            return Err(DomainError::ForeignOwner);
+        }
         if permits
             .iter()
             .any(|permit| !Arc::ptr_eq(&permit.ledger, &self.ledger))
@@ -461,6 +484,7 @@ impl DeviceDomain {
             ledger: Arc::clone(&self.ledger),
             buffers,
             permits,
+            external_leases,
         })
     }
 
@@ -485,6 +509,13 @@ impl DeviceDomain {
                     .checked_mul(std::mem::size_of::<wgpu::CommandBuffer>())
                     .and_then(|buffers| bytes.checked_add(buffers))
             })
+            .and_then(|bytes| {
+                prepared
+                    .external_leases
+                    .capacity()
+                    .checked_mul(std::mem::size_of::<ExternalAllocationLease>())
+                    .and_then(|leases| bytes.checked_add(leases))
+            })
             .and_then(|bytes| bytes.checked_add(submission_metadata_base()))
             .ok_or(DomainError::Overflow)?;
         let metadata = self.reserve(PreparedCost {
@@ -501,6 +532,7 @@ impl DeviceDomain {
             &self.quarantine,
             prepared.permits,
             Some(metadata),
+            prepared.external_leases,
             || self.queue.submit(prepared.buffers),
             |hold| self.queue.on_submitted_work_done(move || hold.complete()),
         )
@@ -544,7 +576,16 @@ impl DeviceDomain {
     /// Used by persistent target Drop, including discarded candidates. This is
     /// accounting retirement, not a promise that driver memory is released.
     pub(crate) fn retire_after_previous_submissions(&self, permits: Vec<Arc<PreparedPermit>>) {
-        if permits.is_empty() {
+        self.retire_resources_after_previous_submissions(permits, Vec::new());
+    }
+
+    /// Trusted raw submissions retain captured allocations as well as charges.
+    pub(crate) fn retire_resources_after_previous_submissions(
+        &self,
+        permits: Vec<Arc<PreparedPermit>>,
+        external_leases: Vec<ExternalAllocationLease>,
+    ) {
+        if permits.is_empty() && external_leases.is_empty() {
             return;
         }
         let _gate = self
@@ -557,7 +598,7 @@ impl DeviceDomain {
             self.ledger.state().lifecycle = Lifecycle::Lost;
             None
         };
-        let hold = CompletionHold::new(permits, None, None, retirement);
+        let hold = CompletionHold::new(permits, None, None, retirement, external_leases);
         let callback = Arc::clone(&hold);
         if let Err(payload) = catch_unwind(AssertUnwindSafe(|| {
             self.queue
@@ -677,7 +718,7 @@ mod tests {
         });
         let allocation = Arc::new(ledger.reserve(cost).expect("old spare allocation"));
         let retirement = ledger.retirement().expect("nonempty allocation retirement");
-        let hold = CompletionHold::new(vec![allocation], None, None, Some(retirement));
+        let hold = CompletionHold::new(vec![allocation], None, None, Some(retirement), Vec::new());
         hold.arm();
         let frame = ledger
             .begin_frame()
@@ -787,6 +828,7 @@ mod tests {
                     &holds,
                     vec![permit],
                     None,
+                    Vec::new(),
                     || (),
                     |hold| {
                         hold.complete();
@@ -858,6 +900,7 @@ mod tests {
                     &holds,
                     vec![permit],
                     None,
+                    Vec::new(),
                     || {
                         assert!(!submit_fault, "submit fault");
                     },
@@ -914,7 +957,7 @@ mod tests {
         };
         let domain = DeviceDomain::with_limits(
             Arc::clone(&device),
-            queue,
+            Arc::clone(&queue),
             PreparedIrLimits {
                 cost: PreparedCost {
                     cpu_bytes: 4096,
@@ -925,6 +968,8 @@ mod tests {
                 frame_submissions: 1,
             },
         );
+        let lease = test_external_lease(&domain);
+        let probe = lease.lifetime_probe();
         let charge = domain.reserve(cost).expect("GPU allocation admitted");
         let buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Retirement regression buffer"),
@@ -937,10 +982,14 @@ mod tests {
         let index = domain
             .submit(
                 domain
-                    .prepare(vec![encoder.finish()], vec![charge])
+                    .prepare_with_external_leases(vec![encoder.finish()], vec![charge], vec![lease])
                     .expect("prepared submission"),
             )
             .expect("GPU submission");
+        assert!(
+            probe.is_alive(),
+            "CPU handoff must not release the captured allocation"
+        );
         // Callback has not been pumped: only actual completion may release it.
         assert!(matches!(
             domain.reserve(PreparedCost {
@@ -960,11 +1009,114 @@ mod tests {
                 timeout: Some(std::time::Duration::from_secs(10)),
             })
             .expect("bounded GPU completion progress");
+        assert!(
+            !probe.is_alive(),
+            "completion releases the engine allocation lease"
+        );
         assert_eq!(domain.ledger.state().submissions, 0);
         let next = domain
             .reserve(cost)
             .expect("next allocation after actual GPU callback");
         drop(next);
         assert_eq!(domain.ledger.state().used, PreparedCost::default());
+        external_leases_survive_competing_faults(&device, &queue);
+    }
+
+    #[cfg(all(feature = "testing", not(target_arch = "wasm32")))]
+    fn test_external_lease(domain: &Arc<DeviceDomain>) -> ExternalAllocationLease {
+        use crate::{
+            ExternalAlpha, ExternalColorEncoding, ExternalSampling, ExternalTextureDescriptor,
+            ExternalTextureRegistry,
+        };
+        let texture = domain.device().create_texture(&wgpu::TextureDescriptor {
+            label: Some("Completion-owned external allocation"),
+            size: wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let mut registry = ExternalTextureRegistry::new(domain);
+        let id = flui_painting::paint::TextureId::new(1);
+        registry
+            .register(
+                id,
+                texture,
+                ExternalTextureDescriptor {
+                    sampling: ExternalSampling::Nearest,
+                    alpha: ExternalAlpha::Straight,
+                    color: ExternalColorEncoding::EncodedSrgb,
+                },
+            )
+            .expect("validated allocation");
+        registry
+            .get(id)
+            .expect("registered allocation")
+            .lease()
+            .clone()
+    }
+
+    #[cfg(all(feature = "testing", not(target_arch = "wasm32")))]
+    fn external_leases_survive_competing_faults(
+        device: &Arc<wgpu::Device>,
+        queue: &Arc<wgpu::Queue>,
+    ) {
+        for (submit_fault, registration_fault) in [(true, false), (false, true), (true, true)] {
+            let domain = DeviceDomain::new(Arc::clone(device), Arc::clone(queue));
+            let lease = test_external_lease(&domain);
+            let probe = lease.lifetime_probe();
+            let mut callback = None;
+            let outcome = catch_unwind(AssertUnwindSafe(|| {
+                submit_and_track(
+                    &domain.ledger,
+                    &domain.quarantine,
+                    Vec::new(),
+                    None,
+                    vec![lease],
+                    || assert!(!submit_fault, "submit fault"),
+                    |hold| {
+                        callback = Some(hold);
+                        assert!(!registration_fault, "registration fault");
+                    },
+                )
+                .expect("submission admission");
+            }));
+            let payload = outcome.expect_err("injected submit boundary failure");
+            let expected = if submit_fault {
+                "submit fault"
+            } else {
+                "registration fault"
+            };
+            assert_eq!(payload.downcast_ref::<&str>().copied(), Some(expected));
+            drop(payload);
+            let callback = callback.expect("callback retained");
+            callback.complete();
+            drop(callback);
+            assert!(
+                probe.is_alive(),
+                "uncertain acceptance must retain allocation despite callback"
+            );
+            assert!(matches!(
+                domain.reserve(PreparedCost::default()),
+                Err(DomainError::Unavailable)
+            ));
+            drop(domain);
+            assert!(
+                !probe.is_alive(),
+                "quarantined allocation releases at owner teardown"
+            );
+            let recovered = DeviceDomain::new(Arc::clone(device), Arc::clone(queue));
+            drop(
+                recovered
+                    .reserve(PreparedCost::default())
+                    .expect("new owner progresses"),
+            );
+        }
     }
 }

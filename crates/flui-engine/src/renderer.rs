@@ -2282,8 +2282,8 @@ impl Renderer {
         // One borrow of the offscreen renderer for the whole capture: it
         // lends the pooled child texture, the cached mask painter, and the
         // mask pass, and is released before the main painter composites.
-        let offscreen = backend
-            .offscreen_mut()
+        let (external_textures, offscreen) = backend
+            .mask_context()
             .expect("gated by caller: offscreen_mut().is_some()");
         let device = Arc::clone(offscreen.device());
         let format = offscreen.surface_format();
@@ -2298,7 +2298,10 @@ impl Renderer {
         let offscreen_painter = offscreen.mask_painter((dev_width, dev_height));
         offscreen_painter.begin_frame_in_scope();
         let recorded = {
-            let mut temp_backend = crate::layer_dispatcher::LayerDispatcher::new(offscreen_painter);
+            let mut temp_backend = crate::layer_dispatcher::LayerDispatcher::with_external_textures(
+                offscreen_painter,
+                external_textures,
+            );
 
             let mut seed_transform = ambient_ctm;
             seed_transform.translate(-device_bounds.left(), -device_bounds.top(), 0.0);
@@ -3347,6 +3350,7 @@ mod tests {
     /// DPR, followers across repaint boundaries, and the shader-mask layer root.
     #[test]
     fn renderer_surface_selection_and_layer_compositing_read_back_as_specified() {
+        shader_mask_external_texture_registrations_follow_parent();
         #[cfg(not(target_arch = "wasm32"))]
         quarantined_domain_reaches_the_backend_recovery_predicate();
         sdr_surface_selection_rejects_incompatible_pairs();
@@ -3356,5 +3360,90 @@ mod tests {
         shader_mask_layer_root_gpu_pixel_readback_reflects_mask();
         #[cfg(feature = "gpu-profiler")]
         crate::profiler::tests::failed_frames_do_not_pollute_the_next_profile();
+    }
+
+    fn shader_mask_external_texture_registrations_follow_parent() {
+        use flui_foundation::geometry::Rect;
+        use flui_layer::{Layer, LayerTree, PictureLayer, Scene, ShaderMaskLayer};
+        use flui_painting::paint::{FilterQuality, TextureId};
+        use flui_painting::styling::Color;
+        use flui_painting::{Canvas, Paint, Shader};
+
+        let Some(renderer) = crate::test_support::renderer_or_skip() else {
+            return;
+        };
+        let mut capture = renderer
+            .retained_capture((128, 128))
+            .expect("capture target");
+        let texture = TextureId::new(73);
+        let scene = |extent: f64, source| {
+            let mut background = Canvas::new();
+            background.draw_rect(
+                Rect::from_xywh(0.0, 0.0, 128.0, 128.0),
+                &Paint::fill(Color::WHITE),
+            );
+            let mut tree = LayerTree::new(Layer::from(PictureLayer::new(background.finish())));
+            let bounds = Rect::from_xywh(20.0, 20.0, extent, extent);
+            let mask = tree.push_child(
+                tree.root(),
+                Layer::from(ShaderMaskLayer::new(
+                    Shader::solid(Color::rgba(255, 255, 255, 128)),
+                    flui_painting::BlendMode::DstIn,
+                    bounds,
+                )),
+            );
+            let mut canvas = Canvas::new();
+            canvas.draw_texture(source, bounds, None, FilterQuality::None, 1.0);
+            tree.push_child(mask, Layer::from(PictureLayer::new(canvas.finish())));
+            Scene::new(tree)
+        };
+        // Equal extents reuse the child painter; a new extent rebuilds it.
+        // Both must observe replacement on the parent's registry, not stale leases.
+        for (extent, color, expected) in [
+            (32.0, [255, 0, 0, 255], [255, 127, 127, 255]),
+            (32.0, [0, 0, 255, 255], [127, 127, 255, 255]),
+            (48.0, [0, 255, 0, 255], [127, 255, 127, 255]),
+        ] {
+            capture.set_solid_texture(texture, color);
+            capture
+                .render_unmanaged(&scene(extent, texture))
+                .expect("masked external frame");
+            let pixels = capture.read_rgba().expect("masked readback");
+            let pixel = |x: usize, y: usize| {
+                let index = (y * 128 + x) * 4;
+                &pixels[index..index + 4]
+            };
+            for (&actual, expected) in pixel(28, 28).iter().zip(expected) {
+                assert!(
+                    (i32::from(actual) - expected).abs() <= 2,
+                    "masked external pixel {:?}, expected {expected}",
+                    pixel(28, 28)
+                );
+            }
+            assert_eq!(pixel(8, 8), &[255, 255, 255, 255], "outside mask unchanged");
+        }
+        let error = capture
+            .render_unmanaged(&scene(48.0, TextureId::new(74)))
+            .expect_err("missing external ID fails");
+        assert!(matches!(
+            error,
+            crate::EngineError::ExternalTexture(crate::ExternalTextureError::UnknownTexture {
+                id: 74
+            })
+        ));
+        capture
+            .render_unmanaged(&scene(48.0, texture))
+            .expect("mask painter recovers after failed lookup");
+        let recovered = capture.read_rgba().expect("recovered masked readback");
+        let offset = (28 * 128 + 28) * 4;
+        for (&actual, expected) in recovered[offset..offset + 4]
+            .iter()
+            .zip([127, 255, 127, 255])
+        {
+            assert!(
+                (i32::from(actual) - expected).abs() <= 2,
+                "recovered frame must repaint the masked texture"
+            );
+        }
     }
 }

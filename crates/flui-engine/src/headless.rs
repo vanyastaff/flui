@@ -582,9 +582,21 @@ impl RetainedCapture {
         );
         let registry = self.painter.external_texture_registry_mut();
         if registry.get(id).is_some() {
-            assert!(registry.update(id, texture), "the texture is registered");
+            registry
+                .update(id, texture)
+                .expect("registered compatible texture");
         } else {
-            registry.register(id, texture, 1, 1, true, false);
+            registry
+                .register(
+                    id,
+                    texture,
+                    crate::ExternalTextureDescriptor {
+                        sampling: crate::ExternalSampling::Nearest,
+                        alpha: crate::ExternalAlpha::Straight,
+                        color: crate::ExternalColorEncoding::EncodedSrgb,
+                    },
+                )
+                .expect("supported test texture");
         }
     }
 

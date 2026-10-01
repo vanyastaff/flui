@@ -30,6 +30,88 @@ use std::error::Error;
 
 use thiserror::Error;
 
+/// Typed failures of trusted external registration and draw validation.
+#[derive(Debug, Clone, Error)]
+#[non_exhaustive]
+pub enum ExternalTextureError {
+    /// The logical ID is not registered.
+    #[error("external texture {id} is not registered")]
+    UnknownTexture {
+        /// Logical texture ID.
+        id: u64,
+    },
+    /// Register cannot implicitly replace a live allocation.
+    #[error("external texture {id} is already registered")]
+    DuplicateTexture {
+        /// Logical texture ID.
+        id: u64,
+    },
+    /// Only two-dimensional textures are supported.
+    #[error("external texture dimension {actual:?} is unsupported")]
+    InvalidTextureDimension {
+        /// Actual texture dimension.
+        actual: wgpu::TextureDimension,
+    },
+    /// Array/cube allocations are unsupported.
+    #[error("external texture has {actual} layers; one required")]
+    InvalidTextureLayers {
+        /// Actual layer count.
+        actual: u32,
+    },
+    /// Multisampled sampling is unsupported.
+    #[error("external texture has {actual} samples; one required")]
+    InvalidTextureSamples {
+        /// Actual sample count.
+        actual: u32,
+    },
+    /// The allocation must be sampleable.
+    #[error("external texture lacks TEXTURE_BINDING usage")]
+    MissingTextureBindingUsage,
+    /// Only encoded-SDR RGBA8/BGRA8 unorm views are supported.
+    #[error("external texture format {format:?} is unsupported")]
+    UnsupportedTextureFormat {
+        /// Actual format, without reinterpretation.
+        format: wgpu::TextureFormat,
+    },
+    /// Dimensions exceed the receiving device's supported extent.
+    #[error("external texture size {width}x{height} is invalid")]
+    InvalidTextureSize {
+        /// Actual width in device pixels.
+        width: u32,
+        /// Actual height in device pixels.
+        height: u32,
+    },
+    /// Update must preserve allocation interpretation and extent.
+    #[error(
+        "external replacement {actual_size:?}/{actual_format:?} differs from {expected_size:?}/{expected_format:?}"
+    )]
+    IncompatibleReplacement {
+        /// Previously admitted extent.
+        expected_size: (u32, u32),
+        /// Replacement extent.
+        actual_size: (u32, u32),
+        /// Previously admitted format.
+        expected_format: wgpu::TextureFormat,
+        /// Replacement format.
+        actual_format: wgpu::TextureFormat,
+    },
+    /// Registry generation arithmetic cannot wrap.
+    #[error("external allocation generation exhausted")]
+    GenerationExhausted,
+    /// Draw opacity must be finite and within zero to one.
+    #[error("external texture opacity is invalid")]
+    InvalidOpacity,
+    /// Destination geometry must be finite and have positive extent.
+    #[error("external texture destination is invalid")]
+    InvalidDestination,
+    /// Crop geometry must be finite, positive and inside the allocation.
+    #[error("external texture source rectangle is invalid")]
+    InvalidSourceRect,
+    /// The captured engine lease belongs to another expected device owner.
+    #[error("external texture lease belongs to another device domain")]
+    ForeignOwner,
+}
+
 /// Rendering errors that can occur in any backend
 ///
 /// This enum is `#[non_exhaustive]` to allow adding new variants
@@ -56,6 +138,9 @@ use thiserror::Error;
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum EngineError {
+    /// External registration or drawing violated its explicit contract.
+    #[error(transparent)]
+    ExternalTexture(#[from] ExternalTextureError),
     /// Preparing a frame would exceed an explicit resource or device limit.
     #[error("prepared {resource} exceeds limit: requested {requested}, limit {limit}")]
     PreparedResourceLimit {
@@ -65,6 +150,15 @@ pub enum EngineError {
         requested: usize,
         /// Maximum admitted amount.
         limit: usize,
+    },
+    /// A fallible prepared metadata allocation was rejected by the allocator.
+    #[error("prepared {resource} allocation failed: {source}")]
+    PreparedResourceAllocation {
+        /// The owner whose metadata could not grow.
+        resource: &'static str,
+        /// The allocator/capacity error.
+        #[source]
+        source: std::collections::TryReserveError,
     },
     /// A resource size cannot be represented without arithmetic overflow.
     #[error("prepared resource size overflow")]
@@ -319,9 +413,11 @@ impl EngineError {
             | Self::InvalidTargetSize { .. }
             | Self::ReadbackTimedOut { .. }
             | Self::NotInitialized => Recoverability::Fatal,
-            Self::SurfaceValidation
+            Self::ExternalTexture(_)
+            | Self::SurfaceValidation
             | Self::PreparedResourceLimit { .. }
             | Self::PreparedResourceOverflow
+            | Self::PreparedResourceAllocation { .. }
             | Self::DeviceDomainMismatch
             | Self::FrameAlreadyActive
             | Self::ResourceIo { .. }
