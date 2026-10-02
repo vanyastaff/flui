@@ -476,11 +476,7 @@ mod synthetic_op_tests {
         [r_pm, g_pm, b_pm, a_u8]
     }
 
-    fn clip_fixture(
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        coverage: Option<u8>,
-    ) -> (wgpu::BindGroupLayout, wgpu::BindGroup) {
+    fn clip_fixture_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
         let uniform = |binding, visibility| wgpu::BindGroupLayoutEntry {
             binding,
             visibility,
@@ -491,7 +487,7 @@ mod synthetic_op_tests {
                 min_binding_size: None,
             },
         };
-        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Composite clip fixture"),
             entries: &[
                 uniform(0, wgpu::ShaderStages::VERTEX),
@@ -507,7 +503,15 @@ mod synthetic_op_tests {
                 },
                 uniform(2, wgpu::ShaderStages::FRAGMENT),
             ],
-        });
+        })
+    }
+
+    fn clip_fixture(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        layout: &wgpu::BindGroupLayout,
+        coverage: Option<u8>,
+    ) -> wgpu::BindGroup {
         let viewport = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Composite fixture viewport"),
             contents: &[0; 16],
@@ -543,9 +547,9 @@ mod synthetic_op_tests {
             texture.size(),
         );
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let binding = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Composite fixture binding"),
-            layout: &layout,
+            layout,
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
@@ -560,8 +564,7 @@ mod synthetic_op_tests {
                     resource: consumer.as_entire_binding(),
                 },
             ],
-        });
-        (layout, binding)
+        })
     }
 
     /// Assert two RGBA u8 pixels are within `±tolerance` in every channel.
@@ -640,8 +643,9 @@ mod synthetic_op_tests {
             BlendMode::Modulate,
         ];
 
-        let (mask_layout, disabled_mask) = clip_fixture(&device, &queue, None);
-        let (_, half_mask) = clip_fixture(&device, &queue, Some(128));
+        let mask_layout = clip_fixture_layout(&device);
+        let disabled_mask = clip_fixture(&device, &queue, &mask_layout, None);
+        let half_mask = clip_fixture(&device, &queue, &mask_layout, Some(128));
         let pipeline = AdvancedBlendPipeline::new(&device, TEST_FORMAT, &mask_layout);
         let mut pool = TexturePool::new(Arc::clone(&device));
         let mut resources = GpuResources::new(crate::device_domain::DeviceDomain::new(

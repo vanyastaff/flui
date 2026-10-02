@@ -75,11 +75,12 @@ impl GpuReplay {
             resources,
             encoder,
         )?;
-        // These modes cannot express mix(destination, blend(source, destination),
-        // coverage) by folding coverage into source alpha. Use a backdrop read
-        // even on devices without dual-source blending.
+        // With fractional coverage these modes cannot express
+        // mix(destination, blend(source, destination), coverage) by folding
+        // coverage into source alpha. Binary masks instead discard the outside
+        // and use fixed-function blending, including on view-only targets.
         let reads_destination = mode.is_advanced()
-            || (!chain.is_unclipped()
+            || (chain.has_antialias()
                 && crate::pipeline_cache::destination_alpha_scale_for(mode).is_some());
         if reads_destination {
             let destination = target

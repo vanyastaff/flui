@@ -181,3 +181,24 @@ layout: три fragment uniform bindings, 8192 bytes на binding и buffer.
 Недостаточные capabilities возвращают `PreparedResourceLimit`, а не validation panic.
 `limited_fragment_uniforms_clip_refusal_recovers` проверяет обычный кадр, отказ
 clip без изменения target и следующий обычный кадр тем же public painter.
+
+
+## Software GPU capture cost
+
+Два Windows CI jobs остановили clip-family по timeout 600s. На том же наборе
+readbacks локальный Microsoft Basic Render Driver (WARP, DX12) дал 398.629s
+с новым painter на каждый capture и 139.305s с reuse painter после успешного
+readback. Grouped clips: 67.931s → 10.144s; FullHD hard-chain занимал 9.930s
+до reuse и не был главным источником задержки. Это замер тестовой семьи
+на одном software adapter, а не frame p95/p99 или оценка всех GPU.
+
+Reuse принадлежит HeadlessRenderer под существующим capture gate. Ошибка
+или unwind после take удаляет painter; successful render/readback возвращает
+его в slot. Регрессии проверяют смену clip, resize, invalid geometry, poison
+и следующий capture. Prepared quota не является полным cap legacy caches.
+
+Отдельный witness primitive AA: AA-enabled axis-aligned 8×8 blue rectangle
+на белом target даёт [15,15,255,255] в (7,6) как при reuse, так и при
+принудительно свежем painter. Это не stale clip; проверка reuse использует
+paint без AA, чтобы pin viewport/clip lifetime отдельно. Primitive AA oracle
+и portable direct coverage plane должны отдельно проверить corner derivatives.

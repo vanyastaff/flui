@@ -61,9 +61,12 @@ removes source pixels the effect could have brought into the visible region.
    the parent prefix. This applies to opacity and filter groups, including empty
    layers whose blend changes the destination under a transparent source.
 5. **Blend.** The group result is `mix(destination, blend(source, destination),
-   coverage)`. Destination-sensitive modes use a backdrop read on the baseline
-   GPU path; multiplying only source alpha is insufficient for Clear, Src and
-   DstIn. Direct primitive draws still use ADR-0057's two-source path. If the
+   coverage)`. Destination-sensitive modes under fractional coverage use a
+   backdrop read on the baseline GPU path; multiplying only source alpha is
+   insufficient for Clear, Src and DstIn. Entirely hard coverage discards
+   excluded fragments and uses exact fixed-function blending, including on
+   view-only targets. Direct primitive draws still use ADR-0057's two-source
+   path. If the
    device cannot carry the independent coverage channel, a direct destructive
    draw under an AA clip is rejected with `UnsupportedCoverageBlend`, rather than
    silently changing its edge. A portable direct-draw fallback needs independent

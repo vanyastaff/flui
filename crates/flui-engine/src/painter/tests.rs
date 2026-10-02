@@ -256,7 +256,8 @@ fn clear_offscreen_result(nested: bool) {
 /// composites with its own blend mode.
 #[test]
 fn painter_images_and_offscreen_results_read_back_as_specified() {
-    let cases: [(&str, fn()); 26] = [
+    let cases: [(&str, fn()); 27] = [
+        ("view-only hard group blends", view_only_hard_group_blends),
         (
             "limited fragment uniforms clip recovery",
             limited_fragment_uniforms_clip_refusal_recovers,
@@ -1837,4 +1838,38 @@ fn limited_fragment_uniforms_clip_refusal_recovers() {
             );
         }
     }
+}
+
+/// Binary bounds coverage needs no readable destination: fixed-function
+/// Porter-Duff blending writes the inside and discards the outside mask.
+fn view_only_hard_group_blends() {
+    use flui_painting::{Paint, styling::Color};
+    let (device, queue) = test_device_and_queue();
+    let mut failed = Vec::new();
+    for (mode, inside) in [
+        (BlendMode::Clear, [0, 0, 0, 0]),
+        (BlendMode::Src, [128, 0, 0, 128]),
+        (BlendMode::DstIn, [0, 0, 128, 128]),
+    ] {
+        // render_to_rgba intentionally passes only a TextureView, never the
+        // destination Texture required by a backdrop-read composite.
+        let rgba = render_to_rgba(&device, &queue, 32, wgpu::Color::BLUE, |painter| {
+            painter.save_layer(
+                Some(Rect::from_xywh(8.0, 8.0, 16.0, 16.0)),
+                &Paint::fill(Color::WHITE).with_blend_mode(mode),
+            );
+            painter.draw_rect(
+                Rect::from_xywh(0.0, 0.0, 32.0, 32.0),
+                &Paint::fill(Color::rgba(255, 0, 0, 128)).with_anti_alias(false),
+            );
+            painter.restore_layer();
+        });
+        let actual = pixel_at(&rgba, 32, 16, 16);
+        let outside = pixel_at(&rgba, 32, 4, 16);
+        if actual.iter().zip(inside).any(|(&a, b)| a.abs_diff(b) > 1) || outside != [0, 0, 255, 255]
+        {
+            failed.push(format!("{mode:?}: inside {actual:?}, outside {outside:?}"));
+        }
+    }
+    assert!(failed.is_empty(), "{failed:#?}");
 }

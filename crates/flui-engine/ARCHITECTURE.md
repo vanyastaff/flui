@@ -335,6 +335,13 @@ under a host-level mutex, so concurrent `&self` callers wait rather than collide
 on the domain's active frame. `twin_renderers_tear_down_without_blocking` also
 covers overlap and the next capture after a poisoned gate. `FrameAlreadyActive`
 is a caller protocol error, distinct from transient GPU backpressure.
+The same mutex owns an optional painter: successful captures retain its GPU
+pipelines and caches, reset frame state and resize before the next recording.
+The painter leaves the slot during capture and returns only after successful
+readback; an error or unwind discards it. The same headless family reads changing
+viewport sizes, clipped then unclipped frames, and a valid frame after invalid
+geometry. These caches live as long as this renderer; the prepared-resource
+quota does not claim to bound every legacy cache allocation.
 An invalidated partial source returns recoverable `MissingRetainedSource` before
 taking the spare target; the invalid-target family checks the retry and quota.
 
