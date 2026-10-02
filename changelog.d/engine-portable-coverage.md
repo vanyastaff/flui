@@ -4,6 +4,8 @@
   tessellated and gradient draws on devices without dual-source blending,
   including transparent Clear and
   gradient edges. Clamp fractional Plus before mixing with the destination.
+- Preserve rounded-gradient edge coverage when cropping scratch passes, without
+  widening their scissors, and skip invisible SSAA paths before backdrop admission.
 
 ### Added
 

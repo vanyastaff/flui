@@ -329,11 +329,17 @@ impl GpuReplay {
 
         let tile_x = op.device_bounds.left().floor().max(0.0) as u32;
         let tile_y = op.device_bounds.top().floor().max(0.0) as u32;
-        let tile_right_edge = (op.device_bounds.right().ceil() as u32 + 1).min(vp_w); // +1px AA fringe
-        let tile_bottom_edge = (op.device_bounds.bottom().ceil() as u32 + 1).min(vp_h); // +1px AA fringe
+        let tile_right_edge =
+            (op.device_bounds.right().ceil() + 1.0).clamp(0.0, f64::from(vp_w)) as u32;
+        let tile_bottom_edge =
+            (op.device_bounds.bottom().ceil() + 1.0).clamp(0.0, f64::from(vp_h)) as u32;
 
-        let tile_w = tile_right_edge.saturating_sub(tile_x).max(1);
-        let tile_h = tile_bottom_edge.saturating_sub(tile_y).max(1);
+        // An invisible path is a no-op, before allocating or reading a backdrop.
+        if tile_x >= tile_right_edge || tile_y >= tile_bottom_edge {
+            return Ok(());
+        }
+        let tile_w = tile_right_edge - tile_x;
+        let tile_h = tile_bottom_edge - tile_y;
 
         // No silent truncation: a path whose 2× tile would exceed the device's
         // max texture dimension is rendered DIRECTLY onto the target (aliased but

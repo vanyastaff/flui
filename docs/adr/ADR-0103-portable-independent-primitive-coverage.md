@@ -41,6 +41,9 @@ original attachment space. Small primitives do not allocate whole-window scratch
 textures. Temporary allocations are admitted before creation and their charges
 retire with submission completion. Lazy isolation layouts preserve ordinary
 drawing on devices requesting fewer resources than the portable path requires.
+Crop origins align with the attachment's 2×2 derivative grid; the original
+scissor bounds both isolation and composite writes despite this alignment.
+An SSAA tile with no attachment intersection is skipped before admission.
 
 `WgpuPainter::render_to_texture` accepts the backing texture and creates its view
 itself. It validates format, extent, dimension, layers, sample count and usages.

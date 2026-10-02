@@ -414,10 +414,17 @@ fn portable_intrinsic_gradient_clear_ignores_source_alpha(
     _native: &HeadlessRenderer,
     renderer: &HeadlessRenderer,
 ) {
-    let render = |family, rounded, mode, color| {
+    let render = |family, rounded, clipped, mode, color| {
         let mut canvas = Canvas::new();
         let full = Rect::from_xywh(0.0, 0.0, 16.0, 16.0);
         canvas.draw_rect(full, &Paint::fill(Color::WHITE).with_anti_alias(false));
+        if clipped {
+            canvas.clip_rect_ext(
+                Rect::from_xywh(3.0, 3.0, 9.0, 9.0),
+                ClipOp::Intersect,
+                Clip::HardEdge,
+            );
+        }
         let colors = vec![color, color];
         let stops = Some(vec![0.0, 1.0]);
         let shader = match family {
@@ -464,19 +471,45 @@ fn portable_intrinsic_gradient_clear_ignores_source_alpha(
     };
     for family in 0..3 {
         for rounded in [false, true] {
-            let reference = render(family, rounded, BlendMode::SrcOver, Color::BLACK);
-            let cleared = render(family, rounded, BlendMode::Clear, Color::rgba(0, 0, 0, 0));
-            let offset = (8 * 16 + 2) * 4;
-            let fringe = reference[offset];
-            assert!(
-                (32..224).contains(&fringe),
-                "family {family}, rounded {rounded}: partial intrinsic coverage required: {fringe}"
-            );
-            for channel in &cleared[offset..offset + 4] {
-                assert!(
-                    channel.abs_diff(fringe) <= 1,
-                    "family {family}, rounded {rounded}: transparent Clear coverage: {channel} versus {fringe}"
+            for clipped in [false, true] {
+                let reference = render(family, rounded, clipped, BlendMode::SrcOver, Color::BLACK);
+                let cleared = render(
+                    family,
+                    rounded,
+                    clipped,
+                    BlendMode::Clear,
+                    Color::rgba(0, 0, 0, 0),
                 );
+                if !clipped {
+                    let fringe = reference[(8 * 16 + 2) * 4];
+                    assert!(
+                        (32..224).contains(&fringe),
+                        "family {family}, rounded {rounded}: partial intrinsic coverage required: {fringe}"
+                    );
+                }
+                // Corners exercise derivative quads; the odd hard clip also
+                // checks that aligning the scratch origin cannot widen writes.
+                for (pixel, (expected, actual)) in reference
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .zip(cleared.as_chunks::<4>().0)
+                    .enumerate()
+                {
+                    for channel in actual {
+                        assert!(
+                            channel.abs_diff(expected[0]) <= 2,
+                            "family {family}, rounded {rounded}, clipped {clipped}, pixel ({}, {}): Clear {channel}, reference {}",
+                            pixel % 16,
+                            pixel / 16,
+                            expected[0],
+                        );
+                    }
+                    let (x, y) = (pixel % 16, pixel / 16);
+                    if clipped && (!(3..12).contains(&x) || !(3..12).contains(&y)) {
+                        assert_eq!(actual, &[255; 4], "outside hard clip at ({x}, {y})");
+                    }
+                }
             }
         }
     }
@@ -493,6 +526,25 @@ fn ssaa_saturated_plus_clamps_before_coverage(
             Rect::from_xywh(0.0, 0.0, 64.0, 64.0),
             &Paint::fill(destination).with_anti_alias(false),
         );
+        // Invisible AA paths must not prevent the following visible operation
+        // or a subsequent frame, including paths exactly at the target edge.
+        for (x, y) in [
+            (80.0, 8.0),
+            (8.0, 80.0),
+            (64.0, 8.0),
+            (8.0, 64.0),
+            (-80.0, 8.0),
+            (8.0, -80.0),
+        ] {
+            let mut outside = flui_painting::paint::Path::new();
+            outside.add_rect(Rect::from_xywh(x, y, 32.0, 32.0));
+            canvas.draw_path(
+                &outside,
+                &Paint::fill(source)
+                    .with_anti_alias(true)
+                    .with_blend_mode(mode),
+            );
+        }
         let mut path = flui_painting::paint::Path::new();
         path.add_rect(Rect::from_xywh(8.5, 8.0, 47.0, 48.0));
         canvas.draw_path(

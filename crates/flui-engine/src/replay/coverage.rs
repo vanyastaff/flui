@@ -63,12 +63,17 @@ fn gradient_needs_portable(
 
 // Bounds come from the geometry sent to the vertex stage, scaled by the same
 // requested viewport. Scissor is a conservative intersection, never coverage.
+struct CoverageCrop {
+    region: (u32, u32, u32, u32),
+    scissor: (u32, u32, u32, u32),
+}
+
 fn crop(
     points: impl Iterator<Item = [f32; 2]>,
     uniform: (u32, u32),
     viewport: (u32, u32),
     scissor: ScissorRect,
-) -> Option<(u32, u32, u32, u32)> {
+) -> Option<CoverageCrop> {
     let mut bounds = [
         f64::INFINITY,
         f64::INFINITY,
@@ -91,12 +96,23 @@ fn crop(
     let top = (bounds[1].floor() - 1.0).max(f64::from(cut.1));
     let right = (bounds[2].ceil() + 1.0).min(f64::from(cut.0 + cut.2));
     let bottom = (bounds[3].ceil() + 1.0).min(f64::from(cut.1 + cut.3));
-    (right > left && bottom > top).then_some((
+    if right <= left || bottom <= top {
+        return None;
+    }
+    let scissor = (
         left as u32,
         top as u32,
         (right - left) as u32,
         (bottom - top) as u32,
-    ))
+    );
+    // Preserve the attachment's 2x2 derivative quads at rounded SDF edges.
+    // Alignment may extend before the original scissor, which stays separate.
+    let x = scissor.0 & !1;
+    let y = scissor.1 & !1;
+    Some(CoverageCrop {
+        region: (x, y, right as u32 - x, bottom as u32 - y),
+        scissor,
+    })
 }
 
 fn mapping_binding(
@@ -133,8 +149,9 @@ fn mapping_binding(
 fn isolation_pass<'a>(
     encoder: &'a mut wgpu::CommandEncoder,
     scratch: &'a PreparedCoverage,
+    crop: &CoverageCrop,
 ) -> wgpu::RenderPass<'a> {
-    encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+    let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
         label: Some("Isolate paint and geometric coverage"),
         color_attachments: &[
             Some(wgpu::RenderPassColorAttachment {
@@ -160,7 +177,14 @@ fn isolation_pass<'a>(
         timestamp_writes: None,
         occlusion_query_set: None,
         multiview_mask: None,
-    })
+    });
+    pass.set_scissor_rect(
+        crop.scissor.0 - crop.region.0,
+        crop.scissor.1 - crop.region.1,
+        crop.scissor.2,
+        crop.scissor.3,
+    );
+    pass
 }
 
 impl GpuReplay {
@@ -206,9 +230,10 @@ impl GpuReplay {
                     [batch.index_start as usize..(batch.index_start + batch.index_count) as usize]
                     .iter()
                     .map(|index| segment.vertices[*index as usize].position);
-                let Some(region) = crop(points, self.uniform_size, viewport, batch.scissor) else {
+                let Some(crop) = crop(points, self.uniform_size, viewport, batch.scissor) else {
                     continue;
                 };
+                let region = crop.region;
                 let scratch =
                     PreparedCoverage::prepare(device, resources, target, region, encoder)?;
                 let cache = pipelines.shape_cache_mut();
@@ -220,7 +245,7 @@ impl GpuReplay {
                     viewport,
                 );
                 {
-                    let mut pass = isolation_pass(encoder, &scratch);
+                    let mut pass = isolation_pass(encoder, &scratch, &crop);
                     pass.set_pipeline(cache.get_isolation(batch.pipeline_key));
                     pass.set_bind_group(0, &self.viewport_bind_group, &[]);
                     pass.set_bind_group(1, &tess.clip_bind_groups[index], &[]);
@@ -239,7 +264,7 @@ impl GpuReplay {
                     encoder,
                     target,
                     mode,
-                    Some(region),
+                    Some(crop.scissor),
                 )?;
             }
             return Ok(());
@@ -313,7 +338,7 @@ impl GpuReplay {
                     GradientKind::Radial => segment.radial_gradient_batch.instances[index].bounds,
                     GradientKind::Sweep => segment.sweep_gradient_batch.instances[index].bounds,
                 };
-                let Some(region) = crop(
+                let Some(crop) = crop(
                     [
                         [bounds[0], bounds[1]],
                         [bounds[0] + bounds[2], bounds[1] + bounds[3]],
@@ -325,6 +350,7 @@ impl GpuReplay {
                 ) else {
                     continue;
                 };
+                let region = crop.region;
                 let scratch =
                     PreparedCoverage::prepare(device, resources, target, region, encoder)?;
                 pipelines.gradients.ensure_isolation(device, kind);
@@ -335,7 +361,7 @@ impl GpuReplay {
                     viewport,
                 );
                 {
-                    let mut pass = isolation_pass(encoder, &scratch);
+                    let mut pass = isolation_pass(encoder, &scratch, &crop);
                     pass.set_pipeline(pipelines.gradients.get_isolation(kind));
                     pass.set_bind_group(0, &self.viewport_bind_group, &[]);
                     pass.set_bind_group(1, stops, &[]);
@@ -354,7 +380,7 @@ impl GpuReplay {
                     encoder,
                     target,
                     run.blend,
-                    Some(region),
+                    Some(crop.scissor),
                 )?;
             }
         }

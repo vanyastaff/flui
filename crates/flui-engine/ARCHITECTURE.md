@@ -418,6 +418,9 @@ blending is unavailable. Fractional Plus always uses the portable path: clamp
 the full operation before mixing coverage. Scratch textures are cropped to
 conservative geometry bounds and the recorded scissor. An immutable crop mapping
 preserves world coordinates and restores attachment coordinates for mask loads.
+Crop origins preserve the attachment's 2×2 derivative grid; the original scissor
+still bounds isolation and composite writes. Invisible SSAA paths are no-ops
+before backdrop admission.
 Each logical primitive composites before the next overlapping operation.
 SSAA Plus resolves a separate geometry plane with the same downsample mapping.
 [ADR-0103](../../docs/adr/ADR-0103-portable-independent-primitive-coverage.md)
