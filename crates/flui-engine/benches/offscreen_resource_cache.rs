@@ -171,5 +171,7 @@ fn captures(c: &mut Criterion) {
     }
     group.finish();
 }
-criterion_group!(benches, captures);
+#[path = "offscreen_resource_cache/clip_startup.rs"]
+mod clip_startup;
+criterion_group!(benches, captures, clip_startup::bench);
 criterion_main!(benches);
