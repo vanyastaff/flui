@@ -204,14 +204,26 @@ impl GpuReplay {
             || backing.depth_or_array_layers() != 1
             || backing.sample_count() != 1
             || backing.format() != surface_format
-            || backing.width() != viewport_size.0
-            || backing.height() != viewport_size.1
             || !backing.usage().contains(wgpu::TextureUsages::COPY_SRC)
         {
             return Err(EngineError::InvalidRenderTarget {
                 reason: "backdrop requires a matching single-sample COPY_SRC attachment",
             });
         }
+        let attachment_size = (backing.width(), backing.height());
+        // During resize the acquired image can still have the preceding extent.
+        // Copy and output use attachment texels; never stretch their correspondence
+        // through the painter's newer viewport uniform.
+        let readable = Rect::from_xywh(
+            0.0,
+            0.0,
+            f64::from(viewport_size.0.min(attachment_size.0)),
+            f64::from(viewport_size.1.min(attachment_size.1)),
+        );
+        let Some(cropped) = output.intersect(&readable).filter(|rect| !rect.is_empty()) else {
+            return Ok(());
+        };
+        output = cropped;
         // Read extent includes the kernel halo even outside the output/damage clip.
         // The attachment edge is a transparent decal boundary.
         let radius = op
@@ -219,12 +231,8 @@ impl GpuReplay {
             .map(|sigma| f64::from((sigma * 1.732_050_8).ceil()));
         let left = (output.left() - radius[0]).floor().max(0.0) as u32;
         let top = (output.top() - radius[1]).floor().max(0.0) as u32;
-        let right = (output.right() + radius[0])
-            .ceil()
-            .min(f64::from(viewport_size.0)) as u32;
-        let bottom = (output.bottom() + radius[1])
-            .ceil()
-            .min(f64::from(viewport_size.1)) as u32;
+        let right = (output.right() + radius[0]).ceil().min(readable.right()) as u32;
+        let bottom = (output.bottom() + radius[1]).ceil().min(readable.bottom()) as u32;
         let dimensions = (right - left, bottom - top);
         let pixels = (dimensions.0 as usize)
             .checked_mul(dimensions.1 as usize)
@@ -312,7 +320,7 @@ impl GpuReplay {
             op.blend,
             Some(&op.clip),
             &op.context,
-            viewport_size,
+            attachment_size,
             surface_format,
             device,
             queue,

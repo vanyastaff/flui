@@ -1142,13 +1142,185 @@ fn ordinary_and_advanced_gradient_numeric_refusals_recover(renderer: &HeadlessRe
     );
 }
 
+// An acquired resize image and the painter viewport can momentarily differ.
+// Use patterned attachment pixels, not a uniform clear, to detect accidental
+// NDC stretching of a backdrop copied from nonzero attachment coordinates.
+#[cfg(feature = "testing")]
+fn backdrop_resize_attachment_coordinates(_renderer: &HeadlessRenderer) {
+    use std::sync::Arc;
+    let (device, queue) = crate::test_support::test_device_and_queue("backdrop resize attachment");
+    for (extent, mode) in [
+        (32_u32, BlendMode::Src),
+        (96, BlendMode::Src),
+        (32, BlendMode::Multiply),
+        (96, BlendMode::Multiply),
+        (32, BlendMode::Plus),
+        (96, BlendMode::Plus),
+    ] {
+        let target = || {
+            device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("backdrop resize target"),
+                size: wgpu::Extent3d {
+                    width: extent,
+                    height: extent,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                    | wgpu::TextureUsages::COPY_SRC
+                    | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            })
+        };
+        let mut seed = Vec::new();
+        for _vertical in 0..extent {
+            for horizontal in 0..extent {
+                seed.extend_from_slice(if (11..15).contains(&horizontal) {
+                    &[255, 0, 0, 255]
+                } else {
+                    &[0, 0, 255, 255]
+                });
+            }
+        }
+        let mut painter = crate::WgpuPainter::with_shared_device(
+            Arc::clone(&device),
+            Arc::clone(&queue),
+            wgpu::TextureFormat::Rgba8Unorm,
+            (64, 64),
+        );
+        let render =
+            |painter: &mut crate::WgpuPainter, texture: &wgpu::Texture, bounds: Rect<f64>| {
+                queue.write_texture(
+                    wgpu::TexelCopyTextureInfo {
+                        texture,
+                        mip_level: 0,
+                        origin: wgpu::Origin3d::ZERO,
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    &seed,
+                    wgpu::TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(extent * 4),
+                        rows_per_image: Some(extent),
+                    },
+                    wgpu::Extent3d {
+                        width: extent,
+                        height: extent,
+                        depth_or_array_layers: 1,
+                    },
+                );
+                painter.begin_frame().expect("begin resized backdrop");
+                painter
+                    .record_backdrop_filter(
+                        bounds,
+                        &ImageFilter::Blur {
+                            sigma_x: 2.0,
+                            sigma_y: 0.0,
+                        },
+                        mode,
+                    )
+                    .expect("record resized backdrop");
+                let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+                let mut encoder =
+                    device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+                painter
+                    .render(
+                        crate::render_target::RenderTarget::sampleable(&view, texture),
+                        &mut encoder,
+                    )
+                    .expect("render acquired resize attachment");
+                painter
+                    .submit_encoder(encoder)
+                    .expect("submit resized backdrop");
+                painter.finish_frame();
+                crate::test_support::readback_bytes(&device, &queue, texture, extent, extent)
+            };
+        let output = Rect::from_xywh(8.0, 8.0, 32.0, 32.0);
+        let actual = render(&mut painter, &target(), output);
+        let mut reference = crate::WgpuPainter::with_shared_device(
+            Arc::clone(&device),
+            Arc::clone(&queue),
+            wgpu::TextureFormat::Rgba8Unorm,
+            (extent, extent),
+        );
+        let expected = render(&mut reference, &target(), output);
+        let mismatch = actual.iter().zip(&expected).position(|(a, b)| a != b);
+        assert!(
+            mismatch.is_none(),
+            "attachment {extent}, {mode:?}: first mismatched channel {mismatch:?}"
+        );
+        assert_ne!(actual, seed, "blur fixture must change stripe pixels");
+        if extent == 32 {
+            assert_eq!(
+                render(
+                    &mut painter,
+                    &target(),
+                    Rect::from_xywh(40.0, 8.0, 8.0, 8.0)
+                ),
+                seed,
+                "outside smaller backing is a no-op"
+            );
+        }
+        if extent == 96 && mode == BlendMode::Src {
+            let edge = render(
+                &mut painter,
+                &target(),
+                Rect::from_xywh(56.0, 8.0, 16.0, 16.0),
+            );
+            let at = |x: usize| (12 * extent as usize + x) * 4;
+            assert_ne!(
+                &edge[at(63)..at(63) + 4],
+                &seed[at(63)..at(63) + 4],
+                "viewport edge supplies transparent blur halo"
+            );
+            assert_eq!(
+                &edge[at(64)..at(64) + 4],
+                &seed[at(64)..at(64) + 4],
+                "larger backing beyond viewport is untouched"
+            );
+        }
+        painter.begin_frame().expect("begin view-only refusal");
+        painter
+            .record_backdrop_filter(
+                output,
+                &ImageFilter::Blur {
+                    sigma_x: 2.0,
+                    sigma_y: 0.0,
+                },
+                mode,
+            )
+            .expect("record refusal");
+        let texture = target();
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+        assert!(matches!(
+            painter.render_to_view(&view, &mut encoder),
+            Err(crate::EngineError::CompositeBackdropUnavailable)
+        ));
+        painter.finish_frame();
+        assert_eq!(
+            render(&mut painter, &target(), output),
+            expected,
+            "same painter recovers after missing backing"
+        );
+    }
+}
+
 #[test]
 fn layer_effects_capture_as_specified() {
     let Some(renderer) = crate::test_support::renderer_or_skip() else {
         return;
     };
     type Case = (&'static str, fn(&HeadlessRenderer));
-    let rows: [Case; 16] = [
+    let rows: &[Case] = &[
+        #[cfg(feature = "testing")]
+        (
+            "backdrop resize attachment coordinates",
+            backdrop_resize_attachment_coordinates,
+        ),
         ("fractional DPR clip and mask", fractional_dpr_clip_and_mask),
         (
             "partial mask equals public capture",

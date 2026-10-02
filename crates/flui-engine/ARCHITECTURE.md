@@ -863,7 +863,11 @@ layer tree cannot cause an unbounded effect call stack.
 Backdrop desired output, required input and write clip are distinct. Blur reads
 its actual kernel halo from the containing target, including pixels outside the
 output clip, and writes only the bounded output under the inherited clip. Outside
-the attachment the source is transparent (decal). Sigma remains two-dimensional;
+the attachment the source is transparent (decal). During a managed surface resize
+transient, output and input reads are bounded by the intersection of the recorded
+viewport and the acquired attachment. The composite uses the actual attachment
+extent so a copied texel is written in the same device coordinate system. The
+public texture-target API still requires matching extents. Sigma remains two-dimensional;
 a transform must either preserve the implemented kernel semantics or be refused.
 Partial-frame damage may constrain writes but must not truncate input dependencies.
 Allocations and captured records remain owned by the existing DeviceDomain and
