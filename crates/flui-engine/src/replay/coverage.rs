@@ -51,6 +51,9 @@ fn gradient_needs_portable(
     range: &std::ops::Range<usize>,
     runs: &[crate::command_ir::GradientRun],
 ) -> bool {
+    // All gradient shaders apply SDF edge AA, including zero-radius rectangles.
+    // Neither corner radii nor the clip chain can rule out partial coverage;
+    // Paint::anti_alias is not carried by gradient instances.
     runs.iter().any(|run| {
         (run.start as usize) < range.end
             && (run.start + run.count) as usize > range.start

@@ -414,41 +414,71 @@ fn portable_intrinsic_gradient_clear_ignores_source_alpha(
     _native: &HeadlessRenderer,
     renderer: &HeadlessRenderer,
 ) {
-    let render = |mode, color| {
+    let render = |family, rounded, mode, color| {
         let mut canvas = Canvas::new();
         let full = Rect::from_xywh(0.0, 0.0, 16.0, 16.0);
         canvas.draw_rect(full, &Paint::fill(Color::WHITE).with_anti_alias(false));
-        canvas.draw_rrect(
-            RRect::from_rect_circular(Rect::from_xywh(2.5, 2.0, 11.0, 12.0), 3.0),
-            &Paint::fill(Color::WHITE)
-                .with_blend_mode(mode)
-                .with_shader(Shader::LinearGradient {
-                    from: Offset::ZERO,
-                    to: Offset::new(16.0, 0.0),
-                    colors: vec![color, color],
-                    stops: Some(vec![0.0, 1.0]),
-                    tile_mode: TileMode::Clamp,
-                }),
-        );
+        let colors = vec![color, color];
+        let stops = Some(vec![0.0, 1.0]);
+        let shader = match family {
+            0 => Shader::LinearGradient {
+                from: Offset::ZERO,
+                to: Offset::new(16.0, 0.0),
+                colors,
+                stops,
+                tile_mode: TileMode::Clamp,
+            },
+            1 => Shader::RadialGradient {
+                center: Offset::new(8.0, 8.0),
+                radius: 16.0,
+                colors,
+                stops,
+                tile_mode: TileMode::Clamp,
+                focal: None,
+                focal_radius: None,
+            },
+            _ => Shader::SweepGradient {
+                center: Offset::new(8.0, 8.0),
+                colors,
+                stops,
+                tile_mode: TileMode::Clamp,
+                start_angle: 0.0,
+                end_angle: std::f64::consts::TAU,
+            },
+        };
+        let paint = Paint::fill(Color::WHITE)
+            .with_anti_alias(false)
+            .with_blend_mode(mode)
+            .with_shader(shader);
+        let bounds = Rect::from_xywh(2.5, 2.0, 11.0, 12.0);
+        if rounded {
+            canvas.draw_rrect(RRect::from_rect_circular(bounds, 3.0), &paint);
+        } else {
+            canvas.draw_rect(bounds, &paint);
+        }
         let mut builder = SceneBuilder::new();
         builder.add_picture(canvas.finish());
         renderer
             .render_layer_tree(&builder.build(), (16, 16))
             .expect("intrinsic coverage render")
     };
-    let reference = render(BlendMode::SrcOver, Color::BLACK);
-    let cleared = render(BlendMode::Clear, Color::rgba(0, 0, 0, 0));
-    let offset = (8 * 16 + 2) * 4;
-    let fringe = reference[offset];
-    assert!(
-        (32..224).contains(&fringe),
-        "witness must have partial intrinsic coverage: {fringe}"
-    );
-    for channel in &cleared[offset..offset + 4] {
-        assert!(
-            channel.abs_diff(fringe) <= 1,
-            "transparent Clear must preserve geometry coverage: {channel} versus {fringe}"
-        );
+    for family in 0..3 {
+        for rounded in [false, true] {
+            let reference = render(family, rounded, BlendMode::SrcOver, Color::BLACK);
+            let cleared = render(family, rounded, BlendMode::Clear, Color::rgba(0, 0, 0, 0));
+            let offset = (8 * 16 + 2) * 4;
+            let fringe = reference[offset];
+            assert!(
+                (32..224).contains(&fringe),
+                "family {family}, rounded {rounded}: partial intrinsic coverage required: {fringe}"
+            );
+            for channel in &cleared[offset..offset + 4] {
+                assert!(
+                    channel.abs_diff(fringe) <= 1,
+                    "family {family}, rounded {rounded}: transparent Clear coverage: {channel} versus {fringe}"
+                );
+            }
+        }
     }
 }
 
