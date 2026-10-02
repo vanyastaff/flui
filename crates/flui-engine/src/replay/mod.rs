@@ -346,7 +346,7 @@ impl GpuReplay {
                         pipelines,
                         resources,
                         encoder,
-                        target.view,
+                        target,
                     )?;
                 }
                 DrawItem::OffscreenTexture(p) => {
@@ -484,7 +484,7 @@ impl GpuReplay {
                             pipelines,
                             resources,
                             encoder,
-                            target.view,
+                            target,
                         )?;
                     }
                 }

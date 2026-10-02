@@ -256,7 +256,15 @@ fn clear_offscreen_result(nested: bool) {
 /// composites with its own blend mode.
 #[test]
 fn painter_images_and_offscreen_results_read_back_as_specified() {
-    let cases: [(&str, fn()); 27] = [
+    let cases: [(&str, fn()); 29] = [
+        (
+            "limited MRT coverage recovery",
+            limited_mrt_coverage_refusal_recovers,
+        ),
+        (
+            "invalid texture target recovery",
+            invalid_texture_target_recovers,
+        ),
         ("view-only hard group blends", view_only_hard_group_blends),
         (
             "limited fragment uniforms clip recovery",
@@ -1872,4 +1880,171 @@ fn view_only_hard_group_blends() {
         }
     }
     assert!(failed.is_empty(), "{failed:#?}");
+}
+
+fn limited_mrt_coverage_refusal_recovers() {
+    use flui_painting::{BlendMode, Paint, paint::Clip, styling::Color};
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+    let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+        power_preference: wgpu::PowerPreference::LowPower,
+        force_fallback_adapter: false,
+        compatible_surface: None,
+        apply_limit_buckets: false,
+    }))
+    .expect("GPU test adapter");
+    let limits = wgpu::Limits {
+        max_color_attachments: 1,
+        ..wgpu::Limits::default()
+    };
+    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+        label: Some("One color attachment device"),
+        required_limits: limits,
+        ..wgpu::DeviceDescriptor::default()
+    }))
+    .expect("custom device with legal uniform count");
+    let device = Arc::new(device);
+    let queue = Arc::new(queue);
+    let (target, view) = crate::test_support::create_target(
+        &device,
+        "limited uniform recovery",
+        32,
+        32,
+        READBACK_FORMAT,
+        wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+    );
+    crate::test_support::clear_target(&device, &queue, &view, wgpu::Color::BLACK);
+    let mut painter = WgpuPainter::with_shared_device(
+        Arc::clone(&device),
+        Arc::clone(&queue),
+        READBACK_FORMAT,
+        (32, 32),
+    );
+    for color in [Color::RED, Color::GREEN] {
+        painter.begin_frame().expect("ordinary frame begins");
+        painter.draw_rect(
+            Rect::from_xywh(0.0, 0.0, 32.0, 32.0),
+            &Paint::fill(color).with_anti_alias(false),
+        );
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+        painter
+            .render_to_view(&view, &mut encoder)
+            .expect("ordinary frame encodes with one attachment");
+        painter
+            .submit_encoder(encoder)
+            .expect("ordinary frame submits");
+        painter.finish_frame();
+        let frame = crate::test_support::readback_bytes(&device, &queue, &target, 32, 32);
+        let expected = if color == Color::RED {
+            [255, 0, 0, 255]
+        } else {
+            [0, 255, 0, 255]
+        };
+        assert_eq!(pixel_at(&frame, 32, 16, 16), expected);
+        if color == Color::RED {
+            painter.begin_frame().expect("clipped frame begins");
+            painter.clip_rect(Rect::from_xywh(8.25, 0.0, 16.0, 32.0), Clip::AntiAlias);
+            painter.draw_rect(
+                Rect::from_xywh(0.0, 0.0, 32.0, 32.0),
+                &Paint::fill(Color::BLUE)
+                    .with_anti_alias(false)
+                    .with_blend_mode(BlendMode::Clear),
+            );
+            let mut failed =
+                device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+            assert!(
+                matches!(
+                    painter.render_to_texture(&target, &mut failed),
+                    Err(crate::EngineError::PreparedResourceLimit {
+                        requested: 2,
+                        limit: 1,
+                        ..
+                    })
+                ),
+                "MRT requirement returns typed refusal before wgpu validation"
+            );
+            drop(failed);
+            painter.finish_frame();
+            let frame = crate::test_support::readback_bytes(&device, &queue, &target, 32, 32);
+            assert_eq!(
+                pixel_at(&frame, 32, 16, 16),
+                [255, 0, 0, 255],
+                "refused clipped frame preserves prior target"
+            );
+        }
+    }
+}
+
+fn invalid_texture_target_recovers() {
+    use flui_painting::{Paint, styling::Color};
+    let (device, queue) = test_device_and_queue();
+    let target = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("valid multi-mip render target"),
+        size: wgpu::Extent3d {
+            width: 32,
+            height: 32,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 2,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: READBACK_FORMAT,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    });
+    let view = target.create_view(&wgpu::TextureViewDescriptor {
+        mip_level_count: Some(1),
+        ..wgpu::TextureViewDescriptor::default()
+    });
+    crate::test_support::clear_target(&device, &queue, &view, wgpu::Color::RED);
+    let mut painter = WgpuPainter::with_shared_device(
+        Arc::clone(&device),
+        Arc::clone(&queue),
+        READBACK_FORMAT,
+        (32, 32),
+    );
+    for (width, usage) in [
+        (
+            16,
+            wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        ),
+        (32, wgpu::TextureUsages::RENDER_ATTACHMENT),
+    ] {
+        let (invalid, _) = crate::test_support::create_target(
+            &device,
+            "invalid target",
+            width,
+            32,
+            READBACK_FORMAT,
+            usage,
+        );
+        painter.begin_frame().expect("invalid frame begins");
+        painter.draw_rect(
+            Rect::from_xywh(0.0, 0.0, 32.0, 32.0),
+            &Paint::fill(Color::BLUE).with_anti_alias(false),
+        );
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+        assert!(matches!(
+            painter.render_to_texture(&invalid, &mut encoder),
+            Err(crate::EngineError::InvalidRenderTarget { .. })
+        ));
+        drop(encoder);
+        painter.finish_frame();
+        let pixels = crate::test_support::readback_bytes(&device, &queue, &target, 32, 32);
+        assert_eq!(pixel_at(&pixels, 32, 16, 16), [255, 0, 0, 255]);
+    }
+    painter.begin_frame().expect("valid frame begins");
+    painter.draw_rect(
+        Rect::from_xywh(0.0, 0.0, 32.0, 32.0),
+        &Paint::fill(Color::GREEN).with_anti_alias(false),
+    );
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+    painter
+        .render_to_texture(&target, &mut encoder)
+        .expect("valid target encodes");
+    painter
+        .submit_encoder(encoder)
+        .expect("valid target submits");
+    painter.finish_frame();
+    let pixels = crate::test_support::readback_bytes(&device, &queue, &target, 32, 32);
+    assert_eq!(pixel_at(&pixels, 32, 16, 16), [0, 255, 0, 255]);
 }

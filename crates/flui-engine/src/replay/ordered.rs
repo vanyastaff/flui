@@ -48,26 +48,26 @@ impl super::GpuReplay {
         pipelines: &mut PipelineSet,
         resources: &mut GpuResources,
         encoder: &mut wgpu::CommandEncoder,
-        view: &wgpu::TextureView,
+        target: crate::render_target::RenderTarget<'_>,
     ) -> crate::error::EngineResult<()> {
         segment.recording_result()?;
-        if !device
-            .features()
-            .contains(wgpu::Features::DUAL_SOURCE_BLENDING)
+        let view = target.view;
         {
             for run in &segment.runs {
-                if !run.clip.has_antialias() {
-                    continue;
-                }
-                let check = |mode| {
-                    if crate::pipeline_cache::destination_alpha_scale_for(mode).is_some() {
-                        Err(crate::error::EngineError::UnsupportedCoverageBlend { mode })
-                    } else {
-                        Ok(())
+                let check = |mode| -> crate::error::EngineResult<()> {
+                    if super::coverage::needs_portable(device, mode) {
+                        let texture = target
+                            .texture
+                            .ok_or(crate::error::EngineError::UnsupportedCoverageBlend { mode })?;
+                        crate::portable_coverage::PortableCoveragePipeline::validate_device_limits(
+                            device,
+                            texture.format(),
+                        )?;
                     }
+                    Ok(())
                 };
                 match &run.kind {
-                    DrawRun::Tess(range) => {
+                    DrawRun::Tess(range) if run.clip.has_antialias() => {
                         for batch in &segment.tess_batches[range.clone()] {
                             check(batch.pipeline_key.blend_mode())?;
                         }
@@ -146,7 +146,9 @@ impl super::GpuReplay {
             (GradientKind::Sweep, &segment.sweep_gradient_runs),
         ] {
             for run in runs {
-                pipelines.gradients.ensure(device, kind, run.blend);
+                if !super::coverage::needs_portable(device, run.blend) {
+                    pipelines.gradients.ensure(device, kind, run.blend);
+                }
             }
         }
         let tess =
@@ -230,6 +232,23 @@ impl super::GpuReplay {
         while cursor < segment.runs.len() {
             self.viewport_bind_group = bindings[cursor].clone();
             let run = &segment.runs[cursor].kind;
+            if super::coverage::run_needs_portable(device, segment, &segment.runs[cursor]) {
+                self.flush_coverage_run(
+                    segment,
+                    run,
+                    tess.as_ref(),
+                    &buffers,
+                    stop_binding.as_ref(),
+                    viewport_size,
+                    device,
+                    pipelines,
+                    resources,
+                    encoder,
+                    target,
+                )?;
+                cursor += 1;
+                continue;
+            }
             match run {
                 DrawRun::Tess(range) => self.flush_tessellated_geometry(
                     segment,
@@ -296,6 +315,13 @@ impl super::GpuReplay {
                     pass.set_bind_group(0, &self.viewport_bind_group, &[]);
                     let mut state = QuadReplayState::default();
                     while cursor < segment.runs.len() {
+                        if super::coverage::run_needs_portable(
+                            device,
+                            segment,
+                            &segment.runs[cursor],
+                        ) {
+                            break;
+                        }
                         pass.set_bind_group(0, &bindings[cursor], &[]);
                         let run = &segment.runs[cursor].kind;
                         let (slot, kind) = match run {

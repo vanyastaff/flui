@@ -71,7 +71,7 @@ pub(crate) enum GradientKind {
 }
 
 impl GradientKind {
-    /// The two assemblies of this kind's shader.
+    /// The folded, dual-source and isolation assemblies of this kind's shader.
     fn shader_sources(self) -> CoverageShaderSources {
         match self {
             Self::Linear => crate::shaders::LINEAR_GRADIENT,
@@ -126,13 +126,17 @@ pub(crate) struct GradientPipelines {
 
     /// Whether the device can compile the second-source assembly at all.
     ///
-    /// `false` withholds the coverage correction for every mode that would
-    /// otherwise take it — the documented ADR-0057 fallback, identical to what
-    /// `PipelineCache` does on the same device.
+    /// `false` selects portable source/coverage isolation for destination-sensitive
+    /// primitives instead of the optional dual-source fast path.
     second_source_available: bool,
 
     /// One pipeline per (kind, mode) encountered, created on first use.
     cache: HashMap<(GradientKind, BlendMode), wgpu::RenderPipeline>,
+    isolation_cache: HashMap<GradientKind, wgpu::RenderPipeline>,
+    isolation_layout: Option<wgpu::PipelineLayout>,
+    isolation_bind_group_layout: Option<wgpu::BindGroupLayout>,
+    isolation_viewport_layout: wgpu::BindGroupLayout,
+    isolation_stops_layout: wgpu::BindGroupLayout,
 }
 
 impl GradientPipelines {
@@ -154,6 +158,11 @@ impl GradientPipelines {
                 .features()
                 .contains(wgpu::Features::DUAL_SOURCE_BLENDING),
             cache: HashMap::new(),
+            isolation_cache: HashMap::new(),
+            isolation_layout: None,
+            isolation_bind_group_layout: None,
+            isolation_viewport_layout: viewport_bind_group_layout.clone(),
+            isolation_stops_layout: gradient_bind_group_layout.clone(),
         }
     }
 
@@ -195,6 +204,67 @@ impl GradientPipelines {
                  GradientPipelines::ensure before beginning the render pass"
             )
         })
+    }
+
+    pub(crate) fn isolation_bind_group_layout(&self) -> &wgpu::BindGroupLayout {
+        self.isolation_bind_group_layout
+            .as_ref()
+            .expect("BUG: gradient isolation layout ensured before binding")
+    }
+
+    pub(crate) fn ensure_isolation(&mut self, device: &wgpu::Device, kind: GradientKind) {
+        if self.isolation_cache.contains_key(&kind) {
+            return;
+        }
+        if self.isolation_layout.is_none() {
+            let mapping = crate::pipeline_cache::create_isolation_bind_group_layout(device);
+            let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("Gradient isolation layout"),
+                bind_group_layouts: &[
+                    Some(&self.isolation_viewport_layout),
+                    Some(&self.isolation_stops_layout),
+                    Some(&mapping),
+                ],
+                immediate_size: 0,
+            });
+            self.isolation_bind_group_layout = Some(mapping);
+            self.isolation_layout = Some(layout);
+        }
+        let targets = [
+            Some(wgpu::ColorTargetState {
+                format: self.surface_format,
+                blend: None,
+                write_mask: wgpu::ColorWrites::ALL,
+            }),
+            Some(wgpu::ColorTargetState {
+                format: wgpu::TextureFormat::R8Unorm,
+                blend: None,
+                write_mask: wgpu::ColorWrites::ALL,
+            }),
+        ];
+        let pipeline = crate::pipeline_set::create_unit_quad_pipeline_with_targets(
+            device,
+            self.isolation_layout
+                .as_ref()
+                .expect("BUG: isolation layout created above"),
+            &QuadPipelineSpec {
+                shader_label: "Gradient isolation shader",
+                pipeline_label: "Gradient isolation pipeline",
+                shader_source: kind.shader_sources().isolation,
+                instance_layout: kind.instance_layout(),
+                blend: wgpu::BlendState::REPLACE,
+                constants: &[],
+            },
+            &targets,
+            "vs_isolation",
+        );
+        self.isolation_cache.insert(kind, pipeline);
+    }
+
+    pub(crate) fn get_isolation(&self, kind: GradientKind) -> &wgpu::RenderPipeline {
+        self.isolation_cache
+            .get(&kind)
+            .expect("BUG: gradient isolation pipeline ensured before replay")
     }
 
     fn create(

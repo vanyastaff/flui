@@ -721,3 +721,6 @@ impl GpuReplay {
 
 #[path = "ordered.rs"]
 mod ordered;
+
+#[path = "coverage.rs"]
+mod coverage;

@@ -412,16 +412,25 @@ the final clip coverage; transparent source texels inside the group region
 remain meaningful. The portable destination-read composite path provides this
 mix without requiring dual-source blending. Capability-specific dual-source
 shape pipelines remain an optimization, not the contract for group coverage.
-Direct Tess/Gradient draws whose blend cannot fold an AA expression into source
-alpha require dual-source blending; otherwise ordered admission returns the
-nonretryable `UnsupportedCoverageBlend` before the segment emits GPU work.
-This supersedes ADR-0057's former incorrect folded fallback under ADR-0102.
-`featureless_direct_aa_refusal_recovers` checks refusal and the next valid public
-painter frame. Portable direct geometric coverage remains required work; it
-cannot be reconstructed from paint alpha, especially for transparent Clear.
+Direct Tess/Gradient draws use independent unblended paint and coverage planes
+when their accepted result cannot use fixed-function blending and dual-source
+blending is unavailable. Fractional Plus always uses the portable path: clamp
+the full operation before mixing coverage. Scratch textures are cropped to
+conservative geometry bounds and the recorded scissor. An immutable crop mapping
+preserves world coordinates and restores attachment coordinates for mask loads.
+Each logical primitive composites before the next overlapping operation.
+SSAA Plus resolves a separate geometry plane with the same downsample mapping.
+[ADR-0103](../../docs/adr/ADR-0103-portable-independent-primitive-coverage.md)
+replaces the former direct-draw capability decision.
+`coverage_blend_reads_back_as_specified` checks the portable result, including
+transparent Clear, gradient alpha and intrinsic edges, crop ordering and saturated
+SSAA Plus. `WgpuPainter::render_to_texture` creates its own base-mip view from a
+validated backing texture. `featureless_direct_aa_refusal_recovers` retains the
+view-only refusal and next-frame contract; `limited_mrt_coverage_refusal_recovers`
+and `invalid_texture_target_recovers` pin requested limits and target admission.
 `grouped_clip_prefix_and_destructive_coverage` asserts Clear, Src and DstIn
-on a fractional clip edge. The current implementation and new readbacks await
-the task's GPU and cross-platform gates; this text is not a passing-test claim.
+on a fractional clip edge. Native readbacks pin the contract; browser and mobile
+runtime execution remain separate evidence from native runs and cross-typechecks.
 
 ### 5. A gradient's blend mode is pipeline state, keyed per draw run
 

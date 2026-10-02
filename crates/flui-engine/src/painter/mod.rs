@@ -489,9 +489,8 @@ impl WgpuPainter {
     /// cumulative frame quota and is outside this managed lifecycle.
     ///
     /// Use this for benchmarks and callers that do not own a backing
-    /// `wgpu::Texture` to supply.  Internal callers should prefer
-    /// `WgpuPainter::render` directly so they can pass a sampleable
-    /// `RenderTarget` when available.
+    /// `wgpu::Texture` to supply. Call [`Self::render_to_texture`] when the
+    /// backing texture is available, so blend passes can read its destination.
     #[must_use = "errors must be propagated or handled"]
     pub fn render_to_view(
         &mut self,
@@ -499,6 +498,50 @@ impl WgpuPainter {
         encoder: &mut wgpu::CommandEncoder,
     ) -> crate::error::EngineResult<()> {
         self.render(crate::render_target::RenderTarget::view_only(view), encoder)
+    }
+
+    /// Encode into a texture whose previous contents can be read for blending.
+    ///
+    /// The texture must match this painter's extent and format, be a single-layer,
+    /// single-sample 2D attachment, and permit `RENDER_ATTACHMENT | COPY_SRC`.
+    /// The texture and encoder must belong to this painter's device. Only mip
+    /// level zero is rendered. Validation precedes encoding. The managed lifecycle
+    /// is the same as [`Self::render_to_view`].
+    #[must_use = "errors must be propagated or handled"]
+    pub fn render_to_texture(
+        &mut self,
+        texture: &wgpu::Texture,
+        encoder: &mut wgpu::CommandEncoder,
+    ) -> crate::error::EngineResult<()> {
+        let reason = if texture.dimension() != wgpu::TextureDimension::D2
+            || texture.depth_or_array_layers() != 1
+        {
+            Some("target must be a single-layer 2D texture")
+        } else if texture.sample_count() != 1 {
+            Some("target must have one sample")
+        } else if (texture.width(), texture.height()) != self.size {
+            Some("target extent must match the painter")
+        } else if texture.format() != self.surface_format {
+            Some("target format must match the painter")
+        } else if !texture
+            .usage()
+            .contains(wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC)
+        {
+            Some("target requires RENDER_ATTACHMENT and COPY_SRC usage")
+        } else {
+            None
+        };
+        if let Some(reason) = reason {
+            return Err(crate::EngineError::InvalidRenderTarget { reason });
+        }
+        let view = texture.create_view(&wgpu::TextureViewDescriptor {
+            mip_level_count: Some(1),
+            ..Default::default()
+        });
+        self.render(
+            crate::render_target::RenderTarget::sampleable(&view, texture),
+            encoder,
+        )
     }
 
     /// Run end-of-frame maintenance: close the glyph atlas' frame, evict over-budget

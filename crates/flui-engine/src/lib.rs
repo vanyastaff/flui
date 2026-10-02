@@ -325,6 +325,7 @@ mod pipeline_cache;
 /// `PipelineCache`/`PipelineBuilder` is gone; this module is the surviving
 /// half.
 pub(crate) mod pipeline_set;
+mod portable_coverage;
 mod profiler;
 mod recording_budget;
 /// Frame render-target descriptor: `view` + optional back-reference `texture`

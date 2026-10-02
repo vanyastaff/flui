@@ -9,13 +9,14 @@
 //! - `GpuReplay::render_ssaa_path` — the replay-time implementation for
 //!   `DrawItem::SsaaPath` items.  Acquires a 2× pooled texture, renders the
 //!   path segment into it (clearing to transparent first), box-downsamples to
-//!   a 1× tile, and composites via the existing premultiplied texture batch path.
+//!   a 1× tile, and composites with the requested blend. Plus also resolves an
+//!   independent geometry tile before clamping and interpolating the result.
 //!
 //! ## Surface / sample-count invariant
 //!
 //! The SSAA tile is a plain normal (non-multisampled) texture, just twice the
 //! logical resolution.  `sample_count` stays 1 everywhere.  No stencil, no
-//! `resolve_target`.  This is safe for Phase B (advanced blend / opacity layers)
+//! `resolve_target`. This is compatible with advanced blend and opacity layers,
 //! which also uses `sample_count: 1` pooled textures.
 //!
 //! ## Premultiplied correctness
@@ -25,9 +26,9 @@
 //! (src factor `One`, pipeline.rs:133). The 2× tile starts clear-transparent, so
 //! the path accumulates premultiplied values over transparent. The box downsample
 //! averages premultiplied values, which is linear-correct (premultiplied colour is
-//! linear in coverage). The 1× tile is then composited via
-//! `flush_texture_batch_premultiplied_with_mode` using the exact blend factors
-//! for `op.blend` (src factor `One` for all tile-safe premultiplied modes).
+//! linear in coverage). Linear tile-safe operators use fixed-function factors.
+//! Saturating Plus resolves geometry independently of paint alpha and clamps
+//! the full additive result before interpolating it with the destination.
 
 use std::sync::Arc;
 
@@ -250,11 +251,13 @@ impl GpuReplay {
     ///
     /// After producing the AA'd 1× tile, the composite is selected by `op.blend`:
     ///
-    /// - **tile-safe** (`is_tile_safe_for_ssaa(op.blend)` = true): composite via
+    /// - **Plus**: render and downsample a separate white geometry membership
+    ///   plane, then clamp the full additive blend before interpolating coverage.
+    ///   A sampleable destination is required.
+    /// - **other tile-safe** (`is_tile_safe_for_ssaa(op.blend)` = true): composite via
     ///   `flush_texture_batch_premultiplied` with `blend_state_for(op.blend)`.
     ///   Transparent SSAA padding is a no-op for these modes (dst preserved).
-    ///   This is an extension over PR-3 (SrcOver-only); now handles Dst, DstOver,
-    ///   DstOut, SrcATop, Xor, Plus as well.
+    ///   Handles Dst, DstOver, DstOut, SrcATop and Xor alongside SrcOver.
     ///
     /// - **advanced** (`op.blend.is_advanced()` = true): composite via
     ///   `flush_advanced_layer` with the 1× tile as foreground.  Requires a
@@ -353,7 +356,10 @@ impl GpuReplay {
                 pipelines,
                 resources,
                 encoder,
-                target_view,
+                crate::render_target::RenderTarget {
+                    view: target_view,
+                    texture: surface_texture,
+                },
             )?;
             return Ok(());
         }
@@ -373,6 +379,42 @@ impl GpuReplay {
         // crop_uv = (1,1) and the shader output is bit-identical.
         let bucket_w = round_up_to_alignment(supersample_w, SSAA_BUCKET_ALIGNMENT).min(max_tex_dim);
         let bucket_h = round_up_to_alignment(supersample_h, SSAA_BUCKET_ALIGNMENT).min(max_tex_dim);
+
+        let coverage_backdrop = if op.blend == flui_painting::BlendMode::Plus {
+            if surface_texture.is_none() {
+                return Err(crate::error::EngineError::CompositeBackdropUnavailable);
+            }
+            crate::portable_coverage::PortableCoveragePipeline::validate_device_limits(
+                device,
+                surface_format,
+            )?;
+            let bytes = (u64::from(bucket_w) * u64::from(bucket_h)
+                + u64::from(tile_w) * u64::from(tile_h))
+            .checked_mul(u64::from(surface_format.block_copy_size(None).unwrap_or(4)))
+            .and_then(|bytes| usize::try_from(bytes).ok())
+            .ok_or(crate::error::GeometryError::Unrepresentable {
+                context: "SSAA coverage allocation",
+            })?;
+            resources.reserve_prepared(crate::device_domain::PreparedCost {
+                gpu_bytes: bytes,
+                cpu_bytes: 0,
+                objects: 4,
+            })?;
+            Some(crate::portable_coverage::PreparedCoverageBackdrop::prepare(
+                device,
+                resources,
+                crate::render_target::RenderTarget {
+                    view: target_view,
+                    texture: surface_texture,
+                },
+                (tile_x, tile_y),
+                (tile_w, tile_h),
+                surface_format,
+                encoder,
+            )?)
+        } else {
+            None
+        };
 
         let super_tex =
             resources
@@ -516,7 +558,7 @@ impl GpuReplay {
             pipelines,
             resources,
             encoder,
-            super_view,
+            crate::render_target::RenderTarget::sampleable(super_view, super_tex.texture()),
         )?;
 
         // ── Step 4: box-downsample 2× → 1× premultiplied tile ────────────────
@@ -537,6 +579,57 @@ impl GpuReplay {
 
         // 2× tile is no longer needed — drop it back to the pool now, before
         // the composite pass, to minimise peak texture memory.
+        // Geometry coverage is independent of paint alpha, including alpha zero.
+        let coverage_tile = if op.blend == flui_painting::BlendMode::Plus {
+            let mut membership = remapped_segment.try_clone_for_remap()?;
+            for vertex in &mut membership.vertices {
+                vertex.color = [1.0; 4];
+            }
+            let supersampled =
+                resources
+                    .layer_texture_pool_mut()
+                    .acquire(bucket_w, bucket_h, surface_format);
+            {
+                let _clear = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("SSAA independent coverage clear"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: supersampled.view(),
+                        resolve_target: None,
+                        depth_slice: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    ..Default::default()
+                });
+            }
+            self.flush_segment(
+                &membership,
+                (supersample_w, supersample_h),
+                device,
+                queue,
+                pipelines,
+                resources,
+                encoder,
+                crate::render_target::RenderTarget::sampleable(
+                    supersampled.view(),
+                    supersampled.texture(),
+                ),
+            )?;
+            Some(self.downsample_ssaa_tile(
+                &supersampled,
+                supersample_w,
+                supersample_h,
+                surface_format,
+                device,
+                pipelines,
+                resources,
+                encoder,
+            ))
+        } else {
+            None
+        };
         drop(super_tex);
 
         // ── Step 5: composite the 1× tile onto the target ────────────────────
@@ -553,7 +646,23 @@ impl GpuReplay {
             f64::from(tile_h as f32),
         );
 
-        if op.blend.is_advanced() {
+        if let Some(coverage) = coverage_tile {
+            coverage_backdrop
+                .expect("BUG: Plus coverage admitted its backdrop before SSAA work")
+                .composite(
+                    pipelines.portable_coverage(device),
+                    device,
+                    encoder,
+                    crate::render_target::RenderTarget {
+                        view: target_view,
+                        texture: surface_texture,
+                    },
+                    &one_x_tile,
+                    &coverage,
+                    op.blend,
+                    None,
+                )?;
+        } else if op.blend.is_advanced() {
             // Advanced (dst-read) composite: route through flush_advanced_layer,
             // same as AdvancedShape. The 1× SSAA tile is the AA'd foreground.
             if let Some(surf_tex) = surface_texture {
@@ -623,7 +732,7 @@ impl GpuReplay {
             //
             // `flush_texture_batch_premultiplied_with_mode` selects (or lazily
             // creates) a pipeline whose `wgpu::BlendState` matches `op.blend`
-            // exactly, so DstOut, Plus, DstOver, Xor, SrcATop, Dst, and SrcOver
+            // exactly, so DstOut, DstOver, Xor, SrcATop, Dst, and SrcOver
             // all composite the 1× tile with their correct factors.
             debug_assert!(
                 is_tile_safe_for_ssaa(op.blend),

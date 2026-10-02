@@ -275,6 +275,10 @@ pub(crate) fn coverage_blend_state_for(mode: BlendMode) -> wgpu::BlendState {
 /// the constant `Zero`. No test ties the partition to `Color::blend`, so this
 /// hand-derivation is the only record of it.)
 ///
+/// Plus preserves transparent padding, but clamping its full blend before
+/// coverage interpolation requires an independent coverage plane and backdrop
+/// read at SSAA replay; tile-safe does not imply a fixed-function composite.
+///
 /// Advanced (dst-read) modes are NOT tile-safe by this definition, but they are
 /// handled separately via `flush_advanced_layer` (not fixed-function blend).
 /// Use `blend.is_advanced()` to detect them before calling this function.
@@ -348,12 +352,12 @@ pub(crate) fn ssaa_eligible_for(mode: BlendMode, device_area: f32) -> bool {
 /// `override_constant_names_match_their_shaders` pins the two together.
 const DESTINATION_ALPHA_SCALE_OVERRIDE: &str = "destination_alpha_scale";
 
-/// The two assemblies of one coverage-correct shader, from which a pipeline
+/// The three assemblies of one coverage-correct shader, from which a pipeline
 /// cache builds pipelines.
 ///
 /// They differ only in the fragment entry point: one folds clip coverage into
 /// the source alpha, the other emits it as a second blend source. Passed as
-/// one value rather than two `&str` parameters because swapping them compiles
+/// one value rather than separate `&str` parameters because swapping them compiles
 /// and then fails at pipeline creation with a message about `@blend_src`
 /// rather than about the mix-up.
 ///
@@ -366,6 +370,8 @@ pub(crate) struct CoverageShaderSources {
     /// Coverage emitted as `@blend_src(1)`. Requires
     /// [`wgpu::Features::DUAL_SOURCE_BLENDING`] on the device that compiles it.
     pub second_source: &'static str,
+    /// Source and coverage on independent unblended attachments.
+    pub isolation: &'static str,
 }
 
 /// The shader assembly a blend mode must be drawn with, and the blend state and
@@ -423,6 +429,11 @@ pub(super) fn select_coverage_blend<S>(
 pub(crate) struct PipelineCache {
     /// Cached pipelines indexed by key
     cache: HashMap<PipelineKey, RenderPipeline>,
+    // Isolation has no blend state; only sample count specializes its pipeline.
+    isolation_cache: HashMap<u32, RenderPipeline>,
+    isolation_shader: Option<wgpu::ShaderModule>,
+    isolation_source: &'static str,
+    isolation_bind_group_layout: wgpu::BindGroupLayout,
 
     /// Shader module folding clip coverage into the source alpha. Used by every
     /// pipeline whose blend mode absorbs `1 - coverage` anyway, and by every
@@ -432,8 +443,8 @@ pub(crate) struct PipelineCache {
     /// Shader module emitting clip coverage as a second blend source.
     ///
     /// `None` when the device lacks [`wgpu::Features::DUAL_SOURCE_BLENDING`],
-    /// in which case the modes that need it fall back to `shader` and keep a
-    /// hard clip edge — see [`Self::new`].
+    /// in which case destination-sensitive partial coverage uses the portable
+    /// isolation pipeline rather than this direct fixed-function cache.
     second_source_shader: Option<wgpu::ShaderModule>,
 
     /// Surface format
@@ -454,24 +465,14 @@ impl PipelineCache {
     ///
     /// # Arguments
     /// * `device` - wgpu device
-    /// * `shader_sources` - the two assemblies of the shape shader
+    /// * `shader_sources` - the three assemblies of the shape shader
     /// * `format` - Surface texture format
     /// * `viewport_bind_group_layout` - Bind group layout for viewport uniform
     ///
-    /// # Coverage fidelity depends on the device
-    ///
-    /// [`CoverageShaderSources::second_source`] is compiled only when `device`
-    /// enabled [`wgpu::Features::DUAL_SOURCE_BLENDING`] — naga rejects its
-    /// `@blend_src` outputs otherwise. Where it is absent, the modes
-    /// [`destination_alpha_scale_for`] names keep a HARD clip edge instead of a
-    /// feathered one, because coverage has nowhere to ride but the source
-    /// alpha their destination factor ignores.
-    ///
-    /// That is a deliberate, documented backend divergence rather than a
-    /// silent one: the feature is optional in WebGPU and absent on the wasm32
-    /// target this workspace ships, and the alternative — spending a paint's
-    /// alpha channel on coverage — would change what a translucent `Clear`
-    /// paint means on every backend to fix an edge on one.
+    /// # Optional dual-source fast path
+    /// The second-source assembly requires `DUAL_SOURCE_BLENDING`. Portable
+    /// replay instead isolates source and coverage and composites against a
+    /// destination snapshot; devices without that feature retain coverage fidelity.
     pub(crate) fn new(
         device: &wgpu::Device,
         shader_sources: CoverageShaderSources,
@@ -510,6 +511,10 @@ impl PipelineCache {
 
         Self {
             cache: HashMap::new(),
+            isolation_cache: HashMap::new(),
+            isolation_shader: None,
+            isolation_source: shader_sources.isolation,
+            isolation_bind_group_layout: create_isolation_bind_group_layout(device),
             shader,
             second_source_shader,
             format,
@@ -551,18 +556,61 @@ impl PipelineCache {
         &self.cache[&key]
     }
 
+    pub(crate) fn isolation_bind_group_layout(&self) -> &wgpu::BindGroupLayout {
+        &self.isolation_bind_group_layout
+    }
+
+    pub(crate) fn ensure_isolation(&mut self, device: &wgpu::Device, key: PipelineKey) {
+        if self.isolation_shader.is_none() {
+            self.isolation_shader = Some(
+                device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                    label: Some("Shape isolation shader"),
+                    source: wgpu::ShaderSource::Wgsl(
+                        self.isolation_source
+                            .replace("@vertex", "")
+                            .replace("fn vs_isolation", "@vertex fn vs_isolation")
+                            .into(),
+                    ),
+                }),
+            );
+        }
+        if !self.isolation_cache.contains_key(&key.msaa_samples()) {
+            let pipeline = self.create_pipeline_inner(device, key, true);
+            self.isolation_cache.insert(key.msaa_samples(), pipeline);
+        }
+    }
+
+    pub(crate) fn get_isolation(&self, key: PipelineKey) -> &RenderPipeline {
+        self.isolation_cache
+            .get(&key.msaa_samples())
+            .expect("BUG: isolation pipeline ensured before replay")
+    }
+
     /// Create a new specialized pipeline
     fn create_pipeline(&self, device: &wgpu::Device, key: PipelineKey) -> RenderPipeline {
+        self.create_pipeline_inner(device, key, false)
+    }
+
+    fn create_pipeline_inner(
+        &self,
+        device: &wgpu::Device,
+        key: PipelineKey,
+        isolation: bool,
+    ) -> RenderPipeline {
         #[cfg(debug_assertions)]
         tracing::trace!("PipelineCache::create_pipeline: key={:?}", key);
 
+        let mut bind_group_layouts = vec![
+            Some(&self.viewport_bind_group_layout),
+            Some(&self.clip_bind_group_layout),
+        ];
+        if isolation {
+            bind_group_layouts.push(Some(&self.isolation_bind_group_layout));
+        }
         // Create layout with viewport bind group
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Shape Pipeline Layout"),
-            bind_group_layouts: &[
-                Some(&self.viewport_bind_group_layout),
-                Some(&self.clip_bind_group_layout),
-            ],
+            bind_group_layouts: &bind_group_layouts,
             immediate_size: 0,
         });
 
@@ -579,9 +627,18 @@ impl PipelineCache {
         // A mode whose destination factor cannot absorb `1 - coverage` takes
         // the second-source shader and the `OneMinusSrc1` factors instead, so a
         // partially covered fragment feathers the blend. Where that shader does
-        // not exist (no `DUAL_SOURCE_BLENDING`), the mode falls back to the
-        // folded shader and the uncorrected factors — see `Self::new`.
-        let (shader, blend_state, constants) = if key.is_alpha_blended() {
+        // not exist, ordered replay isolates fractional coverage before this
+        // native pipeline is selected; folded factors remain exact for binary
+        // coverage. Fractional Plus is isolated on either device.
+        let (shader, blend_state, constants) = if isolation {
+            (
+                self.isolation_shader
+                    .as_ref()
+                    .expect("BUG: isolation shader ensured before pipeline"),
+                None,
+                Vec::new(),
+            )
+        } else if key.is_alpha_blended() {
             let selection = select_coverage_blend(
                 key.blend_mode(),
                 &self.shader,
@@ -597,6 +654,27 @@ impl PipelineCache {
             (&self.shader, None, Vec::new())
         };
 
+        let targets = if isolation {
+            vec![
+                Some(wgpu::ColorTargetState {
+                    format: self.format,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                }),
+                Some(wgpu::ColorTargetState {
+                    format: wgpu::TextureFormat::R8Unorm,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                }),
+            ]
+        } else {
+            vec![Some(wgpu::ColorTargetState {
+                format: self.format,
+                blend: blend_state,
+                write_mask: wgpu::ColorWrites::ALL,
+            })]
+        };
+
         // Configure MSAA
         let msaa_samples = key.msaa_samples();
 
@@ -606,18 +684,14 @@ impl PipelineCache {
             layout: Some(&layout),
             vertex: wgpu::VertexState {
                 module: shader,
-                entry_point: Some("vs_main"),
+                entry_point: Some(if isolation { "vs_isolation" } else { "vs_main" }),
                 buffers: &[Some(crate::vertex::Vertex::desc())],
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
             },
             fragment: Some(wgpu::FragmentState {
                 module: shader,
                 entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: self.format,
-                    blend: blend_state,
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
+                targets: &targets,
                 compilation_options: wgpu::PipelineCompilationOptions {
                     constants: &constants,
                     ..Default::default()
@@ -707,6 +781,23 @@ pub(crate) fn pipeline_key_from_paint(paint: &Paint) -> PipelineKey {
         // `DrawItem::AdvancedShape` segments before the key reaches the cache.
         PipelineKey::with_blend(mode)
     }
+}
+
+/// Shared structural layout for cropped source/coverage isolation.
+pub(crate) fn create_isolation_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+    device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("Isolation mapping layout"),
+        entries: &[wgpu::BindGroupLayoutEntry {
+            binding: 0,
+            visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Uniform,
+                has_dynamic_offset: false,
+                min_binding_size: std::num::NonZeroU64::new(32),
+            },
+            count: None,
+        }],
+    })
 }
 
 /// Pure-logic tests for the blend-mode routing and Porter-Duff factor table.

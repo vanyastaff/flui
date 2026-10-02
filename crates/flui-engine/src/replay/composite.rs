@@ -81,7 +81,8 @@ impl GpuReplay {
         // and use fixed-function blending, including on view-only targets.
         let reads_destination = mode.is_advanced()
             || (chain.has_antialias()
-                && crate::pipeline_cache::destination_alpha_scale_for(mode).is_some());
+                && (mode == BlendMode::Plus
+                    || crate::pipeline_cache::destination_alpha_scale_for(mode).is_some()));
         if reads_destination {
             let destination = target
                 .texture
