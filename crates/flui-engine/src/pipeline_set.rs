@@ -463,9 +463,8 @@ impl PipelineSet {
     /// Ensure the premultiplied composite pipeline for `mode` is in the cache.
     ///
     /// Serves every consumer that draws a premultiplied source texel through a
-    /// mode-specific blend state: the SSAA 1× tile composite and the
-    /// `DrawItem::OffscreenTexture` composite (shader-mask / backdrop-blur
-    /// results, whose layer carries its own blend mode). For `SrcOver`, this
+    /// mode-specific blend state: SSAA tiles, groups and ordered backdrop
+    /// results carry their recorded blend mode. For `SrcOver`, this
     /// is a no-op: the pre-baked `instanced_texture_premul` is always
     /// available.
     ///

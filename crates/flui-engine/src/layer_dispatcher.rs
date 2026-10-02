@@ -22,41 +22,9 @@ use crate::{command_renderer::CommandRenderer, layer_state_stack::LayerStateStac
 
 /// wgpu backend implementation of CommandRenderer.
 ///
-/// # Lifetime parameter
-///
-/// `LayerDispatcher<'frame>` borrows the current frame's painter (`&'frame mut
-/// WgpuPainter`) and, when present, the `wgpu::TextureView` /
-/// `wgpu::Texture` bound by [`bind_surface`](Self::bind_surface). The
-/// lifetime is internal to one render pass: `Renderer::render` creates
-/// the LayerDispatcher in a scoped block, dispatches the `LayerTree`, then lets
-/// it drop before calling `painter.render()`. Sites that don't need to
-/// flush mid-frame (shader-mask offscreen rendering, tests) call
-/// [`LayerDispatcher::new`] which leaves the surface handles unbound.
-///
-/// Per *Rust for Rustaceans* ch.2 "Variance and Lifetimes": the
-/// `'frame` parameter encodes the borrow's scope so the compiler
-/// enforces that no LayerDispatcher outlives its bound resources.
-///
-/// Note: Debug is not derived because `WgpuPainter` contains wgpu types that
-/// don't implement Debug.
-// `missing_debug_implementations` is a crate-level `#[expect]`: these types
-// hold `wgpu` handles, whose lack of `Debug` is the whole reason it exists.
+/// Borrows the recorder only. GPU target and effects are selected during replay.
 pub(crate) struct LayerDispatcher<'frame> {
     painter: &'frame mut WgpuPainter,
-    offscreen: Option<&'frame mut crate::offscreen::OffscreenRenderer>,
-    /// A child capture resolves IDs against its parent while recording. The
-    /// resulting IR owns leases; the cached child painter retains no registry.
-    external_textures: Option<&'frame crate::external_texture_registry::ExternalTextureRegistry>,
-    /// Bound surface view for the current frame. `None` outside a
-    /// frame, or when the construction site cannot supply it
-    /// (e.g. shader-mask offscreen render). Backdrop-filter
-    /// dispatch falls back to passthrough when `None`.
-    surface_view: Option<&'frame wgpu::TextureView>,
-    /// Bound surface texture for the current frame -- companion of
-    /// [`surface_view`](Self::surface_view) for
-    /// `COPY_TEXTURE_TO_TEXTURE` operations during backdrop-filter
-    /// dispatch.
-    surface_texture: Option<&'frame wgpu::Texture>,
     /// Cached command matrix and the ambient CTM it temporarily replaces.
     /// Switching commands restores only the CTM: clips captured by commands
     /// remain active until an explicit scope restore. Layer boundaries flush
@@ -96,77 +64,12 @@ enum ClipFrame {
 impl<'frame> LayerDispatcher<'frame> {
     /// Create a new LayerDispatcher that borrows the given painter for the frame.
     ///
-    /// `surface_view` / `surface_texture` start unbound. Call
-    /// [`bind_surface`](Self::bind_surface) when the frame surface
-    /// is available to enable the DisplayList-backdrop-filter
-    /// command path.
     pub(crate) fn new(painter: &'frame mut WgpuPainter) -> Self {
         Self {
             painter,
-            offscreen: None,
-            external_textures: None,
-            surface_view: None,
-            surface_texture: None,
             active_transform: None,
             clip_frames: Vec::new(),
         }
-    }
-
-    /// Create a new LayerDispatcher that borrows the given painter and offscreen renderer.
-    pub(crate) fn with_offscreen(
-        painter: &'frame mut WgpuPainter,
-        offscreen: &'frame mut crate::offscreen::OffscreenRenderer,
-    ) -> Self {
-        Self {
-            painter,
-            offscreen: Some(offscreen),
-            external_textures: None,
-            surface_view: None,
-            surface_texture: None,
-            active_transform: None,
-            clip_frames: Vec::new(),
-        }
-    }
-
-    /// Bind the frame's surface handles.
-    ///
-    /// Must be called by [`Renderer::render_scene`](crate::renderer::Renderer::render_scene)
-    /// after constructing the LayerDispatcher and before dispatching any
-    /// `LayerTree` commands. These handles identify the target for mid-frame
-    /// flushes before backdrop sampling.
-    pub(crate) fn bind_surface(
-        &mut self,
-        view: &'frame wgpu::TextureView,
-        texture: &'frame wgpu::Texture,
-    ) {
-        self.surface_view = Some(view);
-        self.surface_texture = Some(texture);
-    }
-
-    /// Access the offscreen renderer mutably (for shader mask, backdrop filter).
-    pub(crate) fn offscreen_mut(&mut self) -> Option<&mut crate::offscreen::OffscreenRenderer> {
-        self.offscreen.as_deref_mut()
-    }
-
-    pub(crate) fn with_external_textures(
-        painter: &'frame mut WgpuPainter,
-        registry: &'frame crate::external_texture_registry::ExternalTextureRegistry,
-    ) -> Self {
-        let mut dispatcher = Self::new(painter);
-        dispatcher.external_textures = Some(registry);
-        dispatcher
-    }
-
-    pub(crate) fn mask_context(
-        &mut self,
-    ) -> Option<(
-        &crate::external_texture_registry::ExternalTextureRegistry,
-        &mut crate::offscreen::OffscreenRenderer,
-    )> {
-        let registry = self
-            .external_textures
-            .unwrap_or_else(|| self.painter.external_texture_registry());
-        Some((registry, self.offscreen.as_deref_mut()?))
     }
 
     /// Get a reference to the underlying painter.
@@ -258,147 +161,10 @@ impl<'frame> LayerDispatcher<'frame> {
     }
 
     /// Return to the ambient layer CTM without restoring captured clips.
-    fn flush_active_transform(&mut self) {
+    pub(crate) fn flush_active_transform(&mut self) {
         if let Some(active) = self.active_transform.take() {
             self.painter.restore_transform(&active.parent);
         }
-    }
-
-    /// Blurs the surface region beneath a backdrop-filter layer.
-    ///
-    /// Steps: clamp `device_rect` to the surface extent → copy that region from
-    /// the surface into a pooled blur-input → Dual-Kawase blur → queue the result
-    /// for compositing at the **clamped** rect. The painter is flushed first so
-    /// the pixels to be sampled are present (the flush + copy stay in one
-    /// submission).
-    ///
-    /// Returns `true` if the blur was queued, `false` if it was skipped (no
-    /// offscreen renderer, or the region is entirely off-screen). The caller
-    /// renders the backdrop's children either way.
-    ///
-    /// `device_rect` is the filter bounds already mapped to device space by the
-    /// caller using the accumulated layer transform.
-    pub(crate) fn apply_backdrop_blur(
-        &mut self,
-        device_rect: Rect<f64>,
-        sigma: f32,
-        blend: BlendMode,
-        surface_texture: &wgpu::Texture,
-        surface_view: &wgpu::TextureView,
-    ) -> crate::error::EngineResult<bool> {
-        if self.offscreen.is_none() {
-            // No offscreen renderer → no blur, and no mid-frame flush either: any
-            // painter batches queued before this backdrop still draw in the
-            // frame-end flush (the painter's `draw_order` is an explicit ordered
-            // list, so pre-backdrop content precedes the caller's children
-            // regardless of submit boundaries). Don't "restore" a mid-frame flush
-            // here — it would only split one submit into two with no blur to feed.
-            tracing::warn!("Backdrop blur skipped: no offscreen renderer available");
-            return Ok(false);
-        }
-
-        // device/queue/format come from the offscreen renderer (the same device
-        // the surface was created on); later mutation borrows `offscreen` again
-        // sequentially for the texture pool and the blur.
-        let (device, format) = {
-            let off = self
-                .offscreen
-                .as_deref_mut()
-                .expect("BUG: apply_backdrop_blur returned above when self.offscreen was None; nothing clears it before this borrow");
-            (Arc::clone(off.device()), off.surface_format())
-        };
-
-        // The copy region covers every pixel the device rect touches (floor of
-        // the minimum, ceiling of the maximum, ADR-0098 §6), clamped to the
-        // surface: a partly covered pixel is still under the backdrop. Both
-        // backdrop paths share this rule.
-        let surface_extent = surface_texture.size();
-        let surface_w = surface_extent.width;
-        let surface_h = surface_extent.height;
-        let covered = flui_foundation::geometry::cover(device_rect);
-        let x = covered.left().clamp(0.0, f64::from(surface_w)) as u32;
-        let y = covered.top().clamp(0.0, f64::from(surface_h)) as u32;
-        let right = covered.right().clamp(0.0, f64::from(surface_w)) as u32;
-        let bottom = covered.bottom().clamp(0.0, f64::from(surface_h)) as u32;
-        let w = right.saturating_sub(x).max(1);
-        let h = bottom.saturating_sub(y).max(1);
-
-        // Entirely off-screen after clamping → no copyable region.
-        if right <= x || bottom <= y {
-            tracing::warn!(
-                rect_l = device_rect.left(),
-                rect_t = device_rect.top(),
-                rect_r = device_rect.right(),
-                rect_b = device_rect.bottom(),
-                surface_w,
-                surface_h,
-                "Backdrop blur skipped: clamped device region is empty (entirely off-screen)"
-            );
-            return Ok(false);
-        }
-
-        // Flush painter batches so the backdrop pixels are present on the surface
-        // before the copy. The copy is recorded into the same encoder, keeping
-        // flush → copy in one submission.
-        //
-        // PROFILER-SKIP: this backdrop-flush encoder is intentionally absent from
-        // the GpuFrameProfiler. Backdrop GPU time is not threaded through here
-        // (neither backdrop entry point has a profiler handle); the clear-pass and
-        // final-render scopes in `render_scene` cover the primary frame timing.
-        // This is an explicit trade-off, not an oversight.
-        let mut flush_encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("Backdrop Flush Encoder"),
-        });
-        let flush_target =
-            crate::render_target::RenderTarget::sampleable(surface_view, surface_texture);
-        self.painter.render(flush_target, &mut flush_encoder)?;
-
-        // Copy the clamped device region from the surface into a pooled blur input.
-        let blur_input = self
-            .offscreen
-            .as_deref_mut()
-            .expect("BUG: apply_backdrop_blur returned above when self.offscreen was None; nothing clears it before this borrow")
-            .texture_pool_mut()
-            .acquire(w, h, format);
-        flush_encoder.copy_texture_to_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: surface_texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d { x, y, z: 0 },
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::TexelCopyTextureInfo {
-                texture: blur_input.texture(),
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::Extent3d {
-                width: w,
-                height: h,
-                depth_or_array_layers: 1,
-            },
-        );
-        self.painter.submit_encoder(flush_encoder)?;
-
-        // Dual-Kawase blur, then queue for compositing at the CLAMPED rect — the
-        // copy used origin (x,y) extent (w,h), so the composite rect must match
-        // exactly or the smaller blurred texture would stretch across an
-        // unclamped (edge-crossing) `device_rect`.
-        let blurred = self
-            .offscreen
-            .as_deref_mut()
-            .expect("BUG: apply_backdrop_blur returned above when self.offscreen was None; nothing clears it before this borrow")
-            .render_blur(&blur_input, sigma)?;
-        let clamped_composite_rect = Rect::from_xywh(
-            f64::from(x as f32),
-            f64::from(y as f32),
-            f64::from(w as f32),
-            f64::from(h as f32),
-        );
-        self.painter
-            .queue_offscreen_result(blurred, clamped_composite_rect, blend);
-        Ok(true)
     }
 }
 
@@ -670,16 +436,8 @@ impl CommandRenderer for LayerDispatcher<'_> {
         opacity: f32,
         transform: &Matrix4,
     ) {
-        let registry = self.external_textures;
         self.with_transform(transform, |painter| {
-            painter.draw_texture_from_registry(
-                texture_id,
-                dst,
-                src,
-                filter_quality,
-                opacity,
-                registry,
-            );
+            painter.draw_texture(texture_id, dst, src, filter_quality, opacity);
         });
     }
 

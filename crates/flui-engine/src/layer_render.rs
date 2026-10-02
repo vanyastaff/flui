@@ -327,33 +327,16 @@ impl<R: CommandRenderer + LayerStateStack + ?Sized> LayerRender<R> for ImageFilt
 }
 
 impl<R: CommandRenderer + LayerStateStack + ?Sized> LayerRender<R> for ShaderMaskLayer {
-    fn render(&self, renderer: &mut R) {
-        // Create a compositing layer bounded to the mask area.
-        // Children will be rendered into this layer, then composited
-        // with the shader mask applied during restore.
-        let paint = flui_painting::Paint::default();
-        renderer.save_layer(
-            Some(self.bounds()),
-            &paint,
-            &flui_foundation::geometry::Matrix4::IDENTITY,
-        );
-        // Clip children to mask bounds so content outside is discarded
-        renderer.push_clip_rect(&self.bounds(), flui_painting::paint::Clip::AntiAlias);
+    fn render(&self, _renderer: &mut R) {
+        // The shared record_layer_tree visitor owns mask group entry and terminal shader draw.
     }
-
-    fn cleanup(&self, renderer: &mut R) {
-        // Pop in reverse order: first clip, then compositing layer
-        renderer.pop_clip();
-        renderer.restore_layer(&flui_foundation::geometry::Matrix4::IDENTITY);
-    }
+    fn cleanup(&self, _renderer: &mut R) {}
 }
 
 impl<R: CommandRenderer + LayerStateStack + ?Sized> LayerRender<R> for BackdropFilterLayer {
     fn render(&self, _renderer: &mut R) {
-        // Backdrop blur is handled at the Renderer level in render_layer_recursive,
-        // which has access to the surface texture for mid-frame flush + copy + blur.
-        // This LayerRender impl is a no-op; the Renderer intercepts Layer::BackdropFilter
-        // before calling render()/cleanup().
+        // The shared recording visitor emits an ordered backdrop operation.
+        // Replay selects the active attachment, including isolated child groups.
     }
 
     fn cleanup(&self, _renderer: &mut R) {

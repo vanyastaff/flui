@@ -1,7 +1,6 @@
 //! Stack-safe traversal of a [`LayerTree`].
 //!
-//! Both the windowed renderer (`renderer.rs::render_layer_recursive`) and the
-//! headless capture path (`headless.rs::walk_layer_tree`) walk a layer tree in
+//! Both the windowed renderer and the headless capture path walk a layer tree in
 //! the same order — render a node, descend into its children in paint order,
 //! then run the node's own post-children cleanup. Written as recursion, that
 //! order costs one Rust stack frame per level, and a stack overflow in Rust is
@@ -10,26 +9,10 @@
 //! (`testing/inspect.rs` walks 10 000 levels on a 64 KiB stack), would take
 //! the render path down with it.
 //!
-//! This module owns the traversal once, as an explicit-stack iterator, so both
-//! callers get the same order and the order itself is testable without a GPU.
-//! It is generic over the visitor's state rather than over the callback shape,
-//! because the renderers' visit steps are not uniform — the windowed renderer
-//! diverts `BackdropFilter`, `ShaderMask`, and `Follower` subtrees to
-//! specialized handlers, while the headless path renders every node the same
-//! way. A caller expresses that by matching on the layer inside its visitor:
-//!
-//! - [`Step::Descend`] when the walk should carry the children — which is what
-//!   a handler returns when its own work finishes BEFORE the children paint
-//!   (`BackdropFilter` composites its blur, then the children go on top;
-//!   a `Follower` pushes its offset and pops it on exit). Descending is what
-//!   keeps a chain of such nodes off the call stack.
-//! - [`Step::SkipSubtree`] when the handler consumed the subtree itself
-//!   (`ShaderMask` renders children into its own offscreen texture, so it
-//!   cannot hand them back to a walk that owns the real backend; an unlinked
-//!   `Follower` with `show_when_unlinked == false`, whose subtree is hidden).
-//!   A recursive call inside `enter` is the third option and the one to avoid:
-//!   it costs a call-stack frame per level, which is the failure this module
-//!   exists to remove.
+//! The explicit stack owns traversal order; `record_layer_tree` is the shared
+//! window/capture recorder. Shader masks and backdrops lower into ordered IR;
+//! followers resolve against the original tree and scope their offset until exit.
+//! GPU replay chooses each effect's active attachment after recording.
 
 use flui_foundation::LayerId;
 use flui_layer::LayerTree;
@@ -40,8 +23,8 @@ pub(crate) enum Step {
     /// Continue into this node's children, then run the node's exit step.
     Descend,
     /// Do not visit this node's children, and do not run its exit step. For a
-    /// handler that consumed the whole subtree itself, so the walk must not
-    /// also descend into it.
+    /// hidden, empty or failed subtree whose enter step acquired no state
+    /// requiring cleanup.
     SkipSubtree,
 }
 
@@ -93,14 +76,113 @@ pub(crate) fn walk_layer_tree<V: LayerVisitor>(tree: &LayerTree, root: LayerId, 
 
 pub(crate) trait LayerVisitor {
     /// Visit a node before its children. Return [`Step::SkipSubtree`] when
-    /// this visitor has already handled the whole subtree (a diverted
-    /// `BackdropFilter`/`ShaderMask`/`Follower` handler), so the walk neither
+    /// this subtree needs no traversal or cleanup, so the walk neither
     /// descends nor runs `exit` for it.
     fn enter(&mut self, tree: &LayerTree, id: LayerId, layer: &flui_layer::Layer) -> Step;
 
     /// Run a node's post-children cleanup. Never called for a node whose
     /// `enter` returned [`Step::SkipSubtree`].
     fn exit(&mut self, tree: &LayerTree, id: LayerId, layer: &flui_layer::Layer);
+}
+
+/// Record every consumer through the same layer semantics; GPU effects remain ordered IR.
+pub(crate) fn record_layer_tree(
+    tree: &LayerTree,
+    root: LayerId,
+    backend: &mut crate::layer_dispatcher::LayerDispatcher<'_>,
+) -> crate::EngineResult<()> {
+    struct Recorder<'a, 'b> {
+        backend: &'a mut crate::layer_dispatcher::LayerDispatcher<'b>,
+        error: Option<crate::EngineError>,
+        followers: Vec<LayerId>,
+    }
+    impl LayerVisitor for Recorder<'_, '_> {
+        fn enter(&mut self, tree: &LayerTree, id: LayerId, layer: &flui_layer::Layer) -> Step {
+            use crate::{layer_render::LayerRender, layer_state_stack::LayerStateStack};
+            if self.error.is_some() {
+                return Step::SkipSubtree;
+            }
+            if let Err(error) = self.backend.painter().recording_result() {
+                self.error = Some(error);
+                return Step::SkipSubtree;
+            }
+            self.backend.flush_active_transform();
+            match layer {
+                flui_layer::Layer::Follower(_) => {
+                    let Some(offset) = flui_layer::resolve_follower_offset(tree, id) else {
+                        return Step::SkipSubtree;
+                    };
+                    self.backend.push_offset(offset);
+                    self.followers.push(id);
+                }
+                flui_layer::Layer::BackdropFilter(layer) => {
+                    if let Err(error) = self.backend.painter_mut().record_backdrop_filter(
+                        layer.bounds(),
+                        layer.filter(),
+                        layer.blend_mode(),
+                    ) {
+                        self.error = Some(error);
+                        return Step::SkipSubtree;
+                    }
+                }
+                flui_layer::Layer::ShaderMask(layer) => {
+                    match self
+                        .backend
+                        .painter_mut()
+                        .begin_shader_mask(layer.bounds(), layer.shader())
+                    {
+                        Ok(true) => {}
+                        Ok(false) => return Step::SkipSubtree,
+                        Err(error) => {
+                            self.error = Some(error);
+                            return Step::SkipSubtree;
+                        }
+                    }
+                }
+                _ => layer.render(self.backend),
+            }
+            if let Err(error) = self.backend.painter().recording_result() {
+                self.error = Some(error);
+            }
+            Step::Descend
+        }
+        fn exit(&mut self, _tree: &LayerTree, id: LayerId, layer: &flui_layer::Layer) {
+            use crate::{layer_render::LayerRender, layer_state_stack::LayerStateStack};
+            self.backend.flush_active_transform();
+            match layer {
+                flui_layer::Layer::Follower(_) => {
+                    if self.followers.last() == Some(&id) {
+                        self.followers.pop();
+                        self.backend.pop_transform();
+                    }
+                }
+                flui_layer::Layer::ShaderMask(layer) => {
+                    if let Err(error) = self
+                        .backend
+                        .painter_mut()
+                        .end_shader_mask(layer.shader(), layer.blend_mode())
+                        && self.error.is_none()
+                    {
+                        self.error = Some(error);
+                    }
+                }
+                flui_layer::Layer::BackdropFilter(_) => {}
+                _ => layer.cleanup(self.backend),
+            }
+            if self.error.is_none()
+                && let Err(error) = self.backend.painter().recording_result()
+            {
+                self.error = Some(error);
+            }
+        }
+    }
+    let mut recorder = Recorder {
+        backend,
+        error: None,
+        followers: Vec::new(),
+    };
+    walk_layer_tree(tree, root, &mut recorder);
+    recorder.error.map_or(Ok(()), Err)
 }
 
 #[cfg(test)]

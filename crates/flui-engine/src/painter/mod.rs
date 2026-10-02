@@ -11,7 +11,7 @@
 use std::sync::Arc;
 
 use crate::{
-    command_ir::{DrawItem, DrawSegment, ImageFilterPass, PendingOffscreenTexture},
+    command_ir::{DrawItem, DrawSegment, ImageFilterPass},
     glyph_atlas::{GlyphAtlas, TextAtlas},
     layer_compositor::LayerCompositor,
     pipeline_set::PipelineSet,
@@ -19,7 +19,6 @@ use crate::{
     resources::GpuResources,
     state_stack::GpuStateStack,
 };
-use flui_foundation::geometry::Rect;
 
 /// GPU painter for wgpu-based rendering.
 ///
@@ -85,6 +84,8 @@ pub struct WgpuPainter {
     /// and `layer_stack`.  All save-layer book-keeping delegates here;
     /// GPU emission and draw-record mutation stay on `WgpuPainter`.
     compositor: LayerCompositor,
+    /// Balanced saves rejected by the effect-depth admission limit.
+    suppressed_layer_depth: usize,
 
     // ===== Segmented Draw Order =====
     /// Current draw segment accumulating batched commands
@@ -134,6 +135,7 @@ impl WgpuPainter {
         self.draw_order.clear();
         self.state.reset();
         self.compositor.reset();
+        self.suppressed_layer_depth = 0;
         self.frame_scope = None;
     }
     /// Create a new GPU painter
@@ -223,6 +225,7 @@ impl WgpuPainter {
             glyph_atlas,
             state: GpuStateStack::new(),
             compositor: LayerCompositor::new(),
+            suppressed_layer_depth: 0,
             current_segment: DrawSegment::new(),
             draw_order: Vec::new(),
         }
@@ -279,6 +282,7 @@ impl WgpuPainter {
 
         self.state.reset();
         self.compositor.reset();
+        self.suppressed_layer_depth = 0;
 
         tracing::trace!("WgpuPainter::reset_frame_state: per-frame state cleared");
     }
@@ -297,10 +301,9 @@ impl WgpuPainter {
     ///   `LoadOp::Load` and no scissor, so its `bounds` rect is the full composite
     ///   footprint written to the surface.
     ///
-    /// `DrawItem::Filter` and `DrawItem::OffscreenTexture` are intentionally
+    /// `DrawItem::Filter` are intentionally
     /// excluded: they never read the surface backdrop, so they carry no
-    /// stale-pixel hazard outside the scissor, and an offscreen texture
-    /// composites under the scissor it was queued with.
+    /// stale-pixel hazard outside the scissor.
     ///
     /// "Straddle" means the bounds intersect the damage rect AND are NOT fully
     /// contained by it — i.e., part of the item falls outside the scissored
@@ -340,7 +343,7 @@ impl WgpuPainter {
                 // inside the damage and this arm does not fire for it. It stays
                 // as the guard for a layer whose bounds were not cut that way.
                 //
-                // `DrawItem::Filter` and `DrawItem::OffscreenTexture` are excluded:
+                // `DrawItem::Filter` are excluded:
                 // they composite via premultiplied SrcOver from an offscreen texture
                 // and do not read the surface backdrop.
                 op.blend.is_advanced()
@@ -349,59 +352,6 @@ impl WgpuPainter {
             }
             _ => false,
         })
-    }
-
-    #[cfg(all(test, feature = "testing"))]
-    pub(crate) fn offscreen_results_for_test(&self) -> Vec<(Rect<f64>, u32, u32)> {
-        self.draw_order
-            .iter()
-            .filter_map(|item| match item {
-                DrawItem::OffscreenTexture(p) => {
-                    Some((p.bounds, p.texture.width(), p.texture.height()))
-                }
-                _ => None,
-            })
-            .collect()
-    }
-
-    // ===== Offscreen Compositing =====
-
-    /// Queue an offscreen-rendered texture for compositing into the main render target.
-    ///
-    /// This finalizes the current draw segment and inserts the offscreen texture
-    /// into the draw order. Content drawn before this call will render before
-    /// the offscreen texture, and content drawn after will render after it,
-    /// preserving correct Z-ordering.
-    ///
-    /// `bounds` is the device rect the texture covers. The composite is cut by
-    /// the clip in force now — the scissor (ancestor clip rects and a partial
-    /// frame's damage) and an ambient rounded clip — because the offscreen was
-    /// drawn outside them.
-    pub(crate) fn queue_offscreen_result(
-        &mut self,
-        texture: crate::texture_pool::PooledTexture,
-        bounds: Rect<f64>,
-        blend: flui_painting::paint::BlendMode,
-    ) {
-        let scissor = self.state.current_scissor();
-        let clip =
-            self.composite_clip(None, blend, false)
-                .unwrap_or(crate::command_ir::GroupClip {
-                    legacy: crate::state_stack::ResolvedClip::NONE,
-                    chain: crate::clip_chain::ClipChain::default(),
-                });
-        let budget = self.current_segment.budget.clone();
-        // Finalize the current segment and start a new one
-        self.finish_current_segment();
-        self.draw_order
-            .push(DrawItem::OffscreenTexture(PendingOffscreenTexture {
-                texture,
-                bounds,
-                blend,
-                scissor,
-                clip,
-                budget,
-            }));
     }
 
     /// Render all batched geometry to a texture view.
@@ -630,31 +580,13 @@ impl WgpuPainter {
 
     // ===== Helper Methods =====
 
-    /// Maximum basis length of the current transform's 2D linear part.
-    ///
-    /// Mirrors Impeller's `Matrix::GetMaxBasisLengthXY`: the larger of the two
-    /// column-vector lengths of the upper-left 2x2. The tessellator divides its
-    /// device-space chord-error budget by this so curves are subdivided finely
-    /// enough at the magnification they will be baked and drawn at — see
-    /// [`Tessellator::set_max_scale`](crate::tessellator::Tessellator::set_max_scale).
-    ///
-    /// Also consulted by `LayerDispatcher::render_shader_mask` to size the shader-mask
-    /// offscreen at device resolution: on a HiDPI frame the live device-pixel
-    /// ratio rides in the painter CTM (the `RenderView` root pushes
-    /// `scale(dpr)`), so the offscreen child/result textures must be allocated
-    /// `bounds * dpr` to avoid rendering the masked layer at half resolution.
-    pub(crate) fn current_max_scale(&self) -> f32 {
-        self.state.max_scale()
-    }
-
     /// The accumulated current transform (CTM) as a [`flui_foundation::geometry::Matrix4`].
     ///
     /// The painter stores its CTM as a `glam::Mat4`; both `glam::Mat4` and
     /// `Matrix4` are column-major `[f32; 16]`, so this is a direct reinterpret
     /// of the 16 floats.
     ///
-    /// Consumed by `Renderer::handle_backdrop_filter` (layer-tree "Path A") to
-    /// map a layer's local-space `bounds` into device space before sampling /
+    /// Captured by ordered effect recording to map local bounds before sampling /
     /// compositing. The layer walk pushes the `RenderView` root `scale(dpr)`
     /// (and every intervening `TransformLayer`/`OffsetLayer`) onto this CTM via
     /// `push_transform`/`push_offset`, so reading it here is the same source of
@@ -667,9 +599,7 @@ impl WgpuPainter {
     /// Seal the current segment and start a fresh one.
     ///
     /// Forwards to `DrawBatcher::finish_current_segment`.  Called explicitly
-    /// from `queue_offscreen_result` when an offscreen texture must be
-    /// interleaved at the correct Z-position, and from the flush path to
-    /// finalize the last segment before GPU submission.
+    /// by the flush path to finalize the last segment before GPU submission.
     fn finish_current_segment(&mut self) {
         crate::batches::DrawBatcher::finish_current_segment(
             &mut self.current_segment,
@@ -683,6 +613,7 @@ impl WgpuPainter {
 // transform/clip state, and save-layer/filter composition were
 // moved out of this file to restore the C1 <1500-LOC cap. They are descendant
 // modules of `painter`, so they retain access to WgpuPainter's private fields.
+mod backdrop;
 mod draw;
 mod layer;
 mod submission;

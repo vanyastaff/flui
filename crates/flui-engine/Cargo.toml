@@ -174,7 +174,7 @@ workspace = true
 
 [package.metadata.docs.rs]
 # NOT `all-features`: that would enable `testing`, whose
-# `OffscreenRenderer`/`PooledTexture`/`TexturePool` re-exports are bench
+# `OffscreenRenderer` re-export and test helpers are bench
 # scaffolding the crate documents as "NOT part of the public API". The
 # per-target wgpu entries in this manifest apply on docs.rs's linux host.
 features = []

@@ -1034,29 +1034,21 @@ impl LinearGradientInstance {
     /// Get wgpu vertex buffer layout for instance data
     #[must_use]
     pub(crate) fn desc() -> wgpu::VertexBufferLayout<'static> {
+        // Adjacent geometry pairs share a vec4, and count/offset share a uvec2.
+        // This preserves the existing Rust byte layout while keeping the full
+        // unit-quad + instance input within 13 attributes (locations 0..12).
         const ATTRIBUTES: &[wgpu::VertexAttribute] = &wgpu::vertex_attr_array![
-            // Bounds (location 2)
-            2 => Float32x4,
-            // Gradient start (location 3)
-            3 => Float32x2,
-            // Gradient end (location 4)
-            4 => Float32x2,
-            // Corner radii (location 5)
-            5 => Float32x4,
-            // Stop count (location 6)
-            6 => Uint32,
-            // Stop offset (location 7)
-            7 => Uint32,
-            // Clip bounds [x, y, w, h] (location 8)
-            8 => Float32x4,
-            // Clip corner radii [tl, tr, br, bl] (location 9)
-            9 => Float32x4,
-            // Clip kind (location 10)
-            10 => Uint32x4,
-            // Device-to-clip-local linear part (location 11)
-            11 => Float32x4,
-            // Device-to-clip-local translation, padded (location 12)
-            12 => Float32x4,
+            2 => Float32x4, // bounds
+            3 => Float32x4, // linear endpoints / radial center-radius / sweep center-angles
+            4 => Float32x4, // corner radii
+            5 => Uint32x2,  // stop count and offset
+            6 => Float32x4, // clip bounds
+            7 => Float32x4, // clip radii
+            8 => Uint32x4,  // clip kind
+            9 => Float32x4, // device-to-clip-local linear part
+            10 => Float32x4, // clip-local translation
+            11 => Float32x4, // local-to-device linear part
+            12 => Float32x4, // local-to-device translation
         ];
 
         wgpu::VertexBufferLayout {
@@ -1074,29 +1066,21 @@ impl RadialGradientInstance {
     /// Get wgpu vertex buffer layout for instance data
     #[must_use]
     pub(crate) fn desc() -> wgpu::VertexBufferLayout<'static> {
+        // Adjacent geometry pairs share a vec4, and count/offset share a uvec2.
+        // This preserves the existing Rust byte layout while keeping the full
+        // unit-quad + instance input within 13 attributes (locations 0..12).
         const ATTRIBUTES: &[wgpu::VertexAttribute] = &wgpu::vertex_attr_array![
-            // Bounds (location 2)
-            2 => Float32x4,
-            // Center (location 3)
-            3 => Float32x2,
-            // Radius + padding (location 4)
-            4 => Float32x2,
-            // Corner radii (location 5)
-            5 => Float32x4,
-            // Stop count (location 6)
-            6 => Uint32,
-            // Stop offset (location 7)
-            7 => Uint32,
-            // Clip bounds [x, y, w, h] (location 8)
-            8 => Float32x4,
-            // Clip corner radii [tl, tr, br, bl] (location 9)
-            9 => Float32x4,
-            // Clip kind (location 10)
-            10 => Uint32x4,
-            // Device-to-clip-local linear part (location 11)
-            11 => Float32x4,
-            // Device-to-clip-local translation, padded (location 12)
-            12 => Float32x4,
+            2 => Float32x4, // bounds
+            3 => Float32x4, // linear endpoints / radial center-radius / sweep center-angles
+            4 => Float32x4, // corner radii
+            5 => Uint32x2,  // stop count and offset
+            6 => Float32x4, // clip bounds
+            7 => Float32x4, // clip radii
+            8 => Uint32x4,  // clip kind
+            9 => Float32x4, // device-to-clip-local linear part
+            10 => Float32x4, // clip-local translation
+            11 => Float32x4, // local-to-device linear part
+            12 => Float32x4, // local-to-device translation
         ];
 
         wgpu::VertexBufferLayout {
@@ -1118,29 +1102,21 @@ impl SweepGradientInstance {
     /// Get wgpu vertex buffer layout for instance data
     #[must_use]
     pub(crate) fn desc() -> wgpu::VertexBufferLayout<'static> {
+        // Adjacent geometry pairs share a vec4, and count/offset share a uvec2.
+        // This preserves the existing Rust byte layout while keeping the full
+        // unit-quad + instance input within 13 attributes (locations 0..12).
         const ATTRIBUTES: &[wgpu::VertexAttribute] = &wgpu::vertex_attr_array![
-            // Bounds (location 2)
-            2 => Float32x4,
-            // Center (location 3)
-            3 => Float32x2,
-            // Angles [start, end] (location 4)
-            4 => Float32x2,
-            // Corner radii (location 5)
-            5 => Float32x4,
-            // Stop count (location 6)
-            6 => Uint32,
-            // Stop offset (location 7)
-            7 => Uint32,
-            // Clip bounds [x, y, w, h] (location 8)
-            8 => Float32x4,
-            // Clip corner radii [tl, tr, br, bl] (location 9)
-            9 => Float32x4,
-            // Clip kind (location 10)
-            10 => Uint32x4,
-            // Device-to-clip-local linear part (location 11)
-            11 => Float32x4,
-            // Device-to-clip-local translation, padded (location 12)
-            12 => Float32x4,
+            2 => Float32x4, // bounds
+            3 => Float32x4, // linear endpoints / radial center-radius / sweep center-angles
+            4 => Float32x4, // corner radii
+            5 => Uint32x2,  // stop count and offset
+            6 => Float32x4, // clip bounds
+            7 => Float32x4, // clip radii
+            8 => Uint32x4,  // clip kind
+            9 => Float32x4, // device-to-clip-local linear part
+            10 => Float32x4, // clip-local translation
+            11 => Float32x4, // local-to-device linear part
+            12 => Float32x4, // local-to-device translation
         ];
 
         wgpu::VertexBufferLayout {

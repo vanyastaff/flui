@@ -16,17 +16,19 @@ struct VertexInput {
 
 // Instance input
 struct InstanceInput {
-    @location(2) bounds: vec4<f32>,         // [x, y, width, height]
-    @location(3) center: vec2<f32>,         // Center point (local coords)
-    @location(4) radius_pad: vec2<f32>,     // [radius, padding]
-    @location(5) corner_radii: vec4<f32>,   // [tl, tr, br, bl]
-    @location(6) stop_count: u32,
-    @location(7) stop_offset: u32,          // Offset into gradient stops buffer
-    @location(8) clip_bounds: vec4<f32>,    // Device-space [x, y, w, h]
-    @location(9) clip_radii: vec4<f32>,     // [tl, tr, br, bl]
-    @location(10) clip_kind: vec4<u32>,     // [kind, _, _, _]
-    @location(11) clip_device_to_local: vec4<f32>, // [a, b, c, d], columns first
-    @location(12) clip_local_origin: vec4<f32>,    // [tx, ty, 0, 0]
+    @location(2) bounds: vec4<f32>,
+    // Adjacent Rust fields share one attribute without changing their byte ABI:
+    // linear endpoints; radial center/radius/padding; sweep center/angles.
+    @location(3) geometry: vec4<f32>,
+    @location(4) corner_radii: vec4<f32>,
+    @location(5) stops: vec2<u32>, // count, offset
+    @location(6) clip_bounds: vec4<f32>,
+    @location(7) clip_radii: vec4<f32>,
+    @location(8) clip_kind: vec4<u32>,
+    @location(9) clip_device_to_local: vec4<f32>,
+    @location(10) clip_local_origin: vec4<f32>,
+    @location(11) transform: vec4<f32>,
+    @location(12) transform_translate: vec4<f32>,
 }
 
 // Gradient stop (same as linear)
@@ -126,19 +128,20 @@ fn vs_main(
     var out: VertexOutput;
 
     let local_pos = vertex.position * instance.bounds.zw;
-    let world_pos = local_pos + instance.bounds.xy;
+    let local_absolute = local_pos + instance.bounds.xy;
+    let world_pos = mat2x2<f32>(instance.transform.xy, instance.transform.zw) * local_absolute + instance.transform_translate.xy;
 
     let clip_x = (world_pos.x / viewport.size.x) * 2.0 - 1.0;
     let clip_y = 1.0 - (world_pos.y / viewport.size.y) * 2.0;
 
     out.clip_position = vec4<f32>(clip_x, clip_y, 0.0, 1.0);
     out.local_pos = local_pos;
-    out.center = instance.center;
-    out.radius = instance.radius_pad.x;
+    out.center = instance.geometry.xy;
+    out.radius = instance.geometry.z;
     out.rect_size = instance.bounds.zw;
     out.corner_radii = instance.corner_radii;
-    out.stop_count = instance.stop_count;
-    out.stop_offset = instance.stop_offset;
+    out.stop_count = instance.stops.x;
+    out.stop_offset = instance.stops.y;
     out.world_pos = world_pos;
     out.clip_bounds = instance.clip_bounds;
     out.clip_radii = instance.clip_radii;
@@ -163,9 +166,9 @@ fn shadeFragment(in: VertexOutput) -> ShadedFragment {
     let centered_pos = (in.local_pos / in.rect_size - 0.5) * in.rect_size;
     let dist = sdRoundedBox(centered_pos, in.rect_size * 0.5, in.corner_radii);
 
-    if (dist > 1.0) {
-        discard;
-    }
+    // Local distance is not device distance under affine scaling. Evaluate
+    // derivatives unconditionally; coverage, rather than a local-unit cutoff,
+    // determines the edge contribution.
 
     // Compute radial distance from center
     let radial_dist = length(in.local_pos - in.center);

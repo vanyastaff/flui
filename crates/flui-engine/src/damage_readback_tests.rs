@@ -1676,9 +1676,8 @@ fn a_removed_translated_src_save_layer_leaves_nothing_behind() {
 
 /// A removed shader mask leaves nothing behind: the boundary's damage covers
 /// the mask's whole bounds, which contain every pixel its composite writes.
-/// The mask records `Clear`, which combines its shader with its child and is
-/// not applied at the composite (ADR-0099 §4): the child shows and the
-/// backdrop around it stays.
+/// White `Modulate` preserves the child inside the isolated group. Its result
+/// composites SrcOver (ADR-0099 §4), keeping the surrounding backdrop intact.
 #[test]
 fn a_removed_shader_mask_leaves_nothing_behind() {
     use flui_layer::ShaderMaskLayer;
@@ -1718,7 +1717,7 @@ fn a_removed_shader_mask_leaves_nothing_behind() {
                 boundary,
                 Layer::from(ShaderMaskLayer::new(
                     Shader::solid(Color::WHITE),
-                    BlendMode::Clear,
+                    BlendMode::Modulate,
                     Rect::from_xywh(0.0, 0.0, 60.0, 60.0),
                 )),
             );
@@ -2106,7 +2105,9 @@ fn an_effect_layer_composites_its_whole_region_with_its_mode() {
         (
             "shader mask under a clip inside an opacity layer",
             &mask_in_opacity,
-            &[((30, 30), [128, 127, 0, 255]), ((70, 70), GREEN)],
+            // Opaque white shader SrcOver replaces the red child, then the
+            // enclosing group's 0.5 opacity blends white over green once.
+            &[((30, 30), [128, 255, 128, 255]), ((70, 70), GREEN)],
         ),
     ];
     let mut failed = Vec::new();

@@ -202,3 +202,102 @@ Reuse принадлежит HeadlessRenderer под существующим ca
 принудительно свежем painter. Это не stale clip; проверка reuse использует
 paint без AA, чтобы pin viewport/clip lifetime отдельно. Primitive AA oracle
 и portable direct coverage plane должны отдельно проверить corner derivatives.
+
+## Общий обход и ordered effects
+
+Window и public headless теперь записывают одно дерево через общий visitor.
+ShaderMask использует принудительную изоляцию и terminal shader draw; backdrop
+читает текущий replay attachment до детей. Неподдерживаемые варианты shader и
+backdrop возвращают typed error. Affine gradient instances сохраняют local shader
+coordinates; полный sweep span больше не сворачивается в ноль.
+
+Backdrop Gaussian сохраняет sigma по осям и читает kernel halo за output clip.
+Перед partial clear engine консервативно расширяет repaint до input dependencies
+всех затронутых backdrops; пересекающиеся зависимости замыкаются до fixed point.
+Это не позволяет читать готовые пиксели прошлого кадра с поздними siblings.
+Длинная цепочка зависимостей ограничивает число проходов планирования и переводит
+кадр в full repaint. Source/blur passes используют существующий DeviceDomain;
+нового submission owner нет.
+
+Приёмка — `layer_effects_capture_as_specified`: nested mask/backdrop, shader blend
+между source и child, follower, DPR, обе оси blur, decal, rotated radial/sweep,
+partial/full whole-target comparison и next-frame recovery после конкурирующих
+ошибок, depth/work admission. Отрицательный контроль с отключённым dependency
+expansion провалился на пикселе (28,25): partial [7,7,7,255] вместо full
+[0,0,7,255]. Production-код восстановлен после проверки.
+
+Оставшиеся части этой поставки: направленный Gaussian для произвольной affine
+матрицы; корректный foreground input за пределами viewport до расширения output;
+полная filter chain для backdrop; measured nested-effect allocation/pass costs.
+Текущий axis-preserving backdrop не объявляется реализацией общего affine blur.
+
+## Проверка полноты этапа — 2026-10-02
+
+Общий visitor и ordered effects — поставляемая часть этапа, не заявление о
+завершении всего clip/effects плана. Дополнительная проверка выявила следующие
+обязательства до полной приёмки:
+
+- Foreground Gaussian сначала пересекает content bounds с viewport. Источник
+  x=[−10,−2] при sigma_x=3 должен давать видимый halo около x=0, но источник
+  теряется до расширения output. Нужен отдельный required-input mapping.
+- Общий gradient payload получил admission для NaN, f32 span cancellation и промежуточного overflow;
+  failure/recovery cases прошли в GPU-семье `layer_effects_capture_as_specified` (16 сценариев).
+- Направленный affine Gaussian и backdrop filter chains пока явно unavailable.
+- Измерения pass count, peak live admitted bytes и frame p95/p99 не получаются
+  из существующих Criterion mean intervals или времени GPU-тестов.
+
+Старый offscreen benchmark измерял удаляемый отдельный mask/Kawase backend.
+Его замена измеряет публичный LayerTree capture: ordinary control, вложенные
+маски и перекрывающиеся backdrops. Capture latency включает GPU completion и
+readback; это не pure GPU time, driver VRAM или время window presentation.
+Для ранее неверных эффектов старое меньшее время не является эквивалентным
+performance baseline. Сравниваются общие корректные workloads; новая полноценная
+работа оценивается по абсолютной стоимости и зависимости от размеров/вложенности.
+
+## Сверка открытых issues — 2026-10-02
+
+Проверены 133 открытых заголовка и 21 issue, найденный по `flui-engine`, затем
+сопоставлены релевантные требования с текущими production callers. Таблица не
+означает закрытия issue. После разрешения maintainer опубликованы evidence-based ответы в #1037, #1044, #1048, #1083, #1088 и #1149. #1044 закрыт по устранению исходной операции на main; остальные остаются открытыми.
+
+| Issue | Связь с текущей поставкой и остаток |
+|---|---|
+| [#1083](https://github.com/vanyastaff/flui/issues/1083), stack-safe traversal | На main обычный walker итеративный, но ShaderMask handler повторно вызывает traversal рекурсивно. Общий visitor этой ещё не принятой поставки удаляет специальный рекурсивный вход; deep-chain regression сохранён, replay эффектов ограничен глубиной. |
+| [#1088](https://github.com/vanyastaff/flui/issues/1088), matrix followers | Общий visitor сохраняет существующий offset-only resolver. Нужен единый matrix contract для pixels, hit testing и semantics; translated follower tests этого не доказывают. |
+| [#1037](https://github.com/vanyastaff/flui/issues/1037), damage producer | Native raster lane вычисляет SceneSnapshot diff; эта поставка реконструирует backdrop input. Direct/web producer остаётся full repaint. |
+| [#1044](https://github.com/vanyastaff/flui/issues/1044), pool origin | Explicit release уже отсутствует; Drop возвращает в origin channel. Здесь удалены оставшиеся testing exports и отдельный backend. Исходный foreign-release defect закрыт на main удалением опасной операции; полный lifecycle/counter stress в этом аудите не выполнялся. |
+| [#1048](https://github.com/vanyastaff/flui/issues/1048), WebGL2 | Fallback остаётся несогласованным: wasm gles вместо webgl, default limits и fragment storage. Актуальная версия wgpu и native readbacks не доказывают WebGL2 поддержку. |
+| [#1043](https://github.com/vanyastaff/flui/issues/1043), [#1185](https://github.com/vanyastaff/flui/issues/1185), surface ownership | Owned WindowTarget и drop-before-recreate есть; native Android recreation этим прогоном не выполняется. |
+| [#1149](https://github.com/vanyastaff/flui/issues/1149), lifetime verification | Miri filters в CI/xtask всё ещё используют `wgpu::surface_lease` и `cancelling_renderer_new`; текущий модуль — `surface_lease`, cancellation oracle не найден. Нужна отдельная починка исполняемой проверки, а не ссылка на наличие job. |
+| [#1271](https://github.com/vanyastaff/flui/issues/1271), target coverage | Cross-typecheck остаётся перечислением отдельных packages, не полным покрытием target-gated engine code. |
+| [#1357](https://github.com/vanyastaff/flui/issues/1357), snapping | Hard-clip rounding не реализует content-edge, resolved stroke и text baseline policy. Нужны fractional-DPR и animation readbacks. |
+| [#1360](https://github.com/vanyastaff/flui/issues/1360), color foundation | Следующая отдельная миграция: текущие u8/encoded-space gradients не стали Oklab/HDR от исправления геометрии. |
+| [#1362](https://github.com/vanyastaff/flui/issues/1362), early f32 | Требует собственного display-list prototype benchmark. Large-origin regression здесь показывает, почему нельзя считать раннее narrowing заведомо без потерь. |
+| [#559](https://github.com/vanyastaff/flui/issues/559), [#560](https://github.com/vanyastaff/flui/issues/560), raster/host runtime | Device-domain ownership помогает, но не доказывает threaded UI/raster overlap, shared multi-window services или host-driven integration. |
+| [#185](https://github.com/vanyastaff/flui/issues/185), modal resize | Требует live Win32 resize; headless pixel tests не наблюдают DWM/swapchain stretching. |
+
+Перед заявлением полного clip/effects этапа matrix followers следует согласовать
+с rendering/semantics, а backend support и проверочные пробелы вести отдельными
+задачами. Не связывать текущий PR с автоматическим закрытием этих issues.
+
+
+## Визуальная проверка native и headless
+
+`scene_render --effects` показывает шесть панелей: nested masks, affine gradients,
+backdrop, изолированный Clear, follower и scaled rounded gradient.
+`scene_render --capture-effects gallery.png` сохраняет тот же набор headless.
+На Windows/DX12 (RTX 3070 Ti) окно осмотрено через desktop-mcp; headless PNG
+и диагностические readbacks также проверены. Full/partial backdrop и три пары
+scaled/baked и rebased/baked gradients дали нулевую разницу каналов.
+Это не утверждение о пиксельной идентичности всех mask/direct границ.
+
+Live resize выявил отдельный существующий дефект Win32: `WM_SIZE` обновляет
+context и вызывает resize callback, но accessors `WindowsWindow` читают старый
+`WindowState`. Галерея остаётся прежнего размера при выросшем attachment.
+Начальные decorated размеры также передаются как outer вместо client dimensions.
+По решению maintainer этот platform fix вынесен из текущей поставки; повторная
+native resize проверка остаётся обязательной для него. Управление через computer-use
+остановлено пользователем; завершение такой проверки здесь не заявляется.
+
+Обновлённые benchmarks компилируются в проверках, но сравнительный текущий замер
+не завершён: улучшение производительности этой поставки пока не доказано.

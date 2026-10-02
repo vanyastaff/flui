@@ -57,3 +57,46 @@ Clip при растеризации входа и clip при composite — р�
 | Отказ allocation вложенного эффекта после ранней submission | Последняя committed картинка сохраняется, first error не заменяется cleanup error; следующий простой валидный кадр даёт ожидаемый green пиксель. |
 
 Это проектируемые регрессии; здесь они не запускались. Эталон Gaussian не должен получаться копией production helper: для axes/coverage использовать аналитические zero/nonzero и точные Porter–Duff ожидания, для общего фильтра — независимый full-frame контроль и mutation proof.
+
+## Проверка общего исполнения эффектов — 2026-10-02
+
+После выбора ordered IR дополнительно прочитаны:
+
+- [Impeller EntityPass, строки 467–499](https://codebrowser.dev/flutter_engine/flutter_engine/flutter/impeller/entity/entity_pass.cc.html): backdrop получает `pass_context.GetTexture()`, а активный pass завершается до чтения. Это исторический снимок engine, не утверждение об актуальном Flutter. Проверяет порядок и источник чтения; не задаёт API FLUI.
+- [iced_wgpu 0.14.0, lib.rs](https://docs.rs/iced_wgpu/0.14.0/src/iced_wgpu/lib.rs.html): `present` вызывает `draw` (строка 171), screenshot вызывает тот же `draw` с offscreen view (строка 243); `draw` выполняет общие `prepare` и `render` (146–147). Это аргумент за общий путь представления и capture, но не доказательство поддержки вложенных фильтров в Iced.
+
+Для FLUI выбран общий recording visitor и эффекты внутри существующего ordered IR.
+ShaderMask — изолированная группа, затем shader-source blend с child-destination,
+затем SrcOver в родителя. Backdrop — чтение текущего replay target в своей позиции
+порядка. Такой выбор устраняет временный backend без эффектов и преждевременную
+отправку GPU-команд при обходе дерева. Отдельная shader-mask программа не нужна,
+если обычный shader lowering сохраняет координаты и полностью покрывает attachment.
+Это условие проверяется readback, включая аффинные преобразования и границы.
+
+Текущий этап не объявляет произвольный affine blur реализованным: separable blur
+по device x/y корректен при сохраняющем оси преобразовании; вращение локальных
+анизотропных осей требует направленных проходов либо другого пространства фильтра.
+До такой реализации корректный результат API — типизированный отказ, а не
+усреднение sigma или неявная замена направления.
+
+## Проверка wgpu API — 2026-10-02
+
+Live [crates.io API](https://crates.io/api/v1/crates/wgpu) сообщил
+`max_stable_version = newest_version = 30.0.1`; workspace lock содержит
+wgpu, wgpu-core и naga 30.0.1. [Release notes](https://github.com/gfx-rs/wgpu/releases/tag/v30.0.1)
+описывают исправления Vulkan acquire fence, Metal color constants и WebGPU
+requestAdapter failure. Обновление dependency для этой работы не требуется.
+
+Сверены [CommandEncoder](https://docs.rs/wgpu/30.0.1/wgpu/struct.CommandEncoder.html)
+и [Limits](https://docs.rs/wgpu/30.0.1/wgpu/struct.Limits.html), а также локальные
+исходники exact locked версии. Backdrop завершает предшествующий pass, копирует
+matching single-sample COPY_SRC attachment в отдельный COPY_DST input и только
+затем фильтрует/композитит в том же encoder. Вложенного queue.submit нет;
+prepared resources следуют существующему completion owner.
+
+Аффинный gradient ABI сначала увеличивал число attributes до 15. Стандартный
+requested limit равен 16, но adapter maximum не заменяет requested device limit.
+Соседние geometry fields упакованы в один Float32x4, stop count/offset — Uint32x2:
+сохранены прежние 13 attributes вместе с quad, stride 176 и offsets Rust ABI.
+GPU recovery fixture запрашивает limit 13; readbacks проверяют все три градиента.
+Это проверка требований API, а не свидетельство исполнения на Metal/WebGPU/mobile.

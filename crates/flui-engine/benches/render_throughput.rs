@@ -72,6 +72,8 @@ fn try_create_gpu() -> Option<(Arc<wgpu::Device>, Arc<wgpu::Queue>)> {
             .await
             .ok()?;
 
+        eprintln!("benchmark adapter: {:?}", adapter.get_info());
+
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 label: Some("bench-device"),
@@ -475,7 +477,7 @@ fn damage_retained_target(c: &mut Criterion) {
         (width, height),
     );
     let mut offscreen =
-        flui_engine::OffscreenRenderer::new(Arc::clone(&device), Arc::clone(&queue), format);
+        flui_engine::OffscreenRenderer::new(Arc::clone(&device), Arc::clone(&queue));
 
     fn record(painter: &mut WgpuPainter, layers: u32, damage: Option<f64>, w: f64, h: f64) {
         painter.begin_frame().expect("benchmark frame begins");

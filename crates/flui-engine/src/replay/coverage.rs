@@ -333,17 +333,19 @@ impl GpuReplay {
                 continue;
             }
             for index in start..end {
-                let bounds = match kind {
-                    GradientKind::Linear => segment.linear_gradient_batch.instances[index].bounds,
-                    GradientKind::Radial => segment.radial_gradient_batch.instances[index].bounds,
-                    GradientKind::Sweep => segment.sweep_gradient_batch.instances[index].bounds,
+                let corners = match kind {
+                    GradientKind::Linear => {
+                        segment.linear_gradient_batch.instances[index].device_corners()
+                    }
+                    GradientKind::Radial => {
+                        segment.radial_gradient_batch.instances[index].device_corners()
+                    }
+                    GradientKind::Sweep => {
+                        segment.sweep_gradient_batch.instances[index].device_corners()
+                    }
                 };
                 let Some(crop) = crop(
-                    [
-                        [bounds[0], bounds[1]],
-                        [bounds[0] + bounds[2], bounds[1] + bounds[3]],
-                    ]
-                    .into_iter(),
+                    corners.into_iter(),
                     self.uniform_size,
                     viewport,
                     run.scissor,

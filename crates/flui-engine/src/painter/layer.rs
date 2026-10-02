@@ -24,6 +24,97 @@ fn is_projective(matrix: &flui_foundation::geometry::Matrix4) -> bool {
     m[3].abs() > f64::EPSILON || m[7].abs() > f64::EPSILON || (m[15] - 1.0).abs() > f64::EPSILON
 }
 
+/// Admit only shader semantics represented by the current gradient lowerer.
+fn supported_mask_shader(shader: &flui_painting::paint::Shader) -> bool {
+    use flui_painting::paint::{Shader, TileMode};
+    let packed = |value: f64| {
+        value.is_finite() && (value as f32).is_finite() && (value == 0.0 || value as f32 != 0.0)
+    };
+    let parameters_valid = match shader {
+        Shader::LinearGradient { from, to, .. } => [
+            from.dx,
+            from.dy,
+            to.dx,
+            to.dy,
+            to.dx - from.dx,
+            to.dy - from.dy,
+        ]
+        .into_iter()
+        .all(packed),
+        Shader::RadialGradient { center, radius, .. } => {
+            *radius >= 0.0 && [center.dx, center.dy, *radius].into_iter().all(packed)
+        }
+        Shader::SweepGradient {
+            center,
+            start_angle,
+            end_angle,
+            ..
+        } => {
+            [
+                center.dx,
+                center.dy,
+                *start_angle,
+                *end_angle,
+                end_angle - start_angle,
+            ]
+            .into_iter()
+            .all(packed)
+                && (*end_angle as f32 - *start_angle as f32).is_finite()
+        }
+        _ => true,
+    };
+    if !parameters_valid {
+        return false;
+    }
+    let (colors, stops) = match shader {
+        Shader::Solid { .. } => return true,
+        Shader::LinearGradient {
+            colors,
+            stops,
+            tile_mode: TileMode::Clamp,
+            ..
+        }
+        | Shader::SweepGradient {
+            colors,
+            stops,
+            tile_mode: TileMode::Clamp,
+            ..
+        } => (colors, stops),
+        Shader::RadialGradient {
+            colors,
+            stops,
+            tile_mode: TileMode::Clamp,
+            focal: None,
+            focal_radius,
+            ..
+        } if focal_radius.is_none_or(|radius| radius == 0.0) => (colors, stops),
+        _ => return false,
+    };
+    if colors.is_empty() || colors.len() > crate::batches::MAX_GRADIENT_STOPS {
+        return false;
+    }
+    // Match the shared lowerer's normalization: absent/missing stop entries
+    // are evenly distributed, positions clamp to [0,1], and surplus entries
+    // are ignored. Repeated stops
+    // are valid; nonfinite, unrepresentable or decreasing effective stops are not.
+    let mut previous = f32::NEG_INFINITY;
+    for index in 0..colors.len() {
+        let position = stops.as_ref().and_then(|values| values.get(index)).map_or(
+            index as f32 / colors.len().saturating_sub(1).max(1) as f32,
+            |value| *value as f32,
+        );
+        if !position.is_finite() {
+            return false;
+        }
+        let position = position.clamp(0.0, 1.0);
+        if position < previous {
+            return false;
+        }
+        previous = position;
+    }
+    true
+}
+
 impl WgpuPainter {
     // ===== Viewport Information =====
 
@@ -438,6 +529,87 @@ impl WgpuPainter {
         );
     }
 
+    pub(crate) fn recording_result(&self) -> crate::EngineResult<()> {
+        self.current_segment.recording_result()
+    }
+
+    pub(crate) fn begin_shader_mask(
+        &mut self,
+        bounds: Rect<f64>,
+        shader: &flui_painting::paint::Shader,
+    ) -> crate::EngineResult<bool> {
+        self.recording_result()?;
+        if !supported_mask_shader(shader) {
+            return Err(crate::EngineError::UnsupportedMaskShader);
+        }
+        if self.compositor.depth() >= 64 {
+            self.current_segment
+                .budget
+                .record_error(crate::command_ir::RecordError::Limit {
+                    resource: "effect nesting",
+                    requested: 65,
+                    limit: 64,
+                });
+            return self.recording_result().map(|()| false);
+        }
+        let affine = crate::clip_geometry::ValidatedAffine::new(glam::DMat4::from_cols_array(
+            &self.current_transform_matrix().m,
+        ))?;
+        let Some(device_bounds) = affine.map_bounds(bounds)? else {
+            return Ok(false);
+        };
+        self.save();
+        self.clip_rect(bounds, flui_painting::paint::Clip::AntiAlias);
+        let clip = self.captured_group_clip();
+        self.save_layer_clipped(clip, device_bounds);
+        self.compositor.force_current_layer_isolation();
+        Ok(true)
+    }
+
+    pub(crate) fn end_shader_mask(
+        &mut self,
+        shader: &flui_painting::paint::Shader,
+        blend: flui_painting::BlendMode,
+    ) -> crate::EngineResult<()> {
+        use flui_painting::paint::Shader;
+        let result = (|| {
+            self.recording_result()?;
+            let matrix = glam::DMat4::from_cols_array(&self.current_transform_matrix().m);
+            let affine = crate::clip_geometry::ValidatedAffine::new(matrix)?;
+            if affine.is_empty() {
+                return Ok(());
+            }
+            let inverse = crate::clip_geometry::ValidatedAffine::new(matrix.inverse())?;
+            let viewport = Rect::from_xywh(
+                -4.0,
+                -4.0,
+                f64::from(self.size.0) + 8.0,
+                f64::from(self.size.1) + 8.0,
+            );
+            let source_bounds = inverse.map_bounds(viewport)?.ok_or(
+                crate::error::GeometryError::Unrepresentable {
+                    context: "mask source extent",
+                },
+            )?;
+            let paint = match shader {
+                Shader::Solid { color } => Paint::fill(*color),
+                Shader::LinearGradient { .. }
+                | Shader::RadialGradient { .. }
+                | Shader::SweepGradient { .. } => {
+                    Paint::fill(flui_painting::styling::Color::WHITE).with_shader(shader.clone())
+                }
+                _ => return Err(crate::EngineError::UnsupportedMaskShader),
+            }
+            .with_anti_alias(false)
+            .with_blend_mode(blend);
+            self.draw_rect(source_bounds, &paint);
+            Ok(())
+        })();
+        self.restore_layer();
+        self.restore();
+        result
+    }
+
     /// Like [`Self::save_layer`] but routes the layer through a per-pixel GPU
     /// filter (currently only [`LayerFilter::ColorMatrix`]) before compositing.
     ///
@@ -522,6 +694,20 @@ impl WgpuPainter {
         filters: LayerFilterChain,
         composite_clip: Option<crate::command_ir::GroupClip>,
     ) {
+        if self.suppressed_layer_depth != 0 || self.compositor.depth() >= 64 {
+            self.suppressed_layer_depth = self.suppressed_layer_depth.saturating_add(1);
+            self.current_segment
+                .budget
+                .record_error(crate::command_ir::RecordError::Limit {
+                    resource: "effect nesting",
+                    requested: self
+                        .compositor
+                        .depth()
+                        .saturating_add(self.suppressed_layer_depth),
+                    limit: 64,
+                });
+            return;
+        }
         // A damage-only hardware scissor belongs to the composite prefix too.
         let inherited_scissor = self.state.current_scissor();
         let inherited = self.state.begin_clip_group();
@@ -611,6 +797,10 @@ impl WgpuPainter {
     /// compositor logs a warning and reinstates the pre-restore draw state
     /// (`RestoreOutcome::Underflow`).
     pub fn restore_layer(&mut self) {
+        if self.suppressed_layer_depth != 0 {
+            self.suppressed_layer_depth -= 1;
+            return;
+        }
         // Capture the offscreen content drawn since save_layer.
         let offscreen_final_segment = {
             let replacement = self.current_segment.empty_sibling();

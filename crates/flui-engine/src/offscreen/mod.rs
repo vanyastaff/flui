@@ -1,125 +1,16 @@
-//! Offscreen rendering infrastructure for shader masks
-//!
-//! Manages GPU pipelines, render passes, and offscreen texture rendering
-//! for ShaderMaskLayer effects.
-//!
-//! # Sub-modules
-//!
-//! - `mask`  — `get_or_create_pipeline` + `render_masked`
-//! - `blur`  — `get_or_create_blur_pipelines` + `render_blur`
-//! - `blit`  — `get_or_create_blit_pipeline` + `blit_to_surface`
-
-use std::{collections::HashMap, sync::Arc};
-
-use bytemuck::{Pod, Zeroable};
-use wgpu::util::DeviceExt;
-
+//! Cached intermediate-to-surface presentation blit.
+//! Layer masks and backdrops use ordered painter IR, not this helper.
 use crate::device_domain::{DeviceDomain, PreparedCost};
 use crate::error::EngineResult;
-use crate::texture_pool::{PooledTexture, TexturePool};
-
-use self::shader::ShaderType;
-
+use std::sync::Arc;
 mod blit;
-mod blur;
-mod mask;
-mod shader;
-
-/// Offscreen renderer for shader mask effects
-///
-/// Manages the complete rendering pipeline for shader masks:
-/// 1. Render child to offscreen texture
-/// 2. Apply shader mask to texture
-/// 3. Composite masked result to framebuffer
-///
-/// # Architecture
-///
-/// ```text
-/// ┌──────────────────────────────────────────────────────────┐
-/// │ OffscreenRenderer                                        │
-/// │                                                          │
-/// │  ┌─────────────┐  ┌──────────────┐  ┌────────────────┐ │
-/// │  │ Texture     │  │ Shader       │  │ Pipeline       │ │
-/// │  │ Pool        │→ │ Cache        │→ │ Manager        │ │
-/// │  └─────────────┘  └──────────────┘  └────────────────┘ │
-/// │                                                          │
-/// │  Input: Child Canvas + Shader                            │
-/// │  Output: Masked Canvas                                  │
-/// └──────────────────────────────────────────────────────────┘
-/// ```
-// `missing_debug_implementations` is a crate-level `#[expect]`: these types
-// hold `wgpu` handles, whose lack of `Debug` is the whole reason it exists.
-//
-// `pub` (not `pub(crate)`) because the `testing` feature re-exports
-// this type for the `offscreen_resource_cache` bench; in a default build the
-// crate-wide `unreachable_pub` warn has nothing else to say about it, so the
-// expectation is scoped to the configuration that makes it true.
+/// Cached presentation resources for intermediate-to-surface copies.
 #[cfg_attr(not(feature = "testing"), expect(unreachable_pub))]
 pub struct OffscreenRenderer {
-    /// Texture pool for offscreen rendering — owned directly; borrow it via
-    /// [`Self::texture_pool_mut`]. The pool is single-mutator by
-    /// construction (see `texture_pool.rs`'s module doc).
-    texture_pool: TexturePool,
-    // Legacy targets/pipelines remain outside the prepared-IR quota.
     domain: Arc<DeviceDomain>,
-
-    /// wgpu device for GPU operations
     device: Arc<wgpu::Device>,
-
-    /// Surface texture format
-    surface_format: wgpu::TextureFormat,
-
-    /// Cached render pipelines per shader type
-    pipelines: HashMap<ShaderType, Arc<wgpu::RenderPipeline>>,
-
-    /// Bind group layout for shader uniforms
-    bind_group_layout: wgpu::BindGroupLayout,
-
-    /// Bind group layout for blur shaders (uniform + texture + sampler)
-    blur_bind_group_layout: wgpu::BindGroupLayout,
-
-    /// Cached blur pipelines (downsample, upsample)
-    blur_pipelines: Option<BlurPipelines>,
-    /// The painter that renders a masked subtree into a pooled child texture,
-    /// kept across frames (a `WgpuPainter` is nine pipelines and a glyph
-    /// atlas) and rebuilt only when the requested size changes.
-    mask_painter: Option<crate::painter::WgpuPainter>,
-
-    /// Fullscreen blit pipeline — lazily created when the intermediate-active
-    /// present path is first used (COPY_SRC-less adapters, or forced in tests).
     blit_pipeline: Option<BlitPipeline>,
-
-    /// Shared linear sampler reused by `render_masked` and `render_blur`.
-    ///
-    /// Parameters: `ClampToEdge` × `Linear` — invariant across all calls.
-    /// Created once in the constructor; eliminates one `create_sampler` call
-    /// per `render_masked` invocation and one per `render_blur` invocation.
-    linear_sampler: wgpu::Sampler,
-
-    /// Fullscreen-quad vertex buffer shared by `render_masked` and `render_blur`.
-    ///
-    /// Contains 6 vertices (2 triangles) covering clip-space `[-1, 1]²`.
-    /// Created once in the constructor; eliminates one `create_buffer_init` per
-    /// `render_masked` invocation and one per `render_blur` invocation.
-    fullscreen_quad_vb: wgpu::Buffer,
 }
-
-// ---------------------------------------------------------------------------
-// Blit pipeline — intermediate → swapchain surface (no blend, Replace/Copy)
-// ---------------------------------------------------------------------------
-
-/// Cached GPU resources for the fullscreen intermediate→surface blit.
-///
-/// The pipeline uses no blend equation (`blend: None`) so every texel of the
-/// surface is overwritten.  Nearest-neighbour sampling keeps the blit
-/// pixel-identical to a direct render.
-///
-/// All fields are `Arc`-wrapped so `blit_to_surface` can clone them out before
-/// dropping the `&mut self` borrow (wgpu handle types are not `Clone`).
-///
-/// `sampler` and `vertex_buffer` are frame-invariant (Nearest parameters and a
-/// static fullscreen-quad layout do not change per frame) so they are cached
-/// here and reused every blit instead of being re-allocated each frame.
 struct BlitPipeline {
     pipeline: Arc<wgpu::RenderPipeline>,
     bind_group_layout: Arc<wgpu::BindGroupLayout>,
@@ -130,248 +21,23 @@ struct BlitPipeline {
 }
 
 impl OffscreenRenderer {
-    /// Create new offscreen renderer with GPU resources
-    ///
-    /// # Arguments
-    ///
-    /// * `device` - wgpu device for GPU operations
-    /// * `queue` - wgpu queue for command submission
-    /// * `surface_format` - texture format for framebuffer
-    // `pub` under `testing`: the `offscreen_resource_cache` bench
-    // (a separate crate target) constructs one. Private otherwise.
-    #[cfg_attr(not(feature = "testing"), expect(unreachable_pub))]
+    /// Construct the presentation helper with a shared GPU device.
     #[cfg(feature = "testing")]
-    pub fn new(
-        device: Arc<wgpu::Device>,
-        queue: Arc<wgpu::Queue>,
-        surface_format: wgpu::TextureFormat,
-    ) -> Self {
-        Self::with_domain(DeviceDomain::new(device, queue), surface_format)
+    pub fn new(device: Arc<wgpu::Device>, queue: Arc<wgpu::Queue>) -> Self {
+        Self::with_domain(DeviceDomain::new(device, queue))
     }
-
-    pub(crate) fn with_domain(
-        domain: Arc<DeviceDomain>,
-        surface_format: wgpu::TextureFormat,
-    ) -> Self {
+    pub(crate) fn with_domain(domain: Arc<DeviceDomain>) -> Self {
         let device = Arc::clone(domain.device());
-        let bind_group_layout = Self::create_bind_group_layout(&device);
-        let blur_bind_group_layout = Self::create_blur_bind_group_layout(&device);
-        let linear_sampler = Self::create_linear_sampler(&device);
-        let fullscreen_quad_vb = Self::create_fullscreen_quad_vb(&device);
-
         Self {
-            texture_pool: TexturePool::new(Arc::clone(&device)),
-            device,
-            surface_format,
-            pipelines: HashMap::new(),
-            bind_group_layout,
-            blur_bind_group_layout,
-            blur_pipelines: None,
-            mask_painter: None,
-            blit_pipeline: None,
-            linear_sampler,
-            fullscreen_quad_vb,
             domain,
+            device,
+            blit_pipeline: None,
         }
     }
-
-    /// Create bind group layout for shader mask rendering
-    ///
-    /// Layout:
-    /// - @group(0) @binding(0): child texture (sampled)
-    /// - @group(0) @binding(1): sampler
-    /// - @group(0) @binding(2): uniform buffer
-    fn create_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
-        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("Shader Mask Bind Group Layout"),
-            entries: &[
-                // Child texture
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                // Sampler
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
-                // Uniform buffer
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-            ],
-        })
-    }
-
-    /// Create bind group layout for blur shaders
-    ///
-    /// Layout matches the Dual Kawase blur shaders:
-    /// - @group(0) @binding(0): uniform buffer (BlurParams)
-    /// - @group(0) @binding(1): input texture (sampled)
-    /// - @group(0) @binding(2): sampler
-    fn create_blur_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
-        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("Blur Bind Group Layout"),
-            entries: &[
-                // BlurParams uniform
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                // Input texture
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                // Sampler
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
-            ],
-        })
-    }
-
-    /// Create the shared linear sampler used by `render_masked` and `render_blur`.
-    ///
-    /// Parameters are `ClampToEdge × Linear` — invariant across all calls.
-    fn create_linear_sampler(device: &wgpu::Device) -> wgpu::Sampler {
-        device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("Offscreen Linear Sampler"),
-            address_mode_u: wgpu::AddressMode::ClampToEdge,
-            address_mode_v: wgpu::AddressMode::ClampToEdge,
-            address_mode_w: wgpu::AddressMode::ClampToEdge,
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            mipmap_filter: wgpu::MipmapFilterMode::Linear,
-            ..Default::default()
-        })
-    }
-
-    /// Create the shared fullscreen-quad vertex buffer.
-    ///
-    /// 6 vertices (2 triangles) covering clip-space `[-1, 1]²` — content
-    /// never changes, so it is allocated once and reused across all passes.
-    fn create_fullscreen_quad_vb(device: &wgpu::Device) -> wgpu::Buffer {
-        let vertices = FullscreenVertex::fullscreen_quad();
-        device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Offscreen Fullscreen Quad VB"),
-            contents: bytemuck::cast_slice(&vertices),
-            usage: wgpu::BufferUsages::VERTEX,
-        })
-    }
-
-    /// Access the wgpu device
-    pub(crate) fn device(&self) -> &Arc<wgpu::Device> {
-        &self.device
-    }
-
-    /// Get the surface texture format
-    pub(crate) fn surface_format(&self) -> wgpu::TextureFormat {
-        self.surface_format
-    }
-
-    /// The painter that renders a masked subtree at `size` (device pixels),
-    /// created on first use and rebuilt when `size` changes.
-    pub(crate) fn mask_painter(&mut self, size: (u32, u32)) -> &mut crate::painter::WgpuPainter {
-        if self
-            .mask_painter
-            .as_ref()
-            .is_some_and(|painter| painter.size() != size)
-        {
-            self.mask_painter = None;
-        }
-        let (domain, format) = (&self.domain, self.surface_format);
-        self.mask_painter.get_or_insert_with(|| {
-            tracing::debug!(
-                width = size.0,
-                height = size.1,
-                ?format,
-                "creating the offscreen mask painter"
-            );
-            crate::painter::WgpuPainter::with_domain(Arc::clone(domain), format, size)
-        })
-    }
-
-    /// Exclusive access to the texture pool (all pool operations take
-    /// `&mut` — the inventory is directly owned, not behind a lock).
-    // `pub` under `testing` for the `offscreen_resource_cache` bench.
-    #[cfg_attr(not(feature = "testing"), expect(unreachable_pub))]
-    pub fn texture_pool_mut(&mut self) -> &mut TexturePool {
-        &mut self.texture_pool
-    }
 }
-
-// Note: No Default implementation - OffscreenRenderer requires wgpu resources
-
-/// Result of masked rendering operation
-///
-/// Contains the offscreen texture with the masked content.
-/// The texture will be automatically returned to the pool when dropped.
-#[derive(Debug)]
-#[cfg_attr(not(feature = "testing"), expect(unreachable_pub))]
-pub struct MaskedRenderResult {
-    /// Offscreen texture containing masked result
-    pub texture: PooledTexture,
-}
-
-impl MaskedRenderResult {
-    /// Consume the result and extract the pooled texture for compositing.
-    pub(crate) fn into_texture(self) -> PooledTexture {
-        self.texture
-    }
-}
-
-/// Uniform parameters for Dual Kawase blur shaders
-#[repr(C)]
-#[derive(Debug, Clone, Copy, Pod, Zeroable)]
-pub(crate) struct BlurParams {
-    /// Size of the source texture in pixels
-    pub texture_size: [f32; 2],
-    /// Sample offset multiplier (controls blur spread)
-    pub offset: f32,
-    /// Padding for 16-byte alignment
-    pub _padding: f32,
-}
-
-/// Cached Dual Kawase blur pipelines (downsample + upsample)
-struct BlurPipelines {
-    downsample: Arc<wgpu::RenderPipeline>,
-    upsample: Arc<wgpu::RenderPipeline>,
-}
-
 /// Vertex for fullscreen quad rendering
 ///
-/// Used to render the masked texture as a fullscreen quad.
+/// Used by the intermediate-to-surface presentation blit.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 pub(crate) struct FullscreenVertex {
@@ -413,11 +79,4 @@ impl FullscreenVertex {
             },
         ]
     }
-
-    // Vertex buffer layout descriptor for this type, for use when
-    // `FullscreenVertex` is bound as a vertex buffer in a render pipeline.
-    // Uncomment and implement when `OffscreenRenderer` grows a wired-up
-    // vertex-based fullscreen pass (current path uses hard-coded clip-space
-    // triangles via a storage buffer).
-    // pub fn buffer_layout() -> wgpu::VertexBufferLayout<'static> { ... }
 }

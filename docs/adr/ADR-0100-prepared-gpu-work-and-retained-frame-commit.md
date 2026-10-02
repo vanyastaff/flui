@@ -101,7 +101,6 @@ predicate used by the native recovery loop, independently of the driver callback
 The executable checks are `gradients_read_back_as_specified`,
 `painter_images_and_offscreen_results_read_back_as_specified`,
 `prepared_quota_failure_and_retirement`,
-`kawase_calls_keep_parameters_and_recover_after_admission_failure`,
 `an_invalid_target_promotes_to_full` and `every_failure_boundary_retires_its_ticket`.
 Private quota/fault seams exercise inaccessible failures; rendering assertions use
 actual GPU readbacks. The [measurement record](../research/engine-foundation-measurements.ru.md)

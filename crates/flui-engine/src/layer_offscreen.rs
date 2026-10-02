@@ -22,7 +22,7 @@
 //!
 //! ## Invariants preserved from `flush_opacity_layer`
 //!
-//! - **R1** — arm order (Segment / OffscreenTexture / OpacityLayer /
+//! - **R1** — arm order (Segment / Backdrop / OpacityLayer /
 //!   AdvancedShape) is load-bearing; it is preserved verbatim.
 //! - **R2** — `texture_batch` drain: every `flush_texture_batch*` call drains
 //!   and clears `self.texture_batch` before returning so depth-N+1 content
@@ -476,6 +476,25 @@ impl GpuReplay {
             inst.transform[3] *= scale_y;
         }
 
+        // Preserve local gradient coordinates while composing the attachment rebase.
+        macro_rules! rebase_gradients {
+            ($batch:expr) => {
+                for inst in &mut $batch.instances {
+                    inst.transform_translate[0] =
+                        (inst.transform_translate[0] - origin_x) * scale_x;
+                    inst.transform_translate[1] =
+                        (inst.transform_translate[1] - origin_y) * scale_y;
+                    inst.transform[0] *= scale_x;
+                    inst.transform[1] *= scale_y;
+                    inst.transform[2] *= scale_x;
+                    inst.transform[3] *= scale_y;
+                }
+            };
+        }
+        rebase_gradients!(remapped_segment.linear_gradient_batch);
+        rebase_gradients!(remapped_segment.radial_gradient_batch);
+        rebase_gradients!(remapped_segment.sweep_gradient_batch);
+
         // Each clip's device-to-local mapping consumes a device-space
         // position, so the rebase above has to be composed into it. One call
         // covering every clip carrier, rather than a line per transform loop
@@ -638,7 +657,7 @@ impl GpuReplay {
         }
 
         // Flush all inner draw items to the offscreen texture.
-        // R1: arm order is preserved (Segment / OffscreenTexture / OpacityLayer
+        // R1: arm order is preserved (Segment / Backdrop / OpacityLayer
         //     / AdvancedShape).
         //
         // Use `sampleable` so a nested advanced-blend OpacityLayer or
@@ -648,6 +667,17 @@ impl GpuReplay {
         let offscreen_target = RenderTarget::sampleable(offscreen_view, offscreen.texture());
         for item in layer.items.drain(..) {
             match item {
+                DrawItem::Backdrop(op) => self.replay_backdrop(
+                    op,
+                    viewport_size,
+                    surface_format,
+                    device,
+                    queue,
+                    pipelines,
+                    resources,
+                    encoder,
+                    offscreen_target,
+                )?,
                 DrawItem::Segment(seg) => {
                     self.flush_segment(
                         &seg,
@@ -658,28 +688,6 @@ impl GpuReplay {
                         resources,
                         encoder,
                         offscreen_target,
-                    )?;
-                }
-                DrawItem::OffscreenTexture(p) => {
-                    let context = DrawSegment::with_budget(Arc::clone(&p.budget));
-                    self.composite_group_texture(
-                        p.texture,
-                        p.bounds,
-                        [0.0, 0.0, 1.0, 1.0],
-                        1.0,
-                        [1.0; 3],
-                        p.blend,
-                        Some(&p.clip),
-                        &context,
-                        viewport_size,
-                        surface_format,
-                        device,
-                        queue,
-                        pipelines,
-                        resources,
-                        encoder,
-                        offscreen_target,
-                        p.scissor,
                     )?;
                 }
                 DrawItem::OpacityLayer(nested) => {

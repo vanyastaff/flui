@@ -12,32 +12,14 @@
 //! so advanced
 //! (dst-read) blends that sample the destination render correctly.
 //!
-//! What it does NOT render the way the windowed [`Renderer`] does: the three
-//! layer kinds `Renderer` diverts to its own handlers because they need the
-//! offscreen renderer or the surface, and which the generic `LayerRender`
-//! arms only approximate —
-//!
-//! - [`Layer::BackdropFilter`] — no blur; the children paint unfiltered;
-//! - [`Layer::ShaderMask`] — the children paint inside a save-layer clipped
-//!   to the mask bounds, with no mask applied;
-//! - [`Layer::Follower`] — no leader offset is resolved; the children paint
-//!   at the follower's unlinked position.
-//!
-//! The readback suites capture through this renderer, so those three kinds
-//! are pinned only by `renderer.rs`'s own tests, which build a
-//! `LayerDispatcher::with_offscreen` over an `OffscreenRenderer` directly.
-//!
-//! [`Renderer`]: crate::Renderer
-//! [`Layer::BackdropFilter`]: flui_layer::Layer::BackdropFilter
-//! [`Layer::ShaderMask`]: flui_layer::Layer::ShaderMask
-//! [`Layer::Follower`]: flui_layer::Layer::Follower
+//! Layer effects and follower resolution use the same ordered recording path as windows.
 
 use std::sync::{Arc, Mutex};
 
-use flui_layer::{LayerId, LayerTree};
+use flui_layer::LayerTree;
 
 use crate::error::{EngineError, EngineResult};
-use crate::{layer_dispatcher::LayerDispatcher, layer_render::LayerRender, painter::WgpuPainter};
+use crate::{layer_dispatcher::LayerDispatcher, painter::WgpuPainter};
 
 /// The pixel format headless capture renders and reads back in. RGBA8 maps
 /// straight to a PNG without a channel swizzle.
@@ -241,11 +223,7 @@ impl HeadlessRenderer {
 
         {
             let mut backend = LayerDispatcher::new(&mut painter);
-            let mut visitor = CaptureVisitor {
-                backend: &mut backend,
-            };
-            crate::layer_walk::walk_layer_tree(tree, tree.root(), &mut visitor);
-            // `backend` drops here → its `Drop` flushes the active transform.
+            crate::layer_walk::record_layer_tree(tree, tree.root(), &mut backend)?;
         }
 
         let mut encoder = self
@@ -314,10 +292,7 @@ impl HeadlessRenderer {
             device: Arc::clone(&self.device),
             queue: Arc::clone(&self.queue),
             painter: WgpuPainter::with_domain(Arc::clone(&self.domain), CAPTURE_FORMAT, size),
-            offscreen: crate::offscreen::OffscreenRenderer::with_domain(
-                Arc::clone(&self.domain),
-                CAPTURE_FORMAT,
-            ),
+            offscreen: crate::offscreen::OffscreenRenderer::with_domain(Arc::clone(&self.domain)),
             surface,
             surface_view,
             frame: crate::frame_protocol::FrameProtocol::new(),
@@ -660,25 +635,15 @@ impl crate::frame_protocol::FrameSteps for CaptureFrame<'_> {
 
     fn content(
         &mut self,
-        view: &wgpu::TextureView,
+        _view: &wgpu::TextureView,
         texture: &wgpu::Texture,
-        retained: bool,
+        _retained: bool,
         partial: Option<flui_foundation::geometry::Rect<f64>>,
     ) -> EngineResult<bool> {
         if std::mem::take(self.fail) {
             return Err(EngineError::Timeout);
         }
-        let straddled = crate::Renderer::record_frame_content(
-            self.painter,
-            self.offscreen,
-            self.scene,
-            (view, texture),
-            crate::renderer::RenderContext {
-                supports_copy_src: true,
-                intermediate_active: retained,
-            },
-            partial,
-        );
+        let straddled = crate::Renderer::record_frame_content(self.painter, self.scene, partial);
         let straddled = match straddled {
             Ok(straddled) => straddled,
             Err(error) => {
@@ -712,6 +677,7 @@ impl crate::raster::RasterBackend for RetainedCapture {
         use crate::damage::FramePlan;
         use crate::raster::PresentDisposition;
 
+        self.frame.include_backdrop_dependencies(scene, self.size);
         let plan = self.frame.plan(self.intermediate_required);
         self.last_plan = Some(plan);
         if plan == FramePlan::Skip {
@@ -800,29 +766,6 @@ fn readback_wait_outcome(
             "BUG: the readback waits on the index its own submit returned, yet wgpu \
              reported index {requested} (last completed {completed}) as never submitted"
         ),
-    }
-}
-
-/// The headless capture's visit steps: every node renders and cleans up the
-/// same way, with no diverted subtree handlers, so this is the plain shape
-/// [`walk_layer_tree`](crate::layer_walk::walk_layer_tree) drives.
-struct CaptureVisitor<'a, 'b> {
-    backend: &'a mut LayerDispatcher<'b>,
-}
-
-impl crate::layer_walk::LayerVisitor for CaptureVisitor<'_, '_> {
-    fn enter(
-        &mut self,
-        _tree: &LayerTree,
-        _id: LayerId,
-        layer: &flui_layer::Layer,
-    ) -> crate::layer_walk::Step {
-        layer.render(self.backend);
-        crate::layer_walk::Step::Descend
-    }
-
-    fn exit(&mut self, _tree: &LayerTree, _id: LayerId, layer: &flui_layer::Layer) {
-        layer.cleanup(self.backend);
     }
 }
 

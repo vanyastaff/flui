@@ -31,7 +31,8 @@ Cross-crate contracts carry an ADR; crate-local shapes are recorded under
 | Frame walk | `layer_walk.rs`, `layer_render.rs`, `layer_dispatcher.rs`, `layer_offscreen.rs`, `layer_compositor.rs` | Iterative layer traversal; per-variant lowering of `Layer`; `DrawCommand` → painter routing; offscreen layer rendering and compositing; save/restore layer state |
 | Recording | `painter/`, `batches/`, `command_ir.rs`, `state_stack.rs` | `WgpuPainter` (per-frame coordinator), `DrawBatcher` (per-primitive record methods), the Command IR they write, the transform/clip stacks |
 | Replay | `replay/`, `pipeline_cache.rs`, `pipeline_set.rs`, `instancing.rs`, `vertex.rs`, `shaders/` | Command IR → wgpu encoding; pipeline caching keyed by blend/coverage state; instance layouts; WGSL |
-| Offscreen effects | `offscreen/`, `effects_pipeline.rs`, `blur/`, `mode/`, `gamma/`, `color_matrix/`, `morphology/`, `advanced_blend/`, `ssaa.rs` | Shader masks, backdrop filters, colour filters, dst-read blends, supersampled path AA — each a format-matched pipeline over pooled textures |
+| Offscreen effects | `effects_pipeline.rs`, `blur/`, `mode/`, `gamma/`, `color_matrix/`, `morphology/`, `advanced_blend/`, `ssaa.rs` | Ordered shader masks and backdrop filters, colour filters, dst-read blends and supersampled path AA over pooled textures |
+| Presentation blit | `offscreen/` | Cached intermediate-to-surface copy, independent of layer effects |
 | GPU resources | `texture_pool.rs`, `texture_cache.rs`, `buffer_pool.rs`, `uniform_pool.rs`, `path_cache.rs`, `external_texture_registry.rs`, `resources.rs`, `atlas.rs`, `glyph_atlas.rs`, `tessellator.rs` | Pooling, caching, the glyph atlas (rasterised-glyph pages the glyph pipeline samples), and the one adapter over an external crate (`lyon` for tessellation) |
 | Raster protocol | `raster.rs`, `raster_owner.rs`, `frame_timing.rs` | `RasterBackend`; the mailbox/ack channel a threaded raster lane uses (ADR-0045); frame timers |
 | Damage | `damage.rs`, `retained_target.rs`, `frame_protocol.rs` | The dirty-rect accumulator behind `render_scene`'s scissor (ADR-0061), `plan_frame` (where a frame renders), `begin_partial` (the scissored clear), the retained target a partial frame repaints into (ADR-0087 §4), and `FrameProtocol`, the plan-to-GPU sequence the renderer and the readback capture share |
@@ -42,8 +43,10 @@ into `OUT_DIR` from `build.rs`; each `<filter>/generated.rs` is the committed
 `include!` shim plus the `const` layout assertions that fail the build if the
 generated struct drifts from the hand-written one.
 
-`OffscreenRenderer` retains mask and blur pipelines. Their cache misses create
-shader modules directly from static WGSL; subsequent draws reuse the pipelines.
+`OffscreenRenderer` caches only the intermediate-to-surface presentation blit.
+Shader masks and backdrop filters use ordered painter IR and the shared layer
+recorder. The `offscreen_resource_cache` benchmark exercises public layer captures
+(including GPU completion and RGBA readback), with pixel preconditions before timing.
 
 ---
 
@@ -198,7 +201,7 @@ atomics while `fragile-send-sync-non-atomic-wasm` is on, and wasm32 with
 check` does not.
 
 `testing` gates the GPU readback/oracle suites and the bench scaffolding they
-share (`OffscreenRenderer`, `TexturePool`, `PathCache` re-exports). It is off
+share (`OffscreenRenderer`, `PathCache` re-exports). It is off
 by default, not part of the public API, and the same name and meaning as
 flui-layer's and flui-rendering's `testing`. CI's `gpu-test` job runs the
 suites on WARP with `FLUI_REQUIRE_GPU=1`, so a missing adapter fails there
@@ -216,9 +219,8 @@ shared handle is a wgpu ref-count.
 |---|---|---|
 | `Renderer::device` / `queue` | `Arc<wgpu::Device>` / `Arc<wgpu::Queue>` | wgpu's own ref-counted handles, shared with `WgpuPainter` and `OffscreenRenderer` at setup |
 | `Renderer::lease` | `SurfaceLease<wgpu::Surface<'static>>` | Owned. The lease keeps the presentation target alive as long as the surface exists; `release()` hands back a `#[must_use] Released` token that only `replace_surface` consumes, so a recreate cannot skip the drop-order step and a released renderer cannot present |
-| `Renderer::painter`, `Renderer::offscreen` | `WgpuPainter`, `OffscreenRenderer` | Owned outright; borrowed disjointly per frame by `LayerDispatcher<'frame>` |
+| `Renderer::painter`, `Renderer::offscreen` | `WgpuPainter`, `OffscreenRenderer` | Owned outright; the painter records content and the offscreen renderer blits retained presentation |
 | `Renderer::_single_mutator` | `PhantomData<Cell<()>>` | Makes `Renderer: !Sync` by declaration rather than by whichever field happens to be `!Sync`; pinned by `assert_impl_all!(Renderer: Send)` / `assert_not_impl_any!(Renderer: Sync)` |
-| `OffscreenRenderer::mask_painter` | `Option<WgpuPainter>` | The painter a shader mask renders its subtree with, cached across frames and rebuilt when the requested size changes |
 | `TexturePool` | inventory + mpsc return channel | Single-mutator by construction; `Send` only (the receiver is `!Sync`) |
 | `RasterOwner` mailbox | `parking_lot::Mutex` + condvar + two atomics + bounded crossbeam channels | The one module with its own memory model; its orderings are argued in `InFlightAccounting`'s doc |
 
@@ -494,34 +496,23 @@ Compose through the public scene/capture API;
 `a_clip_inside_an_image_filter_layer_keeps_its_content_and_its_siblings`
 pins the clip case.
 
-### 10. An offscreen result composites with the mode its producer recorded
+### 10. Group and backdrop composites preserve their recorded operator
 
-`PendingOffscreenTexture` carries the producer's `BlendMode`;
-`queue_offscreen_result` takes it; replay routes every mode through
-`PipelineSet::ensure_texture_composite`'s per-mode pipeline. Backdrop-filter
-results go through it, and `flush_opacity_layer` composites a save layer's
-Porter-Duff mode through the same pipelines (an advanced mode takes the
-backdrop-reading path), so a save layer composited `Clear` erases instead of
-drawing. `an_offscreen_result_composites_with_its_own_blend_mode` fails on
-the `SrcOver`-always code. A shader mask is the exception (decision 19,
-ADR-0099 §4): its mode combines its shader with its child, so
-`handle_shader_mask` queues its result `SrcOver` and the mode is not applied
-a second time at the draw-back; a white `Clear` mask over a red child
-therefore draws the masked child, it does not erase the backdrop.
-`OffscreenRenderer::render_masked` takes no blend mode yet (decision 19's
-open item). The result also carries the
-scissor and immutable clip expression captured when it was queued, since its offscreen was drawn
-outside them (decision 19).
+Save layers and ordered backdrop items composite through the shared group-texture
+path, with their recorded blend mode and captured clip expression. Shader masks
+apply the requested operator between shader source and child destination inside
+their isolated group; the finished result composites SrcOver into its parent
+(ADR-0099 §4). A Clear mask therefore makes its group transparent while preserving
+the parent backdrop. `layer_effects_capture_as_specified` pins source/child order,
+transparent masks, empty-child Src and trailing siblings.
 
-### 11. The shader-mask painter is cached across frames
+### 11. Shader masks reuse the containing painter and replay resources
 
-A `WgpuPainter` is nine pipelines and a glyph atlas. The painter a shader
-mask renders its subtree with used to live on the per-frame
-`LayerDispatcher`, so every frame with a mask rebuilt it; it lives on
-`OffscreenRenderer::mask_painter` now, rebuilt only when the requested size
-changes, and `Renderer::handle_shader_mask` borrows the offscreen renderer
-once for the whole capture.
-
+A mask records its children and terminal shader into the existing painter's
+ordered IR. It does not create another painter, glyph atlas, pipeline set or
+submission owner. Explicit isolation prevents ordinary opaque-layer reintegration
+from applying the mask operator directly to the parent. Nested groups use the
+same replay executor and DeviceDomain; effect nesting is admitted before replay.
 ### 12. A zero-sized resize mints nothing
 
 `RasterOwner::resize(0, h)` returns `None` instead of a fresh
@@ -767,8 +758,7 @@ Edge cases:
   child, which the mask pass does, and its result composites `SrcOver`:
   applied again at the composite, the default `Modulate` (or the gradient-text
   `SrcIn`) would multiply the child by the backdrop and erase the backdrop
-  around it. The mask pass applies the shader's alpha alone for now (Open
-  items).
+  around it. The requested operator runs inside the isolated child group.
 
 Locked by `layer_blend_tests::gpu_tests::a_layer_composites_its_whole_region_with_its_mode`
 (mapped, scaled and rotated bounds, an empty `Clear` layer, rect and rounded
@@ -797,11 +787,6 @@ opaque layer among them, its full frame against its partial one),
   straight into the parent's draw order, so content drawn past its bounds is
   cut only by the clip. Cutting it means compositing such a layer whenever its
   content may overrun its bounds, which the splice exists to avoid.
-- **A shader mask's blend mode (decision 19, ADR-0099).** The mask pass
-  multiplies the child by the shader's alpha whatever `ShaderMaskLayer`'s
-  `blend_mode()` says, and the result composites `SrcOver`. Applying the
-  mode between shader and child (`SrcIn` taking the shader's colour,
-  `Modulate` its colour and alpha) belongs in the mask pass.
 - **`catch_unwind` around `render_scene`.** A panic inside a layer's paint
   poisons the frame rather than isolating the layer; changing that is a
   contract change that needs its own ADR.
@@ -849,3 +834,79 @@ expression plus target mapping, and workload benchmarks. These require measured
 benefit and completion-safe resource ownership. The clip quotas do not constitute
 a whole-engine memory cap: DrawItem allocation metadata and other previously
 excluded recording payloads remain known admission limits to address.
+
+### 21. Layer effects record once and replay against their containing target
+
+Problem: window traversal intercepted masks and backdrop filters, while public
+headless capture silently used incomplete generic handlers. A temporary mask
+backend omitted nested effect support. Flushing a backdrop during recording
+could read the root attachment while its preceding siblings belonged to an
+isolated group. These are observable ordering errors, not backend preferences.
+
+Alternatives: giving every recursive capture another renderer preserves duplicate
+traversal, submission and ownership paths. A dedicated shader-mask pipeline also
+duplicates shader evaluation and blend operators. Instead, traversal records one
+ordered stream. A shader mask is an explicitly isolated group whose final draw
+combines the shader source with the child destination; restoring that group uses
+SrcOver. Backdrop filtering is an ordered item that reads the active replay target
+before its children. Window and public headless capture use the same visitor,
+including linked-follower resolution.
+
+Contract: inherited clip membership belongs to the group composite once. Mask
+bounds are captured with their affine transform. The terminal shader geometry
+covers the attachment independently of those bounds, preserving shader coordinates
+without introducing a second antialiasing edge. Unsupported shader or filter input
+is a typed error, never a successful fallback to different pixels. Singular bounds
+have empty output. Nested effects must be admitted before recursive replay so a
+layer tree cannot cause an unbounded effect call stack.
+
+Backdrop desired output, required input and write clip are distinct. Blur reads
+its actual kernel halo from the containing target, including pixels outside the
+output clip, and writes only the bounded output under the inherited clip. Outside
+the attachment the source is transparent (decal). Sigma remains two-dimensional;
+a transform must either preserve the implemented kernel semantics or be refused.
+Partial-frame damage may constrain writes but must not truncate input dependencies.
+Allocations and captured records remain owned by the existing DeviceDomain and
+frame admission/completion protocol; there is no nested submission owner.
+
+Reference check: Skia's `getInputBounds` and `getOutputBounds` deliberately answer
+different questions; Impeller's entity pass reads its current pass texture before
+rendering backdrop-filter children. These support separate footprints and ordered
+execution, without adopting their APIs or scene models. Sources and limits are in
+[the effect research](../../docs/research/engine-effect-footprints-research.ru.md).
+`layer_effects_capture_as_specified` reads back nested masks and backdrop groups,
+shader source/child destination order, followers, fractional DPR, affine linear/
+radial/sweep gradients, both blur axes, attachment-edge decal and whole-target
+partial/full equivalence. Its failure matrix preserves the first error and renders
+the next valid frame after unsupported shaders, missing textures, excessive depth
+and excessive sampling work. Disabling backdrop dependency expansion makes pixel
+(28,25) stale in the partial/full witness; the unchanged test fails on the pixels.
+
+Gradient instances retain local extents plus an affine matrix; the local origin
+is transformed in f64 before packing, preserving small shapes at large offsets.
+Cropped replay composes the attachment rebase with that matrix. Rounded coverage
+uses derivatives without a fixed local-distance cutoff. Nonrepresentable matrix
+packing is refused. Sweep gradients wrap angular position while retaining the full span,
+so a complete turn remains a gradient. Mask shader admission currently supports
+solid and Clamp linear/radial/sweep gradients without radial focal parameters;
+unsupported tiling, nonfinite parameters and invalid effective stops are errors.
+Ordinary and advanced gradient draws also validate rebased numeric payloads and
+effective stop order before admitting stop storage. Finite inputs whose packed shader
+intermediates overflow, or whose nonzero sweep span collapses, are refused too.
+Device vertex input uses
+13 attributes, including the quad, by grouping adjacent geometry and stop fields.
+
+Before partial clear, input-dependency closure expands repaint conservatively.
+It may overestimate clips and isolated groups; after 64 expansion scans it chooses
+a full repaint rather than unbounded planning work. Effect nesting is limited to
+64 and cumulative backdrop sampling to one billion taps per frame. These are
+engine work limits, not a driver VRAM guarantee. Backdrop supports axis-preserving
+Gaussian transforms and encoded SDR UNorm targets; directional affine blur,
+foreground input outside the viewport and backdrop filter chains remain open.
+
+The [scene renderer example](../../examples/scene_render.rs) accepts `--effects`
+for a native six-panel gallery and `--capture-effects <PNG path>` for the same
+scene through headless capture. With feature `testing` and
+`FLUI_READBACK_DUMP_DIR` set, `layer_effects_capture_as_specified` also writes
+named direct/mask, full/partial, scaled/rebased and follower-state PNG witnesses.
+Screenshots complement the numerical readbacks; they do not replace them.

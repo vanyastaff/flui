@@ -75,8 +75,9 @@ The `wgpu` engine has three, recorded as Open items in `crates/flui-engine/ARCHI
 - In the anti-aliased edge of a rounded clip, a destination-replacing mode scales the
   destination by the edge's coverage instead of mixing it.
 
-The mask pass of (4) multiplies the child by the shader's alpha whatever the mask's mode;
-applying the mode there is open work in the same file.
+The engine implements (4) through an isolated group and a terminal shader draw
+with the requested mode (engine mapping decision 21). Unsupported shader variants
+return typed errors rather than an alpha-only substitute.
 
 ## Pinned by
 

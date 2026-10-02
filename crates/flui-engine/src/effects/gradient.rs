@@ -93,6 +93,10 @@ pub(crate) struct LinearGradientInstance {
     /// Device-to-clip-local translation, padded to a `vec4` attribute:
     /// `[tx, ty, 0, 0]`.
     pub clip_local_origin: [f32; 4],
+    /// Local-to-device affine columns.
+    pub transform: [f32; 4],
+    /// Local-to-device translation, padded for the vertex attribute.
+    pub transform_translate: [f32; 4],
     /// Padding for GPU alignment
     pub padding: [u32; 2],
 }
@@ -118,7 +122,35 @@ impl LinearGradientInstance {
             clip_kind: [0; 4],
             clip_device_to_local: [1.0, 0.0, 0.0, 1.0],
             clip_local_origin: [0.0; 4],
+            transform: [1.0, 0.0, 0.0, 1.0],
+            transform_translate: [0.0; 4],
         }
+    }
+
+    pub(crate) fn with_transform(mut self, matrix: glam::DMat4, origin: [f64; 2]) -> Self {
+        // Rebase in f64 before packing. Adding a tiny local extent to a large
+        // f32 origin would destroy the quad before an opposing CTM translation.
+        let mapped = matrix * glam::dvec4(origin[0], origin[1], 0.0, 1.0);
+        self.bounds[0] = 0.0;
+        self.bounds[1] = 0.0;
+        self.transform = [
+            matrix.x_axis.x as f32,
+            matrix.x_axis.y as f32,
+            matrix.y_axis.x as f32,
+            matrix.y_axis.y as f32,
+        ];
+        self.transform_translate = [mapped.x as f32, mapped.y as f32, 0.0, 0.0];
+        self
+    }
+
+    pub(crate) fn device_corners(&self) -> [[f32; 2]; 4] {
+        let [x, y, w, h] = self.bounds;
+        [[x, y], [x + w, y], [x + w, y + h], [x, y + h]].map(|p| {
+            [
+                self.transform[0] * p[0] + self.transform[2] * p[1] + self.transform_translate[0],
+                self.transform[1] * p[0] + self.transform[3] * p[1] + self.transform_translate[1],
+            ]
+        })
     }
 
     /// Set the offset into the shared gradient stops buffer
@@ -170,6 +202,10 @@ pub(crate) struct RadialGradientInstance {
     /// Device-to-clip-local translation, padded to a `vec4` attribute:
     /// `[tx, ty, 0, 0]`.
     pub clip_local_origin: [f32; 4],
+    /// Local-to-device affine columns.
+    pub transform: [f32; 4],
+    /// Local-to-device translation, padded for the vertex attribute.
+    pub transform_translate: [f32; 4],
     /// Padding for GPU alignment
     pub padding2: [u32; 2],
 }
@@ -196,7 +232,35 @@ impl RadialGradientInstance {
             clip_kind: [0; 4],
             clip_device_to_local: [1.0, 0.0, 0.0, 1.0],
             clip_local_origin: [0.0; 4],
+            transform: [1.0, 0.0, 0.0, 1.0],
+            transform_translate: [0.0; 4],
         }
+    }
+
+    pub(crate) fn with_transform(mut self, matrix: glam::DMat4, origin: [f64; 2]) -> Self {
+        // Rebase in f64 before packing. Adding a tiny local extent to a large
+        // f32 origin would destroy the quad before an opposing CTM translation.
+        let mapped = matrix * glam::dvec4(origin[0], origin[1], 0.0, 1.0);
+        self.bounds[0] = 0.0;
+        self.bounds[1] = 0.0;
+        self.transform = [
+            matrix.x_axis.x as f32,
+            matrix.x_axis.y as f32,
+            matrix.y_axis.x as f32,
+            matrix.y_axis.y as f32,
+        ];
+        self.transform_translate = [mapped.x as f32, mapped.y as f32, 0.0, 0.0];
+        self
+    }
+
+    pub(crate) fn device_corners(&self) -> [[f32; 2]; 4] {
+        let [x, y, w, h] = self.bounds;
+        [[x, y], [x + w, y], [x + w, y + h], [x, y + h]].map(|p| {
+            [
+                self.transform[0] * p[0] + self.transform[2] * p[1] + self.transform_translate[0],
+                self.transform[1] * p[0] + self.transform[3] * p[1] + self.transform_translate[1],
+            ]
+        })
     }
 
     /// Set the offset into the shared gradient stops buffer
@@ -249,6 +313,10 @@ pub(crate) struct SweepGradientInstance {
     /// Device-to-clip-local translation, padded to a `vec4` attribute:
     /// `[tx, ty, 0, 0]`.
     pub clip_local_origin: [f32; 4],
+    /// Local-to-device affine columns.
+    pub transform: [f32; 4],
+    /// Local-to-device translation, padded for the vertex attribute.
+    pub transform_translate: [f32; 4],
     /// Padding for GPU alignment
     pub padding: [u32; 2],
 }
@@ -275,7 +343,35 @@ impl SweepGradientInstance {
             clip_kind: [0; 4],
             clip_device_to_local: [1.0, 0.0, 0.0, 1.0],
             clip_local_origin: [0.0; 4],
+            transform: [1.0, 0.0, 0.0, 1.0],
+            transform_translate: [0.0; 4],
         }
+    }
+
+    pub(crate) fn with_transform(mut self, matrix: glam::DMat4, origin: [f64; 2]) -> Self {
+        // Rebase in f64 before packing. Adding a tiny local extent to a large
+        // f32 origin would destroy the quad before an opposing CTM translation.
+        let mapped = matrix * glam::dvec4(origin[0], origin[1], 0.0, 1.0);
+        self.bounds[0] = 0.0;
+        self.bounds[1] = 0.0;
+        self.transform = [
+            matrix.x_axis.x as f32,
+            matrix.x_axis.y as f32,
+            matrix.y_axis.x as f32,
+            matrix.y_axis.y as f32,
+        ];
+        self.transform_translate = [mapped.x as f32, mapped.y as f32, 0.0, 0.0];
+        self
+    }
+
+    pub(crate) fn device_corners(&self) -> [[f32; 2]; 4] {
+        let [x, y, w, h] = self.bounds;
+        [[x, y], [x + w, y], [x + w, y + h], [x, y + h]].map(|p| {
+            [
+                self.transform[0] * p[0] + self.transform[2] * p[1] + self.transform_translate[0],
+                self.transform[1] * p[0] + self.transform[3] * p[1] + self.transform_translate[1],
+            ]
+        })
     }
 
     /// Set the offset into the shared gradient stops buffer
