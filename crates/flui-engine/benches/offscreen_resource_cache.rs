@@ -1,359 +1,175 @@
-// criterion_group!/criterion_main! generate public functions that have no docs;
-// missing_docs on a bench binary is noise (no external consumers of the items).
-//! Criterion benchmarks for `OffscreenRenderer` resource-caching hygiene.
-//!
-//! ## Purpose
-//!
-//! These benches isolate the **CPU-side overhead** of `render_masked` and
-//! `render_blur` — specifically the cost of the per-call GPU resource creation
-//! that was eliminated by audit findings #2 and #3:
-//!
-//! - Finding #2: `render_masked` created one `wgpu::Sampler` and one
-//!   fullscreen-quad `wgpu::Buffer` on every call.  Both are invariant.
-//! - Finding #3: `render_blur` created the same sampler + VB on every call,
-//!   plus `2 × iterations` (up to 10) `create_buffer_init` calls for
-//!   `BlurParams` uniform buffers.  All of these are now cached or
-//!   write-updated.
-//!
-//! ## What is measured
-//!
-//! Each benchmark runs a tight loop of CPU-observed wall time that covers:
-//!
-//! - the call into `render_masked` / `render_blur` (uniform buffer alloc,
-//!   bind group creation, command encoding, queue submit)
-//! - `device.poll(wait_indefinitely())` — blocks until the GPU consumes the
-//!   submitted work, so the measurement captures the full CPU-observable
-//!   round-trip and GPU stalls are visible
-//!
-//! The benchmark does NOT capture pure GPU execution time (shader runtime,
-//! memory bandwidth) — that requires timestamp queries.  The measured delta
-//! is the reduction in CPU-observable latency from eliminating allocation calls.
-//!
-//! ## GPU guard
-//!
-//! Skipped automatically when no adapter is available (headless CI without GPU).
-//! On DX12 machines the bench runs unconditionally.
-//!
-//! ## Reproduction
-//!
-//! ```text
-//! cargo bench -p flui-engine --bench offscreen_resource_cache
-//! ```
-
-use std::hint::black_box;
-use std::sync::Arc;
-
-use bytemuck::cast_slice;
+//! End-to-end ordered layer effects: recording, GPU completion and RGBA readback.
+//! Trees and the renderer are reused. Pixel preconditions run outside timing.
+//! Old mask/backdrop implementations omitted work and are not equivalent baselines.
+//! Optional individual capture quantiles: `FLUI_BENCH_LATENCY_SAMPLES=200`.
+//! `FLUI_BENCH_LATENCY_FILTER=mask_depth8_512` restricts this separate report.
+//! Quantiles include completion/readback, not pure GPU time. Adapter metadata,
+//! internal pass counts and peak admitted bytes are not exposed by this API.
 use criterion::{Criterion, criterion_group, criterion_main};
-use flui_engine::OffscreenRenderer;
-use flui_foundation::geometry::{Rect, Size};
-use flui_painting::{paint::Shader, styling::Color};
-use wgpu::util::DeviceExt as _;
+use flui_engine::HeadlessRenderer;
+use flui_foundation::geometry::Rect;
+use flui_layer::{
+    BackdropFilterLayer, Layer, LayerTree, OffsetLayer, PictureLayer, ShaderMaskLayer,
+};
+use flui_painting::{BlendMode, Canvas, Paint, Shader, paint::ImageFilter, styling::Color};
+use std::hint::black_box;
 
-// ---------------------------------------------------------------------------
-// Backend selection — mirrors render_throughput.rs
-// ---------------------------------------------------------------------------
-
-#[cfg(target_os = "windows")]
-const BACKENDS: wgpu::Backends = wgpu::Backends::DX12;
-#[cfg(target_os = "macos")]
-const BACKENDS: wgpu::Backends = wgpu::Backends::METAL;
-#[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
-const BACKENDS: wgpu::Backends = wgpu::Backends::VULKAN;
-
-// ---------------------------------------------------------------------------
-// GPU setup helper
-// ---------------------------------------------------------------------------
-
-/// Attempt to acquire a headless wgpu device + queue.
-///
-/// Returns `None` when no adapter is present (headless CI).
-fn try_create_gpu() -> Option<(Arc<wgpu::Device>, Arc<wgpu::Queue>)> {
-    pollster::block_on(async {
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-            backends: BACKENDS,
-            ..wgpu::InstanceDescriptor::new_without_display_handle()
-        });
-
-        let adapter = instance
-            .request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: wgpu::PowerPreference::HighPerformance,
-                compatible_surface: None,
-                force_fallback_adapter: false,
-                apply_limit_buckets: false,
-            })
-            .await
-            .ok()?;
-
-        let (device, queue) = adapter
-            .request_device(&wgpu::DeviceDescriptor {
-                label: Some("offscreen-bench-device"),
-                required_features: wgpu::Features::empty(),
-                required_limits: wgpu::Limits::downlevel_defaults(),
-                memory_hints: wgpu::MemoryHints::Performance,
-                experimental_features: wgpu::ExperimentalFeatures::disabled(),
-                trace: wgpu::Trace::Off,
-            })
-            .await
-            .ok()?;
-
-        Some((Arc::new(device), Arc::new(queue)))
-    })
-}
-
-// ---------------------------------------------------------------------------
-// Shared constants — invariant across both benchmarks
-// ---------------------------------------------------------------------------
-
-/// Side length in texels for all bench textures.
-/// 256×256 gives the renderer a realistic-sized pass without large GPU memory
-/// pressure on the bench machine.
-const BENCH_SIDE_TEXELS: u32 = 256;
-
-/// Side length as `f32` logical pixels.
-///
-/// Kept as a named literal (not derived via `as f32`) so the declaration is
-/// the single source of truth and does not trigger cast lints.
-const BENCH_SIDE_PX: f32 = 256.0;
-
-// ---------------------------------------------------------------------------
-// Source texture helper
-// ---------------------------------------------------------------------------
-
-/// Create a 256×256 source texture usable as a `render_masked` / `render_blur` input.
-///
-/// `TEXTURE_BINDING` lets the offscreen sampler read it;
-/// `RENDER_ATTACHMENT` allows it to be used as a render target (required by
-/// `render_blur` which writes into pooled textures at the same size).
-/// `COPY_DST` is not required here but harmless and consistent with test usage.
-fn make_source_texture(device: &wgpu::Device, format: wgpu::TextureFormat) -> wgpu::Texture {
-    device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("bench-source"),
-        size: wgpu::Extent3d {
-            width: BENCH_SIDE_TEXELS,
-            height: BENCH_SIDE_TEXELS,
-            depth_or_array_layers: 1,
-        },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format,
-        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::RENDER_ATTACHMENT,
-        view_formats: &[],
-    })
-}
-
-// ---------------------------------------------------------------------------
-// `render_masked` benchmark
-// ---------------------------------------------------------------------------
-
-/// Measures the per-call overhead of `OffscreenRenderer::render_masked`.
-///
-/// Each iteration:
-/// 1. Calls `render_masked` with a solid-colour shader on a 256×256 input.
-/// 2. Drops the returned `MaskedRenderResult` (returns the texture to the pool
-///    so the pool stays warm across iterations).
-/// 3. Polls until the GPU completes (ensures each measurement is a full round-trip).
-///
-/// The `OffscreenRenderer` is constructed once before the loop, so pipeline
-/// compilation is excluded from the measurement.  The formerly per-call GPU
-/// allocations (sampler, vertex buffer) are now constructor-time — they are
-/// therefore absent from the measured iterations, which is the point.
-fn bench_render_masked(c: &mut Criterion) {
-    let Some((device, queue)) = try_create_gpu() else {
-        println!("skipping offscreen_resource_cache benches: no GPU available");
-        return;
-    };
-
-    let format = wgpu::TextureFormat::Rgba8UnormSrgb;
-
-    // Build the renderer once — sampler + fullscreen VB are constructor-time.
-    let mut offscreen = OffscreenRenderer::new(Arc::clone(&device), Arc::clone(&queue), format);
-
-    let child_bounds =
-        Rect::<f64>::from_ltrb(0.0, 0.0, f64::from(BENCH_SIDE_PX), f64::from(BENCH_SIDE_PX));
-    let result_size: Size<f64> = Size::new(f64::from(BENCH_SIDE_PX), f64::from(BENCH_SIDE_PX));
-    let mask_shader = Shader::solid(Color::rgb(255, 128, 0));
-
-    // Warm-up: one render pass ensures pipeline compilation is excluded.
-    {
-        let source = make_source_texture(&device, format);
-        let _ = offscreen
-            .render_masked(child_bounds, result_size, &mask_shader, &source)
-            .expect("masked warm-up admitted");
-        let _ = device.poll(wgpu::PollType::wait_indefinitely());
+fn picture(side: u32, split: bool) -> Layer {
+    let mut canvas = Canvas::new();
+    let side = f64::from(side);
+    canvas.draw_rect(
+        Rect::from_xywh(0.0, 0.0, side, side),
+        &Paint::fill(if split { Color::WHITE } else { Color::RED }).with_anti_alias(false),
+    );
+    if split {
+        canvas.draw_rect(
+            Rect::from_xywh(0.0, 0.0, side * 0.5, side),
+            &Paint::fill(Color::BLACK).with_anti_alias(false),
+        );
     }
-
-    let source = make_source_texture(&device, format);
-
-    c.bench_function("render_masked_256x256_solid", |b| {
-        b.iter(|| {
-            // `black_box` on all inputs prevents the compiler from constant-folding
-            // the call.  The returned result is black_boxed so the compiler cannot
-            // prove the call is a no-op and eliminate it.
-            let masked_result = offscreen
-                .render_masked(
-                    black_box(child_bounds),
-                    black_box(result_size),
-                    black_box(&mask_shader),
-                    black_box(&source),
-                )
-                .expect("masked frame admitted");
-            let _ = device.poll(wgpu::PollType::wait_indefinitely());
-            // Dropping `masked_result` here returns the texture to the pool,
-            // keeping the pool in a warm steady state for every iteration.
-            black_box(masked_result)
-        });
-    });
+    Layer::from(PictureLayer::new(canvas.finish()))
 }
-
-// ---------------------------------------------------------------------------
-// `render_blur` benchmark
-// ---------------------------------------------------------------------------
-
-/// Measures the per-call overhead of `OffscreenRenderer::render_blur` with
-/// sigma 5.0 (→ 3 downsample + 3 upsample passes) on a 256×256 input.
-///
-/// Each iteration:
-/// 1. Calls `render_blur` with the cached pooled input texture.
-/// 2. Drops the blurred output (returns it to the pool).
-/// 3. Polls until the GPU completes.
-///
-/// Formerly per-call GPU allocations eliminated in this path:
-/// - 1× `create_sampler` (now a cached struct field)
-/// - 1× `create_buffer_init` for the fullscreen-quad VB (now a cached struct field)
-///
-/// Blur parameters now use admitted immutable per-call source-mip buffers;
-/// their cost is intentionally included in this benchmark.
-fn bench_render_blur(c: &mut Criterion) {
-    let Some((device, queue)) = try_create_gpu() else {
-        // GPU unavailability was already printed by bench_render_masked.
-        return;
-    };
-
-    let format = wgpu::TextureFormat::Rgba8UnormSrgb;
-
-    let mut offscreen = OffscreenRenderer::new(Arc::clone(&device), Arc::clone(&queue), format);
-
-    // Acquire the input texture via the renderer's pool so it is a warm
-    // `PooledTexture` exactly as production code hands it to `render_blur`.
-    let blur_input =
-        offscreen
-            .texture_pool_mut()
-            .acquire(BENCH_SIDE_TEXELS, BENCH_SIDE_TEXELS, format);
-
-    // sigma = 5.0 → iterations = ceil(5.0 / 2.0).clamp(1, 5) = 3
-    let blur_sigma: f32 = 5.0;
-
-    // Warm-up: one blur call so pipeline compilation is excluded.
-    {
-        let blur_output = offscreen
-            .render_blur(&blur_input, blur_sigma)
-            .expect("blur warm-up admitted");
-        let _ = device.poll(wgpu::PollType::wait_indefinitely());
-        drop(blur_output);
+fn masks(side: u32, depth: u32) -> LayerTree {
+    let mut tree = LayerTree::new(Layer::from(OffsetLayer::zero()));
+    let mut parent = tree.root();
+    for _ in 0..depth {
+        parent = tree.push_child(
+            parent,
+            Layer::from(ShaderMaskLayer::new(
+                Shader::solid(Color::rgba(255, 255, 255, 128)),
+                BlendMode::DstIn,
+                Rect::from_xywh(0.0, 0.0, f64::from(side), f64::from(side)),
+            )),
+        );
     }
-
-    c.bench_function("render_blur_256x256_sigma5_3passes", |b| {
-        b.iter(|| {
-            let blur_output = offscreen
-                .render_blur(black_box(&blur_input), black_box(blur_sigma))
-                .expect("blur frame admitted");
-            let _ = device.poll(wgpu::PollType::wait_indefinitely());
-            // Drop returns the output texture to the pool — pool stays warm.
-            black_box(blur_output)
-        });
-    });
+    tree.push_child(parent, picture(side, false));
+    tree
 }
-
-// ---------------------------------------------------------------------------
-// Allocation-overhead calibration
-// ---------------------------------------------------------------------------
-
-/// Measures the raw cost of the GPU allocations that were eliminated.
-///
-/// This bench creates the same resources the old per-call code created on every
-/// `render_masked` + `render_blur` invocation, providing a lower-bound estimate
-/// of the allocation overhead that the caching change removes from those paths.
-///
-/// Resources measured (matching the pre-patch call sites exactly):
-/// - 1× `create_sampler` (ClampToEdge × Linear — was in render_masked AND render_blur)
-/// - 1× `create_buffer_init` VERTEX (fullscreen quad VB — was in render_masked AND render_blur)
-/// - 1× `create_buffer_init` UNIFORM (BlurParams per-iteration — was 2×iterations in render_blur)
-///
-/// This is NOT a full render call — it measures only the allocation side. The
-/// number gives the additive allocation cost per call that is now a one-time
-/// constructor + write-update cost.
-fn bench_allocation_overhead_baseline(c: &mut Criterion) {
-    let Some((device, _queue)) = try_create_gpu() else {
+fn backdrops(side: u32, anisotropic: bool) -> LayerTree {
+    let mut tree = LayerTree::new(picture(side, true));
+    for inset in [4.0, 8.0] {
+        tree.push_child(
+            tree.root(),
+            Layer::from(BackdropFilterLayer::new(
+                ImageFilter::Blur {
+                    sigma_x: 3.0,
+                    sigma_y: if anisotropic { 0.0 } else { 3.0 },
+                },
+                BlendMode::Src,
+                Rect::from_xywh(
+                    inset,
+                    inset,
+                    f64::from(side) - 2.0 * inset,
+                    f64::from(side) - 2.0 * inset,
+                ),
+            )),
+        );
+    }
+    tree
+}
+fn pixel(bytes: &[u8], side: u32, x: u32, y: u32) -> [u8; 4] {
+    let index = ((y * side + x) * 4) as usize;
+    bytes[index..index + 4].try_into().expect("RGBA pixel")
+}
+fn report_latency(renderer: &HeadlessRenderer, tree: &LayerTree, side: u32, label: &str) {
+    let Some(samples) = std::env::var("FLUI_BENCH_LATENCY_SAMPLES")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|&count| count > 0 && count <= 10_000)
+    else {
         return;
     };
-
-    let mut group = c.benchmark_group("eliminated_allocation_overhead");
-
-    // 1× create_sampler (was created on every render_masked AND render_blur call)
-    group.bench_function("create_linear_sampler", |b| {
-        b.iter(|| {
-            black_box(device.create_sampler(&wgpu::SamplerDescriptor {
-                label: None,
-                address_mode_u: wgpu::AddressMode::ClampToEdge,
-                address_mode_v: wgpu::AddressMode::ClampToEdge,
-                address_mode_w: wgpu::AddressMode::ClampToEdge,
-                mag_filter: wgpu::FilterMode::Linear,
-                min_filter: wgpu::FilterMode::Linear,
-                mipmap_filter: wgpu::MipmapFilterMode::Linear,
-                ..Default::default()
-            }))
-        });
-    });
-
-    // 1× create_buffer_init VERTEX (fullscreen quad — was created every render_masked + render_blur)
-    let quad_data: [[f32; 4]; 6] = [
-        [-1.0, -1.0, 0.0, 1.0],
-        [1.0, -1.0, 1.0, 1.0],
-        [-1.0, 1.0, 0.0, 0.0],
-        [-1.0, 1.0, 0.0, 0.0],
-        [1.0, -1.0, 1.0, 1.0],
-        [1.0, 1.0, 1.0, 0.0],
-    ];
-    group.bench_function("create_fullscreen_quad_vb", |b| {
-        b.iter(|| {
-            black_box(
-                device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: None,
-                    contents: black_box(cast_slice(&quad_data)),
-                    usage: wgpu::BufferUsages::VERTEX,
-                }),
-            )
-        });
-    });
-
-    // 1× create_buffer_init UNIFORM (BlurParams — was 2×iterations per render_blur call,
-    // up to 10 per call at max iterations=5; this measures the cost of one such creation)
-    let params_data = [0u8; 16]; // size_of::<BlurParams>() = 16
-    group.bench_function("create_blur_uniform_buffer_init", |b| {
-        b.iter(|| {
-            black_box(
-                device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: None,
-                    contents: black_box(&params_data),
-                    usage: wgpu::BufferUsages::UNIFORM,
-                }),
-            )
-        });
-    });
-
+    if std::env::var("FLUI_BENCH_LATENCY_FILTER").is_ok_and(|filter| !label.contains(&filter)) {
+        return;
+    }
+    let mut durations = Vec::with_capacity(samples);
+    for _ in 0..samples {
+        let start = std::time::Instant::now();
+        let bytes = renderer
+            .render_layer_tree(tree, (side, side))
+            .expect("latency capture");
+        durations.push(start.elapsed());
+        black_box(bytes);
+    }
+    durations.sort_unstable();
+    let percentile =
+        |percent: usize| durations[(samples * percent).div_ceil(100) - 1].as_secs_f64() * 1000.0;
+    println!(
+        "capture_completion_readback {label}: n={samples} p50={:.3}ms p95={:.3}ms p99={:.3}ms",
+        percentile(50),
+        percentile(95),
+        percentile(99)
+    );
+}
+fn captures(c: &mut Criterion) {
+    let Ok(renderer) = pollster::block_on(HeadlessRenderer::new()) else {
+        return;
+    };
+    let mut group = c.benchmark_group("layer_capture_completion_readback");
+    group.sample_size(20);
+    for side in [128, 512] {
+        for depth in [0, 1, 4, 8] {
+            let tree = masks(side, depth);
+            let bytes = renderer
+                .render_layer_tree(&tree, (side, side))
+                .expect("warm layer capture");
+            let actual = pixel(&bytes, side, side / 2, side / 2);
+            let expected = (255.0 * (1.0 - (128.0_f64 / 255.0).powi(depth as i32))).round() as u8;
+            assert!(
+                actual[0] == 255
+                    && actual[1].abs_diff(expected) <= 2
+                    && actual[2].abs_diff(expected) <= 2
+                    && actual[3] == 255,
+                "nested masks must perform every opacity operation: {actual:?}, depth={depth}"
+            );
+            let label = format!("mask_depth{depth}_{side}");
+            report_latency(&renderer, &tree, side, &label);
+            group.bench_function(label, |b| {
+                b.iter(|| {
+                    black_box(
+                        renderer
+                            .render_layer_tree(black_box(&tree), (side, side))
+                            .expect("ordered capture"),
+                    )
+                });
+            });
+        }
+        for anisotropic in [false, true] {
+            let tree = backdrops(side, anisotropic);
+            let bytes = renderer
+                .render_layer_tree(&tree, (side, side))
+                .expect("warm backdrop capture");
+            let edge = pixel(&bytes, side, side / 2, side / 2);
+            assert!(
+                edge[0] > 20
+                    && edge[0] < 235
+                    && edge[0] == edge[1]
+                    && edge[1] == edge[2]
+                    && edge[3] == 255,
+                "overlapping filters must soften the source discontinuity: {edge:?}"
+            );
+            assert_eq!(pixel(&bytes, side, 1, side / 2), [0, 0, 0, 255]);
+            let label = format!(
+                "overlapping_backdrops_{}_{side}",
+                if anisotropic {
+                    "horizontal"
+                } else {
+                    "isotropic"
+                }
+            );
+            report_latency(&renderer, &tree, side, &label);
+            group.bench_function(label, |b| {
+                b.iter(|| {
+                    black_box(
+                        renderer
+                            .render_layer_tree(black_box(&tree), (side, side))
+                            .expect("ordered capture"),
+                    )
+                });
+            });
+        }
+    }
     group.finish();
 }
-
-// ---------------------------------------------------------------------------
-// Registration
-// ---------------------------------------------------------------------------
-
-criterion_group!(
-    offscreen_benches,
-    bench_render_masked,
-    bench_render_blur,
-    bench_allocation_overhead_baseline
-);
-criterion_main!(offscreen_benches);
+criterion_group!(benches, captures);
+criterion_main!(benches);

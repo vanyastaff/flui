@@ -176,6 +176,15 @@ pub enum ExternalTextureError {
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum EngineError {
+    /// The mask shader has no admitted shader lowering.
+    #[error("unsupported shader mask shader")]
+    UnsupportedMaskShader,
+    /// The backdrop operation cannot be represented by this device effect path.
+    #[error("unsupported backdrop filter: {reason}")]
+    UnsupportedBackdropFilter {
+        /// Why the recorded filter cannot be represented.
+        reason: &'static str,
+    },
     /// A direct draw cannot separate paint alpha from soft clip coverage on this device.
     #[error(
         "direct {mode:?} drawing under antialiased coverage requires dual-source blending or a supported sampleable destination"
@@ -471,7 +480,9 @@ impl EngineError {
             | Self::InvalidTargetSize { .. }
             | Self::ReadbackTimedOut { .. }
             | Self::NotInitialized => Recoverability::Fatal,
-            Self::UnsupportedCoverageBlend { .. }
+            Self::UnsupportedMaskShader
+            | Self::UnsupportedBackdropFilter { .. }
+            | Self::UnsupportedCoverageBlend { .. }
             | Self::CompositeBackdropUnavailable
             | Self::InvalidRenderTarget { .. }
             | Self::InvalidGeometry(_)

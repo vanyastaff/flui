@@ -28,6 +28,8 @@
 //! Without the env var, the built-in scene (colored rectangles) is used.
 //!
 //! Run with: cargo run --example scene_render
+//! Native effects gallery: cargo run --example scene_render -- --effects
+//! Deterministic PNG: cargo run --example scene_render -- --capture-effects gallery.png
 
 // Target-level lint relaxations — crate-level allows don't reach this
 // target. `unwrap` in test/example code: a panic IS the failure report
@@ -36,6 +38,9 @@
 // `Renderer: Send` is re-proved here for the frame callback; see the
 // `recursion_limit` rationale at the top of flui-engine's `lib.rs`.
 #![recursion_limit = "256"]
+
+#[path = "scene_render/effects.rs"]
+mod effects;
 
 use std::sync::{Arc, Mutex};
 
@@ -90,23 +95,59 @@ fn build_test_scene(width: f64, height: f64) -> Scene {
     Scene::new(LayerTree::new(Layer::from(canvas_layer)))
 }
 
-fn main() {
+fn capture_effects(path: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
+    let renderer = pollster::block_on(flui_engine::HeadlessRenderer::new())?;
+    let scene = effects::build(800.0, 600.0);
+    let pixels = renderer.render_layer_tree(scene.tree(), (800, 600))?;
+    image::save_buffer_with_format(
+        path,
+        &pixels,
+        800,
+        600,
+        image::ExtendedColorType::Rgba8,
+        image::ImageFormat::Png,
+    )?;
+    tracing::info!(path = %path.display(), "Captured effects gallery (800x600 RGBA)");
+    Ok(())
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt()
         .with_max_level(tracing::Level::INFO)
         .init();
 
+    let mut arguments = std::env::args_os().skip(1);
+    while let Some(argument) = arguments.next() {
+        if argument == "--capture-effects" {
+            let path = arguments.next().ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "--capture-effects requires a PNG path",
+                )
+            })?;
+            capture_effects(std::path::Path::new(&path))?;
+            return Ok(());
+        }
+    }
+
     tracing::info!("Scene render example — proving GPU compositor pipeline");
 
-    // Check for hot-reload plugin path
-    let hot_reload = std::env::var("FLUI_SCENE_PLUGIN").ok().map(|path| {
-        tracing::info!("Hot-reload enabled: {}", path);
-        Arc::new(Mutex::new(HotReloadDriver::new(path)))
-    });
+    let effects_mode = std::env::args().any(|argument| argument == "--effects");
+    // Effects mode is deterministic and uses the maintained built-in scene.
+    let hot_reload = (!effects_mode)
+        .then(|| std::env::var("FLUI_SCENE_PLUGIN").ok())
+        .flatten()
+        .map(|path| {
+            tracing::info!("Hot-reload enabled: {}", path);
+            Arc::new(Mutex::new(HotReloadDriver::new(path)))
+        });
 
     let platform = current_platform().expect("Failed to initialize platform");
     tracing::info!("Platform: {}", platform.name());
 
-    let title = if hot_reload.is_some() {
+    let title = if effects_mode {
+        "FLUI Effects — masks / gradients / backdrop / clear / follower / AA"
+    } else if hot_reload.is_some() {
         "FLUI Scene Render — Hot-Reload Active"
     } else {
         "FLUI Scene Render — GPU Compositor Proof"
@@ -160,7 +201,9 @@ fn main() {
         let h = size.height as f64;
 
         // If hot-reload is enabled, poll for plugin updates and use plugin scene
-        let scene = if let Some(ref hr) = hot_reload_frame {
+        let scene = if effects_mode {
+            effects::build(w, h)
+        } else if let Some(ref hr) = hot_reload_frame {
             let mut driver = hr.lock().unwrap();
             driver.poll(w, h);
             // SAFETY: the plugin is built from this workspace by the same
@@ -210,4 +253,5 @@ fn main() {
         .expect("platform event loop exited with an error");
 
     tracing::info!("Application finished");
+    Ok(())
 }

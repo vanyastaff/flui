@@ -66,7 +66,10 @@ impl GpuReplay {
         }
         let unclipped = ClipChain::default();
         let chain = clip.map_or(&unclipped, |clip| &clip.chain);
-        self.viewport_bind_group = self.prepare_clip_binding(
+        // Freeze the composite in its attachment coordinate system. A managed
+        // resize can leave the recorder's viewport different from this target.
+        let previous_uniform_size = std::mem::replace(&mut self.uniform_size, viewport_size);
+        let binding = self.prepare_clip_binding(
             context,
             chain,
             viewport_size,
@@ -74,7 +77,9 @@ impl GpuReplay {
             pipelines,
             resources,
             encoder,
-        )?;
+        );
+        self.uniform_size = previous_uniform_size;
+        self.viewport_bind_group = binding?;
         // With fractional coverage these modes cannot express
         // mix(destination, blend(source, destination), coverage) by folding
         // coverage into source alpha. Binary masks instead discard the outside

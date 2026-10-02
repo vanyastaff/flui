@@ -259,7 +259,7 @@ mod clip_mask;
 /// pipeline and bind-group layout.
 pub(crate) mod color_matrix;
 /// Command IR data types: `DrawSegment`, `DrawItem`, `SavedLayer`,
-/// `PendingOpacityLayer`, `PendingOffscreenTexture`, and their helpers
+/// `PendingOpacityLayer`, ordered backdrop records, and their helpers
 /// (`ScissorRect`, `ScissorRegion`, `TessellatedBatch`). Moved here from
 /// `painter` so the future batcher/compositor modules share one type home.
 pub(crate) mod command_ir;
@@ -413,6 +413,10 @@ mod paragraph_readback_tests;
 #[cfg(test)]
 mod damage_readback_tests;
 
+#[cfg(test)]
+#[path = "layer_effect_tests.rs"]
+mod layer_effect_readback_tests;
+
 // The CPU model of the fixed-function blender that every readback suite
 // asserting an exact blended byte predicts against.
 #[cfg(test)]
@@ -487,13 +491,11 @@ pub use window_target::WindowTarget;
 // can store/display profiling results without gating on `gpu-profiler`.
 pub use profiler::{GpuFrameProfile, PassTiming};
 
-// Offscreen renderer + texture pool — re-exported ONLY under the
-// `testing` feature for the `offscreen_resource_cache` criterion bench.
+// Presentation blit helper — re-exported ONLY under the
+// `testing` feature for the retained-presentation blit benchmark.
 // Gated so benching does not widen the public surface.
 #[cfg(feature = "testing")]
 pub use offscreen::OffscreenRenderer;
-#[cfg(feature = "testing")]
-pub use texture_pool::{PooledTexture, TexturePool};
 // The tessellation cache, for the `render_throughput` bench's warm-hit case.
 #[cfg(feature = "testing")]
 pub use path_cache::PathCache;

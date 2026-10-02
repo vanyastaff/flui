@@ -168,17 +168,8 @@ fn atlas_image_is_sharp_at_one_to_one() {
 /// An offscreen result composited with a blend mode other than `SrcOver`
 /// must actually use that mode.
 ///
-/// `ShaderMaskLayer` carries its own `blend_mode()`; before this test the
-/// layer path accepted it, threaded it into `render_masked`, and that
-/// function dropped it on the floor — every masked layer composited
-/// `SrcOver` regardless of what the caller asked for. The mode now rides on
-/// `DrawItem::OffscreenTexture` and selects the composite pipeline, so a
-/// `Clear` result erases what is under it rather than drawing over it.
-///
-/// The scene: an opaque red frame, then a full-surface offscreen result
-/// composited with `Clear`. `Clear` ignores the source entirely and writes
-/// zero, so the centre must come back transparent. `SrcOver` (the pre-fix
-/// behaviour) would leave red.
+/// An empty save layer with Clear must erase its region, at the root and
+/// inside another isolated layer. SrcOver would preserve the opaque red input.
 fn an_offscreen_result_composites_with_its_own_blend_mode() {
     clear_offscreen_result(false);
     clear_offscreen_result(true);
@@ -203,41 +194,12 @@ fn clear_offscreen_result(nested: bool) {
             &Paint::fill(flui_painting::styling::Color::rgb(255, 0, 0)),
         );
 
-        // Step 2: a transparent offscreen texture, composited with Clear.
-        // Clear must erase even when the source has zero alpha; discarding
-        // transparent fragments would incorrectly preserve the destination.
-        let mut pool = crate::texture_pool::TexturePool::new(Arc::clone(&device));
-        let texture = pool.acquire(SIZE, SIZE, READBACK_FORMAT);
-        {
-            let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("clear-composite source"),
-            });
-            {
-                let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: Some("clear-composite source fill"),
-                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                        view: texture.view(),
-                        resolve_target: None,
-                        depth_slice: None,
-                        ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                            store: wgpu::StoreOp::Store,
-                        },
-                    })],
-                    depth_stencil_attachment: None,
-                    timestamp_writes: None,
-                    occlusion_query_set: None,
-                    multiview_mask: None,
-                });
-            }
-            queue.submit(std::iter::once(encoder.finish()));
-        }
-
-        painter.queue_offscreen_result(
-            texture,
-            Rect::from_xywh(0.0, 0.0, f64::from(SIZE as f32), f64::from(SIZE as f32)),
-            BlendMode::Clear,
+        // A public empty isolated Clear group erases even with transparent source.
+        painter.save_layer(
+            Some(Rect::from_xywh(0.0, 0.0, f64::from(SIZE), f64::from(SIZE))),
+            &Paint::fill(flui_painting::styling::Color::WHITE).with_blend_mode(BlendMode::Clear),
         );
+        painter.restore_layer();
         if nested {
             painter.restore_layer();
         }
@@ -692,6 +654,7 @@ fn recording_quota_charges_filter_remap_clone() {
 }
 
 fn offscreen_only_flushes_freeze_viewport_after_resize() {
+    use flui_painting::Paint;
     let (device, queue) = test_device_and_queue();
     let (first, first_view) = crate::test_support::create_target(
         &device,
@@ -711,11 +674,6 @@ fn offscreen_only_flushes_freeze_viewport_after_resize() {
     );
     crate::test_support::clear_target(&device, &queue, &first_view, wgpu::Color::BLACK);
     crate::test_support::clear_target(&device, &queue, &second_view, wgpu::Color::BLACK);
-    let mut pool = crate::texture_pool::TexturePool::new(Arc::clone(&device));
-    let source = pool.acquire(32, 32, READBACK_FORMAT);
-    let second_source = pool.acquire(32, 32, READBACK_FORMAT);
-    crate::test_support::clear_target(&device, &queue, source.view(), wgpu::Color::RED);
-    crate::test_support::clear_target(&device, &queue, second_source.view(), wgpu::Color::BLUE);
     let mut painter = WgpuPainter::with_shared_device(
         Arc::clone(&device),
         Arc::clone(&queue),
@@ -724,23 +682,32 @@ fn offscreen_only_flushes_freeze_viewport_after_resize() {
     );
     painter.begin_frame().expect("offscreen frame begins");
     let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
-    // The crate-private enqueue seam is the same one shader masks use; it is
-    // necessary to isolate a frame with no ordinary DrawSegment at all.
+    // Only a completed isolated group is queued; public API pins viewport freezing.
     painter.resize(64, 64);
-    painter.queue_offscreen_result(
-        source,
-        Rect::from_xywh(40.0, 8.0, 16.0, 16.0),
-        BlendMode::SrcOver,
+    let bounds = Rect::from_xywh(40.0, 8.0, 16.0, 16.0);
+    painter.save_layer(
+        Some(bounds),
+        &Paint::fill(flui_painting::styling::Color::WHITE).with_blend_mode(BlendMode::Src),
     );
+    painter.draw_rect(
+        bounds,
+        &Paint::fill(flui_painting::styling::Color::RED).with_anti_alias(false),
+    );
+    painter.restore_layer();
     painter
         .render_to_view(&first_view, &mut encoder)
         .expect("first offscreen-only flush encodes");
     painter.resize(128, 128);
-    painter.queue_offscreen_result(
-        second_source,
-        Rect::from_xywh(80.0, 16.0, 32.0, 32.0),
-        BlendMode::SrcOver,
+    let bounds = Rect::from_xywh(80.0, 16.0, 32.0, 32.0);
+    painter.save_layer(
+        Some(bounds),
+        &Paint::fill(flui_painting::styling::Color::WHITE).with_blend_mode(BlendMode::Src),
     );
+    painter.draw_rect(
+        bounds,
+        &Paint::fill(flui_painting::styling::Color::BLUE).with_anti_alias(false),
+    );
+    painter.restore_layer();
     painter
         .render_to_view(&second_view, &mut encoder)
         .expect("resized offscreen-only flush encodes");
@@ -1770,6 +1737,8 @@ fn limited_fragment_uniforms_clip_refusal_recovers() {
     .expect("GPU test adapter");
     let limits = wgpu::Limits {
         max_uniform_buffers_per_shader_stage: 2,
+        // Affine gradient packing must preserve the existing attribute floor.
+        max_vertex_attributes: 13,
         ..wgpu::Limits::default()
     };
     let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {

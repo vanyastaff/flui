@@ -3,9 +3,9 @@
 //! A shader appears here when its source is ASSEMBLED rather than merely read:
 //! every entry below is a concatenation whose piece order is load-bearing, and
 //! the assembly is what earns the indirection. Shaders that are a single file
-//! (`masks/*.wgsl`, `effects/*.wgsl`, the remaining `common/*.wgsl`) stay
-//! `include_str!`-loaded by their consumers — `offscreen/shader.rs` for the
-//! mask/blur/morph stack, `effects_pipeline.rs` for the shadow pipeline.
+//! (`effects/*.wgsl`, the remaining `common/*.wgsl`) stay
+//! `include_str!`-loaded by their consumers, including `effects_pipeline.rs`
+//! for the shadow pipeline.
 
 // Coverage-correct assemblies
 //

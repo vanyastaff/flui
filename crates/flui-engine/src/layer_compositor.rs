@@ -227,6 +227,7 @@ impl LayerCompositor {
         composite_clip: Option<crate::command_ir::GroupClip>,
     ) {
         let saved = SavedLayer {
+            force_isolation: false,
             saved_draw_order,
             saved_segment,
             saved_opacity_stack: std::mem::take(&mut self.opacity_stack),
@@ -244,6 +245,16 @@ impl LayerCompositor {
         // Children inside the layer draw at full opacity; group opacity is
         // applied at composite time by GpuReplay::flush_opacity_layer.
         self.current_opacity = 1.0;
+    }
+
+    pub(super) fn depth(&self) -> usize {
+        self.layer_stack.len()
+    }
+
+    pub(super) fn force_current_layer_isolation(&mut self) {
+        if let Some(layer) = self.layer_stack.last_mut() {
+            layer.force_isolation = true;
+        }
     }
 
     /// Return the `bounds` field of the top-of-stack `SavedLayer` without popping.
@@ -363,7 +374,8 @@ impl LayerCompositor {
         // name, and its clip's coverage is applied to the composite. Splicing
         // the children back into the parent would drop both — the layer's
         // isolation and, for a rounded clip, the clip itself.
-        let needs_composite = (1.0 - saved.layer_opacity).abs() > f32::EPSILON
+        let needs_composite = saved.force_isolation
+            || (1.0 - saved.layer_opacity).abs() > f32::EPSILON
             || has_chroma
             || saved.layer_blend != BlendMode::SrcOver
             || !saved.filters.is_empty()

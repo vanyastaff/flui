@@ -22,7 +22,6 @@ use crate::{
     },
     pipeline_cache::PipelineKey,
     texture_cache::TextureKey,
-    texture_pool::PooledTexture,
     vertex::Vertex,
 };
 
@@ -450,40 +449,15 @@ pub(crate) struct TessellatedBatch {
 
 // ─── Offscreen / layer snapshots ─────────────────────────────────────────────
 
-/// A pending offscreen texture waiting to be composited into the main render target.
-///
-/// Created by [`crate::painter::WgpuPainter::queue_offscreen_result`] and consumed
-/// during [`crate::painter::WgpuPainter::render`] after all other drawing is complete.
-// `wgpu::TextureView` and `PooledTexture` are not `Debug`; no derive possible.
-pub(crate) struct PendingOffscreenTexture {
-    pub(crate) texture: PooledTexture,
-    pub(crate) bounds: Rect<f64>,
-    /// The blend mode the offscreen result must be composited with. The
-    /// offscreen target is cleared transparent and drawn with straight
-    /// `ALPHA_BLENDING`, so the result is premultiplied; `SrcOver` is the
-    /// premultiplied identity and every other mode routes through the
-    /// per-mode composite pipeline.
-    pub(crate) blend: BlendMode,
-    /// The scissor in force when the result was queued: every ancestor clip
-    /// rect and a partial frame's damage. The offscreen was drawn outside
-    /// them, so the composite is where they apply.
-    pub(crate) scissor: ScissorRect,
-    /// The clip the composite carries beyond the scissor: the ambient rounded
-    /// clip, or the bounds of a rotated destination-replacing result as a
-    /// hard clip. `ResolvedClip::NONE` when the scissor is the whole clip.
-    pub(crate) clip: GroupClip,
-    pub(crate) budget: std::sync::Arc<crate::recording_budget::RecordingBudget>,
-}
-
 /// Saved render state for `save_layer`/`restore_layer` offscreen compositing.
 ///
 /// When `save_layer` is called, the current draw state is captured into this
 /// struct and a fresh segment begins. All subsequent drawing goes into the new
 /// segment. On `restore_layer`, the offscreen content is composited back onto
 /// the parent surface with the layer's opacity applied as a group.
-// `saved_draw_order: Vec<DrawItem>` is not `Debug` because `DrawItem::OffscreenTexture`
-// wraps `PooledTexture` which wraps a non-`Debug` `wgpu::Texture`.
+// Saved draw-order owns nested effect payloads.
 pub(crate) struct SavedLayer {
+    pub(crate) force_isolation: bool,
     /// Previous draw order (restored on pop)
     pub(crate) saved_draw_order: Vec<DrawItem>,
     /// Previous segment (restored on pop)
@@ -631,6 +605,7 @@ pub(crate) struct DrawSegment {
 pub(crate) enum RecordError {
     External(crate::error::ExternalTextureError),
     Geometry(crate::error::GeometryError),
+    Backdrop(&'static str),
     Limit {
         resource: &'static str,
         requested: usize,
@@ -762,6 +737,9 @@ impl DrawSegment {
         match self.record_error.clone().or_else(|| self.budget.error()) {
             Some(RecordError::External(error)) => Err(error.into()),
             Some(RecordError::Geometry(error)) => Err(error.into()),
+            Some(RecordError::Backdrop(reason)) => {
+                Err(crate::error::EngineError::UnsupportedBackdropFilter { reason })
+            }
             Some(RecordError::Limit {
                 resource,
                 requested,
@@ -1016,13 +994,11 @@ pub(crate) struct SsaaPathOp {
 /// An item in the draw order list: either a segment of batched commands,
 /// an offscreen texture to composite, an opacity layer, or an advanced shape,
 /// or an SSAA-supersampled path tile.
-// `PendingOffscreenTexture` (via `OffscreenTexture` variant) is not `Debug`
-// because `PooledTexture` wraps a `wgpu::Texture`.
 pub(crate) enum DrawItem {
+    /// An ordered read/filter/write of the current attachment, before subsequent children.
+    Backdrop(BackdropOp),
     /// A segment of instanced/tessellated/gradient draw commands.
     Segment(SealedSegment),
-    /// An offscreen texture to composite at its bounds.
-    OffscreenTexture(PendingOffscreenTexture),
     /// An opacity layer: a group of draw items to render offscreen and composite
     /// with the given alpha. Created by `save_layer`/`restore_layer`.
     OpacityLayer(PendingOpacityLayer),
@@ -1056,6 +1032,22 @@ pub(crate) enum DrawItem {
     Filter(FilterOp),
 }
 
+/// Backdrop input is independent of the output clip and damage write region.
+pub(crate) struct BackdropOp {
+    pub(crate) context: SealedSegment,
+    pub(crate) clip: GroupClip,
+    pub(crate) scissor: ScissorRect,
+    pub(crate) output_bounds: Rect<f64>,
+    pub(crate) sigma: [f32; 2],
+    pub(crate) blend: BlendMode,
+}
+
+impl Drop for BackdropOp {
+    fn drop(&mut self) {
+        self.context.budget.release(std::mem::size_of::<Self>(), 1);
+    }
+}
+
 // ─── Opacity layer ────────────────────────────────────────────────────────────
 
 /// A pending opacity layer waiting to be rendered offscreen and composited.
@@ -1064,7 +1056,7 @@ pub(crate) enum DrawItem {
 /// During [`crate::painter::WgpuPainter::render`], the contained segments are
 /// flushed to a pooled offscreen texture, then that texture is composited onto
 /// the main surface with the layer opacity applied as tint alpha.
-// `DrawItem` (via the `OffscreenTexture` variant containing `PooledTexture`) is not `Debug`.
+// Nested draw payloads are not debug-derived.
 pub(crate) struct PendingOpacityLayer {
     /// Draw items accumulated between save_layer and restore_layer
     pub(crate) items: Vec<DrawItem>,

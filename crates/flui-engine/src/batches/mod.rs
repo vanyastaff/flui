@@ -55,6 +55,7 @@ use crate::{
 };
 
 mod gradients;
+pub(crate) use gradients::MAX_GRADIENT_STOPS;
 mod images;
 mod paths;
 mod shapes;
@@ -95,7 +96,7 @@ impl DrawBatcher {
     ///
     /// This is the **single place** that performs `current_segment → draw_order`
     /// promotion.  Every seal — whether triggered by an explicit Z-interleave
-    /// (`WgpuPainter::queue_offscreen_result`), by the non-`SrcOver` draw-order
+    /// (an ordered backdrop), by the non-`SrcOver` draw-order
     /// contract in [`DrawBatcher::add_tessellated_with_key`], or by the final
     /// flush before GPU submission — routes through here.
     ///

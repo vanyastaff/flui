@@ -11,6 +11,65 @@ use super::{
     DrawBatcher,
 };
 
+// Preserve local extents before f32 packing, including reflected geometry.
+fn affine_rect_instance(
+    segment: &DrawSegment,
+    state: &GpuStateStack,
+    bounds: Rect<f64>,
+    color: flui_painting::styling::Color,
+    radii: [f32; 4],
+) -> Option<crate::instancing::RectInstance> {
+    let matrix = glam::DMat4::from_cols_array(&state.current_transform_matrix().m);
+    let admitted = crate::clip_geometry::ValidatedAffine::new(matrix)
+        .and_then(|affine| affine.map_bounds(bounds));
+    match admitted {
+        Ok(Some(_)) => {}
+        Ok(None) => return None,
+        Err(error) => {
+            segment
+                .budget
+                .record_error(crate::command_ir::RecordError::Geometry(error));
+            return None;
+        }
+    }
+    let origin = matrix * glam::dvec4(bounds.left(), bounds.top(), 0.0, 1.0);
+    let values = [
+        matrix.x_axis.x,
+        matrix.x_axis.y,
+        matrix.y_axis.x,
+        matrix.y_axis.y,
+        origin.x,
+        origin.y,
+        bounds.width(),
+        bounds.height(),
+    ];
+    if values
+        .iter()
+        .any(|&value| !(value as f32).is_finite() || (value != 0.0 && value as f32 == 0.0))
+    {
+        segment
+            .budget
+            .record_error(crate::command_ir::RecordError::Geometry(
+                crate::error::GeometryError::Unrepresentable {
+                    context: "shape affine packing",
+                },
+            ));
+        return None;
+    }
+    Some(crate::instancing::RectInstance::with_affine_transform(
+        [0.0, 0.0, bounds.width() as f32, bounds.height() as f32],
+        color,
+        radii,
+        [
+            values[0] as f32,
+            values[1] as f32,
+            values[2] as f32,
+            values[3] as f32,
+        ],
+        [origin.x as f32, origin.y as f32],
+    ))
+}
+
 // GPU rendering routinely converts between f32/u8/u32 for pixel coordinates,
 // color channels, and buffer indices. These truncations are intentional.
 impl DrawBatcher {
@@ -69,8 +128,8 @@ impl DrawBatcher {
             // through the tessellated path, whose pipeline is selected per
             // `pipeline_key_from_paint` (Phase A fixed-function Porter-Duff).
             if paint.blend_mode == BlendMode::SrcOver {
-                if state.is_axis_aligned() {
-                    // Baked-AABB fast path: axis-aligned SrcOver — bake the
+                if state.is_translate_scale() {
+                    // Baked-AABB fast path: positive-scale SrcOver — bake the
                     // transform into the bounds (scale+translate only) and use
                     // the identity affine. Output is byte-identical to the
                     // pre-affine instanced path.
@@ -102,17 +161,11 @@ impl DrawBatcher {
                     // the GPU. The vertex shader applies `device = M*local + t`;
                     // the fragment SDF evaluates in local space — `fwidth(dist)`
                     // then gives ~1-device-px AA under any affine.
-                    let m = state.current_transform();
-                    let linear_cols = [m.x_axis.x, m.x_axis.y, m.y_axis.x, m.y_axis.y];
-                    let translation = [m.w_axis.x, m.w_axis.y];
-                    let local_bounds = [rect.left(), rect.top(), rect.width(), rect.height()];
-                    let mut instance = crate::instancing::RectInstance::with_affine_transform(
-                        (local_bounds).map(|v| v as f32),
-                        color,
-                        [0.0; 4],
-                        linear_cols,
-                        translation,
-                    );
+                    let Some(mut instance) =
+                        affine_rect_instance(segment, state, rect, color, [0.0; 4])
+                    else {
+                        return;
+                    };
                     if !paint.anti_alias {
                         instance = instance.aliased();
                     }
@@ -304,91 +357,59 @@ impl DrawBatcher {
                 return;
             }
 
-            // SrcOver rrect: split on axis-alignment.
+            // SrcOver rrect: preserve local curvature through non-translation transforms.
             // Per-corner max radius (x and y components of each corner's radii).
             let radius_top_left = rrect.top_left.x.max(rrect.top_left.y);
             let radius_top_right = rrect.top_right.x.max(rrect.top_right.y);
             let radius_bottom_right = rrect.bottom_right.x.max(rrect.bottom_right.y);
             let radius_bottom_left = rrect.bottom_left.x.max(rrect.bottom_left.y);
 
-            if state.is_axis_aligned() {
-                // Baked-AABB fast path: transform the two diagonal corners to get
-                // the device-space AABB, then use identity affine.
-                // Fixes the pre-existing bug where `apply_transform` of only 2 corners
-                // produced a wrong AABB for a rotated rrect (now gated on axis-aligned).
+            // Only translation preserves the local radii unchanged. Scaling,
+            // reflection and rotation retain the original local shape through
+            // the affine, so corner identities and curvature remain correct.
+            let matrix = state.current_transform_matrix().m;
+            let translation_only = state.is_translate_scale()
+                && matrix[0] == 1.0
+                && matrix[5] == 1.0
+                && matrix[1] == 0.0
+                && matrix[4] == 0.0;
+            let radii = [
+                radius_top_left as f32,
+                radius_top_right as f32,
+                radius_bottom_right as f32,
+                radius_bottom_left as f32,
+            ];
+            let instance = if translation_only {
                 let top_left =
                     state.apply_transform(Point::new(rrect.rect.left(), rrect.rect.top()));
-                let bottom_right =
-                    state.apply_transform(Point::new(rrect.rect.right(), rrect.rect.bottom()));
-                let device_rect =
-                    Rect::from_ltrb(top_left.x, top_left.y, bottom_right.x, bottom_right.y);
-
-                let instance =
-                    state.apply_active_clip(crate::instancing::RectInstance::rounded_rect_corners(
-                        device_rect,
-                        color,
-                        radius_top_left as f32,
-                        radius_top_right as f32,
-                        radius_bottom_right as f32,
-                        radius_bottom_left as f32,
-                    ));
-                let _ = segment.rect_batch.add(instance);
-                segment.record_run(
-                    DrawRun::Rect(
-                        segment.rect_batch.len().saturating_sub(1)..segment.rect_batch.len(),
-                    ),
-                    state.clip_chain(),
-                );
-                DrawSegment::push_scissor_region(
-                    &mut segment.rect_scissors,
-                    state.current_scissor(),
-                );
-            } else {
-                // Affine instanced path: rotated/skewed SrcOver rrect.
-                //
-                // Local-space bounds + full 2×3 affine. The SDF evaluates in local
-                // space with per-corner radii; fwidth gives correct ~1px AA under
-                // rotation/skew. This also fixes the pre-existing bug: previously a
-                // rotated SrcOver rrect fell through to the 2-corner AABB bake,
-                // rendering as a wrong-size axis-aligned box.
-                let m = state.current_transform();
-                let linear_cols = [m.x_axis.x, m.x_axis.y, m.y_axis.x, m.y_axis.y];
-                let translation = [m.w_axis.x, m.w_axis.y];
-                let local_bounds = [
-                    rrect.rect.left(),
-                    rrect.rect.top(),
+                let device_rect = Rect::from_xywh(
+                    top_left.x,
+                    top_left.y,
                     rrect.rect.width(),
                     rrect.rect.height(),
-                ];
-                let instance = state.apply_active_clip(
-                    crate::instancing::RectInstance::with_affine_transform(
-                        (local_bounds).map(|v| v as f32),
-                        color,
-                        [
-                            (radius_top_left as f32),
-                            (radius_top_right as f32),
-                            (radius_bottom_right as f32),
-                            (radius_bottom_left as f32),
-                        ],
-                        linear_cols,
-                        translation,
-                    ),
                 );
-                let _ = segment.rect_batch.add(instance);
-                segment.record_run(
-                    DrawRun::Rect(
-                        segment.rect_batch.len().saturating_sub(1)..segment.rect_batch.len(),
-                    ),
-                    state.clip_chain(),
-                );
-                // Scissor = the active damage/clip region (same as the axis-aligned
-                // path); the shape is bounded by its own quad + SDF, so a per-shape
-                // AABB scissor is unnecessary and would clip the AA fringe.
-                DrawSegment::push_scissor_region(
-                    &mut segment.rect_scissors,
-                    state.current_scissor(),
-                );
-            }
+                crate::instancing::RectInstance::rounded_rect_corners(
+                    device_rect,
+                    color,
+                    radii[0],
+                    radii[1],
+                    radii[2],
+                    radii[3],
+                )
+            } else {
+                let Some(instance) = affine_rect_instance(segment, state, rrect.rect, color, radii)
+                else {
+                    return;
+                };
+                instance
+            };
+            let instance = state.apply_active_clip(instance);
+            let _ = segment.rect_batch.add(instance);
+            segment.record_run(
+                DrawRun::Rect(segment.rect_batch.len().saturating_sub(1)..segment.rect_batch.len()),
+                state.clip_chain(),
+            );
+            DrawSegment::push_scissor_region(&mut segment.rect_scissors, state.current_scissor());
         } else {
             // Stroked rounded rect — tessellate (fallback).
             self.prime_tessellator_scale(state);

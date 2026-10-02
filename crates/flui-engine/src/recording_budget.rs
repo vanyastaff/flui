@@ -14,6 +14,7 @@ pub(crate) struct RecordingBudget {
     used_bytes: AtomicUsize,
     used_elements: AtomicUsize,
     clip_work: AtomicUsize,
+    effect_work: AtomicUsize,
     error: OnceLock<RecordError>,
     bytes: usize,
     elements: usize,
@@ -24,6 +25,7 @@ impl RecordingBudget {
             used_bytes: AtomicUsize::new(0),
             used_elements: AtomicUsize::new(0),
             clip_work: AtomicUsize::new(0),
+            effect_work: AtomicUsize::new(0),
             error: OnceLock::new(),
             bytes,
             elements,
@@ -82,6 +84,20 @@ impl RecordingBudget {
             .map(|_| ())
             .map_err(|used| crate::error::EngineError::PreparedResourceLimit {
                 resource: "cumulative clip membership work",
+                requested: used.saturating_add(work),
+                limit: LIMIT,
+            })
+    }
+    /// Bound cumulative texture sampling work before encoding filter passes.
+    pub(crate) fn admit_effect_work(&self, work: usize) -> crate::error::EngineResult<()> {
+        const LIMIT: usize = 1_000_000_000;
+        self.effect_work
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |used| {
+                used.checked_add(work).filter(|next| *next <= LIMIT)
+            })
+            .map(|_| ())
+            .map_err(|used| crate::error::EngineError::PreparedResourceLimit {
+                resource: "cumulative effect sampling work",
                 requested: used.saturating_add(work),
                 limit: LIMIT,
             })

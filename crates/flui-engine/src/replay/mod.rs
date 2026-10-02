@@ -303,7 +303,7 @@ impl GpuReplay {
     /// Items are processed in the order they were drained from `draw_order`:
     ///
     /// - `DrawItem::Segment`          → `flush_segment` (recorded range order)
-    /// - `DrawItem::OffscreenTexture` → premultiplied texture composite
+    /// - `DrawItem::Backdrop`         → ordered attachment read and filter
     /// - `DrawItem::OpacityLayer`     → `flush_opacity_layer` (recursive)
     ///
     /// Text is a batch of its segment (`glyph_batch`), so it renders wherever
@@ -337,6 +337,17 @@ impl GpuReplay {
         // Item insertion order determines compositing order, independently of match arm order.
         for item in items {
             match item {
+                DrawItem::Backdrop(op) => self.replay_backdrop(
+                    op,
+                    viewport_size,
+                    surface_format,
+                    device,
+                    queue,
+                    pipelines,
+                    resources,
+                    encoder,
+                    target,
+                )?,
                 DrawItem::Segment(seg) => {
                     self.flush_segment(
                         &seg,
@@ -347,28 +358,6 @@ impl GpuReplay {
                         resources,
                         encoder,
                         target,
-                    )?;
-                }
-                DrawItem::OffscreenTexture(p) => {
-                    let context = DrawSegment::with_budget(Arc::clone(&p.budget));
-                    self.composite_group_texture(
-                        p.texture,
-                        p.bounds,
-                        [0.0, 0.0, 1.0, 1.0],
-                        1.0,
-                        [1.0; 3],
-                        p.blend,
-                        Some(&p.clip),
-                        &context,
-                        viewport_size,
-                        surface_format,
-                        device,
-                        queue,
-                        pipelines,
-                        resources,
-                        encoder,
-                        target,
-                        p.scissor,
                     )?;
                 }
                 DrawItem::OpacityLayer(layer) => {

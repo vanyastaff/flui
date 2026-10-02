@@ -235,8 +235,11 @@ empty clip, group opacity, nested filter и headless/window-equivalent capture
 градиента и насыщенный Plus требуют отдельного geometric coverage. Native
 GPU readbacks, ограниченные requested limits и восстановление следующего кадра
 проверяются отдельно от browser/mobile исполнения. Это закрывает direct coverage
-подзадачу; общий visitor для window/headless captures и effect footprints
-остаются следующими необходимыми частями поставки 3 перед color foundation.
+подзадачу. Общий visitor и ordered mask/backdrop реализованы: isolated groups,
+affine gradient coordinates, source halo, partial dependency closure и typed
+refusal неподдерживаемых эффектов. До color foundation остаются directional
+affine blur, foreground input вне viewport и измерения nested effect costs;
+подробности — в [плане clip/effects](engine-clip-effects.ru.md).
 
 ### 4. Внедрить color foundation через реальный gradient/image путь
 

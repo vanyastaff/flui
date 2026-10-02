@@ -1,7 +1,7 @@
 //! Gradient and shader-dispatch record methods: gradient_rect, radial_gradient_rect,
 //! sweep_gradient_rect, shadow_rect, dispatch_shader_rect.
 
-use flui_foundation::geometry::{Point, Rect};
+use flui_foundation::geometry::Rect;
 use flui_painting::paint::Shader;
 use flui_painting::{BlendMode, Paint};
 
@@ -40,7 +40,203 @@ impl GradientKind {
 
 // The fragment shaders scan stops linearly. Bound per-pixel work independently
 // of frame storage admission; retain gradients beyond the former eight-stop cap.
-const MAX_GRADIENT_STOPS: usize = 256;
+pub(crate) const MAX_GRADIENT_STOPS: usize = 256;
+
+// Reduce only the phase in f64. The signed span is independent: reducing
+// a complete turn modulo TAU would turn a real gradient into a solid stop.
+fn packed_sweep_angles(start: f64, end: f64) -> Result<[f32; 2], crate::error::GeometryError> {
+    use crate::error::GeometryError;
+    if !start.is_finite() || !end.is_finite() {
+        return Err(GeometryError::NonFinite {
+            context: "gradient angle",
+        });
+    }
+    let span = end - start;
+    let phase = start.rem_euclid(std::f64::consts::TAU);
+    let packed = [phase as f32, (phase + span) as f32];
+    let packed_span = packed[1] - packed[0];
+    if !span.is_finite()
+        || !packed[1].is_finite()
+        || !packed_span.is_finite()
+        || (span != 0.0 && packed_span == 0.0)
+    {
+        return Err(GeometryError::Unrepresentable {
+            context: "gradient angle span",
+        });
+    }
+    Ok(packed)
+}
+
+// Compile the projection into a local affine parameter before narrowing.
+// GPU subtraction of two distant endpoints loses small visible coordinates;
+// t = a*x + b*y + c does not subtract those endpoints per fragment.
+fn packed_linear_parameter(
+    from: [f64; 2],
+    to: [f64; 2],
+    bounds: Rect<f64>,
+) -> Result<[f32; 4], crate::error::GeometryError> {
+    use crate::error::GeometryError;
+    let start = [from[0] - bounds.left(), from[1] - bounds.top()];
+    let delta = [to[0] - from[0], to[1] - from[1]];
+    if start.iter().chain(delta.iter()).any(|v| !v.is_finite()) {
+        return Err(GeometryError::NonFinite {
+            context: "gradient projection",
+        });
+    }
+    let scale = delta[0].abs().max(delta[1].abs());
+    if scale == 0.0 {
+        return Ok([0.0; 4]);
+    }
+    let normalized = [delta[0] / scale, delta[1] / scale];
+    let norm = normalized[0] * normalized[0] + normalized[1] * normalized[1];
+    // Preserve the existing small-direction solid-stop threshold.
+    if scale <= 0.01 && scale * scale * norm <= 0.0001 {
+        return Ok([0.0; 4]);
+    }
+    let a = (normalized[0] / norm) / scale;
+    let b = (normalized[1] / norm) / scale;
+    let c = -(start[0] * a + start[1] * b);
+    let coefficients = [a, b, c];
+    if coefficients
+        .iter()
+        .any(|&v| !v.is_finite() || !(v as f32).is_finite() || (v != 0.0 && v as f32 == 0.0))
+    {
+        return Err(GeometryError::Unrepresentable {
+            context: "gradient projection",
+        });
+    }
+    let packed = [a as f32, b as f32, c as f32, 0.0];
+    // Each partial sum in the shader remains finite throughout the rectangle.
+    let bound = f64::from(packed[0]).abs() * f64::from(bounds.width() as f32)
+        + f64::from(packed[1]).abs() * f64::from(bounds.height() as f32)
+        + f64::from(packed[2]).abs();
+    if !bound.is_finite() || bound > f64::from(f32::MAX) * 0.5 {
+        return Err(GeometryError::Unrepresentable {
+            context: "gradient projection arithmetic",
+        });
+    }
+    Ok(packed)
+}
+
+// Validate the payload before stop storage or a destination-read segment is admitted.
+// Coordinates are rebased in f64 first: a large logical origin is not itself
+// an unrepresentable local gradient.
+fn validate_gradient_payload(
+    shader: &Shader,
+    bounds: Rect<f64>,
+) -> Result<(), crate::error::GeometryError> {
+    use crate::error::GeometryError;
+    let pack = |value: f64| {
+        if !value.is_finite() {
+            Err(GeometryError::NonFinite {
+                context: "gradient payload",
+            })
+        } else if !(value as f32).is_finite() || (value != 0.0 && value as f32 == 0.0) {
+            Err(GeometryError::Unrepresentable {
+                context: "gradient payload",
+            })
+        } else {
+            Ok(())
+        }
+    };
+    let point = |horizontal: f64, vertical: f64| {
+        pack(horizontal - bounds.left())?;
+        pack(vertical - bounds.top())
+    };
+    pack(bounds.width())?;
+    pack(bounds.height())?;
+    // Bound the shader's intermediate products, not only its input casts.
+    // Half MAX leaves room for f32 rounding of the two-term dot/length sum.
+    let arithmetic_limit = f64::from(f32::MAX) * 0.5;
+    let arithmetic = |value: f64| {
+        if value.is_finite() && value <= arithmetic_limit {
+            Ok(())
+        } else {
+            Err(GeometryError::Unrepresentable {
+                context: "gradient arithmetic",
+            })
+        }
+    };
+    let local = |x: f64, y: f64| {
+        [
+            f64::from((x - bounds.left()) as f32),
+            f64::from((y - bounds.top()) as f32),
+        ]
+    };
+    let maximum_offset = |origin: [f64; 2]| {
+        [
+            origin[0]
+                .abs()
+                .max((f64::from(bounds.width() as f32) - origin[0]).abs()),
+            origin[1]
+                .abs()
+                .max((f64::from(bounds.height() as f32) - origin[1]).abs()),
+        ]
+    };
+    let (colors, stops) = match shader {
+        Shader::LinearGradient {
+            from,
+            to,
+            colors,
+            stops,
+            ..
+        } => {
+            packed_linear_parameter([from.dx, from.dy], [to.dx, to.dy], bounds)?;
+            (colors, stops)
+        }
+        Shader::RadialGradient {
+            center,
+            radius,
+            colors,
+            stops,
+            ..
+        } => {
+            point(center.dx, center.dy)?;
+            pack(*radius)?;
+            if *radius < 0.0 {
+                return Err(GeometryError::InvalidRadius);
+            }
+            let offset = maximum_offset(local(center.dx, center.dy));
+            let squared_distance = offset[0] * offset[0] + offset[1] * offset[1];
+            arithmetic(squared_distance)?;
+            let packed_radius = *radius as f32;
+            if packed_radius > 0.0001 {
+                arithmetic(squared_distance.sqrt() / f64::from(packed_radius))?;
+            }
+            (colors, stops)
+        }
+        Shader::SweepGradient {
+            center,
+            start_angle,
+            end_angle,
+            colors,
+            stops,
+            ..
+        } => {
+            point(center.dx, center.dy)?;
+            packed_sweep_angles(*start_angle, *end_angle)?;
+            (colors, stops)
+        }
+        _ => return Ok(()),
+    };
+    let mut previous = 0.0_f32;
+    for index in 0..colors.len() {
+        let even = index as f32 / colors.len().saturating_sub(1).max(1) as f32;
+        let position = if let Some(value) = stops.as_deref().and_then(|values| values.get(index)) {
+            pack(*value)?;
+            (*value as f32).clamp(0.0, 1.0)
+        } else {
+            even
+        };
+        if position < previous {
+            return Err(GeometryError::Unrepresentable {
+                context: "gradient stop order",
+            });
+        }
+        previous = position;
+    }
+    Ok(())
+}
 
 /// Checked indexing for the immutable table; failures remain authoritative at seal.
 fn reserve_gradient_stops(
@@ -74,23 +270,16 @@ impl DrawBatcher {
     /// # Arguments
     /// * `segment`         — current accumulation buffer
     /// * `state`           — read-only transform/scissor queries
-    /// * `bounds`          — rectangle bounds (already in transformed space)
-    /// * `gradient_start`  — gradient start point (local to `bounds`)
-    /// * `gradient_end`    — gradient end point (local to `bounds`)
+    /// * `bounds`          — rectangle bounds in local space
+    /// * `linear_parameter` - validated local affine parameter `[a, b, c, 0]`
     /// * `stops`           — validated gradient color stops
     /// * `corner_radii`    — per-corner radii `[tl, tr, br, bl]` (0.0 = sharp)
     /// * `blend`           — the paint's fixed-function blend mode (never advanced)
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "borrow-seam design: segment/state are disjoint WgpuPainter fields; \
-                  the remaining args mirror the gradient's own parameters"
-    )]
     pub(in super::super) fn draw_gradient_rect(
         segment: &mut DrawSegment,
         state: &GpuStateStack,
         bounds: Rect<f64>,
-        gradient_start: glam::Vec2,
-        gradient_end: glam::Vec2,
+        linear_parameter: [f32; 4],
         stops: &[GradientStop],
         corner_radii: [f32; 4],
         blend: BlendMode,
@@ -116,13 +305,15 @@ impl DrawBatcher {
                 (bounds.width() as f32),
                 (bounds.height() as f32),
             ],
-            gradient_start,
-            gradient_end,
+            linear_parameter,
             corner_radii,
             stop_count as u32,
         )
         .with_stop_offset(stop_offset);
-        let instance = state.apply_active_clip(instance);
+        let instance = state.apply_active_clip(instance.with_transform(
+            glam::DMat4::from_cols_array(&state.current_transform_matrix().m),
+            [bounds.left(), bounds.top()],
+        ));
 
         let _ = segment.linear_gradient_batch.add(instance);
         segment.record_run(
@@ -147,7 +338,7 @@ impl DrawBatcher {
     /// # Arguments
     /// * `segment`        — current accumulation buffer
     /// * `state`          — read-only transform/scissor queries
-    /// * `bounds`         — rectangle bounds (already in transformed space)
+    /// * `bounds`         — rectangle bounds in local space
     /// * `center`         — gradient center (local to `bounds`)
     /// * `radius`         — gradient radius
     /// * `stops`          — validated gradient color stops
@@ -195,7 +386,10 @@ impl DrawBatcher {
             stop_count as u32,
         )
         .with_stop_offset(stop_offset);
-        let instance = state.apply_active_clip(instance);
+        let instance = state.apply_active_clip(instance.with_transform(
+            glam::DMat4::from_cols_array(&state.current_transform_matrix().m),
+            [bounds.left(), bounds.top()],
+        ));
 
         let _ = segment.radial_gradient_batch.add(instance);
         segment.record_run(
@@ -220,7 +414,7 @@ impl DrawBatcher {
     /// # Arguments
     /// * `segment`      — current accumulation buffer
     /// * `state`        — read-only transform/scissor queries
-    /// * `bounds`       — rectangle bounds (already in transformed space)
+    /// * `bounds`       — rectangle bounds in local space
     /// * `center`       — gradient center (local to `bounds`)
     /// * `start_angle`  — start angle in radians
     /// * `end_angle`    — end angle in radians
@@ -271,7 +465,10 @@ impl DrawBatcher {
             stop_count as u32,
         )
         .with_stop_offset(stop_offset);
-        let instance = state.apply_active_clip(instance);
+        let instance = state.apply_active_clip(instance.with_transform(
+            glam::DMat4::from_cols_array(&state.current_transform_matrix().m),
+            [bounds.left(), bounds.top()],
+        ));
 
         let _ = segment.sweep_gradient_batch.add(instance);
         segment.record_run(
@@ -384,16 +581,53 @@ impl DrawBatcher {
             segment.record_limit("gradient stops per draw", color_count, MAX_GRADIENT_STOPS);
             return true;
         }
+        if let Err(error) = validate_gradient_payload(shader, bounds) {
+            segment
+                .budget
+                .record_error(crate::command_ir::RecordError::Geometry(error));
+            return true;
+        }
         let stops = Self::shader_to_gradient_stops(shader, &segment.budget);
         if stops.is_empty() {
             return false;
         }
 
-        // Compute transformed bounds using the read-only state — read before any
-        // mutable gradient call so there is no aliasing.
-        let top_left = state.apply_transform(Point::new(bounds.left(), bounds.top()));
-        let bottom_right = state.apply_transform(Point::new(bounds.right(), bounds.bottom()));
-        let transformed = Rect::from_ltrb(top_left.x, top_left.y, bottom_right.x, bottom_right.y);
+        let matrix = glam::DMat4::from_cols_array(&state.current_transform_matrix().m);
+        // The geometry validator uses f64; the instance affine is an f32 ABI.
+        // A finite root bound does not imply its individual coefficients survive
+        // packing (a huge scale can be cancelled by tiny local geometry).
+        for coefficient in [
+            matrix.x_axis.x,
+            matrix.x_axis.y,
+            matrix.y_axis.x,
+            matrix.y_axis.y,
+            matrix.w_axis.x,
+            matrix.w_axis.y,
+        ] {
+            let packed = coefficient as f32;
+            if !packed.is_finite() || (coefficient != 0.0 && packed == 0.0) {
+                segment
+                    .budget
+                    .record_error(crate::command_ir::RecordError::Geometry(
+                        crate::error::GeometryError::Unrepresentable {
+                            context: "gradient affine coefficient",
+                        },
+                    ));
+                return true;
+            }
+        }
+        let transformed = match crate::clip_geometry::ValidatedAffine::new(matrix)
+            .and_then(|affine| affine.map_bounds(bounds))
+        {
+            Ok(Some(bounds)) => bounds,
+            Ok(None) => return true,
+            Err(error) => {
+                segment
+                    .budget
+                    .record_error(crate::command_ir::RecordError::Geometry(error));
+                return true;
+            }
+        };
 
         // ── Advanced (dst-read) diversion ─────────────────────────────────────
         //
@@ -410,6 +644,21 @@ impl DrawBatcher {
         // a pipeline BY, which is what `blend_state_for`'s defensive SrcOver arm
         // and `GradientPipelines::ensure`'s debug assertion both say. It stays
         // ahead of the keyed path, and it stays first.
+        let origin = matrix * glam::dvec4(bounds.left(), bounds.top(), 0.0, 1.0);
+        for coordinate in [origin.x, origin.y] {
+            let packed = coordinate as f32;
+            if !packed.is_finite() || (coordinate != 0.0 && packed == 0.0) {
+                segment
+                    .budget
+                    .record_error(crate::command_ir::RecordError::Geometry(
+                        crate::error::GeometryError::Unrepresentable {
+                            context: "gradient rebased origin",
+                        },
+                    ));
+                return true;
+            }
+        }
+
         if paint.blend_mode.is_advanced() {
             // Step 1: seal prior content so it lands on the surface before the
             // backdrop is sampled.
@@ -426,28 +675,25 @@ impl DrawBatcher {
             match shader {
                 Shader::LinearGradient { from, to, .. } => {
                     use crate::instancing::LinearGradientInstance;
-                    let start = glam::Vec2::new(
-                        (from.dx - bounds.left()) as f32,
-                        (from.dy - bounds.top()) as f32,
-                    );
-                    let end = glam::Vec2::new(
-                        (to.dx - bounds.left()) as f32,
-                        (to.dy - bounds.top()) as f32,
-                    );
+                    let parameter =
+                        packed_linear_parameter([from.dx, from.dy], [to.dx, to.dy], bounds)
+                            .expect("BUG: linear parameter validated before recording");
                     let instance = LinearGradientInstance::new(
                         [
-                            (transformed.left() as f32),
-                            (transformed.top() as f32),
-                            (transformed.width() as f32),
-                            (transformed.height() as f32),
+                            (bounds.left() as f32),
+                            (bounds.top() as f32),
+                            (bounds.width() as f32),
+                            (bounds.height() as f32),
                         ],
-                        start,
-                        end,
+                        parameter,
                         corner_radii,
                         stop_count as u32,
                     )
                     .with_stop_offset(0);
-                    let instance = state.apply_active_clip(instance);
+                    let instance = state.apply_active_clip(instance.with_transform(
+                        glam::DMat4::from_cols_array(&state.current_transform_matrix().m),
+                        [bounds.left(), bounds.top()],
+                    ));
                     let _ = shape_segment.linear_gradient_batch.add(instance);
                     shape_segment.record_run(
                         DrawRun::LinearGradient(
@@ -476,10 +722,10 @@ impl DrawBatcher {
                     );
                     let instance = RadialGradientInstance::new(
                         [
-                            (transformed.left() as f32),
-                            (transformed.top() as f32),
-                            (transformed.width() as f32),
-                            (transformed.height() as f32),
+                            (bounds.left() as f32),
+                            (bounds.top() as f32),
+                            (bounds.width() as f32),
+                            (bounds.height() as f32),
                         ],
                         c,
                         *radius as f32,
@@ -487,7 +733,10 @@ impl DrawBatcher {
                         stop_count as u32,
                     )
                     .with_stop_offset(0);
-                    let instance = state.apply_active_clip(instance);
+                    let instance = state.apply_active_clip(instance.with_transform(
+                        glam::DMat4::from_cols_array(&state.current_transform_matrix().m),
+                        [bounds.left(), bounds.top()],
+                    ));
                     let _ = shape_segment.radial_gradient_batch.add(instance);
                     shape_segment.record_run(
                         DrawRun::RadialGradient(
@@ -521,19 +770,24 @@ impl DrawBatcher {
                     );
                     let instance = SweepGradientInstance::new(
                         [
-                            (transformed.left() as f32),
-                            (transformed.top() as f32),
-                            (transformed.width() as f32),
-                            (transformed.height() as f32),
+                            (bounds.left() as f32),
+                            (bounds.top() as f32),
+                            (bounds.width() as f32),
+                            (bounds.height() as f32),
                         ],
                         c,
-                        *start_angle as f32,
-                        *end_angle as f32,
+                        packed_sweep_angles(*start_angle, *end_angle)
+                            .expect("BUG: sweep angles validated before recording")[0],
+                        packed_sweep_angles(*start_angle, *end_angle)
+                            .expect("BUG: sweep angles validated before recording")[1],
                         corner_radii,
                         stop_count as u32,
                     )
                     .with_stop_offset(0);
-                    let instance = state.apply_active_clip(instance);
+                    let instance = state.apply_active_clip(instance.with_transform(
+                        glam::DMat4::from_cols_array(&state.current_transform_matrix().m),
+                        [bounds.left(), bounds.top()],
+                    ));
                     let _ = shape_segment.sweep_gradient_batch.add(instance);
                     shape_segment.record_run(
                         DrawRun::SweepGradient(
@@ -578,20 +832,13 @@ impl DrawBatcher {
 
         match shader {
             Shader::LinearGradient { from, to, .. } => {
-                let start = glam::Vec2::new(
-                    (from.dx - bounds.left()) as f32,
-                    (from.dy - bounds.top()) as f32,
-                );
-                let end = glam::Vec2::new(
-                    (to.dx - bounds.left()) as f32,
-                    (to.dy - bounds.top()) as f32,
-                );
+                let parameter = packed_linear_parameter([from.dx, from.dy], [to.dx, to.dy], bounds)
+                    .expect("BUG: linear parameter validated before recording");
                 Self::draw_gradient_rect(
                     segment,
                     state,
-                    transformed,
-                    start,
-                    end,
+                    bounds,
+                    parameter,
                     &stops,
                     corner_radii,
                     paint.blend_mode,
@@ -605,7 +852,7 @@ impl DrawBatcher {
                 Self::draw_radial_gradient_rect(
                     segment,
                     state,
-                    transformed,
+                    bounds,
                     c,
                     *radius as f32,
                     &stops,
@@ -626,10 +873,12 @@ impl DrawBatcher {
                 Self::draw_sweep_gradient_rect(
                     segment,
                     state,
-                    transformed,
+                    bounds,
                     c,
-                    *start_angle as f32,
-                    *end_angle as f32,
+                    packed_sweep_angles(*start_angle, *end_angle)
+                        .expect("BUG: sweep angles validated before recording")[0],
+                    packed_sweep_angles(*start_angle, *end_angle)
+                        .expect("BUG: sweep angles validated before recording")[1],
                     &stops,
                     corner_radii,
                     paint.blend_mode,
