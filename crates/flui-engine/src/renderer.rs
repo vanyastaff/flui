@@ -351,10 +351,8 @@ impl GpuCapabilities {
     /// Without it, the blend modes whose destination factor ignores source
     /// alpha (`Clear`, `Src`, `SrcIn`, `SrcOut`, `Modulate`, `DstIn`,
     /// `DstATop` — see `crate::pipeline_cache::destination_alpha_scale_for`)
-    /// keep a HARD anti-aliased clip edge rather than a feathered one. Every
-    /// other mode is unaffected. Present on DX12 unconditionally, on Metal,
-    /// and on Vulkan drivers reporting `dualSrcBlend`; optional in WebGPU.
-    #[must_use]
+    /// use independent source/coverage isolation and destination sampling for
+    /// exact partial coverage. This flag identifies the optional fast path.
     pub fn supports_dual_source_blending(&self) -> bool {
         self.features.contains(wgpu::Features::DUAL_SOURCE_BLENDING)
     }
@@ -1353,7 +1351,7 @@ impl Renderer {
         // destination-destructive blend instead of applying it at full strength
         // across the whole fringe. Requested only where the adapter exposes it;
         // `PipelineCache` falls back to the folded shader otherwise, and the
-        // seven affected modes keep a hard edge there. See
+        // destination-sensitive coverage uses portable isolation there. See
         // `GpuCapabilities::supports_dual_source_blending`.
         if capabilities.supports_dual_source_blending() {
             features |= wgpu::Features::DUAL_SOURCE_BLENDING;

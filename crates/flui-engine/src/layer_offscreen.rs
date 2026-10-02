@@ -176,7 +176,7 @@ impl GpuReplay {
             pipelines,
             resources,
             encoder,
-            offscreen_view,
+            RenderTarget::sampleable(offscreen_view, offscreen.texture()),
         )?;
 
         Ok(offscreen)
@@ -566,7 +566,7 @@ impl GpuReplay {
             pipelines,
             resources,
             encoder,
-            offscreen_view,
+            RenderTarget::sampleable(offscreen_view, offscreen.texture()),
         )?;
 
         Ok(offscreen)
@@ -657,7 +657,7 @@ impl GpuReplay {
                         pipelines,
                         resources,
                         encoder,
-                        offscreen_view,
+                        offscreen_target,
                     )?;
                 }
                 DrawItem::OffscreenTexture(p) => {
@@ -737,7 +737,7 @@ impl GpuReplay {
                         flush_advanced_layer(
                             blend_op,
                             backdrop_texture,
-                            offscreen_view,
+                            offscreen_target.view,
                             surface_format,
                             viewport_size,
                             &pipelines.advanced_blend,
@@ -768,7 +768,7 @@ impl GpuReplay {
                             pipelines,
                             resources,
                             encoder,
-                            offscreen_view,
+                            offscreen_target,
                         )?;
                     }
                 }
@@ -852,7 +852,7 @@ impl GpuReplay {
                         resources,
                         viewport_size,
                         encoder,
-                        offscreen_view,
+                        offscreen_target.view,
                         filtered_tex.view(),
                         None,
                     );
@@ -889,7 +889,7 @@ impl GpuReplay {
                         pipelines,
                         resources,
                         encoder,
-                        offscreen_view,
+                        offscreen_target.view,
                         offscreen_target.texture, // sampleable pool texture for advanced dst-read
                     )?;
                     tracing::trace!(
@@ -911,7 +911,7 @@ impl GpuReplay {
                 pipelines,
                 resources,
                 encoder,
-                offscreen_view,
+                offscreen_target,
             )?;
         }
 

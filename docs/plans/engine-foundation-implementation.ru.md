@@ -229,6 +229,15 @@ empty clip, group opacity, nested filter и headless/window-equivalent capture
 с full frame, включая destination-replacing blends; known approximations удалены
 или explicit unavailable. Не требуется bit-identical AA на всех GPU.
 
+Продолжение предыдущей поставки: portable independent coverage описана в
+[ADR-0103](../adr/ADR-0103-portable-independent-primitive-coverage.md).
+Изоляция ограничена областью примитива; прозрачный Clear, переменная альфа
+градиента и насыщенный Plus требуют отдельного geometric coverage. Native
+GPU readbacks, ограниченные requested limits и восстановление следующего кадра
+проверяются отдельно от browser/mobile исполнения. Это закрывает direct coverage
+подзадачу; общий visitor для window/headless captures и effect footprints
+остаются следующими необходимыми частями поставки 3 перед color foundation.
+
 ### 4. Внедрить color foundation через реальный gradient/image путь
 
 **Владельцы: flui-painting → flui-layer → flui-engine; зависит от 1/2/3.**

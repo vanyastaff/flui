@@ -7,10 +7,10 @@
 // `pipeline::destination_alpha_scale_for` returns `None` for exactly those
 // modes, and this entry point serves them.
 //
-// It also serves EVERY mode on a device without
-// `wgpu::Features::DUAL_SOURCE_BLENDING`, where the second channel does not
-// exist. There the seven coverage-destructive modes keep a hard edge — a
-// documented backend divergence, not a contract. See ADR-0057.
+// Destination-sensitive fractional coverage uses independent isolation planes
+// when a second blend source is unavailable. Binary coverage can use this entry
+// with exact fixed-function factors. Fractional saturating Plus uses isolation
+// on either device because clamping and geometric coverage do not commute.
 //
 // The module this is appended to supplies `VertexOutput` and `shadeFragment`.
 @fragment

@@ -111,13 +111,8 @@ count = 1
 
 [[allow]]
 path = "crates/flui-engine/src/ssaa.rs"
-class = "phase-letter"
-count = 1
-
-[[allow]]
-path = "crates/flui-engine/src/ssaa.rs"
 class = "pr-label"
-count = 4
+count = 3
 
 [[allow]]
 path = "crates/flui-foundation/src/lib.rs"

@@ -239,6 +239,7 @@ pub(crate) struct PipelineSet {
 
     /// Surface format stored for on-demand composite pipeline creation.
     ssaa_tile_surface_format: wgpu::TextureFormat,
+    portable_coverage: Option<crate::portable_coverage::PortableCoveragePipeline>,
 
     /// Cache of premultiplied SSAA tile composite pipelines keyed by blend mode.
     ///
@@ -247,6 +248,18 @@ pub(crate) struct PipelineSet {
 }
 
 impl PipelineSet {
+    pub(crate) fn portable_coverage(
+        &mut self,
+        device: &wgpu::Device,
+    ) -> &crate::portable_coverage::PortableCoveragePipeline {
+        self.portable_coverage.get_or_insert_with(|| {
+            crate::portable_coverage::PortableCoveragePipeline::new(
+                device,
+                self.ssaa_tile_surface_format,
+            )
+        })
+    }
+
     /// Construct the full pipeline set for `surface_format`.
     ///
     /// `surface_format` is the texture format of the render target (windowed
@@ -395,6 +408,7 @@ impl PipelineSet {
             ssaa_downsample,
             ssaa_tile_composite_layout,
             ssaa_tile_surface_format: surface_format,
+            portable_coverage: None,
             texture_composite_cache: HashMap::new(),
         }
     }
@@ -685,16 +699,40 @@ pub(super) fn create_unit_quad_pipeline(
     layout: &wgpu::PipelineLayout,
     spec: &QuadPipelineSpec<'_>,
 ) -> wgpu::RenderPipeline {
+    let targets = [Some(wgpu::ColorTargetState {
+        format: surface_format,
+        blend: Some(spec.blend),
+        write_mask: wgpu::ColorWrites::ALL,
+    })];
+    create_unit_quad_pipeline_with_targets(device, layout, spec, &targets, "vs_main")
+}
+
+pub(super) fn create_unit_quad_pipeline_with_targets(
+    device: &wgpu::Device,
+    layout: &wgpu::PipelineLayout,
+    spec: &QuadPipelineSpec<'_>,
+    targets: &[Option<wgpu::ColorTargetState>],
+    vertex_entry: &'static str,
+) -> wgpu::RenderPipeline {
+    let source = if vertex_entry == "vs_isolation" {
+        std::borrow::Cow::Owned(
+            spec.shader_source
+                .replace("@vertex", "")
+                .replace("fn vs_isolation", "@vertex fn vs_isolation"),
+        )
+    } else {
+        std::borrow::Cow::Borrowed(spec.shader_source)
+    };
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some(spec.shader_label),
-        source: wgpu::ShaderSource::Wgsl(spec.shader_source.into()),
+        source: wgpu::ShaderSource::Wgsl(source),
     });
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some(spec.pipeline_label),
         layout: Some(layout),
         vertex: wgpu::VertexState {
             module: &shader,
-            entry_point: Some("vs_main"),
+            entry_point: Some(vertex_entry),
             buffers: &[
                 Some(unit_quad_vertex_buffer_layout()),
                 Some(spec.instance_layout.clone()),
@@ -704,11 +742,7 @@ pub(super) fn create_unit_quad_pipeline(
         fragment: Some(wgpu::FragmentState {
             module: &shader,
             entry_point: Some("fs_main"),
-            targets: &[Some(wgpu::ColorTargetState {
-                format: surface_format,
-                blend: Some(spec.blend),
-                write_mask: wgpu::ColorWrites::ALL,
-            })],
+            targets,
             compilation_options: wgpu::PipelineCompilationOptions {
                 constants: spec.constants,
                 ..Default::default()

@@ -2,6 +2,8 @@
 
 - **Status:** Proposed; implementation and local gates pass, pending PR acceptance.
 - **Date:** 2026-10-01
+- **Superseded-by:** [ADR-0103](ADR-0103-portable-independent-primitive-coverage.md)
+  for direct-primitive capability admission; the other decisions remain in force.
 - **Supersedes:** [ADR-0099](ADR-0099-save-layer-region-and-blend.md),
   [ADR-0057](ADR-0057-coverage-correct-blending-is-capability-gated.md)
 - **Related:** [ADR-0057](ADR-0057-coverage-correct-blending-is-capability-gated.md),

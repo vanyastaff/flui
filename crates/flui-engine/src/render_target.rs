@@ -12,8 +12,7 @@
 //!   `DrawSegment`, or any other IR type.
 //! - `Copy + Clone`: callers thread it through nested flush calls without extra
 //!   ceremony.
-//! - The `texture` field is `None` for write-only targets (readback helpers,
-//!   offscreen child paints) that are never sampled back.  Downstream passes
+//! - The `texture` field is `None` only when a caller supplies a view without its backing texture.  Downstream passes
 //!   that require backdrop sampling must call `RenderTarget::sampleable`.
 
 /// The surface (or a pooled offscreen) the current pass writes to, plus an
@@ -28,7 +27,7 @@ pub(crate) struct RenderTarget<'a> {
     pub(crate) view: &'a wgpu::TextureView,
     /// The backing `Texture`, present when a later pass is allowed to sample
     /// this target as a backdrop (dst-read blend modes).  `None` for purely
-    /// write-only targets (readback helpers, offscreen child renders).
+    /// write-only targets supplied without a backing texture.
     ///
     /// Read by the dst-read blend pass when sampling the backdrop region;
     /// `None` targets cannot be sampled and must not be used with advanced modes.
@@ -50,8 +49,8 @@ impl<'a> RenderTarget<'a> {
 
     /// Construct a write-only target — no backdrop sampling allowed.
     ///
-    /// Use this for readback helpers and offscreen child paints that
-    /// are never read back by a blend shader.
+    /// Use this only when the backing texture is unavailable. Internal pooled
+    /// targets retain their backing texture to support destination reads.
     #[inline]
     pub(crate) fn view_only(view: &'a wgpu::TextureView) -> Self {
         Self {

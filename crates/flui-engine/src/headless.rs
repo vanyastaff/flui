@@ -8,8 +8,8 @@
 //! layer-tree walk / readback that `Renderer::render_scene` performs between
 //! surface-acquire and present.
 //!
-//! It renders through the sampleable `RenderTarget` (unlike the public
-//! [`WgpuPainter::render_to_view`], which is `view_only`), so advanced
+//! It uses [`WgpuPainter::render_to_texture`] with a sampleable backing texture,
+//! so advanced
 //! (dst-read) blends that sample the destination render correctly.
 //!
 //! What it does NOT render the way the windowed [`Renderer`] does: the three
@@ -37,10 +37,7 @@ use std::sync::{Arc, Mutex};
 use flui_layer::{LayerId, LayerTree};
 
 use crate::error::{EngineError, EngineResult};
-use crate::{
-    layer_dispatcher::LayerDispatcher, layer_render::LayerRender, painter::WgpuPainter,
-    render_target::RenderTarget,
-};
+use crate::{layer_dispatcher::LayerDispatcher, layer_render::LayerRender, painter::WgpuPainter};
 
 /// The pixel format headless capture renders and reads back in. RGBA8 maps
 /// straight to a PNG without a channel swizzle.
@@ -256,7 +253,7 @@ impl HeadlessRenderer {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("FLUI Headless Capture Render Encoder"),
             });
-        painter.render(RenderTarget::sampleable(&view, &texture), &mut encoder)?;
+        painter.render_to_texture(&texture, &mut encoder)?;
         painter.submit_encoder(encoder)?;
         painter.finish_frame();
 
@@ -694,9 +691,7 @@ impl crate::frame_protocol::FrameSteps for CaptureFrame<'_> {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("FLUI Retained Capture Encoder"),
             });
-        let rendered = self
-            .painter
-            .render(RenderTarget::sampleable(view, texture), &mut encoder);
+        let rendered = self.painter.render_to_texture(texture, &mut encoder);
         let rendered = rendered.and_then(|()| self.painter.submit_encoder(encoder).map(|_| ()));
         self.painter.finish_frame();
         rendered.map(|()| straddled)

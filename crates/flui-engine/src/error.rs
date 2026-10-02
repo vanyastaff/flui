@@ -177,7 +177,9 @@ pub enum ExternalTextureError {
 #[non_exhaustive]
 pub enum EngineError {
     /// A direct draw cannot separate paint alpha from soft clip coverage on this device.
-    #[error("direct {mode:?} drawing under an antialiased clip requires dual-source blending")]
+    #[error(
+        "direct {mode:?} drawing under antialiased coverage requires dual-source blending or a supported sampleable destination"
+    )]
     UnsupportedCoverageBlend {
         /// Destination-sensitive blend mode whose coverage cannot be represented.
         mode: flui_painting::paint::BlendMode,
@@ -185,6 +187,12 @@ pub enum EngineError {
     /// Coverage-correct compositing requires a sampleable destination.
     #[error("compositing requires a sampleable destination target")]
     CompositeBackdropUnavailable,
+    /// A supplied render target violates the required attachment contract.
+    #[error("invalid render target: {reason}")]
+    InvalidRenderTarget {
+        /// The violated attachment requirement.
+        reason: &'static str,
+    },
     /// Geometry violated the admitted rendering contract.
     #[error(transparent)]
     InvalidGeometry(#[from] GeometryError),
@@ -465,6 +473,7 @@ impl EngineError {
             | Self::NotInitialized => Recoverability::Fatal,
             Self::UnsupportedCoverageBlend { .. }
             | Self::CompositeBackdropUnavailable
+            | Self::InvalidRenderTarget { .. }
             | Self::InvalidGeometry(_)
             | Self::ExternalTexture(_)
             | Self::SurfaceValidation
