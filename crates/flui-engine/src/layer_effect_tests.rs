@@ -11,6 +11,11 @@ use flui_painting::{
     styling::Color,
 };
 
+#[path = "layer_effect_tests/backdrop_rotation.rs"]
+mod backdrop_rotation;
+#[path = "layer_effect_tests/reflected_shapes.rs"]
+mod reflected_shapes;
+
 const SIDE: u32 = 64;
 fn picture(rect: Rect<f64>, color: Color) -> Layer {
     let mut canvas = Canvas::new();
@@ -1090,12 +1095,11 @@ fn ordinary_and_advanced_gradient_numeric_refusals_recover(renderer: &HeadlessRe
         ),
         ("NaN sweep angle", sweep(f64::NAN, std::f64::consts::TAU)),
         ("unrepresentable sweep span", sweep(-3e38, 3e38)),
-        ("packed sweep span collapses", sweep(1e9, 1e9 + 1.0)),
         (
-            "linear dot product overflows",
+            "unrepresentable linear parameter",
             Shader::LinearGradient {
-                from: Offset::new(-1e30, 0.0),
-                to: Offset::new(1e30, 0.0),
+                from: Offset::new(0.0, 0.0),
+                to: Offset::new(1e300, 1e300),
                 colors: colors.clone(),
                 stops: None,
                 tile_mode: TileMode::Clamp,
@@ -1140,6 +1144,121 @@ fn ordinary_and_advanced_gradient_numeric_refusals_recover(renderer: &HeadlessRe
         failed.is_empty(),
         "numeric refusal/recovery rows: {failed:?}"
     );
+}
+
+fn large_sweep_phase_preserves_pixels(renderer: &HeadlessRenderer) {
+    let colors = vec![Color::RED, Color::BLUE];
+    let sweep = |start_angle, end_angle| Shader::SweepGradient {
+        center: Offset::new(16.0, 16.0),
+        colors: colors.clone(),
+        stops: None,
+        tile_mode: TileMode::Clamp,
+        start_angle,
+        end_angle,
+    };
+    // Compare large phases against independently equivalent small phases.
+    // A one-radian span previously collapsed; a 64-radian span survived but
+    // lost its wrapped phase during f32 subtraction in the fragment shader.
+    for span in [64.0, 1.0] {
+        for mode in [BlendMode::SrcOver, BlendMode::Multiply] {
+            for masked in [false, true] {
+                let build = |phase| {
+                    let shader = sweep(phase, phase + span);
+                    let bounds = Rect::from_xywh(0.0, 0.0, 32.0, 32.0);
+                    let mut tree = LayerTree::new(picture(
+                        Rect::from_xywh(0.0, 0.0, 64.0, 64.0),
+                        Color::WHITE,
+                    ));
+                    if masked {
+                        let group = tree.push_child(
+                            tree.root(),
+                            Layer::from(ShaderMaskLayer::new(shader, mode, bounds)),
+                        );
+                        tree.push_child(group, picture(bounds, Color::WHITE));
+                    } else {
+                        let mut canvas = Canvas::new();
+                        let paint = Paint::fill(Color::WHITE)
+                            .with_anti_alias(false)
+                            .with_blend_mode(mode)
+                            .with_shader(shader);
+                        canvas.draw_rect(bounds, &paint);
+                        tree.push_child(
+                            tree.root(),
+                            Layer::from(PictureLayer::new(canvas.finish())),
+                        );
+                    }
+                    tree
+                };
+                let expected = capture(renderer, &build(1e9_f64.rem_euclid(std::f64::consts::TAU)));
+                let actual = capture(renderer, &build(1e9));
+                // Sample away from the centre, phase seam and shape edges.
+                for at in [(28, 18), (20, 28), (8, 20)] {
+                    expect_pixel(&actual, at, pixel(&expected, at.0, at.1));
+                }
+            }
+        }
+    }
+}
+
+fn distant_linear_projection_preserves_pixels(renderer: &HeadlessRenderer) {
+    let colors = vec![Color::RED, Color::BLUE];
+    for delta in [32.0, 64.0] {
+        for mode in [BlendMode::SrcOver, BlendMode::Multiply] {
+            for masked in [false, true] {
+                let build = |distant: bool| {
+                    let (from, to) = if distant {
+                        (
+                            Offset::new(1e9, -1e9),
+                            Offset::new(1e9 + delta, -1e9 + delta),
+                        )
+                    } else {
+                        (Offset::ZERO, Offset::new(delta, delta))
+                    };
+                    let shader = Shader::LinearGradient {
+                        from,
+                        to,
+                        colors: colors.clone(),
+                        stops: None,
+                        tile_mode: TileMode::Clamp,
+                    };
+                    let bounds = Rect::from_xywh(0.0, 0.0, 32.0, 32.0);
+                    let mut tree = LayerTree::new(picture(
+                        Rect::from_xywh(0.0, 0.0, 64.0, 64.0),
+                        Color::WHITE,
+                    ));
+                    if masked {
+                        let group = tree.push_child(
+                            tree.root(),
+                            Layer::from(ShaderMaskLayer::new(shader, mode, bounds)),
+                        );
+                        tree.push_child(group, picture(bounds, Color::WHITE));
+                    } else {
+                        let mut canvas = Canvas::new();
+                        let paint = Paint::fill(Color::WHITE)
+                            .with_anti_alias(false)
+                            .with_blend_mode(mode)
+                            .with_shader(shader);
+                        canvas.draw_rect(bounds, &paint);
+                        tree.push_child(
+                            tree.root(),
+                            Layer::from(PictureLayer::new(canvas.finish())),
+                        );
+                    }
+                    tree
+                };
+                let expected = capture(renderer, &build(false));
+                let actual = capture(renderer, &build(true));
+                assert_ne!(
+                    pixel(&expected, 16, 16),
+                    [255, 0, 0, 255],
+                    "nondegenerate linear projection witness"
+                );
+                for at in [(16, 16), (8, 20), (24, 12)] {
+                    expect_pixel(&actual, at, pixel(&expected, at.0, at.1));
+                }
+            }
+        }
+    }
 }
 
 // An acquired resize image and the painter viewport can momentarily differ.
@@ -1316,6 +1435,14 @@ fn layer_effects_capture_as_specified() {
     };
     type Case = (&'static str, fn(&HeadlessRenderer));
     let rows: &[Case] = &[
+        (
+            "reflected shapes and scaled radii",
+            reflected_shapes::reflected_shapes_and_scaled_radii_match_baked,
+        ),
+        (
+            "quarter-turn backdrop axes",
+            backdrop_rotation::quarter_turn_backdrops_match_baked_axes,
+        ),
         #[cfg(feature = "testing")]
         (
             "backdrop resize attachment coordinates",
@@ -1358,6 +1485,11 @@ fn layer_effects_capture_as_specified() {
         (
             "ordinary and advanced gradient numeric recovery",
             ordinary_and_advanced_gradient_numeric_refusals_recover,
+        ),
+        ("large sweep phase", large_sweep_phase_preserves_pixels),
+        (
+            "distant linear projection",
+            distant_linear_projection_preserves_pixels,
         ),
         ("mask modes and tail", mask_modes_and_tail),
         ("followers linked and hidden", followers_resolve_and_hide),

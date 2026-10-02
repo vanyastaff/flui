@@ -86,9 +86,14 @@ impl WgpuPainter {
         }
         // Covariance remains diagonal only for these axis-preserving transforms.
         // General rotation/shear requires directional kernels, not AABB sigma.
-        let sigma = if matrix[1] == 0.0 && matrix[4] == 0.0 {
+        // Public rotation matrices retain sin/cos roundoff at quarter turns.
+        // Compare within each column so an unrelated large scale cannot hide
+        // meaningful shear in the other column.
+        let axis_roundoff =
+            |off_axis: f64, on_axis: f64| off_axis.abs() <= 8.0 * f64::EPSILON * on_axis.abs();
+        let sigma = if axis_roundoff(matrix[1], matrix[0]) && axis_roundoff(matrix[4], matrix[5]) {
             [sigma_x * matrix[0].abs(), sigma_y * matrix[5].abs()]
-        } else if matrix[0] == 0.0 && matrix[5] == 0.0 {
+        } else if axis_roundoff(matrix[0], matrix[1]) && axis_roundoff(matrix[5], matrix[4]) {
             [sigma_y * matrix[4].abs(), sigma_x * matrix[1].abs()]
         } else {
             return Err(EngineError::UnsupportedBackdropFilter {

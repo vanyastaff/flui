@@ -891,7 +891,12 @@ is transformed in f64 before packing, preserving small shapes at large offsets.
 Cropped replay composes the attachment rebase with that matrix. Rounded coverage
 uses derivatives without a fixed local-distance cutoff. Nonrepresentable matrix
 packing is refused. Sweep gradients wrap angular position while retaining the full span,
-so a complete turn remains a gradient. Mask shader admission currently supports
+so a complete turn remains a gradient. The phase is reduced modulo TAU in f64
+before packing. Linear gradients carry a local affine parameter `t = a*x + b*y + c`,
+computed in f64, instead of subtracting distant f32 endpoints per fragment.
+`large_sweep_phase_preserves_pixels` and `distant_linear_projection_preserves_pixels`
+compare direct and masked ordinary/advanced draws against small-coordinate references.
+Mask shader admission currently supports
 solid and Clamp linear/radial/sweep gradients without radial focal parameters;
 unsupported tiling, nonfinite parameters and invalid effective stops are errors.
 Ordinary and advanced gradient draws also validate rebased numeric payloads and
@@ -905,7 +910,11 @@ It may overestimate clips and isolated groups; after 64 expansion scans it choos
 a full repaint rather than unbounded planning work. Effect nesting is limited to
 64 and cumulative backdrop sampling to one billion taps per frame. These are
 engine work limits, not a driver VRAM guarantee. Backdrop supports axis-preserving
-Gaussian transforms and encoded SDR UNorm targets; directional affine blur,
+Gaussian transforms and encoded SDR UNorm targets. The axis test admits only
+per-column f64 roundoff (eight machine epsilons) so public quarter-turn rotations
+work; `quarter_turn_backdrops_match_baked_axes` compares their anisotropic output
+with baked device-space references and rejects a meaningful non-axis rotation.
+Directional affine blur,
 foreground input outside the viewport and backdrop filter chains remain open.
 
 The [scene renderer example](../../examples/scene_render.rs) accepts `--effects`
@@ -914,3 +923,16 @@ scene through headless capture. With feature `testing` and
 `FLUI_READBACK_DUMP_DIR` set, `layer_effects_capture_as_specified` also writes
 named direct/mask, full/partial, scaled/rebased and follower-state PNG witnesses.
 Screenshots complement the numerical readbacks; they do not replace them.
+
+
+### Reflected and scaled primitive bounds remain local
+
+The baked rectangle fast path requires a positive axis-aligned scale. Reflections
+keep positive local extents and the full affine transform. Rounded rectangles
+bake only pure translation: scaling must transform the radii together with the
+shape, and reflection must preserve each corner's identity. The affine path
+rebases the local origin in f64 before packing the positive extents into f32.
+`reflected_shapes_and_scaled_radii_match_baked` compares reflections, asymmetric
+corners, scaled radii and a distant reflected origin against independently baked
+shapes. This does not implement elliptical local corner radii, which still use
+the existing per-corner maximum-radius approximation.

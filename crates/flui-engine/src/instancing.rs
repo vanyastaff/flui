@@ -1039,7 +1039,7 @@ impl LinearGradientInstance {
         // unit-quad + instance input within 13 attributes (locations 0..12).
         const ATTRIBUTES: &[wgpu::VertexAttribute] = &wgpu::vertex_attr_array![
             2 => Float32x4, // bounds
-            3 => Float32x4, // linear endpoints / radial center-radius / sweep center-angles
+            3 => Float32x4, // linear parameter / radial center-radius / sweep center-angles
             4 => Float32x4, // corner radii
             5 => Uint32x2,  // stop count and offset
             6 => Float32x4, // clip bounds
@@ -1071,7 +1071,7 @@ impl RadialGradientInstance {
         // unit-quad + instance input within 13 attributes (locations 0..12).
         const ATTRIBUTES: &[wgpu::VertexAttribute] = &wgpu::vertex_attr_array![
             2 => Float32x4, // bounds
-            3 => Float32x4, // linear endpoints / radial center-radius / sweep center-angles
+            3 => Float32x4, // linear parameter / radial center-radius / sweep center-angles
             4 => Float32x4, // corner radii
             5 => Uint32x2,  // stop count and offset
             6 => Float32x4, // clip bounds
@@ -1107,7 +1107,7 @@ impl SweepGradientInstance {
         // unit-quad + instance input within 13 attributes (locations 0..12).
         const ATTRIBUTES: &[wgpu::VertexAttribute] = &wgpu::vertex_attr_array![
             2 => Float32x4, // bounds
-            3 => Float32x4, // linear endpoints / radial center-radius / sweep center-angles
+            3 => Float32x4, // linear parameter / radial center-radius / sweep center-angles
             4 => Float32x4, // corner radii
             5 => Uint32x2,  // stop count and offset
             6 => Float32x4, // clip bounds

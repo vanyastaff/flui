@@ -59,10 +59,8 @@ impl GradientStop {
 pub(crate) struct LinearGradientInstance {
     /// Rectangle bounds [x, y, width, height]
     pub bounds: [f32; 4],
-    /// Gradient start point (local coordinates)
-    pub gradient_start: [f32; 2],
-    /// Gradient end point (local coordinates)
-    pub gradient_end: [f32; 2],
+    /// Local parameter coefficients `[a, b, c, 0]`: `t = a*x + b*y + c`.
+    pub linear_parameter: [f32; 4],
     /// Corner radii [top-left, top-right, bottom-right, bottom-left]
     pub corner_radii: [f32; 4],
     /// Number of validated gradient stops
@@ -105,15 +103,13 @@ impl LinearGradientInstance {
     /// Create a new linear gradient instance
     pub(crate) fn new(
         bounds: [f32; 4],
-        start: Vec2,
-        end: Vec2,
+        linear_parameter: [f32; 4],
         corner_radii: [f32; 4],
         stop_count: u32,
     ) -> Self {
         Self {
             bounds,
-            gradient_start: [start.x, start.y],
-            gradient_end: [end.x, end.y],
+            linear_parameter,
             corner_radii,
             stop_count,
             stop_offset: 0,

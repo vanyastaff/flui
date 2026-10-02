@@ -18,7 +18,7 @@ struct VertexInput {
 struct InstanceInput {
     @location(2) bounds: vec4<f32>,
     // Adjacent Rust fields share one attribute without changing their byte ABI:
-    // linear endpoints; radial center/radius/padding; sweep center/angles.
+    // linear parameter coefficients; radial center/radius/padding; sweep center/angles.
     @location(3) geometry: vec4<f32>,
     @location(4) corner_radii: vec4<f32>,
     @location(5) stops: vec2<u32>, // count, offset
@@ -45,8 +45,7 @@ struct VertexOutput {
     @builtin(position) clip_position: vec4<f32>,
     @location(0) world_pos: vec2<f32>,      // World space position
     @location(1) local_pos: vec2<f32>,      // Local position within bounds
-    @location(2) gradient_start: vec2<f32>,
-    @location(3) gradient_end: vec2<f32>,
+    @location(2) @interpolate(flat) linear_parameter: vec4<f32>,
     @location(4) rect_size: vec2<f32>,
     @location(5) corner_radii: vec4<f32>,
     @location(6) @interpolate(flat) stop_count: u32,
@@ -141,8 +140,7 @@ fn vs_main(
     out.clip_position = vec4<f32>(clip_x, clip_y, 0.0, 1.0);
     out.world_pos = world_pos;
     out.local_pos = local_pos;
-    out.gradient_start = instance.geometry.xy;
-    out.gradient_end = instance.geometry.zw;
+    out.linear_parameter = instance.geometry;
     out.rect_size = instance.bounds.zw;
     out.corner_radii = instance.corner_radii;
     out.stop_count = instance.stops.x;
@@ -174,18 +172,8 @@ fn shadeFragment(in: VertexOutput) -> ShadedFragment {
     // derivatives unconditionally; coverage, rather than a local-unit cutoff,
     // determines the edge contribution.
 
-    // Compute gradient parameter t
-    let gradient_vec = in.gradient_end - in.gradient_start;
-    let gradient_length_sq = dot(gradient_vec, gradient_vec);
-
-    var t: f32;
-    if (gradient_length_sq > 0.0001) {
-        // Project local position onto gradient line
-        t = dot(in.local_pos - in.gradient_start, gradient_vec) / gradient_length_sq;
-    } else {
-        // Degenerate gradient (start == end), use solid color
-        t = 0.0;
-    }
+    // CPU-derived affine coefficients avoid distant-endpoint subtraction.
+    let t = dot(in.local_pos, in.linear_parameter.xy) + in.linear_parameter.z;
 
     // Interpolate color from gradient stops
     var color = interpolateGradient(t, in.stop_count, in.stop_offset);
