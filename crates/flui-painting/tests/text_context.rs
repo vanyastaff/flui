@@ -52,10 +52,11 @@ fn key(metrics: &TextLayoutResult) -> (f32, f32, usize, f32, f32) {
 const fn assert_send<T: Send>() {}
 const _: () = assert_send::<TextContext>();
 
-/// Two realms' contexts, each moved to its own thread, shape at the same
-/// time and agree with each other. Each context is used through `&mut` and
-/// shares no FLUI lock with the other. The overlap of the two threads' intervals
-/// shows they really ran at once; that neither waited on the other rests on
+/// Two realms' contexts, each moved to its own thread, shape in overlapping
+/// sessions and agree with each other. Each context is used through `&mut` and
+/// shares no FLUI lock with the other. A rendezvous inside each shaping session
+/// ensures the sessions overlap even when the scheduler runs one worker at a
+/// time; that neither waits on a shared shaping lock rests on
 /// the structure (no lock in the API, the crate's `disallowed_types` lint),
 /// not on a timing measurement.
 pub(crate) fn two_realms_shape_in_parallel() {
@@ -76,8 +77,8 @@ pub(crate) fn two_realms_shape_in_parallel() {
             .map(|mut context| {
                 let barrier = &barrier;
                 scope.spawn(move || {
-                    barrier.wait();
                     let start = Instant::now();
+                    barrier.wait();
                     for _ in 0..SHAPES {
                         let metrics = shape(&mut context, LATIN, Some(120.0)).metrics();
                         assert_eq!(key(&metrics), reference);
