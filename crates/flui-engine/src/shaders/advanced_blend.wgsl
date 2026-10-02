@@ -1,10 +1,8 @@
 // Advanced blend-mode composite shader.
 //
-// Implements the W3C Compositing and Blending Level 1 separable and
-// non-separable blend functions for all 15 advanced modes.  The math is
-// a verbatim port of `Color::blend` in `flui-types/src/styling/color.rs`
-// (lines 913–1149); any divergence is a correctness bug — the CPU oracle is
-// the canonical definition.
+// Supports separable/non-separable and Porter-Duff composites. The finished
+// premultiplied result is selected against the original destination by the
+// independently prepared geometric clip coverage.
 //
 // ## Pipeline contract
 //
@@ -16,6 +14,8 @@
 //     binding 1 — foreground texture (premultiplied RGBA f32)
 //     binding 2 — backdrop copy texture (premultiplied RGBA f32)
 //     binding 3 — nearest-clamp sampler
+// - FS group 1 uses the shared viewport/clip layout: binding 1 mask texture,
+//   binding 2 clip consumer. Binding 0 is present in the layout but unused here.
 //
 // ## Gamma space
 //
@@ -91,6 +91,38 @@ var backdrop_tex:   texture_2d<f32>;
 
 @group(0) @binding(3)
 var nearest_sampler: sampler;
+
+struct CompositeClipConsumer { origin_enabled: vec4<i32> };
+@group(1) @binding(1) var composite_clip_mask: texture_2d<f32>;
+@group(1) @binding(2) var<uniform> composite_clip_consumer: CompositeClipConsumer;
+
+fn composite_coverage(position: vec2<f32>) -> f32 {
+    if composite_clip_consumer.origin_enabled.z == 0 { return 1.0; }
+    let texel = vec2<i32>(floor(position)) - composite_clip_consumer.origin_enabled.xy;
+    let extent = vec2<i32>(textureDimensions(composite_clip_mask));
+    if any(texel < vec2<i32>(0)) || any(texel >= extent) { return 0.0; }
+    return textureLoad(composite_clip_mask, texel, 0).r;
+}
+
+fn porter_duff(mode: u32, s: vec4<f32>, d: vec4<f32>) -> vec4<f32> {
+    switch mode {
+        case 15u: { return vec4<f32>(0.0); }
+        case 16u: { return s; }
+        case 17u: { return d; }
+        case 18u: { return s + d*(1.0-s.a); }
+        case 19u: { return d + s*(1.0-d.a); }
+        case 20u: { return s*d.a; }
+        case 21u: { return d*s.a; }
+        case 22u: { return s*(1.0-d.a); }
+        case 23u: { return d*(1.0-s.a); }
+        case 24u: { return s*d.a + d*(1.0-s.a); }
+        case 25u: { return d*s.a + s*(1.0-d.a); }
+        case 26u: { return s*(1.0-d.a) + d*(1.0-s.a); }
+        case 27u: { return min(s+d, vec4<f32>(1.0)); }
+        case 28u: { return s*d; }
+        default: { return d; }
+    }
+}
 
 // ── Vertex shader ─────────────────────────────────────────────────────────────
 //
@@ -257,7 +289,7 @@ fn fs_main(in: VsOutput) -> @location(0) vec4<f32> {
     // ── Blend function B(Cb, Cs) ───────────────────────────────────────────
     var blended: vec3<f32>;
     let m = blend.mode;
-    if m >= 11u {
+    if m >= 11u && m <= 14u {
         // Non-separable: Hue/Saturation/Color/Luminosity
         blended = nonseparable_blend(m, cb, cs);
     } else {
@@ -290,16 +322,15 @@ fn fs_main(in: VsOutput) -> @location(0) vec4<f32> {
     let clip_on = blend.clip_rect.z > 0.0 && blend.clip_rect.w > 0.0;
     let inside = all(local >= blend.clip_rect.xy)
         && all(local <= blend.clip_rect.xy + blend.clip_rect.zw);
-    if clip_on && !inside {
+    if composite_clip_consumer.origin_enabled.z == 0 && clip_on && !inside {
         discard;
     }
 
     // ── out_a <= 0 → transparent (color.rs:945) ───────────────────────────
-    if out_a <= 0.0 {
-        return vec4<f32>(0.0);
-    }
-
-    // Output premultiplied.
-    return vec4<f32>(clamp(out_rgb_pm, vec3<f32>(0.0), vec3<f32>(1.0)),
-                     clamp(out_a, 0.0, 1.0));
+    var result = vec4<f32>(clamp(out_rgb_pm, vec3<f32>(0.0), vec3<f32>(1.0)),
+                          clamp(out_a, 0.0, 1.0));
+    if m >= 15u { result = porter_duff(m, fg_pm_adjusted, bd_pm); }
+    // Coverage selects between the untouched destination and the full blend.
+    // Scaling source alpha alone does not implement Clear, Src or DstIn.
+    return mix(bd_pm, result, composite_coverage(in.frag_pos.xy));
 }

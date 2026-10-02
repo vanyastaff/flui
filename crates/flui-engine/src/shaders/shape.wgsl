@@ -68,6 +68,7 @@ fn shadeFragment(input: VertexOutput) -> ShadedFragment {
     // Tessellated geometry has no SDF of its own, so the clip is the only
     // source of partial coverage — see `clipAlpha` in `common/clip.wgsl`.
     shaded.coverage = clipAlpha(
+        input.clip_position.xy,
         input.world_pos,
         clip.bounds,
         clip.radii,

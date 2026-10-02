@@ -2,10 +2,17 @@
 
 - **Status:** Proposed. `flui-engine` implements it in the change that adds this record;
   acceptance waits on the review of that change.
+- **Superseded-by:** [ADR-0102](ADR-0102-immutable-geometric-clip-composition.md)
 - **Date:** 2026-09-30
 - **Related:** [ADR-0057](ADR-0057-coverage-correct-blending-is-capability-gated.md) (coverage-correct blending,
   shapes only), [ADR-0087](ADR-0087-raster-contract-and-cpu-backend.md) (the raster contract
   a CPU backend must match)
+
+ADR-0102 retains whole-region compositing while replacing single-slot clip and
+doubled-edge limitations with immutable expression ownership. It also supersedes
+ADR-0057's former permission for incorrect featureless direct destructive AA;
+those direct draws now require capability or return `UnsupportedCoverageBlend`.
+This does not claim the portable direct-draw fallback is implemented.
 
 ## Context
 

@@ -51,6 +51,55 @@ impl super::GpuReplay {
         view: &wgpu::TextureView,
     ) -> crate::error::EngineResult<()> {
         segment.recording_result()?;
+        if !device
+            .features()
+            .contains(wgpu::Features::DUAL_SOURCE_BLENDING)
+        {
+            for run in &segment.runs {
+                if !run.clip.has_antialias() {
+                    continue;
+                }
+                let check = |mode| {
+                    if crate::pipeline_cache::destination_alpha_scale_for(mode).is_some() {
+                        Err(crate::error::EngineError::UnsupportedCoverageBlend { mode })
+                    } else {
+                        Ok(())
+                    }
+                };
+                match &run.kind {
+                    DrawRun::Tess(range) => {
+                        for batch in &segment.tess_batches[range.clone()] {
+                            check(batch.pipeline_key.blend_mode())?;
+                        }
+                    }
+                    DrawRun::LinearGradient(range) => {
+                        for batch in segment.linear_gradient_runs.iter().filter(|batch| {
+                            (batch.start as usize) < range.end
+                                && (batch.start + batch.count) as usize > range.start
+                        }) {
+                            check(batch.blend)?;
+                        }
+                    }
+                    DrawRun::RadialGradient(range) => {
+                        for batch in segment.radial_gradient_runs.iter().filter(|batch| {
+                            (batch.start as usize) < range.end
+                                && (batch.start + batch.count) as usize > range.start
+                        }) {
+                            check(batch.blend)?;
+                        }
+                    }
+                    DrawRun::SweepGradient(range) => {
+                        for batch in segment.sweep_gradient_runs.iter().filter(|batch| {
+                            (batch.start as usize) < range.end
+                                && (batch.start + batch.count) as usize > range.start
+                        }) {
+                            check(batch.blend)?;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
         self.prepare_viewport_binding(device, pipelines, resources)?;
         let stops = bytemuck::cast_slice(&segment.current_gradient_stops);
         let stop_binding = if stops.is_empty() {
@@ -102,9 +151,85 @@ impl super::GpuReplay {
         }
         let tess =
             Self::prepare_tessellated_geometry(segment, device, queue, pipelines, resources)?;
+        // Resolve each distinct snapshot once for this attachment before opening a content pass.
+        // Bound hash-table capacity rounding and load-factor slack, including
+        // control bytes and bucket alignment, before either collection grows.
+        let bucket_count = segment
+            .runs
+            .len()
+            .checked_mul(8)
+            .and_then(|v| v.checked_add(6))
+            .map(|v| v / 7)
+            .and_then(|v| v.max(4).checked_next_power_of_two());
+        let metadata_bytes = bucket_count
+            .and_then(|buckets| {
+                buckets
+                    .checked_mul(
+                        std::mem::size_of::<crate::clip_chain::ClipChain>()
+                            + std::mem::size_of::<wgpu::BindGroup>()
+                            + 32,
+                    )
+                    .and_then(|table| {
+                        segment
+                            .runs
+                            .len()
+                            .checked_mul(std::mem::size_of::<wgpu::BindGroup>())
+                            .and_then(|bindings| table.checked_add(bindings))
+                    })
+            })
+            .ok_or(crate::error::EngineError::PreparedResourceLimit {
+                resource: "clip binding metadata bytes",
+                requested: usize::MAX,
+                limit: usize::MAX - 1,
+            })?;
+        resources.reserve_prepared(crate::device_domain::PreparedCost {
+            gpu_bytes: 0,
+            cpu_bytes: metadata_bytes,
+            objects: 0,
+        })?;
+        let mut bindings = Vec::new();
+        #[expect(
+            clippy::mutable_key_type,
+            reason = "Hash and equality use immutable Arc identity; budget atomics are not key state"
+        )]
+        let mut prepared =
+            std::collections::HashMap::<crate::clip_chain::ClipChain, wgpu::BindGroup>::new();
+        bindings
+            .try_reserve_exact(segment.runs.len())
+            .map_err(
+                |source| crate::error::EngineError::PreparedResourceAllocation {
+                    resource: "clip run bindings",
+                    source,
+                },
+            )?;
+        prepared.try_reserve(segment.runs.len()).map_err(|source| {
+            crate::error::EngineError::PreparedResourceAllocation {
+                resource: "clip snapshot bindings",
+                source,
+            }
+        })?;
+        for run in &segment.runs {
+            let binding = if let Some(binding) = prepared.get(&run.clip) {
+                binding.clone()
+            } else {
+                let binding = self.prepare_clip_binding(
+                    segment,
+                    &run.clip,
+                    viewport_size,
+                    device,
+                    pipelines,
+                    resources,
+                    encoder,
+                )?;
+                prepared.insert(run.clip.clone(), binding.clone());
+                binding
+            };
+            bindings.push(binding);
+        }
         let mut cursor = 0;
         while cursor < segment.runs.len() {
-            let run = &segment.runs[cursor];
+            self.viewport_bind_group = bindings[cursor].clone();
+            let run = &segment.runs[cursor].kind;
             match run {
                 DrawRun::Tess(range) => self.flush_tessellated_geometry(
                     segment,
@@ -171,7 +296,8 @@ impl super::GpuReplay {
                     pass.set_bind_group(0, &self.viewport_bind_group, &[]);
                     let mut state = QuadReplayState::default();
                     while cursor < segment.runs.len() {
-                        let run = &segment.runs[cursor];
+                        pass.set_bind_group(0, &bindings[cursor], &[]);
+                        let run = &segment.runs[cursor].kind;
                         let (slot, kind) = match run {
                             DrawRun::Rect(_) => (0, None),
                             DrawRun::Circle(_) => (1, None),

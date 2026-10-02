@@ -64,7 +64,7 @@ thread_local! {
 pub struct HeadlessRenderer {
     domain: Arc<crate::device_domain::DeviceDomain>,
     // Host capture edge only: one complete render/readback per device domain.
-    capture_gate: Mutex<()>,
+    capture_gate: Mutex<Option<WgpuPainter>>,
     /// Kept so a test's feature-reduced twin comes from this same adapter and
     /// instance (see [`Self::without_dual_source_blending`]).
     #[cfg(test)]
@@ -158,7 +158,7 @@ impl HeadlessRenderer {
             crate::device_domain::DeviceDomain::new(Arc::clone(&device), Arc::clone(&queue));
         Ok(Self {
             domain,
-            capture_gate: Mutex::new(()),
+            capture_gate: Mutex::new(None),
             #[cfg(test)]
             adapter,
             device,
@@ -193,21 +193,25 @@ impl HeadlessRenderer {
     /// # Errors
     /// Returns [`EngineError`] when the render pass fails.
     pub fn render_layer_tree(&self, tree: &LayerTree, size: (u32, u32)) -> EngineResult<Vec<u8>> {
-        self.with_capture_gate(|| self.render_layer_tree_locked(tree, size))
+        self.with_capture_gate(|cached| self.render_layer_tree_locked(tree, size, cached))
     }
 
-    fn with_capture_gate<T>(&self, capture: impl FnOnce() -> EngineResult<T>) -> EngineResult<T> {
-        let _capture = self
+    fn with_capture_gate<T>(
+        &self,
+        capture: impl FnOnce(&mut Option<WgpuPainter>) -> EngineResult<T>,
+    ) -> EngineResult<T> {
+        let mut cached = self
             .capture_gate
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        capture()
+        capture(&mut cached)
     }
 
     fn render_layer_tree_locked(
         &self,
         tree: &LayerTree,
         size: (u32, u32),
+        cached: &mut Option<WgpuPainter>,
     ) -> EngineResult<Vec<u8>> {
         let _submission_scope = self.domain.begin_frame_scope()?;
         let (width, height) = size;
@@ -226,13 +230,18 @@ impl HeadlessRenderer {
         if width == 0 || height == 0 || width > max_dim || height > max_dim {
             return Err(EngineError::InvalidTargetSize { width, height });
         }
+        // Taking the cache makes a failed or unwound capture discard its painter.
+        // Only a complete render and readback can return it to the next capture.
+        let mut painter = cached.take().unwrap_or_else(|| {
+            WgpuPainter::with_domain(Arc::clone(&self.domain), CAPTURE_FORMAT, (width, height))
+        });
+        painter.begin_frame_in_scope();
+        painter.resize(width, height);
         let texture = self.create_capture_texture(width, height);
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
 
         self.clear_to_background(&view)?;
 
-        let mut painter =
-            WgpuPainter::with_domain(Arc::clone(&self.domain), CAPTURE_FORMAT, (width, height));
         {
             let mut backend = LayerDispatcher::new(&mut painter);
             let mut visitor = CaptureVisitor {
@@ -251,7 +260,9 @@ impl HeadlessRenderer {
         painter.submit_encoder(encoder)?;
         painter.finish_frame();
 
-        self.readback_rgba(&texture, width, height)
+        let pixels = self.readback_rgba(&texture, width, height)?;
+        *cached = Some(painter);
+        Ok(pixels)
     }
 
     fn create_capture_texture(&self, width: u32, height: u32) -> wgpu::Texture {
@@ -863,6 +874,82 @@ mod target_size_tests {
 mod twin_readback_tests {
     use flui_layer::LayerTree;
 
+    fn repeated_capture_resizes_and_recovers_after_invalid_geometry() {
+        use flui_foundation::geometry::Rect;
+        use flui_layer::{Layer, LayerNode, PictureLayer};
+        use flui_painting::{Canvas, Paint, styling::Color};
+
+        let Some(renderer) = crate::test_support::renderer_or_skip() else {
+            return;
+        };
+        let picture = |size: u32, invalid: bool, clipped: bool| {
+            let mut canvas = Canvas::new();
+            if invalid {
+                canvas.clip_rect(Rect::from_xywh(f64::NAN, 0.0, 1.0, 1.0));
+            } else if clipped {
+                canvas.clip_rect(Rect::from_xywh(
+                    0.0,
+                    0.0,
+                    f64::from(size) / 2.0,
+                    f64::from(size),
+                ));
+            }
+            canvas.draw_rect(
+                Rect::from_xywh(0.0, 0.0, f64::from(size), f64::from(size)),
+                &Paint::fill(if clipped { Color::RED } else { Color::BLUE }).with_anti_alias(false),
+            );
+            LayerTree::new(LayerNode::new(Layer::from(PictureLayer::new(
+                canvas.finish(),
+            ))))
+        };
+        for size in [8, 16, 4] {
+            let pixels = renderer
+                .render_layer_tree(&picture(size, false, true), (size, size))
+                .expect("cached capture resizes its viewport and clip");
+            for y in 0..size {
+                for x in 0..size {
+                    let index = ((y * size + x) * 4) as usize;
+                    let expected = if x < size / 2 {
+                        [255, 0, 0, 255]
+                    } else {
+                        [255, 255, 255, 255]
+                    };
+                    assert_eq!(
+                        &pixels[index..index + 4],
+                        &expected,
+                        "clipped capture size={size} pixel=({x},{y})"
+                    );
+                }
+            }
+            let pixels = renderer
+                .render_layer_tree(&picture(size, false, false), (size, size))
+                .expect("the next capture has no stale clip");
+            for (index, pixel) in pixels.as_chunks::<4>().0.iter().enumerate() {
+                assert_eq!(
+                    *pixel,
+                    [0, 0, 255, 255],
+                    "unclipped capture size={size} pixel=({},{})",
+                    index % size as usize,
+                    index / size as usize
+                );
+            }
+        }
+        assert!(matches!(
+            renderer.render_layer_tree(&picture(8, true, false), (8, 8)),
+            Err(super::EngineError::InvalidGeometry(_))
+        ));
+        let pixels = renderer
+            .render_layer_tree(&picture(8, false, false), (8, 8))
+            .expect("failed cached capture discards its painter and recovers");
+        assert!(
+            pixels
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .all(|pixel| *pixel == [0, 0, 255, 255])
+        );
+    }
+
     /// A renderer and its feature-reduced twin, created, used and dropped over
     /// and over, never block.
     ///
@@ -878,7 +965,7 @@ mod twin_readback_tests {
             let renderer = &renderer;
             let first = threads.spawn(move || {
                 renderer
-                    .with_capture_gate(|| {
+                    .with_capture_gate(|_| {
                         let _scope = renderer.domain.begin_frame_scope()?;
                         entered_tx.send(()).expect("announce overlapping capture");
                         release_rx.recv().expect("release first capture");
@@ -916,8 +1003,9 @@ mod twin_readback_tests {
             );
         });
         let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _result: crate::error::EngineResult<()> = renderer.with_capture_gate(|| {
+            let _result: crate::error::EngineResult<()> = renderer.with_capture_gate(|cached| {
                 let _scope = renderer.domain.begin_frame_scope()?;
+                let _painter = cached.take();
                 panic!("capture edge fault");
             });
         }));
@@ -953,6 +1041,7 @@ mod twin_readback_tests {
         // zero-sized or overflowing capture is a typed error, not a panic.
         super::target_size_tests::zero_sized_capture_is_a_typed_error();
         concurrent_capture_and_unwind_recovery();
+        repeated_capture_resizes_and_recovers_after_invalid_geometry();
         let instances = || super::INSTANCES_CREATED.with(std::cell::Cell::get);
         for _ in 0..12 {
             let before = instances();

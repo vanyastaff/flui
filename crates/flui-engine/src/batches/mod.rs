@@ -207,7 +207,7 @@ impl DrawBatcher {
                 // unchanged — there is no rebase to compose in.
                 clip: clip_for_isolated,
             });
-            shape_segment.record_run(DrawRun::Tess(0..1));
+            shape_segment.record_run(DrawRun::Tess(0..1), state.clip_chain());
 
             draw_order.push(DrawItem::AdvancedShape(AdvancedShapeOp {
                 segment: shape_segment.seal(),
@@ -241,8 +241,10 @@ impl DrawBatcher {
         // batch's clip is what its draw binds.
         segment.current_pipeline_key = Some(key);
         let batch_index = segment.tess_batches.len();
-        let adjacent_tess = matches!(segment.runs.last(), Some(DrawRun::Tess(range))
-            if range.end == batch_index);
+        let adjacent_tess = segment.runs.last().is_some_and(|run| {
+            run.clip == state.clip_chain()
+                && matches!(&run.kind, DrawRun::Tess(range) if range.end == batch_index)
+        });
         let merged = adjacent_tess
             && segment.tess_batches.last_mut().is_some_and(|batch| {
                 if batch.pipeline_key == key
@@ -264,7 +266,10 @@ impl DrawBatcher {
                 index_count,
                 clip,
             });
-            segment.record_run(DrawRun::Tess(batch_index..batch_index + 1));
+            segment.record_run(
+                DrawRun::Tess(batch_index..batch_index + 1),
+                state.clip_chain(),
+            );
         }
 
         // Draw-order contract: close the segment after any non-SrcOver blend.
@@ -338,7 +343,7 @@ impl DrawBatcher {
             index_count: indices.len() as u32,
             clip: clip_for_isolated,
         });
-        path_segment.record_run(DrawRun::Tess(0..1));
+        path_segment.record_run(DrawRun::Tess(0..1), state.clip_chain());
 
         draw_order.push(DrawItem::SsaaPath(SsaaPathOp {
             segment: path_segment.seal(),

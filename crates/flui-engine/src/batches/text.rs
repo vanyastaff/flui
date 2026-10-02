@@ -122,9 +122,12 @@ impl DrawBatcher {
                 let instance = state.apply_active_clip(instance);
 
                 let _ = segment.glyph_batch.add(instance);
-                segment.record_run(DrawRun::Glyph(
-                    segment.glyph_batch.len().saturating_sub(1)..segment.glyph_batch.len(),
-                ));
+                segment.record_run(
+                    DrawRun::Glyph(
+                        segment.glyph_batch.len().saturating_sub(1)..segment.glyph_batch.len(),
+                    ),
+                    state.clip_chain(),
+                );
                 DrawSegment::push_scissor_region(&mut segment.glyph_scissors, scissor);
             }
         }

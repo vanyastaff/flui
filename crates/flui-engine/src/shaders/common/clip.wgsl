@@ -1,3 +1,22 @@
+// Per-encoded-use coverage in attachment coordinates. No sampler is required.
+struct ClipMaskConsumer {
+    origin_enabled: vec4<i32>,
+};
+@group(0) @binding(1) var final_clip_mask: texture_2d<f32>;
+@group(0) @binding(2) var<uniform> final_clip_consumer: ClipMaskConsumer;
+
+fn finalClipCoverage(attachment_pos: vec2<f32>) -> f32 {
+    if final_clip_consumer.origin_enabled.z == 0 {
+        return 1.0;
+    }
+    let texel = vec2<i32>(floor(attachment_pos)) - final_clip_consumer.origin_enabled.xy;
+    let extent = vec2<i32>(textureDimensions(final_clip_mask));
+    if any(texel < vec2<i32>(0)) || any(texel >= extent) {
+        return 0.0;
+    }
+    return textureLoad(final_clip_mask, texel, 0).r;
+}
+
 // Shared SDF helpers for the per-instance clip.
 //
 // This file is not a standalone shader: it is prepended to every shader that
@@ -118,6 +137,7 @@ fn sdfToAlpha(dist: f32) -> f32 {
 /// primitive must agree on what a clip means, and a pasted copy is free to
 /// disagree silently.
 fn clipAlpha(
+    attachment_pos: vec2<f32>,
     world_pos: vec2<f32>,
     clip_bounds: vec4<f32>,
     clip_radii: vec4<f32>,
@@ -161,6 +181,15 @@ fn clipAlpha(
     let hard_alpha = select(0.0, 1.0, clip_dist <= 0.0);
     let soft_alpha = sdfToAlpha(clip_dist);
     let alpha = select(1.0, select(soft_alpha, hard_alpha, clip_hard), clip_active);
+
+    // Resolve derivatives before any mask-dependent discard or early return.
+    if final_clip_consumer.origin_enabled.z != 0 {
+        let coverage = finalClipCoverage(attachment_pos);
+        if coverage <= 0.0 {
+            discard;
+        }
+        return coverage;
+    }
 
     // Fully clipped-out fragments are DISCARDED, not merely made
     // transparent.

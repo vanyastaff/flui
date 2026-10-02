@@ -256,7 +256,16 @@ fn clear_offscreen_result(nested: bool) {
 /// composites with its own blend mode.
 #[test]
 fn painter_images_and_offscreen_results_read_back_as_specified() {
-    let cases: [(&str, fn()); 24] = [
+    let cases: [(&str, fn()); 27] = [
+        ("view-only hard group blends", view_only_hard_group_blends),
+        (
+            "limited fragment uniforms clip recovery",
+            limited_fragment_uniforms_clip_refusal_recovers,
+        ),
+        (
+            "featureless direct AA refusal recovery",
+            featureless_direct_aa_refusal_recovers,
+        ),
         (
             "external completion after repeated submit",
             external_repeated_submission_keeps_allocation,
@@ -1666,4 +1675,201 @@ fn external_straight_linear_filtering_has_no_halo() {
             }
         }
     }
+}
+
+/// A device without dual-source blending refuses unsupported direct coverage
+/// instead of publishing wrong pixels, and the same public painter recovers.
+fn featureless_direct_aa_refusal_recovers() {
+    use flui_painting::{BlendMode, Paint, paint::Clip, styling::Color};
+    let (device, queue) = test_device_and_queue();
+    assert!(
+        !device
+            .features()
+            .contains(wgpu::Features::DUAL_SOURCE_BLENDING),
+        "fixture requests no optional features"
+    );
+    let (target, view) = crate::test_support::create_target(
+        &device,
+        "featureless coverage recovery",
+        32,
+        32,
+        READBACK_FORMAT,
+        wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+    );
+    crate::test_support::clear_target(&device, &queue, &view, wgpu::Color::RED);
+    let mut painter = WgpuPainter::with_shared_device(
+        Arc::clone(&device),
+        Arc::clone(&queue),
+        READBACK_FORMAT,
+        (32, 32),
+    );
+    painter.begin_frame().expect("refusal frame begins");
+    painter.clip_rect(Rect::from_xywh(8.25, 0.0, 16.0, 32.0), Clip::AntiAlias);
+    painter.draw_rect(
+        Rect::from_xywh(0.0, 0.0, 32.0, 32.0),
+        &Paint::fill(Color::BLUE)
+            .with_anti_alias(false)
+            .with_blend_mode(BlendMode::Clear),
+    );
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+    let error = painter
+        .render_to_view(&view, &mut encoder)
+        .expect_err("direct soft Clear has no capability");
+    assert!(matches!(
+        error,
+        crate::EngineError::UnsupportedCoverageBlend {
+            mode: BlendMode::Clear
+        }
+    ));
+    assert_eq!(
+        error.recoverability(),
+        crate::error::Recoverability::Unrecoverable
+    );
+    drop(encoder);
+    painter.finish_frame();
+    let pixels = crate::test_support::readback_bytes(&device, &queue, &target, 32, 32);
+    assert_eq!(
+        pixel_at(&pixels, 32, 8, 16),
+        [255, 0, 0, 255],
+        "refused unsubmitted frame preserves target"
+    );
+    painter.begin_frame().expect("next valid frame begins");
+    painter.draw_rect(
+        Rect::from_xywh(0.0, 0.0, 32.0, 32.0),
+        &Paint::fill(Color::GREEN).with_anti_alias(false),
+    );
+    let mut next = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+    painter
+        .render_to_view(&view, &mut next)
+        .expect("next frame encodes");
+    painter.submit_encoder(next).expect("next frame submits");
+    painter.finish_frame();
+    let pixels = crate::test_support::readback_bytes(&device, &queue, &target, 32, 32);
+    assert_eq!(pixel_at(&pixels, 32, 8, 16), [0, 255, 0, 255]);
+}
+
+/// A legal custom device's smaller fragment uniform count is admitted before
+/// lazy mask layout creation; refusal leaves the reusable public painter valid.
+fn limited_fragment_uniforms_clip_refusal_recovers() {
+    use flui_painting::{Paint, paint::Clip, styling::Color};
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+    let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+        power_preference: wgpu::PowerPreference::LowPower,
+        force_fallback_adapter: false,
+        compatible_surface: None,
+        apply_limit_buckets: false,
+    }))
+    .expect("GPU test adapter");
+    let limits = wgpu::Limits {
+        max_uniform_buffers_per_shader_stage: 2,
+        ..wgpu::Limits::default()
+    };
+    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+        label: Some("Two fragment uniforms device"),
+        required_limits: limits,
+        ..wgpu::DeviceDescriptor::default()
+    }))
+    .expect("custom device with legal uniform count");
+    let device = Arc::new(device);
+    let queue = Arc::new(queue);
+    let (target, view) = crate::test_support::create_target(
+        &device,
+        "limited uniform recovery",
+        32,
+        32,
+        READBACK_FORMAT,
+        wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+    );
+    crate::test_support::clear_target(&device, &queue, &view, wgpu::Color::BLACK);
+    let mut painter = WgpuPainter::with_shared_device(
+        Arc::clone(&device),
+        Arc::clone(&queue),
+        READBACK_FORMAT,
+        (32, 32),
+    );
+    for color in [Color::RED, Color::GREEN] {
+        painter.begin_frame().expect("ordinary frame begins");
+        painter.draw_rect(
+            Rect::from_xywh(0.0, 0.0, 32.0, 32.0),
+            &Paint::fill(color).with_anti_alias(false),
+        );
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+        painter
+            .render_to_view(&view, &mut encoder)
+            .expect("ordinary frame encodes with two uniforms");
+        painter
+            .submit_encoder(encoder)
+            .expect("ordinary frame submits");
+        painter.finish_frame();
+        let frame = crate::test_support::readback_bytes(&device, &queue, &target, 32, 32);
+        let expected = if color == Color::RED {
+            [255, 0, 0, 255]
+        } else {
+            [0, 255, 0, 255]
+        };
+        assert_eq!(pixel_at(&frame, 32, 16, 16), expected);
+        if color == Color::RED {
+            painter.begin_frame().expect("clipped frame begins");
+            painter.clip_rect(Rect::from_xywh(8.25, 0.0, 16.0, 32.0), Clip::AntiAlias);
+            painter.draw_rect(
+                Rect::from_xywh(0.0, 0.0, 32.0, 32.0),
+                &Paint::fill(Color::BLUE).with_anti_alias(false),
+            );
+            let mut failed =
+                device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+            assert!(
+                matches!(
+                    painter.render_to_view(&view, &mut failed),
+                    Err(crate::EngineError::PreparedResourceLimit {
+                        resource: "clip fragment uniform buffers",
+                        requested: 3,
+                        limit: 2
+                    })
+                ),
+                "mask layout requirement returns typed refusal before wgpu validation"
+            );
+            drop(failed);
+            painter.finish_frame();
+            let frame = crate::test_support::readback_bytes(&device, &queue, &target, 32, 32);
+            assert_eq!(
+                pixel_at(&frame, 32, 16, 16),
+                [255, 0, 0, 255],
+                "refused clipped frame preserves prior target"
+            );
+        }
+    }
+}
+
+/// Binary bounds coverage needs no readable destination: fixed-function
+/// Porter-Duff blending writes the inside and discards the outside mask.
+fn view_only_hard_group_blends() {
+    use flui_painting::{Paint, styling::Color};
+    let (device, queue) = test_device_and_queue();
+    let mut failed = Vec::new();
+    for (mode, inside) in [
+        (BlendMode::Clear, [0, 0, 0, 0]),
+        (BlendMode::Src, [128, 0, 0, 128]),
+        (BlendMode::DstIn, [0, 0, 128, 128]),
+    ] {
+        // render_to_rgba intentionally passes only a TextureView, never the
+        // destination Texture required by a backdrop-read composite.
+        let rgba = render_to_rgba(&device, &queue, 32, wgpu::Color::BLUE, |painter| {
+            painter.save_layer(
+                Some(Rect::from_xywh(8.0, 8.0, 16.0, 16.0)),
+                &Paint::fill(Color::WHITE).with_blend_mode(mode),
+            );
+            painter.draw_rect(
+                Rect::from_xywh(0.0, 0.0, 32.0, 32.0),
+                &Paint::fill(Color::rgba(255, 0, 0, 128)).with_anti_alias(false),
+            );
+            painter.restore_layer();
+        });
+        let actual = pixel_at(&rgba, 32, 16, 16);
+        let outside = pixel_at(&rgba, 32, 4, 16);
+        if actual.iter().zip(inside).any(|(&a, b)| a.abs_diff(b) > 1) || outside != [0, 0, 255, 255]
+        {
+            failed.push(format!("{mode:?}: inside {actual:?}, outside {outside:?}"));
+        }
+    }
+    assert!(failed.is_empty(), "{failed:#?}");
 }

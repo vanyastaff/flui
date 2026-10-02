@@ -1,10 +1,16 @@
 # ADR-0057: Coverage-correct blending is capability-gated, and the fallback is named
 
-- **Status:** Accepted
+- **Status:** Accepted; superseded by ADR-0102.
+- **Superseded-by:** [ADR-0102](ADR-0102-immutable-geometric-clip-composition.md)
 - **Date:** 2026-09-05
 - **Related:** `crates/flui-engine/ARCHITECTURE.md` mapping decision 4 (the implementation of this contract)
 - **Depends on:** `wgpu::Features::DUAL_SOURCE_BLENDING`, which is optional and absent on WebGPU
 - **Issue:** #904
+
+The decision below records the former capability fallback. ADR-0102 preserves
+independent coverage as the correctness requirement and replaces permission to
+publish folded incorrect pixels with typed direct-draw refusal. The portable
+group destination-read path is available; portable direct coverage remains work.
 
 ## Context
 

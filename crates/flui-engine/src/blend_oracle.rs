@@ -40,7 +40,7 @@ pub(super) const PORTER_DUFF_MODES: [BlendMode; 14] = [
 ];
 
 /// Byte tolerance per channel, absorbing `Rgba8Unorm` quantisation and the
-/// difference between the GPU's `smoothstep` and this file's arithmetic.
+/// R8 coverage quantisation and this file's arithmetic.
 pub(super) const TOLERANCE: i32 = 2;
 
 // ── The anti-aliased clip both suites blend through ──────────────────────────
@@ -50,12 +50,8 @@ pub(super) const SIDE: u32 = 64;
 
 /// The clip's left edge, in device pixels.
 ///
-/// Deliberately a quarter-pixel past a column boundary. The clip's bounding-box
-/// scissor truncates (`state_stack::clip_rect`), so it starts at column 15 and
-/// the feathered column at 15 survives it. The mirror-image choice on the RIGHT
-/// edge does not: there the scissor ends at `floor(right)` and cuts the one
-/// column the feather lives in — which is what `clip_rect`'s own comment means
-/// by "the outer half of the feather is lost there".
+/// The quarter-pixel region at the right of column 15 is inside the clip.
+/// The conservative enclosing scissor preserves that partially covered column.
 pub(super) const CLIP_LEFT: f32 = 15.75;
 
 /// Top of the clip, in device pixels.
@@ -70,15 +66,12 @@ pub(super) const CLIP_HEIGHT: f32 = 48.0;
 /// Circular corner radius of the clip, in device pixels.
 pub(super) const CLIP_RADIUS: f32 = 8.0;
 
-/// Coverage `sdfToAlpha` reports at [`FRINGE_COLUMN`], derived rather than
-/// measured.
-///
-/// On the clip's straight left edge the rounded-box SDF reduces to
-/// `distance = CLIP_LEFT − x`, whose screen-space gradient magnitude is 1, so
-/// `edge_width = 0.5`. At the column's pixel centre `x = 15.5` that is
-/// `distance = 0.25`, and `1 − smoothstep(−0.5, 0.5, 0.25)` with
-/// `t = 0.75` is `1 − 0.75²·(3 − 2·0.75) = 1 − 0.84375`.
-pub(super) const FRINGE_COVERAGE: f32 = 0.15625;
+/// Coverage on the common 8-by-8 clip sample lattice, derived geometrically.
+/// At column 15 the x sample coordinates are 15 + (i + 0.5) / 8.
+/// Only i = 6 and i = 7 are at or beyond CLIP_LEFT = 15.75;
+/// all eight y samples lie on the straight edge. Thus 16 of 64 samples
+/// are inside, giving one quarter of the pixel before R8 quantisation.
+pub(super) const FRINGE_COVERAGE: f32 = 0.25;
 
 /// The single column the clip's left edge partially covers.
 pub(super) const FRINGE_COLUMN: u32 = 15;

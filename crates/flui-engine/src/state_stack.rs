@@ -17,10 +17,12 @@ use flui_foundation::geometry::{self, Offset, Point, RRect, Rect};
 /// `WgpuPainter` holds one `GpuStateStack` and delegates all
 /// transform/scissor/clip mutation through it, keeping every draw method free
 /// to read the current values without a whole-struct borrow conflict (all
-/// accessors return by **copy**, never by reference).
+/// accessors return owned values, never a borrow of the mutable stack).
 #[derive(Debug)]
 pub(super) struct GpuStateStack {
     saved: Vec<SavedState>,
+    current_clip_chain: crate::clip_chain::ClipChain,
+    clip_groups: Vec<SavedState>,
 
     /// Current accumulated transform (CTM). Identity at frame start.
     ///
@@ -65,8 +67,9 @@ pub(super) struct GpuStateStack {
     current_clip_inv: [f32; 6],
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 struct SavedState {
+    clip_chain: crate::clip_chain::ClipChain,
     transform: glam::DMat4,
     scissor: Option<(u32, u32, u32, u32)>,
     rrect_clip: [f32; 8],
@@ -108,11 +111,64 @@ impl ResolvedClip {
 }
 
 impl GpuStateStack {
+    /// Separate inherited coverage and culling from the child-local suffix.
+    /// This stack is independent of canvas Save/Restore and never changes CTM.
+    pub(super) fn begin_clip_group(&mut self) -> crate::clip_chain::ClipChain {
+        let parent = std::mem::take(&mut self.current_clip_chain);
+        self.clip_groups.push(SavedState {
+            clip_chain: parent.clone(),
+            transform: self.current_transform,
+            scissor: self.current_scissor,
+            rrect_clip: self.current_rrect_clip,
+            rsuperellipse_clip: self.current_rsuperellipse_clip,
+            clip_hard: self.current_clip_hard,
+            device_to_local: self.current_clip_inv,
+        });
+        self.current_scissor = None;
+        self.current_rrect_clip = [0.0; 8];
+        self.current_rsuperellipse_clip = [0.0; 12];
+        self.current_clip_hard = false;
+        self.current_clip_inv = CLIP_INV_IDENTITY;
+        parent
+    }
+
+    pub(super) fn end_clip_group(&mut self) {
+        if let Some(parent) = self.clip_groups.pop() {
+            self.current_clip_chain = parent.clip_chain;
+            self.current_scissor = parent.scissor;
+            self.current_rrect_clip = parent.rrect_clip;
+            self.current_rsuperellipse_clip = parent.rsuperellipse_clip;
+            self.current_clip_hard = parent.clip_hard;
+            self.current_clip_inv = parent.device_to_local;
+        }
+    }
+
+    pub(super) fn clip_chain(&self) -> crate::clip_chain::ClipChain {
+        self.current_clip_chain.clone()
+    }
+
+    pub(super) fn append_clip(
+        &mut self,
+        shape: crate::clip_geometry::ValidatedClip,
+        op: crate::clip_chain::ClipOp,
+        hard: bool,
+        budget: &std::sync::Arc<crate::recording_budget::RecordingBudget>,
+    ) -> Result<(), crate::command_ir::RecordError> {
+        let affine = crate::clip_geometry::ValidatedAffine::new(self.current_transform)
+            .map_err(crate::command_ir::RecordError::Geometry)?;
+        self.current_clip_chain = self
+            .current_clip_chain
+            .append(shape, affine, op, hard, budget)?;
+        Ok(())
+    }
+
     /// Construct a pristine stack — identity transform, no scissor, no SDF
     /// clips, all stacks empty. Equivalent to the post-`reset()` state.
     pub(super) fn new() -> Self {
         Self {
             saved: Vec::new(),
+            current_clip_chain: crate::clip_chain::ClipChain::default(),
+            clip_groups: Vec::new(),
             current_transform: glam::DMat4::IDENTITY,
             current_scissor: None,
             current_rrect_clip: [0.0; 8],
@@ -131,6 +187,8 @@ impl GpuStateStack {
     /// The caller (`WgpuPainter::reset_frame_state`) is responsible for
     /// asserting `depth() == 0` **before** calling this method.
     pub(super) fn reset(&mut self) {
+        self.current_clip_chain = crate::clip_chain::ClipChain::default();
+        self.clip_groups.clear();
         self.current_scissor = None;
         self.current_rrect_clip = [0.0; 8];
         self.current_clip_hard = false;
@@ -166,6 +224,10 @@ impl GpuStateStack {
     /// Compiled out in release builds (`debug_assert!`).
     pub(super) fn debug_assert_balanced(&self) {
         debug_assert!(
+            self.clip_groups.is_empty(),
+            "unbalanced clip groups at frame boundary"
+        );
+        debug_assert!(
             self.saved.is_empty(),
             "unbalanced save/restore at frame boundary: depth={}",
             self.depth()
@@ -182,6 +244,7 @@ impl GpuStateStack {
         tracing::trace!("GpuStateStack::save: depth={}", self.saved.len());
 
         self.saved.push(SavedState {
+            clip_chain: self.current_clip_chain.clone(),
             transform: self.current_transform,
             scissor: self.current_scissor,
             rrect_clip: self.current_rrect_clip,
@@ -204,6 +267,7 @@ impl GpuStateStack {
             return;
         };
 
+        self.current_clip_chain = saved.clip_chain;
         self.current_transform = saved.transform;
         self.current_scissor = saved.scissor;
         self.current_rrect_clip = saved.rrect_clip;
@@ -559,45 +623,12 @@ impl GpuStateStack {
         self.clip_rect_enclosing(rrect.rect, surface_size);
     }
 
-    /// Apply a rounded clip's bounding-box scissor and hand the clip itself
-    /// back for a GROUP COMPOSITE to apply, leaving the per-draw SDF slot
-    /// untouched.
-    ///
-    /// This is `Clip::AntiAliasWithSaveLayer`'s half of [`Self::clip_rrect`].
-    /// That mode renders the clipped subtree into an offscreen and applies the
-    /// clip's coverage ONCE, to the finished group; installing the SDF slot as
-    /// well would apply it a second time, per draw, which is the very thing the
-    /// mode exists to avoid.
-    ///
-    /// Leaving the slot alone is also what makes nesting work: an ANCESTOR's
-    /// `Clip::AntiAlias` is still in the slot and still clips every draw inside
-    /// the offscreen, exactly as it would without the layer. That is why this
-    /// does NOT clear `current_rsuperellipse_clip` the way `clip_rrect` must —
-    /// nothing here is competing for the per-instance `clip_kind`, so an
-    /// ancestor's squircle clip goes on applying to the content.
-    ///
-    /// The scissor is still applied, for the same two reasons it is in
-    /// `clip_rrect`: it bounds the offscreen's work, and it is the only clip
-    /// text ever sees.
-    pub(super) fn clip_rrect_at_composite(
-        &mut self,
-        rrect: RRect,
-        surface_size: (u32, u32),
-    ) -> ResolvedClip {
-        // Soft, always: the mode is `AntiAliasWithSaveLayer`, and a hard edge
-        // would threshold the coverage the composite exists to feather.
-        let resolved = self.resolve_rrect_clip(rrect, false);
-        self.clip_rect_enclosing(rrect.rect, surface_size);
-        resolved
-    }
-
     /// Resolve a rounded clip against the current transform WITHOUT installing
     /// it anywhere.
     ///
     /// The one place the local-bounds/radii layout and the device-to-local
     /// mapping are derived. [`Self::clip_rrect`] stores the result in the
-    /// per-draw slot; [`Self::clip_rrect_at_composite`] hands it to the layer
-    /// that will apply it once. A second copy of this arithmetic would let the
+    /// per-draw slot. A second copy of this arithmetic would let the
     /// two disagree about where the same clip is, with nothing failing.
     ///
     /// The `kind` lane layout is shared with [`Self::active_clip`], which builds
@@ -708,7 +739,7 @@ impl GpuStateStack {
     /// `[x, y, w, h]` then `rx, ry` per corner, clockwise from top-left.
     ///
     /// Shared by [`Self::clip_rsuperellipse`] and
-    /// [`Self::clip_rsuperellipse_at_composite`] for the reason
+    /// the group composite path for the reason
     /// [`Self::resolve_rrect_clip`]'s doc gives about its own pair: a second
     /// copy of this arithmetic would let the per-draw and at-composite routes
     /// disagree about where the same clip is, with nothing failing.
@@ -732,37 +763,6 @@ impl GpuStateStack {
             ((bl_r.x) as f32),
             ((bl_r.y) as f32),
         ]
-    }
-
-    /// The squircle counterpart of [`Self::clip_rrect_at_composite`]: install
-    /// the bounding scissor only, and hand the squircle coverage back for the
-    /// group composite to apply **once**.
-    ///
-    /// The per-draw slot is deliberately left alone, exactly as in the rrect
-    /// case — installing it as well would apply the coverage a second time,
-    /// per draw, which is the artifact `Clip::AntiAliasWithSaveLayer` exists
-    /// to avoid.
-    ///
-    /// Needs no shader work: `ResolvedClip` already carries `kind = 2` and
-    /// [`Self::active_clip`] already builds one this way, and every
-    /// clip-evaluating shader — the offscreen composite's
-    /// `texture_instanced.wgsl` included — routes `kind == 2` to
-    /// `sdRoundedSuperellipse` through `clipAlpha` in `common/clip.wgsl`.
-    pub(super) fn clip_rsuperellipse_at_composite(
-        &mut self,
-        rse: flui_foundation::geometry::RSuperellipse,
-        surface_size: (u32, u32),
-    ) -> ResolvedClip {
-        // Soft, always, for the reason `clip_rrect_at_composite` gives: the
-        // mode is `AntiAliasWithSaveLayer` and a hard edge would threshold the
-        // coverage the composite exists to feather.
-        let resolved = ResolvedClip {
-            rrect: crate::instancing::reduce_superellipse_clip(Self::rsuperellipse_slots(rse)),
-            kind: [2, 0, 0, 0],
-            device_to_local: Self::device_to_local(self.current_transform()),
-        };
-        self.clip_rect_enclosing(rse.outer_rect(), surface_size);
-        resolved
     }
 
     /// The currently-active SDF clip, resolved to the single form every

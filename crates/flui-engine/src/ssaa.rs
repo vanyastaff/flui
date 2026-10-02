@@ -428,6 +428,12 @@ impl GpuReplay {
         let scale_y = vp_h as f32 / tile_h as f32;
 
         let mut remapped_segment = op.segment.try_clone_for_remap()?;
+        remapped_segment.rebase_attachment(
+            f64::from(tile_origin_x),
+            f64::from(tile_origin_y),
+            0.5,
+            0.5,
+        );
         for v in &mut remapped_segment.vertices {
             v.position[0] = (v.position[0] - tile_origin_x) * scale_x;
             v.position[1] = (v.position[1] - tile_origin_y) * scale_y;
@@ -562,6 +568,7 @@ impl GpuReplay {
                     src_uv_max: [1.0, 1.0],
                     clip: None,
                 };
+                self.prepare_viewport_binding(device, pipelines, resources)?;
                 flush_advanced_layer(
                     blend_op,
                     surf_tex,
@@ -572,6 +579,7 @@ impl GpuReplay {
                     resources,
                     device,
                     encoder,
+                    Some(&self.viewport_bind_group),
                 );
                 tracing::trace!(
                     mode = ?op.blend,
@@ -628,6 +636,7 @@ impl GpuReplay {
                 flui_painting::styling::Color::WHITE,
             );
             let _ = self.texture_batch.add(instance);
+            self.prepare_viewport_binding(device, pipelines, resources)?;
             self.flush_texture_batch_premultiplied_with_mode(
                 op.blend,
                 device,

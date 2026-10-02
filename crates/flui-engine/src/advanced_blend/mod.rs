@@ -1,7 +1,6 @@
-//! Advanced-blend composite driver: backdrop copy + shader composite.
+//! Destination-reading composite driver: backdrop copy + coverage selection.
 //!
-//! This module provides two public entry points used by the render-layer
-//! advanced-blend interception (PR-3):
+//! The internal entry points are:
 //!
 //! - `copy_backdrop_region` — copies a device-space rect from the surface
 //!   texture into a pooled offscreen texture so the compositor shader can
@@ -11,13 +10,9 @@
 //!   `AdvancedBlendOp`: copies the backdrop, builds the bind group, and
 //!   executes one render pass over the op's device-space bounds.
 //!
-//! ## No production caller in PR-2
-//!
-//! `flush_advanced_layer` and `AdvancedBlendPipeline` have no production
-//! call site in this PR; the renderer-layer interception that drives them is
-//! wired in PR-3.  They ARE exercised by the synthetic-op GPU gate in this
-//! module's `#[cfg(all(test, feature = "testing"))]` section, which
-//! constitutes the authoritative correctness gate for the WGSL math.
+//! The shader supports advanced and Porter-Duff modes, applying clip coverage
+//! to the finished composite rather than replacing geometric coverage with
+//! source opacity. The synthetic GPU family checks full and fractional coverage.
 
 use bytemuck::cast_slice;
 use flui_foundation::geometry::Rect;
@@ -194,6 +189,7 @@ pub(crate) fn flush_advanced_layer(
     resources: &mut GpuResources,
     device: &wgpu::Device,
     encoder: &mut wgpu::CommandEncoder,
+    mask_binding: Option<&wgpu::BindGroup>,
 ) {
     // Step 1: copy backdrop region.
     let Some(backdrop) = copy_backdrop_region(
@@ -300,6 +296,12 @@ pub(crate) fn flush_advanced_layer(
 
         render_pass.set_pipeline(&pipeline.pipeline);
         bind_group.set(&mut render_pass);
+        render_pass.set_bind_group(
+            1,
+            mask_binding
+                .expect("BUG: composite pass requires its enabled or disabled clip binding"),
+            &[],
+        );
         // 6 vertices synthesised in the VS from @builtin(vertex_index) — no vertex buffer.
         render_pass.draw(0..6, 0..1);
     }
@@ -474,6 +476,97 @@ mod synthetic_op_tests {
         [r_pm, g_pm, b_pm, a_u8]
     }
 
+    fn clip_fixture_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+        let uniform = |binding, visibility| wgpu::BindGroupLayoutEntry {
+            binding,
+            visibility,
+            count: None,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Uniform,
+                has_dynamic_offset: false,
+                min_binding_size: None,
+            },
+        };
+        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Composite clip fixture"),
+            entries: &[
+                uniform(0, wgpu::ShaderStages::VERTEX),
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    count: None,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                },
+                uniform(2, wgpu::ShaderStages::FRAGMENT),
+            ],
+        })
+    }
+
+    fn clip_fixture(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        layout: &wgpu::BindGroupLayout,
+        coverage: Option<u8>,
+    ) -> wgpu::BindGroup {
+        let viewport = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Composite fixture viewport"),
+            contents: &[0; 16],
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
+        let consumer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Composite fixture consumer"),
+            contents: bytemuck::cast_slice(&[0_i32, 0, i32::from(coverage.is_some()), 0]),
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Composite fixture mask"),
+            size: wgpu::Extent3d {
+                width: TARGET_W,
+                height: TARGET_H,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::R8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        queue.write_texture(
+            texture.as_image_copy(),
+            &vec![coverage.unwrap_or(255); (TARGET_W * TARGET_H) as usize],
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(TARGET_W),
+                rows_per_image: Some(TARGET_H),
+            },
+            texture.size(),
+        );
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Composite fixture binding"),
+            layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: viewport.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: consumer.as_entire_binding(),
+                },
+            ],
+        })
+    }
+
     /// Assert two RGBA u8 pixels are within `±tolerance` in every channel.
     fn assert_pixel_close(label: &str, actual: [u8; 4], expected: [u8; 4], tolerance: u8) {
         for ch in 0..4 {
@@ -534,9 +627,26 @@ mod synthetic_op_tests {
             BlendMode::Saturation,
             BlendMode::Color,
             BlendMode::Luminosity,
+            BlendMode::Clear,
+            BlendMode::Src,
+            BlendMode::Dst,
+            BlendMode::SrcOver,
+            BlendMode::DstOver,
+            BlendMode::SrcIn,
+            BlendMode::DstIn,
+            BlendMode::SrcOut,
+            BlendMode::DstOut,
+            BlendMode::SrcATop,
+            BlendMode::DstATop,
+            BlendMode::Xor,
+            BlendMode::Plus,
+            BlendMode::Modulate,
         ];
 
-        let pipeline = AdvancedBlendPipeline::new(&device, TEST_FORMAT);
+        let mask_layout = clip_fixture_layout(&device);
+        let disabled_mask = clip_fixture(&device, &queue, &mask_layout, None);
+        let half_mask = clip_fixture(&device, &queue, &mask_layout, Some(128));
+        let pipeline = AdvancedBlendPipeline::new(&device, TEST_FORMAT, &mask_layout);
         let mut pool = TexturePool::new(Arc::clone(&device));
         let mut resources = GpuResources::new(crate::device_domain::DeviceDomain::new(
             Arc::clone(&device),
@@ -590,117 +700,134 @@ mod synthetic_op_tests {
             queue.submit(std::iter::once(enc.finish()));
         }
 
-        for mode in advanced_modes {
-            // Build a fresh split surface for each mode (flush_advanced_layer modifies it).
-            let surface_texture = create_split_texture(
-                &device,
-                &queue,
-                TARGET_W,
-                TARGET_H,
-                TEST_FORMAT,
-                dst_left_pm,
-                dst_right_pm,
-                wgpu::TextureUsages::empty(),
-            );
-            let surface_view = surface_texture.create_view(&wgpu::TextureViewDescriptor::default());
-
-            // Build a fresh foreground pooled texture for each mode (consumed by op).
-            let fg_this_mode = pool.acquire(TARGET_W, TARGET_H, TEST_FORMAT);
-            {
-                let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some("FG Per-Mode Upload Encoder"),
-                });
-                enc.copy_texture_to_texture(
-                    wgpu::TexelCopyTextureInfo {
-                        texture: &fg_staging,
-                        mip_level: 0,
-                        origin: wgpu::Origin3d::ZERO,
-                        aspect: wgpu::TextureAspect::All,
-                    },
-                    wgpu::TexelCopyTextureInfo {
-                        texture: fg_this_mode.texture(),
-                        mip_level: 0,
-                        origin: wgpu::Origin3d::ZERO,
-                        aspect: wgpu::TextureAspect::All,
-                    },
-                    wgpu::Extent3d {
-                        width: TARGET_W,
-                        height: TARGET_H,
-                        depth_or_array_layers: 1,
-                    },
+        for (coverage, mask_binding) in [(None, &disabled_mask), (Some(128_u8), &half_mask)] {
+            for mode in advanced_modes {
+                // Build a fresh split surface for each mode (flush_advanced_layer modifies it).
+                let surface_texture = create_split_texture(
+                    &device,
+                    &queue,
+                    TARGET_W,
+                    TARGET_H,
+                    TEST_FORMAT,
+                    dst_left_pm,
+                    dst_right_pm,
+                    wgpu::TextureUsages::empty(),
                 );
-                queue.submit(std::iter::once(enc.finish()));
-            }
+                let surface_view =
+                    surface_texture.create_view(&wgpu::TextureViewDescriptor::default());
 
-            let op = AdvancedBlendOp {
-                foreground: fg_this_mode,
-                mode,
-                device_bounds: Rect::from_xywh(
-                    0.0,
-                    0.0,
-                    f64::from(TARGET_W as f32),
-                    f64::from(TARGET_H as f32),
-                ),
-                opacity: 1.0,
-                tint: [1.0, 1.0, 1.0],
-                // Full-viewport foreground: identity UV remap.
-                src_uv_min: [0.0, 0.0],
-                src_uv_max: [1.0, 1.0],
-                clip: None,
-            };
-
-            let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("Advanced Blend Test Encoder"),
-            });
-
-            flush_advanced_layer(
-                op,
-                &surface_texture,
-                &surface_view,
-                TEST_FORMAT,
-                (TARGET_W, TARGET_H),
-                &pipeline,
-                &mut resources,
-                &device,
-                &mut encoder,
-            );
-
-            queue.submit(std::iter::once(encoder.finish()));
-
-            // Read back result.
-            let pixels = readback_texture(&device, &queue, &surface_texture, TARGET_W, TARGET_H);
-
-            // Compute oracles.
-            let expected_left = oracle_pixel(src_straight, dst_left_straight, mode);
-            let expected_right = oracle_pixel(src_straight, dst_right_straight, mode);
-
-            // Tolerance: ±1 LSB (1/255) to absorb f32 rounding across premul/unpremul.
-            let tolerance = 1u8;
-            let mode_label = format!("{mode:?}");
-
-            // Check all left-half pixels (columns 0..TARGET_W/2).
-            for row in 0..TARGET_H {
-                for col in 0..(TARGET_W / 2) {
-                    let pixel = pixels[(row * TARGET_W + col) as usize];
-                    assert_pixel_close(
-                        &format!("{mode_label} left col={col} row={row}"),
-                        pixel,
-                        expected_left,
-                        tolerance,
+                // Build a fresh foreground pooled texture for each mode (consumed by op).
+                let fg_this_mode = pool.acquire(TARGET_W, TARGET_H, TEST_FORMAT);
+                {
+                    let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                        label: Some("FG Per-Mode Upload Encoder"),
+                    });
+                    enc.copy_texture_to_texture(
+                        wgpu::TexelCopyTextureInfo {
+                            texture: &fg_staging,
+                            mip_level: 0,
+                            origin: wgpu::Origin3d::ZERO,
+                            aspect: wgpu::TextureAspect::All,
+                        },
+                        wgpu::TexelCopyTextureInfo {
+                            texture: fg_this_mode.texture(),
+                            mip_level: 0,
+                            origin: wgpu::Origin3d::ZERO,
+                            aspect: wgpu::TextureAspect::All,
+                        },
+                        wgpu::Extent3d {
+                            width: TARGET_W,
+                            height: TARGET_H,
+                            depth_or_array_layers: 1,
+                        },
                     );
+                    queue.submit(std::iter::once(enc.finish()));
                 }
-            }
 
-            // Check all right-half pixels (columns TARGET_W/2..TARGET_W).
-            for row in 0..TARGET_H {
-                for col in (TARGET_W / 2)..TARGET_W {
-                    let pixel = pixels[(row * TARGET_W + col) as usize];
-                    assert_pixel_close(
-                        &format!("{mode_label} right col={col} row={row}"),
-                        pixel,
-                        expected_right,
-                        tolerance,
-                    );
+                let op = AdvancedBlendOp {
+                    foreground: fg_this_mode,
+                    mode,
+                    device_bounds: Rect::from_xywh(
+                        0.0,
+                        0.0,
+                        f64::from(TARGET_W as f32),
+                        f64::from(TARGET_H as f32),
+                    ),
+                    opacity: 1.0,
+                    tint: [1.0, 1.0, 1.0],
+                    // Full-viewport foreground: identity UV remap.
+                    src_uv_min: [0.0, 0.0],
+                    src_uv_max: [1.0, 1.0],
+                    clip: None,
+                };
+
+                let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("Advanced Blend Test Encoder"),
+                });
+
+                flush_advanced_layer(
+                    op,
+                    &surface_texture,
+                    &surface_view,
+                    TEST_FORMAT,
+                    (TARGET_W, TARGET_H),
+                    &pipeline,
+                    &mut resources,
+                    &device,
+                    &mut encoder,
+                    Some(mask_binding),
+                );
+
+                queue.submit(std::iter::once(encoder.finish()));
+
+                // Read back result.
+                let pixels =
+                    readback_texture(&device, &queue, &surface_texture, TARGET_W, TARGET_H);
+
+                // Compute oracles.
+                let covered = |destination: Color| {
+                    let result = oracle_pixel(src_straight, destination, mode);
+                    let Some(coverage) = coverage else {
+                        return result;
+                    };
+                    let destination = oracle_pixel(destination, destination, BlendMode::Src);
+                    let c = f32::from(coverage) / 255.0;
+                    std::array::from_fn(|i| {
+                        (f32::from(destination[i]) * (1.0 - c) + f32::from(result[i]) * c).round()
+                            as u8
+                    })
+                };
+                let expected_left = covered(dst_left_straight);
+                let expected_right = covered(dst_right_straight);
+
+                // Tolerance: ±1 LSB (1/255) to absorb f32 rounding across premul/unpremul.
+                let tolerance = 1u8;
+                let mode_label = format!("{mode:?}");
+
+                // Check all left-half pixels (columns 0..TARGET_W/2).
+                for row in 0..TARGET_H {
+                    for col in 0..(TARGET_W / 2) {
+                        let pixel = pixels[(row * TARGET_W + col) as usize];
+                        assert_pixel_close(
+                            &format!("{mode_label} left col={col} row={row}"),
+                            pixel,
+                            expected_left,
+                            tolerance,
+                        );
+                    }
+                }
+
+                // Check all right-half pixels (columns TARGET_W/2..TARGET_W).
+                for row in 0..TARGET_H {
+                    for col in (TARGET_W / 2)..TARGET_W {
+                        let pixel = pixels[(row * TARGET_W + col) as usize];
+                        assert_pixel_close(
+                            &format!("{mode_label} right col={col} row={row}"),
+                            pixel,
+                            expected_right,
+                            tolerance,
+                        );
+                    }
                 }
             }
         }

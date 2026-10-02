@@ -10,9 +10,7 @@
 //! it, so all three clipped modes were one picture. Now:
 //!
 //! - a **rounded** clip honours `HardEdge` vs `AntiAlias`;
-//! - a **rect** clip does not — it is the hardware scissor under both modes,
-//!   because routing it to the SDF costs text clipping, nested intersection
-//!   and exactness (`Painter::clip_rect` has the full reasoning);
+//! - rect and curved clip chains resolve exact membership on a common sample grid;
 //! - `AntiAliasWithSaveLayer` renders the clipped subtree into an offscreen and
 //!   applies the clip's coverage ONCE, to the finished group. The offscreen
 //!   remains active inside image filters; ordered filter input preserves the
@@ -152,22 +150,9 @@ fn inside_a_clip(
 /// The squircle used by the `ClipSuperellipseLayer` tests: the whole surface,
 /// corner radius equal to the half-extent — an iOS app-icon shape.
 ///
-/// The sample points below are derived from the SDF this shape is evaluated
-/// with, `sdRoundedSuperellipse` in `shaders/common/clip.wgsl`. With
-/// `b = (32, 32)` and `r3 = 32`, `q = |p|` for every pixel, so the corner
-/// branch is always the active one and the distance is
-/// `(⁴√(ax⁴ + ay⁴) − 1) · 32` where `ax = ay = |p| / 32`. The rounded-box SDF
-/// the *approximating* rrect would use replaces that fourth-power norm with the
-/// Euclidean one, which is what makes point B below discriminate.
-///
-/// | point | pixel centre | \|p\| | squircle | circle of the same radius |
-/// |---|---|---|---|---|
-/// | A `(2, 2)` | `(2.5, 2.5)` | 29.5 | **+3.08 outside** | +9.72 outside |
-/// | B `(7, 7)` | `(7.5, 7.5)` | 24.5 | **−2.87 inside** | **+2.65 outside** |
-/// | C `(32, 32)` | `(32.5, 32.5)` | 0.5 | −31.4 inside | −31.29 inside |
-///
-/// Every margin clears the roughly one-pixel anti-aliasing band, so no
-/// assertion below depends on a coverage threshold.
+/// Independent fourth-power membership gives the witness points: (2,2) is
+/// outside, (7,7) inside the squircle but outside an equal-radius circle, and
+/// (32,32) deep inside. All points are clear of the common 8x8 resolve fringe.
 fn icon_squircle() -> flui_foundation::geometry::RSuperellipse {
     flui_foundation::geometry::RSuperellipse::from_rect_circular(
         Rect::from_xywh(0.0, 0.0, f64::from(SIDE as f32), f64::from(SIDE as f32)),
@@ -175,30 +160,11 @@ fn icon_squircle() -> flui_foundation::geometry::RSuperellipse {
     )
 }
 
-/// The squircle the GPU clips to is the squircle the CPU generator describes.
-///
-/// The two are independent expressions of the same shape:
-/// `sdRoundedSuperellipse` in `shaders/common/clip.wgsl` evaluates a signed
-/// distance in the fragment shader, and `superellipse::generate_superellipse_path`
-/// walks the same parametric form on the CPU into a `Path`. `clip.wgsl` is the
-/// SHIPPED evaluator — every clip-evaluating shader is prepended with it — and
-/// until this test nothing held the two statements of the shape to each other.
-/// (`common/sdf.wgsl` carries a reference copy that reaches no GPU; it is not
-/// what this measures, and its doc now says so.)
-///
-/// The neighbouring tests pin three hand-computed sample points, which proves
-/// the SDF is not the approximating rounded rectangle but says nothing about
-/// the rest of the boundary. This walks a whole grid and asks the CPU path
-/// whether each pixel is in or out, so a divergence anywhere on the curve
-/// surfaces as a coordinate rather than as a demo that looks slightly wrong.
-///
-/// **Points near the boundary are skipped, and skipped by construction rather
-/// than by a tolerance.** A pixel whose eight neighbours do not all agree with
-/// it sits within a pixel of the edge, where the SDF is deliberately feathering
-/// and the CPU predicate is a hard in/out — so the two must disagree there and
-/// an assertion would be measuring anti-aliasing, not geometry. The count of
-/// surviving points is asserted too: a filter that excluded everything would
-/// otherwise leave this test green and empty.
+/// The GPU analytic membership in `shaders/clip_mask.wgsl` and the independent
+/// CPU parametric path agree away from the boundary. Neighbour-disagreement
+/// points are excluded because finite sample coverage is fractional there.
+/// The historical function name is preserved; the production evaluator is
+/// Boolean membership followed by one common-grid resolve, not the old SDF.
 fn the_squircle_sdf_agrees_with_the_cpu_path_across_the_whole_boundary() {
     let Some(renderer) = crate::test_support::renderer_or_skip() else {
         return;
@@ -276,15 +242,7 @@ fn fill_everything(canvas: &mut Canvas) {
     canvas.draw_paint(&Paint::fill(Color::rgb(0, 160, 0)).with_anti_alias(false));
 }
 
-/// The bounding box is an APPROXIMATION, and content it lets through is the
-/// documented remainder — not an accident to be quietly narrowed later.
-///
-/// The clip is a triangle. `(40, 20)` lies inside the triangle's bounding box
-/// but outside the triangle itself, and the fill reaches it. An exact path clip
-/// would not. Pinning it here means the day a stencil pass lands, this test
-/// fails and says which promise changed, rather than the gap being closed
-/// silently or — worse — the approximation being mistaken for exactness by a
-/// reader of the tests.
+/// Exact triangle membership rejects a point inside its bounding box.
 fn a_path_clip_lets_through_what_lies_inside_the_box_but_outside_the_shape() {
     let Some(renderer) = crate::test_support::renderer_or_skip() else {
         return;
@@ -310,13 +268,12 @@ fn a_path_clip_lets_through_what_lies_inside_the_box_but_outside_the_shape() {
         .expect("the headless capture path must rasterize the scene");
 
     let in_box_outside_shape = sample(&frame, 40, 20);
-    assert!(
-        in_box_outside_shape[1] > 128,
-        "the bounding-box approximation still paints inside the box but \
-         outside the triangle at (40, 20), got {in_box_outside_shape:?}. If \
-         this fails, path clipping became exact — update this test and \
-         `WgpuPainter::clip_path`'s doc, which promises the gap"
+    assert_eq!(
+        in_box_outside_shape,
+        [255, 0, 0, 255],
+        "exact triangle rejects bounding-box-only interior"
     );
+    assert_eq!(sample(&frame, 20, 40), [0, 160, 0, 255]);
     let outside_the_box = sample(&frame, 2, 2);
     assert!(
         outside_the_box[0] > 200,
@@ -325,15 +282,7 @@ fn a_path_clip_lets_through_what_lies_inside_the_box_but_outside_the_shape() {
     );
 }
 
-/// An EMPTY clip path clips everything away.
-///
-/// `Path::compute_bounds` answers `Rect::ZERO` for a path with no commands, so
-/// the scissor is zero-area and the draw is dropped. That is the same answer
-/// a clip with an empty path gives — nothing visible — and it is the
-/// one case where the bounding-box approximation is EXACT, since the box and
-/// the shape are both empty. Asserted rather than assumed: the previous
-/// behaviour was that an empty clip path clipped nothing at all, and the chain
-/// that turns a zero-area scissor into a dropped draw runs through three files.
+/// Empty path membership is empty under Intersect, including grouped clipping.
 fn an_empty_clip_path_clips_everything() {
     let Some(renderer) = crate::test_support::renderer_or_skip() else {
         return;
@@ -460,28 +409,7 @@ fn a_clip_inside_an_image_filter_layer_keeps_its_content_and_its_siblings() {
 /// array and the loop below reads against a single geometry.
 type PushClip = fn(&mut Canvas, flui_painting::paint::ClipOp, Rect<f64>);
 
-/// EVERY canvas clip shape refuses `ClipOp::Difference` rather than inverting.
-///
-/// A difference clip asks to remove the pixels INSIDE the shape — the region
-/// kept is its complement. A scissor cannot express a complement, and the SDF
-/// slot evaluates the shape rather than its inverse, so no clip primitive here
-/// can honour the request. What the three shapes besides `path` used to do was
-/// worse than refusing: they bound `_clip_op` and installed the shape as an
-/// INTERSECT, so a caller asking to punch a hole got everything outside the
-/// hole erased instead — the exact inverse of the request, and destructive
-/// where refusing is merely permissive (issue #941).
-///
-/// `Canvas::clip_path_ext(&path, ClipOp::Difference, ..)` is public and
-/// documented in `flui-painting`'s README as the way to punch a hole, so these
-/// are reachable from outside the workspace, not just in principle.
-///
-/// Both arms are asserted for every shape. The `Intersect` control is what
-/// makes this more than "nothing happened": it proves the same shape through
-/// the same call DOES clip, so the difference arm is being refused rather than
-/// silently mis-plumbed.
-///
-/// Read on RED: the content is blue and the cleared ground is white, so the two
-/// agree on blue and an assertion there would pass either way.
+/// Difference retains the exterior and removes the interior for every shape.
 fn every_canvas_clip_shape_refuses_difference_rather_than_inverting() {
     let Some(renderer) = crate::test_support::renderer_or_skip() else {
         return;
@@ -548,22 +476,31 @@ fn every_canvas_clip_shape_refuses_difference_rather_than_inverting() {
              difference assertion below proves nothing"
         );
 
-        let difference = sample(&scene(flui_painting::paint::ClipOp::Difference), 2, 2);
+        let difference_frame = scene(flui_painting::paint::ClipOp::Difference);
+        assert_eq!(
+            sample(&difference_frame, 32, 32),
+            [255, 255, 255, 255],
+            "difference removes interior for {name}"
+        );
+        let difference = sample(&difference_frame, 2, 2);
         assert!(
             difference[0] < 64,
-            "a DIFFERENCE {name} clip must install nothing, so content outside \
-             the shape is still painted, got {difference:?}. White here means \
-             the shape was installed as an intersect and the clip inverted \
-             (issue #941)"
+            "difference retains the exterior for {name}: {difference:?}"
         );
     }
 }
 
 /// Clip contract, read back from the GPU: one row per clip feature, each keeping
-/// its own sample points (rect, squircle SDF, path, empty path, clip inside an
-/// image-filter layer, difference refusal).
+/// its own sample points (rect, squircle membership, path, empty path, clip inside an
+/// image-filter layer, difference complement).
 #[test]
 fn clip_layers_read_back_as_the_clip_contract_specifies() {
+    clip_failures_and_singular_membership_recover();
+    grouped_clip_prefix_and_destructive_coverage();
+    path_clip_fill_rules_and_implicit_close();
+    transformed_nested_clip_on_antialiased_path();
+    nested_exact_clip_geometry_and_coverage();
+    hard_clip_membership_scales_to_a_full_hd_frame();
     command_transform_changes_preserve_captured_clips();
     display_list_and_save_layer_scopes_own_their_clips();
     a_clip_rect_layer_clips_its_content_and_its_absence_does_not();
@@ -716,5 +653,401 @@ fn command_transform_changes_preserve_captured_clips() {
                 "{name}: explicit restore removes the clip and preserves the parent offset"
             );
         }
+    }
+}
+
+/// Pins immutable nested membership and one AA resolve through consumer recording.
+fn nested_exact_clip_geometry_and_coverage() {
+    use flui_foundation::geometry::RRect;
+    use flui_painting::paint::ClipOp;
+    let Some(renderer) = crate::test_support::renderer_or_skip() else {
+        return;
+    };
+    let capture = |draw: &dyn Fn(&mut Canvas)| {
+        let mut canvas = Canvas::new();
+        draw(&mut canvas);
+        full_surface(&mut canvas, Color::BLUE);
+        let mut builder = SceneBuilder::new();
+        builder.add_picture(canvas.finish());
+        renderer
+            .render_layer_tree(&builder.build(), (SIDE, SIDE))
+            .expect("exact canvas clip capture")
+    };
+    let nested = capture(&|canvas| {
+        for radius in [16.0, 2.0] {
+            canvas.clip_rrect_ext(
+                RRect::from_rect_circular(Rect::from_xywh(8.0, 8.0, 48.0, 48.0), radius),
+                ClipOp::Intersect,
+                Clip::HardEdge,
+            );
+        }
+    });
+    assert_eq!(
+        sample(&nested, 10, 10),
+        [255, 255, 255, 255],
+        "outer rounded corner survives inner clip"
+    );
+    assert_eq!(sample(&nested, 32, 32), [0, 0, 255, 255]);
+    for repetitions in [1, 2] {
+        let frame = capture(&|canvas| {
+            for _ in 0..repetitions {
+                canvas.clip_rrect_ext(
+                    RRect::from_rect_circular(Rect::from_xywh(8.25, 8.0, 48.0, 48.0), 8.0),
+                    ClipOp::Intersect,
+                    Clip::AntiAlias,
+                );
+            }
+        });
+        for (actual, expected) in sample(&frame, 8, 32).into_iter().zip([64_u8, 64, 255, 255]) {
+            assert!(
+                actual.abs_diff(expected) <= 1,
+                "AA repetition {repetitions} preserves 48/64 coverage"
+            );
+        }
+    }
+    let excluded = capture(&|canvas| {
+        for operation in [ClipOp::Intersect, ClipOp::Difference] {
+            canvas.clip_rrect_ext(
+                RRect::from_rect_circular(Rect::from_xywh(8.25, 8.0, 48.0, 48.0), 8.0),
+                operation,
+                Clip::AntiAlias,
+            );
+        }
+    });
+    for point in [(8, 32), (32, 32)] {
+        assert_eq!(
+            sample(&excluded, point.0, point.1),
+            [255, 255, 255, 255],
+            "C minus C is empty even at a partially covered edge"
+        );
+    }
+    let elliptical = capture(&|canvas| {
+        canvas.clip_rrect_ext(
+            RRect::from_rect_elliptical(Rect::from_xywh(0.0, 0.0, 64.0, 64.0), 32.0, 8.0),
+            ClipOp::Intersect,
+            Clip::HardEdge,
+        );
+    });
+    assert_eq!(
+        sample(&elliptical, 5, 5),
+        [0, 0, 255, 255],
+        "elliptical rx32 ry8 differs from radius32"
+    );
+    assert_eq!(sample(&elliptical, 1, 1), [255, 255, 255, 255]);
+    let subpixel = capture(&|canvas| {
+        canvas.clip_rect_ext(
+            Rect::from_xywh(8.25, 0.0, 48.0, 64.0),
+            ClipOp::Intersect,
+            Clip::AntiAlias,
+        );
+    });
+    for (actual, expected) in sample(&subpixel, 8, 32)
+        .into_iter()
+        .zip([64_u8, 64, 255, 255])
+    {
+        assert!(
+            actual.abs_diff(expected) <= 1,
+            "AA rect resolves 48 of64 membership samples"
+        );
+    }
+}
+
+fn canvas_clip_tree(record: impl FnOnce(&mut Canvas)) -> LayerTree {
+    let mut canvas = Canvas::new();
+    record(&mut canvas);
+    let mut builder = SceneBuilder::new();
+    builder.add_picture(canvas.finish());
+    builder.build()
+}
+
+fn clip_failures_and_singular_membership_recover() {
+    use flui_foundation::geometry::{Matrix4, RRect};
+    use flui_painting::paint::ClipOp;
+    let Some(renderer) = crate::test_support::renderer_or_skip() else {
+        return;
+    };
+    type InvalidClip = fn(&mut Canvas);
+    let invalid: [InvalidClip; 5] = [
+        |c| c.clip_rect(Rect::from_xywh(f64::NAN, 0.0, 32.0, 32.0)),
+        |c| c.clip_rect(Rect::from_xywh(0.0, f64::INFINITY, 32.0, 32.0)),
+        |c| c.clip_rect(Rect::from_xywh(8.0, 8.0, -4.0, 32.0)),
+        |c| {
+            c.clip_rrect(RRect::from_rect_elliptical(
+                Rect::from_xywh(0.0, 0.0, 32.0, 32.0),
+                -2.0,
+                4.0,
+            ));
+        },
+        |c| {
+            c.clip_rrect(RRect::from_rect_elliptical(
+                Rect::from_xywh(0.0, 0.0, 32.0, 32.0),
+                f64::NAN,
+                4.0,
+            ));
+        },
+    ];
+    for clip in invalid {
+        let tree = canvas_clip_tree(|c| {
+            clip(c);
+            full_surface(c, Color::BLUE);
+        });
+        assert!(
+            matches!(
+                renderer.render_layer_tree(&tree, (SIDE, SIDE)),
+                Err(crate::EngineError::InvalidGeometry(_))
+            ),
+            "invalid clip returns typed geometry refusal"
+        );
+        let frame = renderer
+            .render_layer_tree(
+                &canvas_clip_tree(|c| full_surface(c, Color::GREEN)),
+                (SIDE, SIDE),
+            )
+            .expect("valid frame after geometry refusal");
+        assert_eq!(sample(&frame, 32, 32), [0, 255, 0, 255]);
+    }
+    let depth = canvas_clip_tree(|c| {
+        for _ in 0..65 {
+            c.clip_rrect(RRect::from_rect_circular(
+                Rect::from_xywh(0.0, 0.0, 64.0, 64.0),
+                8.0,
+            ));
+        }
+        full_surface(c, Color::BLUE);
+    });
+    assert!(
+        matches!(
+            renderer.render_layer_tree(&depth, (SIDE, SIDE)),
+            Err(crate::EngineError::PreparedResourceLimit { .. })
+        ),
+        "depth admission is a typed refusal"
+    );
+    let next = renderer
+        .render_layer_tree(
+            &canvas_clip_tree(|c| full_surface(c, Color::GREEN)),
+            (SIDE, SIDE),
+        )
+        .expect("valid frame after depth refusal");
+    assert_eq!(sample(&next, 32, 32), [0, 255, 0, 255]);
+    for (op, expected) in [
+        (ClipOp::Intersect, [255, 255, 255, 255]),
+        (ClipOp::Difference, [0, 0, 255, 255]),
+    ] {
+        let tree = canvas_clip_tree(|c| {
+            c.scale(0.0, 1.0);
+            c.clip_rect_ext(Rect::from_xywh(0.0, 0.0, 64.0, 64.0), op, Clip::AntiAlias);
+            c.set_transform(Matrix4::IDENTITY);
+            full_surface(c, Color::BLUE);
+        });
+        let frame = renderer
+            .render_layer_tree(&tree, (SIDE, SIDE))
+            .expect("singular clip has defined membership");
+        assert_eq!(sample(&frame, 32, 32), expected);
+    }
+}
+
+fn grouped_clip_prefix_and_destructive_coverage() {
+    use flui_painting::{BlendMode, paint::ClipOp};
+    let Some(renderer) = crate::test_support::renderer_or_skip() else {
+        return;
+    };
+    for grouped in [false, true] {
+        for (mode, source, expected) in [
+            (BlendMode::Clear, Color::BLUE, [64_u8, 0, 0, 64]),
+            (BlendMode::Src, Color::BLUE, [64, 0, 191, 255]),
+            (
+                BlendMode::DstIn,
+                Color::rgba(0, 0, 255, 128),
+                [160, 0, 0, 160],
+            ),
+        ] {
+            let tree = canvas_clip_tree(|c| {
+                full_surface(c, Color::RED);
+                c.clip_rect_ext(
+                    Rect::from_xywh(8.25, 0.0, 48.0, 64.0),
+                    ClipOp::Intersect,
+                    Clip::AntiAlias,
+                );
+                if grouped {
+                    c.save_layer(None, &Paint::fill(Color::WHITE).with_blend_mode(mode));
+                    full_surface(c, source);
+                    c.restore();
+                } else {
+                    c.draw_rect(
+                        Rect::from_xywh(0.0, 0.0, 64.0, 64.0),
+                        &Paint::fill(source)
+                            .with_anti_alias(false)
+                            .with_blend_mode(mode),
+                    );
+                }
+            });
+            let frame = renderer
+                .render_layer_tree(&tree, (SIDE, SIDE))
+                .expect("destructive clip coverage");
+            let pixel = sample(&frame, 8, 32);
+            for (actual, expected) in pixel.into_iter().zip(expected) {
+                assert!(
+                    actual.abs_diff(expected) <= 1,
+                    "operator {mode:?}, grouped={grouped}, coverage mixes with destination: pixel={pixel:?}, expected channel={expected}"
+                );
+            }
+            assert_eq!(
+                sample(&frame, 7, 32),
+                [255, 0, 0, 255],
+                "outside clip remains red"
+            );
+        }
+    }
+    let tree = canvas_clip_tree(|c| {
+        c.clip_rect_ext(
+            Rect::from_xywh(8.25, 0.0, 48.0, 64.0),
+            ClipOp::Intersect,
+            Clip::AntiAlias,
+        );
+        c.save_layer(None, &Paint::fill(Color::rgba(255, 255, 255, 128)));
+        c.save_layer(None, &Paint::fill(Color::WHITE));
+        full_surface(c, Color::BLUE);
+        c.restore();
+        c.restore();
+    });
+    let frame = renderer
+        .render_layer_tree(&tree, (SIDE, SIDE))
+        .expect("nested group prefix coverage");
+    for (actual, expected) in sample(&frame, 8, 32)
+        .into_iter()
+        .zip([159_u8, 159, 255, 255])
+    {
+        assert!(
+            actual.abs_diff(expected) <= 1,
+            "inherited AA prefix and group opacity each apply once"
+        );
+    }
+}
+
+/// Exercises the antialiased path route's cropped/scaled attachment with a
+/// captured rotated clip and a later root-coordinate nested clip.
+fn transformed_nested_clip_on_antialiased_path() {
+    use flui_foundation::geometry::{Matrix4, RRect};
+    use flui_painting::paint::{ClipOp, Path};
+    let Some(renderer) = crate::test_support::renderer_or_skip() else {
+        return;
+    };
+    let tree = canvas_clip_tree(|c| {
+        c.translate(32.0, 32.0);
+        c.rotate(std::f64::consts::FRAC_PI_4);
+        c.clip_rrect_ext(
+            RRect::from_rect_circular(Rect::from_xywh(-16.0, -16.0, 32.0, 32.0), 4.0),
+            ClipOp::Intersect,
+            Clip::AntiAlias,
+        );
+        c.set_transform(Matrix4::IDENTITY);
+        c.clip_rrect_ext(
+            RRect::from_rect_circular(Rect::from_xywh(10.0, 10.0, 44.0, 44.0), 2.0),
+            ClipOp::Intersect,
+            Clip::AntiAlias,
+        );
+        let mut path = Path::new();
+        path.add_rect(Rect::from_xywh(4.0, 4.0, 56.0, 56.0));
+        c.draw_path(&path, &Paint::fill(Color::BLUE).with_anti_alias(true));
+    });
+    let frame = renderer
+        .render_layer_tree(&tree, (SIDE, SIDE))
+        .expect("transformed path clip capture");
+    assert_eq!(
+        sample(&frame, 12, 12),
+        [255, 255, 255, 255],
+        "rotated ancestor rejects nested bounding-box corner"
+    );
+    assert_eq!(
+        sample(&frame, 32, 32),
+        [0, 0, 255, 255],
+        "cropped path attachment maps interior to root"
+    );
+    assert_eq!(
+        sample(&frame, 32, 18),
+        [0, 0, 255, 255],
+        "noncentral interior survives attachment rebase"
+    );
+    assert_eq!(sample(&frame, 5, 32), [255, 255, 255, 255]);
+}
+
+/// Same-direction contours distinguish winding from parity; fill membership
+/// also closes an otherwise open contour without requiring a close command.
+fn path_clip_fill_rules_and_implicit_close() {
+    use flui_foundation::geometry::Point;
+    use flui_painting::paint::{ClipOp, Path, PathFillType};
+    let Some(renderer) = crate::test_support::renderer_or_skip() else {
+        return;
+    };
+    for fill_type in [PathFillType::NonZero, PathFillType::EvenOdd] {
+        let tree = canvas_clip_tree(|c| {
+            let mut path = Path::with_fill_type(fill_type);
+            path.add_rect(Rect::from_xywh(8.0, 8.0, 48.0, 48.0));
+            path.add_rect(Rect::from_xywh(24.0, 24.0, 16.0, 16.0));
+            c.clip_path_ext(&path, ClipOp::Intersect, Clip::HardEdge);
+            full_surface(c, Color::BLUE);
+        });
+        let frame = renderer
+            .render_layer_tree(&tree, (SIDE, SIDE))
+            .expect("path clip fill rule capture");
+        assert_eq!(
+            sample(&frame, 16, 32),
+            [0, 0, 255, 255],
+            "ring is filled under both rules"
+        );
+        let expected = match fill_type {
+            PathFillType::NonZero => [0, 0, 255, 255],
+            PathFillType::EvenOdd => [255, 255, 255, 255],
+        };
+        assert_eq!(
+            sample(&frame, 32, 32),
+            expected,
+            "nested same-direction contours use {fill_type:?}"
+        );
+        assert_eq!(sample(&frame, 2, 32), [255, 255, 255, 255]);
+    }
+    let tree = canvas_clip_tree(|c| {
+        let mut path = Path::new();
+        path.move_to(Point::new(8.0, 8.0));
+        path.line_to(Point::new(56.0, 8.0));
+        path.line_to(Point::new(8.0, 56.0));
+        c.clip_path_ext(&path, ClipOp::Intersect, Clip::HardEdge);
+        full_surface(c, Color::BLUE);
+    });
+    let frame = renderer
+        .render_layer_tree(&tree, (SIDE, SIDE))
+        .expect("open contour fills with implicit close");
+    assert_eq!(sample(&frame, 16, 16), [0, 0, 255, 255]);
+    assert_eq!(
+        sample(&frame, 48, 48),
+        [255, 255, 255, 255],
+        "outside triangle but inside bounding box stays unpainted"
+    );
+}
+
+/// A routine full-HD hard-clipped frame fits the bounded work allowance.
+/// Evaluating the same pixel-centre membership 64 times needlessly refuses it.
+fn hard_clip_membership_scales_to_a_full_hd_frame() {
+    let Some(renderer) = crate::test_support::renderer_or_skip() else {
+        return;
+    };
+    let size = (1920, 1080);
+    let full = Rect::from_xywh(0.0, 0.0, 1920.0, 1080.0);
+    let tree = canvas_clip_tree(|canvas| {
+        for _ in 0..8 {
+            canvas.clip_rect_ext(
+                full,
+                flui_painting::paint::ClipOp::Intersect,
+                Clip::HardEdge,
+            );
+        }
+        canvas.draw_rect(full, &Paint::fill(Color::BLUE).with_anti_alias(false));
+    });
+    let frame = renderer
+        .render_layer_tree(&tree, size)
+        .expect("full-HD hard membership is admitted without supersample work");
+    for (x, y) in [(0, 0), (960, 540), (1919, 1079)] {
+        let offset = ((y * size.0 + x) * 4) as usize;
+        assert_eq!(&frame[offset..offset + 4], &[0, 0, 255, 255]);
     }
 }

@@ -125,10 +125,13 @@ impl DrawBatcher {
         let instance = state.apply_active_clip(instance);
 
         let _ = segment.linear_gradient_batch.add(instance);
-        segment.record_run(DrawRun::LinearGradient(
-            segment.linear_gradient_batch.len().saturating_sub(1)
-                ..segment.linear_gradient_batch.len(),
-        ));
+        segment.record_run(
+            DrawRun::LinearGradient(
+                segment.linear_gradient_batch.len().saturating_sub(1)
+                    ..segment.linear_gradient_batch.len(),
+            ),
+            state.clip_chain(),
+        );
         DrawSegment::push_gradient_run(
             &mut segment.linear_gradient_runs,
             state.current_scissor(),
@@ -195,10 +198,13 @@ impl DrawBatcher {
         let instance = state.apply_active_clip(instance);
 
         let _ = segment.radial_gradient_batch.add(instance);
-        segment.record_run(DrawRun::RadialGradient(
-            segment.radial_gradient_batch.len().saturating_sub(1)
-                ..segment.radial_gradient_batch.len(),
-        ));
+        segment.record_run(
+            DrawRun::RadialGradient(
+                segment.radial_gradient_batch.len().saturating_sub(1)
+                    ..segment.radial_gradient_batch.len(),
+            ),
+            state.clip_chain(),
+        );
         DrawSegment::push_gradient_run(
             &mut segment.radial_gradient_runs,
             state.current_scissor(),
@@ -268,10 +274,13 @@ impl DrawBatcher {
         let instance = state.apply_active_clip(instance);
 
         let _ = segment.sweep_gradient_batch.add(instance);
-        segment.record_run(DrawRun::SweepGradient(
-            segment.sweep_gradient_batch.len().saturating_sub(1)
-                ..segment.sweep_gradient_batch.len(),
-        ));
+        segment.record_run(
+            DrawRun::SweepGradient(
+                segment.sweep_gradient_batch.len().saturating_sub(1)
+                    ..segment.sweep_gradient_batch.len(),
+            ),
+            state.clip_chain(),
+        );
         DrawSegment::push_gradient_run(
             &mut segment.sweep_gradient_runs,
             state.current_scissor(),
@@ -293,6 +302,7 @@ impl DrawBatcher {
     /// * `params`         — shadow offset, blur sigma, and color
     pub(in super::super) fn draw_shadow_rect(
         segment: &mut DrawSegment,
+        state: &GpuStateStack,
         rect_pos: [f32; 2],
         rect_size: [f32; 2],
         corner_radius: f32,
@@ -306,9 +316,12 @@ impl DrawBatcher {
 
         let instance = ShadowInstance::new(rect_pos, rect_size, corner_radius, params);
         let _ = segment.shadow_batch.add(instance);
-        segment.record_run(DrawRun::Shadow(
-            segment.shadow_batch.len().saturating_sub(1)..segment.shadow_batch.len(),
-        ));
+        segment.record_run(
+            DrawRun::Shadow(
+                segment.shadow_batch.len().saturating_sub(1)..segment.shadow_batch.len(),
+            ),
+            state.clip_chain(),
+        );
     }
 
     /// Dispatch a filled rect/rrect/circle with a shader paint to the correct
@@ -436,10 +449,13 @@ impl DrawBatcher {
                     .with_stop_offset(0);
                     let instance = state.apply_active_clip(instance);
                     let _ = shape_segment.linear_gradient_batch.add(instance);
-                    shape_segment.record_run(DrawRun::LinearGradient(
-                        shape_segment.linear_gradient_batch.len().saturating_sub(1)
-                            ..shape_segment.linear_gradient_batch.len(),
-                    ));
+                    shape_segment.record_run(
+                        DrawRun::LinearGradient(
+                            shape_segment.linear_gradient_batch.len().saturating_sub(1)
+                                ..shape_segment.linear_gradient_batch.len(),
+                        ),
+                        state.clip_chain(),
+                    );
                     // `SrcOver` inside the isolated segment, not the paint's
                     // mode: `flush_advanced_layer` renders this segment into an
                     // offscreen and applies the advanced mode when compositing
@@ -473,10 +489,13 @@ impl DrawBatcher {
                     .with_stop_offset(0);
                     let instance = state.apply_active_clip(instance);
                     let _ = shape_segment.radial_gradient_batch.add(instance);
-                    shape_segment.record_run(DrawRun::RadialGradient(
-                        shape_segment.radial_gradient_batch.len().saturating_sub(1)
-                            ..shape_segment.radial_gradient_batch.len(),
-                    ));
+                    shape_segment.record_run(
+                        DrawRun::RadialGradient(
+                            shape_segment.radial_gradient_batch.len().saturating_sub(1)
+                                ..shape_segment.radial_gradient_batch.len(),
+                        ),
+                        state.clip_chain(),
+                    );
                     // `SrcOver` inside the isolated segment, not the paint's
                     // mode: `flush_advanced_layer` renders this segment into an
                     // offscreen and applies the advanced mode when compositing
@@ -516,10 +535,13 @@ impl DrawBatcher {
                     .with_stop_offset(0);
                     let instance = state.apply_active_clip(instance);
                     let _ = shape_segment.sweep_gradient_batch.add(instance);
-                    shape_segment.record_run(DrawRun::SweepGradient(
-                        shape_segment.sweep_gradient_batch.len().saturating_sub(1)
-                            ..shape_segment.sweep_gradient_batch.len(),
-                    ));
+                    shape_segment.record_run(
+                        DrawRun::SweepGradient(
+                            shape_segment.sweep_gradient_batch.len().saturating_sub(1)
+                                ..shape_segment.sweep_gradient_batch.len(),
+                        ),
+                        state.clip_chain(),
+                    );
                     // `SrcOver` inside the isolated segment, not the paint's
                     // mode: `flush_advanced_layer` renders this segment into an
                     // offscreen and applies the advanced mode when compositing

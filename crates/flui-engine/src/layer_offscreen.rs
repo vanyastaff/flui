@@ -397,6 +397,7 @@ impl GpuReplay {
         let origin_y = fb_y as f32;
 
         let mut remapped_segment = segment.try_clone_for_remap()?;
+        remapped_segment.rebase_attachment(f64::from(origin_x), f64::from(origin_y), 1.0, 1.0);
         for v in &mut remapped_segment.vertices {
             v.position[0] = (v.position[0] - origin_x) * scale_x;
             v.position[1] = (v.position[1] - origin_y) * scale_y;
@@ -660,36 +661,26 @@ impl GpuReplay {
                     )?;
                 }
                 DrawItem::OffscreenTexture(p) => {
-                    // A nested OffscreenTexture (shader-mask / backdrop-blur
-                    // result) is itself premultiplied — composite with the
-                    // premultiplied pipeline and an identity tint so it is not
-                    // re-multiplied by its own alpha. It composites exactly as
-                    // the top-level replay does: with its recorded mode, under
-                    // the scissor and clip in force when it was queued. This
-                    // offscreen shares the viewport's coordinates, so those
-                    // apply unchanged; without them a mask inside an opacity
-                    // layer paints past its clip.
-                    use crate::instancing::ClippableInstance as _;
-                    let instance = crate::instancing::TextureInstance::new(
+                    let context = DrawSegment::with_budget(Arc::clone(&p.budget));
+                    self.composite_group_texture(
+                        p.texture,
                         p.bounds,
-                        flui_painting::styling::Color::WHITE,
-                    )
-                    .with_clip(p.clip);
-                    let _ = self.texture_batch.add(instance);
-                    // The flush drains and clears texture_batch before
-                    // returning.
-                    self.flush_texture_batch_premultiplied_with_mode(
+                        [0.0, 0.0, 1.0, 1.0],
+                        1.0,
+                        [1.0; 3],
                         p.blend,
+                        Some(&p.clip),
+                        &context,
+                        viewport_size,
+                        surface_format,
                         device,
                         queue,
                         pipelines,
                         resources,
-                        viewport_size,
                         encoder,
-                        offscreen_view,
-                        p.texture.view(),
+                        offscreen_target,
                         p.scissor,
-                    );
+                    )?;
                 }
                 DrawItem::OpacityLayer(nested) => {
                     // Recursively handle nested opacity layers.
@@ -742,6 +733,7 @@ impl GpuReplay {
                             ],
                             clip: None,
                         };
+                        self.prepare_viewport_binding(device, pipelines, resources)?;
                         flush_advanced_layer(
                             blend_op,
                             backdrop_texture,
@@ -752,6 +744,7 @@ impl GpuReplay {
                             resources,
                             device,
                             encoder,
+                            Some(&self.viewport_bind_group),
                         );
                         tracing::trace!(
                             mode = ?op.mode,
@@ -832,6 +825,20 @@ impl GpuReplay {
                         f64::from(fb_w as f32),
                         f64::from(fb_h as f32),
                     );
+                    let unclipped = crate::clip_chain::ClipChain::default();
+                    let prefix = op
+                        .composite_clip
+                        .as_ref()
+                        .map_or(&unclipped, |clip| &clip.chain);
+                    self.viewport_bind_group = self.prepare_clip_binding(
+                        &op.input,
+                        prefix,
+                        viewport_size,
+                        device,
+                        pipelines,
+                        resources,
+                        encoder,
+                    )?;
                     let instance = crate::instancing::TextureInstance::with_uv(
                         dst_rect,
                         [0.0, 0.0, 1.0, 1.0],
@@ -959,22 +966,6 @@ impl GpuReplay {
             return Ok(());
         }
 
-        // The advanced-blend arm below composites through `flush_advanced_layer`,
-        // which carries a hard rectangle in the clip's local space and nothing
-        // rounder. An advanced layer's `composite_clip` is the hard bounds clip
-        // of a rotated or skewed `save_layer`: `save_layer_clipped` always asks
-        // for `SrcOver`, and the ambient rounded clip goes on the composite
-        // only for a mode that replaces the destination, which no advanced
-        // mode does. This is the assertion that keeps it so.
-        debug_assert!(
-            !layer.blend.is_advanced()
-                || layer.composite_clip.is_none_or(|clip| {
-                    clip.kind == [1, 0, 1, 0] && clip.rrect[4..].iter().all(|&r| r == 0.0)
-                }),
-            "BUG: an advanced-blend layer's composite clip must be a hard rectangle — \
-             the advanced-blend path cannot carry a rounded or soft clip"
-        );
-
         let layer_tex = self.render_layer_to_offscreen(
             &mut layer,
             viewport_size,
@@ -1009,163 +1000,31 @@ impl GpuReplay {
             encoder,
         );
 
-        // ── Advanced-blend dispatch ─────────────────────────────────────────
-        //
-        // `layer.blend.is_advanced()` is set when the layer carries a W3C
-        // advanced blend mode (Multiply, Screen, Overlay, …, Luminosity).
-        // Advanced blends require a backdrop read from the main surface — they
-        // MUST NOT go through the SrcOver premultiplied composite below, which
-        // would produce a white-over-dst tinted composite instead of the actual
-        // advanced blend.
-        //
-        // The COPY_SRC guard: `main_target.texture` is `Some` only when the
-        // surface was created with COPY_SRC usage.  Without it `copy_backdrop_region`
-        // cannot copy the backdrop, so we fall back to SrcOver + a one-shot warning.
-        if layer.blend.is_advanced() {
-            if let Some(surface_texture) = main_target.texture {
-                let o = layer.opacity.clamp(0.0, 1.0);
-                // UV remap: layer.bounds → [0,1] in viewport space.
-                let uv_left = layer.bounds.left() / f64::from(vp_w as f32);
-                let uv_top = layer.bounds.top() / f64::from(vp_h as f32);
-                let uv_right = layer.bounds.right() / f64::from(vp_w as f32);
-                let uv_bottom = layer.bounds.bottom() / f64::from(vp_h as f32);
-
-                let op = AdvancedBlendOp {
-                    foreground: offscreen,
-                    mode: layer.blend,
-                    device_bounds: layer.bounds,
-                    opacity: o,
-                    tint: layer.tint_rgb,
-                    src_uv_min: [(uv_left as f32), (uv_top as f32)],
-                    src_uv_max: [(uv_right as f32), (uv_bottom as f32)],
-                    clip: layer.composite_clip,
-                };
-                flush_advanced_layer(
-                    op,
-                    surface_texture,
-                    main_target.view,
-                    surface_format,
-                    viewport_size,
-                    &pipelines.advanced_blend,
-                    resources,
-                    device,
-                    encoder,
-                );
-                tracing::trace!(
-                    mode = ?layer.blend,
-                    opacity = layer.opacity,
-                    bounds = ?layer.bounds,
-                    "GpuReplay: composited advanced-blend opacity layer"
-                );
-                return Ok(());
-            }
-            // A `view_only` target has no sampleable backdrop; advanced modes
-            // degrade to SrcOver here (warn once).  Production producers pass a
-            // sampleable target — surface-with-COPY_SRC, the COPY_SRC-less
-            // intermediate, or a pooled offscreen — so this is only reached by
-            // genuinely view-only callers (benches/headless/ShaderMask-style).
-            tracing::warn!(
-                mode = ?layer.blend,
-                "Advanced blend layer reached a view_only target; \
-                 falling back to SrcOver compositing (caller must pass sampleable target)"
-            );
-        }
-
-        let offscreen_view = offscreen.view();
-
-        // Composite the premultiplied offscreen onto the main surface.
-        //
-        // The offscreen texel `T` is premultiplied: `T.rgb = straight_rgb * a`,
-        // `T.a = a`.  With group opacity `O` and ColorFilter chroma `C`
-        // (white = no-op), the correct result is premultiplied source-over of
-        // `T * (C.r*O, C.g*O, C.b*O, O)` — every premultiplied channel scaled
-        // by its tint, then OVER the destination.  The shader applies
-        // `tex * tint` and the premultiplied pipeline (src factor `One`)
-        // performs the OVER.
-        //
-        // - White tint, O<1  → tint (O,O,O,O): uniform group opacity (BUG 2 fix).
-        // - Chroma tint       → modulates hue while preserving premultiplication
-        //                       (BUG 3 fix).
-        let o = layer.opacity.clamp(0.0, 1.0);
-        let tint = [
-            layer.tint_rgb[0] * o,
-            layer.tint_rgb[1] * o,
-            layer.tint_rgb[2] * o,
-            o,
+        let uv = [
+            (layer.bounds.left() / f64::from(vp_w)) as f32,
+            (layer.bounds.top() / f64::from(vp_h)) as f32,
+            (layer.bounds.right() / f64::from(vp_w)) as f32,
+            (layer.bounds.bottom() / f64::from(vp_h)) as f32,
         ];
-
-        // Use layer bounds as the destination rect; UV coordinates map the
-        // bounds region from the full-viewport texture.
-        let uv_left = layer.bounds.left() / f64::from(vp_w as f32);
-        let uv_top = layer.bounds.top() / f64::from(vp_h as f32);
-        let uv_right = layer.bounds.right() / f64::from(vp_w as f32);
-        let uv_bottom = layer.bounds.bottom() / f64::from(vp_h as f32);
-
-        let instance = crate::instancing::TextureInstance::with_uv_tint_f32(
+        self.composite_group_texture(
+            offscreen,
             layer.bounds,
-            [
-                (uv_left as f32),
-                (uv_top as f32),
-                (uv_right as f32),
-                (uv_bottom as f32),
-            ],
-            tint,
-        );
-        // A `Clip::AntiAliasWithSaveLayer` layer applies its clip HERE, to the
-        // finished group, and nowhere else — the draws inside the offscreen
-        // were left unclipped by `clip_rrect_at_composite` precisely so this
-        // multiply happens once. A rotated or skewed layer carries its bounds
-        // as a hard clip, whatever its mode, and a layer whose mode replaces
-        // the destination carries the ambient rounded clip instead, so the
-        // composite changes nothing outside its region. Every other layer
-        // kind leaves the slot clear.
-        let instance = match layer.composite_clip {
-            Some(clip) => {
-                use crate::instancing::ClippableInstance as _;
-                instance.with_clip(clip)
-            }
-            None => instance,
-        };
-        let _ = self.texture_batch.add(instance);
-        // Opacity-layer composite onto main surface. No scissor: the quad is
-        // the layer's region, which the painter already cut to the clip (the
-        // damage scissor included).
-        // Premultiplied: offscreen texels are premultiplied (see above).
-        // R2: both flushes drain + clear texture_batch.
-        //
-        // The layer's own mode composites the whole region (mapping decision
-        // 19): `Src` replaces it with the layer at its opacity, `Clear`
-        // clears it, and a destination-replacing pipeline writes the texels
-        // the content left transparent instead of discarding them. `SrcOver`
-        // resolves to the pre-baked premultiplied pipeline, and so does an
-        // advanced mode that reached here on a target with no backdrop to
-        // read (the warning above).
-        let mode = if layer.blend.is_advanced() {
-            flui_painting::paint::BlendMode::SrcOver
-        } else {
-            layer.blend
-        };
-        self.flush_texture_batch_premultiplied_with_mode(
-            mode,
+            uv,
+            layer.opacity,
+            layer.tint_rgb,
+            layer.blend,
+            layer.composite_clip.as_ref(),
+            &layer.final_segment,
+            viewport_size,
+            surface_format,
             device,
             queue,
             pipelines,
             resources,
-            viewport_size,
             encoder,
-            main_target.view,
-            offscreen_view,
+            main_target,
             None,
-        );
-
-        tracing::trace!(
-            opacity = layer.opacity,
-            bounds = ?layer.bounds,
-            "GpuReplay: composited opacity layer"
-        );
-
-        // offscreen texture returned to pool when `offscreen` is dropped here.
-        Ok(())
+        )
     }
 }
 

@@ -40,11 +40,6 @@ class = "pr-label"
 count = 3
 
 [[allow]]
-path = "crates/flui-engine/src/advanced_blend/mod.rs"
-class = "pr-label"
-count = 3
-
-[[allow]]
 path = "crates/flui-engine/src/batches/paths.rs"
 class = "pr-label"
 count = 2

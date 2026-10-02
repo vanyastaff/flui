@@ -229,6 +229,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
     // Clip coverage — see `clipAlpha` in `common/clip.wgsl`.
     let clip_alpha = clipAlpha(
+        in.position.xy,
         in.world_pos,
         in.clip_bounds,
         in.clip_radii,
