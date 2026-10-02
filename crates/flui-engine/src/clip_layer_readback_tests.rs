@@ -495,6 +495,8 @@ fn every_canvas_clip_shape_refuses_difference_rather_than_inverting() {
 /// image-filter layer, difference complement).
 #[test]
 fn clip_layers_read_back_as_the_clip_contract_specifies() {
+    #[cfg(feature = "testing")]
+    lazy_pipeline_admission_recovers();
     clip_failures_and_singular_membership_recover();
     grouped_clip_prefix_and_destructive_coverage();
     path_clip_fill_rules_and_implicit_close();
@@ -1049,5 +1051,113 @@ fn hard_clip_membership_scales_to_a_full_hd_frame() {
     for (x, y) in [(0, 0), (960, 540), (1919, 1079)] {
         let offset = ((y * size.0 + x) * 4) as usize;
         assert_eq!(&frame[offset..offset + 4], &[0, 0, 255, 255]);
+    }
+}
+
+// A private quota seam exercises failure before driver object creation; the
+// public painter intentionally does not expose device-domain limits.
+#[cfg(feature = "testing")]
+fn lazy_pipeline_admission_recovers() {
+    use crate::clip_mask::{ClipMaskPipeline, MaskMapping, MaskNode};
+    use crate::device_domain::{DeviceDomain, PreparedCost, PreparedIrLimits};
+    use crate::{EngineError, resources::GpuResources};
+    use std::sync::Arc;
+
+    let Some((device, queue)) = crate::test_support::try_test_device_and_queue("clip admission")
+    else {
+        return;
+    };
+    for shape in [0, 1, 3] {
+        let domain = DeviceDomain::with_limits(
+            Arc::clone(&device),
+            Arc::clone(&queue),
+            PreparedIrLimits {
+                cost: PreparedCost {
+                    objects: 7,
+                    ..PreparedIrLimits::default().cost
+                },
+                ..Default::default()
+            },
+        );
+        let mut pipeline = ClipMaskPipeline::new(&device);
+        let nodes = [MaskNode {
+            bounds: [0.0, 0.0, 4.0, 4.0],
+            radii_x: [1.0; 4],
+            radii_y: [1.0; 4],
+            inverse: [1.0, 0.0, 0.0, 1.0],
+            translation: [0.0; 4],
+            meta: [shape, 0, 1, 0],
+            path_range: [0; 4],
+        }];
+        let mapping = MaskMapping {
+            attachment_to_root: [1.0, 0.0, 0.0, 1.0],
+            translation: [0.0; 4],
+            extent_counts: [4, 4, 0, 0],
+        };
+        let prepare = |pipeline: &mut ClipMaskPipeline,
+                       resources: &mut GpuResources,
+                       encoder: &mut wgpu::CommandEncoder| {
+            pipeline.prepare(
+                &device,
+                resources,
+                encoder,
+                &nodes,
+                &[],
+                mapping,
+                usize::MAX,
+            )
+        };
+        // Leave room for the mask but not its first membership pipeline.
+        // Also exercise refusal of the mask allocation itself on the same owner.
+        for occupied in [1, 2] {
+            let blocker = domain
+                .reserve(PreparedCost {
+                    objects: occupied,
+                    ..Default::default()
+                })
+                .expect("competing allocation fits");
+            let mut resources = GpuResources::new(Arc::clone(&domain));
+            let mut encoder =
+                device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+            assert!(
+                matches!(
+                    prepare(&mut pipeline, &mut resources, &mut encoder),
+                    Err(EngineError::PreparedResourceLimit { .. })
+                ),
+                "shape {shape} must reject preparation under competing occupancy {occupied}"
+            );
+            drop(encoder);
+            drop(resources);
+            drop(blocker);
+        }
+        // Recovery on the very same pipeline/domain must release failed work
+        // and leave a refused specialization available for first use.
+        let mut resources = GpuResources::new(Arc::clone(&domain));
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+        let mask = prepare(&mut pipeline, &mut resources, &mut encoder)
+            .expect("valid clip prepares after failed admission");
+        let submission = queue.submit([encoder.finish()]);
+        device
+            .poll(wgpu::PollType::Wait {
+                submission_index: Some(submission),
+                timeout: None,
+            })
+            .expect("recovered clip completes");
+        drop(mask);
+        drop(resources);
+        // A materialized pipeline requires no second creation charge.
+        let blocker = domain
+            .reserve(PreparedCost {
+                objects: 1,
+                ..Default::default()
+            })
+            .expect("competing allocation fits after completion");
+        let mut resources = GpuResources::new(Arc::clone(&domain));
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+        prepare(&mut pipeline, &mut resources, &mut encoder)
+            .expect("repeat use fits without another pipeline allocation");
+        drop(encoder);
+        drop(resources);
+        drop(blocker);
     }
 }

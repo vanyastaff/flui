@@ -952,7 +952,10 @@ pipeline is admitted as a prepared object before creation.
 
 `clip_layers_read_back_as_the_clip_contract_specifies` pins hard/AA and mixed
 clips, curved membership, fill rules, transformed paths, subtraction, invalid
-payload recovery and full-HD hard clipping. The existing
+payload recovery and full-HD hard clipping. Its private quota row also refuses
+mask and first-pipeline preparation under competing occupancy, completes a
+valid clip on the same owner after refusal, and admits repeated use without
+charging pipeline creation again. The existing
 `offscreen_resource_cache` benchmark includes `clip_first_use_prepare_submit_wait`
 for rectangles, curves, paths and mixed tapes. `FLUI_BENCH_FALLBACK=1` requires a
 software adapter for that group and prints its identity. Timing includes first
