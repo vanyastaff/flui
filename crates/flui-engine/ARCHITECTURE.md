@@ -936,3 +936,28 @@ rebases the local origin in f64 before packing the positive extents into f32.
 corners, scaled radii and a distant reflected origin against independently baked
 shapes. This does not implement elliptical local corner radii, which still use
 the existing per-corner maximum-radius approximation.
+
+## Clip membership compilation
+
+The clip mask retains its common 8x8 AA sample grid. Hard leaves evaluate the
+pixel center; an all-hard chain uses one sample. The sample count is supplied
+in the immutable mapping uniform rather than fixed nested shader loops.
+
+Membership pipelines specialize only on geometry: rectangles, curves with
+rectangles, or the general path/mixed case. These three lazy entries share the
+same bind-group layout and shader module; pipeline constants remove unreachable
+path and corner evaluation before driver compilation. No cache key contains
+coordinates, node count, edge count or sample count. Each newly materialized
+pipeline is admitted as a prepared object before creation.
+
+`clip_layers_read_back_as_the_clip_contract_specifies` pins hard/AA and mixed
+clips, curved membership, fill rules, transformed paths, subtraction, invalid
+payload recovery and full-HD hard clipping. Its private quota row also refuses
+mask and first-pipeline preparation under competing occupancy, completes a
+valid clip on the same owner after refusal, and admits repeated use without
+charging pipeline creation again. The existing
+`offscreen_resource_cache` benchmark includes `clip_first_use_prepare_submit_wait`
+for rectangles, curves, paths and mixed tapes. `FLUI_BENCH_FALLBACK=1` requires a
+software adapter for that group and prints its identity. Timing includes first
+clip preparation, submission and completion; painter construction is outside
+the timed interval. It is not a steady-frame throughput measurement.

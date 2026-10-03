@@ -1,3 +1,7 @@
+// Geometry specializations remove unused membership code before driver compilation.
+override HAS_PATHS: bool = true;
+override HAS_CURVES: bool = true;
+
 struct ClipNode {
     bounds: vec4<f32>,
     radii_x: vec4<f32>,
@@ -48,11 +52,11 @@ fn path_contains(n: ClipNode, p: vec2<f32>) -> bool {
 fn contains(n: ClipNode, root: vec2<f32>) -> bool {
     let m = n.inverse;
     let p = vec2<f32>(m.x*root.x + m.z*root.y, m.y*root.x + m.w*root.y) + n.translation.xy;
-    if (n.flags.x == 3u) { return path_contains(n, p); }
+    if (HAS_PATHS && n.flags.x == 3u) { return path_contains(n, p); }
     let lo = n.bounds.xy;
     let hi = lo + n.bounds.zw;
     if (any(p < lo) || any(p >= hi)) { return false; }
-    if (n.flags.x == 0u) { return true; }
+    if (!HAS_CURVES || n.flags.x == 0u) { return true; }
     // Evaluate each corner zone: asymmetric radii may extend past the midpoint.
     for (var corner = 0u; corner < 4u; corner += 1u) {
         let right = corner == 1u || corner == 2u;
@@ -72,29 +76,21 @@ fn contains(n: ClipNode, root: vec2<f32>) -> bool {
 @fragment fn fs_main(@builtin(position) position: vec4<f32>) -> @location(0) f32 {
     let pixel = floor(position.xy);
     let center = root_point(pixel + vec2<f32>(0.5));
-    // Hard leaves all inspect this same center. Repeating them on the AA
-    // grid changes neither their Boolean result nor their coverage.
-    if (mapping.extent_counts.w != 0u) {
+    // Keep the sample count uniform-driven: constant nested loops can cause
+    // costly driver expansion. Hard leaves use the same center; AA leaves
+    // retain the original 8x8 grid, including mixed hard/AA chains.
+    var covered = 0u;
+    for (var sample_index = 0u; sample_index < mapping.extent_counts.w; sample_index += 1u) {
+        let sx = sample_index % 8u;
+        let sy = sample_index / 8u;
+        let sample = root_point(pixel + (vec2<f32>(f32(sx),f32(sy))+vec2<f32>(0.5))/8.0);
         var inside = true;
         for (var i = 0u; i < mapping.extent_counts.z; i += 1u) {
             let n = nodes[i];
-            let hit = contains(n, center);
+            let hit = contains(n, select(sample, center, n.flags.z != 0u));
             inside = inside && select(hit, !hit, n.flags.y == 1u);
         }
-        return select(0.0, 1.0, inside);
+        covered += select(0u, 1u, inside);
     }
-    var covered = 0u;
-    for (var sy = 0u; sy < 8u; sy += 1u) {
-        for (var sx = 0u; sx < 8u; sx += 1u) {
-            let sample = root_point(pixel + (vec2<f32>(f32(sx),f32(sy))+vec2<f32>(0.5))/8.0);
-            var inside = true;
-            for (var i = 0u; i < mapping.extent_counts.z; i += 1u) {
-                let n = nodes[i];
-                let hit = contains(n, select(sample, center, n.flags.z != 0u));
-                inside = inside && select(hit, !hit, n.flags.y == 1u);
-            }
-            covered += select(0u, 1u, inside);
-        }
-    }
-    return f32(covered)/64.0;
+    return f32(covered)/f32(mapping.extent_counts.w);
 }

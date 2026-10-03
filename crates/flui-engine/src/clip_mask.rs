@@ -31,7 +31,7 @@ pub(crate) struct MaskMapping {
     pub(crate) attachment_to_root: [f32; 4],
     /// Root translation XY, integer mask origin in attachment coordinates ZW.
     pub(crate) translation: [f32; 4],
-    /// Mask width/height; prepare overwrites node count and all-hard flag.
+    /// Mask width/height; prepare overwrites node count and sample count (1 hard, 64 AA).
     pub(crate) extent_counts: [u32; 4],
 }
 
@@ -42,9 +42,21 @@ pub(crate) struct PreparedClipMask {
     pub(crate) origin: (i32, i32),
 }
 
+#[derive(Clone, Copy)]
+#[repr(usize)]
+enum MembershipKind {
+    Rect,
+    Curved,
+    General,
+}
+
 pub(crate) struct ClipMaskPipeline {
     layout: wgpu::BindGroupLayout,
-    pipeline: wgpu::RenderPipeline,
+    pipeline_layout: wgpu::PipelineLayout,
+    shader: wgpu::ShaderModule,
+    // Rect-only, curves (with rectangles), general (including paths).
+    // Bounded by geometry kind, never by tape contents or sample count.
+    pipelines: [Option<wgpu::RenderPipeline>; 3],
 }
 
 fn limit(resource: &'static str, requested: usize, cap: usize) -> EngineError {
@@ -140,37 +152,65 @@ impl ClipMaskPipeline {
             label: Some("Clip Mask Membership"),
             source: wgpu::ShaderSource::Wgsl(include_str!("shaders/clip_mask.wgsl").into()),
         });
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        Self {
+            layout,
+            pipeline_layout,
+            shader,
+            pipelines: [None, None, None],
+        }
+    }
+
+    fn create_pipeline(&self, device: &wgpu::Device, kind: MembershipKind) -> wgpu::RenderPipeline {
+        device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("Clip Mask Resolve"),
-            layout: Some(&pipeline_layout),
+            layout: Some(&self.pipeline_layout),
             vertex: wgpu::VertexState {
-                module: &shader,
+                module: &self.shader,
                 entry_point: Some("vs_main"),
                 buffers: &[],
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
             },
             fragment: Some(wgpu::FragmentState {
-                module: &shader,
+                module: &self.shader,
                 entry_point: Some("fs_main"),
                 targets: &[Some(wgpu::ColorTargetState {
                     format: wgpu::TextureFormat::R8Unorm,
                     blend: None,
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                compilation_options: wgpu::PipelineCompilationOptions {
+                    constants: &[
+                        (
+                            "HAS_PATHS",
+                            if matches!(kind, MembershipKind::General) {
+                                1.0
+                            } else {
+                                0.0
+                            },
+                        ),
+                        (
+                            "HAS_CURVES",
+                            if matches!(kind, MembershipKind::Rect) {
+                                0.0
+                            } else {
+                                1.0
+                            },
+                        ),
+                    ],
+                    ..Default::default()
+                },
             }),
             primitive: wgpu::PrimitiveState::default(),
             depth_stencil: None,
             multisample: wgpu::MultisampleState::default(),
             multiview_mask: None,
             cache: None,
-        });
-        Self { layout, pipeline }
+        })
     }
 
     #[expect(clippy::too_many_arguments)]
     pub(crate) fn prepare(
-        &self,
+        &mut self,
         device: &wgpu::Device,
         resources: &mut GpuResources,
         encoder: &mut wgpu::CommandEncoder,
@@ -320,7 +360,7 @@ impl ClipMaskPipeline {
         }
         mapping.extent_counts[2] = u32::try_from(nodes.len())
             .map_err(|_| limit("clip node count", nodes.len(), u32::MAX as usize))?;
-        mapping.extent_counts[3] = u32::from(all_hard);
+        mapping.extent_counts[3] = if all_hard { 1 } else { 64 };
         // Fixed uniform arrays work on baseline WebGL2 without storage buffers.
         let payload = 7168 + 8192 + std::mem::size_of::<MaskMapping>();
         let texture_bytes = (extent.0 as usize)
@@ -334,6 +374,21 @@ impl ClipMaskPipeline {
             cpu_bytes: payload,
             objects: 6,
         })?;
+        let kind = if nodes.iter().any(|node| node.meta[0] == 3) {
+            MembershipKind::General
+        } else if nodes.iter().any(|node| node.meta[0] != 0) {
+            MembershipKind::Curved
+        } else {
+            MembershipKind::Rect
+        };
+        if self.pipelines[kind as usize].is_none() {
+            resources.reserve_prepared(PreparedCost {
+                gpu_bytes: 0,
+                cpu_bytes: 0,
+                objects: 1,
+            })?;
+            self.pipelines[kind as usize] = Some(self.create_pipeline(device, kind));
+        }
         let mut padded_nodes = [0_u8; 7168];
         let mut padded_edges = [0_u8; 8192];
         let node_bytes = bytemuck::cast_slice(nodes);
@@ -413,7 +468,11 @@ impl ClipMaskPipeline {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            pass.set_pipeline(&self.pipeline);
+            pass.set_pipeline(
+                self.pipelines[kind as usize]
+                    .as_ref()
+                    .expect("BUG: clip pipeline admitted"),
+            );
             pass.set_bind_group(0, &binding, &[]);
             pass.draw(0..3, 0..1);
         }
