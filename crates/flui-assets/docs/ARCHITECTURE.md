@@ -415,7 +415,7 @@ hot-reload = ["notify"]
 
 - Decoded data need not implement `Clone`. Registry caches and cloned strong/weak
   handles share `Arc` ownership, while the opt-in `clone_data` operation requires
-  `Clone`. `non_clone_data_shares_cache_ownership_and_releases_before_reload`
+  `Clone`. `non_clone_data_retains_evicted_handles_across_reload`
   loads a non-Clone value, shares cache hits and handles, evicts it while live
   handles retain it, reloads the evicted key, and observes destruction after
   consumer handles and the owning registry are released. Cache invalidation

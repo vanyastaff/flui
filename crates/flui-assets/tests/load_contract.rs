@@ -39,7 +39,7 @@ impl Asset for OwnedAsset {
 }
 
 #[tokio::test]
-async fn non_clone_data_shares_cache_ownership_and_releases_before_reload() {
+async fn non_clone_data_retains_evicted_handles_across_reload() {
     let registry = AssetRegistryBuilder::new().with_default_capacity().build();
     let loads = Arc::new(AtomicUsize::new(0));
     let drops = Arc::new(AtomicUsize::new(0));
