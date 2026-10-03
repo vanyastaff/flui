@@ -70,8 +70,8 @@ bytemuck = { workspace = true }
 # Vector graphics tessellation (`crate::wgpu::tessellator`).
 lyon = { version = "1.0.16" }
 
-# Math for GPU rendering — workspace base has bytemuck; add serde here for GPU struct serialization
-glam = { workspace = true, features = ["serde"] }
+# Math for GPU rendering — GPU uploads and serialization need the optional integrations here.
+glam = { workspace = true, features = ["bytemuck", "serde"] }
 
 # === Utilities ===
 parking_lot = { workspace = true }

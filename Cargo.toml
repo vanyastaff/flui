@@ -233,7 +233,7 @@ accesskit_consumer = "0.39"
 windows = "0.62"
 
 # COLLECTIONS - Used by multiple crates
-smallvec = { version = "1.13", features = ["serde", "union", "const_generics"] }
+smallvec = { version = "1.13", features = ["union", "const_generics"] }
 
 # SERIALIZATION - Core functionality
 serde = { version = "1.0", features = ["derive", "rc"] }
@@ -357,8 +357,8 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg",
 # === Engine/geometry shared math dependencies ===
 # glam: SIMD GPU math used by flui-engine (serde+bytemuck features) and
 # flui-foundation (geometry: `Matrix4` over `DMat4`). The workspace entry carries the common
-# base features; each crate adds its own extras via per-crate `features = [...]`.
-glam = { version = "0.33", features = ["bytemuck"] }
+# floating-point types with std math; each crate adds its own integrations.
+glam = { version = "0.33", default-features = false, features = ["std", "f64"] }
 # kurbo: the curve model behind flui-painting's `Path` (ADR-0098 §7): arcs and ovals as
 # curves, exact winding and tight bounds. Crate-internal; no kurbo type is public.
 kurbo = "0.13"
@@ -464,7 +464,7 @@ insta = "1"
 # generated inputs. Test-only; not compiled in release.
 proptest = "1"
 
-# Workspace-wide lints for consistent code quality (Rust 1.74+)
+# Workspace-wide lints inherited by every member
 [workspace.lints.rust]
 unsafe_code = "warn"
 missing_docs = "warn"
@@ -488,6 +488,9 @@ unsafe_op_in_unsafe_fn = "deny"
 # unused_must_use: a dropped `Result` from a layout/paint/commit call is silent
 # by construction — there is no log, no panic, just a skipped effect.
 unused_must_use = "deny"
+# Rust 1.99: create raw pointers directly, without an intermediate reference
+# whose aliasing and validity requirements the FFI call does not need.
+raw_borrows_via_references = "warn"
 
 [workspace.lints.clippy]
 # Lint groups need lower priority to allow individual lint overrides
