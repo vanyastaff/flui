@@ -23,6 +23,8 @@ not prevent an aggregate's second field from aborting the process.
    The zero-argument `Listenable` and `ChangeNotifier` APIs remain unchanged.
 2. A caught listener failure is reported and later live listeners continue.
    Its opaque panic payload and the callback snapshot are deliberately retained.
+   Reporting borrows that payload behind a separate unwind boundary; a subscriber
+   failure is retained too, so diagnostics cannot interrupt the remaining listeners.
    A self-removing callback may leave the snapshot owning its last envelope;
    running opaque capture destruction after containment would introduce another
    failure. The exceptional path leaks these obligations instead.
@@ -46,7 +48,8 @@ status callback API is not this generic channel and does not change.
 
 `notifier_ownership_and_recovery` exercises the public API in isolated child
 processes: non-Clone arguments, single and aggregate hostile payloads,
-self-removal with hostile capture and payload aggregates, ordinary competing
+self-removal with hostile capture and payload aggregates, a competing tracing
+subscriber failure, ordinary competing
 retirement failures, later-listener execution, and the next notification after
 containment. Existing notification tables preserve ordering, mid-round removal
 and disposal behavior. The foundation test-table runner also retains opaque

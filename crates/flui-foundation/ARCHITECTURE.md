@@ -161,14 +161,17 @@ The notifier's owned snapshot prevents a removed callback from disappearing
 while it runs. After a caught listener failure, the payload and snapshot remain
 retained: opaque capture or panic-payload aggregates can double-panic during
 drop before catch_unwind regains control. Later listeners and later notification
-rounds still progress. Normal success retires callback envelopes one at a time
-in registration order; a retirement failure propagates after retaining the
-remaining envelopes. An individual aggregate double-panic during ordinary
-successful-round retirement keeps Rust's abort behavior.
+rounds still progress. Reporting borrows the original payload behind a separate
+unwind boundary; a panicking tracing subscriber cannot interrupt notification,
+and its secondary payload is also retained. Normal success retires callback
+envelopes one at a time in registration order; a retirement failure propagates
+after retaining the remaining envelopes. An individual aggregate double-panic
+during ordinary successful-round retirement keeps Rust's abort behavior.
 
 The public subprocess table `notifier_ownership_and_recovery` checks borrowed
-non-Clone arguments, hostile payloads and self-removal captures, chronological
-retirement competition and subsequent progress. The common exceptional-payload
-operation is `panic::retain_opaque_payload`, used by notifications, signal reads
+non-Clone arguments, hostile payloads and self-removal captures, tracing failure
+in competition with a listener failure, chronological retirement competition
+and subsequent progress. The common exceptional-payload operation is
+`panic::retain_opaque_payload`, used by notifications, signal reads
 and the test-table runner. This contract is recorded in
 [ADR-0104](../../docs/adr/ADR-0104-borrowed-notification-and-opaque-panic-retention.md).

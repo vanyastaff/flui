@@ -102,6 +102,54 @@ fn contained_failure(aggregate: bool, hostile_capture: bool) {
     );
 }
 
+struct HostileSubscriber {
+    calls: Arc<AtomicUsize>,
+    drops: Arc<AtomicUsize>,
+}
+impl tracing::Subscriber for HostileSubscriber {
+    fn enabled(&self, metadata: &tracing::Metadata<'_>) -> bool {
+        *metadata.level() == tracing::Level::ERROR
+    }
+    fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+        tracing::span::Id::from_u64(1)
+    }
+    fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+    fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+    fn event(&self, _: &tracing::Event<'_>) {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        std::panic::panic_any((
+            Bomb {
+                drops: Arc::clone(&self.drops),
+                message: "first telemetry payload",
+            },
+            Bomb {
+                drops: Arc::clone(&self.drops),
+                message: "second telemetry payload",
+            },
+        ));
+    }
+    fn enter(&self, _: &tracing::span::Id) {}
+    fn exit(&self, _: &tracing::span::Id) {}
+}
+
+fn telemetry_competition() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let drops = Arc::new(AtomicUsize::new(0));
+    tracing::subscriber::with_default(
+        HostileSubscriber {
+            calls: Arc::clone(&calls),
+            drops: Arc::clone(&drops),
+        },
+        || contained_failure(true, true),
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        drops.load(Ordering::SeqCst),
+        0,
+        "secondary telemetry payloads stay retained"
+    );
+}
+
 fn retirement_competition() {
     let notifier = Notifier::<()>::new();
     let drops = Arc::new(AtomicUsize::new(0));
@@ -149,6 +197,7 @@ fn notifier_ownership_and_recovery() {
             "single_payload" => contained_failure(false, false),
             "aggregate_payload" => contained_failure(true, false),
             "capture_and_payload" => contained_failure(true, true),
+            "telemetry_competition" => telemetry_competition(),
             "retirement_competition" => retirement_competition(),
             _ => panic!("unknown child case"),
         }
@@ -160,6 +209,7 @@ fn notifier_ownership_and_recovery() {
         "single_payload",
         "aggregate_payload",
         "capture_and_payload",
+        "telemetry_competition",
         "retirement_competition",
     ] {
         let output = std::process::Command::new(std::env::current_exe().expect("test executable"))

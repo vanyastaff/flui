@@ -274,15 +274,19 @@ impl<Arg> Notifier<Arg> {
             }
             if let Err(payload) = catch_unwind(AssertUnwindSafe(|| callback(arg))) {
                 listener_failed = true;
-                let text = crate::panic::payload_text(&*payload)
-                    .unwrap_or("<non-string panic payload>")
-                    .to_owned();
+                let reported = catch_unwind(AssertUnwindSafe(|| {
+                    let text = crate::panic::payload_text(&*payload)
+                        .unwrap_or("<non-string panic payload>");
+                    tracing::error!(
+                        listener_id = ?id,
+                        panic_payload = text,
+                        "Notifier listener panicked; continuing with remaining listeners"
+                    );
+                }));
                 crate::panic::retain_opaque_payload(payload);
-                tracing::error!(
-                    listener_id = ?id,
-                    panic_payload = text,
-                    "Notifier listener panicked; continuing with remaining listeners"
-                );
+                if let Err(secondary) = reported {
+                    crate::panic::retain_opaque_payload(secondary);
+                }
             }
         }
         if listener_failed {
