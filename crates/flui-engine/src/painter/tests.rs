@@ -218,7 +218,7 @@ fn clear_offscreen_result(nested: bool) {
 /// composites with its own blend mode.
 #[test]
 fn painter_images_and_offscreen_results_read_back_as_specified() {
-    let cases: [(&str, fn()); 37] = [
+    let cases: [(&str, fn()); 41] = [
         (
             "dash progress refusal recovery",
             dashed_intervals_that_cannot_advance_refuse_the_whole_stroke,
@@ -231,6 +231,19 @@ fn painter_images_and_offscreen_results_read_back_as_specified() {
             "invalid dashed contour recovery",
             invalid_dashed_contour_recovers,
         ),
+        (
+            "uninterrupted closed dash join",
+            uninterrupted_closed_dash_uses_miter_join,
+        ),
+        (
+            "exact perimeter closed dash join",
+            exact_perimeter_closed_dash_uses_miter_join,
+        ),
+        (
+            "wrapped closed dash join",
+            wrapped_closed_dash_uses_miter_join,
+        ),
+        ("closed dash seam gap", closed_dash_gap_keeps_seam_open),
         (
             "dashed closed contour",
             dashed_closed_contour_has_its_closing_edge,
@@ -504,6 +517,49 @@ fn invalid_dashed_contour_recovers() {
         pixel_at(&pixels, 64, 24, 40),
         [255, 0, 0, 255],
         "next dashed contour still renders"
+    );
+}
+
+fn uninterrupted_closed_dash_uses_miter_join() {
+    closed_dash_seam(vec![100.0, 100.0], 0.0, true);
+}
+fn exact_perimeter_closed_dash_uses_miter_join() {
+    closed_dash_seam(vec![64.0, 64.0], 0.0, true);
+}
+fn wrapped_closed_dash_uses_miter_join() {
+    closed_dash_seam(vec![20.0, 10.0], 4.0, true);
+}
+fn closed_dash_gap_keeps_seam_open() {
+    closed_dash_seam(vec![20.0, 10.0], 24.0, false);
+}
+fn closed_dash_seam(intervals: Vec<f64>, phase: f64, covered: bool) {
+    use flui_painting::{Paint, paint::path::Path, styling::Color};
+    let (device, queue) = test_device_and_queue();
+    let mut path = Path::new();
+    path.add_rect(Rect::from_xywh(8.0, 8.0, 16.0, 16.0));
+    let solid = Paint::stroke(Color::RED, 4.0);
+    let reference = render_to_rgba(&device, &queue, 64, wgpu::Color::BLACK, |painter| {
+        painter.draw_path(&path, &solid);
+    });
+    let joined_corner = pixel_at(&reference, 64, 7, 7);
+    assert_eq!(joined_corner, [255, 0, 0, 255], "solid closed miter join");
+    let dashed = solid.with_dash(intervals, phase);
+    let pixels = render_to_rgba(&device, &queue, 64, wgpu::Color::BLACK, |painter| {
+        painter.draw_path(&path, &dashed);
+    });
+    assert_eq!(
+        pixel_at(&pixels, 64, 7, 7),
+        if covered {
+            joined_corner
+        } else {
+            [0, 0, 0, 255]
+        },
+        "only covered contour seams have the solid stroke's join"
+    );
+    assert_eq!(
+        pixel_at(&pixels, 64, 16, 8),
+        [255, 0, 0, 255],
+        "on-dash edge"
     );
 }
 

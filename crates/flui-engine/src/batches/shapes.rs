@@ -484,8 +484,7 @@ impl DrawBatcher {
                 let m = state.current_transform();
                 if state.is_axis_aligned() {
                     // Baked fast path: axis-aligned SrcOver — pre-bake the device-space
-                    // center and encode the per-axis scale as diag(sx, sy).  Output is
-                    // byte-identical to the pre-affine path.
+                    // center and encode the per-axis scale as diag(sx, sy).
                     let transformed_center = state.apply_transform(center);
                     let sx = m.x_axis.x.hypot(m.x_axis.y);
                     let sy = m.y_axis.x.hypot(m.y_axis.y);

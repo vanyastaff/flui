@@ -367,7 +367,15 @@ Dashed strokes consume Lyon's lazy, scale-aware flattened path events rather
 than a list of lines that loses contour boundaries. A closed contour includes
 its implicit last-to-first edge; an unfinished dash ends before a disconnected
 contour begins. Dash phase continues across contours using travelled length,
-without counting the spatial gap. Lyon's point-sampling walker cannot replace
+without counting the spatial gap. On a closed contour, on-dash coverage on both
+sides of the starting point forms a join rather than two caps. One uninterrupted
+dash becomes a closed Lyon path; separate first/last dash fragments are merged
+through the seam, keeping their other pattern boundaries capped. A gap at the
+seam remains a gap. Painter rows `uninterrupted_closed_dash_uses_miter_join`,
+`exact_perimeter_closed_dash_uses_miter_join` and `wrapped_closed_dash_uses_miter_join`
+compare the miter corner with a solid stroke. `closed_dash_gap_keeps_seam_open`
+excludes a join where the pattern is off at the seam.
+Lyon's point-sampling walker cannot replace
 this iterator: a stroke also needs the corners between dash boundaries. Kurbo's
 dashing iterator restarts phase at each contour, so adopting it would change this
 existing phase contract rather than repair contour handling.
