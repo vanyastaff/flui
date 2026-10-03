@@ -848,7 +848,12 @@ impl Tessellator {
             };
             let dx = to.x - from.x;
             let dy = to.y - from.y;
-            let seg_length = (dx * dx + dy * dy).sqrt();
+            let seg_length = dx.hypot(dy);
+            if !seg_length.is_finite() {
+                return Err(TessellationError::StrokeFailed(
+                    "dashed contour has non-finite segment length".to_owned(),
+                ));
+            }
             if seg_length < f32::EPSILON {
                 continue;
             }
@@ -860,11 +865,19 @@ impl Tessellator {
             while offset < seg_length {
                 let available = seg_length - offset;
                 let consume = remaining.min(available);
+                let next_offset = offset + consume;
+                // A positive interval can still round back to the old offset.
+                // Refuse before emitting geometry so the whole stroke is absent.
+                if !next_offset.is_finite() || next_offset <= offset {
+                    return Err(TessellationError::StrokeFailed(
+                        "dashed interval does not advance at raster precision".to_owned(),
+                    ));
+                }
 
                 let start_x = from.x + dir_x * offset;
                 let start_y = from.y + dir_y * offset;
-                let end_x = from.x + dir_x * (offset + consume);
-                let end_y = from.y + dir_y * (offset + consume);
+                let end_x = from.x + dir_x * next_offset;
+                let end_y = from.y + dir_y * next_offset;
 
                 if drawing && let Some(ref mut builder) = current_builder {
                     if !started_subpath {
@@ -875,7 +888,7 @@ impl Tessellator {
                 }
 
                 remaining -= consume;
-                offset += consume;
+                offset = next_offset;
 
                 if remaining <= f32::EPSILON {
                     // Finished current interval, move to next

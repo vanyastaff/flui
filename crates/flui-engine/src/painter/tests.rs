@@ -218,7 +218,19 @@ fn clear_offscreen_result(nested: bool) {
 /// composites with its own blend mode.
 #[test]
 fn painter_images_and_offscreen_results_read_back_as_specified() {
-    let cases: [(&str, fn()); 34] = [
+    let cases: [(&str, fn()); 37] = [
+        (
+            "dash progress refusal recovery",
+            dashed_intervals_that_cannot_advance_refuse_the_whole_stroke,
+        ),
+        (
+            "tiny finite circle scale",
+            tiny_finite_circle_scale_remains_visible,
+        ),
+        (
+            "invalid dashed contour recovery",
+            invalid_dashed_contour_recovers,
+        ),
         (
             "dashed closed contour",
             dashed_closed_contour_has_its_closing_edge,
@@ -415,6 +427,84 @@ fn cached_paths_reconstruct_colour_and_transform() {
             "{mode:?}"
         );
     }
+}
+
+fn tiny_finite_circle_scale_remains_visible() {
+    use flui_foundation::geometry::{Offset, Point};
+    use flui_painting::{Paint, styling::Color};
+    let (device, queue) = test_device_and_queue();
+    let pixels = render_to_rgba(&device, &queue, 64, wgpu::Color::BLACK, |painter| {
+        painter.translate(Offset::new(32.0, 32.0));
+        painter.scale(1e-23, 1e-23);
+        painter.draw_circle(Point::new(0.0, 0.0), 1e24, &Paint::fill(Color::RED));
+    });
+    // A large local circle under a tiny finite transform has device radius
+    // approximately ten pixels. Squaring the transform underflowed its
+    // instance columns to zero, degenerating the quad instead of drawing it.
+    // Sample away from the edge so the shader's AA fringe is not the oracle.
+    for (x, y) in [(30, 32), (32, 32), (34, 32)] {
+        assert_eq!(pixel_at(&pixels, 64, x, y), [255, 0, 0, 255]);
+    }
+    for (x, y) in [(8, 8), (55, 55)] {
+        assert_eq!(pixel_at(&pixels, 64, x, y), [0, 0, 0, 255]);
+    }
+}
+
+fn dashed_intervals_that_cannot_advance_refuse_the_whole_stroke() {
+    use flui_foundation::geometry::Point;
+    use flui_painting::{Paint, paint::path::Path, styling::Color};
+    let (device, queue) = test_device_and_queue();
+    let mut unrepresentable = Path::new();
+    unrepresentable.move_to(Point::new(8.0, 16.0));
+    unrepresentable.line_to(Point::new(30_000_008.0, 16.0));
+    // The first interval reaches 2^24, where adding one rounds back. Larger
+    // intervals later in the cycle keep the broken baseline bounded as well.
+    let paint = Paint::stroke(Color::RED, 4.0).with_dash(vec![16_777_216.0, 1.0, 1.0, 1.0], 0.0);
+    let mut valid = Path::new();
+    valid.move_to(Point::new(8.0, 40.0));
+    valid.line_to(Point::new(48.0, 40.0));
+    let pixels = render_to_rgba(&device, &queue, 64, wgpu::Color::BLACK, |painter| {
+        painter.draw_path(&unrepresentable, &paint);
+        painter.draw_path(&valid, &paint);
+    });
+    assert_eq!(
+        pixel_at(&pixels, 64, 24, 16),
+        [0, 0, 0, 255],
+        "refused stroke must not retain its finite prefix"
+    );
+    assert_eq!(
+        pixel_at(&pixels, 64, 24, 40),
+        [255, 0, 0, 255],
+        "next dashed draw renders after progress refusal"
+    );
+}
+
+fn invalid_dashed_contour_recovers() {
+    use flui_foundation::geometry::Point;
+    use flui_painting::{Paint, paint::path::Path, styling::Color};
+    let (device, queue) = test_device_and_queue();
+    let mut invalid = Path::new();
+    invalid.move_to(Point::new(8.0, 16.0));
+    invalid.line_to(Point::new(48.0, 16.0));
+    // Both endpoints survive the f32 raster boundary, but their difference
+    // overflows. Large finite intervals bound the broken baseline's walk;
+    // debug Lyon would reject its generated NaN point rather than hang.
+    invalid.move_to(Point::new(-3e38, 16.0));
+    invalid.line_to(Point::new(3e38, 16.0));
+    let mut valid = Path::new();
+    valid.move_to(Point::new(8.0, 40.0));
+    valid.line_to(Point::new(48.0, 40.0));
+    let paint = Paint::stroke(Color::RED, 4.0).with_dash(vec![1e38, 1e38], 0.0);
+    let pixels = render_to_rgba(&device, &queue, 64, wgpu::Color::BLACK, |painter| {
+        painter.draw_path(&invalid, &paint);
+        painter.draw_path(&valid, &paint);
+    });
+    assert_eq!(pixel_at(&pixels, 64, 24, 16), [0, 0, 0, 255]);
+    assert_eq!(
+        pixel_at(&pixels, 64, 24, 40),
+        [255, 0, 0, 255],
+        "next dashed contour still renders"
+    );
 }
 
 fn dashed_closed_contour_has_its_closing_edge() {

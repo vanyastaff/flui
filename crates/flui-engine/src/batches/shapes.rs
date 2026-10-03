@@ -487,8 +487,8 @@ impl DrawBatcher {
                     // center and encode the per-axis scale as diag(sx, sy).  Output is
                     // byte-identical to the pre-affine path.
                     let transformed_center = state.apply_transform(center);
-                    let sx = (m.x_axis.x * m.x_axis.x + m.x_axis.y * m.x_axis.y).sqrt();
-                    let sy = (m.y_axis.x * m.y_axis.x + m.y_axis.y * m.y_axis.y).sqrt();
+                    let sx = m.x_axis.x.hypot(m.x_axis.y);
+                    let sy = m.y_axis.x.hypot(m.y_axis.y);
                     let instance = state.apply_active_clip(crate::instancing::CircleInstance::new(
                         transformed_center,
                         radius,

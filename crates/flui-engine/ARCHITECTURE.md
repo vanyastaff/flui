@@ -371,6 +371,24 @@ without counting the spatial gap. Lyon's point-sampling walker cannot replace
 this iterator: a stroke also needs the corners between dash boundaries. Kurbo's
 dashing iterator restarts phase at each contour, so adopting it would change this
 existing phase contract rather than repair contour handling.
+Column and segment lengths use `hypot` to avoid intermediate square overflow;
+`tiny_finite_circle_scale_remains_visible` reads interior and exterior pixels
+of a large local circle under a finite `1e-23` scale. Its device radius is about
+ten pixels; the previous squared norm underflowed and degenerated the instance.
+Non-finite dashed segment lengths refuse the draw before walking it.
+`invalid_dashed_contour_recovers` checks finite endpoints whose raster-space
+difference overflows, then a valid stroke. Invalid input contributes no partial
+geometry. Large finite dash intervals bound the broken walk; debug Lyon would
+reject its generated non-finite point rather than loop indefinitely.
+A dash step must also advance its raster-space offset: a positive interval can
+round back to the current offset on a long contour. Failure rejects the whole
+stroke before further geometry is built. The public painter row
+`dashed_intervals_that_cannot_advance_refuse_the_whole_stroke` checks a bounded
+cycle that loses one small step, discards its visible prefix and then renders
+the next ordinary dashed draw. This is a progress guarantee, not a bound on
+total tessellation work; tessellator output remains outside recording quotas.
+These choices prioritize numerical range; no throughput improvement is claimed
+for the native `hypot` implementation.
 `dashed_closed_contour_has_its_closing_edge` and `dashed_contours_do_not_bridge`
 read pixels that distinguish both contour defects. The same painter family row
 `dashed_curves_and_phase_follow_contour_length` checks curve shape and equivalent
