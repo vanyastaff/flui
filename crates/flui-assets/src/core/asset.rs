@@ -87,7 +87,9 @@ pub trait Asset: Send + Sync + 'static {
 
     /// Validates the asset before loading.
     ///
-    /// This is called before `load()` and can be used for early validation,
+    /// [`crate::AssetRegistry::load`] calls this before accessing the cache or
+    /// invoking `load()`, including on cache hits. Direct callers of `load()`
+    /// are responsible for invoking it themselves. It can be used for early validation,
     /// such as checking file extensions, magic numbers, or size limits.
     ///
     /// The default implementation always returns `Ok(())`.

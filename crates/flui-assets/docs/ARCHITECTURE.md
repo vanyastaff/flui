@@ -415,6 +415,23 @@ hot-reload = ["notify"]
 | Performance | ✅ TinyLFU cache | ✅ Similar |
 | Flexibility | ✅ Easy extension | ⚠️ ECS-coupled |
 
+## Mapping decisions
+
+- Registry admission validates each descriptor before cache lookup or loading,
+  including cache hits. Rejection preserves previously accepted cached data.
+  `validation_precedes_loading_and_cache_hits_without_poisoning_accepted_data`
+  pins rejection, cache preservation and the next accepted request.
+- The image bridge selects ambient multi-thread runtimes, skips ambient
+  current-thread runtimes, and honors explicit host injection. Owned runtime
+  creation returns typed errors and can retry after failure; ownership remains
+  registry-local. `load_image_bridged_completes_both_the_success_and_the_failure_path`
+  exercises real decoding and recovery while an ambient current-thread runtime
+  is entered but undriven. `the_bridge_resolves_a_live_runtime_and_survives_its_own_teardown`
+  includes the private runtime-construction failure seam, because OS resource
+  exhaustion cannot be induced reliably through the public API.
+  [ADR-0105](../../../docs/adr/ADR-0105-asset-validation-and-bridge-progress.md)
+  records the host and asset contracts.
+
 ## References
 
 - [Moka Cache Documentation](https://docs.rs/moka)
