@@ -532,11 +532,13 @@ fn gpu_test_plan() -> Vec<Step> {
             "--lib",
         ])
         .args(["--locked", "--no-fail-fast", "--test-threads", "1"])
+        .env("FLUI_REQUIRE_GPU", "1")
         .into(),
         Cmd::cargo(["nextest", "run", "-p", "flui", "--no-default-features"])
             .args(["--features", "gpu-readback-tests"])
             .args(["--test", "composited_layer_update_readback"])
             .args(["--locked", "--no-fail-fast", "--test-threads", "1"])
+            .env("FLUI_REQUIRE_GPU", "1")
             .into(),
     ]
 }
@@ -1194,6 +1196,16 @@ mod tests {
         );
     }
 
+    fn gpu_gate_requires_an_adapter_for_both_suites() {
+        assert_eq!(
+            lines(&gpu_test_plan()),
+            [
+                "$ FLUI_REQUIRE_GPU=1 cargo nextest run -p flui-engine --features testing --lib --locked --no-fail-fast --test-threads 1",
+                "$ FLUI_REQUIRE_GPU=1 cargo nextest run -p flui --no-default-features --features gpu-readback-tests --test composited_layer_update_readback --locked --no-fail-fast --test-threads 1",
+            ]
+        );
+    }
+
     fn workflow_lint_runs_each_installed_linter_and_skips_the_rest() {
         assert_eq!(
             lines(&workflow_lint_plan(|_| true)),
@@ -1323,6 +1335,10 @@ mod tests {
         crate::table_test::run_table(
             "task_plans_contract",
             &[
+                (
+                    "gpu_gate_requires_an_adapter_for_both_suites",
+                    gpu_gate_requires_an_adapter_for_both_suites as fn(),
+                ),
                 (
                     "native_host_suites_only_build_their_packages",
                     native_host_suites_only_build_their_packages as fn(),

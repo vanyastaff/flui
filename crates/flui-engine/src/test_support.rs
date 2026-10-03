@@ -267,10 +267,10 @@ pub(crate) fn readback_pixels(
 
 /// Whether this run demands a working GPU adapter.
 ///
-/// Reads `FLUI_REQUIRE_GPU`. Set it where an adapter is guaranteed — CI's
-/// `gpu-test` job runs the readback suites on WARP — and leave it unset on a
-/// developer machine, which is the shape `FLUI_REQUIRE_EMOJI_FONT` already uses
-/// for the font-fallback fixture.
+/// Reads `FLUI_REQUIRE_GPU`. `cargo xtask gpu-test` sets it so adapter or
+/// device initialization failures cannot turn the local gate into successful
+/// skips. Direct test runs may leave it unset, as `FLUI_REQUIRE_EMOJI_FONT`
+/// does for the font-fallback fixture.
 pub(crate) fn require_gpu() -> bool {
     demanded_by(std::env::var_os("FLUI_REQUIRE_GPU").as_deref())
 }

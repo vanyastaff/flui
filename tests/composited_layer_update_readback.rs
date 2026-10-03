@@ -120,7 +120,7 @@ fn the_update_path_and_a_repaint_produce_the_same_pixels() {
     // then proves nothing, which is exactly how a GPU oracle goes quietly
     // dead.
     let renderer = pollster::block_on(HeadlessRenderer::new())
-        .expect("a GPU adapter for headless capture (CI runs this on the software rasterizer)");
+        .expect("a GPU adapter for local headless capture");
 
     let updated = frame_after_alpha_change(&renderer, 0.25, false);
     let repainted = frame_after_alpha_change(&renderer, 0.25, true);
@@ -237,7 +237,7 @@ fn frame_after_transform_change(
 /// a byte difference that no layer-tree assertion would catch.
 fn the_transform_update_path_and_a_repaint_produce_the_same_pixels() {
     let renderer = pollster::block_on(HeadlessRenderer::new())
-        .expect("a GPU adapter for headless capture (CI runs this on the software rasterizer)");
+        .expect("a GPU adapter for local headless capture");
 
     let updated = frame_after_transform_change(&renderer, Matrix4::scaling(3.0, 3.0, 1.0), false);
     let repainted = frame_after_transform_change(&renderer, Matrix4::scaling(3.0, 3.0, 1.0), true);
@@ -373,7 +373,7 @@ fn frame_after_radius_change(
 /// difference no layer-tree assertion would catch.
 fn the_clip_update_path_and_a_repaint_produce_the_same_pixels() {
     let renderer = pollster::block_on(HeadlessRenderer::new())
-        .expect("a GPU adapter for headless capture (CI runs this on the software rasterizer)");
+        .expect("a GPU adapter for local headless capture");
 
     let updated = frame_after_radius_change(&renderer, 2.0, false);
     let repainted = frame_after_radius_change(&renderer, 2.0, true);

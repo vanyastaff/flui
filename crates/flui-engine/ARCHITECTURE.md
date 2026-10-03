@@ -203,9 +203,10 @@ check` does not.
 `testing` gates the GPU readback/oracle suites and the bench scaffolding they
 share (`OffscreenRenderer`, `PathCache` re-exports). It is off
 by default, not part of the public API, and the same name and meaning as
-flui-layer's and flui-rendering's `testing`. CI's `gpu-test` job runs the
-suites on WARP with `FLUI_REQUIRE_GPU=1`, so a missing adapter fails there
-instead of silently skipping.
+flui-layer's and flui-rendering's `testing`. The local `cargo xtask gpu-test`
+command sets `FLUI_REQUIRE_GPU=1` for both the engine and facade readback
+suites, so missing adapter/device initialization fails instead of silently
+skipping. Linux-only CI does not supply the native GPU runtime coverage.
 
 ---
 

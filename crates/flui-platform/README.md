@@ -55,8 +55,8 @@ rest of the workspace stays `unsafe`-free. Every unsafe block carries a
 ## Testing status
 
 The suite runs under nextest in CI on Linux (the `test` job's dedicated step,
-headless + Xvfb) and on Windows (the `platform-windows` job, default and all
-features). Run it with nextest, not `cargo test`: the winit tests that drive a
+headless + Xvfb). Native Windows/macOS suites run locally through
+`cargo xtask platform-test`, with default and all features. Run it with nextest, not `cargo test`: the winit tests that drive a
 real event loop need one process per test, because winit allows one
 `EventLoop` per process. macOS and the mobile backends are lint-only in CI
 (`cross-typecheck`).

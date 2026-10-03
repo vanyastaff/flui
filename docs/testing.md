@@ -37,7 +37,7 @@ the same bug found by a whole-demo snapshot names a demo.
 | Accessibility | The assembled semantics tree, queried by role | `flui_testing::a11y::{A11yTree, A11yQuery}` | dev-dependency |
 | Gesture replay | A scripted gesture replayed with its timing | `flui_testing::replay::PointerScript` | dev-dependency |
 | Log capture | The `tracing` events a frame emitted | `flui_testing::log_capture::capture` | dev-dependency |
-| GPU readback | Real pixels off a real device (WARP in CI) | `flui-engine`'s readback suite | `flui-engine/testing` |
+| GPU readback | Real pixels off a local device (adapter required) | `flui-engine`'s readback suite | `flui-engine/testing` |
 | Demo composition | A whole demo tree's committed `LayerTree`, as structured text | `tests/demo_layer_snapshots.rs` | `flui/material` + `flui/cupertino` |
 | Live E2E | A real window, real X11/Wayland input, real exit code | `tools/live-smoke` | `cargo xtask live-smoke` |
 
@@ -205,7 +205,7 @@ config's `nextest-version` enforces it).
   the nested tests, ending with a line that names what it skipped.
 - `cargo xtask test --nested` runs only the nested tests (the union of `test-nested`
   and `test-trybuild`); `cargo xtask test --no-trybuild` everything but the `trybuild` group
-  (CI's `test-windows`).
+  (useful for local native Windows runs).
 
 To narrow either stage, combine with `&` inside the single `-E`:
 `-E 'not group(trybuild) & package(flui-view)'`. A second `-E` is ORed
@@ -832,7 +832,7 @@ line sat inside its own cross-machine noise.
 
 What the change gives up is the raster of a *composed* scene. Its pieces are
 covered elsewhere: blending, filters, gradients, and glyph raster per primitive
-by flui-engine's readback/oracle suite on WARP (extended `gpu-test`), and
+by flui-engine's local readback/oracle suite (`cargo xtask gpu-test`), and
 that a real window presents at all by `tools/live-smoke`. What is genuinely
 lost — the anti-aliased pixels of a whole demo — was guarded by nothing before,
 since the suite ran on no job.
@@ -1020,7 +1020,9 @@ CI validation runs on Linux only, including nightly and manual dispatch.
 The Windows/macOS and hosted GPU jobs, the native device-check workflow and
 the full-ci label workflow are removed. `cargo xtask affected` accepts no
 full-ci label flag, and plan does not read PR labels. Native runtime checks
-remain local commands. Cross-typecheck on Linux verifies platform compilation;
+remain local commands. `cargo xtask gpu-test` sets `FLUI_REQUIRE_GPU=1` for
+both the engine and facade readback suites; a missing adapter or device fails
+the gate instead of producing successful skips. Cross-typecheck on Linux verifies platform compilation;
 OS runtime regressions need local platform evidence.
 
 The aggregator requires each lane's Linux jobs to pass and every other job

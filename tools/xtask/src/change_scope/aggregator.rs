@@ -556,6 +556,19 @@ mod tests {
         );
     }
 
+    fn red_main_notifications_have_auth_and_repository_context() {
+        let text = super::super::classify::read_normalised(
+            &crate::util::repo_root().join(".github/workflows/ci.yml"),
+        )
+        .expect("workflow");
+        let notification = text
+            .split("  notify-main-red:")
+            .nth(1)
+            .expect("notification job");
+        assert!(notification.contains("GH_TOKEN: ${{ github.token }}"));
+        assert!(notification.contains("GH_REPO: ${{ github.repository }}"));
+    }
+
     fn native_jobs_are_absent() {
         use clap::Parser;
 
@@ -824,6 +837,10 @@ mod tests {
                 (
                     "extended_jobs_skipped_on_main_is_green_and_on_schedule_is_red",
                     extended_jobs_skipped_on_main_is_green_and_on_schedule_is_red as fn(),
+                ),
+                (
+                    "red_main_notifications_have_auth_and_repository_context",
+                    red_main_notifications_have_auth_and_repository_context as fn(),
                 ),
                 ("native_jobs_are_absent", native_jobs_are_absent as fn()),
                 ("tooling_and_docs_lanes", tooling_and_docs_lanes as fn()),
