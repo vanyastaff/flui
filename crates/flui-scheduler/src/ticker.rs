@@ -1315,7 +1315,7 @@ use std::{
     task::{Context, Poll},
 };
 
-use event_listener::Event;
+use slab::Slab;
 
 /// Completion state of a ticker future.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1330,7 +1330,8 @@ enum TickerFutureState {
 
 /// A continuation registered via [`TickerFuture::when_complete_or_cancel`]
 /// while the future was still pending.
-type Continuation = Box<dyn FnOnce(Result<(), TickerCanceled>) + Send>;
+type Continuation = Box<dyn FnMut(Result<(), TickerCanceled>) + Send>;
+type PanicPayload = Box<dyn std::any::Any + Send>;
 
 /// The durable resolution plus whatever fan-out was registered before it was
 /// known. Both live behind ONE lock so [`TickerCompleter::complete`]/
@@ -1341,32 +1342,13 @@ type Continuation = Box<dyn FnOnce(Result<(), TickerCanceled>) + Send>;
 struct FutureState {
     resolution: TickerFutureState,
     continuations: Vec<Continuation>,
+    waiters: Slab<std::task::Waker>,
 }
 
 /// Shared state for a [`TickerFuture`]/[`TickerCompleter`]/[`TickerDelivery`]
 /// triple.
 struct TickerFutureInner {
     state: Mutex<FutureState>,
-    /// Wakes polling waiters. `notify` runs uncontained — see
-    /// [`deliver_now`]'s own doc for the precondition this carries on the
-    /// executor's waker.
-    event: Event,
-    /// Test-only ordering probe: one entry per decisive state read performed
-    /// by [`Self::read_state`], holding the number of listeners registered on
-    /// [`Self::event`] at that instant.
-    ///
-    /// This is what makes "a listener is registered *before* the state read
-    /// that decides to park" an asserted invariant rather than prose. A poll
-    /// that parks must trace `[0, 1]`: one read with nothing registered, then
-    /// a second read taken after registering.
-    ///
-    /// Test-only in the strict sense, and deliberately not paid for in a
-    /// shipped build: the `Vec` is unbounded (a long-lived future polled many
-    /// times grows it without limit) and `read_state` takes `event-listener`'s
-    /// internal list lock on every decisive read to sample the count. Neither
-    /// cost exists outside `cfg(test)`.
-    #[cfg(test)]
-    read_trace: Mutex<Vec<usize>>,
 }
 
 impl TickerFutureInner {
@@ -1375,34 +1357,12 @@ impl TickerFutureInner {
             state: Mutex::new(FutureState {
                 resolution,
                 continuations: Vec::new(),
+                waiters: Slab::new(),
             }),
-            event: Event::new(),
-            #[cfg(test)]
-            read_trace: Mutex::new(Vec::new()),
         }
     }
 
-    /// Read the durable resolution state — the decisive read a waiter parks on.
-    ///
-    /// The durable state is the source of truth and the notification is only a
-    /// hint to re-read it. `poll_resolution` and every state query
-    /// (`is_complete`/`is_canceled`/`is_pending`, and `Debug` for both
-    /// [`TickerFuture`] and [`TickerCompleter`]) funnel their reads through
-    /// this one accessor, which is what gives the test-only ordering probe a
-    /// single place to observe them. [`TickerFuture::when_complete_or_cancel`]'s
-    /// fast path does NOT: it must read-and-conditionally-push a continuation
-    /// as one atomic step, so it locks `state` directly instead — under
-    /// `cfg(test)` it is therefore the one read this file's ordering probe
-    /// cannot see.
     fn read_state(&self) -> TickerFutureState {
-        #[cfg(test)]
-        {
-            // Sampled before the state lock is taken: `total_listeners` takes
-            // `event-listener`'s own internal lock, and nesting it under the
-            // state mutex would invent a lock order production never uses.
-            let registered = self.event.total_listeners();
-            self.read_trace.lock().push(registered);
-        }
         self.state.lock().resolution
     }
 }
@@ -1430,104 +1390,135 @@ impl Resolved {
     }
 }
 
-/// Poll the shared resolution, parking on `inner`'s event while it is pending.
-///
-/// The loop is `read → register → read → park`, and the second read is not
-/// redundant. [`TickerCompleter`] publishes the durable state *before* it
-/// notifies, and the transition is once-only, so a resolution landing between
-/// the first read and `listen()` announces itself to zero listeners and is
-/// never re-announced. Re-reading after registering is what makes that lost
-/// notification unobservable: the durable state is the source of truth and
-/// the notification is only a hint to re-read it.
-///
-/// `event-listener` unlinks a notified entry as it reports it, and re-polling
-/// that same `EventListener` panics, so the slot is cleared on every path that
-/// stops using it.
+/// Register under the same lock that publishes terminal state. The previous
+/// waker is retired outside the lock, and repeated polls reuse one live slot.
 fn poll_resolution(
-    inner: &Arc<TickerFutureInner>,
-    listener: &mut Option<event_listener::EventListener>,
+    inner: &TickerFutureInner,
+    registration: &mut Option<usize>,
     cx: &mut Context<'_>,
 ) -> Poll<Resolved> {
-    loop {
-        match inner.read_state() {
+    {
+        let state = inner.state.lock();
+        match state.resolution {
             TickerFutureState::Complete => {
-                *listener = None;
+                *registration = None;
                 return Poll::Ready(Resolved::Complete);
             }
             TickerFutureState::Canceled => {
-                *listener = None;
+                *registration = None;
                 return Poll::Ready(Resolved::Canceled);
             }
-            TickerFutureState::Pending => {}
+            TickerFutureState::Pending => {
+                if registration.is_some_and(|index| state.waiters[index].will_wake(cx.waker())) {
+                    return Poll::Pending;
+                }
+            }
         }
+    }
+    // RawWaker cloning can execute foreign code. Preserve the old registration
+    // if cloning fails, and recheck publication after reacquiring the lock.
+    let replacement = cx.waker().clone();
+    let mut state = inner.state.lock();
+    let resolved = match state.resolution {
+        TickerFutureState::Complete => Some(Resolved::Complete),
+        TickerFutureState::Canceled => Some(Resolved::Canceled),
+        TickerFutureState::Pending => None,
+    };
+    if let Some(resolved) = resolved {
+        *registration = None;
+        drop(state);
+        drop(replacement);
+        return Poll::Ready(resolved);
+    }
+    let previous = if let Some(index) = *registration {
+        Some(std::mem::replace(&mut state.waiters[index], replacement))
+    } else {
+        *registration = Some(state.waiters.insert(replacement));
+        None
+    };
+    drop(state);
+    drop(previous);
+    Poll::Pending
+}
 
-        let Some(registered) = listener else {
-            *listener = Some(inner.event.listen());
-            continue;
-        };
-
-        match Pin::new(registered).poll(cx) {
-            Poll::Ready(()) => *listener = None,
-            Poll::Pending => return Poll::Pending,
+/// Keep chronological failure priority even when reporting it runs foreign
+/// tracing subscribers. Opaque secondary payloads cannot safely be destroyed.
+fn record_delivery_failure(first: &mut Option<PanicPayload>, payload: PanicPayload) {
+    let reported = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let text =
+            flui_foundation::panic::payload_text(&*payload).unwrap_or("<non-string panic payload>");
+        if std::thread::panicking() {
+            tracing::error!(
+                payload = text,
+                "TickerFuture delivery failed while already unwinding"
+            );
+        } else {
+            tracing::error!(payload = text, "TickerFuture delivery failed");
         }
+    }));
+    if first.is_none() {
+        *first = Some(payload);
+    } else {
+        flui_foundation::panic::retain_opaque_payload(payload);
+    }
+    if let Err(secondary) = reported {
+        flui_foundation::panic::retain_opaque_payload(secondary);
     }
 }
 
-/// Run every registered continuation, then wake polling waiters, then
-/// re-raise the first caught panic.
-///
-/// Each continuation runs inside its own `catch_unwind`, so one panicking
-/// continuation does not starve its siblings or the waker notification; the
-/// caught payload is logged at `error!` immediately (never silently dropped)
-/// and the FIRST one is what gets re-raised — unless this call is itself
-/// running during an unwind (`std::thread::panicking()`), in which case it is
-/// logged and discarded through [`crate::panic_payload::discard_panic_payload`]
-/// instead of replacing the unwind already in flight or dropping the
-/// payload bare (which could itself panic a second time).
-///
-/// `notify` itself stays uncontained: a waker that re-polls or drops the
-/// future it wakes from inside `wake()` deadlocks inside `event-listener`'s
-/// own list lock regardless of whether this function catches panics, so
-/// containing the call would not make that case safe. Standard parker-based
-/// executors are unaffected.
-fn deliver_now(
-    inner: &TickerFutureInner,
+fn invoke_continuation(
+    mut continuation: Continuation,
     outcome: Result<(), TickerCanceled>,
-    continuations: Vec<Continuation>,
+    first: &mut Option<PanicPayload>,
 ) {
-    let mut first_payload = None;
-    for continuation in continuations {
-        let result =
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| continuation(outcome)));
-        if let Err(payload) = result {
-            tracing::error!(
-                payload = flui_foundation::panic::payload_text(&*payload)
-                    .unwrap_or("<non-string panic payload>"),
-                "a TickerFuture continuation panicked"
-            );
-            first_payload.get_or_insert(payload);
-        }
+    let called = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| continuation(outcome)));
+    if let Err(payload) = called {
+        std::mem::forget(continuation);
+        record_delivery_failure(first, payload);
+    } else if first.is_some() || std::thread::panicking() {
+        std::mem::forget(continuation);
+    } else if let Err(payload) =
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(continuation)))
+    {
+        record_delivery_failure(first, payload);
     }
-    inner.event.notify(usize::MAX);
-    if let Some(payload) = first_payload {
+}
+
+fn finish_delivery(first: Option<PanicPayload>) {
+    if let Some(payload) = first {
         if std::thread::panicking() {
-            tracing::error!(
-                payload = flui_foundation::panic::payload_text(&*payload)
-                    .unwrap_or("<non-string panic payload>"),
-                "a TickerFuture continuation panicked while already unwinding; not re-raising"
-            );
-            // Dropping `payload` bare here would let a second-order panic
-            // from its own `Drop` escape uncontained -- during this
-            // already-unwinding path, a double panic (abort, no
-            // diagnostic).
-            crate::panic_payload::discard_panic_payload(
-                payload,
-                "TickerFuture::deliver_now (continuation panic, traced above)",
-            );
+            flui_foundation::panic::retain_opaque_payload(payload);
         } else {
             std::panic::resume_unwind(payload);
         }
     }
+}
+
+/// Every continuation runs before waiters wake. Foreign code and owning waker
+/// retirement run outside all locks; a failure cannot starve the remaining tail.
+fn deliver_now(
+    outcome: Result<(), TickerCanceled>,
+    continuations: Vec<Continuation>,
+    waiters: Slab<std::task::Waker>,
+) {
+    let mut first = None;
+    for continuation in continuations {
+        invoke_continuation(continuation, outcome, &mut first);
+    }
+    for (_, waker) in waiters {
+        let woke = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| waker.wake_by_ref()));
+        if let Err(payload) = woke {
+            std::mem::forget(waker);
+            record_delivery_failure(&mut first, payload);
+        } else if first.is_some() || std::thread::panicking() {
+            std::mem::forget(waker);
+        } else if let Err(payload) =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(waker)))
+        {
+            record_delivery_failure(&mut first, payload);
+        }
+    }
+    finish_delivery(first);
 }
 
 /// A future representing an ongoing ticker run.
@@ -1557,8 +1548,8 @@ fn deliver_now(
 pub struct TickerFuture {
     /// Shared inner state
     inner: Arc<TickerFutureInner>,
-    /// Event listener for async notification (avoids busy-loop)
-    listener: Option<event_listener::EventListener>,
+    /// One pending waiter slot; clones register independently.
+    registration: Option<usize>,
 }
 
 impl TickerFuture {
@@ -1572,7 +1563,7 @@ impl TickerFuture {
             },
             Self {
                 inner,
-                listener: None,
+                registration: None,
             },
         )
     }
@@ -1585,7 +1576,7 @@ impl TickerFuture {
     pub fn complete() -> Self {
         Self {
             inner: Arc::new(TickerFutureInner::new(TickerFutureState::Complete)),
-            listener: None,
+            registration: None,
         }
     }
 
@@ -1595,7 +1586,7 @@ impl TickerFuture {
     pub fn canceled() -> Self {
         Self {
             inner: Arc::new(TickerFutureInner::new(TickerFutureState::Canceled)),
-            listener: None,
+            registration: None,
         }
     }
 
@@ -1628,20 +1619,26 @@ impl TickerFuture {
     /// later by whichever [`TickerCompleter::complete`]/
     /// [`cancel`](TickerCompleter::cancel) (or its `Drop`) resolves the
     /// future.
+    /// `f` is called exactly once. Its `FnMut` bound keeps captures owned
+    /// outside the invocation so a callback panic cannot unwind through them.
     pub fn when_complete_or_cancel<F>(&self, f: F)
     where
-        F: FnOnce(Result<(), TickerCanceled>) + Send + 'static,
+        F: FnMut(Result<(), TickerCanceled>) + Send + 'static,
     {
         let mut state = self.inner.state.lock();
         match state.resolution {
             TickerFutureState::Pending => state.continuations.push(Box::new(f)),
             TickerFutureState::Complete => {
                 drop(state);
-                f(Ok(()));
+                let mut first = None;
+                invoke_continuation(Box::new(f), Ok(()), &mut first);
+                finish_delivery(first);
             }
             TickerFutureState::Canceled => {
                 drop(state);
-                f(Err(TickerCanceled));
+                let mut first = None;
+                invoke_continuation(Box::new(f), Err(TickerCanceled), &mut first);
+                finish_delivery(first);
             }
         }
     }
@@ -1651,27 +1648,44 @@ impl Clone for TickerFuture {
     fn clone(&self) -> Self {
         Self {
             inner: Arc::clone(&self.inner),
-            listener: None, // Fresh listener per clone
+            registration: None, // Independent waiter per clone
         }
     }
 }
 
 /// Resolves when the ticker run this future was created for ends, either way.
 ///
-/// # Precondition on the executor's waker
 ///
-/// This future's waker is invoked from inside `event-listener`'s own list
-/// lock, which is re-taken by both registering and dropping a listener. A
-/// waker that re-polls **or drops** this future from inside `wake()`
-/// therefore deadlocks inside that dependency. Standard parker-based
-/// executors — including `std::task::Wake` implementors that only signal —
-/// are safe; an inline-poll executor is not.
+/// Wakers run after publication and outside the waitset lock, so inline polling
+/// or dropping a clone is supported. Panicking wakers cannot starve later waiters.
 impl Future for TickerFuture {
     type Output = Result<(), TickerCanceled>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.get_mut();
-        poll_resolution(&this.inner, &mut this.listener, cx).map(|resolved| resolved.as_output())
+        poll_resolution(&this.inner, &mut this.registration, cx)
+            .map(|resolved| resolved.as_output())
+    }
+}
+
+impl Drop for TickerFuture {
+    fn drop(&mut self) {
+        let Some(index) = self.registration.take() else {
+            return;
+        };
+        let retired = {
+            let mut state = self.inner.state.lock();
+            if state.resolution == TickerFutureState::Pending {
+                state.waiters.try_remove(index)
+            } else {
+                None
+            }
+        };
+        if std::thread::panicking() {
+            std::mem::forget(retired);
+        } else {
+            drop(retired);
+        }
     }
 }
 
@@ -1706,38 +1720,49 @@ impl TickerCompleter {
     /// performed the (once-only) transition — `None` means the future was
     /// already resolved by an earlier call, so there is nothing left to
     /// deliver.
-    fn publish(&self, target: TickerFutureState) -> Option<Vec<Continuation>> {
+    fn publish(
+        &self,
+        target: TickerFutureState,
+    ) -> Option<(Vec<Continuation>, Slab<std::task::Waker>)> {
         let mut state = self.inner.state.lock();
         if state.resolution != TickerFutureState::Pending {
             return None;
         }
         state.resolution = target;
-        Some(std::mem::take(&mut state.continuations))
+        Some((
+            std::mem::take(&mut state.continuations),
+            std::mem::take(&mut state.waiters),
+        ))
     }
 
     /// Publish `Ok(())` and hand back the delivery half.
     #[must_use = "a TickerDelivery delivers on drop; call deliver() where continuations may run"]
     pub fn complete(self) -> TickerDelivery {
-        let continuations = self
+        let (continuations, waiters) = self
             .publish(TickerFutureState::Complete)
             .unwrap_or_default();
-        TickerDelivery::new(Arc::clone(&self.inner), Ok(()), continuations)
+        TickerDelivery::new(Arc::clone(&self.inner), Ok(()), continuations, waiters)
     }
 
     /// Publish `Err(TickerCanceled)` and hand back the delivery half.
     #[must_use = "a TickerDelivery delivers on drop; call deliver() where continuations may run"]
     pub fn cancel(self) -> TickerDelivery {
-        let continuations = self
+        let (continuations, waiters) = self
             .publish(TickerFutureState::Canceled)
             .unwrap_or_default();
-        TickerDelivery::new(Arc::clone(&self.inner), Err(TickerCanceled), continuations)
+        TickerDelivery::new(
+            Arc::clone(&self.inner),
+            Err(TickerCanceled),
+            continuations,
+            waiters,
+        )
     }
 }
 
 impl Drop for TickerCompleter {
     fn drop(&mut self) {
-        if let Some(continuations) = self.publish(TickerFutureState::Canceled) {
-            deliver_now(&self.inner, Err(TickerCanceled), continuations);
+        if let Some((continuations, waiters)) = self.publish(TickerFutureState::Canceled) {
+            deliver_now(Err(TickerCanceled), continuations, waiters);
         }
     }
 }
@@ -1760,13 +1785,14 @@ impl std::fmt::Debug for TickerCompleter {
 /// (continuations, wakers) until after that lock is released.
 #[must_use = "a TickerDelivery delivers on drop; call deliver() where continuations may run"]
 pub struct TickerDelivery {
-    inner: Arc<TickerFutureInner>,
+    _inner: Arc<TickerFutureInner>,
     outcome: Result<(), TickerCanceled>,
     // Wrapped in a `Mutex` (never actually contended — `run` only ever
     // touches this through `&mut self`) so `TickerDelivery` stays `Sync`
-    // despite holding `Box<dyn FnOnce(..) + Send>` continuations, which are
+    // despite holding `Box<dyn FnMut(..) + Send>` continuations, which are
     // not themselves `Sync`.
     continuations: Mutex<Vec<Continuation>>,
+    waiters: Slab<std::task::Waker>,
     delivered: bool,
 }
 
@@ -1775,11 +1801,13 @@ impl TickerDelivery {
         inner: Arc<TickerFutureInner>,
         outcome: Result<(), TickerCanceled>,
         continuations: Vec<Continuation>,
+        waiters: Slab<std::task::Waker>,
     ) -> Self {
         Self {
-            inner,
+            _inner: inner,
             outcome,
             continuations: Mutex::new(continuations),
+            waiters,
             delivered: false,
         }
     }
@@ -1800,7 +1828,8 @@ impl TickerDelivery {
         }
         self.delivered = true;
         let continuations = std::mem::take(&mut *self.continuations.lock());
-        deliver_now(&self.inner, self.outcome, continuations);
+        let waiters = std::mem::take(&mut self.waiters);
+        deliver_now(self.outcome, continuations, waiters);
     }
 }
 

@@ -834,8 +834,8 @@ That predicate has two halves, and only the first belongs to the registry:
   later than the drain it is meant to pair with, so the flag is still set
   during the post-drain window. Deleting the flag removes the clear point
   rather than moving it.
-- Adopting `event-listener`, already a dependency of this crate and already
-  used by `TickerFuture` for the sibling problem. Rejected on a structural
+- Adopting an `event-listener` event, as the former ticker backend did.
+  Rejected on a structural
   reason this crate has paid for once: `Event::notify` calls `task.wake()`
   inside the closure holding its own internal list mutex, which is the shape
   issue #1057 removed from `notify_frame_completion`.
@@ -960,15 +960,15 @@ performs `mem::take`, so an entry reaching this loop was, by construction,
 never reached by `notify_frame_completion` first (a delivered completion
 already left the registry through that same `drain`) — the guard would be
 dead code testing a fact the type already proves, not a real defense. Every
-waker's `wake()`, and a panicking wake payload's own possibly-panicking
-`Drop`, is caught and traced via `tracing::error!`; teardown never
-`resume_unwind`s — a panic from a destructor while already unwinding aborts
-the process with no diagnostic, and `abort_frame`'s own doc already states
-this rule for this crate. The same `discard_panic_payload` helper introduced
-for this contains a second (or later) waker's panic during an ordinary,
-non-teardown `notify_frame_completion` drain, and the symmetric case one
-level up in `end_frame_impl`'s own `callback_result`/`notify_result` merge —
-previously an uncontained `Option::or`-selected `drop`.
+waker's caught `wake()` failure is traced via `tracing::error!`; its opaque
+payload is then retained through `flui_foundation::panic::retain_opaque_payload`,
+without executing payload drop glue. This branch does not intentionally resume a
+caught wake panic during teardown. The same retention utility protects secondary
+waker failures in an ordinary `notify_frame_completion` drain and the symmetric
+`end_frame_impl` callback/notification failure merge. Catching payload destruction
+would not provide that guarantee: an aggregate can abort before an outer catch
+returns. This policy concerns caught failures; it does not widen the ownership
+boundaries of the consuming wake or tracing invocation.
 
 **The teardown guarantee is partial, and this does not widen it:** any live
 strong `UpdateScheduler` handle defers `Drop for SchedulerInner`, the same as
@@ -1023,45 +1023,29 @@ a real frame's timing by construction, exactly the "cannot tell them apart"
 defect this issue exists to close, just moved to a new field instead of
 solved.
 
-### A ticker future's poll registers before the read that decides to park
+### A ticker future registers atomically with its terminal-state read
 
-**Rule:** the durable resolution state is the source of truth and the
-notification is only a hint to re-read it. Polling `TickerFuture` must have a
-listener linked *before* it takes the state read that decides to return
-`Poll::Pending`.
+**Rule:** durable resolution is the source of truth. While pending, each polled
+`TickerFuture` owns one slab registration under the same state lock that publishes
+completion or cancellation. Repeat polls replace that slot's waker; clones have
+independent slots. Dropping a pending future removes its slot, so registration
+storage tracks live polled futures rather than historical polling or clone churn.
+Old wakers are retired only after unlocking. Publication takes both callbacks and
+the waitset, then delivery invokes every waker outside all locks. Terminal polls
+need no subscription and can safely run inline from a wake.
 
-**Hazard:** a future built on a completer has no listener to register, and
-therefore no window between observing the state and subscribing to a change.
-FLUI models a
-once-only, monotone transition (a *level* fact) with `event_listener::Event` (an
-*edge* primitive) whose own documentation says a notification sent with no
-listener registered "simply gets lost". The original `poll` read the state,
-dropped the guard, and only then called `listen()`; a resolution landing in
-that window notified zero listeners, and because the transition is guarded by
-`if *state == Pending` nothing ever re-announced it. The future then parked on
-an event that could never fire again — a permanent hang, not a delay. The
-correct order was already present one screen away, in the (then-blocking)
-`when_complete_or_cancel`, with a comment naming the hazard.
+**Conflict:** `event-listener` 5.4.2 calls a waker under its intrusive-list lock,
+preventing inline poll/drop. Its notify loop advances the next entry and marks it
+notified before waking, but increments the notified count afterward. A panicking
+waker therefore leaves inconsistent accounting; catch-and-retry cannot repair the
+listener's later removal. This is why ticker waiting now uses the durable-state
+slab instead of that notification backend (ADR-0106).
 
-**Choice:** one private `poll_resolution` helper running
-`read → register → read → park`. The second read is the fix; the listener
-latch (a notification landing on a registered-but-unpolled entry marks it
-`Notified`, and the next `register` reports that) is a redundant second net
-that closes only the `listen()`→poll half and cannot touch the window that is
-the defect. `TickerCompleter::publish` writes the durable state before
-anything is ever delivered, which is what makes the re-read sufficient; for
-that ordering, **Unasserted:** no test pins this. `poll_resolution` is
-unchanged by every later redesign in this
-family — the controller-owned-future rework below moved WHO resolves a run,
-never HOW a poll discovers that it has.
-
-**Precondition this makes reachable, stated rather than fixed:** `Event::notify`
-calls `task.wake()` while holding `event-listener`'s own internal list mutex,
-which both registering and dropping a listener re-take. A waker that re-polls or
-drops the future from inside `wake()` deadlocks inside the dependency. That was
-always true, but a bug that never woke anyone kept it unreachable; it is now a
-documented precondition on the `Future` impl. Standard parker-based executors
-satisfy it.
+**Proof:** the consumer `ticker_future_delivery_recovery` table covers repeated
+poll replacement, independent clones, immediate resource release on waiter drop,
+publication racing registration, inline wake polling and dropping, failed wake
+and retirement followed by healthy waiters, and a subsequent independent run.
+Abort- and deadlock-capable negatives run in bounded child processes.
 
 ### The ticker resolves nothing; the controller owns the one run future
 
@@ -1118,24 +1102,25 @@ manually stage a two-step unlock dance with no shared shape.
 `AnimationController::finish` is the chokepoint every run-ending or
 run-starting site funnels through: drop the controller lock, notify value
 listeners if the run's value changed, fire status listeners, THEN deliver.
-Continuations run **before** wakers are notified within `deliver` (a
-continuation observes wake count zero; one more once `deliver` returns) —
-inverted, an uncontained panicking waker could unwind out with the drained
-continuation `Vec` never run. Each continuation runs inside its own
-`catch_unwind`; a caught payload is logged at `error!` immediately (so it is
-never silently dropped even if a later continuation panics too) and the
-FIRST one is re-raised once every continuation and the waker notification
-have run — **unless this call is itself running during an unwind**
-(`std::thread::panicking()`), in which case it is logged instead: a caller can
-invoke a resolving call from their own panicking `Drop`, and re-raising there
-would be a panic during a panic, which the runtime aborts rather than unwinds.
-`notify` itself stays uncontained regardless — the same waker precondition the
-previous section documents holds whether or not this function catches panics,
-so containing it would not make a re-entrant waker safe, only hide a different
-failure. `Drop for TickerDelivery` delivers if `deliver()` was never called,
-and `Drop for TickerCompleter` publishes `Canceled` and delivers — a run
-nobody explicitly ended still settles rather than hanging its awaiters
-forever.
+Continuations run **before** wakers within delivery. Each continuation is
+`FnMut`, called exactly once through a borrow of its owning envelope; this keeps
+captured values out of an invocation's unwind. The already-resolved registration
+path uses the same ownership boundary and remains synchronous. Normal capture
+retirement follows invocation and can raise the first failure; subsequent opaque
+envelopes are retained once a failure has priority. Callback, capture retirement,
+wake, waker retirement and reporting failures cannot starve the remaining fan-out.
+The first payload resumes after delivery, or is retained when delivery runs during
+an existing unwind. Secondary payloads are always retained through the shared
+foundation helper. These exceptional leaks are deliberate: aggregate drop glue
+cannot be safely executed while preserving another failure. Two panicking fields
+inside an ordinary first retirement remain an unavoidable Rust abort boundary.
+
+`Drop for TickerDelivery` delivers if explicit delivery was omitted, and
+`Drop for TickerCompleter` publishes cancellation and delivers. No runtime, host
+or global registry is introduced. `ticker_future_delivery_recovery` pins these
+paths, chronological competition, hostile captured values, reporting failures and
+next-operation progress. ADR-0106 supersedes ADR-0064's invocation/waker policy
+while preserving controller ownership and two-phase publication.
 
 **Review checkpoint, not a test-checkable one:** `TickerCompleter::publish`
 taking one lock for both "set the durable state" and "take the continuation

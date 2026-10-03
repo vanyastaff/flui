@@ -62,6 +62,7 @@ use std::{
 };
 
 use dashmap::DashMap;
+use flui_foundation::panic::retain_opaque_payload as discard_panic_payload;
 use parking_lot::Mutex;
 use web_time::{Duration, Instant};
 
@@ -77,7 +78,6 @@ use crate::{
         PostFrameCallback, RecurringFrameCallback, SchedulerPhase,
     },
     id::{CallbackId, IdGenerator},
-    panic_payload::discard_panic_payload,
     task::{Priority, TaskQueue},
     ticker::TickerProvider,
 };
@@ -914,9 +914,9 @@ struct SchedulerInner {
 /// # Never `resume_unwind`
 ///
 /// A panic raised from a destructor while the thread is already unwinding
-/// aborts the process with no diagnostic. Every waker's `wake()` — and, in
-/// turn, a panicking wake payload's own possibly-panicking `Drop` — is
-/// caught and traced via [`discard_panic_payload`]; nothing here ever
+/// aborts the process with no diagnostic. Every waker's `wake()` is caught
+/// and traced; its opaque payload is retained via [`discard_panic_payload`]
+/// without invoking arbitrary drop glue. Nothing here ever
 /// propagates.
 ///
 /// # What this cannot reach
@@ -962,7 +962,7 @@ impl Drop for SchedulerInner {
                     "frame completion waker panicked while the scheduler was being dropped; \
                      discarding rather than unwinding out of Drop"
                 );
-                discard_panic_payload(payload, "SchedulerInner::drop (waker panic, traced above)");
+                discard_panic_payload(payload);
             }
         }
     }
@@ -1626,11 +1626,7 @@ impl UpdateScheduler {
                     std::panic::resume_unwind(payload);
                 }
                 (Err(callback_payload), Err(notify_payload)) => {
-                    discard_panic_payload(
-                        notify_payload,
-                        "end_frame_impl (superseded by the post-frame callback's own panic \
-                         in the same close)",
-                    );
+                    discard_panic_payload(notify_payload);
                     std::panic::resume_unwind(callback_payload);
                 }
             }
@@ -1936,11 +1932,7 @@ impl UpdateScheduler {
                     // THAT escape uncontained would displace the ORIGINAL
                     // frame panic `resume_unwind(payload)` is about to carry
                     // out, right below.
-                    discard_panic_payload(
-                        secondary_payload,
-                        "drive_frame_impl (abort_frame panicked while closing an already-\
-                         panicking frame, traced above)",
-                    );
+                    discard_panic_payload(secondary_payload);
                 }
                 resume_unwind(payload)
             }
@@ -2931,8 +2923,8 @@ impl UpdateScheduler {
     /// catch-then-resume shape for a panicking post-frame callback, just
     /// upstream of it here. A SECOND (or later) waker's panic cannot be
     /// re-raised too -- `resume_unwind` takes one payload -- so it is routed
-    /// through [`discard_panic_payload`] instead, which additionally
-    /// contains the possibility that the payload's own `Drop` panics.
+    /// through [`discard_panic_payload`] instead, retaining the opaque payload
+    /// without invoking its possibly-panicking destruction.
     fn notify_frame_completion(&self, outcome: FrameOutcome) {
         let waiters = self.inner.frame.completion_waiters.lock().drain();
 
@@ -2989,11 +2981,7 @@ impl UpdateScheduler {
                     // too (a payload can own a type whose destructor
                     // panics), rather than an ordinary `drop` that would
                     // propagate that straight out of this loop.
-                    discard_panic_payload(
-                        payload,
-                        "notify_frame_completion (superseded by an earlier waker's panic \
-                         in the same drain)",
-                    );
+                    discard_panic_payload(payload);
                 }
             }
         }

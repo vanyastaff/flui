@@ -68,7 +68,7 @@ impl WakeDelivery {
                     // Opaque aggregate drop glue can panic twice and abort even
                     // inside catch_unwind. Retain secondary payloads rather than
                     // risk replacing the authoritative first failure.
-                    std::mem::forget(payload);
+                    flui_foundation::panic::retain_opaque_payload(payload);
                 }
             }
             let compensation = {

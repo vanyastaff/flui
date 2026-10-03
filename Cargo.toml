@@ -234,6 +234,7 @@ windows = "0.62"
 
 # COLLECTIONS - Used by multiple crates
 smallvec = { version = "1.13", features = ["union", "const_generics"] }
+slab = "0.4.12"
 
 # SERIALIZATION - Core functionality
 serde = { version = "1.0", features = ["derive", "rc"] }
