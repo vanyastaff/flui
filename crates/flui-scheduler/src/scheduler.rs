@@ -1067,16 +1067,9 @@ impl std::fmt::Debug for UpdateScheduler {
 /// Shared body of [`UpdateScheduler::request_frame`] and the async driver's wake hook.
 ///
 /// Factored out so both callers can hand it plain field references
-/// (`&FrameState`, `&BindingState`) rather than duplicating the
-/// scheduled-frame coalescing logic. This is a plumbing convenience, not the
-/// cycle-avoidance mechanism itself: `UpdateScheduler` collapsed to one
-/// `Arc<SchedulerInner>` (see that type's own doc), so the wake hook's actual
-/// acyclic guarantee lives in `UpdateScheduler::new`'s `Weak<SchedulerInner>`
-/// capture, not in this function's split parameters — a stale earlier
-/// version of this doc described the hook capturing `Arc<FrameState>` +
-/// `Arc<BindingState>` separately to dodge an `Arc` cycle; that split-Arc
-/// scheme predates the single-`Arc` `SchedulerInner` and no longer describes
-/// what the hook actually captures.
+/// (`&FrameState`, `&BindingState`) rather than duplicating coalescing logic.
+/// The wake hook captures `Weak<SchedulerInner>` in `UpdateScheduler::new`,
+/// keeping ownership acyclic independently of this function's split parameters.
 fn request_frame_impl(frame: &FrameState, binding: &BindingState) {
     frame.wake_delivery.request(
         || !frame.frame_scheduled.swap(true, Ordering::SeqCst),
