@@ -1069,7 +1069,7 @@ impl Ticker {
             return;
         };
         let inner_next = Arc::clone(&inner);
-        let scheduler_next = scheduler.clone();
+        let scheduler_next = scheduler;
         let disposed_next = Arc::clone(&disposed);
         let cb_id = strong.schedule_frame_callback(Box::new(move |_vsync_time| {
             Self::tick_and_reschedule_static(inner_next, scheduler_next, disposed_next);
@@ -1995,7 +1995,7 @@ mod tests {
     // `UpdateScheduler::set_on_frame_scheduled`'s hook fires synchronously,
     // on the same thread, from inside `schedule_frame_callback` on the
     // `frame_scheduled` false->true edge (`request_frame_impl`); a hook
-    // installed after the FIRST registration and pumped through
+    // installed after a DELIVERED first registration and pumped through
     // `execute_frame()` (which clears that latch at frame entry, in
     // `handle_begin_frame`, before the transient drain) therefore runs
     // exactly inside the next registration's own unlocked gap, deterministically,
@@ -2012,10 +2012,13 @@ mod tests {
         let scheduler = crate::scheduler::UpdateScheduler::new();
         let ticker = Arc::new(Mutex::new(Ticker::new_with_scheduler(&scheduler)));
 
+        // Pay the initial wake: otherwise installing the race hook would
+        // immediately retry start's undelivered demand before any tick ran.
+        scheduler.set_on_frame_scheduled(Some(Arc::new(|| {})));
         ticker.lock().start(|_| {});
 
-        // Installed AFTER `start()`, whose own registration already spent
-        // the first false->true edge — this hook only fires on the auto-tick
+        // Installed AFTER `start()`, whose initial wake was delivered —
+        // this hook only fires on the auto-tick
         // tail's re-registration inside the frame driven below. One-shot so
         // a second, unrelated edge inside the same frame can't call `stop()`
         // twice.

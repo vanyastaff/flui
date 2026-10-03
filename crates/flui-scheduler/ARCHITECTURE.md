@@ -869,13 +869,26 @@ surplus frame" describes a burst, not a repeating caller.
 to never resolve, because only a frame resolved it and only the scheduler ran
 frames, and `Output` being a bare `FrameTiming` left no sentinel to resolve
 with. See the `end_of_frame` resolves an outcome, and a dropped scheduler
-resolves `Err(SchedulerClosed)` entry below for how. **Still open:** a
-panicking `on_frame_scheduled` hook loses its demand permanently, since
-`request_frame` sets the latch before firing the hook, and FLUI defines no
-recovery transition for that (Compose does: a throwing `onNewAwaiters`
-permanently fails the clock and resumes every current and future awaiter with
-the error). That note is on `end_of_frame`, which is the call that can reach
-the hook.
+resolves `Err(SchedulerClosed)` entry below for how. Frame demand and wake delivery are separate facts: a panicking or absent
+`on_frame_scheduled` hook leaves delivery debt. A later identical `request_frame`
+or a hook installation retries it. Task wakers likewise retry an unpaid wake even
+when their task is already indexed as ready. Consuming a demand and clearing its
+issuance latch are synchronized, so a concurrent new request cannot be erased.
+
+The private `WakeDelivery` stores one receipt identity and tracks active hook
+threads. Fresh work overlapping a hook replaces the identity, so an older success
+cannot acknowledge a newer failure. Serial successful requests reuse the receipt
+and thread-index allocation. No callback runs with a delivery lock held. Same-thread
+reentry records demand for at most one compensating attempt; the first panic remains
+authoritative when that attempt also fails. A callback that panics retains its owning
+hook envelope, because self-uninstallation can make its opaque capture bundle's
+Drop the next failure. Opaque secondary panic payloads are also intentionally
+retained: an aggregate whose two fields both panic in Drop aborts even inside a
+catch boundary. These exceptional leaks keep the first failure authoritative;
+they do not change normal hook ownership. A hookless request never acknowledges
+debt. `coalesced_wake_delivery_recovery` exercises repeated requests, cloned task
+wakers, overlapping receipts, missing hooks, reentry, competing failures and the next
+operation. Hooks must still only wake the owner, never drive a frame inline.
 
 ### `end_of_frame` resolves an outcome, and a dropped scheduler resolves `Err(SchedulerClosed)`
 
@@ -1253,24 +1266,22 @@ and `spare` receives this pump's actual batch, taken out via `mem::take`
 end). `recycle`, called on both `poll_ready`'s normal return and
 `PumpGuard::drop`'s unwind path, clears the drained batch and stores it as
 the *next* `spare`, leaving `store.ready` itself untouched — it already
-correctly holds this pump's discovered-ready ids. Measured via a
-counting-allocator test (`tests/async_driver_ready_index_allocation.rs`):
-the bare-`mem::take` shape costs a steady 64 self-re-waking tasks 69
-allocations/pump (64 per-poll `Arc<TaskWaker>` constructions plus ~5 from
-`Vec` regrowing 0→64); the `spare`-buffer fix costs exactly 64, the waker
-cost alone. The remaining 64/pump is a **separate, pre-existing,
-out-of-scope** cost (a fresh `Arc<TaskWaker>` per poll, unchanged from
-before this issue); reusing a per-task waker across polls is a distinct
-optimization this change does not make, named here so it is not mistaken
-for a regression.
+correctly holds this pump's discovered-ready ids.
 
-**Allocation gate, not just a bench:** `cargo xtask ci` has no bench step, so a
-`#[cfg(test)]`-gated oracle carries the CI-run allocation proof:
-`tests/async_driver_ready_index_allocation.rs` (a dedicated-binary,
-counting-`#[global_allocator]` test, following `frame_telemetry_allocation.rs`'s
-convention) asserts R=0 at N∈{0, 100,000} costs zero allocations once warm,
-and steady R=64 self-re-waking tasks cost zero *extra* allocations once warm
-(exactly the per-poll waker count, never more) — but an allocation count
+Every task retains one `Waker` from spawn through retirement; `poll_ready`
+clones it instead of allocating a fresh `Arc<TaskWaker>` per poll. The waker
+holds a `Weak<Inner>`, so its copies cannot retain the driver or its futures.
+A completed or cancelled task's old wakers remain inert through the existing
+live-slot and cancellation checks. The public `task_waker_lifecycle` table
+covers eager and lazy spawn, repeated-poll identity, cloned-waker coalescing,
+completion, cancellation, the next task, and destruction of a driver whose
+pending future exported its waker.
+
+**Allocation gate, not just a bench:** `cargo xtask ci` has no bench step, so
+`tests/async_driver_ready_index_allocation.rs` (a dedicated counting-allocator
+binary) asserts that warm R=0 at N in {0, 100,000} and steady R=64 self-waking
+tasks both allocate nothing. This pins reuse of both task wakers and ready
+buffers. An allocation count still
 cannot discriminate an O(N) scan from an O(R) drain when R=0, since
 collecting zero ready ids allocates nothing either way. That an idle pump
 reads no dormant task's readiness flag (an O(N) filter-scan calls `.load()`

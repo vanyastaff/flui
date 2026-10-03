@@ -191,6 +191,7 @@ mod post_frame;
 // Shared panic-payload containment for scheduler/async_driver/ticker's
 // already-unwinding recovery paths -- see the module doc.
 mod panic_payload;
+mod wake_delivery;
 
 #[cfg(test)]
 mod table_test;

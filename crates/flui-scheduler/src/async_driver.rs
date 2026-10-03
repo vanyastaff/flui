@@ -18,7 +18,9 @@
 //! A task's [`Waker`] sets a per-task `ready` flag and — **only on the
 //! `false → true` transition** — asks the binding for a frame through the
 //! scheduler's existing `request_frame` hook. So a burst of wakes between frames
-//! costs one flag write and one frame request, exactly as
+//! costs one readiness transition and one successfully delivered frame request.
+//! A failed or absent hook retains delivery debt for the next wake or hook
+//! installation, including a wake through another clone of the same waker. As
 //! `ExternalBuildScheduler` coalesces rebuild requests.
 //!
 //! Waking is legal from any thread. Polling is not: it happens only inside
@@ -135,6 +137,8 @@ struct Task {
     /// The future, absent while it is being polled (moved out so the driver's
     /// lock is not held across user code).
     future: Option<BoxedTask>,
+    /// One identity for the task lifetime; cloning it for a poll never allocates.
+    waker: Waker,
     /// Set by the waker; cleared immediately before each poll.
     ready: Arc<ReadyFlag>,
     /// Set by [`TaskToken::drop`]. Checked after a poll returns, so a token
@@ -176,6 +180,7 @@ struct Inner {
     store: Mutex<TaskStore>,
     next_id: AtomicU64,
     request_frame: Mutex<Option<RequestFrame>>,
+    wake_delivery: crate::wake_delivery::WakeDelivery,
 }
 
 impl Inner {
@@ -183,11 +188,9 @@ impl Inner {
     ///
     /// The lock is released before the hook runs: a hook that re-enters the
     /// driver (or takes the binding's own locks) must not deadlock against us.
-    fn request_frame(&self) {
-        let hook = self.request_frame.lock().clone();
-        if let Some(hook) = hook {
-            hook();
-        }
+    fn request_frame(&self, fresh: bool) {
+        self.wake_delivery
+            .request(|| fresh, || self.request_frame.lock().clone());
     }
 }
 
@@ -211,24 +214,18 @@ impl Wake for TaskWaker {
             return;
         }
 
-        // Coalescing: only the first wake since the last poll requests a frame.
-        if !self.ready.swap(true, Ordering::AcqRel)
-            && let Some(inner) = self.inner.upgrade()
-        {
-            // A stale waker may outlive a completed/cancelled task. In that
-            // case it must not wake the event loop for work that can never
-            // run, and must not index an id no task owns any more —
-            // `contains_key` and the push happen in the same locked section.
+        let fresh = !self.ready.swap(true, Ordering::AcqRel);
+        if let Some(inner) = self.inner.upgrade() {
             let task_is_live = {
                 let mut store = inner.store.lock();
                 let is_live = store.tasks.contains_key(&self.id);
-                if is_live {
+                if is_live && fresh {
                     store.ready.push(self.id);
                 }
                 is_live
             };
             if task_is_live {
-                inner.request_frame();
+                inner.request_frame(fresh);
             }
         }
     }
@@ -372,8 +369,8 @@ fn recycle(store: &mut TaskStore, mut buf: Vec<TaskId>) {
 /// finally drops last: a nested `TaskToken` a panicking future owns finishes
 /// its own `cancel()` (lock acquired, then released) before this `Drop`
 /// body ever runs. And the slot this removes holds `future: None` (taken
-/// before the poll), so `tasks.remove` itself runs no user code: only two
-/// `Arc<AtomicBool>` reference-count decrements.
+/// before the poll), so `tasks.remove` itself runs no user code: only
+/// framework-owned waker and readiness reference-count decrements.
 struct PumpGuard<'a> {
     inner: &'a Inner,
     /// This pump's whole ready batch, sorted and deduplicated, consumed
@@ -447,14 +444,15 @@ impl AsyncDriver {
                 }),
                 next_id: AtomicU64::new(1),
                 request_frame: Mutex::new(None),
+                wake_delivery: crate::wake_delivery::WakeDelivery::default(),
             }),
         }
     }
 
     /// Install the binding's "request a frame" hook.
     ///
-    /// Called once at wiring time. A driver with no hook still polls whenever a
-    /// frame happens to run — headless tests rely on that.
+    /// Called at wiring time; installation retries undelivered demand. A driver
+    /// with no hook still polls whenever a frame runs — headless tests rely on that.
     ///
     /// Nothing enforces "once": a later call replaces the hook, and the
     /// displaced `Arc` is dropped only after `request_frame`'s lock is
@@ -466,6 +464,7 @@ impl AsyncDriver {
     {
         let previous = { self.inner.request_frame.lock().replace(Arc::new(hook)) };
         drop(previous);
+        self.inner.request_frame(false);
     }
 
     /// Queue `future` for polling on the frame thread, and request a frame.
@@ -480,6 +479,12 @@ impl AsyncDriver {
         let id = self.inner.next_id.fetch_add(1, Ordering::Relaxed);
         let ready = Arc::new(ReadyFlag::new(true));
         let cancelled = Arc::new(AtomicBool::new(false));
+        let waker = Waker::from(Arc::new(TaskWaker {
+            id,
+            ready: Arc::clone(&ready),
+            cancelled: Arc::clone(&cancelled),
+            inner: Arc::downgrade(&self.inner),
+        }));
 
         {
             let mut store = self.inner.store.lock();
@@ -487,6 +492,7 @@ impl AsyncDriver {
                 id,
                 Task {
                     future: Some(future),
+                    waker,
                     ready: Arc::clone(&ready),
                     cancelled: Arc::clone(&cancelled),
                 },
@@ -497,7 +503,7 @@ impl AsyncDriver {
         }
 
         // A freshly spawned task needs a frame to be polled in.
-        self.inner.request_frame();
+        self.inner.request_frame(true);
 
         TaskToken {
             id,
@@ -563,6 +569,7 @@ impl AsyncDriver {
                 id,
                 Task {
                     future: Some(future),
+                    waker,
                     ready: Arc::clone(&ready),
                     cancelled: Arc::clone(&cancelled),
                 },
@@ -575,7 +582,7 @@ impl AsyncDriver {
         };
 
         if armed {
-            self.inner.request_frame();
+            self.inner.request_frame(true);
         }
 
         Some(TaskToken {
@@ -608,6 +615,7 @@ impl AsyncDriver {
             // through the `MutexGuard`'s `deref_mut` are each their own
             // opaque borrow, which the compiler cannot prove disjoint.
             let store: &mut TaskStore = &mut guard;
+            self.inner.wake_delivery.consume(|| {});
             mem::swap(&mut store.ready, &mut store.spare);
             mem::take(&mut store.spare)
         };
@@ -641,15 +649,15 @@ impl AsyncDriver {
             guard.cursor += 1;
 
             // Take the future out so no lock is held across user code.
-            let Some((mut future, ready, cancelled)) = ({
+            let Some((mut future, waker, cancelled)) = ({
                 let mut store = self.inner.store.lock();
                 store.tasks.get_mut(&id).and_then(|task| {
                     // Clear BEFORE polling: a wake landing during the poll must
                     // re-arm the task rather than be swallowed.
                     task.ready.store(false, Ordering::Release);
-                    task.future.take().map(|future| {
-                        (future, Arc::clone(&task.ready), Arc::clone(&task.cancelled))
-                    })
+                    task.future
+                        .take()
+                        .map(|future| (future, task.waker.clone(), Arc::clone(&task.cancelled)))
                 })
             }) else {
                 // Stale id: cancelled, or a same-pump duplicate whose first
@@ -664,12 +672,6 @@ impl AsyncDriver {
             // revisit it otherwise.
             guard.in_flight = Some(id);
 
-            let waker = Waker::from(Arc::new(TaskWaker {
-                id,
-                ready,
-                cancelled: Arc::clone(&cancelled),
-                inner: Arc::downgrade(&self.inner),
-            }));
             let mut cx = Context::from_waker(&waker);
             let outcome = future.as_mut().poll(&mut cx);
             guard.in_flight = None;
@@ -767,7 +769,9 @@ impl AsyncDriver {
     #[cfg(any(test, feature = "testing"))]
     #[must_use]
     pub fn is_unlocked(&self) -> bool {
-        self.inner.store.try_lock().is_some() && self.inner.request_frame.try_lock().is_some()
+        self.inner.store.try_lock().is_some()
+            && self.inner.request_frame.try_lock().is_some()
+            && self.inner.wake_delivery.is_unlocked()
     }
 }
 
@@ -994,6 +998,8 @@ mod tests {
 
         driver.poll_ready();
         assert_eq!(*order.lock(), (0..8).collect::<Vec<_>>());
+        // Retain cancellation tokens until every task has been observed.
+        drop(tokens);
     }
 
     /// A task woken *during* the poll is picked up next frame, not spun on.

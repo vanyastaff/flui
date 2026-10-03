@@ -749,6 +749,7 @@ struct FrameState {
     budget: Mutex<FrameBudget>,
     /// Whether a frame is currently scheduled
     frame_scheduled: AtomicBool,
+    wake_delivery: crate::wake_delivery::WakeDelivery,
     /// Frame counter
     frame_count: AtomicU64,
     /// Jank tracking - count of frames that exceeded budget
@@ -1077,13 +1078,10 @@ impl std::fmt::Debug for UpdateScheduler {
 /// scheme predates the single-`Arc` `SchedulerInner` and no longer describes
 /// what the hook actually captures.
 fn request_frame_impl(frame: &FrameState, binding: &BindingState) {
-    let was_scheduled = frame.frame_scheduled.swap(true, Ordering::SeqCst);
-    if !was_scheduled {
-        let hook = binding.on_frame_scheduled.lock().clone();
-        if let Some(hook) = hook {
-            hook();
-        }
-    }
+    frame.wake_delivery.request(
+        || !frame.frame_scheduled.swap(true, Ordering::SeqCst),
+        || binding.on_frame_scheduled.lock().clone(),
+    );
 }
 
 impl UpdateScheduler {
@@ -1126,6 +1124,7 @@ impl UpdateScheduler {
                 current_vsync_time: Mutex::new(None),
                 budget: Mutex::new(FrameBudget::new(target_fps)),
                 frame_scheduled: AtomicBool::new(false),
+                wake_delivery: crate::wake_delivery::WakeDelivery::default(),
                 frame_count: AtomicU64::new(0),
                 janky_frame_count: AtomicU64::new(0),
                 warm_up_done: AtomicBool::new(false),
@@ -1281,10 +1280,12 @@ impl UpdateScheduler {
 
         let frame_id = timing.id;
         *self.inner.frame.current_frame.lock() = Some(timing);
-        self.inner
-            .frame
-            .frame_scheduled
-            .store(false, Ordering::Release);
+        self.inner.frame.wake_delivery.consume(|| {
+            self.inner
+                .frame
+                .frame_scheduled
+                .store(false, Ordering::Release);
+        });
         // Recorded at the same point `frame_scheduled` clears: this thread
         // is now the one driving the frame `ensure_visual_update`'s
         // same-thread arms trust (see `frame_thread`'s own doc). This store
@@ -2270,19 +2271,15 @@ impl UpdateScheduler {
     /// outcome out. No single-threaded test can redden a reversion of this;
     /// only a `loom` model could prove it, and none exists yet.
     ///
-    /// # Calling this from a hook that itself pumps recurses
-    ///
-    /// The platform wake hook this method's own demand re-issue can fire
-    /// already forbids re-entering the scheduler (see
-    /// [`set_on_frame_scheduled`](Self::set_on_frame_scheduled)'s contract);
-    /// concretely here, a hook that called back into `finish_async_pump`
-    /// would recurse (pump → clear → re-check → hook → pump → ...), which a
-    /// bare unconditional clear never could.
+    /// Reentrant demand defers delivery to the outer hook invocation, with
+    /// at most one compensating attempt; hooks must not drive a frame inline.
     pub fn finish_async_pump(&self) {
-        self.inner
-            .frame
-            .frame_scheduled
-            .swap(false, Ordering::SeqCst);
+        self.inner.frame.wake_delivery.consume(|| {
+            self.inner
+                .frame
+                .frame_scheduled
+                .swap(false, Ordering::SeqCst);
+        });
 
         // The `completion_waiters` guard `has_live_waiter()` takes is a
         // temporary of this `if`'s condition, so it drops at the end of the
@@ -2303,12 +2300,11 @@ impl UpdateScheduler {
         self.inner.async_driver.pending_task_count()
     }
 
-    /// Install the platform wake hook fired when a frame is first
-    /// scheduled.
+    /// Install the platform wake hook and retry any undelivered demand.
     ///
     /// The hook runs on whichever thread schedules the frame and may run
     /// while callers hold their own locks — it must only touch wake machinery,
-    /// never re-enter the scheduler.
+    /// never drive a frame inline. Reentrant demand is coalesced without recursion.
     ///
     /// "Whichever thread" is not a formality: an `AsyncDriver` task waker fires
     /// this from whatever thread completed the future, which for a job on
@@ -2332,6 +2328,10 @@ impl UpdateScheduler {
         let previous =
             { std::mem::replace(&mut *self.inner.binding.on_frame_scheduled.lock(), hook) };
         drop(previous);
+        self.inner.frame.wake_delivery.request(
+            || false,
+            || self.inner.binding.on_frame_scheduled.lock().clone(),
+        );
     }
 
     /// Add a persistent frame callback.
@@ -2860,13 +2860,8 @@ impl UpdateScheduler {
     /// * A pending waiter is real frame demand, so it suppresses
     ///   [`execute_idle_callbacks`](Self::execute_idle_callbacks) until the
     ///   frame runs.
-    /// * If the `on_frame_scheduled` hook panics, the demand is lost
-    ///   permanently rather than retried: `request_frame` sets
-    ///   `frame_scheduled = true` *before* firing the hook, so an unwinding
-    ///   hook leaves the latch set with no wake delivered and every later
-    ///   demand hits the no-op edge. Compose defines a transition for this
-    ///   (a throwing `onNewAwaiters` fails the clock and resumes every
-    ///   current and future awaiter with the error); FLUI defines none yet.
+    /// * A panicking or absent wake hook leaves durable delivery debt. A later
+    ///   frame request or hook installation retries it without discarding waiters.
     ///
     /// # Panics
     ///

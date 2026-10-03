@@ -75,6 +75,7 @@ fn assert_no_scheduler_lock_held(scheduler: &UpdateScheduler) {
         current_vsync_time,
         budget,
         frame_scheduled: _,
+        wake_delivery,
         frame_count: _,
         janky_frame_count: _,
         warm_up_done: _,
@@ -105,6 +106,11 @@ fn assert_no_scheduler_lock_held(scheduler: &UpdateScheduler) {
     assert!(
         completion_waiters.try_lock().is_some(),
         "completion_waiters is locked during a callback"
+    );
+
+    assert!(
+        wake_delivery.is_unlocked(),
+        "wake delivery is locked during a callback"
     );
 
     let CallbackState {
