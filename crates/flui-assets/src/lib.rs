@@ -193,7 +193,7 @@ pub mod registry;
 
 // Re-exports for convenience
 pub use crate::cache::{AssetCache, AssetCacheCore, AssetCacheExt};
-pub use crate::core::{Asset, AssetLoader, AssetMetadata};
+pub use crate::core::{Asset, AssetMetadata};
 pub use crate::error::{AssetError, Result};
 pub use crate::registry::{AssetRegistry, AssetRegistryBuilder, HasCapacity, NoCapacity};
 pub use crate::types::{
@@ -201,10 +201,13 @@ pub use crate::types::{
 };
 
 // Re-export loaders
-pub use crate::loaders::{BytesFileLoader, FileLoader, MemoryLoader, NetworkLoader};
+pub use crate::loaders::BytesFileLoader;
+#[cfg(feature = "network")]
+pub use crate::loaders::NetworkLoader;
 
 // Re-export concrete asset types
 pub use crate::assets::font::FontAsset;
+#[cfg(feature = "images")]
 pub use crate::assets::image::ImageAsset;
 
 // Re-export Image from flui_painting

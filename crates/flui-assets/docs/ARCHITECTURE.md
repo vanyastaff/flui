@@ -288,22 +288,18 @@ pub trait Asset {
 - `Key` must be hashable and comparable
 - `load()` is async for non-blocking I/O
 
-### Custom Loaders
+### Byte sources and decoding
 
-Implement `AssetLoader` trait:
-```rust
-pub trait AssetLoader<T: Asset> {
-    async fn load(&self, key: &T::Key) -> Result<T::Data, T::Error>;
-    async fn exists(&self, key: &T::Key) -> Result<bool, T::Error> { Ok(false) }
-    async fn metadata(&self, key: &T::Key) -> Result<Option<AssetMetadata>, T::Error> { Ok(None) }
-}
-```
+`Asset::load` owns source selection and decoding. `BytesFileLoader` reads real
+file bytes for `FontAsset` and `ImageAsset`; `NetworkLoader` fetches bytes for the
+network image bridge. Embedded assets own their bytes through `from_bytes`.
+There is no separate generic loader trait: a key alone cannot specify how to
+construct an arbitrary asset's decoded data.
 
-**Built-in loaders**:
-- `FileLoader` - Filesystem with path resolution
-- `BytesFileLoader` - Optimized for raw bytes
-- `MemoryLoader` - In-memory for testing
-- `NetworkLoader` - HTTP/HTTPS (requires `network` feature)
+Image types are available with `images`, and network operations with `network`.
+Unavailable operations are rejected by compilation, rather than reading data
+before returning a feature-disabled error. See
+[ADR-0107](../../../docs/adr/ADR-0107-asset-byte-sources-and-decoding.md).
 
 ## Design Patterns
 
@@ -416,6 +412,28 @@ hot-reload = ["notify"]
 | Flexibility | ✅ Easy extension | ⚠️ ECS-coupled |
 
 ## Mapping decisions
+
+- Decoded data need not implement `Clone`. Registry caches and cloned strong/weak
+  handles share `Arc` ownership, while the opt-in `clone_data` operation requires
+  `Clone`. `non_clone_data_shares_cache_ownership_and_releases_before_reload`
+  loads a non-Clone value, shares cache hits and handles, evicts it while live
+  handles retain it, reloads the evicted key, and observes destruction after
+  consumer handles and the owning registry are released. Cache invalidation
+  excludes future lookups; Moka's deferred retirement is not an immediate physical
+  deallocation guarantee.
+  `AssetHandle::ptr_eq` is an inherent operation using `Arc::ptr_eq`; the same
+  lifecycle test keeps an evicted value alive while reloading its equal key and
+  verifies that the old clone shares ownership while the reloaded value does not.
+  The extension trait no longer substitutes key equality for allocation identity.
+
+- Byte-source selection and decoding belong to `Asset::load`. File-backed image
+  and font assets use `BytesFileLoader`; embedded constructors own their source
+  bytes, and the network bridge uses `NetworkLoader` before image decoding.
+  `font_sources_preserve_bytes_and_recover_after_load_errors` and
+  `image_asset_file_loads_a_committed_png_fixture_to_its_real_dimensions` pin
+  file/embedded equivalence, invalid sources, missing sources and recovery.
+  [ADR-0107](../../../docs/adr/ADR-0107-asset-byte-sources-and-decoding.md) records
+  removal of the unsupported generic loader abstraction and feature-gated types.
 
 - Registry admission validates each descriptor before cache lookup or loading,
   including cache hits. Rejection preserves previously accepted cached data.

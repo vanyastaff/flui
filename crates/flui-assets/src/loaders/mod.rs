@@ -1,14 +1,12 @@
 //! Asset loaders for different sources.
 //!
 //! This module provides concrete implementations of asset loaders for various data sources.
-//! All loaders implement the [`AssetLoader`](crate::AssetLoader) trait for type-safe, async loading.
+//! Load byte sources directly, then decode them in an [`Asset`](crate::Asset) implementation.
 //!
 //! # Available Loaders
 //!
-//! - [`FileLoader`] - Generic file system loader with path resolution
 //! - [`BytesFileLoader`] - Optimized loader for raw bytes from files
-//! - [`MemoryLoader`] - In-memory storage for testing and embedded assets
-//! - [`NetworkLoader`] - HTTP/HTTPS loading (requires `network` feature)
+//! - `NetworkLoader` - HTTP/HTTPS loading (requires `network` feature)
 //!
 //! # Examples
 //!
@@ -16,7 +14,6 @@
 //!
 //! ```rust,no_run
 //! use flui_assets::BytesFileLoader;
-//! use flui_assets::core::AssetLoader;
 //!
 //! # #[tokio::main]
 //! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -27,22 +24,10 @@
 //! # }
 //! ```
 //!
-//! ## Memory Loading (Testing)
-//!
-//! ```rust
-//! use flui_assets::MemoryLoader;
-//!
-//! let loader = MemoryLoader::new();
-//! loader.insert("test", vec![1, 2, 3, 4]);
-//!
-//! assert!(loader.contains(&"test"));
-//! assert_eq!(loader.len(), 1);
-//! ```
-
 pub mod file;
-pub mod memory;
+#[cfg(feature = "network")]
 pub mod network;
 
-pub use file::{BytesFileLoader, FileLoader};
-pub use memory::MemoryLoader;
+pub use file::BytesFileLoader;
+#[cfg(feature = "network")]
 pub use network::NetworkLoader;

@@ -177,15 +177,11 @@ let bytes = loader.load_bytes("logo.png").await?;
 let text = loader.load_string("config.json").await?;
 ```
 
-### Memory Loader
+### Embedded bytes
 
-```rust
-use flui_assets::MemoryLoader;
-
-let loader = MemoryLoader::new();
-loader.insert(AssetKey::new("data"), vec![1, 2, 3, 4, 5]);
-let data = loader.load(&AssetKey::new("data")).await?;
-```
+Construct `FontAsset::from_bytes` or, with `images`, `ImageAsset::from_bytes`.
+The asset owns the source bytes and decodes through the same `Asset::load` contract
+as a file-backed asset; the registry caches its decoded result.
 
 ## Feature Flags
 

@@ -46,6 +46,8 @@ pub trait Asset: Send + Sync + 'static {
     /// The type of data this asset produces when loaded.
     ///
     /// This must be `Send + Sync` to allow sharing across threads.
+    /// It need not implement `Clone`: caches and handles share the value through
+    /// `Arc` ownership. Only explicit data-copying operations require `Clone`.
     type Data: Send + Sync;
 
     /// The type used to uniquely identify this asset.

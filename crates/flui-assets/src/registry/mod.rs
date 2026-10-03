@@ -250,7 +250,6 @@ impl AssetRegistry {
     where
         T: Asset<Error = AssetError>,
         T::Key: std::hash::Hash + Eq + Clone,
-        T::Data: Clone,
     {
         asset.validate()?;
         let key = asset.key();
@@ -284,7 +283,6 @@ impl AssetRegistry {
     where
         T: Asset,
         T::Key: std::hash::Hash + Eq + Clone,
-        T::Data: Clone,
     {
         self.get_cache::<T>()?.get(key).await
     }
@@ -304,7 +302,6 @@ impl AssetRegistry {
     where
         T: Asset<Error = AssetError>,
         T::Key: std::hash::Hash + Eq + Clone,
-        T::Data: Clone,
     {
         self.load(asset).await?;
         Ok(())
@@ -322,7 +319,6 @@ impl AssetRegistry {
     where
         T: Asset,
         T::Key: std::hash::Hash + Eq + Clone,
-        T::Data: Clone,
     {
         if let Some(cache) = self.get_cache::<T>() {
             cache.invalidate(key).await;
@@ -341,7 +337,6 @@ impl AssetRegistry {
     where
         T: Asset,
         T::Key: std::hash::Hash + Eq + Clone,
-        T::Data: Clone,
     {
         if let Some(cache) = self.get_cache::<T>() {
             cache.clear().await;
@@ -363,7 +358,6 @@ impl AssetRegistry {
     where
         T: Asset,
         T::Key: std::hash::Hash + Eq + Clone,
-        T::Data: Clone,
     {
         let caches = self.caches.read();
         let type_id = TypeId::of::<T>();
@@ -378,7 +372,6 @@ impl AssetRegistry {
     where
         T: Asset,
         T::Key: std::hash::Hash + Eq + Clone,
-        T::Data: Clone,
     {
         let type_id = TypeId::of::<T>();
 

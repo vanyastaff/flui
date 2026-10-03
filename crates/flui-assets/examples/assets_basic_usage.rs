@@ -4,7 +4,7 @@
 //! - Loading assets through a registry built with `AssetRegistryBuilder`
 //! - Using the cache for efficient asset management
 //! - Working with different asset types (images and fonts)
-//! - Using memory loaders for embedded assets
+//! - Loading embedded assets from owned bytes
 
 use flui_assets::{AssetRegistryBuilder, FontAsset};
 
@@ -123,20 +123,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     println!("  ✓ Preloaded 3 fonts into cache");
-    println!();
-
-    // Example 6: Using MemoryLoader directly
-    println!("6. Using MemoryLoader Directly");
-    println!("-------------------------------");
-
-    use flui_assets::MemoryLoader;
-
-    let loader: MemoryLoader<AssetKey, Vec<u8>> = MemoryLoader::new();
-    loader.insert(AssetKey::new("data1"), vec![1, 2, 3, 4, 5]);
-    loader.insert(AssetKey::new("data2"), vec![6, 7, 8, 9, 10]);
-
-    println!("  ✓ Inserted 2 items into memory loader");
-    println!("  ✓ Loader contains {} items", loader.len());
     println!();
 
     println!("=== Example Complete ===");

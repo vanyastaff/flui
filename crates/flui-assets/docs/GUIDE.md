@@ -343,24 +343,11 @@ let bytes = loader.load_bytes("texture.png").await?;
 let text = loader.load_string("config.json").await?;
 ```
 
-#### Memory Loader
+### Embedded bytes
 
-```rust
-use flui_assets::{MemoryLoader, AssetKey};
-
-let loader = MemoryLoader::new();
-
-// Insert data
-loader.insert(AssetKey::new("data"), vec![1, 2, 3, 4]);
-
-// Check if exists
-assert!(loader.contains(&AssetKey::new("data")));
-
-// Get length
-assert_eq!(loader.len(), 1);
-```
-
-**Use case**: Testing, embedded assets, hot-reload.
+Construct `FontAsset::from_bytes` or, with `images`, `ImageAsset::from_bytes`.
+The asset owns the source bytes and decodes through the same `Asset::load` contract
+as a file-backed asset; the registry caches its decoded result.
 
 ### Parallel Loading
 
