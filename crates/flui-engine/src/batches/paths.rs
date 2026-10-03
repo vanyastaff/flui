@@ -325,10 +325,9 @@ impl DrawBatcher {
             // Reconstruct full Vertex data with current paint color.
             // The cache stores UNTRANSFORMED positions; bake the current transform now.
             let rgba = paint.color.to_rgba_f32_array();
-            let vertices: Vec<Vertex> = positions
+            let vertices = positions
                 .iter()
-                .map(|&pos| Vertex::new(pos, rgba, [0.0, 0.0]))
-                .collect();
+                .map(|&pos| Vertex::new(pos, rgba, [0.0, 0.0]));
             // `cached_indices` is already `&[u32]` — pass it directly; no allocation needed.
 
             if let Some(blend) = ssaa_blend {
@@ -407,7 +406,7 @@ impl DrawBatcher {
         segment: &mut DrawSegment,
         draw_order: &mut Vec<DrawItem>,
         state: &GpuStateStack,
-        mut vertices: Vec<Vertex>,
+        vertices: impl IntoIterator<Item = Vertex>,
         indices: &[u32],
         blend: BlendMode,
     ) {
@@ -416,11 +415,12 @@ impl DrawBatcher {
         }
 
         let transform = state.current_transform();
-        for v in &mut vertices {
+        let vertices = vertices.into_iter().map(|mut v| {
             let transformed = transform * glam::vec4(v.position[0], v.position[1], 0.0, 1.0);
             v.position = [transformed.x, transformed.y];
-        }
-        Self::divert_path_to_ssaa(segment, draw_order, state, &vertices, indices, blend);
+            v
+        });
+        Self::divert_path_to_ssaa(segment, draw_order, state, vertices, indices, blend);
     }
 
     /// Draw indexed triangle geometry with per-vertex color + uv.

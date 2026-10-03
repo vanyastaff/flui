@@ -218,7 +218,15 @@ fn clear_offscreen_result(nested: bool) {
 /// composites with its own blend mode.
 #[test]
 fn painter_images_and_offscreen_results_read_back_as_specified() {
-    let cases: [(&str, fn()); 29] = [
+    let cases: [(&str, fn()); 31] = [
+        (
+            "cached paths update colour and transform across blend routes",
+            cached_paths_reconstruct_colour_and_transform,
+        ),
+        (
+            "offscreen pool adapts to resized working set",
+            offscreen_pool_reuses_a_resized_working_set,
+        ),
         (
             "limited MRT coverage recovery",
             limited_mrt_coverage_refusal_recovers,
@@ -340,6 +348,61 @@ fn painter_images_and_offscreen_results_read_back_as_specified() {
         failures.is_empty(),
         "painter image rows failed: {failures:?}"
     );
+}
+
+/// A full pool must learn new effect dimensions after a window resize rather
+/// than retaining the old descriptors and reallocating the new ones forever.
+fn offscreen_pool_reuses_a_resized_working_set() {
+    let (device, _queue) = test_device_and_queue();
+    // Choose the fixture's capacity explicitly, independent of renderer defaults.
+    let mut pool = crate::texture_pool::TexturePool::with_capacity(device, 4);
+    let original: Vec<_> = (0..4)
+        .map(|_| pool.acquire(16, 16, READBACK_FORMAT))
+        .collect();
+    drop(original);
+    let resized: Vec<_> = (0..4)
+        .map(|_| pool.acquire(32, 32, READBACK_FORMAT))
+        .collect();
+    let allocations: Vec<_> = resized
+        .iter()
+        .map(|entry| entry.texture().clone())
+        .collect();
+    drop(resized);
+    let reused: Vec<_> = (0..4)
+        .map(|_| pool.acquire(32, 32, READBACK_FORMAT))
+        .collect();
+    for (entry, allocation) in reused.iter().zip(&allocations) {
+        assert_eq!(
+            entry.texture(),
+            allocation,
+            "the resized effect working set reuses its GPU allocations"
+        );
+    }
+}
+
+/// The second draw hits the same local geometry, but must use its current
+/// colour and translation on the normal, SSAA and advanced-blend routes.
+fn cached_paths_reconstruct_colour_and_transform() {
+    use flui_foundation::geometry::Offset;
+    use flui_painting::{Paint, paint::path::Path, styling::Color};
+
+    let (device, queue) = test_device_and_queue();
+    let mut path = Path::new();
+    path.add_rect(Rect::from_xywh(8.0, 8.0, 16.0, 32.0));
+    for mode in [BlendMode::Src, BlendMode::SrcOver, BlendMode::Multiply] {
+        let pixels = render_to_rgba(&device, &queue, 64, wgpu::Color::WHITE, |painter| {
+            painter.draw_path(&path, &Paint::fill(Color::RED).with_blend_mode(mode));
+            painter.translate(Offset::new(24.0, 0.0));
+            painter.draw_path(&path, &Paint::fill(Color::GREEN).with_blend_mode(mode));
+        });
+        assert_eq!(pixel_at(&pixels, 64, 16, 24), [255, 0, 0, 255], "{mode:?}");
+        assert_eq!(pixel_at(&pixels, 64, 40, 24), [0, 255, 0, 255], "{mode:?}");
+        assert_eq!(
+            pixel_at(&pixels, 64, 28, 24),
+            [255, 255, 255, 255],
+            "{mode:?}"
+        );
+    }
 }
 
 fn low_alpha_images_preserve_their_contribution() {

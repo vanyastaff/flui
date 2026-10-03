@@ -226,9 +226,7 @@ impl DrawBatcher {
                 if pipeline_cache::ssaa_eligible_for(mode, device_area as f32) {
                     // Vertices are already in device-pixel space (apply_transform was
                     // called above). Pass them directly to divert_path_to_ssaa.
-                    Self::divert_path_to_ssaa(
-                        segment, draw_order, state, &vertices, &indices, mode,
-                    );
+                    Self::divert_path_to_ssaa(segment, draw_order, state, vertices, &indices, mode);
                 } else {
                     // Coverage-destructive modes or sub-threshold rects: tessellated path.
                     // Coverage-destructive: Clear/Src/SrcIn/DstIn/SrcOut/DstATop/Modulate
@@ -339,7 +337,7 @@ impl DrawBatcher {
                                 v.position = [p.x, p.y];
                             }
                             Self::divert_path_to_ssaa(
-                                segment, draw_order, state, &baked, &indices, mode,
+                                segment, draw_order, state, baked, &indices, mode,
                             );
                         } else {
                             // Coverage-destructive or sub-threshold: tessellated path.
@@ -579,7 +577,7 @@ impl DrawBatcher {
                                 v.position = [p.x, p.y];
                             }
                             Self::divert_path_to_ssaa(
-                                segment, draw_order, state, &baked, &indices, mode,
+                                segment, draw_order, state, baked, &indices, mode,
                             );
                         } else {
                             let key = pipeline_cache::pipeline_key_from_paint(&fill_paint);
@@ -705,7 +703,7 @@ impl DrawBatcher {
                         let p = transform * glam::vec4(v.position[0], v.position[1], 0.0, 1.0);
                         v.position = [p.x, p.y];
                     }
-                    Self::divert_path_to_ssaa(segment, draw_order, state, &baked, &indices, mode);
+                    Self::divert_path_to_ssaa(segment, draw_order, state, baked, &indices, mode);
                 } else {
                     Self::submit_transformed_geometry(
                         segment,
@@ -936,7 +934,7 @@ impl DrawBatcher {
                                 v.position = [p.x, p.y];
                             }
                             Self::divert_path_to_ssaa(
-                                segment, draw_order, state, &baked, &indices, mode,
+                                segment, draw_order, state, baked, &indices, mode,
                             );
                         } else {
                             let key = pipeline_cache::pipeline_key_from_paint(&fill_paint);

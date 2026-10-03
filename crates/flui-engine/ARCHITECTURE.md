@@ -353,6 +353,23 @@ and pipeline, scissor, resolved clip and contiguous index ranges match. A solid
 draw between two paths is an ordering barrier. The painter readback family checks
 this under a bounded budget and with intervening solids and different clips.
 
+Warm path-cache draws stream recoloured, transformed vertices directly into the
+recording arena. The normal, advanced-blend and SSAA paths consume the same
+iterator contract, with isolated bounds computed from their admitted geometry.
+`warm_path_cpu_record` measures the public recording consumer rather than the
+borrowed cache lookup alone. `warm_path_recording_has_no_per_draw_vertex_allocation`
+uses the existing isolated allocator binary to count warmed public draws, allowing
+geometric arena growth but rejecting a temporary allocation per path.
+`cached_paths_reconstruct_colour_and_transform` reads back a cache hit with a new
+colour and translation through normal, SSAA and advanced blend routes.
+
+The offscreen texture pool retains the most recently returned idle allocations,
+evicting the oldest when its bounded inventory fills. A resized effect working
+set therefore replaces obsolete dimensions and warms up again. Returning an
+allocation never mutates an outstanding texture or a submitted command's wgpu
+reference. `offscreen_pool_reuses_a_resized_working_set` in the painter readback
+family checks allocation reuse after the previous dimensions filled the pool.
+
 ### Encoded sRGB surface presentation
 
 The current shaders emit the encoded components supplied by `Color::to_f32_array`;

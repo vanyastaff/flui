@@ -175,7 +175,7 @@ impl TexturePoolInner {
     fn take_matching(&mut self, desc: &TextureDesc) -> Option<GpuTexture> {
         if let Some(idx) = self.available.iter().position(|t| t.desc == *desc) {
             tracing::trace!("Texture pool hit: {:?}", desc);
-            Some(self.available.swap_remove(idx))
+            Some(self.available.remove(idx))
         } else {
             None
         }
@@ -183,7 +183,17 @@ impl TexturePoolInner {
 
     /// Return a texture to the pool for future reuse
     fn return_texture(&mut self, gpu_tex: GpuTexture) {
-        if self.available.len() < self.max_pool_size {
+        if self.max_pool_size > 0 {
+            if self.available.len() == self.max_pool_size {
+                // The front is the least recently returned idle allocation.
+                // Admit the new descriptor so a resized working set can warm
+                // up instead of allocating forever behind obsolete textures.
+                let retired = self.available.remove(0);
+                self.total_allocated = self.total_allocated.saturating_sub(1);
+                self.total_memory_bytes = self
+                    .total_memory_bytes
+                    .saturating_sub(retired.desc.size_bytes());
+            }
             tracing::trace!("Texture returned to pool: {:?}", gpu_tex.desc);
             self.available.push(gpu_tex);
         } else {

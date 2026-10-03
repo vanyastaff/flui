@@ -156,7 +156,7 @@ impl DrawBatcher {
         segment: &mut DrawSegment,
         draw_order: &mut Vec<DrawItem>,
         state: &GpuStateStack,
-        vertices: Vec<Vertex>,
+        vertices: impl IntoIterator<Item = Vertex>,
         indices: &[u32],
         key: PipelineKey,
     ) {
@@ -180,16 +180,13 @@ impl DrawBatcher {
             // are flushed in the submit loop.
             Self::finish_current_segment(segment, draw_order);
 
-            // Step 2: compute device-space AABB from the already-baked vertices.
-            // Vertices are in device-pixel coordinates (the CTM was applied by the
-            // caller via apply_transform / submit_transformed_geometry).
-            let device_bounds = vertices_aabb(&vertices);
-
-            // Step 3: build an isolated DrawSegment containing only this shape.
+            // Build an isolated DrawSegment directly from the device-space
+            // vertices, without an intermediate copy of a cached path.
             let clip_for_isolated = state.active_clip();
             let mut shape_segment = segment.empty_sibling();
             // Indices reference vertices[0..], so base_index = 0.
-            shape_segment.vertices.extend_from_slice(&vertices);
+            shape_segment.vertices.extend(vertices);
+            let device_bounds = vertices_aabb(&shape_segment.vertices);
             shape_segment.indices.extend(indices.iter().copied()); // already 0-based
             shape_segment.current_pipeline_key = Some(key);
             shape_segment.tess_batches.push(TessellatedBatch {
@@ -310,7 +307,7 @@ impl DrawBatcher {
         segment: &mut DrawSegment,
         draw_order: &mut Vec<DrawItem>,
         state: &GpuStateStack,
-        vertices: &[Vertex],
+        vertices: impl IntoIterator<Item = Vertex>,
         indices: &[u32],
         blend: BlendMode,
     ) {
@@ -325,16 +322,14 @@ impl DrawBatcher {
         // Step 1: seal prior content so it appears below the SSAA tile.
         Self::finish_current_segment(segment, draw_order);
 
-        // Step 2: compute the device-space AABB from the baked (transformed) vertices.
-        let device_bounds = vertices_aabb(vertices);
-
-        // Step 3: build an isolated DrawSegment for this path only.
+        // Build an isolated DrawSegment for this path only.
         // The internal pipeline is always SrcOver (alpha-blend): the geometry is
         // rendered into a transparent offscreen tile.  The SSAA blend mode is stored
         // in `SsaaPathOp::blend` and applied at composite time, not at raster time.
         let clip_for_isolated = state.active_clip();
         let mut path_segment = segment.empty_sibling();
-        path_segment.vertices.extend_from_slice(vertices);
+        path_segment.vertices.extend(vertices);
+        let device_bounds = vertices_aabb(&path_segment.vertices);
         path_segment.indices.extend(indices.iter().copied());
         path_segment.current_pipeline_key = Some(PipelineKey::alpha_blend());
         path_segment.tess_batches.push(TessellatedBatch {
@@ -362,7 +357,7 @@ impl DrawBatcher {
         segment: &mut DrawSegment,
         draw_order: &mut Vec<DrawItem>,
         state: &GpuStateStack,
-        mut vertices: Vec<Vertex>,
+        vertices: impl IntoIterator<Item = Vertex>,
         indices: &[u32],
         key: PipelineKey,
     ) {
@@ -371,10 +366,11 @@ impl DrawBatcher {
         }
 
         let transform = state.current_transform();
-        for v in &mut vertices {
+        let vertices = vertices.into_iter().map(|mut v| {
             let transformed = transform * glam::vec4(v.position[0], v.position[1], 0.0, 1.0);
             v.position = [transformed.x, transformed.y];
-        }
+            v
+        });
         Self::add_tessellated_with_key(segment, draw_order, state, vertices, indices, key);
     }
 
