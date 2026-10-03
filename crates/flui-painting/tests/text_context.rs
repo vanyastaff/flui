@@ -1,11 +1,10 @@
 //! Per-realm text contexts over one shared font collection (ADR-0092 §2–§3).
 //!
-//! Two contexts built from one [`FontCollection`] shape on two threads at
-//! once and see a face registered after they were built.
+//! Two contexts built from one [`FontCollection`] shape on separate threads
+//! and see a face registered after they were built.
 
 use std::sync::Barrier;
 use std::thread;
-use std::time::Instant;
 
 use flui_painting::parley_text::{ParagraphLayout, ParagraphSpec};
 use flui_painting::testing::font_collection_holders;
@@ -52,12 +51,11 @@ fn key(metrics: &TextLayoutResult) -> (f32, f32, usize, f32, f32) {
 const fn assert_send<T: Send>() {}
 const _: () = assert_send::<TextContext>();
 
-/// Two realms' contexts, each moved to its own thread, shape at the same
-/// time and agree with each other. Each context is used through `&mut` and
-/// shares no FLUI lock with the other. The overlap of the two threads' intervals
-/// shows they really ran at once; that neither waited on the other rests on
-/// the structure (no lock in the API, the crate's `disallowed_types` lint),
-/// not on a timing measurement.
+/// Two realms' contexts, each moved to its own thread, agree with the
+/// reference layout over repeated shaping. The barrier releases both workers
+/// together, but the OS may schedule one to completion before the other runs.
+/// Absence of a FLUI lock is enforced by the API and disallowed-types lint;
+/// wall-clock overlap cannot prove that contract.
 pub(crate) fn two_realms_shape_in_parallel() {
     const SHAPES: usize = 200;
     let fonts = FontCollection::new();
@@ -70,34 +68,24 @@ pub(crate) fn two_realms_shape_in_parallel() {
     );
 
     let barrier = Barrier::new(2);
-    let intervals = thread::scope(|scope| {
+    thread::scope(|scope| {
         let workers: Vec<_> = [a, b]
             .into_iter()
             .map(|mut context| {
                 let barrier = &barrier;
                 scope.spawn(move || {
                     barrier.wait();
-                    let start = Instant::now();
                     for _ in 0..SHAPES {
                         let metrics = shape(&mut context, LATIN, Some(120.0)).metrics();
                         assert_eq!(key(&metrics), reference);
                     }
-                    (start, Instant::now())
                 })
             })
             .collect();
-        workers
-            .into_iter()
-            .map(|worker| worker.join().expect("a shaping thread panicked"))
-            .collect::<Vec<_>>()
+        for worker in workers {
+            worker.join().expect("a shaping thread panicked");
+        }
     });
-    let [(start_a, end_a), (start_b, end_b)] = intervals[..] else {
-        unreachable!("two workers")
-    };
-    assert!(
-        start_a < end_b && start_b < end_a,
-        "the two threads' shaping intervals overlap"
-    );
 }
 
 /// A face registered on the collection after two contexts were built shapes

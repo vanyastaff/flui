@@ -13,8 +13,8 @@
 //!    - `docs`: nothing else;
 //!    - `tooling`: `deps`, and `standalone` when plan names a standalone crate;
 //!    - `wide`: `deps` and the `HEAVY_JOBS` list (every Linux job), and
-//!      `ios-runner` when plan puts the iOS runner in scope (`cross_ios`);
-//!    - `full`: `wide` plus `FULL_JOBS` (the Windows and macOS jobs);
+//!      no native host jobs;
+//!    - `full`: `wide` plus `FULL_JOBS` (additional Linux checks);
 //!    - `extended`: `full` plus `EXTENDED_JOBS`.
 //!
 //!    Every other declared job must skip. Any other skip (a drifted `if:`, a
@@ -187,7 +187,6 @@ pub(super) struct Plan<'a> {
     pub(super) result: Option<&'a str>,
     /// `docs`, `tooling`, `wide`, `full` or `extended`.
     pub(super) lane: &'a str,
-    pub(super) cross_ios: bool,
     /// Whether plan names a standalone crate for the `standalone` job.
     pub(super) standalone: bool,
 }
@@ -227,10 +226,6 @@ fn planned_runs(plan: &Plan<'_>, lanes: &LaneJobs) -> Option<BTreeSet<String>> {
         "tooling" => add(&["deps"]),
         "wide" | "full" | "extended" => {
             add(&["deps"]);
-            // the lanes above run the same clippy in `cli-macos`
-            if plan.lane == "wide" && plan.cross_ios {
-                add(&["ios-runner"]);
-            }
             runs.extend(lanes.wide.iter().cloned());
             if plan.lane != "wide" {
                 runs.extend(lanes.full.iter().cloned());
@@ -392,7 +387,6 @@ mod tests {
     /// What a run looks like: its lane, plan's two flags, and the results.
     struct Run<'a> {
         lane: &'a str,
-        cross_ios: bool,
         standalone: bool,
         event: &'a str,
     }
@@ -402,7 +396,6 @@ mod tests {
     fn run(lane: &str) -> Run<'_> {
         Run {
             lane,
-            cross_ios: false,
             standalone: false,
             event: PR,
         }
@@ -420,7 +413,6 @@ mod tests {
         let plan = Plan {
             result: Some(result_of("plan")),
             lane: r.lane,
-            cross_ios: r.cross_ios,
             standalone: r.standalone,
         };
         verify(&w.gated, &needs, &w.lanes, &plan, r.event)
@@ -465,10 +457,10 @@ mod tests {
             .collect()
     }
 
-    /// `ios-runner` (out of scope in [`run`]) and `standalone`, which no
+    /// `standalone`, which no
     /// whole-workspace lane runs.
     fn not_whole_workspace() -> Vec<String> {
-        names(&["ios-runner", "standalone"])
+        names(&["standalone"])
     }
 
     fn heavy_jobs_list_matches_the_jobs_gated_on_heavy() {
@@ -483,9 +475,7 @@ mod tests {
         assert!(w.lanes.wide.is_disjoint(&w.lanes.full));
         assert!(w.lanes.wide.is_disjoint(&w.lanes.extended));
         assert!(w.lanes.full.is_disjoint(&w.lanes.extended));
-        assert!(
-            !w.lanes.wide.is_empty() && !w.lanes.full.is_empty() && !w.lanes.extended.is_empty()
-        );
+        assert!(!w.lanes.wide.is_empty() && !w.lanes.full.is_empty());
     }
 
     /// The jobs outside the lane lists: each one's `if:` must be the
@@ -494,10 +484,6 @@ mod tests {
         let w = workflow();
         let expected: BTreeMap<&str, &str> = [
             ("deps", "needs.plan.outputs.lane != 'docs'"),
-            (
-                "ios-runner",
-                "needs.plan.outputs.lane == 'wide' && needs.plan.outputs.cross_ios == 'true'",
-            ),
             (
                 "standalone",
                 "needs.plan.outputs.lane == 'tooling' && needs.plan.outputs.standalone != ''",
@@ -533,14 +519,12 @@ mod tests {
             .chain(w.lanes.extended.iter().cloned())
             .collect();
         let wide = skipping(&skipped);
-        assert_eq!(wide.get("gpu-test"), Some(&"skipped"));
         green(&run("wide"), &wide);
         red(
             &run("wide"),
             &with(wide.clone(), "clippy", "skipped"),
             "clippy",
         );
-        red(&run("wide"), &without(wide, "gpu-test"), "gpu-test");
     }
 
     fn full_lane() {
@@ -556,87 +540,64 @@ mod tests {
         let full = skipping(&skipped);
         green(&main, &full);
         red(&main, &with(full.clone(), "miri", "skipped"), "miri");
-        red(
-            &main,
-            &with(full.clone(), "gpu-test", "skipped"),
-            "gpu-test",
-        );
         red(&main, &with(full.clone(), "test", "failure"), "test");
-        red(&main, &without(full, "ios-runner"), "ios-runner");
     }
 
     fn extended_jobs_skipped_on_main_is_green_and_on_schedule_is_red() {
-        let w = workflow();
-        assert!(w.lanes.extended.contains("macos-ci"));
-        let main_push = skipping(
-            &not_whole_workspace()
-                .into_iter()
-                .chain(w.lanes.extended.iter().cloned())
-                .collect::<Vec<_>>(),
-        );
-        let push = Run {
-            event: "push",
-            ..run("full")
-        };
-        green(&push, &main_push);
         let nightly = Run {
             event: "schedule",
             ..run("extended")
         };
-        red(&nightly, &main_push, "macos-ci");
-        red(&nightly, &main_push, "test-windows");
         green(&nightly, &skipping(&not_whole_workspace()));
-        // an extended job that ran on main disagrees with its `if:`
-        red(&push, &without(main_push, "macos-ci"), "macos-ci");
+        red(
+            &nightly,
+            &with(skipping(&not_whole_workspace()), "test", "skipped"),
+            "test",
+        );
     }
 
-    fn ios_leg_follows_the_plan() {
+    fn red_main_notifications_have_auth_and_repository_context() {
+        let text = super::super::classify::read_normalised(
+            &crate::util::repo_root().join(".github/workflows/ci.yml"),
+        )
+        .expect("workflow");
+        let notification = text
+            .split("  notify-main-red:")
+            .nth(1)
+            .expect("notification job");
+        assert!(notification.contains("GH_TOKEN: ${{ github.token }}"));
+        assert!(notification.contains("GH_REPO: ${{ github.repository }}"));
+    }
+
+    fn native_jobs_are_absent() {
+        use clap::Parser;
+
         let w = workflow();
-        // the wide lane's jobs run; the platform lanes' and standalone skip
-        let others: Vec<String> = w
-            .lanes
-            .full
-            .iter()
-            .chain(&w.lanes.extended)
-            .cloned()
-            .chain(names(&["standalone"]))
-            .collect();
-        let ios = Run {
-            cross_ios: true,
-            ..run("wide")
-        };
-        // in scope: it must run and pass
-        green(&ios, &skipping(&others));
-        red(
-            &ios,
-            &with(skipping(&others), "ios-runner", "skipped"),
-            "ios-runner",
+        assert!(w.lanes.extended.is_empty());
+        assert!(
+            crate::Cli::try_parse_from(["xtask", "affected", "--full-ci-label", "true"]).is_err()
         );
-        red(
-            &ios,
-            &with(skipping(&others), "ios-runner", "failure"),
+        for removed in ["full-ci.yml", "manual.yml"] {
+            assert!(
+                !crate::util::repo_root()
+                    .join(".github/workflows")
+                    .join(removed)
+                    .exists(),
+                "{removed}"
+            );
+        }
+        for job in [
+            "gpu-test",
+            "platform-windows",
+            "platform-macos",
+            "cli-windows",
+            "cli-macos",
+            "macos-ci",
+            "test-windows",
             "ios-runner",
-        );
-        // out of scope: it must skip
-        red(&run("wide"), &skipping(&others), "ios-runner");
-        // the full lane's cli-macos runs the same command: ios-runner skips
-        let main = Run {
-            event: "push",
-            cross_ios: true,
-            ..run("full")
-        };
-        red(
-            &main,
-            &skipping(
-                &w.lanes
-                    .extended
-                    .iter()
-                    .cloned()
-                    .chain(names(&["standalone"]))
-                    .collect::<Vec<_>>(),
-            ),
-            "ios-runner",
-        );
+        ] {
+            assert!(!w.gated.contains(job), "{job}");
+        }
     }
 
     fn tooling_and_docs_lanes() {
@@ -648,7 +609,6 @@ mod tests {
             .chain(&w.lanes.full)
             .chain(&w.lanes.extended)
             .cloned()
-            .chain(names(&["ios-runner"]))
             .collect();
         let tooling = skipping(compiling.iter().chain(&names(&["standalone"])));
         green(&run("tooling"), &tooling);
@@ -725,7 +685,6 @@ mod tests {
         let plan = Plan {
             result: Some("success"),
             lane: "full",
-            cross_ios: false,
             standalone: false,
         };
         let (ok, log) = verify(&w.gated, &needs, &w.lanes, &plan, "push");
@@ -749,7 +708,6 @@ mod tests {
         let plan = Plan {
             result: Some("success"),
             lane: "extended",
-            cross_ios: false,
             standalone: false,
         };
         let (ok, log) = verify(&gated, &needs, &w.lanes, &plan, "schedule");
@@ -767,7 +725,7 @@ mod tests {
             .chain(&w.lanes.full)
             .chain(&w.lanes.extended)
             .cloned()
-            .chain(names(&["ios-runner", "standalone"]))
+            .chain(names(&["standalone"]))
             .collect();
         let tooling = skipping(&whole);
         green(&run("tooling"), &tooling);
@@ -880,7 +838,11 @@ mod tests {
                     "extended_jobs_skipped_on_main_is_green_and_on_schedule_is_red",
                     extended_jobs_skipped_on_main_is_green_and_on_schedule_is_red as fn(),
                 ),
-                ("ios_leg_follows_the_plan", ios_leg_follows_the_plan as fn()),
+                (
+                    "red_main_notifications_have_auth_and_repository_context",
+                    red_main_notifications_have_auth_and_repository_context as fn(),
+                ),
+                ("native_jobs_are_absent", native_jobs_are_absent as fn()),
                 ("tooling_and_docs_lanes", tooling_and_docs_lanes as fn()),
                 (
                     "checks_runs_on_a_docs_only_pr",

@@ -141,8 +141,10 @@ state (`cargo xtask globals`).
 
 The Parley path takes no FLUI lock. A `TextContext` is `Send` and used
 through `&mut` by the realm that owns it (flui-rendering lends it to one
-measurement at a time), so two realms shape at the same time
-(`tests/text_context.rs`, `two_realms_shape_in_parallel`). The
+measurement at a time), so two realms can shape on separate threads.
+`two_realms_shape_in_parallel` (`tests/text_context.rs`) checks that both
+contexts repeatedly produce the reference layout; it makes no assertion about
+OS scheduling or wall-clock overlap. The
 `FontCollection` they share is fontique's shared mode: a registration takes
 fontique's mutex and bumps a version, and each context re-reads the collection
 under that mutex once, on its next shape; otherwise a shape costs one atomic

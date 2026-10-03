@@ -71,10 +71,9 @@ pub(super) const HEAVY_TRIGGERS: &[&str] = &[
     // Shaders: clippy only embeds them as strings and no build script parses
     // them (`checks`' `wgsl` step is a syntactic uniformity check, in every
     // lane). The wide lane's live-smoke compiles the pipelines its demo draws
-    // with on lavapipe; gpu-test, which compiles every shader module on WARP,
-    // runs only from the full lane up (merge queue, main), so a shader the
-    // demo does not draw is first compiled there. A shader outside every
-    // crate would otherwise take the tooling lane.
+    // with on lavapipe. The local gpu-test command compiles every shader
+    // module; a shader the demo does not draw needs that local check. A shader
+    // outside every crate would otherwise take the tooling lane.
     "**/*.wgsl",
     // The `deps` job's advisories step blocks only from the wide lane up, and an
     // edited advisory ignore is exactly what that step judges.

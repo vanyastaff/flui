@@ -2,10 +2,10 @@
 //! `cargo xtask check-changed` runs -- the one place the lane and the scoped
 //! test policy live.
 //!
-//! The lane ([`Lane::decide`]) comes from the event, the `full-ci` label and
+//! The lane ([`Lane::decide`]) comes from the event and
 //! the classification: `docs` and `tooling` compile nothing, `wide` runs every
-//! Linux job over the whole workspace in parallel, `full` adds the Windows and
-//! macOS jobs, `extended` the nightly-only platform jobs on top. A pull request
+//! Linux PR jobs over the workspace in parallel; `full` adds Linux checks,
+//! and nightly/manual `extended` uses the same Linux coverage. A pull request
 //! that compiles anything takes `wide`: one serial job over the changed crates
 //! measured slower than the parallel jobs over everything (35 against 18
 //! minutes, median of the runs of 2026-09-30), and hosted runners do not queue
@@ -26,8 +26,7 @@
 //!   only exists under one of its features (optional, or named in a feature):
 //!   the default build never compiles the code on that edge;
 //! - the flui-app/flui iOS runner gets a macOS clippy leg whenever either is in
-//!   scope, like the Android runner (it needs xcrun: in CI the `ios-runner`
-//!   job, whose `cross_ios` output is the one scoped value CI reads);
+//!   scope, like the Android runner (it needs xcrun and runs locally on macOS);
 //! - rustdoc -D warnings runs over the scope with its packages' `testing`
 //!   features (the doc job's flags, narrowed): a moved item's broken intra-doc
 //!   link otherwise merges green and fails main's `doc` job;
@@ -67,11 +66,11 @@ pub(super) enum Lane {
     /// Repository tooling or a standalone crate: `deps` and `standalone` too.
     Tooling,
     /// A pull request that compiles anything: every Linux job over the whole
-    /// workspace (`HEAVY_JOBS`), and `ios-runner` when the iOS runner is in scope.
+    /// workspace (`HEAVY_JOBS`).
     Wide,
-    /// `main` and the merge queue: `wide` plus the Windows and macOS jobs (`FULL_JOBS`).
+    /// `main` and the merge queue: `wide` plus additional Linux jobs (`FULL_JOBS`).
     Full,
-    /// Nightly, dispatch and the `full-ci` label: `full` plus `EXTENDED_JOBS`.
+    /// Nightly and dispatch: Linux full coverage.
     Extended,
 }
 
@@ -86,19 +85,11 @@ impl Lane {
         }
     }
 
-    /// The lane for a run: the event first, then the `full-ci` label, then
-    /// what the change touches. This is the only place the label's lane is
-    /// decided.
-    pub(super) fn decide(
-        event: Event,
-        full_ci_label: bool,
-        mode: Mode,
-        heavy_required: bool,
-    ) -> Self {
+    /// The lane for a run: the event first, then what the change touches.
+    pub(super) fn decide(event: Event, mode: Mode, heavy_required: bool) -> Self {
         match event {
             Event::Schedule | Event::WorkflowDispatch => Self::Extended,
             Event::Push | Event::MergeGroup => Self::Full,
-            Event::PullRequest if full_ci_label => Self::Extended,
             Event::PullRequest if heavy_required => Self::Wide,
             Event::PullRequest => match mode {
                 Mode::Full | Mode::Packages => Self::Wide,
@@ -288,12 +279,7 @@ fn feature_gated_dependents<'a>(
 }
 
 /// The lane for `scope` on `event`, and `check-changed`'s arguments for it.
-pub(super) fn lane_args(
-    repo: &Repo,
-    scope: &Scope,
-    event: Event,
-    full_ci_label: bool,
-) -> anyhow::Result<LaneArgs> {
+pub(super) fn lane_args(repo: &Repo, scope: &Scope, event: Event) -> anyhow::Result<LaneArgs> {
     let full = scope.mode == Mode::Full;
     let compiles = matches!(scope.mode, Mode::Packages | Mode::Full);
     let set: BTreeSet<&str> = scope.packages.iter().map(String::as_str).collect();
@@ -399,7 +385,7 @@ pub(super) fn lane_args(
     }
 
     Ok(LaneArgs {
-        lane: Lane::decide(event, full_ci_label, scope.mode, scope.heavy_required),
+        lane: Lane::decide(event, scope.mode, scope.heavy_required),
         mode: scope.mode.as_str().to_owned(),
         heavy_required: scope.heavy_required,
         reason: scope.reason.clone(),
@@ -454,12 +440,12 @@ mod tests {
     use super::*;
 
     fn args(files: &[&str]) -> LaneArgs {
-        lane_args(repo(), &scope(files), Event::PullRequest, false).expect("lane args")
+        lane_args(repo(), &scope(files), Event::PullRequest).expect("lane args")
     }
 
     /// The lane a pull request changing `files` takes.
-    fn pr_lane(files: &[&str], full_ci_label: bool) -> Lane {
-        lane_args(repo(), &scope(files), Event::PullRequest, full_ci_label)
+    fn pr_lane(files: &[&str]) -> Lane {
+        lane_args(repo(), &scope(files), Event::PullRequest)
             .expect("lane args")
             .lane
     }
@@ -477,8 +463,7 @@ mod tests {
 
     fn heavy_triggers_on_a_pr_take_the_wide_lane_not_full() {
         for path in ["Cargo.lock", ".github/workflows/ci.yml", "deny.toml"] {
-            assert_eq!(pr_lane(&[path], false), Lane::Wide, "{path}");
-            assert_eq!(pr_lane(&[path], true), Lane::Extended, "{path}");
+            assert_eq!(pr_lane(&[path]), Lane::Wide, "{path}");
         }
     }
 
@@ -486,20 +471,14 @@ mod tests {
         use Event::{MergeGroup, PullRequest, Push, Schedule, WorkflowDispatch};
         for mode in [Mode::Docs, Mode::None, Mode::Packages, Mode::Full] {
             for heavy in [false, true] {
-                for label in [false, true] {
-                    assert_eq!(Lane::decide(Push, label, mode, heavy), Lane::Full);
-                    assert_eq!(Lane::decide(MergeGroup, label, mode, heavy), Lane::Full);
-                    assert_eq!(Lane::decide(Schedule, label, mode, heavy), Lane::Extended);
-                    assert_eq!(
-                        Lane::decide(WorkflowDispatch, label, mode, heavy),
-                        Lane::Extended
-                    );
-                }
-                assert_eq!(Lane::decide(PullRequest, true, mode, heavy), Lane::Extended);
+                assert_eq!(Lane::decide(Push, mode, heavy), Lane::Full);
+                assert_eq!(Lane::decide(MergeGroup, mode, heavy), Lane::Full);
+                assert_eq!(Lane::decide(Schedule, mode, heavy), Lane::Extended);
+                assert_eq!(Lane::decide(WorkflowDispatch, mode, heavy), Lane::Extended);
             }
-            assert_eq!(Lane::decide(PullRequest, false, mode, true), Lane::Wide);
+            assert_eq!(Lane::decide(PullRequest, mode, true), Lane::Wide);
         }
-        let pr = |mode| Lane::decide(PullRequest, false, mode, false);
+        let pr = |mode| Lane::decide(PullRequest, mode, false);
         assert_eq!(
             [
                 pr(Mode::Docs),
@@ -550,7 +529,7 @@ mod tests {
             heavy_required: false,
             reason: String::new(),
         };
-        let a = lane_args(repo(), &only_platform, Event::PullRequest, false).expect("lane args");
+        let a = lane_args(repo(), &only_platform, Event::PullRequest).expect("lane args");
         assert_eq!(a.test_args, "");
         assert!(a.platform, "its own leg runs it");
     }
@@ -565,7 +544,7 @@ mod tests {
             heavy_required: false,
             reason: String::new(),
         };
-        let a = lane_args(repo(), &only_standalone, Event::PullRequest, false).expect("lane args");
+        let a = lane_args(repo(), &only_standalone, Event::PullRequest).expect("lane args");
         assert_eq!(
             (a.lane, a.standalone.as_str(), a.pkg_args.as_str()),
             (Lane::Tooling, "tools/spike", "")
@@ -709,8 +688,7 @@ mod tests {
     }
 
     fn the_wide_lane_selects_the_whole_workspace() {
-        let a =
-            lane_args(repo(), &Scope::whole_workspace(), Event::Push, false).expect("lane args");
+        let a = lane_args(repo(), &Scope::whole_workspace(), Event::Push).expect("lane args");
         assert_eq!(a.lane, Lane::Full);
         assert_eq!(
             (a.pkg_args.as_str(), a.test_args.as_str()),

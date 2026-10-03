@@ -252,7 +252,7 @@ fn platform_suite_linux() -> Cmd {
 }
 
 /// flui-platform's suite on `host`: under Xvfb on Linux, directly on Windows
-/// (CI's `platform-windows` job needs neither), skipped elsewhere.
+/// (native Windows needs neither), skipped elsewhere.
 fn platform_suite(host: Host) -> Step {
     match host {
         Host::Linux => platform_suite_linux().into(),
@@ -264,6 +264,50 @@ fn platform_suite(host: Host) -> Step {
                 .to_owned(),
         ),
     }
+}
+
+fn native_platform_plan(host: Host) -> Vec<Step> {
+    match host {
+        Host::Windows | Host::MacOs => [false, true]
+            .into_iter()
+            .map(|all_features| {
+                let mut command = Cmd::cargo([
+                    "nextest",
+                    "run",
+                    "-p",
+                    "flui-platform",
+                    "--locked",
+                    "--no-fail-fast",
+                ]);
+                if all_features {
+                    command = command.args(["--all-features"]);
+                }
+                if host == Host::MacOs {
+                    // A bare test process cannot own an AppKit run loop.
+                    // Direct backend unit tests still execute; window-loop
+                    // tests retain their existing macOS ignore annotations.
+                    command = command.env("FLUI_HEADLESS", "1");
+                }
+                command.into()
+            })
+            .collect(),
+        Host::Linux => vec![platform_suite_linux().into()],
+        Host::Other => vec![Step::Note("platform-test: unsupported host".to_owned())],
+    }
+}
+
+fn cli_test_plan() -> Vec<Step> {
+    vec![
+        Cmd::cargo([
+            "nextest",
+            "run",
+            "-p",
+            "flui-cli",
+            "--locked",
+            "--no-fail-fast",
+        ])
+        .into(),
+    ]
 }
 
 /// The tests that run a `cargo` or `rustc` of their own (.config/nextest.toml):
@@ -286,8 +330,10 @@ enum Stages {
     All,
     /// Everything but the nested tests (`--fast`).
     Fast,
-    /// The nested tests alone (`--nested`): CI runs them as their own job.
+    /// The nested tests alone (`--nested`); CI can select each group separately.
     Nested,
+    /// One nested group, for independent CI jobs.
+    NestedGroup(NestedGroup),
     /// Everything but the trybuild suites (`--no-trybuild`): what CI's
     /// Windows job runs, since compiler diagnostics do not depend on the host
     /// and Linux checks them.
@@ -312,6 +358,7 @@ fn test_plan(host: Host, stages: Stages) -> Vec<Step> {
             )),
         ],
         Stages::Nested => vec![nested.into()],
+        Stages::NestedGroup(group) => vec![scoped_nextest(group.filterset()).into()],
         Stages::NoTrybuild => vec![
             base().into(),
             platform_suite(host),
@@ -346,7 +393,7 @@ fn lint_plan() -> Vec<Step> {
 /// backends, the mobile runners, flui-cli's Windows paths and flui-desktop-mcp's
 /// Windows and macOS backends. No link, no
 /// tests: green means "compiles clean under the workspace lints", nothing more.
-/// The iOS runner needs macOS (CI runs it in `cli-macos`), so it is skipped
+/// The iOS runner needs a local macOS host, so it is skipped
 /// with a message elsewhere.
 fn cross_typecheck_plan(host: Host) -> Vec<Step> {
     let mut steps: Vec<Step> = PLATFORM_TARGETS
@@ -357,7 +404,7 @@ fn cross_typecheck_plan(host: Host) -> Vec<Step> {
         ios_runner().into()
     } else {
         Step::Note(
-            "cross-typecheck: skipped the iOS runner (its C shim needs xcrun: macOS only; CI's cli-macos job runs it)"
+            "cross-typecheck: skipped the iOS runner (its C shim needs xcrun: macOS only; run it locally on macOS)"
                 .to_owned(),
         )
     });
@@ -458,7 +505,7 @@ impl Slice {
 /// flui-engine's wgpu backend features get no combination run of their own:
 /// they only forward to wgpu's features and no FLUI code is behind them, so
 /// every pair compiles the same FLUI code, and each backend already builds on
-/// its native target in gpu-test, cli-macos and wasm-check.
+/// supported targets in local checks and the wasm-check CI job.
 fn feature_matrix_plan(slice: Slice) -> Vec<Step> {
     let packages = match slice {
         Slice::All => "--workspace".to_owned(),
@@ -485,11 +532,13 @@ fn gpu_test_plan() -> Vec<Step> {
             "--lib",
         ])
         .args(["--locked", "--no-fail-fast", "--test-threads", "1"])
+        .env("FLUI_REQUIRE_GPU", "1")
         .into(),
         Cmd::cargo(["nextest", "run", "-p", "flui", "--no-default-features"])
             .args(["--features", "gpu-readback-tests"])
             .args(["--test", "composited_layer_update_readback"])
             .args(["--locked", "--no-fail-fast", "--test-threads", "1"])
+            .env("FLUI_REQUIRE_GPU", "1")
             .into(),
     ]
 }
@@ -699,6 +748,24 @@ pub(crate) fn gate(args: &GateArgs) -> anyhow::Result<ExitCode> {
     done(gate_stage(args.run.runner()))
 }
 
+/// Nested suites that can run independently while retaining the same build scope.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+enum NestedGroup {
+    /// Generated projects and native facade consumers.
+    Native,
+    /// Compiler diagnostics checked by trybuild.
+    Trybuild,
+}
+
+impl NestedGroup {
+    const fn filterset(self) -> &'static str {
+        match self {
+            Self::Native => "group(nested-cargo)",
+            Self::Trybuild => "group(trybuild)",
+        }
+    }
+}
+
 /// Arguments for `cargo xtask test`.
 #[derive(Debug, clap::Args)]
 pub(crate) struct TestArgs {
@@ -709,6 +776,9 @@ pub(crate) struct TestArgs {
     /// Run only the nested tests.
     #[arg(long, conflicts_with = "fast")]
     nested: bool,
+    /// Select one nested suite; without this option --nested runs both.
+    #[arg(long, value_enum, requires = "nested")]
+    nested_group: Option<NestedGroup>,
     /// Leave out only the trybuild suites (host-independent compiler output).
     #[arg(long, conflicts_with_all = ["fast", "nested"])]
     no_trybuild: bool,
@@ -721,13 +791,42 @@ pub(crate) fn test(args: &TestArgs) -> anyhow::Result<ExitCode> {
     let stages = if args.fast {
         Stages::Fast
     } else if args.nested {
-        Stages::Nested
+        args.nested_group
+            .map_or(Stages::Nested, Stages::NestedGroup)
     } else if args.no_trybuild {
         Stages::NoTrybuild
     } else {
         Stages::All
     };
     done(args.run.runner().steps(&test_plan(Host::current(), stages)))
+}
+
+/// Arguments for the native platform suite.
+#[derive(Debug, clap::Args)]
+pub(crate) struct PlatformTestArgs {
+    #[command(flatten)]
+    run: RunOpts,
+}
+
+/// Run the platform suites without compiling unrelated framework crates.
+pub(crate) fn platform_test(args: &PlatformTestArgs) -> anyhow::Result<ExitCode> {
+    done(
+        args.run
+            .runner()
+            .steps(&native_platform_plan(Host::current())),
+    )
+}
+
+/// Arguments for the native CLI suite.
+#[derive(Debug, clap::Args)]
+pub(crate) struct CliTestArgs {
+    #[command(flatten)]
+    run: RunOpts,
+}
+
+/// Run the same CLI suite in either native CI job or locally.
+pub(crate) fn cli_test(args: &CliTestArgs) -> anyhow::Result<ExitCode> {
+    done(args.run.runner().steps(&cli_test_plan()))
 }
 
 /// Arguments for `cargo xtask build-all-targets`.
@@ -1076,6 +1175,37 @@ mod tests {
 
     const SCOPE: &str = "--workspace --exclude flui-platform --locked --no-fail-fast --lib --bins --tests --features flui/material,flui/cupertino,flui-devtools/agent";
 
+    fn native_host_suites_only_build_their_packages() {
+        assert_eq!(
+            lines(&native_platform_plan(Host::Windows)),
+            [
+                "$ cargo nextest run -p flui-platform --locked --no-fail-fast",
+                "$ cargo nextest run -p flui-platform --locked --no-fail-fast --all-features",
+            ]
+        );
+        assert_eq!(
+            lines(&native_platform_plan(Host::MacOs)),
+            [
+                "$ FLUI_HEADLESS=1 cargo nextest run -p flui-platform --locked --no-fail-fast",
+                "$ FLUI_HEADLESS=1 cargo nextest run -p flui-platform --locked --no-fail-fast --all-features",
+            ]
+        );
+        assert_eq!(
+            lines(&cli_test_plan()),
+            ["$ cargo nextest run -p flui-cli --locked --no-fail-fast"]
+        );
+    }
+
+    fn gpu_gate_requires_an_adapter_for_both_suites() {
+        assert_eq!(
+            lines(&gpu_test_plan()),
+            [
+                "$ FLUI_REQUIRE_GPU=1 cargo nextest run -p flui-engine --features testing --lib --locked --no-fail-fast --test-threads 1",
+                "$ FLUI_REQUIRE_GPU=1 cargo nextest run -p flui --no-default-features --features gpu-readback-tests --test composited_layer_update_readback --locked --no-fail-fast --test-threads 1",
+            ]
+        );
+    }
+
     fn workflow_lint_runs_each_installed_linter_and_skips_the_rest() {
         assert_eq!(
             lines(&workflow_lint_plan(|_| true)),
@@ -1115,13 +1245,22 @@ mod tests {
             "{}",
             fast[2]
         );
-        // CI's test-nested job: both groups alone, with no platform leg
+        // The complete local nested stage: both groups, with no platform leg
         assert_eq!(
             lines(&test_plan(Host::Linux, Stages::Nested)),
             [format!(
                 "$ cargo nextest run {SCOPE} -E 'group(nested-cargo) | group(trybuild)'"
             )]
         );
+        for (group, filter) in [
+            (NestedGroup::Native, "group(nested-cargo)"),
+            (NestedGroup::Trybuild, "group(trybuild)"),
+        ] {
+            assert_eq!(
+                lines(&test_plan(Host::Linux, Stages::NestedGroup(group))),
+                [format!("$ cargo nextest run {SCOPE} -E '{filter}'")]
+            );
+        }
         // CI's Windows job: the host-specific nested group, not trybuild
         let windows = lines(&test_plan(Host::Windows, Stages::NoTrybuild));
         assert_eq!(windows.len(), 4);
@@ -1145,6 +1284,43 @@ mod tests {
         assert!(SCOPE.ends_with(&format!("--features {TEST_FEATURES}")));
     }
 
+    fn nested_group_requires_nested_and_preserves_existing_modes() {
+        #[derive(clap::Parser)]
+        struct TestCli {
+            #[command(flatten)]
+            args: TestArgs,
+        }
+        use clap::Parser as _;
+
+        for group in ["native", "trybuild"] {
+            assert!(TestCli::try_parse_from(["test", "--nested-group", group]).is_err());
+            let parsed = TestCli::try_parse_from(["test", "--nested", "--nested-group", group])
+                .expect("BUG: nested group must parse with --nested");
+            assert!(parsed.args.nested);
+            assert!(parsed.args.nested_group.is_some());
+            for incompatible in ["--fast", "--no-trybuild"] {
+                assert!(
+                    TestCli::try_parse_from([
+                        "test",
+                        "--nested",
+                        "--nested-group",
+                        group,
+                        incompatible,
+                    ])
+                    .is_err()
+                );
+            }
+        }
+        assert!(
+            TestCli::try_parse_from(["test", "--nested", "--nested-group", "unknown"]).is_err()
+        );
+        for mode in ["--nested", "--fast", "--no-trybuild"] {
+            let parsed = TestCli::try_parse_from(["test", mode])
+                .expect("BUG: existing test mode must parse");
+            assert_eq!(parsed.args.nested_group, None);
+        }
+    }
+
     fn feature_matrix_slices_parse() {
         assert_eq!(Slice::parse("all"), Ok(Slice::All));
         assert_eq!(Slice::parse("combinations"), Ok(Slice::Combinations));
@@ -1160,12 +1336,24 @@ mod tests {
             "task_plans_contract",
             &[
                 (
+                    "gpu_gate_requires_an_adapter_for_both_suites",
+                    gpu_gate_requires_an_adapter_for_both_suites as fn(),
+                ),
+                (
+                    "native_host_suites_only_build_their_packages",
+                    native_host_suites_only_build_their_packages as fn(),
+                ),
+                (
                     "workflow_lint_runs_each_installed_linter_and_skips_the_rest",
                     workflow_lint_runs_each_installed_linter_and_skips_the_rest as fn(),
                 ),
                 (
                     "test_runs_both_group_stages_and_the_platform_suite_per_host",
                     test_runs_both_group_stages_and_the_platform_suite_per_host as fn(),
+                ),
+                (
+                    "nested_group_requires_nested_and_preserves_existing_modes",
+                    nested_group_requires_nested_and_preserves_existing_modes as fn(),
                 ),
                 (
                     "feature_matrix_slices_parse",

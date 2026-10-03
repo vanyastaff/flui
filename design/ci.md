@@ -6,6 +6,8 @@
   **Revised 2026-09-30** ([§10](#10-revision-2026-09-30-the-fast-lane-measured)): the `fast` lane
   and its `fast-lane`/`fast-lane-ios` jobs are gone, every compiling pull request takes `wide`, and
   the text below that describes the fast lane records what was measured, not what runs.
+  **Revised 2026-10-02** ([selective checks](#selective-native-checks-and-nested-test-split)): ordinary PRs also select native and GPU suites from affected code.
+  **Current policy:** [Native CI removal](#native-ci-removal) supersedes the earlier lane proposals.
 - **Date:** 2026-09-26
 - **Baseline:** `main` at `c2ba3ae51`; workflows as of that commit; CI runs from 2026-09-23 to
   2026-09-26.
@@ -710,3 +712,39 @@ Not changed, with the reason:
   one, which is most CI runs, so no CI profile overrides it.
 - **Test sharding, mold, cranelift**: none of the eleven projects compared uses them in CI (zed,
   bevy, xilem, vello, egui, iced, rust-analyzer, tokio, wgpu, slint, dioxus).
+
+## Selective native checks and nested test split
+
+The [Linux merge gate policy](#linux-merge-gate-policy) below supersedes native job selection.
+
+[Run 37074279492](https://github.com/vanyastaff/flui/actions/runs/37074279492)
+finished in 48:46; the extended Windows gate took 45:42, macOS 38:09,
+GPU 11:29 and nested tests 16:49. Whole-workspace native gates remain
+extended. Ordinary PRs select narrow GPU, platform and CLI suites from code
+and dependency impact; global inputs select all of them.
+
+The nested command spent about five minutes preparing, then about 6:20 on
+generated projects and 4:40 on trybuild. Separate jobs overlap those groups
+while duplicating preparation and consuming more runner time. Both restore
+the existing test cache, with no additional cache writer. This is an
+experiment: the next Actions run must establish the actual critical path.
+
+## Linux merge gate policy
+
+Ordinary PRs and main use Linux jobs. GPU and every native Windows/macOS job
+run only nightly, manually, or with `full-ci`. The macOS CLI job retains the
+iOS runner clippy; the separate per-PR macOS runner job is removed. This
+supersedes selective native jobs: timing in run 37099705439 showed the
+extended critical path still taking 50:27, dominated by Windows at 47:21.
+The nested split shortened its critical path from 16:49 to 10:35. Native
+runtime regressions may now be discovered after merging; cross-typecheck
+remains on each compiling PR but validates compilation rather than runtime.
+
+## Native CI removal
+
+All native Windows/macOS and hosted GPU validation jobs are removed, together
+with the full-ci label workflow and hosted manual device-check workflow.
+The label is no longer a lane input and its CLI flag is removed. AGENTS.md
+no longer recommends it. Nightly and manual CI remain Linux-only. Local
+platform/GPU/device commands remain available, while release workflows still
+build their platform artifacts. Earlier native-lane sections are historical.

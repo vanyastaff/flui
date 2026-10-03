@@ -6,7 +6,7 @@
 //! ```text
 //! cargo xtask affected                         # vs origin/main, human summary
 //! cargo xtask affected --worktree              # also uncommitted + untracked files
-//! cargo xtask affected --event pull_request --full-ci-label false --base <sha> --format github >> "$GITHUB_OUTPUT"
+//! cargo xtask affected --event pull_request --base <sha> --format github >> "$GITHUB_OUTPUT"
 //! eval "$(cargo xtask affected --worktree --format shell)"
 //! ```
 //!
@@ -62,9 +62,6 @@ pub(crate) struct AffectedArgs {
     /// Every event but `pull_request` takes the whole workspace, no diff.
     #[arg(long, value_enum)]
     event: Option<Event>,
-    /// Whether the pull request carries the `full-ci` label.
-    #[arg(long, action = clap::ArgAction::Set, default_value_t = false)]
-    full_ci_label: bool,
 }
 
 /// `cargo xtask affected`: print the lane and the packages a change touches (CI's `plan`).
@@ -80,7 +77,7 @@ pub(crate) fn affected(args: &AffectedArgs) -> anyhow::Result<ExitCode> {
         };
         classify::classify(&repo, &files)?
     };
-    let values = lane_args::lane_args(&repo, &scope, event, args.full_ci_label)?;
+    let values = lane_args::lane_args(&repo, &scope, event)?;
     print!("{}", render(&values, scope.packages.len(), args.format));
     Ok(ExitCode::SUCCESS)
 }
@@ -92,11 +89,9 @@ pub(crate) fn affected(args: &AffectedArgs) -> anyhow::Result<ExitCode> {
 pub(crate) fn worktree_lane(base: &str) -> anyhow::Result<Vec<(&'static str, String)>> {
     let repo = Repo::open(repo_root());
     let scope = classify::classify(&repo, &repo.changed_files(base, true)?)?;
-    Ok(
-        lane_args::lane_args(&repo, &scope, Event::PullRequest, false)?
-            .fields()
-            .into(),
-    )
+    Ok(lane_args::lane_args(&repo, &scope, Event::PullRequest)?
+        .fields()
+        .into())
 }
 
 /// The packages that do not build for wasm32 (`[package.metadata.flui]
@@ -189,7 +184,7 @@ pub(crate) fn paths_filter(_args: &PathsFilterArgs) -> anyhow::Result<ExitCode> 
 /// Arguments for `cargo xtask ci-verify`, the `ci` aggregator job's check.
 ///
 /// Its inputs come from the environment the job sets: `NEEDS` (the
-/// `toJSON(needs)` of every gated job), `LANE`, `CROSS_IOS`, `STANDALONE`,
+/// `toJSON(needs)` of every gated job), `LANE`, `STANDALONE`,
 /// `EVENT`, and the lane lists `HEAVY_JOBS` (the `wide` lane's jobs),
 /// `FULL_JOBS` and `EXTENDED_JOBS`.
 #[derive(Debug, clap::Args)]
@@ -220,7 +215,6 @@ pub(crate) fn ci_verify(_args: &CiVerifyArgs) -> anyhow::Result<ExitCode> {
     let plan = aggregator::Plan {
         result: needs.get("plan").map(String::as_str),
         lane: &lane,
-        cross_ios: std::env::var("CROSS_IOS").is_ok_and(|v| v == "true"),
         standalone: std::env::var("STANDALONE").is_ok_and(|v| !v.trim().is_empty()),
     };
     let ci_yml = classify::read_normalised(&repo_root().join(".github/workflows/ci.yml"))
@@ -330,7 +324,7 @@ mod tests {
         let repo = classify::tests::repo();
         let scope = classify::classify(repo, &[payload.to_owned()]).expect("classify");
         let out = render(
-            &lane_args::lane_args(repo, &scope, Event::PullRequest, false).expect("args"),
+            &lane_args::lane_args(repo, &scope, Event::PullRequest).expect("args"),
             scope.packages.len(),
             Format::Shell,
         );

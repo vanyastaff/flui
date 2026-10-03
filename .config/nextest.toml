@@ -38,6 +38,8 @@ leak-timeout = "1s"
 # `-E 'not (group(nested-cargo) | group(trybuild))'` then
 # `-E 'group(nested-cargo) | group(trybuild)'` (`--fast` stops after the
 # first): complements by construction, so no test runs twice or not at all.
+# CI splits the second stage with `--nested --nested-group native` and
+# `--nested --nested-group trybuild`; each selects one of these same groups.
 # `cargo nextest show-config test-groups` lists the members. Keep these
 # overrides first: a test takes its group from the first override that
 # matches it and sets one, so only here is each group exactly its filter.

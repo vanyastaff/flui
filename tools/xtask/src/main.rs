@@ -52,6 +52,10 @@ enum Command {
     Gate(tasks::GateArgs),
     /// Run the workspace test suite the way CI does.
     Test(tasks::TestArgs),
+    /// Run the native platform suites on this host.
+    PlatformTest(tasks::PlatformTestArgs),
+    /// Run the CLI suite on this host.
+    CliTest(tasks::CliTestArgs),
     /// Link the examples and benches with the test suite's features.
     BuildAllTargets(tasks::BuildAllTargetsArgs),
     /// `gate`, `test` and the doctests: the local mirror of CI's required checks.
@@ -145,6 +149,8 @@ fn main() -> ExitCode {
         Command::Lint(args) => tasks::lint(&args),
         Command::Gate(args) => tasks::gate(&args),
         Command::Test(args) => tasks::test(&args),
+        Command::PlatformTest(args) => tasks::platform_test(&args),
+        Command::CliTest(args) => tasks::cli_test(&args),
         Command::BuildAllTargets(args) => tasks::build_all_targets_task(&args),
         Command::Ci(args) => tasks::ci(&args),
         Command::CiFull(args) => tasks::ci_full(&args),
