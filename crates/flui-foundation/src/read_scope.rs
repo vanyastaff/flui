@@ -393,6 +393,14 @@ fn invoke_reader<T: 'static, R>(
                     expected: type_name::<T>(),
                 }),
             });
+            if matches!(&out, Some(Ok(Err(_)))) {
+                // The owning graph must observe reader failure before loan
+                // finalization: otherwise a released opaque value can abort
+                // while retiring over this hidden first failure. Keep the
+                // authoritative payload in `out` and propagate an inert,
+                // destructor-free unwind marker through the erased callback.
+                std::panic::resume_unwind(Box::new(()));
+            }
         })
     }));
     (out, graph_outcome)

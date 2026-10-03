@@ -127,9 +127,36 @@ fn element_lifecycle_and_dependency_matrix() {
 
 #[test]
 fn signal_read_and_write_matrix() {
+    if signal_reads::run_released_loan_child() {
+        return;
+    }
     run_table(
         "signal_read_and_write_matrix",
         &[
+            (
+                "signal_reads::released_update_reports_ordinary_retirement_failure",
+                signal_reads::released_update_reports_ordinary_retirement_failure as fn(),
+            ),
+            (
+                "signal_reads::released_read_reports_ordinary_retirement_failure",
+                signal_reads::released_read_reports_ordinary_retirement_failure as fn(),
+            ),
+            (
+                "signal_reads::released_update_retains_aggregate_before_resuming_failure",
+                signal_reads::released_update_retains_aggregate_before_resuming_failure as fn(),
+            ),
+            (
+                "signal_reads::released_read_retains_aggregate_before_resuming_failure",
+                signal_reads::released_read_retains_aggregate_before_resuming_failure as fn(),
+            ),
+            (
+                "signal_reads::released_update_retains_nested_release_obligations",
+                signal_reads::released_update_retains_nested_release_obligations as fn(),
+            ),
+            (
+                "signal_reads::released_read_retains_nested_release_obligations",
+                signal_reads::released_read_retains_nested_release_obligations as fn(),
+            ),
             (
                 "signal_reads::a_read_in_build_subscribes_through_the_production_context",
                 signal_reads::a_read_in_build_subscribes_through_the_production_context as fn(),

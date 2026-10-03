@@ -61,7 +61,13 @@ before containment regains control. After a reader or graph panic, the retained 
 callback envelope and any later opaque result or panic payload are deliberately leaked:
 Rust drop glue can destroy a second captured field while the first field's destructor is
 unwinding, so no generic `catch_unwind` wrapper can safely retire that aggregate. Normal
-reads still destroy the callback and result normally. This exceptional-path leak is the
+reads still destroy the callback and result normally. The typed adapter records the
+original reader payload outside the graph invocation, then propagates a destructor-free
+unit unwind marker through the erased reader. This makes failure visible to the graph
+before it finalizes a released loan while preserving the original payload's priority
+over graph cleanup and subscription failures. The released-read subprocess rows in
+`flui-view`'s `signal_read_and_write_matrix` cover that actual cross-crate bridge.
+This exceptional-path leak is the
 strongest continuation-safe contract available without constraining public callback and
 result types to destructor-free values.
 

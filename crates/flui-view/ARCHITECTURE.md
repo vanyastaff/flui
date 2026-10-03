@@ -315,8 +315,15 @@ and validates a replacement value before `set`; a future transactional primitive
 needs its own consumer and contract. Notification stays deferred through the
 existing rebuild inbox and never invokes signal readers inline. An explicit
 `Reactive::release` of that same slot from inside its closure remains
-authoritative: it destroys the loaned value and reader set, so no commit
-survives to invalidate.
+authoritative: the value and reader set are no longer live, so no commit
+survives to invalidate. Loan finalization returns a still-live value before any
+retirement. When a callback has already failed, a released loan's opaque value
+is retained instead of destroyed: aggregate drop glue can abort before an outer
+catch observes a secondary failure, and nested release obligations must not run
+while that first failure has priority. Successful callbacks still retire released
+values normally, outside the graph borrow. Restoration keeps the value owned by
+the loan until the slot check completes; a restoration failure likewise retains
+that value before resuming its payload.
 
 Rust also provides no generic way to recover from aggregate drop glue when two
 fields both panic: the second panic occurs while the first is unwinding and the
@@ -330,6 +337,17 @@ Pinned by the reactive graph unit tests for replacement/equality/destructor and
 updater/wake/telemetry panics,
 `flui-foundation`'s subscribe-before-unwind test, and
 `tests/signal_reads.rs` for mounted partial-commit and first-build recovery.
+Its `released_update_retains_aggregate_before_resuming_failure`,
+`released_read_retains_aggregate_before_resuming_failure`,
+`released_update_retains_nested_release_obligations` and
+`released_read_retains_nested_release_obligations` rows join
+`signal_read_and_write_matrix` and run in child processes. They pin the primary
+payload, released-slot behavior, retained destructors and the next live update.
+The companion `released_update_reports_ordinary_retirement_failure` and
+`released_read_reports_ordinary_retirement_failure` rows preserve normal released
+value retirement: its first destructor failure propagates while callback captures
+are retained. The subprocess boundary makes an old-code aggregate abort a
+table-row failure.
 
 ### Reconciliation emits typed events on the live path
 

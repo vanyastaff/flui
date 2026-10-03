@@ -195,3 +195,139 @@ pub(crate) fn a_partially_committed_panicking_update_rebuilds_its_mounted_reader
 // ============================================================================
 // A handle of the wrong type
 // ============================================================================
+
+// Released loan values may have aggregate drop glue that aborts the process.
+// Exercise those negative variants in children, keeping the family table alive.
+const LOAN_CHILD_CASE: &str = "FLUI_SIGNAL_RELEASED_LOAN_CASE";
+
+fn released_loan_child(case: &str) {
+    let output = std::process::Command::new(std::env::current_exe().expect("test executable"))
+        .args(["--exact", "signal_read_and_write_matrix", "--nocapture"])
+        .env(LOAN_CHILD_CASE, case)
+        .output()
+        .expect("released-loan child process");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success()
+            && stdout.contains("running 1 test")
+            && stdout.contains("test result: ok. 1 passed; 0 failed;"),
+        "{case}: child failed: {}\n{}",
+        stdout,
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+pub(crate) fn released_update_retains_aggregate_before_resuming_failure() {
+    released_loan_child("update aggregate");
+}
+
+pub(crate) fn released_read_retains_aggregate_before_resuming_failure() {
+    released_loan_child("read aggregate");
+}
+
+pub(crate) fn released_update_retains_nested_release_obligations() {
+    released_loan_child("update nested");
+}
+
+pub(crate) fn released_read_retains_nested_release_obligations() {
+    released_loan_child("read nested");
+}
+
+pub(crate) fn released_update_reports_ordinary_retirement_failure() {
+    released_loan_child("update retirement");
+}
+
+pub(crate) fn released_read_reports_ordinary_retirement_failure() {
+    released_loan_child("read retirement");
+}
+
+pub(crate) fn run_released_loan_child() -> bool {
+    let Ok(case) = std::env::var(LOAN_CHILD_CASE) else {
+        return false;
+    };
+    let (update, nested, callback_fails) = match case.as_str() {
+        "update aggregate" => (true, false, true),
+        "read aggregate" => (false, false, true),
+        "update nested" => (true, true, true),
+        "read nested" => (false, true, true),
+        "update retirement" => (true, false, false),
+        "read retirement" => (false, false, false),
+        _ => panic!("unknown released-loan child case: {case}"),
+    };
+    struct Bomb(Rc<Cell<usize>>, bool);
+    impl Drop for Bomb {
+        fn drop(&mut self) {
+            if self.1 {
+                self.0.set(self.0.get() + 1);
+                panic!("released value destructor");
+            }
+        }
+    }
+    struct ReleaseOnDrop {
+        graph: flui_view::reactive::Reactive,
+        slot: flui_view::SignalSlot,
+        drops: Rc<Cell<usize>>,
+    }
+    impl Drop for ReleaseOnDrop {
+        fn drop(&mut self) {
+            self.drops.set(self.drops.get() + 1);
+            self.graph.release(self.slot);
+        }
+    }
+    let graph = flui_view::reactive::Reactive::new();
+    let next = graph.signal(10u32);
+    let drops = Rc::new(Cell::new(0));
+    let nested_drops = Rc::new(Cell::new(0));
+    let obligation = nested.then(|| ReleaseOnDrop {
+        graph: graph.clone(),
+        slot: next.slot(),
+        drops: Rc::clone(&nested_drops),
+    });
+    let signal = graph.signal((
+        Bomb(Rc::clone(&drops), true),
+        Bomb(Rc::clone(&drops), callback_fails),
+        obligation,
+    ));
+    let capture_drops = Rc::new(Cell::new(0));
+    let capture = Bomb(Rc::clone(&capture_drops), true);
+    let callback_graph = graph.clone();
+    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        if update {
+            signal.update(&graph, move |_| {
+                let _keep_capture = &capture;
+                callback_graph.release(signal.slot());
+                assert!(!callback_fails, "primary callback failure");
+            })
+        } else {
+            signal.peek(&graph, move |_| {
+                let _keep_capture = &capture;
+                callback_graph.release(signal.slot());
+                assert!(!callback_fails, "primary callback failure");
+            })
+        }
+    }))
+    .expect_err("callback failed");
+    assert_eq!(
+        flui_foundation::panic::payload_text(&*failure),
+        Some(if callback_fails {
+            "primary callback failure"
+        } else {
+            "released value destructor"
+        })
+    );
+    assert_eq!(drops.get(), usize::from(!callback_fails));
+    assert_eq!(
+        capture_drops.get(),
+        0,
+        "capture destruction stays secondary"
+    );
+    assert_eq!(nested_drops.get(), 0, "nested obligations remain retained");
+    assert!(matches!(
+        signal.peek(&graph, |_| ()),
+        Err(flui_view::SignalError::Released { .. })
+    ));
+    next.update(&graph, |value| *value += 1)
+        .expect("next live update");
+    assert_eq!(next.peek(&graph, |value| *value), Ok(11));
+    true
+}
