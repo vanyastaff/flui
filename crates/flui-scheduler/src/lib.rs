@@ -188,6 +188,7 @@ pub use post_frame::{
 /// name `UpdateScheduler::drive_frame`'s `vsync_time` without depending on `web_time`.
 mod post_frame;
 
+mod completion_wake;
 mod wake_delivery;
 
 #[cfg(test)]

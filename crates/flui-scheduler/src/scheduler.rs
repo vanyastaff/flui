@@ -267,6 +267,19 @@ struct FrameCompletionState {
     waker: Option<Waker>,
 }
 
+// A cancelled waiter can own the final executor envelope. During unrelated
+// unwind, invoking its opaque destruction could abort before any catch returns.
+impl Drop for FrameCompletionState {
+    fn drop(&mut self) {
+        let waker = self.waker.take();
+        if std::thread::panicking() {
+            std::mem::forget(waker);
+        } else {
+            drop(waker);
+        }
+    }
+}
+
 /// Future that resolves when a frame completes
 ///
 /// This is returned by `UpdateScheduler::end_of_frame()` and allows awaiting
@@ -914,10 +927,10 @@ struct SchedulerInner {
 /// # Never `resume_unwind`
 ///
 /// A panic raised from a destructor while the thread is already unwinding
-/// aborts the process with no diagnostic. Every waker's `wake()` is caught
-/// and traced; its opaque payload is retained via [`discard_panic_payload`]
-/// without invoking arbitrary drop glue. Nothing here ever
-/// propagates.
+/// aborts the process with no diagnostic. Wakers are borrowed for invocation,
+/// retaining their owning envelopes on failure or existing unwind. Ordinary
+/// retirement and telemetry have separate catches; caught opaque payloads
+/// are retained, and this delivery loop never resumes a caught failure.
 ///
 /// # What this cannot reach
 ///
@@ -931,12 +944,13 @@ struct SchedulerInner {
 /// driver's wake hook captures only a `Weak<SchedulerInner>` (see
 /// [`UpdateScheduler::with_budget_target_and_task_queue`]'s constructor doc),
 /// precisely so a pending task cannot keep the scheduler it belongs to alive
-/// through this destructor. See this crate's `ARCHITECTURE.md` "the teardown
-/// guarantee is partial" paragraph in the #1162 mapping entry for the full
+/// through this destructor. See this crate's `ARCHITECTURE.md` "The teardown lifetime
+/// guarantee remains partial" paragraph in the #1162 mapping entry for the full
 /// argument.
 impl Drop for SchedulerInner {
     fn drop(&mut self) {
         let waiters = self.frame.completion_waiters.get_mut().drain();
+        let mut delivery = crate::completion_wake::WakeBatch::new("scheduler teardown", false);
 
         for notifier in waiters {
             // A failed upgrade means the future was already dropped
@@ -953,18 +967,9 @@ impl Drop for SchedulerInner {
             };
             let Some(waker) = waker else { continue };
 
-            if let Err(payload) =
-                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| waker.wake()))
-            {
-                tracing::error!(
-                    panic_msg = flui_foundation::panic::payload_text(&*payload)
-                        .unwrap_or("(non-string panic payload)"),
-                    "frame completion waker panicked while the scheduler was being dropped; \
-                     discarding rather than unwinding out of Drop"
-                );
-                discard_panic_payload(payload);
-            }
+            delivery.wake(waker);
         }
+        delivery.finish(false);
     }
 }
 
@@ -1601,7 +1606,10 @@ impl UpdateScheduler {
             // with `current_vsync_time` still set, reachable through
             // `drive_frame`'s `Ok` arm rather than its `Err` one.
             let notify_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                self.notify_frame_completion(FrameOutcome::Completed { timing });
+                self.notify_frame_completion(
+                    FrameOutcome::Completed { timing },
+                    callback_result.is_err(),
+                );
             }));
 
             if callback_result.is_err() || notify_result.is_err() {
@@ -1686,6 +1694,10 @@ impl UpdateScheduler {
     ///
     /// Idempotent: a no-op when no frame is open.
     pub fn abort_frame(&self) {
+        self.abort_frame_impl(false);
+    }
+
+    fn abort_frame_impl(&self, preserve_failure: bool) {
         if self.phase() == SchedulerPhase::Idle {
             return;
         }
@@ -1703,7 +1715,7 @@ impl UpdateScheduler {
         self.inner.callbacks.cancelled.clear();
 
         if let Some(timing) = timing {
-            self.notify_frame_completion(FrameOutcome::Aborted { timing });
+            self.notify_frame_completion(FrameOutcome::Aborted { timing }, preserve_failure);
         }
 
         tracing::warn!("frame aborted; its post-frame callbacks were not run");
@@ -1918,21 +1930,12 @@ impl UpdateScheduler {
                 // caller would observe the waker's failure instead of
                 // whichever phase actually caused this frame to abort.
                 if let Err(secondary_payload) =
-                    catch_unwind(AssertUnwindSafe(|| self.abort_frame()))
+                    catch_unwind(AssertUnwindSafe(|| self.abort_frame_impl(true)))
                 {
-                    tracing::error!(
-                        panic_msg = flui_foundation::panic::payload_text(&*secondary_payload)
-                            .unwrap_or("(non-string panic payload)"),
-                        "abort_frame panicked while closing a frame that was already \
-                         panicking; resuming the ORIGINAL panic, not this one"
+                    crate::completion_wake::retain_reported(
+                        secondary_payload,
+                        "abort_frame closing an already failed frame",
                     );
-                    // A plain `drop` here would be the same class of bug this
-                    // issue fixes at the other two sites: `secondary_payload`
-                    // can itself own a type whose `Drop` panics, and letting
-                    // THAT escape uncontained would displace the ORIGINAL
-                    // frame panic `resume_unwind(payload)` is about to carry
-                    // out, right below.
-                    discard_panic_payload(secondary_payload);
                 }
                 resume_unwind(payload)
             }
@@ -2925,10 +2928,11 @@ impl UpdateScheduler {
     /// re-raised too -- `resume_unwind` takes one payload -- so it is routed
     /// through [`discard_panic_payload`] instead, retaining the opaque payload
     /// without invoking its possibly-panicking destruction.
-    fn notify_frame_completion(&self, outcome: FrameOutcome) {
+    fn notify_frame_completion(&self, outcome: FrameOutcome, preserve_failure: bool) {
         let waiters = self.inner.frame.completion_waiters.lock().drain();
 
-        let mut first_panic: Option<Box<dyn std::any::Any + Send>> = None;
+        let mut delivery =
+            crate::completion_wake::WakeBatch::new("frame completion", preserve_failure);
         for notifier in waiters {
             // `upgrade()` at loop-body scope, never inside the
             // `completion_waiters` block above: the temporary `Arc` it
@@ -2962,33 +2966,9 @@ impl UpdateScheduler {
             // after completion is explicitly permitted by `Waker`'s own
             // contract. Do not "fix" it by holding the guard across the
             // wake; that is issue #1057's deadlock.
-            if let Err(payload) =
-                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| waker.wake()))
-            {
-                tracing::error!(
-                    panic_msg = flui_foundation::panic::payload_text(&*payload)
-                        .unwrap_or("(non-string panic payload)"),
-                    "frame completion waker panicked; notifying remaining waiters before \
-                     propagating"
-                );
-                if first_panic.is_none() {
-                    first_panic = Some(payload);
-                } else {
-                    // A second (or later) panic in the same drain: only the
-                    // FIRST one can be `resume_unwind`n below, so this one
-                    // is discarded -- and discarding it safely means
-                    // containing the possibility that ITS OWN `Drop` panics
-                    // too (a payload can own a type whose destructor
-                    // panics), rather than an ordinary `drop` that would
-                    // propagate that straight out of this loop.
-                    discard_panic_payload(payload);
-                }
-            }
+            delivery.wake(waker);
         }
-
-        if let Some(payload) = first_panic {
-            std::panic::resume_unwind(payload);
-        }
+        delivery.finish(true);
     }
 
     // =========================================================================

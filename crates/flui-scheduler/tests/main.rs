@@ -14,6 +14,9 @@ mod ticker_future_recovery;
 #[path = "wake_delivery.rs"]
 mod wake_delivery;
 
+#[path = "frame_completion_recovery.rs"]
+mod frame_completion_recovery;
+
 #[path = "end_of_frame_lifecycle.rs"]
 mod end_of_frame_lifecycle;
 

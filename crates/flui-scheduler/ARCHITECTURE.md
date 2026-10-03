@@ -960,17 +960,31 @@ performs `mem::take`, so an entry reaching this loop was, by construction,
 never reached by `notify_frame_completion` first (a delivered completion
 already left the registry through that same `drain`) — the guard would be
 dead code testing a fact the type already proves, not a real defense. Every
-waker's caught `wake()` failure is traced via `tracing::error!`; its opaque
-payload is then retained through `flui_foundation::panic::retain_opaque_payload`,
-without executing payload drop glue. This branch does not intentionally resume a
-caught wake panic during teardown. The same retention utility protects secondary
-waker failures in an ordinary `notify_frame_completion` drain and the symmetric
-`end_frame_impl` callback/notification failure merge. Catching payload destruction
-would not provide that guarantee: an aggregate can abort before an outer catch
-returns. This policy concerns caught failures; it does not widen the ownership
-boundaries of the consuming wake or tracing invocation.
+waker is invoked with `wake_by_ref` after its state guard is released, while the
+owning executor envelope remains outside the catch. A failed invocation retains
+that envelope; an ordinary successful invocation retires it through a separate
+catch. Once an earlier callback, pipeline, wake or retirement failure exists (or
+teardown is already unwinding), remaining opaque envelopes are retained after
+waking, since their aggregate destruction cannot safely run over that failure.
+Telemetry runs in its own catch and never displaces the delivery failure or stops
+the tail. Opaque secondary payloads are retained without running drop glue. The
+first failure propagates after normal frame delivery finishes; scheduler teardown
+retains it instead. Explicit frame abort preserves the same chronology; recovery
+of an already failed pipeline also retains its earlier authoritative payload.
 
-**The teardown guarantee is partial, and this does not widen it:** any live
+A cancelled pending `FrameCompletionFuture` can itself own the final executor
+waker. Its state destructor retains that envelope during unrelated unwind and
+performs ordinary destruction otherwise. Exceptional retention is deliberate:
+two panicking fields in one opaque destructor can abort before an outer catch
+returns. Ordinary successful retirement with such an aggregate remains outside
+the containment guarantee, as with ticker executor envelopes.
+`completion_wake_ownership_and_recovery`, a row of
+`end_of_frame_demand_matrix`, isolates normal/aborted/failed-pipeline delivery,
+post-frame failure, teardown and existing unwind, successful envelope retention,
+ordinary retirement, competing opaque payloads and telemetry, pending cancellation
+and a next independent frame through the consumer API.
+
+**The teardown lifetime guarantee remains partial:** any live
 strong `UpdateScheduler` handle defers `Drop for SchedulerInner`, the same as
 any other `Arc`. A task on an external executor that owns a clone does not
 hang — dropping the executor drops the task, the clone, then the scheduler —
