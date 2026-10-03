@@ -586,7 +586,11 @@ impl Transform {
     ///
     /// # Returns
     ///
-    /// A tuple of (translation, rotation_radians, scale_x, scale_y)
+    /// A tuple of (translation, rotation_radians, scale_x, scale_y).
+    /// Column lengths use `f64::hypot`, and the signed second scale uses a
+    /// normalized determinant when direct products overflow or underflow,
+    /// avoiding intermediate range loss for finite scales. Below the existing epsilon threshold, rotation is
+    /// zero and the second scale is its unsigned column length.
     ///
     /// # Examples
     ///
@@ -618,12 +622,19 @@ impl Transform {
         let d = matrix.m[5];
 
         // Extract scale from column vectors
-        let sx = (a * a + b * b).sqrt();
-        let det = a * d - b * c;
+        let sx = a.hypot(b);
         let sy = if sx > f64::EPSILON {
-            det / sx
+            let det = a * d - b * c;
+            if det.is_finite() && det != 0.0 {
+                // Keep direct products when representable: normalizing a much
+                // smaller component first can underflow it before multiplication.
+                det / sx
+            } else {
+                // Normalize only at range loss, preserving the reflection sign.
+                (a / sx) * d - (b / sx) * c
+            }
         } else {
-            (c * c + d * d).sqrt()
+            c.hypot(d)
         };
 
         // Extract rotation from normalized column vector

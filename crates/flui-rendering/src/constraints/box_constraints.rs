@@ -655,12 +655,15 @@ impl BoxConstraints {
     }
 
     /// Returns maximum diagonal length as raw f64.
+    ///
+    /// Uses `f64::hypot` to avoid intermediate squared lengths overflowing or
+    /// underflowing when the diagonal itself is representable.
     #[inline]
     #[must_use]
     pub fn max_diagonal(&self) -> f64 {
         let w = self.max_width;
         let h = self.max_height;
-        (w * w + h * h).sqrt()
+        w.hypot(h)
     }
 
     /// Clamps constraints to fit within bounds.

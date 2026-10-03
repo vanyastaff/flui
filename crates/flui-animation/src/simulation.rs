@@ -662,7 +662,7 @@ impl FrictionSimulation {
             // (Previously used `(x0 - x)`, the wrong sign, which returned
             // negative times for forward motion; `time_at_x(final_x)` is `+inf`,
             // the asymptote.)
-            ((self.drag_log * (x - self.initial_position) / self.initial_velocity) + 1.0).ln()
+            (self.drag_log * (x - self.initial_position) / self.initial_velocity).ln_1p()
                 / self.drag_log
         }
     }
@@ -712,11 +712,14 @@ impl FrictionSimulation {
 
 impl Simulation for FrictionSimulation {
     fn x(&self, time: f64) -> f64 {
+        // exp_m1 retains small displacement for drag near one or time near
+        // zero, where subtracting one from drag^time loses those bits.
         // Single-term form: pos + vel*(drag^t - 1)/drag_log
         // Algebraically equivalent to the two-term form for finite inputs, but
         // avoids INF - INF = NaN when |vel| → ∞ (e.g. before the 8 000 px/s
         // cap is applied).
-        self.initial_position + self.initial_velocity * (self.drag.powf(time) - 1.0) / self.drag_log
+        self.initial_position
+            + self.initial_velocity * (self.drag_log * time).exp_m1() / self.drag_log
     }
 
     fn dx(&self, time: f64) -> f64 {

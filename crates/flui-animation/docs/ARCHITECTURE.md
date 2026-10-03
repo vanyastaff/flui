@@ -692,6 +692,16 @@ tests were rewritten (not merely patched) to assert the rejection plus the
 unbounded constructor's own `0.0` start, each documenting why the old
 assertion no longer holds.
 
+### Friction numerical range
+
+Friction displacement uses `exp_m1(log_drag * time)`, and inverse arrival time
+uses `ln_1p` of the relative displacement. This retains small finite movement
+as drag approaches one without changing constructor validation, velocity
+sampling or the existing near-origin inverse threshold. Public consumer test
+`friction_preserves_small_decay_and_position_time_roundtrips` checks the
+constant-velocity limit, positive and negative normal flings, position/time
+round trips and unreachable/non-finite queries.
+
 ## Composition Model
 
 Animations compose via `Arc<dyn Animation<f32>>`:

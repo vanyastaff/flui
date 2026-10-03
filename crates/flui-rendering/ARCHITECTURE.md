@@ -32,6 +32,14 @@ deepest-first element unmount so view lifecycle hooks remain canonical.
 
 This section records design decisions and why they were taken. Each entry follows the "Accepted trade-offs" format established by [`docs/plans/2026-03-31-custom-render-callback-design.md`](https://github.com/vanyastaff/flui/blob/e30ab7194d50ac1c11ffe17c59230958d2fbeecd/docs/plans/2026-03-31-custom-render-callback-design.md): state the rule (or absence of rule), the choice, the alternatives considered, the trade-off accepted.
 
+### Constraint diagonals preserve representable lengths
+
+`BoxConstraints::max_diagonal` uses standard `hypot`: squaring large finite
+lengths can overflow, and squaring tiny lengths can underflow, while their
+diagonal remains representable. Public consumer test
+`maximum_diagonal_retains_representable_extreme_lengths` uses independently
+known scaled 3-4-5 triangles and preserves zero and unbounded results.
+
 ### Canvas clips belong to one fragment run
 
 Painting a child may replace the parent's canvas, so the boundary is

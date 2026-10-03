@@ -13,6 +13,15 @@ instantiations are the device-pixel grid (`DevicePoint`, `DeviceSize`, `DeviceRe
 lives here too: `snap`, `snap_point`, `snap_edges`, `cover`, `device_rect_covering`,
 `device_size` and `resolve_stroke_width`; the engine decides where they apply.
 
+Transform decomposition computes column lengths with `hypot`. It keeps a finite,
+nonzero direct determinant before dividing by the first scale: prematurely
+normalizing an anisotropic column can erase a smaller representable signed scale.
+When direct products overflow or underflow to zero, it uses the normalized
+column determinant. The existing epsilon threshold still selects zero rotation
+and an unsigned second-column length. Public consumer test
+`affine_decomposition_retains_finite_extreme_scales` checks ordinary rotation,
+reflections, extreme columns, anisotropic shear and determinant underflow.
+
 ---
 
 ## The signal read contract (`read_scope`)
