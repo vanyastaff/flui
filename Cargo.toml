@@ -554,6 +554,10 @@ needless_collect = "warn"
 collection_is_never_read = "warn"
 # Keep stack-heavy async work visible even if the pedantic group changes.
 large_futures = "warn"
+# Preserve small differences and representable lengths in floating-point math.
+imprecise_flops = "warn"
+# A mutating debug assertion changes behavior between debug and release builds.
+debug_assert_with_mut_call = "warn"
 # Allow reasonable exceptions
 cast_precision_loss = "allow"
 module_name_repetitions = "allow"
@@ -590,10 +594,8 @@ struct_excessive_bools = "allow"
 # signature even when that particular impl has nothing to await — the lint's fix
 # (`fn … -> impl Future<Output = …>` plus `future::ready`) desugars one impl of a
 # trait whose other impls stay `async fn`, so the family stops reading alike for
-# no runtime difference. It also has no answer for the feature-gated stub pairs
-# (`flui-assets`'s `network`-off `load_url`/`load_text`), where the `async` is
-# what keeps the two configurations' signatures identical. Fires on `flui-assets`
-# and `flui-cli`'s build pipeline today; new in Rust 1.98's pedantic set.
+# no runtime difference. Keep the trait implementation family consistent;
+# this also applies to custom Asset implementations with immediately ready data.
 unused_async_trait_impl = "allow"
 
 [package]
