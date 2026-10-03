@@ -4,6 +4,7 @@ error[E0423]: cannot initialize a tuple struct which contains private fields
 7 |     let _ratio = DevicePixelRatio(0.0);
   |                  ^^^^^^^^^^^^^^^^
   |
+  = note: a struct named `DevicePixelRatio` exists in another namespace
 note: constructor is not visible here due to private fields
  --> $WORKSPACE/crates/flui-foundation/src/geometry/snap.rs
   |

@@ -11,5 +11,5 @@ note: method defined here
   |        ^^^^^^^^^^^^^^^^
 help: provide the argument
   |
-9 |     access.remove_dependent(/* context::build_context::sealed::CrateToken */, dependent);
-  |                             +++++++++++++++++++++++++++++++++++++++++++++++++
+9 |     access.remove_dependent(/* CrateToken */, dependent);
+  |                             +++++++++++++++++

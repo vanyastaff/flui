@@ -441,7 +441,7 @@ mod tests {
         assert_eq!(window, WINDOW);
         assert_eq!(id, offer.id());
         assert_eq!(action, TransferActions::COPY, "documented COPY stamp");
-        assert!(source.windows_awaiting_freeze().is_empty());
+        assert_eq!(source.windows_awaiting_freeze(), [] as [WindowId; 0]);
 
         // A frozen offer resolves synchronously from memory.
         let outcome = poll_now(source.request(

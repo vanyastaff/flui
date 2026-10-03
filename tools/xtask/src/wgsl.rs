@@ -639,7 +639,7 @@ mod tests {
 
     fn marker_inside_a_block_comment_line_still_counts_for_its_line() {
         let source = "fn f(x: f32) -> f32 {\n  /* wgsl-uniformity: uniform */\n  if u.a > 0.0 { return dpdx(x); }\n  return 0.0;\n}";
-        assert!(findings(source).is_empty());
+        assert_eq!(findings(source), [] as [String; 0]);
     }
 
     #[test]

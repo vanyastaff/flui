@@ -38,7 +38,6 @@ impl StatelessView for PanicBuildView {
     // fix a concrete `impl IntoView`-satisfying type.
     #[expect(
         unreachable_code,
-        unused_variables,
         clippy::diverging_sub_expression,
         reason = "panic body — see comment above"
     )]

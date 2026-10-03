@@ -403,7 +403,7 @@ mod tests {
         }
         let (head, body) = get(server.addr, "HEAD", "/pkg/app.js");
         assert!(head.starts_with("HTTP/1.1 200"), "{head}");
-        assert!(body.is_empty());
+        assert_eq!(body, [] as [u8; 0]);
         let (head, _) = get(server.addr, "POST", "/");
         assert!(head.starts_with("HTTP/1.1 405"), "{head}");
     }

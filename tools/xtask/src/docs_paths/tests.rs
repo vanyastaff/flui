@@ -986,7 +986,10 @@ fn the_seed_is_an_allowlist_that_passes() {
     let mut allow: Allowlist = toml::from_str(&seed(&found)).expect("the seed parses");
     assert_eq!(allow.allow.len(), 1);
     allow.allow[0].reason = "filled in".to_owned();
-    assert!(judge(&found, &["a.md".to_owned()], &allow).is_empty());
+    assert_eq!(
+        judge(&found, &["a.md".to_owned()], &allow),
+        [] as [Finding; 0]
+    );
 }
 
 #[test]

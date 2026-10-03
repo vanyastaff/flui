@@ -337,7 +337,10 @@ mod tests {
             ja.script(Script::from_str_unchecked("Kana")),
             ["Noto Sans CJK JP"]
         );
-        assert!(us.script(Script::from_str_unchecked("Latn")).is_empty());
+        assert_eq!(
+            us.script(Script::from_str_unchecked("Latn")),
+            [] as [&str; 0]
+        );
         assert_eq!(us.common().first(), Some(&"Noto Sans"));
         for (platform, locale, expected) in [
             (Platform::Unix, "ja-JP", "Noto Sans CJK JP"),

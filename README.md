@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/vanyastaff/flui/actions/workflows/ci.yml/badge.svg)](https://github.com/vanyastaff/flui/actions/workflows/ci.yml)
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](README.md#license)
-[![MSRV: 1.98](https://img.shields.io/badge/MSRV-1.98-orange.svg)](README.md#minimum-supported-rust-version)
+[![MSRV: 1.99](https://img.shields.io/badge/MSRV-1.99-orange.svg)](README.md#minimum-supported-rust-version)
 
 > A modular declarative UI framework for Rust with GPU-accelerated rendering.
 
@@ -29,7 +29,7 @@ See [`docs/crates.md`](docs/crates.md) for the full layered map and per-crate st
 
 ## Quick Start
 
-Prerequisites: Rust 1.98 (edition 2024). The repository is a Cargo workspace consumed by path — clone and build. A `rust-toolchain.toml` is committed, so `rustup` will install and select the correct toolchain automatically.
+Prerequisites: Rust 1.99 (edition 2024). The repository is a Cargo workspace consumed by path — clone and build. A `rust-toolchain.toml` is committed, so `rustup` will install and select the correct toolchain automatically.
 
 ```bash
 git clone https://github.com/vanyastaff/flui
@@ -168,7 +168,7 @@ itself), see `examples/platform_window.rs`. More examples live under
 
 ## Minimum Supported Rust Version
 
-The MSRV is **Rust 1.98**, declared as `rust-version` in the workspace
+The MSRV is **Rust 1.99**, declared as `rust-version` in the workspace
 manifest (clippy reads it from there). `rust-toolchain.toml`'s `channel` is
 the *development* toolchain pin; under the policy below the two are the same
 release, so every CI job builds on the MSRV. `cargo xtask toolchain` (part of

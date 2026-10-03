@@ -1119,7 +1119,7 @@ mod tests {
             Err(SignalError::Released { .. })
         ));
         shared.set(&r, 1).unwrap();
-        assert!(scheduled(&inbox).is_empty());
+        assert_eq!(scheduled(&inbox), [] as [ElementId; 0]);
 
         let fresh = r.signal(9u8);
         assert_eq!(

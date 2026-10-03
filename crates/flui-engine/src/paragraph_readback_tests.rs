@@ -337,7 +337,10 @@ fn cjk_breaks_at_a_line_separator(renderer: &crate::headless::HeadlessRenderer) 
         return;
     }
     let pixels = read_back(renderer, &painter, 1.0);
-    assert!(!ink_in(&pixels, band(&painter, 0), everywhere(), inked).is_empty());
+    assert_ne!(
+        ink_in(&pixels, band(&painter, 0), everywhere(), inked),
+        [] as [(u32, u32); 0]
+    );
     assert!(
         !ink_in(&pixels, band(&painter, 1), everywhere(), inked).is_empty(),
         "世界 is painted on line 2"

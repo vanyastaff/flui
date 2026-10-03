@@ -46,7 +46,7 @@ impl RecordingBudget {
         }
         if let Err(used) =
             self.used_bytes
-                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |used| {
+                .try_update(Ordering::Relaxed, Ordering::Relaxed, |used| {
                     used.checked_add(bytes).filter(|next| *next <= self.bytes)
                 })
         {
@@ -59,7 +59,7 @@ impl RecordingBudget {
         }
         if let Err(used) =
             self.used_elements
-                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |used| {
+                .try_update(Ordering::Relaxed, Ordering::Relaxed, |used| {
                     used.checked_add(elements)
                         .filter(|next| *next <= self.elements)
                 })
@@ -78,7 +78,7 @@ impl RecordingBudget {
     pub(crate) fn admit_clip_work(&self, work: usize) -> crate::error::EngineResult<()> {
         const LIMIT: usize = 1_000_000_000;
         self.clip_work
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |used| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |used| {
                 used.checked_add(work).filter(|next| *next <= LIMIT)
             })
             .map(|_| ())
@@ -92,7 +92,7 @@ impl RecordingBudget {
     pub(crate) fn admit_effect_work(&self, work: usize) -> crate::error::EngineResult<()> {
         const LIMIT: usize = 1_000_000_000;
         self.effect_work
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |used| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |used| {
                 used.checked_add(work).filter(|next| *next <= LIMIT)
             })
             .map(|_| ())

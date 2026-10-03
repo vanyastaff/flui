@@ -15,7 +15,7 @@ not a generated application).
 
 | Tool | Minimum version | Notes |
 |------|-----------------|-------|
-| Rust | 1.98 | MSRV floor in `workspace.package.rust-version`; `rustup` installs the pinned dev toolchain automatically on first `cargo` invocation. |
+| Rust | 1.99 | MSRV floor in `workspace.package.rust-version`; `rustup` installs the pinned dev toolchain automatically on first `cargo` invocation. |
 | Native toolchain | platform-specific | MSVC on Windows, Xcode CLT on macOS, NDK on Android (only if targeting Android). |
 
 The `flui` CLI is published on crates.io as `flui-cli` (`cargo install flui-cli --locked`); the

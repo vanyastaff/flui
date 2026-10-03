@@ -152,9 +152,8 @@ mod appkit_close_path_probe {
         // but the markers must be authoritative first.
         if failures.is_empty() {
             std::process::exit(0);
-        } else {
-            std::process::exit(1);
         }
+        std::process::exit(1);
     }
 }
 

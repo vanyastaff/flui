@@ -345,7 +345,7 @@ pub(crate) fn merge_semantics_boundary_collapses_plain_children_into_one_node() 
          into the boundary's single node — neither leaf gets its own \
          SemanticsNode",
     );
-    assert!(node.children().is_empty());
+    assert_eq!(node.children(), []);
     assert!(
         node.config().is_button(),
         "Beta's button flag absorbs up into the merged node",
