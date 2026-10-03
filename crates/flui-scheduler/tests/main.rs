@@ -5,6 +5,9 @@
 #[path = "async_driver_waker.rs"]
 mod async_driver_waker;
 
+#[path = "async_driver_unwind.rs"]
+mod async_driver_unwind;
+
 #[path = "wake_delivery.rs"]
 mod wake_delivery;
 

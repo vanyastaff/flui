@@ -43,12 +43,15 @@ surface and change no cross-crate ownership contract, so they do not need a new 
 
 ## Unresolved architecture findings
 
-AsyncDriver calls Future::poll while its owned future is a local unwind obligation. If poll
-panics and that future's Drop also panics, the process can abort before PumpGuard recovers.
-Test eager and lazy polling, single failures, chronological competition, self-wakes, and
-continued sibling progress in a subprocess before changing this contract.
+The subsequent AsyncDriver ownership audit reproduced eight failing subprocess cases,
+including lazy/eager poll-plus-destructor aborts and failed-spawn orphans. Polling now borrows
+the future into its catch boundary and retains that opaque future before resuming the original
+panic. Unwind-time token destruction similarly detaches without running user destruction;
+spawn establishes rollback ownership before calling its hook. All twelve subprocess cases
+pass, including ordinary retirement failures and continued sibling progress. Exceptional
+retention keeps captured resources and nested tokens alive. It cannot contain competing panics
+inside user poll locals or multiple fields of an ordinary destructor.
 
-This boundary is not claimed fixed by retaining a waker or recovering delivery hooks.
 Distinct atlas image IDs also currently force
 batch changes; sharing an atlas page alone does not prove they can share all replay bindings.
 

@@ -1256,6 +1256,26 @@ design never needed — it re-derives readiness from ground truth every call and
 cannot strand a sibling — and what an index-based one owes back in return for
 not scanning.
 
+**Owned future failure boundary:** both lazy and eager polling borrow the
+future into `catch_unwind`, keeping its ownership outside the closure. On
+poll failure the future is retained without invoking opaque destruction, its
+waker is cancelled, and the original payload resumes. `PumpGuard` removes the
+empty slot and restores unreached siblings. A token dropped during an existing
+unwind likewise detaches its task and retains its future. Catching `drop` would
+not contain two panicking fields in one future; exceptional retention includes
+all captures and nested tokens, so it does not promise recursive cleanup.
+Ordinary completion and explicit cancellation still run destructors outside
+the map lock and propagate their first failure. Panics competing inside a
+user's own `poll` locals, or multiple fields of an ordinary opaque destructor,
+remain subject to Rust's abort behavior.
+
+Spawn establishes its token before invoking the frame hook: a failing hook
+therefore cancels the task whose token could not be returned. The public
+`async_driver_unwind_matrix` runs twelve cases in child processes, covering
+lazy/eager poll failures with zero, one and two hostile destructors, stale
+self-wakes, sibling progress, unwind cancellation, retirement failure,
+nested cancellation and both spawn-hook rollback paths.
+
 **Stale index entries are tolerated, not prevented.** `store.ready` is never
 proactively purged on cancel, nor scrubbed for a self-woken id whose task then
 panics: both go stale for at most one pump and self-heal via `poll_ready`'s
