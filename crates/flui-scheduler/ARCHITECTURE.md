@@ -879,16 +879,27 @@ The private `WakeDelivery` stores one receipt identity and tracks active hook
 threads. Fresh work overlapping a hook replaces the identity, so an older success
 cannot acknowledge a newer failure. Serial successful requests reuse the receipt
 and thread-index allocation. No callback runs with a delivery lock held. Same-thread
-reentry records demand for at most one compensating attempt; the first panic remains
-authoritative when that attempt also fails. A callback that panics retains its owning
-hook envelope, because self-uninstallation can make its opaque capture bundle's
+reentry records demand for at most one compensating attempt, which rereads the
+currently installed hook. A replacement hook therefore pays the debt even when the
+displaced hook panics. Both owning envelopes remain live until the active entry is
+removed; the first panic remains authoritative when compensation also fails. A
+callback failure retains both envelopes, because self-uninstallation or replacement
+can make an opaque capture bundle's
 Drop the next failure. Opaque secondary panic payloads are also intentionally
 retained: an aggregate whose two fields both panic in Drop aborts even inside a
 catch boundary. These exceptional leaks keep the first failure authoritative;
-they do not change normal hook ownership. A hookless request never acknowledges
+they do not change normal hook ownership. On successful delivery, initial-envelope
+retirement happens after active bookkeeping closes; if retirement panics, its error
+resumes after retaining the compensation envelope. Two panicking field destructors
+inside that first retirement remain Rust's unavoidable aggregate-abort boundary.
+A hookless request never acknowledges
 debt. `coalesced_wake_delivery_recovery` exercises repeated requests, cloned task
 wakers, overlapping receipts, missing hooks, reentry, competing failures and the next
-operation. Hooks must still only wake the owner, never drive a frame inline.
+operation. Its `reentrant_hook_replacement_delivers_the_current_hook_after_failure`
+row covers replacement on both scheduling and task wakes;
+`initial_hook_retirement_retains_the_compensating_envelope_on_failure` covers
+competing capture retirement and the next operation. Hooks must still only wake
+the owner, never drive a frame inline.
 
 ### `end_of_frame` resolves an outcome, and a dropped scheduler resolves `Err(SchedulerClosed)`
 

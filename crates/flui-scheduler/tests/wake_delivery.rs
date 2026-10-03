@@ -408,11 +408,163 @@ fn perpetual_reentrant_demand_is_bounded_and_retained() {
     );
 }
 
+fn reentrant_hook_replacement_delivers_the_current_hook_after_failure() {
+    fn scheduler() {
+        assert_reentrant_hook_replacement_after_failure(false);
+    }
+    fn driver() {
+        assert_reentrant_hook_replacement_after_failure(true);
+    }
+    crate::run_table(
+        "reentrant_hook_replacement",
+        &[("scheduler", scheduler as fn()), ("driver", driver as fn())],
+    );
+}
+
+fn assert_reentrant_hook_replacement_after_failure(use_driver: bool) {
+    let scheduler = UpdateScheduler::new();
+    let driver = scheduler.async_driver();
+    let observed = Arc::new(Mutex::new(None::<Waker>));
+    let task_observed = Arc::clone(&observed);
+    let token = use_driver.then(|| {
+        driver.spawn_local(Box::pin(std::future::poll_fn(move |cx| {
+            *task_observed.lock().expect("observed waker") = Some(cx.waker().clone());
+            Poll::<()>::Pending
+        })))
+    });
+    if use_driver {
+        assert_eq!(driver.poll_ready(), 1);
+    }
+    scheduler.finish_async_pump();
+    let initial_calls = Arc::new(AtomicUsize::new(0));
+    let replacement_calls = Arc::new(AtomicUsize::new(0));
+    let hook_initial_calls = Arc::clone(&initial_calls);
+    let hook_replacement_calls = Arc::clone(&replacement_calls);
+    let weak = scheduler.downgrade();
+    let initial = move || {
+        hook_initial_calls.fetch_add(1, Ordering::Relaxed);
+        let scheduler = weak.upgrade().expect("live scheduler");
+        let replacement_calls = Arc::clone(&hook_replacement_calls);
+        let replacement = move || {
+            replacement_calls.fetch_add(1, Ordering::Relaxed);
+        };
+        if use_driver {
+            scheduler.async_driver().set_request_frame(replacement);
+        } else {
+            scheduler.set_on_frame_scheduled(Some(Arc::new(replacement)));
+        }
+        panic!("initial hook failure");
+    };
+    if use_driver {
+        driver.set_request_frame(initial);
+    } else {
+        scheduler.set_on_frame_scheduled(Some(Arc::new(initial)));
+    }
+    let waker = observed.lock().expect("observed waker").clone();
+    let demand = || {
+        if let Some(waker) = &waker {
+            waker.wake_by_ref();
+        } else {
+            scheduler.request_frame();
+        }
+    };
+    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(demand))
+        .expect_err("initial hook failed");
+    assert_eq!(
+        failure.downcast_ref::<&str>(),
+        Some(&"initial hook failure")
+    );
+    assert_eq!(initial_calls.load(Ordering::Relaxed), 1);
+    assert_eq!(replacement_calls.load(Ordering::Relaxed), 1);
+    demand();
+    assert_eq!(replacement_calls.load(Ordering::Relaxed), 1);
+    if let Some(token) = token {
+        token.cancel();
+    }
+}
+
+fn initial_hook_retirement_retains_the_compensating_envelope_on_failure() {
+    struct Capture {
+        drops: Arc<AtomicUsize>,
+        failure: &'static str,
+    }
+    impl Drop for Capture {
+        fn drop(&mut self) {
+            self.drops.fetch_add(1, Ordering::Relaxed);
+            panic!("{}", self.failure);
+        }
+    }
+    let scheduler = UpdateScheduler::new();
+    let weak = scheduler.downgrade();
+    let initial_drops = Arc::new(AtomicUsize::new(0));
+    let replacement_drops = Arc::new(AtomicUsize::new(0));
+    let replacement_calls = Arc::new(AtomicUsize::new(0));
+    let initial_capture = Capture {
+        drops: Arc::clone(&initial_drops),
+        failure: "initial envelope retirement",
+    };
+    let hook_replacement_drops = Arc::clone(&replacement_drops);
+    let hook_replacement_calls = Arc::clone(&replacement_calls);
+    scheduler.set_on_frame_scheduled(Some(Arc::new(move || {
+        let _keep_capture = &initial_capture;
+        let scheduler = weak.upgrade().expect("live scheduler");
+        scheduler.finish_async_pump();
+        let replacement_capture = Capture {
+            drops: Arc::clone(&hook_replacement_drops),
+            failure: "replacement envelope retirement",
+        };
+        let replacement_calls = Arc::clone(&hook_replacement_calls);
+        let replacement_weak = scheduler.downgrade();
+        scheduler.set_on_frame_scheduled(Some(Arc::new(move || {
+            let _keep_capture = &replacement_capture;
+            replacement_calls.fetch_add(1, Ordering::Relaxed);
+            replacement_weak
+                .upgrade()
+                .expect("live scheduler")
+                .set_on_frame_scheduled(None);
+        })));
+        scheduler.request_frame();
+    })));
+    let failure =
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| scheduler.request_frame()));
+    // Retire any still-installed replacement before asserting. This also makes
+    // a counterfactual using the old callback selection fail without unwinding
+    // through a panicking capture destructor at the end of this table row.
+    let cleanup = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        scheduler.set_on_frame_scheduled(None);
+    }));
+    assert!(cleanup.is_ok(), "the compensation uninstalled its hook");
+    let failure = failure.expect_err("initial envelope retirement failed");
+    assert_eq!(
+        failure.downcast_ref::<String>().map(String::as_str),
+        Some("initial envelope retirement")
+    );
+    assert_eq!(initial_drops.load(Ordering::Relaxed), 1);
+    assert_eq!(replacement_drops.load(Ordering::Relaxed), 0);
+    assert_eq!(replacement_calls.load(Ordering::Relaxed), 1);
+    let next_calls = Arc::new(AtomicUsize::new(0));
+    let hook_next_calls = Arc::clone(&next_calls);
+    scheduler.set_on_frame_scheduled(Some(Arc::new(move || {
+        hook_next_calls.fetch_add(1, Ordering::Relaxed);
+    })));
+    scheduler.finish_async_pump();
+    scheduler.request_frame();
+    assert_eq!(next_calls.load(Ordering::Relaxed), 1);
+}
+
 #[test]
 fn coalesced_wake_delivery_recovery() {
     crate::run_table(
         "coalesced_wake_delivery_recovery",
         &[
+            (
+                "initial_hook_retirement_retains_the_compensating_envelope_on_failure",
+                initial_hook_retirement_retains_the_compensating_envelope_on_failure as fn(),
+            ),
+            (
+                "reentrant_hook_replacement_delivers_the_current_hook_after_failure",
+                reentrant_hook_replacement_delivers_the_current_hook_after_failure as fn(),
+            ),
             (
                 "a_secondary_aggregate_with_two_panicking_fields_is_retained",
                 a_secondary_aggregate_with_two_panicking_fields_is_retained as fn(),

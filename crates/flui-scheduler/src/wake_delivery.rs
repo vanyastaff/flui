@@ -24,7 +24,7 @@ impl WakeDelivery {
     pub(crate) fn request(
         &self,
         fresh: impl FnOnce() -> bool,
-        read_hook: impl FnOnce() -> Option<Arc<dyn Fn() + Send + Sync>>,
+        mut read_hook: impl FnMut() -> Option<Arc<dyn Fn() + Send + Sync>>,
     ) {
         let thread = std::thread::current().id();
         let (mut token, hook) = {
@@ -54,9 +54,12 @@ impl WakeDelivery {
             (token, hook)
         };
         let mut first_panic = None;
-        let mut may_compensate = true;
+        // Keep both owning envelopes until delivery bookkeeping is closed.
+        // Switching hooks must not run the displaced callback's capture Drop.
+        let mut compensation_hook: Option<Arc<dyn Fn() + Send + Sync>> = None;
         loop {
-            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| hook()));
+            let current_hook = compensation_hook.as_ref().unwrap_or(&hook);
+            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| current_hook()));
             let succeeded = outcome.is_ok();
             if let Err(payload) = outcome {
                 if first_panic.is_none() {
@@ -82,26 +85,52 @@ impl WakeDelivery {
                     .active
                     .get_mut(&thread)
                     .expect("BUG: active delivery owns its thread entry");
-                let retry = *reentered && may_compensate;
+                let retry = *reentered && compensation_hook.is_none();
                 *reentered = false;
-                if retry && state.pending {
-                    state.token.clone()
+                let next = if retry && state.pending {
+                    // Hook installation is itself a retry opportunity. Select
+                    // its current callback rather than repeat a displaced one.
+                    read_hook().map(|hook| {
+                        (
+                            Arc::clone(
+                                state
+                                    .token
+                                    .as_ref()
+                                    .expect("BUG: active delivery has a receipt"),
+                            ),
+                            hook,
+                        )
+                    })
                 } else {
-                    state.active.remove(&thread);
                     None
+                };
+                if next.is_none() {
+                    state.active.remove(&thread);
                 }
+                next
             };
-            if let Some(next) = compensation {
+            if let Some((next, next_hook)) = compensation {
                 token = next;
-                may_compensate = false;
+                compensation_hook = Some(next_hook);
             } else {
                 if let Some(payload) = first_panic {
                     // A hook can uninstall itself before panicking. Its opaque
                     // capture bundle may have panicking aggregate drop glue,
                     // so retain our owning envelope before resuming the failure.
                     std::mem::forget(hook);
+                    std::mem::forget(compensation_hook);
                     std::panic::resume_unwind(payload);
                 }
+                // Normal retirement can itself raise the first failure. Retire
+                // the initial envelope after removing the active entry; if it
+                // panics, retain the compensation envelope before resuming it.
+                if let Err(payload) =
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(hook)))
+                {
+                    std::mem::forget(compensation_hook);
+                    std::panic::resume_unwind(payload);
+                }
+                drop(compensation_hook);
                 return;
             }
         }
