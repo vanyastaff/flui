@@ -2,6 +2,7 @@
 - Async tasks retain one waker across polls, removing steady-state per-poll allocations.
 - Cached GPU path geometry streams into draw segments without an intermediate vertex buffer.
 - Foundational dependencies enable serialization and GPU conversion features only where needed.
+- Typed notification callbacks borrow their argument, supporting non-Clone values; discarded opaque panic payloads and callback captures are retained after contained failures.
 
 ### Fixed
 - Coalesced scheduler and async wakes retry unpaid delivery after hook failures or installation, without an older successful callback erasing newer demand.

@@ -1,7 +1,7 @@
 //! `Notifier<Arg>` — a generic, typed, hardened notification channel.
 //!
 //! Generalizes [`crate::notifier::ChangeNotifier`] (which is effectively
-//! `Notifier<()>`) to deliver a `Clone` argument to each listener. Reuses the
+//! `Notifier<()>`) to lend an argument to each listener. Reuses the
 //! same firing discipline proven in [`crate::notifier::ChangeNotifier::notify_listeners`]:
 //! snapshot-under-lock, registration-order firing, drop-lock before callbacks,
 //! per-callback `catch_unwind`, remove-during-notify skip, and a dispose guard.
@@ -29,19 +29,28 @@ use parking_lot::Mutex;
 
 use crate::id::ListenerId;
 
-/// A listener callback that receives a `Clone` argument by value.
-pub type ArgCallback<Arg> = Arc<dyn Fn(Arg) + Send + Sync + 'static>;
+/// A listener callback that borrows its argument for the duration of the call.
+pub type ArgCallback<Arg> = Arc<dyn Fn(&Arg) + Send + Sync + 'static>;
 
 /// A generic, typed, hardened notification channel. See module docs.
 ///
 /// Cloning shares the same underlying listener set, id counter, and disposed
 /// flag (`Arc`-backed), so a callback holding its own clone observes disposal
 /// performed elsewhere — matching `ChangeNotifier`'s semantics.
-#[derive(Clone)]
 pub struct Notifier<Arg> {
     listeners: Arc<Mutex<HashMap<ListenerId, ArgCallback<Arg>>>>,
     next_id: Arc<AtomicUsize>,
     is_disposed: Arc<AtomicBool>,
+}
+
+impl<Arg> Clone for Notifier<Arg> {
+    fn clone(&self) -> Self {
+        Self {
+            listeners: Arc::clone(&self.listeners),
+            next_id: Arc::clone(&self.next_id),
+            is_disposed: Arc::clone(&self.is_disposed),
+        }
+    }
 }
 
 impl<Arg> Default for Notifier<Arg> {
@@ -209,7 +218,7 @@ impl<Arg> Notifier<Arg> {
     }
 }
 
-impl<Arg: Clone> Notifier<Arg> {
+impl<Arg> Notifier<Arg> {
     /// Fire every listener with `arg`, in registration order.
     ///
     /// Mirrors [`ChangeNotifier::notify_listeners`](crate::notifier::ChangeNotifier::notify_listeners):
@@ -221,7 +230,14 @@ impl<Arg: Clone> Notifier<Arg> {
     /// backing `HashMap` is unordered, so the snapshot is sorted). Listeners
     /// *added* during a notify round are NOT fired in that round — only in the
     /// next one (same round-N-vs-round-N+1 rule as `notify_listeners`).
-    pub fn notify(&self, arg: Arg) {
+    /// Arguments are borrowed: notification never clones or destroys the value.
+    /// After a caught listener panic, its payload and callback snapshot are
+    /// retained rather than running opaque capture destructors. On a successful
+    /// round, callbacks retire normally; the first retirement panic propagates
+    /// with remaining envelopes retained. A single callback whose own capture
+    /// aggregate double-panics during ordinary destruction remains subject to
+    /// Rust's abort semantics, as does double-panic inside user callback code.
+    pub fn notify(&self, arg: &Arg) {
         if self.check_disposed() {
             return;
         }
@@ -233,7 +249,7 @@ impl<Arg: Clone> Notifier<Arg> {
     /// dispose-safe either way: once the snapshot is taken it is honoured to
     /// completion, and a fully-disposed (empty) listener map simply yields an
     /// empty snapshot.
-    pub(crate) fn notify_unchecked(&self, arg: Arg) {
+    pub(crate) fn notify_unchecked(&self, arg: &Arg) {
         // Stack-allocate the snapshot for the common case (1-4 listeners);
         // ≥5 spills to the heap. `SmallVec` over `tinyvec::ArrayVec`
         // deliberately: the callbacks are `Arc<dyn Fn(..)>`, which does not
@@ -245,8 +261,10 @@ impl<Arg: Clone> Notifier<Arg> {
             .map(|(&id, cb)| (id, Arc::clone(cb)))
             .collect();
         snapshot.sort_unstable_by_key(|(id, _)| *id);
+        let mut snapshot = std::mem::ManuallyDrop::new(snapshot);
+        let mut listener_failed = false;
 
-        for (id, callback) in &snapshot {
+        for (id, callback) in snapshot.iter() {
             // Skip a listener individually removed mid-notify (by an earlier
             // callback). Once disposed mid-flight, the snapshot is honoured to
             // completion (the disposed-state check ran at entry).
@@ -254,15 +272,33 @@ impl<Arg: Clone> Notifier<Arg> {
             {
                 continue;
             }
-            if let Err(payload) = catch_unwind(AssertUnwindSafe(|| callback(arg.clone()))) {
+            if let Err(payload) = catch_unwind(AssertUnwindSafe(|| callback(arg))) {
+                listener_failed = true;
+                let text = crate::panic::payload_text(&*payload)
+                    .unwrap_or("<non-string panic payload>")
+                    .to_owned();
+                crate::panic::retain_opaque_payload(payload);
                 tracing::error!(
                     listener_id = ?id,
-                    panic_payload = crate::panic::payload_text(&*payload)
-                        .unwrap_or("<non-string panic payload>"),
+                    panic_payload = text,
                     "Notifier listener panicked; continuing with remaining listeners"
                 );
             }
         }
+        if listener_failed {
+            // Self-removal may leave this snapshot owning the last callback
+            // envelope. Its opaque captures must not drop after containment.
+            return;
+        }
+        // Retire separate envelopes one at a time. If one destructor fails,
+        // the remaining snapshot must not add another failure during unwind.
+        snapshot.reverse();
+        while let Some((_, callback)) = snapshot.pop() {
+            if let Err(payload) = catch_unwind(AssertUnwindSafe(|| drop(callback))) {
+                std::panic::resume_unwind(payload);
+            }
+        }
+        drop(std::mem::ManuallyDrop::into_inner(snapshot));
     }
 }
 
@@ -275,12 +311,12 @@ mod tests {
     fn panicking_listener_does_not_abort_rest() {
         let n: Notifier<()> = Notifier::new();
         let ran = Arc::new(AtomicUsize::new(0));
-        let _ = n.add(Arc::new(|()| panic!("boom")));
+        let _ = n.add(Arc::new(|&()| panic!("boom")));
         let r = Arc::clone(&ran);
-        let _ = n.add(Arc::new(move |()| {
+        let _ = n.add(Arc::new(move |&()| {
             r.fetch_add(1, Ordering::SeqCst);
         }));
-        n.notify(());
+        n.notify(&());
         assert_eq!(ran.load(Ordering::SeqCst), 1);
     }
 
@@ -290,18 +326,18 @@ mod tests {
         let id_b_cell = Arc::new(Mutex::new(None::<ListenerId>));
         let n2 = n.clone();
         let cell2 = Arc::clone(&id_b_cell);
-        let _a = n.add(Arc::new(move |()| {
+        let _a = n.add(Arc::new(move |&()| {
             let id = *cell2.lock();
             if let Some(id) = id {
                 n2.remove(id);
             }
         }));
         let fb = Arc::clone(&fired_b);
-        let id_b = n.add(Arc::new(move |()| {
+        let id_b = n.add(Arc::new(move |&()| {
             fb.fetch_add(1, Ordering::SeqCst);
         }));
         let _prev = id_b_cell.lock().replace(id_b);
-        n.notify(());
+        n.notify(&());
         assert_eq!(fired_b.load(Ordering::SeqCst), 0);
     }
 

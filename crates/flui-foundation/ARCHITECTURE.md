@@ -136,3 +136,24 @@ Items below are concrete cleanups visible from `flui-foundation` outward. Each i
 - **State-notification surface decided** — `Notifier`/`ChangeNotifier` in this crate is the listener-notification mechanism. The signals crate that the summary table once pointed at (`flui-reactivity`) was removed 2026-07-28. Realm-scoped signals (ADR-0074) are not a crate: their read contract is this crate's `read_scope` module and their graph lives in `flui-view` (ADR-0085). The `Arc<Mutex<…>>` notifier stays for `Send + Sync` users until the UI callback surface loses `Send` (ADR-0091 §1), when a `Listenable` adapter over a signal replaces it.
 
 ---
+
+## Mapping decisions
+
+### Borrow arguments and retain exceptional notification obligations
+
+Typed notification callbacks borrow their argument and do not require Clone.
+The notifier's owned snapshot prevents a removed callback from disappearing
+while it runs. After a caught listener failure, the payload and snapshot remain
+retained: opaque capture or panic-payload aggregates can double-panic during
+drop before catch_unwind regains control. Later listeners and later notification
+rounds still progress. Normal success retires callback envelopes one at a time
+in registration order; a retirement failure propagates after retaining the
+remaining envelopes. An individual aggregate double-panic during ordinary
+successful-round retirement keeps Rust's abort behavior.
+
+The public subprocess table `notifier_ownership_and_recovery` checks borrowed
+non-Clone arguments, hostile payloads and self-removal captures, chronological
+retirement competition and subsequent progress. The common exceptional-payload
+operation is `panic::retain_opaque_payload`, used by notifications, signal reads
+and the test-table runner. This contract is recorded in
+[ADR-0104](../../docs/adr/ADR-0104-borrowed-notification-and-opaque-panic-retention.md).

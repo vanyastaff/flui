@@ -43,3 +43,15 @@ pub fn payload_text(payload: &(dyn Any + Send)) -> Option<&str> {
 pub fn is_internal_invariant(text: &str) -> bool {
     text.starts_with("BUG:")
 }
+
+/// Retain a discarded opaque panic payload so containment can continue safely.
+///
+/// A payload may own several fields with panicking destructors. Dropping it
+/// inside `catch_unwind` can still abort when a second field panics during the
+/// first field's unwind. Exceptional-path retention deliberately leaks the
+/// payload; it does not run arbitrary destruction after a caught failure.
+/// Boundaries that propagate the original failure should use `resume_unwind`
+/// instead. This operation is for a failure already reported or superseded.
+pub fn retain_opaque_payload(payload: Box<dyn Any + Send>) {
+    std::mem::forget(payload);
+}

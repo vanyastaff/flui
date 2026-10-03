@@ -262,7 +262,7 @@ impl<S: Send + Sync + 'static> ListenerRegistry<S> {
         }
     }
 
-    /// Register a status listener (receives `S`). Returns a RAII [`ListenerSubscription`].
+    /// Register a status listener (borrows `S`). Returns a RAII [`ListenerSubscription`].
     #[must_use = "dropping the ListenerSubscription immediately removes the listener"]
     pub fn add_status_listener(&self, cb: ArgCallback<S>) -> ListenerSubscription {
         let id = self.inner.status.add(cb);
@@ -275,9 +275,9 @@ impl<S: Send + Sync + 'static> ListenerRegistry<S> {
     }
 }
 
-impl<S: Clone> ListenerRegistry<S> {
+impl<S> ListenerRegistry<S> {
     /// Fire all status listeners with `status`.
-    pub fn notify_status(&self, status: S) {
+    pub fn notify_status(&self, status: &S) {
         self.inner.status.notify(status);
     }
 }
@@ -358,7 +358,7 @@ mod tests {
             l2.fetch_add(1, Ordering::SeqCst);
         });
         let s1 = reg.add_value_listener(Arc::new(|| {}));
-        let s2 = reg.add_status_listener(Arc::new(|_s: u8| {}));
+        let s2 = reg.add_status_listener(Arc::new(|_s: &u8| {}));
         assert_eq!(lasts.load(Ordering::SeqCst), 0);
         drop(s1);
         assert_eq!(lasts.load(Ordering::SeqCst), 0, "still 1 listener");

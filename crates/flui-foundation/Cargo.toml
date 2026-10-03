@@ -1,4 +1,5 @@
 [package]
+autotests = false
 publish = ["crates-io"]
 name = "flui-foundation"
 version.workspace = true
@@ -69,6 +70,14 @@ serde_json = { workspace = true }
 # message that reads like a toolchain fault.
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
 wasm-bindgen-test = "=0.3.77"
+
+[[test]]
+name = "foundation_it"
+path = "tests/main.rs"
+
+[[test]]
+name = "wasm32"
+path = "tests/wasm32.rs"
 
 [[bench]]
 name = "geometry_bench"

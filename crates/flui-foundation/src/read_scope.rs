@@ -535,7 +535,7 @@ fn discard_secondary<T>(value: T) {
 fn discard_panic_payload(payload: Box<dyn Any + Send>) {
     // A panic payload is opaque and may itself contain multiple hostile
     // destructors. Retiring it through `drop` cannot be made unwind-safe.
-    std::mem::forget(payload);
+    crate::panic::retain_opaque_payload(payload);
 }
 
 impl<T: 'static> Signal<T> {

@@ -284,7 +284,7 @@ impl ChangeNotifier {
         // check, and a `dispose` racing in after it must behave as it always
         // did under the single-check semantics (the in-flight call proceeds)
         // rather than trip the inner channel's generically-worded gate.
-        self.inner.notify_unchecked(());
+        self.inner.notify_unchecked(&());
     }
 
     /// Whether any listeners are currently registered
@@ -318,7 +318,7 @@ impl Listenable for ChangeNotifier {
         // Unchecked for the same reason as `notify_listeners`: the branded
         // check above is the one entry check; a racing `dispose` must not
         // produce the inner channel's generically-worded failure.
-        self.inner.add_unchecked(Arc::new(move |()| listener()))
+        self.inner.add_unchecked(Arc::new(move |&()| listener()))
     }
 
     fn remove_listener(&self, id: ListenerId) {
