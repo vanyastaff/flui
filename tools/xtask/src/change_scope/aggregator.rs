@@ -8,14 +8,13 @@
 //!    Without this, a job added without editing that list ran, passed or
 //!    failed, and gated nothing.
 //! 2. EXACTLY THE EXPECTED SKIPS -- which jobs run is decided by `plan`'s
-//!    `lane` and the finite `extra_jobs` selection, and the aggregator recomputes it instead of trusting each
+//!    `lane` alone, and the aggregator recomputes it instead of trusting each
 //!    job's `if:`. Every lane runs `checks` and `plan`; then:
 //!    - `docs`: nothing else;
 //!    - `tooling`: `deps`, and `standalone` when plan names a standalone crate;
 //!    - `wide`: `deps` and the `HEAVY_JOBS` list (every Linux job), and
-//!      `ios-runner` when plan puts the iOS runner in scope (`cross_ios`),
-//!      plus the selected GPU and native platform/CLI checks;
-//!    - `full`: `wide` plus `FULL_JOBS` (the Windows and macOS jobs);
+//!      no native host jobs;
+//!    - `full`: `wide` plus `FULL_JOBS` (additional Linux checks);
 //!    - `extended`: `full` plus `EXTENDED_JOBS`.
 //!
 //!    Every other declared job must skip. Any other skip (a drifted `if:`, a
@@ -188,10 +187,8 @@ pub(super) struct Plan<'a> {
     pub(super) result: Option<&'a str>,
     /// `docs`, `tooling`, `wide`, `full` or `extended`.
     pub(super) lane: &'a str,
-    pub(super) cross_ios: bool,
     /// Whether plan names a standalone crate for the `standalone` job.
     pub(super) standalone: bool,
-    pub(super) extra_jobs: BTreeSet<super::selective::ExtraJob>,
 }
 
 /// Python-style repr of a string, as the aggregator's messages print it:
@@ -221,14 +218,6 @@ fn planned_runs(plan: &Plan<'_>, lanes: &LaneJobs) -> Option<BTreeSet<String>> {
     if plan.result != Some("success") {
         return None; // without a plan there is no expectation to check against
     }
-    if (!plan.extra_jobs.is_empty() && !matches!(plan.lane, "wide" | "full" | "extended"))
-        || plan
-            .extra_jobs
-            .iter()
-            .any(|job| !lanes.full.contains(job.as_str()))
-    {
-        return None;
-    }
     let mut runs: BTreeSet<String> = ["checks", "plan"].map(str::to_owned).into();
     let mut add = |names: &[&str]| runs.extend(names.iter().map(|&n| n.to_owned()));
     match plan.lane {
@@ -237,12 +226,7 @@ fn planned_runs(plan: &Plan<'_>, lanes: &LaneJobs) -> Option<BTreeSet<String>> {
         "tooling" => add(&["deps"]),
         "wide" | "full" | "extended" => {
             add(&["deps"]);
-            // the lanes above run the same clippy in `cli-macos`
-            if plan.lane == "wide" && plan.cross_ios {
-                add(&["ios-runner"]);
-            }
             runs.extend(lanes.wide.iter().cloned());
-            runs.extend(plan.extra_jobs.iter().map(|job| job.as_str().to_owned()));
             if plan.lane != "wide" {
                 runs.extend(lanes.full.iter().cloned());
             }
@@ -403,7 +387,6 @@ mod tests {
     /// What a run looks like: its lane, plan's two flags, and the results.
     struct Run<'a> {
         lane: &'a str,
-        cross_ios: bool,
         standalone: bool,
         event: &'a str,
     }
@@ -413,7 +396,6 @@ mod tests {
     fn run(lane: &str) -> Run<'_> {
         Run {
             lane,
-            cross_ios: false,
             standalone: false,
             event: PR,
         }
@@ -431,9 +413,7 @@ mod tests {
         let plan = Plan {
             result: Some(result_of("plan")),
             lane: r.lane,
-            cross_ios: r.cross_ios,
             standalone: r.standalone,
-            extra_jobs: BTreeSet::new(),
         };
         verify(&w.gated, &needs, &w.lanes, &plan, r.event)
     }
@@ -477,10 +457,10 @@ mod tests {
             .collect()
     }
 
-    /// `ios-runner` (out of scope in [`run`]) and `standalone`, which no
+    /// `standalone`, which no
     /// whole-workspace lane runs.
     fn not_whole_workspace() -> Vec<String> {
-        names(&["ios-runner", "standalone"])
+        names(&["standalone"])
     }
 
     fn heavy_jobs_list_matches_the_jobs_gated_on_heavy() {
@@ -490,24 +470,12 @@ mod tests {
 
     fn lane_lists_match_the_job_conditions() {
         let w = workflow();
-        let mut full = gated_on(&w, FULL_CONDITION);
-        for job in super::super::selective::ExtraJob::ALL {
-            let condition = format!(
-                "{FULL_CONDITION} || (needs.plan.outputs.lane == 'wide' && contains(fromJSON(needs.plan.outputs.extra_jobs), '{}'))",
-                job.as_str()
-            );
-            let selected = gated_on(&w, &condition);
-            assert_eq!(selected, [job.as_str().to_owned()].into());
-            full.extend(selected);
-        }
-        assert_eq!(full, w.lanes.full);
+        assert_eq!(gated_on(&w, FULL_CONDITION), w.lanes.full);
         assert_eq!(gated_on(&w, EXTENDED_CONDITION), w.lanes.extended);
         assert!(w.lanes.wide.is_disjoint(&w.lanes.full));
         assert!(w.lanes.wide.is_disjoint(&w.lanes.extended));
         assert!(w.lanes.full.is_disjoint(&w.lanes.extended));
-        assert!(
-            !w.lanes.wide.is_empty() && !w.lanes.full.is_empty() && !w.lanes.extended.is_empty()
-        );
+        assert!(!w.lanes.wide.is_empty() && !w.lanes.full.is_empty());
     }
 
     /// The jobs outside the lane lists: each one's `if:` must be the
@@ -516,10 +484,6 @@ mod tests {
         let w = workflow();
         let expected: BTreeMap<&str, &str> = [
             ("deps", "needs.plan.outputs.lane != 'docs'"),
-            (
-                "ios-runner",
-                "needs.plan.outputs.lane == 'wide' && needs.plan.outputs.cross_ios == 'true'",
-            ),
             (
                 "standalone",
                 "needs.plan.outputs.lane == 'tooling' && needs.plan.outputs.standalone != ''",
@@ -555,14 +519,12 @@ mod tests {
             .chain(w.lanes.extended.iter().cloned())
             .collect();
         let wide = skipping(&skipped);
-        assert_eq!(wide.get("gpu-test"), Some(&"skipped"));
         green(&run("wide"), &wide);
         red(
             &run("wide"),
             &with(wide.clone(), "clippy", "skipped"),
             "clippy",
         );
-        red(&run("wide"), &without(wide, "gpu-test"), "gpu-test");
     }
 
     fn full_lane() {
@@ -578,87 +540,51 @@ mod tests {
         let full = skipping(&skipped);
         green(&main, &full);
         red(&main, &with(full.clone(), "miri", "skipped"), "miri");
-        red(
-            &main,
-            &with(full.clone(), "gpu-test", "skipped"),
-            "gpu-test",
-        );
         red(&main, &with(full.clone(), "test", "failure"), "test");
-        red(&main, &without(full, "ios-runner"), "ios-runner");
     }
 
     fn extended_jobs_skipped_on_main_is_green_and_on_schedule_is_red() {
-        let w = workflow();
-        assert!(w.lanes.extended.contains("macos-ci"));
-        let main_push = skipping(
-            &not_whole_workspace()
-                .into_iter()
-                .chain(w.lanes.extended.iter().cloned())
-                .collect::<Vec<_>>(),
-        );
-        let push = Run {
-            event: "push",
-            ..run("full")
-        };
-        green(&push, &main_push);
         let nightly = Run {
             event: "schedule",
             ..run("extended")
         };
-        red(&nightly, &main_push, "macos-ci");
-        red(&nightly, &main_push, "test-windows");
         green(&nightly, &skipping(&not_whole_workspace()));
-        // an extended job that ran on main disagrees with its `if:`
-        red(&push, &without(main_push, "macos-ci"), "macos-ci");
+        red(
+            &nightly,
+            &with(skipping(&not_whole_workspace()), "test", "skipped"),
+            "test",
+        );
     }
 
-    fn ios_leg_follows_the_plan() {
+    fn native_jobs_are_absent() {
+        use clap::Parser;
+
         let w = workflow();
-        // the wide lane's jobs run; the platform lanes' and standalone skip
-        let others: Vec<String> = w
-            .lanes
-            .full
-            .iter()
-            .chain(&w.lanes.extended)
-            .cloned()
-            .chain(names(&["standalone"]))
-            .collect();
-        let ios = Run {
-            cross_ios: true,
-            ..run("wide")
-        };
-        // in scope: it must run and pass
-        green(&ios, &skipping(&others));
-        red(
-            &ios,
-            &with(skipping(&others), "ios-runner", "skipped"),
-            "ios-runner",
+        assert!(w.lanes.extended.is_empty());
+        assert!(
+            crate::Cli::try_parse_from(["xtask", "affected", "--full-ci-label", "true"]).is_err()
         );
-        red(
-            &ios,
-            &with(skipping(&others), "ios-runner", "failure"),
+        for removed in ["full-ci.yml", "manual.yml"] {
+            assert!(
+                !crate::util::repo_root()
+                    .join(".github/workflows")
+                    .join(removed)
+                    .exists(),
+                "{removed}"
+            );
+        }
+        for job in [
+            "gpu-test",
+            "platform-windows",
+            "platform-macos",
+            "cli-windows",
+            "cli-macos",
+            "macos-ci",
+            "test-windows",
             "ios-runner",
-        );
-        // out of scope: it must skip
-        red(&run("wide"), &skipping(&others), "ios-runner");
-        // the full lane's cli-macos runs the same command: ios-runner skips
-        let main = Run {
-            event: "push",
-            cross_ios: true,
-            ..run("full")
-        };
-        red(
-            &main,
-            &skipping(
-                &w.lanes
-                    .extended
-                    .iter()
-                    .cloned()
-                    .chain(names(&["standalone"]))
-                    .collect::<Vec<_>>(),
-            ),
-            "ios-runner",
-        );
+        ] {
+            assert!(!w.gated.contains(job), "{job}");
+        }
     }
 
     fn tooling_and_docs_lanes() {
@@ -670,7 +596,6 @@ mod tests {
             .chain(&w.lanes.full)
             .chain(&w.lanes.extended)
             .cloned()
-            .chain(names(&["ios-runner"]))
             .collect();
         let tooling = skipping(compiling.iter().chain(&names(&["standalone"])));
         green(&run("tooling"), &tooling);
@@ -736,54 +661,6 @@ mod tests {
         assert!(!ok && log.contains("lane='heavy'"), "{log}");
     }
 
-    fn selected_jobs_are_required_and_other_hosts_skip() {
-        use super::super::selective::ExtraJob;
-        let w = workflow();
-        let plan = Plan {
-            result: Some("success"),
-            lane: "wide",
-            cross_ios: false,
-            standalone: false,
-            extra_jobs: [ExtraJob::GpuTest].into(),
-        };
-        for (result, expected) in [("success", true), ("skipped", false), ("failure", false)] {
-            let mut needs: BTreeMap<String, String> = w
-                .gated
-                .iter()
-                .map(|j| {
-                    let runs =
-                        j == "checks" || j == "plan" || j == "deps" || w.lanes.wide.contains(j);
-                    (
-                        j.clone(),
-                        if runs { "success" } else { "skipped" }.to_owned(),
-                    )
-                })
-                .collect();
-            needs.insert("gpu-test".to_owned(), result.to_owned());
-            let (ok, log) = verify(&w.gated, &needs, &w.lanes, &plan, PR);
-            assert_eq!(ok, expected, "{log}");
-            if expected {
-                needs.insert("platform-windows".to_owned(), "success".to_owned());
-                assert!(!verify(&w.gated, &needs, &w.lanes, &plan, PR).0);
-            }
-        }
-        let docs = Plan {
-            lane: "docs",
-            ..plan.clone()
-        };
-        assert!(planned_runs(&docs, &w.lanes).is_none());
-        let tooling = Plan {
-            lane: "tooling",
-            ..plan.clone()
-        };
-        assert!(planned_runs(&tooling, &w.lanes).is_none());
-        let mut invalid_lanes = w.lanes.clone();
-        invalid_lanes.full.remove("gpu-test");
-        assert!(planned_runs(&plan, &invalid_lanes).is_none());
-        assert!(super::super::selective::parse(r#"["miri"]"#).is_err());
-        assert!(super::super::selective::parse(r#"["unknown"]"#).is_err());
-    }
-
     fn a_job_missing_from_needs_is_red() {
         let w = workflow();
         let mut needs: BTreeMap<String, String> = w
@@ -795,9 +672,7 @@ mod tests {
         let plan = Plan {
             result: Some("success"),
             lane: "full",
-            cross_ios: false,
             standalone: false,
-            extra_jobs: BTreeSet::new(),
         };
         let (ok, log) = verify(&w.gated, &needs, &w.lanes, &plan, "push");
         assert!(!ok);
@@ -820,9 +695,7 @@ mod tests {
         let plan = Plan {
             result: Some("success"),
             lane: "extended",
-            cross_ios: false,
             standalone: false,
-            extra_jobs: BTreeSet::new(),
         };
         let (ok, log) = verify(&gated, &needs, &w.lanes, &plan, "schedule");
         assert!(!ok && log.contains("'new-job': 'ran (success)"), "{log}");
@@ -839,7 +712,7 @@ mod tests {
             .chain(&w.lanes.full)
             .chain(&w.lanes.extended)
             .cloned()
-            .chain(names(&["ios-runner", "standalone"]))
+            .chain(names(&["standalone"]))
             .collect();
         let tooling = skipping(&whole);
         green(&run("tooling"), &tooling);
@@ -928,10 +801,6 @@ mod tests {
             "aggregator_contract",
             &[
                 (
-                    "selected_jobs_are_required_and_other_hosts_skip",
-                    selected_jobs_are_required_and_other_hosts_skip as fn(),
-                ),
-                (
                     "heavy_jobs_list_matches_the_jobs_gated_on_heavy",
                     heavy_jobs_list_matches_the_jobs_gated_on_heavy as fn(),
                 ),
@@ -956,7 +825,7 @@ mod tests {
                     "extended_jobs_skipped_on_main_is_green_and_on_schedule_is_red",
                     extended_jobs_skipped_on_main_is_green_and_on_schedule_is_red as fn(),
                 ),
-                ("ios_leg_follows_the_plan", ios_leg_follows_the_plan as fn()),
+                ("native_jobs_are_absent", native_jobs_are_absent as fn()),
                 ("tooling_and_docs_lanes", tooling_and_docs_lanes as fn()),
                 (
                     "checks_runs_on_a_docs_only_pr",

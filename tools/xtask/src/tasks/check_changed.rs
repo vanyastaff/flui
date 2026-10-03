@@ -208,7 +208,7 @@ fn plan(lane: &Lane, host: Host, targets: &BTreeSet<String>, have_hack: bool) ->
             ios_runner().into()
         } else {
             Step::Note(format!(
-                "check-changed: skipped the iOS runner (needs macOS + rustup target add {IOS_TARGET}; CI's ios-runner runs it)"
+                "check-changed: skipped the iOS runner (needs macOS + rustup target add {IOS_TARGET}; run it locally on macOS)"
             ))
         });
     }
@@ -348,7 +348,7 @@ mod tests {
                 "$ RUSTDOCFLAGS='-D warnings' cargo doc -p flui -p flui-material -p flui-web-counter --features flui/testing --no-deps --locked --document-private-items",
                 "$ cargo test -p flui -p flui-material --locked --doc",
                 "$ CC_aarch64_linux_android=clang CFLAGS_aarch64_linux_android=--target=aarch64-linux-android21 AR_aarch64_linux_android=ar cargo clippy -p flui-app -p flui --locked --target aarch64-linux-android -- -D warnings",
-                "check-changed: skipped the iOS runner (needs macOS + rustup target add aarch64-apple-ios; CI's ios-runner runs it)",
+                "check-changed: skipped the iOS runner (needs macOS + rustup target add aarch64-apple-ios; run it locally on macOS)",
                 "$ cargo clippy -p flui -p flui-material -p flui-web-counter --lib --bins --locked --target wasm32-unknown-unknown -- -D warnings",
                 "$ cargo check -p flui --locked --target wasm32-unknown-unknown --no-default-features --features hot-reload",
                 "$ cargo hack clippy -p flui-material --locked --each-feature --keep-going -- -D warnings",

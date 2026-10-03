@@ -300,7 +300,7 @@ which exists.
   and the book are updated from the list
   `rg 'flui::(material|cupertino)|features.*(material|cupertino)'` produces.
   `.github/workflows/ci.yml:924` builds `--features material --example
-  sliver_demo`; that line changes, which needs the owner's sign-off and the `full-ci` label.
+  sliver_demo`; that line changes, which needs the owner's sign-off and the Linux CI gate.
 - The name `flui-sdk` is free on crates.io (checked 2026-09-26, when the crate was created); the
   fallback `flui-package-sdk` is not needed.
 - **The guard also ties platform plugins to the train.** `flui-platform-api` depends on

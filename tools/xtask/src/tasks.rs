@@ -252,7 +252,7 @@ fn platform_suite_linux() -> Cmd {
 }
 
 /// flui-platform's suite on `host`: under Xvfb on Linux, directly on Windows
-/// (CI's `platform-windows` job needs neither), skipped elsewhere.
+/// (native Windows needs neither), skipped elsewhere.
 fn platform_suite(host: Host) -> Step {
     match host {
         Host::Linux => platform_suite_linux().into(),
@@ -393,7 +393,7 @@ fn lint_plan() -> Vec<Step> {
 /// backends, the mobile runners, flui-cli's Windows paths and flui-desktop-mcp's
 /// Windows and macOS backends. No link, no
 /// tests: green means "compiles clean under the workspace lints", nothing more.
-/// The iOS runner needs macOS (CI runs it in `cli-macos`), so it is skipped
+/// The iOS runner needs a local macOS host, so it is skipped
 /// with a message elsewhere.
 fn cross_typecheck_plan(host: Host) -> Vec<Step> {
     let mut steps: Vec<Step> = PLATFORM_TARGETS
@@ -404,7 +404,7 @@ fn cross_typecheck_plan(host: Host) -> Vec<Step> {
         ios_runner().into()
     } else {
         Step::Note(
-            "cross-typecheck: skipped the iOS runner (its C shim needs xcrun: macOS only; CI's cli-macos job runs it)"
+            "cross-typecheck: skipped the iOS runner (its C shim needs xcrun: macOS only; run it locally on macOS)"
                 .to_owned(),
         )
     });
@@ -505,7 +505,7 @@ impl Slice {
 /// flui-engine's wgpu backend features get no combination run of their own:
 /// they only forward to wgpu's features and no FLUI code is behind them, so
 /// every pair compiles the same FLUI code, and each backend already builds on
-/// its native target in gpu-test, cli-macos and wasm-check.
+/// supported targets in local checks and the wasm-check CI job.
 fn feature_matrix_plan(slice: Slice) -> Vec<Step> {
     let packages = match slice {
         Slice::All => "--workspace".to_owned(),

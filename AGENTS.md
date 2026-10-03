@@ -97,8 +97,8 @@ crate you're changing before changing it.
 - **Commits** `area: what changed`, one logical change each. **PRs** are one task each, with
   `cargo xtask check-changed` green first; CI is the proof. Before asking for review, review the
   branch against `main` yourself and list only what would block the merge: file and line, why it
-  is wrong, how to show it fails. Risky PRs get the `full-ci` label (it runs the extended
-  lane: every job, the nightly-only platform jobs included). Use
+  is wrong, how to show it fails. CI is temporarily Linux-only; no label enables native or GPU CI jobs.
+  Use local platform/GPU commands when a change needs those checks. Use
   `Refs #N`; `Closes`/`Fixes #N` only when merging should close it (GitHub's linker ignores
   negation around it). A consumer-visible change adds `changelog.d/<branch-slug>.md` (a
   `### Added|Changed|Deprecated|Removed|Fixed|Security` header and bullets) instead of editing
