@@ -38,10 +38,79 @@ reads. A stabilization PR mentioned in TWIR is not evidence that its API is avai
   the temporary Vec previously created for each cache hit. Preserve ordered SSAA and advanced
   blend isolation; this does not make those entire recording paths allocation-free.
 
-These are crate-local implementation and feature-selection changes. They add no unwired public
+The initial changes above are crate-local implementation and feature-selection changes. They add no unwired public
 surface and change no cross-crate ownership contract, so they do not need a new ADR.
 
-## Unresolved architecture findings
+## Additional Clippy policy and numerical behavior
+
+The audit uses the exact [Clippy 1.99 lint catalog](https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html),
+rather than enabling the entire nursery or restriction groups. Two further workspace checks
+are selected: `imprecise_flops` exposes avoidable cancellation and squared-length range loss;
+`debug_assert_with_mut_call` rejects mutations whose execution depends on debug assertions.
+These are improvements adopted with the current compiler, not claims that the lints or the
+standard numerical functions first appeared in Rust 1.99.
+
+`FrictionSimulation` uses `exp_m1` for displacement and `ln_1p` for inverse arrival time.
+Independent counterfactual runs restore each old expression separately: a valid drag one
+representable step below one produces zero frame displacement or zero arrival time instead
+of the constant-velocity limit. Column norms and maximum layout diagonals use `hypot`.
+Decomposition retains a representable direct determinant before division; normalized products
+are a fallback at overflow/underflow, because early normalization can erase the smaller
+component of an anisotropic shear. Separate mutations fail the large/reflected-scale cases
+and the signed anisotropic cases. The fixed foundation, animation, rendering and scheduler
+suite passed 95 tests (`target/modernization-numerics-scheduler-fixed.log`).
+
+Other audited candidates remain selective. `suboptimal_flops` proposes fused operations that
+change rounding and requires a separate numerical contract. `mutex_atomic` cannot infer the
+critical sections needed around shared state. `iter_with_drain` can discard the retained
+capacity of frame queues. `future_not_send` conflicts with deliberately local UI futures,
+and `non_send_fields_in_send_ty` conflicts with audited platform wrapper guarantees. A lint
+finding is a reason to inspect the ownership or numerical behavior, not to rewrite it blindly.
+
+## Asset loading contracts
+
+The asset audit found concrete mismatches between the public API and production
+behavior. `Asset::validate` advertised early rejection but registry loads never
+called it. Validation now precedes key computation and cache access, including
+cache hits; rejected descriptors leave previously accepted cached data intact.
+This makes admission deliberate without making `get` invent a descriptor to validate.
+[ADR-0105](../adr/ADR-0105-asset-validation-and-bridge-progress.md) records the contract.
+
+The bridge formerly accepted an ambient current-thread Tokio handle even when only
+entered: an external executor could poll the completion future forever while Tokio's
+spawned task remained undriven. Automatic resolution now selects ambient multi-thread
+runtimes or a registry-owned worker. Explicit injection remains a host promise to
+keep the runtime alive and driven. Registry-local fallible initialization returns
+`AssetError::Io`, leaves the runtime slot empty on failure, and permits retry;
+non-blocking shutdown and registry ownership remain intact.
+
+The generic `AssetLoader` abstraction had no production caller. Generic file loading
+read bytes and then always failed, generic network loading always failed, and
+`MemoryLoader` duplicated an unused storage boundary. These surfaces were removed.
+Concrete `Asset::load` implementations select their source and decoder directly:
+file assets now use `BytesFileLoader`, embedded assets own bytes through `from_bytes`,
+and the network bridge fetches with `reqwest` before decoding with `image`. No new
+decoder trait or storage layer was added. Optional image/network modules and types
+require the corresponding features rather than exposing unconditional-error stubs.
+[ADR-0107](../adr/ADR-0107-asset-byte-sources-and-decoding.md) records this API change.
+The consumer audit used `rg -n 'ImageAsset|NetworkLoader' --glob '*.rs' --glob 'Cargo.toml'`;
+widget `asset-images` already enables `flui-assets/images`, and `network-images`
+additionally enables `flui-assets/network`.
+
+Registry APIs also imposed seven unnecessary decoded-data `Clone` bounds, although
+caches and handles already share `Arc` ownership. Those bounds were removed; explicit
+`clone_data` keeps its copying requirement. The former extension `ptr_eq` compared
+keys despite promising allocation identity. The inherent `AssetHandle::ptr_eq` now
+uses `Arc::ptr_eq`, distinguishing an old retained value from a same-key reload.
+
+Public consumer regressions cover validation rejection before loading and on cache
+hits, file/embedded equivalence, invalid and missing sources followed by recovery,
+non-Clone data ownership/release/reload, and actual image decoding while an ambient
+current-thread runtime is entered but undriven. Named bridge/font cases continue
+after ordinary panics. A private seam covers deterministic runtime-construction
+failure followed by genuinely executed work after retry.
+
+## Additional ownership and rendering audit
 
 The subsequent AsyncDriver ownership audit reproduced eight failing subprocess cases,
 including lazy/eager poll-plus-destructor aborts and failed-spawn orphans. Polling now borrows
@@ -55,7 +124,7 @@ inside user poll locals or multiple fields of an ordinary destructor.
 Distinct atlas image IDs also currently force
 batch changes; sharing an atlas page alone does not prove they can share all replay bindings.
 
-## Validation
+## Initial validation
 
 Commands and their full output are retained under the worktree's gitignored `target/`.
 
@@ -71,7 +140,7 @@ Commands and their full output are retained under the worktree's gitignored `tar
   their serialization features to build.
 - `cargo xtask checks`: passed, including documentation links, workspace/reach/module
   contracts, globals, file-length, shader validation and changelog validation.
-- `cargo xtask check-changed`: passed. The final run passed all 612 selected tests (10
+- `cargo xtask check-changed`: passed. The initial pass ran all 612 selected tests (10
   suite skips), strict rustdoc, doctests, engine testing-feature linting, platform a11y
   typechecks on Windows/macOS, Windows CLI and desktop MCP on Windows/macOS. Android,
   iOS and wasm targets were unavailable; the Linux platform runtime suite requires Xvfb
@@ -97,3 +166,16 @@ Commands and their full output are retained under the worktree's gitignored `tar
   130 allocations for 128 draws and the resized pool identity row fail. Restored streaming
   records those draws with two arena-growth allocations (2,899,968 bytes versus baseline
   3,956,736); this is an allocation observation, not a throughput claim.
+
+## Continued verification
+
+- Asset tests passed without optional features (4), with images (7), network (5), and full (8). Reverting validation or allocation identity fails the relevant consumer row; accepting an entered but undriven ambient runtime reaches the bridge test's ten-second failure bound. Reintroducing decoded-data `Clone` bounds fails compilation of the non-Clone consumer (`target/modernization-assets-*-fixed.log` and corresponding baseline logs).
+- Ticker tests passed 19/19. Its 18-child recovery matrix distinguishes the prior notifier, consuming callbacks, payload competition, waker ownership and telemetry behavior (`target/modernization-scheduler-ticker-fixed.log`, `target/modernization-ticker-baseline.log`).
+- Frame completion tests passed 19/19, including 15 child scenarios for delivery, abort, teardown, retirement and reporting. The prior implementation aborts hostile executor/teardown/cancellation cases and loses chronological priority under telemetry failures (`target/modernization-frame-completion-*.log`).
+- View tests passed 40/40. Four released-loan rows fail under the old graph implementation; retaining the new graph but restoring the old typed read adapter still aborts the two read scenarios. The adapter must expose failure before the graph finalizes its loan, while keeping the original payload outside that boundary (`target/modernization-view-loan-baseline.log`, `target/modernization-read-bridge-*.log`).
+- Independent agents reviewed functionality, failure scenarios and misleading claims during verification. They caught premature anisotropic normalization, an invalid large-circle test oracle, a misleading cache-lifetime test name and stale signal-release documentation. The corrected GPU circle row uses tiny scale and a large local radius to produce a representable ten-pixel device radius; restoring squared CPU column norms loses the figure. Removing dash advancement refusal retains an invalid primitive's visible prefix. These are actual pixel differences, not implementation predicates (`target/modernization-circle-norm-baseline.log`, `target/modernization-dash-progress-baseline.log`).
+- Selected workspace Clippy checks passed over all targets with `-D warnings` (`target/modernization-clippy-final-components.log`). The numerical required-GPU suite passed 59/59, zero skipped (`target/modernization-gpu-final-fixed.log`).
+- Final peer review found that notifier diagnostics could interrupt healthy listeners after a caught failure. Reporting now borrows the original payload inside its own catch boundary and retains subscriber failures too. Restoring only the old reporting fails the public `notifier_ownership_and_recovery` family; the corrected foundation suite passed 22/22 (`target/modernization-notifier-telemetry-baseline.log`, `target/modernization-notifier-telemetry-fixed.log`).
+- Dependency bans, licenses, sources, advisories and cargo-shear passed again (`target/modernization-deps-final.log`). macOS platform Clippy passed over all targets with the final lint policy (`target/modernization-platform-macos-final.log`); this remains typechecking, not a macOS execution result.
+- Closed-contour review also exposed two caps at a seam covered by a dash. The engine closes one uninterrupted fragment or merges covered first/last fragments; actual gaps retain their caps. Restoring the prior tessellator fails all three covered-seam pixel rows while the gap row passes (`target/modernization-dash-seam-baseline.log`). Four independent named rows compare the miter corner with a solid stroke and verify an on-dash edge. The final required-GPU suite after this correction passed 59/59, zero skipped (`target/modernization-gpu-seam-final.log`). A separate agent reviewed the restored seam implementation and found no concrete blocker.
+- After the final reporting and seam corrections, `cargo xtask check-changed` completed with exit 0: 620 tests passed, 10 configured suite skips; workspace and engine-testing Clippy, strict rustdoc including private items, doctests, platform a11y typechecks on Windows/macOS, Windows CLI and desktop MCP on Windows/macOS all passed (`target/modernization-check-changed-final.log`). Android/iOS/wasm targets and Linux platform execution remain unavailable locally. `cargo xtask checks` also passed (`target/modernization-checks-final.log`). The available macOS lanes are compile checks; no macOS runtime execution is claimed.
