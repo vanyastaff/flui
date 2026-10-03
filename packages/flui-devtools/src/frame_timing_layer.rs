@@ -1,4 +1,4 @@
-//! [`FrameTimingLayer`] — feeds the [`Profiler`](crate::profiler::Profiler) from
+//! [`FrameTimingLayer`] — feeds the [`Profiler`] from
 //! the framework's own tracing spans.
 //!
 //! # Why a subscriber and not a call

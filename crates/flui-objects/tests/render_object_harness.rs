@@ -1111,7 +1111,7 @@ fn harness_custom_single_child_layout_positions_child_with_delegate() {
     );
     assert_eq!(run.offset(run.id("child")), Offset::new(70.0, 50.0));
     assert_eq!(run.hit_first(75.0, 55.0), Some(run.id("child")));
-    assert!(run.hit(10.0, 10.0).is_empty());
+    assert_eq!(run.hit(10.0, 10.0), [] as [flui_foundation::RenderId; 0]);
     assert!(
         run.display_commands()
             .iter()
@@ -2007,7 +2007,7 @@ fn harness_offstage_hidden_collapses_and_misses_hits() {
     // Under LOOSE constraints `constraints.smallest()` is zero, so the box does
     // collapse — but only incidentally. See the two tests below.
     assert_eq!(run.box_geometry(run.root()), Size::ZERO);
-    assert!(run.hit(10.0, 10.0).is_empty());
+    assert_eq!(run.hit(10.0, 10.0), [] as [flui_foundation::RenderId; 0]);
     assert!(
         run.descendant_property("RenderOffstage", "offstage")
             .is_some()
@@ -2211,7 +2211,7 @@ fn harness_merge_semantics_collapses_descendant_boundaries() {
         1,
         "RenderMergeSemantics must collapse both descendants into one node",
     );
-    assert!(node.children().is_empty());
+    assert_eq!(node.children(), []);
     assert!(node.config().is_button());
     let label = node.label().expect("merged label");
     assert!(label.contains("Alpha") && label.contains("Beta"));
@@ -3191,7 +3191,7 @@ fn harness_sliver_ignore_pointer_blocks_hits_when_active() {
     .with_size(Size::new(300.0, 100.0))
     .run_frame();
 
-    assert!(run.hit(20.0, 20.0).is_empty());
+    assert_eq!(run.hit(20.0, 20.0), [] as [flui_foundation::RenderId; 0]);
     assert!(
         run.descendant_property("RenderSliverIgnorePointer", "ignoring")
             .is_some()
@@ -4252,8 +4252,8 @@ fn harness_flow_degenerate_transform_is_never_hit_but_siblings_still_are() {
     // The zero-scale child collapses to a single point; no finite position
     // can hit it, and its inverse doesn't exist so `RenderFlow::hit_test`
     // must skip it outright rather than panicking or matching everything.
-    assert!(run.hit(0.0, 0.0).is_empty());
-    assert!(run.hit(10.0, 10.0).is_empty());
+    assert_eq!(run.hit(0.0, 0.0), [] as [flui_foundation::RenderId; 0]);
+    assert_eq!(run.hit(10.0, 10.0), [] as [flui_foundation::RenderId; 0]);
     // The sibling at a real translation is unaffected by child 0's
     // degenerate transform.
     assert_eq!(run.hit_first(70.0, 20.0), Some(run.id("normal")));

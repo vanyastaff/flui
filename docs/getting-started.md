@@ -8,7 +8,7 @@ This page covers prerequisites, the first build, and how to run the bundled exam
 
 | Tool | Minimum version | Notes |
 |------|-----------------|-------|
-| Rust | 1.98 | MSRV floor in `workspace.package.rust-version`; development toolchain pinned separately in `rust-toolchain.toml`. `rustup` installs/selects it automatically on first `cargo` invocation. |
+| Rust | 1.99 | MSRV floor in `workspace.package.rust-version`; development toolchain pinned separately in `rust-toolchain.toml`. `rustup` installs/selects it automatically on first `cargo` invocation. |
 | Cargo | bundled with Rust | Workspace uses `resolver = "3"` (MSRV-aware) and edition 2024. |
 | Git | any recent | Required to clone the repo. |
 | Python | 3.10+ | Only for the font-fixture generator (`tools/decoy-face/generate.py`, which `cargo xtask checks` re-runs to verify the committed bytes) and the macOS/iOS drivers in `tools/device-checks/`. Not required to build or run an application. |

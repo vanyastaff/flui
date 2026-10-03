@@ -196,7 +196,7 @@ mod tests {
     fn a_missing_tool_is_a_note_or_under_strict_a_failure() {
         let only_shear = |tool: Tool| tool == SHEAR;
         let (skipped, missing) = steps(plan(None, false), false, only_shear);
-        assert!(missing.is_empty());
+        assert_eq!(missing, [] as [Tool; 0]);
         assert_eq!(
             skipped.iter().map(ToString::to_string).collect::<Vec<_>>(),
             [
@@ -211,7 +211,7 @@ mod tests {
             ["$ cargo shear --locked"]
         );
         let (all, missing) = steps(plan(None, false), true, |_| true);
-        assert!(missing.is_empty());
+        assert_eq!(missing, [] as [Tool; 0]);
         assert_eq!(all.len(), 3);
     }
 

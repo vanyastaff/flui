@@ -364,7 +364,7 @@ mod tests {
         assert_eq!(parse("TAB").key, KeyName::Tab);
         assert_eq!(parse("esc").key, KeyName::Escape);
         assert_eq!(parse("pagedown").key, KeyName::PageDown);
-        assert!(parse("enter").modifiers.is_empty());
+        assert_eq!(parse("enter").modifiers, [] as [Modifier; 0]);
     }
 
     fn modifiers_keep_their_order() {

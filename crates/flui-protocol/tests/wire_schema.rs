@@ -198,7 +198,7 @@ fn every_published_schema_is_additive_to_the_next() {
 #[test]
 fn the_additivity_check_refuses_a_removed_field_a_respelled_name_and_a_new_required_one() {
     let older = current_schema();
-    assert!(additivity_violations(&older, &older).is_empty());
+    assert_eq!(additivity_violations(&older, &older), [] as [String; 0]);
 
     let mut added = older.clone();
     added["Node"]["properties"]["tooltip"] = serde_json::json!({"type": "string"});

@@ -220,7 +220,7 @@ fn worker(root: PathBuf, case: &str) {
     let artifacts = result.expect("Cargo artifact");
     let external = PathBuf::from(std::env::var_os("FLUI_IOS_EXPECTED_TARGET").expect("target"));
     if case == "example" || case == "application" {
-        assert!(artifacts.rust_libs.is_empty());
+        assert_eq!(artifacts.rust_libs, [] as [PathBuf; 0]);
         let path = artifacts.executable.expect("example executable");
         assert!(path.is_file() && path.starts_with(&external));
     } else {

@@ -525,7 +525,7 @@ impl ProcessSlot {
     fn take(pool: &'static Pool) -> ToolResult<Self> {
         use std::sync::atomic::Ordering;
         pool.running
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |n| {
                 (n < pool.limit).then_some(n + 1)
             })
             .map(|_| Self(pool))

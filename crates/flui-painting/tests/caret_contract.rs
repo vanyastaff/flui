@@ -133,7 +133,7 @@ pub(crate) fn a_combining_mark_is_one_hit_target() {
         "the caret between the scalars sits inside the grapheme: {start:?} {inner:?} {end:?}"
     );
     let hits = hits_across(&painter, start.dx + 0.25, end.dx, line_middle(&painter, 0));
-    assert!(!hits.is_empty());
+    assert_ne!(hits, [] as [usize; 0]);
     assert!(
         hits.iter().all(|&offset| offset == 0 || offset == 3),
         "hits over the grapheme: {hits:?}"

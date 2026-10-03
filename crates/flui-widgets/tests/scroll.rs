@@ -1,5 +1,4 @@
 //! Scroll-path tests:
-#![expect(clippy::float_cmp)] // physics clamp + controller pixel reads return exact f64 literals
 //!
 //! 1. `SingleChildScrollView` viewport geometry (cross-protocol Box→Sliver path).
 //! 2. `ScrollController` thumb geometry helpers.

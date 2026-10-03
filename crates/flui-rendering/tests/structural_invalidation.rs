@@ -34,7 +34,7 @@ pub(crate) fn pure_reorder_marks_layout_only() {
 
     assert_eq!(owner.nodes_needing_layout().len(), 1);
     assert_eq!(owner.nodes_needing_layout()[0].id, parent);
-    assert!(owner.nodes_needing_compositing_bits_update().is_empty());
-    assert!(owner.nodes_needing_semantics().is_empty());
-    assert!(owner.nodes_needing_paint().is_empty());
+    assert_eq!(owner.nodes_needing_compositing_bits_update(), []);
+    assert_eq!(owner.nodes_needing_semantics(), []);
+    assert_eq!(owner.nodes_needing_paint(), []);
 }

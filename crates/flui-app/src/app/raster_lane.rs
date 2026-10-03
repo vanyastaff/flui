@@ -741,7 +741,10 @@ mod tests {
         }
         lane.with_backend(|backend| {
             assert_eq!(backend.full, 3);
-            assert!(backend.dirty.is_empty());
+            assert_eq!(
+                backend.dirty,
+                [] as [flui_foundation::geometry::Rect<f64>; 0]
+            );
         });
     }
 

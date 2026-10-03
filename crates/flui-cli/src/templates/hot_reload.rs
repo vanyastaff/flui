@@ -72,7 +72,7 @@ members = ["{types_package}", "{worker_package}", "{host_package}"]
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.98"
+rust-version = "1.99"
 
 [workspace.dependencies]
 tracing = "0.1"
