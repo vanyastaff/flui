@@ -22,7 +22,7 @@ fn main() {
         "`{rustc} -vV` exited with {}: the ABI handshake needs the compiler identity",
         output.status
     );
-    let verbose_version = String::from_utf8_lossy(&output.stdout).into_owned();
+    let verbose_version = String::from_utf8_lossy_owned(output.stdout);
 
     // Single line so the env var survives cargo's metadata handling.
     let compact = verbose_version

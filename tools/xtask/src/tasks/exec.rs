@@ -138,10 +138,7 @@ impl Cmd {
         let status = child
             .wait()
             .with_context(|| format!("waiting for `{self}`"))?;
-        Ok((
-            status.success(),
-            String::from_utf8_lossy(&captured).into_owned(),
-        ))
+        Ok((status.success(), String::from_utf8_lossy_owned(captured)))
     }
 }
 

@@ -99,8 +99,8 @@ fn self_install() -> CliResult<()> {
         .output()
         .map_err(|error| CliError::context(error, "Failed to run cargo install"))?;
 
-    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
-    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    let stdout = String::from_utf8_lossy_owned(output.stdout);
+    let stderr = String::from_utf8_lossy_owned(output.stderr);
 
     if output.status.success() {
         spinner.stop(format!("{} {CRATE_NAME} installed", style("✓").green()));
@@ -154,7 +154,7 @@ fn report_check() -> CliResult<()> {
         Ok(output) if output.status.success() => output,
         Ok(output) => {
             spinner.error("cargo search failed");
-            let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+            let stderr = String::from_utf8_lossy_owned(output.stderr);
             return Err(CliError::context(
                 std::io::Error::other(stderr),
                 "cargo search failed",
@@ -166,7 +166,7 @@ fn report_check() -> CliResult<()> {
         }
     };
 
-    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    let stdout = String::from_utf8_lossy_owned(output.stdout);
     let latest = parse_search_version(&stdout, CRATE_NAME);
 
     let (message, update_available) = match &latest {
@@ -205,7 +205,7 @@ fn report_check_dependencies() -> CliResult<()> {
         Ok(output) if output.status.success() => output,
         Ok(output) => {
             spinner.error("cargo update --dry-run failed");
-            let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+            let stderr = String::from_utf8_lossy_owned(output.stderr);
             return Err(CliError::context(
                 std::io::Error::other(stderr),
                 "cargo update --dry-run failed",
@@ -220,7 +220,7 @@ fn report_check_dependencies() -> CliResult<()> {
         }
     };
 
-    let report = String::from_utf8_lossy(&output.stderr).into_owned();
+    let report = String::from_utf8_lossy_owned(output.stderr);
     let changes = planned_changes(&report);
     let update_available = !changes.is_empty();
 
