@@ -790,33 +790,6 @@ impl Tessellator {
             return self.tessellate_stroke(path, paint);
         }
 
-        // Collect all line segments from the path by flattening curves
-        let mut segments: Vec<(lyon::geom::Point<f32>, lyon::geom::Point<f32>)> = Vec::new();
-        let mut current_pos = lyon::geom::point(0.0f32, 0.0);
-
-        // Flatten the path to line segments. Scale-aware: the dash walker runs
-        // in local space but the result is baked through the world transform, so
-        // divide the device-space budget by the scale to keep facets sub-pixel.
-        for event in path.iter().flattened(self.dash_tolerance()) {
-            match event {
-                PathEvent::Begin { at } => {
-                    current_pos = at;
-                }
-                PathEvent::Line { from: _, to } => {
-                    segments.push((current_pos, to));
-                    current_pos = to;
-                }
-                PathEvent::End { .. } | PathEvent::Quadratic { .. } | PathEvent::Cubic { .. } => {
-                    // End is a no-op; Quadratic/Cubic should have been flattened
-                    // to lines by `flattened()` above.
-                }
-            }
-        }
-
-        if segments.is_empty() {
-            return Ok((Vec::new(), Vec::new()));
-        }
-
         // Walk the segments and generate dash sub-paths
         let mut dash_paths: Vec<Path> = Vec::new();
         let mut phase = dash_pattern.phase as f32 % cycle_length;
@@ -846,7 +819,33 @@ impl Tessellator {
         }
         let mut started_subpath = false;
 
-        for (from, to) in &segments {
+        // Lyon lazily flattens curves while preserving contour events. Keep
+        // those events: End carries the implicit closing edge, and Begin must
+        // terminate a dash before a disconnected contour starts. Dash phase
+        // continues across contours, counting only their travelled lengths.
+        for event in path.iter().flattened(self.dash_tolerance()) {
+            let (from, to) = match event {
+                PathEvent::Begin { .. } => {
+                    if started_subpath {
+                        if let Some(mut builder) = current_builder.take() {
+                            builder.end(false);
+                            dash_paths.push(builder.build());
+                        }
+                        started_subpath = false;
+                    }
+                    current_builder = drawing.then(|| Path::builder_with_attributes(0));
+                    continue;
+                }
+                PathEvent::Line { from, to } => (from, to),
+                PathEvent::End {
+                    last,
+                    first,
+                    close: true,
+                } => (last, first),
+                PathEvent::End { close: false, .. }
+                | PathEvent::Quadratic { .. }
+                | PathEvent::Cubic { .. } => continue,
+            };
             let dx = to.x - from.x;
             let dy = to.y - from.y;
             let seg_length = (dx * dx + dy * dy).sqrt();
@@ -950,15 +949,6 @@ impl Tessellator {
 
         Ok((all_vertices, all_indices))
     }
-
-    // `tessellate_flui_path_dashed_stroke` was removed: a workspace-wide
-    // search found no callers. The live dashed-stroke entry point is
-    // `tessellate_dashed_stroke` on a lyon `Path` (used by the painter's
-    // outline pipeline). The FLUI-to-lyon conversion lives in the
-    // `IntoLyonPath` trait below -- a caller can do
-    // `tessellate_dashed_stroke(&flui_path.to_lyon_path(), paint, dp)`
-    // in one line if the helper is needed again, but no one needs
-    // it today.
 }
 
 /// Helper trait for creating lyon paths from FLUI types

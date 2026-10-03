@@ -363,6 +363,19 @@ geometric arena growth but rejecting a temporary allocation per path.
 `cached_paths_reconstruct_colour_and_transform` reads back a cache hit with a new
 colour and translation through normal, SSAA and advanced blend routes.
 
+Dashed strokes consume Lyon's lazy, scale-aware flattened path events rather
+than a list of lines that loses contour boundaries. A closed contour includes
+its implicit last-to-first edge; an unfinished dash ends before a disconnected
+contour begins. Dash phase continues across contours using travelled length,
+without counting the spatial gap. Lyon's point-sampling walker cannot replace
+this iterator: a stroke also needs the corners between dash boundaries. Kurbo's
+dashing iterator restarts phase at each contour, so adopting it would change this
+existing phase contract rather than repair contour handling.
+`dashed_closed_contour_has_its_closing_edge` and `dashed_contours_do_not_bridge`
+read pixels that distinguish both contour defects. The same painter family row
+`dashed_curves_and_phase_follow_contour_length` checks curve shape and equivalent
+positive/negative phase across disconnected contours.
+
 The offscreen texture pool retains the most recently returned idle allocations,
 evicting the oldest when its bounded inventory fills. A resized effect working
 set therefore replaces obsolete dimensions and warms up again. Returning an

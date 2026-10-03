@@ -218,7 +218,19 @@ fn clear_offscreen_result(nested: bool) {
 /// composites with its own blend mode.
 #[test]
 fn painter_images_and_offscreen_results_read_back_as_specified() {
-    let cases: [(&str, fn()); 31] = [
+    let cases: [(&str, fn()); 34] = [
+        (
+            "dashed closed contour",
+            dashed_closed_contour_has_its_closing_edge,
+        ),
+        (
+            "dashed disconnected contours",
+            dashed_contours_do_not_bridge,
+        ),
+        (
+            "dashed curves and phase",
+            dashed_curves_and_phase_follow_contour_length,
+        ),
         (
             "cached paths update colour and transform across blend routes",
             cached_paths_reconstruct_colour_and_transform,
@@ -403,6 +415,103 @@ fn cached_paths_reconstruct_colour_and_transform() {
             "{mode:?}"
         );
     }
+}
+
+fn dashed_closed_contour_has_its_closing_edge() {
+    use flui_painting::{Paint, paint::path::Path, styling::Color};
+
+    let (device, queue) = test_device_and_queue();
+    let mut path = Path::new();
+    path.add_rect(Rect::from_xywh(8.0, 8.0, 16.0, 16.0));
+    let pixels = render_to_rgba(&device, &queue, 64, wgpu::Color::BLACK, |painter| {
+        painter.draw_path(
+            &path,
+            &Paint::stroke(Color::RED, 4.0).with_dash(vec![100.0, 100.0], 0.0),
+        );
+    });
+    assert_eq!(
+        pixel_at(&pixels, 64, 8, 16),
+        [255, 0, 0, 255],
+        "implicit left closing edge"
+    );
+    assert_eq!(
+        pixel_at(&pixels, 64, 16, 8),
+        [255, 0, 0, 255],
+        "explicit top edge"
+    );
+}
+
+fn dashed_contours_do_not_bridge() {
+    use flui_foundation::geometry::Point;
+    use flui_painting::{Paint, paint::path::Path, styling::Color};
+
+    let (device, queue) = test_device_and_queue();
+    let mut path = Path::new();
+    for (start, end) in [(8.0, 16.0), (40.0, 48.0)] {
+        path.move_to(Point::new(start, 16.0));
+        path.line_to(Point::new(end, 16.0));
+    }
+    let pixels = render_to_rgba(&device, &queue, 64, wgpu::Color::BLACK, |painter| {
+        painter.draw_path(
+            &path,
+            &Paint::stroke(Color::RED, 4.0).with_dash(vec![100.0, 100.0], 0.0),
+        );
+    });
+    assert_eq!(pixel_at(&pixels, 64, 12, 16), [255, 0, 0, 255]);
+    assert_eq!(pixel_at(&pixels, 64, 44, 16), [255, 0, 0, 255]);
+    assert_eq!(
+        pixel_at(&pixels, 64, 28, 16),
+        [0, 0, 0, 255],
+        "disconnected contour gap"
+    );
+}
+
+fn dashed_curves_and_phase_follow_contour_length() {
+    use flui_foundation::geometry::Point;
+    use flui_painting::{Paint, paint::path::Path, styling::Color};
+
+    let (device, queue) = test_device_and_queue();
+    // The first contour consumes twelve units: phase four then starts the
+    // second contour at phase zero. Spatial distance between contours is free.
+    for phase in [4.0, -12.0] {
+        let mut path = Path::new();
+        for (start, end) in [(8.0, 20.0), (32.0, 44.0)] {
+            path.move_to(Point::new(start, 16.0));
+            path.line_to(Point::new(end, 16.0));
+        }
+        let pixels = render_to_rgba(&device, &queue, 64, wgpu::Color::BLACK, |painter| {
+            painter.draw_path(
+                &path,
+                &Paint::stroke(Color::RED, 4.0).with_dash(vec![8.0, 8.0], phase),
+            );
+        });
+        for (x, red) in [(10, true), (16, false), (34, true), (42, false)] {
+            assert_eq!(
+                pixel_at(&pixels, 64, x, 16),
+                [if red { 255 } else { 0 }, 0, 0, 255],
+                "phase {phase}, x {x}"
+            );
+        }
+    }
+    let mut curve = Path::new();
+    curve.move_to(Point::new(8.0, 40.0));
+    curve.quadratic_bezier_to(Point::new(24.0, 8.0), Point::new(40.0, 40.0));
+    let pixels = render_to_rgba(&device, &queue, 64, wgpu::Color::BLACK, |painter| {
+        painter.draw_path(
+            &curve,
+            &Paint::stroke(Color::RED, 4.0).with_dash(vec![100.0, 100.0], 0.0),
+        );
+    });
+    assert_eq!(
+        pixel_at(&pixels, 64, 24, 24),
+        [255, 0, 0, 255],
+        "flattened curve apex"
+    );
+    assert_eq!(
+        pixel_at(&pixels, 64, 24, 40),
+        [0, 0, 0, 255],
+        "curve must not become a chord"
+    );
 }
 
 fn low_alpha_images_preserve_their_contribution() {
