@@ -426,7 +426,7 @@ fn a_node_removed_after_measuring_is_skipped() {
 fn the_record_stays_bounded_without_a_font_change() {
     const REBUILDS: usize = 500;
     let text = realm_text();
-    let mut owner = PipelineOwner::new(text.clone());
+    let mut owner = PipelineOwner::new(text);
     for _ in 0..REBUILDS {
         let previous = owner.root_id();
         let labels = mount_on(&mut owner, paragraph("rebuilt"));

@@ -146,7 +146,7 @@ fn worker(root: PathBuf, case: &str) {
     } else {
         root.clone()
     };
-    let ctx = BuilderContextBuilder::new(cwd.clone())
+    let ctx = BuilderContextBuilder::new(cwd)
         .with_platform(Platform::Desktop { target: None })
         .with_profile(Profile::Debug)
         .with_target(unit)

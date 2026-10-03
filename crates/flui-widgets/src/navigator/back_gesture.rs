@@ -577,7 +577,7 @@ impl BackGestureDetectorState {
         let update_runtime = Rc::clone(&self.runtime);
         let end_runtime = Rc::clone(&self.runtime);
         let cancel_runtime = Rc::clone(&self.runtime);
-        let drag = horizontal_drag(arena.clone())
+        let drag = horizontal_drag(arena)
             .with_on_start(move |details| start_runtime.on_drag_start(details))
             .with_on_update(move |details| update_runtime.on_drag_update(details))
             .with_on_end(move |details| end_runtime.on_drag_end(details))

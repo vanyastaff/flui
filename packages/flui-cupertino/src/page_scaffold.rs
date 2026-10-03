@@ -148,7 +148,7 @@ impl StatelessView for CupertinoPageScaffold {
             } else {
                 0.0
             };
-            let mut reduced = media.clone();
+            let mut reduced = media;
             reduced.padding.top = 0.0;
             if self.resize_to_avoid_bottom_inset {
                 reduced.view_insets.bottom = 0.0;

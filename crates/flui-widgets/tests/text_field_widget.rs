@@ -19,7 +19,7 @@ pub(crate) fn raw_text_field_callbacks_write_through_the_forwarded_cx() {
 
     let controller = TextEditingController::new();
     let focus_node = FocusNode::with_debug_label("raw-cx field");
-    let (probe_controller, probe_node) = (controller.clone(), Rc::clone(&focus_node));
+    let (probe_controller, probe_node) = (controller, Rc::clone(&focus_node));
     let probe = SignalProbe::new(move |ProbeSignals { count, .. }| {
         RawTextField::new(probe_controller.clone())
             .focus_node(Rc::clone(&probe_node))

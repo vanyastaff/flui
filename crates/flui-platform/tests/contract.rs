@@ -41,7 +41,7 @@ fn test_window_lifecycle_contract() {
         ..Default::default()
     };
 
-    match platform.open_window(options.clone()) {
+    match platform.open_window(options) {
         Ok(window) => {
             tracing::info!("✓ Platform supports window creation");
 

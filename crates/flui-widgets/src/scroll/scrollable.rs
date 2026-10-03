@@ -566,7 +566,7 @@ impl ViewState<Scrollable> for ScrollableState {
                 let mut scsv = SingleChildScrollView::new()
                     .scroll_direction(scroll_direction)
                     .position(scroll_controller.position());
-                if let Some(content) = child.clone().into_inner() {
+                if let Some(content) = child.into_inner() {
                     scsv = scsv.child(content);
                 }
                 scsv.boxed()
@@ -687,9 +687,9 @@ impl ViewState<Scrollable> for ScrollableState {
             // position (zero delta, or already clamped at the extent) means
             // "only express interest in the event if it would actually result
             // in a scroll" — the outer scrollable then takes the tick.
-            let ctrl_wheel = scroll_controller.clone();
-            let post_frame_wheel = post_frame.clone();
-            let fling_wheel = fling_controller.clone();
+            let ctrl_wheel = scroll_controller;
+            let post_frame_wheel = post_frame;
+            let fling_wheel = fling_controller;
             Listener::new()
                 .on_scroll_claim(move |data: &ScrollEventData| {
                     // Deliberately modifier-agnostic: a ctrl+wheel tick over a
@@ -740,7 +740,7 @@ impl ViewState<Scrollable> for ScrollableState {
                     position.set_pixels(target);
                     match &post_frame_wheel {
                         Some(post_frame) => {
-                            let pulse_end = position.clone();
+                            let pulse_end = position;
                             post_frame.schedule(move |_timing| {
                                 pulse_end.set_is_scrolling(false);
                             });

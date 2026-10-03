@@ -433,7 +433,7 @@ impl ViewState<InputDecorator> for InputDecoratorState {
         let colors = theme.color_scheme;
         let text_theme = theme.text_theme.clone();
         let decoration_theme: InputDecorationThemeData =
-            theme.input_decoration_theme.clone().unwrap_or_default();
+            theme.input_decoration_theme.unwrap_or_default();
         let decoration = &view.decoration;
 
         // Widget state set: disabled, focused, hovering (already
@@ -541,7 +541,7 @@ impl ViewState<InputDecorator> for InputDecoratorState {
             rows.push(child);
         }
         if let Some((line_text, is_error)) = helper_or_error_line(decoration) {
-            let base = text_theme.body_small.clone().unwrap_or_default();
+            let base = text_theme.body_small.unwrap_or_default();
             let style = if is_error {
                 decoration_theme.error_style.as_ref().map_or_else(
                     || default_error_style(colors, base).resolve(&states),

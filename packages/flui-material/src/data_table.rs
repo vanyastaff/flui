@@ -1036,7 +1036,7 @@ impl StatelessView for DataTable {
 
         let material = Material::new(Color::TRANSPARENT).child(table);
         let mut container = Container::new();
-        if let Some(decoration) = style.decoration.clone() {
+        if let Some(decoration) = style.decoration {
             container = container.decoration(decoration);
         }
         container.child(material)

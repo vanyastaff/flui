@@ -713,7 +713,7 @@ mod tests {
         .map(str::to_owned)
         .into();
         assert_eq!(listing_errors(&inventory, &complete), [] as [String; 0]);
-        let mut broken = complete.clone();
+        let mut broken = complete;
         broken.remove("assets/fonts/A.ttf");
         broken.insert("assets/fonts/ARIAL.TTF".to_owned());
         assert_eq!(

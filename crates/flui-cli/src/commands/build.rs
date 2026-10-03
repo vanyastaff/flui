@@ -505,7 +505,7 @@ fn build_web(options: &BuildOptions, output: Option<&PathBuf>) -> CliResult<Vec<
 
     Ok(vec![Artifact::new(
         "dir",
-        ctx.output_dir.clone(),
+        ctx.output_dir,
         final_artifacts.size_bytes,
     )])
 }
@@ -697,7 +697,7 @@ fn build_macos_universal(
         builder = builder.with_output_dir(out.clone());
     }
     let ctx = builder.build();
-    let output_dir = ctx.output_dir.clone();
+    let output_dir = ctx.output_dir;
     std::fs::create_dir_all(&output_dir)?;
     let scratch = output_dir.join(".slices");
 

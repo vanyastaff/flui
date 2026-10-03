@@ -534,7 +534,7 @@ where
             ..
         } = application;
         let proxy = owner.proxy();
-        let ingress = Ingress::new(proxy.clone(), startup == StartupWindow::Open);
+        let ingress = Ingress::new(proxy, startup == StartupWindow::Open);
         let handle = ingress.handle();
         install_owner_platform(owner)?;
         APP_RUNTIME.with(|slot| {
@@ -662,7 +662,7 @@ mod tests {
     ) -> AppHandle {
         let proxy = owner.proxy();
         install_owner_platform(owner).expect("owner signal");
-        let ingress = Ingress::new(proxy.clone(), false);
+        let ingress = Ingress::new(proxy, false);
         let handle = ingress.handle();
         APP_RUNTIME.with(|slot| {
             let mut runtime = slot.borrow_mut();

@@ -347,7 +347,7 @@ where
 
     // 6. Register frame callback -> the wake gate, then UiRealm::pump
     let lane_frame = Arc::clone(&lane);
-    let worker_reload_frame = worker_reload.clone();
+    let worker_reload_frame = worker_reload;
     // Reuses the SAME backoff constructed at step 0c (already wired
     // into the wake-deadline hook above) — not a fresh one.
     let frame_fallback = Arc::clone(&fallback);

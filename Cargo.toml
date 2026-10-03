@@ -545,6 +545,14 @@ unimplemented = "warn"
 # a destructor that re-enters the same lock deadlocks. Bind the value with
 # `let` first, then branch on it.
 significant_drop_in_scrutinee = "warn"
+# Selected nursery checks: avoid redundant ownership copies and temporary
+# collections, and catch a collection populated but never consumed.
+# Enable individual checks rather than the entire evolving nursery group.
+redundant_clone = "warn"
+needless_collect = "warn"
+collection_is_never_read = "warn"
+# Keep stack-heavy async work visible even if the pedantic group changes.
+large_futures = "warn"
 # Allow reasonable exceptions
 cast_precision_loss = "allow"
 module_name_repetitions = "allow"

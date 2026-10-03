@@ -131,7 +131,7 @@ fn mount() -> Mounted {
     let label = StateHandle::new(String::from("label"));
     let position = ScrollPosition::new(0.0);
     let app = PerfApp {
-        label: label.clone(),
+        label,
         position: position.clone(),
     };
     let mut binding = HeadlessBinding::new();

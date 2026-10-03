@@ -258,7 +258,7 @@ pub(crate) fn active_global_key_move_through_build_scope_updates_render_parent_l
         }
     });
 
-    let parent_b_v2 = MultiBox::host(2, vec![GlobalLeafBox::new(global.clone()).boxed()]);
+    let parent_b_v2 = MultiBox::host(2, vec![GlobalLeafBox::new(global).boxed()]);
     tree.update(parent_b, &parent_b_v2, &mut owner.element_owner_mut());
     owner.schedule_build_for(
         parent_b,

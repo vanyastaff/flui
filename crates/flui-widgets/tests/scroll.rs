@@ -300,7 +300,7 @@ pub(crate) fn scroll_activity_tracks_the_whole_gesture_lifecycle() {
 
     let vsync = Vsync::new();
     let widget = Scrollable::new()
-        .controller(controller.clone())
+        .controller(controller)
         .child(SizedBox::new(300.0, 5000.0));
     let mut scoped = fling_scoped(widget, vsync, tight(300.0, 300.0));
 

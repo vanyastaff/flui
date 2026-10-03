@@ -796,8 +796,6 @@ impl EditableTextState {
         // rather than a selection anchored at whatever was last there.
 
         let resolve = {
-            let owner = owner.clone();
-            let anchor = anchor.clone();
             let controller = Rc::clone(&controller);
             move |global: Offset<f64>| -> Option<usize> {
                 // Owned, not borrowed across the call: `source_text` must be
@@ -832,7 +830,6 @@ impl EditableTextState {
         };
 
         let moved = {
-            let resolve = resolve.clone();
             let controller = Rc::clone(&controller);
             let drag_anchor = Rc::clone(&drag_anchor);
             move |_cx: &mut EventCx<'_>, dispatch: PointerDispatch<'_>| {

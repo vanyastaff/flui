@@ -797,7 +797,7 @@ impl ViewState<GestureDetector> for GestureDetectorState {
             let update_writer = writer.clone();
             let end_writer = writer.clone();
             let cancel_writer = writer;
-            DragGestureRecognizer::new(arena.clone(), DragAxis::Horizontal)
+            DragGestureRecognizer::new(arena, DragAxis::Horizontal)
                 .with_on_down(move |details| {
                     let callback = down_slot.borrow().down.clone();
                     if let Some(callback) = callback {

@@ -593,19 +593,16 @@ fn self_test_diff() -> anyhow::Result<(Vec<Identity>, Vec<Identity>)> {
         )
         .collect();
     // a marker the scan gets wrong is wrong in both passes; report it once
-    missed.extend(
-        want.difference(&judged)
-            .filter(|id| !missed.contains(id))
-            .cloned()
-            .collect::<Vec<_>>(),
-    );
-    extra.extend(
-        judged
-            .difference(&want)
-            .filter(|id| !extra.contains(id))
-            .cloned()
-            .collect::<Vec<_>>(),
-    );
+    for id in want.difference(&judged) {
+        if !missed.contains(id) {
+            missed.push(id.clone());
+        }
+    }
+    for id in judged.difference(&want) {
+        if !extra.contains(id) {
+            extra.push(id.clone());
+        }
+    }
     Ok((missed, extra))
 }
 

@@ -288,10 +288,7 @@ fn duplicate_global_key_panics_in_debug() {
         key: key.clone(),
         initial: 1,
     };
-    let counter_b = KeyedCounter {
-        key: key.clone(),
-        initial: 2,
-    };
+    let counter_b = KeyedCounter { key, initial: 2 };
 
     let root_id = tree.write().mount_root_with_pipeline_owner(
         &DuplicateHost {

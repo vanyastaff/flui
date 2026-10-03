@@ -492,7 +492,7 @@ mod did_change_dependencies_on_inherited_update {
 
         let provider_v2 = PanicThemeProvider {
             theme: MyTheme { color: 0x0000_FF00 },
-            child: provider_v1.child.clone(),
+            child: provider_v1.child,
         };
         tree.update(provider_id, &provider_v2, &mut owner.element_owner_mut());
         tree.mark_needs_build(sibling);

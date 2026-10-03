@@ -90,7 +90,7 @@ pub(crate) fn post_frame_callback_runs_after_layout_in_the_same_pumped_frame() {
 
     let observed_cb = Arc::clone(&observed);
     let calls_cb = Arc::clone(&calls);
-    let pipeline_cb = pipeline.clone();
+    let pipeline_cb = pipeline;
     // `PipelineCell` is `!Send`, so this callback cannot go through
     // `add_post_frame_callback` (its `Box<dyn Fn() + Send + Sync>` bound is for
     // cross-thread wake, not owner-local frame callbacks). `LocalPostFrameHandle::

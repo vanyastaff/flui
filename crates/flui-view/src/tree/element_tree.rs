@@ -1440,15 +1440,13 @@ impl ElementTree {
         let mut pipeline_owner: Option<PipelineCell> = None;
         let mut visited = 0;
 
-        let roots: Vec<ElementId> = self
+        // Children are pushed reversed so siblings pop in ascending slot order.
+        let mut stack: Vec<(ElementId, Option<flui_foundation::RenderId>)> = self
             .iter_nodes()
             .filter(|(_, node)| node.parent.is_none())
-            .map(|(id, _)| id)
+            .map(|(id, _)| (id, None))
             .collect();
-
-        // Children are pushed reversed so siblings pop in ascending slot order.
-        let mut stack: Vec<(ElementId, Option<flui_foundation::RenderId>)> =
-            roots.into_iter().rev().map(|id| (id, None)).collect();
+        stack.reverse();
         while let Some((element_id, render_ancestor)) = stack.pop() {
             visited += 1;
             let Some(node) = self.get(element_id) else {
@@ -3127,7 +3125,7 @@ mod tests {
         let donor = tree.insert(&UnitRenderHost, root, 0, &mut owner.element_owner_mut());
         let destination = tree.insert(&UnitRenderHost, root, 1, &mut owner.element_owner_mut());
         let key = GlobalKey::<()>::new();
-        let keyed = KeyedTransparentView { key: key.clone() };
+        let keyed = KeyedTransparentView { key };
         let candidate = tree.insert(&keyed, donor, 0, &mut owner.element_owner_mut());
         let first_boundary = tree.insert(
             &UnitRenderHost,

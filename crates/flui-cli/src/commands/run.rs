@@ -120,17 +120,14 @@ fn run_session(
                 ))?;
                 let mut strategy = WorkerHost {
                     project,
-                    profile: profile.clone(),
+                    profile,
                     verbose,
                 };
                 dev_loop(&mut strategy)?;
             }
             Project::Application => {
                 ui::success("Hot reload enabled (process restart)")?;
-                let mut strategy = ProcessRestart {
-                    profile: profile.clone(),
-                    verbose,
-                };
+                let mut strategy = ProcessRestart { profile, verbose };
                 dev_loop(&mut strategy)?;
             }
         }

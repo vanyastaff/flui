@@ -223,7 +223,7 @@ pub(crate) fn switching_widgets_app_from_home_to_router_releases_the_navigator()
     // form with another handle mounts that one, not the first.
     let next = NavigatorHandle::new();
     laid.pump_widget(VsyncScope::new(
-        vsync.clone(),
+        vsync,
         WidgetsApp::new(SizedBox::shrink()).navigator(next.clone()),
     ));
     settle(&mut laid);

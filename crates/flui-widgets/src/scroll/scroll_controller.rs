@@ -625,7 +625,7 @@ mod tests {
             reentrant_controller.jump_to(0.0);
         }));
 
-        let hook_target = fling.clone();
+        let hook_target = fling;
         controller.set_stop_hook(Arc::new(move || {
             let _ = hook_target.stop();
         }));

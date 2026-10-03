@@ -186,8 +186,10 @@ mod tests {
         let wake = ReloadWake::new(move || {
             counted.fetch_add(1, Ordering::Relaxed);
         });
-        wake.clone().wake();
+        let cloned = wake.clone();
         wake.wake();
+        drop(wake);
+        cloned.wake();
         assert_eq!(wakes.load(Ordering::Relaxed), 2);
     }
 }
