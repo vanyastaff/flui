@@ -72,8 +72,8 @@ pub(super) const HEAVY_TRIGGERS: &[&str] = &[
     // them (`checks`' `wgsl` step is a syntactic uniformity check, in every
     // lane). The wide lane's live-smoke compiles the pipelines its demo draws
     // with on lavapipe; gpu-test, which compiles every shader module on WARP,
-    // runs only from the full lane up (merge queue, main), so a shader the
-    // demo does not draw is first compiled there. A shader outside every
+    // is additionally selected for shader PRs, so pipelines the
+    // demo does not draw are validated before merging. A shader outside every
     // crate would otherwise take the tooling lane.
     "**/*.wgsl",
     // The `deps` job's advisories step blocks only from the wide lane up, and an
@@ -440,7 +440,7 @@ impl Workspace {
     /// depending on them through normal and build edges, transitively, and
     /// then the dev-dependents of all of those. A dev-dependent is the last
     /// hop, because its library does not contain the dependency.
-    fn affected(&self, seeds: &BTreeSet<String>) -> BTreeSet<String> {
+    pub(super) fn affected(&self, seeds: &BTreeSet<String>) -> BTreeSet<String> {
         let mut scope = seeds.clone();
         let mut todo: Vec<String> = seeds.iter().cloned().collect();
         while let Some(pkg) = todo.pop() {
@@ -460,7 +460,7 @@ impl Workspace {
     }
 
     /// The package owning `path`: the longest matching prefix wins.
-    fn owning_package(&self, path: &str) -> Option<&str> {
+    pub(super) fn owning_package(&self, path: &str) -> Option<&str> {
         let mut best: Option<(&str, usize)> = None;
         for (name, prefixes) in &self.owned {
             for pre in prefixes {
@@ -567,6 +567,8 @@ impl Mode {
 /// The classification of a change.
 #[derive(Debug, Clone)]
 pub(super) struct Scope {
+    /// Non-documentation paths, retained even when classification widens.
+    pub(super) changed_paths: Vec<String>,
     pub(super) mode: Mode,
     /// The whole scope, sorted: seeds plus their transitive dependents.
     pub(super) packages: Vec<String>,
@@ -585,6 +587,7 @@ impl Scope {
     fn new(mode: Mode, reason: String) -> Self {
         Self {
             mode,
+            changed_paths: Vec::new(),
             packages: Vec::new(),
             seeds: Vec::new(),
             manifests: Vec::new(),
@@ -638,6 +641,12 @@ fn first_five(files: &[&str]) -> String {
 
 /// Classifies the changed `files` (repo-relative, `/`-separated).
 pub(super) fn classify(repo: &Repo, files: &[String]) -> anyhow::Result<Scope> {
+    let mut scope = classify_inner(repo, files)?;
+    scope.changed_paths = files.iter().filter(|f| !is_docs_only(f)).cloned().collect();
+    Ok(scope)
+}
+
+fn classify_inner(repo: &Repo, files: &[String]) -> anyhow::Result<Scope> {
     let code: Vec<&str> = files
         .iter()
         .map(String::as_str)
@@ -740,6 +749,7 @@ pub(super) fn classify(repo: &Repo, files: &[String]) -> anyhow::Result<Scope> {
     );
     Ok(Scope {
         mode: Mode::Packages,
+        changed_paths: Vec::new(),
         packages: scope.into_iter().collect(),
         seeds: seed_list,
         manifests: manifests.into_iter().collect(),

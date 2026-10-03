@@ -6,6 +6,7 @@
   **Revised 2026-09-30** ([§10](#10-revision-2026-09-30-the-fast-lane-measured)): the `fast` lane
   and its `fast-lane`/`fast-lane-ios` jobs are gone, every compiling pull request takes `wide`, and
   the text below that describes the fast lane records what was measured, not what runs.
+  **Revised 2026-10-02** ([selective checks](#selective-native-checks-and-nested-test-split)): ordinary PRs also select native and GPU suites from affected code.
 - **Date:** 2026-09-26
 - **Baseline:** `main` at `c2ba3ae51`; workflows as of that commit; CI runs from 2026-09-23 to
   2026-09-26.
@@ -710,3 +711,17 @@ Not changed, with the reason:
   one, which is most CI runs, so no CI profile overrides it.
 - **Test sharding, mold, cranelift**: none of the eleven projects compared uses them in CI (zed,
   bevy, xilem, vello, egui, iced, rust-analyzer, tokio, wgpu, slint, dioxus).
+
+## Selective native checks and nested test split
+
+[Run 37074279492](https://github.com/vanyastaff/flui/actions/runs/37074279492)
+finished in 48:46; the extended Windows gate took 45:42, macOS 38:09,
+GPU 11:29 and nested tests 16:49. Whole-workspace native gates remain
+extended. Ordinary PRs select narrow GPU, platform and CLI suites from code
+and dependency impact; global inputs select all of them.
+
+The nested command spent about five minutes preparing, then about 6:20 on
+generated projects and 4:40 on trybuild. Separate jobs overlap those groups
+while duplicating preparation and consuming more runner time. Both restore
+the existing test cache, with no additional cache writer. This is an
+experiment: the next Actions run must establish the actual critical path.

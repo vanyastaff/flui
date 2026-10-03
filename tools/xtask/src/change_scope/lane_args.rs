@@ -110,10 +110,11 @@ impl Lane {
 }
 
 /// `cargo xtask affected`'s outputs (CI's `plan` reads `lane`, `mode`,
-/// `cross_ios` and `standalone`), one field per output, in output order.
+/// `cross_ios`, `standalone` and `extra_jobs`), one field per output, in output order.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct LaneArgs {
     pub(super) lane: Lane,
+    pub(super) extra_jobs: BTreeSet<super::selective::ExtraJob>,
     pub(super) mode: String,
     pub(super) heavy_required: bool,
     pub(super) reason: String,
@@ -139,7 +140,7 @@ pub(super) struct LaneArgs {
 
 impl LaneArgs {
     /// `(key, value)` in output order; booleans as `true`/`false`.
-    pub(super) fn fields(&self) -> [(&'static str, String); 20] {
+    pub(super) fn fields(&self) -> [(&'static str, String); 21] {
         let b = |v: bool| if v { "true" } else { "false" }.to_owned();
         [
             ("lane", self.lane.as_str().to_owned()),
@@ -166,6 +167,7 @@ impl LaneArgs {
             ("doc_args", self.doc_args.clone()),
             ("doctest_args", self.doctest_args.clone()),
             ("standalone", self.standalone.clone()),
+            ("extra_jobs", super::selective::to_json(&self.extra_jobs)),
         ]
     }
 }
@@ -399,6 +401,7 @@ pub(super) fn lane_args(
     }
 
     Ok(LaneArgs {
+        extra_jobs: super::selective::select(repo, scope)?,
         lane: Lane::decide(event, full_ci_label, scope.mode, scope.heavy_required),
         mode: scope.mode.as_str().to_owned(),
         heavy_required: scope.heavy_required,
@@ -542,6 +545,7 @@ mod tests {
 
     fn platform_only_scope_has_no_test_args() {
         let only_platform = Scope {
+            changed_paths: Vec::new(),
             mode: Mode::Packages,
             packages: vec!["flui-platform".to_owned()],
             seeds: vec!["flui-platform".to_owned()],
@@ -557,6 +561,7 @@ mod tests {
 
     fn a_standalone_crate_runs_the_tooling_lane() {
         let only_standalone = Scope {
+            changed_paths: Vec::new(),
             mode: Mode::None,
             packages: Vec::new(),
             seeds: Vec::new(),
@@ -774,11 +779,87 @@ mod tests {
         assert_eq!(args(&["docs/x.md"]).lane, Lane::Docs);
     }
 
+    fn extra_jobs_follow_behavior_dependencies() {
+        use super::super::selective::ExtraJob;
+        let cases: &[(&[&str], &[ExtraJob])] = &[
+            (
+                &[
+                    "crates/flui-engine/src/shaders/deleted.wgsl",
+                    "docs/architecture.md",
+                ],
+                &[ExtraJob::GpuTest],
+            ),
+            (
+                &[
+                    "crates/flui-engine/src/shaders/deleted.wgsl",
+                    "crates/flui-engine/src/lib.rs",
+                ],
+                &[ExtraJob::GpuTest],
+            ),
+            (
+                &[
+                    "crates/flui-engine/src/shaders/deleted.wgsl",
+                    "unknown-input.rs",
+                ],
+                &ExtraJob::ALL,
+            ),
+            (&["Cargo.lock"], &ExtraJob::ALL),
+            (&["unknown-input.rs"], &ExtraJob::ALL),
+            (&["docs/architecture.md"], &[]),
+        ];
+        for (files, expected) in cases {
+            let a = lane_args(repo(), &scope(files), Event::PullRequest, false).expect("lane args");
+            let fields: BTreeMap<_, _> = a.fields().into();
+            let actual = super::super::selective::parse(&fields["extra_jobs"]).expect("extra jobs");
+            assert_eq!(actual, expected.iter().copied().collect(), "{files:?}");
+        }
+        for (file, selected, absent) in [
+            (
+                "crates/flui-platform/src/platforms/windows/deleted.rs",
+                ExtraJob::PlatformWindows,
+                ExtraJob::PlatformMacos,
+            ),
+            (
+                "crates/flui-platform/src/platforms/macos/deleted.rs",
+                ExtraJob::PlatformMacos,
+                ExtraJob::PlatformWindows,
+            ),
+        ] {
+            let a =
+                lane_args(repo(), &scope(&[file]), Event::PullRequest, false).expect("lane args");
+            assert!(a.extra_jobs.contains(&selected), "{file}");
+            assert!(!a.extra_jobs.contains(&absent), "{file}");
+        }
+        for file in [
+            "crates/flui-platform/src/shared/events.rs",
+            "crates/flui-platform-api/src/lib.rs",
+        ] {
+            let a =
+                lane_args(repo(), &scope(&[file]), Event::PullRequest, false).expect("lane args");
+            assert!(a.extra_jobs.contains(&ExtraJob::PlatformWindows), "{file}");
+            assert!(a.extra_jobs.contains(&ExtraJob::PlatformMacos), "{file}");
+        }
+        let a = lane_args(
+            repo(),
+            &scope(&["crates/flui-foundation/src/lib.rs"]),
+            Event::PullRequest,
+            false,
+        )
+        .expect("lane args");
+        assert!(a.extra_jobs.contains(&ExtraJob::GpuTest));
+        assert!(a.extra_jobs.contains(&ExtraJob::CliWindows));
+        assert!(a.extra_jobs.contains(&ExtraJob::CliMacos));
+    }
+
     #[test]
     fn lane_args_contract() {
         crate::table_test::run_table(
             "lane_args_contract",
             &[
+                (
+                    "extra_jobs_follow_behavior_dependencies",
+                    extra_jobs_follow_behavior_dependencies as fn(),
+                ),
                 (
                     "whole_workspace_pr_takes_the_wide_lane",
                     whole_workspace_pr_takes_the_wide_lane as fn(),

@@ -8,12 +8,13 @@
 //!    Without this, a job added without editing that list ran, passed or
 //!    failed, and gated nothing.
 //! 2. EXACTLY THE EXPECTED SKIPS -- which jobs run is decided by `plan`'s
-//!    `lane` alone, and the aggregator recomputes it instead of trusting each
+//!    `lane` and the finite `extra_jobs` selection, and the aggregator recomputes it instead of trusting each
 //!    job's `if:`. Every lane runs `checks` and `plan`; then:
 //!    - `docs`: nothing else;
 //!    - `tooling`: `deps`, and `standalone` when plan names a standalone crate;
 //!    - `wide`: `deps` and the `HEAVY_JOBS` list (every Linux job), and
-//!      `ios-runner` when plan puts the iOS runner in scope (`cross_ios`);
+//!      `ios-runner` when plan puts the iOS runner in scope (`cross_ios`),
+//!      plus the selected GPU and native platform/CLI checks;
 //!    - `full`: `wide` plus `FULL_JOBS` (the Windows and macOS jobs);
 //!    - `extended`: `full` plus `EXTENDED_JOBS`.
 //!
@@ -190,6 +191,7 @@ pub(super) struct Plan<'a> {
     pub(super) cross_ios: bool,
     /// Whether plan names a standalone crate for the `standalone` job.
     pub(super) standalone: bool,
+    pub(super) extra_jobs: BTreeSet<super::selective::ExtraJob>,
 }
 
 /// Python-style repr of a string, as the aggregator's messages print it:
@@ -219,6 +221,14 @@ fn planned_runs(plan: &Plan<'_>, lanes: &LaneJobs) -> Option<BTreeSet<String>> {
     if plan.result != Some("success") {
         return None; // without a plan there is no expectation to check against
     }
+    if (!plan.extra_jobs.is_empty() && !matches!(plan.lane, "wide" | "full" | "extended"))
+        || plan
+            .extra_jobs
+            .iter()
+            .any(|job| !lanes.full.contains(job.as_str()))
+    {
+        return None;
+    }
     let mut runs: BTreeSet<String> = ["checks", "plan"].map(str::to_owned).into();
     let mut add = |names: &[&str]| runs.extend(names.iter().map(|&n| n.to_owned()));
     match plan.lane {
@@ -232,6 +242,7 @@ fn planned_runs(plan: &Plan<'_>, lanes: &LaneJobs) -> Option<BTreeSet<String>> {
                 add(&["ios-runner"]);
             }
             runs.extend(lanes.wide.iter().cloned());
+            runs.extend(plan.extra_jobs.iter().map(|job| job.as_str().to_owned()));
             if plan.lane != "wide" {
                 runs.extend(lanes.full.iter().cloned());
             }
@@ -422,6 +433,7 @@ mod tests {
             lane: r.lane,
             cross_ios: r.cross_ios,
             standalone: r.standalone,
+            extra_jobs: BTreeSet::new(),
         };
         verify(&w.gated, &needs, &w.lanes, &plan, r.event)
     }
@@ -478,7 +490,17 @@ mod tests {
 
     fn lane_lists_match_the_job_conditions() {
         let w = workflow();
-        assert_eq!(gated_on(&w, FULL_CONDITION), w.lanes.full);
+        let mut full = gated_on(&w, FULL_CONDITION);
+        for job in super::super::selective::ExtraJob::ALL {
+            let condition = format!(
+                "{FULL_CONDITION} || (needs.plan.outputs.lane == 'wide' && contains(fromJSON(needs.plan.outputs.extra_jobs), '{}'))",
+                job.as_str()
+            );
+            let selected = gated_on(&w, &condition);
+            assert_eq!(selected, [job.as_str().to_owned()].into());
+            full.extend(selected);
+        }
+        assert_eq!(full, w.lanes.full);
         assert_eq!(gated_on(&w, EXTENDED_CONDITION), w.lanes.extended);
         assert!(w.lanes.wide.is_disjoint(&w.lanes.full));
         assert!(w.lanes.wide.is_disjoint(&w.lanes.extended));
@@ -714,6 +736,54 @@ mod tests {
         assert!(!ok && log.contains("lane='heavy'"), "{log}");
     }
 
+    fn selected_jobs_are_required_and_other_hosts_skip() {
+        use super::super::selective::ExtraJob;
+        let w = workflow();
+        let plan = Plan {
+            result: Some("success"),
+            lane: "wide",
+            cross_ios: false,
+            standalone: false,
+            extra_jobs: [ExtraJob::GpuTest].into(),
+        };
+        for (result, expected) in [("success", true), ("skipped", false), ("failure", false)] {
+            let mut needs: BTreeMap<String, String> = w
+                .gated
+                .iter()
+                .map(|j| {
+                    let runs =
+                        j == "checks" || j == "plan" || j == "deps" || w.lanes.wide.contains(j);
+                    (
+                        j.clone(),
+                        if runs { "success" } else { "skipped" }.to_owned(),
+                    )
+                })
+                .collect();
+            needs.insert("gpu-test".to_owned(), result.to_owned());
+            let (ok, log) = verify(&w.gated, &needs, &w.lanes, &plan, PR);
+            assert_eq!(ok, expected, "{log}");
+            if expected {
+                needs.insert("platform-windows".to_owned(), "success".to_owned());
+                assert!(!verify(&w.gated, &needs, &w.lanes, &plan, PR).0);
+            }
+        }
+        let docs = Plan {
+            lane: "docs",
+            ..plan.clone()
+        };
+        assert!(planned_runs(&docs, &w.lanes).is_none());
+        let tooling = Plan {
+            lane: "tooling",
+            ..plan.clone()
+        };
+        assert!(planned_runs(&tooling, &w.lanes).is_none());
+        let mut invalid_lanes = w.lanes.clone();
+        invalid_lanes.full.remove("gpu-test");
+        assert!(planned_runs(&plan, &invalid_lanes).is_none());
+        assert!(super::super::selective::parse(r#"["miri"]"#).is_err());
+        assert!(super::super::selective::parse(r#"["unknown"]"#).is_err());
+    }
+
     fn a_job_missing_from_needs_is_red() {
         let w = workflow();
         let mut needs: BTreeMap<String, String> = w
@@ -727,6 +797,7 @@ mod tests {
             lane: "full",
             cross_ios: false,
             standalone: false,
+            extra_jobs: BTreeSet::new(),
         };
         let (ok, log) = verify(&w.gated, &needs, &w.lanes, &plan, "push");
         assert!(!ok);
@@ -751,6 +822,7 @@ mod tests {
             lane: "extended",
             cross_ios: false,
             standalone: false,
+            extra_jobs: BTreeSet::new(),
         };
         let (ok, log) = verify(&gated, &needs, &w.lanes, &plan, "schedule");
         assert!(!ok && log.contains("'new-job': 'ran (success)"), "{log}");
@@ -855,6 +927,10 @@ mod tests {
         crate::table_test::run_table(
             "aggregator_contract",
             &[
+                (
+                    "selected_jobs_are_required_and_other_hosts_skip",
+                    selected_jobs_are_required_and_other_hosts_skip as fn(),
+                ),
                 (
                     "heavy_jobs_list_matches_the_jobs_gated_on_heavy",
                     heavy_jobs_list_matches_the_jobs_gated_on_heavy as fn(),

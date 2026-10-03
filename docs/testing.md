@@ -203,8 +203,8 @@ config's `nextest-version` enforces it).
   whole suite.
 - `cargo xtask test --fast` is the quick local loop: the same scope without
   the nested tests, ending with a line that names what it skipped.
-- `cargo xtask test --nested` runs only the nested tests (CI's `test-nested`
-  job); `cargo xtask test --no-trybuild` everything but the `trybuild` group
+- `cargo xtask test --nested` runs only the nested tests (the union of `test-nested`
+  and `test-trybuild`); `cargo xtask test --no-trybuild` everything but the `trybuild` group
   (CI's `test-windows`).
 
 To narrow either stage, combine with `&` inside the single `-E`:
@@ -900,8 +900,10 @@ cargo bench -p flui-rendering --no-run                        # bench-compile jo
 cargo xtask doc-strict                                        # doc job
 cargo xtask test --fast                                       # test job: nextest over the test scope, then flui-platform under Xvfb (FLUI_HEADLESS=1)
 cargo xtask build-all-targets                                 # same job: links the examples and benches the test scope's features reach
-cargo xtask test --nested                                     # test-nested job: the nested-cargo group
-cargo nextest run -p flui-platform --locked [--all-features] --no-fail-fast                           # platform-windows job (windows-latest), both feature sets
+cargo xtask test --nested --nested-group native               # test-nested: generated projects and facade consumers
+cargo xtask test --nested --nested-group trybuild             # test-trybuild: compile-fail suites
+cargo xtask platform-test                                    # native platform suites, default and all features
+cargo xtask cli-test                                         # native CLI suite
 cargo test --workspace --locked --doc
 cargo +nightly miri test -p flui-rendering --lib pipeline::owner  # miri job; NARROW — every
                                                               # unit test under that module, including PipelineCell
@@ -922,7 +924,7 @@ runs `checks`, `plan` and the `ci` aggregator:
 |---|---|---|
 | `docs` | a pull request that changes only documentation | nothing |
 | `tooling` | a pull request that changes only repository tooling, or a standalone crate | `deps`; `standalone` for the crate |
-| `wide` | a pull request that compiles anything | `deps` and the pull-request gate (`HEAVY_JOBS`: `clippy`, `cross-typecheck`, `test`, `test-nested`, `doc`, `wasm-check`, `test-features`, `live-smoke`) over the whole workspace; `ios-runner` when the change reaches the iOS runner |
+| `wide` | a pull request that compiles anything | `deps` and the pull-request gate (`HEAVY_JOBS`: `clippy`, `cross-typecheck`, `test`, `test-nested`, `test-trybuild`, `doc`, `wasm-check`, `test-features`, `live-smoke`) over the whole workspace; `ios-runner` when the change reaches the iOS runner; GPU and native platform/CLI jobs selected by affected code |
 | `full` | a push to `main`, the merge queue | `wide` plus `FULL_JOBS`: the Windows and macOS jobs, `feature-matrix`, `miri`, `bench-compile`, `doc-test` |
 | `extended` | the nightly schedule, `workflow_dispatch`, a pull request labelled `full-ci` | `full` plus the nightly-only platform jobs (`EXTENDED_JOBS`) |
 
@@ -956,7 +958,9 @@ runs `checks`, `plan` and the `ci` aggregator:
   (the repository has none today); the `standalone` job runs
   `cargo check --locked --all-targets` on each one the change touches.
 - **Full and extended lanes**: `main` and the merge queue run `full`, which
-  adds `gpu-test`, `platform-windows` and `cli-macos`. The nightly run,
+  adds `gpu-test`, `platform-windows`, `platform-macos`, `cli-windows` and
+  `cli-macos`. Ordinary compiling PRs also run these suites when their code
+  or dependencies change. The nightly run,
   `workflow_dispatch` and the `full-ci` label run `extended`, which adds the
   nightly-only platform jobs. Adding the label re-runs the PR's own CI run
   through `full-ci.yml`, so the extended result replaces the earlier one in
@@ -972,19 +976,19 @@ runs `checks`, `plan` and the `ci` aggregator:
 and still turn main red: the per-feature matrix (`feature-matrix`), miri,
 bench linking (`bench-compile`) and the doctests (`doc-test`) — over 171 runs
 of 2026-09-26..30 none of them failed where `clippy` and `test` passed, so
-they run after the merge and a break is fixed forward — and every Windows and
-macOS job, that is
-GPU readback on WARP (`gpu-test`), flui-platform's Windows suite
-(`platform-windows`), macOS's `flui-cli` suite and the iOS runner clippy
-(`cli-macos`; on a pull request the iOS clippy runs in `ios-runner` when
-the change reaches `flui-app` or `flui`). Only
+they run after the merge and a break is fixed forward. GPU readback on WARP
+(`gpu-test`), native platform suites (`platform-windows`, `platform-macos`)
+and native CLI suites (`cli-windows`, `cli-macos`) run on ordinary PRs when
+selected by affected code, and always in full and extended lanes. The macOS
+CLI job retains the iOS runner clippy; `ios-runner` also checks it when a PR
+reaches `flui-app` or `flui`. Only
 `extended` runs the whole workspace suite on macOS (`macos-ci`) and on
 Windows (`test-windows`).
 
 Label a change that is likely to break one of these `full-ci`.
 
-The `ci` aggregator recomputes which jobs the lane runs from `plan`'s `lane`
-and its lists `HEAVY_JOBS`, `FULL_JOBS` and `EXTENDED_JOBS`. It fails on any
+The `ci` aggregator recomputes which jobs the lane runs from `plan`'s `lane`,
+finite `extra_jobs` selection and its lists `HEAVY_JOBS`, `FULL_JOBS` and `EXTENDED_JOBS`. It fails on any
 other skip, and on a job that ran where it should have skipped.
 
 Locally, `cargo xtask check-changed` is the pre-PR check. `cargo xtask ci` is
@@ -1000,11 +1004,13 @@ what it needs. One row per job in `.github/workflows/ci.yml`:
 | `standalone` | `cargo check --locked --all-targets --manifest-path <crate>/Cargo.toml` | tooling lane only, for each standalone crate the change touches; warnings are not denied (the crate is outside the workspace lints) |
 | `clippy` | `cargo xtask lint` (in `gate`) | — |
 | `test` | `cargo xtask test --fast`, then `cargo xtask build-all-targets` | the same commands; the all-targets build uses the test scope's features, so it links the examples and benches without rebuilding the rest (a target whose `required-features` it leaves off is compiled by `feature-matrix`, not linked) (the facade's default feature set is linted by `feature-matrix`, not built here); the flui-platform leg needs `xvfb-run` (Linux) |
-| `test-nested` | `cargo xtask test --nested` | the nested-cargo group (trybuild, generated projects, facade consumers), beside `test`; `cargo xtask test` without a flag runs both |
+| `test-nested` | `cargo xtask test --nested --nested-group native` | generated projects and facade consumers, beside `test` and `test-trybuild` |
+| `test-trybuild` | `cargo xtask test --nested --nested-group trybuild` | compile-fail suites; plain `--nested` still runs both groups |
 | `test-features` | the job's `cargo nextest run` lines (`ci-full` runs them) | — |
 | `live-smoke` | `cargo xtask live-smoke`, `cargo xtask live-smoke --wayland` | the job runs these two commands; Linux only (Xvfb, lavapipe, weston); `ci-full` runs them on Linux and says it skipped them elsewhere |
-| `gpu-test` | `cargo xtask gpu-test` | the job runs this command, in the full and extended lanes only; CI renders on Windows' WARP software rasterizer; locally the host adapter renders, so a local-only mismatch is a host difference to look at, not a CI verdict |
-| `platform-windows` | `cargo xtask test` (on Windows) | `test` runs the all-features pass only; CI adds a default-features pass |
+| `gpu-test` | `cargo xtask gpu-test` | the job runs this command when selected on a PR, and in every full and extended lane; CI renders on Windows' WARP software rasterizer; locally the host adapter renders, so a local-only mismatch is a host difference to look at, not a CI verdict |
+| `platform-windows`, `platform-macos` | `cargo xtask platform-test` | default and all-features native platform suites; macOS uses `FLUI_HEADLESS=1`, preserving ignored window-loop tests |
+| `cli-windows` | `cargo xtask cli-test` | the native CLI suite |
 | `bench-compile` | `cargo xtask bench-compile` | — |
 | `doc` | `cargo xtask doc-strict` (in `gate`) | — |
 | `deps` | `cargo xtask deps` | CI runs `--only policy` and `--only advisories` as two steps, with `--strict` (a missing cargo-deny or cargo-shear fails instead of being skipped); every lane but `docs` runs it; the advisories step blocks on main, nightly and a pull request whose change is workspace-wide or touches `deny.toml`, and only reports on other pull requests, because a new RustSec entry can fail a commit that passed the day before |
@@ -1041,6 +1047,23 @@ advisories need no weekly run: the nightly run's `deps` job checks them
 every day and blocks on them.
 
 A change cannot be merged if any of these fail. If you encounter a flaky test, file a fix issue rather than retrying CI.
+
+### Selecting additional native checks
+
+`cargo xtask affected` emits `extra_jobs` as a JSON list of finite job names.
+Engine changes (including WGSL) or affected dependencies select `gpu-test`.
+Platform changes select Windows and macOS suites; changes confined to one
+native backend select that backend's platform suite. CLI changes or affected
+dependencies select both native CLI suites. Global build inputs and unknown
+source paths conservatively select all five jobs. Docs and standalone tooling
+keep their existing lanes. Full and extended lanes run all five regardless of
+selection; extended retains the full Windows and macOS workspace gates.
+
+`ci-verify` requires every selected job to succeed, every unrelated optional job
+to skip, and rejects unknown names or selections incompatible with the lane.
+The two nested jobs restore the existing test cache without writing new entries.
+Splitting overlaps their execution but duplicates setup; runner timings must
+confirm the net gain. Native platform suites do not replace live OS smoke tests.
 
 ## See Also
 

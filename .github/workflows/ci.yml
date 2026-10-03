@@ -7,13 +7,14 @@ name: CI
 #             (its own [workspace]): `deps`, and `standalone` for the crate
 #   wide      a PR that compiles anything: `deps` and the pull-request gate
 #             (HEAVY_JOBS in `ci`: clippy, cross-typecheck, test,
-#             test-nested, doc, wasm-check, test-features, live-smoke; the
+#             test-nested, test-trybuild, doc, wasm-check, test-features, live-smoke; the
 #             last two are the only compile of the non-default feature paths
 #             and the only run above synthetic event dispatch, which
 #             AGENTS.md requires of event-translation changes) over the
 #             whole workspace, in
 #             parallel, and `ios-runner` when the change reaches the iOS
-#             runner. One serial job over the changed crates measured 35 min
+#             runner. GPU and native platform/CLI suites also run when
+#             their code or dependencies change. One serial job over the changed crates measured 35 min
 #             median against this lane's 18 (2026-09-30), and hosted runners
 #             do not queue here.
 #   full      push to main, merge_group: `wide` plus FULL_JOBS: the Windows
@@ -324,6 +325,7 @@ jobs:
       lane: ${{ steps.scope.outputs.lane }}
       mode: ${{ steps.scope.outputs.mode }}
       heavy_required: ${{ steps.scope.outputs.heavy_required }}
+      extra_jobs: ${{ steps.scope.outputs.extra_jobs }}
       standalone: ${{ steps.scope.outputs.standalone }}
       cross_ios: ${{ steps.scope.outputs.cross_ios }}
     steps:
@@ -544,13 +546,9 @@ jobs:
           retention-days: 7
 
   # ─────────────────────────────────────────────────────────────────────────
-  # test-nested — the nested tests (`cargo xtask test --nested`: the trybuild
-  # compile_fail suites, flui-cli's generated projects, the facade consumers;
-  # each runs a `cargo` or `rustc` of its own). It was over half of `test`'s
-  # wall-clock (5.7 of ~10 min in a PR run), so it runs beside it. Linux
-  # only: what these tests check (compiler diagnostics, that a generated or
-  # consuming crate builds) does not depend on the host.
-  # ─────────────────────────────────────────────────────────────────────────
+  # Nested cargo tests run in two parallel jobs: generated projects and
+  # facade consumers in test-nested, compile-fail suites in test-trybuild.
+  # Both restore the test build cache; neither writes nested build artifacts.
   test-nested:
     name: test-nested
     needs: [checks, plan]
@@ -579,8 +577,39 @@ jobs:
         with:
           tool: cargo-nextest@0.9
 
-      - name: cargo xtask test --nested
-        run: cargo xtask test --nested
+      - name: cargo xtask test --nested --nested-group native
+        run: cargo xtask test --nested --nested-group native
+
+  test-trybuild:
+    name: test-trybuild
+    needs: [checks, plan]
+    if: contains(fromJSON('["wide","full","extended"]'), needs.plan.outputs.lane)
+    runs-on: ubuntu-26.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+
+      - name: Cache cargo registry + target
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          cache-on-failure: true
+          # `test`'s entry: the same TEST_SCOPE build. Restore only, so the
+          # nested-cargo builds add no cache entry of their own.
+          shared-key: workspace-tests-v2
+          save-if: false
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@76c2e6406e52637deed7160d77bded76bd83e06e # v2.87.14
+        with:
+          tool: cargo-nextest@0.9
+
+      - name: cargo xtask test --nested --nested-group trybuild
+        run: cargo xtask test --nested --nested-group trybuild
 
       - name: Upload trybuild output on failure
         if: failure()
@@ -783,7 +812,7 @@ jobs:
     name: gpu-test
     needs: [checks, plan]
     # Windows: `full` and `extended` only, never on an ordinary PR push.
-    if: contains(fromJSON('["full","extended"]'), needs.plan.outputs.lane)
+    if: contains(fromJSON('["full","extended"]'), needs.plan.outputs.lane) || (needs.plan.outputs.lane == 'wide' && contains(fromJSON(needs.plan.outputs.extra_jobs), 'gpu-test'))
     runs-on: windows-latest
     # Generous headroom: ~440 readback tests on a software rasterizer, each
     # creating its own wgpu::Device, plus the cold wgpu-stack build. The first
@@ -860,7 +889,7 @@ jobs:
   platform-windows:
     name: platform-windows
     needs: [checks, plan]
-    if: contains(fromJSON('["full","extended"]'), needs.plan.outputs.lane)
+    if: contains(fromJSON('["full","extended"]'), needs.plan.outputs.lane) || (needs.plan.outputs.lane == 'wide' && contains(fromJSON(needs.plan.outputs.extra_jobs), 'platform-windows'))
     runs-on: windows-latest
     timeout-minutes: 45
     steps:
@@ -877,16 +906,50 @@ jobs:
         with:
           tool: cargo-nextest@0.9
 
-      # Default features: the Win32 backend alone, as a Windows app ships it.
-      - name: cargo nextest run (flui-platform, default features)
-        run: cargo nextest run -p flui-platform --locked --no-fail-fast
-
-      # All features: adds the winit backend and its `arboard` clipboard,
-      # which shares the Win32 clipboard with the backend above.
-      - name: cargo nextest run (flui-platform, all features)
-        run: cargo nextest run -p flui-platform --all-features --locked --no-fail-fast
+      # Both the native backend alone and all features (including winit).
+      - name: cargo xtask platform-test
+        run: cargo xtask platform-test
 
   # ─────────────────────────────────────────────────────────────────────────
+  # Native platform and CLI suites also run selectively on ordinary PRs.
+  platform-macos:
+    name: platform-macos
+    needs: [checks, plan]
+    if: contains(fromJSON('["full","extended"]'), needs.plan.outputs.lane) || (needs.plan.outputs.lane == 'wide' && contains(fromJSON(needs.plan.outputs.extra_jobs), 'platform-macos'))
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@76c2e6406e52637deed7160d77bded76bd83e06e # v2.87.14
+        with:
+          tool: cargo-nextest@0.9
+      - name: cargo xtask platform-test
+        run: cargo xtask platform-test
+
+  cli-windows:
+    name: cli-windows
+    needs: [checks, plan]
+    if: contains(fromJSON('["full","extended"]'), needs.plan.outputs.lane) || (needs.plan.outputs.lane == 'wide' && contains(fromJSON(needs.plan.outputs.extra_jobs), 'cli-windows'))
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@76c2e6406e52637deed7160d77bded76bd83e06e # v2.87.14
+        with:
+          tool: cargo-nextest@0.9
+      - name: cargo xtask cli-test
+        run: cargo xtask cli-test
+
   # bench-compile — the criterion benches compile and link in the bench
   # profile (`--no-run`: nothing executes). `test`'s all-targets build links
   # them in the dev profile only.
@@ -1260,7 +1323,7 @@ jobs:
   cli-macos:
     name: cli-macos
     needs: [checks, plan]
-    if: contains(fromJSON('["full","extended"]'), needs.plan.outputs.lane)
+    if: contains(fromJSON('["full","extended"]'), needs.plan.outputs.lane) || (needs.plan.outputs.lane == 'wide' && contains(fromJSON(needs.plan.outputs.extra_jobs), 'cli-macos'))
     runs-on: macos-latest
     timeout-minutes: 30
     steps:
@@ -1286,8 +1349,8 @@ jobs:
         with:
           tool: cargo-nextest@0.9
 
-      - name: cargo nextest run -p flui-cli
-        run: cargo nextest run -p flui-cli --locked
+      - name: cargo xtask cli-test
+        run: cargo xtask cli-test
 
       # The iOS RUNNER in flui-app (`app/runner/ios.rs`) is behind
       # `cfg(target_os = "ios")`; its Android twin is linted in
@@ -1499,7 +1562,7 @@ jobs:
   ci:
     name: ci
     if: always()
-    needs: [checks, plan, ios-runner, standalone, clippy, feature-matrix, wasm-check, cross-typecheck, cli-macos, test, test-nested, test-features, live-smoke, gpu-test, platform-windows, bench-compile, doc, deps, doc-test, miri, macos-ci, test-windows]
+    needs: [checks, plan, ios-runner, standalone, clippy, feature-matrix, wasm-check, cross-typecheck, cli-macos, cli-windows, platform-macos, test, test-nested, test-trybuild, test-features, live-smoke, gpu-test, platform-windows, bench-compile, doc, deps, doc-test, miri, macos-ci, test-windows]
     runs-on: ubuntu-26.04
     timeout-minutes: 10
     steps:
@@ -1527,12 +1590,13 @@ jobs:
       #    passed or failed, and gated nothing.
       #
       # 2. EXACTLY THE EXPECTED SKIPS -- which jobs run is decided by
-      #    `plan`'s `lane` alone, and the aggregator recomputes it instead of
+      #    `plan`'s `lane` and finite `extra_jobs` selection, and the aggregator recomputes it instead of
       #    trusting each job's `if:`. Every lane runs checks and plan; then
       #      docs      nothing else
       #      tooling   deps, and standalone when plan names a standalone crate
       #      wide      deps + HEAVY_JOBS (every Linux job), and ios-runner
-      #                when plan puts the iOS runner in scope (cross_ios)
+      #                when plan puts the iOS runner in scope (cross_ios),
+      #                plus selected GPU and native platform/CLI suites
       #      full      wide + FULL_JOBS (Windows, macOS)
       #      extended  full + EXTENDED_JOBS
       #    Every other job must skip. Any other skip (a drifted `if:`, a
@@ -1543,14 +1607,15 @@ jobs:
         env:
           NEEDS: ${{ toJSON(needs) }}
           HEAVY_JOBS: >-
-            clippy wasm-check cross-typecheck test test-nested doc
+            clippy wasm-check cross-typecheck test test-nested test-trybuild doc
             test-features live-smoke
           FULL_JOBS: >-
-            gpu-test platform-windows cli-macos feature-matrix bench-compile
+            gpu-test platform-windows platform-macos cli-windows cli-macos feature-matrix bench-compile
             doc-test miri
           EXTENDED_JOBS: >-
             macos-ci test-windows
           LANE: ${{ needs.plan.outputs.lane }}
+          EXTRA_JOBS: ${{ needs.plan.outputs.extra_jobs }}
           CROSS_IOS: ${{ needs.plan.outputs.cross_ios }}
           STANDALONE: ${{ needs.plan.outputs.standalone }}
           EVENT: ${{ github.event_name }}
