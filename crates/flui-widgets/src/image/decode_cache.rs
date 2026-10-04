@@ -46,7 +46,7 @@ use std::task::{Context, Poll};
 
 use flui_painting::paint::Image as PixelImage;
 use futures_util::FutureExt;
-use futures_util::future::Shared;
+use futures_util::future::{Either, Shared};
 use parking_lot::Mutex;
 
 use super::cache_key::ImageCacheKey;
@@ -58,7 +58,8 @@ use super::provider::ImageProviderError;
 /// justify a larger one —
 /// revisit alongside `docs/ROADMAP.md`'s deferred cache eviction API). Callers who need to bypass the cache entirely can pre-decode and use
 /// [`DirectImageProvider`](super::DirectImageProvider) instead.
-const DEFAULT_CAPACITY: usize = 100;
+const DEFAULT_CAPACITY: NonZeroUsize =
+    NonZeroUsize::new(100).expect("BUG: decoded image cache capacity is nonzero");
 
 type SharedLoad =
     Shared<Pin<Box<dyn Future<Output = Result<PixelImage, ImageProviderError>> + Send>>>;
@@ -77,12 +78,25 @@ struct DecodedImageCache {
 }
 
 impl DecodedImageCache {
-    fn new(capacity: usize) -> Self {
-        let capacity = NonZeroUsize::new(capacity).unwrap_or(NonZeroUsize::MIN);
+    fn new(capacity: NonZeroUsize) -> Self {
         Self {
             entries: Mutex::new(lru::LruCache::new(capacity)),
             pending: Mutex::new(HashMap::new()),
         }
+    }
+
+    fn cached(&self, key: &ImageCacheKey) -> Option<PixelImage> {
+        self.entries.lock().get(key).cloned()
+    }
+
+    fn insert(&self, key: ImageCacheKey, image: PixelImage) {
+        let retired = {
+            let mut entries = self.entries.lock();
+            entries.push(key, image)
+        };
+        // `put` destroys capacity evictions inside the operation. `push` hands
+        // back ownership, so the last pixel buffer is freed outside the lock.
+        drop(retired);
     }
 }
 
@@ -92,7 +106,7 @@ static CACHE: LazyLock<DecodedImageCache> =
 /// Returns the cached decoded image for `key`, if present — the synchronous
 /// probe [`Image`](crate::Image) makes before spawning an async load.
 pub(crate) fn cached(key: &ImageCacheKey) -> Option<PixelImage> {
-    CACHE.entries.lock().get(key).cloned()
+    CACHE.cached(key)
 }
 
 /// A handle to an in-flight (or already-resolved) coalesced load.
@@ -138,7 +152,10 @@ impl Drop for CoalescedLoad {
 /// again. The decoded image is
 /// written to the sync cache before the future resolves, so a [`cached`]
 /// probe made immediately after any awaiter observes completion already sees
-/// the hit. An abandoned load (every subscriber dropped before completion) is
+/// the hit. Admission probes completed entries again, so a completion after
+/// the caller's earlier cache miss does not cause another load. Hits refresh
+/// LRU recency without invoking `start`.
+/// An abandoned load (every subscriber dropped before completion) is
 /// removed from the pending map immediately — see the module doc.
 pub(crate) fn load_coalesced<F>(
     key: ImageCacheKey,
@@ -148,13 +165,21 @@ where
     F: Future<Output = Result<PixelImage, ImageProviderError>> + Send + 'static,
 {
     let mut pending = CACHE.pending.lock();
+    if let Some(image) = CACHE.cached(&key) {
+        // The unused start closure may own host state. Retire it only after
+        // releasing the admission guard, on both cached and pending hits.
+        drop(pending);
+        return Either::Left(std::future::ready(Ok(image)));
+    }
     if let Some(slot) = pending.get(&key) {
         slot.live_subscribers.fetch_add(1, Ordering::AcqRel);
-        return CoalescedLoad {
+        let load = CoalescedLoad {
             key,
             future: slot.future.clone(),
             live_subscribers: Arc::clone(&slot.live_subscribers),
         };
+        drop(pending);
+        return Either::Right(load);
     }
 
     let cache_key_for_success = key.clone();
@@ -162,10 +187,7 @@ where
         Box::pin(async move {
             let outcome = start().await;
             if let Ok(image) = &outcome {
-                CACHE
-                    .entries
-                    .lock()
-                    .put(cache_key_for_success, image.clone());
+                CACHE.insert(cache_key_for_success, image.clone());
             }
             outcome
         });
@@ -179,16 +201,49 @@ where
         },
     );
 
-    CoalescedLoad {
+    let load = CoalescedLoad {
         key,
         future: shared,
         live_subscribers,
-    }
+    };
+    drop(pending);
+    Either::Right(load)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A local cache is the seam for count/recency policy; global production
+    /// capacity is not part of the public image-provider contract.
+    #[test]
+    fn decoded_cache_promotes_hits_and_preserves_displayed_pixels_after_eviction() {
+        let cache = DecodedImageCache::new(NonZeroUsize::new(2).expect("nonzero test capacity"));
+        let a = fresh_key("recent");
+        let b = fresh_key("evicted");
+        let c = fresh_key("inserted");
+        cache.insert(a.clone(), solid(1, 1));
+        cache.insert(b.clone(), solid(2, 1));
+        let displayed = cache.cached(&b).expect("display holds decoded image");
+        let displayed_pixels = displayed.data().to_vec();
+        cache.cached(&a).expect("using the older image promotes it");
+        cache.insert(c.clone(), solid(3, 1));
+        assert!(cache.cached(&b).is_none(), "least recent image is evicted");
+        assert_eq!(cache.cached(&a).expect("recent image survives").width(), 1);
+        assert_eq!(cache.cached(&c).expect("new image is cached").width(), 3);
+        assert_eq!((displayed.width(), displayed.height()), (2, 1));
+        assert_eq!(
+            displayed.data(),
+            displayed_pixels,
+            "eviction does not retire displayed pixels"
+        );
+        cache.insert(a.clone(), solid(4, 1));
+        assert_eq!(cache.cached(&a).expect("replacement is cached").width(), 4);
+        assert!(
+            cache.cached(&c).is_some(),
+            "replacement does not evict another image"
+        );
+    }
 
     /// The production cache is intentionally process-wide, while Rust's unit
     /// test harness runs this module in parallel. Give every cache test a clean
@@ -292,11 +347,66 @@ mod tests {
         assert_eq!(first_result.unwrap(), second_result.unwrap());
     }
 
-    /// Both coalescing contracts in one runtime: an abandoned load leaves no pending entry,
-    /// and concurrent callers share one load.
+    async fn unused_load_captures_can_reenter_on_cache_and_pending_hits() {
+        struct ReenterOnDrop {
+            provider: super::super::AssetImage,
+            retired: Arc<AtomicUsize>,
+        }
+        impl Drop for ReenterOnDrop {
+            fn drop(&mut self) {
+                use super::super::ImageProvider;
+                assert!(
+                    CACHE.pending.try_lock().is_some(),
+                    "admission is unlocked before retirement"
+                );
+                assert!(
+                    CACHE.entries.try_lock().is_some(),
+                    "entries are unlocked before retirement"
+                );
+                drop(self.provider.resolve_async());
+                self.retired.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+
+        let _cache = isolated_cache().await;
+        for completed in [false, true] {
+            let path = format!("decode-cache-reentry-{completed}");
+            let key = ImageCacheKey::Asset(path.clone());
+            let mut first = Box::pin(load_coalesced(key.clone(), || async { Ok(solid(2, 1)) }));
+            if completed {
+                first.as_mut().await.expect("first load completes");
+            }
+            let retired = Arc::new(AtomicUsize::new(0));
+            let probe = ReenterOnDrop {
+                provider: super::super::AssetImage::new(
+                    Arc::new(flui_assets::AssetRegistry::default()),
+                    path,
+                ),
+                retired: Arc::clone(&retired),
+            };
+            let second = load_coalesced(key, move || {
+                drop(probe);
+                async { Ok(solid(9, 1)) }
+            });
+            assert_eq!(
+                retired.load(Ordering::SeqCst),
+                1,
+                "unused capture is released at admission"
+            );
+            let shared = second.await.expect("existing decode remains deliverable");
+            assert_eq!(shared.width(), 2, "hit must not invoke the new loader");
+            if !completed {
+                first.await.expect("original subscriber still completes");
+            }
+        }
+    }
+
+    /// Coalescing contracts in one runtime: abandonment releases pending work,
+    /// concurrent callers share one load, and unused captures can reenter.
     #[tokio::test]
     async fn decode_cache_coalescing_contracts() {
         abandoning_the_only_subscriber_before_completion_removes_the_pending_entry().await;
         load_coalesced_shares_one_load_across_concurrent_callers().await;
+        unused_load_captures_can_reenter_on_cache_and_pending_hits().await;
     }
 }

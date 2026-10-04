@@ -33,8 +33,8 @@ pub struct NetworkImage {
 }
 
 impl NetworkImage {
-    /// Creates a provider that fetches `url` through `registry` when
-    /// resolved asynchronously.
+    /// Creates a provider that fetches `url` through `registry` on a decoded
+    /// cache miss during asynchronous resolution.
     pub fn new(registry: Arc<AssetRegistry>, url: impl Into<String>) -> Self {
         Self {
             registry,
@@ -66,6 +66,9 @@ impl ImageProvider for NetworkImage {
         )
     }
 
+    /// Reuses a completed decoded image, or shares an in-flight load for the
+    /// same registry and URL. A hit refreshes LRU recency without HTTP traffic.
+    /// Failed loads are not cached and a later request can retry.
     fn resolve_async(
         &self,
     ) -> Pin<Box<dyn Future<Output = Result<PixelImage, ImageProviderError>> + Send + 'static>>

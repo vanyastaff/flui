@@ -34,8 +34,8 @@ pub struct AssetImage {
 }
 
 impl AssetImage {
-    /// Creates a provider that loads `path` through `registry` when resolved
-    /// asynchronously.
+    /// Creates a provider that loads `path` through `registry` on a decoded
+    /// cache miss during asynchronous resolution.
     pub fn new(registry: Arc<AssetRegistry>, path: impl Into<String>) -> Self {
         Self {
             registry,
@@ -70,6 +70,9 @@ impl ImageProvider for AssetImage {
         )
     }
 
+    /// Reuses a completed decoded image, or shares an in-flight load for the
+    /// same cache key. A hit refreshes LRU recency without reading the source.
+    /// Failed loads are not cached and a later request can retry.
     fn resolve_async(
         &self,
     ) -> Pin<Box<dyn Future<Output = Result<PixelImage, ImageProviderError>> + Send + 'static>>
