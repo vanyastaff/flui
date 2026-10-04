@@ -63,8 +63,15 @@ holds the lock rules once for every implementation, including the frame
 transaction: it reads the `CommitGate` the store's owner installs through
 `TextStore::set_commit_gate`, so no store keeps a transaction flag of its own
 to forget. `flui_testing::text_store_kit` checks a store against these rules.
+The arbiter rechecks the gate before each queued grant and after draining older
+work before admitting a new request. If a grant closes the gate, later grants
+remain queued in request order; a new synchronous request is refused and an
+asynchronous request joins the queue's tail. Reopening the gate lets the next
+commit anchor resume that work.
 **Tests:** the `text_store` module's unit tests, and `flui-testing`'s
-`in_memory_store_conforms_to_kit_v1`.
+`in_memory_store_conforms_to_kit_v1`; the public
+`queued_text_store_grants_respect_gate_changes` family covers gate closure
+during deferred and direct grants, FIFO ordering, refusal and resumed progress.
 
 ### Data-transfer delivery shares the foundation claim slot
 
