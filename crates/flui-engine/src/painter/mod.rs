@@ -176,6 +176,20 @@ impl WgpuPainter {
         surface_format: wgpu::TextureFormat,
         size: (u32, u32),
     ) -> Self {
+        Self::with_domain_and_font_source(
+            domain,
+            surface_format,
+            size,
+            crate::frame_protocol::FontSource::Ordinary,
+        )
+    }
+
+    pub(crate) fn with_domain_and_font_source(
+        domain: Arc<crate::device_domain::DeviceDomain>,
+        surface_format: wgpu::TextureFormat,
+        size: (u32, u32),
+        source: crate::frame_protocol::FontSource,
+    ) -> Self {
         let device = Arc::clone(domain.device());
         let queue = Arc::clone(domain.queue());
         #[cfg(debug_assertions)]
@@ -205,7 +219,7 @@ impl WgpuPainter {
             Arc::clone(&device),
             Arc::clone(&queue),
             &pipelines.glyph_atlas_bind_group_layout,
-            flui_painting::glyphs::SwashRasterizer::new(),
+            source.rasterizer(),
         );
 
         // ===== Resource managers =====
@@ -235,19 +249,11 @@ impl WgpuPainter {
     /// Called before recording a frame, after the previous frame's commands
     /// have been submitted or discarded. Submitted GPU work owns its resources.
     pub(crate) fn reset_scene_fonts(&mut self, source: crate::frame_protocol::FontSource) {
-        let rasterizer = match source {
-            crate::frame_protocol::FontSource::Ordinary => {
-                flui_painting::glyphs::SwashRasterizer::new()
-            }
-            crate::frame_protocol::FontSource::Plugin => {
-                flui_painting::glyphs::SwashRasterizer::with_owned_fonts()
-            }
-        };
         self.glyph_atlas = GlyphAtlas::new(
             Arc::clone(&self.device),
             Arc::clone(&self.queue),
             &self.pipelines.glyph_atlas_bind_group_layout,
-            rasterizer,
+            source.rasterizer(),
         );
     }
 

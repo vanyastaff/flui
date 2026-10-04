@@ -66,6 +66,15 @@ pub(crate) enum FontSource {
     Plugin,
 }
 
+impl FontSource {
+    pub(crate) fn rasterizer(self) -> flui_painting::glyphs::SwashRasterizer {
+        match self {
+            Self::Ordinary => flui_painting::glyphs::SwashRasterizer::new(),
+            Self::Plugin => flui_painting::glyphs::SwashRasterizer::with_owned_fonts(),
+        }
+    }
+}
+
 /// A renderer's damage, its retained target and the one-frame promotion to a
 /// full repaint.
 #[derive(Debug)]
@@ -115,6 +124,23 @@ impl FrameProtocol {
             self.font_source = source;
             self.damage.mark_full_repaint();
         }
+    }
+
+    /// Constructs an empty painter with this scene source's font ownership.
+    /// Recovery and surface-format changes replace GPU resources, not the
+    /// source namespace selected by the last scene.
+    pub(crate) fn new_painter(
+        &self,
+        domain: Arc<DeviceDomain>,
+        format: wgpu::TextureFormat,
+        size: (u32, u32),
+    ) -> crate::painter::WgpuPainter {
+        crate::painter::WgpuPainter::with_domain_and_font_source(
+            domain,
+            format,
+            size,
+            self.font_source,
+        )
     }
 
     /// Adds `rect` to the damage owed.

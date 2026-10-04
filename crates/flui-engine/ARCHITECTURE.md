@@ -669,6 +669,19 @@ use `SwashRasterizer::with_owned_fonts` to copy a newly admitted font into
 host-owned bytes (painting's decision 18); ordinary atlases retain shared sources
 to preserve their weak source-cache identity. Switching sources
 also allocates a fresh atlas, while frames within one source retain it.
+Recovery and a surface-format change also replace the painter. Their shared
+format-consumer factory constructs its empty atlas using the current
+`FrameProtocol` source: a warm plugin frame can then omit a reset without
+retaining image-dependent font storage. The new atlas starts an empty font
+namespace; ordinary replacements continue to retain shared sources.
+`plugin_fonts_survive_format_replacement`,
+`plugin_fonts_survive_domain_replacement` and
+`ordinary_fonts_retain_sources_after_replacement` in
+`painter_images_and_offscreen_results_read_back_as_specified` exercise the
+actual factory and atlas with source retirement probes, uncached glyph bitmap
+comparison and atlas upload. This private seam is needed because native surface
+replacement requires a live window; it does not claim a native recovery run.
+
 
 `parley_runs_read_back` reads back what paint now
 draws: hard breaks, synthetic bold, host fallback faces, right alignment and

@@ -218,7 +218,19 @@ fn clear_offscreen_result(nested: bool) {
 /// composites with its own blend mode.
 #[test]
 fn painter_images_and_offscreen_results_read_back_as_specified() {
-    let cases: [(&str, fn()); 41] = [
+    let cases: [(&str, fn()); 44] = [
+        (
+            "plugin fonts after format replacement",
+            plugin_fonts_survive_format_replacement,
+        ),
+        (
+            "plugin fonts after device-domain replacement",
+            plugin_fonts_survive_domain_replacement,
+        ),
+        (
+            "ordinary fonts after replacement",
+            ordinary_fonts_retain_sources_after_replacement,
+        ),
         (
             "dash progress refusal recovery",
             dashed_intervals_that_cannot_advance_refuse_the_whole_stroke,
@@ -2334,4 +2346,154 @@ fn invalid_texture_target_recovers() {
     painter.finish_frame();
     let pixels = crate::test_support::readback_bytes(&device, &queue, &target, 32, 32);
     assert_eq!(pixel_at(&pixels, 32, 16, 16), [0, 255, 0, 255]);
+}
+
+fn plugin_fonts_survive_format_replacement() {
+    replacement_fonts_keep_source_policy(crate::frame_protocol::FontSource::Plugin, false);
+}
+
+fn plugin_fonts_survive_domain_replacement() {
+    replacement_fonts_keep_source_policy(crate::frame_protocol::FontSource::Plugin, true);
+}
+
+fn ordinary_fonts_retain_sources_after_replacement() {
+    replacement_fonts_keep_source_policy(crate::frame_protocol::FontSource::Ordinary, true);
+}
+
+/// Surface replacement needs a native window. This seam exercises its actual
+/// format-consumer factory and real atlas, including opaque source retirement.
+fn replacement_fonts_keep_source_policy(
+    source: crate::frame_protocol::FontSource,
+    fresh_domain: bool,
+) {
+    use flui_painting::GlyphRasterizer;
+    use flui_painting::glyphs::{FaceKey, GlyphKey, SubpixelBin, SwashRasterizer};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct Source {
+        bytes: Vec<u8>,
+        reads: Arc<AtomicUsize>,
+        drops: Arc<AtomicUsize>,
+    }
+    impl AsRef<[u8]> for Source {
+        fn as_ref(&self) -> &[u8] {
+            self.reads.fetch_add(1, Ordering::Relaxed);
+            &self.bytes
+        }
+    }
+    impl Drop for Source {
+        fn drop(&mut self) {
+            self.drops.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    let (device, queue) = test_device_and_queue();
+    let domain = crate::device_domain::DeviceDomain::new(Arc::clone(&device), Arc::clone(&queue));
+    let mut frame = crate::frame_protocol::FrameProtocol::new();
+    let (mut painter, _) = crate::Renderer::build_format_consumers(
+        &frame,
+        Arc::clone(&domain),
+        READBACK_FORMAT,
+        (32, 32),
+    );
+    frame.select_font_source(&mut painter, source, false);
+    let face = FaceKey {
+        blob_id: 1,
+        index: 0,
+    };
+    painter
+        .glyph_atlas
+        .rasterizer_mut()
+        .fonts_mut()
+        .register_face(face, Arc::new(flui_painting::fonts::MATERIAL_ICONS_REGULAR))
+        .expect("old namespace face registers");
+
+    let replacement_domain = if fresh_domain {
+        crate::device_domain::DeviceDomain::new(device, queue)
+    } else {
+        domain
+    };
+    let format = if fresh_domain {
+        READBACK_FORMAT
+    } else {
+        wgpu::TextureFormat::Bgra8Unorm
+    };
+    // These are the two replacement inputs: a new domain on recovery, or a
+    // changed format on the existing domain. Both discard the old font namespace.
+    let (replacement, _) =
+        crate::Renderer::build_format_consumers(&frame, replacement_domain, format, (32, 32));
+    painter = replacement;
+    // A warm plugin frame supplies no image reset. Its factory must already
+    // have installed the owning policy; this call must not mask that defect.
+    frame.select_font_source(&mut painter, source, false);
+    let reads = Arc::new(AtomicUsize::new(0));
+    let drops = Arc::new(AtomicUsize::new(0));
+    let backing = Arc::new(Source {
+        bytes: flui_painting::fonts::ROBOTO_REGULAR.to_vec(),
+        reads: Arc::clone(&reads),
+        drops: Arc::clone(&drops),
+    });
+    painter
+        .glyph_atlas
+        .rasterizer_mut()
+        .fonts_mut()
+        .register_face(face, backing.clone())
+        .expect("replacement namespace admits different bytes under the same face key");
+    drop(backing);
+    reads.store(0, Ordering::Relaxed);
+    let key = GlyphKey::new(face, 36, 18.0, SubpixelBin::Zero);
+    let mut reference = SwashRasterizer::new();
+    reference
+        .fonts_mut()
+        .register_face(face, Arc::new(flui_painting::fonts::ROBOTO_REGULAR))
+        .expect("reference face registers");
+    let expected = reference
+        .rasterize(key)
+        .expect("reference glyph rasterizes");
+    assert!(
+        expected.width > 0 && expected.height > 0,
+        "sample glyph has ink"
+    );
+    let actual = painter
+        .glyph_atlas
+        .rasterizer_mut()
+        .rasterize(key)
+        .expect("replacement glyph rasterizes after caller source retirement");
+    assert_eq!(actual, expected, "replacement draws the new font");
+    let slot = painter
+        .glyph_atlas
+        .slot(key)
+        .expect("replacement atlas uploads the glyph");
+    assert_eq!(slot.size, [expected.width, expected.height]);
+    match source {
+        crate::frame_protocol::FontSource::Plugin => {
+            assert_eq!(
+                drops.load(Ordering::Relaxed),
+                1,
+                "plugin source retires before painter"
+            );
+            assert_eq!(
+                reads.load(Ordering::Relaxed),
+                0,
+                "glyph reads use host-owned bytes"
+            );
+        }
+        crate::frame_protocol::FontSource::Ordinary => {
+            assert_eq!(
+                drops.load(Ordering::Relaxed),
+                0,
+                "ordinary source retains weak-cache identity"
+            );
+            assert!(
+                reads.load(Ordering::Relaxed) > 0,
+                "ordinary glyph reads retained shared source"
+            );
+        }
+    }
+    drop(painter);
+    assert_eq!(
+        drops.load(Ordering::Relaxed),
+        1,
+        "source is retired exactly once"
+    );
 }
