@@ -141,6 +141,17 @@ exists to prevent.
 
 ---
 
+## Diagnostics serialization
+
+Diagnostics nodes expose their structured properties and children and their
+human-readable tree formatting. The existing `serde` feature implements value
+serialization through serde, including string escaping. There is no separate
+JSON string exporter: the removed hand-written exporter had no callers and
+could emit unescaped ASCII control characters. Agent transports serialize the
+typed protocol tree rather than this diagnostics representation (ADR-0095).
+
+---
+
 ## Architecture Decision Summary
 
 | Decision | FLUI |
