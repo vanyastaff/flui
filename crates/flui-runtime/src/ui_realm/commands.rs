@@ -376,33 +376,46 @@ impl UiCommandSender {
     }
 
     pub(super) fn send(&self, command: UiCommand) -> Result<(), CommandSendError> {
+        self.deliver_enqueued(self.enqueue(command))
+    }
+
+    /// Serialize only durable admission; delivery runs after any caller's fence.
+    pub(super) fn enqueue(&self, command: UiCommand) -> Result<(), CommandSendError> {
         match self.tx.try_send(command) {
+            Ok(()) => Ok(()),
+            Err(TrySendError::Full(rejected)) => Err(CommandSendError::ChannelFull {
+                capacity: self.capacity,
+                rejected,
+            }),
+            Err(TrySendError::Disconnected(rejected)) => {
+                Err(CommandSendError::OwnerGone { rejected })
+            }
+        }
+    }
+
+    /// Deliver accepted demand, or retry prior delivery debt under backpressure.
+    pub(super) fn deliver_enqueued(
+        &self,
+        result: Result<(), CommandSendError>,
+    ) -> Result<(), CommandSendError> {
+        match result {
             Ok(()) => {
                 self.wake_owner();
                 Ok(())
             }
-            Err(TrySendError::Full(rejected)) => {
-                // A failed wake can leave the already-accepted command at the
-                // head of a full bounded inbox. No later send can succeed to
-                // reach the normal wake path, so backpressure itself must pay
-                // any outstanding delivery debt before returning its payload.
+            Err(CommandSendError::ChannelFull { capacity, rejected }) => {
+                // A failed wake can leave an accepted command in a full inbox.
+                // Backpressure must retry its debt after admission locks retire.
                 let wake = catch_unwind(AssertUnwindSafe(|| self.retry_wake_debt()));
                 if let Err(wake_payload) = wake {
-                    // The rejected command is opaque and may contain several
-                    // hostile capture destructors. Aggregate drop glue cannot
-                    // be contained after the wake already panicked, so retain
-                    // this exceptional-path envelope and resume the wake.
+                    // Retain the opaque rejected envelope once delivery failed;
+                    // competing capture destructors cannot replace that failure.
                     std::mem::forget(rejected);
                     resume_unwind(wake_payload);
                 }
-                Err(CommandSendError::ChannelFull {
-                    capacity: self.capacity,
-                    rejected,
-                })
+                Err(CommandSendError::ChannelFull { capacity, rejected })
             }
-            Err(TrySendError::Disconnected(rejected)) => {
-                Err(CommandSendError::OwnerGone { rejected })
-            }
+            Err(error @ CommandSendError::OwnerGone { .. }) => Err(error),
         }
     }
 

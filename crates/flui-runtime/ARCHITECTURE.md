@@ -348,7 +348,11 @@ presentation drops the agent and every call on a window answers `gone` (kind `wi
 and before anything is enqueued, even while another thread's call still holds the port: the port
 carries an open flag the presentation clears as it closes, and a call enqueues under the flag's
 read lock while the close takes its write lock, so nothing is admitted for a closed window. The
-windows hold the presentation's semantics handle strongly instead of the presentation, so the
+wake runs after the read guard retires, including a full-inbox debt retry. A wake
+may therefore re-enter close without deadlocking the admission fence; the
+already admitted command keeps its place in the inbox. The bounded child rows
+in `agent_port_admission_matrix` exercise both public reads and actions, then
+verify that later calls answer `gone`. The windows hold the presentation's semantics handle strongly instead of the presentation, so the
 cost lasts exactly as long as the hook keeps a window: a hook that does not serve is handed none,
 and one that detaches or panics drops its windows, and collection stops on the next frame. `flui-app`'s desktop and iOS runners
 and `flui_testing::HeadlessDevAgent` drive the hook through `dev_agent::DevAgentHost`; the

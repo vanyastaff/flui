@@ -31,7 +31,7 @@ fn test_window() -> crate::presentation::PresentationWindow {
     crate::presentation::PresentationWindow::new(host, accessibility)
 }
 
-fn new_runtime(wake: Arc<dyn Fn() + Send + Sync>) -> Result<UiRealm, UiRealmError> {
+pub(super) fn new_runtime(wake: Arc<dyn Fn() + Send + Sync>) -> Result<UiRealm, UiRealmError> {
     UiRealm::new(
         wake,
         test_window(),
