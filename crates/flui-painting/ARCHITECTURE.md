@@ -879,6 +879,19 @@ nearest stop.
 
 ---
 
+### 21. Hidden borders contribute neither paint nor neighboring edge insets
+
+`BorderStyle::None` skips uniform rectangle and circle borders and contributes
+zero width to the strip painter for nonuniform borders. The shared rectangle
+painter applies the same rule to table outer edges. The existing handling of
+zero-width solid borders is unchanged; it is distinct from a hidden style.
+
+`decoration_contract` covers this through
+`hidden_uniform_rectangle_borders_do_not_paint`,
+`hidden_uniform_circle_borders_do_not_paint`, `hidden_table_borders_do_not_paint` and
+`hidden_edges_do_not_shorten_visible_neighboring_edges`: positive hidden widths
+draw nothing, while a visible neighboring edge spans the full box height.
+
 ## Open items
 
 - **`Save`/`Restore` carry a transform nobody reads.** Every command is

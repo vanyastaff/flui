@@ -203,6 +203,22 @@ fn decoration_contract() {
         "decoration",
         &[
             (
+                "hidden_uniform_rectangle_borders_do_not_paint",
+                decoration_unit::hidden_uniform_rectangle_borders_do_not_paint,
+            ),
+            (
+                "hidden_uniform_circle_borders_do_not_paint",
+                decoration_unit::hidden_uniform_circle_borders_do_not_paint,
+            ),
+            (
+                "hidden_table_borders_do_not_paint",
+                decoration_unit::hidden_table_borders_do_not_paint,
+            ),
+            (
+                "hidden_edges_do_not_shorten_visible_neighboring_edges",
+                decoration_unit::hidden_edges_do_not_shorten_visible_neighboring_edges,
+            ),
+            (
                 "paint_order_is_shadow_background_border",
                 decoration_unit::paint_order_is_shadow_background_border,
             ),

@@ -385,7 +385,7 @@ fn paint_circle_border(
         return;
     };
     let width = side.width;
-    if width <= 0.0 {
+    if side.style.is_none() || width <= 0.0 {
         return;
     }
     let diameter = circle.radius * 2.0;
@@ -567,7 +567,7 @@ pub(crate) fn paint_border(
         let Some(side) = border.top else {
             return;
         };
-        if side.width <= 0.0 {
+        if side.style.is_none() || side.width <= 0.0 {
             return;
         }
         let outer = rrect.unwrap_or_else(|| RRect::from_rect_circular(rect, 0.0));
@@ -576,7 +576,9 @@ pub(crate) fn paint_border(
         return;
     }
 
-    let side_width = |side: &Option<crate::styling::BorderSide<f64>>| side.map_or(0.0, |s| s.width);
+    let side_width = |side: &Option<crate::styling::BorderSide<f64>>| {
+        side.filter(|s| s.style.is_solid()).map_or(0.0, |s| s.width)
+    };
     let side_color = |side: &Option<crate::styling::BorderSide<f64>>| {
         side.map_or(Color::TRANSPARENT, |s| s.color)
     };
