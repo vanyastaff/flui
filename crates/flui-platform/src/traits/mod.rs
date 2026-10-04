@@ -3,9 +3,17 @@
 //! This module defines the contract between the framework and platform-specific
 //! embedders. The traits are designed for maximum code reuse while allowing
 //! platform-specific customization.
+//!
+//! Input prediction and velocity tracking belong to the interaction layer.
+//! The unused platform tracker and embedder abstraction are retired (ADR-0082 §5).
+//!
+//! ```compile_fail,E0432
+//! use flui_platform::traits::{
+//!     BasicVelocityTracker, PlatformEmbedder, SystemTimestamp, TimestampProvider,
+//! };
+//! ```
 
 mod capabilities;
-mod embedder;
 mod host_window;
 // The owner-thread capability (ADR-0039): `OwnerPlatform`, `PlatformProxy`,
 // `PendingWindow`, and their typed errors. `pub(crate)` (not private): the
@@ -14,7 +22,6 @@ mod host_window;
 // module, not just this crate's own `traits` tree.
 pub(crate) mod owner;
 mod platform;
-mod velocity;
 
 // The contracts live in `flui-platform-api` (ADR-0082) and are re-exported
 // here under their old names, so every existing path keeps resolving.
@@ -34,7 +41,6 @@ pub use flui_platform_api::{
 pub use capabilities::{
     DesktopCapabilities, MobileCapabilities, PlatformCapabilities, WebCapabilities,
 };
-pub use embedder::PlatformEmbedder;
 pub use flui_semantics::platform::{
     AccessibilityActionListener, AccessibilityActivationListener, PlatformAccessibility,
 };
@@ -46,4 +52,3 @@ pub use owner::{
     WaitError, WakeRegistrationError, WindowOpen,
 };
 pub use platform::{PathPromptOptions, Platform, PlatformExecutor, PlatformReadyCallback};
-pub use velocity::{BasicVelocityTracker, SystemTimestamp, TimestampProvider};

@@ -4,7 +4,9 @@
   rule that only composition roots depend on `flui-platform` (its `allowed-dependents`); §3's
   first change. §3's second change (`PlatformWindow`'s move with the host-side window subtrait
   `HostWindow` for `accessibility()`, and the removal of `as_winit`) is accepted on merge,
-  pending the evidence Verification lists as outstanding for it. §4 and §5 remain Proposed. §4
+  pending the evidence Verification lists as outstanding for it. §4 and the remaining §5
+  backend consolidation remain Proposed. The §5 retirement of `PlatformEmbedder`,
+  `BasicVelocityTracker`, `TimestampProvider` and `SystemTimestamp` is adopted (2026-10-04). §4
   was revised in place on 2026-09-26, while still Proposed: what step one requires, the
   precondition for step two, and the order of the headless and Win32 backends. Win32 has
   completed step one. §2 was amended on 2026-09-26: `PlatformAccessibility` moves to
@@ -75,9 +77,9 @@ keep:
 - A second, older window family (`Window`, `WindowManager`, `WindowBuilder`, a crate-local
   `RawWindowHandle` enum, `crates/flui-platform/src/window.rs:53,265,340,452`) exposes
   `fn raw_window_handle(&self) -> RawWindowHandle` (`window.rs:196`). Nothing outside the crate
-  uses it; neither `PlatformEmbedder` (`src/traits/embedder.rs:33`), `PlatformCapabilities`
+  uses it; neither `PlatformEmbedder` (retired by the adopted §5 subset), `PlatformCapabilities`
   (`src/traits/capabilities.rs:13`, returned by `Platform::capabilities`, `platform.rs:557`),
-  `BasicVelocityTracker` (`src/traits/input.rs:305`) nor `LinuxPlatform`
+  `BasicVelocityTracker` (also retired) nor `LinuxPlatform`
   (`src/platforms/linux/mod.rs:108`) has a user outside the crate (`grep -rln` over `crates`,
   `src`, `examples`, `tools`). `LinuxPlatform::new` is an `unimplemented!` stub
   (`linux/mod.rs:120-124`); Linux runs on the winit backend, which `flui-app` enables per target
@@ -245,6 +247,16 @@ elsewhere). Every setter installs through that gate, an off-owner `open_window` 
 `platform.rs` `tests`) and `shared/owner_signal.rs`.
 
 ### 5. One backend per OS
+
+**Adopted in part (2026-10-04): unused helper retirement.** `PlatformEmbedder`
+and its private event vocabulary, `BasicVelocityTracker`, `TimestampProvider`
+and `SystemTimestamp` are removed. Full source inspection of their modules and
+`rg` across `crates`, `packages`, `src` and `examples` found only definitions and
+re-exports, with no implementation or production caller. Native input timestamp
+sources and the interaction layer's actual velocity tracker remain in place.
+The compile-fail example on `flui_platform::traits` pins the removed imports as
+seen by consumers. The backend selection, capability removal and other deletions
+below remain proposed; this adoption does not silently accept the rest of §5.
 
 | Target | Backend |
 |---|---|

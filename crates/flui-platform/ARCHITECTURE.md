@@ -1052,6 +1052,15 @@ competing with reporting, and a subsequent callback. These rows do not execute r
 NSAccessibility adapters; they prove the shared boundary. Native wiring remains source-reviewed and subject to
 platform type-checking.
 
+### Input processing has no unused platform-side duplicate
+
+ADR-0082 §5's helper retirement removes the zero-consumer `PlatformEmbedder`
+abstraction and platform velocity/timestamp helper types. Backends retain their
+actual event clocks and translation paths; interaction owns velocity tracking.
+The compile-fail example on `flui_platform::traits` checks that retired imports
+are unavailable through the consumer surface. This does not adopt the ADR's
+remaining backend consolidation or capability removals.
+
 ### Android has no separate page-aligned container
 
 Android exposes no framework allocator or page-aligned vector. The removed
