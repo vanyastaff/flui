@@ -177,8 +177,8 @@ impl Page {
     /// Doubles the page, re-uploading every live glyph at its existing
     /// position. `false` when the page is already at the device limit.
     ///
-    /// A re-rasterized image that no longer fits its slot (another size,
-    /// another content kind, or data of the wrong length) is not uploaded,
+    /// A glyph that cannot be re-rasterized, or an image that no longer fits
+    /// its slot (another size, another content kind, or data of the wrong length) is not uploaded,
     /// which would fail wgpu's copy validation. Its entry is dropped, so the
     /// glyph's next use asks the rasterizer again, as after a `None`; its
     /// allocation is freed now, or at the frame's end if `frame` drew it.
@@ -216,6 +216,7 @@ impl Page {
                 continue;
             }
             let Some(image) = rasterizer.rasterize(*key) else {
+                mismatched.push(*key);
                 continue;
             };
             if [image.width, image.height] != entry.slot.size
@@ -232,7 +233,7 @@ impl Page {
                 ?key,
                 count = mismatched.len(),
                 page = self.label(),
-                "a glyph re-rasterized to another bitmap on atlas grow; it is dropped and asked for again on its next use"
+                "a glyph could not reproduce its bitmap on atlas grow; it is dropped and asked for again on its next use"
             );
         }
         for key in mismatched {
@@ -258,8 +259,9 @@ impl Page {
 /// so an upload of it cannot fail wgpu's copy validation.
 fn fits(image: &GlyphImage) -> bool {
     let texels = u64::from(image.width) * u64::from(image.height);
-    u64::try_from(image.data.len())
-        .is_ok_and(|len| len == texels * u64::from(image.content.bytes_per_texel()))
+    texels
+        .checked_mul(u64::from(image.content.bytes_per_texel()))
+        .is_some_and(|bytes| u64::try_from(image.data.len()) == Ok(bytes))
 }
 
 fn create_page_texture(
@@ -528,8 +530,8 @@ fn create_bind_group(
 mod rasterizer_tests {
     use std::sync::Arc;
 
-    use flui_painting::GlyphRasterizer;
     use flui_painting::glyphs::{FaceKey, GlyphKey, SubpixelBin, SwashRasterizer};
+    use flui_painting::{GlyphContent, GlyphImage, GlyphRasterizer};
 
     use super::GlyphAtlas;
 
@@ -580,6 +582,168 @@ mod rasterizer_tests {
         assert!(
             first.iter().filter(|slot| !slot.is_empty()).count() > 100,
             "most glyphs have ink"
+        );
+    }
+
+    // The public painter always owns SwashRasterizer. This private seam models
+    // failed replay after the atlas has already admitted a bitmap.
+    #[derive(Default)]
+    struct ReplayRasterizer {
+        calls: [usize; 3],
+        missing: bool,
+        malformed: bool,
+    }
+
+    impl GlyphRasterizer for ReplayRasterizer {
+        type Key = usize;
+
+        fn rasterize(&mut self, key: usize) -> Option<GlyphImage> {
+            self.calls[key] += 1;
+            if self.missing && key == 0 && self.calls[key] == 2 {
+                return None;
+            }
+            let mut image = GlyphImage {
+                left: 0,
+                top: 32,
+                width: 32,
+                height: 32,
+                content: GlyphContent::Mask,
+                data: vec![255; 32 * 32],
+            };
+            if self.malformed && key == 1 && self.calls[key] == 2 {
+                let _ = image.data.pop();
+            }
+            Some(image)
+        }
+    }
+
+    fn replay_recovery(missing: bool, malformed: bool) {
+        let mut atlas = atlas(ReplayRasterizer {
+            missing,
+            malformed,
+            ..Default::default()
+        });
+        let before = [
+            atlas.slot(0).expect("initial missing candidate"),
+            atlas.slot(1).expect("initial malformed candidate"),
+            atlas.slot(2).expect("healthy glyph"),
+        ];
+        assert!(atlas.mask.grow(
+            &mut atlas.entries,
+            atlas.frame,
+            &atlas.device,
+            &atlas.queue,
+            &mut atlas.rasterizer,
+        ));
+
+        for (key, failed) in [(0, missing), (1, malformed), (2, false)] {
+            let recovered = atlas.slot(key).expect("next use retries failed replay");
+            assert_eq!(recovered.size, before[key].size);
+            assert_eq!(
+                atlas.rasterizer.calls[key],
+                if failed { 3 } else { 2 },
+                "failed replay must not remain a cache hit for key {key}"
+            );
+            if failed {
+                // Every initial slot was used this frame. Its recorded quad
+                // must never sample a different glyph admitted after the grow.
+                for old in before {
+                    assert!(
+                        recovered.texel[0] + recovered.size[0] <= old.texel[0]
+                            || old.texel[0] + old.size[0] <= recovered.texel[0]
+                            || recovered.texel[1] + recovered.size[1] <= old.texel[1]
+                            || old.texel[1] + old.size[1] <= recovered.texel[1],
+                        "retry reused a recorded glyph region"
+                    );
+                }
+            } else {
+                assert_eq!(recovered.texel, before[key].texel);
+            }
+        }
+        atlas.end_frame();
+        for key in 0..3 {
+            let calls = atlas.rasterizer.calls[key];
+            assert!(
+                atlas.slot(key).is_some(),
+                "recovery survives frame retirement"
+            );
+            assert_eq!(atlas.rasterizer.calls[key], calls);
+        }
+    }
+
+    fn missing_replay_retries() {
+        replay_recovery(true, false);
+    }
+
+    fn malformed_replay_retries() {
+        replay_recovery(false, true);
+    }
+
+    fn independent_replay_failures_retry() {
+        replay_recovery(true, true);
+    }
+
+    fn overflowing_bitmap_size_is_rejected_and_retries() {
+        struct OversizedRasterizer(bool);
+        impl GlyphRasterizer for OversizedRasterizer {
+            type Key = usize;
+
+            fn rasterize(&mut self, _key: usize) -> Option<GlyphImage> {
+                if std::mem::take(&mut self.0) {
+                    Some(GlyphImage {
+                        left: 0,
+                        top: 0,
+                        width: u32::MAX,
+                        height: u32::MAX,
+                        content: GlyphContent::Color,
+                        data: Vec::new(),
+                    })
+                } else {
+                    Some(GlyphImage {
+                        left: 0,
+                        top: 1,
+                        width: 1,
+                        height: 1,
+                        content: GlyphContent::Color,
+                        data: vec![255; 4],
+                    })
+                }
+            }
+        }
+        let mut atlas = atlas(OversizedRasterizer(true));
+        assert!(
+            atlas.slot(0).is_none(),
+            "unrepresentable bitmap is rejected"
+        );
+        let recovered = atlas
+            .slot(0)
+            .expect("invalid bitmap must not poison the cache");
+        assert_eq!(recovered.size, [1, 1]);
+        assert!(recovered.color_page);
+    }
+
+    #[test]
+    fn failed_glyph_replay_retries_without_reusing_recorded_regions() {
+        let mut failed = Vec::new();
+        for (name, case) in [
+            ("missing bitmap", missing_replay_retries as fn()),
+            ("malformed bitmap", malformed_replay_retries as fn()),
+            (
+                "independent failures",
+                independent_replay_failures_retry as fn(),
+            ),
+            (
+                "overflowing bitmap size",
+                overflowing_bitmap_size_is_rejected_and_retries as fn(),
+            ),
+        ] {
+            if std::panic::catch_unwind(case).is_err() {
+                failed.push(name);
+            }
+        }
+        assert!(
+            failed.is_empty(),
+            "glyph replay recovery failed: {failed:?}"
         );
     }
 }
