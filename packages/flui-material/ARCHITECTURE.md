@@ -280,3 +280,19 @@ the mounted scrim, then complete a fresh gesture to the opposite endpoint.
 The existing
 `a_fast_release_below_halfway_flings_the_drawer_open_rather_than_snapping_shut`
 row preserves the ordinary-release velocity contract.
+
+### Data-table checkbox spacing consumes the resolved theme cascade
+
+The presence of a custom checkbox margin is resolved together with its value:
+the widget override wins over the theme, and either tier gives the first data
+column its full horizontal padding. Only the absence of both tiers selects
+the default half-padding beside the checkbox. Heading and data cells consume
+the same resolved choice.
+
+The `selection_control_contracts` rows
+`themed_checkbox_margin_matches_the_same_widget_margin` and
+`checkbox_margin_override_beats_the_theme_without_changing_default_spacing`
+compare actual mounted heading/data text insets and checkbox-column widths;
+they retain widget precedence and the unchanged default-spacing control.
+
+

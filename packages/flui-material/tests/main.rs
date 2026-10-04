@@ -191,6 +191,14 @@ fn selection_control_contracts() {
             "data_table::widget override beats theme beats default on a mounted tree",
             data_table::widget_override_beats_theme_beats_default_on_a_mounted_tree,
         ),
+        (
+            "data_table::themed checkbox margin matches the same widget margin",
+            data_table::themed_checkbox_margin_matches_the_same_widget_margin,
+        ),
+        (
+            "data_table::checkbox margin override beats theme and retains default spacing",
+            data_table::checkbox_margin_override_beats_the_theme_without_changing_default_spacing,
+        ),
     ]);
 }
 

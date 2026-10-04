@@ -488,6 +488,7 @@ struct ResolvedDataTableStyle {
     divider_thickness: f64,
     checkbox_margin_start: f64,
     checkbox_margin_end: f64,
+    checkbox_margin_is_set: bool,
 }
 
 /// Resolves the M3 `DataTable` defaults through the widget -> theme ->
@@ -570,6 +571,7 @@ fn resolve_style(widget: &DataTable, theme: &ThemeData) -> ResolvedDataTableStyl
         divider_thickness,
         checkbox_margin_start,
         checkbox_margin_end,
+        checkbox_margin_is_set: checkbox_horizontal_margin.is_some(),
     }
 }
 
@@ -953,7 +955,7 @@ impl StatelessView for DataTable {
                 index,
                 self.columns.len(),
                 display_checkbox_column,
-                self.checkbox_horizontal_margin.is_some(),
+                style.checkbox_margin_is_set,
                 style.horizontal_margin,
                 style.column_spacing,
             );
@@ -1005,7 +1007,7 @@ impl StatelessView for DataTable {
                     col_index,
                     self.columns.len(),
                     display_checkbox_column,
-                    self.checkbox_horizontal_margin.is_some(),
+                    style.checkbox_margin_is_set,
                     style.horizontal_margin,
                     style.column_spacing,
                 );

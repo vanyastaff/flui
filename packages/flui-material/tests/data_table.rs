@@ -15,7 +15,7 @@ use flui_material::{
     DataCell, DataColumn, DataRow, DataTable, DataTableThemeData, Theme, ThemeData,
 };
 use flui_sdk::foundation::RenderId;
-use flui_sdk::widgets::Text;
+use flui_sdk::widgets::{TableColumnWidth, Text};
 
 fn text_column(label: &str) -> DataColumn {
     DataColumn::new(Text::new(label.to_string()))
@@ -68,6 +68,47 @@ pub fn widget_override_beats_theme_beats_default_on_a_mounted_tree() {
         96.0,
         "the widget-level override must win over both the theme and the M3 default"
     );
+}
+
+fn table_cell_insets(theme_margin: Option<f64>, widget_margin: Option<f64>) -> [f64; 3] {
+    let mut theme = ThemeData::light();
+    theme.data_table_theme = Some(DataTableThemeData {
+        checkbox_horizontal_margin: theme_margin,
+        ..Default::default()
+    });
+    let mut table = DataTable::new(
+        vec![text_column("Heading").column_width(TableColumnWidth::Fixed(140.0))],
+        vec![DataRow::new(vec![text_cell("Entry")]).on_select_changed(|_, _| {})],
+    );
+    if let Some(margin) = widget_margin {
+        table = table.checkbox_horizontal_margin(margin);
+    }
+    let laid = common::lay_out(themed(theme, table), loose(400.0));
+    let render_table = laid.find_by_render_type("RenderTable");
+    let heading = laid.find_text("Heading").expect("heading is laid out");
+    let entry = laid.find_text("Entry").expect("entry is laid out");
+    let heading_cell = laid.child(render_table, 1);
+    let data_cell = laid.child(render_table, 3);
+    [
+        laid.absolute_offset(heading).dx - laid.absolute_offset(heading_cell).dx,
+        laid.absolute_offset(entry).dx - laid.absolute_offset(data_cell).dx,
+        laid.size(laid.child(render_table, 0)).width,
+    ]
+}
+
+pub fn themed_checkbox_margin_matches_the_same_widget_margin() {
+    let themed = table_cell_insets(Some(13.0), None);
+    let overridden = table_cell_insets(None, Some(13.0));
+    assert_eq!(
+        themed, overridden,
+        "both cascade tiers must lay out the same cells"
+    );
+    assert_eq!(themed, [24.0, 24.0, 44.0]);
+}
+
+pub fn checkbox_margin_override_beats_the_theme_without_changing_default_spacing() {
+    assert_eq!(table_cell_insets(Some(13.0), Some(7.0)), [24.0, 24.0, 32.0]);
+    assert_eq!(table_cell_insets(None, None), [12.0, 12.0, 54.0]);
 }
 
 // =============================================================================
