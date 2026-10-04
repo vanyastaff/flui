@@ -12,6 +12,16 @@ shape.
 
 ## Mapping decisions
 
+### Parent-specific detachment preserves both sides of a link
+
+`SemanticsTree::remove_child` detaches only a child whose current parent is the
+live parent supplied by the caller. A stale or different parent is a no-op;
+clearing the child's actual parent in that case would leave its old parent's
+children list pointing at it and defeat `add_child`'s automatic reparenting.
+`detaching_checks_the_actual_parent_and_preserves_reparenting` exercises the
+owner wrapper, refused detachment, reparenting, published parent child lists,
+and a successful detach followed by reattachment.
+
 ### 1. Role resolution is a single-valued specificity cascade, and checkable state outranks the broad `IsButton`
 
 **Rule:** a semantics node carries a *set* of flags, and a radio tile, for example,

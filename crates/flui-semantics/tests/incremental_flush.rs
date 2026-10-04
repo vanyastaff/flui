@@ -102,3 +102,69 @@ fn a_rebuild_publishes_only_what_changed() {
         "and it is the node whose content changed"
     );
 }
+
+#[test]
+fn detaching_checks_the_actual_parent_and_preserves_reparenting() {
+    let (mut owner, received) = recording_owner();
+    let root = owner.insert(node(0, "root"));
+    let first = owner.insert(node(1, "first parent"));
+    let second = owner.insert(node(2, "second parent"));
+    let child = owner.insert(node(3, "child"));
+    owner.set_root(Some(root));
+    owner.add_child(root, first);
+    owner.add_child(root, second);
+    owner.add_child(first, child);
+    owner.flush();
+
+    owner.remove_child(second, child);
+    owner.remove_child(flui_foundation::SemanticsId::new(99), child);
+    assert_eq!(owner.tree().parent(child), Some(first));
+    assert_eq!(owner.tree().children(first), Some(&[child][..]));
+    owner.flush();
+    assert_eq!(received.lock().len(), 1, "a refused detach changes nothing");
+
+    owner.add_child(second, child);
+    assert_eq!(owner.tree().parent(child), Some(second));
+    assert_eq!(owner.tree().children(first), Some(&[][..]));
+    assert_eq!(owner.tree().children(second), Some(&[child][..]));
+    owner.flush();
+    {
+        let updates = received.lock();
+        let moved = &updates[1];
+        let first_id = owner
+            .get(first)
+            .expect("first parent")
+            .accessibility_id()
+            .expect("render-backed");
+        let second_id = owner
+            .get(second)
+            .expect("second parent")
+            .accessibility_id()
+            .expect("render-backed");
+        let child_id = owner
+            .get(child)
+            .expect("child")
+            .accessibility_id()
+            .expect("render-backed");
+        let published = |id| {
+            &moved
+                .nodes
+                .iter()
+                .find(|(node_id, _)| node_id.0 == id)
+                .expect("changed parent published")
+                .1
+        };
+        assert!(published(first_id.as_u64()).children().is_empty());
+        assert_eq!(
+            published(second_id.as_u64()).children(),
+            &[accesskit::NodeId(child_id.as_u64())]
+        );
+    }
+
+    owner.remove_child(second, child);
+    assert_eq!(owner.tree().parent(child), None);
+    assert_eq!(owner.tree().children(second), Some(&[][..]));
+    owner.add_child(first, child);
+    assert_eq!(owner.tree().parent(child), Some(first));
+    assert_eq!(owner.tree().children(first), Some(&[child][..]));
+}
