@@ -21,6 +21,7 @@
   `unicode-segmentation` in any FLUI crate. The supersessions below have taken effect and their
   back-links are written.
 - **Date:** 2026-09-25
+- **Superseded-by:** ADR-0114 for §10 step 4b's direction-only line alignment; other decisions remain in force.
 - **Revised:** 2026-09-26 (rasterization prototype; see Context); 2026-09-29 (§10 step 3
   split into 3a and 3b; the realm lends its context through a shared handle; Parley
   measurement behind `parley-layout`; a pipeline is built with its context, and the hot-reload

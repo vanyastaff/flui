@@ -387,6 +387,8 @@ pub(crate) mod parley_measurement {
                 default_style: None,
                 font_size: SIZE as f32,
                 max_width: None,
+                min_width: 0.0,
+                text_align: flui_painting::typography::TextAlign::Start,
                 line_height: None,
                 direction: TextDirection::Ltr,
                 max_lines: None,

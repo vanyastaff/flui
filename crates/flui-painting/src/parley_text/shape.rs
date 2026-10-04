@@ -15,7 +15,7 @@ use crate::display_list::paragraph::RunData;
 use crate::display_list::{FontBlob, FontFace, ShapedGlyph, ShapedParagraph};
 use crate::glyphs::{Synthesis, fake_bold_width};
 use crate::styling::Color;
-use crate::typography::{FontStyle, TextDirection, TextStyle};
+use crate::typography::{FontStyle, TextAlign, TextDirection, TextStyle};
 use flui_foundation::geometry::{Rect, Size};
 use parley::fontique::Collection;
 use parley::layout::PositionedLayoutItem;
@@ -41,15 +41,15 @@ pub struct ParagraphSpec<'a> {
     pub font_size: f32,
     /// The width lines break at; `None` breaks only at hard breaks.
     pub max_width: Option<f32>,
+    /// Minimum allocated width, independent of the line-breaking cap.
+    pub min_width: f32,
+    /// Per-line alignment inside the allocated paragraph box.
+    pub text_align: TextAlign,
     /// The line height in logical pixels; `None` is `1.2 ×` each run's own
     /// font size, so a larger span grows its line box.
     pub line_height: Option<f32>,
-    /// The edge lines align to: `Ltr` aligns left, `Rtl` aligns right.
-    ///
-    /// It does not set the bidi base direction. Parley 0.11 takes that from
-    /// the paragraph's first strong character and has no way to override it,
-    /// so Latin-first text under `Rtl` is still ordered as an LTR paragraph
-    /// (flui-painting `ARCHITECTURE.md`, mapping decision 12).
+    /// Resolves Start/End alignment. It does not override Parley's inferred
+    /// bidi base direction (mapping decision 12).
     pub direction: TextDirection,
     /// The lines the paragraph keeps; `None` or `Some(0)` keeps every line.
     /// Lines past it are dropped, and the metrics report `truncated`.
@@ -72,7 +72,8 @@ pub struct ParagraphLayout {
     spans: Vec<SpanInfo>,
     pub(super) line_height: f32,
     max_lines: Option<usize>,
-    direction: TextDirection,
+    alignment_width: f32,
+    content_widths: (f64, f64),
     /// Whether an ellipsis replaced dropped lines; the layout itself then
     /// holds only the kept ones.
     pub(super) ellipsized: bool,
@@ -121,7 +122,7 @@ impl ParagraphLayout {
     pub fn metrics(&self) -> TextLayoutResult {
         let Some(first) = self.layout.get(0) else {
             return TextLayoutResult {
-                width: 0.0,
+                width: f64::from(self.alignment_width),
                 height: f64::from(self.line_height),
                 line_count: 1,
                 max_line_width: 0.0,
@@ -134,7 +135,7 @@ impl ParagraphLayout {
         let kept = self.kept();
         let (width, height) = self.kept_extent();
         TextLayoutResult {
-            width: f64::from(width),
+            width: f64::from(self.alignment_width),
             height: f64::from(height),
             line_count: kept.max(1),
             max_line_width: f64::from(width),
@@ -156,13 +157,25 @@ impl ParagraphLayout {
                 .take(kept)
                 .fold((0.0_f32, 0.0_f32), |(width, height), line| {
                     let metrics = line.metrics();
-                    let extent =
-                        metrics.inline_min_coord + metrics.advance - metrics.trailing_whitespace;
+                    let extent = metrics.inline_min_coord + Self::visible_line_width(&line);
                     (width.max(extent), height + metrics.line_height)
                 })
         } else {
-            (self.layout.width(), self.layout.height())
+            let width = self
+                .layout
+                .lines()
+                .map(|line| Self::visible_line_width(&line))
+                .fold(0.0_f32, f32::max);
+            (width, self.layout.height())
         }
+    }
+
+    pub(super) fn visible_line_width(line: &parley::layout::Line<'_, SpanBrush>) -> f32 {
+        let advance: f32 = line
+            .runs()
+            .map(|run| run.clusters().map(|cluster| cluster.advance()).sum::<f32>())
+            .sum();
+        advance - line.metrics().trailing_whitespace
     }
 
     /// The paragraph's narrowest and widest widths: `(min, max)`, where min
@@ -174,8 +187,7 @@ impl ParagraphLayout {
         if self.text.is_empty() {
             return (0.0, 0.0);
         }
-        let widths = self.layout.calculate_content_widths();
-        (f64::from(widths.min), f64::from(widths.max))
+        self.content_widths
     }
 
     /// The paragraph as the display list carries it: its kept lines' glyph
@@ -185,14 +197,11 @@ impl ParagraphLayout {
     /// span colour equals it carries none of its own, so a root-only recolour
     /// repaints without reshaping.
     ///
-    /// Lines are placed in the paragraph's own box, as wide as the metrics
-    /// say: under `Rtl` each line's visible end is at the box's right edge,
-    /// under `Ltr` its start is at the left edge. Where the box sits within
-    /// the width it was broken at is the caller's paint offset.
+    /// Lines use Parley's alignment in the allocated paragraph box. These
+    /// same offsets and cluster advances are used by the caret queries.
     #[must_use]
     pub fn to_shaped(&self, root: Option<Color>) -> ShapedParagraph {
         let metrics = self.metrics();
-        let (box_width, _) = self.kept_extent();
         let mut faces: Vec<FontFace> = Vec::new();
         let mut face_index: HashMap<(u64, u32), u32> = HashMap::new();
         let mut em_bounds: Vec<Option<[f32; 4]>> = Vec::new();
@@ -204,7 +213,6 @@ impl ParagraphLayout {
         for line in self.layout.lines().take(self.kept()) {
             let line_metrics = line.metrics();
             baselines.push(line_metrics.baseline);
-            let shift = self.line_shift(line_metrics, box_width);
             for item in line.items() {
                 let PositionedLayoutItem::GlyphRun(glyph_run) = item else {
                     continue;
@@ -229,7 +237,7 @@ impl ParagraphLayout {
                         warn_glyph_id(glyph.id);
                         continue;
                     };
-                    let x = glyph.x + shift;
+                    let x = glyph.x;
                     let dy = glyph.y - baseline;
                     ink.add(
                         em_bounds.get(face as usize).copied().flatten(),
@@ -268,34 +276,6 @@ impl ParagraphLayout {
             spans,
         }
     }
-
-    /// How far paint moves `line` from where Parley aligned it: to
-    /// [`Self::line_start`] from Parley's own offset. Paint shifts every
-    /// glyph by it, and the caret queries every cluster edge, so carets sit
-    /// on the painted glyphs.
-    pub(super) fn line_shift(&self, line: &parley::layout::LineMetrics, box_width: f32) -> f32 {
-        self.line_start(line, box_width) - line.offset
-    }
-
-    /// Where `line`'s first glyph run starts in a box `box_width` wide:
-    /// Parley's rule for its alignment, with the box in place of the width
-    /// the line was broken at, so a line of a paragraph broken at 300 px
-    /// that is 120 px wide right-aligns to 120, not to 300.
-    pub(super) fn line_start(&self, line: &parley::layout::LineMetrics, box_width: f32) -> f32 {
-        // An RTL line hangs its trailing whitespace off its left end.
-        let hang = if self.layout.is_rtl() {
-            -line.trailing_whitespace
-        } else {
-            0.0
-        };
-        match self.direction {
-            TextDirection::Ltr => hang,
-            TextDirection::Rtl => {
-                let free = box_width - line.advance + line.trailing_whitespace;
-                hang + free.max(0.0)
-            }
-        }
-    }
 }
 
 impl fmt::Debug for ParagraphLayout {
@@ -305,6 +285,26 @@ impl fmt::Debug for ParagraphLayout {
             .field("lines", &self.layout.len())
             .finish_non_exhaustive()
     }
+}
+
+/// Confines Parley's public line-width escape hatch to allocation alignment.
+/// The shaped clusters are reused; this repeats line breaking, not shaping.
+fn align_allocated_lines(layout: &mut Layout<SpanBrush>, spec: &ParagraphSpec<'_>, width: f32) {
+    let cap = spec.max_width.unwrap_or(f32::MAX);
+    let mut breaker = layout.break_lines();
+    breaker.state_mut().set_layout_max_advance(cap);
+    breaker.state_mut().set_line_max_advance(cap);
+    while breaker.break_next().is_some() {
+        breaker.set_prior_line_width(width);
+    }
+    breaker.finish();
+    let alignment = match spec.text_align.resolve(spec.direction) {
+        TextAlign::Left | TextAlign::Start => Alignment::Left,
+        TextAlign::Right | TextAlign::End => Alignment::Right,
+        TextAlign::Center => Alignment::Center,
+        TextAlign::Justify => Alignment::Justify,
+    };
+    layout.align(alignment, AlignmentOptions::default());
 }
 
 /// `start..end` as `u32`s; a paragraph holds fewer than 2^32 glyphs.
@@ -496,13 +496,27 @@ impl TextContext {
                 kept_text -= c.len_utf8();
             }
         }
+        let kept = max_lines.map_or(shaped.layout.len(), |max| max.min(shaped.layout.len()));
+        let content_width = shaped
+            .layout
+            .lines()
+            .take(kept)
+            .fold(0.0_f32, |width, line| {
+                let metrics = line.metrics();
+                width.max(metrics.inline_min_coord + metrics.advance - metrics.trailing_whitespace)
+            });
+        let alignment_width = paragraph.min_width.max(content_width);
+        let widths = shaped.layout.calculate_content_widths();
+        let content_widths = (f64::from(widths.min), f64::from(widths.max));
+        align_allocated_lines(&mut shaped.layout, paragraph, alignment_width);
         ParagraphLayout {
             layout: shaped.layout,
             text: shaped.text,
             spans: shaped.spans,
             line_height: paragraph.line_height.unwrap_or(paragraph.font_size * 1.2),
             max_lines,
-            direction: paragraph.direction,
+            alignment_width,
+            content_widths,
             ellipsized,
             kept_text,
             placed: OnceLock::new(),
@@ -669,11 +683,6 @@ impl TextContext {
         }
         let mut layout = builder.build(&breaks);
         layout.break_all_lines(paragraph.max_width);
-        let alignment = match paragraph.direction {
-            TextDirection::Ltr => Alignment::Left,
-            TextDirection::Rtl => Alignment::Right,
-        };
-        layout.align(alignment, AlignmentOptions::default());
         Shaped {
             layout,
             text,
@@ -872,6 +881,8 @@ mod tests {
             default_style: None,
             font_size: 16.0,
             max_width: Some(WIDTH),
+            min_width: WIDTH,
+            text_align: crate::typography::TextAlign::Start,
             line_height: None,
             direction,
             max_lines: None,
@@ -940,6 +951,8 @@ mod tests {
                     default_style: None,
                     font_size: 16.0,
                     max_width: None,
+                    min_width: 0.0,
+                    text_align: crate::typography::TextAlign::Start,
                     line_height: None,
                     direction: TextDirection::Ltr,
                     max_lines: None,
@@ -966,6 +979,8 @@ mod tests {
             default_style: None,
             font_size: 16.0,
             max_width: Some(60.0),
+            min_width: 0.0,
+            text_align: crate::typography::TextAlign::Start,
             line_height: Some(20.0),
             direction: TextDirection::Ltr,
             max_lines,
@@ -1016,6 +1031,8 @@ mod tests {
                 default_style: None,
                 font_size: 16.0,
                 max_width: None,
+                min_width: 0.0,
+                text_align: crate::typography::TextAlign::Start,
                 line_height: None,
                 direction: TextDirection::Ltr,
                 max_lines: None,

@@ -374,6 +374,66 @@ fn caret_contract() {
         &[
             ("caret_position", cc::caret_position),
             (
+                "unbounded_breaking_uses_the_minimum_allocated_width",
+                cc::unbounded_breaking_uses_the_minimum_allocated_width,
+            ),
+            (
+                "centered_lines_use_the_tight_allocated_box",
+                cc::centered_lines_use_the_tight_allocated_box,
+            ),
+            (
+                "right_aligned_lines_use_the_tight_allocated_box",
+                cc::right_aligned_lines_use_the_tight_allocated_box,
+            ),
+            (
+                "loose_centered_lines_stay_inside_the_measured_box",
+                cc::loose_centered_lines_stay_inside_the_measured_box,
+            ),
+            (
+                "unbounded_centered_lines_align_without_wrapping",
+                cc::unbounded_centered_lines_align_without_wrapping,
+            ),
+            (
+                "rtl_start_aligns_each_line_right",
+                cc::rtl_start_aligns_each_line_right,
+            ),
+            (
+                "rtl_end_aligns_each_line_left",
+                cc::rtl_end_aligns_each_line_left,
+            ),
+            (
+                "native_rtl_lines_center_in_the_allocated_box",
+                cc::native_rtl_lines_center_in_the_allocated_box,
+            ),
+            (
+                "native_rtl_lines_align_to_the_right_edge",
+                cc::native_rtl_lines_align_to_the_right_edge,
+            ),
+            (
+                "a_last_kept_soft_line_retains_native_justification",
+                cc::a_last_kept_soft_line_retains_native_justification,
+            ),
+            (
+                "trailing_whitespace_does_not_shift_visible_alignment",
+                cc::trailing_whitespace_does_not_shift_visible_alignment,
+            ),
+            (
+                "justification_expands_soft_lines_but_not_the_final_line",
+                cc::justification_expands_soft_lines_but_not_the_final_line,
+            ),
+            (
+                "justification_leaves_hard_break_lines_unstretched",
+                cc::justification_leaves_hard_break_lines_unstretched,
+            ),
+            (
+                "alignment_change_replaces_cached_positions",
+                cc::alignment_change_replaces_cached_positions,
+            ),
+            (
+                "ellipsized_lines_align_only_the_kept_text",
+                cc::ellipsized_lines_align_only_the_kept_text,
+            ),
+            (
                 "two_space_run_word_boundary",
                 cc::two_space_run_word_boundary,
             ),

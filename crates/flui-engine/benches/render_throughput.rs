@@ -196,6 +196,8 @@ fn render_throughput(c: &mut Criterion) {
                 default_style: None,
                 font_size: 24.0,
                 max_width: None,
+                min_width: 0.0,
+                text_align: flui_painting::typography::TextAlign::Start,
                 line_height: None,
                 direction: flui_painting::typography::TextDirection::Ltr,
                 max_lines: None,

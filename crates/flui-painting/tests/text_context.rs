@@ -22,6 +22,8 @@ fn spec(spans: &[(String, Option<TextStyle>)], max_width: Option<f32>) -> Paragr
         default_style: None,
         font_size: 16.0,
         max_width,
+        min_width: 0.0,
+        text_align: flui_painting::typography::TextAlign::Start,
         line_height: None,
         direction: TextDirection::Ltr,
         max_lines: None,

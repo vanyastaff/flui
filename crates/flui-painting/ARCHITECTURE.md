@@ -452,17 +452,18 @@ Locked by `two_realms_shape_in_parallel` and
 (`src/text_layout/context.rs`).
 
 
-### 12. `TextDirection` sets line alignment on the Parley path, not the base direction
+### 12. Explicit direction resolves alignment, not the bidi base direction
 
-**Rule:** `ParagraphSpec::direction` aligns lines: `Ltr` to the left edge,
-`Rtl` to the right. The bidi base direction is Parley's own, taken from the
+**Rule:** `ParagraphSpec::text_align` aligns each line in the allocated box
+(ADR-0114). `direction` resolves `Start` and `End` to explicit left/right
+alignment. The bidi base direction is Parley's own, taken from the
 paragraph's first strong character, so Latin-first text under `Rtl` is still
 ordered as an LTR paragraph, and Hebrew-first text under `Ltr` is ordered RTL.
 
 **Why:** Parley 0.11.1 has no way to set it: its analysis calls the bidi
 resolver with `None` for the base level (`analysis/mod.rs:539-546`), and
-neither the builder nor the layout exposes one. Right alignment is the part
-of `Rtl` that can be honoured today.
+neither the builder nor the layout exposes one. Explicit directional
+alignment can be honoured without changing run order.
 
 **Accepted trade-off:** a right-to-left paragraph whose text starts with Latin
 or neutrals lays out its runs in the wrong order until the base direction can
@@ -518,9 +519,9 @@ metrics, carets, selection boxes, word boundaries and hit-testing all come
 from one Parley layout on the realm's context. `TextPainter`'s cache keeps
 the `ParagraphLayout` beside the paragraph it paints, and the queries
 (`parley_text/caret.rs`) answer in the painted box's coordinates: each
-cluster edge takes the same per-line shift `to_shaped` gives the line's
-glyphs (`ParagraphLayout::line_shift`), so a caret sits on the glyph it
-follows under `Rtl` and on a line narrower than the width it broke at.
+cluster edge uses the native aligned line offset and cluster advance, just
+as `to_shaped` positions glyphs. This includes justified whitespace and lines
+narrower than the allocated box.
 Parley metrics are unquantized, so a baseline reaches the device grid once,
 when its glyphs are placed (`round(baseline × scale)`). Parley's width
 excludes trailing whitespace, and so does a line's `width` in the line
@@ -787,9 +788,9 @@ and the raster size are computed at placement (`ShapedRun::placed_glyphs`),
 under the transform the paragraph is replayed with. Variation coordinates
 travel raw and are interned by the raster side's registry
 (`FontRegistry::prepare_run`), whose `VariationId`s mean nothing to another
-registry. Within its box each line starts at the left edge under `Ltr` and
-ends at the right edge under `Rtl`; the box is as wide as the measured width,
-and the paint offset places it within the width it was laid out at.
+registry. Native line alignment places each line within the allocated box;
+explicit direction resolves Start/End while center/right/justify retain their
+own placement rules.
 
 **Why:** a retained layer replays a picture recorded frames earlier, so a
 table of the blobs this frame's recorders named would miss a replayed
@@ -823,10 +824,12 @@ responsibility. Public rows `subpixel_split_is_total_across_the_float_domain`,
 `placed_glyphs_keep_cancelling_vertical_coordinates` in `parley_oracle_contract`
 exercise the tuple policy and actual paint-produced paragraph placement.
 The bin and the device row depend on the device transform, which only the replay
-knows. Parley aligns
-a line within the width it was broken at; the painter's box is the measured
-width, so lines are re-aligned in it, or an `Rtl` paragraph would be shifted
-twice.
+knows. Line breaking retains its wrap cap, while alignment uses the actual
+allocated width: the larger of the minimum width and widest kept content
+line. A loose finite wrap cap does not force the paragraph to fill it.
+Parley's public `BreakLines::set_prior_line_width` supplies that separate
+alignment width during a second line-break pass over the same shaped data;
+then native alignment runs once (ADR-0114).
 
 **Accepted trade-off:** paint follows Parley where it differs from the
 cosmic-text paint it replaced:
@@ -1021,3 +1024,28 @@ unlisted fonts, checks hashes/notices, regenerates all fixtures into a temporary
 directory, and checks Cargo package file selection. This is a Rust test-fixture
 and packaging decision; it changes no shaping contract. It also
 does not solve registry dependency cycles or certify complete release archives.
+
+### Per-line allocation alignment
+
+Alignment changes invalidate the painter's cached layout and paint paragraph,
+so carets and selection cannot observe positions from the previous alignment.
+Intrinsic widths are recorded before justification changes cluster advances.
+The `caret_contract` public family covers unequal-line tight center/right,
+loose and unbounded allocation, RTL Start/End, trailing whitespace, soft-line
+justification with an unstretched original-final line, hard-break controls, cache changes
+and kept ellipsized lines. Its named rows include
+`centered_lines_use_the_tight_allocated_box`,
+`loose_centered_lines_stay_inside_the_measured_box`,
+`justification_expands_soft_lines_but_not_the_final_line`,
+`alignment_change_replaces_cached_positions` and
+`ellipsized_lines_align_only_the_kept_text`. Native Hebrew RTL rows check both
+selection edges, carets, hits and painted glyph shifts independently of source
+order. `a_last_kept_soft_line_retains_native_justification` pins the policy that
+truncation without ellipsis does not turn a kept soft line into a hard or final
+line of the original paragraph.
+
+The dependency adapter confines Parley 0.11.1's public but doc-hidden line-width
+escape hatch. Upstream describes the separate alignment-width use while warning
+that the escape hatch has not been carefully evaluated; the behavioral controls
+pin the contract on which FLUI relies. This adds a line-break pass and makes no
+performance improvement claim. It does not override inferred bidi base direction.
