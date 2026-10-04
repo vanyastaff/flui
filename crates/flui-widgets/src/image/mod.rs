@@ -27,6 +27,8 @@ mod network_image;
 mod resolve;
 
 pub use cache_key::ImageCacheKey;
+#[cfg(feature = "network-images")]
+pub use cache_key::NetworkImageKey;
 pub use image::Image;
 #[cfg(feature = "asset-images")]
 pub use image::ImageState;

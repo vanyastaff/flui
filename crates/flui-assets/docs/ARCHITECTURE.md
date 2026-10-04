@@ -378,6 +378,24 @@ hot-reload = ["notify"]
 
 ## Mapping decisions
 
+- Default network image loads share a lazily initialized HTTP client per registry,
+  constructed on the loading runtime. Initialization returns a typed error and
+  remains retryable. `NetworkLoader::new` is fallible rather than hiding external
+  initialization failures in a panic; `Default` is not a construction contract.
+  Hosts supply a client builder that creates a fresh configured pool, preserving
+  its HTTP policy through capacity transitions without changing runtime selection.
+  `network_bridge_reuses_connections_and_recovers_after_decode_errors` checks
+  real connection reuse after invalid image bytes, host injection, independent
+  registry pool ownership and replacement of an ambient runtime. Fresh configured
+  pools cannot import another runtime's existing connection drivers (ADR-0118).
+- Network bytes are transferred into their owned vector through `Bytes`' consuming
+  conversion, allowing buffer reuse where its ownership permits. Text remains
+  strict UTF-8, preserving a BOM and ignoring charset replacement decoding. HTTP
+  admission remains limited to 2xx; `error_for_status` would also admit 3xx.
+  `network_loader_preserves_transport_and_text_contracts_after_failures` exercises
+  HTTP status errors, redirects, malformed text, truncated bodies, a configured
+  body deadline and recovery through the public loader.
+
 - Decoded data need not implement `Clone`. Registry caches and cloned strong/weak
   handles share `Arc` ownership, while the opt-in `clone_data` operation requires
   `Clone`. `non_clone_data_retains_evicted_handles_across_reload`

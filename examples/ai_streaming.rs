@@ -5,6 +5,10 @@
 //! FLUI_AI_OFFLINE=1 selects an explicitly labelled deterministic demonstration.
 //! Run: cargo run --example ai_streaming
 
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "support/ai_http.rs"]
+mod ai_http;
+
 #[cfg(not(target_arch = "wasm32"))]
 mod desktop {
     use std::{
@@ -18,7 +22,6 @@ mod desktop {
     use flui::app::{ServiceDefinition, ServiceLifetime, TaskHandle, TaskSpawner};
     use flui::prelude::*;
     use flui::widgets::{Stream, StreamBuilder, TextEditingController, column, row};
-    use futures_util::StreamExt;
     use tokio::sync::mpsc;
 
     const MAX_PROMPT_BYTES: usize = 8 * 1024;
@@ -35,6 +38,7 @@ mod desktop {
             endpoint: reqwest::Url,
             model: String,
             api_key: Option<String>,
+            client: Arc<tokio::sync::OnceCell<reqwest::Client>>,
         },
     }
 
@@ -70,6 +74,7 @@ mod desktop {
                 endpoint,
                 model,
                 api_key,
+                client: Arc::new(tokio::sync::OnceCell::new()),
             })
         }
 
@@ -211,13 +216,18 @@ mod desktop {
                 endpoint,
                 model,
                 api_key,
+                client,
             } => {
-                let client = reqwest::Client::builder()
-                    .timeout(Duration::from_secs(90))
-                    .connect_timeout(Duration::from_secs(10))
-                    .redirect(reqwest::redirect::Policy::none())
-                    .build()
-                    .map_err(|_| "Could not create HTTP client".to_owned())?;
+                let client = client
+                    .get_or_try_init(|| async {
+                        reqwest::Client::builder()
+                            .timeout(Duration::from_secs(90))
+                            .connect_timeout(Duration::from_secs(10))
+                            .redirect(reqwest::redirect::Policy::none())
+                            .build()
+                            .map_err(|_| "Could not create HTTP client".to_owned())
+                    })
+                    .await?;
                 let mut request = client.post(endpoint).json(&serde_json::json!({
                     "model": model,
                     "stream": true,
@@ -227,7 +237,7 @@ mod desktop {
                 if let Some(key) = api_key {
                     request = request.bearer_auth(key);
                 }
-                let response = request
+                let mut response = request
                     .send()
                     .await
                     .map_err(|_| "Provider connection failed or timed out".to_owned())?;
@@ -237,13 +247,15 @@ mod desktop {
                         response.status().as_u16()
                     ));
                 }
-                let mut chunks = response.bytes_stream();
                 let mut parser = EventParser::default();
                 let mut text = String::new();
                 let mut received = 0usize;
                 let mut event_count = 0usize;
-                while let Some(chunk) = chunks.next().await {
-                    let chunk = chunk.map_err(|_| "Provider stream read failed".to_owned())?;
+                while let Some(chunk) = response
+                    .chunk()
+                    .await
+                    .map_err(|_| "Provider stream read failed".to_owned())?
+                {
                     received = received
                         .checked_add(chunk.len())
                         .filter(|size| *size <= MAX_RESPONSE_BYTES)
@@ -485,6 +497,49 @@ mod desktop {
     #[cfg(test)]
     mod tests {
         use super::*;
+
+        #[test]
+        fn provider_reuses_http_connection_after_invalid_sse_and_delivers_text() {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("provider test runtime starts")
+                .block_on(async {
+                    let (endpoint, server) = crate::ai_http::spawn_server();
+                    let provider = Provider::Http {
+                        endpoint: reqwest::Url::parse(&endpoint).expect("loopback provider URL"),
+                        model: "test-model".to_owned(),
+                        api_key: None,
+                        client: Arc::new(tokio::sync::OnceCell::new()),
+                    };
+                    for request in 0..3 {
+                        let (sender, mut receiver) = mpsc::channel(CHANNEL_CAPACITY);
+                        let result = tokio::time::timeout(
+                            Duration::from_secs(5),
+                            produce(provider.clone(), "hello".to_owned(), sender),
+                        )
+                        .await
+                        .expect("provider request completes");
+                        if request == 0 {
+                            assert!(result.is_err(), "malformed provider JSON is rejected");
+                        } else {
+                            result.expect("valid provider response recovers");
+                            let mut updates = Vec::new();
+                            while let Ok(event) = receiver.try_recv() {
+                                updates.push(event.expect("successful text update"));
+                            }
+                            let final_update = updates.last().expect("provider delivers updates");
+                            assert!(final_update.complete);
+                            assert_eq!(final_update.text, "Привет");
+                        }
+                    }
+                    assert_eq!(
+                        server.join().expect("provider server completed"),
+                        1,
+                        "provider clones must share the HTTP connection pool"
+                    );
+                });
+        }
 
         #[test]
         fn sse_contract() {

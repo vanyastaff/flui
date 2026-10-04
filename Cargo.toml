@@ -400,14 +400,11 @@ pulldown-cmark = { version = "0.13", default-features = false }
 moka = { version = "0.12", features = ["future"] }
 
 # NETWORKING - Used by flui-assets
-# `default-features = false` + an explicit `rustls`: reqwest 0.13 made rustls
-# its default backend, but `default-tls` still resolves to native-tls (and
-# therefore openssl, which deny.toml bans) whenever a sibling feature turns it
-# on, so the opt-out plus the explicit backend is what actually keeps this
-# workspace rustls-only rather than merely rustls-by-default. The feature is
-# spelled `rustls` here, not `rustls-tls` — 0.13 renamed it. Dropping the
-# defaults also drops `charset`/`http2`/`system-proxy`, unchanged from 0.12.
-reqwest = { version = "0.13", default-features = false, features = ["json", "stream", "rustls"] }
+# Select Rustls explicitly; 0.13's `default-tls` currently also enables Rustls,
+# but its backend is not a fixed contract. Disabling defaults keeps
+# charset/http2/system-proxy opt-in. Asset loading only needs binary responses;
+# the provider example enables JSON at its own development dependency.
+reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
 
 # UI EVENTS - Cross-platform input event abstraction (W3C compliant)
 ui-events = "0.3"
@@ -725,9 +722,8 @@ flui-engine = { path = "crates/flui-engine", version = "=0.2.0-dev", features = 
 pollster = { workspace = true }
 wgpu = { workspace = true }
 winit.workspace = true
-reqwest.workspace = true
+reqwest = { workspace = true, features = ["json"] }
 tokio = { workspace = true, features = ["sync", "time"] }
-futures-util.workspace = true
 
 # === Error Handling (for examples) ===
 anyhow.workspace = true

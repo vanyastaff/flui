@@ -13,7 +13,7 @@ use crate::error::AssetError;
 /// ```rust,ignore
 /// use flui_assets::loaders::NetworkLoader;
 ///
-/// let loader = NetworkLoader::new();
+/// let loader = NetworkLoader::new()?;
 ///
 /// // Load from URL
 /// let bytes = loader.load_url("https://example.com/image.png").await?;
@@ -23,21 +23,24 @@ pub struct NetworkLoader {
     client: reqwest::Client,
 }
 
-impl Default for NetworkLoader {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl NetworkLoader {
     /// Creates a new network loader with default HTTP client.
-    pub fn new() -> Self {
-        Self {
-            client: reqwest::Client::new(),
-        }
+    ///
+    /// Reuse this loader or its clones to share HTTP connections. The default
+    /// client has no request deadline; use [`Self::with_client`] to configure one.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if TLS or resolver initialization fails.
+    pub fn new() -> reqwest::Result<Self> {
+        reqwest::Client::builder().build().map(Self::with_client)
     }
 
     /// Creates a network loader with a custom HTTP client.
+    ///
+    /// A used client's pooled connections can depend on the runtime that first
+    /// drove them. Keep those runtimes driven when sharing this loader across
+    /// runtimes. Registry configuration accepts a fresh client builder instead.
     pub fn with_client(client: reqwest::Client) -> Self {
         Self { client }
     }
@@ -47,7 +50,7 @@ impl NetworkLoader {
     /// # Examples
     ///
     /// ```rust,ignore
-    /// let loader = NetworkLoader::new();
+    /// let loader = NetworkLoader::new()?;
     /// let bytes = loader.load_url("https://example.com/data.bin").await?;
     /// ```
     pub async fn load_url(&self, url: &str) -> Result<Vec<u8>, AssetError> {
@@ -73,10 +76,13 @@ impl NetworkLoader {
             reason: format!("Failed to read response body: {e}"),
         })?;
 
-        Ok(bytes.to_vec())
+        Ok(bytes.into())
     }
 
-    /// Loads a text string from a URL.
+    /// Loads strict UTF-8 text from a URL, preserving any UTF-8 BOM.
+    ///
+    /// Unlike [`reqwest::Response::text`], rejects invalid UTF-8 instead of
+    /// replacing malformed bytes, and does not apply Content-Type charset decoding.
     pub async fn load_text(&self, url: &str) -> Result<String, AssetError> {
         let bytes = self.load_url(url).await?;
         String::from_utf8(bytes).map_err(|e| AssetError::LoadFailed {
@@ -143,7 +149,7 @@ mod tests {
         const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 
         let addr = spawn_single_response_server(FIXTURE_BODY);
-        let loader = NetworkLoader::new();
+        let loader = NetworkLoader::new().expect("default HTTP client initializes");
 
         let bytes = tokio::time::timeout(
             REQUEST_TIMEOUT,

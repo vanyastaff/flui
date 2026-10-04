@@ -119,6 +119,15 @@ find one with `rg <name> tests/`.
 
 ## Mapping decisions
 
+### Network responses belong to their registry
+
+`NetworkImage` includes its registry's weak allocation identity in both decoded
+cache and pending-load keys (ADR-0118). HTTP headers and policies can change the
+response at the same URL; different registries must not share those responses.
+Clones sharing one registry still share keys. Retained keys cannot retain the
+registry's HTTP pool or runtime, and their addresses cannot alias a later owner.
+**Test:** `network_images_scope_cached_and_pending_responses_to_the_registry`.
+
 ### 1. `DragTarget` publishes a shared `DragTargetSlot`, not its `State`
 
 **Choice:** the target keeps an owner-local `Rc<DragTargetSlot>` — a
