@@ -419,15 +419,76 @@ impl SemanticsProperties {
         self
     }
 
-    /// Returns whether any properties are set.
+    /// Returns whether no properties are set.
+    ///
+    /// An explicitly supplied `false` or empty optional value is present.
     pub fn is_empty(&self) -> bool {
-        self.label.is_none()
-            && self.value.is_none()
-            && self.hint.is_none()
-            && self.button.is_none()
-            && self.enabled.is_none()
-            && self.checked.is_none()
-            && self.tags.is_empty()
+        let Self {
+            enabled,
+            checked,
+            mixed,
+            selected,
+            toggled,
+            expanded,
+            focused,
+            focusable,
+            button,
+            link,
+            header,
+            image,
+            text_field,
+            slider,
+            read_only,
+            hidden,
+            obscured,
+            multiline,
+            scopes_route,
+            names_route,
+            in_mutually_exclusive_group,
+            live_region,
+            label,
+            value,
+            increased_value,
+            decreased_value,
+            hint,
+            text_direction,
+            sort_key,
+            tags,
+            custom_actions,
+            hint_overrides,
+        } = self;
+        enabled.is_none()
+            && checked.is_none()
+            && mixed.is_none()
+            && selected.is_none()
+            && toggled.is_none()
+            && expanded.is_none()
+            && focused.is_none()
+            && focusable.is_none()
+            && button.is_none()
+            && link.is_none()
+            && header.is_none()
+            && image.is_none()
+            && text_field.is_none()
+            && slider.is_none()
+            && read_only.is_none()
+            && hidden.is_none()
+            && obscured.is_none()
+            && multiline.is_none()
+            && scopes_route.is_none()
+            && names_route.is_none()
+            && in_mutually_exclusive_group.is_none()
+            && live_region.is_none()
+            && label.is_none()
+            && value.is_none()
+            && increased_value.is_none()
+            && decreased_value.is_none()
+            && hint.is_none()
+            && text_direction.is_none()
+            && sort_key.is_none()
+            && tags.is_empty()
+            && custom_actions.is_empty()
+            && hint_overrides.is_none()
     }
 
     /// Converts properties to flags.

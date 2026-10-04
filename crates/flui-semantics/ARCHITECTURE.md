@@ -347,3 +347,16 @@ adapter and desktop sources, and checked to cover every role FLUI publishes),
 `read_honours_max_depth_and_max_nodes_and_says_truncated` and
 `a_read_tree_round_trips_through_json`. `every_wire_action_routes_to_a_semantics_action` pins
 `semantics_action_for_wire` to the Windows adapter's route row by row.
+
+
+### Property presence includes every supplied annotation
+
+`SemanticsProperties::is_empty` means that no optional field is supplied and both
+the tag and custom-action collections are empty. `Some(false)`, a supplied empty
+string and supplied empty hint overrides remain present; this query concerns
+whether an annotation was supplied, not its truth or text content. The exhaustive
+field destructure makes a newly added property require a presence decision at
+compile time. Public family
+`semantics_property_presence_includes_every_public_annotation` covers each field
+and a selection-only annotation published through a consumer's empty-annotation
+filter and `SemanticsOwner`.
