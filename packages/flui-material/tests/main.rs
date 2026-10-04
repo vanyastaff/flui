@@ -229,6 +229,11 @@ fn overlay_contracts() {
             "snack_bar::a completion panic still advances the accepted snack bar queue",
             snack_bar::a_completion_panic_still_advances_the_accepted_snack_bar_queue,
         ),
+        ("drawer::narrow_start_drawer_cancel_uses_its_actual_panel_extent", drawer::narrow_start_drawer_cancel_uses_its_actual_panel_extent),
+        ("drawer::narrow_end_drawer_cancel_uses_its_actual_panel_extent", drawer::narrow_end_drawer_cancel_uses_its_actual_panel_extent),
+        ("drawer::smaller_configured_drawer_keeps_its_declared_panel_extent", drawer::smaller_configured_drawer_keeps_its_declared_panel_extent),
+        ("drawer::ordinary_drawer_keeps_its_configured_extent_in_a_wider_viewport", drawer::ordinary_drawer_keeps_its_configured_extent_in_a_wider_viewport),
+        ("drawer::retained_drawer_recomputes_its_extent_after_a_collapsed_resize", drawer::retained_drawer_recomputes_its_extent_after_a_collapsed_resize),
         (
             "drawer::cancelled fast edge drag settles closed below halfway",
             drawer::cancelled_fast_edge_drag_settles_closed_below_halfway,

@@ -342,3 +342,24 @@ destructors and assert that none retire before or after recovery. Readiness is
 published after mounting; setup and operation have separate deadlines.
 
 
+### Drawer drag extent follows its constrained declared panel width
+
+The standard Drawer enforces its configured width under finite loose Align
+constraints. DrawerController uses an existing LayoutBuilder to cap its drag
+and velocity divisor by the incoming maximum width; the tight slot minimum
+must not expand a smaller declared panel. Before layout its configured extent
+remains the fallback. Generic custom children must declare matching panel_width;
+this is not a descendant-size measurement API. A collapsed or unusable extent
+ignores movement and settles by position without dividing velocity by it.
+
+The existing drawer family rows
+`narrow_start_drawer_cancel_uses_its_actual_panel_extent` and
+`narrow_end_drawer_cancel_uses_its_actual_panel_extent` use real cancelled
+contacts to cross half of a 100-pixel mounted panel, then reverse-close and
+reopen it. Actual material geometry pins the constrained panel width.
+`smaller_configured_drawer_keeps_its_declared_panel_extent` and
+`ordinary_drawer_keeps_its_configured_extent_in_a_wider_viewport` preserve
+50-in-100 and 304-in-400 behavior.
+`retained_drawer_recomputes_its_extent_after_a_collapsed_resize` keeps a contact
+across a zero-width resize, then uses the retained handle and a new contact
+after resizing to 100 pixels.

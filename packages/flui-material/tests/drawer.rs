@@ -395,3 +395,167 @@ fn cancelled_fast_drag_settles_by_position(initially_open: bool) {
         "the recovered gesture must settle the visible drawer too"
     );
 }
+
+fn constrained_drawer_drag(end: bool, viewport: f64, configured: f64, travel: f64) {
+    let vsync = Vsync::new();
+    let slot = Rc::new(RefCell::new(None));
+    let probe = HandleProbe {
+        slot: Rc::clone(&slot),
+        on_tap: Rc::new(|_handle| {}),
+    };
+    let drawer = Drawer::new()
+        .width(configured)
+        .child(SizedBox::new(1.0, 800.0));
+    let scaffold = if end {
+        Scaffold::new().end_drawer(drawer).body(probe)
+    } else {
+        Scaffold::new().drawer(drawer).body(probe)
+    };
+    let mut laid = lay_out_animated(
+        themed_animated(scaffold, &vsync),
+        tight(viewport, 800.0),
+        vsync,
+    );
+    let handle = slot.borrow().clone().expect("mounted drawer handle");
+    let x = |distance: f64| if end { viewport - distance } else { distance };
+    laid.dispatch_pointer_down(x(5.0), 400.0);
+    for position in [travel.min(40.0), travel * 0.8, travel] {
+        laid.dispatch_pointer_move(x(position), 400.0);
+    }
+    laid.dispatch_pointer_cancel();
+    for _ in 0..FLING_SETTLE_PUMPS {
+        laid.pump_for(FRAME);
+    }
+    assert!(
+        if end {
+            handle.is_end_drawer_open()
+        } else {
+            handle.is_drawer_open()
+        },
+        "cancel settles beyond half of the actual constrained panel"
+    );
+    assert_drawer_panel_width(&laid, configured.min(viewport));
+    laid.dispatch_pointer_down(x(travel), 400.0);
+    for position in [travel - 35.0, travel * 0.3, 5.0] {
+        laid.dispatch_pointer_move(x(position), 400.0);
+    }
+    laid.dispatch_pointer_cancel();
+    for _ in 0..FLING_SETTLE_PUMPS {
+        laid.pump_for(FRAME);
+    }
+    assert!(
+        !if end {
+            handle.is_end_drawer_open()
+        } else {
+            handle.is_drawer_open()
+        },
+        "reverse cancelled contact settles closed"
+    );
+    assert_eq!(drawer_panels(&laid).len(), 0);
+    laid.enter_owner_scope(|| {
+        if end {
+            handle.open_end_drawer();
+        } else {
+            handle.open_drawer();
+        }
+    });
+    for _ in 0..FLING_SETTLE_PUMPS {
+        laid.pump_for(FRAME);
+    }
+    assert_drawer_panel_width(&laid, configured.min(viewport));
+}
+
+fn drawer_panels(laid: &common::LaidOut) -> Vec<flui_sdk::foundation::RenderId> {
+    laid.find_all_by_render_type("RenderPhysicalShape")
+        .into_iter()
+        .filter(|&id| {
+            laid.render_property(id, "elevation")
+                .and_then(|text| text.parse::<f64>().ok())
+                == Some(1.0)
+        })
+        .collect()
+}
+
+fn assert_drawer_panel_width(laid: &common::LaidOut, expected: f64) {
+    let panels = drawer_panels(laid);
+    assert_eq!(panels.len(), 1, "one actual mounted drawer surface");
+    assert_eq!(laid.size(panels[0]).width, expected);
+    let origin = laid.absolute_offset(panels[0]).dx;
+    assert!(origin >= -1e-9, "settled panel begins inside the viewport");
+    assert!(origin + expected <= laid.size(laid.root()).width + 1e-9);
+}
+
+pub fn narrow_start_drawer_cancel_uses_its_actual_panel_extent() {
+    constrained_drawer_drag(false, 100.0, 304.0, 95.0);
+}
+
+pub fn narrow_end_drawer_cancel_uses_its_actual_panel_extent() {
+    constrained_drawer_drag(true, 100.0, 304.0, 95.0);
+}
+
+pub fn smaller_configured_drawer_keeps_its_declared_panel_extent() {
+    constrained_drawer_drag(false, 100.0, 50.0, 95.0);
+}
+
+pub fn ordinary_drawer_keeps_its_configured_extent_in_a_wider_viewport() {
+    constrained_drawer_drag(false, 400.0, 304.0, 250.0);
+}
+
+fn resizable_drawer_tree(
+    width: f64,
+    slot: Rc<RefCell<Option<DrawerHandle>>>,
+    vsync: &Vsync,
+) -> impl View {
+    VsyncScope::new(
+        vsync.clone(),
+        MediaQuery::new(
+            MediaQueryData::default(),
+            Theme::new(
+                ThemeData::light(),
+                flui_sdk::widgets::Align::new(flui_sdk::painting::Alignment::CENTER_LEFT).child(
+                    SizedBox::new(width, 800.0).child(Scaffold::new().drawer(Drawer::new()).body(
+                        HandleProbe {
+                            slot,
+                            on_tap: Rc::new(|_handle| {}),
+                        },
+                    )),
+                ),
+            ),
+        ),
+    )
+}
+
+pub fn retained_drawer_recomputes_its_extent_after_a_collapsed_resize() {
+    let vsync = Vsync::new();
+    let slot = Rc::new(RefCell::new(None));
+    let mut laid = lay_out_animated(
+        resizable_drawer_tree(400.0, Rc::clone(&slot), &vsync),
+        tight(400.0, 800.0),
+        vsync.clone(),
+    );
+    let handle = slot.borrow().clone().expect("mounted drawer handle");
+    // Keep a captured contact alive while its panel's available width collapses.
+    laid.dispatch_pointer_down(5.0, 400.0);
+    laid.pump_widget(resizable_drawer_tree(0.0, Rc::clone(&slot), &vsync));
+    laid.dispatch_pointer_move(40.0, 400.0);
+    laid.dispatch_pointer_move(95.0, 400.0);
+    laid.dispatch_pointer_cancel();
+    for _ in 0..FLING_SETTLE_PUMPS {
+        laid.pump_for(FRAME);
+    }
+    assert!(!handle.is_drawer_open());
+    laid.pump_widget(resizable_drawer_tree(100.0, slot, &vsync));
+    laid.dispatch_pointer_down(5.0, 400.0);
+    for x in [40.0, 70.0, 95.0] {
+        laid.dispatch_pointer_move(x, 400.0);
+    }
+    laid.dispatch_pointer_cancel();
+    for _ in 0..FLING_SETTLE_PUMPS {
+        laid.pump_for(FRAME);
+    }
+    assert!(
+        handle.is_drawer_open(),
+        "same retained handle observes resized drag"
+    );
+    assert_drawer_panel_width(&laid, 100.0);
+}

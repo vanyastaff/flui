@@ -28,28 +28,16 @@
 //! Sync` in name only — see that type's own module doc). `DrawerHandle`
 //! sidesteps the knot entirely by never claiming `Send` in the first place.
 //!
-//! ## Named divergence: the drag divisor is the *configured* panel width,
-//! not a live render-object measurement
+//! ## Drag extent follows the constrained declared panel width
 //!
-//! The oracle's `_width` getter (`DrawerControllerState._width`) reads the
-//! mounted `Drawer` panel's **actual laid-out** `RenderBox.size.width` via
-//! `_drawerKey.currentContext?.findRenderObject()`, falling back to
-//! `_kWidth` only while unmounted. FLUI has no render-object size query for
-//! an arbitrary descendant from event-handling code (no `GlobalKey`
-//! `findRenderObject` equivalent) — building one is a new cross-crate
-//! primitive out of this feature's scope. [`DrawerController`] instead uses
-//! [`Drawer::width`]'s **configured** value directly (default
-//! [`DEFAULT_DRAWER_WIDTH`]), passed down via [`DrawerController::panel_width`]. This is
-//! behaviorally equivalent in the drawer's actual mounting context: the
-//! open panel is wrapped in an [`flui_sdk::widgets::Align`] with a `width_factor`,
-//! which gives its child **loose** (unbounded) width constraints to measure
-//! its natural size — so `Drawer`'s own `BoxConstraints.expand(width:)`
-//! (ported as [`flui_sdk::rendering::BoxConstraints::tighten`])
-//! renders at exactly its configured width, unclamped. The divergence is
-//! bounded to the case the oracle's own comment calls out — the drawer
-//! genuinely being unmounted, where both approaches already agree on
-//! [`DEFAULT_DRAWER_WIDTH`] — plus an exotic ambient-constraint scenario the oracle's
-//! live measurement would catch and this substrate would not.
+//! `Scaffold` passes `Drawer::configured_width` to the controller. A
+//! [`flui_sdk::widgets::LayoutBuilder`] caps that declared width by the actual
+//! incoming maximum width, matching the standard `Drawer` under its loose
+//! `Align` constraints. Before layout, the configured width remains the fallback.
+//! A custom controller child must declare its panel extent with
+//! [`DrawerController::panel_width`]; this is not arbitrary descendant measurement.
+//! An empty or unusable extent ignores movement and settles by position without
+//! dividing velocity by that extent.
 //!
 //! ## Deferred, and named
 //!
@@ -82,7 +70,7 @@ use flui_sdk::view::prelude::*;
 use flui_sdk::view::{GlobalKey, RebuildHandle, impl_inherited_view};
 use flui_sdk::widgets::animated::VsyncScope;
 use flui_sdk::widgets::{
-    Align, ColoredBox, ConstrainedBox, GestureDetector, MediaQuery, SizedBox, Stack,
+    Align, ColoredBox, ConstrainedBox, GestureDetector, LayoutBuilder, MediaQuery, SizedBox, Stack,
 };
 
 use crate::material::Material;
@@ -478,8 +466,9 @@ impl DrawerController {
         }
     }
 
-    /// The drag divisor — see the module docs' named-divergence note.
-    /// Defaults to [`DEFAULT_DRAWER_WIDTH`].
+    /// The declared panel extent, capped by the laid-out available width for
+    /// drag movement and velocity. A custom child must supply its own extent.
+    /// Defaults to [`DEFAULT_DRAWER_WIDTH`] before layout.
     #[must_use]
     pub fn panel_width(mut self, panel_width: f64) -> Self {
         self.panel_width = panel_width;
@@ -604,6 +593,9 @@ impl DrawerControllerCore {
     /// of the three firing paths.
     fn move_by(&self, primary_delta: f64) {
         let width = self.panel_width.get();
+        if !width.is_finite() || width <= 0.0 {
+            return;
+        }
         let new_value = self.controller.value() + primary_delta / width * self.direction_factor();
         self.controller.set_value(new_value);
 
@@ -622,7 +614,7 @@ impl DrawerControllerCore {
             return;
         }
         let width = self.panel_width.get();
-        if primary_velocity.abs() >= MIN_FLING_VELOCITY {
+        if width.is_finite() && width > 0.0 && primary_velocity.abs() >= MIN_FLING_VELOCITY {
             let visual_velocity = primary_velocity / width * self.direction_factor();
             let _ = self.controller.fling(visual_velocity);
             self.notify_open_changed(visual_velocity > 0.0);
@@ -788,17 +780,23 @@ impl ViewState<DrawerController> for DrawerControllerState {
         };
         let drag_area_width = view.edge_drag_width.unwrap_or(EDGE_DRAG_WIDTH + side_inset);
 
-        if self.core.is_dismissed() {
-            if view.enable_open_drag_gesture {
-                closed_edge_strip(&self.core, view.alignment, drag_area_width)
-                    .into_view()
-                    .boxed()
+        let core = Rc::clone(&self.core);
+        let view = view.clone();
+        LayoutBuilder::new(move |_ctx, constraints| {
+            core.panel_width
+                .set(view.panel_width.min(constraints.max_width));
+            if core.is_dismissed() {
+                if view.enable_open_drag_gesture {
+                    closed_edge_strip(&core, view.alignment, drag_area_width)
+                        .into_view()
+                        .boxed()
+                } else {
+                    SizedBox::shrink().into_view().boxed()
+                }
             } else {
-                SizedBox::shrink().into_view().boxed()
+                open_panel(&core, &view).into_view().boxed()
             }
-        } else {
-            open_panel(&self.core, view).into_view().boxed()
-        }
+        })
     }
 
     fn dispose(&mut self) {
