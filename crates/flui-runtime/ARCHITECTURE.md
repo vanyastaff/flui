@@ -402,3 +402,11 @@ restart identity allocation. `exhausted_incarnations_never_alias_previous_realms
 in `realm_and_presentation_isolation_matrix` exercises the production allocator
 with a local counter at its terminal boundary; exhausting the actual global
 source is impractical and would invalidate unrelated realm tests.
+
+### A zero-capacity performance window is disabled
+
+`PerformanceStats::new(0)` retains no duration samples, so both average frame
+time and FPS stay zero. A nonzero window still records platform-clock intervals.
+The consumer row `a_zero_capacity_performance_window_retains_no_frame_samples`
+in flui-testing's `headless_frame_driver_matrix` distinguishes the two through
+the public timing methods. Production overlays retain their default 120 samples.

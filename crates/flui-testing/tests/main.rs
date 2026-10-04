@@ -63,6 +63,7 @@ fn headless_frame_driver_matrix() {
     run_table(
         "headless_frame_driver_matrix",
         &[
+            ("realm_driver::a_zero_capacity_performance_window_retains_no_frame_samples", realm_driver::a_zero_capacity_performance_window_retains_no_frame_samples as fn()),
             ("realm_driver::logical_render_root_tracks_replacement_and_build_recovery", realm_driver::logical_render_root_tracks_replacement_and_build_recovery as fn()),
             ("a11y_query::a_button_in_the_render_tree_is_findable_by_role", a11y_query::a_button_in_the_render_tree_is_findable_by_role as fn()),
             ("mount_bootstrap::mount_root_installs_the_render_root_and_lays_it_out", mount_bootstrap::mount_root_installs_the_render_root_and_lays_it_out as fn()),
