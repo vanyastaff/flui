@@ -415,21 +415,20 @@ impl HitTestResult {
     ///
     /// # Panic semantics
     ///
-    /// If `f` panics, the transform is **not** popped (no `Drop`-
-    /// based guard). The hit-test framework runs inside the
-    /// pipeline owner's `catch_unwind` boundary, so a panicked
-    /// `HitTestResult` is dropped wholesale on the next frame;
-    /// per-call transform balance is therefore not load-bearing.
-    /// Callers wanting strict panic-safe transform balance should
-    /// pop manually with `push_offset` + `pop_transform`.
+    /// The entry transform depth is restored both on return and on unwind.
+    /// A caller may catch a descendant's panic and continue the same hit walk
+    /// without giving the next entry the failed descendant's coordinate space.
     pub fn with_paint_offset<F, R>(&mut self, offset: Offset<f64>, f: F) -> R
     where
         F: FnOnce(&mut Self) -> R,
     {
+        let depth = self.transforms.len() + self.local_transforms.len();
         self.push_offset(-offset);
-        let result = f(self);
-        self.pop_transform();
-        result
+        let guard = TransformGuard {
+            result: self,
+            depth,
+        };
+        f(&mut *guard.result)
     }
 
     /// Runs `f` with the INVERSE of `transform` pushed onto the transform
@@ -477,10 +476,13 @@ impl HitTestResult {
     where
         F: FnOnce(&mut Self) -> R,
     {
+        let depth = self.transforms.len() + self.local_transforms.len();
         self.push_transform(transform.try_inverse().unwrap_or(transform));
-        let result = f(self);
-        self.pop_transform();
-        result
+        let guard = TransformGuard {
+            result: self,
+            depth,
+        };
+        f(&mut *guard.result)
     }
 
     /// Returns the number of entries.
@@ -774,23 +776,33 @@ impl HitTestResult {
 
 /// RAII guard for transform stack management.
 ///
-/// Automatically pops transform when dropped.
+/// Restores the preceding transform depth when dropped, including on unwind.
 #[must_use = "TransformGuard must be held to maintain the transform"]
 #[derive(Debug)]
 pub struct TransformGuard<'a> {
     result: &'a mut HitTestResult,
+    depth: usize,
 }
 
 impl<'a> TransformGuard<'a> {
-    /// Creates a guard that will pop on drop.
+    /// Creates a guard that removes the current top transform and any later
+    /// pushes on drop. Create it immediately after pushing the scoped transform.
     pub fn new(result: &'a mut HitTestResult) -> Self {
-        Self { result }
+        let depth = (result.transforms.len() + result.local_transforms.len()).saturating_sub(1);
+        Self { result, depth }
     }
 }
 
 impl Drop for TransformGuard<'_> {
     fn drop(&mut self) {
-        self.result.pop_transform();
+        if self.result.transforms.len() > self.depth {
+            self.result.transforms.truncate(self.depth);
+            self.result.local_transforms.clear();
+        } else {
+            self.result
+                .local_transforms
+                .truncate(self.depth - self.result.transforms.len());
+        }
     }
 }
 

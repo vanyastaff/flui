@@ -146,11 +146,30 @@ fn hit_test_matrix() {
             "transform_to::transform_to_accumulates_offsets_through_a_plain_chain",
             crate::transform_to::transform_to_accumulates_offsets_through_a_plain_chain,
         ),
+        (
+            "hit_test_pipeline::caught_offset_scope_restores_hit_coordinates",
+            crate::hit_test_pipeline::caught_offset_scope_restores_hit_coordinates,
+        ),
+        (
+            "hit_test_pipeline::caught_matrix_scope_restores_hit_coordinates",
+            crate::hit_test_pipeline::caught_matrix_scope_restores_hit_coordinates,
+        ),
+        (
+            "hit_test_pipeline::caught_nested_scope_restores_hit_coordinates",
+            crate::hit_test_pipeline::caught_nested_scope_restores_hit_coordinates,
+        ),
+        (
+            "hit_test_pipeline::caught_child_offset_scope_restores_hit_coordinates",
+            crate::hit_test_pipeline::caught_child_offset_scope_restores_hit_coordinates,
+        ),
+        (
+            "hit_test_pipeline::caught_driver_node_scope_restores_hit_coordinates",
+            crate::hit_test_pipeline::caught_driver_node_scope_restores_hit_coordinates,
+        ),
+        (
+            "hit_test_pipeline::caught_zero_offset_driver_node_scope_restores_hit_coordinates",
+            crate::hit_test_pipeline::caught_zero_offset_driver_node_scope_restores_hit_coordinates,
+        ),
     ];
-    for &(name, case) in cases {
-        if let Err(payload) = std::panic::catch_unwind(case) {
-            eprintln!("matrix case `{name}` failed");
-            std::panic::resume_unwind(payload);
-        }
-    }
+    crate::run_table(cases);
 }

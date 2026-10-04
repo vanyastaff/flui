@@ -32,6 +32,21 @@ deepest-first element unmount so view lifecycle hooks remain canonical.
 
 This section records design decisions and why they were taken. Each entry follows the "Accepted trade-offs" format established by [`docs/plans/2026-03-31-custom-render-callback-design.md`](https://github.com/vanyastaff/flui/blob/e30ab7194d50ac1c11ffe17c59230958d2fbeecd/docs/plans/2026-03-31-custom-render-callback-design.md): state the rule (or absence of rule), the choice, the alternatives considered, the trade-off accepted.
 
+### Caught hit-test panics do not change sibling coordinates
+
+A custom render object can catch a child's hit-test panic and continue querying
+its other children. Scoped context transforms therefore own a matching RAII pop;
+the raw push/pop API retains its explicit balancing contract. Driver offset,
+node-transform and follower scopes restore the shared result's entry depth on
+return or unwind, across both pending and globalized transform parts. Previously
+a caught child panic left its transform active on the healthy sibling's entry.
+
+The existing public `hit_test_matrix` includes named `caught_*_scope_restores_hit_coordinates`
+rows for offset, matrix, nested context scopes, explicit child offsets and driver
+node scopes, including zero-offset override descent with no enclosing result
+scope. Each catches an ordinary failure, checks the healthy sibling's
+emitted global-to-local coordinates, and repeats the hit walk.
+
 ### Constraint diagonals preserve representable lengths
 
 `BoxConstraints::max_diagonal` uses standard `hypot`: squaring large finite

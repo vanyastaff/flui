@@ -68,6 +68,25 @@ pub struct HitTestContext<'ctx, P: Protocol, A: Arity, PD: ParentData> {
     self_hit_entry_registered: bool,
 }
 
+/// Owns the matching pop while lending the context to a scoped callback.
+struct HitTestTransformGuard<'scope, 'ctx, P: Protocol, A: Arity, PD: ParentData>
+where
+    <P::HitTest as HitTestCapability>::Context<'ctx, A, PD>:
+        HitTestContextApi<'ctx, P::HitTest, A, PD>,
+{
+    context: &'scope mut HitTestContext<'ctx, P, A, PD>,
+}
+
+impl<'ctx, P: Protocol, A: Arity, PD: ParentData> Drop for HitTestTransformGuard<'_, 'ctx, P, A, PD>
+where
+    <P::HitTest as HitTestCapability>::Context<'ctx, A, PD>:
+        HitTestContextApi<'ctx, P::HitTest, A, PD>,
+{
+    fn drop(&mut self) {
+        self.context.inner.pop_transform();
+    }
+}
+
 impl<P: Protocol, A: Arity, PD: ParentData> std::fmt::Debug for HitTestContext<'_, P, A, PD> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // `inner` is a capability-GAT context (may hold live driver callbacks);
@@ -244,27 +263,28 @@ where
 
     /// Runs `f` with `transform` pushed (see
     /// [`push_transform`](Self::push_transform)) and pops it before
-    /// returning.
+    /// returning or unwinding from a panic. Raw pushes inside `f` must still
+    /// be paired with their own pops.
     pub fn with_transform<F, R>(&mut self, transform: Matrix4, f: F) -> R
     where
         F: FnOnce(&mut Self) -> R,
     {
         self.inner.push_transform(transform);
-        let result = f(self);
-        self.inner.pop_transform();
-        result
+        let guard = HitTestTransformGuard { context: self };
+        f(&mut *guard.context)
     }
 
     /// Runs `f` with `offset` pushed (see
-    /// [`push_offset`](Self::push_offset)) and pops it before returning.
+    /// [`push_offset`](Self::push_offset)) and pops it before returning or
+    /// unwinding from a panic. Raw pushes inside `f` must still be paired
+    /// with their own pops.
     pub fn with_offset<F, R>(&mut self, offset: Offset, f: F) -> R
     where
         F: FnOnce(&mut Self) -> R,
     {
         self.inner.push_offset(offset);
-        let result = f(self);
-        self.inner.pop_transform();
-        result
+        let guard = HitTestTransformGuard { context: self };
+        f(&mut *guard.context)
     }
 
     // ════════════════════════════════════════════════════════════════════════
@@ -371,10 +391,9 @@ where
         if offset == Offset::ZERO {
             return self.inner.hit_test_child(index, local_position);
         }
-        self.push_offset(offset);
-        let hit = self.inner.hit_test_child(index, local_position);
-        self.pop_transform();
-        hit
+        self.with_offset(offset, |ctx| {
+            ctx.inner.hit_test_child(index, local_position)
+        })
     }
 }
 
