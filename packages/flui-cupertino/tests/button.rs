@@ -24,21 +24,28 @@ pub fn tap_callback_writes_a_signal_and_rebuilds_its_reader() {
     assert_eq!(probe.reads(), [0, 1]);
 }
 
-/// `CupertinoButton(Text("Tap"))` must announce as one button node labelled
-/// with its child's text — the same merge the Material button family gets
-/// from `ButtonStyleButtonCore`'s `Semantics` wrapper
-/// (`packages/flui-material/src/button_style_button.rs`), proven here for
-/// `CupertinoButton`'s own pre-existing `Semantics::new().button(true)` wrap
-/// (`packages/flui-cupertino/src/button.rs`) now that `RenderParagraph`
-/// publishes a label for its child to merge up. `CupertinoButton`'s button
-/// semantics never set `enabled`, so unlike the Material case this node
-/// reports no enabled/disabled state at all — not asserted here because there
-/// is nothing to assert.
+/// The child label merges into one button node, with the same enabled state
+/// that governs pointer interaction.
 pub fn cupertino_button_with_text_child_announces_one_labelled_button_node() {
-    let mut laid = lay_out(
+    assert_button_announcement(
         CupertinoButton::new(Text::new("Tap")).on_pressed(|_cx| {}),
-        loose(200.0),
+        false,
     );
+}
+
+pub fn long_press_only_button_announces_enabled() {
+    assert_button_announcement(
+        CupertinoButton::new(Text::new("Tap")).on_long_press(|_cx| {}),
+        false,
+    );
+}
+
+pub fn disabled_button_announces_disabled() {
+    assert_button_announcement(CupertinoButton::new(Text::new("Tap")), true);
+}
+
+fn assert_button_announcement(button: CupertinoButton, disabled: bool) {
+    let mut laid = lay_out(button, loose(200.0));
     laid.enable_semantics();
     laid.pump();
 
@@ -50,6 +57,12 @@ pub fn cupertino_button_with_text_child_announces_one_labelled_button_node() {
         .unwrap_or_else(|error| panic!("expected one node labelled \"Tap\": {error}"));
 
     assert_eq!(node.role(), Role::Button);
+    assert_eq!(
+        node.is_disabled(),
+        disabled,
+        "the accessibility node must report interaction availability. Tree was:\n{}",
+        tree.describe()
+    );
     assert!(
         node.child_ids().is_empty(),
         "the child paragraph's label must merge into the button's own node, not form a \

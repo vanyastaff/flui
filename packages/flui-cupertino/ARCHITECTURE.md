@@ -34,3 +34,15 @@ that check at consumption instead of adding an unused public index type.
 `out_of_range_controller_selection_reports_error_and_recovers` (invalid live
 selection, subsequent valid selection and pointer delivery) and
 `standalone_bar_rejects_an_out_of_range_selection`.
+
+### Button availability reaches accessibility
+
+A button is enabled when either its tap or long-press callback exists. Its
+`Semantics` wrapper publishes that same state along with the button role,
+including for disabled buttons whose text label merges into the node. This
+uses the existing `Semantics::enabled` contract also consumed by `RawButton`;
+no callback conversion or separate accessibility state is introduced.
+
+The `component_contracts` family checks the labelled tap button,
+`long_press_only_button_announces_enabled`, and
+`disabled_button_announces_disabled` through the emitted accessibility tree.

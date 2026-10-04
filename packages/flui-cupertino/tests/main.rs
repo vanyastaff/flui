@@ -52,6 +52,14 @@ fn component_contracts() {
             button::cupertino_button_with_text_child_announces_one_labelled_button_node,
         ),
         (
+            "button::long press only button announces enabled",
+            button::long_press_only_button_announces_enabled,
+        ),
+        (
+            "button::disabled button announces disabled",
+            button::disabled_button_announces_disabled,
+        ),
+        (
             "nav_bar::leading middle and trailing all mount",
             nav_bar::leading_middle_and_trailing_all_mount,
         ),
