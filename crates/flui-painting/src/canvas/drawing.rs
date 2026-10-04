@@ -111,6 +111,45 @@ impl Canvas {
         self.record(DrawOp::Image { image, dst, paint });
     }
 
+    /// Draws an in-bounds source texel rectangle into a logical destination.
+    ///
+    /// The engine omits invalid regions or non-finite/non-affine placement.
+    pub fn draw_image_region(
+        &mut self,
+        image: Image,
+        src: Rect<f64>,
+        dst: Rect<f64>,
+        paint: Option<&Paint>,
+    ) {
+        self.draw_image_region_effects(image, src, dst, None, ImageRepeat::NoRepeat, None, paint);
+    }
+
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Records the complete fitted image operation"
+    )]
+    pub(crate) fn draw_image_region_effects(
+        &mut self,
+        image: Image,
+        src: Rect<f64>,
+        dst: Rect<f64>,
+        tile: Option<Rect<f64>>,
+        repeat: ImageRepeat,
+        filter: Option<ColorFilter>,
+        paint: Option<&Paint>,
+    ) {
+        let paint = self.intern_optional_paint(paint);
+        self.record(DrawOp::ImageRegion {
+            image,
+            src,
+            dst,
+            tile,
+            repeat,
+            filter,
+            paint,
+        });
+    }
+
     /// Draws an image with tiling/repeat.
     pub fn draw_image_repeat(
         &mut self,

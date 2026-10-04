@@ -298,6 +298,80 @@ impl super::WgpuPainter {
         );
     }
 
+    /// Draw an in-bounds texel region under the current affine transform.
+    ///
+    /// Filtering applies to decoded straight channels before Paint tint/alpha.
+    /// Invalid geometry omits the complete operation; quota failures remain sticky.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "The source rectangle and optional fitted tile preserve the recorded image operation"
+    )]
+    pub fn draw_image_region(
+        &mut self,
+        image: &flui_painting::paint::Image,
+        src: flui_foundation::geometry::Rect<f64>,
+        dst: flui_foundation::geometry::Rect<f64>,
+        tile: Option<flui_foundation::geometry::Rect<f64>>,
+        repeat: flui_painting::paint::ImageRepeat,
+        filter: Option<flui_painting::paint::ColorFilter>,
+        paint: Option<&flui_painting::Paint>,
+    ) {
+        crate::batches::DrawBatcher::draw_image_region(
+            &mut self.current_segment,
+            &mut self.draw_order,
+            &self.state,
+            self.resources.texture_cache_mut(),
+            image,
+            src,
+            dst,
+            tile,
+            repeat,
+            filter,
+            paint,
+        );
+    }
+
+    pub(crate) fn draw_image_nine_slice_painted(
+        &mut self,
+        image: &flui_painting::paint::Image,
+        centre: flui_foundation::geometry::Rect<f64>,
+        dst: flui_foundation::geometry::Rect<f64>,
+        paint: Option<&flui_painting::Paint>,
+    ) {
+        crate::batches::DrawBatcher::draw_image_nine_slice_painted(
+            &mut self.current_segment,
+            &mut self.draw_order,
+            &self.state,
+            self.resources.texture_cache_mut(),
+            image,
+            centre,
+            dst,
+            paint,
+        );
+    }
+
+    pub(crate) fn draw_atlas_painted(
+        &mut self,
+        image: &flui_painting::paint::Image,
+        sprites: &[flui_foundation::geometry::Rect<f64>],
+        transforms: &[flui_foundation::geometry::Matrix4],
+        colors: Option<&[flui_painting::styling::Color]>,
+        paint: Option<&flui_painting::Paint>,
+    ) {
+        crate::batches::DrawBatcher::draw_atlas_painted(
+            &mut self.current_segment,
+            &mut self.draw_order,
+            &self.state,
+            self.resources.texture_cache_mut(),
+            image,
+            sprites,
+            transforms,
+            colors,
+            paint.map_or(flui_painting::BlendMode::SrcOver, |p| p.blend_mode),
+            paint,
+        );
+    }
+
     /// Draw a tiled image with an explicit blend mode.
     ///
     /// Pass `BlendMode::SrcOver` for the default tiling behaviour.  When
@@ -449,16 +523,6 @@ impl super::WgpuPainter {
         colors: Option<&[flui_painting::styling::Color]>,
         blend_mode: flui_painting::BlendMode,
     ) {
-        // Convert Matrix4 transforms to pixel-space origins here, at the
-        // painter boundary, so the batcher stays Matrix4-free (C4 rule).
-        // Each transform is column-major; m[12] = x translation, m[13] = y.
-        let sprite_origins: Vec<flui_foundation::geometry::Offset<f64>> = transforms
-            .iter()
-            .map(|t| flui_foundation::geometry::Offset {
-                dx: (t.m[12]),
-                dy: (t.m[13]),
-            })
-            .collect();
         crate::batches::DrawBatcher::draw_atlas(
             &mut self.current_segment,
             &mut self.draw_order,
@@ -466,7 +530,7 @@ impl super::WgpuPainter {
             self.resources.texture_cache_mut(),
             image,
             sprites,
-            &sprite_origins,
+            transforms,
             colors,
             blend_mode,
         );

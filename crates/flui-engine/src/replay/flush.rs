@@ -263,7 +263,7 @@ impl GpuReplay {
         viewport_size: (u32, u32),
         device: &Arc<wgpu::Device>,
         queue: &Arc<wgpu::Queue>,
-        pipelines: &PipelineSet,
+        pipelines: &mut PipelineSet,
         resources: &mut GpuResources,
         encoder: &mut wgpu::CommandEncoder,
         view: &wgpu::TextureView,
@@ -279,11 +279,16 @@ impl GpuReplay {
         // Scissor of the most-recently buffered instance — forwarded when a
         // texture-change forces an early flush.
         let mut active_scissor: ScissorRect = None;
+        let mut active_mode = flui_painting::BlendMode::SrcOver;
 
-        for (texture_id, instance, scissor) in pending_images.iter().cloned() {
-            if active_texture_id.as_ref() != Some(&texture_id) || active_scissor != scissor {
+        for (texture_id, instance, scissor, mode) in pending_images {
+            if active_texture_id.as_ref() != Some(texture_id)
+                || active_scissor != *scissor
+                || active_mode != *mode
+            {
                 if let Some(texture_view) = active_texture_view.as_ref() {
-                    self.flush_texture_batch(
+                    self.flush_texture_batch_premultiplied_with_mode(
+                        active_mode,
                         device,
                         queue,
                         pipelines,
@@ -298,15 +303,17 @@ impl GpuReplay {
                 active_texture_id = Some(texture_id.clone());
                 active_texture_view = resources
                     .texture_cache_mut()
-                    .get(&texture_id)
+                    .get(texture_id)
                     .map(|cached| cached.view.clone());
             }
 
-            active_scissor = scissor;
+            active_scissor = *scissor;
+            active_mode = *mode;
             if let Some(texture_view) = active_texture_view.as_ref()
-                && self.texture_batch.add(instance)
+                && self.texture_batch.add(*instance)
             {
-                self.flush_texture_batch(
+                self.flush_texture_batch_premultiplied_with_mode(
+                    active_mode,
                     device,
                     queue,
                     pipelines,
@@ -321,7 +328,8 @@ impl GpuReplay {
         }
 
         if let Some(texture_view) = active_texture_view.as_ref() {
-            self.flush_texture_batch(
+            self.flush_texture_batch_premultiplied_with_mode(
+                active_mode,
                 device,
                 queue,
                 pipelines,
@@ -445,41 +453,6 @@ impl GpuReplay {
     // =========================================================================
     // Texture-batch flush methods (shared plumbing now lives on self)
     // =========================================================================
-
-    /// Flush the texture instance batch with straight-alpha blending.
-    ///
-    /// Used for normal decoded-image draws whose samples carry straight
-    /// (non-premultiplied) alpha.  Offscreen layer composites must use
-    /// `flush_texture_batch_premultiplied` instead.
-    ///
-    /// `scissor` is the clip rect to apply.  Pass `None` for full-viewport
-    /// (unclipped), matching the rect/circle instanced batches.
-    pub(crate) fn flush_texture_batch(
-        &mut self,
-        device: &Arc<wgpu::Device>,
-        queue: &Arc<wgpu::Queue>,
-        pipelines: &PipelineSet,
-        resources: &mut GpuResources,
-        viewport_size: (u32, u32),
-        encoder: &mut wgpu::CommandEncoder,
-        view: &wgpu::TextureView,
-        texture_view: &wgpu::TextureView,
-        scissor: ScissorRect,
-    ) {
-        self.flush_texture_batch_with_blend(
-            device,
-            queue,
-            pipelines,
-            resources,
-            viewport_size,
-            encoder,
-            view,
-            texture_view,
-            scissor,
-            false,
-            None,
-        );
-    }
 
     /// Flush the texture instance batch using **premultiplied** source-over
     /// blending.

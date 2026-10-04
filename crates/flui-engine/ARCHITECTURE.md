@@ -1105,3 +1105,60 @@ and subsequent GPU readback have separate deadlines. The parent kills and reaps
 a hung child and the family continues to later named rows. No adapter skip is
 added. A private zero-capacity recording seam is necessary for the quota rows;
 the rendering and next-frame recovery operations remain the public painter API.
+
+
+### Image regions preserve affine placement, Paint and clip coverage
+
+ADR-0115 carries the source texel rectangle separately from logical destination
+and optional fitted repeat placement. The image batcher maps all four corners
+through a finite affine matrix, narrows the origin and basis vectors once, and
+uses the resulting quad for GPU placement and replay bounds. Sprite transforms
+compose with the ambient matrix instead of extracting only their translation.
+Existing offscreen and SSAA rectangle constructors supply axis-aligned bases.
+Attachment rebasing retains its separate attachment-to-root map.
+
+Cached image runs record their fixed blend mode. An advanced image operation
+records SrcOver internally and applies its operator once to the completed group.
+Filters process decoded straight channels before tinting; decoded linear taps
+are premultiplied before interpolation. Optional Paint multiplies RGB and alpha.
+UV crops map through the actual cache atlas region without a half-texel inset.
+
+Under fractional clips, destination-sensitive image modes use the existing
+portable compositor even when the adapter exposes dual-source blending. The
+image isolation pipeline writes sampled premultiplied color and geometric
+coverage to separate attachments. Transparent source pixels carry clip coverage
+and therefore replace the destination where Src requires it; pixels outside the
+coverage preserve the destination. No additional image raster backend exists.
+
+The existing `painter_images_and_offscreen_results_read_back_as_specified`
+family contains `ambient_shear`, `rotated_uv`, `tint_and_alpha`,
+`src_transparency` and `feathered_src_transparency`. The feathered row measures
+coverage with an opaque SrcOver image on a transparent target, then checks a
+transparent Src image against the retained destination at partial-coverage
+pixels, together with untouched outside content and a later draw. These GPU
+rows use the private readable-target seam because a public window surface
+cannot be sampled by an integration consumer; recording is the public painter
+API and the isolation is the actual production replay path.
+
+
+`decoration_cover`, `decoration_filter_opacity`, `decoration_repeat_phase` and
+`canvas_image_paint` invoke the public painting producers and replay their
+recorded commands. `render_image_scaled_cover` mounts a real RenderImage through
+RenderTester and captures its actual layer tree; `render_image_none_crops_at_natural_scale`
+also pins an oversized natural-scale crop. Both visible crop color and
+pixels outside the allocated box distinguish the producer defect. Engine dev
+edges on objects and rendering's testing feature exist for this consumer path.
+`standalone_source_crop`, `atlas_affine_and_paint`, `advanced_affine` and
+`degenerate_image_quad_keeps_sibling` cover source region/texture layout, sprite and
+advanced placement, and deliberate zero-area image-quad omission with a healthy
+next draw. They are rows of the same GPU family, rather than separate targets.
+
+The texture instance also carries original-image UV bounds at location 11.
+Decoded atlas images set these to their full loaded image region; external,
+offscreen and SSAA constructors keep full-texture bounds. Manual straight taps
+clamp at the original-image texel edge, not the crop edge, so adjacent texels
+inside an image remain part of an internal fractional crop's filter footprint.
+`packed_original_edge` and `standalone_original_edge` draw equivalent opaque
+source crops at the same scale and check original edge samples and outside
+pixels. Removing the original bounds affects the packed row while leaving the
+standalone row healthy. This changes sampling admission, not atlas allocation.

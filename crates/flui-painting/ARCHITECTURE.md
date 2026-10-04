@@ -1049,3 +1049,15 @@ escape hatch. Upstream describes the separate alignment-width use while warning
 that the escape hatch has not been carefully evaluated; the behavioral controls
 pin the contract on which FLUI relies. This adds a line-break pass and makes no
 performance improvement claim. It does not override inferred bidi base direction.
+
+
+### Image fitting preserves source texels and repeat placement
+
+The image-region display command carries source texels separately from logical
+destination and optional fitted repeat placement. Decoration and RenderImage use
+`BoxFit::apply` plus alignment to crop the source into the allocated box.
+Fitted repeats preserve logical tile scale and aligned phase; legacy Canvas
+repeat retains natural tile size and destination-origin phase. Color filters
+and optional Paint survive dispatch. ADR-0115 specifies the command, instance
+and replay contract; actual producer readbacks join the engine's existing
+`painter_images_and_offscreen_results_read_back_as_specified` family.

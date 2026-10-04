@@ -480,68 +480,52 @@ pub(crate) fn resolve_gradient(gradient: &Gradient, rect: Rect<f64>) -> Shader {
     }
 }
 
-/// The decoration image, fitted into the rect per its `BoxFit` (the
-/// repeat modes tile the image at its natural size).
+/// Source cropping and logical tile placement share the fitted image contract.
 fn paint_decoration_image(
     canvas: &mut Canvas,
     rect: Rect<f64>,
     image: &crate::styling::DecorationImage,
 ) {
-    use crate::BoxFit;
-    use crate::styling::ImageRepeat;
-
-    if image.repeat != ImageRepeat::NoRepeat {
-        canvas.draw_image_repeat(image.image.clone(), rect, image.repeat, None);
-        return;
-    }
-
-    // image dimensions are far below f64's 24-bit integer range
-    let (src_w, src_h) = (image.image.width() as f64, image.image.height() as f64);
-    let (dst_w, dst_h) = (rect.width(), rect.height());
-    let fit = image.fit.unwrap_or(BoxFit::ScaleDown);
-
-    let (out_w, out_h) = if src_w <= 0.0 || src_h <= 0.0 {
-        (dst_w, dst_h)
-    } else {
-        match fit {
-            BoxFit::Fill => (dst_w, dst_h),
-            BoxFit::Contain => {
-                let scale = (dst_w / src_w).min(dst_h / src_h);
-                (src_w * scale, src_h * scale)
-            }
-            BoxFit::Cover => {
-                let scale = (dst_w / src_w).max(dst_h / src_h);
-                (src_w * scale, src_h * scale)
-            }
-            BoxFit::FitWidth => {
-                let scale = dst_w / src_w;
-                (dst_w, src_h * scale)
-            }
-            BoxFit::FitHeight => {
-                let scale = dst_h / src_h;
-                (src_w * scale, dst_h)
-            }
-            BoxFit::None => (src_w, src_h),
-            BoxFit::ScaleDown => {
-                let scale = (dst_w / src_w).min(dst_h / src_h).min(1.0);
-                (src_w * scale, src_h * scale)
-            }
-        }
-    };
-
-    // Alignment positions the fitted box within the paint rect.
-    let free_w = dst_w - out_w;
-    let free_h = dst_h - out_h;
-    let left = rect.min.x + f64::midpoint(image.alignment.x, 1.0) * free_w;
-    let top = rect.min.y + f64::midpoint(image.alignment.y, 1.0) * free_h;
-    let dst = Rect::from_ltrb(left, top, left + out_w, top + out_h);
-
+    use crate::{BoxFit, styling::ImageRepeat};
+    use flui_foundation::geometry::Size;
+    let input = Size::new(
+        f64::from(image.image.width()),
+        f64::from(image.image.height()),
+    );
+    let output = Size::new(rect.width(), rect.height());
+    let fitted = image.fit.unwrap_or(BoxFit::ScaleDown).apply(input, output);
+    let ax = f64::midpoint(image.alignment.x, 1.0);
+    let ay = f64::midpoint(image.alignment.y, 1.0);
+    let src = Rect::from_xywh(
+        ax * (input.width - fitted.source.width),
+        ay * (input.height - fitted.source.height),
+        fitted.source.width,
+        fitted.source.height,
+    );
+    let tile = Rect::from_xywh(
+        rect.left() + ax * (output.width - fitted.destination.width),
+        rect.top() + ay * (output.height - fitted.destination.height),
+        fitted.destination.width,
+        fitted.destination.height,
+    );
     let paint = (image.opacity < 1.0).then(|| {
-        // clamped 0..=1 then scaled to u8 range
-        let alpha = (image.opacity.clamp(0.0, 1.0) * 255.0).round() as u8;
-        Paint::fill(Color::rgba(255, 255, 255, alpha))
+        Paint::fill(Color::rgba(
+            255,
+            255,
+            255,
+            (image.opacity.clamp(0.0, 1.0) * 255.0).round() as u8,
+        ))
     });
-    canvas.draw_image(image.image.clone(), dst, paint.as_ref());
+    let repeated = image.repeat != ImageRepeat::NoRepeat;
+    canvas.draw_image_region_effects(
+        image.image.clone(),
+        src,
+        if repeated { rect } else { tile },
+        repeated.then_some(tile),
+        image.repeat,
+        image.color_filter,
+        paint.as_ref(),
+    );
 }
 
 /// The border, on top of everything.

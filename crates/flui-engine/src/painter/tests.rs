@@ -5,6 +5,8 @@ use flui_painting::BlendMode;
 
 use super::WgpuPainter;
 
+mod image_boundary;
+
 /// Headless GPU device + queue for painter tests.
 fn test_device_and_queue() -> (Arc<wgpu::Device>, Arc<wgpu::Queue>) {
     crate::test_support::test_device_and_queue("Painter Test Device")
@@ -218,7 +220,64 @@ fn clear_offscreen_result(nested: bool) {
 /// composites with its own blend mode.
 #[test]
 fn painter_images_and_offscreen_results_read_back_as_specified() {
-    let cases: [(&str, fn()); 62] = [
+    let cases: [(&str, fn()); 80] = [
+        (
+            "image feathered Src transparent texels",
+            image_boundary::feathered_src_transparency,
+        ),
+        ("decoration Cover crop", image_boundary::decoration_cover),
+        (
+            "decoration filter and opacity",
+            image_boundary::decoration_filter_opacity,
+        ),
+        (
+            "Canvas image Paint propagation",
+            image_boundary::canvas_image_paint,
+        ),
+        (
+            "RenderImage scale and Cover crop",
+            image_boundary::render_image_scaled_cover,
+        ),
+        (
+            "RenderImage natural-scale crop",
+            image_boundary::render_image_natural_crop,
+        ),
+        (
+            "decoration fitted repeat phase",
+            image_boundary::decoration_repeat_phase,
+        ),
+        (
+            "atlas affine and Paint",
+            image_boundary::atlas_affine_and_paint,
+        ),
+        ("advanced image affine", image_boundary::advanced_affine),
+        (
+            "standalone source crop",
+            image_boundary::standalone_source_crop,
+        ),
+        (
+            "degenerate image quad keeps sibling",
+            image_boundary::degenerate_image_quad_keeps_sibling,
+        ),
+        (
+            "packed original image edge",
+            image_boundary::packed_original_edge,
+        ),
+        (
+            "standalone original image edge",
+            image_boundary::standalone_original_edge,
+        ),
+        (
+            "source crop keeps original neighbors",
+            image_boundary::crop_keeps_original_neighbors,
+        ),
+        ("image ambient shear", image_boundary::ambient_shear),
+        ("image rotated UV", image_boundary::rotated_uv),
+        ("image Paint tint and alpha", image_boundary::tint_and_alpha),
+        (
+            "image Src transparent texels",
+            image_boundary::src_transparency,
+        ),
         ("repeat x ordinary stall", repeat_x_ordinary_stall),
         ("repeat x ordinary crop", repeat_x_ordinary_crop),
         ("repeat y ordinary stall", repeat_y_ordinary_stall),

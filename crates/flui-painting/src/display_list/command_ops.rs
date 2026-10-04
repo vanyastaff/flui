@@ -248,7 +248,8 @@ impl DrawOp {
                 bounds: Some(bounds),
                 ..
             } => bounded(*bounds),
-            DrawOp::Image { .. }
+            DrawOp::ImageRegion { .. }
+            | DrawOp::Image { .. }
             | DrawOp::ImageRepeat { .. }
             | DrawOp::ImageNineSlice { .. }
             | DrawOp::Texture { .. }
@@ -311,7 +312,8 @@ impl DrawOp {
                 let size = Size::new(effective_radius * 2.0, effective_radius * 2.0);
                 Some(Rect::from_center_size(*center, size))
             }
-            DrawOp::Image { dst, .. }
+            DrawOp::ImageRegion { dst, .. }
+            | DrawOp::Image { dst, .. }
             | DrawOp::ImageRepeat { dst, .. }
             | DrawOp::ImageNineSlice { dst, .. }
             | DrawOp::ImageFiltered { dst, .. }

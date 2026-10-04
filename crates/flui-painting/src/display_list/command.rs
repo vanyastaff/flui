@@ -182,6 +182,25 @@ pub enum DrawOp {
         paint: Option<Arc<Paint>>,
     },
 
+    /// Draw a source texel region with fitted logical placement (ADR-0115).
+    ImageRegion {
+        /// Decoded image.
+        image: Image,
+        /// Positive in-bounds source rectangle in image texels.
+        src: Rect<f64>,
+        /// Logical destination; repeated draws cover this rectangle.
+        dst: Rect<f64>,
+        /// Fitted logical tile rectangle, including aligned phase.
+        /// `None` keeps the natural source size and destination-origin phase.
+        tile: Option<Rect<f64>>,
+        /// Repeated axes, or a single destination quad.
+        repeat: ImageRepeat,
+        /// Filter decoded straight channels before Paint and sampling.
+        filter: Option<ColorFilter>,
+        /// Optional RGB/alpha tint and framebuffer blend mode.
+        paint: Option<Arc<Paint>>,
+    },
+
     /// Draw an image with repeat (tiling).
     ImageRepeat {
         /// Image to tile.

@@ -128,6 +128,8 @@ wgsl_bindgen = { workspace = true }
 regex = { workspace = true }
 
 [dev-dependencies]
+flui-objects = { workspace = true }
+flui-rendering = { workspace = true, features = ["testing"] }
 flui-painting = { path = "../flui-painting", version = "=0.2.0-dev", features = ["testing"] }
 pollster = { workspace = true }
 criterion = { workspace = true }

@@ -271,6 +271,9 @@ flui-protocol = { path = "crates/flui-protocol", version = "=0.2.0-dev" }
 # WORKSPACE PROC-MACROS
 flui-macros = { path = "crates/flui-macros", version = "=0.2.0-dev" }
 
+# RENDER CONTRACTS — shared by concrete objects and dev-only render consumers
+flui-rendering = { path = "crates/flui-rendering", version = "=0.2.0-dev" }
+
 # OBJECT CATALOG — sits above flui-rendering (depends on it), below flui-view/app
 flui-objects = { path = "crates/flui-objects", version = "=0.2.0-dev" }
 

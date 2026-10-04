@@ -157,3 +157,15 @@ through `PipelineOwner`; they hold no shared mutable state of their own.
 | Item | Notes |
 |------|-------|
 | Shared `classify_cache_window` helper across list + grid | Grid owns its classify today; list uses `finite_leading_cache_edge`. Consolidating into one module is optional follow-up once a third consumer appears. |
+
+
+### RenderImage source fitting
+
+RenderImage uses painting's BoxFit::apply for both the cropped source and the
+fitted destination (ADR-0115). Alignment positions both rectangles. Its logical
+intrinsic/scale source converts back to decoded texel coordinates before Canvas
+records an ImageRegion, so Cover paints inside the allocated box and high-DPI
+source cropping uses the decoded image's coordinates. The actual object/tree
+consumer is `render_image_scaled_cover`, a row of the engine's existing
+`painter_images_and_offscreen_results_read_back_as_specified` GPU family; the
+objects catalog still owns its layout/paint-presence harness rows.
