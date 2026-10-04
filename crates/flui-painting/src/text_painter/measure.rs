@@ -52,8 +52,8 @@ impl TextPainter {
             .layout_cache
             .as_ref()
             .filter(|cache| cache.fonts.matches(&fonts))
-            && (cache.min_width - min_width).abs() < f64::EPSILON
-            && (cache.max_width - max_width).abs() < f64::EPSILON
+            && (cache.min_width == min_width || (cache.min_width - min_width).abs() < f64::EPSILON)
+            && (cache.max_width == max_width || (cache.max_width - max_width).abs() < f64::EPSILON)
         {
             return;
         }

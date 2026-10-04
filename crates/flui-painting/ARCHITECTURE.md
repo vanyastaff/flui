@@ -79,8 +79,11 @@ width, `max_lines` and ellipsis), reads size and baselines from the
 come from a second shape without truncation (`content_widths`, decision 9).
 The painter's cache keys on the context's collection and its
 `FontCollection::generation`, so a layout from another realm's collection, or
-from before a registration, shapes again. The app's collection is fed from one
-scan of the host's fonts (`HostFonts`): its faces, the generics the bundled
+from before a registration, shapes again. Equal width constraints, including
+`+INFINITY` for an unbounded maximum, reuse that cache; nearby finite widths
+retain the existing epsilon comparison. Equality is checked before subtraction
+because subtracting equal infinities produces NaN. The app's collection is fed
+from one scan of the host's fonts (`HostFonts`): its faces, the generics the bundled
 faces leave unbound, and FLUI's fallback lists for the host (decision 17); a
 style's family is resolved by one rule (decision 8).
 
