@@ -35,7 +35,13 @@ magnitude, scaling before `hypot` preserves their unit direction instead of
 returning zero. `vector_normalization_keeps_finite_directions_and_refuses_invalid_input`
 checks ordinary and extreme vectors, fallback admission, and the actual
 `Line::direction` and `Circle::nearest_point` consumers. Endpoint subtraction
-and other vector operations retain their own floating-point range limits.
+and other vector operations retain their own floating-point range limits. `Offset::normalize`
+delegates to the same `Vec2` policy, including zero and near-zero refusal and
+non-finite components returning zero. Infinite offsets previously produced NaN
+components; that invalid normalized output is deliberately refused. The family
+also checks `Offset::move_towards` taking a finite unit step toward a target with
+an overflowing magnitude. Its subtraction and maximum-distance policies are
+unchanged.
 
 Transform decomposition computes column lengths with `hypot`. It keeps a finite,
 nonzero direct determinant before dividing by the first scale: prematurely

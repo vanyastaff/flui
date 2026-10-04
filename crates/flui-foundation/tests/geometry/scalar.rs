@@ -1,5 +1,5 @@
 //! Scalar geometry across the representable coordinate range.
-use flui_foundation::geometry::{ApproxEq, Circle, DevicePoint, Line, Point, Vec2};
+use flui_foundation::geometry::{ApproxEq, Circle, DevicePoint, Line, Offset, Point, Vec2};
 fn opposite_extremes_are_distinct() {
     let min = DevicePoint::new(i32::MIN, 0);
     let max = DevicePoint::new(i32::MAX, 0);
@@ -220,9 +220,55 @@ fn circle_consumer_keeps_the_extreme_direction() {
     assert!(nearest.x > 0.0 && nearest.y > 0.0);
 }
 
+fn extreme_offsets_keep_their_direction_and_step() {
+    let diagonal = std::f64::consts::FRAC_1_SQRT_2;
+    let target = Offset::new(f64::MAX, f64::MAX);
+    let normalized = target.normalize();
+    assert!((normalized.dx - diagonal).abs() < 1e-15);
+    assert!((normalized.dy - diagonal).abs() < 1e-15);
+    let moved = Offset::ZERO.move_towards(target, 1.0);
+    assert!((moved.dx - diagonal).abs() < 1e-15);
+    assert!((moved.dy - diagonal).abs() < 1e-15);
+    assert!((moved.distance() - 1.0).abs() < 1e-15);
+}
+
+fn offset_normalization_refuses_invalid_and_near_zero_input() {
+    for offset in [
+        Offset::ZERO,
+        Offset::new(f64::EPSILON, 0.0),
+        Offset::new(f64::from_bits(1), 0.0),
+        Offset::new(f64::INFINITY, 1.0),
+        Offset::new(1.0, f64::NEG_INFINITY),
+        Offset::new(f64::NAN, 2.0),
+    ] {
+        assert_eq!(offset.normalize(), Offset::ZERO);
+    }
+    assert_eq!(Offset::new(3.0, 4.0).normalize(), Offset::new(0.6, 0.8));
+    assert_eq!(
+        Offset::new(f64::EPSILON * 2.0, 0.0).normalize(),
+        Offset::new(1.0, 0.0)
+    );
+    assert_eq!(
+        Offset::ZERO.move_towards(Offset::new(3.0, 4.0), 10.0),
+        Offset::new(3.0, 4.0)
+    );
+    assert_eq!(
+        Offset::ZERO.move_towards(Offset::new(3.0, 4.0), 0.0),
+        Offset::ZERO
+    );
+}
+
 #[test]
 fn vector_normalization_keeps_finite_directions_and_refuses_invalid_input() {
     crate::run_table(&[
+        (
+            "extreme offsets and movement",
+            extreme_offsets_keep_their_direction_and_step,
+        ),
+        (
+            "offset normalization admission",
+            offset_normalization_refuses_invalid_and_near_zero_input,
+        ),
         (
             "finite extremes",
             extreme_finite_vectors_keep_a_unit_direction,
