@@ -7743,6 +7743,7 @@ dependencies = [
  "serde",
  "serde_json",
  "syn 3.0.6",
+ "tempfile",
  "toml",
  "walkdir",
  "windows 0.62.2",
