@@ -1064,3 +1064,44 @@ for rectangles, curves, paths and mixed tapes. `FLUI_BENCH_FALLBACK=1` requires 
 software adapter for that group and prints its identity. Timing includes first
 clip preparation, submission and completion; painter construction is outside
 the timed interval. It is not a steady-frame throughput measurement.
+
+### Repeated images crop natural tiles and cannot stall recording
+
+Repeated axes retain the image's natural pixel extent in logical coordinates.
+The final tile crops the source UV extent, including atlas remapping, instead
+of squeezing the whole source image into a smaller destination. Ordinary and
+advanced blend routes consume the same tile bounds and UVs; advanced repeats
+remain one isolated shape so all tiles blend against the same backdrop.
+`NoRepeat` keeps the single-image route.
+
+A repeated draw with nonfinite or reversed destination edges, an overflowing
+extent, or an edge that cannot advance in `f64` is omitted as a whole. This is
+a primitive omission, not a sticky frame error. Tiles accumulate in an empty
+sibling of the live recording segment until traversal completes. A later
+stalled edge therefore discards its finite prefix while retaining earlier and
+following draws. Dropping that sibling releases its charged arena capacity and
+live elements; the texture cache may still retain the loaded image, as caches
+are outside recording admission. Successful ordinary repeats publish a segment
+in painter order; advanced repeats publish one `AdvancedShape`.
+
+A recording quota failure is different: it remains the existing sticky frame
+error, and traversal stops immediately after refusal. The shared recording
+budget bounds appended tile work; there is no separate tile-count cap or
+floating-point-to-integer count conversion. A new frame recovers the budget.
+
+`painter_images_and_offscreen_results_read_back_as_specified` includes named
+X, Y and two-axis crop and late-stall rows for SrcOver and Multiply. The crop
+rows render into an actual readable texture, check the terminal source prefix,
+full-tile suffix, prior content outside the destination and a later overlapping
+draw. Stall rows rebase two representable local edges into visible pixels
+before the third stalls at `2^53`, then check that the prefix did not escape and
+a healthy sibling draws. Ordinary and advanced quota and nonfinite rows cover
+sticky next-frame recovery and omission respectively.
+
+Potentially nonterminating counterfactuals reexecute the existing painter test
+binary in a child. Device and target preparation signal readiness before the
+public recording call; recording has a five-second deadline, while preparation
+and subsequent GPU readback have separate deadlines. The parent kills and reaps
+a hung child and the family continues to later named rows. No adapter skip is
+added. A private zero-capacity recording seam is necessary for the quota rows;
+the rendering and next-frame recovery operations remain the public painter API.

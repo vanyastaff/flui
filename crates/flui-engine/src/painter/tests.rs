@@ -218,7 +218,23 @@ fn clear_offscreen_result(nested: bool) {
 /// composites with its own blend mode.
 #[test]
 fn painter_images_and_offscreen_results_read_back_as_specified() {
-    let cases: [(&str, fn()); 46] = [
+    let cases: [(&str, fn()); 62] = [
+        ("repeat x ordinary stall", repeat_x_ordinary_stall),
+        ("repeat x ordinary crop", repeat_x_ordinary_crop),
+        ("repeat y ordinary stall", repeat_y_ordinary_stall),
+        ("repeat y ordinary crop", repeat_y_ordinary_crop),
+        ("repeat both ordinary stall", repeat_both_ordinary_stall),
+        ("repeat both ordinary crop", repeat_both_ordinary_crop),
+        ("repeat ordinary quota", repeat_ordinary_quota),
+        ("repeat ordinary nonfinite", repeat_ordinary_nonfinite),
+        ("repeat x advanced stall", repeat_x_advanced_stall),
+        ("repeat x advanced crop", repeat_x_advanced_crop),
+        ("repeat y advanced stall", repeat_y_advanced_stall),
+        ("repeat y advanced crop", repeat_y_advanced_crop),
+        ("repeat both advanced stall", repeat_both_advanced_stall),
+        ("repeat both advanced crop", repeat_both_advanced_crop),
+        ("repeat advanced quota", repeat_advanced_quota),
+        ("repeat advanced nonfinite", repeat_advanced_nonfinite),
         (
             "horizontal glyph bitmap bearings",
             horizontal_glyph_bearings_do_not_overflow_before_clipping,
@@ -395,6 +411,14 @@ fn painter_images_and_offscreen_results_read_back_as_specified() {
             an_offscreen_result_composites_with_its_own_blend_mode,
         ),
     ];
+    if let Ok(selected) = std::env::var("FLUI_REPEAT_CHILD") {
+        let (_, case) = cases
+            .iter()
+            .find(|(name, _)| *name == selected)
+            .expect("bounded repeat child names an existing row");
+        case();
+        return;
+    }
     let mut failures = Vec::new();
     for (name, case) in cases {
         if std::panic::catch_unwind(case).is_err() {
@@ -2588,5 +2612,398 @@ fn replacement_fonts_keep_source_policy(
         drops.load(Ordering::Relaxed),
         1,
         "source is retired exactly once"
+    );
+}
+
+#[derive(Clone, Copy)]
+enum RepeatInput {
+    Stall,
+    Quota,
+    Nonfinite,
+}
+
+fn repeat_crop(repeat: flui_painting::paint::ImageRepeat, mode: BlendMode) {
+    use flui_painting::paint::{Image, ImageRepeat};
+    let (device, queue) = test_device_and_queue();
+    let mut bytes = Vec::new();
+    for y in 0..4 {
+        for x in 0..4 {
+            let red = match repeat {
+                ImageRepeat::RepeatX => x < 2,
+                ImageRepeat::RepeatY => y < 2,
+                _ => x < 2 && y < 2,
+            };
+            bytes.extend_from_slice(if red {
+                &[255, 0, 0, 255]
+            } else {
+                &[0, 0, 255, 255]
+            });
+        }
+    }
+    let image = Image::from_rgba8(4, 4, bytes);
+    let (width, height, last_x, last_y, full_x, full_y) = match repeat {
+        ImageRepeat::RepeatX => (6.0, 4.0, 13, 9, 11, 9),
+        ImageRepeat::RepeatY => (4.0, 6.0, 9, 13, 9, 11),
+        _ => (6.0, 6.0, 13, 13, 11, 11),
+    };
+    let (target, view) = crate::test_support::create_target(
+        &device,
+        "repeat cropped source",
+        32,
+        32,
+        READBACK_FORMAT,
+        wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+    );
+    crate::test_support::clear_target(&device, &queue, &view, wgpu::Color::BLACK);
+    let mut painter = WgpuPainter::with_shared_device(
+        Arc::clone(&device),
+        Arc::clone(&queue),
+        READBACK_FORMAT,
+        (32, 32),
+    );
+    painter.begin_frame().expect("repeat crop frame begins");
+    painter.draw_rect(
+        Rect::from_xywh(0.0, 0.0, 32.0, 32.0),
+        &flui_painting::Paint::fill(flui_painting::styling::Color::WHITE).with_anti_alias(false),
+    );
+    painter.draw_image_repeat(
+        &image,
+        Rect::from_xywh(8.0, 8.0, width, height),
+        repeat,
+        mode,
+    );
+    painter.draw_rect(
+        Rect::from_xywh(8.0, 8.0, 1.0, 1.0),
+        &flui_painting::Paint::fill(flui_painting::styling::Color::GREEN).with_anti_alias(false),
+    );
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+    // Advanced images require the actual readable destination, not a view-only
+    // helper which intentionally cannot execute a destination-read shape.
+    painter
+        .render_to_texture(&target, &mut encoder)
+        .expect("repeat crop encodes");
+    painter
+        .submit_encoder(encoder)
+        .expect("repeat crop submits");
+    painter.finish_frame();
+    let pixels = crate::test_support::readback_bytes(&device, &queue, &target, 32, 32);
+    assert_eq!(
+        pixel_at(&pixels, 32, 8, 8),
+        [0, 255, 0, 255],
+        "following draw stays above repeat"
+    );
+    assert_eq!(
+        pixel_at(&pixels, 32, last_x, last_y),
+        [255, 0, 0, 255],
+        "terminal tile crops the red source prefix"
+    );
+    assert_eq!(
+        pixel_at(&pixels, 32, full_x, full_y),
+        [0, 0, 255, 255],
+        "full tile retains its blue source suffix"
+    );
+    assert_eq!(
+        pixel_at(&pixels, 32, 14, 14),
+        [255, 255, 255, 255],
+        "repeat does not cross its destination"
+    );
+}
+
+// Adapter startup and GPU readback are outside the recording deadline. This
+// lets the old infinite loop fail without attributing a slow adapter to tiling.
+fn bounded_repeat_child(name: &str) {
+    use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock after epoch")
+        .as_nanos();
+    let ready =
+        std::env::temp_dir().join(format!("flui-repeat-{}-{unique}.ready", std::process::id()));
+    let recorded = ready.with_extension("recorded");
+    let mut child = std::process::Command::new(std::env::current_exe().expect("test executable"))
+        .arg("--exact")
+        .arg("painter::tests::painter_images_and_offscreen_results_read_back_as_specified")
+        .arg("--nocapture")
+        .env("FLUI_REPEAT_CHILD", name)
+        .env("FLUI_REPEAT_READY", &ready)
+        .spawn()
+        .expect("bounded repeat child starts");
+    let mut failure = None;
+    for (marker, timeout, phase) in [
+        (
+            &ready,
+            Duration::from_secs(60),
+            "adapter and target preparation",
+        ),
+        (&recorded, Duration::from_secs(5), "repeat recording"),
+    ] {
+        let deadline = Instant::now() + timeout;
+        while !marker.exists() {
+            if child.try_wait().expect("repeat child status").is_some() {
+                failure = Some(format!("{name}: child exited before {phase}"));
+                break;
+            }
+            if Instant::now() >= deadline {
+                failure = Some(format!("{name}: timed out during {phase}"));
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        if failure.is_some() {
+            break;
+        }
+    }
+    let deadline = Instant::now() + Duration::from_secs(60);
+    let status = loop {
+        if let Some(status) = child.try_wait().expect("repeat child status") {
+            break Some(status);
+        }
+        if failure.is_some() || Instant::now() >= deadline {
+            child.kill().expect("stop bounded repeat child");
+            child.wait().expect("reap bounded repeat child");
+            break None;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    };
+    let _ = std::fs::remove_file(ready);
+    let _ = std::fs::remove_file(recorded);
+    assert!(failure.is_none(), "{failure:?}");
+    assert!(
+        status.is_some_and(|status| status.success()),
+        "{name}: child did not finish successfully"
+    );
+}
+
+fn repeat_refusal(
+    name: &str,
+    repeat: flui_painting::paint::ImageRepeat,
+    mode: BlendMode,
+    input: RepeatInput,
+) {
+    if std::env::var_os("FLUI_REPEAT_CHILD").is_none() {
+        bounded_repeat_child(name);
+        return;
+    }
+    use flui_foundation::geometry::Offset;
+    use flui_painting::{Paint, paint::Image, styling::Color};
+    let (device, queue) = test_device_and_queue();
+    let (target, view) = crate::test_support::create_target(
+        &device,
+        "repeat recovery",
+        32,
+        32,
+        READBACK_FORMAT,
+        wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+    );
+    crate::test_support::clear_target(&device, &queue, &view, wgpu::Color::BLACK);
+    let mut painter = WgpuPainter::with_shared_device(
+        Arc::clone(&device),
+        Arc::clone(&queue),
+        READBACK_FORMAT,
+        (32, 32),
+    );
+    painter.begin_frame().expect("repeat frame begins");
+    if matches!(input, RepeatInput::Quota) {
+        // Public painter limits cannot select a tiny arena; this admission seam
+        // tests the production budget shared by isolated repeat segments.
+        painter.current_segment = crate::command_ir::DrawSegment::with_budget(
+            crate::recording_budget::RecordingBudget::new(0, 0),
+        );
+    } else {
+        painter.draw_rect(
+            Rect::from_xywh(0.0, 0.0, 32.0, 32.0),
+            &Paint::fill(Color::BLUE).with_anti_alias(false),
+        );
+    }
+    let image = Image::from_rgba8(1, 1, vec![255, 0, 0, 255]);
+    // Two edges advance before the third stalls at 2^53. A silent return after
+    // publishing those edges would leak a visible red prefix after rebasing.
+    let base = 9_007_199_254_740_990.0;
+    let (x, y) = match repeat {
+        flui_painting::paint::ImageRepeat::RepeatX => (base, 0.0),
+        flui_painting::paint::ImageRepeat::RepeatY => (0.0, base),
+        _ => (base, base),
+    };
+    let dst = match input {
+        RepeatInput::Stall => Rect::from_xywh(x, y, 6.0, 6.0),
+        RepeatInput::Quota => Rect::from_xywh(0.0, 0.0, 1e300, 1.0),
+        RepeatInput::Nonfinite => Rect::from_ltrb(0.0, 0.0, f64::INFINITY, 1.0),
+    };
+    painter.save();
+    if matches!(input, RepeatInput::Stall) {
+        painter.translate(Offset::new(-x, -y));
+    }
+    let ready = std::path::PathBuf::from(
+        std::env::var_os("FLUI_REPEAT_READY").expect("child readiness marker"),
+    );
+    std::fs::write(&ready, b"ready").expect("signal prepared device and target");
+    painter.draw_image_repeat(&image, dst, repeat, mode);
+    std::fs::write(ready.with_extension("recorded"), b"recorded")
+        .expect("signal completed repeat recording");
+    painter.restore();
+    painter.draw_rect(
+        Rect::from_xywh(8.0, 8.0, 8.0, 8.0),
+        &Paint::fill(Color::GREEN).with_anti_alias(false),
+    );
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+    if matches!(input, RepeatInput::Quota) {
+        assert!(matches!(
+            painter.render_to_view(&view, &mut encoder),
+            Err(crate::EngineError::PreparedResourceLimit { .. })
+        ));
+        drop(encoder);
+        painter.finish_frame();
+        let old = crate::test_support::readback_bytes(&device, &queue, &target, 32, 32);
+        assert_eq!(
+            pixel_at(&old, 32, 12, 12),
+            [0, 0, 0, 255],
+            "quota failure preserves target"
+        );
+        painter.begin_frame().expect("next repeat frame begins");
+        painter.draw_rect(
+            Rect::from_xywh(8.0, 8.0, 8.0, 8.0),
+            &Paint::fill(Color::GREEN).with_anti_alias(false),
+        );
+        encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+    }
+    painter
+        .render_to_view(&view, &mut encoder)
+        .expect("healthy sibling encodes after omitted repeat or next frame");
+    painter
+        .submit_encoder(encoder)
+        .expect("repeat recovery submits");
+    painter.finish_frame();
+    let pixels = crate::test_support::readback_bytes(&device, &queue, &target, 32, 32);
+    let untouched = if matches!(input, RepeatInput::Quota) {
+        [0, 0, 0, 255]
+    } else {
+        [0, 0, 255, 255]
+    };
+    assert_eq!(
+        pixel_at(&pixels, 32, 0, 0),
+        untouched,
+        "no finite repeat prefix escapes; earlier draw remains"
+    );
+    assert_eq!(
+        pixel_at(&pixels, 32, 12, 12),
+        [0, 255, 0, 255],
+        "healthy sibling/next frame makes visible progress"
+    );
+}
+
+fn repeat_x_ordinary_stall() {
+    repeat_refusal(
+        "repeat x ordinary stall",
+        flui_painting::paint::ImageRepeat::RepeatX,
+        BlendMode::SrcOver,
+        RepeatInput::Stall,
+    );
+}
+fn repeat_x_ordinary_crop() {
+    repeat_crop(
+        flui_painting::paint::ImageRepeat::RepeatX,
+        BlendMode::SrcOver,
+    );
+}
+fn repeat_y_ordinary_stall() {
+    repeat_refusal(
+        "repeat y ordinary stall",
+        flui_painting::paint::ImageRepeat::RepeatY,
+        BlendMode::SrcOver,
+        RepeatInput::Stall,
+    );
+}
+fn repeat_y_ordinary_crop() {
+    repeat_crop(
+        flui_painting::paint::ImageRepeat::RepeatY,
+        BlendMode::SrcOver,
+    );
+}
+fn repeat_both_ordinary_stall() {
+    repeat_refusal(
+        "repeat both ordinary stall",
+        flui_painting::paint::ImageRepeat::Repeat,
+        BlendMode::SrcOver,
+        RepeatInput::Stall,
+    );
+}
+fn repeat_both_ordinary_crop() {
+    repeat_crop(
+        flui_painting::paint::ImageRepeat::Repeat,
+        BlendMode::SrcOver,
+    );
+}
+fn repeat_ordinary_quota() {
+    repeat_refusal(
+        "repeat ordinary quota",
+        flui_painting::paint::ImageRepeat::RepeatX,
+        BlendMode::SrcOver,
+        RepeatInput::Quota,
+    );
+}
+fn repeat_ordinary_nonfinite() {
+    repeat_refusal(
+        "repeat ordinary nonfinite",
+        flui_painting::paint::ImageRepeat::RepeatX,
+        BlendMode::SrcOver,
+        RepeatInput::Nonfinite,
+    );
+}
+fn repeat_x_advanced_stall() {
+    repeat_refusal(
+        "repeat x advanced stall",
+        flui_painting::paint::ImageRepeat::RepeatX,
+        BlendMode::Multiply,
+        RepeatInput::Stall,
+    );
+}
+fn repeat_x_advanced_crop() {
+    repeat_crop(
+        flui_painting::paint::ImageRepeat::RepeatX,
+        BlendMode::Multiply,
+    );
+}
+fn repeat_y_advanced_stall() {
+    repeat_refusal(
+        "repeat y advanced stall",
+        flui_painting::paint::ImageRepeat::RepeatY,
+        BlendMode::Multiply,
+        RepeatInput::Stall,
+    );
+}
+fn repeat_y_advanced_crop() {
+    repeat_crop(
+        flui_painting::paint::ImageRepeat::RepeatY,
+        BlendMode::Multiply,
+    );
+}
+fn repeat_both_advanced_stall() {
+    repeat_refusal(
+        "repeat both advanced stall",
+        flui_painting::paint::ImageRepeat::Repeat,
+        BlendMode::Multiply,
+        RepeatInput::Stall,
+    );
+}
+fn repeat_both_advanced_crop() {
+    repeat_crop(
+        flui_painting::paint::ImageRepeat::Repeat,
+        BlendMode::Multiply,
+    );
+}
+fn repeat_advanced_quota() {
+    repeat_refusal(
+        "repeat advanced quota",
+        flui_painting::paint::ImageRepeat::RepeatX,
+        BlendMode::Multiply,
+        RepeatInput::Quota,
+    );
+}
+fn repeat_advanced_nonfinite() {
+    repeat_refusal(
+        "repeat advanced nonfinite",
+        flui_painting::paint::ImageRepeat::RepeatX,
+        BlendMode::Multiply,
+        RepeatInput::Nonfinite,
     );
 }

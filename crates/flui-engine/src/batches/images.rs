@@ -11,7 +11,8 @@
 //! |----------------------------------------------|---------------------------------------------------|
 //! | `draw_texture`                               | resolved allocation lease and effective sampling |
 //! | `draw_image`, `draw_atlas`                   | `&mut TextureCache`                               |
-//! | `draw_image_repeat`, `draw_image_nine_slice` | `&mut TextureCache` (delegate to `draw_image`)    |
+//! | `draw_image_repeat` | `&mut TextureCache` (load once, record cropped tiles) |
+//! | `draw_image_nine_slice` | `&mut TextureCache` (delegate extracted regions) |
 //! | `draw_image_filtered`                        | `&mut TextureCache` (all branches CPU-recolor then delegate to `draw_image`) |
 //!
 //! # Advanced (dst-read) blend support
@@ -31,7 +32,7 @@
 //!   is pushed.  Per-tile `AdvancedShape` calls would be incorrect: tile N
 //!   would dst-read tile N−1's already-blended result instead of the original
 //!   backdrop — producing wrong output for any non-commutative mode.  The
-//!   SrcOver delegation path stays per-tile (byte-identical).
+//!   SrcOver path publishes the completed tile segment in painter order.
 //!
 //! - **`draw_image_filtered`**: the `ColorFilter::Mode` branch bakes the filter
 //!   (CPU per-pixel `color.blend(pixel, filter_mode)`) and then passes
@@ -55,9 +56,9 @@
 //! - `cached_images` entries are `(TextureKey, TextureInstance, ScissorRect)`.
 //! - External draws capture immutable allocation leases while recording;
 //!   replay consumes those handles without another registry lookup.
-//! - The SrcOver `draw_image_repeat`/`draw_image_nine_slice` → `draw_image`
-//!   delegation produces identical per-tile/per-region calls; loop bounds and
-//!   dst rects are byte-identical to the painter originals.
+//! - Repeat images share natural tile bounds and cropped source UVs across
+//!   ordinary and advanced routes. A stalled edge omits the whole repeat draw.
+//! - Nine-slice regions delegate to `draw_image` with extracted source pixels.
 //! - `draw_image_filtered` bakes every filter into the image pixels on the CPU
 //!   and routes the result through `draw_image`.  `ColorFilter::Mode` CPU-bakes
 //!   per-pixel, then delegates with `paint.blend_mode` for GPU compositing; the
@@ -77,6 +78,51 @@ use super::{
     },
     DrawBatcher,
 };
+
+/// One natural-image axis, with an explicitly terminal failure when a local
+/// edge cannot advance. No integer tile count can overflow or silently truncate.
+#[derive(Clone)]
+struct TileAxis {
+    current: f64,
+    end: f64,
+    step: f64,
+    repeat: bool,
+}
+
+impl TileAxis {
+    fn new(start: f64, end: f64, step: f64, repeat: bool) -> Option<Self> {
+        (start.is_finite()
+            && end.is_finite()
+            && (end - start).is_finite()
+            && end > start
+            && step.is_finite()
+            && step > 0.0)
+            .then_some(Self {
+                current: start,
+                end,
+                step,
+                repeat,
+            })
+    }
+}
+
+impl Iterator for TileAxis {
+    type Item = Result<(f64, f64), ()>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.current >= self.end {
+            return None;
+        }
+        let start = self.current;
+        let end = (start + self.step).min(self.end);
+        if end <= start || !end.is_finite() {
+            self.current = self.end;
+            return Some(Err(()));
+        }
+        self.current = if self.repeat { end } else { self.end };
+        Some(Ok((start, end)))
+    }
+}
 
 // GPU rendering routinely converts between f32/u8/u32 for pixel coordinates,
 // color channels, and buffer indices. These truncations are intentional.
@@ -267,7 +313,7 @@ impl DrawBatcher {
         );
     }
 
-    /// Record a tiled image draw by delegating to `draw_image` for each tile.
+    /// Record natural image tiles, cropping source UVs at the destination edge.
     ///
     /// **Advanced blend mode handling:** when `blend_mode.is_advanced()`,
     /// ALL tiles are collected into ONE isolated `DrawSegment` and a single
@@ -275,8 +321,7 @@ impl DrawBatcher {
     /// incorrect: tile N would dst-read tile N−1's already-blended pixels instead
     /// of the original backdrop, producing wrong output for non-commutative modes.
     ///
-    /// The SrcOver delegation path is byte-identical to what it was before
-    /// advanced-blend support existed.
+    /// Both routes publish only after every local tile edge advances.
     #[expect(
         clippy::too_many_arguments,
         reason = "borrow-seam design: segment/draw_order/state/texture_cache are disjoint \
@@ -295,231 +340,125 @@ impl DrawBatcher {
         if segment.recording_result().is_err() {
             return;
         }
-
         use flui_painting::paint::image::ImageRepeat;
-
-        let img_w = image.width() as f32;
-        let img_h = image.height() as f32;
-        if img_w <= 0.0 || img_h <= 0.0 {
+        let width = f64::from(image.width());
+        let height = f64::from(image.height());
+        if width <= 0.0 || height <= 0.0 {
             return;
         }
-
-        if blend_mode.is_advanced() {
-            // ── Advanced: collect all tiles into one segment → one AdvancedShape ──
-            //
-            // Seal prior content first (Z-order guarantee).
-            Self::finish_current_segment(segment, draw_order);
-
-            let mut shape_segment = segment.empty_sibling();
-            let mut overall_bounds: Option<Rect<f64>> = None;
-
-            // Helper: load the image into the texture cache and push one tile
-            // entry into shape_segment.
-            let texture_id = crate::texture_cache::TextureKey::from_image(image);
-
-            match texture_cache.load_from_rgba(
-                texture_id.clone(),
-                image.width(),
-                image.height(),
-                image.data(),
-            ) {
-                Ok(cached_texture) => {
-                    // Build a closure capturing shape_segment by &mut.
-                    let add_tile = |shape_seg: &mut DrawSegment,
-                                    bounds: &mut Option<Rect<f64>>,
-                                    tile_dst: Rect<f64>| {
-                        let top_left =
-                            state.apply_transform(Point::new(tile_dst.left(), tile_dst.top()));
-                        let bottom_right =
-                            state.apply_transform(Point::new(tile_dst.right(), tile_dst.bottom()));
-                        let tr =
-                            Rect::from_ltrb(top_left.x, top_left.y, bottom_right.x, bottom_right.y);
-
-                        let instance = if let Some(uv_rect) = cached_texture.uv_rect {
-                            state.apply_active_clip(crate::instancing::TextureInstance::with_uv(
-                                tr,
-                                uv_rect,
-                                Color::WHITE,
-                            ))
-                        } else {
-                            state.apply_active_clip(crate::instancing::TextureInstance::new(
-                                tr,
-                                Color::WHITE,
-                            ))
-                        };
-                        shape_seg.cached_images.push((
-                            texture_id.clone(),
-                            instance,
-                            state.current_scissor(),
-                        ));
-                        shape_seg.record_run(
-                            DrawRun::CachedImage(
-                                shape_seg.cached_images.len().saturating_sub(1)
-                                    ..shape_seg.cached_images.len(),
-                            ),
-                            state.clip_chain(),
-                        );
-
-                        // Grow overall AABB.
-                        *bounds = Some(match *bounds {
-                            None => tr,
-                            Some(prev) => Rect::from_ltrb(
-                                prev.left().min(tr.left()),
-                                prev.top().min(tr.top()),
-                                prev.right().max(tr.right()),
-                                prev.bottom().max(tr.bottom()),
-                            ),
-                        });
-                    };
-
-                    match repeat {
-                        ImageRepeat::NoRepeat => {
-                            add_tile(&mut shape_segment, &mut overall_bounds, dst);
-                        }
-                        ImageRepeat::Repeat => {
-                            let mut y = dst.top();
-                            while y < dst.bottom() {
-                                let mut x = dst.left();
-                                while x < dst.right() {
-                                    let tw = img_w.min((dst.right() - x) as f32);
-                                    let th = img_h.min((dst.bottom() - y) as f32);
-                                    add_tile(
-                                        &mut shape_segment,
-                                        &mut overall_bounds,
-                                        Rect::from_xywh(x, y, f64::from(tw), f64::from(th)),
-                                    );
-                                    x += f64::from(img_w);
-                                }
-                                y += f64::from(img_h);
-                            }
-                        }
-                        ImageRepeat::RepeatX => {
-                            let th = img_h.min(dst.height() as f32);
-                            let mut x = dst.left();
-                            while x < dst.right() {
-                                let tw = img_w.min((dst.right() - x) as f32);
-                                add_tile(
-                                    &mut shape_segment,
-                                    &mut overall_bounds,
-                                    Rect::from_xywh(x, dst.top(), f64::from(tw), f64::from(th)),
-                                );
-                                x += f64::from(img_w);
-                            }
-                        }
-                        ImageRepeat::RepeatY => {
-                            let tw = img_w.min(dst.width() as f32);
-                            let mut y = dst.top();
-                            while y < dst.bottom() {
-                                let th = img_h.min((dst.bottom() - y) as f32);
-                                add_tile(
-                                    &mut shape_segment,
-                                    &mut overall_bounds,
-                                    Rect::from_xywh(dst.left(), y, f64::from(tw), f64::from(th)),
-                                );
-                                y += f64::from(img_h);
-                            }
-                        }
-                    }
-                }
-                Err(e) => {
-                    tracing::error!("Failed to load repeat image texture: {}", e);
-                    return;
-                }
-            }
-
-            if shape_segment.cached_images.is_empty() {
+        if repeat == ImageRepeat::NoRepeat {
+            Self::draw_image(
+                segment,
+                draw_order,
+                state,
+                texture_cache,
+                image,
+                dst,
+                blend_mode,
+            );
+            return;
+        }
+        let Some(columns) = TileAxis::new(
+            dst.left(),
+            dst.right(),
+            width,
+            repeat != ImageRepeat::RepeatY,
+        ) else {
+            return;
+        };
+        let Some(rows) = TileAxis::new(
+            dst.top(),
+            dst.bottom(),
+            height,
+            repeat != ImageRepeat::RepeatX,
+        ) else {
+            return;
+        };
+        let texture_id = crate::texture_cache::TextureKey::from_image(image);
+        let cached = match texture_cache.load_from_rgba(
+            texture_id.clone(),
+            image.width(),
+            image.height(),
+            image.data(),
+        ) {
+            Ok(cached) => cached,
+            Err(error) => {
+                tracing::error!("Failed to load repeat image texture: {error}");
                 return;
             }
-
-            let device_bounds = overall_bounds
-                .expect("invariant: non-empty cached_images implies overall_bounds is Some");
+        };
+        let [u0, v0, u1, v1] = cached.uv_rect.unwrap_or([0.0, 0.0, 1.0, 1.0]);
+        // Keep the draw unpublished until all its local edges advance. A later
+        // precision failure must not leave a finite prefix in the ordinary path.
+        let mut tiles = segment.empty_sibling();
+        let mut bounds: Option<Rect<f64>> = None;
+        for row in rows {
+            let Ok((top, bottom)) = row else {
+                return;
+            };
+            for column in columns.clone() {
+                let Ok((left, right)) = column else {
+                    return;
+                };
+                let top_left = state.apply_transform(Point::new(left, top));
+                let bottom_right = state.apply_transform(Point::new(right, bottom));
+                if ![top_left.x, top_left.y, bottom_right.x, bottom_right.y]
+                    .into_iter()
+                    .all(f64::is_finite)
+                {
+                    return;
+                }
+                let transformed =
+                    Rect::from_ltrb(top_left.x, top_left.y, bottom_right.x, bottom_right.y);
+                // The terminal tile crops the natural image rather than scaling
+                // the entire source into the remaining destination width/height.
+                let uv = [
+                    u0,
+                    v0,
+                    u0 + ((right - left) / width).min(1.0) as f32 * (u1 - u0),
+                    v0 + ((bottom - top) / height).min(1.0) as f32 * (v1 - v0),
+                ];
+                let instance = state.apply_active_clip(
+                    crate::instancing::TextureInstance::with_uv(transformed, uv, Color::WHITE),
+                );
+                tiles
+                    .cached_images
+                    .push((texture_id.clone(), instance, state.current_scissor()));
+                tiles.record_run(
+                    DrawRun::CachedImage(
+                        tiles.cached_images.len().saturating_sub(1)..tiles.cached_images.len(),
+                    ),
+                    state.clip_chain(),
+                );
+                // The frame budget is shared with the parent and other layers.
+                // Once it refuses growth, traversing further tiles cannot help.
+                if tiles.recording_result().is_err() {
+                    return;
+                }
+                bounds = Some(match bounds {
+                    None => transformed,
+                    Some(previous) => Rect::from_ltrb(
+                        previous.left().min(transformed.left()),
+                        previous.top().min(transformed.top()),
+                        previous.right().max(transformed.right()),
+                        previous.bottom().max(transformed.bottom()),
+                    ),
+                });
+            }
+        }
+        let Some(device_bounds) = bounds else {
+            return;
+        };
+        Self::finish_current_segment(segment, draw_order);
+        let tiles = tiles.seal();
+        if blend_mode.is_advanced() {
             draw_order.push(DrawItem::AdvancedShape(AdvancedShapeOp {
-                segment: shape_segment.seal(),
+                segment: tiles,
                 mode: blend_mode,
                 device_bounds,
             }));
-
-            return;
-        }
-
-        // ── SrcOver path (unchanged by advanced-blend support) ────────────────
-
-        match repeat {
-            ImageRepeat::NoRepeat => {
-                // Single draw, no tiling.
-                Self::draw_image(
-                    segment,
-                    draw_order,
-                    state,
-                    texture_cache,
-                    image,
-                    dst,
-                    blend_mode,
-                );
-            }
-            ImageRepeat::Repeat => {
-                // Tile in both directions.
-                let mut y = dst.top();
-                while y < dst.bottom() {
-                    let mut x = dst.left();
-                    while x < dst.right() {
-                        let tile_w = img_w.min((dst.right() - x) as f32);
-                        let tile_h = img_h.min((dst.bottom() - y) as f32);
-                        let tile_dst = Rect::from_xywh(x, y, f64::from(tile_w), f64::from(tile_h));
-                        Self::draw_image(
-                            segment,
-                            draw_order,
-                            state,
-                            texture_cache,
-                            image,
-                            tile_dst,
-                            blend_mode,
-                        );
-                        x += f64::from(img_w);
-                    }
-                    y += f64::from(img_h);
-                }
-            }
-            ImageRepeat::RepeatX => {
-                // Tile only horizontally.
-                let tile_h = img_h.min(dst.height() as f32);
-                let mut x = dst.left();
-                while x < dst.right() {
-                    let tile_w = img_w.min((dst.right() - x) as f32);
-                    let tile_dst =
-                        Rect::from_xywh(x, dst.top(), f64::from(tile_w), f64::from(tile_h));
-                    Self::draw_image(
-                        segment,
-                        draw_order,
-                        state,
-                        texture_cache,
-                        image,
-                        tile_dst,
-                        blend_mode,
-                    );
-                    x += f64::from(img_w);
-                }
-            }
-            ImageRepeat::RepeatY => {
-                // Tile only vertically.
-                let tile_w = img_w.min(dst.width() as f32);
-                let mut y = dst.top();
-                while y < dst.bottom() {
-                    let tile_h = img_h.min((dst.bottom() - y) as f32);
-                    let tile_dst =
-                        Rect::from_xywh(dst.left(), y, f64::from(tile_w), f64::from(tile_h));
-                    Self::draw_image(
-                        segment,
-                        draw_order,
-                        state,
-                        texture_cache,
-                        image,
-                        tile_dst,
-                        blend_mode,
-                    );
-                    y += f64::from(img_h);
-                }
-            }
+        } else {
+            draw_order.push(DrawItem::Segment(tiles));
         }
     }
 
