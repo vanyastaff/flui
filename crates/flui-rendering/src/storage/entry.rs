@@ -437,11 +437,18 @@ impl<P: Protocol> RenderEntry<P> {
                         // before that foreign call as well as on ordinary return.
                         let payload = std::mem::ManuallyDrop::new(payload);
                         let msg = payload_text(&**payload).unwrap_or("(non-string panic payload)");
-                        tracing::error!(
-                            render_object = debug_name,
-                            panic_msg = msg,
-                            "perform_layout panicked — surfacing as RenderError::Poisoned",
-                        );
+                        if let Err(reporting_payload) =
+                            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                tracing::error!(
+                                    render_object = debug_name,
+                                    panic_msg = msg,
+                                    "perform_layout panicked — surfacing as RenderError::Poisoned",
+                                );
+                            }))
+                        {
+                            // Reporting is secondary; do not retire its opaque failure or report it again.
+                            std::mem::forget(reporting_payload);
+                        }
                         Err(crate::error::RenderError::poisoned(
                             debug_name,
                             crate::error::PoisonPhase::Layout,

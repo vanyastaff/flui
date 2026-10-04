@@ -1383,14 +1383,23 @@ unsafe fn layout_subtree_borrowed_impl(
         let geometry = match unwind_result {
             Ok(inner) => inner?,
             Err(payload) => {
-                let msg = payload_text(&*payload).unwrap_or("(non-string panic payload)");
-                tracing::error!(
-                    render_object = debug_name,
-                    panic_msg = msg,
-                    "perform_layout panicked in non-leaf path — surfacing as \
-                     RenderError::Poisoned (symmetric with leaf-path \
-                     layout_leaf_only catch_unwind discipline)",
-                );
+                // As in the leaf boundary, retain opaque destruction before diagnostics.
+                let payload = std::mem::ManuallyDrop::new(payload);
+                let msg = payload_text(&**payload).unwrap_or("(non-string panic payload)");
+                if let Err(reporting_payload) =
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        tracing::error!(
+                            render_object = debug_name,
+                            panic_msg = msg,
+                            "perform_layout panicked in non-leaf path — surfacing as \
+                         RenderError::Poisoned (symmetric with leaf-path \
+                         layout_leaf_only catch_unwind discipline)",
+                        );
+                    }))
+                {
+                    // Reporting is secondary; do not retire its opaque failure or report it again.
+                    std::mem::forget(reporting_payload);
+                }
                 return Err(crate::error::RenderError::poisoned(
                     debug_name,
                     crate::error::PoisonPhase::Layout,
@@ -2054,13 +2063,22 @@ unsafe fn layout_sliver_subtree_borrowed_impl(
         let geometry = match unwind_result {
             Ok(inner) => inner?,
             Err(payload) => {
-                let msg = payload_text(&*payload).unwrap_or("(non-string panic payload)");
-                tracing::error!(
-                    render_object = debug_name,
-                    panic_msg = msg,
-                    "perform_layout panicked in non-leaf sliver path — surfacing as \
-                     RenderError::Poisoned",
-                );
+                // As in the leaf boundary, retain opaque destruction before diagnostics.
+                let payload = std::mem::ManuallyDrop::new(payload);
+                let msg = payload_text(&**payload).unwrap_or("(non-string panic payload)");
+                if let Err(reporting_payload) =
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        tracing::error!(
+                            render_object = debug_name,
+                            panic_msg = msg,
+                            "perform_layout panicked in non-leaf sliver path — surfacing as \
+                         RenderError::Poisoned",
+                        );
+                    }))
+                {
+                    // Reporting is secondary; do not retire its opaque failure or report it again.
+                    std::mem::forget(reporting_payload);
+                }
                 return Err(crate::error::RenderError::poisoned(
                     debug_name,
                     crate::error::PoisonPhase::Layout,

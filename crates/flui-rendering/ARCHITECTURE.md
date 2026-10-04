@@ -1061,18 +1061,24 @@ hundredth and remain unchanged. The objects consumer `family_sizing` checks a
 large finite requested width under a different finite parent maximum, and
 ordinary hundredth rounding; this pins actual geometry rather than a getter.
 
-### Leaf layout reporting retains opaque failure payloads
+### Layout reporting retains opaque failure payloads
 
-A custom leaf layout may panic with an opaque payload whose destructors also
-panic. The leaf-only layout boundary retains that payload before borrowing its
-text or invoking tracing subscribers, so failure reporting still returns the
-original layout `Poisoned` error. Exceptional retention does not execute user
-`Drop`; it follows ADR-0104. Ordinary render-object destruction remains unchanged.
+A custom layout may panic with an opaque payload whose destructors also
+panic. The leaf, nonleaf Box, and nonleaf Sliver boundaries retain that payload
+before borrowing its text or invoking tracing subscribers. A reporting panic
+is secondary: its payload is retained without another diagnostic, preserving
+the original layout `Poisoned` error. Exceptional retention does not execute
+user `Drop`; it follows ADR-0104. Ordinary render-object destruction remains
+unchanged, including ordinary destructor failures outside these boundaries.
 
-`leaf_layout_reporting_retains_opaque_payloads` exercises an ordinary payload,
-a hostile destructor, two competing field destructors, and successful layout
-through a replacement object. Bounded child processes isolate an old-source
-aggregate abort from the parent test runner.
+`layout_reporting_retains_opaque_payloads` exercises an ordinary payload,
+a hostile destructor, competing field destructors, and a panicking subscriber
+alone or competing with the source aggregate. Each row then lays out a healthy
+replacement. Nonleaf rows attach actual children and use the public recursive
+layout driver. Sliver failures reach their Box host through the declared zero
+stand-in and degraded-geometry contract; replacement slivers provide their
+actual geometry. Bounded child processes isolate an old-source aggregate abort
+from the parent test runner.
 
 ### Finite grid windows saturate index arithmetic before item bounds
 
