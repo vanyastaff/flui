@@ -361,3 +361,233 @@ pub(crate) fn registered_fonts_release_the_source_and_keep_rasterizing() {
         "the registry must release its source"
     );
 }
+
+fn split_maximum_float_saturates() {
+    assert_eq!(SubpixelBin::split(f32::MAX), (i32::MAX, SubpixelBin::Zero));
+}
+fn split_minimum_float_saturates() {
+    assert_eq!(SubpixelBin::split(f32::MIN), (i32::MIN, SubpixelBin::Zero));
+}
+fn split_positive_infinity_saturates() {
+    assert_eq!(
+        SubpixelBin::split(f32::INFINITY),
+        (i32::MAX, SubpixelBin::Zero)
+    );
+}
+fn split_negative_infinity_saturates() {
+    assert_eq!(
+        SubpixelBin::split(f32::NEG_INFINITY),
+        (i32::MIN, SubpixelBin::Zero)
+    );
+}
+fn split_nan_keeps_the_documented_zero() {
+    assert_eq!(SubpixelBin::split(f32::NAN), (0, SubpixelBin::Zero));
+}
+fn split_quarter_pixel_edges_keep_their_bins() {
+    assert_eq!(SubpixelBin::split(0.125), (0, SubpixelBin::One));
+    assert_eq!(SubpixelBin::split(0.375), (0, SubpixelBin::Two));
+    assert_eq!(SubpixelBin::split(0.625), (0, SubpixelBin::Three));
+    assert_eq!(SubpixelBin::split(0.875), (1, SubpixelBin::Zero));
+    assert_eq!(SubpixelBin::split(-0.125), (-1, SubpixelBin::Three));
+    assert_eq!(SubpixelBin::split(-0.375), (-1, SubpixelBin::Two));
+    assert_eq!(SubpixelBin::split(-0.625), (-1, SubpixelBin::One));
+    assert_eq!(SubpixelBin::split(-0.875), (-1, SubpixelBin::Zero));
+}
+
+pub(crate) fn subpixel_split_is_total_across_the_float_domain() {
+    crate::cases::run_cases(
+        "subpixel_split",
+        &[
+            ("maximum finite", split_maximum_float_saturates),
+            ("minimum finite", split_minimum_float_saturates),
+            ("positive infinity", split_positive_infinity_saturates),
+            ("negative infinity", split_negative_infinity_saturates),
+            ("NaN", split_nan_keeps_the_documented_zero),
+            (
+                "quarter pixel edges",
+                split_quarter_pixel_edges_keep_their_bins,
+            ),
+        ],
+    );
+}
+
+fn placement_paragraph(
+    style: flui_painting::typography::TextStyle,
+) -> (Arc<flui_painting::ShapedParagraph>, f64) {
+    use flui_painting::typography::{TextDirection, TextSpan};
+    use flui_painting::{Canvas, DrawOp, FontCollection, TextBaseline, TextContext, TextPainter};
+    let mut context = TextContext::new(&FontCollection::new());
+    let mut painter = TextPainter::new()
+        .with_text(TextSpan::styled("AA", style))
+        .with_text_direction(TextDirection::Ltr);
+    painter.layout(&mut context, 0.0, f64::INFINITY);
+    let baseline = painter.compute_distance_to_actual_baseline(TextBaseline::Alphabetic);
+    let mut canvas = Canvas::new();
+    painter.paint(&mut canvas, flui_foundation::geometry::Offset::ZERO);
+    let list = canvas.finish();
+    let paragraph = list
+        .iter()
+        .find_map(|command| match &command.op {
+            DrawOp::Paragraph { paragraph, .. } => Some(Arc::clone(paragraph)),
+            _ => None,
+        })
+        .expect("public paint records the shaped paragraph");
+    assert_eq!(
+        paragraph.runs().count(),
+        1,
+        "fixture is one bundled-font run"
+    );
+    (paragraph, baseline)
+}
+
+fn place_paragraph(
+    paragraph: &flui_painting::ShapedParagraph,
+    origin: (f32, f32),
+    scale: f32,
+) -> Vec<flui_painting::glyphs::PlacedGlyph> {
+    let run = paragraph
+        .runs()
+        .next()
+        .expect("the public paragraph has a run");
+    let mut fonts = FontRegistry::new();
+    let key = fonts.prepare_run(&run).expect("the shaped face registers");
+    run.placed_glyphs(key, origin, scale).collect()
+}
+
+fn assert_origin_is_omitted(origin: (f32, f32)) {
+    let (paragraph, _) = placement_paragraph(flui_painting::typography::TextStyle::default());
+    let healthy = place_paragraph(&paragraph, (0.0, 0.0), 1.0);
+    assert_eq!(healthy.len(), 2);
+    assert!(
+        place_paragraph(&paragraph, origin, 1.0).is_empty(),
+        "invalid origin {origin:?} reached placement"
+    );
+    assert_eq!(
+        place_paragraph(&paragraph, (0.0, 0.0), 1.0),
+        healthy,
+        "next ordinary placement changed"
+    );
+}
+fn placed_maximum_horizontal_origin_is_omitted() {
+    assert_origin_is_omitted((f32::MAX, 0.0));
+}
+fn placed_minimum_horizontal_origin_is_omitted() {
+    assert_origin_is_omitted((f32::MIN, 0.0));
+}
+fn placed_positive_infinite_origin_is_omitted() {
+    assert_origin_is_omitted((f32::INFINITY, 0.0));
+}
+fn placed_negative_infinite_origin_is_omitted() {
+    assert_origin_is_omitted((0.0, f32::NEG_INFINITY));
+}
+fn placed_nan_horizontal_origin_is_omitted() {
+    assert_origin_is_omitted((f32::NAN, 0.0));
+}
+fn placed_nan_vertical_origin_is_omitted() {
+    assert_origin_is_omitted((0.0, f32::NAN));
+}
+fn placed_maximum_vertical_origin_is_omitted() {
+    assert_origin_is_omitted((0.0, f32::MAX));
+}
+fn placed_minimum_vertical_origin_is_omitted() {
+    assert_origin_is_omitted((0.0, f32::MIN));
+}
+fn placed_exact_upper_integer_boundary_is_omitted() {
+    // This IEEE f32 value is exactly 2^31, one above i32::MAX.
+    assert_origin_is_omitted((f32::from_bits(0x4f00_0000), 0.0));
+}
+fn placed_final_vertical_row_overflow_is_omitted() {
+    let (paragraph, _) = placement_paragraph(flui_painting::typography::TextStyle::default());
+    let healthy = place_paragraph(&paragraph, (0.0, 0.0), 16.0);
+    assert_eq!(healthy.len(), 2);
+    assert!(
+        healthy[0].y > 127,
+        "fixture baseline must overflow after the largest in-range f32 offset"
+    );
+    assert_eq!(
+        place_paragraph(&paragraph, (0.0, f32::from_bits(0x4eff_ffff)), 16.0),
+        Vec::new()
+    );
+    assert_eq!(place_paragraph(&paragraph, (0.0, 0.0), 16.0), healthy);
+}
+
+pub(crate) fn placed_glyphs_omit_unrepresentable_coordinates() {
+    crate::cases::run_cases(
+        "glyph_coordinate_admission",
+        &[
+            (
+                "maximum horizontal",
+                placed_maximum_horizontal_origin_is_omitted,
+            ),
+            (
+                "minimum horizontal",
+                placed_minimum_horizontal_origin_is_omitted,
+            ),
+            (
+                "positive infinity",
+                placed_positive_infinite_origin_is_omitted,
+            ),
+            (
+                "negative infinity",
+                placed_negative_infinite_origin_is_omitted,
+            ),
+            ("horizontal NaN", placed_nan_horizontal_origin_is_omitted),
+            ("vertical NaN", placed_nan_vertical_origin_is_omitted),
+            (
+                "maximum vertical",
+                placed_maximum_vertical_origin_is_omitted,
+            ),
+            (
+                "minimum vertical",
+                placed_minimum_vertical_origin_is_omitted,
+            ),
+            (
+                "exact upper boundary",
+                placed_exact_upper_integer_boundary_is_omitted,
+            ),
+            (
+                "final vertical row overflow",
+                placed_final_vertical_row_overflow_is_omitted,
+            ),
+        ],
+    );
+}
+
+pub(crate) fn placed_glyphs_keep_representable_extremes_and_hinting() {
+    let (paragraph, _) = placement_paragraph(flui_painting::typography::TextStyle::default());
+    let healthy = place_paragraph(&paragraph, (0.0, 0.0), 1.0);
+    assert_eq!(healthy.len(), 2);
+    let low = place_paragraph(&paragraph, (-f32::from_bits(0x4f00_0000), 0.0), 1.0);
+    assert_eq!(low.len(), 2);
+    assert_eq!(low[0].x, i32::MIN);
+    let high = place_paragraph(&paragraph, (f32::from_bits(0x4eff_ffff), 0.0), 1.0);
+    assert_eq!(high.len(), 2);
+    assert_eq!(high[0].x, 2_147_483_520);
+    let fractional = place_paragraph(&paragraph, (0.125, 1.75), 1.0);
+    assert_eq!(fractional[0].x, healthy[0].x);
+    assert_eq!(fractional[0].key.x_bin(), SubpixelBin::One);
+    assert_eq!(fractional[0].y, healthy[0].y + 1);
+}
+
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "the public baseline is a widened f32 layout value, narrowed back to its native precision"
+)]
+pub(crate) fn placed_glyphs_keep_cancelling_vertical_coordinates() {
+    let (paragraph, baseline) = placement_paragraph(
+        flui_painting::typography::TextStyle::default().with_height(4_294_967_296.0),
+    );
+    assert!(
+        baseline > f64::from(i32::MAX),
+        "fixture baseline must exceed the device integer range"
+    );
+    let origin_y = -(baseline as f32).round();
+    let placed = place_paragraph(&paragraph, (0.0, origin_y), 1.0);
+    assert_eq!(
+        placed.len(),
+        2,
+        "valid cancellation must not discard the run"
+    );
+    assert_eq!(placed[0].y, 0);
+    assert_eq!(placed[1].y, 0);
+}

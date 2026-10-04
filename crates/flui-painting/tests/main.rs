@@ -72,6 +72,22 @@ fn parley_oracle_contract() {
                 "registered_fonts_release_the_source_and_keep_rasterizing",
                 parley_oracle::registered_fonts_release_the_source_and_keep_rasterizing,
             ),
+            (
+                "subpixel_split_is_total_across_the_float_domain",
+                parley_oracle::subpixel_split_is_total_across_the_float_domain,
+            ),
+            (
+                "placed_glyphs_omit_unrepresentable_coordinates",
+                parley_oracle::placed_glyphs_omit_unrepresentable_coordinates,
+            ),
+            (
+                "placed_glyphs_keep_representable_extremes_and_hinting",
+                parley_oracle::placed_glyphs_keep_representable_extremes_and_hinting,
+            ),
+            (
+                "placed_glyphs_keep_cancelling_vertical_coordinates",
+                parley_oracle::placed_glyphs_keep_cancelling_vertical_coordinates,
+            ),
         ],
     );
 }

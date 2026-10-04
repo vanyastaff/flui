@@ -235,6 +235,10 @@ impl<'a> ShapedRun<'a> {
     /// `origin.y + dy × scale`; its bitmap is rasterized at
     /// `font_size × scale`. These are the rules cosmic-text placed glyphs
     /// with, so a glyph lands on the device pixel it landed on there.
+    ///
+    /// Glyphs with non-finite or unrepresentable device coordinates are omitted.
+    /// The rounded baseline and truncated vertical offset are added in `f64`
+    /// before checking the final row, preserving cancellation between them.
     pub fn placed_glyphs(
         &self,
         key: RunKey,
@@ -244,26 +248,21 @@ impl<'a> ShapedRun<'a> {
         let size = self.data.font_size * scale;
         let synthesis = self.data.synthesis;
         let color = self.data.color;
-        #[expect(
-            clippy::cast_possible_truncation,
-            reason = "a device row fits i32; rounding is the baseline rule"
-        )]
-        let baseline = (self.data.baseline * scale).round() as i32;
-        self.glyphs().iter().map(move |glyph| {
-            let (x, bin) = SubpixelBin::split(glyph.x.mul_add(scale, origin.0));
-            #[expect(
-                clippy::cast_possible_truncation,
-                reason = "a device row fits i32; truncation is the vertical hinting rule"
-            )]
-            let dy = glyph.dy.mul_add(scale, origin.1).trunc() as i32;
-            PlacedGlyph {
+        let baseline = (self.data.baseline * scale).round();
+        self.glyphs().iter().filter_map(move |glyph| {
+            let horizontal = glyph.x.mul_add(scale, origin.0);
+            device_coordinate(f64::from(horizontal))?;
+            let (x, bin) = SubpixelBin::split(horizontal);
+            let dy = glyph.dy.mul_add(scale, origin.1).trunc();
+            let y = device_coordinate(f64::from(baseline) + f64::from(dy))?;
+            Some(PlacedGlyph {
                 key: GlyphKey::new(key.face, glyph.id, size, bin)
                     .with_variation(key.variation)
                     .with_synthesis(synthesis),
                 x,
-                y: baseline + dy,
+                y,
                 color,
-            }
+            })
         })
     }
 }
@@ -276,5 +275,18 @@ impl fmt::Debug for ShapedRun<'_> {
             .field("synthesis", &self.data.synthesis)
             .field("glyphs", &self.glyphs().len())
             .finish_non_exhaustive()
+    }
+}
+
+/// Validate before casting: i32::MAX rounds up to 2^31 when cast to f32.
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "finite coordinates are checked against exact i32 bounds before truncation"
+)]
+fn device_coordinate(value: f64) -> Option<i32> {
+    if value.is_finite() && (f64::from(i32::MIN)..=f64::from(i32::MAX)).contains(&value) {
+        Some(value as i32)
+    } else {
+        None
     }
 }
