@@ -100,7 +100,9 @@ pub use canvas::Canvas;
 pub use decoration::{DecorationPaintOptions, box_decoration_hit_test, paint_box_decoration};
 pub use display_list::{DamageExtent, DisplayList, DrawCommand, DrawOp, ShapedParagraph};
 pub use error::RegisterFontError;
-pub use glyphs::{GlyphContent, GlyphImage, GlyphKey, GlyphRasterizer, PlacedGlyph};
+pub use glyphs::{
+    GlyphContent, GlyphImage, GlyphImageError, GlyphKey, GlyphRasterizer, PlacedGlyph,
+};
 pub use table_border::paint_table_border;
 pub use text_layout::{FontCollection, HostFontFeed, HostFonts, TextContext, TextLayoutResult};
 pub use text_painter::{Invalidation, TextBaseline, TextPainter};

@@ -137,6 +137,24 @@ so its vertical bin is always zero. A registry holds every blob a key names,
 so a key stays valid after fontique's source cache drops the file
 (`a_held_blob_keeps_its_keys_across_a_prune`, `src/text_layout/context.rs`).
 
+`GlyphImage` owns one validated, immutable bitmap (ADR-0120). Its constructor
+checks `width * height * bytes_per_texel` in the target's `usize`; an
+unrepresentable size or incomplete buffer cannot cross the rasterizer boundary.
+Either zero dimension requires zero bytes before any dimension conversion or
+multiplication. Immutable getters expose placement, format and `&[u8]`, with
+no dimension setter, mutable buffer or serialization constructor bypass.
+`SwashRasterizer` admits its scaler output through the same constructor and
+returns `None` when that output cannot form an image. Deterministic output per
+key remains a rasterizer obligation: validation proves a complete bitmap, not
+that a later rasterization has the same dimensions or texels.
+
+The public `glyph_images_admit_only_complete_mask_and_color_buffers` row in
+`parley_oracle_contract` covers mask/RGBA admission, short and excess buffers,
+format/length disagreement, empty-axis extremes, overflow and a healthy next
+image. `GlyphImage`'s compile-fail doctests prohibit literal construction,
+dimension mutation and pixel mutation through its getter. The existing Swash
+bitmap oracle continues to pin actual producer output.
+
 ---
 
 ## Thread safety

@@ -22,6 +22,9 @@
   back-links are written.
 - **Date:** 2026-09-25
 - **Superseded-by:** ADR-0114 for §10 step 4b's direction-only line alignment; other decisions remain in force.
+- **Superseded-by:** [ADR-0120](ADR-0120-validated-glyph-image.md) for §5's
+  `GlyphImage` representation and admission only; the raster trait, font identity,
+  registry ownership and shaping decisions remain in force.
 - **Revised:** 2026-09-26 (rasterization prototype; see Context); 2026-09-29 (§10 step 3
   split into 3a and 3b; the realm lends its context through a shared handle; Parley
   measurement behind `parley-layout`; a pipeline is built with its context, and the hot-reload
@@ -343,6 +346,11 @@ Settled by §10 step 4:
   manifest.
 
 ### 5. Glyph keys carry font identity; rasterization is a raster-side trait
+
+**Image representation superseded by ADR-0120.** The rasterizer now returns an
+immutable `GlyphImage` admitted by checked construction; the atlas trusts its
+byte-layout invariant. The key, registry and `Option` rasterization contract
+below remain binding, including replay checks for a different valid bitmap.
 
 `GlyphKey` becomes font blob id, face index, glyph id, exact size, variation identity, a
 quarter-pixel x bin (cosmic-text's rule) and the hinting and synthesis flags. The prototype hashed

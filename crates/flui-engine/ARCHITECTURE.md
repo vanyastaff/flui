@@ -699,28 +699,29 @@ promising extreme-coordinate GPU floating-point precision.
 
 `parley_runs_read_back` reads back what paint now
 draws: hard breaks, synthetic bold, host fallback faces, right alignment and
-the device baseline. Because a rasterizer is a seam,
-the atlas guards the upload rather than trusting it: an image whose data
-length is not `width × height × bytes_per_texel` is not placed (warned), and
-a grow re-uploads a re-rasterized glyph only if it has the size and content
-kind its slot was given. Either would otherwise fail wgpu's copy validation,
-which panics under the default error handler. A glyph that fails the grow
+the device baseline. `GlyphImage` validates CPU byte storage at construction
+(ADR-0120); the atlas does not repeat that invariant. A valid bitmap can still
+exceed the device's texture limit, so allocation refuses it before eviction or
+page growth and converts dimensions to the packer's signed representation with
+checked conversions. A grow re-uploads a re-rasterized glyph only if it has the
+size and content kind its slot was given. A glyph that fails the grow
 check is dropped from the cache, as after a `None`, so its next use asks
 again; its allocation is freed at the end of the frame if the frame already
 drew from it, so no other glyph is packed into a region a recorded draw
 samples. `swash_glyphs_land_and_equal_keys_share_a_slot` pins the placement
 path a real rasterizer takes.
 `failed_glyph_replay_retries_without_reusing_recorded_regions` models a missing
-bitmap, malformed bitmap and both failures on independent keys through the private
+bitmap, valid bitmaps with changed size or content, and competing failures on independent keys through the private
 rasterizer seam. Failed replay removes the cache entry even when the rasterizer
 returns `None`; the replacement texture contains no uploaded bitmap for that key.
 The next use retries, healthy keys remain cached, and retry allocations cannot
 reuse regions already referenced by the current frame. This checks recovery and
 allocation ownership, without claiming that a failed bitmap can still be drawn
 in the frame which first requested it.
-The same family rejects an overflowing color-bitmap byte count before upload and
-proves that a subsequent valid bitmap for the key can still be admitted. Expected
-byte length uses checked arithmetic even when a rasterizer violates its contract.
+The same family produces a valid CPU bitmap beyond a deliberately small device
+limit, proves refusal without replaying healthy glyphs or growing the page, and
+then admits a valid bitmap for the same key. Width and height are separate rows.
+CPU byte-count overflow and malformed storage are painting constructor tests.
 
 ### 17. One rounding rule per purpose: hard edges snap, bounds cover — [ADR-0098 §6](../../docs/adr/ADR-0098-owned-f64-geometry-values.md)
 

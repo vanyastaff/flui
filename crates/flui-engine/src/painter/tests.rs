@@ -2553,8 +2553,8 @@ fn extreme_glyph_bearings_do_not_overflow_before_clipping(
             .rasterize(glyph.key)
             .expect("fixture glyph rasterizes");
         assert!(
-            i64::from(glyph.x) + i64::from(bitmap.left) < i64::from(i32::MIN)
-                || i64::from(glyph.y) - i64::from(bitmap.top) < i64::from(i32::MIN),
+            i64::from(glyph.x) + i64::from(bitmap.left()) < i64::from(i32::MIN)
+                || i64::from(glyph.y) - i64::from(bitmap.top()) < i64::from(i32::MIN),
             "fixture bearing crosses the integer endpoint"
         );
         let actual = render_to_rgba(&device, &queue, 64, wgpu::Color::WHITE, |painter| {
@@ -2659,7 +2659,7 @@ fn replacement_fonts_keep_source_policy(
         .rasterize(key)
         .expect("reference glyph rasterizes");
     assert!(
-        expected.width > 0 && expected.height > 0,
+        expected.width() > 0 && expected.height() > 0,
         "sample glyph has ink"
     );
     let actual = painter
@@ -2672,7 +2672,7 @@ fn replacement_fonts_keep_source_policy(
         .glyph_atlas
         .slot(key)
         .expect("replacement atlas uploads the glyph");
-    assert_eq!(slot.size, [expected.width, expected.height]);
+    assert_eq!(slot.size, [expected.width(), expected.height()]);
     match source {
         crate::frame_protocol::FontSource::Plugin => {
             assert_eq!(

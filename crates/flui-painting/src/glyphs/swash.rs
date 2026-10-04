@@ -128,13 +128,14 @@ impl GlyphRasterizer for SwashRasterizer {
             // comes back; the arm keeps the match total.
             Content::Mask | Content::SubpixelMask => GlyphContent::Mask,
         };
-        Some(GlyphImage {
-            left: image.placement.left,
-            top: image.placement.top,
-            width: image.placement.width,
-            height: image.placement.height,
+        GlyphImage::try_new(
+            image.placement.left,
+            image.placement.top,
+            image.placement.width,
+            image.placement.height,
             content,
-            data: image.data,
-        })
+            image.data,
+        )
+        .ok()
     }
 }

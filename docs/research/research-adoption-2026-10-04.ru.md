@@ -2,10 +2,25 @@
 
 Дата: **4 октября 2026 года**. Исходная подборка:
 [материалы за 4 июля — 4 октября](useful-ui-resources-2026-07-04--2026-10-04.ru.md).
-База внедрения: `origin/main` на `f7d49b596`, после обновления worktree.
+База первоначального внедрения (#1418): `origin/main` на `f7d49b596`, после
+обновления worktree. Его изменения вошли в `main` на `1da74e162`.
 [Предыдущий аудит](2026-10-03-rust-ecosystem-modernization.md) уже находится в
 этой базе. Его выводы сверялись с текущим кодом; повторная смена уже обновлённых
 API или dependencies не считается новым внедрением.
+
+Текущее продолжение с валидируемым `GlyphImage` основано на слитом `origin/main`
+`2992d8c44`: эта база включает dependency API audit (#1419) и уже слитое
+исправление panic-payload retirement/Miri coverage (#1420). Bitmap change
+перенесён на эту базу отдельно от prerequisite repair. Первоначальные результаты
+#1418 ниже сохранены как исторические; они не доказывают прохождение проверок
+нового bitmap API.
+
+[Dependency API audit](2026-10-04-dependency-api-audit.md) уже внедрил HTTP
+connection pooling внутри asset registry, fallible client construction,
+registry-aware network-image identity по
+[ADR-0118](../adr/ADR-0118-network-image-registry-identity.md) и обработку
+provider response chunks. Это самостоятельное ранее слитое внедрение;
+изменения `GlyphImage` не повторяют его и не приписывают себе его результаты.
 
 ## Что изменено и зачем
 
@@ -31,6 +46,12 @@ Agent semantics suite намеренно проверяет версию Windows
 
 ### Glyph atlas: отсутствующий bitmap должен разрешать повторную попытку
 
+Этот раздел описывает первоначальный repair и его failure cases в #1418.
+После перехода на валидируемый `GlyphImage` malformed-buffer/overflow cases
+проверяются на construction boundary; текущая engine family использует
+валидные изображения с изменёнными dimensions/content, missing replay и
+отказ по device limit.
+
 [Glifo fallible rendering](https://github.com/linebender/vello/releases/tag/glifo-v0.4.0)
 послужил поводом проверить наш собственный recovery path.
 В `Page::grow` новый texture создаётся и live glyphs повторно растеризуются.
@@ -49,6 +70,37 @@ SwashRasterizer; публичный API ради внедрения mock не р
 Соседняя проверка размера bitmap теперь использует checked multiplication:
 `u32::MAX × u32::MAX × 4` раньше overflow в debug вместо отказа invalid bitmap.
 Четвёртый failure case требует отказа и успешной следующей загрузки.
+
+### GlyphImage: invariant задаётся при создании значения
+
+Продолжение на слитом `origin/main` `2992d8c44`, после первоначального внедрения на `1da74e162`,
+переносит проверку byte layout на границу construction.
+[ADR-0120](../adr/ADR-0120-validated-glyph-image.md) частично supersedes
+ADR-0067/ADR-0092: `GlyphImage` имеет шесть private fields, fallible `try_new`
+и read-only accessors. Constructor проверяет представимость ожидаемой длины
+и точное соответствие data; ошибки — `SizeOverflow` и
+`InvalidDataLength { expected, actual }`. Zero-area bitmap легален с empty data.
+Ни struct literal, ни последующая безопасная mutation больше не позволяют
+создать inconsistent размеры/content/bytes.
+
+SwashRasterizer валидирует converted output; `GlyphRasterizer::rasterize`
+сохраняет `Option`, construction failure отображается в `None`. Engine убирает
+дублирующий data-length guard, сохраняя device/packer limits, retry после `None`,
+проверку изменившихся dimensions/content и retirement записанных frame regions.
+Проверки malformed output перенесены в public constructor cases; engine recovery
+использует individually valid bitmap с отличающейся replay формой.
+
+До eviction и page growth engine отвергает bitmap, превышающий device texture
+dimensions или представимый диапазон размеров packer. Неудачная admission
+не вытесняет здоровые entries и не запускает бесполезный replay при growth;
+следующий вызов того же key может повторить rasterization.
+
+Внешние consumers заменяют literal на `try_new(...)?` либо `.ok()` в Option
+producer, field reads — на getters, mutation — на construction replacement.
+Подробная migration и сохранённые shaping/raster contracts находятся в ADR.
+Это breaking API change, устраняющая invalid state в safe Rust; speedup или
+новый rendering benchmark не заявляются. Проверки этого продолжения фиксируются
+отдельно от результатов предыдущего внедрения ниже.
 
 ### Accessibility queries: дорогая диагностика только на failure path
 
@@ -145,17 +197,6 @@ Action acknowledgement, paint recording и native presentation не взаимо
    generic API/renderer оправдано измерением и сохранением behavior, а не числом
    features у другой библиотеки.
 
-5. **Валидируемый `GlyphImage`.** Сделать bitmap immutable и добавить fallible
-   constructor с checked byte-count validation. Единственный production producer
-   находится в SwashRasterizer, а consumer — в engine atlas; SDK и facade тип не
-   экспортируют. Такая смена публичного API устранит malformed bitmap в safe Rust
-   и позволит убрать повторную проверку длины данных в engine. Device limits,
-   изменение размера/content при replay, `None` и защита записанных frame regions
-   останутся обязанностями atlas. Потребуются пересмотр ADR-0067/ADR-0092, public
-   constructor tests и migration внешних struct literals. В текущий patch эта
-   отдельная cross-crate смена контракта не включена; recovery fixes завершены
-   на существующем API.
-
 Maintainer разрешил breaking changes, улучшающие API и архитектуру. Это применимо
 к следующим проектам, когда новая форма устраняет конкретное invalid state или
 дублирование ответственности. В этой работе смена raw query semantics нарушила
@@ -163,7 +204,45 @@ Maintainer разрешил breaking changes, улучшающие API и арх
 существующего контракта дала более точный результат. Новые cross-crate decisions
 требуют ADR, а изменённое behavior — отличающего regression test.
 
-## Проверки и границы выполнения
+## Проверки текущего GlyphImage
+
+Текущий source основан на слитом `origin/main` `2992d8c44`. Constructor,
+producer wiring, engine admission/replay и consumer migration дополнительно
+прочитаны независимым агентом; блокирующих дефектов не найдено.
+
+- `cargo nextest run -p flui-painting --features serde parley_oracle_contract
+  --locked --no-capture`: family прошла, включая 19 новых constructor cases.
+  Strict painting Clippy с `--all-targets --features serde` также прошёл до
+  rebase; проверяемый source при rebase не менялся.
+- `cargo test -p flui-painting --doc GlyphImage --locked`: **3 passed**,
+  consumer compile-fail cases для struct literal, field mutation и mutable bytes.
+- Required GPU family
+  `failed_glyph_replay_retries_without_reusing_recorded_regions` с
+  `FLUI_REQUIRE_GPU=1`: **1 passed**, семь строк, **5.36 s**.
+  Выполнение на Windows, без GPU skip; выбранный adapter helper не печатает.
+  Это atlas ownership/retry test, а не заявление о pixel output или speedup.
+- Четыре production controls выполнились последовательно: открытые поля дали
+  unexpected compile success (**exit 101**); отключённая length validation
+  пропустила malformed buffers (**exit 100**); wrapping arithmetic пропустила
+  color bitmap с обнулённым byte count и неверно классифицировала maximum size
+  (**exit 100**); удаление раннего device-limit guard вызвало лишний healthy
+  glyph replay в обеих oversized orientations (**expected 1 / actual 2**, exit
+  **100**). Каждый source восстановлен exact-byte в `finally`; restored
+  constructor family, три privacy doctests и GPU family прошли снова.
+  Логи: `target/glyph-control-*.log`, `target/glyph-constructor-restored.log`,
+  `target/glyph-privacy-restored.log`, `target/glyph-device-limit-restored.log`.
+
+`cargo xtask checks` и `cargo xtask check-changed` завершились с **exit 0**.
+Changed-crate closure: **494 passed, 0 skipped**, **316.674 s**; strict rustdoc,
+**434 passed / 333 ignored** doctests, Windows CLI Clippy, wasm-compatible
+closure и facade hot-reload check прошли. Оба cargo-hack each-feature прохода
+по **60** конфигураций (библиотеки и tests/benches/examples) прошли.
+Журналы: `target/glyph-checks.log`, `target/glyph-check-changed.log`.
+Пять локальных ссылок текущего отчёта отдельно проверены через `Test-Path`.
+Native macOS/Linux/mobile/browser execution этим прогоном не устанавливается.
+Исторические числа из #1418 к этому продолжению не относятся.
+
+## Исторические проверки #1418 и границы выполнения
 
 Работа разделена между агентами по tooling, runtime/testing и graphics;
 координатор изучал platform и интегрировал dependency cohort. Изменения
