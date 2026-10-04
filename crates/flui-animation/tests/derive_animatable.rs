@@ -53,3 +53,6 @@ pub(crate) fn run_table(cases: &[(&str, fn())]) {
         panic!("failed numerical cases: {names:?}");
     }
 }
+
+#[path = "contracts/controller_sources.rs"]
+mod controller_sources;

@@ -881,3 +881,24 @@ Public consumer families `weighted_sequences_preserve_endpoints_and_relative_pro
 and `weighted_sequences_reject_invalid_edited_configuration` cover overflowing
 finite weights, small first and final intervals, ordinary weighted progress,
 edited invalid configuration and a subsequent valid sequence.
+
+### Controller sources execute outside the state lock
+
+Custom `Simulation::x`, `dx`, `is_done` and `Curve::transform` implementations may
+read or change their controller. Sampling snapshots the source and inputs under
+the state lock, then calls user code after releasing it. A run generation and
+sample epoch reject a result after replacement, stop or a newer nested tick;
+the older call cannot rewind the controller or finish its replacement run.
+
+Displaced simulations, curves and status callbacks retire after the lock is
+released. Opaque envelopes keep their source alive across sampling and delivery;
+if a call unwinds, its remaining envelopes are retained without invoking user
+`Drop`. On ordinary return they retire normally, so an ordinary destructor panic
+still propagates. This protects other envelopes during that unwind; it does not
+contain competing destructors inside a user's own aggregate.
+
+`controller_sources_allow_reentry_and_preserve_run_ownership` tests public source
+queries, replacement, stop, nested ticks, ordinary retirement reentry, competing
+sampling/status and destructor failures, and the next operation. Each row runs
+in a bounded child process because the previous implementation calls these
+sources while holding a non-reentrant mutex.
