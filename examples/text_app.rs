@@ -9,7 +9,7 @@
 //! ```
 //!
 //! Renders "Hello, FLUI!" with the word `FLUI` in bold red — so it also
-//! proves the per-span rich-text seam (Wave 2b): a styled child span keeps
+//! proves per-span rich text: a styled child span keeps
 //! its own color and weight instead of collapsing to plain black SansSerif.
 //!
 //! Run with: cargo run -p flui --example text_app

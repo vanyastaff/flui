@@ -293,13 +293,3 @@ count = 4
 path = "docs/designs/2026-09-18-macos-ios-feature-completeness.md"
 class = "slice"
 count = 1
-
-[[allow]]
-path = "examples/text_app.rs"
-class = "wave"
-count = 1
-
-[[allow]]
-path = "src/lib.rs"
-class = "wave"
-count = 1
