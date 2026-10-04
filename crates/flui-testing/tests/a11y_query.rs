@@ -15,6 +15,7 @@ use flui_rendering::protocol::BoxProtocol;
 use flui_semantics::{SemanticsConfiguration, SemanticsRole};
 use flui_testing::HeadlessBinding;
 use flui_testing::a11y::Role;
+use flui_testing::{A11yQuery, A11yQueryError, A11yTree};
 use flui_view::{BuildOwner, tree::ElementTree};
 
 /// A leaf carrying whatever semantics the test wants to see come out the other
@@ -88,4 +89,89 @@ pub(crate) fn a_button_in_the_render_tree_is_findable_by_role() {
         .unwrap_or_else(|e| panic!("expected exactly one button: {e}"));
 
     assert_eq!(button.label(), Some("Submit"));
+}
+
+/// Selectors refuse duplicates and preserve every matching subject in reading
+/// order, even when the payload's emission order differs from the tree.
+pub(crate) fn unique_queries_preserve_subjects_and_complete_failure_diagnostics() {
+    use accesskit::{Node, NodeId, TreeId, TreeInfo, TreeUpdate};
+
+    let root_id = NodeId(1);
+    let mut root = Node::new(Role::Window);
+    root.set_children(vec![NodeId(2), NodeId(3), NodeId(4), NodeId(5)]);
+    let button = |name: &str, value: &str| {
+        let mut node = Node::new(Role::Button);
+        node.set_label(name);
+        node.set_value(value);
+        node
+    };
+    let mut textbox = Node::new(Role::TextInput);
+    textbox.set_label("Unique");
+    let tree = A11yTree::new(TreeUpdate {
+        nodes: vec![
+            (NodeId(4), button("Repeated", "third")),
+            (NodeId(3), button("Repeated", "second")),
+            (NodeId(5), textbox),
+            (NodeId(2), button("Repeated", "first")),
+            (root_id, root),
+        ],
+        tree: Some(TreeInfo::new(root_id)),
+        tree_id: TreeId::ROOT,
+        focus: root_id,
+    });
+
+    assert_eq!(
+        tree.find(Role::TextInput)
+            .expect("one textbox is present")
+            .id(),
+        NodeId(5)
+    );
+    assert_eq!(
+        tree.find_by_label("Unique")
+            .expect("one subject has the unique label")
+            .id(),
+        NodeId(5)
+    );
+    for (result, query) in [
+        (tree.find(Role::Image), A11yQuery::Role(Role::Image)),
+        (
+            tree.find_by_label("Absent"),
+            A11yQuery::Label("Absent".to_string()),
+        ),
+    ] {
+        let Err(A11yQueryError::NotFound {
+            query: actual,
+            tree: actual_tree,
+        }) = result
+        else {
+            panic!("a missing subject must report NotFound");
+        };
+        assert_eq!(actual, query);
+        assert_eq!(
+            actual_tree,
+            "  Window\n  Button label=\"Repeated\" value=\"first\"\n  Button label=\"Repeated\" value=\"second\"\n  Button label=\"Repeated\" value=\"third\"\n  TextInput label=\"Unique\""
+        );
+    }
+    let expected = [
+        "Button label=\"Repeated\" value=\"first\"",
+        "Button label=\"Repeated\" value=\"second\"",
+        "Button label=\"Repeated\" value=\"third\"",
+    ];
+    for (result, query) in [
+        (tree.find(Role::Button), A11yQuery::Role(Role::Button)),
+        (
+            tree.find_by_label("Repeated"),
+            A11yQuery::Label("Repeated".to_string()),
+        ),
+    ] {
+        let Err(A11yQueryError::Ambiguous {
+            query: actual,
+            matches,
+        }) = result
+        else {
+            panic!("three matching subjects must report Ambiguous");
+        };
+        assert_eq!(actual, query);
+        assert_eq!(matches, expected);
+    }
 }

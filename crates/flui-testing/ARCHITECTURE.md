@@ -71,6 +71,23 @@ substrate driver over raw owners, which the raw-owner suites still use.
 
 ## Mapping decisions
 
+### Unique accessibility queries materialize only failure diagnostics
+
+`A11yTree::find` and `find_by_label` inspect their matching iterator directly.
+One matching node returns without collecting a temporary node vector. A second
+match establishes ambiguity, but the iterator is then exhausted to preserve
+every matching description in tree order. Missing subjects retain the complete
+reachable-tree diagnostic. The public
+`unique_queries_preserve_subjects_and_complete_failure_diagnostics` row in
+`headless_frame_driver_matrix` covers both selectors, unique and missing
+subjects, and three distinguishable duplicates emitted in a different order.
+
+These queries inspect the raw root-reachable AccessKit update; they do not
+implement an OS adapter's hidden-node and transparent-container filters. The
+development agent's wire projection performs the shared consumer filtering
+under ADR-0095. Keeping the distinction explicit avoids treating a raw payload
+query as proof that a screen reader can reach the subject.
+
 ### The harness pumps the realm
 
 The harness calls `HeadlessRealm::pump(dt)`, which

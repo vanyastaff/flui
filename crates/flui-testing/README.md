@@ -67,6 +67,30 @@ driver into production binaries. `cargo xtask workspace` rejects one from any
 crate below it, and `flui-widgets` forbids reaching it (`reach-forbid`). The
 facade takes it only as an optional `testing` dependency.
 
+## Checking an interaction
+
+Establish the initial state, identify one subject, dispatch the event, then
+assert the changed state after pumping the required frames. `A11yTree::find`
+and `find_by_label` refuse ambiguous subjects; an indexed `find_all` result
+does not establish uniqueness. Check the subject's value, toggle state or
+geometry, rather than merely confirming that a textbox or button exists.
+
+A delivered semantics action is not a completed effect. A `GestureDetector`
+can defer its tap callback to a later frame, and a callback can schedule a
+rebuild for the following frame. Advance time deliberately for animation or
+gesture deadlines; a zero-duration pump does not advance the virtual clock,
+and one pump is not a general guarantee that work has settled. Keep finite
+frame/time bounds when waiting for an observable condition.
+
+The harness checks product build, layout, paint recording, semantics assembly
+and synthetic input on bundled fonts. Its sink records scenes without a GPU
+or native compositor, so recorded paint does not prove visible pixels or
+presentation. GPU readbacks need the engine tests; system-font fallback,
+native event translation, IME integration and OS accessibility need native
+checks. `A11yTree` exposes the raw root-reachable AccessKit payload, including
+hidden and transparent nodes. Platform adapters and the development agent
+apply additional filtering before exposing their trees.
+
 ## Documentation
 
 Every public item is documented (`#![deny(missing_docs)]`); build locally with

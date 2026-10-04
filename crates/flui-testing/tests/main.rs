@@ -70,6 +70,7 @@ fn headless_frame_driver_matrix() {
             ("realm_driver::a_zero_capacity_performance_window_retains_no_frame_samples", realm_driver::a_zero_capacity_performance_window_retains_no_frame_samples as fn()),
             ("realm_driver::logical_render_root_tracks_replacement_and_build_recovery", realm_driver::logical_render_root_tracks_replacement_and_build_recovery as fn()),
             ("a11y_query::a_button_in_the_render_tree_is_findable_by_role", a11y_query::a_button_in_the_render_tree_is_findable_by_role as fn()),
+            ("a11y_query::unique_queries_preserve_subjects_and_complete_failure_diagnostics", a11y_query::unique_queries_preserve_subjects_and_complete_failure_diagnostics as fn()),
             ("mount_bootstrap::mount_root_installs_the_render_root_and_lays_it_out", mount_bootstrap::mount_root_installs_the_render_root_and_lays_it_out as fn()),
             ("mount_bootstrap::the_bound_binding_keeps_pumping_from_where_the_bootstrap_left_off", mount_bootstrap::the_bound_binding_keeps_pumping_from_where_the_bootstrap_left_off as fn()),
             ("layout_builder_seam::headless_pump_frame_runs_the_layout_builder_seam", layout_builder_seam::headless_pump_frame_runs_the_layout_builder_seam as fn()),

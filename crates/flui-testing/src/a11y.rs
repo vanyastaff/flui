@@ -1,11 +1,12 @@
-//! Query the accessibility tree exactly as a screen reader receives it.
+//! Query the raw accessibility snapshot supplied to a platform adapter.
 //!
 //! A test asserts against the same [`accesskit::TreeUpdate`] a platform adapter
 //! would hand to the OS, produced by the same translation
 //! (`flui_semantics::tree_to_update`). There is deliberately no second,
-//! test-only role vocabulary: if a query here finds a `Role::Button`, a screen
-//! reader announces a button, and if it does not, the screen reader is silent
-//! too. A parallel query path would agree with the adapter only by accident.
+//! test-only role vocabulary. Queries inspect root-reachable payload nodes,
+//! including hidden and transparent containers; an OS adapter can filter those
+//! nodes before exposing them to assistive technology. For the filtered agent
+//! projection, use the development agent's read protocol.
 //!
 //! Reach it through [`HeadlessBinding::a11y_tree`](crate::HeadlessBinding::a11y_tree),
 //! after [`enable_semantics`](crate::HeadlessBinding::enable_semantics) — the
@@ -57,21 +58,23 @@ pub struct NotTreeBound;
 ///
 /// # Traversal order
 ///
-/// Queries return matches in **pre-order from the root** — the order a screen
-/// reader walks the tree, and what "the first button" means to someone reading
-/// the test. This is not the order the nodes arrive in: the semantics tree
+/// Queries return matches in **pre-order from the root**, preserving structural
+/// reading order before any adapter filtering. This is not the order the nodes
+/// arrive in: the semantics tree
 /// stores nodes in a slab, so emission order follows slab indices and shifts as
 /// freed slots are reused. Sorting by that would make `find_all(...)[0]`
 /// silently pick a different node after an unrelated rebuild.
 ///
 /// # Reachability
 ///
-/// Only nodes reachable from the root are queryable, because only those are
-/// announced. A node that was built but never linked into the tree is invisible
+/// Only nodes reachable from the root are queryable. A node that was built
+/// but never linked into the tree is invisible
 /// to assistive technology, and a finder that returned it would report a control
 /// as present that no user can reach. [`unreachable_count`](Self::unreachable_count)
 /// exposes how many such nodes exist, so "built but detached" stays diagnosable
-/// instead of merely absent.
+/// instead of merely absent. Reachability does not imply OS visibility:
+/// hidden nodes and transparent containers remain queryable in this raw
+/// snapshot, and adapters apply their own filtering.
 #[derive(Debug, Clone)]
 pub struct A11yTree {
     update: TreeUpdate,
@@ -163,7 +166,10 @@ impl A11yTree {
     /// is asserting there is one; silently picking one would keep passing after
     /// a second button appears.
     pub fn find(&self, role: Role) -> Result<A11yNode<'_>, A11yQueryError> {
-        self.exactly_one(A11yQuery::Role(role), self.find_all(role))
+        self.exactly_one(
+            || A11yQuery::Role(role),
+            self.nodes().filter(|node| node.role() == role),
+        )
     }
 
     /// Every node whose label equals `label`, in pre-order.
@@ -179,27 +185,33 @@ impl A11yTree {
     /// As [`find`](Self::find).
     pub fn find_by_label(&self, label: &str) -> Result<A11yNode<'_>, A11yQueryError> {
         self.exactly_one(
-            A11yQuery::Label(label.to_string()),
-            self.find_all_by_label(label),
+            || A11yQuery::Label(label.to_string()),
+            self.nodes().filter(|node| node.label() == Some(label)),
         )
     }
 
     fn exactly_one<'a>(
         &'a self,
-        query: A11yQuery,
-        mut matches: Vec<A11yNode<'a>>,
+        query: impl FnOnce() -> A11yQuery,
+        mut matches: impl Iterator<Item = A11yNode<'a>>,
     ) -> Result<A11yNode<'a>, A11yQueryError> {
-        match matches.len() {
-            1 => Ok(matches.remove(0)),
-            0 => Err(A11yQueryError::NotFound {
-                query,
+        let Some(first) = matches.next() else {
+            return Err(A11yQueryError::NotFound {
+                query: query(),
                 tree: self.describe(),
-            }),
-            _ => Err(A11yQueryError::Ambiguous {
-                query,
-                matches: matches.iter().map(A11yNode::describe).collect(),
-            }),
-        }
+            });
+        };
+        let Some(second) = matches.next() else {
+            return Ok(first);
+        };
+        Err(A11yQueryError::Ambiguous {
+            query: query(),
+            matches: [first, second]
+                .into_iter()
+                .chain(matches)
+                .map(|node| node.describe())
+                .collect(),
+        })
     }
 
     /// A one-line-per-node rendering of the tree, for failure messages.
