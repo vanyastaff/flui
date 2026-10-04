@@ -10,9 +10,9 @@
 use std::collections::BTreeSet;
 use std::ffi::{OsStr, OsString};
 use std::fmt;
-use std::io::{Read as _, Write as _};
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Command, ExitCode, Stdio};
+use std::process::{Child, Command, ExitCode, Stdio};
 
 use anyhow::{Context, bail};
 
@@ -121,25 +121,50 @@ impl Cmd {
             Ok((reader, child))
         };
         let (mut reader, mut child) = spawn().with_context(|| format!("running `{self}`"))?;
-        let mut captured = Vec::new();
-        let mut chunk = [0_u8; 8192];
+        let mut owned_child = ChildCleanup(&mut child);
         let mut out = std::io::stdout().lock();
-        loop {
-            let read = reader
-                .read(&mut chunk)
-                .with_context(|| format!("reading the output of `{self}`"))?;
-            if read == 0 {
-                break;
-            }
-            out.write_all(&chunk[..read])?;
-            captured.extend_from_slice(&chunk[..read]);
-        }
-        out.flush()?;
-        let status = child
-            .wait()
-            .with_context(|| format!("waiting for `{self}`"))?;
-        Ok((status.success(), String::from_utf8_lossy_owned(captured)))
+        capture_merged(&mut reader, &mut owned_child, &mut out)
+            .with_context(|| format!("capturing the output of `{self}`"))
     }
+}
+
+/// `Child` does not stop or reap its process on drop. Keep ownership through
+/// output errors and unwinding; this guards the direct child, not descendants.
+struct ChildCleanup<'a>(&'a mut Child);
+
+impl Drop for ChildCleanup<'_> {
+    fn drop(&mut self) {
+        if !matches!(self.0.try_wait(), Ok(Some(_))) {
+            if self.0.kill().is_ok() {
+                let _ = self.0.wait();
+            } else {
+                // Killing may be refused (for example after a Unix credential
+                // change). Do not block the original failure waiting for a
+                // still-live child; reap only if it has already exited.
+                let _ = self.0.try_wait();
+            }
+        }
+    }
+}
+
+fn capture_merged(
+    reader: &mut impl Read,
+    child: &mut ChildCleanup<'_>,
+    out: &mut impl Write,
+) -> std::io::Result<(bool, String)> {
+    let mut captured = Vec::new();
+    let mut chunk = [0_u8; 8192];
+    loop {
+        let read = reader.read(&mut chunk)?;
+        if read == 0 {
+            break;
+        }
+        out.write_all(&chunk[..read])?;
+        captured.extend_from_slice(&chunk[..read]);
+    }
+    out.flush()?;
+    let status = child.0.wait()?;
+    Ok((status.success(), String::from_utf8_lossy_owned(captured)))
 }
 
 /// `value` as a POSIX shell word, for display: bare when it needs no quoting,
@@ -337,6 +362,101 @@ pub(super) fn host_binary(target_dir: &Path, dirs: &[&str], name: &str) -> PathB
 mod tests {
     use super::*;
 
+    #[derive(Clone, Copy)]
+    enum CaptureFailure {
+        Read,
+        Write,
+        Flush,
+        Panic,
+    }
+
+    struct FailingStream(CaptureFailure);
+
+    impl Read for FailingStream {
+        fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+            Err(std::io::Error::other("capture read refused"))
+        }
+    }
+
+    impl Write for FailingStream {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            match self.0 {
+                CaptureFailure::Write => Err(std::io::Error::other("capture write refused")),
+                CaptureFailure::Panic => panic!("capture sink panicked"),
+                CaptureFailure::Read | CaptureFailure::Flush => Ok(bytes.len()),
+            }
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Err(std::io::Error::other("capture flush refused"))
+        }
+    }
+
+    fn capture_failure_reaps_the_owned_child(failure: CaptureFailure) {
+        let mut child = Command::new(std::env::current_exe().expect("test executable"))
+            .args(["--exact", "tasks::exec::tests::exec_failure_contract"])
+            .env("FLUI_XTASK_CAPTURE_CHILD", "1")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn the direct child");
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let mut owned = ChildCleanup(&mut child);
+            let mut sink = FailingStream(failure);
+            if matches!(failure, CaptureFailure::Read) {
+                capture_merged(&mut FailingStream(failure), &mut owned, &mut sink)
+            } else {
+                capture_merged(&mut std::io::Cursor::new(b"output"), &mut owned, &mut sink)
+            }
+        }));
+        let reaped = child
+            .try_wait()
+            .expect("inspect the direct child")
+            .is_some();
+        // Reap even with the broken implementation so a failed oracle cannot
+        // leave its parked fixture running after the test.
+        if !reaped {
+            child.kill().expect("kill an orphaned fixture");
+            child.wait().expect("reap an orphaned fixture");
+        }
+        assert!(reaped, "capture failure left the direct child running");
+        match failure {
+            CaptureFailure::Panic => assert!(result.is_err()),
+            CaptureFailure::Read | CaptureFailure::Write | CaptureFailure::Flush => {
+                let error = result
+                    .expect("ordinary IO refusal")
+                    .expect_err("refused capture");
+                let expected = match failure {
+                    CaptureFailure::Read => "capture read refused",
+                    CaptureFailure::Write => "capture write refused",
+                    CaptureFailure::Flush => "capture flush refused",
+                    CaptureFailure::Panic => unreachable!(),
+                };
+                assert_eq!(error.to_string(), expected);
+            }
+        }
+        Cmd::cargo(["--version"])
+            .status()
+            .expect("next command progresses");
+    }
+
+    fn output_read_failure_reaps_the_child() {
+        capture_failure_reaps_the_owned_child(CaptureFailure::Read);
+    }
+
+    fn output_write_failure_reaps_the_child() {
+        capture_failure_reaps_the_owned_child(CaptureFailure::Write);
+    }
+
+    fn output_flush_failure_reaps_the_child() {
+        capture_failure_reaps_the_owned_child(CaptureFailure::Flush);
+    }
+
+    fn output_sink_panic_reaps_the_child() {
+        capture_failure_reaps_the_owned_child(CaptureFailure::Panic);
+    }
+
     fn a_failing_command_is_an_error_naming_it() {
         let error = Cmd::cargo(["--no-such-flag-xtask"])
             .status()
@@ -395,9 +515,30 @@ mod tests {
 
     #[test]
     fn exec_failure_contract() {
+        if std::env::var_os("FLUI_XTASK_CAPTURE_CHILD").is_some() {
+            loop {
+                std::thread::park();
+            }
+        }
         crate::table_test::run_table(
             "exec_failure_contract",
             &[
+                (
+                    "output_read_failure_reaps_the_child",
+                    output_read_failure_reaps_the_child as fn(),
+                ),
+                (
+                    "output_write_failure_reaps_the_child",
+                    output_write_failure_reaps_the_child as fn(),
+                ),
+                (
+                    "output_flush_failure_reaps_the_child",
+                    output_flush_failure_reaps_the_child as fn(),
+                ),
+                (
+                    "output_sink_panic_reaps_the_child",
+                    output_sink_panic_reaps_the_child as fn(),
+                ),
                 (
                     "a_failing_command_is_an_error_naming_it",
                     a_failing_command_is_an_error_naming_it as fn(),
