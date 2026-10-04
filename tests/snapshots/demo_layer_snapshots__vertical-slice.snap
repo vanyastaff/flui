@@ -24,77 +24,77 @@ Offset dx=0.00 dy=0.00
     Restore
   ClipRect rect=(16.00,81.60 868.00x200.00) clip=hard
     Offset dx=16.00 dy=81.60
-      Picture bounds=(4.00,4.00 39.43x16.80)
+      Picture bounds=(4.00,4.00 860.00x16.80)
         Save
         Paragraph offset=(0.00,0.00) "Item 0" #000000FF lines=1 runs=[len=6 family=SansSerif weight=400 style=Normal] xf=[1.00,0.00,0.00,0.00,0.00,1.00,0.00,0.00,0.00,0.00,1.00,0.00,4.00,4.00,0.00,1.00]
         Restore
     Offset dx=16.00 dy=113.60
-      Picture bounds=(4.00,4.00 39.43x16.80)
+      Picture bounds=(4.00,4.00 860.00x16.80)
         Save
         Paragraph offset=(0.00,0.00) "Item 1" #000000FF lines=1 runs=[len=6 family=SansSerif weight=400 style=Normal] xf=[1.00,0.00,0.00,0.00,0.00,1.00,0.00,0.00,0.00,0.00,1.00,0.00,4.00,4.00,0.00,1.00]
         Restore
     Offset dx=16.00 dy=145.60
-      Picture bounds=(4.00,4.00 39.43x16.80)
+      Picture bounds=(4.00,4.00 860.00x16.80)
         Save
         Paragraph offset=(0.00,0.00) "Item 2" #000000FF lines=1 runs=[len=6 family=SansSerif weight=400 style=Normal] xf=[1.00,0.00,0.00,0.00,0.00,1.00,0.00,0.00,0.00,0.00,1.00,0.00,4.00,4.00,0.00,1.00]
         Restore
     Offset dx=16.00 dy=177.60
-      Picture bounds=(4.00,4.00 39.43x16.80)
+      Picture bounds=(4.00,4.00 860.00x16.80)
         Save
         Paragraph offset=(0.00,0.00) "Item 3" #000000FF lines=1 runs=[len=6 family=SansSerif weight=400 style=Normal] xf=[1.00,0.00,0.00,0.00,0.00,1.00,0.00,0.00,0.00,0.00,1.00,0.00,4.00,4.00,0.00,1.00]
         Restore
     Offset dx=16.00 dy=209.60
-      Picture bounds=(4.00,4.00 39.43x16.80)
+      Picture bounds=(4.00,4.00 860.00x16.80)
         Save
         Paragraph offset=(0.00,0.00) "Item 4" #000000FF lines=1 runs=[len=6 family=SansSerif weight=400 style=Normal] xf=[1.00,0.00,0.00,0.00,0.00,1.00,0.00,0.00,0.00,0.00,1.00,0.00,4.00,4.00,0.00,1.00]
         Restore
     Offset dx=16.00 dy=241.60
-      Picture bounds=(4.00,4.00 39.43x16.80)
+      Picture bounds=(4.00,4.00 860.00x16.80)
         Save
         Paragraph offset=(0.00,0.00) "Item 5" #000000FF lines=1 runs=[len=6 family=SansSerif weight=400 style=Normal] xf=[1.00,0.00,0.00,0.00,0.00,1.00,0.00,0.00,0.00,0.00,1.00,0.00,4.00,4.00,0.00,1.00]
         Restore
     Offset dx=16.00 dy=273.60
-      Picture bounds=(4.00,4.00 39.43x16.80)
+      Picture bounds=(4.00,4.00 860.00x16.80)
         Save
         Paragraph offset=(0.00,0.00) "Item 6" #000000FF lines=1 runs=[len=6 family=SansSerif weight=400 style=Normal] xf=[1.00,0.00,0.00,0.00,0.00,1.00,0.00,0.00,0.00,0.00,1.00,0.00,4.00,4.00,0.00,1.00]
         Restore
     Offset dx=16.00 dy=305.60
-      Picture bounds=(4.00,4.00 39.43x16.80)
+      Picture bounds=(4.00,4.00 860.00x16.80)
         Save
         Paragraph offset=(0.00,0.00) "Item 7" #000000FF lines=1 runs=[len=6 family=SansSerif weight=400 style=Normal] xf=[1.00,0.00,0.00,0.00,0.00,1.00,0.00,0.00,0.00,0.00,1.00,0.00,4.00,4.00,0.00,1.00]
         Restore
     Offset dx=16.00 dy=337.60
-      Picture bounds=(4.00,4.00 39.43x16.80)
+      Picture bounds=(4.00,4.00 860.00x16.80)
         Save
         Paragraph offset=(0.00,0.00) "Item 8" #000000FF lines=1 runs=[len=6 family=SansSerif weight=400 style=Normal] xf=[1.00,0.00,0.00,0.00,0.00,1.00,0.00,0.00,0.00,0.00,1.00,0.00,4.00,4.00,0.00,1.00]
         Restore
     Offset dx=16.00 dy=369.60
-      Picture bounds=(4.00,4.00 39.43x16.80)
+      Picture bounds=(4.00,4.00 860.00x16.80)
         Save
         Paragraph offset=(0.00,0.00) "Item 9" #000000FF lines=1 runs=[len=6 family=SansSerif weight=400 style=Normal] xf=[1.00,0.00,0.00,0.00,0.00,1.00,0.00,0.00,0.00,0.00,1.00,0.00,4.00,4.00,0.00,1.00]
         Restore
     Offset dx=16.00 dy=401.60
-      Picture bounds=(4.00,4.00 47.30x16.80)
+      Picture bounds=(4.00,4.00 860.00x16.80)
         Save
         Paragraph offset=(0.00,0.00) "Item 10" #000000FF lines=1 runs=[len=7 family=SansSerif weight=400 style=Normal] xf=[1.00,0.00,0.00,0.00,0.00,1.00,0.00,0.00,0.00,0.00,1.00,0.00,4.00,4.00,0.00,1.00]
         Restore
     Offset dx=16.00 dy=433.60
-      Picture bounds=(4.00,4.00 47.30x16.80)
+      Picture bounds=(4.00,4.00 860.00x16.80)
         Save
         Paragraph offset=(0.00,0.00) "Item 11" #000000FF lines=1 runs=[len=7 family=SansSerif weight=400 style=Normal] xf=[1.00,0.00,0.00,0.00,0.00,1.00,0.00,0.00,0.00,0.00,1.00,0.00,4.00,4.00,0.00,1.00]
         Restore
     Offset dx=16.00 dy=465.60
-      Picture bounds=(4.00,4.00 47.30x16.80)
+      Picture bounds=(4.00,4.00 860.00x16.80)
         Save
         Paragraph offset=(0.00,0.00) "Item 12" #000000FF lines=1 runs=[len=7 family=SansSerif weight=400 style=Normal] xf=[1.00,0.00,0.00,0.00,0.00,1.00,0.00,0.00,0.00,0.00,1.00,0.00,4.00,4.00,0.00,1.00]
         Restore
     Offset dx=16.00 dy=497.60
-      Picture bounds=(4.00,4.00 47.30x16.80)
+      Picture bounds=(4.00,4.00 860.00x16.80)
         Save
         Paragraph offset=(0.00,0.00) "Item 13" #000000FF lines=1 runs=[len=7 family=SansSerif weight=400 style=Normal] xf=[1.00,0.00,0.00,0.00,0.00,1.00,0.00,0.00,0.00,0.00,1.00,0.00,4.00,4.00,0.00,1.00]
         Restore
     Offset dx=16.00 dy=529.60
-      Picture bounds=(4.00,4.00 47.30x16.80)
+      Picture bounds=(4.00,4.00 860.00x16.80)
         Save
         Paragraph offset=(0.00,0.00) "Item 14" #000000FF lines=1 runs=[len=7 family=SansSerif weight=400 style=Normal] xf=[1.00,0.00,0.00,0.00,0.00,1.00,0.00,0.00,0.00,0.00,1.00,0.00,4.00,4.00,0.00,1.00]
         Restore
