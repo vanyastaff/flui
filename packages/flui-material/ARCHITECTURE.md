@@ -310,3 +310,35 @@ The `navigation_and_layout_contracts` rows
 size and actual loose-parent layout, with bottom indicator-band coordinates.
 
 
+### Completion failure does not strand the accepted snack-bar queue
+
+After a dismissed entry is popped, its completion, the next entrance and
+scaffold rebuild delivery are independent attempts. The earliest caught failure
+propagates after the advancement guard is released; secondary opaque payloads
+are retained. Scaffold rebuild handles are snapshotted before host callbacks,
+so those callbacks cannot run under the registration RefCell borrow. A caught
+failure retains the completed entry and failed-delivery handles rather than
+running opaque teardown in competition with the authoritative failure.
+
+This does not contain a callback body's panic competing with its consumed
+`FnOnce` captures' destruction before control returns, or a double panic during
+ordinary aggregate retirement. Display-timer cancellation before the pop retains
+its separate existing failure boundary.
+
+`overlay_contracts` row
+`a_completion_panic_still_advances_the_accepted_snack_bar_queue` observes the
+original ordinary completion panic, the next accepted bar's mounted entrance
+and eventual Timeout on virtual frames, then a fresh show/remove operation.
+
+The private `a_panicking_completion_does_not_lock_future_queue_operations`
+family separately injects completion, entrance-listener and scaffold-delivery
+failures, individually and in chronological competition. Lifecycle-acquired
+rebuild probes have distinct mounted owner inboxes so each fanout wake is
+observable. Their private map registration is a delivery fault seam, not
+supported cross-realm Messenger topology. Rows check the first failure, every
+eligible delivery, actual subsequent rebuilds and accepted queue progress.
+Four bounded children add hostile secondary payloads with several panicking
+destructors and assert that none retire before or after recovery. Readiness is
+published after mounting; setup and operation have separate deadlines.
+
+

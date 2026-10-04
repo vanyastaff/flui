@@ -371,10 +371,40 @@ struct MessengerCore {
     scaffolds: RefCell<HashMap<ElementId, RebuildHandle>>,
 }
 
+type CompletionFailure = Option<Box<dyn std::any::Any + Send>>;
+
+fn remember_completion_failure(first: &mut CompletionFailure, result: std::thread::Result<()>) {
+    if let Err(payload) = result {
+        if first.is_none() {
+            *first = Some(payload);
+        } else {
+            flui_sdk::foundation::panic::retain_opaque_payload(payload);
+        }
+    }
+}
+
 impl MessengerCore {
     fn schedule_rebuild_on_scaffolds(&self) {
-        for rebuild in self.scaffolds.borrow().values() {
-            rebuild.schedule(flui_sdk::view::RebuildReason::StateChange);
+        self.deliver_scaffold_rebuilds(false);
+    }
+
+    fn deliver_scaffold_rebuilds(&self, retain_after_failure: bool) {
+        // Host wake callbacks may synchronously register or dispose scaffolds.
+        let handles: Vec<_> = self.scaffolds.borrow().values().cloned().collect();
+        let mut first = None;
+        for rebuild in &handles {
+            remember_completion_failure(
+                &mut first,
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    rebuild.schedule(flui_sdk::view::RebuildReason::StateChange);
+                })),
+            );
+        }
+        if retain_after_failure || first.is_some() {
+            std::mem::forget(handles);
+        }
+        if let Some(payload) = first {
+            std::panic::resume_unwind(payload);
         }
     }
 
@@ -449,20 +479,45 @@ impl MessengerCore {
                 self.0.set(false);
             }
         }
-        let _advancing = AdvanceGuard(&self.advancing);
+        let advancing_guard = AdvanceGuard(&self.advancing);
 
         self.cancel_display_timer();
         let popped = self.queue.borrow_mut().pop_front();
-        if let Some(entry) = popped {
-            self.complete_entry(entry, origin);
+        let mut first = None;
+        if let Some(entry) = &popped {
+            // Pin the opaque entry outside invocation: the clone's unwind
+            // cannot retire the last owner of its snack-bar value.
+            remember_completion_failure(
+                &mut first,
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    self.complete_entry(Rc::clone(entry), origin);
+                })),
+            );
         }
 
         let has_next = !self.queue.borrow().is_empty();
         if has_next {
-            let _ = self.entry_controller.forward();
+            remember_completion_failure(
+                &mut first,
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    let _ = self.entry_controller.forward();
+                })),
+            );
         }
-
-        self.schedule_rebuild_on_scaffolds();
+        let retain_after_failure = first.is_some();
+        remember_completion_failure(
+            &mut first,
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                self.deliver_scaffold_rebuilds(retain_after_failure);
+            })),
+        );
+        if let Some(payload) = first {
+            // The completed entry owns no remaining queue obligation, but its
+            // opaque value may have competing panicking destructors.
+            std::mem::forget(popped);
+            drop(advancing_guard);
+            std::panic::resume_unwind(payload);
+        }
     }
 
     /// Fires `entry`'s `on_closed` per `origin` — immediately for
@@ -984,27 +1039,11 @@ mod tests {
         (harness, handle)
     }
 
+    #[path = "messenger_failure_cases.rs"]
+    mod failure_cases;
+
     #[test]
     fn a_panicking_completion_does_not_lock_future_queue_operations() {
-        fn panic_completion(_cx: &mut EventCx<'_>, _reason: SnackBarClosedReason) {
-            panic!("completion panic");
-        }
-        let (_harness, handle) = mounted_handle();
-        handle
-            .show_snack_bar(snack_bar("panic"))
-            .on_closed(panic_completion);
-        let completed = Rc::new(Cell::new(false));
-        let recorded = Rc::clone(&completed);
-        handle
-            .show_snack_bar(snack_bar("next"))
-            .on_closed(move |_cx, _reason| recorded.set(true));
-
-        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            handle.remove_current_snack_bar();
-        }));
-        assert!(panic.is_err(), "the caller still observes its panic");
-        handle.remove_current_snack_bar();
-        assert!(completed.get(), "the next removal can enter the drain");
-        assert!(handle.shared.queue.borrow().is_empty());
+        failure_cases::run();
     }
 }

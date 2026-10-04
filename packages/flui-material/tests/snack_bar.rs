@@ -404,3 +404,61 @@ pub fn action_callback_panic_disables_the_button_and_fresh_action_progresses() {
             .is_disabled()
     );
 }
+
+pub fn a_completion_panic_still_advances_the_accepted_snack_bar_queue() {
+    let vsync = Vsync::new();
+    let (mut laid, handle) =
+        mount_with_scaffolds(&vsync, vec![Scaffold::new().body(body_marker())]);
+    let first_calls = Rc::new(std::cell::Cell::new(0));
+    let recorded = Rc::clone(&first_calls);
+    handle
+        .show_snack_bar(SnackBar::new(Text::new("first")))
+        .on_closed(move |_cx, reason| -> () {
+            assert_eq!(reason, flui_material::SnackBarClosedReason::Remove);
+            recorded.set(recorded.get() + 1);
+            panic!("first completion failed");
+        });
+    let second_reason = Rc::new(std::cell::Cell::new(None));
+    let recorded = Rc::clone(&second_reason);
+    handle
+        .show_snack_bar(SnackBar::new(Text::new("second")).duration(Duration::from_millis(64)))
+        .on_closed(move |_cx, reason| recorded.set(Some(reason)));
+    pump_ms(&mut laid, 300);
+    assert_eq!(snack_bar_material_count(&laid), 1);
+    let payload = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        handle.remove_current_snack_bar();
+    }))
+    .expect_err("the completion failure must reach the caller");
+    assert_eq!(
+        payload.downcast_ref::<&str>(),
+        Some(&"first completion failed")
+    );
+    assert_eq!(first_calls.get(), 1);
+    pump_ms(&mut laid, 300);
+    assert_eq!(
+        snack_bar_material_count(&laid),
+        1,
+        "the accepted second bar entered"
+    );
+    pump_ms(&mut laid, 500);
+    assert_eq!(
+        second_reason.get(),
+        Some(flui_material::SnackBarClosedReason::Timeout)
+    );
+    assert_eq!(snack_bar_material_count(&laid), 0);
+    let third_reason = Rc::new(std::cell::Cell::new(None));
+    let recorded = Rc::clone(&third_reason);
+    handle
+        .show_snack_bar(SnackBar::new(Text::new("third")))
+        .on_closed(move |_cx, reason| recorded.set(Some(reason)));
+    pump_ms(&mut laid, 300);
+    assert_eq!(snack_bar_material_count(&laid), 1);
+    handle.remove_current_snack_bar();
+    laid.pump();
+    assert_eq!(
+        third_reason.get(),
+        Some(flui_material::SnackBarClosedReason::Remove)
+    );
+    assert_eq!(snack_bar_material_count(&laid), 0);
+    assert_eq!(first_calls.get(), 1);
+}

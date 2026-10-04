@@ -226,6 +226,10 @@ fn text_input_contracts() {
 fn overlay_contracts() {
     common::run_cases(&[
         (
+            "snack_bar::a completion panic still advances the accepted snack bar queue",
+            snack_bar::a_completion_panic_still_advances_the_accepted_snack_bar_queue,
+        ),
+        (
             "drawer::cancelled fast edge drag settles closed below halfway",
             drawer::cancelled_fast_edge_drag_settles_closed_below_halfway,
         ),
