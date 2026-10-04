@@ -209,3 +209,10 @@ public CLI. Its portable fixture delegates metadata and project discovery to
 real Cargo, substitutes tool availability, and refuses compilation while
 reporting the actual selected Cargo arguments. It verifies selection without
 claiming a wasm compilation or Android delivery run.
+
+### Generated crate names respect Rust's reserved edition keywords
+
+Project names become bare crate identifiers in generated application source,
+so validation refuses `gen` and `try` along with the other reserved keywords.
+`create_with_an_invalid_project_name_is_rejected` includes public CLI rows for both names;
+accepting either would create source that the selected Rust edition rejects.
