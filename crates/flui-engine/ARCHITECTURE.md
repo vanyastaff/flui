@@ -1144,7 +1144,7 @@ API and the isolation is the actual production replay path.
 `decoration_cover`, `decoration_filter_opacity`, `decoration_repeat_phase` and
 `canvas_image_paint` invoke the public painting producers and replay their
 recorded commands. `render_image_scaled_cover` mounts a real RenderImage through
-RenderTester and captures its actual layer tree; `render_image_none_crops_at_natural_scale`
+RenderTester and captures its actual layer tree; `render_image_natural_crop`
 also pins an oversized natural-scale crop. Both visible crop color and
 pixels outside the allocated box distinguish the producer defect. Engine dev
 edges on objects and rendering's testing feature exist for this consumer path.
