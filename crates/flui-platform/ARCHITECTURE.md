@@ -1036,6 +1036,22 @@ deadline: the previous implementation blocks or aborts the browser thread under 
 state mutex. Source inspection and type checking do not prove browser execution
 or arbitrary aggregate destructor containment.
 
+### Off-owner accessibility adapter retention precedes diagnostics
+
+The Win32 and AppKit accessibility adapters cannot retire their native subclass
+state off its owner thread. Their existing exceptional retention fallback moves
+the adapter into permanent retention before attempting diagnostics. A subscriber
+failure is contained independently; it cannot restore a destructor obligation on
+the wrong thread or replace an unwind already in progress.
+
+The private shared `retain_off_owner_resource` seam is used by both adapter
+Drop paths. `the_owner_thread_machinery_honours_its_contracts` exercises the same
+production boundary with an opaque aggregate resource surrogate: successful
+reporting, an opaque reporting failure, an earlier teardown failure alone and
+competing with reporting, and a subsequent callback. These rows do not execute real UIA or
+NSAccessibility adapters; they prove the shared boundary. Native wiring remains source-reviewed and subject to
+platform type-checking.
+
 ### Android has no separate page-aligned container
 
 Android exposes no framework allocator or page-aligned vector. The removed
