@@ -167,6 +167,21 @@ Items below are concrete cleanups visible from `flui-foundation` outward. Each i
 
 ## Mapping decisions
 
+### Notification channels retain only the surfaces they serve
+
+`Notifier<T>` lends typed arguments; `ChangeNotifier` adapts it to zero-argument
+listeners. `ValueNotifier<T>` owns its value without a `Clone` requirement on
+reading, mutation or extraction. Its derived `Clone` remains available for
+cloneable values, copying the value while sharing the listener channel.
+`into_value` disposes that shared channel before extracting the value.
+The public `notifier_ownership_and_recovery` family includes a non-Clone owned
+value's mutation/extraction sequence and clone compatibility.
+
+The separate `ListenerRegistry`/`ListenerSubscription` surface is removed.
+It had no production consumer; its lazy first/last hooks duplicated notification
+ownership and exposed a callback-under-lock transaction. Typed and zero-argument
+notification continue through the channels above.
+
 ### Claim slots commit outcomes before delivering borrowed wakes
 
 The ADR-0039 claim-slot state machine remains the authority for ownership of a

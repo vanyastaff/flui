@@ -1,6 +1,6 @@
 //! Notification ownership and recovery, exercised through the public API.
 
-use flui_foundation::{ListenerId, ListenerRegistry, Notifier};
+use flui_foundation::{Listenable, ListenerId, Notifier, ValueListenable, ValueNotifier};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -34,12 +34,54 @@ fn non_clone_argument() {
     observed.lock().expect("observation").clear();
     cloned.notify(&argument);
     assert!(observed.lock().expect("observation").is_empty());
-    let registry = ListenerRegistry::<Argument>::new();
-    let subscription = registry.add_status_listener(Arc::new(|argument| {
-        assert_eq!(argument.0, "borrowed value");
+}
+
+fn non_clone_owned_value() {
+    #[derive(Default, PartialEq)]
+    struct OwnedValue(String);
+
+    fn read(listenable: &impl ValueListenable<OwnedValue>) -> &str {
+        &listenable.value().0
+    }
+
+    let mut notifier = ValueNotifier::new(OwnedValue("initial".into()));
+    let calls = Arc::new(AtomicUsize::new(0));
+    let listener_calls = Arc::clone(&calls);
+    notifier.add_listener(Arc::new(move || {
+        listener_calls.fetch_add(1, Ordering::SeqCst);
     }));
-    registry.notify_status(&argument);
-    drop(subscription);
+    assert_eq!(read(&notifier), "initial");
+    notifier.set_value(OwnedValue("initial".into()));
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    notifier.set_value(OwnedValue("changed".into()));
+    let replaced = notifier.replace(OwnedValue("replacement".into()));
+    assert_eq!(replaced.0, "changed");
+    notifier.update(|value| value.0.push_str(" updated"));
+    let taken = notifier.take();
+    assert_eq!(taken.0, "replacement updated");
+    assert_eq!(calls.load(Ordering::SeqCst), 4);
+    assert_eq!(read(&notifier), "");
+    let extracted = notifier.into_value();
+    assert_eq!(extracted.0, "");
+}
+
+fn cloneable_values_keep_independent_values_and_shared_listeners() {
+    let original = ValueNotifier::new(1_u32);
+    let mut cloned = original.clone();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let listener_calls = Arc::clone(&calls);
+    original.add_listener(Arc::new(move || {
+        listener_calls.fetch_add(1, Ordering::SeqCst);
+    }));
+    cloned.set_value(2);
+    assert_eq!(*original.value(), 1);
+    assert_eq!(*cloned.value(), 2);
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(cloned.into_value(), 2);
+    assert!(
+        original.is_empty(),
+        "extraction disposes the shared channel"
+    );
 }
 
 fn contained_failure(aggregate: bool, hostile_capture: bool) {
@@ -194,6 +236,10 @@ fn notifier_ownership_and_recovery() {
     if let Ok(case) = std::env::var(CHILD) {
         match case.as_str() {
             "non_clone_argument" => non_clone_argument(),
+            "non_clone_owned_value" => non_clone_owned_value(),
+            "cloneable_values_keep_independent_values_and_shared_listeners" => {
+                cloneable_values_keep_independent_values_and_shared_listeners();
+            }
             "single_payload" => contained_failure(false, false),
             "aggregate_payload" => contained_failure(true, false),
             "capture_and_payload" => contained_failure(true, true),
@@ -206,6 +252,8 @@ fn notifier_ownership_and_recovery() {
     let mut failures = Vec::new();
     for case in [
         "non_clone_argument",
+        "non_clone_owned_value",
+        "cloneable_values_keep_independent_values_and_shared_listeners",
         "single_payload",
         "aggregate_payload",
         "capture_and_payload",

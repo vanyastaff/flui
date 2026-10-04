@@ -1,6 +1,7 @@
 # ADR-0104: Borrowed notification arguments and opaque panic retention
 
 - **Status:** Accepted.
+- **Superseded-by:** [ADR-0109](ADR-0109-notification-channel-surface.md)
 - **Date:** 2026-10-03
 - **Related:** [ADR-0074](ADR-0074-realm-scoped-signals.md), [ADR-0085](ADR-0085-reactive-core-placement-and-phase-subscribers.md)
 

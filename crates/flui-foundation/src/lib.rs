@@ -209,8 +209,7 @@ pub mod notifier;
 // re-exported from the root: reached as `flui_foundation::read_scope::…`.
 pub mod read_scope;
 
-// Generic typed notification channel + unified listener registry
-pub mod listener_registry;
+// Generic typed notification channel
 pub mod notifier_generic;
 
 // Diagnostics and debugging
@@ -287,8 +286,7 @@ pub use key::{Key, KeyRef, Keyed, SaltedKey, UniqueKey, ValueKey, ViewKey, WithK
 pub use notifier::{ChangeNotifier, Listenable, ListenerCallback, ValueListenable, ValueNotifier};
 pub use rebuild_reason::{RebuildReason, RebuildReasons};
 pub use slot::IndexedSlot;
-// Generic typed channel + unified listener registry
-pub use listener_registry::{ListenerRegistry, ListenerSubscription};
+// Generic typed channel
 pub use notifier_generic::{ArgCallback, Notifier};
 // WASM compatibility
 pub use wasm::WasmNotSendSync;

@@ -341,13 +341,17 @@ impl Listenable for ChangeNotifier {
 }
 
 /// A `ChangeNotifier` that holds a single value.
+///
+/// Reading, mutating and extracting the owned value do not require `Clone`.
+/// Cloning the notifier requires `T: Clone`: it copies the value and shares
+/// the listener channel.
 #[derive(Clone)]
-pub struct ValueNotifier<T: Clone> {
+pub struct ValueNotifier<T> {
     value: T,
     notifier: ChangeNotifier,
 }
 
-impl<T: Clone> ValueNotifier<T> {
+impl<T> ValueNotifier<T> {
     /// Create a new value notifier with an initial value.
     #[must_use]
     pub fn new(value: T) -> Self {
@@ -375,12 +379,7 @@ impl<T: Clone> ValueNotifier<T> {
 
     /// Consumes the notifier and returns the inner value.
     ///
-    /// Audit I-20: calls `self.notifier.dispose()` before the inner
-    /// `ChangeNotifier` is dropped so the dispose hook (PR #84
-    /// template) fires once. Pre-cycle the listeners were silently
-    /// dropped without the dispose protocol — any registered
-    /// `assert_alive` guard on a sibling subscriber never saw the
-    /// disposal event.
+    /// Disposes the shared listener channel before returning the value.
     #[must_use]
     #[inline]
     pub fn into_value(self) -> T {
@@ -474,7 +473,7 @@ impl<T: Clone> ValueNotifier<T> {
     }
 }
 
-impl<T: Clone + fmt::Debug> fmt::Debug for ValueNotifier<T> {
+impl<T: fmt::Debug> fmt::Debug for ValueNotifier<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ValueNotifier")
             .field("value", &self.value)
@@ -490,22 +489,22 @@ impl<T: Clone + fmt::Debug> fmt::Debug for ValueNotifier<T> {
 // principle of least surprise. Construct explicitly via
 // `ValueNotifier::new(value)`.
 
-impl<T: Clone + PartialEq> PartialEq for ValueNotifier<T> {
+impl<T: PartialEq> PartialEq for ValueNotifier<T> {
     #[inline]
     fn eq(&self, other: &Self) -> bool {
         self.value == other.value
     }
 }
 
-impl<T: Clone + Eq> Eq for ValueNotifier<T> {}
+impl<T: Eq> Eq for ValueNotifier<T> {}
 
-impl<T: Clone + fmt::Display> fmt::Display for ValueNotifier<T> {
+impl<T: fmt::Display> fmt::Display for ValueNotifier<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Display::fmt(&self.value, f)
     }
 }
 
-impl<T: Clone> Deref for ValueNotifier<T> {
+impl<T> Deref for ValueNotifier<T> {
     type Target = T;
 
     #[inline]
@@ -514,14 +513,14 @@ impl<T: Clone> Deref for ValueNotifier<T> {
     }
 }
 
-impl<T: Clone> AsRef<T> for ValueNotifier<T> {
+impl<T> AsRef<T> for ValueNotifier<T> {
     #[inline]
     fn as_ref(&self) -> &T {
         &self.value
     }
 }
 
-impl<T: Clone + Send + Sync> Listenable for ValueNotifier<T> {
+impl<T: Send + Sync> Listenable for ValueNotifier<T> {
     fn add_listener(&self, listener: ListenerCallback) -> ListenerId {
         self.notifier.add_listener(listener)
     }
@@ -535,7 +534,7 @@ impl<T: Clone + Send + Sync> Listenable for ValueNotifier<T> {
     }
 }
 
-impl<T: Clone + Send + Sync> ValueListenable<T> for ValueNotifier<T> {
+impl<T: Send + Sync> ValueListenable<T> for ValueNotifier<T> {
     fn value(&self) -> &T {
         &self.value
     }

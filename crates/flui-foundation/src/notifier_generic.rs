@@ -6,10 +6,6 @@
 //! snapshot-under-lock, registration-order firing, drop-lock before callbacks,
 //! per-callback `catch_unwind`, remove-during-notify skip, and a dispose guard.
 //!
-//! This is the substrate the animation crate composes into a
-//! [`crate::listener_registry::ListenerRegistry`]: the *value* channel is a
-//! `Notifier<()>` and the *status* channel is a `Notifier<AnimationStatus>`.
-//!
 //! It is also the core `ChangeNotifier` itself is seated on: `ChangeNotifier`
 //! wraps a `Notifier<()>` and adds only its own seams (the branded
 //! use-after-dispose message, and `remove_listener` tolerating a disposed
@@ -159,8 +155,7 @@ impl<Arg> Notifier<Arg> {
     /// Remove a previously registered listener. No-op if absent.
     ///
     /// Unlike `ChangeNotifier::remove_listener` (which tolerates post-dispose
-    /// removal), this generic notifier keeps its disposed gate:
-    /// `ListenerRegistry`'s Status-channel guard depends on the current shape.
+    /// removal), this generic notifier keeps its disposed gate.
     /// The tolerant behaviour lives in [`Self::remove_even_if_disposed`],
     /// which `ChangeNotifier` delegates to.
     pub fn remove(&self, id: ListenerId) {
