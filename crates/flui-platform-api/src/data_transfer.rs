@@ -8,8 +8,8 @@
 //! - [`RepresentationDescriptor`] / [`TransferFormat`] / [`Mime`] — stage 2
 //!   negotiation vocabulary, plus [`DropFeedback`], the DnD reply half;
 //! - [`TransferLimits`] — stage-3 resource bounds;
-//! - [`TransferRequest`] / [`TransferCompleter`] — stage 4, a hand-rolled
-//!   oneshot future/completer pair polled on the frame-driven `AsyncDriver`
+//! - [`TransferRequest`] / [`TransferCompleter`] — stage 4, a request/reply pair using
+//!   the foundation claim slot polled on the frame-driven `AsyncDriver`
 //!   (no second async mechanism, no runtime dependency);
 //! - [`TransferPayload`] / [`TransferError`] — stage 5 outcomes;
 //! - [`DataTransferSource`] — the platform-side trait tying the stages
@@ -25,10 +25,8 @@
 use std::num::NonZeroU32;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::task::Waker;
 
-use flui_foundation::DataTransferId;
-use parking_lot::Mutex;
+use flui_foundation::{ClaimHandle, ClaimOutcome, ClaimSlot, DataTransferId, claim_slot};
 
 // ============================================================================
 // MIME + formats
@@ -540,38 +538,24 @@ impl OfferTable {
 // TransferRequest / TransferCompleter — the stage-4 oneshot pair
 // ============================================================================
 
-/// Shared oneshot state between a [`TransferRequest`] and its
-/// [`TransferCompleter`]. Private; no guard ever escapes.
 #[derive(Debug)]
-struct TransferShared {
-    slot: Mutex<TransferSlot>,
-}
-
-#[derive(Debug)]
-struct TransferSlot {
-    /// The delivery outcome, present between completion and the consumer
-    /// taking it in `poll`.
-    outcome: Option<Result<TransferPayload, TransferError>>,
-    /// Waker of the last poll, woken on completion.
-    waker: Option<Waker>,
-    /// Consumer dropped its half (stage-7 cancellation).
-    cancelled: bool,
-    /// Producer finished — `complete` ran or the completer was dropped.
-    settled: bool,
-    /// The consumer already took the outcome out of the slot.
-    delivered: bool,
+enum RequestState {
+    Ready(Option<Result<TransferPayload, TransferError>>),
+    Channel(ClaimHandle<Result<TransferPayload, TransferError>>),
 }
 
 /// Stage-4 artifact, consumer half: one in-flight delivery. A `Send` future
-/// so it can ride `BoxedTask` (`Pin<Box<dyn Future<Output = ()> + Send>>`,
-/// flui-scheduler's `AsyncDriver` contour) after being wrapped by the
-/// consumer. Dropping it before completion is stage-7 cancellation: the
-/// shared state is marked cancelled, which the producer observes via
-/// [`TransferCompleter::is_cancelled`].
+/// polled by the frame-driven async driver. Dropping it before completion
+/// cancels the delivery, observed by [`TransferCompleter::is_cancelled`].
+///
+/// Executor clone, wake and retirement run outside the claim slot's locks.
+/// Caught wake failures preserve the delivery and retain opaque executor
+/// ownership; ordinary successful retirement still runs destructors.
 #[must_use = "dropping a TransferRequest cancels the delivery"]
 #[derive(Debug)]
 pub struct TransferRequest {
-    shared: Arc<TransferShared>,
+    state: RequestState,
+    resolved: bool,
 }
 
 impl TransferRequest {
@@ -579,35 +563,24 @@ impl TransferRequest {
     /// request from [`DataTransferSource::request`].
     #[must_use = "dropping the pair immediately resolves it as cancelled"]
     pub fn channel() -> (TransferRequest, TransferCompleter) {
-        let shared = Arc::new(TransferShared {
-            slot: Mutex::new(TransferSlot {
-                outcome: None,
-                waker: None,
-                cancelled: false,
-                settled: false,
-                delivered: false,
-            }),
-        });
+        // Transport completion consumes its producer; unlike a window request,
+        // it has no owner-side resource registry to wake on abandonment.
+        let (slot, handle) = claim_slot(Arc::new(|| {}));
         (
             TransferRequest {
-                shared: Arc::clone(&shared),
+                state: RequestState::Channel(handle),
+                resolved: false,
             },
-            TransferCompleter { shared },
+            TransferCompleter { slot },
         )
     }
 
     /// An already-resolved request, for data that is genuinely in memory.
+    /// Polling this path does not clone or register an executor waker.
     pub fn ready(result: Result<TransferPayload, TransferError>) -> Self {
         Self {
-            shared: Arc::new(TransferShared {
-                slot: Mutex::new(TransferSlot {
-                    outcome: Some(result),
-                    waker: None,
-                    cancelled: false,
-                    settled: true,
-                    delivered: false,
-                }),
-            }),
+            state: RequestState::Ready(Some(result)),
+            resolved: false,
         }
     }
 }
@@ -616,92 +589,61 @@ impl std::future::Future for TransferRequest {
     type Output = Result<TransferPayload, TransferError>;
 
     fn poll(
-        self: std::pin::Pin<&mut Self>,
+        mut self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Self::Output> {
-        let mut slot = self.shared.slot.lock();
-        if let Some(outcome) = slot.outcome.take() {
-            slot.delivered = true;
-            slot.waker = None;
-            return std::task::Poll::Ready(outcome);
-        }
+        use std::task::Poll;
         assert!(
-            !slot.delivered,
+            !self.resolved,
             "BUG: TransferRequest polled again after it resolved"
         );
-        slot.waker = Some(cx.waker().clone());
-        std::task::Poll::Pending
+        let outcome = match &mut self.state {
+            RequestState::Ready(result) => {
+                result.take().expect("BUG: ready transfer lost its result")
+            }
+            RequestState::Channel(handle) => match std::pin::Pin::new(handle).poll(cx) {
+                Poll::Pending => return Poll::Pending,
+                Poll::Ready(ClaimOutcome::Delivered(result)) => result,
+                Poll::Ready(ClaimOutcome::OwnerGone) => Err(TransferError::SourceGone),
+                Poll::Ready(ClaimOutcome::AlreadyClaimed) => {
+                    panic!("BUG: TransferRequest polled again after it resolved")
+                }
+            },
+        };
+        self.resolved = true;
+        Poll::Ready(outcome)
     }
 }
 
-impl Drop for TransferRequest {
-    fn drop(&mut self) {
-        let mut slot = self.shared.slot.lock();
-        slot.cancelled = true;
-        // Free the payload and waker eagerly; the producer only reads flags.
-        slot.outcome = None;
-        slot.waker = None;
-    }
-}
-
-/// Stage-4 artifact, producer half, held by the backend. `Send` — complete
-/// from any thread. Completing after the consumer dropped the request is a
-/// silent no-op; dropping the completer without completing resolves the
-/// request with [`TransferError::SourceGone`], so a crashed producer can
-/// never leave a consumer pending forever.
+/// Stage-4 artifact, producer half, held by the backend. `Send` - complete
+/// from any thread. Completing after cancellation discards the result.
+/// Dropping the producer without completing resolves the request with
+/// [`TransferError::SourceGone`].
+///
+/// The claim slot preserves an existing unwind if executor delivery also
+/// panics, retaining exceptional opaque ownership rather than dropping it
+/// during continuation. This does not contain arbitrary double panics during
+/// ordinary successful executor retirement.
 #[derive(Debug)]
 pub struct TransferCompleter {
-    shared: Arc<TransferShared>,
+    slot: ClaimSlot<Result<TransferPayload, TransferError>>,
 }
 
 impl TransferCompleter {
     /// Resolve the paired request. A no-op if the consumer already cancelled
     /// (dropped its half).
     pub fn complete(self, result: Result<TransferPayload, TransferError>) {
-        let waker = {
-            let mut slot = self.shared.slot.lock();
-            slot.settled = true;
-            if slot.cancelled {
-                None
-            } else {
-                slot.outcome = Some(result);
-                slot.waker.take()
-            }
-        };
-        if let Some(waker) = waker {
-            waker.wake();
-        }
+        // A rejected result contains only the concrete transport vocabulary,
+        // not a caller-supplied destructor. Consuming self retires the owner.
+        drop(self.slot.deliver(result));
     }
 
     /// True once the consumer cancelled (dropped its half). A long-running
-    /// producer polls this to abandon work early. Note: a blocking read
-    /// already in progress (arboard) is *not* interruptible — cancellation
-    /// then means the result is discarded, not that the thread unblocks.
+    /// producer polls this to abandon work early. A blocking read already in
+    /// progress is not interrupted; its eventual result is discarded.
     #[must_use]
     pub fn is_cancelled(&self) -> bool {
-        self.shared.slot.lock().cancelled
-    }
-}
-
-impl Drop for TransferCompleter {
-    fn drop(&mut self) {
-        let waker = {
-            let mut slot = self.shared.slot.lock();
-            if slot.settled {
-                None
-            } else {
-                slot.settled = true;
-                if slot.cancelled {
-                    None
-                } else {
-                    slot.outcome = Some(Err(TransferError::SourceGone));
-                    slot.waker.take()
-                }
-            }
-        };
-        if let Some(waker) = waker {
-            waker.wake();
-        }
+        self.slot.is_abandoned()
     }
 }
 

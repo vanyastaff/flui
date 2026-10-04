@@ -65,3 +65,25 @@ transaction: it reads the `CommitGate` the store's owner installs through
 to forget. `flui_testing::text_store_kit` checks a store against these rules.
 **Tests:** the `text_store` module's unit tests, and `flui-testing`'s
 `in_memory_store_conforms_to_kit_v1`.
+
+### Data-transfer delivery shares the foundation claim slot
+
+`TransferRequest::channel` uses `ClaimSlot` for cancellation, executor
+registration and delivery. A producer is consumed by completion, so no
+owner registry remains to wake on abandonment. Producer disconnection maps to
+`TransferError::SourceGone`; polling any resolved request again is a caller
+contract violation. `TransferRequest::ready` keeps its concrete payload locally
+and never clones the executor waker.
+
+Executor clone, wake and retirement run outside shared locks. Caught delivery
+failures retain opaque executor ownership and preserve the result; during an
+existing unwind, secondary failures cannot replace it. The concrete transfer
+payload has no caller-defined destructor. Ordinary successful retirement still
+runs destructors, with Rust's normal abort semantics if aggregate destruction
+panics twice before containment regains control.
+
+**Tests:** `transfer_request_recovery` exercises public completion during
+executor clone, clone failure with a previous registration, displaced executor
+retirement, wake/capture failure competition, cancellation and producer loss
+during an existing unwind, ready results and next-request progress. Each row
+runs in a bounded subprocess so a deadlock or abort cannot hide later rows.
