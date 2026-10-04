@@ -1162,3 +1162,16 @@ inside an image remain part of an internal fractional crop's filter footprint.
 source crops at the same scale and check original edge samples and outside
 pixels. Removing the original bounds affects the packed row while leaving the
 standalone row healthy. This changes sampling admission, not atlas allocation.
+
+### Radial gradients interpolate two circles
+
+ADR-0116 defines the focal/initial and outer circles, greatest admissible root,
+transparent no-solution coverage and existing tiling modes. Both ordinary and
+advanced recording use one validated packed-circle admission. Radial vertex
+inputs use 13 actual attributes (quad location 0 plus instance locations 2..13);
+linear and sweep use 12. Mask gradients keep their explicit Clamp/no-focal
+support. `layer_effects_capture_as_specified` includes the focal, initial-radius,
+concentric/linear/repeated-root/cone, tiling, decoration, affine and refusal/recovery
+readback rows. CPU geometry normalization and computed shader roots retain their
+documented numeric limits; exact conical geometry at every floating range is
+not promised.

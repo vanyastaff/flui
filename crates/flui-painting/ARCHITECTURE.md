@@ -1061,3 +1061,11 @@ repeat retains natural tile size and destination-origin phase. Color filters
 and optional Paint survive dispatch. ADR-0115 specifies the command, instance
 and replay contract; actual producer readbacks join the engine's existing
 `painter_images_and_offscreen_results_read_back_as_specified` family.
+
+### Radial decoration carries both defining circles
+
+Radial decoration resolves the focal alignment and initial radius along with
+the outer circle. Ordinary and advanced engine consumers solve both circles
+and honor tiling under ADR-0116. The gradient-mask boundary retains its existing
+explicit Clamp/no-focal support. The engine's existing layer-effect readback
+family includes the actual decoration producer and ordinary/advanced consumers.

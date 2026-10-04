@@ -1,13 +1,4 @@
-// Radial Gradient Shader for FLUI
-//
-// Renders radial (circular) gradients with up to 8 color stops.
-// Supports custom center point and radius for spotlight effects.
-//
-// Common use cases:
-// - Avatar backgrounds (circular fade)
-// - Button hover effects (radial highlight from center)
-// - Spotlight/vignette effects
-// - Loading spinners with gradients
+// Two-circle radial gradients with validated storage-buffer stops.
 
 // Vertex input (unit quad)
 struct VertexInput {
@@ -18,7 +9,7 @@ struct VertexInput {
 struct InstanceInput {
     @location(2) bounds: vec4<f32>,
     // Adjacent Rust fields share one attribute without changing their byte ABI:
-    // linear endpoints; radial center/radius/padding; sweep center/angles.
+    // radial second-circle centre/radius/tile mode.
     @location(3) geometry: vec4<f32>,
     @location(4) corner_radii: vec4<f32>,
     @location(5) stops: vec2<u32>, // count, offset
@@ -29,6 +20,7 @@ struct InstanceInput {
     @location(10) clip_local_origin: vec4<f32>,
     @location(11) transform: vec4<f32>,
     @location(12) transform_translate: vec4<f32>,
+    @location(13) focal: vec4<f32>,
 }
 
 // Gradient stop (same as linear)
@@ -44,8 +36,8 @@ struct GradientStop {
 struct VertexOutput {
     @builtin(position) clip_position: vec4<f32>,
     @location(0) local_pos: vec2<f32>,
-    @location(1) center: vec2<f32>,
-    @location(2) radius: f32,
+    @location(1) @interpolate(flat) center: vec2<f32>,
+    @location(2) @interpolate(flat) radius: f32,
     @location(3) rect_size: vec2<f32>,
     @location(4) corner_radii: vec4<f32>,
     @location(5) @interpolate(flat) stop_count: u32,
@@ -58,6 +50,8 @@ struct VertexOutput {
     @location(10) @interpolate(flat) clip_kind: u32,
     @location(11) clip_device_to_local: vec4<f32>,
     @location(12) clip_local_origin: vec4<f32>,
+    @location(13) @interpolate(flat) focal: vec4<f32>,
+    @location(14) @interpolate(flat) tile: f32,
 }
 
 // Uniforms
@@ -138,6 +132,8 @@ fn vs_main(
     out.local_pos = local_pos;
     out.center = instance.geometry.xy;
     out.radius = instance.geometry.z;
+    out.focal = instance.focal;
+    out.tile = instance.geometry.w;
     out.rect_size = instance.bounds.zw;
     out.corner_radii = instance.corner_radii;
     out.stop_count = instance.stops.x;
@@ -161,6 +157,47 @@ fn vs_main(
 // `common/fragment_folded.wgsl` / `common/fragment_second_source.wgsl` own the
 // two entry points. All this module owes them is `shadeFragment`.
 
+// A finite solution must also describe a circle with nonnegative radius.
+fn admissibleRoot(t: f32, r0: f32, dr: f32) -> bool {
+    let radius = r0 + t * dr;
+    return abs(t) <= 3.402823e38 && radius >= 0.0 && radius <= 3.402823e38;
+}
+
+// The second component is coverage: points outside the cone have no solution.
+fn radialParameter(p: vec2<f32>, center: vec2<f32>, radius: f32, focal: vec4<f32>) -> vec2<f32> {
+    let d = center - focal.xy;
+    let dr = radius - focal.z;
+    let q = p * focal.w - focal.xy;
+    if (all(d == vec2<f32>(0.0)) && radius == 0.0 && focal.z == 0.0) {
+        return vec2<f32>(0.0, 1.0);
+    }
+    let a = dot(d, d) - dr * dr;
+    let b = -2.0 * (dot(q, d) + focal.z * dr);
+    let c = dot(q, q) - focal.z * focal.z;
+    if (a == 0.0) {
+        if (b == 0.0) { return vec2<f32>(0.0); }
+        let t = -c / b;
+        return vec2<f32>(t, select(0.0, 1.0, admissibleRoot(t, focal.z, dr)));
+    }
+    let discriminant = b * b - 4.0 * a * c;
+    if (discriminant < 0.0) { return vec2<f32>(0.0); }
+    if (discriminant == 0.0) {
+        let t = -b / (2.0 * a);
+        return vec2<f32>(t, select(0.0, 1.0, admissibleRoot(t, focal.z, dr)));
+    }
+    // Avoid cancellation in one root; the other follows from their product.
+    let root = sqrt(discriminant);
+    let stable = -0.5 * (b + select(-root, root, b >= 0.0));
+    let t0 = stable / a;
+    let t1 = c / stable;
+    let valid0 = admissibleRoot(t0, focal.z, dr);
+    let valid1 = admissibleRoot(t1, focal.z, dr);
+    if (valid0 && valid1) { return vec2<f32>(max(t0, t1), 1.0); }
+    if (valid0) { return vec2<f32>(t0, 1.0); }
+    if (valid1) { return vec2<f32>(t1, 1.0); }
+    return vec2<f32>(0.0);
+}
+
 fn shadeFragment(in: VertexOutput) -> ShadedFragment {
     // Check if inside rounded corners
     let centered_pos = (in.local_pos / in.rect_size - 0.5) * in.rect_size;
@@ -169,20 +206,6 @@ fn shadeFragment(in: VertexOutput) -> ShadedFragment {
     // Local distance is not device distance under affine scaling. Evaluate
     // derivatives unconditionally; coverage, rather than a local-unit cutoff,
     // determines the edge contribution.
-
-    // Compute radial distance from center
-    let radial_dist = length(in.local_pos - in.center);
-
-    // Normalize to [0, 1] based on radius
-    var t: f32;
-    if (in.radius > 0.0001) {
-        t = radial_dist / in.radius;
-    } else {
-        t = 0.0;
-    }
-
-    // Interpolate color from storage buffer
-    var color = interpolateGradient(t, in.stop_count, in.stop_offset);
 
     // The gradient's own rounded-box edge and the clip's edge are both partial
     // coverage, and both belong on the coverage channel rather than folded into
@@ -201,38 +224,22 @@ fn shadeFragment(in: VertexOutput) -> ShadedFragment {
         in.clip_local_origin,
     );
 
+    let parameter = radialParameter(in.local_pos, in.center, in.radius, in.focal);
+    var t = parameter.x;
+    var valid = parameter.y;
+    if (in.tile == 1.0) {
+        t = t - floor(t);
+    } else if (in.tile == 2.0) {
+        let repeated = t - 2.0 * floor(t * 0.5);
+        t = 1.0 - abs(repeated - 1.0);
+    } else if (in.tile == 3.0 && (t < 0.0 || t > 1.0)) {
+        valid = 0.0;
+    }
+    // Invalid roots must not reach stop interpolation with a NaN parameter.
+    let color = interpolateGradient(select(0.0, t, valid != 0.0), in.stop_count, in.stop_offset);
+
     var shaded: ShadedFragment;
     shaded.color = color;
-    shaded.coverage = edge_alpha * clip_alpha;
+    shaded.coverage = edge_alpha * clip_alpha * valid;
     return shaded;
 }
-
-// =============================================================================
-// Usage Example
-// =============================================================================
-//
-// ```rust
-// // Spotlight effect from center
-// let stops = vec![
-//     GradientStop::new(Color::WHITE, 0.0),
-//     GradientStop::new(Color::TRANSPARENT, 1.0),
-// ];
-//
-// painter.draw_radial_gradient_rect(
-//     bounds,
-//     center: bounds.center(),
-//     radius: bounds.width * 0.5,
-//     stops,
-// );
-//
-// // Offset spotlight (hover effect)
-// painter.draw_radial_gradient_rect(
-//     bounds,
-//     center: mouse_pos,  // Follow cursor
-//     radius: 100.0,
-//     stops: vec![
-//         GradientStop::new(Color::rgba(255, 255, 255, 0.3), 0.0),
-//         GradientStop::new(Color::TRANSPARENT, 1.0),
-//     ],
-// );
-// ```

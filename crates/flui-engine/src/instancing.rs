@@ -1094,7 +1094,7 @@ impl RadialGradientInstance {
     pub(crate) fn desc() -> wgpu::VertexBufferLayout<'static> {
         // Adjacent geometry pairs share a vec4, and count/offset share a uvec2.
         // This preserves the existing Rust byte layout while keeping the full
-        // unit-quad + instance input within 13 attributes (locations 0..12).
+        // unit-quad + instance input within 13 attributes (quad0, instances2..13).
         const ATTRIBUTES: &[wgpu::VertexAttribute] = &wgpu::vertex_attr_array![
             2 => Float32x4, // bounds
             3 => Float32x4, // linear parameter / radial center-radius / sweep center-angles
@@ -1107,6 +1107,7 @@ impl RadialGradientInstance {
             10 => Float32x4, // clip-local translation
             11 => Float32x4, // local-to-device linear part
             12 => Float32x4, // local-to-device translation
+            13 => Float32x4, // focal centre, initial radius, inverse scale
         ];
 
         wgpu::VertexBufferLayout {

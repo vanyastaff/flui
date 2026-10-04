@@ -162,12 +162,12 @@ impl LinearGradientInstance {
 pub(crate) struct RadialGradientInstance {
     /// Rectangle bounds [x, y, width, height]
     pub bounds: [f32; 4],
-    /// Gradient center point (local coordinates)
+    /// Second circle center in normalized bounds-local coordinates
     pub center: [f32; 2],
-    /// Gradient radius
+    /// Normalized second circle radius
     pub radius: f32,
-    /// Padding
-    pub padding1: f32,
+    /// Tile mode: Clamp=0, Repeat=1, Mirror=2, Decal=3.
+    pub tile_mode: f32,
     /// Corner radii [top-left, top-right, bottom-right, bottom-left]
     pub corner_radii: [f32; 4],
     /// Number of validated gradient stops
@@ -202,6 +202,8 @@ pub(crate) struct RadialGradientInstance {
     pub transform: [f32; 4],
     /// Local-to-device translation, padded for the vertex attribute.
     pub transform_translate: [f32; 4],
+    /// Normalized focal center, initial radius and inverse coordinate scale.
+    pub focal: [f32; 4],
     /// Padding for GPU alignment
     pub padding2: [u32; 2],
 }
@@ -219,11 +221,12 @@ impl RadialGradientInstance {
             bounds,
             center: [center.x, center.y],
             radius,
-            padding1: 0.0,
+            tile_mode: 0.0,
             corner_radii,
             stop_count,
             stop_offset: 0,
             padding2: [0; 2],
+            focal: [center.x, center.y, 0.0, 1.0],
             clip_rrect: [0.0; 8],
             clip_kind: [0; 4],
             clip_device_to_local: [1.0, 0.0, 0.0, 1.0],
@@ -231,6 +234,12 @@ impl RadialGradientInstance {
             transform: [1.0, 0.0, 0.0, 1.0],
             transform_translate: [0.0; 4],
         }
+    }
+
+    pub(crate) fn with_circles(mut self, focal: [f32; 4], tile: f32) -> Self {
+        self.focal = focal;
+        self.tile_mode = tile;
+        self
     }
 
     pub(crate) fn with_transform(mut self, matrix: glam::DMat4, origin: [f64; 2]) -> Self {

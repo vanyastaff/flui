@@ -466,8 +466,10 @@ pub(crate) fn resolve_gradient(gradient: &Gradient, rect: Rect<f64>) -> Shader {
             colors: radial.colors.clone(),
             stops: radial.stops.clone(),
             tile_mode: radial.tile_mode,
-            focal: None,
-            focal_radius: None,
+            focal: radial.focal.map(at),
+            focal_radius: radial
+                .focal_radius
+                .map(|radius| radius * half_w.min(half_h) * 2.0),
         },
         Gradient::Sweep(sweep) => Shader::SweepGradient {
             center: at(sweep.center),
