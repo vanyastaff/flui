@@ -38,7 +38,7 @@ pub struct FontRegistry {
 
 /// One registered face and swash's handle on it.
 pub(super) struct Face {
-    bytes: FontBytes,
+    bytes: Arc<[u8]>,
     /// The face's table-directory offset inside `bytes`.
     offset: u32,
     /// swash keys its scaler cache (hinting state included) on this.
@@ -52,7 +52,7 @@ impl Face {
     /// swash's view of the face.
     pub(super) fn font_ref(&self) -> swash::FontRef<'_> {
         swash::FontRef {
-            data: (*self.bytes).as_ref(),
+            data: self.bytes.as_ref(),
             offset: self.offset,
             key: self.cache_key,
         }
@@ -80,7 +80,8 @@ impl FontRegistry {
     }
 
     /// Adds `face` over `bytes`. Registering a present face again over equal
-    /// bytes is a no-op.
+    /// bytes is a no-op. A new face copies its bytes into registry-owned
+    /// storage; the source allocation and its erased implementation can retire.
     ///
     /// # Errors
     ///
@@ -95,7 +96,7 @@ impl FontRegistry {
         bytes: FontBytes,
     ) -> Result<(), RegisterFaceError> {
         if let Some(held) = self.faces.get(&face) {
-            let (held, new) = ((*held.bytes).as_ref(), (*bytes).as_ref());
+            let (held, new) = (held.bytes.as_ref(), (*bytes).as_ref());
             let same = (held.as_ptr() == new.as_ptr() && held.len() == new.len()) || held == new;
             return if same {
                 Ok(())
@@ -104,8 +105,11 @@ impl FontRegistry {
             };
         }
         let index = usize::try_from(face.index).map_err(|_| RegisterFaceError::NotAFace)?;
+        // Font sources may come from an unloadable plugin. Retain neither its
+        // erased AsRef vtable nor a slice into the plugin image.
+        let bytes: Arc<[u8]> = Arc::from((*bytes).as_ref());
         let (offset, cache_key) = {
-            let font = swash::FontRef::from_index((*bytes).as_ref(), index)
+            let font = swash::FontRef::from_index(bytes.as_ref(), index)
                 .ok_or(RegisterFaceError::NotAFace)?;
             (font.offset, font.key)
         };

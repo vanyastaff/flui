@@ -67,9 +67,10 @@ so its unit tests run without the feature:
   registration. A degraded or failed reload is logged and keeps the last good
   tree, as before.
 - `ScenePluginHook` owns the `HotReloadDriver`. `scene_frame` builds the frame's
-  scene and lends it to the host's renderer; the scene is dropped before the
-  call returns, while the driver still holds the library, which is the ordering
-  the `unsafe` `build_scene` requires.
+  scene and lends it to the host's renderer. The original scene is dropped
+  before the call returns while the driver holds the image. The unsafe
+  `scene_frame` caller must additionally guarantee the renderer retains no
+  cloned image-dependent payload; a borrowed scene alone cannot ensure this.
 
 The host applies a `Patched` poll once to every realm, not to whichever realm
 polled first; before the hook, a worker's rebuild request reached only the most
@@ -105,3 +106,55 @@ out without root constraints, and constraints set once at mount would keep the
 first size after the host's surface is resized. Pinned by
 `a_plugin_pipeline_lays_out_at_the_size_of_each_frame`
 (`tests/plugin_pipeline_layout.rs`, under `app-plugin`).
+
+### Polling an image does not construct a scene
+
+`HotReloadDriver::poll` returns whether an image was loaded or replaced. It
+never calls a scene build entry point. Constructing a scene remains the
+separate unsafe `build_scene` operation: its caller must drop every scene and
+retained clone before the image can be unloaded. A safe polling method that
+returned an unrestricted `Scene` would let that lifetime obligation escape
+without an unsafe call. The hook polls, builds once, lends the scene to the
+renderer and retires it before returning; reload no longer builds and discards
+an extra scene. The driver and host hook boundaries follow ADR-0108. The consumer test
+`polling_an_unavailable_plugin_reports_no_change` pins the polling result type
+and retries an unavailable image without constructing a scene.
+
+Unix loading preserves native path bytes rather than requiring UTF-8. Symbol
+names remain UTF-8 C strings, a separate API input. The Linux GNU consumer test `a_native_byte_library_path_can_be_loaded` opens
+an already-loaded libc image through a non-UTF-8 symlink and resolves its
+`malloc` symbol. It needs no compiled plugin fixture. Unix native-byte loading has not
+been executed on the current Windows development host.
+
+### Reload detection retains native timestamp precision
+
+Loaded scene and worker plugins, and the idle artifact watcher, compare the
+same native `Option<SystemTime>` metadata revision. Whole-second truncation
+would miss two replacements of the same artifact path within one second.
+Missing metadata is a distinct unavailable revision; recreation changes it
+again. Resolved paths still participate in the watcher's identity, so staged
+content-addressed filenames remain distinguishable even with equal timestamps.
+The public `worker_artifact_stamp` returns the resolved path and optional native
+timestamp, and is the method the watcher uses. The former seconds-only
+`file_mtime` helper is removed because no production consumer needs its
+truncated timestamp.
+`same_path_subsecond_revisions_and_recreation_are_detected` uses actual
+`FileTimes` updates within one second, then deletion and recreation. The existing
+`an_artifact_change_wakes_the_host` additionally pins watcher delivery.
+The test invokes the public stamp without loading an image; loader and watcher
+share its native timestamp detector. It does not reconstruct the stamp predicate.
+
+### Plugin image font identities reset until rendering succeeds
+
+A plugin image can issue the same font blob IDs as its predecessor for different
+font bytes. `ScenePluginHook` requests a fresh renderer font namespace on its
+first scene and after every successful image replacement. The request remains
+pending until the callback returns true; false or unwind does not acknowledge
+it, and an unchanged-image poll cannot erase it. Replacing the entire hook also
+starts pending. The callback receives the request alongside its scene borrow.
+
+`scene_frame_reset_recovery_matrix` pins first/replacement success, refusal,
+panic and the next render. Its private seam invokes the production image-update
+and callback-dispatch methods with a borrowed empty scene because installing a
+real replacement DSO is not needed to test acknowledgement chronology. It
+asserts callback flags and results, not internal fields or a copied predicate.

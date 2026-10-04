@@ -496,6 +496,139 @@ fn selection_highlights_the_second_line(renderer: &crate::headless::HeadlessRend
     );
 }
 
+/// Two image-local font namespaces can reuse a complete glyph key.
+fn colliding_font_scene(text: &str, family: &str) -> flui_layer::Scene {
+    let fonts = flui_painting::FontCollection::new();
+    let mut context = flui_painting::TextContext::new(&fonts);
+    let style = TextStyle::new().with_font_family(family);
+    let spans = [(text.to_owned(), None)];
+    let paragraph = context
+        .shape(&flui_painting::parley_text::ParagraphSpec {
+            spans: &spans,
+            default_style: Some(&style),
+            font_size: 48.0,
+            max_width: None,
+            line_height: None,
+            direction: TextDirection::Ltr,
+            max_lines: None,
+            ellipsis: None,
+        })
+        .to_shaped(None);
+    let paragraph = std::sync::Arc::new(
+        flui_painting::testing::paragraph_with_font_ids(&paragraph, 1)
+            .expect("fixture font ids fit u64"),
+    );
+    assert_eq!(
+        paragraph.runs().len(),
+        1,
+        "the fixture has no fallback face"
+    );
+    let run = paragraph.runs().next().expect("the fixture shapes one run");
+    assert_eq!(
+        run.face().key(),
+        flui_painting::glyphs::FaceKey {
+            blob_id: 1,
+            index: 0
+        }
+    );
+    assert_eq!(run.glyphs().len(), 1);
+    assert_eq!(
+        run.glyphs()[0].id,
+        36,
+        "vendored fonts share this glyph key"
+    );
+    let mut canvas = Canvas::new();
+    canvas.draw_paragraph(&paragraph, Offset::new(8.0, 8.0), Color::BLACK);
+    let mut builder = SceneBuilder::new();
+    builder.add_picture(canvas.finish());
+    flui_layer::Scene::new(builder.build())
+}
+
+#[derive(Clone, Copy)]
+enum FontTransition {
+    OrdinaryToPlugin,
+    ReloadedPlugin,
+    PluginToOrdinary,
+}
+
+fn check_font_transition(renderer: &crate::headless::HeadlessRenderer, transition: FontTransition) {
+    use crate::raster::{PresentDisposition, RasterBackend};
+
+    let before = colliding_font_scene("?", "Roboto");
+    let after = colliding_font_scene("w", "Material Icons");
+    let expected = |scene: &flui_layer::Scene| {
+        let mut capture = renderer
+            .retained_capture((SIDE, SIDE))
+            .expect("reference capture");
+        capture.render_scene(scene).expect("reference renders");
+        capture.read_rgba().expect("reference readback")
+    };
+    let before_pixels = expected(&before);
+    let after_pixels = expected(&after);
+    assert_ne!(
+        before_pixels, after_pixels,
+        "the two fonts draw distinct ink"
+    );
+    let mut capture = renderer
+        .retained_capture((SIDE, SIDE))
+        .expect("transition capture");
+    match transition {
+        FontTransition::OrdinaryToPlugin => {
+            capture.render_scene(&before).expect("ordinary frame");
+        }
+        FontTransition::ReloadedPlugin | FontTransition::PluginToOrdinary => {
+            capture
+                .render_plugin_scene(&before, true)
+                .expect("plugin frame");
+            // Consume unmanaged-frame damage promotion without changing source.
+            capture
+                .render_plugin_frame(&before, false)
+                .expect("managed plugin frame");
+        }
+    }
+    assert_eq!(capture.read_rgba().expect("before readback"), before_pixels);
+    let unchanged = match transition {
+        FontTransition::OrdinaryToPlugin => capture.render_scene(&before),
+        FontTransition::ReloadedPlugin | FontTransition::PluginToOrdinary => {
+            capture.render_plugin_frame(&before, false)
+        }
+    }
+    .expect("unchanged frame");
+    assert_eq!(
+        unchanged,
+        PresentDisposition::NoDamage,
+        "the transition starts with no producer damage or pending promotion"
+    );
+    let disposition = match transition {
+        FontTransition::OrdinaryToPlugin => capture.render_plugin_frame(&after, false),
+        FontTransition::ReloadedPlugin => capture.render_plugin_frame(&after, true),
+        FontTransition::PluginToOrdinary => capture.render_scene(&after),
+    }
+    .expect("the new font namespace renders");
+    assert_eq!(
+        disposition,
+        PresentDisposition::Presented,
+        "source admission must repaint without producer damage"
+    );
+    assert_eq!(
+        capture.read_rgba().expect("after readback"),
+        after_pixels,
+        "a reused font key must draw the current source's ink"
+    );
+}
+
+fn ordinary_to_plugin_repaints_with_the_new_font(renderer: &crate::headless::HeadlessRenderer) {
+    check_font_transition(renderer, FontTransition::OrdinaryToPlugin);
+}
+
+fn a_reloaded_plugin_repaints_with_the_new_font(renderer: &crate::headless::HeadlessRenderer) {
+    check_font_transition(renderer, FontTransition::ReloadedPlugin);
+}
+
+fn plugin_to_ordinary_repaints_with_the_new_font(renderer: &crate::headless::HeadlessRenderer) {
+    check_font_transition(renderer, FontTransition::PluginToOrdinary);
+}
+
 /// Parley's runs read back as laid out: hard breaks, synthesis, fallback
 /// faces, right alignment and the device baseline, each sampled where Parley
 /// paint and the cosmic-text paint it replaced differ.
@@ -505,7 +638,19 @@ fn parley_runs_read_back() {
         return;
     };
     type Row = (&'static str, fn(&crate::headless::HeadlessRenderer));
-    let rows: [Row; 8] = [
+    let rows: [Row; 11] = [
+        (
+            "ordinary_to_plugin_repaints_with_the_new_font",
+            ordinary_to_plugin_repaints_with_the_new_font,
+        ),
+        (
+            "a_reloaded_plugin_repaints_with_the_new_font",
+            a_reloaded_plugin_repaints_with_the_new_font,
+        ),
+        (
+            "plugin_to_ordinary_repaints_with_the_new_font",
+            plugin_to_ordinary_repaints_with_the_new_font,
+        ),
         (
             "latin_breaks_at_a_line_separator",
             latin_breaks_at_a_line_separator,

@@ -432,3 +432,18 @@ A branded `Cx<'build>` token (its role is taken by the `BuildContext`/`Lifecycle
 ADR-0078); a `Mounted<'_>` re-entry token with RAII effect scopes (async and listener re-entry go
 through `RebuildHandle` and the realm inbox, ADR-0027 §3; derived state and effects are
 ADR-0075's subject); shrinking `ElementBase` into a capability-typed `Element<V, P>`.
+
+### A scene-plugin rendering callback has an explicit unsafe lifetime contract
+
+`DevReloadHook::scene_frame` is unsafe: a scene borrow allows cloning layers
+and shared annotations whose code belongs to a plugin image. Its caller must
+retain none of those image-dependent payloads after the callback boundary,
+including an unwinding call. The hook may then unload on the next frame or
+on drop. A `compile_fail,E0133` doctest pins mandatory acknowledgement at the
+public invocation. Ordinary worker polling remains safe and unchanged.
+
+The scene callback also receives a pending font namespace reset and returns a
+rendering verdict. The host uses the dedicated plugin renderer entry point;
+only a true callback result acknowledges that reset. Plugin image replacement
+can reuse font IDs for different bytes, so this boundary carries the image
+transition independently of an ordinary font cache lookup (ADR-0108).

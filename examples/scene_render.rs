@@ -139,7 +139,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .flatten()
         .map(|path| {
             tracing::info!("Hot-reload enabled: {}", path);
-            Arc::new(Mutex::new(HotReloadDriver::new(path)))
+            Arc::new(Mutex::new((HotReloadDriver::new(path), true)))
         });
 
     let platform = current_platform().expect("Failed to initialize platform");
@@ -200,20 +200,30 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let w = size.width as f64;
         let h = size.height as f64;
 
-        // If hot-reload is enabled, poll for plugin updates and use plugin scene
+        if !effects_mode && let Some(ref hot_reload) = hot_reload_frame {
+            let mut reload = hot_reload.lock().unwrap();
+            let (driver, pending_font_reset) = &mut *reload;
+            *pending_font_reset |= driver.poll();
+            // SAFETY: the scene is rendered and dropped while this driver is
+            // locked, before any later reload. The dedicated renderer copies
+            // retained font bytes and retains no image-dependent payloads.
+            #[expect(unsafe_code)]
+            let built = unsafe { driver.build_scene(w, h) };
+            if let Some(scene) = built {
+                let result = renderer_frame
+                    .lock()
+                    .unwrap()
+                    .render_plugin_scene(&scene, *pending_font_reset);
+                match result {
+                    Ok(_) => *pending_font_reset = false,
+                    Err(error) => tracing::error!(?error, "plugin rendering failed"),
+                }
+                drop(scene);
+                return;
+            }
+        }
         let scene = if effects_mode {
             effects::build(w, h)
-        } else if let Some(ref hr) = hot_reload_frame {
-            let mut driver = hr.lock().unwrap();
-            driver.poll(w, h);
-            // SAFETY: the plugin is built from this workspace by the same
-            // toolchain, so host and plugin agree on `Scene`'s layout and
-            // allocator, and the returned scene is dropped at the end of this
-            // frame while `driver` (owning the library) lives on. See
-            // `HotReloadDriver::build_scene`'s `# Safety`.
-            #[expect(unsafe_code)]
-            let built = unsafe { driver.build_scene_or(w, h, build_test_scene) };
-            built
         } else {
             build_test_scene(w, h)
         };

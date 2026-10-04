@@ -130,7 +130,7 @@ pub struct WorkerPlugin {
     init_fn: WorkerInitFn,
     fingerprint_fn: Option<WorkerFingerprintFn>,
     version: u32,
-    mtime: u64,
+    mtime: Option<std::time::SystemTime>,
     /// The `(fingerprint, ptr)` pairs this plugin's init hook registered in
     /// `WORKER_BUILDS` — pruned by `Drop` before the image is unmapped.
     registered: Mutex<Vec<(u64, BuildPtr)>>,
@@ -194,7 +194,7 @@ impl WorkerPlugin {
                 .symbol("flui_worker_fingerprint")
                 .map(|ptr| std::mem::transmute::<_, WorkerFingerprintFn>(ptr));
 
-            let mtime = dynlib::file_mtime(lib_path);
+            let mtime = dynlib::file_revision(lib_path);
             let plugin = WorkerPlugin {
                 lib,
                 init_fn,
@@ -241,7 +241,7 @@ impl WorkerPlugin {
 
     /// Whether the on-disk library changed since load.
     pub fn has_update(&self) -> bool {
-        dynlib::file_mtime(self.lib.path()) != self.mtime
+        dynlib::file_revision(self.lib.path()) != self.mtime
     }
 
     /// Unload the worker library.
@@ -359,10 +359,10 @@ fn resolve_worker_path(lib_path: &Path) -> PathBuf {
 /// share an mtime, but they never share a path. Comparing only the mtime would
 /// miss that second build.
 #[must_use]
-pub fn worker_artifact_stamp(lib_path: &Path) -> (PathBuf, u64) {
+pub fn worker_artifact_stamp(lib_path: &Path) -> (PathBuf, Option<std::time::SystemTime>) {
     let resolved = resolve_worker_path(lib_path);
-    let mtime = dynlib::file_mtime(&resolved);
-    (resolved, mtime)
+    let revision = dynlib::file_revision(&resolved);
+    (resolved, revision)
 }
 
 /// Polls a worker dylib path and reloads on mtime changes.

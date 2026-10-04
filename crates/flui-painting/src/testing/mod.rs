@@ -114,3 +114,28 @@ pub fn host_family_names(host: &HostFonts) -> Vec<String> {
 pub fn collection_holds(fonts: &FontCollection, family: &str) -> bool {
     fonts.holds(family)
 }
+
+/// Gives the paragraph's faces deterministic ids to model independent plugin
+/// images whose local blob counters restart. This fixture changes ids only;
+/// the font bytes, shaped glyphs and placement stay unchanged.
+///
+/// # Errors
+///
+/// Returns an error if the face indices or requested ids do not fit in `u64`.
+pub fn paragraph_with_font_ids(
+    paragraph: &crate::ShapedParagraph,
+    first_id: u64,
+) -> Result<crate::ShapedParagraph, &'static str> {
+    let mut paragraph = paragraph.clone();
+    for (index, face) in paragraph.faces.iter_mut().enumerate() {
+        let index = u64::try_from(index).map_err(|_| "face index does not fit u64")?;
+        let id = first_id
+            .checked_add(index)
+            .ok_or("fixture font ids overflow u64")?;
+        *face = crate::display_list::FontFace::new(
+            crate::display_list::FontBlob::new(id, std::sync::Arc::clone(face.blob().bytes())),
+            face.key().index,
+        );
+    }
+    Ok(paragraph)
+}

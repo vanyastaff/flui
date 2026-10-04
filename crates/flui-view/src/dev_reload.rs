@@ -144,13 +144,37 @@ pub trait DevReloadHook: Send + 'static {
     fn poll(&mut self) -> ReloadEvent;
 
     /// Let a loaded scene plugin draw this frame instead of the widget tree
-    /// (Android's `flui run --scene`). Returns `true` when it called
-    /// `render`, in which case the host skips the widget pipeline for this
-    /// frame.
+    /// (Android's `flui run --scene`). Returns `true` when `render` succeeded,
+    /// in which case the host skips the widget pipeline for this frame.
     ///
-    /// The scene is lent to `render` and never leaves the call, so it cannot
-    /// outlive the library image that built it. The default draws nothing.
-    fn scene_frame(&mut self, _width: f64, _height: f64, _render: &mut dyn FnMut(&Scene)) -> bool {
+    /// The callback's second argument requests a fresh font identity namespace
+    /// for the plugin image. It starts true and becomes true after loading a
+    /// replacement image. Return true only after successful rendering; false
+    /// or unwind preserves the reset request for the next attempt.
+    ///
+    /// The default draws nothing.
+    ///
+    /// # Safety
+    ///
+    /// `render` must not retain any scene payload, layer clone or annotation
+    /// whose storage, code or vtable depends on the plugin image beyond this call,
+    /// including when it unwinds. The hook may unload that image on its next
+    /// call or when dropped. Borrowing the scene alone does not prevent its
+    /// shared payloads from being cloned.
+    ///
+    /// ```compile_fail,E0133
+    /// use flui_view::dev_reload::DevReloadHook;
+    /// fn render_frame(hook: &mut dyn DevReloadHook) {
+    ///     hook.scene_frame(100.0, 100.0, &mut |_scene, _reset_fonts| true);
+    /// }
+    /// ```
+    #[expect(unsafe_code, reason = "plugin payload lifetime is a caller obligation")]
+    unsafe fn scene_frame(
+        &mut self,
+        _width: f64,
+        _height: f64,
+        _render: &mut dyn FnMut(&Scene, bool) -> bool,
+    ) -> bool {
         false
     }
 }
@@ -174,7 +198,14 @@ mod tests {
     #[test]
     fn scene_frame_default_never_calls_render() {
         let mut calls = 0;
-        let drew = PollOnly.scene_frame(10.0, 10.0, &mut |_scene| calls += 1);
+        // SAFETY: PollOnly uses the default, which supplies no plugin payload.
+        #[expect(unsafe_code)]
+        let drew = unsafe {
+            PollOnly.scene_frame(10.0, 10.0, &mut |_scene, _reset_fonts| {
+                calls += 1;
+                true
+            })
+        };
         assert!(!drew, "the default claims no frame");
         assert_eq!(calls, 0, "the default never renders");
     }

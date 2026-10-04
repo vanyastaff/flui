@@ -68,6 +68,10 @@ fn parley_oracle_contract() {
                 "rasterizing_a_key_twice_draws_the_same_bitmap",
                 parley_oracle::rasterizing_a_key_twice_draws_the_same_bitmap,
             ),
+            (
+                "registered_fonts_release_the_source_and_keep_rasterizing",
+                parley_oracle::registered_fonts_release_the_source_and_keep_rasterizing,
+            ),
         ],
     );
 }

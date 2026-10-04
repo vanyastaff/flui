@@ -234,6 +234,7 @@ impl Drop for ArtifactWatcher {
 /// runs.
 pub struct ScenePluginHook {
     driver: HotReloadDriver,
+    pending_font_reset: bool,
 }
 
 impl std::fmt::Debug for ScenePluginHook {
@@ -254,7 +255,24 @@ impl ScenePluginHook {
     pub fn new(path: impl AsRef<Path>) -> Self {
         Self {
             driver: HotReloadDriver::new(path),
+            pending_font_reset: true,
         }
+    }
+
+    fn observe_image_update(&mut self, updated: bool) {
+        self.pending_font_reset |= updated;
+    }
+
+    fn render_loaded_scene(
+        &mut self,
+        scene: &Scene,
+        render: &mut dyn FnMut(&Scene, bool) -> bool,
+    ) -> bool {
+        let rendered = render(scene, self.pending_font_reset);
+        if rendered {
+            self.pending_font_reset = false;
+        }
+        rendered
     }
 
     /// Where `flui run --scene` puts the plugin on a device: the app's
@@ -274,26 +292,34 @@ impl DevReloadHook for ScenePluginHook {
         ReloadEvent::Unchanged
     }
 
-    fn scene_frame(&mut self, width: f64, height: f64, render: &mut dyn FnMut(&Scene)) -> bool {
-        // A reload builds a first scene, dropped here while the driver still
-        // holds the library that built it.
-        drop(self.driver.poll(width, height));
+    #[expect(
+        unsafe_code,
+        reason = "implements the plugin payload lifetime contract"
+    )]
+    unsafe fn scene_frame(
+        &mut self,
+        width: f64,
+        height: f64,
+        render: &mut dyn FnMut(&Scene, bool) -> bool,
+    ) -> bool {
+        let updated = self.driver.poll();
+        self.observe_image_update(updated);
 
         // SAFETY: `HotReloadDriver::build_scene` reclaims a scene the plugin
         // allocated, so host and plugin must agree on `Scene`'s layout and
         // the scene must be dropped before the library is unloaded. The
         // layout agreement is the ABI-token handshake the loader checked; the
-        // ordering holds because `scene` is only lent to `render` and is
-        // dropped before this method returns, while `self.driver`, which owns
-        // the library, is borrowed for the whole call and so cannot unload it.
+        // original scene is dropped before this method returns, while the
+        // driver holds the image. The unsafe scene_frame caller additionally
+        // guarantees render retains no cloned image-dependent payloads.
         #[expect(unsafe_code)]
         let built = unsafe { self.driver.build_scene(width, height) };
         let Some(scene) = built else {
             return false;
         };
-        render(&scene);
+        let rendered = self.render_loaded_scene(&scene, render);
         drop(scene);
-        true
+        rendered
     }
 }
 

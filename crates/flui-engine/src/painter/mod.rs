@@ -231,6 +231,18 @@ impl WgpuPainter {
         }
     }
 
+    /// Replaces font faces and cached glyph bitmaps between scene sources.
+    /// Called before recording a frame, after the previous frame's commands
+    /// have been submitted or discarded. Submitted GPU work owns its resources.
+    pub(crate) fn reset_scene_fonts(&mut self) {
+        self.glyph_atlas = GlyphAtlas::new(
+            Arc::clone(&self.device),
+            Arc::clone(&self.queue),
+            &self.pipelines.glyph_atlas_bind_group_layout,
+            flui_painting::glyphs::SwashRasterizer::new(),
+        );
+    }
+
     // ===== Accessors =====
 
     /// How many faces the glyph rasterizer has registered: one per distinct

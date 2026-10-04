@@ -645,7 +645,30 @@ hashes `R::Key` and owns `R`, taking it by `&mut` on a miss and on a grow. The
 painter's is a `TextAtlas`, `GlyphAtlas<SwashRasterizer>`: the rasterizer owns
 the registry of every face a paragraph drawn through it named, so a key stays
 valid while the atlas lives, and rasterization takes no lock and shares no
-font state with any realm. `parley_runs_read_back` reads back what paint now
+font state with any realm. `Renderer::render_plugin_scene` selects a plugin
+font source; the first scene from a hook and every successful image reload
+request a reset. Switching ordinary ↔ plugin sources also replaces the complete
+`TextAtlas` between frames, including its registry and bitmap entries. Blob ids
+are local to the image that created them, so retaining either cache across an
+image transition could draw a previous image's face under the same glyph key.
+Ordinary managed `render_frame` selects the ordinary source too. The shared
+`FrameProtocol` selector forces full repaint before damage planning; an unchanged
+producer diff cannot leave pixels from the previous namespace on screen.
+Previously submitted GPU work owns its resources, so replacing the atlas does
+not require waiting for the device.
+
+`ordinary_to_plugin_repaints_with_the_new_font`,
+`a_reloaded_plugin_repaints_with_the_new_font` and
+`plugin_to_ordinary_repaints_with_the_new_font` in `parley_runs_read_back`
+read back two distinct fonts sharing a glyph key, against independent fresh
+captures. Each transition starts with `NoDamage`. The private retained capture
+uses the production source selector and frame protocol; painting's
+`testing::paragraph_with_font_ids` models image-local counters restarting, which
+cannot be injected through the production paragraph constructors. Copying a newly
+admitted font into host-owned bytes is painting's decision 18; switching sources
+also allocates a fresh atlas, while frames within one source retain it.
+
+`parley_runs_read_back` reads back what paint now
 draws: hard breaks, synthetic bold, host fallback faces, right alignment and
 the device baseline. Because a rasterizer is a seam,
 the atlas guards the upload rather than trusting it: an image whose data

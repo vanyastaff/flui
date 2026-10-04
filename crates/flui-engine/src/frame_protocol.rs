@@ -59,6 +59,13 @@ pub(crate) trait FrameSteps {
     fn blit(&mut self, retained: &wgpu::Texture, surface: &wgpu::TextureView) -> EngineResult<()>;
 }
 
+/// Font blob ids are local to the image that shapes a scene.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FontSource {
+    Ordinary,
+    Plugin,
+}
+
 /// A renderer's damage, its retained target and the one-frame promotion to a
 /// full repaint.
 #[derive(Debug)]
@@ -74,6 +81,7 @@ pub(crate) struct FrameProtocol {
     /// frame for one frame), and after a frame rendered outside the damage
     /// protocol ([`Self::end_unmanaged`]).
     force_full_next_frame: bool,
+    font_source: FontSource,
 }
 
 impl Default for FrameProtocol {
@@ -89,6 +97,23 @@ impl FrameProtocol {
             damage: DamageTracker::new(),
             retained: RetainedTarget::default(),
             force_full_next_frame: false,
+            font_source: FontSource::Ordinary,
+        }
+    }
+
+    /// Selects a font namespace before damage planning or frame recording.
+    /// Reloaded images can reuse blob ids, so both faces and atlas entries
+    /// must retire together. A transition also invalidates unchanged pixels.
+    pub(crate) fn select_font_source(
+        &mut self,
+        painter: &mut crate::painter::WgpuPainter,
+        source: FontSource,
+        reset_fonts: bool,
+    ) {
+        if self.font_source != source || reset_fonts {
+            painter.reset_scene_fonts();
+            self.font_source = source;
+            self.damage.mark_full_repaint();
         }
     }
 

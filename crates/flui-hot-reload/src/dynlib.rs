@@ -92,15 +92,12 @@ impl Drop for DynLib {
     }
 }
 
-/// Get the modification time of a file as seconds since the Unix epoch.
-///
-/// Returns 0 if the file doesn't exist or metadata can't be read.
-pub fn file_mtime(path: impl AsRef<Path>) -> u64 {
+/// The native revision used by reload drivers, preserving subsecond precision
+/// and distinguishing unavailable metadata from an epoch timestamp.
+pub(crate) fn file_revision(path: &Path) -> Option<std::time::SystemTime> {
     std::fs::metadata(path)
-        .and_then(|m| m.modified())
+        .and_then(|metadata| metadata.modified())
         .ok()
-        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map_or(0, |d| d.as_secs())
 }
 
 // ── Platform-specific implementations ──────────────────────────────────
@@ -113,8 +110,7 @@ mod sys {
     };
 
     pub(super) fn load_library(path: &Path) -> Option<*mut c_void> {
-        let path_str = path.to_str()?;
-        let c_path = CString::new(path_str).ok()?;
+        let c_path = CString::new(path.as_os_str().as_encoded_bytes()).ok()?;
 
         // SAFETY: `c_path` is a NUL-terminated `CString` that outlives the
         // `dlopen` call, and the returned handle is null-checked before it

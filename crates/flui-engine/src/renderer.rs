@@ -1673,6 +1673,30 @@ impl Renderer {
         result
     }
 
+    /// Renders a scene produced by an unloadable plugin image.
+    ///
+    /// Set `reset_fonts` for the first scene from a hook and after each successful
+    /// image reload. Switching between plugin and ordinary scenes also resets
+    /// the font registry and glyph atlas, because their blob ids may overlap.
+    ///
+    /// # Errors
+    /// The same rendering and presentation failures as [`Self::render_scene`].
+    pub fn render_plugin_scene(
+        &mut self,
+        scene: &flui_layer::Scene,
+        reset_fonts: bool,
+    ) -> Result<PresentDisposition, EngineError> {
+        self.frame.select_font_source(
+            &mut self.painter,
+            crate::frame_protocol::FontSource::Plugin,
+            reset_fonts,
+        );
+        self.frame.begin_unmanaged();
+        let result = self.render_frame_inner(scene);
+        self.frame.end_unmanaged();
+        result
+    }
+
     /// Renders `scene` with the damage applied since the last presented
     /// frame: the raster owner's path (`RasterBackend::render_scene`).
     ///
@@ -1683,6 +1707,18 @@ impl Renderer {
     /// continuing. [`PresentDisposition::NoDamage`] means nothing was owed;
     /// otherwise the dispositions are [`Self::render_scene`]'s.
     pub(crate) fn render_frame(
+        &mut self,
+        scene: &flui_layer::Scene,
+    ) -> Result<PresentDisposition, EngineError> {
+        self.frame.select_font_source(
+            &mut self.painter,
+            crate::frame_protocol::FontSource::Ordinary,
+            false,
+        );
+        self.render_frame_inner(scene)
+    }
+
+    fn render_frame_inner(
         &mut self,
         scene: &flui_layer::Scene,
     ) -> Result<PresentDisposition, EngineError> {

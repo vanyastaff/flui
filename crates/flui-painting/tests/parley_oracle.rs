@@ -285,3 +285,79 @@ pub(crate) fn rasterizing_a_key_twice_draws_the_same_bitmap() {
         "a key drew a different bitmap the second time"
     );
 }
+
+/// Cached glyphs remain drawable after the registered font source retires.
+pub(crate) fn registered_fonts_release_the_source_and_keep_rasterizing() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct Source {
+        bytes: Vec<u8>,
+        reads: Arc<AtomicUsize>,
+        drops: Arc<AtomicUsize>,
+    }
+
+    impl AsRef<[u8]> for Source {
+        fn as_ref(&self) -> &[u8] {
+            self.reads.fetch_add(1, Ordering::Relaxed);
+            &self.bytes
+        }
+    }
+
+    impl Drop for Source {
+        fn drop(&mut self) {
+            self.drops.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    let face = FaceKey {
+        blob_id: 1,
+        index: 0,
+    };
+    let glyph = swash::FontRef::from_index(ROBOTO, 0)
+        .expect("the vendored Roboto is a face")
+        .charmap()
+        .map('A');
+    assert_ne!(glyph, 0, "Roboto covers the sample");
+    let key = GlyphKey::new(face, glyph, 18.0, SubpixelBin::Zero);
+    let mut reference = SwashRasterizer::new();
+    reference
+        .fonts_mut()
+        .register_face(face, Arc::new(ROBOTO))
+        .expect("the reference face registers");
+    let expected = reference.rasterize(key).expect("the reference glyph draws");
+    assert!(
+        expected.width > 0 && expected.height > 0,
+        "the sample has ink"
+    );
+
+    let reads = Arc::new(AtomicUsize::new(0));
+    let drops = Arc::new(AtomicUsize::new(0));
+    let source = Arc::new(Source {
+        bytes: ROBOTO.to_vec(),
+        reads: Arc::clone(&reads),
+        drops: Arc::clone(&drops),
+    });
+    let mut rasterizer = SwashRasterizer::new();
+    rasterizer
+        .fonts_mut()
+        .register_face(face, source.clone())
+        .expect("the disposable source registers");
+    drop(source);
+    reads.store(0, Ordering::Relaxed);
+
+    // This first rasterization must read the owned font, not a cached bitmap.
+    let actual = rasterizer
+        .rasterize(key)
+        .expect("the glyph survives source retirement");
+    assert_eq!(actual, expected, "retirement must not change the glyph");
+    assert_eq!(
+        reads.load(Ordering::Relaxed),
+        0,
+        "cached glyph drawing must not call the source"
+    );
+    assert_eq!(
+        drops.load(Ordering::Relaxed),
+        1,
+        "the registry must release its source"
+    );
+}
