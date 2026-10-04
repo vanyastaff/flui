@@ -8,7 +8,7 @@ Crate-level design notes for `flui_interaction`: subsystems, ownership, mapping 
 |---|---|
 | `arena` | Owner-local conflict resolution between competing recognisers. Tracks per-pointer `SmallVec<[Arc<dyn GestureArenaMember>; 4]>` (inline for ≤ 4 members), exact generational slots, held generations detached across pointer-ID reuse, and a lifecycle (Open → Held → Closed → Resolved). Eager acceptors win when the arena closes; teams enable multi-winner resolution. |
 | `recognizers` | The 11+ recogniser types. Each implements `GestureRecognizer` (the `add_pointer` / `handle_event` / `dispose` lifecycle) and gets `GestureArenaMember` for free via the `CustomGestureRecognizer` blanket impl. State machines are kept inline per file (TapState, LongPressPhase, etc.) — no shared trait-object dispatch. |
-| `processing` | Per-pointer derived data: `VelocityTracker` (LSQ fit on 20-sample circular buffer, 100 ms horizon, 40 ms stationary gate), `PointerEventResampler` (frame-rate adaptation with 100-event cap and 1 ms minimum sample interval), `InputPredictor` (kalman-style pointer extrapolation), `RawInputHandler` (low-level stream adapter), and the shared `lsq_solver` + `sampling_clock` helpers. |
+| `processing` | Per-pointer derived data: `VelocityTracker` (LSQ fit on 20-sample circular buffer, 100 ms horizon, 40 ms stationary gate), `PointerEventResampler` (frame-rate adaptation with 100-event cap and 1 ms minimum sample interval), `InputPredictor` (velocity extrapolation with optional acceleration and prediction smoothing), `RawInputHandler` (low-level stream adapter), and the shared `lsq_solver` + `sampling_clock` helpers. |
 | `routing` | Event dispatch infrastructure: `EventRouter`, `PointerRouter`, owner-thread TLS `FocusManager`, `FocusScopeNode` / reading-order Tab traversal, `MouseTracker` (enter/exit/hover), hit testing, and the `TransformGuard` stack-RAII for the transform stack. Off the per-pointer hot path. |
 | `binding` | `GestureBinding` — owner-local glue that hosts the arena, resolves and retains the Down hit route, coalesces/resamples Moves, and runs route → arena lifecycle ordering. Contact generations prevent frame-delayed samples from crossing a reused platform pointer ID. |
 | `observability` | Observability substrate. `GestureEvent` is a typed `Display` enum of recogniser / arena event names; `SPAN_RECOGNIZER` and `SPAN_ARENA` are span-name constants; `pointer_event_kind` summarises a `PointerEvent` to a short string for span fields. `#[tracing::instrument]` is applied on `RecognizerBase` start_tracking / stop_tracking and on every public `GestureArena` method. |
@@ -86,14 +86,18 @@ the app boundary; the crate does not install one. Filter via
 ## Friction log
 
 - **`docs/ARCHITECTURE.md` (this file) is the template-driven version;** the pre-template `crates/flui-interaction/docs/ARCHITECTURE.md` body (gesture state-machine diagrams, hit testing walk) lives as a companion. Relocation to crate root is deferred to a doc-tidying pass.
-- **`is_resolved(pointer)` returns `bool` not `Result`.** Arena resolution can't fail in this design (the worst case is a `parking_lot::Mutex` poison — the `Deref` impl swallows it for ergonomics, and the arena entry is dropped). If you need poison-detection, wrap the call site in `catch_unwind` rather than changing the API.
+- **`is_resolved(pointer)` is a state query.** Callback failure is handled at
+  resolution boundaries; `parking_lot::Mutex` does not poison. Catching an
+  unwind is not a query for poisoned state.
 - **`make_*_event` test helpers are `#[cfg(any(test, feature = "testing"))]`.** The benches depend on the `testing` feature being enabled in `dev-dependencies`. Documented at `Cargo.toml`; the gates will surface any missing opt-in.
 
 ## Outstanding refactors
 
 - **Doc-test sweep: convert the remaining 72 `rust,ignore` to runnable.** The `processing::InputPredictor` and `routing::FocusManager` doc-tests are the next highest-value targets. The `testing` module builders (`ModifiersBuilder`, `KeyEventBuilder`) are the third tier. Land as a follow-up PR.
 - **Property tests for the gesture arena** (deferred). `proptest` over a sequence of `add` / `close` / `sweep` operations, asserting: every reachable pointer has a state, no arena has two winners, `is_resolved` ⇔ `winner_count >= 1` after `close`. Bench time + property-cost justifies a separate `flui-interaction/tests/proptest_arena.rs` file.
-- **Loom test coverage for the arena's DashMap + Mutex pairing** (deferred). `loom` over a small parallel `add` / `resolve` workload. Same precedent as `flui-rendering` — needs a `#[cfg(loom)]` gate.
+- **Concurrency models must match ownership.** The executable arena is
+  owner-local; a parallel `add` / `resolve` model would test an unsupported
+  execution contract. Deferred data-plane synchronization needs its own model.
 - **Bench fidelity pass: realistic workloads.** Current benches use synthetic events; the next pass should replay recorded gesture traces from `flui-app` (TBD where they live). The `testing::recording` module is the substrate.
 - **Re-export the `pub mod observability` at `crate::prelude`** once the devtools substrate is stable — currently only the `GestureEvent` / `SPAN_*` items are re-exported at the crate root.
 
