@@ -437,3 +437,13 @@ public `cold_registry_loads_share_work_and_recover` family checks shared
 allocation identity, shared failure followed by retry, and waiter progress after
 initializer cancellation. This coalesces ordinary registry loads; bridged image
 loads retain the widget decode cache's subscriber-lifetime contract.
+
+
+### Cache clones observe one cache and its counters
+
+`AssetCache::clone` shares Moka entries and the statistics allocation. Registry
+loads clone the typed cache before leaving the registry lock; these temporary
+handles must not reset counters or allocate a new statistics lock per lookup.
+`cache_clones_report_shared_operations_and_reset` in `tests/load_contract.rs`
+checks real insertion, lookup, invalidation and clearing through different
+handles, alongside their shared operation counts and statistics reset.

@@ -427,3 +427,48 @@ fn cold_registry_loads_share_work_and_recover() {
         ),
     ]);
 }
+
+/// Cache clones account for operations on the same entries, including reset.
+#[tokio::test]
+async fn cache_clones_report_shared_operations_and_reset() {
+    use flui_assets::AssetCache;
+
+    let cache = AssetCache::<GatedAsset>::with_config(100, std::time::Duration::from_mins(1));
+    let key = "shared".to_owned();
+    cache.insert(key.clone(), 7).await;
+    let observer = cache.clone();
+    assert_eq!(
+        *observer
+            .get(&key)
+            .await
+            .expect("clones share cached entries"),
+        7
+    );
+    assert!(cache.get(&"missing".to_owned()).await.is_none());
+    let counts = |stats: flui_assets::cache::CacheStats| {
+        (stats.hits, stats.misses, stats.insertions, stats.evictions)
+    };
+    assert_eq!(counts(cache.stats()), (1, 1, 1, 0));
+    assert_eq!(counts(observer.stats()), (1, 1, 1, 0));
+
+    observer.invalidate(&key).await;
+    assert!(
+        cache.get(&key).await.is_none(),
+        "invalidation affects the shared entry"
+    );
+    assert_eq!(counts(cache.stats()), (1, 2, 1, 1));
+    assert_eq!(counts(observer.stats()), (1, 2, 1, 1));
+    cache.insert(key.clone(), 9).await;
+    observer.clear().await;
+    assert_eq!(
+        counts(cache.stats()),
+        (0, 0, 0, 0),
+        "clear resets shared counters"
+    );
+    assert!(
+        cache.get(&key).await.is_none(),
+        "clear removes the shared entry"
+    );
+    observer.reset_stats();
+    assert_eq!(counts(cache.stats()), (0, 0, 0, 0));
+}

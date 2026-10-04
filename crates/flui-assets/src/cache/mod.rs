@@ -486,12 +486,12 @@ pub trait AssetCacheExt<T: Asset>: AssetCacheCore<T> {
 // Blanket implementation for all types implementing AssetCacheCore
 impl<C, T: Asset> AssetCacheExt<T> for C where C: AssetCacheCore<T> + ?Sized {}
 
-// Clone creates a new cache that shares no state
+// Clones share cached entries and their operation counters.
 impl<T: Asset> Clone for AssetCache<T> {
     fn clone(&self) -> Self {
         Self {
             cache: self.cache.clone(),
-            stats: Arc::new(parking_lot::RwLock::new(CacheStats::default())),
+            stats: Arc::clone(&self.stats),
         }
     }
 }
