@@ -166,7 +166,7 @@ fn winit_lane_dropped_after_delivery_unwinds_and_leaves_the_window_gone() {
         .expect("first install succeeds");
 
     let platform_for_worker = Arc::clone(&platform);
-    let control_for_worker = control.clone();
+    let control_for_worker = control;
     let worker = thread::spawn(move || {
         // Catch a scenario panic (e.g. a bounded-poll timeout) so
         // `request_quit()` always runs below -- otherwise a failing

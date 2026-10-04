@@ -1126,3 +1126,23 @@ and public getters inside and after delivery, followed by an ordinary resize.
 The row requires the actual native dimension to reach the unsigned range; an OS
 limit reports an unavailable witness instead of allowing a false positive.
 Zero-size clamping and minimized-window handling retain their existing behavior.
+
+### Winit primary display selection uses monitor identity
+
+`init_displays` queries available monitors before the primary monitor and maps
+that iterator directly into display records. The private mapping core selects
+by `MonitorHandle::PartialEq`; a missing primary capability selects only index
+zero, while a reported primary absent from the iterator selects no substitute.
+Names are labels, not identity. Installed winit 0.30.13
+[derives handle equality and documents a human-readable name](https://github.com/rust-windowing/winit/blob/e9809ef54b18499bb4f2cac945719ecc2a61061b/src/monitor.rs#L102).
+Its macOS backend [compares monitor UUIDs](https://github.com/rust-windowing/winit/blob/e9809ef54b18499bb4f2cac945719ecc2a61061b/src/platform_impl/macos/monitor.rs#L164)
+and [formats the model number as the name](https://github.com/rust-windowing/winit/blob/e9809ef54b18499bb4f2cac945719ecc2a61061b/src/platform_impl/macos/monitor.rs#L224).
+Two displays of the same model therefore share a name while remaining distinct
+handles. Wayland [reports no primary](https://github.com/rust-windowing/winit/blob/e9809ef54b18499bb4f2cac945719ecc2a61061b/src/platform_impl/linux/wayland/output.rs#L18).
+
+`platforms::winit::platform::tests::monitor_display_mapping_matrix` tests the
+actual production enumeration/selection/factory core with identity fixtures.
+Produced records cover duplicate model labels, a primary after index zero,
+changed labels for the same identity, the no-primary fallback, absent primary
+identity and empty input. This does not execute native discovery or validate a
+physical two-monitor macOS setup; that native path remains unverified.
