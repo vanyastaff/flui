@@ -454,14 +454,26 @@ An element slot's next nonzero generation is checked before eager removal or
 finalized retirement unregisters dependencies, invokes unmount or frees storage.
 The checked generation is committed only after slot removal. A caught exhaustion
 panic therefore leaves the original occupant live rather than freeing a slot
-that could reuse its identity. Keyed soft removal does not free storage and does
-not advance the generation.
+that could reuse its identity. Subtree removal preflights every live slot it
+will finalize before detaching keyed descendants or retiring any node. Under
+`DeactivateKeyed`, the snapshot excludes keyed boundaries and their surviving
+descendants; those slots require no generation advance. Under `Finalize`, every
+node is admitted before deepest-first teardown. Keyed soft removal does not
+free storage and does not advance the generation.
 
 The three exhaustion rows of `element_tree_contract_matrix` inject the otherwise
 unreachable maximum counter, then use the tree's removal, lookup and insertion
 surface. Each refuses repeated retirement while preserving the active occupant,
 and proves a subsequent ordinary sibling can be removed and replaced without
 reviving its stale ID. Unannounced retirement shares the finalized primitive.
+Six subtree rows inject exhaustion at the root, intermediate node or leaf for
+both removal modes and assert that repeated refusal leaves every occupant,
+parent/child link and active lifecycle intact, with no unmount observation.
+An independent sibling still retires and remints afterward. A separate exhausted
+wrapper row preserves its keyed descendant's active lifecycle and registration
+before any soft detach. The terminal keyed subtree control checks that soft
+removal preserves the keyed boundary and its exhausted descendant instead of
+imposing a generation advance on retained slots.
 
 
 ### Object keys own their identity
