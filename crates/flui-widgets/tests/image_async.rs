@@ -267,3 +267,77 @@ fn async_image_loads_are_owned_by_their_widget() {
     a_retired_providers_late_completion_cannot_replace_the_current_image();
     unmounting_the_widget_cancels_its_in_flight_load();
 }
+
+/// Async consumers reuse a completed decode, including after a failed cold
+/// request has recovered. Removing the source proves the hit performs no I/O.
+#[test]
+fn asset_image_async_reuses_completed_decodes_after_cold_failure_recovery() {
+    common::cases::run_cases(
+        "completed decoded cache",
+        &[
+            ("completed source", completed_source),
+            ("failed source recovers", failed_source_recovers),
+        ],
+    );
+}
+
+fn completed_source() {
+    reuse_decoded_source(false);
+}
+
+fn failed_source_recovers() {
+    reuse_decoded_source(true);
+}
+
+fn reuse_decoded_source(fail_first: bool) {
+    struct TestDirectory(std::path::PathBuf);
+    impl Drop for TestDirectory {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(self.0.join("image.png"));
+            let _ = std::fs::remove_dir(&self.0);
+        }
+    }
+
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("source test runtime starts")
+        .block_on(async {
+            let directory = TestDirectory(std::env::temp_dir().join(format!(
+            "flui-decoded-cache-{}-{}-{fail_first}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("test clock is after epoch")
+                .as_nanos()
+        )));
+            std::fs::create_dir(&directory.0).expect("test directory created");
+            let path = directory.0.join("image.png");
+            let registry = Arc::new(flui_assets::AssetRegistry::default());
+            let provider = flui_widgets::AssetImage::new(registry, path.to_string_lossy());
+            assert!(provider.resolve().is_err(), "a new source is cold");
+            if fail_first {
+                assert!(
+                    tokio::time::timeout(DECODE_BUDGET, provider.resolve_async())
+                        .await
+                        .expect("missing source completes")
+                        .is_err(),
+                    "failed loads must not become completed cache entries"
+                );
+            }
+            std::fs::write(&path, include_bytes!("fixtures/tiny.png"))
+                .expect("source fixture writes");
+            let first = tokio::time::timeout(DECODE_BUDGET, provider.resolve_async())
+                .await
+                .expect("first decode completes")
+                .expect("available source decodes");
+            assert_eq!((first.width(), first.height()), (5, 3));
+            std::fs::remove_file(&path).expect("remove source after successful decode");
+            let repeated = tokio::time::timeout(DECODE_BUDGET, provider.clone().resolve_async())
+                .await
+                .expect("cached decode completes")
+                .expect("completed cache hit must not reload the missing source");
+            assert_eq!((repeated.width(), repeated.height()), (5, 3));
+            assert_eq!(repeated.data(), first.data());
+        });
+}

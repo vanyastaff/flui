@@ -352,7 +352,7 @@ futures-util = { version = "0.3", default-features = false, features = ["alloc"]
 # time-based eviction, unlike flui-assets' moka byte-loader cache (TTL
 # 5min/TTI 1min) — see that module's doc for why the two caches serve
 # different roles and neither substitutes for the other.
-lru = "0.18"
+lru = "0.18.5"
 
 # CLIPBOARD - Cross-platform clipboard access
 arboard = "3.4"
