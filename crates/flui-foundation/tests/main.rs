@@ -3,6 +3,9 @@
 #[path = "notifier.rs"]
 mod notifier;
 
+#[path = "claim_slot.rs"]
+mod claim_slot;
+
 #[path = "geometry/transform.rs"]
 mod transform;
 

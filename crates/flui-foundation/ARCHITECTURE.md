@@ -154,6 +154,32 @@ Items below are concrete cleanups visible from `flui-foundation` outward. Each i
 
 ## Mapping decisions
 
+### Claim slots commit outcomes before delivering borrowed wakes
+
+The ADR-0039 claim-slot state machine remains the authority for ownership of a
+reply. Executor cloning and displaced-waker destruction run outside the slot's
+locks; a clone can synchronously deliver, and the subsequent state check must
+observe that outcome. Delivery and owner disconnection publish their terminal
+state before notifying blocked or asynchronous requesters. Abandonment retains
+the reply for the owner to reclaim even when its wake callback fails, and still
+attempts the task wake.
+
+Wake invocation borrows an owning executor envelope held outside catch_unwind.
+The first caught wake or retirement failure propagates during ordinary calls;
+later failures and failures during an existing unwind are retained. After a
+caught failure or during active unwind, shared state and opaque envelopes are
+retained so reply or callback captures cannot introduce a competing destructor
+failure. Successful ordinary retirement still runs destructors, and an
+individual aggregate that double-panics before containment regains control can
+abort. This is exceptional-path retention, not a guarantee against arbitrary
+destruction inside user callbacks.
+
+The public subprocess family `claim_slot_executor_and_owner_recovery` covers
+clone reentry, failed clone and replacement retirement, committed delivery
+followed by wake or retirement failure, owner disconnection during unwind,
+owner/task failure competition on abandonment, and reclamation of an unclaimed
+reply after failure. Each scenario also checks the next request.
+
 ### Borrow arguments and retain exceptional notification obligations
 
 Typed notification callbacks borrow their argument and do not require Clone.
