@@ -795,8 +795,24 @@ image. The plugin source can retire after registration.
 `registered_fonts_release_the_source_and_keep_rasterizing`
 (`tests/parley_oracle.rs`, `parley_oracle_contract`) uses the owning rasterizer,
 drops a custom font source and then rasterizes its first glyph, checking the
-bitmap and absence of calls back into the retired source. The bin and the device
-row depend on the device transform, which only the replay knows. Parley aligns
+bitmap and absence of calls back into the retired source.
+
+The public `SubpixelBin::split` tuple saturates out-of-range positions,
+including infinities, to an integer endpoint with a zero bin; NaN keeps its
+specified zero result. Actual `ShapedRun::placed_glyphs` instead omits non-finite
+or unrepresentable device coordinates, so saturation never moves a glyph onto a
+visible edge. The exact `i32::MAX` bound is checked in `f64`, since converting
+that bound to `f32` rounds it up to the inadmissible coordinate 2^31.
+Baseline rounding and vertical-offset truncation are preserved, then added in
+`f64` before checking the final row: large cancelling terms may still place a
+glyph at a valid device row. Bitmap-bearing arithmetic remains the engine's
+responsibility. Public rows `subpixel_split_is_total_across_the_float_domain`,
+`placed_glyphs_omit_unrepresentable_coordinates`,
+`placed_glyphs_keep_representable_extremes_and_hinting` and
+`placed_glyphs_keep_cancelling_vertical_coordinates` in `parley_oracle_contract`
+exercise the tuple policy and actual paint-produced paragraph placement.
+The bin and the device row depend on the device transform, which only the replay
+knows. Parley aligns
 a line within the width it was broken at; the painter's box is the measured
 width, so lines are re-aligned in it, or an `Rtl` paragraph would be shifted
 twice.
