@@ -1014,3 +1014,14 @@ where work crosses threads, rather than to polling a completed value.
 Dropping a spawned handle detaches the Tokio task; it does not cancel it.
 Pinned by `ready_tasks_return_results_without_executor_bounds` through the
 public API.
+
+### Android has no separate page-aligned container
+
+Android exposes no framework allocator or page-aligned vector. The removed
+container had no production consumers, while its generic element retirement
+could leave already-dropped elements marked initialized after a destructor
+panic. Framework buffers use standard owning containers; wgpu owns GPU
+allocation and its backend alignment requirements. A device's native page size
+does not require every application-side vector to use a custom allocator.
+This removes an unused unsafe surface rather than asserting native allocation
+behavior: Android execution remains unavailable on this host.
