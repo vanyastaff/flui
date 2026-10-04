@@ -2010,3 +2010,13 @@ retires the contact prevents the subsequent caret write.
 `foreign_cancel_preserves_the_selection_contact`,
 `disabling_the_field_retires_its_selection_contact`,
 `replacing_the_controller_retires_the_old_selection_contact`.
+
+### Non-IME splices collapse after the resulting grapheme
+
+`TextEditingController::insert_str` moves its collapsed caret forward to the
+next ICU extended-grapheme boundary of the resulting document. Inserted bytes
+can join a following combining mark, and deleting a selected separator can join
+regional indicators; neither leaves Backspace starting inside the new cluster.
+Raw text-store/IME scalar selection remains exact under ADR-0090.
+**Tests:** `insertion_keeps_the_caret_after_the_joined_combining_cluster`,
+`deleting_a_separator_keeps_the_caret_after_the_joined_flag`.

@@ -581,6 +581,31 @@ pub(crate) mod event_cx {
     }
 }
 
+/// Inserting before an existing mark joins a cluster; Backspace removes it whole.
+pub(crate) fn insertion_keeps_the_caret_after_the_joined_combining_cluster() {
+    let controller = TextEditingController::with_text("\u{301}");
+    controller.set_caret_byte_offset(0);
+    controller.insert_str("e");
+    assert_eq!(controller.text(), "e\u{301}");
+    assert_eq!(controller.caret_byte_offset(), controller.text().len());
+    controller.backspace();
+    assert_eq!(controller.text(), "");
+    controller.insert_str("ok");
+    assert_eq!(controller.caret_byte_offset(), 2);
+}
+
+pub(crate) fn deleting_a_separator_keeps_the_caret_after_the_joined_flag() {
+    let controller = TextEditingController::with_text("🇦 🇧");
+    controller.set_selection(4, 5);
+    controller.insert_str("");
+    assert_eq!(controller.text(), "🇦🇧");
+    assert_eq!(controller.caret_byte_offset(), 8);
+    controller.backspace();
+    assert_eq!(controller.text(), "");
+    controller.insert_str("x");
+    assert_eq!(controller.caret_byte_offset(), 1);
+}
+
 fn selection_contact(id: u64) -> flui_interaction::PointerId {
     flui_interaction::PointerId::new(id).expect("nonzero fixture contact")
 }
