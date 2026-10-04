@@ -223,7 +223,7 @@ console_error_panic_hook = "0.1"
 # there is no lighter path, but an application that does not want a
 # screen-reader bridge should not link a D-Bus stack.
 [target.'cfg(target_os = "linux")'.dependencies]
-accesskit_unix = { version = "0.23", optional = true }
+accesskit_unix = { version = "0.24", optional = true }
 
 # iOS native backend (UIKit + Metal). `objc2` is the maintained Objective-C
 # binding stack — the `objc` crate the macOS backend still uses has not
@@ -291,14 +291,13 @@ dispatch2 = "0.3.1"
 # dependency (0.62) matches the backend's own, so no duplicate windows-rs
 # stack is linked.
 [target.'cfg(target_os = "windows")'.dependencies.accesskit_windows]
-version = "0.35"
+version = "0.35.1"
 optional = true
 
 # NSAccessibility bridge for macOS, same `a11y` feature and the same 0.25
-# accesskit cohort. Uses objc2 internally; independent of the backend's
-# `cocoa`/`objc` stack.
+# accesskit cohort. Uses the same objc2 binding family as the backend.
 [target.'cfg(target_os = "macos")'.dependencies.accesskit_macos]
-version = "0.27"
+version = "0.27.1"
 optional = true
 
 [features]

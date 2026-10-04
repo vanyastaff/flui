@@ -223,10 +223,10 @@ web-time = "1.1"
 # the per-OS `accesskit_*` platform adapters are feature-gated in flui-platform,
 # and the `PlatformAccessibility` trait they implement is flui-semantics'.
 # One required dependency of its own (uuid), MIT OR Apache-2.0.
-accesskit = "0.25"
+accesskit = "0.25.1"
 # The tree model every AccessKit adapter reads through: flui-semantics' agent
 # read projects the published tree with the adapters' own predicates.
-accesskit_consumer = "0.39"
+accesskit_consumer = "0.39.1"
 
 # Win32 bindings: the Windows platform backend, hot-reload's library loader,
 # and xtask's UI Automation client. Each member names the API families it uses.

@@ -284,7 +284,7 @@ fn wire_role_matches_the_windows_adapter_for_every_role_flui_publishes() {
     }
 }
 
-/// Every tool of the ADR-0080 wire vocabulary, as accesskit_windows 0.35.0
+/// Every tool of the ADR-0080 wire vocabulary, as accesskit_windows 0.35.1
 /// turns its UI Automation call into an AccessKit action (`node.rs`), and the
 /// FLUI action that action reaches. The in-process route
 /// (`semantics_action_for_wire`) must reach the same FLUI action, so an

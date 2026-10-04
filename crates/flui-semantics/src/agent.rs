@@ -154,7 +154,7 @@ pub(crate) fn semantics_action_for_wire(action: ActionName) -> Option<SemanticsA
 /// `reads_selected` were transcribed from; a test fails when the workspace
 /// locks another one.
 #[cfg(test)]
-const WIRE_ROLE_TRANSCRIBED_FROM: &str = "0.35.0";
+const WIRE_ROLE_TRANSCRIBED_FROM: &str = "0.35.1";
 
 /// The wire role the desktop server reports for a node AccessKit publishes as
 /// `role` on Windows: UI Automation's control type for it
