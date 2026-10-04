@@ -447,3 +447,18 @@ rendering verdict. The host uses the dedicated plugin renderer entry point;
 only a true callback result acknowledges that reset. Plugin image replacement
 can reuse font IDs for different bytes, so this boundary carries the image
 transition independently of an ordinary font cache lookup (ADR-0108).
+
+### Exhausted element identities refuse removal before teardown
+
+An element slot's next nonzero generation is checked before eager removal or
+finalized retirement unregisters dependencies, invokes unmount or frees storage.
+The checked generation is committed only after slot removal. A caught exhaustion
+panic therefore leaves the original occupant live rather than freeing a slot
+that could reuse its identity. Keyed soft removal does not free storage and does
+not advance the generation.
+
+The three exhaustion rows of `element_tree_contract_matrix` inject the otherwise
+unreachable maximum counter, then use the tree's removal, lookup and insertion
+surface. Each refuses repeated retirement while preserving the active occupant,
+and proves a subsequent ordinary sibling can be removed and replaced without
+reviving its stale ID. Unannounced retirement shares the finalized primitive.
