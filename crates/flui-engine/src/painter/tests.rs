@@ -218,7 +218,15 @@ fn clear_offscreen_result(nested: bool) {
 /// composites with its own blend mode.
 #[test]
 fn painter_images_and_offscreen_results_read_back_as_specified() {
-    let cases: [(&str, fn()); 44] = [
+    let cases: [(&str, fn()); 46] = [
+        (
+            "horizontal glyph bitmap bearings",
+            horizontal_glyph_bearings_do_not_overflow_before_clipping,
+        ),
+        (
+            "vertical glyph bitmap bearings",
+            vertical_glyph_bearings_do_not_overflow_before_clipping,
+        ),
         (
             "plugin fonts after format replacement",
             plugin_fonts_survive_format_replacement,
@@ -2358,6 +2366,91 @@ fn plugin_fonts_survive_domain_replacement() {
 
 fn ordinary_fonts_retain_sources_after_replacement() {
     replacement_fonts_keep_source_policy(crate::frame_protocol::FontSource::Ordinary, true);
+}
+
+fn horizontal_glyph_bearings_do_not_overflow_before_clipping() {
+    extreme_glyph_bearings_do_not_overflow_before_clipping(flui_foundation::geometry::Point::new(
+        f64::from(i32::MIN),
+        0.0,
+    ));
+}
+
+fn vertical_glyph_bearings_do_not_overflow_before_clipping() {
+    extreme_glyph_bearings_do_not_overflow_before_clipping(flui_foundation::geometry::Point::new(
+        0.0,
+        f64::from(i32::MIN),
+    ));
+}
+
+fn extreme_glyph_bearings_do_not_overflow_before_clipping(
+    origin: flui_foundation::geometry::Point<f64>,
+) {
+    use flui_foundation::geometry::{Offset, Point};
+    use flui_painting::glyphs::SwashRasterizer;
+    use flui_painting::styling::Color;
+    use flui_painting::typography::{TextDirection, TextSpan, TextStyle};
+    use flui_painting::{
+        Canvas, DrawOp, FontCollection, GlyphRasterizer, TextContext, TextPainter,
+    };
+
+    let fonts = FontCollection::new();
+    let mut text = TextPainter::new()
+        .with_text(TextSpan::styled(
+            "j",
+            TextStyle::new().with_font_size(24.0).with_height(0.0),
+        ))
+        .with_text_direction(TextDirection::Ltr);
+    text.layout(&mut TextContext::new(&fonts), 0.0, f64::INFINITY);
+    let mut canvas = Canvas::new();
+    text.paint(&mut canvas, Offset::ZERO);
+    let list = canvas.finish();
+    let paragraph = list
+        .iter()
+        .find_map(|command| match &command.op {
+            DrawOp::Paragraph { paragraph, .. } => Some(Arc::clone(paragraph)),
+            _ => None,
+        })
+        .expect("public paint records the paragraph");
+    let run = paragraph.runs().next().expect("bundled glyph run");
+    let mut rasterizer = SwashRasterizer::new();
+    let key = rasterizer
+        .fonts_mut()
+        .prepare_run(&run)
+        .expect("face registers");
+    let (device, queue) = test_device_and_queue();
+    let reference = render_to_rgba(&device, &queue, 64, wgpu::Color::WHITE, |painter| {
+        painter.draw_paragraph(Arc::clone(&paragraph), Point::new(8.0, 24.0), Color::BLACK);
+    });
+    assert!(
+        reference.as_chunks::<4>().0.iter().any(|p| p[0] < 200),
+        "visible reference has real glyph ink"
+    );
+    {
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "the i32 lower endpoint is exactly representable in f32"
+        )]
+        let glyph = run
+            .placed_glyphs(key, (origin.x as f32, origin.y as f32), 1.0)
+            .next()
+            .expect("extreme placed origin is admitted");
+        let bitmap = rasterizer
+            .rasterize(glyph.key)
+            .expect("fixture glyph rasterizes");
+        assert!(
+            i64::from(glyph.x) + i64::from(bitmap.left) < i64::from(i32::MIN)
+                || i64::from(glyph.y) - i64::from(bitmap.top) < i64::from(i32::MIN),
+            "fixture bearing crosses the integer endpoint"
+        );
+        let actual = render_to_rgba(&device, &queue, 64, wgpu::Color::WHITE, |painter| {
+            painter.draw_paragraph(Arc::clone(&paragraph), origin, Color::BLACK);
+            painter.draw_paragraph(Arc::clone(&paragraph), Point::new(8.0, 24.0), Color::BLACK);
+        });
+        assert_eq!(
+            actual, reference,
+            "clipped endpoint must preserve the next visible glyph"
+        );
+    }
 }
 
 /// Surface replacement needs a native window. This seam exercises its actual

@@ -682,6 +682,14 @@ actual factory and atlas with source retirement probes, uncached glyph bitmap
 comparison and atlas upload. This private seam is needed because native surface
 replacement requires a live window; it does not claim a native recovery run.
 
+Bitmap bearings and dimensions are widened to `i64` before forming a glyph quad
+and testing the scissor. An admitted `i32` origin can have ink outside that range;
+clipping must not first overflow the bitmap offset. The public painter calls in
+`extreme_glyph_bearings_do_not_overflow_before_clipping` draw real glyph bearings
+at both lower coordinate endpoints and compare subsequent visible ink with a
+reference readback. This preserves integer placement through clipping, without
+promising extreme-coordinate GPU floating-point precision.
+
 
 `parley_runs_read_back` reads back what paint now
 draws: hard breaks, synthetic bold, host fallback faces, right alignment and
