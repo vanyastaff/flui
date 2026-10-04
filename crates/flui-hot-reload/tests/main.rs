@@ -12,3 +12,6 @@ mod plugin_pipeline_text;
 #[cfg(feature = "app-plugin")]
 #[path = "plugin_pipeline_layout.rs"]
 mod plugin_pipeline_layout;
+
+#[path = "worker_lifetime.rs"]
+mod worker_lifetime;

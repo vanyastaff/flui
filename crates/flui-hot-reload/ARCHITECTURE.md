@@ -158,3 +158,20 @@ panic and the next render. Its private seam invokes the production image-update
 and callback-dispatch methods with a borrowed empty scene because installing a
 real replacement DSO is not needed to test acknowledgement chronology. It
 asserts callback flags and results, not internal fields or a copied predicate.
+
+### Worker descendants keep their admitted image mapped
+
+ADR-0111 retains every successfully admitted worker image until process exit.
+A build-call lease cannot protect callbacks, vtables or borrowed storage that
+escape into host-owned trees and consumer clones. Worker registration retirement
+still prunes matching dispatch entries, but does not invalidate already escaped
+values. Rejected images close normally. Each admitted revision consumes image
+memory and can keep its Windows staged file locked; restart the host to reclaim
+these resources. Scene plugins retain their separate unsafe unload obligations.
+
+`admitted_worker_callbacks_survive_retirement_and_replacement` compiles two
+same-toolchain dynamic fixtures and loads them through the public worker API in
+a bounded child process. It calls and drops an old image-defined callback after
+registration retirement and replacement, then verifies subsequent dispatch and
+callback retirement. This test executes the actual loader and plugin code, rather
+than inspecting an address or reproducing a retention predicate.

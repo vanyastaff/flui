@@ -2,6 +2,7 @@
 
 - **Status:** Proposed. The hook's driver half is implemented (see "§1 as implemented");
   Subsecond is not integrated.
+- **Superseded-by:** [ADR-0111](ADR-0111-worker-image-lifetime.md) for admitted worker image lifetime only; its other proposed and implemented contracts remain unchanged.
 - **Date:** 2026-09-25
 - **Superseded-by:** [ADR-0108](ADR-0108-plugin-scene-render-callback-safety.md) for
   the implemented scene callback's safety contract only.
