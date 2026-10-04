@@ -17,7 +17,7 @@ use parking_lot::Mutex;
 use super::recognizer::{GestureRecognizer, RecognizerBase};
 use crate::{
     arena::GestureArenaMember,
-    events::{PointerEvent, PointerType},
+    events::{PointerEvent, PointerType, extract_pointer_id},
     ids::PointerId,
     routing::PointerDispatch,
     settings::GestureSettings,
@@ -450,20 +450,18 @@ impl GestureRecognizer for MultiTapGestureRecognizer {
         if !self.state.assert_not_disposed("handle_event") {
             return;
         }
+        let pointer = extract_pointer_id(event);
+        if !self.gesture_state.lock().pointers.contains_key(&pointer) {
+            return;
+        }
         match event {
             PointerEvent::Move(data) => {
-                // In a real implementation, we'd need to know which pointer this is
-                // For now, we'll track via primary pointer
-                if let Some(pointer) = self.state.primary_pointer() {
-                    let pos = data.current.position;
-                    let position = Offset::new(pos.x, pos.y);
-                    self.handle_pointer_move(pointer, position, data.pointer.pointer_type);
-                }
+                let pos = data.current.position;
+                let position = Offset::new(pos.x, pos.y);
+                self.handle_pointer_move(pointer, position, data.pointer.pointer_type);
             }
             PointerEvent::Up(data) => {
-                if let Some(pointer) = self.state.primary_pointer() {
-                    self.handle_pointer_up(pointer, data.pointer.pointer_type);
-                }
+                self.handle_pointer_up(pointer, data.pointer.pointer_type);
             }
             PointerEvent::Cancel(_) => {
                 self.handle_cancel();
