@@ -266,10 +266,12 @@ impl ProfilerInner {
         };
 
         // Add to history
-        if self.frame_history.len() >= self.config.max_frame_history {
-            self.frame_history.pop_front();
+        if self.config.max_frame_history > 0 {
+            if self.frame_history.len() >= self.config.max_frame_history {
+                self.frame_history.pop_front();
+            }
+            self.frame_history.push_back(stats);
         }
-        self.frame_history.push_back(stats);
 
         self.frame_number += 1;
         self.total_frames += 1;

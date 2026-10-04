@@ -309,6 +309,7 @@ impl TimelineInner {
 
     fn clear(&mut self) {
         self.events.clear();
+        self.base_event_id = self.next_event_id;
         self.start_time = Instant::now();
     }
 

@@ -123,3 +123,79 @@ fn a_real_frame_reaches_the_profiler_with_its_phases() {
         "the dirtied frame's `paint` span must land as Paint; saw {painted:?}"
     );
 }
+
+fn zero_history_capacity_keeps_counters_without_frames() {
+    let profiler = Profiler::with_config(flui_devtools::ProfilerConfig {
+        max_frame_history: 0,
+        jank_threshold_ms: -1.0,
+    });
+    for _ in 0..2 {
+        profiler.begin_frame();
+        let phase = profiler.profile_phase(FramePhase::Build);
+        drop(phase);
+        profiler.end_frame();
+        assert!(profiler.frame_history().is_empty());
+        assert!(profiler.frame_stats().is_none());
+    }
+    assert_eq!(profiler.jank_percentage(), 100.0);
+}
+
+#[cfg(feature = "timeline")]
+fn a_guard_before_clear_cannot_update_a_new_event() {
+    use flui_devtools::timeline::{EventCategory, Timeline};
+    let timeline = Timeline::new();
+    let old = timeline.record_event("old", EventCategory::Custom);
+    timeline.clear();
+    let duration = Duration::from_secs(123_456_789);
+    timeline.record_completed_event(
+        "new",
+        EventCategory::Custom,
+        web_time::Instant::now(),
+        duration,
+        serde_json::Value::Null,
+    );
+    drop(old);
+    let events = timeline.get_events();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].name, "new");
+    assert_eq!(events[0].duration_micros, duration.as_micros());
+}
+
+#[cfg(feature = "timeline")]
+fn a_guard_after_clear_updates_its_own_event() {
+    use flui_devtools::timeline::{EventCategory, Timeline};
+    let timeline = Timeline::new();
+    timeline.record_instant("old", EventCategory::Custom);
+    timeline.clear();
+    let current = timeline.record_event("current", EventCategory::Custom);
+    std::thread::sleep(Duration::from_millis(1));
+    drop(current);
+    let events = timeline.get_events();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].name, "current");
+    assert!(events[0].duration_micros > 0);
+}
+
+#[test]
+fn developer_history_respects_capacity_and_clear() {
+    let cases: &[(&str, fn())] = &[
+        (
+            "zero_capacity",
+            zero_history_capacity_keeps_counters_without_frames,
+        ),
+        #[cfg(feature = "timeline")]
+        (
+            "stale_guard",
+            a_guard_before_clear_cannot_update_a_new_event,
+        ),
+        #[cfg(feature = "timeline")]
+        ("fresh_guard", a_guard_after_clear_updates_its_own_event),
+    ];
+    let mut failures = Vec::new();
+    for &(name, case) in cases {
+        if std::panic::catch_unwind(case).is_err() {
+            failures.push(name);
+        }
+    }
+    assert!(failures.is_empty(), "failed cases: {failures:?}");
+}
