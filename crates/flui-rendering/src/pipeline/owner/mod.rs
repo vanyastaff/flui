@@ -847,12 +847,205 @@ mod tests {
                 "render_entry_layout_catches_owned_string_panic",
                 render_entry_layout_catches_owned_string_panic,
             ),
+            (
+                "recursive_box_layout_retires_static_string_and_recovers",
+                recursive_box_layout_retires_static_string_and_recovers,
+            ),
+            (
+                "recursive_box_layout_retires_owned_string_and_recovers",
+                recursive_box_layout_retires_owned_string_and_recovers,
+            ),
+            (
+                "recursive_sliver_layout_retires_static_string_and_recovers",
+                recursive_sliver_layout_retires_static_string_and_recovers,
+            ),
+            (
+                "recursive_sliver_layout_retires_owned_string_and_recovers",
+                recursive_sliver_layout_retires_owned_string_and_recovers,
+            ),
         ];
+        let mut failures = Vec::new();
         for &(name, case) in cases {
-            if let Err(payload) = std::panic::catch_unwind(case) {
-                eprintln!("matrix case `{name}` failed");
-                std::panic::resume_unwind(payload);
+            if std::panic::catch_unwind(case).is_err() {
+                failures.push(name);
             }
+        }
+        assert!(failures.is_empty(), "matrix cases failed: {failures:?}");
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    enum RecursiveLayoutPayload {
+        Healthy,
+        Static,
+        Owned,
+    }
+
+    impl RecursiveLayoutPayload {
+        fn fail(self) {
+            match self {
+                Self::Healthy => {}
+                Self::Static => panic!("recursive layout static string panic"),
+                Self::Owned => {
+                    std::panic::panic_any(String::from("recursive layout owned string panic"));
+                }
+            }
+        }
+    }
+
+    #[derive(Debug)]
+    struct RecursiveTextBox(RecursiveLayoutPayload);
+
+    impl flui_foundation::Diagnosticable for RecursiveTextBox {}
+
+    impl RenderBox for RecursiveTextBox {
+        type Arity = flui_foundation::Single;
+        type ParentData = BoxParentData;
+
+        fn perform_layout(
+            &mut self,
+            ctx: &mut BoxLayoutContext<'_, Self::Arity, Self::ParentData>,
+        ) -> Size {
+            self.0.fail();
+            ctx.layout_child(0, *ctx.constraints())
+        }
+    }
+
+    #[derive(Debug)]
+    struct RecursiveTextSliver(RecursiveLayoutPayload);
+
+    impl flui_foundation::Diagnosticable for RecursiveTextSliver {}
+
+    impl crate::traits::RenderSliver for RecursiveTextSliver {
+        type Arity = flui_foundation::Single;
+        type ParentData = crate::parent_data::SliverParentData;
+
+        fn perform_layout(
+            &mut self,
+            ctx: &mut crate::context::SliverLayoutContext<'_, Self::Arity, Self::ParentData>,
+        ) -> crate::constraints::SliverGeometry {
+            self.0.fail();
+            let size = ctx.layout_box_child(0, BoxConstraints::tight(Size::new(10.0, 20.0)));
+            crate::constraints::SliverGeometry::new(size.height, size.height, 0.0)
+        }
+    }
+
+    #[derive(Debug)]
+    struct TextSliverHost(Rc<std::cell::Cell<crate::constraints::SliverGeometry>>);
+
+    impl flui_foundation::Diagnosticable for TextSliverHost {}
+
+    impl RenderBox for TextSliverHost {
+        type Arity = flui_foundation::Single;
+        type ParentData = BoxParentData;
+
+        fn perform_layout(
+            &mut self,
+            ctx: &mut BoxLayoutContext<'_, Self::Arity, Self::ParentData>,
+        ) -> Size {
+            self.0.set(
+                ctx.layout_sliver_child(
+                    0,
+                    crate::testing::sliver::vertical()
+                        .remaining_paint_extent(100.0)
+                        .cross_axis_extent(300.0)
+                        .viewport_main_axis_extent(100.0)
+                        .remaining_cache_extent(120.0)
+                        .cache_origin(-20.0)
+                        .build(),
+                ),
+            );
+            ctx.constraints().biggest()
+        }
+    }
+
+    fn recursive_box_layout_retires_static_string_and_recovers() {
+        recursive_layout_retires_text_and_recovers(false, RecursiveLayoutPayload::Static);
+    }
+
+    fn recursive_box_layout_retires_owned_string_and_recovers() {
+        recursive_layout_retires_text_and_recovers(false, RecursiveLayoutPayload::Owned);
+    }
+
+    fn recursive_sliver_layout_retires_static_string_and_recovers() {
+        recursive_layout_retires_text_and_recovers(true, RecursiveLayoutPayload::Static);
+    }
+
+    fn recursive_sliver_layout_retires_owned_string_and_recovers() {
+        recursive_layout_retires_text_and_recovers(true, RecursiveLayoutPayload::Owned);
+    }
+
+    fn recursive_layout_retires_text_and_recovers(sliver: bool, payload: RecursiveLayoutPayload) {
+        use crate::constraints::SliverGeometry;
+        use crate::error::{PoisonPhase, RenderError};
+
+        let captured = Rc::new(std::cell::Cell::new(SliverGeometry::ZERO));
+        let mut owner =
+            PipelineOwner::new(crate::pipeline::TextContextHandle::standalone()).into_layout();
+        let constraints = BoxConstraints::tight(Size::new(10.0, 20.0));
+        let install = |owner: &mut PipelineOwner<crate::pipeline::phase::Layout>, payload| {
+            let root = if sliver {
+                owner
+                    .render_tree_mut()
+                    .insert_box(Box::new(TextSliverHost(Rc::clone(&captured))))
+            } else {
+                owner
+                    .render_tree_mut()
+                    .insert_box(Box::new(RecursiveTextBox(payload)))
+            };
+            let parent = if sliver {
+                owner
+                    .render_tree_mut()
+                    .insert_sliver_child(root, Box::new(RecursiveTextSliver(payload)))
+                    .expect("sliver parent attaches to host")
+            } else {
+                root
+            };
+            owner
+                .render_tree_mut()
+                .insert_box_child(parent, Box::new(SemanticLeaf::empty()))
+                .expect("attached child exercises recursive non-leaf layout");
+            root
+        };
+        let root = install(&mut owner, payload);
+        let result = owner.layout_dirty_root(root, constraints);
+        if sliver {
+            result.expect("host completes with failed sliver's stand-in");
+            assert_eq!(captured.get(), SliverGeometry::ZERO);
+            assert!(
+                owner
+                    .render_tree()
+                    .get(root)
+                    .expect("host remains installed")
+                    .geometry_degraded(),
+                "host reports its failed descendant geometry"
+            );
+        } else {
+            assert!(matches!(
+                result,
+                Err(RenderError::Poisoned {
+                    phase: PoisonPhase::Layout,
+                    ..
+                })
+            ));
+        }
+        owner.render_tree_mut().remove_recursive(root);
+        let replacement = install(&mut owner, RecursiveLayoutPayload::Healthy);
+        assert_eq!(
+            owner
+                .layout_dirty_root(replacement, constraints)
+                .expect("healthy replacement layouts after containment"),
+            Size::new(10.0, 20.0)
+        );
+        if sliver {
+            assert_eq!(captured.get().paint_extent, 20.0);
+            assert!(
+                !owner
+                    .render_tree()
+                    .get(replacement)
+                    .expect("replacement host remains installed")
+                    .geometry_degraded(),
+                "healthy descendant geometry clears degradation"
+            );
         }
     }
 
@@ -919,10 +1112,9 @@ mod tests {
     /// `RenderEntry::layout`. This verifies the catch_unwind wrapper on
     /// the layout call site.
     ///
-    /// Note: `RenderEntry::layout` is not yet wired into the pipeline
-    /// owner's `run_layout` (the propagation stubs are empty per the
-    /// Mythos Outstanding Refactors list), so this test exercises the
-    /// entry directly rather than through `run_frame`.
+    /// This row isolates direct leaf layout through `layout_leaf_only`.
+    /// The recursive rows in the same matrix drive `layout_dirty_root`
+    /// with registered children to cover non-leaf Box and Sliver layout.
     fn test_render_entry_layout_catches_panic() {
         render_entry_layout_catches_text_panic(PanickingLayoutBox::new());
     }

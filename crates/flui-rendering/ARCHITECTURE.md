@@ -1074,8 +1074,10 @@ After reporting has finished borrowing the payload, the shared foundation
 operation releases exact static-string and owned-string payloads under
 [ADR-0119](../../docs/adr/ADR-0119-inert-panic-payload-retirement.md). Arbitrary
 source and secondary payloads remain retained. The Miri-running
-`frame_panic_containment_matrix` exercises both text forms without disabling
-leak checking.
+`frame_panic_containment_matrix` exercises both text forms through the leaf,
+recursive Box and recursive Sliver boundaries without disabling leak checking.
+Recursive rows register actual children and then lay out a healthy replacement
+after the failed subtree retires.
 
 `layout_reporting_retains_opaque_payloads` exercises an ordinary payload,
 a hostile destructor, competing field destructors, and a panicking subscriber

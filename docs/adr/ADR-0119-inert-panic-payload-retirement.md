@@ -42,9 +42,13 @@ or destruction before control returns to the boundary.
 ## Verification
 
 The existing Miri-running `frame_panic_containment_matrix` executes ordinary
-static-string and owned-string layout panics through the real leaf boundary.
-Miri leak checking must remain enabled. Restoring unconditional retention must
-reproduce a leak after the otherwise successful matrix.
+static-string and owned-string layout panics through the leaf boundary and
+registered non-leaf Box and Sliver parents. Recursive rows assert the poisoned
+Box refusal or the Sliver's zero stand-in and degraded host, then remove the
+failed subtree and lay out a healthy replacement on the same owner.
+Miri leak checking must remain enabled. Restoring unconditional retention in
+the shared operation, or at either recursive source-payload retirement call
+independently, must reproduce a leak after the otherwise successful matrix.
 
 The existing subprocess family `layout_reporting_retains_opaque_payloads`
 continues to exercise hostile aggregate payloads, competing diagnostic failures
