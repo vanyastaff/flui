@@ -242,3 +242,188 @@ async fn validation_precedes_loading_and_cache_hits_without_poisoning_accepted_d
         "accepted cache hits do not reload"
     );
 }
+
+struct GatedAsset {
+    loads: Arc<AtomicUsize>,
+    gate: Arc<tokio::sync::Semaphore>,
+    fail: bool,
+}
+
+impl Asset for GatedAsset {
+    type Data = usize;
+    type Key = String;
+    type Error = AssetError;
+
+    fn key(&self) -> String {
+        "gated".into()
+    }
+
+    async fn load(&self) -> Result<usize, AssetError> {
+        let generation = self.loads.fetch_add(1, Ordering::Relaxed) + 1;
+        self.gate
+            .acquire()
+            .await
+            .expect("gate remains open")
+            .forget();
+        if self.fail {
+            Err(AssetError::LoadFailed {
+                path: "gated".into(),
+                reason: format!("attempt {generation}"),
+            })
+        } else {
+            Ok(generation)
+        }
+    }
+}
+
+fn run_cold_load_case(case: impl std::future::Future<Output = ()>) {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("the load test runtime starts")
+        .block_on(async {
+            tokio::time::timeout(std::time::Duration::from_secs(5), case)
+                .await
+                .expect("cold load waiters must make progress");
+        });
+}
+
+async fn poll_until_loading<F: std::future::Future>(
+    mut future: std::pin::Pin<&mut F>,
+    loads: &AtomicUsize,
+    count: usize,
+) {
+    std::future::poll_fn(|cx| {
+        assert!(
+            future.as_mut().poll(cx).is_pending(),
+            "gate must hold the load"
+        );
+        if loads.load(Ordering::Relaxed) >= count {
+            std::task::Poll::Ready(())
+        } else {
+            std::task::Poll::Pending
+        }
+    })
+    .await;
+}
+
+async fn poll_waiter<F: std::future::Future>(mut future: std::pin::Pin<&mut F>) {
+    std::future::poll_fn(|cx| {
+        assert!(
+            future.as_mut().poll(cx).is_pending(),
+            "waiter must await the held load"
+        );
+        std::task::Poll::Ready(())
+    })
+    .await;
+}
+
+fn concurrent_cold_success_shares_the_loaded_allocation() {
+    run_cold_load_case(async {
+        let registry = AssetRegistryBuilder::new().with_default_capacity().build();
+        let loads = Arc::new(AtomicUsize::new(0));
+        let gate = Arc::new(tokio::sync::Semaphore::new(0));
+        let asset = || GatedAsset {
+            loads: Arc::clone(&loads),
+            gate: Arc::clone(&gate),
+            fail: false,
+        };
+        let mut first = Box::pin(registry.load(asset()));
+        let mut second = Box::pin(registry.load(asset()));
+        poll_until_loading(first.as_mut(), &loads, 1).await;
+        poll_waiter(second.as_mut()).await;
+        assert_eq!(
+            loads.load(Ordering::Relaxed),
+            1,
+            "cold callers share loader work"
+        );
+        gate.add_permits(2);
+        let first = first.await.expect("first load succeeds");
+        let second = second.await.expect("waiting load succeeds");
+        assert!(
+            first.ptr_eq(&second),
+            "both callers retain one decoded allocation"
+        );
+        let cached = registry.load(asset()).await.expect("cached load succeeds");
+        assert!(first.ptr_eq(&cached));
+        assert_eq!(loads.load(Ordering::Relaxed), 1);
+    });
+}
+
+fn concurrent_cold_error_is_shared_and_a_later_request_retries() {
+    run_cold_load_case(async {
+        let registry = AssetRegistryBuilder::new().with_default_capacity().build();
+        let loads = Arc::new(AtomicUsize::new(0));
+        let gate = Arc::new(tokio::sync::Semaphore::new(0));
+        let asset = |fail| GatedAsset {
+            loads: Arc::clone(&loads),
+            gate: Arc::clone(&gate),
+            fail,
+        };
+        let mut first = Box::pin(registry.load(asset(true)));
+        let mut second = Box::pin(registry.load(asset(true)));
+        poll_until_loading(first.as_mut(), &loads, 1).await;
+        poll_waiter(second.as_mut()).await;
+        gate.add_permits(3);
+        let first = first.await.expect_err("first load fails");
+        let second = second.await.expect_err("waiting load fails");
+        assert_eq!(
+            first.to_string(),
+            second.to_string(),
+            "waiters observe one failure"
+        );
+        assert_eq!(loads.load(Ordering::Relaxed), 1);
+        let next = registry
+            .load(asset(false))
+            .await
+            .expect("error is not cached");
+        assert_eq!(*next, 2, "the next accepted descriptor retries loading");
+    });
+}
+
+fn canceling_the_initializer_restarts_a_waiting_load() {
+    run_cold_load_case(async {
+        let registry = AssetRegistryBuilder::new().with_default_capacity().build();
+        let loads = Arc::new(AtomicUsize::new(0));
+        let gate = Arc::new(tokio::sync::Semaphore::new(0));
+        let asset = || GatedAsset {
+            loads: Arc::clone(&loads),
+            gate: Arc::clone(&gate),
+            fail: false,
+        };
+        let mut first = Box::pin(registry.load(asset()));
+        let mut second = Box::pin(registry.load(asset()));
+        poll_until_loading(first.as_mut(), &loads, 1).await;
+        poll_waiter(second.as_mut()).await;
+        assert_eq!(loads.load(Ordering::Relaxed), 1);
+        drop(first);
+        poll_until_loading(second.as_mut(), &loads, 2).await;
+        gate.add_permits(1);
+        let second = second.await.expect("waiter initializes after cancellation");
+        assert_eq!(*second, 2);
+        let cached = registry
+            .load(asset())
+            .await
+            .expect("completed retry is cached");
+        assert!(second.ptr_eq(&cached));
+        assert_eq!(loads.load(Ordering::Relaxed), 2);
+    });
+}
+
+#[test]
+fn cold_registry_loads_share_work_and_recover() {
+    crate::cases::run_cases(&[
+        (
+            "concurrent cold success shares the loaded allocation",
+            concurrent_cold_success_shares_the_loaded_allocation,
+        ),
+        (
+            "concurrent cold error is shared and a later request retries",
+            concurrent_cold_error_is_shared_and_a_later_request_retries,
+        ),
+        (
+            "canceling the initializer restarts a waiting load",
+            canceling_the_initializer_restarts_a_waiting_load,
+        ),
+    ]);
+}

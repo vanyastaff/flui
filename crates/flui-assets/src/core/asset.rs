@@ -66,8 +66,9 @@ pub trait Asset: Send + Sync + 'static {
 
     /// Loads and decodes the asset asynchronously.
     ///
-    /// This method performs all I/O and decoding operations. The result will be
-    /// cached by the asset registry, so expensive operations are only performed once.
+    /// This method performs I/O and decoding. The asset registry caches successful
+    /// results and coalesces concurrent cold requests for the same typed key.
+    /// Calling this method directly bypasses registry caching.
     ///
     /// # Errors
     ///

@@ -195,13 +195,13 @@ as a file-backed asset; the registry caches its decoded result.
 
 ### Memory Efficiency
 - **AssetKey**: 4 bytes (vs 24+ for `String`)
-- **AssetHandle**: 8 bytes (single `Arc` pointer)
-- **Option<ElementId>**: 8 bytes (niche optimization)
+- **AssetHandle**: stores a key and an `Arc` sharing the loaded data
 
-### Cache Performance
-- **Insert**: O(1) amortized - Lock-free with Moka
-- **Get**: O(1) expected - Hash table lookup
-- **Eviction**: O(1) amortized - TinyLFU admission policy
+### Cache Behavior
+
+Moka manages cache entries and admission. Cache operations also update statistics
+behind a separate lock. `AssetCache::stats()` reports that typed cache's counters;
+the registry does not aggregate statistics across asset types.
 
 ### Thread Safety
 

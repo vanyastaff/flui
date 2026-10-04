@@ -4,7 +4,7 @@
 
 `flui_assets` is a high-performance asset management system built on three core principles:
 1. **Type Safety** - Generic traits ensure compile-time correctness
-2. **Performance** - Lock-free caching with minimal memory overhead
+2. **Caching** - Moka admission and eviction, with shared ownership of decoded data
 3. **Extensibility** - Easy to add custom asset types
 
 ## Three-Layer Architecture
@@ -41,7 +41,7 @@
                       │
 ┌─────────────────────▼─────────────────────────────────────┐
 │             AssetHandle<T, K> (Arc)                        │
-│  • 8 bytes (single Arc pointer)                           │
+│  • Shared data and a caller-selected key                  │
 │  • Weak references for cache-friendly patterns            │
 │  • Extension traits for convenience                       │
 └───────────────────────────────────────────────────────────┘
@@ -70,8 +70,9 @@ pub struct AssetRegistry {
 
 **Trade-offs**:
 - ✅ Type erasure allows storing different cache types
-- ✅ No runtime overhead for type checks (TypeId is compile-time)
-- ⚠️ Small cost for downcasting (checked at runtime, but cached)
+- Cache lookup and downcasting check the requested type at runtime.
+- A typed cache handle is cloned before asynchronous loading; the registry lock
+  does not span that load.
 
 ### 2. AssetCache<T>
 
@@ -80,26 +81,21 @@ pub struct AssetRegistry {
 **Key Features**:
 - Built on `moka` with TinyLFU eviction algorithm
 - Better hit rates than LRU (admission policy)
-- Lock-free concurrent access
+- Concurrent cache access; statistics updates take a write lock
 - Real-time statistics
 
 **Implementation**:
 ```rust
 pub struct AssetCache<T: Asset> {
-    cache: Arc<Cache<T::Key, Arc<T::Data>>>,
-    stats: Arc<Mutex<CacheStats>>,
+    cache: Cache<T::Key, Arc<T::Data>>,
+    stats: Arc<parking_lot::RwLock<CacheStats>>,
 }
 ```
 
 **Why TinyLFU?**
 - Considers both frequency and recency
-- ~10% better hit rate than LRU in typical workloads
-- O(1) admission decision (using count-min sketch)
-
-**Memory Layout**:
-```
-Cache Entry: Key (4 bytes) + Arc pointer (8 bytes) = 12 bytes + data
-```
+- Admission and eviction are delegated to Moka; this crate does not implement
+  a replacement policy or claim a measured advantage over another policy.
 
 ### 3. AssetHandle<T, K>
 
@@ -109,19 +105,19 @@ Cache Entry: Key (4 bytes) + Arc pointer (8 bytes) = 12 bytes + data
 - Arc-based sharing (cheap clone)
 - Weak references for cache-aware code
 - Extension traits for convenience methods
-- Only 8 bytes per handle
+- A handle owns an `Arc<T>` and its generic key; neither its byte size nor the
+  cache entry layout is an ABI contract.
 
 **Implementation**:
 ```rust
 pub struct AssetHandle<T, K> {
-    data: Arc<T>,        // 8 bytes
-    key: K,              // 4 bytes (AssetKey)
+    inner: Arc<T>,
+    key: K,
 }
-// Total: 12 bytes (but Arc is most important)
 ```
 
 **Design Pattern**: Handle-Body idiom
-- Handle is lightweight (just Arc + key)
+- Cloning a handle shares its decoded data and clones its key
 - Body is the actual data (potentially large)
 - Multiple handles can point to same data
 
@@ -147,11 +143,6 @@ let key1 = AssetKey::new("textures/grass.png"); // 4 bytes
 let key2 = AssetKey::new("textures/grass.png"); // 4 bytes
 assert_eq!(key1, key2);                          // Same Spur value
 ```
-
-**Performance Impact**:
-- HashMap lookups: 2-3x faster (hashing a u32 vs string)
-- Memory usage: 6x reduction (4 bytes vs 24+ bytes)
-- Comparison: 10x faster (single u32 comparison)
 
 ## Data Flow
 
@@ -198,53 +189,27 @@ Is cache full?
               └─ new_freq ≤ victim_freq ──→ Reject new asset
 ```
 
-## Performance Characteristics
+## Capacity and synchronization
 
-### Memory Usage
+`AssetCache::new(capacity_bytes)` converts its byte hint to an estimated entry
+count, assuming 10 KiB per entry and retaining a minimum of 100 entries.
+`with_config` configures Moka by entry count. Neither constructor weighs decoded
+assets or bounds their actual byte footprint. Handles held outside the cache
+retain their data after eviction; the public
+`non_clone_data_retains_evicted_handles_across_reload` case pins that ownership.
 
-| Component | Size | Notes |
-|-----------|------|-------|
-| AssetKey | 4 bytes | String interning |
-| AssetHandle | 12 bytes | Arc + Key |
-| Cache Entry | 12 bytes + data | Key + Arc pointer |
-| Registry | 8 bytes + caches | Arc to HashMap |
+| Component | Synchronization |
+|-----------|-----------------|
+| Registry cache map | `parking_lot::RwLock`; typed handles leave the lock before loading |
+| Typed cache | Moka's concurrent cache |
+| Statistics | `parking_lot::RwLock`, written on hits, misses and mutations |
+| Key interner | Lasso's `ThreadedRodeo` |
 
-### Time Complexity
-
-| Operation | Complexity | Notes |
-|-----------|-----------|-------|
-| load() | O(1) expected | HashMap lookup + async I/O |
-| get() | O(1) expected | HashMap lookup only |
-| insert() | O(1) amortized | Lock-free with Moka |
-| evict() | O(1) amortized | TinyLFU admission |
-| key creation | O(1) amortized | Lasso interning |
-
-### Benchmarks (M1 MacBook Pro)
-
-```
-Cache insert:  ~50ns
-Cache hit:     ~30ns
-Cache miss:    ~40ns + I/O time
-Key creation:  ~100ns (interning overhead)
-```
-
-## Thread Safety
-
-### Synchronization Primitives
-
-| Component | Lock Type | Rationale |
-|-----------|-----------|-----------|
-| AssetRegistry | parking_lot::RwLock | Rare writes (cache creation) |
-| AssetCache | Lock-free (moka) | High contention on reads |
-| AssetKey interner | parking_lot::RwLock | Rare writes (new strings) |
-| Stats | parking_lot::Mutex | Infrequent updates |
-
-### Why parking_lot?
-
-- 2-3x faster than `std::sync::Mutex`
-- Smaller memory footprint (no poisoning)
-- Better contention handling
-- Used throughout FLUI for consistency
+Cache lookup, admission, eviction and string interning use their dependencies'
+implementations. IO and decoding costs depend on the source and data; no timing
+or hit-rate measurements are recorded here. `AssetCache::stats` reports its
+typed cache's counters. The registry exposes no aggregated statistics API; its
+former method returned an empty vector without inspecting caches.
 
 ### Concurrent Access Patterns
 
@@ -262,9 +227,9 @@ let handles: Vec<_> = (0..10)
     .collect();
 ```
 
-**Write contention** (rare):
-- Only occurs when creating new cache for new asset type
-- Once cache exists, all operations are lock-free
+Registry-map writes create typed caches. Existing-cache lookups still acquire
+the registry read lock, and cache operations update statistics under their own
+write lock.
 
 ## Extension Mechanisms
 
@@ -456,3 +421,19 @@ hot-reload = ["notify"]
 - [TinyLFU Paper](https://arxiv.org/abs/1512.00727)
 - [Lasso String Interning](https://docs.rs/lasso)
 - [parking_lot Performance](https://github.com/Amanieu/parking_lot#performance)
+
+### Concurrent registry misses share maintained cache initialization
+
+`AssetRegistry::load` validates every descriptor before looking up its typed
+cache. Concurrent cold requests for that key use Moka's `try_get_with`, sharing
+one loaded allocation or initialization error. Errors are cloned back into the
+existing owned `AssetError` result and are not cached. A cancelled initializing
+future releases Moka's waiters; a remaining accepted descriptor can restart the
+load. The generic public cache convenience helper keeps its existing error API.
+
+Statistics count each initial cold probe as a miss and a successful initializer
+as one insertion; waiting on another request is not another insertion. The
+public `cold_registry_loads_share_work_and_recover` family checks shared
+allocation identity, shared failure followed by retry, and waiter progress after
+initializer cancellation. This coalesces ordinary registry loads; bridged image
+loads retain the widget decode cache's subscriber-lifetime contract.

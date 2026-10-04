@@ -134,8 +134,8 @@
 //! ## Memory Efficiency
 //!
 //! - **AssetKey**: 4 bytes (vs 24+ for `String`)
-//! - **AssetHandle**: 8 bytes (single `Arc` pointer)
-//! - **Cache overhead**: Minimal with TinyLFU algorithm
+//! - **AssetHandle**: stores a key and an `Arc` sharing the loaded data
+//! - **Cache**: Moka manages entries and admission; statistics use a separate lock
 //!
 //! ## Thread Safety
 //!

@@ -172,6 +172,34 @@ impl<T: Asset> AssetCache<T> {
         Ok(self.insert(key, data).await)
     }
 
+    /// Coalesce registry cold loads while preserving its owned error type.
+    /// A cold contender counts as a miss; only the successful initializer
+    /// counts as an insertion. Moka owns waiting and cancellation recovery.
+    pub(crate) async fn get_or_insert_coalesced_with<F, Fut>(
+        &self,
+        key: T::Key,
+        f: F,
+    ) -> Result<AssetHandle<T::Data, T::Key>, T::Error>
+    where
+        F: FnOnce() -> Fut,
+        Fut: std::future::Future<Output = Result<T::Data, T::Error>>,
+        T::Error: Clone,
+    {
+        if let Some(handle) = self.get(&key).await {
+            return Ok(handle);
+        }
+        let data = self
+            .cache
+            .try_get_with(key.clone(), async {
+                let data = Arc::new(f().await?);
+                self.stats.write().insertions += 1;
+                Ok::<_, T::Error>(data)
+            })
+            .await
+            .map_err(|error| (*error).clone())?;
+        Ok(AssetHandle::new(data, key))
+    }
+
     /// Invalidates (removes) an asset from the cache.
     ///
     /// # Examples

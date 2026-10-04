@@ -303,15 +303,14 @@ key1 == key2; // O(1) u32 comparison
 ```
 
 ### Benefits
-- ✅ **6x memory reduction** - 4 bytes vs 24+ bytes
-- ✅ **10x faster comparison** - Single u32 comparison
-- ✅ **2-3x faster hashing** - Hash u32 instead of string
-- ✅ **Cache-friendly** - Keys fit in CPU cache lines
+
+- Keys compare and hash an integer instead of string contents.
+- Repeated keys share the interned string storage.
 
 ### Trade-offs
-- ⚠️ Global state (interner)
-- ⚠️ ~100ns overhead on first use
-- ⚠️ Strings never deallocated (acceptable for finite key space)
+
+- The process-wide interner retains strings for the process lifetime.
+- Creating a key requires an interner lookup; a new string also needs storage.
 
 ### When to Use
 - Identifiers with many duplicates

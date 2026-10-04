@@ -42,12 +42,12 @@ where
     ///
     /// # Examples
     ///
-    /// ```rust,ignore
+    /// ```
     /// use flui_assets::{AssetHandle, AssetKey};
-    /// use triomphe::Arc;
+    /// use std::sync::Arc;
     ///
-    /// let data = Image::new(100, 100);
-    /// let handle = AssetHandle::new(Arc::new(data), AssetKey::new("test.png"));
+    /// let handle = AssetHandle::new(Arc::new(vec![1, 2, 3]), AssetKey::new("bytes"));
+    /// assert_eq!(handle.get().as_slice(), &[1, 2, 3]);
     /// ```
     #[inline]
     pub fn new(data: Arc<T>, key: K) -> Self {

@@ -230,7 +230,10 @@ impl AssetRegistry {
     /// descriptor returns its validation error even on a cache hit, without
     /// loading or changing previously cached data.
     /// If the asset is already cached, returns the cached version immediately.
-    /// Otherwise, loads the asset and adds it to the cache.
+    /// Otherwise, concurrent requests for the same typed key share one load.
+    /// Loading errors are shared with current waiters but are not cached; a
+    /// later request may retry. Cancelling the initializing request lets a
+    /// remaining waiter initialize from its own accepted descriptor.
     ///
     /// # Errors
     ///
@@ -255,16 +258,9 @@ impl AssetRegistry {
         let key = asset.key();
         let cache = self.get_or_create_cache::<T>();
 
-        // Try to get from cache first
-        if let Some(handle) = cache.get(&key).await {
-            return Ok(handle);
-        }
-
-        // Not in cache, load the asset
-        let data = asset.load().await?;
-
-        // Insert into cache and return handle
-        Ok(cache.insert(key, data).await)
+        cache
+            .get_or_insert_coalesced_with(key, || asset.load())
+            .await
     }
 
     /// Gets an asset from cache without loading.
@@ -399,16 +395,6 @@ impl AssetRegistry {
         let cache = AssetCache::<T>::new(self.default_capacity);
         caches.insert(type_id, Box::new(cache.clone()));
         cache
-    }
-
-    /// Returns statistics for all caches.
-    ///
-    /// Returns a map of asset type names to their cache stats.
-    pub fn stats(&self) -> Vec<(String, crate::cache::CacheStats)> {
-        // Note: We can't easily get type names from TypeId at runtime,
-        // so this is a simplified version. In a real implementation,
-        // you might want to track type names explicitly.
-        vec![]
     }
 }
 
