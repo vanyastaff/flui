@@ -1039,7 +1039,6 @@ mod tests {
         (harness, handle)
     }
 
-    #[path = "messenger_failure_cases.rs"]
     mod failure_cases;
 
     #[test]
