@@ -67,8 +67,6 @@ const UNIFORM_MARKER: &str = "wgsl-uniformity: uniform";
 /// walk; everything else (numbers, operators, commas) is skipped.
 static TOKEN: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"[A-Za-z_]\w*|[{}();]").expect("BUG: static regex"));
-static BLOCK_COMMENT: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?s)/\*.*?\*/").expect("BUG: static regex"));
 
 /// Arguments for `cargo xtask wgsl`.
 #[derive(Debug, clap::Args)]
@@ -190,17 +188,39 @@ impl fmt::Display for Finding {
 /// newlines so every later token stays on its own line — the marker lines are
 /// numbered against the raw text.
 fn strip_comments(text: &str) -> String {
-    let blanked = BLOCK_COMMENT.replace_all(text, |caps: &regex::Captures<'_>| {
-        caps[0]
-            .chars()
-            .map(|c| if c == '\n' { '\n' } else { ' ' })
-            .collect::<String>()
-    });
-    blanked
-        .lines()
-        .map(|line| line.split_once("//").map_or(line, |(code, _)| code))
-        .collect::<Vec<_>>()
-        .join("\n")
+    // WGSL block comments nest; an opener in a line comment has no effect.
+    // Preserve byte positions and newlines while removing all comment tokens.
+    let mut code = text.as_bytes().to_vec();
+    let mut index = 0;
+    let mut depth = 0_usize;
+    let mut line_comment = false;
+    while index < code.len() {
+        if line_comment && code[index] == b'\n' {
+            line_comment = false;
+        }
+        let pair = code.get(index..index + 2);
+        if !line_comment && pair == Some(b"/*") {
+            depth += 1;
+            code[index..index + 2].fill(b' ');
+            index += 2;
+            continue;
+        }
+        if depth != 0 && pair == Some(b"*/") {
+            depth -= 1;
+            code[index..index + 2].fill(b' ');
+            index += 2;
+            continue;
+        }
+        if depth == 0 && pair == Some(b"//") {
+            line_comment = true;
+        }
+        if (depth != 0 || line_comment) && code[index] != b'\n' {
+            code[index] = b' ';
+        }
+        index += 1;
+    }
+    String::from_utf8(code)
+        .expect("BUG: comment bytes become ASCII spaces; UTF-8 code is untouched")
 }
 
 /// Line numbers whose comment carries the uniform-branch marker.
@@ -642,11 +662,26 @@ mod tests {
         assert_eq!(findings(source), [] as [String; 0]);
     }
 
+    fn nested_comments_and_line_openers_do_not_change_uniformity() {
+        let nested = "fn f(x: f32, c: bool) -> f32 {\n  /* outer /* inner */ if c { return dpdx(x); } */\n  return 0.0;\n}";
+        assert_eq!(findings(nested), [] as [String; 0]);
+        let line = "fn f(x: f32, c: bool) -> f32 {\n  // /* is only text until this line ends\n  if c { return dpdx(x); }\n  /* another comment */\n  return 0.0;\n}";
+        assert_eq!(
+            findings(line),
+            ["t.wgsl:3: `dpdx` takes a derivative inside a branch in `f`"]
+        );
+        assert_eq!(findings(&line.replace('\n', "\r\n")), findings(line));
+    }
+
     #[test]
     fn wgsl_gate_contract() {
         crate::table_test::run_table(
             "wgsl_gate_contract",
             &[
+                (
+                    "nested_comments_and_line_openers_do_not_change_uniformity",
+                    nested_comments_and_line_openers_do_not_change_uniformity as fn(),
+                ),
                 (
                     "crlf_source_reports_the_same_lines",
                     crlf_source_reports_the_same_lines as fn(),
