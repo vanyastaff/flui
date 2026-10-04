@@ -190,6 +190,17 @@ and ignored `ClipOp::Difference`), and `draw_shader_mask` /
 filters are layers (`flui_layer::{ShaderMaskLayer, BackdropFilterLayer}`),
 and the command-level copies had no producer and a second engine lowering.
 
+Shader values carry paint inputs, not GPU byte layouts. Shader masks record a
+terminal draw through the engine's ordinary gradient path; its typed instances
+and stop buffers own GPU packing. The independent `Shader::to_mask_uniform_data`
+serializer had no consumer and encoded only two colors, so it is removed rather
+than maintained as a second ABI.
+
+`BoxFit::apply` returns source and destination sizes. Comparing those sizes
+cannot determine clipping: a contained image can scale up while showing the
+whole source. The unused `FittedSizes::will_clip` query is removed; `scale_factor`
+and `needs_scaling` retain their scalar and size-comparison contracts.
+
 ### 3. No `DisplayList` mutation, no analysis layer, no trait pair
 
 `DisplayList` exposes `iter`/`commands`/`len`/`is_empty`/`bounds`/`append`
