@@ -397,6 +397,7 @@ fn realm_and_presentation_isolation_matrix() {
     crate::table_test::run_table(
         "realm_and_presentation_isolation_matrix",
         &[
+            ("exhausted_incarnations_never_alias_previous_realms", crate::realm_services::exhausted_incarnations_never_alias_previous_realms as fn()),
             ("addressed_input_routing::input_stamped_for_b_never_reaches_as_arena", addressed_input_routing::input_stamped_for_b_never_reaches_as_arena as fn()),
             ("async_completion_isolation::async_completion_after_presentation_teardown_fails_closed_no_sibling_reach", async_completion_isolation::async_completion_after_presentation_teardown_fails_closed_no_sibling_reach as fn()),
             ("closing_one_presentation_is_invisible_to_siblings::closing_presentation_a_leaves_sibling_layer_tree_identical", closing_one_presentation_is_invisible_to_siblings::closing_presentation_a_leaves_sibling_layer_tree_identical as fn()),

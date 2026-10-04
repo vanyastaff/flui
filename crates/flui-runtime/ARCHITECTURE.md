@@ -393,3 +393,12 @@ queued behind that task. Bytes registered before are refused at that door
 owner turn. A notice that only wakes is idempotent: a second notice, or a pipeline that already
 applied the change, lays nothing out. Pinned by `font_registration_matrix`
 (`src/ui_realm/tests/font_registration.rs`).
+
+### Incarnation exhaustion cannot reissue a stale address
+
+The incarnation counter issues every nonzero `u32` generation once, then keeps
+zero as a permanent exhaustion sentinel. Catching an exhaustion panic cannot
+restart identity allocation. `exhausted_incarnations_never_alias_previous_realms`
+in `realm_and_presentation_isolation_matrix` exercises the production allocator
+with a local counter at its terminal boundary; exhausting the actual global
+source is impractical and would invalidate unrelated realm tests.
