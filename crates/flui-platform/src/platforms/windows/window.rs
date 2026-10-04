@@ -13,8 +13,8 @@ use windows::{
     Win32::{
         Foundation::{FALSE, HWND, LPARAM, POINT, RECT, TRUE, WPARAM},
         Graphics::Gdi::{
-            HRGN, InvalidateRect, MONITOR_DEFAULTTOPRIMARY, MonitorFromWindow, ScreenToClient,
-            UpdateWindow,
+            ClientToScreen, HRGN, InvalidateRect, MONITOR_DEFAULTTOPRIMARY, MonitorFromWindow,
+            ScreenToClient, UpdateWindow,
         },
         System::LibraryLoader::GetModuleHandleW,
         UI::{
@@ -57,7 +57,7 @@ pub struct WindowsWindow {
     /// Which native window this wrapper was built for. The callbacks
     /// themselves live in that window's owner-thread context, not here;
     /// see [`Self::register`].
-    identity: super::platform::WindowIdentity,
+    pub(super) identity: super::platform::WindowIdentity,
 
     /// Reference to platform's window map (for cleanup)
     windows_map: Arc<Mutex<HashMap<isize, Arc<WindowsWindow>>>>,
@@ -126,18 +126,18 @@ unsafe impl Send for WindowsWindow {}
 unsafe impl Sync for WindowsWindow {}
 
 /// Mutable window state
-struct WindowState {
+pub(super) struct WindowState {
     /// Current window bounds (logical pixels)
-    bounds: Bounds<f64>,
+    pub(super) bounds: Bounds<f64>,
 
     /// Current scale factor (DPI / 96)
-    scale_factor: f64,
+    pub(super) scale_factor: f64,
 
     /// Is window visible?
-    visible: bool,
+    pub(super) visible: bool,
 
     /// Is window focused?
-    focused: bool,
+    pub(super) focused: bool,
 
     /// Window title
     title: String,
@@ -203,8 +203,10 @@ impl WindowsWindow {
             // Determine window style
             let style = if options.decorated {
                 WS_OVERLAPPEDWINDOW
-            } else {
+            } else if options.visible {
                 WS_POPUP | WS_VISIBLE
+            } else {
+                WS_POPUP
             };
 
             let ex_style = WS_EX_APPWINDOW;
@@ -251,17 +253,38 @@ impl WindowsWindow {
                 scale_factor
             );
 
-            // Create window state with default bounds (actual bounds will be set after
-            // creation)
+            // Seed observations from the native client, not requested outer bounds.
             let identity = super::platform::WindowIdentity::mint();
 
+            let native_dpi = GetDpiForWindow(hwnd);
+            let scale_factor = if native_dpi == 0 {
+                scale_factor
+            } else {
+                native_dpi as f64 / USER_DEFAULT_SCREEN_DPI as f64
+            };
+            let mut client = RECT::default();
+            let initial_size = if GetClientRect(hwnd, &raw mut client).is_ok() {
+                Size::new(client.right - client.left, client.bottom - client.top)
+            } else {
+                Size::new(width, height)
+            };
+            let mut origin = POINT::default();
+            let _ = ClientToScreen(hwnd, &raw mut origin);
+
+            let created_style = GetWindowLongPtrW(hwnd, GWL_STYLE) as u32;
             let state = Arc::new(Mutex::new(WindowState {
                 bounds: Bounds {
-                    origin: Point::new(0.0, 0.0),
-                    size: options.size,
+                    origin: Point::new(
+                        origin.x as f64 / scale_factor,
+                        origin.y as f64 / scale_factor,
+                    ),
+                    size: Size::new(
+                        initial_size.width as f64 / scale_factor,
+                        initial_size.height as f64 / scale_factor,
+                    ),
                 },
                 scale_factor,
-                visible: false,
+                visible: crate::shared::visibility::win32_initial_visibility(created_style),
                 focused: false,
                 title: options.title.clone(),
             }));
@@ -274,20 +297,18 @@ impl WindowsWindow {
             use super::platform::WindowContext;
 
             let window_id = WindowId(hwnd.0 as u64);
-            let device_width = logical_to_device(width as f64, scale_factor);
-            let device_height = logical_to_device(height as f64, scale_factor);
-            let initial_size = Size::new(device_width, device_height);
             // Seed the visibility edge filter from the window's ACTUAL
-            // style, not a default: an undecorated window is created
+            // style, not a default: a visible undecorated window is created
             // `WS_POPUP | WS_VISIBLE` (already visible before this context
             // installs), so the creation-time `ShowWindow(SW_SHOW)` below
             // never delivers a `WM_SHOWWINDOW` edge for it — a `false`
             // seed would swallow that window's first minimize. See
             // `shared::visibility::win32_initial_visibility`'s doc.
-            let created_style = GetWindowLongPtrW(hwnd, GWL_STYLE) as u32;
             let context = Box::new(WindowContext {
                 window_id,
                 identity,
+                windows: Arc::downgrade(&windows_map),
+                window_state: Arc::downgrade(&state),
                 handlers,
                 callbacks: WindowCallbacks::new(),
                 scale_factor: std::cell::Cell::new(scale_factor),
@@ -1088,8 +1109,6 @@ impl PlatformWindow for WindowsWindow {
             ) {
                 tracing::warn!(hwnd = ?self.hwnd, ?error, "SetWindowPos (PlatformWindow::resize) failed");
             }
-
-            self.state.lock().bounds.size = size;
         }
     }
 
@@ -1471,8 +1490,6 @@ impl WindowTrait for WindowsWindow {
             ) {
                 tracing::warn!(hwnd = ?self.hwnd, ?error, "SetWindowPos (move) failed");
             }
-
-            self.state.lock().bounds.origin = position;
         }
     }
 
@@ -1498,8 +1515,6 @@ impl WindowTrait for WindowsWindow {
             ) {
                 tracing::warn!(hwnd = ?self.hwnd, ?error, "SetWindowPos (resize) failed");
             }
-
-            self.state.lock().bounds.size = size;
         }
     }
 
@@ -2169,7 +2184,17 @@ impl Drop for WindowsWindow {
 
             // Remove from windows map
             let hwnd_key = self.hwnd.0 as isize;
-            let _prev = self.windows_map.lock().remove(&hwnd_key);
+            let _prev = {
+                let mut windows = self.windows_map.lock();
+                if windows
+                    .get(&hwnd_key)
+                    .is_some_and(|window| window.identity == self.identity)
+                {
+                    windows.remove(&hwnd_key)
+                } else {
+                    None
+                }
+            };
         }
     }
 }

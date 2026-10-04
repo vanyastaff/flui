@@ -1086,3 +1086,34 @@ The method's public compile-fail doctest rejects numeric IDs, and its compiling
 example pins the borrowed-window signature and boolean result. These compiler
 checks do not prove native tab grouping or close/reentry behavior. AppKit runtime
 execution remains unverified on the Windows audit host.
+
+### Win32 observations and closed-window tracking
+
+A window context holds weak references to the wrapper's observation cache and
+platform registry. Native size, position, visibility, focus and DPI messages
+publish cache changes before invoking callbacks; no cache mutex spans a user
+callback or native call. Initial dimensions are the native client dimensions,
+and setters do not overwrite a synchronous native observation with their
+requested outer dimensions. Minimization keeps the last non-minimized size.
+
+`WM_DESTROY` clears userdata and retires its context ledger before removing the
+matching window identity from tracking. The removed owning Arc is dropped outside
+the registry mutex. Consequently its destructor cannot recursively destroy the
+in-flight native window, and an old wrapper cannot remove a reused HWND's newer
+registry entry. Weak context references do not alter the wrapper's final-state
+owner count or introduce another cycle. WNDPROC callback failures retain the
+existing fail-stop policy; this does not claim recoverable native unwinding.
+
+`test_window_lifecycle_contract` adds bounded Windows subprocess rows
+`native_close_retires_final_registry_owner`, `closed_window_retires_tracking`,
+`close_callback_releases_external_owner`,
+`resize_callback_observes_current_client_bounds` and
+`hidden_popup_is_natively_hidden` and
+`move_callback_observes_full_native_coordinates`. These create actual hidden native windows,
+check owner retirement (including the registry's final owner during native
+`WM_CLOSE`) and subsequent opening, compare getters inside and after
+real native resize delivery, query native popup visibility and compare full
+client-origin observations across a native move beyond signed16 coordinates
+and a subsequent ordinary move. Cache and Moved events use `ClientToScreen`;
+packed message coordinates remain a fallback only if that query fails. These rows do not
+exercise monitor DPI migration or interactive focus changes.
