@@ -653,23 +653,10 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         // so a caller pushing the forward (paint-direction) matrix here
         // recorded the wrong composition for any chain mixing this transform
         // with an outer offset -- correct only when the whole chain
-        // commutes (pure translations). A non-invertible `hit_test_transform`
-        // (e.g. a zero-scale `Transform`) falls back to pushing the
-        // still-singular forward matrix: when the determinant is exactly
-        // zero, the composed chain stays singular, so delivery still
-        // detects and skips it (`LocalEventTransform::capture`). For a
-        // merely near-singular transform (`0 < |det| < f64::EPSILON`, which
-        // `Matrix4::is_invertible` also rejects) the skip is only
-        // threshold-relative, not guaranteed: determinants compose
-        // multiplicatively, so a large-determinant ancestor can lift the
-        // product back above `f64::EPSILON`, and delivery then hands the
-        // entry a garbage local position instead of skipping it -- out of
-        // scope to change that skip behavior here.
+        // commutes (pure translations). A transform without an admitted finite
+        // inverse refuses this subtree before any descendant can publish an
+        // entry; its forward matrix is never used as a substitute (ADR-0113).
         let hit_transform = render_object.hit_test_transform(own_size);
-        let has_transform = hit_transform.is_some();
-        if let Some(t) = hit_transform {
-            result.push_transform(t.try_inverse().unwrap_or(t));
-        }
         // A resolved follower offset rides the SAME transform-stack
         // lifecycle as `hit_test_transform` (flui-rendering ARCHITECTURE.md, follower hit-testing) — the same
         // translation the paint/GPU path applies via
@@ -677,9 +664,6 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         // `Matrix4` (exact and lossless — the composer only ever
         // shifts coordinate space via translation). Pushed as the inverse
         // translation for the same reason as `hit_test_transform` above.
-        if let Some(r) = follower_offset {
-            result.push_transform(Matrix4::translation(-r.dx, -r.dy, 0.0));
-        }
 
         // Shift the position handed into this node's own subtree by the
         // resolved offset — the SAME position-shift pattern `hit_child`
@@ -691,115 +675,121 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
             None => position,
         };
 
-        let mut hit_child = |index: usize,
-                             override_pos: Option<Offset>,
-                             local_transform: Option<Matrix4>|
-         -> bool {
-            let Some(&child_id) = children.get(index) else {
-                return false;
-            };
-            let Some(child_node) = self.render_tree.get(child_id) else {
-                return false;
-            };
-            // Skip a child this pass did not lay out, exactly as paint does.
-            // Its committed offset describes a pass that no longer holds, so
-            // hitting it would return something the user cannot see — and
-            // paint already skips it, so allowing the hit would make the two
-            // disagree, which is worse than the stale rect either alone.
-            if !child_node.was_placed_by(id, parent_generation) {
-                return false;
-            }
-            // `local_transform` is the object's own FORWARD (paint-direction)
-            // transform, accumulated by its ctx-level `push_transform`/
-            // `push_offset` calls (`BoxHitTestCtx::composed_transform`).
-            // `with_paint_transform` pushes its INVERSE onto the shared
-            // `HitTestResult`, matching every other forward-transform push
-            // in this walk (`hit_test_transform` above, the follower offset).
-            // Scoped to exactly this one child recursion — the ctx that accumulated it already
-            // scoped the push/pop to the same call.
-            let dispatch_child = |result: &mut crate::hit_testing::HitTestResult| -> bool {
-                if child_node.as_sliver().is_some() {
-                    // Explicit positions are already child-local; the layout-offset
-                    // fallback starts from the child's physical paint offset.
-                    return if let Some(position) = override_pos {
-                        let child_position =
-                            Self::sliver_hit_position_from_offset(child_node, position);
-                        self.hit_test_sliver_subtree(child_id, child_position, result)
+        let hit_node = |result: &mut crate::hit_testing::HitTestResult| {
+            let mut hit_child = |index: usize,
+                                 override_pos: Option<Offset>,
+                                 local_transform: Option<Matrix4>|
+             -> bool {
+                let Some(&child_id) = children.get(index) else {
+                    return false;
+                };
+                let Some(child_node) = self.render_tree.get(child_id) else {
+                    return false;
+                };
+                // Skip a child this pass did not lay out, exactly as paint does.
+                // Its committed offset describes a pass that no longer holds, so
+                // hitting it would return something the user cannot see — and
+                // paint already skips it, so allowing the hit would make the two
+                // disagree, which is worse than the stale rect either alone.
+                if !child_node.was_placed_by(id, parent_generation) {
+                    return false;
+                }
+                // `local_transform` is the object's own FORWARD (paint-direction)
+                // transform, accumulated by its ctx-level `push_transform`/
+                // `push_offset` calls (`BoxHitTestCtx::composed_transform`).
+                // `with_paint_transform` pushes its INVERSE onto the shared
+                // `HitTestResult`, matching every other forward-transform push
+                // in this walk (`hit_test_transform` above, the follower offset).
+                // Scoped to exactly this one child recursion — the ctx that accumulated it already
+                // scoped the push/pop to the same call.
+                let dispatch_child = |result: &mut crate::hit_testing::HitTestResult| -> bool {
+                    if child_node.as_sliver().is_some() {
+                        // Explicit positions are already child-local; the layout-offset
+                        // fallback starts from the child's physical paint offset.
+                        return if let Some(position) = override_pos {
+                            let child_position =
+                                Self::sliver_hit_position_from_offset(child_node, position);
+                            self.hit_test_sliver_subtree(child_id, child_position, result)
+                        } else {
+                            if !Self::sliver_child_is_visible(child_node) {
+                                return false;
+                            }
+                            let child_offset = child_node.offset();
+                            result.with_paint_offset(child_offset, |result| {
+                                let child_position = Self::sliver_hit_position_from_paint_offset(
+                                    child_node,
+                                    position - child_offset,
+                                );
+                                self.hit_test_sliver_subtree(child_id, child_position, result)
+                            })
+                        };
+                    }
+                    if let Some(child_position) = override_pos {
+                        self.hit_test_subtree(child_id, child_position, result)
                     } else {
-                        if !Self::sliver_child_is_visible(child_node) {
-                            return false;
-                        }
                         let child_offset = child_node.offset();
                         result.with_paint_offset(child_offset, |result| {
-                            let child_position = Self::sliver_hit_position_from_paint_offset(
-                                child_node,
-                                position - child_offset,
-                            );
-                            self.hit_test_sliver_subtree(child_id, child_position, result)
+                            self.hit_test_subtree(child_id, position - child_offset, result)
                         })
-                    };
-                }
-                if let Some(child_position) = override_pos {
-                    self.hit_test_subtree(child_id, child_position, result)
-                } else {
-                    let child_offset = child_node.offset();
-                    result.with_paint_offset(child_offset, |result| {
-                        self.hit_test_subtree(child_id, position - child_offset, result)
-                    })
+                    }
+                };
+
+                match local_transform {
+                    Some(local_transform) => result
+                        .with_paint_transform(local_transform, dispatch_child)
+                        .unwrap_or(false),
+                    None => dispatch_child(result),
                 }
             };
 
-            match local_transform {
-                Some(local_transform) => {
-                    result.with_paint_transform(local_transform, dispatch_child)
-                }
-                None => dispatch_child(result),
+            let hit =
+                render_object.hit_test_raw(position, children.len(), own_size, &mut hit_child);
+            if hit.add_self {
+                // Leaf-first path: children pushed their entries during
+                // the callback above; the ancestor follows. The transform
+                // is still on the stack, so this entry captures it.
+                //
+                // A render object that listens for pointer events (RenderListener)
+                // advertises its data-only pointer target here; it rides on the
+                // entry so dispatch can resolve the owner-local handler. Every
+                // other render object returns `None`, leaving a target-less entry.
+                let entry = crate::hit_testing::HitTestEntry::new(id);
+                let entry = match render_object.pointer_target() {
+                    Some(target) => entry.pointer_target(target),
+                    None => entry,
+                };
+                let entry = match render_object.scroll_target() {
+                    Some(target) => entry.scroll_target(target),
+                    None => entry,
+                };
+                let entry = match render_object.pan_zoom_target() {
+                    Some(target) => entry.pan_zoom_target(target),
+                    None => entry,
+                };
+                let entry = entry.cursor(render_object.mouse_cursor());
+                let entry = match render_object.metadata() {
+                    Some(payload) => entry.metadata(payload),
+                    None => entry,
+                };
+                let entry = match render_object.mouse_tracker_annotation(id) {
+                    Some(annotation) => entry.mouse_annotation(annotation),
+                    None => entry,
+                };
+                result.add(entry);
             }
+
+            hit.blocks_below
         };
-
-        let hit = render_object.hit_test_raw(position, children.len(), own_size, &mut hit_child);
-        if hit.add_self {
-            // Leaf-first path: children pushed their entries during
-            // the callback above; the ancestor follows. The transform
-            // is still on the stack, so this entry captures it.
-            //
-            // A render object that listens for pointer events (RenderListener)
-            // advertises its data-only pointer target here; it rides on the
-            // entry so dispatch can resolve the owner-local handler. Every
-            // other render object returns `None`, leaving a target-less entry.
-            let entry = crate::hit_testing::HitTestEntry::new(id);
-            let entry = match render_object.pointer_target() {
-                Some(target) => entry.pointer_target(target),
-                None => entry,
-            };
-            let entry = match render_object.scroll_target() {
-                Some(target) => entry.scroll_target(target),
-                None => entry,
-            };
-            let entry = match render_object.pan_zoom_target() {
-                Some(target) => entry.pan_zoom_target(target),
-                None => entry,
-            };
-            let entry = entry.cursor(render_object.mouse_cursor());
-            let entry = match render_object.metadata() {
-                Some(payload) => entry.metadata(payload),
-                None => entry,
-            };
-            let entry = match render_object.mouse_tracker_annotation(id) {
-                Some(annotation) => entry.mouse_annotation(annotation),
-                None => entry,
-            };
-            result.add(entry);
+        let hit_follower = |result: &mut crate::hit_testing::HitTestResult| match follower_offset {
+            Some(offset) => result.with_paint_offset(offset, hit_node),
+            None => hit_node(result),
+        };
+        match hit_transform {
+            Some(transform) => result
+                .with_paint_transform(transform, hit_follower)
+                .unwrap_or(false),
+            None => hit_follower(result),
         }
-
-        if follower_offset.is_some() {
-            result.pop_transform();
-        }
-        if has_transform {
-            result.pop_transform();
-        }
-
-        hit.blocks_below
     }
 
     fn sliver_hit_position_from_offset(node: &RenderNode, position: Offset) -> MainAxisPosition {

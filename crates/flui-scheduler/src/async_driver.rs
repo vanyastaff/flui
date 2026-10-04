@@ -18,7 +18,9 @@
 //! A task's [`Waker`] sets a per-task `ready` flag and — **only on the
 //! `false → true` transition** — asks the binding for a frame through the
 //! scheduler's existing `request_frame` hook. So a burst of wakes between frames
-//! costs one flag write and one frame request, exactly as
+//! costs one readiness transition and one successfully delivered frame request.
+//! A failed or absent hook retains delivery debt for the next wake or hook
+//! installation, including a wake through another clone of the same waker. As
 //! `ExternalBuildScheduler` coalesces rebuild requests.
 //!
 //! Waking is legal from any thread. Polling is not: it happens only inside
@@ -75,7 +77,9 @@
 //! # Cancellation
 //!
 //! [`TaskToken`] cancels on drop: the future is removed from the driver and
-//! dropped, so it is never polled again and its destructors run. A `Waker` held
+//! dropped, so it is never polled again and its destructors run. During an
+//! existing unwind the detached future is retained instead: running opaque
+//! destruction then could abort the process. A `Waker` held
 //! by a cancelled task is inert — it sets a flag nobody reads and finds no task
 //! to poll. This is real cancellation, not "ignore the late callback".
 //!
@@ -135,6 +139,8 @@ struct Task {
     /// The future, absent while it is being polled (moved out so the driver's
     /// lock is not held across user code).
     future: Option<BoxedTask>,
+    /// One identity for the task lifetime; cloning it for a poll never allocates.
+    waker: Waker,
     /// Set by the waker; cleared immediately before each poll.
     ready: Arc<ReadyFlag>,
     /// Set by [`TaskToken::drop`]. Checked after a poll returns, so a token
@@ -176,6 +182,7 @@ struct Inner {
     store: Mutex<TaskStore>,
     next_id: AtomicU64,
     request_frame: Mutex<Option<RequestFrame>>,
+    wake_delivery: crate::wake_delivery::WakeDelivery,
 }
 
 impl Inner {
@@ -183,11 +190,9 @@ impl Inner {
     ///
     /// The lock is released before the hook runs: a hook that re-enters the
     /// driver (or takes the binding's own locks) must not deadlock against us.
-    fn request_frame(&self) {
-        let hook = self.request_frame.lock().clone();
-        if let Some(hook) = hook {
-            hook();
-        }
+    fn request_frame(&self, fresh: bool) {
+        self.wake_delivery
+            .request(|| fresh, || self.request_frame.lock().clone());
     }
 }
 
@@ -211,24 +216,18 @@ impl Wake for TaskWaker {
             return;
         }
 
-        // Coalescing: only the first wake since the last poll requests a frame.
-        if !self.ready.swap(true, Ordering::AcqRel)
-            && let Some(inner) = self.inner.upgrade()
-        {
-            // A stale waker may outlive a completed/cancelled task. In that
-            // case it must not wake the event loop for work that can never
-            // run, and must not index an id no task owns any more —
-            // `contains_key` and the push happen in the same locked section.
+        let fresh = !self.ready.swap(true, Ordering::AcqRel);
+        if let Some(inner) = self.inner.upgrade() {
             let task_is_live = {
                 let mut store = inner.store.lock();
                 let is_live = store.tasks.contains_key(&self.id);
-                if is_live {
+                if is_live && fresh {
                     store.ready.push(self.id);
                 }
                 is_live
             };
             if task_is_live {
-                inner.request_frame();
+                inner.request_frame(fresh);
             }
         }
     }
@@ -272,9 +271,8 @@ impl TaskToken {
     ///
     /// Propagates a panic raised by the removed future's own destructor —
     /// called directly, this is an ordinary panic with an ordinary
-    /// backtrace. This type's `Drop` impl is the one caller that must NOT
-    /// let this propagate unconditionally: see its own doc for why it
-    /// contains this same panic instead, while already unwinding.
+    /// backtrace. During an existing unwind this type's `Drop` detaches and
+    /// retains the future instead of running its destructor.
     pub fn cancel(&self) {
         self.cancelled.store(true, Ordering::Release);
         if let Some(inner) = self.inner.upgrade() {
@@ -297,42 +295,22 @@ impl Drop for TaskToken {
     ///
     /// `cancel()` drops the removed future outside this driver's lock (see
     /// its own doc), but that future's destructor is still arbitrary user
-    /// code that can itself panic. Reached through an ordinary `drop()`,
-    /// that panic propagates like any other — the dominant path
-    /// (`ViewState::dispose` → `FutureBuilder::unsubscribe` → `dispose`)
-    /// already runs inside its own `catch_unwind` one level up
-    /// (`on_unmount`'s hook-panic recovery), so propagating here reports it
-    /// through that same accounting rather than swallowing it a second
-    /// time. Reached instead while THIS thread is already unwinding from a
-    /// separate panic (`std::thread::panicking()`) — concretely, a held
-    /// token dropping out of a thread-local registry during thread teardown
-    /// mid-unwind (`flui-app`'s `PENDING_SECONDARY_WINDOW_OPENS`) —
-    /// propagating would be a double panic, which `abort`s the process with
-    /// no diagnostic for either failure. So this one case is contained and
-    /// logged instead, matching std's own Drop convention — and the caught
-    /// payload itself is discarded through `panic_payload::discard_panic_payload`,
-    /// not dropped bare, since the payload can just as well own a type
-    /// whose own `Drop` panics too.
+    /// code that can itself panic. Ordinary destruction propagates that
+    /// failure. During an existing unwind even catching the future's Drop
+    /// cannot contain two of its fields panicking in succession. Detach its
+    /// slot and retain the opaque future without invoking any user destruction.
+    /// This also retains any resources and nested tokens it owns; cancellation
+    /// of this task is guaranteed, recursive destruction of its captures is not.
     fn drop(&mut self) {
         if std::thread::panicking() {
-            if let Err(payload) =
-                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.cancel()))
-            {
-                tracing::error!(
-                    task_id = self.id,
-                    payload = flui_foundation::panic::payload_text(&*payload)
-                        .unwrap_or("<non-string panic payload>"),
-                    "TaskToken::cancel panicked while already unwinding; not re-raising"
-                );
-                // The payload itself may own a type whose own `Drop` panics;
-                // dropping it bare here would let that second panic escape
-                // uncontained -- during this already-unwinding path, the
-                // exact double panic (abort, no diagnostic) this whole
-                // branch exists to prevent.
-                crate::panic_payload::discard_panic_payload(
-                    payload,
-                    "TaskToken::drop (cancel panic, traced above)",
-                );
+            self.cancelled.store(true, Ordering::Release);
+            if let Some(inner) = self.inner.upgrade() {
+                let removed = { inner.store.lock().tasks.remove(&self.id) };
+                if let Some(mut task) = removed
+                    && let Some(future) = task.future.take()
+                {
+                    mem::forget(future);
+                }
             }
         } else {
             self.cancel();
@@ -369,11 +347,12 @@ fn recycle(store: &mut TaskStore, mut buf: Vec<TaskId>) {
 /// locals first (the panicking loop iteration's `future`, waker, and
 /// `cancelled`, none of which hold this lock) before propagating to
 /// `poll_ready`'s own frame, where this guard (declared outside the loop)
-/// finally drops last: a nested `TaskToken` a panicking future owns finishes
-/// its own `cancel()` (lock acquired, then released) before this `Drop`
-/// body ever runs. And the slot this removes holds `future: None` (taken
-/// before the poll), so `tasks.remove` itself runs no user code: only two
-/// `Arc<AtomicBool>` reference-count decrements.
+/// finally drops last. Poll failure retains the opaque future before resuming;
+/// ordinary retirement releases the map lock before running destruction, and
+/// nested tokens reached during that unwind detach without user destruction.
+/// The slot this removes holds `future: None` (taken
+/// before the poll), so `tasks.remove` itself runs no user code: only
+/// framework-owned waker and readiness reference-count decrements.
 struct PumpGuard<'a> {
     inner: &'a Inner,
     /// This pump's whole ready batch, sorted and deduplicated, consumed
@@ -447,14 +426,15 @@ impl AsyncDriver {
                 }),
                 next_id: AtomicU64::new(1),
                 request_frame: Mutex::new(None),
+                wake_delivery: crate::wake_delivery::WakeDelivery::default(),
             }),
         }
     }
 
     /// Install the binding's "request a frame" hook.
     ///
-    /// Called once at wiring time. A driver with no hook still polls whenever a
-    /// frame happens to run — headless tests rely on that.
+    /// Called at wiring time; installation retries undelivered demand. A driver
+    /// with no hook still polls whenever a frame runs — headless tests rely on that.
     ///
     /// Nothing enforces "once": a later call replaces the hook, and the
     /// displaced `Arc` is dropped only after `request_frame`'s lock is
@@ -466,6 +446,7 @@ impl AsyncDriver {
     {
         let previous = { self.inner.request_frame.lock().replace(Arc::new(hook)) };
         drop(previous);
+        self.inner.request_frame(false);
     }
 
     /// Queue `future` for polling on the frame thread, and request a frame.
@@ -480,6 +461,12 @@ impl AsyncDriver {
         let id = self.inner.next_id.fetch_add(1, Ordering::Relaxed);
         let ready = Arc::new(ReadyFlag::new(true));
         let cancelled = Arc::new(AtomicBool::new(false));
+        let waker = Waker::from(Arc::new(TaskWaker {
+            id,
+            ready: Arc::clone(&ready),
+            cancelled: Arc::clone(&cancelled),
+            inner: Arc::downgrade(&self.inner),
+        }));
 
         {
             let mut store = self.inner.store.lock();
@@ -487,6 +474,7 @@ impl AsyncDriver {
                 id,
                 Task {
                     future: Some(future),
+                    waker,
                     ready: Arc::clone(&ready),
                     cancelled: Arc::clone(&cancelled),
                 },
@@ -496,14 +484,15 @@ impl AsyncDriver {
             store.ready.push(id);
         }
 
-        // A freshly spawned task needs a frame to be polled in.
-        self.inner.request_frame();
-
-        TaskToken {
+        let token = TaskToken {
             id,
             cancelled,
             inner: Arc::downgrade(&self.inner),
-        }
+        };
+        // Establish rollback ownership before calling the host hook. If the
+        // hook fails, token destruction detaches the unreturned task.
+        self.inner.request_frame(true);
+        token
     }
 
     /// Spawn `future` and poll it **once, inline, right now**.
@@ -548,7 +537,18 @@ impl AsyncDriver {
         }));
         let mut cx = Context::from_waker(&waker);
 
-        if future.as_mut().poll(&mut cx).is_ready() {
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            future.as_mut().poll(&mut cx)
+        }));
+        let outcome = match outcome {
+            Ok(outcome) => outcome,
+            Err(payload) => {
+                cancelled.store(true, Ordering::Release);
+                mem::forget(future);
+                std::panic::resume_unwind(payload);
+            }
+        };
+        if outcome.is_ready() {
             return None;
         }
 
@@ -563,6 +563,7 @@ impl AsyncDriver {
                 id,
                 Task {
                     future: Some(future),
+                    waker,
                     ready: Arc::clone(&ready),
                     cancelled: Arc::clone(&cancelled),
                 },
@@ -574,15 +575,16 @@ impl AsyncDriver {
             armed
         };
 
-        if armed {
-            self.inner.request_frame();
-        }
-
-        Some(TaskToken {
+        let token = TaskToken {
             id,
             cancelled,
             inner: Arc::downgrade(&self.inner),
-        })
+        };
+        if armed {
+            self.inner.request_frame(true);
+        }
+
+        Some(token)
     }
 
     /// Poll every task whose waker fired since the last frame.
@@ -608,6 +610,7 @@ impl AsyncDriver {
             // through the `MutexGuard`'s `deref_mut` are each their own
             // opaque borrow, which the compiler cannot prove disjoint.
             let store: &mut TaskStore = &mut guard;
+            self.inner.wake_delivery.consume(|| {});
             mem::swap(&mut store.ready, &mut store.spare);
             mem::take(&mut store.spare)
         };
@@ -641,15 +644,15 @@ impl AsyncDriver {
             guard.cursor += 1;
 
             // Take the future out so no lock is held across user code.
-            let Some((mut future, ready, cancelled)) = ({
+            let Some((mut future, waker, cancelled)) = ({
                 let mut store = self.inner.store.lock();
                 store.tasks.get_mut(&id).and_then(|task| {
                     // Clear BEFORE polling: a wake landing during the poll must
                     // re-arm the task rather than be swallowed.
                     task.ready.store(false, Ordering::Release);
-                    task.future.take().map(|future| {
-                        (future, Arc::clone(&task.ready), Arc::clone(&task.cancelled))
-                    })
+                    task.future
+                        .take()
+                        .map(|future| (future, task.waker.clone(), Arc::clone(&task.cancelled)))
                 })
             }) else {
                 // Stale id: cancelled, or a same-pump duplicate whose first
@@ -664,14 +667,22 @@ impl AsyncDriver {
             // revisit it otherwise.
             guard.in_flight = Some(id);
 
-            let waker = Waker::from(Arc::new(TaskWaker {
-                id,
-                ready,
-                cancelled: Arc::clone(&cancelled),
-                inner: Arc::downgrade(&self.inner),
-            }));
             let mut cx = Context::from_waker(&waker);
-            let outcome = future.as_mut().poll(&mut cx);
+            // Borrow the future into the recovery boundary: it must remain
+            // owned outside the closure so poll unwinding cannot drop it.
+            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                future.as_mut().poll(&mut cx)
+            }));
+            let outcome = match outcome {
+                Ok(outcome) => outcome,
+                Err(payload) => {
+                    cancelled.store(true, Ordering::Release);
+                    mem::forget(future);
+                    // PumpGuard removes the empty slot and restores siblings;
+                    // none of its recovery values run user destruction.
+                    std::panic::resume_unwind(payload);
+                }
+            };
             guard.in_flight = None;
             polled += 1;
 
@@ -767,7 +778,9 @@ impl AsyncDriver {
     #[cfg(any(test, feature = "testing"))]
     #[must_use]
     pub fn is_unlocked(&self) -> bool {
-        self.inner.store.try_lock().is_some() && self.inner.request_frame.try_lock().is_some()
+        self.inner.store.try_lock().is_some()
+            && self.inner.request_frame.try_lock().is_some()
+            && self.inner.wake_delivery.is_unlocked()
     }
 }
 
@@ -994,6 +1007,8 @@ mod tests {
 
         driver.poll_ready();
         assert_eq!(*order.lock(), (0..8).collect::<Vec<_>>());
+        // Retain cancellation tokens until every task has been observed.
+        drop(tokens);
     }
 
     /// A task woken *during* the poll is picked up next frame, not spun on.
@@ -1111,43 +1126,6 @@ mod tests {
         );
     }
 
-    /// `Drop for TaskToken`, reached while this thread is already unwinding
-    /// from an unrelated panic, must CONTAIN a panic `cancel()` raises
-    /// rather than let it become a double panic. Reverting the `Drop` impl
-    /// to an unconditional `self.cancel();` `abort`s this whole test
-    /// process before the outer `catch_unwind` below can even return —
-    /// reaching the final assertion is itself the proof.
-    fn drop_while_already_unwinding_contains_the_cancel_panic_instead_of_aborting() {
-        struct PanicsOnDrop;
-        impl Drop for PanicsOnDrop {
-            fn drop(&mut self) {
-                panic!("drop-while-unwinding probe");
-            }
-        }
-
-        let driver = AsyncDriver::new();
-        let token = driver.spawn_local(Box::pin(async move {
-            let _payload = PanicsOnDrop;
-            std::future::pending::<()>().await;
-        }));
-        // Poll once so `_payload` is actually constructed before the token
-        // is dropped — see `cancel_propagates_the_removed_futures_panic`.
-        assert_eq!(driver.poll_ready(), 1);
-
-        // `token`'s `Drop` runs while this closure is unwinding from the
-        // panic below, i.e. with `std::thread::panicking()` already `true`.
-        let outer = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
-            let _token = token;
-            panic!("outer probe");
-        }));
-
-        assert!(
-            outer.is_err(),
-            "the outer panic must still propagate; only the token's own \
-             nested cancel panic is contained"
-        );
-    }
-
     #[test]
     fn async_driver_failure_and_ordering_matrix() {
         crate::table_test::run_table(
@@ -1180,11 +1158,6 @@ mod tests {
                 (
                     "cancel_propagates_the_removed_futures_panic",
                     cancel_propagates_the_removed_futures_panic as fn(),
-                ),
-                (
-                    "drop_while_already_unwinding_contains_the_cancel_panic_instead_of_aborting",
-                    drop_while_already_unwinding_contains_the_cancel_panic_instead_of_aborting
-                        as fn(),
                 ),
             ],
         );

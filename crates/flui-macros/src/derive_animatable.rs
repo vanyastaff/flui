@@ -19,8 +19,8 @@
 //!
 //! ## Generated-code path strategy
 //!
-//! Runtime paths resolve the direct owning crate first, otherwise its module
-//! in the `flui` facade. Cargo dependency aliases are respected.
+//! Runtime paths resolve through the SDK, then the owning crate, then the
+//! `flui` facade, using the shared resolver and honoring Cargo dependency aliases.
 
 use proc_macro2::TokenStream;
 use quote::quote;

@@ -191,6 +191,14 @@ fn selection_control_contracts() {
             "data_table::widget override beats theme beats default on a mounted tree",
             data_table::widget_override_beats_theme_beats_default_on_a_mounted_tree,
         ),
+        (
+            "data_table::themed checkbox margin matches the same widget margin",
+            data_table::themed_checkbox_margin_matches_the_same_widget_margin,
+        ),
+        (
+            "data_table::checkbox margin override beats theme and retains default spacing",
+            data_table::checkbox_margin_override_beats_the_theme_without_changing_default_spacing,
+        ),
     ]);
 }
 
@@ -218,6 +226,23 @@ fn text_input_contracts() {
 fn overlay_contracts() {
     common::run_cases(&[
         (
+            "snack_bar::a completion panic still advances the accepted snack bar queue",
+            snack_bar::a_completion_panic_still_advances_the_accepted_snack_bar_queue,
+        ),
+        ("drawer::narrow_start_drawer_cancel_uses_its_actual_panel_extent", drawer::narrow_start_drawer_cancel_uses_its_actual_panel_extent),
+        ("drawer::narrow_end_drawer_cancel_uses_its_actual_panel_extent", drawer::narrow_end_drawer_cancel_uses_its_actual_panel_extent),
+        ("drawer::smaller_configured_drawer_keeps_its_declared_panel_extent", drawer::smaller_configured_drawer_keeps_its_declared_panel_extent),
+        ("drawer::ordinary_drawer_keeps_its_configured_extent_in_a_wider_viewport", drawer::ordinary_drawer_keeps_its_configured_extent_in_a_wider_viewport),
+        ("drawer::retained_drawer_recomputes_its_extent_after_a_collapsed_resize", drawer::retained_drawer_recomputes_its_extent_after_a_collapsed_resize),
+        (
+            "drawer::cancelled fast edge drag settles closed below halfway",
+            drawer::cancelled_fast_edge_drag_settles_closed_below_halfway,
+        ),
+        (
+            "drawer::cancelled fast panel drag settles open above halfway",
+            drawer::cancelled_fast_panel_drag_settles_open_above_halfway,
+        ),
+        (
             "dialog::a tap on an action fires its handler",
             dialog::a_tap_on_an_action_fires_its_handler,
         ),
@@ -234,6 +259,10 @@ fn overlay_contracts() {
             snack_bar::action_press_closes_the_snack_bar_and_is_single_fire,
         ),
         (
+            "action_callback_panic_disables_the_button_and_fresh_action_progresses",
+            snack_bar::action_callback_panic_disables_the_button_and_fresh_action_progresses,
+        ),
+        (
             "drawer::a fast release below halfway flings the drawer open rather than snapping shut",
             drawer::a_fast_release_below_halfway_flings_the_drawer_open_rather_than_snapping_shut,
         ),
@@ -248,6 +277,14 @@ fn overlay_contracts() {
 #[test]
 fn navigation_and_layout_contracts() {
     common::run_cases(&[
+        (
+            "tabs::small tab height overrides determine the mounted bar height",
+            tabs::small_tab_height_overrides_determine_the_mounted_bar_height,
+        ),
+        (
+            "tabs::mixed and empty tab bars keep their content height rules",
+            tabs::mixed_and_empty_tab_bars_keep_their_content_height_rules,
+        ),
         (
             "app_bar::tapping the implied back button pops the route",
             app_bar::tapping_the_implied_back_button_pops_the_route,
@@ -267,6 +304,22 @@ fn navigation_and_layout_contracts() {
         (
             "navigation_bar::tapping a disabled destination does not fire the callback",
             navigation_bar::tapping_a_disabled_destination_does_not_fire_the_callback,
+        ),
+        (
+            "navigation_bar::an empty destination list is rejected",
+            navigation_bar::an_empty_destination_list_is_rejected,
+        ),
+        (
+            "navigation_bar::a single destination is rejected",
+            navigation_bar::a_single_destination_is_rejected,
+        ),
+        (
+            "navigation_bar::an index at the destination count is rejected",
+            navigation_bar::an_index_at_the_destination_count_is_rejected,
+        ),
+        (
+            "navigation_bar::an unrepresentable destination index is rejected",
+            navigation_bar::an_unrepresentable_destination_index_is_rejected,
         ),
         (
             "tabs::default tab controller survives a length shrink past the selected index",

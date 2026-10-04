@@ -390,7 +390,8 @@ impl Circle<f64> {
     /// Computes the intersection points between this circle and a line.
     ///
     /// Returns `None` if they don't intersect, or `Some((p1, p2))` with the two
-    /// intersection points.
+    /// intersection points. The line is infinite, rather than limited to its
+    /// endpoints. A computed zero-length direction returns `None`.
     #[inline]
     #[must_use]
     pub fn intersect_line(&self, line: &super::Line<f64>) -> Option<(Point<f64>, Point<f64>)> {
@@ -398,6 +399,9 @@ impl Circle<f64> {
         let f = line.p0 - self.center;
 
         let a = d.dot(d);
+        if a == 0.0 {
+            return None;
+        }
         let b = 2.0 * f.dot(d);
         let c = f.dot(f) - self.radius * self.radius;
 

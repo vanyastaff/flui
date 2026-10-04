@@ -422,6 +422,14 @@ fn summarize_op(op: &DrawOp) -> DrawCommandSummary {
         }
 
         // ── Images ───────────────────────────────────────────────────────────
+        DrawOp::ImageRegion { src, dst, .. } => DrawCommandSummary {
+            kind: DrawKind::Image,
+            line: format!(
+                "DrawImageRegion src={} dst={}",
+                fmt_rect(*src),
+                fmt_rect(*dst)
+            ),
+        },
         DrawOp::Image { dst, .. } => DrawCommandSummary {
             kind: DrawKind::Image,
             line: format!("DrawImage dst={}", fmt_rect(*dst)),

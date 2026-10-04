@@ -32,6 +32,29 @@ deepest-first element unmount so view lifecycle hooks remain canonical.
 
 This section records design decisions and why they were taken. Each entry follows the "Accepted trade-offs" format established by [`docs/plans/2026-03-31-custom-render-callback-design.md`](https://github.com/vanyastaff/flui/blob/e30ab7194d50ac1c11ffe17c59230958d2fbeecd/docs/plans/2026-03-31-custom-render-callback-design.md): state the rule (or absence of rule), the choice, the alternatives considered, the trade-off accepted.
 
+### Caught hit-test panics do not change sibling coordinates
+
+A custom render object can catch a child's hit-test panic and continue querying
+its other children. Scoped context transforms therefore own a matching RAII pop;
+the raw push/pop API retains its explicit balancing contract. Driver offset,
+node-transform and follower scopes restore the shared result's entry depth on
+return or unwind, across both pending and globalized transform parts. Previously
+a caught child panic left its transform active on the healthy sibling's entry.
+
+The existing public `hit_test_matrix` includes named `caught_*_scope_restores_hit_coordinates`
+rows for offset, matrix, nested context scopes, explicit child offsets and driver
+node scopes, including zero-offset override descent with no enclosing result
+scope. Each catches an ordinary failure, checks the healthy sibling's
+emitted global-to-local coordinates, and repeats the hit walk.
+
+### Constraint diagonals preserve representable lengths
+
+`BoxConstraints::max_diagonal` uses standard `hypot`: squaring large finite
+lengths can overflow, and squaring tiny lengths can underflow, while their
+diagonal remains representable. Public consumer test
+`maximum_diagonal_retains_representable_extreme_lengths` uses independently
+known scaled 3-4-5 triangles and preserves zero and unbounded results.
+
 ### Canvas clips belong to one fragment run
 
 Painting a child may replace the parent's canvas, so the boundary is
@@ -1030,6 +1053,42 @@ text node it ever built. Locked by `font_change_contract` (`tests/text_context.r
 `the_record_stays_bounded_without_a_font_change` row rebuilds a paragraph 500 times.
 
 
+### Hundredth quantization preserves large finite constraints
+
+`BoxConstraints::round_for_cache` multiplies by 100 only when the product remains
+finite. Larger finite values already have representable spacing far above a
+hundredth and remain unchanged. The objects consumer `family_sizing` checks a
+large finite requested width under a different finite parent maximum, and
+ordinary hundredth rounding; this pins actual geometry rather than a getter.
+
+### Layout reporting retains opaque failure payloads
+
+A custom layout may panic with an opaque payload whose destructors also
+panic. The leaf, nonleaf Box, and nonleaf Sliver boundaries retain that payload
+before borrowing its text or invoking tracing subscribers. A reporting panic
+is secondary: its payload is retained without another diagnostic, preserving
+the original layout `Poisoned` error. Exceptional retention does not execute
+user `Drop`; it follows ADR-0104. Ordinary render-object destruction remains
+unchanged, including ordinary destructor failures outside these boundaries.
+
+`layout_reporting_retains_opaque_payloads` exercises an ordinary payload,
+a hostile destructor, competing field destructors, and a panicking subscriber
+alone or competing with the source aggregate. Each row then lays out a healthy
+replacement. Nonleaf rows attach actual children and use the public recursive
+layout driver. Sliver failures reach their Box host through the declared zero
+stand-in and degraded-geometry contract; replacement slivers provide their
+actual geometry. Bounded child processes isolate an old-source aggregate abort
+from the parent test runner.
+
+### Finite grid windows saturate index arithmetic before item bounds
+
+A finite scroll or cache extent may exceed the range of `usize` rows. Grid
+layout saturates row-to-item multiplication before the render object clips to
+its finite item count. A huge cache therefore covers existing items, while a
+huge leading offset lies beyond them; neither wraps into an unrelated row.
+`sliver_grid_golden_geometry` runs both public layout cases and an ordinary band
+control, checking published extents and the cached items' committed geometry.
+
 ## Thread safety
 
 `flui-rendering` runs in the render pipeline; per strategy clause "sync hot path", the hot frame loop is single-threaded. Sync primitives in this crate are limited to shared-infrastructure objects and lock-free atomics on per-node state. No primitive sits inside `perform_layout` / `paint` on a per-node basis.
@@ -1152,3 +1211,21 @@ These deep-dives stay as companion documents (not under the per-crate template d
 ## Notes
 
 - **No lint yet for a lock on per-node render storage.** The clippy lint vocabulary cannot today express "field of type `RwLock<X>` where `X` is a trait object locked in method `foo`", so the rule is held by the storage shape and review; promoting it to a lint waits for ecosystem expressivity (`dylint` plugin or a future clippy feature).
+
+### Hit traversal refuses transforms without a computed finite inverse
+
+At both node-hook and context-child boundaries the pipeline maps failed
+`HitTestResult::with_paint_transform` admission to a miss (ADR-0113). It never
+uses the forward matrix as a substitute for the inverse. Refusal occurs before
+the descendant callback, so the rejected subtree contributes no entries and
+cannot block a healthy sibling. Successful scopes keep their existing unwind
+restoration.
+
+The public `hit_test_matrix` rows in `tests/hit_test_pipeline.rs` include
+`nested_tiny_transforms_emit_the_correct_local_hit_point` (real nested
+`RenderTransform` objects), and the `singular_*_transform_refuses_before_hit_and_preserves_sibling`
+and `nonfinite_*_transform_refuses_before_hit_and_preserves_sibling` rows for
+node and context boundaries. The latter use consumer-defined render objects
+that would claim a hit if invoked, then check a healthy sibling's emitted local
+point and repeat the walk. Existing `caught_*_scope_restores_hit_coordinates`
+rows retain the unwind contract.

@@ -335,7 +335,7 @@ impl ViewState<TextField> for MaterialTextFieldState {
 
         // Rebuild on every edit — `is_empty` (fed to `InputDecorator`) is
         // recomputed fresh in `build`, so a text change must trigger one.
-        let rebuild_on_edit = rebuild.clone();
+        let rebuild_on_edit = rebuild;
         self.controller_listener_id = Some(self.controller.add_listener(Arc::new(move || {
             rebuild_on_edit.schedule(flui_sdk::view::RebuildReason::StateChange);
         })));
@@ -435,7 +435,7 @@ impl ViewState<TextField> for MaterialTextFieldState {
             .enabled(effective_enabled)
             .caret_color(caret_color)
             .obscure_text(view.obscure_text);
-        if let Some(text_style) = theme.text_theme.body_large.clone() {
+        if let Some(text_style) = theme.text_theme.body_large {
             editable = editable.text_style(text_style);
         }
         if let Some(on_submitted) = view.on_submitted.clone() {

@@ -72,7 +72,7 @@ impl SliverGridLayout {
             return 0;
         }
         let row = (scroll_offset / self.main_axis_stride).floor() as usize;
-        row * self.cross_axis_count
+        row.saturating_mul(self.cross_axis_count)
     }
 
     /// Returns the maximum child index reachable by the given scroll offset.
@@ -90,7 +90,9 @@ impl SliverGridLayout {
         let main_axis_count = (scroll_offset / self.main_axis_stride).ceil() as usize;
         // `saturating_sub` is the `usize` form of `max(0, … - 1)`:
         // at `scroll_offset == 0` the count is 0 and the result clamps to 0.
-        (self.cross_axis_count * main_axis_count).saturating_sub(1)
+        self.cross_axis_count
+            .saturating_mul(main_axis_count)
+            .saturating_sub(1)
     }
 
     /// Returns the maximum scroll extent for a grid with `child_count` items.

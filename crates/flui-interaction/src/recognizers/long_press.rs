@@ -792,7 +792,7 @@ mod tests {
         // long press.
         arena.add(pointer, Arc::new(Competitor));
 
-        let recognizer = LongPressGestureRecognizer::new(arena.clone());
+        let recognizer = LongPressGestureRecognizer::new(arena);
         let position = Offset::new(10.0, 10.0);
         recognizer.add_pointer(pointer, position, position);
 

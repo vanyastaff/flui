@@ -188,9 +188,8 @@ pub use post_frame::{
 /// name `UpdateScheduler::drive_frame`'s `vsync_time` without depending on `web_time`.
 mod post_frame;
 
-// Shared panic-payload containment for scheduler/async_driver/ticker's
-// already-unwinding recovery paths -- see the module doc.
-mod panic_payload;
+mod completion_wake;
+mod wake_delivery;
 
 #[cfg(test)]
 mod table_test;

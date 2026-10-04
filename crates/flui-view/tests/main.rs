@@ -13,6 +13,8 @@
 
 #[path = "ancestor_finders.rs"]
 mod ancestor_finders;
+#[path = "support/async_snapshot_recovery.rs"]
+mod async_snapshot_recovery;
 #[path = "build_owner_tests.rs"]
 mod build_owner_tests;
 #[path = "dense_reconcile_containment.rs"]
@@ -29,6 +31,8 @@ mod global_key_reparent;
 mod inherited_dependency;
 #[path = "lifecycle_panic_containment.rs"]
 mod lifecycle_panic_containment;
+#[path = "support/lifecycle_recovery.rs"]
+mod lifecycle_recovery;
 #[path = "lifecycle_tests.rs"]
 mod lifecycle_tests;
 #[path = "notifications.rs"]
@@ -72,6 +76,8 @@ fn dense_and_production_reconcile_matrix() {
             ("dense_update_containment::phase_one_did_update_view_panic_substitutes_at_same_slot", dense_update_containment::phase_one_did_update_view_panic_substitutes_at_same_slot as fn()),
             ("dense_update_containment::phase_five_a_shifted_suffix_update_panic_uses_final_slot", dense_update_containment::phase_five_a_shifted_suffix_update_panic_uses_final_slot as fn()),
             #[cfg(feature = "test-utils")]
+            ("production_reconcile_emits::object_keys_follow_retained_allocations_through_reorder", production_reconcile_emits::object_keys_follow_retained_allocations_through_reorder as fn()),
+            #[cfg(feature = "test-utils")]
             ("production_reconcile_emits::active_global_key_move_through_build_scope_updates_render_parent_links", production_reconcile_emits::active_global_key_move_through_build_scope_updates_render_parent_links as fn()),
             #[cfg(feature = "test-utils")]
             ("production_reconcile_emits::failed_dense_mount_production_reconcile_emits_only_final_slots", production_reconcile_emits::failed_dense_mount_production_reconcile_emits_only_final_slots as fn()),
@@ -95,6 +101,22 @@ fn global_key_contract_matrix() {
 
 #[test]
 fn lifecycle_panic_containment_matrix() {
+    if let Ok(kind) = std::env::var("FLUI_ASYNC_SNAPSHOT_CHILD") {
+        async_snapshot_recovery::dispatch_child(&kind);
+        return;
+    }
+    if let Ok(kind) = std::env::var("FLUI_LIFECYCLE_RECOVERY_CHILD") {
+        lifecycle_recovery::dispatch_child(&kind);
+        return;
+    }
+    if let Ok(kind) = std::env::var("FLUI_BUILD_PAYLOAD_RECOVERY_CHILD") {
+        lifecycle_panic_containment::build_payload_recovery::dispatch_child(&kind);
+        return;
+    }
+    if let Ok(kind) = std::env::var("FLUI_OBSERVER_RECOVERY_CHILD") {
+        lifecycle_panic_containment::observer_recovery::dispatch_child(&kind);
+        return;
+    }
     run_table(
         "lifecycle_panic_containment_matrix",
         &[
@@ -103,6 +125,39 @@ fn lifecycle_panic_containment_matrix() {
             ("lifecycle_panic_containment::a_dispose_panic_on_a_global_keyed_element_still_clears_the_registry", lifecycle_panic_containment::a_dispose_panic_on_a_global_keyed_element_still_clears_the_registry as fn()),
             ("lifecycle_panic_containment::a_deactivate_panic_is_contained_and_the_element_is_still_parked_inactive", lifecycle_panic_containment::a_deactivate_panic_is_contained_and_the_element_is_still_parked_inactive as fn()),
             ("recovered_panics::a_contained_build_panic_is_recorded_once_with_its_element_and_hook", recovered_panics::a_contained_build_panic_is_recorded_once_with_its_element_and_hook as fn()),
+            ("async_snapshot_recovery::future_publication_survives_old_value_retirement", async_snapshot_recovery::future_publication_survives_old_value_retirement as fn()),
+            ("async_snapshot_recovery::future_publication_keeps_competing_incoming_value_alive", async_snapshot_recovery::future_publication_keeps_competing_incoming_value_alive as fn()),
+            ("async_snapshot_recovery::future_retirement_panic_keeps_priority_over_rebuild_wake", async_snapshot_recovery::future_retirement_panic_keeps_priority_over_rebuild_wake as fn()),
+            ("async_snapshot_recovery::stream_publication_survives_old_value_retirement", async_snapshot_recovery::stream_publication_survives_old_value_retirement as fn()),
+            ("async_snapshot_recovery::stream_publication_keeps_competing_incoming_value_alive", async_snapshot_recovery::stream_publication_keeps_competing_incoming_value_alive as fn()),
+            ("async_snapshot_recovery::stream_retirement_panic_keeps_priority_over_rebuild_wake", async_snapshot_recovery::stream_retirement_panic_keeps_priority_over_rebuild_wake as fn()),
+            ("async_snapshot_recovery::eager_failure_keeps_incoming_aggregate_owned_after_state_disposal", async_snapshot_recovery::eager_failure_keeps_incoming_aggregate_owned_after_state_disposal as fn()),
+            ("lifecycle_recovery::self_cancelled_callback_failure_retains_its_capture_aggregate", lifecycle_recovery::self_cancelled_callback_failure_retains_its_capture_aggregate as fn()),
+            ("lifecycle_recovery::self_cancellation_retains_competing_payload_and_capture_aggregates", lifecycle_recovery::self_cancellation_retains_competing_payload_and_capture_aggregates as fn()),
+            ("lifecycle_recovery::terminal_release_keeps_the_earlier_callback_failure", lifecycle_recovery::terminal_release_keeps_the_earlier_callback_failure as fn()),
+            ("lifecycle_recovery::release_retains_later_envelopes_after_first_retirement_failure", lifecycle_recovery::release_retains_later_envelopes_after_first_retirement_failure as fn()),
+            ("lifecycle_recovery::subscription_retirement_during_unwind_retains_its_envelope", lifecycle_recovery::subscription_retirement_during_unwind_retains_its_envelope as fn()),
+            ("lifecycle_recovery::source_retirement_during_unwind_retains_its_envelopes", lifecycle_recovery::source_retirement_during_unwind_retains_its_envelopes as fn()),
+            ("lifecycle_recovery::caught_failure_retains_rejected_lifecycle_callback", lifecycle_recovery::caught_failure_retains_rejected_lifecycle_callback as fn()),
+            ("lifecycle_recovery::live_source_rejection_during_unwind_retains_captures", lifecycle_recovery::live_source_rejection_during_unwind_retains_captures as fn()),
+            ("lifecycle_recovery::dead_source_rejection_during_unwind_retains_captures", lifecycle_recovery::dead_source_rejection_during_unwind_retains_captures as fn()),
+            ("lifecycle_recovery::caught_failure_protects_nested_pending_subscription_retirement", lifecycle_recovery::caught_failure_protects_nested_pending_subscription_retirement as fn()),
+            ("lifecycle_recovery::successful_lifecycle_cancellation_retires_captures_and_keeps_fifo", lifecycle_recovery::successful_lifecycle_cancellation_retires_captures_and_keeps_fifo as fn()),
+            ("build_payload_recovery::aggregate_build_payload_is_retained_before_recovery", lifecycle_panic_containment::build_payload_recovery::aggregate_build_payload_is_retained_before_recovery as fn()),
+            ("build_payload_recovery::recovery_reporting_preserves_original_attribution", lifecycle_panic_containment::build_payload_recovery::recovery_reporting_preserves_original_attribution as fn()),
+            ("build_payload_recovery::original_and_reporting_payloads_do_not_compete_at_retirement", lifecycle_panic_containment::build_payload_recovery::original_and_reporting_payloads_do_not_compete_at_retirement as fn()),
+            ("build_payload_recovery::recovery_view_survives_reporting_with_opaque_captures", lifecycle_panic_containment::build_payload_recovery::recovery_view_survives_reporting_with_opaque_captures as fn()),
+            ("build_payload_recovery::recovery_factory_failure_keeps_its_authority_after_opaque_build_failure", lifecycle_panic_containment::build_payload_recovery::recovery_factory_failure_keeps_its_authority_after_opaque_build_failure as fn()),
+            ("build_payload_recovery::staged_lifecycle_attribution_survives_reporting_failure", lifecycle_panic_containment::build_payload_recovery::staged_lifecycle_attribution_survives_reporting_failure as fn()),
+            ("observer_recovery::emission_retains_aggregate_payload", lifecycle_panic_containment::observer_recovery::emission_retains_aggregate_payload as fn()),
+            ("observer_recovery::emission_retains_failed_capture_envelope", lifecycle_panic_containment::observer_recovery::emission_retains_failed_capture_envelope as fn()),
+            ("observer_recovery::emission_retains_competing_payload_and_captures", lifecycle_panic_containment::observer_recovery::emission_retains_competing_payload_and_captures as fn()),
+            ("observer_recovery::emission_contains_reporting_failure", lifecycle_panic_containment::observer_recovery::emission_contains_reporting_failure as fn()),
+            ("observer_recovery::emission_contains_all_opaque_obligations", lifecycle_panic_containment::observer_recovery::emission_contains_all_opaque_obligations as fn()),
+            ("observer_recovery::detach_retains_aggregate_payload", lifecycle_panic_containment::observer_recovery::detach_retains_aggregate_payload as fn()),
+            ("observer_recovery::detach_retains_failed_capture_envelope", lifecycle_panic_containment::observer_recovery::detach_retains_failed_capture_envelope as fn()),
+            ("observer_recovery::detach_contains_all_opaque_obligations", lifecycle_panic_containment::observer_recovery::detach_contains_all_opaque_obligations as fn()),
+            ("observer_recovery::replacement_preserves_its_new_observer_after_detach_failure", lifecycle_panic_containment::observer_recovery::replacement_preserves_its_new_observer_after_detach_failure as fn()),
         ],
     );
 }
@@ -127,9 +182,36 @@ fn element_lifecycle_and_dependency_matrix() {
 
 #[test]
 fn signal_read_and_write_matrix() {
+    if signal_reads::run_released_loan_child() {
+        return;
+    }
     run_table(
         "signal_read_and_write_matrix",
         &[
+            (
+                "signal_reads::released_update_reports_ordinary_retirement_failure",
+                signal_reads::released_update_reports_ordinary_retirement_failure as fn(),
+            ),
+            (
+                "signal_reads::released_read_reports_ordinary_retirement_failure",
+                signal_reads::released_read_reports_ordinary_retirement_failure as fn(),
+            ),
+            (
+                "signal_reads::released_update_retains_aggregate_before_resuming_failure",
+                signal_reads::released_update_retains_aggregate_before_resuming_failure as fn(),
+            ),
+            (
+                "signal_reads::released_read_retains_aggregate_before_resuming_failure",
+                signal_reads::released_read_retains_aggregate_before_resuming_failure as fn(),
+            ),
+            (
+                "signal_reads::released_update_retains_nested_release_obligations",
+                signal_reads::released_update_retains_nested_release_obligations as fn(),
+            ),
+            (
+                "signal_reads::released_read_retains_nested_release_obligations",
+                signal_reads::released_read_retains_nested_release_obligations as fn(),
+            ),
             (
                 "signal_reads::a_read_in_build_subscribes_through_the_production_context",
                 signal_reads::a_read_in_build_subscribes_through_the_production_context as fn(),

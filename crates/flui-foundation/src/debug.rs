@@ -916,81 +916,6 @@ impl DiagnosticsNode {
     pub fn to_string_deep_at_level(&self, min_level: DiagnosticLevel) -> String {
         self.format_deep_filtered(0, min_level)
     }
-
-    /// Exports this diagnostics tree as a JSON string.
-    ///
-    /// Produces a structured JSON representation suitable for devtools
-    /// consumption. Each node has `name`, `properties`, `children`,
-    /// and `level` fields.
-    ///
-    /// # Example output
-    ///
-    /// ```json
-    /// {
-    ///   "name": "RenderPadding",
-    ///   "level": "info",
-    ///   "properties": {"padding": "16px"},
-    ///   "children": []
-    /// }
-    /// ```
-    #[must_use]
-    pub fn to_json(&self) -> String {
-        fn write_json(node: &DiagnosticsNode, buf: &mut String, indent: usize) -> std::fmt::Result {
-            use std::fmt::Write as _;
-
-            let pad = " ".repeat(indent);
-            writeln!(buf, "{pad}{{")?;
-            writeln!(
-                buf,
-                "{pad}  \"name\": \"{}\",",
-                escape_json(node.name().unwrap_or(""))
-            )?;
-            writeln!(buf, "{pad}  \"level\": \"{}\",", node.level.as_str())?;
-
-            // Properties
-            write!(buf, "{pad}  \"properties\": {{")?;
-            let props = node.properties();
-            for (i, prop) in props.iter().enumerate() {
-                if i > 0 {
-                    buf.push(',');
-                }
-                buf.push('\n');
-                write!(
-                    buf,
-                    "{pad}    \"{}\": \"{}\"",
-                    escape_json(prop.name()),
-                    escape_json(prop.value())
-                )?;
-            }
-            if !props.is_empty() {
-                buf.push('\n');
-                write!(buf, "{pad}  ")?;
-            }
-            buf.push_str("},\n");
-
-            // Children
-            write!(buf, "{pad}  \"children\": [")?;
-            let children = node.children();
-            for (i, child) in children.iter().enumerate() {
-                if i > 0 {
-                    buf.push(',');
-                }
-                buf.push('\n');
-                write_json(child, buf, indent + 4)?;
-            }
-            if !children.is_empty() {
-                buf.push('\n');
-                write!(buf, "{pad}  ")?;
-            }
-            buf.push_str("]\n");
-            write!(buf, "{pad}}}")
-        }
-
-        let mut buf = String::with_capacity(256);
-        // Writing to a `String` through `fmt::Write` is infallible.
-        let _ = write_json(self, &mut buf, 0);
-        buf
-    }
 }
 
 impl Default for DiagnosticsNode {
@@ -998,22 +923,6 @@ impl Default for DiagnosticsNode {
     fn default() -> Self {
         Self::anonymous()
     }
-}
-
-/// Escapes a string for JSON embedding.
-fn escape_json(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for c in s.chars() {
-        match c {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            _ => out.push(c),
-        }
-    }
-    out
 }
 
 impl fmt::Display for DiagnosticsNode {

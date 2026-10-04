@@ -12,8 +12,6 @@ use common::{lay_out, tight};
 use flui_cupertino::{
     CupertinoTabBar, CupertinoTabBarItem, CupertinoTabController, CupertinoTabScaffold,
 };
-// Only the `#[cfg(debug_assertions)]` recovery test names this type: the
-// ErrorView substitution it asserts on exists only in debug builds.
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{Icon, IconData, MediaQuery, MediaQueryData, SizedBox};
 
@@ -128,5 +126,46 @@ pub fn tapping_a_tab_item_switches_the_active_tab() {
         controller.index(),
         1,
         "tapping the second tab item must advance the controller to index 1"
+    );
+}
+
+/// A changed controller is checked against the live bar, and a later valid
+/// selection can build content again after the error boundary recovers.
+pub fn out_of_range_controller_selection_reports_error_and_recovers() {
+    let controller = CupertinoTabController::new(0);
+    let scaffold = CupertinoTabScaffold::new(two_tab_bar(), controller.clone(), |_ctx, _index| {
+        SizedBox::new(11.0, 11.0).boxed()
+    });
+    let mut laid = lay_out(
+        // Keep the harness render root mounted while the scaffold replaces
+        // its own subtree with ErrorView, then builds valid tabs again.
+        SizedBox::new(400.0, 800.0).child(MediaQuery::new(MediaQueryData::default(), scaffold)),
+        tight(400.0, 800.0),
+    );
+    assert_eq!(laid.find_all_by_render_type("RenderErrorBox"), []);
+
+    controller.set_index(2);
+    laid.tick();
+    assert!(
+        !laid.find_all_by_render_type("RenderErrorBox").is_empty(),
+        "invalid selection must report the build failure, including in release"
+    );
+
+    controller.set_index(1);
+    laid.tick();
+    assert_eq!(laid.find_all_by_render_type("RenderErrorBox"), []);
+    laid.dispatch_pointer_down(100.0, 790.0);
+    laid.dispatch_pointer_up(100.0, 790.0);
+    laid.tick();
+    assert_eq!(controller.index(), 0, "recovered content accepts tab taps");
+}
+
+pub fn standalone_bar_rejects_an_out_of_range_selection() {
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        two_tab_bar().current_index(2)
+    }));
+    assert!(
+        result.is_err(),
+        "a bar cannot publish a selection outside its items"
     );
 }

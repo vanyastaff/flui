@@ -67,6 +67,18 @@ impl super::GpuReplay {
                     Ok(())
                 };
                 match &run.kind {
+                    DrawRun::CachedImage(range) if run.clip.has_antialias() => {
+                        for (_, _, _, mode) in &segment.cached_images[range.clone()] {
+                            if super::coverage::image_needs_portable(*mode) {
+                                let texture = target.texture.ok_or(
+                                    crate::error::EngineError::UnsupportedCoverageBlend {
+                                        mode: *mode,
+                                    },
+                                )?;
+                                crate::portable_coverage::PortableCoveragePipeline::validate_device_limits(device, texture.format())?;
+                            }
+                        }
+                    }
                     DrawRun::Tess(range) if run.clip.has_antialias() => {
                         for batch in &segment.tess_batches[range.clone()] {
                             check(batch.pipeline_key.blend_mode())?;

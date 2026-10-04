@@ -246,6 +246,11 @@ impl UiRealm {
                 }
                 Err(payload) => {
                     let failed_phase = presentation.segment_phase();
+                    let (message, internal_invariant) =
+                        self.frame_failure_detail.get().panic_text(&*payload);
+                    // The payload may contain several panicking destructors.
+                    // Retain it before any recovery operation or diagnostics.
+                    flui_foundation::panic::retain_opaque_payload(payload);
                     if matches!(failed_phase, SegmentPhase::Tail | SegmentPhase::Scene) {
                         // The pipeline already consumed this presentation's
                         // paint dirtiness before either post-pipeline segment
@@ -254,11 +259,6 @@ impl UiRealm {
                         // a later clean sibling must not steal attribution.
                         self.mark_needs_full_repaint_for(presentation);
                     }
-                    // Classify against the borrowed raw payload before the
-                    // configured privacy policy decides whether any source
-                    // text may be retained.
-                    let (message, internal_invariant) =
-                        self.frame_failure_detail.get().panic_text(&*payload);
                     self.report_frame_failure(
                         presentation,
                         FrameFailureKind::SegmentPanic {

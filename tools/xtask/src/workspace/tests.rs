@@ -500,6 +500,64 @@ fn an_undeclared_tests_main_is_reported() {
     );
 }
 
+fn block_commented_modules_do_not_mount_tests() {
+    assert_commented_module_is_unreachable("/*\nmod orphan;\n*/\n");
+}
+
+fn line_commented_path_modules_do_not_mount_tests() {
+    assert_commented_module_is_unreachable("// #[path = \"orphan.rs\"] mod omitted;\n");
+}
+
+fn assert_commented_module_is_unreachable(source: &str) {
+    let fixture = Fixture::new();
+    fixture.edit(
+        "crates/a/Cargo.toml",
+        "repository.workspace = true\n",
+        "repository.workspace = true\nautotests = false\n\n[[test]]\nname = \"a_it\"\npath = \"tests/main.rs\"\n",
+    );
+    fixture.write("crates/a/tests/main.rs", source);
+    fixture.write("crates/a/tests/orphan.rs", "");
+    assert_one(&fixture.findings(), "crates/a/tests/orphan.rs never runs");
+}
+
+fn string_literals_do_not_mount_tests() {
+    let fixture = Fixture::new();
+    fixture.edit(
+        "crates/a/Cargo.toml",
+        "repository.workspace = true\n",
+        "repository.workspace = true\nautotests = false\n\n[[test]]\nname = \"a_it\"\npath = \"tests/main.rs\"\n",
+    );
+    fixture.write(
+        "crates/a/tests/main.rs",
+        "const EXAMPLE: &str = r#\"#[path = \"orphan.rs\"] mod omitted;\"#;\n",
+    );
+    fixture.write("crates/a/tests/orphan.rs", "");
+    assert_one(&fixture.findings(), "crates/a/tests/orphan.rs never runs");
+}
+
+fn implicit_cargo_main_test_path_mounts_tests() {
+    assert_implicit_cargo_test_path_mounts_tests("main");
+}
+
+fn implicit_cargo_named_test_path_mounts_tests() {
+    assert_implicit_cargo_test_path_mounts_tests("contract");
+}
+
+fn assert_implicit_cargo_test_path_mounts_tests(name: &str) {
+    let fixture = Fixture::new();
+    fixture.edit(
+        "crates/a/Cargo.toml",
+        "repository.workspace = true\n",
+        &format!("repository.workspace = true\nautotests = false\n\n[[test]]\nname = \"{name}\"\n"),
+    );
+    fixture.write(
+        &format!("crates/a/tests/{name}.rs"),
+        "#[path = \"mounted.rs\"]\npub(crate) mod mounted;\n",
+    );
+    fixture.write("crates/a/tests/mounted.rs", "");
+    assert_eq!(fixture.findings(), Vec::<String>::new());
+}
+
 fn duplicate_adr_numbers_are_reported() {
     let fixture = Fixture::new();
     fixture.write("docs/adr/ADR-0001-second.md", "# ADR-0001\n");
@@ -891,6 +949,26 @@ fn workspace_gate_contract() {
             (
                 "an_undeclared_tests_main_is_reported",
                 an_undeclared_tests_main_is_reported as fn(),
+            ),
+            (
+                "block_commented_modules_do_not_mount_tests",
+                block_commented_modules_do_not_mount_tests as fn(),
+            ),
+            (
+                "line_commented_path_modules_do_not_mount_tests",
+                line_commented_path_modules_do_not_mount_tests as fn(),
+            ),
+            (
+                "string_literals_do_not_mount_tests",
+                string_literals_do_not_mount_tests as fn(),
+            ),
+            (
+                "implicit_cargo_main_test_path_mounts_tests",
+                implicit_cargo_main_test_path_mounts_tests as fn(),
+            ),
+            (
+                "implicit_cargo_named_test_path_mounts_tests",
+                implicit_cargo_named_test_path_mounts_tests as fn(),
             ),
             (
                 "duplicate_adr_numbers_are_reported",

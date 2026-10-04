@@ -21,8 +21,12 @@
 //!
 //! // In your event loop:
 //! loop {
-//!     if let Some(scene) = driver.poll(width, height) {
-//!         renderer.render_scene(&scene);
+//!     if driver.poll() {
+//!         // SAFETY: the scene and any clones are dropped before the next poll
+//!         // or before dropping the driver, keeping plugin code loaded.
+//!         if let Some(scene) = unsafe { driver.build_scene(width, height) } {
+//!             renderer.render_scene(&scene);
+//!         }
 //!     }
 //! }
 //! ```
@@ -42,8 +46,8 @@ use crate::{
 /// Manages the hot-reload lifecycle for a scene plugin.
 ///
 /// Wraps [`ScenePlugin`] with automatic mtime-based change detection and
-/// reload. Call [`poll()`](Self::poll) from your event loop — it returns
-/// `Some(Scene)` when a plugin was (re)loaded and a new scene is available.
+/// reload. Call [`poll()`](Self::poll) from your event loop to update the
+/// loaded image, then construct a scene through [`Self::build_scene`].
 ///
 /// When no plugin is loaded, [`build_scene()`](Self::build_scene) returns
 /// `None`, allowing the caller to fall back to a built-in scene.
@@ -89,21 +93,15 @@ impl HotReloadDriver {
         self
     }
 
-    /// Poll for plugin updates and return a new scene if the plugin was
-    /// (re)loaded.
+    /// Poll for plugin updates without constructing a scene.
     ///
-    /// This method should be called from your event loop. It:
-    /// 1. Checks if enough time has elapsed since the last poll
-    /// 2. If so, checks the library file's mtime for changes
-    /// 3. If the file changed, unloads the old plugin and loads the new one
-    /// 4. If a reload happened, builds and returns a new scene
-    ///
-    /// Returns `Some(Scene)` when a reload happened (caller should re-render).
-    /// Returns `None` when no update was detected or the poll interval hasn't
-    /// elapsed.
-    pub fn poll(&mut self, width: f64, height: f64) -> Option<Scene> {
+    /// Returns `true` when a plugin was loaded or reloaded successfully, and
+    /// `false` when unchanged, throttled, or unavailable. Call
+    /// [`Self::build_scene`] separately; its caller must ensure every scene
+    /// and retained clone is dropped before a later poll can unload its image.
+    pub fn poll(&mut self) -> bool {
         if self.last_poll.elapsed() < self.poll_interval {
-            return None;
+            return false;
         }
         self.last_poll = Instant::now();
 
@@ -123,9 +121,7 @@ impl HotReloadDriver {
                         kind,
                         self.reload_count
                     );
-                    // SAFETY: forwarded from this fn's own contract.
-                    #[expect(unsafe_code)]
-                    return unsafe { self.build_scene(width, height) };
+                    return true;
                 }
                 tracing::warn!("HotReloadDriver: reload failed — plugin not available");
             }
@@ -137,13 +133,11 @@ impl HotReloadDriver {
                     "HotReloadDriver: plugin now available — loaded from {}",
                     self.lib_path.display()
                 );
-                // SAFETY: forwarded from this fn's own contract.
-                #[expect(unsafe_code)]
-                return unsafe { self.build_scene(width, height) };
+                return true;
             }
         }
 
-        None
+        false
     }
 
     /// Build a scene using the currently loaded plugin.

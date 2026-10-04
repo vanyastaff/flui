@@ -138,6 +138,42 @@ class EventStream:
         return None
 
 
+def shutdown_error(code, events):
+    """Check the public CLI interrupt outcome after its output has drained."""
+    if code != 130:
+        return f'flui run exited {code}, expected 130 after SIGINT'
+    if not any(e.get('event') == 'run.stop' and e.get('interrupted') is True for e in events):
+        return 'no run.stop interrupted=true after SIGINT'
+    errors = [e for e in events if e.get('event') == 'error']
+    if not errors or any(e.get('code') != 130 for e in errors):
+        return f'expected only an error event with code 130, got {errors}'
+    return None
+
+
+def cleanup_run(run, stream, log):
+    """Retire the owned session, reap its CLI, then let the output pump finish."""
+    errors = []
+    # The host can outlive the CLI while retaining the stdout pipe. The group
+    # belongs to start_new_session=True, so retire it even after the CLI exited.
+    try:
+        os.killpg(run.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    except OSError as error:
+        errors.append(f'cannot kill run process group: {error}')
+    try:
+        run.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        errors.append('CLI could not be reaped within 10s during cleanup')
+    stream.thread.join(timeout=10)
+    if stream.thread.is_alive():
+        errors.append('output pump did not finish within 10s during cleanup')
+        # Closing its log while it is writing would introduce a second failure.
+    else:
+        log.close()
+    return errors
+
+
 def pid_alive(pid):
     try:
         os.kill(pid, 0)
@@ -315,13 +351,25 @@ def main():
             time.sleep(0.2)
         if pid_alive(host_pid):
             fail(f'SHUTDOWN: host PID {host_pid} still alive 15s after flui run exited')
-        names = [e.get('event') for e in stream.snapshot()[before:]]
+        stream.thread.join(timeout=10)
+        if stream.thread.is_alive():
+            fail('SHUTDOWN: CLI output did not drain within 10s of its exit')
+        events = stream.snapshot()[before:]
+        refused = shutdown_error(code, events)
+        if refused is not None:
+            fail(f'SHUTDOWN: {refused}')
+        names = [e.get('event') for e in events]
         print(f'STAGE=SHUTDOWN PASS: flui run exit {code}, host gone, events {names}', flush=True)
-        print(f'HOT_RELOAD_LOOP=PASS count_after_edit1={count} count_after_fix={after_fix}', flush=True)
     finally:
-        if run.poll() is None:
-            os.killpg(run.pid, signal.SIGKILL)
-        log.close()
+        primary_failure = sys.exc_info()[0] is not None
+        cleanup_errors = cleanup_run(run, stream, log)
+        if cleanup_errors:
+            message = '; '.join(cleanup_errors)
+            if primary_failure:
+                print(f'HOT_RELOAD_LOOP cleanup: {message}', file=sys.stderr, flush=True)
+            else:
+                fail(f'cleanup: {message}')
+    print(f'HOT_RELOAD_LOOP=PASS count_after_edit1={count} count_after_fix={after_fix}', flush=True)
 
 
 if __name__ == '__main__':

@@ -10,23 +10,10 @@
 //! and `#[global_allocator]` is process-wide. Same pattern as
 //! `frame_telemetry_allocation.rs` in this same crate.
 //!
-//! # Why the steady-`R` claim is "no *extra* allocation", not "zero"
-//!
-//! `poll_ready` allocates one `Arc<TaskWaker>` per poll — unconditionally,
-//! for every task actually polled, on `main` as much as on this change. That
-//! cost is orthogonal to issue #1056 (which is about *discovering* ready
-//! work, not about waker identity/reuse) and reusing a per-task waker across
-//! polls is a separate, unscoped optimization this change does not make.
-//! Measured directly: draining `store.ready` via a bare `mem::take` (instead
-//! of `src/async_driver.rs`'s `recycle`/`spare`-buffer pair) would install a
-//! cold, zero-capacity `Vec` that a self-waking task's mid-pump push then has
-//! to regrow — a steady `R=64` pump costs 69 allocations that way (64
-//! wakers + ~5 from `store.ready` regrowing 0→64 every pump); with the
-//! `spare`-buffer fix, exactly 64 — the waker cost alone, with the ready
-//! index itself contributing nothing further. This test therefore asserts
-//! the ready index's own contribution is zero (an exact, task-proportional
-//! allocation count, not "roughly stable"), not that the whole call
-//! allocates nothing.
+//! Each task retains one waker from spawn through retirement. Polling clones
+//! that waker without allocating; the ping-pong ready buffers likewise reuse
+//! capacity after warm-up. Both idle and steadily ready pumps must therefore
+//! allocate nothing, including self-wakes during a poll.
 //!
 //! # One test, not several, and why
 //!
@@ -96,24 +83,13 @@ unsafe impl GlobalAlloc for CountingAllocator {
 #[global_allocator]
 static ALLOCATOR: CountingAllocator = CountingAllocator;
 
-/// Both halves of issue #1056's allocation claim, pinned in ONE test so they
-/// can never interleave across threads regardless of runner (see this
-/// file's own module doc):
-///
-/// (a) **R=0 at N ∈ {0, 100_000}:** once the initial spawn-time poll has made
-///     every task dormant, 20 further empty pumps cost zero allocations —
-///     `poll_ready` must drain an empty index, never scan `N` dormant tasks.
-/// (b) **Steady R=64 self-re-waking tasks across 5 pumps:** the first pump
-///     (warm-up, not measured) may allocate; the next 4 must cost exactly
-///     one allocation per poll (the pre-existing, unrelated-to-this-issue
-///     `Arc<TaskWaker>`) and nothing more — the ready index's own
-///     contribution, once warm, is zero (module doc, "Why the steady-`R`
-///     claim is 'no *extra* allocation', not 'zero'").
+/// Dormant tasks and steady self-waking tasks both allocate nothing once warm.
 #[test]
 fn poll_ready_costs_zero_extra_allocations_once_warm() {
     // (a) R=0 at N in {0, 100_000}: dormant tasks must never be scanned.
     for dormant in [0usize, 100_000] {
         let driver = AsyncDriver::new();
+        driver.set_request_frame(|| {});
         let mut tokens = Vec::with_capacity(dormant);
         for _ in 0..dormant {
             tokens.push(driver.spawn_local(Box::pin(std::future::pending::<()>())));
@@ -154,6 +130,7 @@ fn poll_ready_costs_zero_extra_allocations_once_warm() {
     const STEADY_PUMPS: usize = 4;
 
     let driver = AsyncDriver::new();
+    driver.set_request_frame(|| {});
     let mut tokens = Vec::with_capacity(READY_TASKS);
     for _ in 0..READY_TASKS {
         tokens.push(driver.spawn_local(Box::pin(std::future::poll_fn(|cx| {
@@ -163,9 +140,7 @@ fn poll_ready_costs_zero_extra_allocations_once_warm() {
         }))));
     }
 
-    // Warm-up pump: settles one-time costs (waker `Arc` construction shapes,
-    // the very first growth of the ready index from empty) not claimed to be
-    // part of the steady-state cost. Excluded from the measured window.
+    // Warm-up settles the ready index capacity; spawn already created each waker.
     assert_eq!(driver.poll_ready(), READY_TASKS, "the warm-up pump");
 
     let count_before = read();
@@ -182,21 +157,9 @@ fn poll_ready_costs_zero_extra_allocations_once_warm() {
         "async_driver_ready_index_allocation: R={READY_TASKS} steady self-re-waking tasks: \
          {allocations} allocations across {STEADY_PUMPS} pumps after warm-up"
     );
-    // Exactly one allocation per poll (the pre-existing `Arc<TaskWaker>`,
-    // unrelated to this issue) and NOTHING more: the ready index's own
-    // contribution, once warm, must be exactly zero -- not "small", not
-    // "roughly stable". Without the `spare`-buffer fix `src/async_driver.rs`'s
-    // `recycle` doc describes, this count is measurably higher (69/pump, not
-    // 64) because draining `store.ready` via a bare `mem::take` installs a
-    // cold, zero-capacity `Vec` that every self-waking task's mid-pump push
-    // then has to regrow, every single pump.
-    let expected = READY_TASKS * STEADY_PUMPS;
     assert_eq!(
-        allocations, expected,
-        "{allocations} allocations across {STEADY_PUMPS} steady pumps of {READY_TASKS} \
-         self-re-waking tasks, expected exactly {expected} (one Arc<TaskWaker> per poll, the \
-         ready index's own contribution being zero) -- the ready index's capacity donation \
-         must reach zero EXTRA allocations at steady state (issue #1056)"
+        allocations, 0,
+        "steady self-waking tasks must reuse both their wakers and the ready index"
     );
 
     drop(tokens);

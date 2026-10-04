@@ -52,6 +52,52 @@ are cheap now and expensive once consumers exist, so fix a bad shape instead of 
   layer is a module (`flui-widgets` stays one crate). Shared code moves down a layer, not
   sideways into a copy.
 
+## Preventing recurring defects
+
+Apply these rules before implementing a change to the affected subsystem; use the
+failure-path review below to verify the result.
+
+- **Treat user code as reentrant.** Callbacks, wakers, observers, diagnostics and generic
+  `Drop` implementations can access the same subsystem, replace a hook or release its last
+  owner. Commit internal state and move outgoing ownership out while guarded; release lock
+  guards and `RefCell` borrows before invoking or retiring user code. Test reentry through
+  the same public handle, including replacement and owner release.
+- **Catching a panic does not finish cleanup.** At a containment boundary, account for
+  callback captures, old and rejected values, panic payloads and nested cancellation. A caught
+  panic makes `thread::panicking()` false; preserve the first failure explicitly across nested
+  retirement until recovery finishes. Establish the subsystem's documented ownership policy
+  before invoking diagnostics or recovery code. Use its existing containment helpers, keep
+  healthy-path destruction, and state the limits: an outer catch cannot rescue an aggregate
+  whose destructors already double-panic before reaching it.
+- **Accepted work must remain deliverable.** Commit admission before waking, and represent
+  pending delivery separately from queued data. A missing, replaced or panicking hook must not
+  erase delivery debt; an older successful wake must not clear a newer obligation. On failure,
+  preserve the accepted tail and arrange a retry according to the subsystem's contract. Test
+  recovery, repeated IDs and independent handles sharing that state.
+- **Identity is not a label.** Compare backend handles or typed identities, never display
+  names or model strings. Specify the absent-owner fallback. Keep ownership and generation
+  checks at lookup and retirement; exhausting an ID must refuse permanently instead of
+  wrapping or reissuing a stale identity. Cover duplicate labels, stale handles and the
+  terminal counter boundary where applicable.
+- **Check intermediate arithmetic and the final output.** Finite inputs can overflow during
+  multiplication, squaring or inversion. Define the admitted range and degeneracy behavior;
+  preserve meaningful results without publishing non-finite geometry. Distinguish text's
+  wrapping limit from its allocated width, source-image crop from sampling bounds, and theme
+  defaults from explicit widget configuration. Test loose and tight constraints, RTL,
+  fractional boundaries and degenerate cases through the actual affected producer.
+- **Prove the regression test distinguishes the defect.** For a substantive behavior repair,
+  run the affected case with the production fix reverted or a narrowly documented defect
+  restored; it must fail for the intended reason. Use an isolated checkout, or save exact
+  original bytes and restore them in a `finally` path; never overlap source mutation with
+  another build. Pixel samples must distinguish the outputs. Explain changed snapshots and
+  then run with snapshot updates and forced success disabled.
+- **Modernize the complete declared scope.** For a workspace audit, keep a per-crate coverage
+  ledger including optional features, tests, examples, shaders and tooling; green defaults do
+  not establish that coverage. Prefer current stable standard-library APIs and mature crates
+  where they improve the design; adopt Clippy lints deliberately rather than enabling every
+  experimental lint. Report reading, compilation and actual execution separately, including
+  platform and feature paths the host could not execute.
+
 ## Codebase map
 
 24 crates under `crates/`, the official packages under `packages/`, and the `flui` facade

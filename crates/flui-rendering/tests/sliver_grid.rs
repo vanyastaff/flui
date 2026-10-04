@@ -182,7 +182,7 @@ fn two_column_delegate() -> Arc<dyn flui_rendering::delegates::SliverGridDelegat
     Arc::new(SliverGridDelegateWithFixedCrossAxisCount::new(2))
 }
 
-pub(crate) fn sliver_grid_golden_geometry() {
+fn primary_geometry() {
     // Oracle: scroll_extent=400, paint_extent=200, layout_extent=200,
     // max_paint_extent=400, cache_extent=200, has_visual_overflow=true.
     let (owner, _root, grid, _children) =
@@ -225,3 +225,61 @@ pub(crate) fn sliver_grid_golden_geometry() {
 // ── should_relayout on delegate swap ─────────────────────────────────────────
 
 // ── empty grid ───────────────────────────────────────────────────────────────
+
+fn huge_finite_cache_lays_out_all_existing_items() {
+    let constraints = sliver_presets::vertical()
+        .scroll_offset(0.0)
+        .remaining_paint_extent(200.0)
+        .cross_axis_extent(200.0)
+        .viewport_main_axis_extent(200.0)
+        .remaining_cache_extent(1e300)
+        .build();
+    let (owner, _root, grid, children) = build_grid_tree(constraints, two_column_delegate(), 8);
+    let geometry = sliver_geometry(&owner, grid);
+    assert_eq!(geometry.scroll_extent, 400.0);
+    assert_eq!(geometry.paint_extent, 200.0);
+    assert_eq!(geometry.cache_extent, 400.0);
+    for child in children {
+        let size = owner
+            .render_tree()
+            .get(child)
+            .expect("grid child")
+            .as_box()
+            .expect("box child")
+            .state()
+            .geometry()
+            .expect("item laid out");
+        assert_eq!(size, Size::new(100.0, 100.0));
+    }
+}
+
+fn huge_finite_scroll_has_no_visible_items() {
+    let constraints = sliver_presets::vertical()
+        .scroll_offset(1e300)
+        .remaining_paint_extent(200.0)
+        .cross_axis_extent(200.0)
+        .viewport_main_axis_extent(200.0)
+        .remaining_cache_extent(200.0)
+        .build();
+    let (owner, _root, grid, _children) = build_grid_tree(constraints, two_column_delegate(), 8);
+    let geometry = sliver_geometry(&owner, grid);
+    assert_eq!(geometry.scroll_extent, 400.0);
+    assert_eq!(geometry.max_paint_extent, 400.0);
+    assert_eq!(geometry.paint_extent, 0.0);
+    assert_eq!(geometry.cache_extent, 0.0);
+    assert!(!geometry.visible);
+}
+
+pub(crate) fn sliver_grid_golden_geometry() {
+    crate::run_table(&[
+        ("ordinary grid band", primary_geometry),
+        (
+            "huge finite cache",
+            huge_finite_cache_lays_out_all_existing_items,
+        ),
+        (
+            "huge finite scroll",
+            huge_finite_scroll_has_no_visible_items,
+        ),
+    ]);
+}

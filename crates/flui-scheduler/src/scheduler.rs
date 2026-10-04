@@ -62,6 +62,7 @@ use std::{
 };
 
 use dashmap::DashMap;
+use flui_foundation::panic::retain_opaque_payload as discard_panic_payload;
 use parking_lot::Mutex;
 use web_time::{Duration, Instant};
 
@@ -77,7 +78,6 @@ use crate::{
         PostFrameCallback, RecurringFrameCallback, SchedulerPhase,
     },
     id::{CallbackId, IdGenerator},
-    panic_payload::discard_panic_payload,
     task::{Priority, TaskQueue},
     ticker::TickerProvider,
 };
@@ -265,6 +265,19 @@ struct FrameCompletionState {
     completed: Option<Result<FrameOutcome, SchedulerClosed>>,
     /// Waker to notify when frame completes
     waker: Option<Waker>,
+}
+
+// A cancelled waiter can own the final executor envelope. During unrelated
+// unwind, invoking its opaque destruction could abort before any catch returns.
+impl Drop for FrameCompletionState {
+    fn drop(&mut self) {
+        let waker = self.waker.take();
+        if std::thread::panicking() {
+            std::mem::forget(waker);
+        } else {
+            drop(waker);
+        }
+    }
 }
 
 /// Future that resolves when a frame completes
@@ -749,6 +762,7 @@ struct FrameState {
     budget: Mutex<FrameBudget>,
     /// Whether a frame is currently scheduled
     frame_scheduled: AtomicBool,
+    wake_delivery: crate::wake_delivery::WakeDelivery,
     /// Frame counter
     frame_count: AtomicU64,
     /// Jank tracking - count of frames that exceeded budget
@@ -913,10 +927,10 @@ struct SchedulerInner {
 /// # Never `resume_unwind`
 ///
 /// A panic raised from a destructor while the thread is already unwinding
-/// aborts the process with no diagnostic. Every waker's `wake()` — and, in
-/// turn, a panicking wake payload's own possibly-panicking `Drop` — is
-/// caught and traced via [`discard_panic_payload`]; nothing here ever
-/// propagates.
+/// aborts the process with no diagnostic. Wakers are borrowed for invocation,
+/// retaining their owning envelopes on failure or existing unwind. Ordinary
+/// retirement and telemetry have separate catches; caught opaque payloads
+/// are retained, and this delivery loop never resumes a caught failure.
 ///
 /// # What this cannot reach
 ///
@@ -930,12 +944,13 @@ struct SchedulerInner {
 /// driver's wake hook captures only a `Weak<SchedulerInner>` (see
 /// [`UpdateScheduler::with_budget_target_and_task_queue`]'s constructor doc),
 /// precisely so a pending task cannot keep the scheduler it belongs to alive
-/// through this destructor. See this crate's `ARCHITECTURE.md` "the teardown
-/// guarantee is partial" paragraph in the #1162 mapping entry for the full
+/// through this destructor. See this crate's `ARCHITECTURE.md` "The teardown lifetime
+/// guarantee remains partial" paragraph in the #1162 mapping entry for the full
 /// argument.
 impl Drop for SchedulerInner {
     fn drop(&mut self) {
         let waiters = self.frame.completion_waiters.get_mut().drain();
+        let mut delivery = crate::completion_wake::WakeBatch::new("scheduler teardown", false);
 
         for notifier in waiters {
             // A failed upgrade means the future was already dropped
@@ -952,18 +967,9 @@ impl Drop for SchedulerInner {
             };
             let Some(waker) = waker else { continue };
 
-            if let Err(payload) =
-                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| waker.wake()))
-            {
-                tracing::error!(
-                    panic_msg = flui_foundation::panic::payload_text(&*payload)
-                        .unwrap_or("(non-string panic payload)"),
-                    "frame completion waker panicked while the scheduler was being dropped; \
-                     discarding rather than unwinding out of Drop"
-                );
-                discard_panic_payload(payload, "SchedulerInner::drop (waker panic, traced above)");
-            }
+            delivery.wake(waker);
         }
+        delivery.finish(false);
     }
 }
 
@@ -1066,24 +1072,14 @@ impl std::fmt::Debug for UpdateScheduler {
 /// Shared body of [`UpdateScheduler::request_frame`] and the async driver's wake hook.
 ///
 /// Factored out so both callers can hand it plain field references
-/// (`&FrameState`, `&BindingState`) rather than duplicating the
-/// scheduled-frame coalescing logic. This is a plumbing convenience, not the
-/// cycle-avoidance mechanism itself: `UpdateScheduler` collapsed to one
-/// `Arc<SchedulerInner>` (see that type's own doc), so the wake hook's actual
-/// acyclic guarantee lives in `UpdateScheduler::new`'s `Weak<SchedulerInner>`
-/// capture, not in this function's split parameters — a stale earlier
-/// version of this doc described the hook capturing `Arc<FrameState>` +
-/// `Arc<BindingState>` separately to dodge an `Arc` cycle; that split-Arc
-/// scheme predates the single-`Arc` `SchedulerInner` and no longer describes
-/// what the hook actually captures.
+/// (`&FrameState`, `&BindingState`) rather than duplicating coalescing logic.
+/// The wake hook captures `Weak<SchedulerInner>` in `UpdateScheduler::new`,
+/// keeping ownership acyclic independently of this function's split parameters.
 fn request_frame_impl(frame: &FrameState, binding: &BindingState) {
-    let was_scheduled = frame.frame_scheduled.swap(true, Ordering::SeqCst);
-    if !was_scheduled {
-        let hook = binding.on_frame_scheduled.lock().clone();
-        if let Some(hook) = hook {
-            hook();
-        }
-    }
+    frame.wake_delivery.request(
+        || !frame.frame_scheduled.swap(true, Ordering::SeqCst),
+        || binding.on_frame_scheduled.lock().clone(),
+    );
 }
 
 impl UpdateScheduler {
@@ -1126,6 +1122,7 @@ impl UpdateScheduler {
                 current_vsync_time: Mutex::new(None),
                 budget: Mutex::new(FrameBudget::new(target_fps)),
                 frame_scheduled: AtomicBool::new(false),
+                wake_delivery: crate::wake_delivery::WakeDelivery::default(),
                 frame_count: AtomicU64::new(0),
                 janky_frame_count: AtomicU64::new(0),
                 warm_up_done: AtomicBool::new(false),
@@ -1281,10 +1278,12 @@ impl UpdateScheduler {
 
         let frame_id = timing.id;
         *self.inner.frame.current_frame.lock() = Some(timing);
-        self.inner
-            .frame
-            .frame_scheduled
-            .store(false, Ordering::Release);
+        self.inner.frame.wake_delivery.consume(|| {
+            self.inner
+                .frame
+                .frame_scheduled
+                .store(false, Ordering::Release);
+        });
         // Recorded at the same point `frame_scheduled` clears: this thread
         // is now the one driving the frame `ensure_visual_update`'s
         // same-thread arms trust (see `frame_thread`'s own doc). This store
@@ -1607,7 +1606,10 @@ impl UpdateScheduler {
             // with `current_vsync_time` still set, reachable through
             // `drive_frame`'s `Ok` arm rather than its `Err` one.
             let notify_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                self.notify_frame_completion(FrameOutcome::Completed { timing });
+                self.notify_frame_completion(
+                    FrameOutcome::Completed { timing },
+                    callback_result.is_err(),
+                );
             }));
 
             if callback_result.is_err() || notify_result.is_err() {
@@ -1632,11 +1634,7 @@ impl UpdateScheduler {
                     std::panic::resume_unwind(payload);
                 }
                 (Err(callback_payload), Err(notify_payload)) => {
-                    discard_panic_payload(
-                        notify_payload,
-                        "end_frame_impl (superseded by the post-frame callback's own panic \
-                         in the same close)",
-                    );
+                    discard_panic_payload(notify_payload);
                     std::panic::resume_unwind(callback_payload);
                 }
             }
@@ -1696,6 +1694,10 @@ impl UpdateScheduler {
     ///
     /// Idempotent: a no-op when no frame is open.
     pub fn abort_frame(&self) {
+        self.abort_frame_impl(false);
+    }
+
+    fn abort_frame_impl(&self, preserve_failure: bool) {
         if self.phase() == SchedulerPhase::Idle {
             return;
         }
@@ -1713,7 +1715,7 @@ impl UpdateScheduler {
         self.inner.callbacks.cancelled.clear();
 
         if let Some(timing) = timing {
-            self.notify_frame_completion(FrameOutcome::Aborted { timing });
+            self.notify_frame_completion(FrameOutcome::Aborted { timing }, preserve_failure);
         }
 
         tracing::warn!("frame aborted; its post-frame callbacks were not run");
@@ -1928,24 +1930,11 @@ impl UpdateScheduler {
                 // caller would observe the waker's failure instead of
                 // whichever phase actually caused this frame to abort.
                 if let Err(secondary_payload) =
-                    catch_unwind(AssertUnwindSafe(|| self.abort_frame()))
+                    catch_unwind(AssertUnwindSafe(|| self.abort_frame_impl(true)))
                 {
-                    tracing::error!(
-                        panic_msg = flui_foundation::panic::payload_text(&*secondary_payload)
-                            .unwrap_or("(non-string panic payload)"),
-                        "abort_frame panicked while closing a frame that was already \
-                         panicking; resuming the ORIGINAL panic, not this one"
-                    );
-                    // A plain `drop` here would be the same class of bug this
-                    // issue fixes at the other two sites: `secondary_payload`
-                    // can itself own a type whose `Drop` panics, and letting
-                    // THAT escape uncontained would displace the ORIGINAL
-                    // frame panic `resume_unwind(payload)` is about to carry
-                    // out, right below.
-                    discard_panic_payload(
+                    crate::completion_wake::retain_reported(
                         secondary_payload,
-                        "drive_frame_impl (abort_frame panicked while closing an already-\
-                         panicking frame, traced above)",
+                        "abort_frame closing an already failed frame",
                     );
                 }
                 resume_unwind(payload)
@@ -2270,19 +2259,15 @@ impl UpdateScheduler {
     /// outcome out. No single-threaded test can redden a reversion of this;
     /// only a `loom` model could prove it, and none exists yet.
     ///
-    /// # Calling this from a hook that itself pumps recurses
-    ///
-    /// The platform wake hook this method's own demand re-issue can fire
-    /// already forbids re-entering the scheduler (see
-    /// [`set_on_frame_scheduled`](Self::set_on_frame_scheduled)'s contract);
-    /// concretely here, a hook that called back into `finish_async_pump`
-    /// would recurse (pump → clear → re-check → hook → pump → ...), which a
-    /// bare unconditional clear never could.
+    /// Reentrant demand defers delivery to the outer hook invocation, with
+    /// at most one compensating attempt; hooks must not drive a frame inline.
     pub fn finish_async_pump(&self) {
-        self.inner
-            .frame
-            .frame_scheduled
-            .swap(false, Ordering::SeqCst);
+        self.inner.frame.wake_delivery.consume(|| {
+            self.inner
+                .frame
+                .frame_scheduled
+                .swap(false, Ordering::SeqCst);
+        });
 
         // The `completion_waiters` guard `has_live_waiter()` takes is a
         // temporary of this `if`'s condition, so it drops at the end of the
@@ -2303,12 +2288,11 @@ impl UpdateScheduler {
         self.inner.async_driver.pending_task_count()
     }
 
-    /// Install the platform wake hook fired when a frame is first
-    /// scheduled.
+    /// Install the platform wake hook and retry any undelivered demand.
     ///
     /// The hook runs on whichever thread schedules the frame and may run
     /// while callers hold their own locks — it must only touch wake machinery,
-    /// never re-enter the scheduler.
+    /// never drive a frame inline. Reentrant demand is coalesced without recursion.
     ///
     /// "Whichever thread" is not a formality: an `AsyncDriver` task waker fires
     /// this from whatever thread completed the future, which for a job on
@@ -2332,6 +2316,10 @@ impl UpdateScheduler {
         let previous =
             { std::mem::replace(&mut *self.inner.binding.on_frame_scheduled.lock(), hook) };
         drop(previous);
+        self.inner.frame.wake_delivery.request(
+            || false,
+            || self.inner.binding.on_frame_scheduled.lock().clone(),
+        );
     }
 
     /// Add a persistent frame callback.
@@ -2860,13 +2848,8 @@ impl UpdateScheduler {
     /// * A pending waiter is real frame demand, so it suppresses
     ///   [`execute_idle_callbacks`](Self::execute_idle_callbacks) until the
     ///   frame runs.
-    /// * If the `on_frame_scheduled` hook panics, the demand is lost
-    ///   permanently rather than retried: `request_frame` sets
-    ///   `frame_scheduled = true` *before* firing the hook, so an unwinding
-    ///   hook leaves the latch set with no wake delivered and every later
-    ///   demand hits the no-op edge. Compose defines a transition for this
-    ///   (a throwing `onNewAwaiters` fails the clock and resumes every
-    ///   current and future awaiter with the error); FLUI defines none yet.
+    /// * A panicking or absent wake hook leaves durable delivery debt. A later
+    ///   frame request or hook installation retries it without discarding waiters.
     ///
     /// # Panics
     ///
@@ -2943,12 +2926,13 @@ impl UpdateScheduler {
     /// catch-then-resume shape for a panicking post-frame callback, just
     /// upstream of it here. A SECOND (or later) waker's panic cannot be
     /// re-raised too -- `resume_unwind` takes one payload -- so it is routed
-    /// through [`discard_panic_payload`] instead, which additionally
-    /// contains the possibility that the payload's own `Drop` panics.
-    fn notify_frame_completion(&self, outcome: FrameOutcome) {
+    /// through [`discard_panic_payload`] instead, retaining the opaque payload
+    /// without invoking its possibly-panicking destruction.
+    fn notify_frame_completion(&self, outcome: FrameOutcome, preserve_failure: bool) {
         let waiters = self.inner.frame.completion_waiters.lock().drain();
 
-        let mut first_panic: Option<Box<dyn std::any::Any + Send>> = None;
+        let mut delivery =
+            crate::completion_wake::WakeBatch::new("frame completion", preserve_failure);
         for notifier in waiters {
             // `upgrade()` at loop-body scope, never inside the
             // `completion_waiters` block above: the temporary `Arc` it
@@ -2982,37 +2966,9 @@ impl UpdateScheduler {
             // after completion is explicitly permitted by `Waker`'s own
             // contract. Do not "fix" it by holding the guard across the
             // wake; that is issue #1057's deadlock.
-            if let Err(payload) =
-                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| waker.wake()))
-            {
-                tracing::error!(
-                    panic_msg = flui_foundation::panic::payload_text(&*payload)
-                        .unwrap_or("(non-string panic payload)"),
-                    "frame completion waker panicked; notifying remaining waiters before \
-                     propagating"
-                );
-                if first_panic.is_none() {
-                    first_panic = Some(payload);
-                } else {
-                    // A second (or later) panic in the same drain: only the
-                    // FIRST one can be `resume_unwind`n below, so this one
-                    // is discarded -- and discarding it safely means
-                    // containing the possibility that ITS OWN `Drop` panics
-                    // too (a payload can own a type whose destructor
-                    // panics), rather than an ordinary `drop` that would
-                    // propagate that straight out of this loop.
-                    discard_panic_payload(
-                        payload,
-                        "notify_frame_completion (superseded by an earlier waker's panic \
-                         in the same drain)",
-                    );
-                }
-            }
+            delivery.wake(waker);
         }
-
-        if let Some(payload) = first_panic {
-            std::panic::resume_unwind(payload);
-        }
+        delivery.finish(true);
     }
 
     // =========================================================================

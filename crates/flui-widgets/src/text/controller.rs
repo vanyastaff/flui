@@ -479,7 +479,8 @@ impl TextEditingController {
             // range's start keeps this one notification, not two.
             let at = guard.delete_selected_range();
             guard.text.insert_str(at, text);
-            guard.selection = Selection::collapsed(at + text.len());
+            let caret = clamp_to_grapheme_boundary(&guard.text, at + text.len());
+            guard.selection = Selection::collapsed(caret);
             guard.composing = None;
         }
         self.notifier.notify_listeners();

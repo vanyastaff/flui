@@ -328,8 +328,9 @@ impl Reactive {
     /// Release a slot explicitly: its value drops, its readers forget it, later
     /// handle use reports [`SignalError::Released`]. A no-op for a handle that
     /// is already stale. Release is authoritative even while the slot's value
-    /// is loaned to its own read or update closure: the loaned value is dropped
-    /// when that closure returns or unwinds, and no readers are invalidated.
+    /// is loaned to its own read or update closure. Successful completion retires
+    /// that loan normally; after a callback failure, its opaque value is retained
+    /// to preserve the first failure. No readers are invalidated.
     pub fn release(&self, slot: SignalSlot) {
         let mut inner = self.inner.borrow_mut();
         if self.check(&inner, slot).is_err() {
@@ -511,10 +512,31 @@ struct Loan<'a> {
     value: Option<Box<dyn Any>>,
 }
 
+impl Loan<'_> {
+    /// Close the loan while preserving an earlier callback failure. A released
+    /// value stays owned here until graph bookkeeping has finished, so opaque
+    /// drop glue cannot run inside the restoration boundary.
+    fn finish(mut self, preserve_failure: bool) {
+        let restored = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.graph.put_back(self.slot, &mut self.value);
+        }));
+        if let Err(payload) = restored {
+            discard_secondary(self.value.take());
+            std::panic::resume_unwind(payload);
+        }
+        let retired = self.value.take();
+        if preserve_failure {
+            discard_secondary(retired);
+        } else {
+            drop(retired);
+        }
+    }
+}
+
 impl Drop for Loan<'_> {
     fn drop(&mut self) {
-        if let Some(value) = self.value.take() {
-            self.graph.put_back(self.slot, value);
+        if self.value.is_some() {
+            self.graph.put_back(self.slot, &mut self.value);
         }
     }
 }
@@ -539,12 +561,12 @@ impl Reactive {
         })
     }
 
-    /// Return a loaned value, unless the slot was released (or reused) while
-    /// it was out — then the value simply drops.
-    fn put_back(&self, slot: SignalSlot, value: Box<dyn Any>) {
+    /// Restore a live loan. A released or reused slot leaves the value owned by
+    /// the loan so retirement happens outside the graph borrow.
+    fn put_back(&self, slot: SignalSlot, value: &mut Option<Box<dyn Any>>) {
         let mut inner = self.inner.borrow_mut();
         if self.check(&inner, slot).is_ok() {
-            inner.nodes[slot.index() as usize].value = Some(value);
+            inner.nodes[slot.index() as usize].value = value.take();
         }
     }
 
@@ -581,36 +603,34 @@ impl Reactive {
                 expected: type_name::<T>(),
             })?;
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(typed)));
-        let finalized = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(loan)));
+        let finalized = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            loan.finish(outcome.is_err());
+        }));
         match outcome {
             Ok(result) => {
+                if let Err(payload) = finalized {
+                    std::mem::forget(f);
+                    discard_secondary(result);
+                    std::panic::resume_unwind(payload);
+                }
                 // Restore the loan before destroying the opaque capture
                 // bundle. Generated closure drop glue can abort when two
                 // captured fields panic; it must not strand the slot. A
-                // contained capture panic keeps the pre-existing phase
-                // priority over a loan-finalization panic.
+                // contained capture panic is the first failure only after
+                // loan restoration succeeds.
                 let disposed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(f)));
                 match disposed {
                     Err(payload) => {
-                        if let Err(secondary) = finalized {
-                            discard_panic_payload(secondary);
-                        }
                         discard_secondary(result);
                         std::panic::resume_unwind(payload)
                     }
-                    Ok(()) => match finalized {
-                        Ok(()) => Ok(result),
-                        Err(payload) => {
-                            discard_secondary(result);
-                            std::panic::resume_unwind(payload)
-                        }
-                    },
+                    Ok(()) => Ok(result),
                 }
             }
             Err(payload) => {
                 std::mem::forget(f);
                 if let Err(secondary) = finalized {
-                    discard_panic_payload(secondary);
+                    flui_foundation::panic::retain_opaque_payload(secondary);
                 }
                 std::panic::resume_unwind(payload)
             }
@@ -654,7 +674,9 @@ impl Reactive {
         // process before `catch_unwind` can return. A panicking updater's
         // opaque bundle is retained; a successful updater is destroyed only
         // after loan restoration and invalidation are durable.
-        let finalized = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(loan)));
+        let finalized = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            loan.finish(outcome.is_err());
+        }));
         let invalidated =
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.mark(slot)));
         match outcome {
@@ -663,7 +685,7 @@ impl Reactive {
                     std::mem::forget(f);
                     discard_secondary(result);
                     if let Err(secondary) = invalidated {
-                        discard_panic_payload(secondary);
+                        flui_foundation::panic::retain_opaque_payload(secondary);
                     }
                     std::panic::resume_unwind(payload)
                 }
@@ -691,10 +713,10 @@ impl Reactive {
             Err(payload) => {
                 std::mem::forget(f);
                 if let Err(secondary) = finalized {
-                    discard_panic_payload(secondary);
+                    flui_foundation::panic::retain_opaque_payload(secondary);
                 }
                 if let Err(secondary) = invalidated {
-                    discard_panic_payload(secondary);
+                    flui_foundation::panic::retain_opaque_payload(secondary);
                 }
                 std::panic::resume_unwind(payload)
             }
@@ -721,7 +743,9 @@ impl ReadGraph for Reactive {
                 read(value);
             }
         }));
-        let finalized = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(loan)));
+        let finalized = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            loan.finish(outcome.is_err());
+        }));
         match outcome {
             Ok(()) => match finalized {
                 Ok(()) => Ok(()),
@@ -729,7 +753,7 @@ impl ReadGraph for Reactive {
             },
             Err(payload) => {
                 if let Err(secondary) = finalized {
-                    discard_panic_payload(secondary);
+                    flui_foundation::panic::retain_opaque_payload(secondary);
                 }
                 std::panic::resume_unwind(payload)
             }
@@ -744,16 +768,12 @@ fn discard_secondary<T>(value: T) {
     std::mem::forget(value);
 }
 
-fn discard_panic_payload(payload: Box<dyn Any + Send>) {
-    std::mem::forget(payload);
-}
-
 fn retain_first_panic(first: &mut Option<Box<dyn Any + Send>>, outcome: std::thread::Result<()>) {
     if let Err(payload) = outcome {
         if first.is_none() {
             *first = Some(payload);
         } else {
-            discard_panic_payload(payload);
+            flui_foundation::panic::retain_opaque_payload(payload);
         }
     }
 }
@@ -900,7 +920,9 @@ impl<T: 'static> SignalWriteExt<T> for Signal<T> {
                 .take()
                 .expect("BUG: a signal replacement is consumed only once"),
         );
-        let finalized = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(loan)));
+        let finalized = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            loan.finish(false);
+        }));
         let invalidated =
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| graph.mark(slot)));
 
@@ -909,7 +931,7 @@ impl<T: 'static> SignalWriteExt<T> for Signal<T> {
         if let Some(payload) = first {
             discard_secondary(retired);
             if let Err(secondary) = invalidated {
-                discard_panic_payload(secondary);
+                flui_foundation::panic::retain_opaque_payload(secondary);
             }
             std::panic::resume_unwind(payload);
         }

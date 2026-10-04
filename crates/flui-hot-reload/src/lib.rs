@@ -18,9 +18,11 @@
 //!   host moves the value out with `ptr::read` and returns the emptied box
 //!   through `flui_*_free`, so no cross-image allocator or drop-glue pairing
 //!   is assumed.
-//! * The worker build registry is pruned by [`worker::WorkerPlugin`]'s `Drop`
-//!   BEFORE its image unmaps, so [`worker::get_worker_build_ptr`] returning
-//!   `Some` implies a live image; `None` means "worker unavailable".
+//! * Admitted worker images remain mapped until process exit (ADR-0111):
+//!   escaped host-tree views, callbacks and state can retain plugin-owned code,
+//!   vtables or storage. Dropping a [`worker::WorkerPlugin`] prunes its matching
+//!   registrations without unmapping its image. Each distinct worker revision
+//!   retains memory and can keep Windows staged files locked until host exit.
 //! * What remains, and why this stays a dev-loop tool: a returned `Scene`
 //!   can hold `Arc<dyn Any>` (`AnnotatedRegionLayer`) and `Arc<dyn Fn>`
 //!   (`InlineSpan::on_tap` inside a display list) whose vtables live in the

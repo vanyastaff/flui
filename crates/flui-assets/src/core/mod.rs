@@ -4,7 +4,6 @@
 //! extensible asset management:
 //!
 //! - [`Asset`] - Main trait that all asset types must implement
-//! - [`AssetLoader`] - Trait for loading assets from different sources
 //! - [`AssetMetadata`] - Optional metadata about assets (format, size, etc.)
 //!
 //! # Examples
@@ -47,9 +46,7 @@
 //! ```
 
 pub mod asset;
-pub mod loader;
 pub mod metadata;
 
 pub use asset::Asset;
-pub use loader::AssetLoader;
 pub use metadata::AssetMetadata;

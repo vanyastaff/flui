@@ -1,10 +1,5 @@
-// Instanced texture shader for FLUI
-//
-// Renders multiple textured quads in a single draw call using GPU instancing.
-// Each instance contains: destination rect, source UV, tint color, and transform.
-//
-// Performance: 100 images = 1 draw call (vs 100 without instancing)
-// Supports: texture atlases, rotation, color tinting
+// Textured affine quads. Consecutive compatible images may share a draw;
+// texture, blend and scissor changes preserve recording order.
 
 // Vertex input (shared unit quad: [0,0] to [1,1])
 struct VertexInput {
@@ -13,15 +8,16 @@ struct VertexInput {
 
 // Instance input (per-image data)
 struct InstanceInput {
-    @location(2) dst_rect: vec4<f32>,      // [x, y, width, height] in screen space
+    @location(2) origin_and_x: vec4<f32>, // [ox, oy, xx, xy] device quad
     @location(3) src_uv: vec4<f32>,        // [u_min, v_min, u_max, v_max] in 0-1 range
     @location(4) tint: vec4<f32>,          // [r, g, b, a] in 0-1 range
-    @location(5) transform: vec4<f32>,     // [cos(angle), sin(angle), tx, ty]
+    @location(5) axis_y: vec4<f32>,       // [yx, yy, 0, 0] device quad
     @location(6) clip_bounds: vec4<f32>,   // [x, y, width, height] of clip
     @location(7) clip_radii: vec4<f32>,    // [tl, tr, br, bl] of clip
     @location(8) clip_kind: vec4<u32>,           // [kind, source mode, hard clip, _]
     @location(9) clip_device_to_local: vec4<f32>,  // [a, b, c, d], columns first
     @location(10) clip_local_origin: vec4<f32>,    // [tx, ty, 0, 0]
+    @location(11) original_image_uv: vec4<f32>, // full image in atlas, not crop
 }
 
 // Vertex output / Fragment input
@@ -36,6 +32,7 @@ struct VertexOutput {
     @location(6) clip_device_to_local: vec4<f32>,
     @location(7) clip_local_origin: vec4<f32>,
     @location(8) @interpolate(flat) source_mode: u32,
+    @location(9) @interpolate(flat) original_image_uv: vec4<f32>,
 }
 
 // =============================================================================
@@ -102,37 +99,9 @@ fn vs_main(
 ) -> VertexOutput {
     var out: VertexOutput;
 
-    // Extract destination rectangle components
-    let dst_x = instance.dst_rect.x;
-    let dst_y = instance.dst_rect.y;
-    let dst_width = instance.dst_rect.z;
-    let dst_height = instance.dst_rect.w;
-
-    // Transform unit quad [0,1] to destination rectangle
-    var local_pos = vertex.position * vec2<f32>(dst_width, dst_height);
-
-    // Apply rotation if present
-    let cos_angle = instance.transform.x;
-    let sin_angle = instance.transform.y;
-
-    // Rotate around center of destination rect
-    if (abs(cos_angle - 1.0) > 0.001 || abs(sin_angle) > 0.001) {
-        // Translate to origin (center of rect)
-        let center = vec2<f32>(dst_width * 0.5, dst_height * 0.5);
-        var centered = local_pos - center;
-
-        // Apply rotation matrix
-        let rotated = vec2<f32>(
-            centered.x * cos_angle - centered.y * sin_angle,
-            centered.x * sin_angle + centered.y * cos_angle
-        );
-
-        // Translate back
-        local_pos = rotated + center;
-    }
-
-    // Apply position and additional translation
-    let world_pos = vec2<f32>(dst_x, dst_y) + local_pos + instance.transform.zw;
+    let world_pos = instance.origin_and_x.xy
+        + vertex.position.x * instance.origin_and_x.zw
+        + vertex.position.y * instance.axis_y.xy;
 
     // Convert to clip space [-1, 1]
     let clip_x = (world_pos.x / viewport.size.x) * 2.0 - 1.0;
@@ -154,7 +123,7 @@ fn vs_main(
     out.tint = instance.tint;
 
     // The clip is evaluated in device pixels, so hand the fragment the same
-    // world position the vertex was placed at — post-rotation, pre-projection.
+    // world position the vertex was placed at, before viewport projection.
     out.world_pos = world_pos;
     out.clip_bounds = instance.clip_bounds;
     out.clip_radii = instance.clip_radii;
@@ -163,39 +132,41 @@ fn vs_main(
     // Bit 2 carries the clip layer's Clip mode; `clipAlpha` unpacks it.
     out.clip_kind = instance.clip_kind.x | (instance.clip_kind.z << 2u);
     out.source_mode = instance.clip_kind.y;
+    out.original_image_uv = instance.original_image_uv;
 
     return out;
 }
 
 // Straight-alpha coverage must be premultiplied BEFORE filtering; multiplying
 // the hardware-filtered RGB by its filtered alpha compounds edge attenuation.
-fn load_premultiplied_straight(coord: vec2<i32>, size: vec2<i32>) -> vec4<f32> {
-    let clamped = clamp(coord, vec2<i32>(0), size - vec2<i32>(1));
+fn load_premultiplied_straight(coord: vec2<i32>, size: vec2<i32>, bounds: vec4<f32>) -> vec4<f32> {
+    let first = vec2<i32>(round(bounds.xy * vec2<f32>(size)));
+    let last = vec2<i32>(round(bounds.zw * vec2<f32>(size))) - vec2<i32>(1);
+    let clamped = clamp(coord, first, last);
     let texel = textureLoad(texture_view, clamped, 0);
     return vec4<f32>(texel.rgb * texel.a, texel.a);
 }
 
-fn filter_straight_coverage(uv: vec2<f32>) -> vec4<f32> {
+fn filter_straight_coverage(uv: vec2<f32>, bounds: vec4<f32>) -> vec4<f32> {
     let size = vec2<i32>(textureDimensions(texture_view, 0));
     let position = uv * vec2<f32>(size) - vec2<f32>(0.5);
     let base = vec2<i32>(floor(position));
     let weight = fract(position);
-    let tl = load_premultiplied_straight(base, size);
-    let tr = load_premultiplied_straight(base + vec2<i32>(1, 0), size);
-    let bl = load_premultiplied_straight(base + vec2<i32>(0, 1), size);
-    let br = load_premultiplied_straight(base + vec2<i32>(1, 1), size);
+    let tl = load_premultiplied_straight(base, size, bounds);
+    let tr = load_premultiplied_straight(base + vec2<i32>(1, 0), size, bounds);
+    let bl = load_premultiplied_straight(base + vec2<i32>(0, 1), size, bounds);
+    let br = load_premultiplied_straight(base + vec2<i32>(1, 1), size, bounds);
     return mix(mix(tl, tr, weight.x), mix(bl, br, weight.x), weight.y);
 }
 
-@fragment
-fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
+fn sampledImage(in: VertexOutput) -> vec4<f32> {
     // Derivatives are computed in uniform control flow; source mode is per
     // instance and does not justify implicit derivatives inside either branch.
     let uv_dx = dpdx(in.uv);
     let uv_dy = dpdy(in.uv);
     var tex_color: vec4<f32>;
     if (in.source_mode == 2u) {
-        tex_color = filter_straight_coverage(in.uv);
+        tex_color = filter_straight_coverage(in.uv, in.original_image_uv);
     } else {
         // Preserve hardware sampling and LOD for all existing image paths.
         tex_color = textureSampleGrad(texture_view, texture_sampler, in.uv, uv_dx, uv_dy);
@@ -206,6 +177,12 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
     // Apply tint (multiply)
     tex_color = tex_color * in.tint;
+
+    return tex_color;
+}
+
+fn folded_image(in: VertexOutput) -> vec4<f32> {
+    var tex_color = sampledImage(in);
 
     // Clip coverage — see `clipAlpha` in `common/clip.wgsl`.
     let clip_alpha = clipAlpha(

@@ -268,12 +268,12 @@ pub struct NavigationBar {
 impl NavigationBar {
     /// A bar over `destinations`, `selected_index: 0`, no overrides.
     ///
-    /// Requires `destinations.len() >= 2` and
-    /// `selected_index < destinations.len()`; this is a debug-only contract
-    /// check (`debug_assert!`), not a production-enforced invariant.
+    /// # Panics
+    ///
+    /// Panics if `destinations` contains fewer than two entries, in every build profile.
     #[must_use]
     pub fn new(destinations: Vec<NavigationDestination>) -> Self {
-        debug_assert!(
+        assert!(
             destinations.len() >= 2,
             "NavigationBar requires at least two destinations"
         );
@@ -290,9 +290,13 @@ impl NavigationBar {
     }
 
     /// Sets which destination is currently selected.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `selected_index` is outside this bar's destinations, in every build profile.
     #[must_use]
     pub fn selected_index(mut self, selected_index: usize) -> Self {
-        debug_assert!(
+        assert!(
             selected_index < self.destinations.len(),
             "selected_index must be < destinations.len()"
         );

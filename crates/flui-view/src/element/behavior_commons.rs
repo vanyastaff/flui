@@ -21,13 +21,12 @@
 //! Principle 4 (no `dyn` by default), free functions taking the minimal
 //! slice of state composes cleanly with the existing trait surface.
 //!
-//! ## Scope
+//! ## Recovery ownership
 //!
-//! REFACTOR-FIRST. No behavior change. Existing
-//! integration tests in `crates/flui-view/tests/*` cover the
-//! end-to-end behavior; the per-helper tests below pin the helpers
-//! themselves so a future regression in extraction quality is caught
-//! before the integration suite.
+//! Build recovery classifies the original panic before retaining its opaque
+//! payload. Factories keep their own failure authority, and diagnostic failure
+//! cannot discard a successful recovery view or its attributed record. Public
+//! integration rows exercise these boundaries through actual element builds.
 
 use std::{any::TypeId, panic::AssertUnwindSafe};
 
@@ -188,31 +187,35 @@ where
     if let Some(id) = building {
         owner.reactive.begin_element_build(id);
     }
-    let outcome = std::panic::catch_unwind(AssertUnwindSafe(build));
-    if let Some(id) = building {
-        owner.reactive.end_element_build(id, outcome.is_ok());
-    }
-    match outcome {
-        Ok(child_view) => child_view,
+    match std::panic::catch_unwind(AssertUnwindSafe(build)) {
+        Ok(child_view) => {
+            if let Some(id) = building {
+                owner.reactive.end_element_build(id, true);
+            }
+            child_view
+        }
         Err(payload) => {
-            let Some(element) = core.self_id() else {
-                // No slab id — see the doc comment above.
+            // Classification borrows the original; retire it before recovery
+            // invokes user factories or diagnostics. Opaque aggregate drop glue
+            // could otherwise abort even after successful ErrorView substitution.
+            let Some(element) = building else {
                 let error = FrameworkError::from_panic(
                     payload.as_ref(),
                     format!("building {behavior_name}"),
                 );
-                tracing::error!(
-                    behavior_name,
-                    panic_message = %error.message,
-                    "lifecycle hook panicked outside the slab; substituting ErrorView \
-                     (no element id to record)"
-                );
+                flui_foundation::panic::retain_opaque_payload(payload);
+                if let Err(payload) = std::panic::catch_unwind(AssertUnwindSafe(|| {
+                    tracing::error!(
+                        behavior_name,
+                        panic_message = %error.message,
+                        "lifecycle hook panicked outside the slab; substituting ErrorView \
+                         (no element id to record)"
+                    );
+                })) {
+                    flui_foundation::panic::retain_opaque_payload(payload);
+                }
                 return crate::view::ErrorView::build_error_view(&error);
             };
-            // `RecoveredPanic::from_payload` classifies and builds the
-            // `FrameworkError` in one step; the ErrorView borrows it before
-            // the record moves into `push_recovered_panic` below, so the
-            // panic is converted to a `FrameworkError` exactly once.
             let panic = RecoveredPanic::from_payload(
                 RecoveredAt::Element {
                     element,
@@ -223,11 +226,15 @@ where
                 payload.as_ref(),
                 format!("building {behavior_name}"),
             );
+            flui_foundation::panic::retain_opaque_payload(payload);
+            owner.reactive.end_element_build(element, false);
+            // A recovery factory failure retains its existing authority. No
+            // successful recovery record is published until it returns a view.
             let error_view = crate::view::ErrorView::build_error_view(&panic.error);
             if let Some(flag) = owner.build_recovered {
                 flag.set(true);
             }
-            owner.push_recovered_panic(panic); // logs at error level
+            owner.push_recovered_panic(panic);
             error_view
         }
     }

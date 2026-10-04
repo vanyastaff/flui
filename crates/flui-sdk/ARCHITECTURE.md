@@ -119,3 +119,9 @@ needs the nightly JSON tooling and replaces this table when it lands.
 
 Cargo resolves each crate separately, so FLUI gives packages one crate with its own version
 instead of the internal crates. The reasons are ADR-0088; the tests above pin it.
+
+
+`interaction::GestureEndReason` exposes the same terminal-reason enum as the
+facade (ADR-0112). Material drawer callbacks use it to settle cancelled drags
+without release velocity. The existing surface list and type-identity tests
+include this package-author decision.

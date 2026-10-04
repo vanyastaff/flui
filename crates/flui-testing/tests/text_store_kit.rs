@@ -23,6 +23,8 @@ fn in_memory_store_conforms_to_kit_v1() {
 /// One deliberate defect a store might have.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Fault {
+    /// Panics before invoking an offered grant, with an opaque aggregate payload.
+    PanicsBeforeGrant,
     /// Reports its length in UTF-8 bytes.
     CountsUtf8Bytes,
     /// Ignores the commit gate it is handed and grants at once.
@@ -60,6 +62,15 @@ impl TextStore for Faulty {
         timing: LockTiming,
     ) -> Result<LockOutcome, TextStoreError> {
         let fault = self.fault;
+        if fault == Fault::PanicsBeforeGrant {
+            struct Bomb;
+            impl Drop for Bomb {
+                fn drop(&mut self) {
+                    panic!("opaque store failure destructor");
+                }
+            }
+            std::panic::panic_any((Bomb, Bomb));
+        }
         let wrapped = match grant {
             LockGrant::Read(body) => LockGrant::read(move |session| {
                 body(&ReadFault {
@@ -362,11 +373,162 @@ fn kit_fails_a_store_that_notifies_inside_a_transaction() {
     );
 }
 
+fn a_store_failure_before_the_grant_is_reported_and_next_grant_progresses() {
+    let mut fixture = FaultyFixture::new(Fault::PanicsBeforeGrant);
+    let case = text_store_kit::cases()
+        .iter()
+        .find(|case| case.name == "a_panicking_grant_releases_the_lock")
+        .expect("documented public kit case");
+    let failure = case
+        .run(&mut fixture)
+        .expect_err("store failure did not invoke the offered grant");
+    assert_eq!(failure.case, case.name);
+    assert_eq!(failure.message, "panicked: a non-string panic payload");
+    // Change only the consumer fixture's injected fault; an ordinary idle
+    // grant does not exercise its unrelated transaction-grant defect.
+    Rc::get_mut(&mut fixture.store)
+        .expect("case released its store clones")
+        .fault = Fault::GrantsInsideTransaction;
+    let ran = Rc::new(Cell::new(false));
+    let next = Rc::clone(&ran);
+    assert_eq!(
+        fixture
+            .store()
+            .request_lock(LockGrant::read(move |_| next.set(true)), LockTiming::Sync),
+        Ok(LockOutcome::Granted)
+    );
+    assert!(ran.get());
+}
+
+fn kit_reports_pre_grant_failure_without_destroying_its_payload() {
+    isolated_kit_payload_child("lock");
+}
+
+fn kit_retains_opaque_failure_payloads_and_continues() {
+    if std::env::var_os("FLUI_TEXT_KIT_PAYLOAD_CHILD").is_some() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+        struct Bomb(Arc<AtomicUsize>);
+        impl Drop for Bomb {
+            fn drop(&mut self) {
+                self.0.fetch_add(1, Ordering::SeqCst);
+                panic!("opaque payload destructor");
+            }
+        }
+        struct Fixture {
+            inner: InMemoryFixture,
+            remaining: usize,
+            drops: Arc<AtomicUsize>,
+        }
+        impl TextStoreFixture for Fixture {
+            fn store(&mut self) -> Rc<dyn TextStore> {
+                self.inner.store()
+            }
+            fn reset(&mut self, text: &str) {
+                if self.remaining > 0 {
+                    self.remaining -= 1;
+                    std::panic::panic_any((
+                        Bomb(Arc::clone(&self.drops)),
+                        Bomb(Arc::clone(&self.drops)),
+                    ));
+                }
+                self.inner.reset(text);
+            }
+            fn app_replace_all(&mut self, text: &str) {
+                self.inner.app_replace_all(text);
+            }
+            fn pump(&mut self) {
+                self.inner.pump();
+            }
+            fn owner_notifications(&self) -> usize {
+                self.inner.owner_notifications()
+            }
+            fn capabilities(&self) -> FixtureCapabilities {
+                self.inner.capabilities()
+            }
+        }
+        let drops = Arc::new(AtomicUsize::new(0));
+        let mut fixture = Fixture {
+            inner: InMemoryFixture::new(),
+            remaining: 2,
+            drops: Arc::clone(&drops),
+        };
+        let failures = text_store_kit::run(&mut fixture, KIT_VERSION);
+        assert_eq!(
+            failures.len(),
+            2,
+            "only the two reset failures are reported"
+        );
+        assert_eq!(failures[0].case, "length_counts_utf16_units");
+        assert_eq!(failures[1].case, "text_reads_utf16_ranges");
+        for failure in failures {
+            assert_eq!(failure.message, "panicked: a non-string panic payload");
+        }
+        assert_eq!(drops.load(Ordering::SeqCst), 0);
+        text_store_kit::assert_conforms(&mut fixture, KIT_VERSION);
+        return;
+    }
+    isolated_kit_payload_child("reset");
+}
+
+fn isolated_kit_payload_child(kind: &str) {
+    use std::{
+        process::{Command, Stdio},
+        time::{Duration, Instant},
+    };
+    let mut child = Command::new(std::env::current_exe().expect("test executable"))
+        .args([
+            "--exact",
+            "text_store_kit::text_store_kit_matrix",
+            "--nocapture",
+        ])
+        .env("FLUI_TEXT_KIT_PAYLOAD_CHILD", kind)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn kit consumer child");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        if child.try_wait().expect("child status").is_some() {
+            break;
+        }
+        if Instant::now() >= deadline {
+            child.kill().expect("kill blocked child");
+            let output = child.wait_with_output().expect("reap child");
+            panic!("kit failure containment blocked: {output:?}");
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let output = child.wait_with_output().expect("child output");
+    assert!(
+        output.status.success() && String::from_utf8_lossy(&output.stdout).contains("1 passed"),
+        "kit opaque payload containment failed: {output:?}"
+    );
+}
+
 #[test]
 fn text_store_kit_matrix() {
+    if let Ok(kind) = std::env::var("FLUI_TEXT_KIT_PAYLOAD_CHILD") {
+        match kind.as_str() {
+            "reset" => kit_retains_opaque_failure_payloads_and_continues(),
+            "lock" => a_store_failure_before_the_grant_is_reported_and_next_grant_progresses(),
+            _ => panic!("unknown kit child"),
+        }
+        return;
+    }
     crate::run_table(
         "text_store_kit_matrix",
         &[
+            (
+                "kit_reports_pre_grant_failure_without_destroying_its_payload",
+                kit_reports_pre_grant_failure_without_destroying_its_payload as fn(),
+            ),
+            (
+                "kit_retains_opaque_failure_payloads_and_continues",
+                kit_retains_opaque_failure_payloads_and_continues as fn(),
+            ),
             (
                 "in_memory_store_conforms_to_kit_v1",
                 in_memory_store_conforms_to_kit_v1 as fn(),

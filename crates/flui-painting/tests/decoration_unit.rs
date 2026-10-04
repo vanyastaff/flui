@@ -14,7 +14,7 @@ use flui_painting::{
     paint::PaintStyle,
     styling::{
         Border, BorderRadius, BorderRadiusExt, BorderSide, BorderStyle, BoxDecoration, BoxShadow,
-        Color,
+        Color, TableBorder,
     },
 };
 
@@ -35,6 +35,59 @@ fn commands_in(rect: Rect<f64>, decoration: &BoxDecoration<f64>) -> Vec<DrawOp> 
         DecorationPaintOptions::default(),
     );
     canvas.finish().iter().map(|c| c.op.clone()).collect()
+}
+
+fn hidden_uniform_border(shape: BoxShape) {
+    let hidden = BorderSide::new(Color::RED, 5.0, BorderStyle::None);
+    let decoration = BoxDecoration::new()
+        .set_shape(shape)
+        .set_border(Some(Border::all(hidden)));
+    assert!(
+        commands_in(square_rect(), &decoration).is_empty(),
+        "{shape:?}"
+    );
+}
+
+pub(crate) fn hidden_uniform_rectangle_borders_do_not_paint() {
+    hidden_uniform_border(BoxShape::Rectangle);
+}
+
+pub(crate) fn hidden_uniform_circle_borders_do_not_paint() {
+    hidden_uniform_border(BoxShape::Circle);
+}
+
+pub(crate) fn hidden_table_borders_do_not_paint() {
+    let hidden = BorderSide::new(Color::RED, 5.0, BorderStyle::None);
+    let mut canvas = Canvas::new();
+    flui_painting::paint_table_border(
+        &mut canvas,
+        rect100(),
+        &[25.0],
+        &[50.0],
+        &TableBorder::all(hidden),
+    );
+    assert!(
+        canvas.finish().is_empty(),
+        "hidden interior and outer table borders"
+    );
+}
+
+pub(crate) fn hidden_edges_do_not_shorten_visible_neighboring_edges() {
+    let decoration = BoxDecoration::new().set_border(Some(Border {
+        top: Some(BorderSide::new(Color::RED, 10.0, BorderStyle::None)),
+        bottom: Some(BorderSide::new(Color::BLUE, 12.0, BorderStyle::None)),
+        left: Some(BorderSide::new(Color::GREEN, 3.0, BorderStyle::Solid)),
+        right: None,
+    }));
+    let cmds = commands(&decoration);
+    assert_eq!(cmds.len(), 1, "only the visible left side paints: {cmds:?}");
+    match &cmds[0] {
+        DrawOp::Rect { rect, paint } => {
+            assert_eq!(*rect, Rect::from_ltrb(0.0, 0.0, 3.0, 50.0));
+            assert_eq!(paint.color, Color::GREEN);
+        }
+        other => panic!("expected a full-height left strip, got {other:?}"),
+    }
 }
 
 pub(crate) fn paint_order_is_shadow_background_border() {

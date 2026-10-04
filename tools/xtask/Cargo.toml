@@ -20,9 +20,12 @@ pulldown-cmark = { workspace = true }
 regex = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+sha2 = { workspace = true }
 syn = { workspace = true, features = ["full", "parsing", "visit"] }
+tempfile = { workspace = true }
 toml = { workspace = true }
 walkdir = { workspace = true }
+wasmparser = { workspace = true }
 
 # `cargo xtask device windows-a11y` and `windows-input`: a UI Automation
 # client, and real input through `SendInput`.

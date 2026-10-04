@@ -76,7 +76,6 @@ use crate::realm::HeadlessWindow;
 pub struct LaidOut {
     host: WidgetHost,
     pipeline_owner: PipelineCell,
-    root_render_id: RenderId,
     /// Concrete identity of the caller's root below the presentation scopes.
     logical_root_type: TypeId,
     /// Whether this mount wrapped the caller in [`Align`] so a non-tight
@@ -105,7 +104,7 @@ impl std::fmt::Debug for LaidOut {
         // harness value in a test failure message is identified by what it
         // mounted, not by the machinery driving it.
         f.debug_struct("LaidOut")
-            .field("root_render_id", &self.root_render_id)
+            .field("logical_root_type", &self.logical_root_type)
             .finish_non_exhaustive()
     }
 }
@@ -330,12 +329,10 @@ pub fn lay_out(root: impl View, constraints: BoxConstraints) -> LaidOut {
     );
     let host = WidgetHost::mount(wrapped, HeadlessWindow::new(surface.0, surface.1));
     let pipeline_owner = host.pipeline().clone();
-    let root_render_id = resolve_logical_render_root(&host, logical_root_type);
 
     LaidOut {
         host,
         pipeline_owner,
-        root_render_id,
         logical_root_type,
         loosen_with_align,
         reapply_constraints,
@@ -490,16 +487,15 @@ impl LaidOut {
         self.host.realm().accessibility_action_listener()
     }
 
-    /// The render id of the root widget's render object.
+    /// The current render id of the root widget's render object.
+    /// A composition root can replace its render subtree during any frame.
     pub fn root(&self) -> RenderId {
-        self.root_render_id
+        resolve_logical_render_root(&self.host, self.logical_root_type)
     }
 
-    /// Recompute the caller's logical render root. After a root swap this
-    /// tracks [`LaidOut::root`]; remounts that replace the caller's element
-    /// refresh the stored id via [`pump_widget`](Self::pump_widget).
+    /// Resolve the caller's logical render root after the latest frame.
     pub fn current_root(&self) -> RenderId {
-        self.root_render_id
+        self.root()
     }
 
     /// Number of nodes in the caller's logical render subtree.
@@ -1195,7 +1191,6 @@ impl LaidOut {
             self.unconstrained_wrap,
         );
         self.host.swap(wrapped);
-        self.root_render_id = resolve_logical_render_root(&self.host, self.logical_root_type);
     }
 
     /// Every `RenderSemanticsAnnotations` node that describes a control —

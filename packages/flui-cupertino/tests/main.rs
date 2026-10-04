@@ -52,6 +52,14 @@ fn component_contracts() {
             button::cupertino_button_with_text_child_announces_one_labelled_button_node,
         ),
         (
+            "button::long press only button announces enabled",
+            button::long_press_only_button_announces_enabled,
+        ),
+        (
+            "button::disabled button announces disabled",
+            button::disabled_button_announces_disabled,
+        ),
+        (
             "nav_bar::leading middle and trailing all mount",
             nav_bar::leading_middle_and_trailing_all_mount,
         ),
@@ -100,6 +108,14 @@ fn navigation_contracts() {
         (
             "tab_scaffold::tapping a tab item switches the active tab",
             tab_scaffold::tapping_a_tab_item_switches_the_active_tab,
+        ),
+        (
+            "tab_scaffold::out of range controller selection reports error and recovers",
+            tab_scaffold::out_of_range_controller_selection_reports_error_and_recovers,
+        ),
+        (
+            "tab_scaffold::standalone bar rejects an out of range selection",
+            tab_scaffold::standalone_bar_rejects_an_out_of_range_selection,
         ),
     ]);
 }

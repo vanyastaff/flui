@@ -23,12 +23,16 @@ impl PlatformExecutor for IOSExecutor {
         // `spawn` returns nothing, so a panicking task must not unwind across
         // the GCD block's `extern "C"` trampoline. The same shield
         // `owner_lane.rs` uses on macOS is applied here: catch the panic and
-        // log it, so one bad task cannot take the process down.
+        // retain its opaque payload without running arbitrary destructors.
+        // The task itself is FnOnce: its capture destruction is still governed
+        // by Rust's ordinary consuming-call unwind rules.
         DispatchQueue::global_queue(GlobalQueueIdentifier::Priority(
             DispatchQueueGlobalPriority::Default,
         ))
         .exec_async(move || {
-            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(task));
+            if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(task)) {
+                flui_foundation::panic::retain_opaque_payload(payload);
+            }
         });
     }
 

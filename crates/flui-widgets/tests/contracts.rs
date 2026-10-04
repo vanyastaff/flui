@@ -110,6 +110,14 @@ fn text_editing() {
         &[
             ("editable_text::a_double_tap_selects_the_word_under_it", crate::editable_text::a_double_tap_selects_the_word_under_it as fn()),
             ("editable_text::a_drag_selects_from_its_start_to_the_pointer", crate::editable_text::a_drag_selects_from_its_start_to_the_pointer),
+            ("editable_text::disabling_the_field_retires_its_selection_contact", crate::editable_text::disabling_the_field_retires_its_selection_contact),
+            ("editable_text::replacing_the_controller_retires_the_old_selection_contact", crate::editable_text::replacing_the_controller_retires_the_old_selection_contact),
+            ("editable_text::selection_drag_survives_a_same_controller_rebuild", crate::editable_text::selection_drag_survives_a_same_controller_rebuild),
+            ("editable_text::foreign_release_preserves_the_selection_contact", crate::editable_text::foreign_release_preserves_the_selection_contact),
+            ("editable_text::foreign_cancel_preserves_the_selection_contact", crate::editable_text::foreign_cancel_preserves_the_selection_contact),
+            ("editable_text::insertion_keeps_the_caret_after_the_joined_combining_cluster", crate::editable_text::insertion_keeps_the_caret_after_the_joined_combining_cluster),
+            ("editable_text::deleting_a_separator_keeps_the_caret_after_the_joined_flag", crate::editable_text::deleting_a_separator_keeps_the_caret_after_the_joined_flag),
+            ("editable_text::text_store::rtl_scalar_rect_midpoints_resolve_to_the_source_scalar", crate::editable_text::text_store::rtl_scalar_rect_midpoints_resolve_to_the_source_scalar),
             ("editable_text::a_tap_places_the_caret_where_it_landed", crate::editable_text::a_tap_places_the_caret_where_it_landed),
             ("editable_text::an_obscured_field_never_hands_its_real_text_to_the_render_object", crate::editable_text::an_obscured_field_never_hands_its_real_text_to_the_render_object),
             ("editable_text::the_editor_steps_the_graphemes_the_painter_snaps_to", crate::editable_text::the_editor_steps_the_graphemes_the_painter_snaps_to),
@@ -149,6 +157,7 @@ fn pointer_and_gesture_recognition() {
     run_cases(
         "pointer_and_gesture_recognition",
         &[
+            ("gesture_detector::viewer_reports_cancelled_then_completed_interactions", crate::gesture_detector::viewer_reports_cancelled_then_completed_interactions as fn()),
             ("gesture_detector::gesture_detector_fires_on_tap_for_a_down_up_on_the_child", crate::gesture_detector::gesture_detector_fires_on_tap_for_a_down_up_on_the_child as fn()),
             ("gesture_detector::gesture_detector_recognizes_a_pan_and_suppresses_the_tap", crate::gesture_detector::gesture_detector_recognizes_a_pan_and_suppresses_the_tap),
             ("gesture_detector_advanced::double_tap_combined_with_tap_fires_double_tap_once_and_tap_never", crate::gesture_detector_advanced::double_tap_combined_with_tap_fires_double_tap_once_and_tap_never),
@@ -212,6 +221,21 @@ fn scroll_physics_and_activity() {
     run_cases(
         "scroll_physics_and_activity",
         &[
+            ("scroll::cancelling_an_in_range_scroll_ends_activity_without_coasting", crate::scroll::cancelling_an_in_range_scroll_ends_activity_without_coasting as fn()),
+            ("scroll::cancelling_bouncing_overscroll_settles_without_release_velocity", crate::scroll::cancelling_bouncing_overscroll_settles_without_release_velocity as fn()),
+            ("scroll::cancelling_a_threshold_refresh_pull_does_not_refresh", crate::scroll::cancelling_a_threshold_refresh_pull_does_not_refresh as fn()),
+            ("scroll::bouncing_lower_edge_preserves_outward_direction", crate::scroll::bouncing_lower_edge_preserves_outward_direction as fn()),
+            ("scroll::bouncing_upper_edge_preserves_outward_direction", crate::scroll::bouncing_upper_edge_preserves_outward_direction as fn()),
+            ("scroll::bouncing_stationary_input_preserves_overscroll", crate::scroll::bouncing_stationary_input_preserves_overscroll as fn()),
+            ("scroll::bouncing_inward_motion_and_crossing_respect_the_new_edge", crate::scroll::bouncing_inward_motion_and_crossing_respect_the_new_edge as fn()),
+            ("scroll::a_scrollable_swap_stops_old_motion_and_retires_its_jump_hook", crate::scroll::a_scrollable_swap_stops_old_motion_and_retires_its_jump_hook as fn()),
+            ("scroll::a_same_position_scrollable_rebuild_preserves_motion", crate::scroll::a_same_position_scrollable_rebuild_preserves_motion as fn()),
+            ("scroll::retiring_one_scrollable_preserves_a_later_owners_jump_hook", crate::scroll::retiring_one_scrollable_preserves_a_later_owners_jump_hook as fn()),
+            ("scroll::a_fast_gesture_while_refreshing_does_not_start_a_fling", crate::scroll::a_fast_gesture_while_refreshing_does_not_start_a_fling as fn()),
+            ("scroll::incremental_pulls_refresh_once_and_finish_allows_the_next_gesture", crate::scroll::incremental_pulls_refresh_once_and_finish_allows_the_next_gesture as fn()),
+            ("scroll::reversing_a_pull_consumes_it_before_scrolling_content", crate::scroll::reversing_a_pull_consumes_it_before_scrolling_content as fn()),
+            ("scroll::a_refresh_controller_swap_retires_the_old_fling_and_drives_the_new_position", crate::scroll::a_refresh_controller_swap_retires_the_old_fling_and_drives_the_new_position as fn()),
+            ("scroll::rebuilding_refresh_content_with_the_same_position_preserves_its_fling", crate::scroll::rebuilding_refresh_content_with_the_same_position_preserves_its_fling as fn()),
             (
                 "scroll::a_wheel_tick_over_nested_scrollables_moves_only_the_inner",
                 crate::scroll::a_wheel_tick_over_nested_scrollables_moves_only_the_inner as fn(),
@@ -263,6 +287,7 @@ fn navigator_and_overlay() {
     run_cases(
         "navigator_and_overlay",
         &[
+            ("back_gesture::cancelling_a_back_swipe_past_halfway_keeps_the_route", crate::back_gesture::cancelling_a_back_swipe_past_halfway_keeps_the_route as fn()),
             ("navigator::local_history::an_entry_pops_before_the_route_and_observers_stay_silent", crate::navigator::local_history::an_entry_pops_before_the_route_and_observers_stay_silent as fn()),
             ("navigator::navigator_pop_removes_top_route_and_completes_result", crate::navigator::navigator_pop_removes_top_route_and_completes_result),
             ("navigator::navigator_push_builds_new_route_and_rearranges_overlay", crate::navigator::navigator_push_builds_new_route_and_rearranges_overlay),
@@ -327,6 +352,9 @@ fn animation_and_visibility() {
     run_cases(
         "animation_and_visibility",
         &[
+            ("dismissible::cancelling_a_fully_slid_card_restores_it_without_dismissal", crate::dismissible::cancelling_a_fully_slid_card_restores_it_without_dismissal as fn()),
+            ("dismissible::a_cancelled_horizontal_dismiss_restores_the_card", crate::dismissible::a_cancelled_horizontal_dismiss_restores_the_card as fn()),
+            ("dismissible::a_cancelled_vertical_dismiss_restores_the_card", crate::dismissible::a_cancelled_vertical_dismiss_restores_the_card as fn()),
             ("animated_size::animated_size_interpolates_to_a_new_child_size_over_frames", crate::animated_size::animated_size_interpolates_to_a_new_child_size_over_frames as fn()),
             ("implicit_animations::animated_container_interpolates_size_over_frames", crate::implicit_animations::animated_container_interpolates_size_over_frames),
             ("implicit_animations::animated_opacity_retargets_from_the_current_value_midflight", crate::implicit_animations::animated_opacity_retargets_from_the_current_value_midflight),

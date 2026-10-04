@@ -1,10 +1,6 @@
 //! Network-based asset loader using HTTP/HTTPS.
 
-#[cfg(feature = "network")]
 use reqwest;
-
-#[cfg(feature = "network")]
-use crate::core::{Asset, AssetLoader, AssetMetadata};
 
 use crate::error::AssetError;
 
@@ -24,7 +20,6 @@ use crate::error::AssetError;
 /// ```
 #[derive(Debug, Clone)]
 pub struct NetworkLoader {
-    #[cfg(feature = "network")]
     client: reqwest::Client,
 }
 
@@ -36,23 +31,13 @@ impl Default for NetworkLoader {
 
 impl NetworkLoader {
     /// Creates a new network loader with default HTTP client.
-    #[cfg(feature = "network")]
     pub fn new() -> Self {
         Self {
             client: reqwest::Client::new(),
         }
     }
 
-    /// Creates a new network loader (requires `network` feature).
-    ///
-    /// This is a stub when the `network` feature is not enabled.
-    #[cfg(not(feature = "network"))]
-    pub fn new() -> Self {
-        Self {}
-    }
-
     /// Creates a network loader with a custom HTTP client.
-    #[cfg(feature = "network")]
     pub fn with_client(client: reqwest::Client) -> Self {
         Self { client }
     }
@@ -65,7 +50,6 @@ impl NetworkLoader {
     /// let loader = NetworkLoader::new();
     /// let bytes = loader.load_url("https://example.com/data.bin").await?;
     /// ```
-    #[cfg(feature = "network")]
     pub async fn load_url(&self, url: &str) -> Result<Vec<u8>, AssetError> {
         let response = self
             .client
@@ -92,23 +76,7 @@ impl NetworkLoader {
         Ok(bytes.to_vec())
     }
 
-    /// Stub for loading from URL (requires `network` feature).
-    ///
-    /// Returns an error when the `network` feature is not enabled.
-    #[cfg(not(feature = "network"))]
-    #[expect(
-        clippy::unused_async,
-        reason = "public API: signature must match the genuinely-async `network`-enabled variant"
-    )]
-    pub async fn load_url(&self, url: &str) -> Result<Vec<u8>, AssetError> {
-        Err(AssetError::LoadFailed {
-            path: url.to_string(),
-            reason: "Network loading requires 'network' feature".to_string(),
-        })
-    }
-
     /// Loads a text string from a URL.
-    #[cfg(feature = "network")]
     pub async fn load_text(&self, url: &str) -> Result<String, AssetError> {
         let bytes = self.load_url(url).await?;
         String::from_utf8(bytes).map_err(|e| AssetError::LoadFailed {
@@ -116,110 +84,16 @@ impl NetworkLoader {
             reason: format!("Invalid UTF-8: {e}"),
         })
     }
-
-    /// Stub for loading text from URL (requires `network` feature).
-    ///
-    /// Returns an error when the `network` feature is not enabled.
-    #[cfg(not(feature = "network"))]
-    #[expect(
-        clippy::unused_async,
-        reason = "public API: signature must match the genuinely-async `network`-enabled variant"
-    )]
-    pub async fn load_text(&self, url: &str) -> Result<String, AssetError> {
-        Err(AssetError::LoadFailed {
-            path: url.to_string(),
-            reason: "Network loading requires 'network' feature".to_string(),
-        })
-    }
-}
-
-#[cfg(feature = "network")]
-impl<T> AssetLoader<T> for NetworkLoader
-where
-    T: Asset<Error = AssetError>,
-    T::Key: AsRef<str>,
-{
-    async fn load(&self, key: &T::Key) -> std::result::Result<T::Data, T::Error> {
-        let url = key.as_ref();
-
-        // For generic loading, we can't construct T::Data from bytes
-        // This is meant to be used with concrete implementations
-        Err(AssetError::LoadFailed {
-            path: url.to_string(),
-            reason:
-                "Generic network loading not supported - use load_url() or concrete Asset types"
-                    .to_string(),
-        })
-    }
-
-    async fn exists(&self, key: &T::Key) -> std::result::Result<bool, T::Error> {
-        let url = key.as_ref();
-
-        // Send HEAD request to check if resource exists
-        match self.client.head(url).send().await {
-            Ok(response) => Ok(response.status().is_success()),
-            Err(_) => Ok(false),
-        }
-    }
-
-    async fn metadata(&self, key: &T::Key) -> std::result::Result<Option<AssetMetadata>, T::Error> {
-        let url = key.as_ref();
-
-        let response = self
-            .client
-            .head(url)
-            .send()
-            .await
-            .map_err(|e| AssetError::LoadFailed {
-                path: url.to_string(),
-                reason: format!("HTTP HEAD request failed: {e}"),
-            })?;
-
-        if !response.status().is_success() {
-            return Ok(None);
-        }
-
-        let size_bytes = response
-            .headers()
-            .get(reqwest::header::CONTENT_LENGTH)
-            .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.parse::<usize>().ok());
-
-        let content_type = response
-            .headers()
-            .get(reqwest::header::CONTENT_TYPE)
-            .and_then(|v| v.to_str().ok())
-            .map(ToString::to_string);
-
-        Ok(Some(AssetMetadata {
-            size_bytes,
-            format: content_type,
-            ..Default::default()
-        }))
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[tokio::test]
-    #[cfg(not(feature = "network"))]
-    async fn test_network_loader_without_feature() {
-        let loader = NetworkLoader::new();
-        let result = loader.load_url("https://example.com/test").await;
-
-        assert!(result.is_err());
-        if let Err(AssetError::LoadFailed { reason, .. }) = result {
-            assert!(reason.contains("network"));
-        }
-    }
-
     /// A single-request, single-response HTTP/1.1 server bound to an
     /// ephemeral loopback port — hermetic, no external network. Accepts
     /// exactly one connection, discards the request, writes `body` as a
     /// `200 OK` response, then the listener thread exits.
-    #[cfg(feature = "network")]
     fn spawn_single_response_server(body: &'static [u8]) -> std::net::SocketAddr {
         use std::io::{Read, Write};
         use std::net::TcpListener;
@@ -254,17 +128,14 @@ mod tests {
     /// `NetworkLoader::load_url` against a real, hermetic local HTTP server:
     /// no external network, no mocking library — proves `flui-assets`' own
     /// network-loading code path (the `network` feature's `reqwest` client)
-    /// genuinely round-trips bytes over HTTP. This is independent of, and
-    /// does not imply anything about, `flui-widgets`' `network-images`
-    /// feature, whose `NetworkImage` provider never issues a request at all
-    /// (see `crates/flui-widgets/src/image/provider.rs`).
+    /// genuinely round-trips bytes over HTTP. Widget image decoding and
+    /// presentation are covered by their own consumer tests.
     ///
     /// The `load_url` call is wrapped in a bounded [`tokio::time::timeout`]:
     /// `NetworkLoader::new()` builds a `reqwest::Client` with no request
     /// timeout of its own, so a wedged exchange (a server that accepts but
     /// never writes) would otherwise hang this test — and CI — forever.
     #[tokio::test]
-    #[cfg(feature = "network")]
     async fn load_url_round_trips_bytes_from_a_hermetic_local_server() {
         use std::time::Duration;
 

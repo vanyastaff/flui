@@ -16,7 +16,7 @@
 
 use crate::common;
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -207,6 +207,11 @@ pub fn action_press_closes_the_snack_bar_and_is_single_fire() {
         "the action must fire on press"
     );
 
+    // The installed callback must reject another contact before rebuilding.
+    laid.dispatch_pointer_down(tap_x, tap_y);
+    laid.dispatch_pointer_up(tap_x, tap_y);
+    assert_eq!(action_presses.load(Ordering::SeqCst), 1);
+
     pump_ms(&mut laid, ENTRY.as_millis() as u64);
     assert_eq!(
         snack_bar_material_count(&laid),
@@ -214,10 +219,7 @@ pub fn action_press_closes_the_snack_bar_and_is_single_fire() {
         "pressing the action must close the snack bar (SnackBarClosedReason::Action)"
     );
 
-    // A second dispatch at the same coordinates hits whatever is now
-    // mounted there (the body, since the snack bar closed) — confirms the
-    // action truly stopped being interactable, not merely that its
-    // callback happens not to have re-fired for an unrelated reason.
+    // After dismissal the same coordinates no longer reach the action.
     laid.dispatch_pointer_down(tap_x, tap_y);
     laid.dispatch_pointer_up(tap_x, tap_y);
     assert_eq!(
@@ -247,22 +249,12 @@ pub fn action_press_closes_the_snack_bar_and_is_single_fire() {
 //    tree — the practical shape "re-homing" actually takes in this
 //    substrate.
 //
-// A literal "the SAME Scaffold element persists in place while its ANCESTOR
-// messenger identity changes" scenario is not exercised here: FLUI
-// reconciles `ScaffoldMessenger::new(...)` at the same type+position
-// in the tree as an UPDATE to the existing element, not a fresh mount — so
-// two structurally-identical `ScaffoldMessenger::new(...)` calls in
-// sequence are the SAME element/handle, not "old" vs "new" (confirmed
-// empirically: `pump_widget` with a second, differently-parameterized
-// `ScaffoldMessenger::new(...)` at the same tree shape yields
-// `first_handle.ptr_eq(&second_handle) == true`). Reaching a genuinely
-// different ancestor identity without remounting the Scaffold would need
-// `GlobalKey`-based reparenting across two structurally distinct branches,
-// which `ScaffoldMessengerScope::maybe_of`'s no-dependency ambient lookup
-// (see `scaffold.rs`'s own module docs' "`ScaffoldMessenger` wiring"
-// section) cannot pick up anyway, since `did_change_dependencies` never
-// fires for it — a documented, honest limitation, not silently papered
-// over.
+// A same-type messenger configuration update keeps its mounted handle, so it
+// does not exercise an ancestor identity transition. GlobalKey reparenting
+// between distinct messenger branches can retain Scaffold state; its tracked
+// Theme/MediaQuery dependencies schedule did_change_dependencies on reactivation,
+// which rehomes the registration. That retained transition has no dedicated
+// behavior row here; the absence of coverage is not evidence of broken wiring.
 // ============================================================================
 
 // ============================================================================
@@ -328,4 +320,135 @@ pub fn a_snack_bar_completion_cannot_write_another_presentations_signal() {
         Some(Err(flui_sdk::view::SignalError::ForeignGraph { .. }))
     ));
     assert_eq!(probe.value(), Ok(0));
+}
+
+/// A failed action stays claimed, publishes disabled semantics on the next
+/// frame, and does not prevent a newly mounted action from being pressed.
+pub fn action_callback_panic_disables_the_button_and_fresh_action_progresses() {
+    let vsync = Vsync::new();
+    let calls = Rc::new(Cell::new(0));
+    let callback_calls = Rc::clone(&calls);
+    let mut laid = lay_out_animated(
+        themed_animated(
+            &vsync,
+            SnackBarAction::new("UNDO", move |_cx| -> () {
+                callback_calls.set(callback_calls.get() + 1);
+                panic!("action failed");
+            }),
+        ),
+        tight(160.0, 48.0),
+        vsync.clone(),
+    );
+    laid.enable_semantics();
+    laid.pump();
+    assert!(
+        !laid
+            .a11y_tree()
+            .expect("semantics enabled")
+            .find_by_label("UNDO")
+            .expect("action button labelled")
+            .is_disabled()
+    );
+    laid.dispatch_pointer_down(80.0, 24.0);
+    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        laid.dispatch_pointer_up(80.0, 24.0);
+    }))
+    .expect_err("the action panic must propagate");
+    assert_eq!(failure.downcast_ref::<&str>(), Some(&"action failed"));
+    assert_eq!(calls.get(), 1);
+
+    // A second contact before the frame cannot retry the failed callback.
+    laid.dispatch_pointer_down(80.0, 24.0);
+    laid.dispatch_pointer_up(80.0, 24.0);
+    assert_eq!(calls.get(), 1);
+    laid.pump();
+    assert!(
+        laid.a11y_tree()
+            .expect("semantics enabled")
+            .find_by_label("UNDO")
+            .expect("action button retained")
+            .is_disabled()
+    );
+
+    // Remove the old state rather than merely updating its configuration:
+    // the one-shot claim belongs to the retained action state.
+    laid.pump_widget(themed_animated(&vsync, SizedBox::new(160.0, 48.0)));
+    laid.pump();
+    let fresh_calls = Rc::clone(&calls);
+    laid.pump_widget(themed_animated(
+        &vsync,
+        SnackBarAction::new("RETRY", move |_cx| {
+            fresh_calls.set(fresh_calls.get() + 1);
+        }),
+    ));
+    laid.pump();
+    laid.dispatch_pointer_down(80.0, 24.0);
+    laid.dispatch_pointer_up(80.0, 24.0);
+    assert_eq!(calls.get(), 2, "a fresh action must still receive input");
+    laid.pump();
+    assert!(
+        laid.a11y_tree()
+            .expect("semantics enabled")
+            .find_by_label("RETRY")
+            .expect("fresh action labelled")
+            .is_disabled()
+    );
+}
+
+pub fn a_completion_panic_still_advances_the_accepted_snack_bar_queue() {
+    let vsync = Vsync::new();
+    let (mut laid, handle) =
+        mount_with_scaffolds(&vsync, vec![Scaffold::new().body(body_marker())]);
+    let first_calls = Rc::new(std::cell::Cell::new(0));
+    let recorded = Rc::clone(&first_calls);
+    handle
+        .show_snack_bar(SnackBar::new(Text::new("first")))
+        .on_closed(move |_cx, reason| -> () {
+            assert_eq!(reason, flui_material::SnackBarClosedReason::Remove);
+            recorded.set(recorded.get() + 1);
+            panic!("first completion failed");
+        });
+    let second_reason = Rc::new(std::cell::Cell::new(None));
+    let recorded = Rc::clone(&second_reason);
+    handle
+        .show_snack_bar(SnackBar::new(Text::new("second")).duration(Duration::from_millis(64)))
+        .on_closed(move |_cx, reason| recorded.set(Some(reason)));
+    pump_ms(&mut laid, 300);
+    assert_eq!(snack_bar_material_count(&laid), 1);
+    let payload = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        handle.remove_current_snack_bar();
+    }))
+    .expect_err("the completion failure must reach the caller");
+    assert_eq!(
+        payload.downcast_ref::<&str>(),
+        Some(&"first completion failed")
+    );
+    assert_eq!(first_calls.get(), 1);
+    pump_ms(&mut laid, 300);
+    assert_eq!(
+        snack_bar_material_count(&laid),
+        1,
+        "the accepted second bar entered"
+    );
+    pump_ms(&mut laid, 500);
+    assert_eq!(
+        second_reason.get(),
+        Some(flui_material::SnackBarClosedReason::Timeout)
+    );
+    assert_eq!(snack_bar_material_count(&laid), 0);
+    let third_reason = Rc::new(std::cell::Cell::new(None));
+    let recorded = Rc::clone(&third_reason);
+    handle
+        .show_snack_bar(SnackBar::new(Text::new("third")))
+        .on_closed(move |_cx, reason| recorded.set(Some(reason)));
+    pump_ms(&mut laid, 300);
+    assert_eq!(snack_bar_material_count(&laid), 1);
+    handle.remove_current_snack_bar();
+    laid.pump();
+    assert_eq!(
+        third_reason.get(),
+        Some(flui_material::SnackBarClosedReason::Remove)
+    );
+    assert_eq!(snack_bar_material_count(&laid), 0);
+    assert_eq!(first_calls.get(), 1);
 }

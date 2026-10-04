@@ -656,7 +656,7 @@ fn percent_decoded(text: &str) -> String {
             at += 1;
         }
     }
-    String::from_utf8_lossy(&decoded).into_owned()
+    String::from_utf8_lossy_owned(decoded)
 }
 
 /// The allowlist file.

@@ -1,10 +1,10 @@
 //! Image asset implementation.
 
+use std::borrow::Cow;
 use std::path::Path;
 
-use tokio::fs;
+use crate::loaders::BytesFileLoader;
 
-#[cfg(feature = "images")]
 use image;
 
 use crate::core::{Asset, AssetMetadata};
@@ -13,7 +13,7 @@ use crate::types::AssetKey;
 
 /// Image asset for loading images from various sources.
 ///
-/// Supports common formats: PNG, JPEG, GIF, BMP, ICO, TIFF, WebP, etc.
+/// Supports PNG, JPEG and GIF through the workspace's `image` codec features.
 ///
 /// # Examples
 ///
@@ -77,20 +77,13 @@ impl Asset for ImageAsset {
 
     async fn load(&self) -> Result<Self::Data, Self::Error> {
         // Get bytes either from memory or file
-        #[cfg_attr(not(feature = "images"), allow(unused_variables))]
         let bytes = if let Some(ref bytes) = self.bytes {
-            bytes.clone()
+            Cow::Borrowed(bytes.as_slice())
         } else {
             // Load from file
-            fs::read(&self.path)
-                .await
-                .map_err(|e| AssetError::LoadFailed {
-                    path: self.path.clone(),
-                    reason: format!("Failed to read file: {e}"),
-                })?
+            Cow::Owned(BytesFileLoader::new("").load_bytes(&self.path).await?)
         };
 
-        #[cfg(feature = "images")]
         {
             // Decode image using image crate
             let img = image::load_from_memory(&bytes).map_err(|e| AssetError::LoadFailed {
@@ -99,7 +92,7 @@ impl Asset for ImageAsset {
             })?;
 
             // Convert to RGBA8
-            let rgba = img.to_rgba8();
+            let rgba = img.into_rgba8();
             let (width, height) = rgba.dimensions();
             let data = rgba.into_raw();
 
@@ -108,14 +101,6 @@ impl Asset for ImageAsset {
                     path: self.path.clone(),
                     reason: format!("Decoded image is malformed: {e}"),
                 }
-            })
-        }
-
-        #[cfg(not(feature = "images"))]
-        {
-            Err(AssetError::LoadFailed {
-                path: self.path.clone(),
-                reason: "Image loading requires 'images' feature".to_string(),
             })
         }
     }

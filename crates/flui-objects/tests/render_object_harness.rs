@@ -5539,6 +5539,14 @@ fn family_sizing() {
                 harness_constrained_box_enforces_minimums,
             ),
             (
+                "constrained_box_preserves_large_finite_bound",
+                harness_constrained_box_preserves_large_finite_bound,
+            ),
+            (
+                "constrained_box_keeps_hundredth_quantization",
+                harness_constrained_box_keeps_hundredth_quantization,
+            ),
+            (
                 "limited_box_caps_unbounded_width_in_row",
                 harness_limited_box_caps_unbounded_width_in_row,
             ),
@@ -5582,6 +5590,14 @@ fn family_intrinsics() {
             (
                 "intrinsic_width_shrink_wrapping_width_oracle",
                 harness_intrinsic_width_shrink_wrapping_width_oracle,
+            ),
+            (
+                "intrinsic_width_preserves_size_with_tiny_step",
+                harness_intrinsic_width_preserves_size_with_tiny_step,
+            ),
+            (
+                "intrinsic_width_rounds_up_to_ordinary_step",
+                harness_intrinsic_width_rounds_up_to_ordinary_step,
             ),
             (
                 "dry_layout_child_intrinsic_channel_matches_standalone_query",
@@ -6034,4 +6050,57 @@ fn family_recovery() {
             ),
         ],
     );
+}
+
+fn harness_constrained_box_preserves_large_finite_bound() {
+    let width = f64::MAX / 8.0;
+    let run = RenderTester::mount(
+        box_node(RenderConstrainedBox::new(BoxConstraints::tight(Size::new(
+            width, 10.0,
+        ))))
+        .child(box_node(RenderColoredBox::red(20.0, 10.0)).label("child")),
+    )
+    .with_constraints(BoxConstraints::new(0.0, f64::MAX / 4.0, 0.0, 100.0))
+    .run_layout();
+    assert_eq!(run.box_geometry(run.root()), Size::new(width, 10.0));
+    assert_eq!(run.box_geometry(run.id("child")), Size::new(width, 10.0));
+}
+
+fn harness_constrained_box_keeps_hundredth_quantization() {
+    let run = RenderTester::mount(
+        box_node(RenderConstrainedBox::new(BoxConstraints::tight(Size::new(
+            10.004, 20.006,
+        ))))
+        .child(box_node(RenderColoredBox::red(20.0, 10.0)).label("child")),
+    )
+    .with_constraints(loose(100.0))
+    .run_layout();
+    assert_eq!(run.box_geometry(run.root()), Size::new(10.0, 20.01));
+    assert_eq!(run.box_geometry(run.id("child")), Size::new(10.0, 20.01));
+}
+
+fn harness_intrinsic_width_preserves_size_with_tiny_step() {
+    let mut run = RenderTester::mount(
+        box_node(RenderIntrinsicWidth::new(Some(f64::MIN_POSITIVE), None))
+            .child(box_node(RenderTestBox::new(10.0, 40.0, 20.0, 80.0)).label("child")),
+    )
+    .with_constraints(BoxConstraints::new(0.0, 100.0, 0.0, 100.0))
+    .run_layout();
+    let root = run.root();
+    assert_eq!(run.box_geometry(root).width, 40.0);
+    assert_eq!(run.box_geometry(run.id("child")).width, 40.0);
+    assert_eq!(run.max_intrinsic_width(root, 100.0), 40.0);
+}
+
+fn harness_intrinsic_width_rounds_up_to_ordinary_step() {
+    let mut run = RenderTester::mount(
+        box_node(RenderIntrinsicWidth::new(Some(30.0), None))
+            .child(box_node(RenderTestBox::new(10.0, 40.0, 20.0, 80.0)).label("child")),
+    )
+    .with_constraints(BoxConstraints::new(0.0, 100.0, 0.0, 100.0))
+    .run_layout();
+    let root = run.root();
+    assert_eq!(run.box_geometry(root).width, 60.0);
+    assert_eq!(run.box_geometry(run.id("child")).width, 60.0);
+    assert_eq!(run.max_intrinsic_width(root, 100.0), 60.0);
 }

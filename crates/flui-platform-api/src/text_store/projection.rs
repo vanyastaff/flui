@@ -107,7 +107,7 @@ fn preedit(
     }))?;
     let caret = match cursor {
         Some((_, end)) => {
-            let end = clamp_to_char_boundary(text, end);
+            let end = text.ceil_char_boundary(end);
             Utf16Offset::new(start.get() + utf16::utf16_len(&text[..end]).get())
         }
         None => change.new_end,
@@ -133,17 +133,6 @@ fn commit(session: &mut dyn TextStoreEdit, text: &str) -> Result<(), TextStoreEr
     };
     session.set_composition(None)?;
     session.set_selection(Selection::collapsed(change.new_end))
-}
-
-/// `offset` moved forward to the nearest `char` boundary of `text`, and
-/// clamped to its end: a preedit cursor is untrusted platform input.
-fn clamp_to_char_boundary(text: &str, offset: usize) -> usize {
-    if offset >= text.len() {
-        return text.len();
-    }
-    (offset..=text.len())
-        .find(|&candidate| text.is_char_boundary(candidate))
-        .unwrap_or(text.len())
 }
 
 #[cfg(test)]
@@ -224,6 +213,18 @@ mod tests {
         assert_eq!(store.selection(), Selection::collapsed(at(1)));
         apply(&store, &preedit_event("éa", Some((0, 99))));
         assert_eq!(store.selection(), Selection::collapsed(at(2)));
+        for (text, cursor, units) in [
+            ("中a", 1, 1),
+            ("中a", 2, 1),
+            ("😀a", 1, 2),
+            ("😀a", 2, 2),
+            ("😀a", 3, 2),
+            ("😀a", usize::MAX, 3),
+            ("", usize::MAX, 0),
+        ] {
+            apply(&store, &preedit_event(text, Some((0, cursor))));
+            assert_eq!(store.selection(), Selection::collapsed(at(units)));
+        }
     }
 
     fn commit_replaces_the_composition() {

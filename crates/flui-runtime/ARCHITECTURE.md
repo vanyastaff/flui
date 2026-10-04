@@ -141,7 +141,8 @@ host.
   `SemanticsHost`, `PerformanceStats`, the commit epoch) or, for
   `ExecutionServices`, one host loop, constructed only by the host's
   composition root. The one static is `realm_services`' incarnation counter,
-  a monotonic ID counter the globals gate exempts.
+  an identity counter with an explicit ADR-0097 counter grant. Its `try_update`
+  helper preserves permanent exhaustion instead of wrapping into a previous realm.
 - **The realm's surface is the host's, not an embedder's.** `UiRealm`,
   `PresentationState` and their methods are `pub` only where `flui-app`
   calls them; what only `flui-app`'s tests call is `pub` under
@@ -297,6 +298,17 @@ later host opportunity. A send refused because the bounded inbox is full is
 also a host opportunity: it retries existing debt before returning the rejected
 command, because otherwise no successful ingress could reach the wake path.
 
+A queued `HotReload` follows the same failure ordering. If reassembly or its
+frame-request callback panics, partial tree changes retain redraw demand and a
+fresh owner wake is attempted before the first panic resumes. A failed retry
+keeps shared delivery debt for the next ingress or owner boundary. The accepted
+FIFO tail is neither discarded nor executed inside the failed turn. This does
+not roll back reassembly or promise a host turn after every delivery fails.
+`failed_reload_wake_rearms_the_accepted_tail` and
+`competing_reload_wakes_preserve_the_first_failure_and_retry`, and
+`reassemble_failure_keeps_priority_over_a_failed_rearm` exercise the real
+widget reassembly callback with a queued agent read.
+
 This is continuation safety, not rollback or callback isolation. The panic
 still leaves the dispatch boundary, and arbitrary external effects remain the
 application's responsibility. Pinned by the panicking secondary-presentation
@@ -348,7 +360,11 @@ presentation drops the agent and every call on a window answers `gone` (kind `wi
 and before anything is enqueued, even while another thread's call still holds the port: the port
 carries an open flag the presentation clears as it closes, and a call enqueues under the flag's
 read lock while the close takes its write lock, so nothing is admitted for a closed window. The
-windows hold the presentation's semantics handle strongly instead of the presentation, so the
+wake runs after the read guard retires, including a full-inbox debt retry. A wake
+may therefore re-enter close without deadlocking the admission fence; the
+already admitted command keeps its place in the inbox. The bounded child rows
+in `agent_port_admission_matrix` exercise both public reads and actions, then
+verify that later calls answer `gone`. The windows hold the presentation's semantics handle strongly instead of the presentation, so the
 cost lasts exactly as long as the hook keeps a window: a hook that does not serve is handed none,
 and one that detaches or panics drops its windows, and collection stops on the next frame. `flui-app`'s desktop and iOS runners
 and `flui_testing::HeadlessDevAgent` drive the hook through `dev_agent::DevAgentHost`; the
@@ -393,3 +409,60 @@ queued behind that task. Bytes registered before are refused at that door
 owner turn. A notice that only wakes is idempotent: a second notice, or a pipeline that already
 applied the change, lays nothing out. Pinned by `font_registration_matrix`
 (`src/ui_realm/tests/font_registration.rs`).
+
+### Incarnation exhaustion cannot reissue a stale address
+
+The incarnation counter issues every nonzero `u32` generation once, then keeps
+zero as a permanent exhaustion sentinel. Catching an exhaustion panic cannot
+restart identity allocation. `exhausted_incarnations_never_alias_previous_realms`
+in `realm_and_presentation_isolation_matrix` exercises the production allocator
+with a local counter at its terminal boundary; exhausting the actual global
+source is impractical and would invalidate unrelated realm tests.
+
+### A zero-capacity performance window is disabled
+
+`PerformanceStats::new(0)` retains no duration samples, so both average frame
+time and FPS stay zero. A nonzero window still records platform-clock intervals.
+The consumer row `a_zero_capacity_performance_window_retains_no_frame_samples`
+in flui-testing's `headless_frame_driver_matrix` distinguishes the two through
+the public timing methods. Production overlays retain their default 120 samples.
+
+
+### Deterministic execution preserves concurrent admission during compaction
+
+Completed deterministic tasks retire under the task-list mutex; pending futures
+stay in the same list, including tasks admitted by another producer before the
+lock is acquired. Removed slots contain no future, so their retirement invokes
+no user destructor under that mutex. Taking a snapshot and replacing the list
+would discard concurrent admission. `compaction_preserves_concurrently_admitted_future_and_next_work`
+in `execution_lane_matrix` uses a private before-lock seam to admit a real public
+spawn exactly at that boundary, then proves both that task and the next task run.
+
+### Refused first-frame counter operations preserve existing deferrals
+
+An unmatched release or exhausted deferral count refuses its atomic update
+before mutation. Catching that refusal therefore leaves later valid operations
+usable. The public `unmatched_first_frame_release_preserves_the_next_deferral`
+row in `flui-testing`'s `headless_frame_driver_matrix` proves real painted output
+is withheld and then delivered after recovery. `draw_frame_returns_layer_tree_and_defers_when_gated`
+also contains the terminal-count row; only its initial count is injected
+privately because the public boundary requires billions of calls to reach.
+
+### Frame failure delivery isolates diagnostics and opaque ownership
+
+A segment failure is classified by borrowing its payload, then the opaque payload
+is retained before recovery or diagnostics can run. The typed report owns only
+framework values and strings. Diagnostics and the registered handler run under
+separate boundaries: subscriber failure cannot suppress callback delivery, and
+neither can replace the presentation's original failure or stop sibling frames.
+A failed callback's owning envelope is retained before secondary payload handling;
+ordinary successful-envelope retirement still runs under its own boundary. Rust
+cannot contain two panicking fields in an aggregate's first ordinary destruction.
+
+`frame_failure_containment_matrix` isolates aggregate payload and callback-capture
+cases in subprocesses: producer alone, handler alone, diagnostics alone, competing
+failures, and failed-handler retirement during realm teardown. Each case asserts
+one segment report, no partial submission and the next automatic retry presenting.
+The existing private segment probe injects a failure that consumers cannot place
+at this exact outer boundary; the registered report handler and real frame driver
+are the production paths.

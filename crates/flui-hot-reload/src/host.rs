@@ -93,7 +93,7 @@ pub struct ScenePlugin {
     drop_fn: Option<SceneDropFn>,
     kind: PluginKind,
     version: u32,
-    mtime: u64,
+    mtime: Option<std::time::SystemTime>,
 }
 
 impl ScenePlugin {
@@ -116,7 +116,7 @@ impl ScenePlugin {
         unsafe {
             // Try app_plugin! symbols first (flui_app_build)
             if let Some(resolved) = Self::try_resolve(&lib, "flui_app") {
-                let mtime = dynlib::file_mtime(lib_path);
+                let mtime = dynlib::file_revision(lib_path);
                 tracing::info!(
                     "App plugin loaded (version {}) from {}",
                     resolved.version,
@@ -135,7 +135,7 @@ impl ScenePlugin {
 
             // Fall back to scene_plugin! symbols (flui_scene_build)
             if let Some(resolved) = Self::try_resolve(&lib, "flui_scene") {
-                let mtime = dynlib::file_mtime(lib_path);
+                let mtime = dynlib::file_revision(lib_path);
                 tracing::info!(
                     "Scene plugin loaded (version {}) from {}",
                     resolved.version,
@@ -310,7 +310,7 @@ impl ScenePlugin {
     /// Check if the shared library file on disk has been modified since it was
     /// loaded.
     pub fn has_update(&self) -> bool {
-        let current = dynlib::file_mtime(self.lib.path());
+        let current = dynlib::file_revision(self.lib.path());
         current != self.mtime
     }
 

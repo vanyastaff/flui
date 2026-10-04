@@ -210,15 +210,7 @@ fn setup(unrelated_count: usize) -> Fixture {
         tree,
         owner,
         destination,
-        destination_update: Host::new(
-            2,
-            vec![
-                GlobalLeaf {
-                    key: global.clone(),
-                }
-                .boxed(),
-            ],
-        ),
+        destination_update: Host::new(2, vec![GlobalLeaf { key: global }.boxed()]),
         moved_render,
         pipeline,
     }

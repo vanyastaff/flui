@@ -15,7 +15,9 @@
 //! it, flush. The tests deliberately use only API that predates the diff so
 //! they can run — and fail — against the pre-diff implementation.
 
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use flui_foundation::RenderId;
 use flui_semantics::{SemanticsNode, SemanticsOwner, TreeUpdate};
@@ -100,5 +102,648 @@ fn a_rebuild_publishes_only_what_changed() {
         diff.nodes[0].1.label(),
         Some("CHANGED"),
         "and it is the node whose content changed"
+    );
+}
+
+#[test]
+fn detaching_checks_the_actual_parent_and_preserves_reparenting() {
+    let (mut owner, received) = recording_owner();
+    let root = owner.insert(node(0, "root"));
+    let first = owner.insert(node(1, "first parent"));
+    let second = owner.insert(node(2, "second parent"));
+    let child = owner.insert(node(3, "child"));
+    owner.set_root(Some(root));
+    owner.add_child(root, first);
+    owner.add_child(root, second);
+    owner.add_child(first, child);
+    owner.flush();
+
+    owner.remove_child(second, child);
+    owner.remove_child(flui_foundation::SemanticsId::new(99), child);
+    assert_eq!(owner.tree().parent(child), Some(first));
+    assert_eq!(owner.tree().children(first), Some(&[child][..]));
+    owner.flush();
+    assert_eq!(received.lock().len(), 1, "a refused detach changes nothing");
+
+    owner.add_child(second, child);
+    assert_eq!(owner.tree().parent(child), Some(second));
+    assert_eq!(owner.tree().children(first), Some(&[][..]));
+    assert_eq!(owner.tree().children(second), Some(&[child][..]));
+    owner.flush();
+    {
+        let updates = received.lock();
+        let moved = &updates[1];
+        let first_id = owner
+            .get(first)
+            .expect("first parent")
+            .accessibility_id()
+            .expect("render-backed");
+        let second_id = owner
+            .get(second)
+            .expect("second parent")
+            .accessibility_id()
+            .expect("render-backed");
+        let child_id = owner
+            .get(child)
+            .expect("child")
+            .accessibility_id()
+            .expect("render-backed");
+        let published = |id| {
+            &moved
+                .nodes
+                .iter()
+                .find(|(node_id, _)| node_id.0 == id)
+                .expect("changed parent published")
+                .1
+        };
+        assert_eq!(published(first_id.as_u64()).children(), []);
+        assert_eq!(
+            published(second_id.as_u64()).children(),
+            &[accesskit::NodeId(child_id.as_u64())]
+        );
+    }
+
+    owner.remove_child(second, child);
+    assert_eq!(owner.tree().parent(child), None);
+    assert_eq!(owner.tree().children(second), Some(&[][..]));
+    owner.add_child(first, child);
+    assert_eq!(owner.tree().parent(child), Some(first));
+    assert_eq!(owner.tree().children(first), Some(&[child][..]));
+}
+
+fn failed_label_delivery_retries_unchanged_input() {
+    assert_delivery_recovers(|owner, _, child| {
+        owner
+            .get_mut(child)
+            .expect("live child")
+            .config_mut()
+            .set_label("changed");
+    });
+}
+
+fn failed_focus_delivery_retries_unchanged_input() {
+    assert_delivery_recovers(|owner, _, child| {
+        owner
+            .get_mut(child)
+            .expect("live child")
+            .config_mut()
+            .set_focused(true);
+    });
+}
+
+fn failed_removal_delivery_retries_unchanged_input() {
+    assert_delivery_recovers(|owner, _, child| {
+        drop(owner.remove(child));
+    });
+}
+
+fn assert_delivery_recovers(
+    change: fn(&mut SemanticsOwner, flui_foundation::SemanticsId, flui_foundation::SemanticsId),
+) {
+    let fail_delivery = Arc::new(AtomicBool::new(false));
+    let received = Arc::new(Mutex::new(Vec::<TreeUpdate>::new()));
+    let sink = Arc::clone(&received);
+    let fail = Arc::clone(&fail_delivery);
+    let mut owner = SemanticsOwner::new(Arc::new(move |update| {
+        assert!(
+            !fail.load(Ordering::Relaxed),
+            "delivery failed before acceptance"
+        );
+        sink.lock().push(update.clone());
+    }));
+    let root = owner.insert(node(0, "root"));
+    let child = owner.insert(node(1, "original"));
+    owner.add_child(root, child);
+    owner.set_root(Some(root));
+    assert_eq!(owner.flush(), 2);
+    change(&mut owner, root, child);
+    let expected = owner.to_accesskit_tree_update(None).expect("rooted tree");
+
+    fail_delivery.store(true, Ordering::Relaxed);
+    let failure = catch_unwind(AssertUnwindSafe(|| owner.flush()))
+        .expect_err("the callback rejects this attempt");
+    let is_delivery_failure = failure
+        .downcast_ref::<String>()
+        .is_some_and(|message| message.contains("delivery failed before acceptance"))
+        || failure
+            .downcast_ref::<&str>()
+            .is_some_and(|message| message.contains("delivery failed before acceptance"));
+    std::mem::forget(failure);
+    assert!(
+        is_delivery_failure,
+        "the original delivery failure remains authoritative"
+    );
+    assert!(owner.needs_flush(), "failed delivery keeps work pending");
+    assert_eq!(received.lock().len(), 1);
+
+    fail_delivery.store(false, Ordering::Relaxed);
+    owner.flush();
+    {
+        let updates = received.lock();
+        assert_eq!(updates.len(), 2, "unchanged input must retry delivery");
+        let mut actual = updates[0]
+            .nodes
+            .iter()
+            .cloned()
+            .collect::<std::collections::HashMap<_, _>>();
+        for (id, node) in &updates[1].nodes {
+            actual.insert(*id, node.clone());
+        }
+        // Removal is conveyed by the parent's child list, not a tombstone.
+        for (id, node) in &expected.nodes {
+            assert_eq!(
+                actual.get(id),
+                Some(node),
+                "retry delivers the current node"
+            );
+        }
+        assert_eq!(
+            updates[1].focus, expected.focus,
+            "retry delivers current focus"
+        );
+    }
+    assert!(!owner.needs_flush());
+    assert_eq!(owner.flush(), 0);
+    assert_eq!(
+        received.lock().len(),
+        2,
+        "accepted retry leaves no duplicate debt"
+    );
+
+    owner
+        .get_mut(root)
+        .expect("root remains live")
+        .config_mut()
+        .set_label("next operation");
+    assert_eq!(owner.flush(), 1);
+    assert_eq!(
+        received.lock().len(),
+        3,
+        "the next operation still progresses"
+    );
+}
+
+#[test]
+fn failed_incremental_delivery_preserves_retry_and_progress() {
+    let cases: &[(&str, fn())] = &[
+        (
+            "failed_label_delivery_retries_unchanged_input",
+            failed_label_delivery_retries_unchanged_input,
+        ),
+        (
+            "failed_focus_delivery_retries_unchanged_input",
+            failed_focus_delivery_retries_unchanged_input,
+        ),
+        (
+            "failed_removal_delivery_retries_unchanged_input",
+            failed_removal_delivery_retries_unchanged_input,
+        ),
+    ];
+    let mut failures = Vec::new();
+    for &(name, run) in cases {
+        if let Err(payload) = catch_unwind(run) {
+            failures.push(name);
+            std::mem::forget(payload);
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "delivery recovery rows failed: {failures:?}"
+    );
+}
+
+fn selected_properties_publish_when_a_consumer_skips_empty_annotations() {
+    use flui_semantics::{SemanticsConfiguration, SemanticsProperties};
+    let properties = SemanticsProperties {
+        selected: Some(true),
+        ..SemanticsProperties::default()
+    };
+    let (mut owner, updates) = recording_owner();
+    if !properties.is_empty() {
+        let root = owner
+            .insert(node(0, "").with_config(SemanticsConfiguration::from_properties(&properties)));
+        owner.set_root(Some(root));
+        owner.flush();
+    }
+    let updates = updates.lock();
+    assert_eq!(
+        updates.len(),
+        1,
+        "selection-only annotation must reach the platform"
+    );
+    assert_eq!(updates[0].nodes[0].1.is_selected(), Some(true));
+}
+
+fn absent_properties_and_empty_collections_are_empty() {
+    let properties = flui_semantics::SemanticsProperties::default();
+    assert!(properties.is_empty());
+}
+
+fn explicit_enabled_is_a_present_property() {
+    let properties = flui_semantics::SemanticsProperties {
+        enabled: Some(false),
+        ..flui_semantics::SemanticsProperties::default()
+    };
+    assert!(!properties.is_empty());
+}
+
+fn explicit_checked_is_a_present_property() {
+    let properties = flui_semantics::SemanticsProperties {
+        checked: Some(false),
+        ..flui_semantics::SemanticsProperties::default()
+    };
+    assert!(!properties.is_empty());
+}
+
+fn explicit_mixed_is_a_present_property() {
+    let properties = flui_semantics::SemanticsProperties {
+        mixed: Some(false),
+        ..flui_semantics::SemanticsProperties::default()
+    };
+    assert!(!properties.is_empty());
+}
+
+fn explicit_selected_is_a_present_property() {
+    let properties = flui_semantics::SemanticsProperties {
+        selected: Some(false),
+        ..flui_semantics::SemanticsProperties::default()
+    };
+    assert!(!properties.is_empty());
+}
+
+fn explicit_toggled_is_a_present_property() {
+    let properties = flui_semantics::SemanticsProperties {
+        toggled: Some(false),
+        ..flui_semantics::SemanticsProperties::default()
+    };
+    assert!(!properties.is_empty());
+}
+
+fn explicit_expanded_is_a_present_property() {
+    let properties = flui_semantics::SemanticsProperties {
+        expanded: Some(false),
+        ..flui_semantics::SemanticsProperties::default()
+    };
+    assert!(!properties.is_empty());
+}
+
+fn explicit_focused_is_a_present_property() {
+    let properties = flui_semantics::SemanticsProperties {
+        focused: Some(false),
+        ..flui_semantics::SemanticsProperties::default()
+    };
+    assert!(!properties.is_empty());
+}
+
+fn explicit_focusable_is_a_present_property() {
+    let properties = flui_semantics::SemanticsProperties {
+        focusable: Some(false),
+        ..flui_semantics::SemanticsProperties::default()
+    };
+    assert!(!properties.is_empty());
+}
+
+fn explicit_button_is_a_present_property() {
+    let properties = flui_semantics::SemanticsProperties {
+        button: Some(false),
+        ..flui_semantics::SemanticsProperties::default()
+    };
+    assert!(!properties.is_empty());
+}
+
+fn explicit_link_is_a_present_property() {
+    let properties = flui_semantics::SemanticsProperties {
+        link: Some(false),
+        ..flui_semantics::SemanticsProperties::default()
+    };
+    assert!(!properties.is_empty());
+}
+
+fn explicit_header_is_a_present_property() {
+    let properties = flui_semantics::SemanticsProperties {
+        header: Some(false),
+        ..flui_semantics::SemanticsProperties::default()
+    };
+    assert!(!properties.is_empty());
+}
+
+fn explicit_image_is_a_present_property() {
+    let properties = flui_semantics::SemanticsProperties {
+        image: Some(false),
+        ..flui_semantics::SemanticsProperties::default()
+    };
+    assert!(!properties.is_empty());
+}
+
+fn explicit_text_field_is_a_present_property() {
+    let properties = flui_semantics::SemanticsProperties {
+        text_field: Some(false),
+        ..flui_semantics::SemanticsProperties::default()
+    };
+    assert!(!properties.is_empty());
+}
+
+fn explicit_slider_is_a_present_property() {
+    let properties = flui_semantics::SemanticsProperties {
+        slider: Some(false),
+        ..flui_semantics::SemanticsProperties::default()
+    };
+    assert!(!properties.is_empty());
+}
+
+fn explicit_read_only_is_a_present_property() {
+    let properties = flui_semantics::SemanticsProperties {
+        read_only: Some(false),
+        ..flui_semantics::SemanticsProperties::default()
+    };
+    assert!(!properties.is_empty());
+}
+
+fn explicit_hidden_is_a_present_property() {
+    let properties = flui_semantics::SemanticsProperties {
+        hidden: Some(false),
+        ..flui_semantics::SemanticsProperties::default()
+    };
+    assert!(!properties.is_empty());
+}
+
+fn explicit_obscured_is_a_present_property() {
+    let properties = flui_semantics::SemanticsProperties {
+        obscured: Some(false),
+        ..flui_semantics::SemanticsProperties::default()
+    };
+    assert!(!properties.is_empty());
+}
+
+fn explicit_multiline_is_a_present_property() {
+    let properties = flui_semantics::SemanticsProperties {
+        multiline: Some(false),
+        ..flui_semantics::SemanticsProperties::default()
+    };
+    assert!(!properties.is_empty());
+}
+
+fn explicit_scopes_route_is_a_present_property() {
+    let properties = flui_semantics::SemanticsProperties {
+        scopes_route: Some(false),
+        ..flui_semantics::SemanticsProperties::default()
+    };
+    assert!(!properties.is_empty());
+}
+
+fn explicit_names_route_is_a_present_property() {
+    let properties = flui_semantics::SemanticsProperties {
+        names_route: Some(false),
+        ..flui_semantics::SemanticsProperties::default()
+    };
+    assert!(!properties.is_empty());
+}
+
+fn explicit_in_mutually_exclusive_group_is_a_present_property() {
+    let properties = flui_semantics::SemanticsProperties {
+        in_mutually_exclusive_group: Some(false),
+        ..flui_semantics::SemanticsProperties::default()
+    };
+    assert!(!properties.is_empty());
+}
+
+fn explicit_live_region_is_a_present_property() {
+    let properties = flui_semantics::SemanticsProperties {
+        live_region: Some(false),
+        ..flui_semantics::SemanticsProperties::default()
+    };
+    assert!(!properties.is_empty());
+}
+
+fn explicit_label_is_a_present_property() {
+    let properties = flui_semantics::SemanticsProperties {
+        label: Some(flui_semantics::AttributedString::new("")),
+        ..flui_semantics::SemanticsProperties::default()
+    };
+    assert!(!properties.is_empty());
+}
+
+fn explicit_value_is_a_present_property() {
+    let properties = flui_semantics::SemanticsProperties {
+        value: Some(flui_semantics::AttributedString::new("")),
+        ..flui_semantics::SemanticsProperties::default()
+    };
+    assert!(!properties.is_empty());
+}
+
+fn explicit_increased_value_is_a_present_property() {
+    let properties = flui_semantics::SemanticsProperties {
+        increased_value: Some(flui_semantics::AttributedString::new("")),
+        ..flui_semantics::SemanticsProperties::default()
+    };
+    assert!(!properties.is_empty());
+}
+
+fn explicit_decreased_value_is_a_present_property() {
+    let properties = flui_semantics::SemanticsProperties {
+        decreased_value: Some(flui_semantics::AttributedString::new("")),
+        ..flui_semantics::SemanticsProperties::default()
+    };
+    assert!(!properties.is_empty());
+}
+
+fn explicit_hint_is_a_present_property() {
+    let properties = flui_semantics::SemanticsProperties {
+        hint: Some(flui_semantics::AttributedString::new("")),
+        ..flui_semantics::SemanticsProperties::default()
+    };
+    assert!(!properties.is_empty());
+}
+
+fn explicit_text_direction_is_a_present_property() {
+    let properties = flui_semantics::SemanticsProperties {
+        text_direction: Some(flui_semantics::TextDirection::Ltr),
+        ..flui_semantics::SemanticsProperties::default()
+    };
+    assert!(!properties.is_empty());
+}
+
+fn explicit_sort_key_is_a_present_property() {
+    let properties = flui_semantics::SemanticsProperties {
+        sort_key: Some(flui_semantics::SemanticsSortKey::new(0.0)),
+        ..flui_semantics::SemanticsProperties::default()
+    };
+    assert!(!properties.is_empty());
+}
+
+fn explicit_tags_is_a_present_property() {
+    let properties = flui_semantics::SemanticsProperties {
+        tags: std::iter::once(flui_semantics::SemanticsTag::new("tag")).collect(),
+        ..flui_semantics::SemanticsProperties::default()
+    };
+    assert!(!properties.is_empty());
+}
+
+fn explicit_custom_actions_is_a_present_property() {
+    let properties = flui_semantics::SemanticsProperties {
+        custom_actions: vec![flui_semantics::CustomSemanticsAction::new(1, "action")],
+        ..flui_semantics::SemanticsProperties::default()
+    };
+    assert!(!properties.is_empty());
+}
+
+fn explicit_hint_overrides_is_a_present_property() {
+    let properties = flui_semantics::SemanticsProperties {
+        hint_overrides: Some(flui_semantics::SemanticsHintOverrides::default()),
+        ..flui_semantics::SemanticsProperties::default()
+    };
+    assert!(!properties.is_empty());
+}
+
+#[test]
+fn semantics_property_presence_includes_every_public_annotation() {
+    let cases: &[(&str, fn())] = &[
+        (
+            "absent properties",
+            absent_properties_and_empty_collections_are_empty,
+        ),
+        (
+            "selection publication",
+            selected_properties_publish_when_a_consumer_skips_empty_annotations,
+        ),
+        (
+            "explicit_enabled_is_a_present_property",
+            explicit_enabled_is_a_present_property,
+        ),
+        (
+            "explicit_checked_is_a_present_property",
+            explicit_checked_is_a_present_property,
+        ),
+        (
+            "explicit_mixed_is_a_present_property",
+            explicit_mixed_is_a_present_property,
+        ),
+        (
+            "explicit_selected_is_a_present_property",
+            explicit_selected_is_a_present_property,
+        ),
+        (
+            "explicit_toggled_is_a_present_property",
+            explicit_toggled_is_a_present_property,
+        ),
+        (
+            "explicit_expanded_is_a_present_property",
+            explicit_expanded_is_a_present_property,
+        ),
+        (
+            "explicit_focused_is_a_present_property",
+            explicit_focused_is_a_present_property,
+        ),
+        (
+            "explicit_focusable_is_a_present_property",
+            explicit_focusable_is_a_present_property,
+        ),
+        (
+            "explicit_button_is_a_present_property",
+            explicit_button_is_a_present_property,
+        ),
+        (
+            "explicit_link_is_a_present_property",
+            explicit_link_is_a_present_property,
+        ),
+        (
+            "explicit_header_is_a_present_property",
+            explicit_header_is_a_present_property,
+        ),
+        (
+            "explicit_image_is_a_present_property",
+            explicit_image_is_a_present_property,
+        ),
+        (
+            "explicit_text_field_is_a_present_property",
+            explicit_text_field_is_a_present_property,
+        ),
+        (
+            "explicit_slider_is_a_present_property",
+            explicit_slider_is_a_present_property,
+        ),
+        (
+            "explicit_read_only_is_a_present_property",
+            explicit_read_only_is_a_present_property,
+        ),
+        (
+            "explicit_hidden_is_a_present_property",
+            explicit_hidden_is_a_present_property,
+        ),
+        (
+            "explicit_obscured_is_a_present_property",
+            explicit_obscured_is_a_present_property,
+        ),
+        (
+            "explicit_multiline_is_a_present_property",
+            explicit_multiline_is_a_present_property,
+        ),
+        (
+            "explicit_scopes_route_is_a_present_property",
+            explicit_scopes_route_is_a_present_property,
+        ),
+        (
+            "explicit_names_route_is_a_present_property",
+            explicit_names_route_is_a_present_property,
+        ),
+        (
+            "explicit_in_mutually_exclusive_group_is_a_present_property",
+            explicit_in_mutually_exclusive_group_is_a_present_property,
+        ),
+        (
+            "explicit_live_region_is_a_present_property",
+            explicit_live_region_is_a_present_property,
+        ),
+        (
+            "explicit_label_is_a_present_property",
+            explicit_label_is_a_present_property,
+        ),
+        (
+            "explicit_value_is_a_present_property",
+            explicit_value_is_a_present_property,
+        ),
+        (
+            "explicit_increased_value_is_a_present_property",
+            explicit_increased_value_is_a_present_property,
+        ),
+        (
+            "explicit_decreased_value_is_a_present_property",
+            explicit_decreased_value_is_a_present_property,
+        ),
+        (
+            "explicit_hint_is_a_present_property",
+            explicit_hint_is_a_present_property,
+        ),
+        (
+            "explicit_text_direction_is_a_present_property",
+            explicit_text_direction_is_a_present_property,
+        ),
+        (
+            "explicit_sort_key_is_a_present_property",
+            explicit_sort_key_is_a_present_property,
+        ),
+        (
+            "explicit_tags_is_a_present_property",
+            explicit_tags_is_a_present_property,
+        ),
+        (
+            "explicit_custom_actions_is_a_present_property",
+            explicit_custom_actions_is_a_present_property,
+        ),
+        (
+            "explicit_hint_overrides_is_a_present_property",
+            explicit_hint_overrides_is_a_present_property,
+        ),
+    ];
+    let mut failures = Vec::new();
+    for &(name, run) in cases {
+        if let Err(payload) = catch_unwind(run) {
+            failures.push(name);
+            std::mem::forget(payload);
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "property presence rows failed: {failures:?}"
     );
 }

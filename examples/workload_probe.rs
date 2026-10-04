@@ -528,8 +528,8 @@ fn main() {
     let scroll_controller = ScrollController::new();
     let text_controller = TextEditingController::new();
 
-    let scroll_controller_for_factory = scroll_controller.clone();
-    let text_controller_for_factory = text_controller.clone();
+    let scroll_controller_for_factory = scroll_controller;
+    let text_controller_for_factory = text_controller;
     let result = Application::new(move |handle: &AppHandle| WorkloadDriver {
         scroll_controller: scroll_controller_for_factory.clone(),
         text_controller: text_controller_for_factory.clone(),

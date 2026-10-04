@@ -47,7 +47,7 @@ criterion = { workspace = true }
 [features]
 default = []
 ## Enable serde serialization/deserialization support for animation types.
-serde = ["dep:serde", "flui-painting/serde"]
+serde = ["dep:serde", "smallvec/serde", "flui-painting/serde"]
 
 [[bench]]
 name = "animation_bench"

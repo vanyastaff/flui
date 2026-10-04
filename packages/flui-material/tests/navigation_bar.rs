@@ -120,3 +120,33 @@ pub fn tapping_a_disabled_destination_does_not_fire_the_callback() {
         "a disabled destination must swallow the tap and never fire the callback",
     );
 }
+
+fn assert_invalid_configuration_rejected(make_bar: impl FnOnce() -> NavigationBar) {
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(make_bar));
+    assert!(
+        result.is_err(),
+        "invalid navigation configuration must fail in every profile"
+    );
+}
+
+pub fn an_empty_destination_list_is_rejected() {
+    assert_invalid_configuration_rejected(|| NavigationBar::new(Vec::new()));
+}
+
+pub fn a_single_destination_is_rejected() {
+    assert_invalid_configuration_rejected(|| {
+        NavigationBar::new(vec![NavigationDestination::new(icon(), "Home")])
+    });
+}
+
+pub fn an_index_at_the_destination_count_is_rejected() {
+    assert_invalid_configuration_rejected(|| {
+        NavigationBar::new(three_destinations()).selected_index(3)
+    });
+}
+
+pub fn an_unrepresentable_destination_index_is_rejected() {
+    assert_invalid_configuration_rejected(|| {
+        NavigationBar::new(three_destinations()).selected_index(usize::MAX)
+    });
+}

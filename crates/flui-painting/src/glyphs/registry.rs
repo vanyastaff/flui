@@ -31,14 +31,29 @@ pub struct FontRegistry {
     /// probability and no process-wide counter is needed.
     identity: u64,
     faces: HashMap<FaceKey, Face>,
+    owned_sources: bool,
     /// Interned coordinate sets; a [`VariationId`] is an index into this.
     variations: Vec<Box<[i16]>>,
     variation_ids: HashMap<Box<[i16]>, VariationId>,
 }
 
+enum FaceBytes {
+    Shared(FontBytes),
+    Owned(Arc<[u8]>),
+}
+
+impl AsRef<[u8]> for FaceBytes {
+    fn as_ref(&self) -> &[u8] {
+        match self {
+            Self::Shared(bytes) => (**bytes).as_ref(),
+            Self::Owned(bytes) => bytes.as_ref(),
+        }
+    }
+}
+
 /// One registered face and swash's handle on it.
 pub(super) struct Face {
-    bytes: FontBytes,
+    bytes: FaceBytes,
     /// The face's table-directory offset inside `bytes`.
     offset: u32,
     /// swash keys its scaler cache (hinting state included) on this.
@@ -52,7 +67,7 @@ impl Face {
     /// swash's view of the face.
     pub(super) fn font_ref(&self) -> swash::FontRef<'_> {
         swash::FontRef {
-            data: (*self.bytes).as_ref(),
+            data: self.bytes.as_ref(),
             offset: self.offset,
             key: self.cache_key,
         }
@@ -66,6 +81,7 @@ impl Default for FontRegistry {
             // per registry, from state std already keeps.
             identity: RandomState::new().build_hasher().finish(),
             faces: HashMap::new(),
+            owned_sources: false,
             variations: Vec::new(),
             variation_ids: HashMap::new(),
         }
@@ -79,8 +95,23 @@ impl FontRegistry {
         Self::default()
     }
 
+    /// An empty registry that copies new faces into concrete owned storage.
+    ///
+    /// Use for font sources from unloadable images. The source's erased
+    /// implementation and backing allocation can retire after registration.
+    /// Ordinary registries retain sources so a shaper's weak cache keeps its
+    /// blob identity while the registered face remains live.
+    #[must_use]
+    pub fn with_owned_sources() -> Self {
+        Self {
+            owned_sources: true,
+            ..Self::default()
+        }
+    }
+
     /// Adds `face` over `bytes`. Registering a present face again over equal
-    /// bytes is a no-op.
+    /// bytes is a no-op. The default registry retains the source; a registry
+    /// constructed with [`Self::with_owned_sources`] copies it on first admission.
     ///
     /// # Errors
     ///
@@ -95,7 +126,7 @@ impl FontRegistry {
         bytes: FontBytes,
     ) -> Result<(), RegisterFaceError> {
         if let Some(held) = self.faces.get(&face) {
-            let (held, new) = ((*held.bytes).as_ref(), (*bytes).as_ref());
+            let (held, new) = (held.bytes.as_ref(), (*bytes).as_ref());
             let same = (held.as_ptr() == new.as_ptr() && held.len() == new.len()) || held == new;
             return if same {
                 Ok(())
@@ -104,8 +135,15 @@ impl FontRegistry {
             };
         }
         let index = usize::try_from(face.index).map_err(|_| RegisterFaceError::NotAFace)?;
+        let bytes = if self.owned_sources {
+            // Retain neither an unloadable image's erased AsRef vtable nor
+            // a slice into that image. Ordinary sources keep their blob alive.
+            FaceBytes::Owned(Arc::from((*bytes).as_ref()))
+        } else {
+            FaceBytes::Shared(bytes)
+        };
         let (offset, cache_key) = {
-            let font = swash::FontRef::from_index((*bytes).as_ref(), index)
+            let font = swash::FontRef::from_index(bytes.as_ref(), index)
                 .ok_or(RegisterFaceError::NotAFace)?;
             (font.offset, font.key)
         };

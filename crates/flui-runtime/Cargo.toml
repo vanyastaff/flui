@@ -139,3 +139,7 @@ order = 4
 # and `flui-testing`, the host of the headless test loop, whose driver runs the
 # realm's frame (ADR-0083 §4). Dev edges are not restricted.
 allowed-dependents = ["flui-app", "flui-testing"]
+# Process-unique identity only; realm services and registries remain owned.
+globals = [
+    { item = "realm_services::NEXT_INCARNATION", grant = "ADR-0097", class = "counter", reason = "Realm and presentation generations, advanced by try_update with permanent exhaustion" },
+]

@@ -7,13 +7,14 @@
 //! run a tokio runtime, [`AssetRegistry`](super::AssetRegistry) owns one: a
 //! single-worker, named background runtime, started lazily on the first call
 //! that needs it. A host that already runs tokio can inject its [`Handle`]
-//! instead via `AssetRegistryBuilder::with_runtime_handle` — misconfiguration
-//! is impossible, because [`BridgeRuntime::resolve`] always falls back to
-//! starting (or reusing) an owned runtime when nothing else is available.
+//! instead via `AssetRegistryBuilder::with_runtime_handle`. Ambient current-thread
+//! runtimes are not selected: entering one does not drive its queued tasks.
+//! Starting an owned runtime is fallible; a failed attempt can be retried.
 
-use std::sync::OnceLock;
+use parking_lot::Mutex;
+use tokio::runtime::{Builder, Handle, Runtime, RuntimeFlavor};
 
-use tokio::runtime::{Builder, Handle, Runtime};
+use crate::error::Result;
 
 /// Thread name of the lazily-started owned runtime's single worker.
 const WORKER_THREAD_NAME: &str = "flui-assets-bridge";
@@ -31,56 +32,63 @@ const WORKER_THREAD_NAME: &str = "flui-assets-bridge";
 /// degrades silently: the task is scheduled but never polled), so every
 /// later bridged load would permanently fail with a "task was dropped"
 /// error, with no way to recover short of rebuilding the registry. An
-/// injected handle is a deliberate, per-call-checked promise from the host
+/// injected handle is a deliberate promise from the host
 /// (`AssetRegistryBuilder::with_runtime_handle`'s contract is that the
-/// injected runtime outlives the registry) — re-cloning it each call costs
-/// nothing and closes the same staleness class of bug for it too.
+/// injected runtime remains driven and outlives the loads). Cloning its handle
+/// cannot detect or repair a shut-down injected runtime.
 pub(crate) struct BridgeRuntime {
-    /// Started lazily on first use when neither an injected nor an ambient
-    /// handle is available; reused for every subsequent call that also finds
-    /// neither available.
-    owned: OnceLock<Runtime>,
+    /// Started lazily when neither an injected nor an ambient multi-thread
+    /// handle is available; reused for subsequent calls with the same fallback.
+    owned: Mutex<Option<Runtime>>,
 }
 
 impl BridgeRuntime {
     pub(crate) fn new() -> Self {
         Self {
-            owned: OnceLock::new(),
+            owned: Mutex::new(None),
         }
     }
 
     /// Resolution order, freshly checked on every call: `injected` (if the
     /// registry was built with one) wins unconditionally; otherwise an
-    /// ambient tokio context on the calling thread right now
-    /// (`Handle::try_current`); otherwise this registry's own runtime,
-    /// started on first need.
-    pub(crate) fn resolve(&self, injected: Option<&Handle>) -> Handle {
+    /// ambient multi-thread runtime; otherwise this registry's own runtime.
+    /// Failed creation leaves the owned slot empty so later calls can retry.
+    pub(crate) fn resolve(&self, injected: Option<&Handle>) -> Result<Handle> {
         if let Some(handle) = injected {
-            return handle.clone();
+            return Ok(handle.clone());
         }
-        if let Ok(handle) = Handle::try_current() {
-            return handle;
+        if let Ok(handle) = Handle::try_current()
+            && handle.runtime_flavor() == RuntimeFlavor::MultiThread
+        {
+            return Ok(handle);
         }
-        self.owned
-            .get_or_init(|| {
-                Builder::new_multi_thread()
-                    .worker_threads(1)
-                    .thread_name(WORKER_THREAD_NAME)
-                    .enable_all()
-                    .build()
-                    .expect(
-                        "BUG: building a single-worker tokio runtime must succeed \
-                         on any platform this crate targets",
-                    )
-            })
-            .handle()
-            .clone()
+        self.resolve_owned_with(|| {
+            Builder::new_multi_thread()
+                .worker_threads(1)
+                .thread_name(WORKER_THREAD_NAME)
+                .enable_all()
+                .build()
+        })
+    }
+
+    fn resolve_owned_with(
+        &self,
+        build: impl FnOnce() -> std::io::Result<Runtime>,
+    ) -> Result<Handle> {
+        let mut owned = self.owned.lock();
+        if let Some(runtime) = owned.as_ref() {
+            return Ok(runtime.handle().clone());
+        }
+        let runtime = build()?;
+        let handle = runtime.handle().clone();
+        *owned = Some(runtime);
+        Ok(handle)
     }
 }
 
 impl Drop for BridgeRuntime {
     fn drop(&mut self) {
-        if let Some(runtime) = self.owned.take() {
+        if let Some(runtime) = self.owned.get_mut().take() {
             // `Runtime::shutdown_background` returns immediately without
             // blocking the calling thread. `Runtime`'s own `Drop` instead
             // performs a BLOCKING shutdown (joins every worker thread) and
@@ -110,11 +118,13 @@ mod tests {
         let source = Builder::new_current_thread()
             .enable_all()
             .build()
-            .expect("building a current-thread runtime must succeed");
+            .expect("building a runtime must succeed");
         let injected_handle = source.handle().clone();
 
         let bridge = BridgeRuntime::new();
-        let resolved = bridge.resolve(Some(&injected_handle));
+        let resolved = bridge
+            .resolve(Some(&injected_handle))
+            .expect("injected handle resolves");
 
         assert_eq!(
             resolved.id(),
@@ -122,7 +132,7 @@ mod tests {
             "an injected handle must be returned as-is, never substituted",
         );
         assert!(
-            bridge.owned.get().is_none(),
+            bridge.owned.lock().is_none(),
             "an injected handle must never cause the owned fallback runtime to start",
         );
     }
@@ -135,17 +145,19 @@ mod tests {
     fn resolve_does_not_reuse_a_since_shut_down_ambient_handle() {
         let bridge = BridgeRuntime::new();
 
-        let ambient = Builder::new_current_thread()
+        let ambient = Builder::new_multi_thread()
+            .worker_threads(1)
             .enable_all()
             .build()
-            .expect("building a current-thread runtime must succeed");
-        let first = ambient.block_on(async { bridge.resolve(None) });
+            .expect("building a multi-thread runtime must succeed");
+        let first =
+            ambient.block_on(async { bridge.resolve(None).expect("ambient handle resolves") });
         drop(ambient); // the ambient runtime is now fully shut down.
 
         // A later call, with no ambient context anymore, must fall back to
         // (and start) the owned runtime rather than reusing the dead first
         // handle.
-        let second = bridge.resolve(None);
+        let second = bridge.resolve(None).expect("owned runtime starts");
         assert_ne!(
             first.id(),
             second.id(),
@@ -171,7 +183,7 @@ mod tests {
         let bridge = BridgeRuntime::new();
         // No ambient context in this plain #[test] fn and no injection, so
         // this starts (and owns) a runtime.
-        let handle = bridge.resolve(None);
+        let handle = bridge.resolve(None).expect("owned runtime starts");
 
         let (done_tx, done_rx) = std::sync::mpsc::channel();
         handle.spawn(async move {
@@ -192,5 +204,24 @@ mod tests {
         resolve_prefers_an_injected_handle_over_starting_an_owned_runtime();
         resolve_does_not_reuse_a_since_shut_down_ambient_handle();
         dropping_from_inside_its_own_task_does_not_panic();
+        failed_runtime_creation_is_typed_and_retryable();
+    }
+
+    fn failed_runtime_creation_is_typed_and_retryable() {
+        let bridge = BridgeRuntime::new();
+        let failure =
+            bridge.resolve_owned_with(|| Err(std::io::Error::other("worker unavailable")));
+        assert!(
+            matches!(failure, Err(crate::AssetError::Io(reason)) if reason == "worker unavailable")
+        );
+        let handle = bridge
+            .resolve(None)
+            .expect("the next runtime creation can succeed");
+        let (tx, rx) = std::sync::mpsc::channel();
+        handle.spawn(async move {
+            let _ = tx.send(());
+        });
+        rx.recv_timeout(std::time::Duration::from_secs(5))
+            .expect("a retried runtime must actually drive work");
     }
 }

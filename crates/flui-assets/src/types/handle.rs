@@ -42,12 +42,12 @@ where
     ///
     /// # Examples
     ///
-    /// ```rust,ignore
+    /// ```
     /// use flui_assets::{AssetHandle, AssetKey};
-    /// use triomphe::Arc;
+    /// use std::sync::Arc;
     ///
-    /// let data = Image::new(100, 100);
-    /// let handle = AssetHandle::new(Arc::new(data), AssetKey::new("test.png"));
+    /// let handle = AssetHandle::new(Arc::new(vec![1, 2, 3]), AssetKey::new("bytes"));
+    /// assert_eq!(handle.get().as_slice(), &[1, 2, 3]);
     /// ```
     #[inline]
     pub fn new(data: Arc<T>, key: K) -> Self {
@@ -106,6 +106,15 @@ where
 }
 
 impl<T, K> AssetHandle<T, K> {
+    /// Returns whether two handles share the same asset allocation.
+    ///
+    /// Keys and data contents are not compared. Handles retained across
+    /// invalidation and reloading can have equal keys but distinct allocations.
+    #[inline]
+    pub fn ptr_eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.inner, &other.inner)
+    }
+
     /// Returns the strong reference count.
     ///
     /// This counts how many `AssetHandle` instances exist for this asset.
@@ -445,27 +454,6 @@ pub trait AssetHandleExt<T, K>: AssetHandleCore<T, K> {
     #[inline]
     fn total_ref_count(&self) -> usize {
         self.strong_count() + self.weak_count()
-    }
-
-    /// Returns `true` if two handles point to the same asset data.
-    ///
-    /// This compares the underlying Arc pointers, not the keys or data.
-    ///
-    /// # Examples
-    ///
-    /// ```rust,ignore
-    /// let handle1 = registry.load(image).await?;
-    /// let handle2 = handle1.clone();
-    /// assert!(handle1.ptr_eq(&handle2));
-    /// ```
-    #[inline]
-    fn ptr_eq(&self, other: &Self) -> bool
-    where
-        Self: Sized,
-        K: PartialEq,
-    {
-        // Use key equality as a proxy for pointer equality
-        self.key() == other.key()
     }
 }
 

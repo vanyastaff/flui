@@ -182,16 +182,14 @@ fn list_android_avds() -> Result<Vec<Device>, devices::Problem> {
         PROBE_TIMEOUT,
     ) {
         Ok(output) if output.status.success() => {
-            let names: Vec<String> = String::from_utf8_lossy(&output.stdout)
+            let names = String::from_utf8_lossy(&output.stdout);
+            let running = running_android_avd_names();
+
+            Ok(names
                 .lines()
                 .map(str::trim)
                 .filter(|line| !line.is_empty())
                 .map(str::to_string)
-                .collect();
-            let running = running_android_avd_names();
-
-            Ok(names
-                .into_iter()
                 .map(|name| {
                     let status = if running.iter().any(|r| r.eq_ignore_ascii_case(&name)) {
                         Status::Booted

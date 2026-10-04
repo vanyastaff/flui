@@ -124,11 +124,50 @@ fn a_self_reenqueuing_build_task_is_bounded_by_the_reentry_cap_not_hung_forever(
     );
 }
 
+fn exhausted_id_generator_keeps_refusing_after_panics() {
+    let generator = flui_scheduler::IdGenerator::<flui_scheduler::markers::Frame>::starting_from(
+        usize::MAX - 1,
+    );
+    assert_eq!(generator.next().get(), usize::MAX - 1);
+    for _ in 0..3 {
+        assert!(std::panic::catch_unwind(|| generator.next()).is_err());
+    }
+    generator.reset();
+    assert_eq!(generator.next().get(), 1);
+    assert_eq!(generator.next().get(), 2);
+}
+
+fn concurrent_id_exhaustion_admits_only_the_remaining_identity() {
+    let generator = flui_scheduler::IdGenerator::<flui_scheduler::markers::Frame>::starting_from(
+        usize::MAX - 1,
+    );
+    let admitted = std::thread::scope(|scope| {
+        let workers: Vec<_> = (0..4)
+            .map(|_| scope.spawn(|| std::panic::catch_unwind(|| generator.next())))
+            .collect();
+        workers
+            .into_iter()
+            .filter_map(|worker| worker.join().expect("worker contains generator panic").ok())
+            .collect::<Vec<_>>()
+    });
+    assert_eq!(admitted.len(), 1);
+    assert_eq!(admitted[0].get(), usize::MAX - 1);
+    assert!(std::panic::catch_unwind(|| generator.next()).is_err());
+}
+
 #[test]
 fn update_scheduler_bounds_matrix() {
     crate::run_table(
         "update_scheduler_bounds_matrix",
         &[
+            (
+                "exhausted_id_generator_keeps_refusing_after_panics",
+                exhausted_id_generator_keeps_refusing_after_panics,
+            ),
+            (
+                "concurrent_id_exhaustion_admits_only_the_remaining_identity",
+                concurrent_id_exhaustion_admits_only_the_remaining_identity,
+            ),
             (
                 "tiny_deadline_defers_idle_but_never_defers_build_or_animation",
                 tiny_deadline_defers_idle_but_never_defers_build_or_animation as fn(),

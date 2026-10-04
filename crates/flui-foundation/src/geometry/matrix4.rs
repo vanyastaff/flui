@@ -335,14 +335,11 @@ impl Matrix4 {
         self.is_identity_with_epsilon(1e-5)
     }
 
-    /// Returns whether this is an identity matrix with custom epsilon.
+    /// Returns whether this finite matrix is identity within `epsilon`.
+    ///
+    /// The tolerance must be finite and nonnegative; otherwise returns false.
     pub fn is_identity_with_epsilon(&self, epsilon: f64) -> bool {
-        for i in 0..16 {
-            if (self.m[i] - Self::IDENTITY.m[i]).abs() > epsilon {
-                return false;
-            }
-        }
-        true
+        self.approx_eq_eps(&Self::IDENTITY, epsilon)
     }
 
     /// This matrix as a pure 2D translation `(dx, dy)`, or `None` if it is
@@ -559,18 +556,10 @@ impl Matrix4 {
         &mut self.m[col * 4 + row]
     }
 
-    /// Returns whether this matrix has an inverse.
+    /// Returns whether this matrix has an admitted finite computed inverse.
     ///
-    /// This is exactly the predicate [`try_inverse`](Self::try_inverse) gates
-    /// success on -- `determinant().abs() >= f64::EPSILON` -- computed
-    /// without building the full inverse. `try_inverse` is defined in terms
-    /// of this method, so the cheap probe and the real inversion can never
-    /// disagree about a borderline (near-singular) matrix.
-    ///
-    /// Prefer this over `try_inverse().is_some()` when the inverse itself is
-    /// discarded: callers on a hot path (e.g. once per hit-test entry per
-    /// pointer event) that only need a well-formedness check should not pay
-    /// for `glam::DMat4::inverse()`.
+    /// This computes the same inverse as [`try_inverse`](Self::try_inverse).
+    /// Call that method directly when the inverse is also needed.
     ///
     /// # Examples
     ///
@@ -579,29 +568,32 @@ impl Matrix4 {
     ///
     /// assert!(Matrix4::identity().is_invertible());
     /// assert!(Matrix4::translation(3.0, -1.0, 0.0).is_invertible());
-    ///
-    /// // Zero-scale on one axis collapses the matrix to singular.
+    /// assert!(Matrix4::scaling(1e-9, 1e-9, 1.0).is_invertible());
     /// assert!(!Matrix4::scaling(0.0, 1.0, 1.0).is_invertible());
     /// ```
     #[must_use]
     pub fn is_invertible(&self) -> bool {
-        // `glam::DMat4::inverse` returns a matrix of NaNs/inf for a
-        // non-invertible matrix rather than signalling, so this (and
-        // `try_inverse`, below) gate on the determinant explicitly.
-        self.to_glam().determinant().abs() >= f64::EPSILON
+        self.try_inverse().is_some()
     }
 
-    /// Attempts to invert this matrix.
+    /// Attempts to compute a finite inverse using glam.
     ///
-    /// Returns `None` if the matrix is singular (see
-    /// [`is_invertible`](Self::is_invertible) for the exact threshold).
-    /// Uses Gauss-Jordan elimination for general 4x4 matrices.
-    ///
-    /// For simple transformations (translation, rotation, uniform scaling),
-    /// consider using specialized inverse methods if available.
+    /// Returns `None` for non-finite input, a zero or non-finite computed
+    /// determinant, or non-finite computed inverse entries. There is no
+    /// absolute determinant tolerance. Floating-point intermediate range
+    /// limits can still refuse a mathematically invertible matrix.
     pub fn try_inverse(&self) -> Option<Self> {
-        if self.is_invertible() {
-            Some(Self::from_glam(self.to_glam().inverse()))
+        let matrix = self.to_glam();
+        if !matrix.is_finite() {
+            return None;
+        }
+        let determinant = matrix.determinant();
+        if determinant == 0.0 || !determinant.is_finite() {
+            return None;
+        }
+        let inverse = matrix.try_inverse()?;
+        if inverse.is_finite() {
+            Some(Self::from_glam(inverse))
         } else {
             None
         }
@@ -609,7 +601,8 @@ impl Matrix4 {
 
     /// Inverts this matrix in place.
     ///
-    /// Returns `true` if successful, `false` if the matrix is singular.
+    /// Returns `true` if a finite computed inverse is admitted. On failure,
+    /// returns `false` and leaves the matrix unchanged.
     pub fn invert(&mut self) -> bool {
         if let Some(inv) = self.try_inverse() {
             *self = inv;
@@ -645,15 +638,17 @@ impl Eq for Matrix4 {}
 impl Matrix4 {
     /// Checks approximate equality with a custom epsilon.
     ///
-    /// Returns true if all elements differ by at most `epsilon`.
+    /// Returns true if all finite elements differ by at most `epsilon`.
+    /// The tolerance must be finite and nonnegative; otherwise returns false.
     #[must_use]
     pub fn approx_eq_eps(&self, other: &Self, epsilon: f64) -> bool {
-        for i in 0..16 {
-            if (self.m[i] - other.m[i]).abs() > epsilon {
-                return false;
-            }
-        }
-        true
+        epsilon.is_finite()
+            && epsilon >= 0.0
+            && self
+                .m
+                .iter()
+                .zip(other.m.iter())
+                .all(|(&a, &b)| a.is_finite() && b.is_finite() && (a - b).abs() <= epsilon)
     }
 
     /// Checks approximate equality with default epsilon (1e-5).

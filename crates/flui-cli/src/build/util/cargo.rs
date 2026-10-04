@@ -133,7 +133,7 @@ async fn cargo_output(dir: &Path, args: &[&str]) -> BuildResult<Vec<u8>> {
         return Err(BuildError::CommandFailed {
             command: format!("cargo {}", args.join(" ")),
             exit_code: output.status.code().unwrap_or(-1),
-            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+            stderr: String::from_utf8_lossy_owned(output.stderr),
         });
     }
     Ok(output.stdout)

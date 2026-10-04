@@ -253,7 +253,7 @@ fn make_pointer_info(pe: &web_sys::PointerEvent) -> ui_events::pointer::PointerI
 /// no gesture recognizer would ever see it.
 ///
 /// Bit values are fixed by the UI Events spec: 1 primary, 2 secondary,
-/// 4 auxiliary; bits 8/16 (back/forward) have no `PointerButton` here.
+/// 4 auxiliary, 8 back and 16 forward.
 fn buttons_from_mask(mask: u16) -> ui_events::pointer::PointerButtons {
     use ui_events::pointer::{PointerButton, PointerButtons};
 
@@ -266,6 +266,12 @@ fn buttons_from_mask(mask: u16) -> ui_events::pointer::PointerButtons {
     }
     if mask & 0x04 != 0 {
         buttons.insert(PointerButton::Auxiliary);
+    }
+    if mask & 0x08 != 0 {
+        buttons.insert(PointerButton::X1);
+    }
+    if mask & 0x10 != 0 {
+        buttons.insert(PointerButton::X2);
     }
     buttons
 }

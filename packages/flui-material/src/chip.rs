@@ -472,7 +472,6 @@ impl StatelessView for Chip {
         let label_style = theme
             .text_theme
             .label_large
-            .clone()
             .unwrap_or_default()
             .with_color(label_color);
 
@@ -737,7 +736,6 @@ impl StatelessView for FilterChip {
         let label_style = theme
             .text_theme
             .label_large
-            .clone()
             .unwrap_or_default()
             .with_color(label_color);
 

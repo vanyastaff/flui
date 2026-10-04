@@ -800,7 +800,7 @@ where
             };
             let reload = crate::app::hot_reload::WorkerReload::from_config(&config);
             let host = APP_RUNTIME.with(|slot| slot.borrow().main_host_lifecycle);
-            let config_for_install = config.clone();
+            let config_for_install = config;
             PENDING_SECONDARY_WINDOW_COMPLETIONS.with(|queue| {
                 queue.borrow_mut().push(PendingCompletion {
                     config: install_config,

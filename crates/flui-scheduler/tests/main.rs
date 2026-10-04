@@ -2,6 +2,21 @@
 //! that writes process-global state keeps its own `[[test]]` target instead (see
 //! `Cargo.toml`).
 
+#[path = "async_driver_waker.rs"]
+mod async_driver_waker;
+
+#[path = "async_driver_unwind.rs"]
+mod async_driver_unwind;
+
+#[path = "ticker_future_recovery.rs"]
+mod ticker_future_recovery;
+
+#[path = "wake_delivery.rs"]
+mod wake_delivery;
+
+#[path = "frame_completion_recovery.rs"]
+mod frame_completion_recovery;
+
 #[path = "end_of_frame_lifecycle.rs"]
 mod end_of_frame_lifecycle;
 

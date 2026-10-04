@@ -1,6 +1,7 @@
 //! Web platform core implementation
 
 use std::cell::RefCell;
+use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -81,6 +82,33 @@ impl WebPlatform {
         f(&mut self.state.lock())
     }
 
+    /// Lease the callback outside state; a replacement registered during the
+    /// call wins. Keep its owning envelope outside the caught invocation.
+    fn dispatch_window_event(state: &Mutex<WebState>, event: WindowEvent) {
+        let Some(callback) = state.lock().handlers.window_event.take() else {
+            return;
+        };
+        let mut callback = Some(callback);
+        let outcome = catch_unwind(AssertUnwindSafe(|| {
+            callback
+                .as_mut()
+                .expect("BUG: leased window callback exists")(event);
+        }));
+        {
+            let mut state = state.lock();
+            if state.handlers.window_event.is_none() {
+                state.handlers.window_event = callback.take();
+            }
+        }
+        if let Err(payload) = outcome {
+            // A replaced opaque callback may own panicking aggregate captures.
+            // Do not retire it while preserving the callback's earlier failure.
+            std::mem::forget(callback);
+            resume_unwind(payload);
+        }
+        drop(callback);
+    }
+
     /// Start the requestAnimationFrame render loop
     fn start_raf_loop(&self) {
         let state = Arc::clone(&self.state);
@@ -106,13 +134,12 @@ impl WebPlatform {
             }
 
             // Also fire RedrawRequested through platform handlers
-            {
-                let mut s = state.lock();
-                s.handlers
-                    .invoke_window_event(WindowEvent::RedrawRequested {
-                        window_id: WindowId(0),
-                    });
-            }
+            Self::dispatch_window_event(
+                &state,
+                WindowEvent::RedrawRequested {
+                    window_id: WindowId(0),
+                },
+            );
 
             // Request next frame after work (ensures smooth loop)
             if let Some(w) = web_sys::window() {
@@ -175,10 +202,19 @@ impl Platform for WebPlatform {
 
     fn quit(&self) {
         tracing::info!("Web platform quit requested");
-        self.with_state(|s| {
-            s.is_running = false;
-            s.handlers.invoke_quit();
+        let callback = self.with_state(|state| {
+            state.is_running = false;
+            state.handlers.quit.take()
         });
+        if let Some(mut callback) = callback {
+            if let Err(payload) = catch_unwind(AssertUnwindSafe(&mut callback)) {
+                // Shutdown is committed. Retain failed opaque captures before
+                // propagating the original callback panic to the Rust boundary.
+                std::mem::forget(callback);
+                resume_unwind(payload);
+            }
+            drop(callback);
+        }
     }
 
     fn open_window(&self, options: WindowOptions) -> Result<Arc<dyn HostWindow>, OpenWindowError> {
@@ -201,10 +237,7 @@ impl Platform for WebPlatform {
         });
 
         // Notify window created
-        self.with_state(|s| {
-            s.handlers
-                .invoke_window_event(WindowEvent::Created(WindowId(0)));
-        });
+        Self::dispatch_window_event(&self.state, WindowEvent::Created(WindowId(0)));
 
         Ok(Arc::new(window))
     }
@@ -265,11 +298,13 @@ impl Platform for WebPlatform {
     }
 
     fn on_quit(&self, callback: Box<dyn FnMut() + Send>) {
-        self.with_state(|s| s.handlers.quit = Some(callback));
+        let previous = self.with_state(|state| state.handlers.quit.replace(callback));
+        drop(previous);
     }
 
     fn on_window_event(&self, callback: Box<dyn FnMut(WindowEvent) + Send>) {
-        self.with_state(|s| s.handlers.window_event = Some(callback));
+        let previous = self.with_state(|state| state.handlers.window_event.replace(callback));
+        drop(previous);
     }
 
     fn app_path(&self) -> Result<std::path::PathBuf, PlatformError> {

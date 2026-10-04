@@ -534,7 +534,19 @@ impl From<PathRepr> for Path {
                 PathCommand::Close => path.close(),
             }
         }
-        path.hint = repr.hint;
+        // A hint may select a different renderer, so only retain it when its
+        // constructor reproduces the submitted geometry exactly.
+        let hinted = match repr.hint {
+            ShapeHint::None => None,
+            ShapeHint::Rect(rect) => Some(Self::rectangle(rect)),
+            ShapeHint::Oval(rect) => Some(Self::oval(rect)),
+            ShapeHint::RRect(rrect) => Some(Self::from_rrect(rrect)),
+        };
+        if let Some(hinted) = hinted
+            && path.geometry == hinted.geometry
+        {
+            path.hint = hinted.hint;
+        }
         path
     }
 }

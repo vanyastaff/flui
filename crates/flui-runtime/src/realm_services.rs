@@ -71,11 +71,38 @@ static NEXT_INCARNATION: AtomicU32 = AtomicU32::new(1);
 /// Mints a fresh, process-unique `(RealmId, PresentationId)` pair. Slot 0 is
 /// the single-window slot; a multi-window registry would mint other slots.
 pub(crate) fn next_identity() -> (RealmId, PresentationId) {
-    let incarnation = NEXT_INCARNATION.fetch_add(1, Ordering::Relaxed);
+    next_identity_with_counter(&NEXT_INCARNATION)
+}
+
+fn next_identity_with_counter(counter: &AtomicU32) -> (RealmId, PresentationId) {
+    let incarnation = counter
+        .try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+            // Zero is permanent exhaustion; MAX remains the last valid generation.
+            (current != 0).then(|| current.wrapping_add(1))
+        })
+        .expect("BUG: realm incarnation space exhausted");
     let generation = NonZeroU32::new(incarnation)
         .expect("BUG: incarnation counter starts at 1 and only increments");
     (
         RealmId::new_gen(0, generation),
         PresentationId::new_gen(0, generation),
     )
+}
+
+#[cfg(test)]
+pub(crate) fn exhausted_incarnations_never_alias_previous_realms() {
+    // A local counter reaches an otherwise impractical failure boundary without
+    // changing the process-global identity source used by unrelated realm tests.
+    let counter = AtomicU32::new(u32::MAX - 1);
+    let (before_last, before_last_presentation) = next_identity_with_counter(&counter);
+    let (last, last_presentation) = next_identity_with_counter(&counter);
+    assert_ne!(before_last, last);
+    assert_ne!(before_last_presentation, last_presentation);
+    for _ in 0..3 {
+        assert!(std::panic::catch_unwind(|| next_identity_with_counter(&counter)).is_err());
+    }
+    let fresh = AtomicU32::new(1);
+    let (realm, presentation) = next_identity_with_counter(&fresh);
+    assert_ne!(realm, last);
+    assert_ne!(presentation, last_presentation);
 }

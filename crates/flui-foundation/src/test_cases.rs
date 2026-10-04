@@ -1,7 +1,6 @@
 //! Runner for table-driven tests: each row is a named scenario, and a failing
 //! row is reported under its name.
 
-use std::any::Any;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
 /// Runs every `(name, scenario)` row, then panics once naming each failing row.
@@ -19,7 +18,7 @@ pub(crate) fn run_cases(cases: &[(&str, fn())]) {
                 })
                 .unwrap_or_else(|| "non-string panic payload".to_owned());
             failures.push(format!("case `{name}` failed: {message}"));
-            drop_contained(payload);
+            crate::panic::retain_opaque_payload(payload);
         }
     }
     assert!(
@@ -32,24 +31,6 @@ pub(crate) fn run_cases(cases: &[(&str, fn())]) {
     );
 }
 
-/// Drops a panic payload without letting a panicking destructor escape the
-/// runner: the failure already recorded stays authoritative and later rows
-/// still run. A destructor that keeps panicking is leaked after a few rounds.
-fn drop_contained(payload: Box<dyn Any + Send>) {
-    let mut payload = Some(payload);
-    for _ in 0..8 {
-        let Some(current) = payload.take() else {
-            return;
-        };
-        if let Err(next) = catch_unwind(AssertUnwindSafe(move || drop(current))) {
-            payload = Some(next);
-        }
-    }
-    if let Some(leaked) = payload {
-        std::mem::forget(leaked);
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::run_cases;
@@ -58,12 +39,16 @@ mod tests {
 
     impl Drop for Bomb {
         fn drop(&mut self) {
-            assert!(std::thread::panicking(), "payload destructor");
+            panic!("payload destructor");
         }
     }
 
     fn payload_with_a_panicking_destructor() {
         std::panic::panic_any(Bomb);
+    }
+
+    fn aggregate_payload_with_panicking_destructors() {
+        std::panic::panic_any((Bomb, Bomb));
     }
 
     fn later_failure() {
@@ -77,6 +62,10 @@ mod tests {
     fn a_panicking_payload_destructor_does_not_stop_later_rows() {
         run_cases(&[
             ("bomb", payload_with_a_panicking_destructor as fn()),
+            (
+                "aggregate",
+                aggregate_payload_with_panicking_destructors as fn(),
+            ),
             ("later", later_failure as fn()),
         ]);
     }

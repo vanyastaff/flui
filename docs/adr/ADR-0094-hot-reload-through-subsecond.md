@@ -2,7 +2,10 @@
 
 - **Status:** Proposed. The hook's driver half is implemented (see "§1 as implemented");
   Subsecond is not integrated.
+- **Superseded-by:** [ADR-0111](ADR-0111-worker-image-lifetime.md) for admitted worker image lifetime only; its other proposed and implemented contracts remain unchanged.
 - **Date:** 2026-09-25
+- **Superseded-by:** [ADR-0108](ADR-0108-plugin-scene-render-callback-safety.md) for
+  the implemented scene callback's safety contract only.
 - **Revised:** 2026-09-26 (Windows spike failed; see Context and §5); 2026-09-29 (the hook's
   driver half landed ahead of Subsecond and hosts the dlopen paths; see "§1 as implemented")
 - **Supersedes (on acceptance, after the spike below passes):** the three-crate dlopen worker
@@ -225,8 +228,9 @@ The hook is split so the edge from `flui-app` could go before Subsecond exists.
   not build the widget catalog (a reach fact pins its default graph free of `flui-widgets`).
   `WorkerReloadHook` watches the worker artifact from `attach`, reloads it on `poll`, and turns a
   worker's rebuild request into `Patched`; `ScenePluginHook` draws Android `--scene` frames
-  through `scene_frame`, lending the scene to the host so it cannot outlive the library that
-  built it.
+  through `scene_frame`. Its callback lifetime obligation is explicit under
+  [ADR-0108](ADR-0108-plugin-scene-render-callback-safety.md): a borrowed scene can
+  still expose cloneable plugin payloads.
 - **No edge from `flui-app`.** Its `hot-reload` feature, optional dependency and
   `edge-exceptions` entry are gone; the reach facts say `flui-hot-reload` is absent from
   `flui-app`'s graph under every feature, that the facade's feature brings it in, and that the

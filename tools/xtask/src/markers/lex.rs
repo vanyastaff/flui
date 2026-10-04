@@ -132,7 +132,7 @@ fn rust(src: &str) -> Vec<Chunk> {
 fn block_lines(src: &str, content: Range<usize>) -> Vec<Range<usize>> {
     let mut lines = Vec::new();
     let mut start = content.start;
-    for line in src[content.clone()].split('\n') {
+    for line in src[content].split('\n') {
         lines.push(start..start + line.len());
         start += line.len() + 1;
     }

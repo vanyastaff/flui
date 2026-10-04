@@ -140,6 +140,8 @@ impl RenderBox for RenderErrorBox {
                 default_style: Some(&style),
                 font_size: DEBUG_FONT_SIZE as f32,
                 max_width: Some(size.width as f32),
+                min_width: 0.0,
+                text_align: flui_painting::typography::TextAlign::Start,
                 line_height: None,
                 direction: TextDirection::Ltr,
                 max_lines: None,

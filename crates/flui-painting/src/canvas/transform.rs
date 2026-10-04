@@ -34,6 +34,7 @@ impl Canvas {
 
     /// Skews the coordinate system along the X and Y axes.
     ///
+    /// The shear factors map `(x, y)` to `(x + sx * y, y + sy * x)`.
     /// Useful for italic text effects, parallax, and perspective-like
     /// distortions.
     #[inline]
@@ -41,7 +42,7 @@ impl Canvas {
         debug_assert!(sx.is_finite(), "Canvas::skew sx must be finite");
         debug_assert!(sy.is_finite(), "Canvas::skew sy must be finite");
         let skew_matrix = Matrix4::new(
-            1.0, sx, 0.0, 0.0, sy, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+            1.0, sy, 0.0, 0.0, sx, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
         );
         self.transform *= skew_matrix;
     }

@@ -68,6 +68,11 @@ pub enum SubpixelBin {
 impl SubpixelBin {
     /// Whole device pixel and bin; NaN maps to `(0, Zero)`.
     ///
+    /// Positions beyond the integer range, including infinities, saturate to
+    /// the corresponding `i32` endpoint with a zero bin. Glyph placement checks
+    /// representability separately and omits those positions rather than drawing
+    /// at a saturated coordinate.
+    ///
     /// Truncates toward zero and then bins the fraction, with the same edges
     /// as `cosmic_text::SubpixelBin::new`.
     #[must_use]
@@ -77,7 +82,7 @@ impl SubpixelBin {
         }
         #[expect(
             clippy::cast_possible_truncation,
-            reason = "a device coordinate fits i32; truncation toward zero is the bin rule"
+            reason = "float-to-integer saturation is the public split policy; truncation is the bin rule"
         )]
         let trunc = position as i32;
         #[expect(
@@ -89,13 +94,13 @@ impl SubpixelBin {
             if fract > -0.125 {
                 (trunc, Self::Zero)
             } else if fract > -0.375 {
-                (trunc - 1, Self::Three)
+                (trunc.saturating_sub(1), Self::Three)
             } else if fract > -0.625 {
-                (trunc - 1, Self::Two)
+                (trunc.saturating_sub(1), Self::Two)
             } else if fract > -0.875 {
-                (trunc - 1, Self::One)
+                (trunc.saturating_sub(1), Self::One)
             } else {
-                (trunc - 1, Self::Zero)
+                (trunc.saturating_sub(1), Self::Zero)
             }
         } else if fract < 0.125 {
             (trunc, Self::Zero)
@@ -106,7 +111,7 @@ impl SubpixelBin {
         } else if fract < 0.875 {
             (trunc, Self::Three)
         } else {
-            (trunc + 1, Self::Zero)
+            (trunc.saturating_add(1), Self::Zero)
         }
     }
 

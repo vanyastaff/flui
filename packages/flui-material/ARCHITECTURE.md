@@ -229,3 +229,137 @@ elsewhere in the widget layer.
 |------|-------|
 | Cupertino tab index still `debug_assert!` | `flui-cupertino` `CupertinoTabScaffold` — audit for the same policy when that surface is retouched. |
 | Bounded `TabIndex` API | Optional follow-up if mutation ergonomics need fallible `try_set_index` without panic. |
+
+### NavigationBar configuration bounds hold in every profile
+
+`NavigationBar` requires at least two destinations and a selected index within
+that immutable list. Construction and the selection setter reject violations
+in release as well as debug; no bar can publish a selection outside its own
+list. These are the existing programmer-error contracts, now enforced where
+the configuration is constructed. There is no mutable controller or externally
+replaceable list on this widget, so adding a public count/index type would add
+a conversion without removing another source of count disagreement.
+
+`navigation_and_layout_contracts` includes the public rows
+`an_empty_destination_list_is_rejected`, `a_single_destination_is_rejected`,
+`an_index_at_the_destination_count_is_rejected` and
+`an_unrepresentable_destination_index_is_rejected`; pointer delivery and disabled
+destinations remain covered in that family.
+
+### SnackBarAction claims activation before invoking application code
+
+The one-shot claim belongs to the retained action state. Its installed
+callback claims the shared `Cell` at event time, so two complete pointer
+contacts before a rebuild cannot execute the action twice. It schedules the
+disabled configuration before invoking application code. A callback panic
+propagates with the action still claimed; dismissal follows only a successful
+callback. A newly mounted action starts with a fresh claim.
+
+The `overlay_contracts` rows
+`tests/snack_bar.rs::action_press_closes_the_snack_bar_and_is_single_fire`
+and `action_callback_panic_disables_the_button_and_fresh_action_progresses`
+exercise consecutive contacts before a frame, successful dismissal, disabled
+button semantics after an ordinary callback panic, and fresh-action input.
+The pointer recovery row observes the resulting disabled button; it does not
+isolate scheduling order because `InkWell` also schedules pressed-state
+updates before invoking the action.
+
+### Drawer cancellation settles without release momentum
+
+Drawer edge and panel consumers use measured velocity only for
+`GestureEndReason::Completed`. For `Cancelled` they settle with zero velocity,
+choosing the resting endpoint from the current position, as the panel's
+preacceptance cancellation already does. Cancellation cannot turn a short
+fast movement into a fling toward the opposite endpoint.
+
+The `overlay_contracts` rows
+`tests/drawer.rs::cancelled_fast_edge_drag_settles_closed_below_halfway`
+and `cancelled_fast_panel_drag_settles_open_above_halfway` dispatch pointer
+cancellation, tick the settle animation and check both the public handle and
+the mounted scrim, then complete a fresh gesture to the opposite endpoint.
+The existing
+`a_fast_release_below_halfway_flings_the_drawer_open_rather_than_snapping_shut`
+row preserves the ordinary-release velocity contract.
+
+### Data-table checkbox spacing consumes the resolved theme cascade
+
+The presence of a custom checkbox margin is resolved together with its value:
+the widget override wins over the theme, and either tier gives the first data
+column its full horizontal padding. Only the absence of both tiers selects
+the default half-padding beside the checkbox. Heading and data cells consume
+the same resolved choice.
+
+The `selection_control_contracts` rows
+`themed_checkbox_margin_matches_the_same_widget_margin` and
+`checkbox_margin_override_beats_the_theme_without_changing_default_spacing`
+compare actual mounted heading/data text insets and checkbox-column widths;
+they retain widget precedence and the unchanged default-spacing control.
+
+
+### Tab-bar height follows actual tab overrides
+
+A nonempty secondary tab bar allocates the largest requested content height
+plus its indicator band. The default tab height is the empty-bar fallback,
+not a lower bound on explicit smaller overrides. Preferred size and the
+mounted layout consume the same calculation. Mixed default/override tabs and
+larger overrides keep their existing maximum-height behavior.
+
+The `navigation_and_layout_contracts` rows
+`small_tab_height_overrides_determine_the_mounted_bar_height` and
+`mixed_and_empty_tab_bars_keep_their_content_height_rules` observe preferred
+size and actual loose-parent layout, with bottom indicator-band coordinates.
+
+
+### Completion failure does not strand the accepted snack-bar queue
+
+After a dismissed entry is popped, its completion, the next entrance and
+scaffold rebuild delivery are independent attempts. The earliest caught failure
+propagates after the advancement guard is released; secondary opaque payloads
+are retained. Scaffold rebuild handles are snapshotted before host callbacks,
+so those callbacks cannot run under the registration RefCell borrow. A caught
+failure retains the completed entry and failed-delivery handles rather than
+running opaque teardown in competition with the authoritative failure.
+
+This does not contain a callback body's panic competing with its consumed
+`FnOnce` captures' destruction before control returns, or a double panic during
+ordinary aggregate retirement. Display-timer cancellation before the pop retains
+its separate existing failure boundary.
+
+`overlay_contracts` row
+`a_completion_panic_still_advances_the_accepted_snack_bar_queue` observes the
+original ordinary completion panic, the next accepted bar's mounted entrance
+and eventual Timeout on virtual frames, then a fresh show/remove operation.
+
+The private `a_panicking_completion_does_not_lock_future_queue_operations`
+family separately injects completion, entrance-listener and scaffold-delivery
+failures, individually and in chronological competition. Lifecycle-acquired
+rebuild probes have distinct mounted owner inboxes so each fanout wake is
+observable. Their private map registration is a delivery fault seam, not
+supported cross-realm Messenger topology. Rows check the first failure, every
+eligible delivery, actual subsequent rebuilds and accepted queue progress.
+Four bounded children add hostile secondary payloads with several panicking
+destructors and assert that none retire before or after recovery. Readiness is
+published after mounting; setup and operation have separate deadlines.
+
+
+### Drawer drag extent follows its constrained declared panel width
+
+The standard Drawer enforces its configured width under finite loose Align
+constraints. DrawerController uses an existing LayoutBuilder to cap its drag
+and velocity divisor by the incoming maximum width; the tight slot minimum
+must not expand a smaller declared panel. Before layout its configured extent
+remains the fallback. Generic custom children must declare matching panel_width;
+this is not a descendant-size measurement API. A collapsed or unusable extent
+ignores movement and settles by position without dividing velocity by it.
+
+The existing drawer family rows
+`narrow_start_drawer_cancel_uses_its_actual_panel_extent` and
+`narrow_end_drawer_cancel_uses_its_actual_panel_extent` use real cancelled
+contacts to cross half of a 100-pixel mounted panel, then reverse-close and
+reopen it. Actual material geometry pins the constrained panel width.
+`smaller_configured_drawer_keeps_its_declared_panel_extent` and
+`ordinary_drawer_keeps_its_configured_extent_in_a_wider_viewport` preserve
+50-in-100 and 304-in-400 behavior.
+`retained_drawer_recomputes_its_extent_after_a_collapsed_resize` keeps a contact
+across a zero-width resize, then uses the retained handle and a new contact
+after resizing to 100 pixels.

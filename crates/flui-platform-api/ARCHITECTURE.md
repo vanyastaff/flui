@@ -63,5 +63,34 @@ holds the lock rules once for every implementation, including the frame
 transaction: it reads the `CommitGate` the store's owner installs through
 `TextStore::set_commit_gate`, so no store keeps a transaction flag of its own
 to forget. `flui_testing::text_store_kit` checks a store against these rules.
+The arbiter rechecks the gate before each queued grant and after draining older
+work before admitting a new request. If a grant closes the gate, later grants
+remain queued in request order; a new synchronous request is refused and an
+asynchronous request joins the queue's tail. Reopening the gate lets the next
+commit anchor resume that work.
 **Tests:** the `text_store` module's unit tests, and `flui-testing`'s
-`in_memory_store_conforms_to_kit_v1`.
+`in_memory_store_conforms_to_kit_v1`; the public
+`queued_text_store_grants_respect_gate_changes` family covers gate closure
+during deferred and direct grants, FIFO ordering, refusal and resumed progress.
+
+### Data-transfer delivery shares the foundation claim slot
+
+`TransferRequest::channel` uses `ClaimSlot` for cancellation, executor
+registration and delivery. A producer is consumed by completion, so no
+owner registry remains to wake on abandonment. Producer disconnection maps to
+`TransferError::SourceGone`; polling any resolved request again is a caller
+contract violation. `TransferRequest::ready` keeps its concrete payload locally
+and never clones the executor waker.
+
+Executor clone, wake and retirement run outside shared locks. Caught delivery
+failures retain opaque executor ownership and preserve the result; during an
+existing unwind, secondary failures cannot replace it. The concrete transfer
+payload has no caller-defined destructor. Ordinary successful retirement still
+runs destructors, with Rust's normal abort semantics if aggregate destruction
+panics twice before containment regains control.
+
+**Tests:** `transfer_request_recovery` exercises public completion during
+executor clone, clone failure with a previous registration, displaced executor
+retirement, wake/capture failure competition, cancellation and producer loss
+during an existing unwind, ready results and next-request progress. Each row
+runs in a bounded subprocess so a deadlock or abort cannot hide later rows.

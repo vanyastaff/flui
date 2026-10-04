@@ -45,7 +45,7 @@ impl TextPainter {
     #[must_use]
     pub fn get_offset_for_caret(&self, position: TextPosition) -> Offset<f64> {
         let cache = self.laid_out("get_offset_for_caret");
-        cache.layout.caret(position) + cache.paint_offset
+        cache.layout.caret(position)
     }
 
     /// Returns the text position for a screen offset: the grapheme boundary
@@ -58,7 +58,7 @@ impl TextPainter {
     #[must_use]
     pub fn get_position_for_offset(&self, offset: Offset<f64>) -> TextPosition {
         let cache = self.laid_out("get_position_for_offset");
-        cache.layout.position_at(offset - cache.paint_offset)
+        cache.layout.position_at(offset)
     }
 
     /// Returns metrics for each kept line of the laid out text.
@@ -83,11 +83,7 @@ impl TextPainter {
     #[must_use]
     pub fn get_boxes_for_selection(&self, start: usize, end: usize) -> Vec<TextBox> {
         let cache = self.laid_out("get_boxes_for_selection");
-        let mut boxes = cache.layout.boxes(TextRange::new(start, end));
-        for text_box in &mut boxes {
-            text_box.rect = text_box.rect.translate_offset(cache.paint_offset);
-        }
-        boxes
+        cache.layout.boxes(TextRange::new(start, end))
     }
 
     /// Returns the word boundary at the given text position.
@@ -127,13 +123,12 @@ impl TextPainter {
             .as_ref()
             .expect("BUG: TextPainter::layout() must be called before paint() — it reads the cached layout that layout() populates");
 
-        let paint_offset = offset + cache.paint_offset;
         let color = text
             .style()
             .and_then(crate::text_layout::paint_color)
             .unwrap_or(crate::styling::Color::BLACK);
         // The very paragraph this painter measured: what the engine
         // rasterises is, by identity, what was laid out.
-        canvas.draw_paragraph(&cache.paragraph, paint_offset, color);
+        canvas.draw_paragraph(&cache.paragraph, offset, color);
     }
 }

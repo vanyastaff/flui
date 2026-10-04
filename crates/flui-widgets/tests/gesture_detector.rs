@@ -107,6 +107,8 @@ pub(crate) fn gesture_detector_recognizes_a_pan_and_suppresses_the_tap() {
 /// and fires `onEnd`, not `onCancel`. The terminal event must still leave the recognizer reusable.
 pub(crate) fn horizontal_drag_pointer_cancel_after_acceptance_ends_and_does_not_wedge_the_detector()
 {
+    let reasons = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let recorded = std::rc::Rc::clone(&reasons);
     let cancels = Arc::new(AtomicUsize::new(0));
     let ends = Arc::new(AtomicUsize::new(0));
     let starts = Arc::new(AtomicUsize::new(0));
@@ -121,7 +123,8 @@ pub(crate) fn horizontal_drag_pointer_cancel_after_acceptance_ends_and_does_not_
             .on_horizontal_drag_cancel(move |_cx| {
                 cancel_cb.fetch_add(1, Ordering::SeqCst);
             })
-            .on_horizontal_drag_end(move |_cx, _details| {
+            .on_horizontal_drag_end(move |_cx, details| {
+                recorded.borrow_mut().push(details.reason);
                 end_cb.fetch_add(1, Ordering::SeqCst);
             })
             .child(ColoredBox::new(Color::rgb(10, 20, 30))),
@@ -154,6 +157,13 @@ pub(crate) fn horizontal_drag_pointer_cancel_after_acceptance_ends_and_does_not_
         "a drag after a cancel still starts (the cancel did not wedge the recognizer)",
     );
     assert_eq!(ends.load(Ordering::SeqCst), 2);
+    assert_eq!(
+        *reasons.borrow(),
+        [
+            flui_widgets::GestureEndReason::Cancelled,
+            flui_widgets::GestureEndReason::Completed
+        ]
+    );
 }
 
 // ============================================================================
@@ -262,4 +272,32 @@ pub(crate) mod event_cx {
             "scheduler recovery retains the next accepted command"
         );
     }
+}
+
+pub(crate) fn viewer_reports_cancelled_then_completed_interactions() {
+    use flui_widgets::{GestureEndReason, InteractiveViewer};
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    let reasons = Rc::new(RefCell::new(Vec::new()));
+    let recorded = Rc::clone(&reasons);
+    let laid = lay_out(
+        InteractiveViewer::new()
+            .on_interaction_end(move |_cx, details| recorded.borrow_mut().push(details.reason))
+            .child(target_for_viewer()),
+        tight(200.0, 200.0),
+    );
+    laid.dispatch_pointer_down(30.0, 80.0);
+    laid.dispatch_pointer_move(100.0, 80.0);
+    laid.dispatch_pointer_cancel();
+    laid.dispatch_pointer_down(30.0, 80.0);
+    laid.dispatch_pointer_move(100.0, 80.0);
+    laid.dispatch_pointer_up(100.0, 80.0);
+    assert_eq!(
+        *reasons.borrow(),
+        [GestureEndReason::Cancelled, GestureEndReason::Completed]
+    );
+}
+
+fn target_for_viewer() -> ColoredBox {
+    ColoredBox::new(Color::rgb(10, 20, 30))
 }

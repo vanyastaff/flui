@@ -214,8 +214,17 @@ impl CupertinoTabBar {
     }
 
     /// Sets which item is drawn active.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `current_index` is outside this bar's items, in every build profile.
     #[must_use]
     pub fn current_index(mut self, current_index: usize) -> Self {
+        assert!(
+            current_index < self.items.len(),
+            "CupertinoTabBar's current index {current_index} is out of bounds for {} items",
+            self.items.len()
+        );
         self.current_index = current_index;
         self
     }

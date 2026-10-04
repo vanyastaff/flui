@@ -353,6 +353,62 @@ and pipeline, scissor, resolved clip and contiguous index ranges match. A solid
 draw between two paths is an ordering barrier. The painter readback family checks
 this under a bounded budget and with intervening solids and different clips.
 
+Warm path-cache draws stream recoloured, transformed vertices directly into the
+recording arena. The normal, advanced-blend and SSAA paths consume the same
+iterator contract, with isolated bounds computed from their admitted geometry.
+`warm_path_cpu_record` measures the public recording consumer rather than the
+borrowed cache lookup alone. `warm_path_recording_has_no_per_draw_vertex_allocation`
+uses the existing isolated allocator binary to count warmed public draws, allowing
+geometric arena growth but rejecting a temporary allocation per path.
+`cached_paths_reconstruct_colour_and_transform` reads back a cache hit with a new
+colour and translation through normal, SSAA and advanced blend routes.
+
+Dashed strokes consume Lyon's lazy, scale-aware flattened path events rather
+than a list of lines that loses contour boundaries. A closed contour includes
+its implicit last-to-first edge; an unfinished dash ends before a disconnected
+contour begins. Dash phase continues across contours using travelled length,
+without counting the spatial gap. On a closed contour, on-dash coverage on both
+sides of the starting point forms a join rather than two caps. One uninterrupted
+dash becomes a closed Lyon path; separate first/last dash fragments are merged
+through the seam, keeping their other pattern boundaries capped. A gap at the
+seam remains a gap. Painter rows `uninterrupted_closed_dash_uses_miter_join`,
+`exact_perimeter_closed_dash_uses_miter_join` and `wrapped_closed_dash_uses_miter_join`
+compare the miter corner with a solid stroke. `closed_dash_gap_keeps_seam_open`
+excludes a join where the pattern is off at the seam.
+Lyon's point-sampling walker cannot replace
+this iterator: a stroke also needs the corners between dash boundaries. Kurbo's
+dashing iterator restarts phase at each contour, so adopting it would change this
+existing phase contract rather than repair contour handling.
+Column and segment lengths use `hypot` to avoid intermediate square overflow;
+`tiny_finite_circle_scale_remains_visible` reads interior and exterior pixels
+of a large local circle under a finite `1e-23` scale. Its device radius is about
+ten pixels; the previous squared norm underflowed and degenerated the instance.
+Non-finite dashed segment lengths refuse the draw before walking it.
+`invalid_dashed_contour_recovers` checks finite endpoints whose raster-space
+difference overflows, then a valid stroke. Invalid input contributes no partial
+geometry. Large finite dash intervals bound the broken walk; debug Lyon would
+reject its generated non-finite point rather than loop indefinitely.
+A dash step must also advance its raster-space offset: a positive interval can
+round back to the current offset on a long contour. Failure rejects the whole
+stroke before further geometry is built. The public painter row
+`dashed_intervals_that_cannot_advance_refuse_the_whole_stroke` checks a bounded
+cycle that loses one small step, discards its visible prefix and then renders
+the next ordinary dashed draw. This is a progress guarantee, not a bound on
+total tessellation work; tessellator output remains outside recording quotas.
+These choices prioritize numerical range; no throughput improvement is claimed
+for the native `hypot` implementation.
+`dashed_closed_contour_has_its_closing_edge` and `dashed_contours_do_not_bridge`
+read pixels that distinguish both contour defects. The same painter family row
+`dashed_curves_and_phase_follow_contour_length` checks curve shape and equivalent
+positive/negative phase across disconnected contours.
+
+The offscreen texture pool retains the most recently returned idle allocations,
+evicting the oldest when its bounded inventory fills. A resized effect working
+set therefore replaces obsolete dimensions and warms up again. Returning an
+allocation never mutates an outstanding texture or a submitted command's wgpu
+reference. `offscreen_pool_reuses_a_resized_working_set` in the painter readback
+family checks allocation reuse after the previous dimensions filled the pool.
+
 ### Encoded sRGB surface presentation
 
 The current shaders emit the encoded components supplied by `Color::to_f32_array`;
@@ -589,7 +645,53 @@ hashes `R::Key` and owns `R`, taking it by `&mut` on a miss and on a grow. The
 painter's is a `TextAtlas`, `GlyphAtlas<SwashRasterizer>`: the rasterizer owns
 the registry of every face a paragraph drawn through it named, so a key stays
 valid while the atlas lives, and rasterization takes no lock and shares no
-font state with any realm. `parley_runs_read_back` reads back what paint now
+font state with any realm. `Renderer::render_plugin_scene` selects a plugin
+font source; the first scene from a hook and every successful image reload
+request a reset. Switching ordinary ↔ plugin sources also replaces the complete
+`TextAtlas` between frames, including its registry and bitmap entries. Blob ids
+are local to the image that created them, so retaining either cache across an
+image transition could draw a previous image's face under the same glyph key.
+Ordinary managed `render_frame` selects the ordinary source too. The shared
+`FrameProtocol` selector forces full repaint before damage planning; an unchanged
+producer diff cannot leave pixels from the previous namespace on screen.
+Previously submitted GPU work owns its resources, so replacing the atlas does
+not require waiting for the device.
+
+`ordinary_to_plugin_repaints_with_the_new_font`,
+`a_reloaded_plugin_repaints_with_the_new_font` and
+`plugin_to_ordinary_repaints_with_the_new_font` in `parley_runs_read_back`
+read back two distinct fonts sharing a glyph key, against independent fresh
+captures. Each transition starts with `NoDamage`. The private retained capture
+uses the production source selector and frame protocol; painting's
+`testing::paragraph_with_font_ids` models image-local counters restarting, which
+cannot be injected through the production paragraph constructors. Plugin atlases
+use `SwashRasterizer::with_owned_fonts` to copy a newly admitted font into
+host-owned bytes (painting's decision 18); ordinary atlases retain shared sources
+to preserve their weak source-cache identity. Switching sources
+also allocates a fresh atlas, while frames within one source retain it.
+Recovery and a surface-format change also replace the painter. Their shared
+format-consumer factory constructs its empty atlas using the current
+`FrameProtocol` source: a warm plugin frame can then omit a reset without
+retaining image-dependent font storage. The new atlas starts an empty font
+namespace; ordinary replacements continue to retain shared sources.
+`plugin_fonts_survive_format_replacement`,
+`plugin_fonts_survive_domain_replacement` and
+`ordinary_fonts_retain_sources_after_replacement` in
+`painter_images_and_offscreen_results_read_back_as_specified` exercise the
+actual factory and atlas with source retirement probes, uncached glyph bitmap
+comparison and atlas upload. This private seam is needed because native surface
+replacement requires a live window; it does not claim a native recovery run.
+
+Bitmap bearings and dimensions are widened to `i64` before forming a glyph quad
+and testing the scissor. An admitted `i32` origin can have ink outside that range;
+clipping must not first overflow the bitmap offset. The public painter calls in
+`extreme_glyph_bearings_do_not_overflow_before_clipping` draw real glyph bearings
+at both lower coordinate endpoints and compare subsequent visible ink with a
+reference readback. This preserves integer placement through clipping, without
+promising extreme-coordinate GPU floating-point precision.
+
+
+`parley_runs_read_back` reads back what paint now
 draws: hard breaks, synthetic bold, host fallback faces, right alignment and
 the device baseline. Because a rasterizer is a seam,
 the atlas guards the upload rather than trusting it: an image whose data
@@ -962,3 +1064,114 @@ for rectangles, curves, paths and mixed tapes. `FLUI_BENCH_FALLBACK=1` requires 
 software adapter for that group and prints its identity. Timing includes first
 clip preparation, submission and completion; painter construction is outside
 the timed interval. It is not a steady-frame throughput measurement.
+
+### Repeated images crop natural tiles and cannot stall recording
+
+Repeated axes retain the image's natural pixel extent in logical coordinates.
+The final tile crops the source UV extent, including atlas remapping, instead
+of squeezing the whole source image into a smaller destination. Ordinary and
+advanced blend routes consume the same tile bounds and UVs; advanced repeats
+remain one isolated shape so all tiles blend against the same backdrop.
+`NoRepeat` keeps the single-image route.
+
+A repeated draw with nonfinite or reversed destination edges, an overflowing
+extent, or an edge that cannot advance in `f64` is omitted as a whole. This is
+a primitive omission, not a sticky frame error. Tiles accumulate in an empty
+sibling of the live recording segment until traversal completes. A later
+stalled edge therefore discards its finite prefix while retaining earlier and
+following draws. Dropping that sibling releases its charged arena capacity and
+live elements; the texture cache may still retain the loaded image, as caches
+are outside recording admission. Successful ordinary repeats publish a segment
+in painter order; advanced repeats publish one `AdvancedShape`.
+
+A recording quota failure is different: it remains the existing sticky frame
+error, and traversal stops immediately after refusal. The shared recording
+budget bounds appended tile work; there is no separate tile-count cap or
+floating-point-to-integer count conversion. A new frame recovers the budget.
+
+`painter_images_and_offscreen_results_read_back_as_specified` includes named
+X, Y and two-axis crop and late-stall rows for SrcOver and Multiply. The crop
+rows render into an actual readable texture, check the terminal source prefix,
+full-tile suffix, prior content outside the destination and a later overlapping
+draw. Stall rows rebase two representable local edges into visible pixels
+before the third stalls at `2^53`, then check that the prefix did not escape and
+a healthy sibling draws. Ordinary and advanced quota and nonfinite rows cover
+sticky next-frame recovery and omission respectively.
+
+Potentially nonterminating counterfactuals reexecute the existing painter test
+binary in a child. Device and target preparation signal readiness before the
+public recording call; recording has a five-second deadline, while preparation
+and subsequent GPU readback have separate deadlines. The parent kills and reaps
+a hung child and the family continues to later named rows. No adapter skip is
+added. A private zero-capacity recording seam is necessary for the quota rows;
+the rendering and next-frame recovery operations remain the public painter API.
+
+
+### Image regions preserve affine placement, Paint and clip coverage
+
+ADR-0115 carries the source texel rectangle separately from logical destination
+and optional fitted repeat placement. The image batcher maps all four corners
+through a finite affine matrix, narrows the origin and basis vectors once, and
+uses the resulting quad for GPU placement and replay bounds. Sprite transforms
+compose with the ambient matrix instead of extracting only their translation.
+Existing offscreen and SSAA rectangle constructors supply axis-aligned bases.
+Attachment rebasing retains its separate attachment-to-root map.
+
+Cached image runs record their fixed blend mode. An advanced image operation
+records SrcOver internally and applies its operator once to the completed group.
+Filters process decoded straight channels before tinting; decoded linear taps
+are premultiplied before interpolation. Optional Paint multiplies RGB and alpha.
+UV crops map through the actual cache atlas region without a half-texel inset.
+
+Under fractional clips, destination-sensitive image modes use the existing
+portable compositor even when the adapter exposes dual-source blending. The
+image isolation pipeline writes sampled premultiplied color and geometric
+coverage to separate attachments. Transparent source pixels carry clip coverage
+and therefore replace the destination where Src requires it; pixels outside the
+coverage preserve the destination. No additional image raster backend exists.
+
+The existing `painter_images_and_offscreen_results_read_back_as_specified`
+family contains `ambient_shear`, `rotated_uv`, `tint_and_alpha`,
+`src_transparency` and `feathered_src_transparency`. The feathered row measures
+coverage with an opaque SrcOver image on a transparent target, then checks a
+transparent Src image against the retained destination at partial-coverage
+pixels, together with untouched outside content and a later draw. These GPU
+rows use the private readable-target seam because a public window surface
+cannot be sampled by an integration consumer; recording is the public painter
+API and the isolation is the actual production replay path.
+
+
+`decoration_cover`, `decoration_filter_opacity`, `decoration_repeat_phase` and
+`canvas_image_paint` invoke the public painting producers and replay their
+recorded commands. `render_image_scaled_cover` mounts a real RenderImage through
+RenderTester and captures its actual layer tree; `render_image_natural_crop`
+also pins an oversized natural-scale crop. Both visible crop color and
+pixels outside the allocated box distinguish the producer defect. Engine dev
+edges on objects and rendering's testing feature exist for this consumer path.
+`standalone_source_crop`, `atlas_affine_and_paint`, `advanced_affine` and
+`degenerate_image_quad_keeps_sibling` cover source region/texture layout, sprite and
+advanced placement, and deliberate zero-area image-quad omission with a healthy
+next draw. They are rows of the same GPU family, rather than separate targets.
+
+The texture instance also carries original-image UV bounds at location 11.
+Decoded atlas images set these to their full loaded image region; external,
+offscreen and SSAA constructors keep full-texture bounds. Manual straight taps
+clamp at the original-image texel edge, not the crop edge, so adjacent texels
+inside an image remain part of an internal fractional crop's filter footprint.
+`packed_original_edge` and `standalone_original_edge` draw equivalent opaque
+source crops at the same scale and check original edge samples and outside
+pixels. Removing the original bounds affects the packed row while leaving the
+standalone row healthy. This changes sampling admission, not atlas allocation.
+
+### Radial gradients interpolate two circles
+
+ADR-0116 defines the focal/initial and outer circles, greatest admissible root,
+transparent no-solution coverage and existing tiling modes. Both ordinary and
+advanced recording use one validated packed-circle admission. Radial vertex
+inputs use 13 actual attributes (quad location 0 plus instance locations 2..13);
+linear and sweep use 12. Mask gradients keep their explicit Clamp/no-focal
+support. `layer_effects_capture_as_specified` includes the focal, initial-radius,
+concentric/linear/repeated-root/cone, tiling, decoration, affine and refusal/recovery
+readback rows. CPU geometry normalization and computed shader roots retain their
+documented numeric limits; exact conical geometry at every floating range is
+not promised.

@@ -22,6 +22,20 @@ pub(crate) fn save_restore_tracks_the_save_count() {
     assert_eq!(canvas.save_count(), 1);
 }
 
+pub(crate) fn shear_factors_map_the_named_axes_in_recorded_commands() {
+    let list = flui_painting::testing::record(|canvas| {
+        canvas.translate(10.0, 20.0);
+        canvas.skew(2.0, 3.0);
+        canvas.draw_rect(
+            Rect::from_xywh(0.0, 0.0, 1.0, 1.0),
+            &Paint::fill(Color::RED),
+        );
+    });
+    let command = list.iter().next().expect("the rectangle was recorded");
+    assert_eq!(command.transform.transform_point(4.0, 5.0), (24.0, 37.0));
+    assert_eq!(list.bounds(), Some(Rect::from_ltrb(10.0, 20.0, 13.0, 24.0)));
+}
+
 /// `Canvas::finish` wires a `debug_assert!` to catch unrestored `save()`
 /// calls; release builds finalise silently, so the row is debug-only.
 #[cfg(debug_assertions)]

@@ -240,6 +240,7 @@ pub(crate) struct PipelineSet {
     /// Surface format stored for on-demand composite pipeline creation.
     ssaa_tile_surface_format: wgpu::TextureFormat,
     portable_coverage: Option<crate::portable_coverage::PortableCoveragePipeline>,
+    image_isolation: Option<(wgpu::BindGroupLayout, wgpu::RenderPipeline)>,
 
     /// Cache of premultiplied SSAA tile composite pipelines keyed by blend mode.
     ///
@@ -248,6 +249,54 @@ pub(crate) struct PipelineSet {
 }
 
 impl PipelineSet {
+    pub(crate) fn image_isolation(
+        &mut self,
+        device: &wgpu::Device,
+    ) -> &(wgpu::BindGroupLayout, wgpu::RenderPipeline) {
+        if self.image_isolation.is_none() {
+            let mapping = crate::pipeline_cache::create_isolation_bind_group_layout(device);
+            let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("Image source and coverage isolation"),
+                bind_group_layouts: &[
+                    Some(self.viewport_bind_group_layout()),
+                    Some(&self.texture_bind_group_layout),
+                    Some(&mapping),
+                ],
+                immediate_size: 0,
+            });
+            let targets = [
+                Some(wgpu::ColorTargetState {
+                    format: self.ssaa_tile_surface_format,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                }),
+                Some(wgpu::ColorTargetState {
+                    format: wgpu::TextureFormat::R8Unorm,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                }),
+            ];
+            let pipeline = create_unit_quad_pipeline_with_targets(
+                device,
+                &layout,
+                &QuadPipelineSpec {
+                    shader_label: "Image isolation shader",
+                    pipeline_label: "Image isolation pipeline",
+                    shader_source: crate::shaders::TEXTURE_ISOLATION,
+                    instance_layout: crate::instancing::TextureInstance::desc(),
+                    blend: wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING,
+                    constants: &[("premultiplied_source", 1.0)],
+                },
+                &targets,
+                "vs_isolation",
+            );
+            self.image_isolation = Some((mapping, pipeline));
+        }
+        self.image_isolation
+            .as_ref()
+            .expect("BUG: image isolation initialized above")
+    }
+
     pub(crate) fn portable_coverage(
         &mut self,
         device: &wgpu::Device,
@@ -409,6 +458,7 @@ impl PipelineSet {
             ssaa_tile_composite_layout,
             ssaa_tile_surface_format: surface_format,
             portable_coverage: None,
+            image_isolation: None,
             texture_composite_cache: HashMap::new(),
         }
     }

@@ -85,9 +85,20 @@ pub struct DragUpdateDetails {
     pub kind: PointerType,
 }
 
+/// Why an accepted gesture reached its terminal callback.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GestureEndReason {
+    /// A normal pointer release or a synthesized discrete interaction completed.
+    Completed,
+    /// The input sequence was interrupted by a pointer cancellation.
+    Cancelled,
+}
+
 /// Details about drag end
 #[derive(Debug, Clone, PartialEq)]
 pub struct DragEndDetails {
+    /// Accepted cancellation still reports an end, but must not commit a release action.
+    pub reason: GestureEndReason,
     /// Velocity at end of drag (pixels per second)
     pub velocity: Velocity,
     /// Final global position
@@ -107,7 +118,7 @@ pub type DragDownCallback = Rc<dyn Fn(DragDownDetails)>;
 pub type DragStartCallback = Rc<dyn Fn(DragStartDetails)>;
 /// Callback fired for each pointer move while the drag is in progress.
 pub type DragUpdateCallback = Rc<dyn Fn(DragUpdateDetails)>;
-/// Callback fired when the pointer lifts and the drag completes.
+/// Callback fired when an accepted drag completes or is cancelled.
 pub type DragEndCallback = Rc<dyn Fn(DragEndDetails)>;
 /// Callback fired when the gesture is cancelled (e.g. the arena rejects it).
 pub type DragCancelCallback = Rc<dyn Fn()>;
@@ -576,6 +587,7 @@ impl DragGestureRecognizer {
             self.state.stop_tracking();
             if let Some(callback) = callback {
                 callback(DragEndDetails {
+                    reason: GestureEndReason::Completed,
                     velocity,
                     global_position,
                     local_position: position,
@@ -627,6 +639,7 @@ impl DragGestureRecognizer {
                 self.state.stop_tracking();
                 if let Some(callback) = callback {
                     callback(DragEndDetails {
+                        reason: GestureEndReason::Cancelled,
                         velocity,
                         global_position,
                         local_position: position,

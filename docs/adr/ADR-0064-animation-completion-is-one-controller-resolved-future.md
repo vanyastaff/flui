@@ -1,6 +1,7 @@
 # ADR-0064: Animation completion is one controller-resolved future; the ticker resolves nothing
 
 - **Status:** Accepted
+- **Superseded-by:** ADR-0106 (continuation ownership and waiter delivery policy only)
 - **Date:** 2026-09-15
 - **Supersedes:** ADR-0020's push-completion mechanism (a status-listener seam in place of a
   `TickerFuture`)

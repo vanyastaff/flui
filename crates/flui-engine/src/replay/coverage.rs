@@ -21,12 +21,24 @@ pub(super) fn needs_portable(device: &wgpu::Device, mode: BlendMode) -> bool {
             && crate::pipeline_cache::destination_alpha_scale_for(mode).is_some())
 }
 
+// Decoded image pipelines have one color output. Even on dual-source devices,
+// destination-sensitive image coverage uses the shared portable compositor.
+pub(super) fn image_needs_portable(mode: BlendMode) -> bool {
+    mode == BlendMode::Plus || crate::pipeline_cache::destination_alpha_scale_for(mode).is_some()
+}
+
 pub(super) fn run_needs_portable(
     device: &wgpu::Device,
     segment: &DrawSegment,
     run: &RecordedRun,
 ) -> bool {
     match &run.kind {
+        DrawRun::CachedImage(range) => {
+            run.clip.has_antialias()
+                && segment.cached_images[range.clone()]
+                    .iter()
+                    .any(|(_, _, _, mode)| image_needs_portable(*mode))
+        }
         DrawRun::Tess(range) => {
             run.clip.has_antialias()
                 && segment.tess_batches[range.clone()]
@@ -206,6 +218,77 @@ impl GpuReplay {
         encoder: &mut wgpu::CommandEncoder,
         target: RenderTarget<'_>,
     ) -> EngineResult<()> {
+        if let DrawRun::CachedImage(range) = run {
+            for (key, instance, scissor, mode) in &segment.cached_images[range.clone()] {
+                let Some(crop) = crop(
+                    instance.corners().into_iter(),
+                    self.uniform_size,
+                    viewport,
+                    *scissor,
+                ) else {
+                    continue;
+                };
+                let Some(texture) = resources
+                    .texture_cache_mut()
+                    .get(key)
+                    .map(|cached| cached.view.clone())
+                else {
+                    continue;
+                };
+                let scratch =
+                    PreparedCoverage::prepare(device, resources, target, crop.region, encoder)?;
+                let bytes = bytemuck::bytes_of(instance);
+                resources.reserve_prepared(crate::device_domain::PreparedCost {
+                    gpu_bytes: bytes.len(),
+                    cpu_bytes: bytes.len(),
+                    objects: 2,
+                })?;
+                let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("Isolated image quad"),
+                    contents: bytes,
+                    usage: wgpu::BufferUsages::VERTEX,
+                });
+                let texture_binding = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("Isolated image source"),
+                    layout: &pipelines.texture_bind_group_layout,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: wgpu::BindingResource::Sampler(&self.default_sampler),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: wgpu::BindingResource::TextureView(&texture),
+                        },
+                    ],
+                });
+                let (mapping_layout, pipeline) = pipelines.image_isolation(device);
+                let mapping = mapping_binding(device, mapping_layout, crop.region, viewport);
+                {
+                    let mut pass = isolation_pass(encoder, &scratch, &crop);
+                    pass.set_pipeline(pipeline);
+                    pass.set_bind_group(0, &self.viewport_bind_group, &[]);
+                    pass.set_bind_group(1, &texture_binding, &[]);
+                    pass.set_bind_group(2, &mapping, &[]);
+                    pass.set_vertex_buffer(0, self.unit_quad_buffer.slice(..));
+                    pass.set_vertex_buffer(1, buffer.slice(..));
+                    pass.set_index_buffer(
+                        self.unit_quad_index_buffer.slice(..),
+                        wgpu::IndexFormat::Uint16,
+                    );
+                    pass.draw_indexed(0..6, 0, 0..1);
+                }
+                scratch.composite(
+                    pipelines.portable_coverage(device),
+                    device,
+                    encoder,
+                    target,
+                    *mode,
+                    Some(crop.scissor),
+                )?;
+            }
+            return Ok(());
+        }
         if let DrawRun::Tess(range) = run {
             let Some(tess) = tess else {
                 return Ok(());

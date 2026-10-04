@@ -576,7 +576,13 @@ impl Renderer {
         // fixed — see issue #1043.
         let (w, h) = (800u32, 600u32); // Will be updated on first resize
         let (target, stack) = Self::probe_then_build(Arc::new(target), |target| async move {
-            let stack = Self::build_windowed_gpu_stack(&target, w, h).await?;
+            let stack = Self::build_windowed_gpu_stack(
+                &crate::frame_protocol::FrameProtocol::new(),
+                &target,
+                w,
+                h,
+            )
+            .await?;
             Ok((target, stack))
         })
         .await?;
@@ -763,7 +769,8 @@ impl Renderer {
     /// one of those two sites would be the exact blank-window defect the
     /// rebuild exists to remove. A third consumer belongs in this function,
     /// where both callers pick it up together.
-    fn build_format_consumers(
+    pub(crate) fn build_format_consumers(
+        frame: &crate::frame_protocol::FrameProtocol,
         domain: Arc<crate::device_domain::DeviceDomain>,
         format: wgpu::TextureFormat,
         size: (u32, u32),
@@ -771,7 +778,7 @@ impl Renderer {
         crate::painter::WgpuPainter,
         crate::offscreen::OffscreenRenderer,
     ) {
-        let painter = crate::painter::WgpuPainter::with_domain(Arc::clone(&domain), format, size);
+        let painter = frame.new_painter(Arc::clone(&domain), format, size);
         let offscreen = crate::offscreen::OffscreenRenderer::with_domain(domain);
         (painter, offscreen)
     }
@@ -790,6 +797,7 @@ impl Renderer {
     /// a TDR). Returns the underlying [`EngineError`]; the caller may retry on
     /// the next frame.
     async fn build_windowed_gpu_stack(
+        frame: &crate::frame_protocol::FrameProtocol,
         target: &Arc<dyn WindowTarget>,
         width: u32,
         height: u32,
@@ -877,6 +885,7 @@ impl Renderer {
         surface.configure(&device, &config);
 
         let (painter, offscreen) = Self::build_format_consumers(
+            frame,
             crate::device_domain::DeviceDomain::new(Arc::clone(&device), Arc::clone(&queue)),
             config.format,
             (config.width, config.height),
@@ -1030,7 +1039,8 @@ impl Renderer {
         // 800×600.
         let (width, height) = (self.config.width, self.config.height);
 
-        let stack = Self::build_windowed_gpu_stack(released.target(), width, height).await?;
+        let stack =
+            Self::build_windowed_gpu_stack(&self.frame, released.target(), width, height).await?;
 
         self.instance = stack.instance;
         self.adapter = stack.adapter;
@@ -1609,6 +1619,7 @@ impl Renderer {
             // lane — the startup cost, paid again. It neither submits nor
             // waits on the GPU; shader compilation is the whole of it.
             let (painter, offscreen) = Self::build_format_consumers(
+                &self.frame,
                 Arc::clone(self.painter.domain()),
                 fresh_config.format,
                 (width, height),
@@ -1673,6 +1684,30 @@ impl Renderer {
         result
     }
 
+    /// Renders a scene produced by an unloadable plugin image.
+    ///
+    /// Set `reset_fonts` for the first scene from a hook and after each successful
+    /// image reload. Switching between plugin and ordinary scenes also resets
+    /// the font registry and glyph atlas, because their blob ids may overlap.
+    ///
+    /// # Errors
+    /// The same rendering and presentation failures as [`Self::render_scene`].
+    pub fn render_plugin_scene(
+        &mut self,
+        scene: &flui_layer::Scene,
+        reset_fonts: bool,
+    ) -> Result<PresentDisposition, EngineError> {
+        self.frame.select_font_source(
+            &mut self.painter,
+            crate::frame_protocol::FontSource::Plugin,
+            reset_fonts,
+        );
+        self.frame.begin_unmanaged();
+        let result = self.render_frame_inner(scene);
+        self.frame.end_unmanaged();
+        result
+    }
+
     /// Renders `scene` with the damage applied since the last presented
     /// frame: the raster owner's path (`RasterBackend::render_scene`).
     ///
@@ -1683,6 +1718,18 @@ impl Renderer {
     /// continuing. [`PresentDisposition::NoDamage`] means nothing was owed;
     /// otherwise the dispositions are [`Self::render_scene`]'s.
     pub(crate) fn render_frame(
+        &mut self,
+        scene: &flui_layer::Scene,
+    ) -> Result<PresentDisposition, EngineError> {
+        self.frame.select_font_source(
+            &mut self.painter,
+            crate::frame_protocol::FontSource::Ordinary,
+            false,
+        );
+        self.render_frame_inner(scene)
+    }
+
+    fn render_frame_inner(
         &mut self,
         scene: &flui_layer::Scene,
     ) -> Result<PresentDisposition, EngineError> {
@@ -2297,8 +2344,12 @@ mod tests {
         let format = wgpu::TextureFormat::Rgba8Unorm;
         let domain =
             crate::device_domain::DeviceDomain::new(Arc::clone(&device), Arc::clone(&queue));
-        let (painter, offscreen) =
-            Renderer::build_format_consumers(Arc::clone(&domain), format, (16, 16));
+        let (painter, offscreen) = Renderer::build_format_consumers(
+            &crate::frame_protocol::FrameProtocol::new(),
+            Arc::clone(&domain),
+            format,
+            (16, 16),
+        );
         let callback_flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let mut renderer = Renderer {
             instance,
@@ -2348,7 +2399,7 @@ mod tests {
             Arc::clone(&renderer.queue),
         );
         (renderer.painter, renderer.offscreen) =
-            Renderer::build_format_consumers(Arc::clone(&fresh), format, (16, 16));
+            Renderer::build_format_consumers(&renderer.frame, Arc::clone(&fresh), format, (16, 16));
         assert!(!crate::RasterBackend::is_device_lost(&renderer));
         let encoder = renderer
             .device

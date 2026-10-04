@@ -13,6 +13,8 @@ use flui_painting::{
 
 #[path = "layer_effect_tests/backdrop_rotation.rs"]
 mod backdrop_rotation;
+#[path = "layer_effect_tests/radial_circles.rs"]
+mod radial_circles;
 #[path = "layer_effect_tests/reflected_shapes.rs"]
 mod reflected_shapes;
 
@@ -1435,6 +1437,45 @@ fn layer_effects_capture_as_specified() {
     };
     type Case = (&'static str, fn(&HeadlessRenderer));
     let rows: &[Case] = &[
+        ("radial ordinary_focal", radial_circles::ordinary_focal),
+        ("radial advanced_focal", radial_circles::advanced_focal),
+        (
+            "radial ordinary_initial_circle",
+            radial_circles::ordinary_initial_circle,
+        ),
+        (
+            "radial advanced_initial_circle",
+            radial_circles::advanced_initial_circle,
+        ),
+        (
+            "radial concentric_initial_radius",
+            radial_circles::concentric_initial_radius,
+        ),
+        (
+            "radial linear_circle_equation",
+            radial_circles::linear_circle_equation,
+        ),
+        (
+            "radial repeated_root_and_missing_cone",
+            radial_circles::repeated_root_and_missing_cone,
+        ),
+        ("radial radial_tiling", radial_circles::radial_tiling),
+        (
+            "radial centered_defaults_and_zero_radius",
+            radial_circles::centered_defaults_and_zero_radius,
+        ),
+        (
+            "radial decoration_preserves_both_circles",
+            radial_circles::decoration_preserves_both_circles,
+        ),
+        (
+            "radial radial_refusal_and_next_frame",
+            radial_circles::radial_refusal_and_next_frame,
+        ),
+        (
+            "radial affine_cropped_radial",
+            radial_circles::affine_cropped_radial,
+        ),
         (
             "reflected shapes and scaled radii",
             reflected_shapes::reflected_shapes_and_scaled_radii_match_baked,

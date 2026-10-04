@@ -30,6 +30,8 @@ mod composition;
 mod custom_multi_child_layout;
 #[path = "directionality_dependency.rs"]
 mod directionality_dependency;
+#[path = "dismissible.rs"]
+mod dismissible;
 #[path = "draggable_events.rs"]
 mod draggable_events;
 #[path = "editable_text.rs"]

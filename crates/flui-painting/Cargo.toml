@@ -51,6 +51,7 @@ parley = { workspace = true }
 proptest = { workspace = true }
 trybuild = { workspace = true }
 criterion = { workspace = true }
+serde_json = { workspace = true }
 # Self dev-dependency that turns the off-by-default `testing` feature on for
 # this crate's own integration tests, so `tests/*.rs` can reach the harness.
 # Checkout-only test edge: versionless, so Cargo drops it from the published manifest.

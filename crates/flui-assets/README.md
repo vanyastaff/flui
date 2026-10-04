@@ -177,15 +177,11 @@ let bytes = loader.load_bytes("logo.png").await?;
 let text = loader.load_string("config.json").await?;
 ```
 
-### Memory Loader
+### Embedded bytes
 
-```rust
-use flui_assets::MemoryLoader;
-
-let loader = MemoryLoader::new();
-loader.insert(AssetKey::new("data"), vec![1, 2, 3, 4, 5]);
-let data = loader.load(&AssetKey::new("data")).await?;
-```
+Construct `FontAsset::from_bytes` or, with `images`, `ImageAsset::from_bytes`.
+The asset owns the source bytes and decodes through the same `Asset::load` contract
+as a file-backed asset; the registry caches its decoded result.
 
 ## Feature Flags
 
@@ -199,13 +195,13 @@ let data = loader.load(&AssetKey::new("data")).await?;
 
 ### Memory Efficiency
 - **AssetKey**: 4 bytes (vs 24+ for `String`)
-- **AssetHandle**: 8 bytes (single `Arc` pointer)
-- **Option<ElementId>**: 8 bytes (niche optimization)
+- **AssetHandle**: stores a key and an `Arc` sharing the loaded data
 
-### Cache Performance
-- **Insert**: O(1) amortized - Lock-free with Moka
-- **Get**: O(1) expected - Hash table lookup
-- **Eviction**: O(1) amortized - TinyLFU admission policy
+### Cache Behavior
+
+Moka manages cache entries and admission. Cache operations also update statistics
+behind a separate lock. `AssetCache::stats()` reports that typed cache's counters;
+the registry does not aggregate statistics across asset types.
 
 ### Thread Safety
 

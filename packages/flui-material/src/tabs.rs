@@ -353,13 +353,14 @@ impl PreferredSizeView for TabBar {
 
 /// The bar's total height: the tallest tab's content height (`46.0` if
 /// `tabs` is empty) plus `indicator_weight`. This also covers the zero-tab
-/// special case (`TAB_HEIGHT + indicator_weight`) — no separate branch is needed here because folding over
-/// an empty `tabs` slice already returns the `TAB_HEIGHT` seed.
+/// special case (`TAB_HEIGHT + indicator_weight`). A nonempty bar uses only
+/// its tabs' requested heights, including overrides below the default.
 fn bar_height(tabs: &[Tab], indicator_weight: f64) -> f64 {
     let max_content_height = tabs
         .iter()
         .map(tab_content_height)
-        .fold(TAB_HEIGHT, f64::max);
+        .reduce(f64::max)
+        .unwrap_or(TAB_HEIGHT);
     max_content_height + indicator_weight
 }
 

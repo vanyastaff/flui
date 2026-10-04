@@ -374,8 +374,17 @@ impl GpuStateStack {
     /// while the true area scale is 5. Use [`Self::area_scale`] for area thresholds.
     pub(super) fn max_scale(&self) -> f32 {
         let m = self.current_transform();
-        let col_x = (m.x_axis.x * m.x_axis.x + m.x_axis.y * m.x_axis.y).sqrt();
-        let col_y = (m.y_axis.x * m.y_axis.x + m.y_axis.y * m.y_axis.y).sqrt();
+        // Preserve NaN propagation: hypot(infinity, NaN) alone is infinity.
+        let col_x = if m.x_axis.x.is_nan() || m.x_axis.y.is_nan() {
+            f32::NAN
+        } else {
+            m.x_axis.x.hypot(m.x_axis.y)
+        };
+        let col_y = if m.y_axis.x.is_nan() || m.y_axis.y.is_nan() {
+            f32::NAN
+        } else {
+            m.y_axis.x.hypot(m.y_axis.y)
+        };
         col_x.max(col_y)
     }
 

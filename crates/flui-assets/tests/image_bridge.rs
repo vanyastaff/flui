@@ -54,10 +54,18 @@ fn block_on<F: Future>(future: F) -> F::Output {
     let mut future = Box::pin(future);
     let waker = Waker::from(Arc::new(ThreadWaker(std::thread::current())));
     let mut cx = Context::from_waker(&waker);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     loop {
         match future.as_mut().poll(&mut cx) {
             Poll::Ready(output) => return output,
-            Poll::Pending => std::thread::park(),
+            Poll::Pending => {
+                let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+                assert!(
+                    !remaining.is_zero(),
+                    "bridged load failed to complete within ten seconds"
+                );
+                std::thread::park_timeout(remaining);
+            }
         }
     }
 }
@@ -99,12 +107,37 @@ fn load_image_bridged_reports_a_missing_file_as_an_error_not_a_hang() {
         result.is_err(),
         "a nonexistent path must surface a typed error, got {result:?}",
     );
+    let recovered = block_on(registry.load_image_bridged(fixture_path()))
+        .expect("a failed file load must not prevent the next load");
+    assert_eq!((recovered.width(), recovered.height()), (4, 2));
+}
+
+fn entered_current_thread_runtime_does_not_trap_bridged_loads() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("the test runtime starts");
+    let _entered = runtime.enter();
+    // No Runtime::block_on: the ambient runtime never drives its queue.
+    load_image_bridged_reports_a_missing_file_as_an_error_not_a_hang();
 }
 
 /// The bridge end to end with no ambient runtime: the success path decodes and
 /// the failure path resolves to an error instead of hanging.
 #[test]
 fn load_image_bridged_completes_both_the_success_and_the_failure_path() {
-    load_image_bridged_starts_an_owned_runtime_and_decodes_the_fixture();
-    load_image_bridged_reports_a_missing_file_as_an_error_not_a_hang();
+    crate::cases::run_cases(&[
+        (
+            "owned runtime decode",
+            load_image_bridged_starts_an_owned_runtime_and_decodes_the_fixture,
+        ),
+        (
+            "missing file recovery",
+            load_image_bridged_reports_a_missing_file_as_an_error_not_a_hang,
+        ),
+        (
+            "undriven ambient runtime",
+            entered_current_thread_runtime_does_not_trap_bridged_loads,
+        ),
+    ]);
 }

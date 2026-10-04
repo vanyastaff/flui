@@ -116,11 +116,12 @@ impl Drop for MacosAccessibility {
             // it is the only acceptable fallback. Reaching here at all
             // means the window's own teardown (which calls `shutdown`
             // first) was bypassed.
-            tracing::warn!(
-                "leaking an NSAccessibility subclass adapter dropped off the \
-                 main thread (unhooking would touch AppKit state cross-thread)"
-            );
-            std::mem::forget(adapter);
+            crate::shared::panic_boundary::retain_off_owner_resource(adapter, || {
+                tracing::warn!(
+                    "leaking an NSAccessibility subclass adapter dropped off the \
+                     main thread (unhooking would touch AppKit state cross-thread)"
+                );
+            });
         }
     }
 }

@@ -46,6 +46,8 @@ pub trait Asset: Send + Sync + 'static {
     /// The type of data this asset produces when loaded.
     ///
     /// This must be `Send + Sync` to allow sharing across threads.
+    /// It need not implement `Clone`: caches and handles share the value through
+    /// `Arc` ownership. Only explicit data-copying operations require `Clone`.
     type Data: Send + Sync;
 
     /// The type used to uniquely identify this asset.
@@ -64,8 +66,9 @@ pub trait Asset: Send + Sync + 'static {
 
     /// Loads and decodes the asset asynchronously.
     ///
-    /// This method performs all I/O and decoding operations. The result will be
-    /// cached by the asset registry, so expensive operations are only performed once.
+    /// This method performs I/O and decoding. The asset registry caches successful
+    /// results and coalesces concurrent cold requests for the same typed key.
+    /// Calling this method directly bypasses registry caching.
     ///
     /// # Errors
     ///
@@ -87,7 +90,9 @@ pub trait Asset: Send + Sync + 'static {
 
     /// Validates the asset before loading.
     ///
-    /// This is called before `load()` and can be used for early validation,
+    /// [`crate::AssetRegistry::load`] calls this before accessing the cache or
+    /// invoking `load()`, including on cache hits. Direct callers of `load()`
+    /// are responsible for invoking it themselves. It can be used for early validation,
     /// such as checking file extensions, magic numbers, or size limits.
     ///
     /// The default implementation always returns `Ok(())`.

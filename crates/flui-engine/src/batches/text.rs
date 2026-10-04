@@ -99,9 +99,11 @@ impl DrawBatcher {
                 if slot.is_empty() {
                     continue;
                 }
-                let x = glyph.x + slot.left;
-                let y = glyph.y - slot.top;
-                let (w, h) = (slot.size[0] as i32, slot.size[1] as i32);
+                // A representable placed origin can have bitmap bearings
+                // outside i32. Keep the quad wide until scissor exclusion.
+                let x = i64::from(glyph.x) + i64::from(slot.left);
+                let y = i64::from(glyph.y) - i64::from(slot.top);
+                let (w, h) = (i64::from(slot.size[0]), i64::from(slot.size[1]));
                 if matches!(placement, Placement::Uniform) && outside_scissor(scissor, x, y, w, h) {
                     continue;
                 }
@@ -159,12 +161,11 @@ fn uniform_linear(state: &GpuStateStack, scale: f32) -> Option<[f32; 4]> {
 }
 
 /// Whether a `w × h` quad at `(x, y)` shares no pixel with `scissor`.
-fn outside_scissor(scissor: Option<(u32, u32, u32, u32)>, x: i32, y: i32, w: i32, h: i32) -> bool {
+fn outside_scissor(scissor: Option<(u32, u32, u32, u32)>, x: i64, y: i64, w: i64, h: i64) -> bool {
     let Some((sx, sy, sw, sh)) = scissor else {
         return false;
     };
     let (sx, sy) = (sx as i64, sy as i64);
     let (sr, sb) = (sx + sw as i64, sy + sh as i64);
-    let (x, y) = (x as i64, y as i64);
-    x + w as i64 <= sx || y + h as i64 <= sy || x >= sr || y >= sb
+    x + w <= sx || y + h <= sy || x >= sr || y >= sb
 }

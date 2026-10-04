@@ -68,7 +68,7 @@ pub(crate) fn resolve_java_home() -> BuildResult<PathBuf> {
 
     if !path.exists() {
         return Err(BuildError::PathNotFound {
-            path: path.clone(),
+            path,
             context: "JAVA_HOME path does not exist".to_string(),
         });
     }

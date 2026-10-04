@@ -180,3 +180,20 @@ with real headless realms in host tests; it is not another lifecycle reducer or 
 public raw-platform capability. Root configurations can retain application-owned
 state while a new session creates fresh `ViewState`. See ADR-0073 for native
 attachment lifetime, panic containment and platform limits.
+
+### Android scene rendering discharges the plugin payload lifetime obligation
+
+The Android host calls unsafe `DevReloadHook::scene_frame` with only its
+synchronous `Renderer::render_plugin_scene` callback (ADR-0108). The engine walks
+borrowed layers and ignores annotated-region payloads. Cached image bytes
+are concrete `Arc<Vec<u8>>`; glyph face admission copies source bytes into the
+host registry's concrete `Arc<[u8]>`. The callback therefore retains no
+plugin-backed trait object, including on unwind, before the hook can unload
+its image. This proof is about the shipped renderer; a callback that clones
+opaque scene payloads must establish its own ordering.
+
+The callback passes the hook's pending font reset to the renderer and returns
+true only for a successful rendering result. A failed rendering logs its error
+and leaves the hook's reset pending. Ordinary fallback rendering restores the
+renderer namespace separately; the next plugin frame therefore cannot alias
+ordinary or prior-image font IDs.

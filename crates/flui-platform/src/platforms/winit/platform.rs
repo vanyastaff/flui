@@ -395,23 +395,30 @@ impl WinitPlatformState {
     }
 
     fn init_displays(&mut self, event_loop: &ActiveEventLoop) {
-        let monitors: Vec<_> = event_loop.available_monitors().collect();
+        let monitors = event_loop.available_monitors();
         let primary_monitor = event_loop.primary_monitor();
-
-        self.displays = monitors
-            .into_iter()
-            .enumerate()
-            .map(|(idx, monitor)| {
-                let is_primary = primary_monitor
-                    .as_ref()
-                    .map_or(idx == 0, |pm| pm.name() == monitor.name());
-
-                Arc::new(WinitDisplay::new(monitor, idx as u64, is_primary))
-            })
-            .collect();
+        self.displays = map_monitor_displays(monitors, primary_monitor, |monitor, id, primary| {
+            Arc::new(WinitDisplay::new(monitor, id, primary))
+        });
 
         tracing::info!(count = self.displays.len(), "Initialized displays");
     }
+}
+
+fn map_monitor_displays<M: PartialEq, D>(
+    monitors: impl Iterator<Item = M>,
+    primary: Option<M>,
+    mut make: impl FnMut(M, u64, bool) -> D,
+) -> Vec<D> {
+    monitors
+        .enumerate()
+        .map(|(index, monitor)| {
+            let is_primary = primary
+                .as_ref()
+                .map_or(index == 0, |primary| primary == &monitor);
+            make(monitor, index as u64, is_primary)
+        })
+        .collect()
 }
 
 impl Default for WinitPlatform {
@@ -2589,6 +2596,97 @@ mod tests {
         platforms::winit::control::control_lane,
         traits::{Platform, WindowOptions},
     };
+
+    #[derive(Clone, Debug)]
+    struct Monitor {
+        uuid: u64,
+        label: &'static str,
+    }
+    impl PartialEq for Monitor {
+        fn eq(&self, other: &Self) -> bool {
+            self.uuid == other.uuid
+        }
+    }
+    fn monitor(uuid: u64, label: &'static str) -> Monitor {
+        Monitor { uuid, label }
+    }
+    fn mapped(
+        monitors: Vec<Monitor>,
+        primary: Option<Monitor>,
+    ) -> Vec<(u64, u64, &'static str, bool)> {
+        super::map_monitor_displays(monitors.into_iter(), primary, |monitor, id, primary| {
+            (id, monitor.uuid, monitor.label, primary)
+        })
+    }
+    fn duplicate_model_labels_select_only_the_primary_uuid() {
+        assert_eq!(
+            mapped(
+                vec![monitor(10, "Monitor #7"), monitor(20, "Monitor #7")],
+                Some(monitor(20, "Monitor #7"))
+            ),
+            [(0, 10, "Monitor #7", false), (1, 20, "Monitor #7", true)]
+        );
+    }
+    fn changed_label_preserves_the_primary_uuid() {
+        assert_eq!(
+            mapped(
+                vec![monitor(10, "new label")],
+                Some(monitor(10, "old label"))
+            ),
+            [(0, 10, "new label", true)]
+        );
+    }
+    fn absent_primary_uses_only_the_first_display() {
+        assert_eq!(
+            mapped(vec![monitor(10, "first"), monitor(20, "second")], None),
+            [(0, 10, "first", true), (1, 20, "second", false)]
+        );
+    }
+    fn missing_primary_identity_does_not_select_a_substitute() {
+        assert_eq!(
+            mapped(vec![monitor(10, "same")], Some(monitor(30, "same"))),
+            [(0, 10, "same", false)]
+        );
+    }
+    fn empty_monitor_lists_have_no_primary_display() {
+        assert_eq!(mapped(Vec::new(), None), []);
+        assert_eq!(mapped(Vec::new(), Some(monitor(30, "missing"))), []);
+    }
+    #[test]
+    fn monitor_display_mapping_matrix() {
+        let mut failures = Vec::new();
+        for (name, row) in [
+            (
+                "duplicate_model_labels_select_only_the_primary_uuid",
+                duplicate_model_labels_select_only_the_primary_uuid as fn(),
+            ),
+            (
+                "changed_label_preserves_the_primary_uuid",
+                changed_label_preserves_the_primary_uuid,
+            ),
+            (
+                "absent_primary_uses_only_the_first_display",
+                absent_primary_uses_only_the_first_display,
+            ),
+            (
+                "missing_primary_identity_does_not_select_a_substitute",
+                missing_primary_identity_does_not_select_a_substitute,
+            ),
+            (
+                "empty_monitor_lists_have_no_primary_display",
+                empty_monitor_lists_have_no_primary_display,
+            ),
+        ] {
+            if let Err(payload) = catch_unwind(AssertUnwindSafe(row)) {
+                failures.push(name);
+                flui_foundation::panic::retain_opaque_payload(payload);
+            }
+        }
+        assert!(
+            failures.is_empty(),
+            "failed monitor mapping cases: {failures:?}"
+        );
+    }
 
     // ========================================================================
     // combine_shutdown_result

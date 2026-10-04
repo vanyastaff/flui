@@ -12,6 +12,31 @@ shape.
 
 ## Mapping decisions
 
+### Failed incremental publication keeps delivery pending
+
+The published-node mirror and published focus advance only after the platform
+callback returns successfully. A callback panic propagates to the caller; dirty
+nodes remain pending, so retrying the same input delivers its changed payload
+and focus. Removal bookkeeping can prune absent identities before delivery:
+the dirty parent's changed child list remains different from the delivered
+mirror and therefore retries. Focus claimant bookkeeping describes current
+tree state rather than delivered state and may likewise advance before delivery.
+The callback may have accepted an update before panicking, so retries can repeat
+delivery; this boundary promises progress, not exactly-once delivery.
+`failed_incremental_delivery_preserves_retry_and_progress` checks failed label,
+focus, and removal updates, a retry without further mutation, an idle flush,
+and a subsequent independent change.
+
+### Parent-specific detachment preserves both sides of a link
+
+`SemanticsTree::remove_child` detaches only a child whose current parent is the
+live parent supplied by the caller. A stale or different parent is a no-op;
+clearing the child's actual parent in that case would leave its old parent's
+children list pointing at it and defeat `add_child`'s automatic reparenting.
+`detaching_checks_the_actual_parent_and_preserves_reparenting` exercises the
+owner wrapper, refused detachment, reparenting, published parent child lists,
+and a successful detach followed by reattachment.
+
 ### 1. Role resolution is a single-valued specificity cascade, and checkable state outranks the broad `IsButton`
 
 **Rule:** a semantics node carries a *set* of flags, and a radio tile, for example,
@@ -322,3 +347,16 @@ adapter and desktop sources, and checked to cover every role FLUI publishes),
 `read_honours_max_depth_and_max_nodes_and_says_truncated` and
 `a_read_tree_round_trips_through_json`. `every_wire_action_routes_to_a_semantics_action` pins
 `semantics_action_for_wire` to the Windows adapter's route row by row.
+
+
+### Property presence includes every supplied annotation
+
+`SemanticsProperties::is_empty` means that no optional field is supplied and both
+the tag and custom-action collections are empty. `Some(false)`, a supplied empty
+string and supplied empty hint overrides remain present; this query concerns
+whether an annotation was supplied, not its truth or text content. The exhaustive
+field destructure makes a newly added property require a presence decision at
+compile time. Public family
+`semantics_property_presence_includes_every_public_annotation` covers each field
+and a selection-only annotation published through a consumer's empty-annotation
+filter and `SemanticsOwner`.

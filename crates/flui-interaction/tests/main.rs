@@ -5,5 +5,11 @@
 #[path = "headless_long_press.rs"]
 mod headless_long_press;
 
+#[path = "multi_tap.rs"]
+mod multi_tap;
+
 #[path = "interaction_lane.rs"]
 mod interaction_lane;
+
+#[path = "hit_test_transform.rs"]
+mod hit_test_transform;

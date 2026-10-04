@@ -147,7 +147,7 @@ where
     /// bound, so the proxy cannot compare old vs. new). Status listeners are
     /// notified only when the status actually differs across the swap.
     pub fn set_parent(&self, new_parent: Arc<dyn Animation<T>>) {
-        let old_status = self.parent.read().status();
+        let old_status = self.parent().status();
         // Subscribe to the new parent first, then swap; replacing the stored
         // subscriptions drops the old ones, which removes the value listener
         // and status forwarder from the previous parent.
@@ -177,12 +177,12 @@ where
 {
     #[inline]
     fn value(&self) -> T {
-        self.parent.read().value()
+        self.parent().value()
     }
 
     #[inline]
     fn status(&self) -> AnimationStatus {
-        self.parent.read().status()
+        self.parent().status()
     }
 
     fn add_status_listener(&self, callback: StatusCallback) -> ListenerId {

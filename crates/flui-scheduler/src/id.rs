@@ -109,9 +109,15 @@ impl<M: Marker> IdGenerator<M> {
     ///
     /// # Panics
     ///
-    /// Panics if the counter overflows (after `usize::MAX - 1` IDs).
+    /// Panics when the next value reaches `usize::MAX`, which is reserved
+    /// for exhaustion. Exhaustion remains until an explicit [`Self::reset`].
     pub fn next(&self) -> Id<M> {
-        let value = self.counter.fetch_add(1, Ordering::Relaxed);
+        let value = self
+            .counter
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+                current.checked_add(1)
+            })
+            .expect("BUG: scheduler ID generator exhausted; refusing to reuse identities");
         Id::zip(value)
     }
 

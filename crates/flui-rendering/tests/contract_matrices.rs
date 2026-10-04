@@ -127,6 +127,26 @@ fn layout_protocol_matrix() {
 fn hit_test_matrix() {
     let cases: &[(&str, fn())] = &[
         (
+            "hit_test_pipeline::nested_tiny_transforms_emit_the_correct_local_hit_point",
+            crate::hit_test_pipeline::nested_tiny_transforms_emit_the_correct_local_hit_point,
+        ),
+        (
+            "hit_test_pipeline::singular_node_transform_refuses_before_hit_and_preserves_sibling",
+            crate::hit_test_pipeline::singular_node_transform_refuses_before_hit_and_preserves_sibling,
+        ),
+        (
+            "hit_test_pipeline::nonfinite_node_transform_refuses_before_hit_and_preserves_sibling",
+            crate::hit_test_pipeline::nonfinite_node_transform_refuses_before_hit_and_preserves_sibling,
+        ),
+        (
+            "hit_test_pipeline::singular_context_transform_refuses_before_hit_and_preserves_sibling",
+            crate::hit_test_pipeline::singular_context_transform_refuses_before_hit_and_preserves_sibling,
+        ),
+        (
+            "hit_test_pipeline::nonfinite_context_transform_refuses_before_hit_and_preserves_sibling",
+            crate::hit_test_pipeline::nonfinite_context_transform_refuses_before_hit_and_preserves_sibling,
+        ),
+        (
             "hit_test_pipeline::flex_lays_out_and_hits_children_at_layout_offsets",
             crate::hit_test_pipeline::flex_lays_out_and_hits_children_at_layout_offsets,
         ),
@@ -146,11 +166,30 @@ fn hit_test_matrix() {
             "transform_to::transform_to_accumulates_offsets_through_a_plain_chain",
             crate::transform_to::transform_to_accumulates_offsets_through_a_plain_chain,
         ),
+        (
+            "hit_test_pipeline::caught_offset_scope_restores_hit_coordinates",
+            crate::hit_test_pipeline::caught_offset_scope_restores_hit_coordinates,
+        ),
+        (
+            "hit_test_pipeline::caught_matrix_scope_restores_hit_coordinates",
+            crate::hit_test_pipeline::caught_matrix_scope_restores_hit_coordinates,
+        ),
+        (
+            "hit_test_pipeline::caught_nested_scope_restores_hit_coordinates",
+            crate::hit_test_pipeline::caught_nested_scope_restores_hit_coordinates,
+        ),
+        (
+            "hit_test_pipeline::caught_child_offset_scope_restores_hit_coordinates",
+            crate::hit_test_pipeline::caught_child_offset_scope_restores_hit_coordinates,
+        ),
+        (
+            "hit_test_pipeline::caught_driver_node_scope_restores_hit_coordinates",
+            crate::hit_test_pipeline::caught_driver_node_scope_restores_hit_coordinates,
+        ),
+        (
+            "hit_test_pipeline::caught_zero_offset_driver_node_scope_restores_hit_coordinates",
+            crate::hit_test_pipeline::caught_zero_offset_driver_node_scope_restores_hit_coordinates,
+        ),
     ];
-    for &(name, case) in cases {
-        if let Err(payload) = std::panic::catch_unwind(case) {
-            eprintln!("matrix case `{name}` failed");
-            std::panic::resume_unwind(payload);
-        }
-    }
+    crate::run_table(cases);
 }

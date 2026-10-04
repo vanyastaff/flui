@@ -15,19 +15,20 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use flui_foundation::geometry::Size;
 use flui_interaction::routing::FocusNode;
+use flui_painting::styling::Color;
 use flui_platform_api::text_store::{
     LockGrant, LockOutcome, LockTiming, TextStoreError, TextStoreRead, Utf16Offset,
 };
 use flui_rendering::hit_testing::CursorIcon;
 use flui_rendering::prelude::{BoxLayoutContext, BoxParentData, Leaf, PaintCx, RenderBox};
 use flui_scheduler::SchedulerPhase;
-use flui_testing::widgets::{ProbeSignals, SignalProbe, lay_out, tight};
+use flui_testing::widgets::{ProbeSignals, SignalProbe, lay_out, loose, tight};
 use flui_testing::{A11yTree, Action, ActionRequest, TreeId};
 use flui_view::prelude::*;
 use flui_view::{RenderView, View};
 use flui_widgets::{
-    EditableText, GestureDetector, MediaQuery, MediaQueryData, MouseRegion, Semantics, SizedBox,
-    Text, TextEditingController,
+    ColoredBox, EditableText, GestureDetector, MediaQuery, MediaQueryData, MouseRegion, Padding,
+    Semantics, SizedBox, Text, TextEditingController,
 };
 
 // ---------------------------------------------------------------------------
@@ -439,4 +440,119 @@ fn mouse_region_cursor_reaches_the_window_through_the_realm() {
     laid.dispatch_pointer_hover(20.0, 20.0);
 
     assert_eq!(laid.cursor(), CursorIcon::Pointer);
+}
+
+#[derive(Clone, StatefulView)]
+struct ReplacingRenderRoot {
+    mode: Rc<Cell<u8>>,
+    rebuild: Rc<RefCell<Option<RebuildHandle>>>,
+}
+
+struct ReplacingRenderRootState {
+    rebuild: Rc<RefCell<Option<RebuildHandle>>>,
+}
+
+impl StatefulView for ReplacingRenderRoot {
+    type State = ReplacingRenderRootState;
+
+    fn create_state(&self) -> Self::State {
+        ReplacingRenderRootState {
+            rebuild: Rc::clone(&self.rebuild),
+        }
+    }
+}
+
+impl ViewState<ReplacingRenderRoot> for ReplacingRenderRootState {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
+        *self.rebuild.borrow_mut() = Some(ctx.rebuild_handle());
+    }
+
+    fn build(&self, view: &ReplacingRenderRoot, _ctx: &dyn BuildContext) -> impl IntoView {
+        assert_ne!(view.mode.get(), 1, "induced root build failure");
+        if view.mode.get() == 2 {
+            Padding::all(5.0).child(SizedBox::new(40.0, 30.0)).boxed()
+        } else {
+            SizedBox::new(20.0, 10.0).boxed()
+        }
+    }
+}
+
+pub fn logical_render_root_tracks_replacement_and_build_recovery() {
+    let mode = Rc::new(Cell::new(0));
+    let rebuild = Rc::new(RefCell::new(None));
+    let mut laid = lay_out(
+        ReplacingRenderRoot {
+            mode: Rc::clone(&mode),
+            rebuild: Rc::clone(&rebuild),
+        },
+        loose(100.0),
+    );
+    let initial = laid.root();
+    assert_eq!(laid.size(initial), Size::new(20.0, 10.0));
+    for next in [2, 1, 0] {
+        mode.set(next);
+        rebuild
+            .borrow()
+            .as_ref()
+            .expect("root registered its rebuild handle")
+            .schedule(RebuildReason::StateChange);
+        laid.tick();
+        let root = laid.root();
+        assert_eq!(root, laid.current_root());
+        match next {
+            2 => {
+                assert_eq!(root, laid.find_by_render_type("RenderPadding"));
+                assert_eq!(laid.size(root), Size::new(50.0, 40.0));
+                assert_eq!(laid.try_size(initial), None);
+            }
+            1 => {
+                assert_eq!(root, laid.find_by_render_type("RenderErrorBox"));
+                assert!(laid.try_size(root).is_some());
+            }
+            _ => {
+                assert_eq!(laid.find_all_by_render_type("RenderErrorBox"), []);
+                assert_eq!(root, laid.find_by_render_type("RenderConstrainedBox"));
+                assert_eq!(laid.size(root), Size::new(20.0, 10.0));
+            }
+        }
+    }
+}
+
+pub fn a_zero_capacity_performance_window_retains_no_frame_samples() {
+    let mut disabled = flui_runtime::performance_stats::PerformanceStats::new(0);
+    let mut enabled = flui_runtime::performance_stats::PerformanceStats::new(1);
+    disabled.record_frame();
+    enabled.record_frame();
+    // The API samples the platform clock, rather than accepting a test clock.
+    // A nonzero interval distinguishes disabled retention from a zero-duration frame.
+    std::thread::sleep(std::time::Duration::from_millis(2));
+    disabled.record_frame();
+    enabled.record_frame();
+    assert_eq!(disabled.avg_frame_time_ms(), 0.0);
+    assert_eq!(disabled.fps(), 0.0);
+    assert!(enabled.avg_frame_time_ms() > 0.0);
+    assert!(enabled.fps() > 0.0);
+    disabled.record_frame();
+    assert_eq!(disabled.avg_frame_time_ms(), 0.0);
+}
+
+/// A reused probe follows the new owning realm rather than its released signal.
+pub fn a_signal_probe_reads_and_writes_its_current_mount_after_remount() {
+    let probe = SignalProbe::new(|ProbeSignals { count, .. }| {
+        GestureDetector::new()
+            .on_tap(move |cx| count.update(cx, |value| *value += 1))
+            .child(ColoredBox::new(Color::WHITE))
+    });
+    let mut first = lay_out(probe.view(), tight(100.0, 100.0));
+    first.dispatch_pointer_down(50.0, 50.0);
+    first.dispatch_pointer_up(50.0, 50.0);
+    first.tick();
+    assert_eq!(probe.value(), Ok(1));
+    drop(first);
+    let mut current = lay_out(probe.view(), tight(100.0, 100.0));
+    assert_eq!(probe.value(), Ok(0), "the new mount owns a new live signal");
+    current.dispatch_pointer_down(50.0, 50.0);
+    current.dispatch_pointer_up(50.0, 50.0);
+    current.tick();
+    assert_eq!(probe.value(), Ok(1));
 }

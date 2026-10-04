@@ -111,34 +111,23 @@ pub(crate) fn adr_exists(files: &[String], number: &str) -> bool {
         .any(|file| file.starts_with(&prefix) || *file == exact)
 }
 
-/// A uniquely named directory under the system temp dir, removed on drop.
-pub(crate) struct ScratchDir(PathBuf);
+/// An exclusively created temporary directory, removed on drop.
+///
+/// `tempfile` owns name generation, atomic admission and cleanup, so an
+/// existing path is never adopted and subsequently removed as our scratch.
+pub(crate) struct ScratchDir(tempfile::TempDir);
 
 impl ScratchDir {
     pub(crate) fn new(label: &str) -> anyhow::Result<Self> {
-        use std::sync::atomic::{AtomicUsize, Ordering};
-        static COUNTER: AtomicUsize = AtomicUsize::new(0);
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |elapsed| elapsed.subsec_nanos());
-        let path = std::env::temp_dir().join(format!(
-            "xtask-{label}-{}-{}-{nanos}",
-            std::process::id(),
-            COUNTER.fetch_add(1, Ordering::Relaxed)
-        ));
-        std::fs::create_dir_all(&path).with_context(|| format!("creating {}", path.display()))?;
-        Ok(Self(path))
+        tempfile::Builder::new()
+            .prefix(&format!("xtask-{label}-"))
+            .tempdir()
+            .map(Self)
+            .context("creating an exclusive xtask scratch directory")
     }
 
     pub(crate) fn path(&self) -> &Path {
-        &self.0
-    }
-}
-
-impl Drop for ScratchDir {
-    fn drop(&mut self) {
-        // Best effort: a leftover scratch directory is harmless.
-        let _ = std::fs::remove_dir_all(&self.0);
+        self.0.path()
     }
 }
 

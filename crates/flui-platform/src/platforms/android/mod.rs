@@ -43,7 +43,6 @@
 //! needs a window has nothing to build a surface from before it.
 
 pub mod input;
-pub mod memory;
 pub mod window;
 
 use std::{
@@ -57,10 +56,6 @@ use std::{
 
 use android_activity::{AndroidApp, InputStatus, MainEvent, PollEvent};
 
-pub use memory::{
-    PageAlignedVec, PageAllocError, align_to_page_size, align_to_page_size_u64, get_page_size,
-    is_16kb_page_size,
-};
 use parking_lot::Mutex;
 pub use window::AndroidWindow;
 

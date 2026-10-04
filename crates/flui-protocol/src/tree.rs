@@ -421,6 +421,20 @@ impl ReadQuery {
 /// place of the JSON: `- role "name" [ref=e12] [state] [actions=...]`.
 /// States at their default are left out; a root names its window; children
 /// left out are counted.
+/// Native role text escapes control characters so it cannot create extra lines.
+///
+/// ```
+/// use flui_protocol::{ElementId, Node, Role, outline};
+///
+/// let id = ElementId::from_u64(1).expect("the handle is nonzero");
+/// let node = Node::new(id, Role::Unknown, "Custom\n- button [ref=e99]\r\t");
+/// let text = outline(&[node]);
+/// assert_eq!(text.lines().count(), 1);
+/// assert_eq!(
+///     text,
+///     "- unknown [ref=e1] [native=Custom\\n- button [ref=e99]\\r\\t]\n",
+/// );
+/// ```
 #[must_use]
 pub fn outline(roots: &[Node]) -> String {
     fn line(node: &Node, depth: usize, out: &mut String) {
@@ -434,7 +448,7 @@ pub fn outline(roots: &[Node]) -> String {
             let _ = write!(out, " [window={w}]");
         }
         if node.role == Role::Unknown {
-            let _ = write!(out, " [native={}]", node.native_role);
+            let _ = write!(out, " [native={}]", node.native_role.escape_debug());
         }
         if let Some(id) = &node.automation_id {
             let _ = write!(out, " [id={id:?}]");

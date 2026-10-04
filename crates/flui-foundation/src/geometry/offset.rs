@@ -404,16 +404,13 @@ impl Offset<f64> {
     }
 
     /// Normalize this offset to a unit vector.
+    ///
+    /// Returns zero for a near-zero length or non-finite components. Finite
+    /// directions are retained even when their magnitude exceeds `f64::MAX`.
     #[inline]
     #[must_use]
     pub fn normalize(self) -> Offset<f64> {
-        let dist = self.distance();
-        if dist > f64::EPSILON {
-            let dist_f32 = dist;
-            Offset::new(self.dx / dist_f32, self.dy / dist_f32)
-        } else {
-            Offset::ZERO
-        }
+        Vec2::from(self).normalize().into()
     }
 
     /// Compute the dot product of this offset and another.

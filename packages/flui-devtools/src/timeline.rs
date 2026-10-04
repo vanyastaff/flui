@@ -171,9 +171,13 @@ impl TimelineEvent {
         self.start_micros as f64 / 1000.0
     }
 
-    /// Get duration as Duration
+    /// Get duration as Duration, saturating values beyond its representable range.
     pub fn duration(&self) -> Duration {
-        Duration::from_micros(self.duration_micros as u64)
+        let Ok(seconds) = u64::try_from(self.duration_micros / 1_000_000) else {
+            return Duration::MAX;
+        };
+        let nanos = (self.duration_micros % 1_000_000) as u32 * 1_000;
+        Duration::new(seconds, nanos)
     }
 }
 
@@ -309,6 +313,7 @@ impl TimelineInner {
 
     fn clear(&mut self) {
         self.events.clear();
+        self.base_event_id = self.next_event_id;
         self.start_time = Instant::now();
     }
 
@@ -361,8 +366,9 @@ impl Timeline {
     /// } // Event duration recorded here
     /// ```
     pub fn record_event(&self, name: impl Into<String>, category: EventCategory) -> EventGuard {
+        let name = name.into();
         let mut inner = self.inner.lock();
-        let event_handle = inner.start_event(name.into(), category);
+        let event_handle = inner.start_event(name, category);
         let start = Instant::now();
 
         EventGuard {
@@ -377,8 +383,9 @@ impl Timeline {
     /// Use this for events that happen at a point in time rather than over a
     /// duration.
     pub fn record_instant(&self, name: impl Into<String>, category: EventCategory) {
+        let name = name.into();
         let mut inner = self.inner.lock();
-        let event_handle = inner.start_event(name.into(), category);
+        let event_handle = inner.start_event(name, category);
         inner.end_event(event_handle, Duration::ZERO);
     }
 
@@ -396,12 +403,13 @@ impl Timeline {
         duration: Duration,
         args: serde_json::Value,
     ) {
+        let name = name.into();
         let mut inner = self.inner.lock();
         let start_micros = start
             .saturating_duration_since(inner.start_time)
             .as_micros();
         inner.push_event(TimelineEvent {
-            name: name.into(),
+            name,
             start_micros,
             duration_micros: duration.as_micros(),
             category,

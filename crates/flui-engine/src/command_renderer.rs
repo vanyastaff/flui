@@ -103,6 +103,23 @@ pub(crate) trait CommandRenderer {
         transform: &Matrix4,
     );
 
+    /// Render a source texel region, optionally tiled from a fitted logical rect.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Carries the complete recorded image operation"
+    )]
+    fn render_image_region(
+        &mut self,
+        image: &Image,
+        src: Rect<f64>,
+        dst: Rect<f64>,
+        tile: Option<Rect<f64>>,
+        repeat: flui_painting::paint::ImageRepeat,
+        filter: Option<flui_painting::paint::ColorFilter>,
+        paint: Option<&Paint>,
+        transform: &Matrix4,
+    );
+
     /// Render a texture atlas with sprites
     #[expect(clippy::too_many_arguments)]
     fn render_atlas(

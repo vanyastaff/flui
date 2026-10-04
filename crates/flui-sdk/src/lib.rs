@@ -57,6 +57,7 @@ pub mod platform {
 /// Gesture details and focus, at the paths `flui::interaction` uses.
 pub mod interaction {
     pub use flui_interaction::DragDownDetails;
+    pub use flui_interaction::GestureEndReason;
     pub use flui_interaction::routing::FocusNode;
 }
 

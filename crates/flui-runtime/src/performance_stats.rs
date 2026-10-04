@@ -29,6 +29,7 @@ impl Default for PerformanceStats {
 
 impl PerformanceStats {
     /// A window that keeps the last `max_samples` frame durations.
+    /// Zero disables sample retention and reports zero timing and FPS.
     #[must_use]
     pub fn new(max_samples: usize) -> Self {
         Self {
@@ -41,7 +42,9 @@ impl PerformanceStats {
     /// Records that a frame was composited now.
     pub fn record_frame(&mut self) {
         let now = Instant::now();
-        if let Some(last) = self.last_frame {
+        if let Some(last) = self.last_frame
+            && self.max_samples != 0
+        {
             if self.frame_times.len() >= self.max_samples {
                 self.frame_times.pop_front();
             }

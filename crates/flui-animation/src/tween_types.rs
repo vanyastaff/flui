@@ -115,7 +115,7 @@ impl Animatable<i32> for IntTween {
     #[expect(clippy::cast_possible_truncation)] // rounded f64->i32, saturating cast
     fn transform(&self, t: f64) -> i32 {
         let t = t.clamp(0.0, 1.0);
-        (self.begin as f64 + (self.end - self.begin) as f64 * t).round() as i32
+        (f64::from(self.begin) + (f64::from(self.end) - f64::from(self.begin)) * t).round() as i32
     }
 }
 
@@ -142,7 +142,7 @@ impl Animatable<i32> for StepTween {
     #[expect(clippy::cast_possible_truncation)] // floored f64->i32, saturating cast
     fn transform(&self, t: f64) -> i32 {
         let t = t.clamp(0.0, 1.0);
-        (self.begin as f64 + (self.end - self.begin) as f64 * t).floor() as i32
+        (f64::from(self.begin) + (f64::from(self.end) - f64::from(self.begin)) * t).floor() as i32
     }
 }
 
@@ -340,8 +340,11 @@ pub type Matrix4Tween = Tween<Matrix4>;
 pub struct TweenSequence<T, A: Animatable<T>> {
     /// The items in the sequence.
     items: Vec<TweenSequenceItem<T, A>>,
-    /// Cached total weight for performance.
+    /// Sum in the caller's original units; it can overflow for finite weights.
     total_weight: f64,
+    /// Evaluation uses scaled weights so their sum cannot overflow.
+    weight_scale: f64,
+    normalized_total: f64,
 }
 
 impl<T, A: Animatable<T>> TweenSequence<T, A> {
@@ -349,7 +352,7 @@ impl<T, A: Animatable<T>> TweenSequence<T, A> {
     ///
     /// # Panics
     ///
-    /// Panics if `items` is empty or if total weight is not positive.
+    /// Panics if `items` is empty or an item's weight is not finite and positive.
     #[must_use]
     pub fn new(items: Vec<TweenSequenceItem<T, A>>) -> Self {
         assert!(
@@ -357,13 +360,23 @@ impl<T, A: Animatable<T>> TweenSequence<T, A> {
             "TweenSequence must have at least one item"
         );
 
-        // Validate that weights sum to a positive number
-        let total_weight: f64 = items.iter().map(|item| item.weight).sum();
-        assert!(total_weight > 0.0, "Total weight must be positive");
+        // Item fields are public, so validate again after any caller edits.
+        let mut weight_scale = 0.0_f64;
+        for item in &items {
+            assert!(
+                item.weight.is_finite() && item.weight > 0.0,
+                "TweenSequence item weights must be finite and positive"
+            );
+            weight_scale = weight_scale.max(item.weight);
+        }
+        let total_weight = items.iter().map(|item| item.weight).sum();
+        let normalized_total = items.iter().map(|item| item.weight / weight_scale).sum();
 
         Self {
             items,
             total_weight,
+            weight_scale,
+            normalized_total,
         }
     }
 
@@ -374,7 +387,10 @@ impl<T, A: Animatable<T>> TweenSequence<T, A> {
         &self.items
     }
 
-    /// Returns the total weight of all items.
+    /// Returns the sum of the original item weights.
+    ///
+    /// This sum can be infinite when finite weights overflow. Evaluation uses
+    /// normalized weights and remains defined in that case.
     #[inline]
     #[must_use]
     pub fn total_weight(&self) -> f64 {
@@ -390,24 +406,29 @@ impl<T, A: Animatable<T>> Animatable<T> for TweenSequence<T, A> {
     fn transform(&self, t: f64) -> T {
         let t = t.clamp(0.0, 1.0);
 
-        // Find which item we're in
+        // Exact endpoints remain reachable even if an item's relative weight
+        // is too small to represent as a distinct progress interval in f64.
+        if t == 0.0 {
+            return self.items[0].tween.transform(0.0);
+        }
+        if t == 1.0 {
+            return self.items[self.items.len() - 1].tween.transform(1.0);
+        }
+
+        let progress = t * self.normalized_total;
         let mut accumulated_weight = 0.0;
         for (i, item) in self.items.iter().enumerate() {
-            let item_end = (accumulated_weight + item.weight) / self.total_weight;
-
-            if t <= item_end || i == self.items.len() - 1 {
-                // Calculate local t within this item
-                let item_start = accumulated_weight / self.total_weight;
-                let local_t = if (item_end - item_start).abs() < 1e-6 {
+            let weight = item.weight / self.weight_scale;
+            let item_end = accumulated_weight + weight;
+            if progress <= item_end || i == self.items.len() - 1 {
+                let local_t = if weight == 0.0 {
                     0.0
                 } else {
-                    ((t - item_start) / (item_end - item_start)).clamp(0.0, 1.0)
+                    ((progress - accumulated_weight) / weight).clamp(0.0, 1.0)
                 };
-
                 return item.tween.transform(local_t);
             }
-
-            accumulated_weight += item.weight;
+            accumulated_weight = item_end;
         }
 
         // Unreachable: `new()` (the only constructor) asserts `items` is

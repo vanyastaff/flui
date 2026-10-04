@@ -904,3 +904,9 @@ pub(crate) fn a_deactivate_panic_is_contained_and_the_element_is_still_parked_in
 // `listenable()` that panics on every call after mount cannot make removal
 // panic too.
 // ============================================================================
+
+#[path = "support/observer_recovery.rs"]
+pub(crate) mod observer_recovery;
+
+#[path = "support/build_payload_recovery.rs"]
+pub(crate) mod build_payload_recovery;

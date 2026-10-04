@@ -59,6 +59,11 @@ and a `tracing::warn!`, then the list ships as recorded, which is what
 `PictureRecorder.endRecording()` does in release. `restore()` on an empty
 stack is a silent no-op for the same reason.
 
+`Canvas::skew` takes shear factors, mapping `(x, y)` to
+`(x + sx * y, y + sy * x)` before the existing canvas transform. The public
+`shear_factors_map_the_named_axes_in_recorded_commands` row of
+`recording_contract` checks mapped coordinates and the recorded damage extent.
+
 ---
 
 ## Text
@@ -74,8 +79,11 @@ width, `max_lines` and ellipsis), reads size and baselines from the
 come from a second shape without truncation (`content_widths`, decision 9).
 The painter's cache keys on the context's collection and its
 `FontCollection::generation`, so a layout from another realm's collection, or
-from before a registration, shapes again. The app's collection is fed from one
-scan of the host's fonts (`HostFonts`): its faces, the generics the bundled
+from before a registration, shapes again. Equal width constraints, including
+`+INFINITY` for an unbounded maximum, reuse that cache; nearby finite widths
+retain the existing epsilon comparison. Equality is checked before subtraction
+because subtracting equal infinities produces NaN. The app's collection is fed
+from one scan of the host's fonts (`HostFonts`): its faces, the generics the bundled
 faces leave unbound, and FLUI's fallback lists for the host (decision 17); a
 style's family is resolved by one rule (decision 8).
 
@@ -181,6 +189,17 @@ and ignored `ClipOp::Difference`), and `draw_shader_mask` /
 `draw_backdrop_filter` with their `DrawCommand` variants — masks and backdrop
 filters are layers (`flui_layer::{ShaderMaskLayer, BackdropFilterLayer}`),
 and the command-level copies had no producer and a second engine lowering.
+
+Shader values carry paint inputs, not GPU byte layouts. Shader masks record a
+terminal draw through the engine's ordinary gradient path; its typed instances
+and stop buffers own GPU packing. The independent `Shader::to_mask_uniform_data`
+serializer had no consumer and encoded only two colors, so it is removed rather
+than maintained as a second ABI.
+
+`BoxFit::apply` returns source and destination sizes. Comparing those sizes
+cannot determine clipping: a contained image can scale up while showing the
+whole source. The unused `FittedSizes::will_clip` query is removed; `scale_factor`
+and `needs_scaling` retain their scalar and size-comparison contracts.
 
 ### 3. No `DisplayList` mutation, no analysis layer, no trait pair
 
@@ -433,17 +452,18 @@ Locked by `two_realms_shape_in_parallel` and
 (`src/text_layout/context.rs`).
 
 
-### 12. `TextDirection` sets line alignment on the Parley path, not the base direction
+### 12. Explicit direction resolves alignment, not the bidi base direction
 
-**Rule:** `ParagraphSpec::direction` aligns lines: `Ltr` to the left edge,
-`Rtl` to the right. The bidi base direction is Parley's own, taken from the
+**Rule:** `ParagraphSpec::text_align` aligns each line in the allocated box
+(ADR-0114). `direction` resolves `Start` and `End` to explicit left/right
+alignment. The bidi base direction is Parley's own, taken from the
 paragraph's first strong character, so Latin-first text under `Rtl` is still
 ordered as an LTR paragraph, and Hebrew-first text under `Ltr` is ordered RTL.
 
 **Why:** Parley 0.11.1 has no way to set it: its analysis calls the bidi
 resolver with `None` for the base level (`analysis/mod.rs:539-546`), and
-neither the builder nor the layout exposes one. Right alignment is the part
-of `Rtl` that can be honoured today.
+neither the builder nor the layout exposes one. Explicit directional
+alignment can be honoured without changing run order.
 
 **Accepted trade-off:** a right-to-left paragraph whose text starts with Latin
 or neutrals lays out its runs in the wrong order until the base direction can
@@ -499,9 +519,9 @@ metrics, carets, selection boxes, word boundaries and hit-testing all come
 from one Parley layout on the realm's context. `TextPainter`'s cache keeps
 the `ParagraphLayout` beside the paragraph it paints, and the queries
 (`parley_text/caret.rs`) answer in the painted box's coordinates: each
-cluster edge takes the same per-line shift `to_shaped` gives the line's
-glyphs (`ParagraphLayout::line_shift`), so a caret sits on the glyph it
-follows under `Rtl` and on a line narrower than the width it broke at.
+cluster edge uses the native aligned line offset and cluster advance, just
+as `to_shaped` positions glyphs. This includes justified whitespace and lines
+narrower than the allocated box.
 Parley metrics are unquantized, so a baseline reaches the device grid once,
 when its glyphs are placed (`round(baseline × scale)`). Parley's width
 excludes trailing whitespace, and so does a line's `width` in the line
@@ -768,20 +788,48 @@ and the raster size are computed at placement (`ShapedRun::placed_glyphs`),
 under the transform the paragraph is replayed with. Variation coordinates
 travel raw and are interned by the raster side's registry
 (`FontRegistry::prepare_run`), whose `VariationId`s mean nothing to another
-registry. Within its box each line starts at the left edge under `Ltr` and
-ends at the right edge under `Rtl`; the box is as wide as the measured width,
-and the paint offset places it within the width it was laid out at.
+registry. Native line alignment places each line within the allocated box;
+explicit direction resolves Start/End while center/right/justify retain their
+own placement rules.
 
 **Why:** a retained layer replays a picture recorded frames earlier, so a
 table of the blobs this frame's recorders named would miss a replayed
 paragraph's faces; a paragraph that carries its faces is complete by
 construction, for the cost of one shared handle per distinct face per
 paragraph. Holding the handle also keeps fontique's weakly cached blob, and so
-its id, alive while any paragraph or registry names it. The bin and the device
-row depend on the device transform, which only the replay knows. Parley aligns
-a line within the width it was broken at; the painter's box is the measured
-width, so lines are re-aligned in it, or an `Rtl` paragraph would be shifted
-twice.
+its id, alive while a paragraph or an ordinary raster registry names it.
+The default registry retains the shared source, preserving fontique's weak
+source-cache identity across pruning. A plugin rasterizer instead uses
+`FontRegistry::with_owned_sources` through `SwashRasterizer::with_owned_fonts`:
+it copies each newly registered face into concrete `Arc<[u8]>` storage, retaining
+neither the source's erased `AsRef` vtable nor a borrowed slice into an unloadable
+image. The plugin source can retire after registration.
+`registered_fonts_release_the_source_and_keep_rasterizing`
+(`tests/parley_oracle.rs`, `parley_oracle_contract`) uses the owning rasterizer,
+drops a custom font source and then rasterizes its first glyph, checking the
+bitmap and absence of calls back into the retired source.
+
+The public `SubpixelBin::split` tuple saturates out-of-range positions,
+including infinities, to an integer endpoint with a zero bin; NaN keeps its
+specified zero result. Actual `ShapedRun::placed_glyphs` instead omits non-finite
+or unrepresentable device coordinates, so saturation never moves a glyph onto a
+visible edge. The exact `i32::MAX` bound is checked in `f64`, since converting
+that bound to `f32` rounds it up to the inadmissible coordinate 2^31.
+Baseline rounding and vertical-offset truncation are preserved, then added in
+`f64` before checking the final row: large cancelling terms may still place a
+glyph at a valid device row. Bitmap-bearing arithmetic remains the engine's
+responsibility. Public rows `subpixel_split_is_total_across_the_float_domain`,
+`placed_glyphs_omit_unrepresentable_coordinates`,
+`placed_glyphs_keep_representable_extremes_and_hinting` and
+`placed_glyphs_keep_cancelling_vertical_coordinates` in `parley_oracle_contract`
+exercise the tuple policy and actual paint-produced paragraph placement.
+The bin and the device row depend on the device transform, which only the replay
+knows. Line breaking retains its wrap cap, while alignment uses the actual
+allocated width: the larger of the minimum width and widest kept content
+line. A loose finite wrap cap does not force the paragraph to fill it.
+Parley's public `BreakLines::set_prior_line_width` supplies that separate
+alignment width during a second line-break pass over the same shaped data;
+then native alignment runs once (ADR-0114).
 
 **Accepted trade-off:** paint follows Parley where it differs from the
 cosmic-text paint it replaced:
@@ -867,7 +915,92 @@ Locked by `a_lam_alef_ligature_is_one_glyph_and_two_caret_stops`
 the middle caret at the midpoint, each quarter of the ligature answering its
 nearest stop.
 
+### 20. Serialized paint values pass the constructor's admission rules
+
+`Image` deserialization uses `try_from_rgba8`: a serialized buffer must match
+the checked `width * height * 4` byte count, including zero-sized images.
+Serialization preserves the existing dimensions and byte-array representation.
+`deserialized_images_validate_rgba_dimensions_and_data` in `value_contract`
+checks rejected lengths and dimensions followed by a valid round trip.
+
+`Path` deserialization replays commands through its builders. A shape hint is
+retained only when the corresponding canonical constructor reproduces those
+commands exactly; submitted geometry remains authoritative. The engine uses
+rounded-rectangle hints to choose an analytic shadow, so an unrelated hint must
+not replace a polygon's shadow silhouette. `deserialized_paths_keep_geometry_authoritative`
+checks a triangle carrying another shape's hint, and
+`serialized_factory_paths_preserve_their_shapes` checks exact commands and hints
+through a lossless value round trip, and geometry and containment after a JSON
+string round trip (both rows of `value_contract`, enabled with `serde`). A format
+that changes floating-point coordinates may discard the hint even when the
+geometric difference is tiny. Retaining the submitted geometry takes priority
+over keeping an analytic rendering shortcut; no approximate hint admission is
+used.
+
 ---
+
+### 21. Hidden borders contribute neither paint nor neighboring edge insets
+
+`BorderStyle::None` skips uniform rectangle and circle borders and contributes
+zero width to the strip painter for nonuniform borders. The shared rectangle
+painter applies the same rule to table outer edges. The existing handling of
+zero-width solid borders is unchanged; it is distinct from a hidden style.
+
+`decoration_contract` covers this through
+`hidden_uniform_rectangle_borders_do_not_paint`,
+`hidden_uniform_circle_borders_do_not_paint`, `hidden_table_borders_do_not_paint` and
+`hidden_edges_do_not_shorten_visible_neighboring_edges`: positive hidden widths
+draw nothing, while a visible neighboring edge spans the full box height.
+
+### 22. Gradient interpolation validates its inputs and preserves discontinuities
+
+All three gradient kinds reject empty colors, stop/color count mismatches,
+stops outside the documented closed `0..=1` range, descending stops, and a NaN
+interpolation fraction before the equal-input shortcut. Ordered repeated stops
+within the range are valid. Their left and
+right colors remain separate output stops at the same position; interpolation
+samples both limits with `slice::partition_point`, rather than approximating a
+left limit with an epsilon. Ordinary stops still merge into one ordered union.
+
+The public `value_contract` rows `linear_nan_stops_are_rejected`,
+`radial_infinite_stops_are_rejected`, `sweep_descending_stops_are_rejected`,
+`empty_equal_gradients_are_rejected`,
+`mismatched_equal_gradient_stops_are_rejected` and
+`nan_gradient_interpolation_is_rejected` cover refusal and the next valid call.
+`negative_linear_stops_are_rejected`, `radial_stops_above_one_are_rejected`,
+`extreme_negative_sweep_stops_are_rejected` and
+`extreme_positive_linear_stops_are_rejected` pin range refusal, including finite
+endpoints whose subtraction would overflow outside the admitted range.
+`linear_interpolation_keeps_hard_transitions`,
+`radial_interpolation_keeps_hard_transitions` and
+`sweep_interpolation_keeps_hard_transitions` pin both colors of a red-to-blue
+hard edge interpolated toward black.
+
+### 23. Text styles reach Parley's spacing and OpenType setting properties
+
+Word spacing, feature lists and variation lists are applied alongside size,
+weight and letter spacing, both for paragraph defaults and span ranges. Parley
+owns the converted lists for the builder; measurement, painted runs and caret
+queries continue to share the resulting layout.
+
+OpenType tags are admitted by Parley's `Tag::parse`. Feature values must fit
+`u16`; variation values must remain finite when narrowed to Parley's `f32`
+coordinate space. Invalid entries are ignored individually, so they cannot
+override earlier valid settings. An empty admitted list supplies no override.
+Unknown valid features and axes are interpreted by the font and shaper.
+
+The public `text_contract` rows
+`root_word_spacing_reaches_measurement_paint_and_carets` and
+`span_word_spacing_reaches_measurement_paint_and_carets` pin an eight-pixel
+increase across two spaces. `font_features_change_the_measured_and_painted_glyphs`
+disables the generated Arabic face's lam-alef ligature, checking five painted
+glyphs and their measured advances.
+`font_variations_select_the_painted_run_instance` selects opposite sides of the
+generated `wght` axis and reads the painted run's normalized coordinates; that
+fixture has no outline deltas, so the test makes no width or rasterization claim.
+`invalid_font_features_do_not_replace_valid_settings` and
+`invalid_font_variations_do_not_replace_valid_settings` cover admission alongside
+valid settings.
 
 ## Open items
 
@@ -891,3 +1024,61 @@ unlisted fonts, checks hashes/notices, regenerates all fixtures into a temporary
 directory, and checks Cargo package file selection. This is a Rust test-fixture
 and packaging decision; it changes no shaping contract. It also
 does not solve registry dependency cycles or certify complete release archives.
+
+### Per-line allocation alignment
+
+Alignment changes invalidate the painter's cached layout and paint paragraph,
+so carets and selection cannot observe positions from the previous alignment.
+Intrinsic widths are recorded before justification changes cluster advances.
+The `caret_contract` public family covers unequal-line tight center/right,
+loose and unbounded allocation, RTL Start/End, trailing whitespace, soft-line
+justification with an unstretched original-final line, hard-break controls, cache changes
+and kept ellipsized lines. Its named rows include
+`centered_lines_use_the_tight_allocated_box`,
+`loose_centered_lines_stay_inside_the_measured_box`,
+`justification_expands_soft_lines_but_not_the_final_line`,
+`alignment_change_replaces_cached_positions` and
+`ellipsized_lines_align_only_the_kept_text`. Native Hebrew RTL rows check both
+selection edges, carets, hits and painted glyph shifts independently of source
+order. `a_last_kept_soft_line_retains_native_justification` pins the policy that
+truncation without ellipsis does not turn a kept soft line into a hard or final
+line of the original paragraph.
+
+The dependency adapter confines Parley 0.11.1's public but doc-hidden line-width
+escape hatch. Upstream describes the separate alignment-width use while warning
+that the escape hatch has not been carefully evaluated; the behavioral controls
+pin the contract on which FLUI relies. This adds a line-break pass and makes no
+performance improvement claim. It does not override inferred bidi base direction.
+
+
+### Image fitting preserves source texels and repeat placement
+
+The image-region display command carries source texels separately from logical
+destination and optional fitted repeat placement. Decoration and RenderImage use
+`BoxFit::apply` plus alignment to crop the source into the allocated box.
+For decoration images, alignment may move the fitted source beyond
+its decoded texels. The recorder intersects that source with the image bounds
+and trims the destination proportionally, preserving scale and leaving the
+unavailable part empty. Fully outside sources record no image; later commands
+still paint. The engine family rows `decoration_cover_positive_overshoot`,
+`decoration_cover_negative_overshoot`, `decoration_cover_vertical_overshoot` and
+`decoration_cover_fully_outside` exercise the actual decoration producer.
+Cover and the cropping FitWidth/FitHeight branches fill the allocation, so
+repeating them adds no visible tile. They record the clipped image once.
+For a mixed-axis None fit, trimming a cropped axis preserves the other axis's
+fitted repeat period and phase. `decoration_cover_repeat_overshoot`,
+`decoration_cover_repeat_x_overshoot`, `decoration_cover_repeat_y_overshoot` and
+`decoration_none_crop_keeps_other_axis_repeat` pin these actual producer paths.
+Fitted repeats preserve logical tile scale and aligned phase; legacy Canvas
+repeat retains natural tile size and destination-origin phase. Color filters
+and optional Paint survive dispatch. ADR-0115 specifies the command, instance
+and replay contract; actual producer readbacks join the engine's existing
+`painter_images_and_offscreen_results_read_back_as_specified` family.
+
+### Radial decoration carries both defining circles
+
+Radial decoration resolves the focal alignment and initial radius along with
+the outer circle. Ordinary and advanced engine consumers solve both circles
+and honor tiling under ADR-0116. The gradient-mask boundary retains its existing
+explicit Clamp/no-focal support. The engine's existing layer-effect readback
+family includes the actual decoration producer and ordinary/advanced consumers.

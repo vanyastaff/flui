@@ -330,7 +330,7 @@ fn worker(root: PathBuf, case: &str) {
                 .app_binary
                 .join(device["LibraryIdentifier"].as_str().expect("id"))
                 .join(device["LibraryPath"].as_str().expect("path"));
-            let mut single = ctx.clone();
+            let mut single = ctx;
             single.platform = Platform::Ios {
                 targets: vec![targets[0].clone()],
             };
@@ -345,8 +345,7 @@ fn worker(root: PathBuf, case: &str) {
             assert!(delivered_one.app_binary.is_dir());
             assert!(delivered_one.size_bytes > 0);
             sentinel();
-        }
-        if case == "cached-failure" {
+        } else if case == "cached-failure" {
             let cached = runtime
                 .block_on(builder.build_rust(&ctx))
                 .expect("cached build");

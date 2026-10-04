@@ -212,5 +212,5 @@ fn main() -> anyhow::Result<()> {
 fn calculate_diagonal_inches(width_px: f64, height_px: f64, dpi: f64) -> f64 {
     let width_inches = width_px / dpi;
     let height_inches = height_px / dpi;
-    (width_inches * width_inches + height_inches * height_inches).sqrt()
+    width_inches.hypot(height_inches)
 }

@@ -104,15 +104,16 @@ impl AssetRegistry {
     /// owns or was handed — never on the caller's thread.
     ///
     /// Spawns onto [`AssetRegistryBuilder::with_runtime_handle`]'s injected
-    /// handle if one was supplied at construction; otherwise an ambient tokio
-    /// runtime already running on the calling thread right now
+    /// handle if one was supplied at construction; otherwise an ambient multi-thread
+    /// tokio runtime on the calling thread right now
     /// (`tokio::runtime::Handle::try_current`, re-checked on **every** call —
     /// never memoized, since an ambient runtime can shut down and restart
     /// between calls); otherwise a dedicated single-worker runtime, started
     /// on first need and reused (this one, unlike an ambient handle, is safe
     /// to memoize: this registry controls its lifetime completely).
-    /// Misconfiguration is impossible: every call resolves to a working
-    /// handle, never a stale one.
+    /// An ambient current-thread runtime is skipped because entering it alone
+    /// does not drive spawned tasks. Explicitly injected runtimes must remain
+    /// driven until the loads complete.
     ///
     /// The returned future is reactor-free: it only awaits a
     /// [`tokio::sync::oneshot`] receiver, so *polling* it never requires an
@@ -132,7 +133,8 @@ impl AssetRegistry {
     /// decoded, or if the loading task is dropped before completing — most
     /// often because it panicked, but also possible if the runtime it was
     /// spawned on (an injected or ambient one this registry does not own)
-    /// shuts down while the task is still in flight.
+    /// shuts down while the task is still in flight. Returns [`AssetError::Io`]
+    /// if starting the owned runtime fails; a later call retries initialization.
     #[cfg(feature = "images")]
     pub fn load_image_bridged(
         &self,
@@ -145,14 +147,19 @@ impl AssetRegistry {
         let (tx, rx) = tokio::sync::oneshot::channel();
 
         let spawn_path = path.clone();
-        handle.spawn(async move {
-            let asset = crate::assets::image::ImageAsset::file(spawn_path);
-            let outcome = Asset::load(&asset).await;
-            // A dropped receiver just means the observer future was abandoned
-            // (e.g. its subscriber unmounted); the load itself still ran to
-            // completion and there is nothing useful to report to.
-            let _ = tx.send(outcome);
-        });
+        match handle {
+            Ok(handle) => {
+                handle.spawn(async move {
+                    let asset = crate::assets::image::ImageAsset::file(spawn_path);
+                    let outcome = Asset::load(&asset).await;
+                    // A dropped receiver means the observer abandoned the load.
+                    let _ = tx.send(outcome);
+                });
+            }
+            Err(error) => {
+                let _ = tx.send(Err(error));
+            }
+        }
 
         async move {
             rx.await.map_err(|_| AssetError::LoadFailed {
@@ -190,16 +197,24 @@ impl AssetRegistry {
         let (tx, rx) = tokio::sync::oneshot::channel();
 
         let spawn_url = url.clone();
-        handle.spawn(async move {
-            let outcome = async {
-                let loader = crate::loaders::NetworkLoader::new();
-                let bytes = loader.load_url(&spawn_url).await?;
-                let asset = crate::assets::image::ImageAsset::from_bytes(spawn_url.clone(), bytes);
-                Asset::load(&asset).await
+        match handle {
+            Ok(handle) => {
+                handle.spawn(async move {
+                    let outcome = async {
+                        let loader = crate::loaders::NetworkLoader::new();
+                        let bytes = loader.load_url(&spawn_url).await?;
+                        let asset =
+                            crate::assets::image::ImageAsset::from_bytes(spawn_url.clone(), bytes);
+                        Asset::load(&asset).await
+                    }
+                    .await;
+                    let _ = tx.send(outcome);
+                });
             }
-            .await;
-            let _ = tx.send(outcome);
-        });
+            Err(error) => {
+                let _ = tx.send(Err(error));
+            }
+        }
 
         async move {
             rx.await.map_err(|_| AssetError::LoadFailed {
@@ -211,8 +226,14 @@ impl AssetRegistry {
 
     /// Loads an asset, using the cache if available.
     ///
+    /// Validates each supplied asset before consulting the cache. A rejected
+    /// descriptor returns its validation error even on a cache hit, without
+    /// loading or changing previously cached data.
     /// If the asset is already cached, returns the cached version immediately.
-    /// Otherwise, loads the asset and adds it to the cache.
+    /// Otherwise, concurrent requests for the same typed key share one load.
+    /// Loading errors are shared with current waiters but are not cached; a
+    /// later request may retry. Cancelling the initializing request lets a
+    /// remaining waiter initialize from its own accepted descriptor.
     ///
     /// # Errors
     ///
@@ -232,21 +253,14 @@ impl AssetRegistry {
     where
         T: Asset<Error = AssetError>,
         T::Key: std::hash::Hash + Eq + Clone,
-        T::Data: Clone,
     {
+        asset.validate()?;
         let key = asset.key();
         let cache = self.get_or_create_cache::<T>();
 
-        // Try to get from cache first
-        if let Some(handle) = cache.get(&key).await {
-            return Ok(handle);
-        }
-
-        // Not in cache, load the asset
-        let data = asset.load().await?;
-
-        // Insert into cache and return handle
-        Ok(cache.insert(key, data).await)
+        cache
+            .get_or_insert_coalesced_with(key, || asset.load())
+            .await
     }
 
     /// Gets an asset from cache without loading.
@@ -265,7 +279,6 @@ impl AssetRegistry {
     where
         T: Asset,
         T::Key: std::hash::Hash + Eq + Clone,
-        T::Data: Clone,
     {
         self.get_cache::<T>()?.get(key).await
     }
@@ -285,7 +298,6 @@ impl AssetRegistry {
     where
         T: Asset<Error = AssetError>,
         T::Key: std::hash::Hash + Eq + Clone,
-        T::Data: Clone,
     {
         self.load(asset).await?;
         Ok(())
@@ -303,7 +315,6 @@ impl AssetRegistry {
     where
         T: Asset,
         T::Key: std::hash::Hash + Eq + Clone,
-        T::Data: Clone,
     {
         if let Some(cache) = self.get_cache::<T>() {
             cache.invalidate(key).await;
@@ -322,7 +333,6 @@ impl AssetRegistry {
     where
         T: Asset,
         T::Key: std::hash::Hash + Eq + Clone,
-        T::Data: Clone,
     {
         if let Some(cache) = self.get_cache::<T>() {
             cache.clear().await;
@@ -344,7 +354,6 @@ impl AssetRegistry {
     where
         T: Asset,
         T::Key: std::hash::Hash + Eq + Clone,
-        T::Data: Clone,
     {
         let caches = self.caches.read();
         let type_id = TypeId::of::<T>();
@@ -359,7 +368,6 @@ impl AssetRegistry {
     where
         T: Asset,
         T::Key: std::hash::Hash + Eq + Clone,
-        T::Data: Clone,
     {
         let type_id = TypeId::of::<T>();
 
@@ -387,16 +395,6 @@ impl AssetRegistry {
         let cache = AssetCache::<T>::new(self.default_capacity);
         caches.insert(type_id, Box::new(cache.clone()));
         cache
-    }
-
-    /// Returns statistics for all caches.
-    ///
-    /// Returns a map of asset type names to their cache stats.
-    pub fn stats(&self) -> Vec<(String, crate::cache::CacheStats)> {
-        // Note: We can't easily get type names from TypeId at runtime,
-        // so this is a simplified version. In a real implementation,
-        // you might want to track type names explicitly.
-        vec![]
     }
 }
 
@@ -538,6 +536,11 @@ impl<C> AssetRegistryBuilder<C> {
     /// lifecycle it wants bridged asset loads to share — e.g. a
     /// `#[tokio::main]` binary that wants every background task on one
     /// runtime.
+    ///
+    /// The host must keep this runtime alive and driving tasks until bridged
+    /// loads finish. A current-thread runtime must be driven by `Runtime::block_on`;
+    /// entering its handle alone does not run tasks. Injection is an explicit
+    /// ownership choice and is honored even for current-thread runtimes.
     ///
     /// # Examples
     ///

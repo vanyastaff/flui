@@ -69,9 +69,28 @@ impl<T: 'static> Clone for GlobalKey<T> {
 
 impl<T: 'static> GlobalKey<T> {
     /// Create a new global key.
+    ///
+    /// # Panics
+    ///
+    /// Panics after every nonzero `u64` identity has been issued. Exhaustion
+    /// is permanent; catching this panic cannot make an old key available again.
     pub fn new() -> Self {
         static COUNTER: AtomicU64 = AtomicU64::new(1);
-        let id = COUNTER.fetch_add(1, Ordering::Relaxed);
+        Self::new_with_counter(&COUNTER)
+    }
+
+    // Zero is the permanent exhaustion sentinel; MAX itself remains assignable.
+    // The local-counter seam keeps terminal tests away from the shared allocator.
+    fn new_with_counter(counter: &AtomicU64) -> Self {
+        let id = counter
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+                if current == 0 {
+                    None
+                } else {
+                    Some(current.wrapping_add(1))
+                }
+            })
+            .expect("GlobalKey counter exhausted: all nonzero u64 identities issued");
         Self {
             id,
             _marker: PhantomData,
@@ -250,5 +269,30 @@ impl<T: 'static> ViewKey for GlobalKey<T> {
 
     fn is_global_key(&self) -> bool {
         true
+    }
+}
+
+#[cfg(test)]
+impl GlobalKey<()> {
+    pub(crate) fn exhausted_global_key_counter_never_reissues_an_identity() {
+        let counter = AtomicU64::new(u64::MAX - 1);
+        let penultimate = Self::new_with_counter(&counter);
+        let last = Self::new_with_counter(&counter);
+        assert_eq!(penultimate.id(), u64::MAX - 1);
+        assert_eq!(last.id(), u64::MAX);
+        assert_ne!(penultimate, last);
+        for _ in 0..8 {
+            assert!(
+                std::panic::catch_unwind(|| Self::new_with_counter(&counter)).is_err(),
+                "catching exhaustion must never reissue zero or an earlier identity"
+            );
+        }
+        let healthy = AtomicU64::new(1);
+        let first = Self::new_with_counter(&healthy);
+        let second = Self::new_with_counter(&healthy);
+        assert_eq!(first.id(), 1);
+        assert_eq!(second.id(), 2);
+        assert_ne!(first, second);
+        assert_ne!(first, last);
     }
 }

@@ -633,7 +633,7 @@ fn rendered_offset_at(
             let inside_line = line.top() <= y && y < line.bottom();
             boundaries
                 .windows(2)
-                .find(|pair| pair[0].1 <= x && x < pair[1].1)
+                .find(|pair| pair[0].1.min(pair[1].1) <= x && x < pair[0].1.max(pair[1].1))
                 .filter(|_| inside_line)
                 .map(|pair| pair[0].0)
                 .ok_or(TextStoreError::PointOutside)

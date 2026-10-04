@@ -615,6 +615,32 @@ impl RetainedCapture {
         self.frame.end_unmanaged();
         result
     }
+
+    /// The headless twin of Renderer::render_plugin_scene.
+    pub(crate) fn render_plugin_scene(
+        &mut self,
+        scene: &flui_layer::Scene,
+        reset_fonts: bool,
+    ) -> Result<crate::raster::PresentDisposition, EngineError> {
+        self.frame.begin_unmanaged();
+        let result = self.render_plugin_frame(scene, reset_fonts);
+        self.frame.end_unmanaged();
+        result
+    }
+
+    /// Exercises the same source admission before managed damage planning.
+    pub(crate) fn render_plugin_frame(
+        &mut self,
+        scene: &flui_layer::Scene,
+        reset_fonts: bool,
+    ) -> Result<crate::raster::PresentDisposition, EngineError> {
+        self.frame.select_font_source(
+            &mut self.painter,
+            crate::frame_protocol::FontSource::Plugin,
+            reset_fonts,
+        );
+        self.render_frame_inner(scene)
+    }
 }
 
 /// The capture's side of `FrameProtocol::run`.
@@ -669,8 +695,8 @@ impl crate::frame_protocol::FrameSteps for CaptureFrame<'_> {
 }
 
 #[cfg(test)]
-impl crate::raster::RasterBackend for RetainedCapture {
-    fn render_scene(
+impl RetainedCapture {
+    fn render_frame_inner(
         &mut self,
         scene: &flui_layer::Scene,
     ) -> Result<crate::raster::PresentDisposition, EngineError> {
@@ -700,6 +726,21 @@ impl crate::raster::RasterBackend for RetainedCapture {
         )?;
         self.frame.presented();
         Ok(PresentDisposition::Presented)
+    }
+}
+
+#[cfg(test)]
+impl crate::raster::RasterBackend for RetainedCapture {
+    fn render_scene(
+        &mut self,
+        scene: &flui_layer::Scene,
+    ) -> Result<crate::raster::PresentDisposition, EngineError> {
+        self.frame.select_font_source(
+            &mut self.painter,
+            crate::frame_protocol::FontSource::Ordinary,
+            false,
+        );
+        self.render_frame_inner(scene)
     }
 
     fn resize(&mut self, _width: u32, _height: u32) {

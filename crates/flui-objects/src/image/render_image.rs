@@ -28,7 +28,7 @@ pub enum ImageFit {
     Cover,
     /// Contain the image and scale to fit, but only shrink (never enlarge).
     ScaleDown,
-    /// Do not scale the image; show at natural size.
+    /// Keep natural scale, cropping oversized content to the allocated box.
     None,
 }
 
@@ -258,44 +258,33 @@ impl RenderImage {
     /// Returns `None` when the intrinsic size is degenerate (zero in either
     /// dimension), in which case there is nothing to paint.
     pub fn paint_rect_in(&self, box_size: Size) -> Option<Rect> {
-        // Logical image size: the fit math operates
-        // on the same `intrinsic / scale` dimensions the box was laid out
-        // against, so a high-DPI asset paints at its logical size — without the
-        // divide, `ImageFit::None`/`ScaleDown` would draw a 2x asset at its full
-        // pixel size and overflow its laid-out box.
-        let iw = self.intrinsic_size.width / self.scale;
-        let ih = self.intrinsic_size.height / self.scale;
-        if iw <= 0.0 || ih <= 0.0 {
+        self.fitted_rects(box_size).map(|(_, dst)| dst)
+    }
+
+    fn fitted_rects(&self, box_size: Size) -> Option<(Rect, Rect)> {
+        let input = Size::new(
+            self.intrinsic_size.width / self.scale,
+            self.intrinsic_size.height / self.scale,
+        );
+        if ![input.width, input.height, box_size.width, box_size.height]
+            .into_iter()
+            .all(|v| v.is_finite() && v > 0.0)
+        {
             return None;
         }
-
-        let bw = box_size.width;
-        let bh = box_size.height;
-
-        // Determine the painted (scaled) size of the image content.
-        let (pw, ph) = match self.fit {
-            ImageFit::Fill => (bw, bh),
-            ImageFit::Contain => {
-                let scale = (bw / iw).min(bh / ih);
-                (iw * scale, ih * scale)
-            }
-            ImageFit::Cover => {
-                let scale = (bw / iw).max(bh / ih);
-                (iw * scale, ih * scale)
-            }
-            ImageFit::ScaleDown => {
-                // Like Contain but never enlarge.
-                let scale = (bw / iw).min(bh / ih).min(1.0);
-                (iw * scale, ih * scale)
-            }
-            ImageFit::None => (iw, ih),
+        let fit = match self.fit {
+            ImageFit::Fill => flui_painting::BoxFit::Fill,
+            ImageFit::Contain => flui_painting::BoxFit::Contain,
+            ImageFit::Cover => flui_painting::BoxFit::Cover,
+            ImageFit::ScaleDown => flui_painting::BoxFit::ScaleDown,
+            ImageFit::None => flui_painting::BoxFit::None,
         };
-
-        let painted = Size::new(pw, ph);
-        let origin = self.alignment.offset(painted, box_size);
-        Some(Rect::from_origin_size(
-            Point::new(origin.dx, origin.dy),
-            painted,
+        let fitted = fit.apply(input, box_size);
+        let src_origin = self.alignment.offset(fitted.source, input);
+        let dst_origin = self.alignment.offset(fitted.destination, box_size);
+        Some((
+            Rect::from_origin_size(Point::new(src_origin.dx, src_origin.dy), fitted.source),
+            Rect::from_origin_size(Point::new(dst_origin.dx, dst_origin.dy), fitted.destination),
         ))
     }
 
@@ -375,8 +364,21 @@ impl RenderBox for RenderImage {
         // Apply fit + alignment to obtain the destination rect in local
         // coordinates (the recorder pre-translates to this node's origin).
         // The laid-out box size comes from RenderState via `ctx.size()`.
-        if let Some(dst) = self.paint_rect_in(ctx.size()) {
-            ctx.canvas().draw_image(image.clone(), dst, None);
+        if let Some((source, dst)) = self.fitted_rects(ctx.size()) {
+            let logical = Size::new(
+                self.intrinsic_size.width / self.scale,
+                self.intrinsic_size.height / self.scale,
+            );
+            let sx = f64::from(image.width()) / logical.width;
+            let sy = f64::from(image.height()) / logical.height;
+            let src = Rect::from_ltrb(
+                source.left() * sx,
+                source.top() * sy,
+                source.right() * sx,
+                source.bottom() * sy,
+            );
+            ctx.canvas()
+                .draw_image_region(image.clone(), src, dst, None);
         }
     }
 

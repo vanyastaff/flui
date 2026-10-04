@@ -75,10 +75,16 @@ const TEST_FEATURES: &str = "flui/material,flui/cupertino,flui-devtools/agent";
 /// target whose `required-features` those features leave off (devtools'
 /// `profiler_demo`, the engine's `testing` benches): `feature-matrix`
 /// compiles them per feature, and nothing links them.
+/// The driver itself is already built by the cargo alias. Exclude it here:
+/// Windows cannot replace its running executable when workspace feature
+/// unification changes the driver's dependency artifacts. Its test binary
+/// remains part of the workspace test run, and lint checks all its targets.
 fn build_all_targets() -> Cmd {
     Cmd::cargo([
         "build",
         "--workspace",
+        "--exclude",
+        "xtask",
         "--all-targets",
         "--locked",
         "--features",
@@ -515,7 +521,7 @@ fn feature_matrix_plan(slice: Slice) -> Vec<Step> {
     hack_passes(&packages).map(Step::from).into()
 }
 
-/// CI's `gpu-test` job: the flui-engine readback suite, then the facade's
+/// Local `gpu-test` gate: engine readbacks and path-recording allocations, then the facade's
 /// composited-layer update readback (it needs the render pipeline and the
 /// headless renderer, which only the facade depends on together).
 /// `--test-threads 1`: each test builds its own `wgpu::Device`, and a software
@@ -530,6 +536,8 @@ fn gpu_test_plan() -> Vec<Step> {
             "--features",
             "testing",
             "--lib",
+            "--test",
+            "raster_backpressure_allocation",
         ])
         .args(["--locked", "--no-fail-fast", "--test-threads", "1"])
         .env("FLUI_REQUIRE_GPU", "1")
@@ -1200,7 +1208,7 @@ mod tests {
         assert_eq!(
             lines(&gpu_test_plan()),
             [
-                "$ FLUI_REQUIRE_GPU=1 cargo nextest run -p flui-engine --features testing --lib --locked --no-fail-fast --test-threads 1",
+                "$ FLUI_REQUIRE_GPU=1 cargo nextest run -p flui-engine --features testing --lib --test raster_backpressure_allocation --locked --no-fail-fast --test-threads 1",
                 "$ FLUI_REQUIRE_GPU=1 cargo nextest run -p flui --no-default-features --features gpu-readback-tests --test composited_layer_update_readback --locked --no-fail-fast --test-threads 1",
             ]
         );
@@ -1278,7 +1286,7 @@ mod tests {
         assert_eq!(
             lines(&[build_all_targets().into()]),
             [format!(
-                "$ cargo build --workspace --all-targets --locked --features {TEST_FEATURES}"
+                "$ cargo build --workspace --exclude xtask --all-targets --locked --features {TEST_FEATURES}"
             )]
         );
         assert!(SCOPE.ends_with(&format!("--features {TEST_FEATURES}")));

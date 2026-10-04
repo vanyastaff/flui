@@ -293,26 +293,44 @@ where
     }
 
     /// Returns a normalized (unit length) vector.
+    ///
+    /// Returns `None` for non-finite components or a length at most
+    /// `f64::EPSILON`. Finite components can normalize even when their
+    /// magnitude exceeds `f64::MAX`.
     #[inline]
     #[must_use]
     pub fn try_normalize(self) -> Option<Vec2<f64>> {
-        let len = self.length();
-        if len > f64::EPSILON {
-            Some(Vec2::new(self.x.into() / len, self.y.into() / len))
-        } else {
-            None
+        let x: f64 = self.x.into();
+        let y: f64 = self.y.into();
+        if !x.is_finite() || !y.is_finite() {
+            return None;
         }
+        let len = x.hypot(y);
+        if len <= f64::EPSILON {
+            return None;
+        }
+        if len.is_finite() {
+            return Some(Vec2::new(x / len, y / len));
+        }
+        // Scale only the overflow case, preserving ordinary rounding and the
+        // existing near-zero admission. At least one scaled component is +/-1.
+        let scale = x.abs().max(y.abs());
+        let x = x / scale;
+        let y = y / scale;
+        let len = x.hypot(y);
+        Some(Vec2::new(x / len, y / len))
     }
 
     /// Returns a normalized (unit length) vector, or `Vec2::ZERO` if the
-    /// length is near zero.
+    /// length is near zero or either component is non-finite.
     #[inline]
     #[must_use]
     pub fn normalize(self) -> Vec2<f64> {
         self.try_normalize().unwrap_or(Vec2::ZERO)
     }
 
-    /// Returns a normalized vector, or a fallback if length is near zero.
+    /// Returns a normalized vector, or a fallback if length is near zero or
+    /// either component is non-finite.
     #[inline]
     #[must_use]
     pub fn normalize_or(self, fallback: Vec2<f64>) -> Vec2<f64> {

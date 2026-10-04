@@ -372,11 +372,24 @@ impl ScenePlugin {
             return false;
         };
         let rendered = reload.lend("scene_frame", |hook| {
-            hook.scene_frame(width, height, &mut |scene| {
-                if let Err(error) = renderer.render_scene(scene) {
-                    tracing::error!(?error, "Plugin render failed");
-                }
-            })
+            // SAFETY: render_plugin_scene traverses the scene synchronously.
+            // It ignores AnnotatedRegion payloads; cached images are concrete
+            // Arc<Vec<u8>> data, and first font admission copies source bytes
+            // into the host registry's Arc<[u8]>. Recorded GPU commands retain
+            // no plugin trait objects. This callback retains no image-dependent
+            // payload, including when rendering unwinds.
+            #[expect(unsafe_code)]
+            unsafe {
+                hook.scene_frame(width, height, &mut |scene, reset_fonts| match renderer
+                    .render_plugin_scene(scene, reset_fonts)
+                {
+                    Ok(_) => true,
+                    Err(error) => {
+                        tracing::error!(?error, "Plugin render failed");
+                        false
+                    }
+                })
+            }
         });
         matches!(rendered, Lent::Returned(true))
     }

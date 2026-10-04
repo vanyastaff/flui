@@ -1189,6 +1189,86 @@ mod tests {
         }
     }
 
+    fn off_owner_retention_case(fail_report: bool, already_unwinding: bool) {
+        struct Resource(Arc<AtomicUsize>);
+        impl Drop for Resource {
+            fn drop(&mut self) {
+                self.0.fetch_add(1, Ordering::SeqCst);
+                panic!("owner-affine resource retired on a foreign thread");
+            }
+        }
+        struct Guard {
+            resource: Option<(Resource, Resource)>,
+            report_drops: Arc<AtomicUsize>,
+            fail_report: bool,
+        }
+        impl Drop for Guard {
+            fn drop(&mut self) {
+                let report_drops = Arc::clone(&self.report_drops);
+                let fail_report = self.fail_report;
+                crate::shared::panic_boundary::retain_off_owner_resource(
+                    self.resource.take().expect("resource"),
+                    || {
+                        if fail_report {
+                            std::panic::panic_any((
+                                Resource(Arc::clone(&report_drops)),
+                                Resource(report_drops),
+                            ));
+                        }
+                    },
+                );
+            }
+        }
+        let resource_drops = Arc::new(AtomicUsize::new(0));
+        let report_drops = Arc::new(AtomicUsize::new(0));
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            let guard = Guard {
+                resource: Some((
+                    Resource(Arc::clone(&resource_drops)),
+                    Resource(Arc::clone(&resource_drops)),
+                )),
+                report_drops: Arc::clone(&report_drops),
+                fail_report,
+            };
+            assert!(!already_unwinding, "original teardown failure");
+            drop(guard);
+        }));
+        assert_eq!(resource_drops.load(Ordering::SeqCst), 0);
+        assert_eq!(report_drops.load(Ordering::SeqCst), 0);
+        if already_unwinding {
+            assert_eq!(
+                *result
+                    .expect_err("original failure")
+                    .downcast::<&str>()
+                    .expect("original payload"),
+                "original teardown failure"
+            );
+        } else {
+            assert!(result.is_ok(), "report failure must remain contained");
+        }
+        let next = AtomicUsize::new(0);
+        crate::shared::panic_boundary::contain_owner_callback(|| {
+            next.fetch_add(1, Ordering::SeqCst);
+        });
+        assert_eq!(next.load(Ordering::SeqCst), 1);
+    }
+
+    fn off_owner_retention_precedes_normal_diagnostics() {
+        off_owner_retention_case(false, false);
+    }
+    fn off_owner_retention_contains_opaque_diagnostic_failure() {
+        off_owner_retention_case(true, false);
+    }
+    fn off_owner_retention_preserves_an_unwind_with_normal_diagnostics() {
+        off_owner_retention_case(false, true);
+    }
+    fn off_owner_retention_preserves_the_existing_unwind() {
+        off_owner_retention_case(true, true);
+    }
+    fn clear_multiple_panicking_captures_directly() {
+        clear_multiple_panicking_captures(false);
+    }
+
     const HW_OWNER: u32 = 7;
     const HW_FOREIGN: u32 = 8;
 
@@ -1263,9 +1343,49 @@ mod tests {
     /// owner signal coalesces a burst and gives a re-entrant wake a later turn.
     #[test]
     fn the_owner_thread_machinery_honours_its_contracts() {
-        clear_multiple_panicking_captures(false);
-        owner_callback_and_capture_panics_do_not_replace_an_existing_unwind();
-        refusal_precedence_is_gone_then_foreign_thread_then_class_then_slot();
-        worker_burst_coalesces_and_reentrant_wake_gets_a_later_finite_turn();
+        let cases: &[(&str, fn())] = &[
+            (
+                "clear multiple panicking captures",
+                clear_multiple_panicking_captures_directly,
+            ),
+            (
+                "owner callback and capture panic priority",
+                owner_callback_and_capture_panics_do_not_replace_an_existing_unwind,
+            ),
+            (
+                "refusal precedence",
+                refusal_precedence_is_gone_then_foreign_thread_then_class_then_slot,
+            ),
+            (
+                "worker burst and reentrant wake",
+                worker_burst_coalesces_and_reentrant_wake_gets_a_later_finite_turn,
+            ),
+            (
+                "off-owner normal diagnostics",
+                off_owner_retention_precedes_normal_diagnostics,
+            ),
+            (
+                "off-owner diagnostic failure",
+                off_owner_retention_contains_opaque_diagnostic_failure,
+            ),
+            (
+                "off-owner unwind with normal diagnostics",
+                off_owner_retention_preserves_an_unwind_with_normal_diagnostics,
+            ),
+            (
+                "off-owner existing unwind",
+                off_owner_retention_preserves_the_existing_unwind,
+            ),
+        ];
+        let mut failures = Vec::new();
+        for &(name, case) in cases {
+            if catch_unwind(AssertUnwindSafe(case)).is_err() {
+                failures.push(name);
+            }
+        }
+        assert!(
+            failures.is_empty(),
+            "failed owner machinery cases: {failures:?}"
+        );
     }
 }

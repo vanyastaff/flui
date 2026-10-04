@@ -288,7 +288,7 @@ where
 
         // 6. Register frame callback -- with hot-reload plugin override
         let lane_frame = Arc::clone(&lane);
-        let hot_reload_frame = hot_reload.clone();
+        let hot_reload_frame = hot_reload;
         // Reuses the SAME backoff constructed at step 0b (already wired
         // into the wake-deadline hook above) — not a fresh one.
         window.on_request_frame(Box::new(move || {

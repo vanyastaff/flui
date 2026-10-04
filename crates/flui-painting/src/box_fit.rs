@@ -2,7 +2,7 @@
 
 use flui_foundation::geometry::Size;
 
-/// Epsilon for safe float comparisons (Rust 1.91.0 strict arithmetic)
+/// Tolerance for a degenerate source width when querying its scale factor.
 const EPSILON: f64 = 1e-6;
 
 /// How a box should inscribe into another box.
@@ -434,12 +434,5 @@ impl FittedSizes {
     #[must_use]
     pub fn needs_scaling(&self) -> bool {
         self.source != self.destination
-    }
-
-    /// Returns true if the image will be clipped.
-    #[inline]
-    #[must_use]
-    pub fn will_clip(&self) -> bool {
-        self.destination.width > self.source.width || self.destination.height > self.source.height
     }
 }

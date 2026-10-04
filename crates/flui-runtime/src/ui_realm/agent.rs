@@ -420,19 +420,25 @@ impl SemanticsAgent {
     /// [`AgentError::InboxFull`] or [`AgentError::RealmGone`] when the
     /// request cannot be enqueued; the reply carries the rest.
     pub fn read(&self, query: ReadQuery) -> Result<AgentReply<Tree>, AgentError> {
+        let (command, answer) = self.read_command(query);
+        self.sender.send(command).map_err(AgentError::from_send)?;
+        Ok(answer)
+    }
+
+    fn read_command(&self, query: ReadQuery) -> (UiCommand, AgentReply<Tree>) {
         let issued = query
             .root
             .is_none_or(|root| self.issued.lock().was_issued(root));
         let (reply, answer) = self.reply(record_issued);
-        self.sender
-            .send(UiCommand::SemanticsRead {
+        (
+            UiCommand::SemanticsRead {
                 presentation_id: self.sender.presentation_id,
                 query,
                 issued,
                 reply,
-            })
-            .map_err(AgentError::from_send)?;
-        Ok(answer)
+            },
+            answer,
+        )
     }
 
     /// Perform `request` on its element, checked against the element as the
@@ -452,17 +458,23 @@ impl SemanticsAgent {
     /// [`AgentError::InboxFull`] or [`AgentError::RealmGone`] when the
     /// request cannot be enqueued; the reply carries the rest.
     pub fn act(&self, request: ActionRequest) -> Result<AgentReply<()>, AgentError> {
+        let (command, answer) = self.action_command(request);
+        self.sender.send(command).map_err(AgentError::from_send)?;
+        Ok(answer)
+    }
+
+    fn action_command(&self, request: ActionRequest) -> (UiCommand, AgentReply<()>) {
         let issued = self.issued.lock().was_issued(request.element);
         let (reply, answer) = self.reply(|(), _| {});
-        self.sender
-            .send(UiCommand::SemanticsAgentAction {
+        (
+            UiCommand::SemanticsAgentAction {
                 presentation_id: self.sender.presentation_id,
                 request,
                 issued,
                 reply,
-            })
-            .map_err(AgentError::from_send)?;
-        Ok(answer)
+            },
+            answer,
+        )
     }
 }
 
@@ -488,18 +500,27 @@ impl DevAgentPort {
     /// Run `enqueue` if the window is open, holding admission open for it.
     fn admit<T>(
         &self,
-        enqueue: impl FnOnce(&SemanticsAgent) -> Result<AgentReply<T>, AgentError>,
+        prepare: impl FnOnce(&SemanticsAgent) -> (UiCommand, AgentReply<T>),
     ) -> Result<AgentAnswer<T>, AgentFault>
     where
         T: Send + 'static,
     {
-        let open = self.open.read();
-        if !*open {
-            return Err(AgentFault::window_gone());
-        }
-        enqueue(&self.agent)
-            .map(flui_view::__runtime::agent_answer)
-            .map_err(AgentFault::from)
+        let (admission, answer) = {
+            let open = self.open.read();
+            if !*open {
+                return Err(AgentFault::window_gone());
+            }
+            let (command, answer) = prepare(&self.agent);
+            (self.agent.sender.enqueue(command), answer)
+        };
+        // A wake can re-enter this port or synchronously close its presentation.
+        // Only the enqueue belongs inside the close/admission fence.
+        self.agent
+            .sender
+            .deliver_enqueued(admission)
+            .map_err(AgentError::from_send)
+            .map_err(AgentFault::from)?;
+        Ok(flui_view::__runtime::agent_answer(answer))
     }
 
     /// Close admission, waiting for any call already admitted to finish
@@ -515,11 +536,11 @@ impl AgentPort for DevAgentPort {
     }
 
     fn read(&self, query: ReadQuery) -> Result<AgentAnswer<Tree>, AgentFault> {
-        self.admit(|agent| agent.read(query))
+        self.admit(|agent| agent.read_command(query))
     }
 
     fn act(&self, request: ActionRequest) -> Result<AgentAnswer<()>, AgentFault> {
-        self.admit(|agent| agent.act(request))
+        self.admit(|agent| agent.action_command(request))
     }
 }
 
@@ -683,3 +704,7 @@ impl UiRealm {
             })
     }
 }
+
+#[cfg(test)]
+#[path = "tests/agent_admission.rs"]
+mod admission_tests;

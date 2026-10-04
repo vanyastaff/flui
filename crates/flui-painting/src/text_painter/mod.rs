@@ -14,7 +14,7 @@
 use std::sync::Arc;
 
 use crate::typography::{InlineSpan, TextAlign, TextDirection};
-use flui_foundation::geometry::{Offset, Size};
+use flui_foundation::geometry::Size;
 
 use crate::display_list::ShapedParagraph;
 use crate::parley_text::ParagraphLayout;
@@ -108,8 +108,6 @@ pub(super) struct TextLayoutCache {
     pub(super) ideographic_baseline: f64,
     /// Whether layout did overflow.
     pub(super) did_exceed_max_lines: bool,
-    /// Computed paint offset based on alignment.
-    pub(super) paint_offset: Offset<f64>,
     /// The paragraph `paint` records: the runs of the layout that gave
     /// `size`, so what is painted is, by identity, what was measured.
     pub(super) paragraph: Arc<ShapedParagraph>,
@@ -132,7 +130,6 @@ pub(super) struct LayoutMetrics {
     pub(super) alphabetic_baseline: f64,
     pub(super) ideographic_baseline: f64,
     pub(super) did_exceed_max_lines: bool,
-    pub(super) paint_offset: Offset<f64>,
 }
 
 impl Default for TextPainter {
@@ -292,24 +289,15 @@ impl TextPainter {
 
     /// Sets the text alignment.
     ///
-    /// Alignment is a PAINT offset over the shaped lines, not a shaping
-    /// input: the cached layout is kept and only its paint offset is
-    /// recomputed (no re-shape).
+    /// Alignment changes per-line positions and justification advances in the
+    /// cached paragraph, so the next layout rebuilds its paint and caret data.
     pub fn set_text_align(&mut self, align: TextAlign) -> Invalidation {
         if self.text_align == align {
             return Invalidation::None;
         }
         self.text_align = align;
-        // Two-step to satisfy the borrow checker: compute from the
-        // cache's stored extents, then write back.
-        let recomputed = self
-            .layout_cache
-            .as_ref()
-            .map(|cache| self.compute_paint_offset(cache.size.width, cache.max_width));
-        if let (Some(cache), Some(offset)) = (&mut self.layout_cache, recomputed) {
-            cache.paint_offset = offset;
-        }
-        Invalidation::Paint
+        self.mark_needs_layout();
+        Invalidation::Layout
     }
 
     /// Sets the text direction.

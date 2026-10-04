@@ -9,4 +9,8 @@ allow-expect-in-tests = true
 # tests, where printing is how a failure explains itself.
 allow-print-in-tests = true
 
+# Async work runs at IO/scheduling edges. Flag nested future frames above
+# 8 KiB so their stack footprint is reviewed before growing further.
+future-size-threshold = 8192
+
 # The MSRV comes from `rust-version` in Cargo.toml; clippy reads it there.

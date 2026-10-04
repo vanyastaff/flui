@@ -88,6 +88,8 @@ fn shape(text_cx: &mut TextContext, text: &str) -> Arc<ShapedParagraph> {
                 default_style: None,
                 font_size: FONT_SIZE,
                 max_width: Some(WIDTH as f32 - 32.0),
+                min_width: 0.0,
+                text_align: flui_painting::typography::TextAlign::Start,
                 line_height: None,
                 direction: TextDirection::Ltr,
                 max_lines: None,

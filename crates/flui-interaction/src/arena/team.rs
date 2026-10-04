@@ -513,8 +513,8 @@ mod tests {
         let member1 = MockMember::new(1);
         let member2 = MockMember::new(2);
 
-        let entry1 = team.add(pointer, member1.clone(), &arena);
-        let _entry2 = team.add(pointer, member2.clone(), &arena);
+        let entry1 = team.add(pointer, member1, &arena);
+        let _entry2 = team.add(pointer, member2, &arena);
 
         // member1 accepts - captain should win
         entry1.resolve(GestureDisposition::Accepted);

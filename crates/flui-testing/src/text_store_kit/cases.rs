@@ -620,15 +620,28 @@ fn deferred_grants_run_in_request_order(fixture: &mut dyn TextStoreFixture) -> O
 
 fn a_panicking_grant_releases_the_lock(fixture: &mut dyn TextStoreFixture) -> Outcome {
     let store = fresh(fixture, CORPUS);
+    let grant_ran = Rc::new(Cell::new(false));
+    let ran = Rc::clone(&grant_ran);
     let unwound = catch_unwind(AssertUnwindSafe(|| {
         let _ = store.request_lock(
-            LockGrant::read_write(|_| panic!("the kit's deliberately failing grant")),
+            LockGrant::read_write(move |_| {
+                ran.set(true);
+                panic!("the kit's deliberately failing grant");
+            }),
             LockTiming::Sync,
         );
     }));
-    ensure(unwound.is_err(), || {
-        "a panicking grant did not unwind out of request_lock".to_owned()
-    })?;
+    match unwound {
+        Err(payload) => {
+            if !grant_ran.get() {
+                // A store failure before the grant is not evidence that the
+                // deliberately panicking grant released its lock.
+                std::panic::resume_unwind(payload);
+            }
+            flui_foundation::panic::retain_opaque_payload(payload);
+        }
+        Ok(()) => return Err("a panicking grant did not unwind out of request_lock".to_owned()),
+    }
     let len = read(&store, |session| session.document_len())?;
     ensure_eq(len, at(CORPUS_LEN), "the length after a panicking grant")
 }

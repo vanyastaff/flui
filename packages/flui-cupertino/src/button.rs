@@ -572,6 +572,7 @@ impl ViewState<CupertinoButton> for CupertinoButtonState {
         // (a disabled button is still announced as a button, just an inert one).
         let faded = Semantics::new()
             .button(true)
+            .enabled(enabled)
             .child(ConstrainedBox::new(constraints).child(FadeTransition::new(opacity, decorated)));
 
         let mut gesture_detector = GestureDetector::new();

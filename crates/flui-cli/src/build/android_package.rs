@@ -323,7 +323,7 @@ mod tests {
         }
         let lib = dir.path().join("libapp.so");
         std::fs::write(&lib, b"\x7fELF").expect("lib");
-        add_native_libs(&apk, &[("arm64-v8a".into(), lib.clone())]).expect("append");
+        add_native_libs(&apk, &[("arm64-v8a".into(), lib)]).expect("append");
         let mut names = archive_entries(&apk).expect("entries");
         names.sort();
         assert_eq!(names, ["AndroidManifest.xml", "lib/arm64-v8a/libapp.so"]);

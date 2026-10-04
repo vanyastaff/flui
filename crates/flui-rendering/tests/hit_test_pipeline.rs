@@ -134,3 +134,343 @@ pub(crate) fn flex_lays_out_and_hits_children_at_layout_offsets() {
 // ============================================================================
 // 5. Sliver subtree hit-testing through a Box host
 // ============================================================================
+
+#[derive(Clone, Copy, Debug)]
+enum FailedHitScope {
+    Offset,
+    Transform,
+    Nested,
+    ChildOffset,
+    ChildLayoutOffset,
+    ChildOverride,
+}
+
+#[derive(Debug)]
+struct RecoveringHitParent(FailedHitScope);
+
+impl flui_foundation::Diagnosticable for RecoveringHitParent {}
+
+impl flui_rendering::traits::RenderBox for RecoveringHitParent {
+    type Arity = flui_foundation::Variable;
+    type ParentData = flui_rendering::parent_data::BoxParentData;
+
+    fn perform_layout(
+        &mut self,
+        ctx: &mut flui_rendering::context::BoxLayoutContext<'_, Self::Arity, Self::ParentData>,
+    ) -> flui_foundation::geometry::Size {
+        let first_offset = if matches!(self.0, FailedHitScope::ChildOverride) {
+            Offset::ZERO
+        } else {
+            Offset::new(20.0, 0.0)
+        };
+        for (index, offset) in [first_offset, Offset::new(5.0, 0.0)]
+            .into_iter()
+            .enumerate()
+        {
+            ctx.layout_child(
+                index,
+                flui_rendering::constraints::BoxConstraints::tight(
+                    flui_foundation::geometry::Size::new(40.0, 40.0),
+                ),
+            );
+            ctx.position_child(index, offset);
+        }
+        ctx.constraints()
+            .constrain(flui_foundation::geometry::Size::new(100.0, 100.0))
+    }
+
+    fn paint(&self, _ctx: &mut flui_rendering::context::PaintCx<'_, Self::Arity>) {}
+
+    fn hit_test(
+        &self,
+        ctx: &mut flui_rendering::context::BoxHitTestContext<'_, Self::Arity, Self::ParentData>,
+    ) -> bool {
+        use flui_foundation::geometry::Matrix4;
+        let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match self.0 {
+            FailedHitScope::Offset => ctx.with_offset(Offset::new(100.0, 0.0), |_| {
+                panic!("failed offset hit scope")
+            }),
+            FailedHitScope::Transform => ctx
+                .with_transform(Matrix4::scaling(2.0, 3.0, 1.0), |_| {
+                    panic!("failed matrix hit scope")
+                }),
+            FailedHitScope::Nested => ctx.with_offset(Offset::new(100.0, 0.0), |ctx| {
+                ctx.with_transform(Matrix4::scaling(2.0, 3.0, 1.0), |_| {
+                    panic!("failed nested hit scope")
+                });
+            }),
+            FailedHitScope::ChildOffset => {
+                ctx.hit_test_child_at_offset(0, Offset::new(20.0, 0.0));
+            }
+            FailedHitScope::ChildLayoutOffset => {
+                ctx.hit_test_child_at_layout_offset(0);
+            }
+            FailedHitScope::ChildOverride => {
+                let position = *ctx.position();
+                ctx.hit_test_child(0, position);
+            }
+        }));
+        assert!(failure.is_err(), "fixture must catch its failed hit scope");
+        ctx.hit_test_child_at_layout_offset(1)
+    }
+}
+
+#[derive(Debug)]
+struct PanickingHitLeaf;
+impl flui_foundation::Diagnosticable for PanickingHitLeaf {}
+
+impl flui_rendering::traits::RenderBox for PanickingHitLeaf {
+    type Arity = flui_foundation::Leaf;
+    type ParentData = flui_rendering::parent_data::BoxParentData;
+
+    fn perform_layout(
+        &mut self,
+        ctx: &mut flui_rendering::context::BoxLayoutContext<'_, Self::Arity, Self::ParentData>,
+    ) -> flui_foundation::geometry::Size {
+        ctx.constraints()
+            .constrain(flui_foundation::geometry::Size::new(40.0, 40.0))
+    }
+
+    fn paint(&self, _ctx: &mut flui_rendering::context::PaintCx<'_, Self::Arity>) {}
+
+    fn hit_test_transform(
+        &self,
+        _size: flui_foundation::geometry::Size,
+    ) -> Option<flui_foundation::geometry::Matrix4> {
+        Some(flui_foundation::geometry::Matrix4::scaling(2.0, 3.0, 1.0))
+    }
+
+    fn hit_test(
+        &self,
+        _ctx: &mut flui_rendering::context::BoxHitTestContext<'_, Self::Arity, Self::ParentData>,
+    ) -> bool {
+        panic!("descendant hit test failed");
+    }
+}
+
+fn assert_recovered_hit_coordinates(scope: FailedHitScope) {
+    let mut owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
+    let root = owner.insert(Box::new(RecoveringHitParent(scope)) as BoxedRenderObject);
+    owner
+        .insert_child_render_object(root, Box::new(PanickingHitLeaf))
+        .expect("panicking child insert");
+    let healthy = owner
+        .insert_child_render_object(root, Box::new(RenderColoredBox::red(40.0, 40.0)))
+        .expect("healthy child insert");
+    let owner = laid_out(owner, root);
+    for _ in 0..2 {
+        let path = inspect::hit_path_with_transforms(&owner, 10.0, 10.0);
+        let (_, transform) = path
+            .iter()
+            .find(|(id, _)| *id == healthy)
+            .expect("healthy sibling remains hittable");
+        let local =
+            inspect::localize_hit_point(transform.expect("hit entry transform"), 10.0, 10.0)
+                .expect("invertible healthy transform");
+        assert_eq!(
+            local,
+            Offset::new(5.0, 10.0),
+            "caught {scope:?} must not change the healthy child's coordinates"
+        );
+    }
+}
+
+pub(crate) fn caught_offset_scope_restores_hit_coordinates() {
+    assert_recovered_hit_coordinates(FailedHitScope::Offset);
+}
+pub(crate) fn caught_matrix_scope_restores_hit_coordinates() {
+    assert_recovered_hit_coordinates(FailedHitScope::Transform);
+}
+pub(crate) fn caught_nested_scope_restores_hit_coordinates() {
+    assert_recovered_hit_coordinates(FailedHitScope::Nested);
+}
+pub(crate) fn caught_child_offset_scope_restores_hit_coordinates() {
+    assert_recovered_hit_coordinates(FailedHitScope::ChildOffset);
+}
+pub(crate) fn caught_driver_node_scope_restores_hit_coordinates() {
+    assert_recovered_hit_coordinates(FailedHitScope::ChildLayoutOffset);
+}
+
+pub(crate) fn caught_zero_offset_driver_node_scope_restores_hit_coordinates() {
+    assert_recovered_hit_coordinates(FailedHitScope::ChildOverride);
+}
+
+pub(crate) fn nested_tiny_transforms_emit_the_correct_local_hit_point() {
+    let mut owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
+    let ancestor = owner.insert(Box::new(
+        RenderTransform::scale(1e-4, 1e-4).with_alignment(flui_painting::Alignment::TOP_LEFT),
+    ) as BoxedRenderObject);
+    let child = owner
+        .insert_child_render_object(
+            ancestor,
+            Box::new(
+                RenderTransform::scale(1e-9, 1e-9)
+                    .with_alignment(flui_painting::Alignment::TOP_LEFT),
+            ),
+        )
+        .expect("nested transform inserted");
+    let leaf = owner
+        .insert_child_render_object(child, Box::new(RenderColoredBox::red(40.0, 40.0)))
+        .expect("leaf inserted");
+    let owner = laid_out(owner, ancestor);
+    for _ in 0..2 {
+        let path = inspect::hit_path_with_transforms(&owner, 5e-13, 5e-13);
+        let (_, transform) = path
+            .iter()
+            .find(|(id, _)| *id == leaf)
+            .expect("tiny transformed leaf is hittable");
+        let local =
+            inspect::localize_hit_point(transform.expect("recorded transform"), 5e-13, 5e-13)
+                .expect("computed inverse remains usable");
+        assert!(
+            (local.dx - 5.0).abs() < 1e-12 && (local.dy - 5.0).abs() < 1e-12,
+            "nested transforms must deliver local (5,5), got {local:?}"
+        );
+    }
+}
+
+#[derive(Debug)]
+struct RefusalHitParent(Option<flui_foundation::geometry::Matrix4>);
+impl flui_foundation::Diagnosticable for RefusalHitParent {}
+impl flui_rendering::traits::RenderBox for RefusalHitParent {
+    type Arity = flui_foundation::Variable;
+    type ParentData = flui_rendering::parent_data::BoxParentData;
+    fn perform_layout(
+        &mut self,
+        ctx: &mut flui_rendering::context::BoxLayoutContext<'_, Self::Arity, Self::ParentData>,
+    ) -> flui_foundation::geometry::Size {
+        for index in 0..2 {
+            ctx.layout_child(
+                index,
+                flui_rendering::constraints::BoxConstraints::tight(
+                    flui_foundation::geometry::Size::new(40.0, 40.0),
+                ),
+            );
+            ctx.position_child(
+                index,
+                if index == 0 {
+                    Offset::ZERO
+                } else {
+                    Offset::new(5.0, 0.0)
+                },
+            );
+        }
+        ctx.constraints()
+            .constrain(flui_foundation::geometry::Size::new(100.0, 100.0))
+    }
+    fn paint(&self, _ctx: &mut flui_rendering::context::PaintCx<'_, Self::Arity>) {}
+    fn hit_test(
+        &self,
+        ctx: &mut flui_rendering::context::BoxHitTestContext<'_, Self::Arity, Self::ParentData>,
+    ) -> bool {
+        let first = match self.0 {
+            Some(matrix) => {
+                ctx.with_transform(matrix, |ctx| ctx.hit_test_child_at_layout_offset(0))
+            }
+            None => ctx.hit_test_child_at_layout_offset(0),
+        };
+        first || ctx.hit_test_child_at_layout_offset(1)
+    }
+}
+
+#[derive(Debug)]
+struct RefusedHitLeaf {
+    transform: Option<flui_foundation::geometry::Matrix4>,
+    calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+}
+impl flui_foundation::Diagnosticable for RefusedHitLeaf {}
+impl flui_rendering::traits::RenderBox for RefusedHitLeaf {
+    type Arity = flui_foundation::Leaf;
+    type ParentData = flui_rendering::parent_data::BoxParentData;
+    fn perform_layout(
+        &mut self,
+        ctx: &mut flui_rendering::context::BoxLayoutContext<'_, Self::Arity, Self::ParentData>,
+    ) -> flui_foundation::geometry::Size {
+        ctx.constraints()
+            .constrain(flui_foundation::geometry::Size::new(40.0, 40.0))
+    }
+    fn paint(&self, _ctx: &mut flui_rendering::context::PaintCx<'_, Self::Arity>) {}
+    fn hit_test_transform(
+        &self,
+        _size: flui_foundation::geometry::Size,
+    ) -> Option<flui_foundation::geometry::Matrix4> {
+        self.transform
+    }
+    fn hit_test(
+        &self,
+        _ctx: &mut flui_rendering::context::BoxHitTestContext<'_, Self::Arity, Self::ParentData>,
+    ) -> bool {
+        self.calls
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        true
+    }
+}
+
+fn assert_refused_transform_preserves_sibling(
+    matrix: flui_foundation::geometry::Matrix4,
+    context: bool,
+) {
+    let mut owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
+    let root =
+        owner.insert(Box::new(RefusalHitParent(context.then_some(matrix))) as BoxedRenderObject);
+    let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let invalid = owner
+        .insert_child_render_object(
+            root,
+            Box::new(RefusedHitLeaf {
+                transform: (!context).then_some(matrix),
+                calls: std::sync::Arc::clone(&calls),
+            }),
+        )
+        .expect("refused candidate inserted");
+    let healthy = owner
+        .insert_child_render_object(root, Box::new(RenderColoredBox::red(40.0, 40.0)))
+        .expect("healthy sibling inserted");
+    let owner = laid_out(owner, root);
+    for _ in 0..2 {
+        let path = inspect::hit_path_with_transforms(&owner, 10.0, 10.0);
+        assert_eq!(
+            calls.load(std::sync::atomic::Ordering::Relaxed),
+            0,
+            "inverse refusal must skip the descendant callback"
+        );
+        assert!(
+            !path.iter().any(|(id, _)| *id == invalid),
+            "refused subtree cannot publish a hit"
+        );
+        let (_, transform) = path
+            .iter()
+            .find(|(id, _)| *id == healthy)
+            .expect("refusal cannot block the healthy sibling");
+        assert_eq!(
+            inspect::localize_hit_point(transform.expect("healthy transform"), 10.0, 10.0),
+            Some(Offset::new(5.0, 10.0)),
+            "sibling remains in its own coordinate space"
+        );
+    }
+}
+
+pub(crate) fn singular_node_transform_refuses_before_hit_and_preserves_sibling() {
+    assert_refused_transform_preserves_sibling(
+        flui_foundation::geometry::Matrix4::scaling(0.0, 1.0, 1.0),
+        false,
+    );
+}
+pub(crate) fn nonfinite_node_transform_refuses_before_hit_and_preserves_sibling() {
+    assert_refused_transform_preserves_sibling(
+        flui_foundation::geometry::Matrix4::scaling(f64::NAN, 1.0, 1.0),
+        false,
+    );
+}
+pub(crate) fn singular_context_transform_refuses_before_hit_and_preserves_sibling() {
+    assert_refused_transform_preserves_sibling(
+        flui_foundation::geometry::Matrix4::scaling(0.0, 1.0, 1.0),
+        true,
+    );
+}
+pub(crate) fn nonfinite_context_transform_refuses_before_hit_and_preserves_sibling() {
+    assert_refused_transform_preserves_sibling(
+        flui_foundation::geometry::Matrix4::scaling(f64::INFINITY, 1.0, 1.0),
+        true,
+    );
+}

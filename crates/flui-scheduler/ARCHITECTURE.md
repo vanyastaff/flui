@@ -834,8 +834,8 @@ That predicate has two halves, and only the first belongs to the registry:
   later than the drain it is meant to pair with, so the flag is still set
   during the post-drain window. Deleting the flag removes the clear point
   rather than moving it.
-- Adopting `event-listener`, already a dependency of this crate and already
-  used by `TickerFuture` for the sibling problem. Rejected on a structural
+- Adopting an `event-listener` event, as the former ticker backend did.
+  Rejected on a structural
   reason this crate has paid for once: `Event::notify` calls `task.wake()`
   inside the closure holding its own internal list mutex, which is the shape
   issue #1057 removed from `notify_frame_completion`.
@@ -869,13 +869,37 @@ surplus frame" describes a burst, not a repeating caller.
 to never resolve, because only a frame resolved it and only the scheduler ran
 frames, and `Output` being a bare `FrameTiming` left no sentinel to resolve
 with. See the `end_of_frame` resolves an outcome, and a dropped scheduler
-resolves `Err(SchedulerClosed)` entry below for how. **Still open:** a
-panicking `on_frame_scheduled` hook loses its demand permanently, since
-`request_frame` sets the latch before firing the hook, and FLUI defines no
-recovery transition for that (Compose does: a throwing `onNewAwaiters`
-permanently fails the clock and resumes every current and future awaiter with
-the error). That note is on `end_of_frame`, which is the call that can reach
-the hook.
+resolves `Err(SchedulerClosed)` entry below for how. Frame demand and wake delivery are separate facts: a panicking or absent
+`on_frame_scheduled` hook leaves delivery debt. A later identical `request_frame`
+or a hook installation retries it. Task wakers likewise retry an unpaid wake even
+when their task is already indexed as ready. Consuming a demand and clearing its
+issuance latch are synchronized, so a concurrent new request cannot be erased.
+
+The private `WakeDelivery` stores one receipt identity and tracks active hook
+threads. Fresh work overlapping a hook replaces the identity, so an older success
+cannot acknowledge a newer failure. Serial successful requests reuse the receipt
+and thread-index allocation. No callback runs with a delivery lock held. Same-thread
+reentry records demand for at most one compensating attempt, which rereads the
+currently installed hook. A replacement hook therefore pays the debt even when the
+displaced hook panics. Both owning envelopes remain live until the active entry is
+removed; the first panic remains authoritative when compensation also fails. A
+callback failure retains both envelopes, because self-uninstallation or replacement
+can make an opaque capture bundle's
+Drop the next failure. Opaque secondary panic payloads are also intentionally
+retained: an aggregate whose two fields both panic in Drop aborts even inside a
+catch boundary. These exceptional leaks keep the first failure authoritative;
+they do not change normal hook ownership. On successful delivery, initial-envelope
+retirement happens after active bookkeeping closes; if retirement panics, its error
+resumes after retaining the compensation envelope. Two panicking field destructors
+inside that first retirement remain Rust's unavoidable aggregate-abort boundary.
+A hookless request never acknowledges
+debt. `coalesced_wake_delivery_recovery` exercises repeated requests, cloned task
+wakers, overlapping receipts, missing hooks, reentry, competing failures and the next
+operation. Its `reentrant_hook_replacement_delivers_the_current_hook_after_failure`
+row covers replacement on both scheduling and task wakes;
+`initial_hook_retirement_retains_the_compensating_envelope_on_failure` covers
+competing capture retirement and the next operation. Hooks must still only wake
+the owner, never drive a frame inline.
 
 ### `end_of_frame` resolves an outcome, and a dropped scheduler resolves `Err(SchedulerClosed)`
 
@@ -936,17 +960,31 @@ performs `mem::take`, so an entry reaching this loop was, by construction,
 never reached by `notify_frame_completion` first (a delivered completion
 already left the registry through that same `drain`) — the guard would be
 dead code testing a fact the type already proves, not a real defense. Every
-waker's `wake()`, and a panicking wake payload's own possibly-panicking
-`Drop`, is caught and traced via `tracing::error!`; teardown never
-`resume_unwind`s — a panic from a destructor while already unwinding aborts
-the process with no diagnostic, and `abort_frame`'s own doc already states
-this rule for this crate. The same `discard_panic_payload` helper introduced
-for this contains a second (or later) waker's panic during an ordinary,
-non-teardown `notify_frame_completion` drain, and the symmetric case one
-level up in `end_frame_impl`'s own `callback_result`/`notify_result` merge —
-previously an uncontained `Option::or`-selected `drop`.
+waker is invoked with `wake_by_ref` after its state guard is released, while the
+owning executor envelope remains outside the catch. A failed invocation retains
+that envelope; an ordinary successful invocation retires it through a separate
+catch. Once an earlier callback, pipeline, wake or retirement failure exists (or
+teardown is already unwinding), remaining opaque envelopes are retained after
+waking, since their aggregate destruction cannot safely run over that failure.
+Telemetry runs in its own catch and never displaces the delivery failure or stops
+the tail. Opaque secondary payloads are retained without running drop glue. The
+first failure propagates after normal frame delivery finishes; scheduler teardown
+retains it instead. Explicit frame abort preserves the same chronology; recovery
+of an already failed pipeline also retains its earlier authoritative payload.
 
-**The teardown guarantee is partial, and this does not widen it:** any live
+A cancelled pending `FrameCompletionFuture` can itself own the final executor
+waker. Its state destructor retains that envelope during unrelated unwind and
+performs ordinary destruction otherwise. Exceptional retention is deliberate:
+two panicking fields in one opaque destructor can abort before an outer catch
+returns. Ordinary successful retirement with such an aggregate remains outside
+the containment guarantee, as with ticker executor envelopes.
+`completion_wake_ownership_and_recovery`, a row of
+`end_of_frame_demand_matrix`, isolates normal/aborted/failed-pipeline delivery,
+post-frame failure, teardown and existing unwind, successful envelope retention,
+ordinary retirement, competing opaque payloads and telemetry, pending cancellation
+and a next independent frame through the consumer API.
+
+**The teardown lifetime guarantee remains partial:** any live
 strong `UpdateScheduler` handle defers `Drop for SchedulerInner`, the same as
 any other `Arc`. A task on an external executor that owns a clone does not
 hang — dropping the executor drops the task, the clone, then the scheduler —
@@ -999,45 +1037,29 @@ a real frame's timing by construction, exactly the "cannot tell them apart"
 defect this issue exists to close, just moved to a new field instead of
 solved.
 
-### A ticker future's poll registers before the read that decides to park
+### A ticker future registers atomically with its terminal-state read
 
-**Rule:** the durable resolution state is the source of truth and the
-notification is only a hint to re-read it. Polling `TickerFuture` must have a
-listener linked *before* it takes the state read that decides to return
-`Poll::Pending`.
+**Rule:** durable resolution is the source of truth. While pending, each polled
+`TickerFuture` owns one slab registration under the same state lock that publishes
+completion or cancellation. Repeat polls replace that slot's waker; clones have
+independent slots. Dropping a pending future removes its slot, so registration
+storage tracks live polled futures rather than historical polling or clone churn.
+Old wakers are retired only after unlocking. Publication takes both callbacks and
+the waitset, then delivery invokes every waker outside all locks. Terminal polls
+need no subscription and can safely run inline from a wake.
 
-**Hazard:** a future built on a completer has no listener to register, and
-therefore no window between observing the state and subscribing to a change.
-FLUI models a
-once-only, monotone transition (a *level* fact) with `event_listener::Event` (an
-*edge* primitive) whose own documentation says a notification sent with no
-listener registered "simply gets lost". The original `poll` read the state,
-dropped the guard, and only then called `listen()`; a resolution landing in
-that window notified zero listeners, and because the transition is guarded by
-`if *state == Pending` nothing ever re-announced it. The future then parked on
-an event that could never fire again — a permanent hang, not a delay. The
-correct order was already present one screen away, in the (then-blocking)
-`when_complete_or_cancel`, with a comment naming the hazard.
+**Conflict:** `event-listener` 5.4.2 calls a waker under its intrusive-list lock,
+preventing inline poll/drop. Its notify loop advances the next entry and marks it
+notified before waking, but increments the notified count afterward. A panicking
+waker therefore leaves inconsistent accounting; catch-and-retry cannot repair the
+listener's later removal. This is why ticker waiting now uses the durable-state
+slab instead of that notification backend (ADR-0106).
 
-**Choice:** one private `poll_resolution` helper running
-`read → register → read → park`. The second read is the fix; the listener
-latch (a notification landing on a registered-but-unpolled entry marks it
-`Notified`, and the next `register` reports that) is a redundant second net
-that closes only the `listen()`→poll half and cannot touch the window that is
-the defect. `TickerCompleter::publish` writes the durable state before
-anything is ever delivered, which is what makes the re-read sufficient; for
-that ordering, **Unasserted:** no test pins this. `poll_resolution` is
-unchanged by every later redesign in this
-family — the controller-owned-future rework below moved WHO resolves a run,
-never HOW a poll discovers that it has.
-
-**Precondition this makes reachable, stated rather than fixed:** `Event::notify`
-calls `task.wake()` while holding `event-listener`'s own internal list mutex,
-which both registering and dropping a listener re-take. A waker that re-polls or
-drops the future from inside `wake()` deadlocks inside the dependency. That was
-always true, but a bug that never woke anyone kept it unreachable; it is now a
-documented precondition on the `Future` impl. Standard parker-based executors
-satisfy it.
+**Proof:** the consumer `ticker_future_delivery_recovery` table covers repeated
+poll replacement, independent clones, immediate resource release on waiter drop,
+publication racing registration, inline wake polling and dropping, failed wake
+and retirement followed by healthy waiters, and a subsequent independent run.
+Abort- and deadlock-capable negatives run in bounded child processes.
 
 ### The ticker resolves nothing; the controller owns the one run future
 
@@ -1094,24 +1116,25 @@ manually stage a two-step unlock dance with no shared shape.
 `AnimationController::finish` is the chokepoint every run-ending or
 run-starting site funnels through: drop the controller lock, notify value
 listeners if the run's value changed, fire status listeners, THEN deliver.
-Continuations run **before** wakers are notified within `deliver` (a
-continuation observes wake count zero; one more once `deliver` returns) —
-inverted, an uncontained panicking waker could unwind out with the drained
-continuation `Vec` never run. Each continuation runs inside its own
-`catch_unwind`; a caught payload is logged at `error!` immediately (so it is
-never silently dropped even if a later continuation panics too) and the
-FIRST one is re-raised once every continuation and the waker notification
-have run — **unless this call is itself running during an unwind**
-(`std::thread::panicking()`), in which case it is logged instead: a caller can
-invoke a resolving call from their own panicking `Drop`, and re-raising there
-would be a panic during a panic, which the runtime aborts rather than unwinds.
-`notify` itself stays uncontained regardless — the same waker precondition the
-previous section documents holds whether or not this function catches panics,
-so containing it would not make a re-entrant waker safe, only hide a different
-failure. `Drop for TickerDelivery` delivers if `deliver()` was never called,
-and `Drop for TickerCompleter` publishes `Canceled` and delivers — a run
-nobody explicitly ended still settles rather than hanging its awaiters
-forever.
+Continuations run **before** wakers within delivery. Each continuation is
+`FnMut`, called exactly once through a borrow of its owning envelope; this keeps
+captured values out of an invocation's unwind. The already-resolved registration
+path uses the same ownership boundary and remains synchronous. Normal capture
+retirement follows invocation and can raise the first failure; subsequent opaque
+envelopes are retained once a failure has priority. Callback, capture retirement,
+wake, waker retirement and reporting failures cannot starve the remaining fan-out.
+The first payload resumes after delivery, or is retained when delivery runs during
+an existing unwind. Secondary payloads are always retained through the shared
+foundation helper. These exceptional leaks are deliberate: aggregate drop glue
+cannot be safely executed while preserving another failure. Two panicking fields
+inside an ordinary first retirement remain an unavoidable Rust abort boundary.
+
+`Drop for TickerDelivery` delivers if explicit delivery was omitted, and
+`Drop for TickerCompleter` publishes cancellation and delivers. No runtime, host
+or global registry is introduced. `ticker_future_delivery_recovery` pins these
+paths, chronological competition, hostile captured values, reporting failures and
+next-operation progress. ADR-0106 supersedes ADR-0064's invocation/waker policy
+while preserving controller ownership and two-phase publication.
 
 **Review checkpoint, not a test-checkable one:** `TickerCompleter::publish`
 taking one lock for both "set the durable state" and "take the continuation
@@ -1232,6 +1255,26 @@ design never needed — it re-derives readiness from ground truth every call and
 cannot strand a sibling — and what an index-based one owes back in return for
 not scanning.
 
+**Owned future failure boundary:** both lazy and eager polling borrow the
+future into `catch_unwind`, keeping its ownership outside the closure. On
+poll failure the future is retained without invoking opaque destruction, its
+waker is cancelled, and the original payload resumes. `PumpGuard` removes the
+empty slot and restores unreached siblings. A token dropped during an existing
+unwind likewise detaches its task and retains its future. Catching `drop` would
+not contain two panicking fields in one future; exceptional retention includes
+all captures and nested tokens, so it does not promise recursive cleanup.
+Ordinary completion and explicit cancellation still run destructors outside
+the map lock and propagate their first failure. Panics competing inside a
+user's own `poll` locals, or multiple fields of an ordinary opaque destructor,
+remain subject to Rust's abort behavior.
+
+Spawn establishes its token before invoking the frame hook: a failing hook
+therefore cancels the task whose token could not be returned. The public
+`async_driver_unwind_matrix` runs twelve cases in child processes, covering
+lazy/eager poll failures with zero, one and two hostile destructors, stale
+self-wakes, sibling progress, unwind cancellation, retirement failure,
+nested cancellation and both spawn-hook rollback paths.
+
 **Stale index entries are tolerated, not prevented.** `store.ready` is never
 proactively purged on cancel, nor scrubbed for a self-woken id whose task then
 panics: both go stale for at most one pump and self-heal via `poll_ready`'s
@@ -1253,24 +1296,22 @@ and `spare` receives this pump's actual batch, taken out via `mem::take`
 end). `recycle`, called on both `poll_ready`'s normal return and
 `PumpGuard::drop`'s unwind path, clears the drained batch and stores it as
 the *next* `spare`, leaving `store.ready` itself untouched — it already
-correctly holds this pump's discovered-ready ids. Measured via a
-counting-allocator test (`tests/async_driver_ready_index_allocation.rs`):
-the bare-`mem::take` shape costs a steady 64 self-re-waking tasks 69
-allocations/pump (64 per-poll `Arc<TaskWaker>` constructions plus ~5 from
-`Vec` regrowing 0→64); the `spare`-buffer fix costs exactly 64, the waker
-cost alone. The remaining 64/pump is a **separate, pre-existing,
-out-of-scope** cost (a fresh `Arc<TaskWaker>` per poll, unchanged from
-before this issue); reusing a per-task waker across polls is a distinct
-optimization this change does not make, named here so it is not mistaken
-for a regression.
+correctly holds this pump's discovered-ready ids.
 
-**Allocation gate, not just a bench:** `cargo xtask ci` has no bench step, so a
-`#[cfg(test)]`-gated oracle carries the CI-run allocation proof:
-`tests/async_driver_ready_index_allocation.rs` (a dedicated-binary,
-counting-`#[global_allocator]` test, following `frame_telemetry_allocation.rs`'s
-convention) asserts R=0 at N∈{0, 100,000} costs zero allocations once warm,
-and steady R=64 self-re-waking tasks cost zero *extra* allocations once warm
-(exactly the per-poll waker count, never more) — but an allocation count
+Every task retains one `Waker` from spawn through retirement; `poll_ready`
+clones it instead of allocating a fresh `Arc<TaskWaker>` per poll. The waker
+holds a `Weak<Inner>`, so its copies cannot retain the driver or its futures.
+A completed or cancelled task's old wakers remain inert through the existing
+live-slot and cancellation checks. The public `task_waker_lifecycle` table
+covers eager and lazy spawn, repeated-poll identity, cloned-waker coalescing,
+completion, cancellation, the next task, and destruction of a driver whose
+pending future exported its waker.
+
+**Allocation gate, not just a bench:** `cargo xtask ci` has no bench step, so
+`tests/async_driver_ready_index_allocation.rs` (a dedicated counting-allocator
+binary) asserts that warm R=0 at N in {0, 100,000} and steady R=64 self-waking
+tasks both allocate nothing. This pins reuse of both task wakers and ready
+buffers. An allocation count still
 cannot discriminate an O(N) scan from an O(R) drain when R=0, since
 collecting zero ready ids allocates nothing either way. That an idle pump
 reads no dormant task's readiness flag (an O(N) filter-scan calls `.load()`
@@ -1328,3 +1369,12 @@ exercise it — is precisely the shape this crate deletes on sight.
 
 **Trade-off accepted:** none. Nothing outside this crate observed `clear`'s
 existence.
+
+### Identity exhaustion refuses reuse until explicit reset
+
+`IdGenerator` atomically checks its increment and reserves `usize::MAX` as
+an exhaustion state. Once reached, every later allocation panics without
+wrapping through zero and restarting at one. An explicit `reset` retains its
+documented deterministic-test behavior. `update_scheduler_bounds_matrix`
+includes repeated caught exhaustion, reset, and concurrent last-value admission
+through the public API. The ordinary sequence starts at one and is unchanged.

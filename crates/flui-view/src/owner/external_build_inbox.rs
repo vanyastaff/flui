@@ -1,7 +1,6 @@
 //! Shared external build queue and its panic-safe frame-wake delivery state.
 
 use std::{
-    any::Any,
     collections::{HashMap, HashSet},
     sync::{
         Arc,
@@ -16,13 +15,6 @@ use parking_lot::Mutex;
 struct WakeState {
     active_threads: HashSet<std::thread::ThreadId>,
     reentrant_threads: HashSet<std::thread::ThreadId>,
-}
-
-fn discard_panic_payload(payload: Box<dyn Any + Send>) {
-    // A panic payload is opaque and may itself be an aggregate with several
-    // panicking destructors. Dropping it while another panic has priority can
-    // abort before the primary payload resumes, so retain it.
-    std::mem::forget(payload);
 }
 
 type WakeToken = Arc<AtomicBool>;
@@ -106,7 +98,7 @@ impl ExternalBuildInbox {
                     if first_panic.is_none() {
                         first_panic = Some(payload);
                     } else {
-                        discard_panic_payload(payload);
+                        flui_foundation::panic::retain_opaque_payload(payload);
                     }
                 }
             }

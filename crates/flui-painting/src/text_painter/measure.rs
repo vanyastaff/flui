@@ -3,8 +3,8 @@
 
 use std::sync::Arc;
 
-use crate::typography::{InlineSpan, TextAlign, TextDirection, TextStyle};
-use flui_foundation::geometry::{Offset, Size};
+use crate::typography::{InlineSpan, TextDirection, TextStyle};
+use flui_foundation::geometry::Size;
 
 use super::{DEFAULT_FONT_SIZE, LayoutMetrics, TextBaseline, TextLayoutCache, TextPainter};
 use crate::text_layout::{FontsKey, TextContext, TextLayoutResult};
@@ -38,9 +38,8 @@ impl TextPainter {
     #[expect(clippy::expect_used)] // Documented precondition: text and text_direction must be set
     pub fn layout(&mut self, text_cx: &mut TextContext, min_width: f64, max_width: f64) {
         // NaN is forbidden, but `+INFINITY` is the documented "no max
-        // width" sentinel — `compute_paint_offset` and the shaping
-        // below detect `!is_finite()` and skip alignment shifts /
-        // width clamping. Do not tighten this to `is_finite()`.
+        // width" sentinel: the shaping below omits the wrap cap for it.
+        // Do not tighten this to `is_finite()`.
         assert!(
             !max_width.is_nan() && !min_width.is_nan(),
             "Width constraints must not be NaN"
@@ -52,8 +51,8 @@ impl TextPainter {
             .layout_cache
             .as_ref()
             .filter(|cache| cache.fonts.matches(&fonts))
-            && (cache.min_width - min_width).abs() < f64::EPSILON
-            && (cache.max_width - max_width).abs() < f64::EPSILON
+            && (cache.min_width == min_width || (cache.min_width - min_width).abs() < f64::EPSILON)
+            && (cache.max_width == max_width || (cache.max_width - max_width).abs() < f64::EPSILON)
         {
             return;
         }
@@ -68,9 +67,10 @@ impl TextPainter {
 
         // One layout measures and paints: the paragraph the display list
         // carries is built from the layout the metrics are read from.
-        let layout = self.parley_paragraph(text_cx, text, max_width, LineOverflow::Enforce);
+        let layout =
+            self.parley_paragraph(text_cx, text, min_width, max_width, LineOverflow::Enforce);
         let result = layout.metrics();
-        let metrics = self.metrics_from(&result, min_width, max_width);
+        let metrics = Self::metrics_from(&result, min_width);
         let root = text.style().and_then(crate::text_layout::paint_color);
         let paragraph = Arc::new(layout.to_shaped(root));
 
@@ -85,7 +85,6 @@ impl TextPainter {
             alphabetic_baseline: metrics.alphabetic_baseline,
             ideographic_baseline: metrics.ideographic_baseline,
             did_exceed_max_lines: metrics.did_exceed_max_lines,
-            paint_offset: metrics.paint_offset,
             paragraph,
             layout,
             min_intrinsic_width,
@@ -137,6 +136,7 @@ impl TextPainter {
         &self,
         text_cx: &mut TextContext,
         text: &InlineSpan,
+        min_width: f64,
         max_width: f64,
         line_overflow: LineOverflow,
     ) -> crate::parley_text::ParagraphLayout {
@@ -153,6 +153,8 @@ impl TextPainter {
             default_style: root.as_ref(),
             font_size: self.scaled_font_size(text) as f32,
             max_width: max_width.is_finite().then_some(max_width as f32),
+            min_width: min_width as f32,
+            text_align: self.text_align,
             line_height: None,
             direction: self.text_direction.unwrap_or(TextDirection::Ltr),
             max_lines,
@@ -168,17 +170,12 @@ impl TextPainter {
         max_width: f64,
         line_overflow: LineOverflow,
     ) -> TextLayoutResult {
-        self.parley_paragraph(text_cx, text, max_width, line_overflow)
+        self.parley_paragraph(text_cx, text, 0.0, max_width, line_overflow)
             .metrics()
     }
 
     /// The box metrics a shaped result gives under the width constraints.
-    fn metrics_from(
-        &self,
-        result: &TextLayoutResult,
-        min_width: f64,
-        max_width: f64,
-    ) -> LayoutMetrics {
+    fn metrics_from(result: &TextLayoutResult, min_width: f64) -> LayoutMetrics {
         let width = result.width.max(min_width);
         LayoutMetrics {
             size: Size::new(width, result.height),
@@ -186,7 +183,6 @@ impl TextPainter {
             // Shaper-derived (descent edge of the first line).
             ideographic_baseline: result.ideographic_baseline,
             did_exceed_max_lines: result.truncated,
-            paint_offset: self.compute_paint_offset(width, max_width),
         }
     }
 
@@ -200,6 +196,7 @@ impl TextPainter {
             .parley_paragraph(
                 text_cx,
                 text,
+                0.0,
                 f64::INFINITY,
                 LineOverflow::IgnoreForWidthIntrinsic,
             )
@@ -245,6 +242,8 @@ impl TextPainter {
                 default_style: root.as_ref(),
                 font_size,
                 max_width: None,
+                min_width: 0.0,
+                text_align: crate::typography::TextAlign::Start,
                 line_height: None,
                 direction: self.text_direction.unwrap_or(TextDirection::Ltr),
                 max_lines: None,
@@ -252,33 +251,6 @@ impl TextPainter {
             })
             .metrics()
             .width
-    }
-
-    /// Computes the paint offset based on text alignment.
-    pub(super) fn compute_paint_offset(&self, content_width: f64, max_width: f64) -> Offset<f64> {
-        if !max_width.is_finite() {
-            return Offset::ZERO;
-        }
-
-        let direction = self.text_direction.unwrap_or(TextDirection::Ltr);
-        let extra_space = max_width - content_width;
-
-        let dx = match self.text_align {
-            TextAlign::Left => 0.0,
-            TextAlign::Right => extra_space,
-            TextAlign::Center => extra_space / 2.0,
-            TextAlign::Justify => 0.0,
-            TextAlign::Start => match direction {
-                TextDirection::Ltr => 0.0,
-                TextDirection::Rtl => extra_space,
-            },
-            TextAlign::End => match direction {
-                TextDirection::Ltr => extra_space,
-                TextDirection::Rtl => 0.0,
-            },
-        };
-
-        Offset::new(dx, 0.0)
     }
 
     // ===== Metrics =====
@@ -421,7 +393,7 @@ impl TextPainter {
             return Size::ZERO;
         };
         let result = self.measure(text_cx, text, max_width, LineOverflow::Enforce);
-        self.metrics_from(&result, min_width, max_width).size
+        Self::metrics_from(&result, min_width).size
     }
 
     /// Where the first baseline of the given kind would sit after a dry
@@ -438,7 +410,7 @@ impl TextPainter {
         text_cx.note_lent();
         let text = self.text.as_ref()?;
         let result = self.measure(text_cx, text, max_width, LineOverflow::Enforce);
-        let metrics = self.metrics_from(&result, min_width, max_width);
+        let metrics = Self::metrics_from(&result, min_width);
         Some(match baseline {
             TextBaseline::Alphabetic => metrics.alphabetic_baseline,
             TextBaseline::Ideographic => metrics.ideographic_baseline,

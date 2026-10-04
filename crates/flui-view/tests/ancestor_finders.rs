@@ -125,8 +125,8 @@ pub(crate) fn find_ancestor_view_returns_nearest_match() {
         &mut owner.write().element_owner_mut(),
     );
 
-    let ctx = ElementBuildContext::for_element(child_id, tree.clone(), owner.clone())
-        .expect("the child element is live");
+    let ctx =
+        ElementBuildContext::for_element(child_id, tree, owner).expect("the child element is live");
 
     let value = ctx.find_ancestor::<LabeledView, u32>(LabeledView::value);
     assert_eq!(

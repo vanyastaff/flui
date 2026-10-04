@@ -55,7 +55,7 @@ pub(crate) fn pump_post_frame_callback_observes_this_frames_committed_layout() {
     let calls = Arc::new(AtomicUsize::new(0));
     let observed_cb = Arc::clone(&observed);
     let calls_cb = Arc::clone(&calls);
-    let pipeline_cb = pipeline.clone();
+    let pipeline_cb = pipeline;
     // `PipelineCell` is `!Send`, so the callback goes on the owner-local
     // lane, which only a pump that ends its frame with that lane drains.
     realm

@@ -422,10 +422,9 @@ impl RenderBox for RenderTransform {
         // That is what lets the check live on `skip_paint`, which is handed
         // no laid-out size.
         //
-        // Spelled out rather than `!self.transform.is_invertible()`: that
-        // helper gates on `det.abs() >= f64::EPSILON`, which answers *true*
-        // for an infinite determinant and would paint exactly the non-finite
-        // cases this must suppress.
+        // Painting rejects a collapsed or non-finite determinant. Hit testing
+        // separately requires the computed finite inverse (ADR-0113), so a
+        // finite determinant alone does not promise a usable inverse.
         let determinant = self.transform.determinant();
         determinant == 0.0 || !determinant.is_finite()
     }

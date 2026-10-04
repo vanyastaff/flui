@@ -835,14 +835,20 @@ impl DeterministicExecutors {
 
             // Compact completed slots between passes (a slot with no future
             // and no pending re-queue is done).
-            let mut tasks = std::mem::take(&mut *self.inner.tasks.lock());
-            tasks.retain(|task| task.future.is_some());
-            let _prev = std::mem::replace(&mut *self.inner.tasks.lock(), tasks);
+            self.compact_completed_tasks(|| {});
 
             if !progressed {
                 return steps;
             }
         }
+    }
+
+    fn compact_completed_tasks(&self, before_lock: impl FnOnce()) {
+        // The test seam admits work at the old snapshot/restore race boundary.
+        // Production supplies a no-op. Keep admission and compaction atomic:
+        // discarded slots contain no future and only our internal ready flag.
+        before_lock();
+        self.inner.tasks.lock().retain(|task| task.future.is_some());
     }
 
     /// Queued-but-unfinished work, `(jobs, futures)`.
@@ -1041,11 +1047,58 @@ mod tests {
         }
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
+    fn compaction_preserves_concurrently_admitted_future_and_next_work() {
+        let executor = DeterministicExecutors::new();
+        executor
+            .spawn_future(Box::pin(std::future::pending()))
+            .expect("parked future");
+        let completed = Arc::new(AtomicUsize::new(0));
+        let producer = executor.clone();
+        let completed_in_producer = Arc::clone(&completed);
+        executor.compact_completed_tasks(|| {
+            // Joining puts an actual independent-handle admission exactly at
+            // the compaction boundary without relying on timing or task count.
+            std::thread::spawn(move || {
+                producer
+                    .spawn_future(Box::pin(async move {
+                        completed_in_producer.fetch_add(1, Ordering::SeqCst);
+                    }))
+                    .expect("concurrent future admission");
+            })
+            .join()
+            .expect("producer joined");
+        });
+        executor.run_until_idle();
+        assert_eq!(
+            completed.load(Ordering::SeqCst),
+            1,
+            "accepted work survives compaction"
+        );
+        let completed_in_next = Arc::clone(&completed);
+        executor
+            .spawn_future(Box::pin(async move {
+                completed_in_next.fetch_add(1, Ordering::SeqCst);
+            }))
+            .expect("next future admission");
+        executor.run_until_idle();
+        assert_eq!(
+            completed.load(Ordering::SeqCst),
+            2,
+            "the next drive progresses"
+        );
+    }
+
     #[test]
     fn execution_lane_matrix() {
         crate::table_test::run_table(
             "execution_lane_matrix",
             &[
+                #[cfg(not(target_arch = "wasm32"))]
+                (
+                    "compaction_preserves_concurrently_admitted_future_and_next_work",
+                    compaction_preserves_concurrently_admitted_future_and_next_work as fn(),
+                ),
                 (
                     "conformance_admission_is_bounded_and_released",
                     conformance_admission_is_bounded_and_released as fn(),

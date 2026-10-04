@@ -100,3 +100,59 @@ fn panics_in_callbacks_and_tasks_leave_the_dispatcher_usable() {
     nested_should_close_is_conservative_veto_without_recursion();
     test_background_executor_panic_handling();
 }
+
+fn ready_task_returns_owner_local_data() {
+    let expected = std::rc::Rc::new(String::from("owner"));
+    let mut task = flui_platform::Task::ready(std::rc::Rc::clone(&expected));
+    let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+    let std::task::Poll::Ready(actual) =
+        std::future::Future::poll(std::pin::Pin::new(&mut task), &mut context)
+    else {
+        panic!("a ready task must return its result on the first poll");
+    };
+    assert!(std::rc::Rc::ptr_eq(&expected, &actual));
+}
+
+fn ready_task_returns_a_non_unpin_result() {
+    struct ResultValue {
+        value: String,
+        _pin: std::marker::PhantomPinned,
+    }
+    let mut task = flui_platform::Task::ready(ResultValue {
+        value: String::from("completed"),
+        _pin: std::marker::PhantomPinned,
+    });
+    let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+    let std::task::Poll::Ready(actual) =
+        std::future::Future::poll(std::pin::Pin::new(&mut task), &mut context)
+    else {
+        panic!("a ready task must return its result on the first poll");
+    };
+    assert_eq!(actual.value, "completed");
+}
+
+fn ready_task_returns_borrowed_data() {
+    let value = String::from("borrowed");
+    let mut task = flui_platform::Task::ready(value.as_str());
+    let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+    assert_eq!(
+        std::future::Future::poll(std::pin::Pin::new(&mut task), &mut context),
+        std::task::Poll::Ready("borrowed"),
+    );
+}
+
+#[test]
+fn ready_tasks_return_results_without_executor_bounds() {
+    let cases: &[(&str, fn())] = &[
+        ("owner_local", ready_task_returns_owner_local_data),
+        ("non_unpin", ready_task_returns_a_non_unpin_result),
+        ("borrowed", ready_task_returns_borrowed_data),
+    ];
+    let mut failures = Vec::new();
+    for &(name, case) in cases {
+        if std::panic::catch_unwind(case).is_err() {
+            failures.push(name);
+        }
+    }
+    assert!(failures.is_empty(), "failed cases: {failures:?}");
+}

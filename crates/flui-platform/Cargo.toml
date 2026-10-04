@@ -166,7 +166,6 @@ dispatch = "0.2"
 # Android platform
 [target.'cfg(target_os = "android")'.dependencies]
 android-activity = { version = "0.6", features = ["native-activity"] }
-libc = "0.2"
 
 # Native-only async dependencies (not available on wasm32)
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]

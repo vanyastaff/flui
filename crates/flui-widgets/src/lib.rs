@@ -306,7 +306,8 @@ pub use flui_rendering::hit_testing::{
 pub use flui_rendering::view::ScrollPosition;
 // Drag details surfaced by `GestureDetector`'s `on_pan_*` callbacks.
 pub use flui_interaction::{
-    DragDownDetails, DragEndDetails, DragStartDetails, DragUpdateDetails, PointerPanZoomEvent,
+    DragDownDetails, DragEndDetails, DragStartDetails, DragUpdateDetails, GestureEndReason,
+    PointerPanZoomEvent,
 };
 pub use flui_rendering::semantics::{
     SemanticsConfiguration, SemanticsProperties, SemanticsRole,
@@ -380,7 +381,8 @@ pub mod prelude {
     pub use flui_foundation::geometry::Axis;
     pub use flui_foundation::geometry::{EdgeInsets, Matrix4};
     pub use flui_interaction::{
-        DragDownDetails, DragEndDetails, DragStartDetails, DragUpdateDetails, PointerPanZoomEvent,
+        DragDownDetails, DragEndDetails, DragStartDetails, DragUpdateDetails, GestureEndReason,
+        PointerPanZoomEvent,
     };
     pub use flui_objects::{CrossAxisAlignment, MainAxisAlignment, MainAxisSize, StackFit};
     pub use flui_objects::{WrapAlignment, WrapCrossAlignment};

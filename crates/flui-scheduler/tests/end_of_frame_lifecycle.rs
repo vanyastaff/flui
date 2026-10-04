@@ -162,9 +162,16 @@ fn a_registration_from_inside_an_aborted_frames_waker_demands_exactly_one_frame(
 
 #[test]
 fn end_of_frame_demand_matrix() {
+    if crate::frame_completion_recovery::selected_child() {
+        return;
+    }
     crate::run_table(
         "end_of_frame_demand_matrix",
         &[
+            (
+                "completion_wake_ownership_and_recovery",
+                crate::frame_completion_recovery::completion_wake_ownership_and_recovery as fn(),
+            ),
             (
                 "an_idle_registration_demands_one_frame_and_resolves_with_its_timing",
                 an_idle_registration_demands_one_frame_and_resolves_with_its_timing as fn(),

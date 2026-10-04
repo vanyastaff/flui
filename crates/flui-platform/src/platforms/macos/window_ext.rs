@@ -108,10 +108,30 @@ pub trait MacOSWindowExt {
 
     /// Add this window to a tab group with another window.
     ///
-    /// # Parameters
+    /// Borrows the other window rather than accepting a numeric window ID: both
+    /// wrappers keep their native objects alive through the join. Returns `true`
+    /// after AppKit receives the join, or `false` if either window is closed,
+    /// the target uses another backend, the windows are the same, or their
+    /// owner lanes are not the same AppKit main lane.
     ///
-    /// - `other_window_id`: ID of the window to tab with
-    fn add_tab_to_window(&mut self, other_window_id: u64);
+    /// Numeric IDs cannot establish that ownership:
+    ///
+    /// ```compile_fail,E0308
+    /// use flui_platform::platforms::macos::MacOSWindowExt;
+    ///
+    /// fn join(window: &mut dyn MacOSWindowExt) {
+    ///     window.add_tab_to_window(1);
+    /// }
+    /// ```
+    ///
+    /// ```no_run
+    /// use flui_platform::{HostWindow, platforms::macos::MacOSWindowExt};
+    ///
+    /// fn join(window: &mut dyn MacOSWindowExt, other: &dyn HostWindow) -> bool {
+    ///     window.add_tab_to_window(other)
+    /// }
+    /// ```
+    fn add_tab_to_window(&mut self, other: &dyn crate::traits::HostWindow) -> bool;
 
     /// Toggle native fullscreen mode with macOS animation.
     ///

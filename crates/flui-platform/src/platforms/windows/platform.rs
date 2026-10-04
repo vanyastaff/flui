@@ -7,8 +7,8 @@ use flui_foundation::geometry::{Bounds, Point, Size};
 use parking_lot::Mutex;
 use windows::{
     Win32::{
-        Foundation::{ERROR_CANCELLED, HWND, LPARAM, LRESULT, RECT, WPARAM},
-        Graphics::Gdi::{BeginPaint, EndPaint, HBRUSH, PAINTSTRUCT},
+        Foundation::{ERROR_CANCELLED, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM},
+        Graphics::Gdi::{BeginPaint, ClientToScreen, EndPaint, HBRUSH, PAINTSTRUCT},
         System::{
             LibraryLoader::{GetModuleFileNameW, GetModuleHandleW},
             Threading::GetCurrentThreadId,
@@ -18,10 +18,10 @@ use windows::{
             Input::KeyboardAndMouse::{TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent},
             WindowsAndMessaging::{
                 CS_HREDRAW, CS_OWNDC, CS_VREDRAW, CreateWindowExW, DefWindowProcW, DestroyWindow,
-                DispatchMessageW, GWLP_USERDATA, GetClassNameW, GetForegroundWindow, GetMessageW,
-                GetWindowLongPtrW, GetWindowThreadProcessId, HICON, HTCLIENT, HWND_MESSAGE,
-                IDC_ARROW, MSG, PM_REMOVE, PeekMessageW, PostQuitMessage, RegisterClassW,
-                SW_SHOWNORMAL, SWP_NOACTIVATE, SWP_NOZORDER, SetForegroundWindow,
+                DispatchMessageW, GWLP_USERDATA, GetClassNameW, GetClientRect, GetForegroundWindow,
+                GetMessageW, GetWindowLongPtrW, GetWindowThreadProcessId, HICON, HTCLIENT,
+                HWND_MESSAGE, IDC_ARROW, MSG, PM_REMOVE, PeekMessageW, PostQuitMessage,
+                RegisterClassW, SW_SHOWNORMAL, SWP_NOACTIVATE, SWP_NOZORDER, SetForegroundWindow,
                 SetWindowLongPtrW, SetWindowPos, TranslateMessage, WINDOW_EX_STYLE, WINDOW_STYLE,
                 WM_CHAR, WM_CLOSE, WM_CREATE, WM_DESTROY, WM_DPICHANGED, WM_ERASEBKGND,
                 WM_INPUTLANGCHANGE, WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS, WM_LBUTTONDOWN,
@@ -89,6 +89,9 @@ pub(super) struct WindowContext {
     pub window_id: WindowId,
     /// Which native window this context belongs to; see [`WindowIdentity`].
     pub identity: WindowIdentity,
+    /// Tracking and cache access do not keep wrappers or their state alive.
+    pub windows: std::sync::Weak<Mutex<HashMap<isize, Arc<WindowsWindow>>>>,
+    pub window_state: std::sync::Weak<Mutex<super::window::WindowState>>,
     /// The platform-level handlers, shared with the owner control context.
     /// `Rc<RefCell<..>>`: every holder lives on the owner thread, and no
     /// borrow is held while a handler runs.
@@ -154,6 +157,13 @@ pub(super) struct WindowContext {
 }
 
 impl WindowContext {
+    /// Complete cache updates before callback-capable native/user code.
+    fn update_window_state(&self, update: impl FnOnce(&mut super::window::WindowState)) {
+        if let Some(state) = self.window_state.upgrade() {
+            update(&mut state.lock());
+        }
+    }
+
     /// Dispatch a window event to the platform-level handler.
     #[inline]
     pub(super) fn dispatch_event(&self, event: WindowEvent) {
@@ -840,6 +850,22 @@ impl WindowsPlatform {
                         // further ordering.
                         SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
                         ctx.ledger.borrow_mut().retire();
+
+                        // Retire tracking only after userdata: the removed Arc
+                        // may be the last wrapper. Its Drop must see cleared userdata and
+                        // cannot recursively destroy this in-flight HWND.
+                        let removed = ctx.windows.upgrade().and_then(|windows| {
+                            let mut windows = windows.lock();
+                            if windows
+                                .get(&(hwnd.0 as isize))
+                                .is_some_and(|window| window.identity == ctx.identity)
+                            {
+                                windows.remove(&(hwnd.0 as isize))
+                            } else {
+                                None
+                            }
+                        });
+                        drop(removed);
                     }
 
                     LRESULT(0)
@@ -894,13 +920,23 @@ impl WindowsPlatform {
                 WM_SIZE => {
                     use super::util::{SIZE_MAXIMIZED, SIZE_MINIMIZED, SIZE_RESTORED};
 
-                    let width = get_x_lparam(lparam).max(1);
-                    let height = get_y_lparam(lparam).max(1);
+                    // WM_SIZE dimensions are unsigned16, unlike signed
+                    // mouse and WM_MOVE coordinates packed in the same shape.
+                    let width = (lparam.0 as u32 & 0xffff).max(1) as i32;
+                    let height = hiword(lparam.0 as u32).max(1) as i32;
                     let size_type = wparam.0 as u32;
 
                     if let Some(ctx) = ctx {
                         let size = Size::new(width, height);
                         let prev_mode = ctx.mode.get();
+                        if size_type != SIZE_MINIMIZED {
+                            ctx.update_window_state(|state| {
+                                state.bounds.size = Size::new(
+                                    width as f64 / ctx.scale_factor.get(),
+                                    height as f64 / ctx.scale_factor.get(),
+                                );
+                            });
+                        }
 
                         // Handle state transition and dispatch appropriate event
                         let (new_mode, event) = match size_type {
@@ -914,10 +950,7 @@ impl WindowsPlatform {
                                     },
                                 };
                                 if prev_mode.can_transition_to(&candidate) {
-                                    // Save current size before minimizing
-                                    if !prev_mode.is_minimized() {
-                                        ctx.last_size.set(size);
-                                    }
+                                    // Preserve the last non-minimized client size.
                                     (
                                         candidate,
                                         Some(WindowEvent::Minimized {
@@ -1080,6 +1113,7 @@ impl WindowsPlatform {
                         && let Some(ctx) = ctx
                     {
                         let shown = wparam.0 != 0;
+                        ctx.update_window_state(|state| state.visible = shown);
                         if let Some(visible) =
                             crate::shared::visibility::win32_show_window_visibility(
                                 shown,
@@ -1107,11 +1141,24 @@ impl WindowsPlatform {
                 }
 
                 WM_MOVE => {
-                    let x = get_x_lparam(lparam);
-                    let y = get_y_lparam(lparam);
+                    // Packed WM_MOVE coordinates truncate beyond signed16.
+                    // Query the actual client origin; retain the message fallback
+                    // if Win32 cannot report it for this handle.
+                    let mut origin = POINT::default();
+                    let (x, y) = if ClientToScreen(hwnd, &raw mut origin).as_bool() {
+                        (origin.x, origin.y)
+                    } else {
+                        (get_x_lparam(lparam), get_y_lparam(lparam))
+                    };
                     tracing::debug!("Window Moved: ({}, {})", x, y);
 
                     if let Some(ctx) = ctx {
+                        ctx.update_window_state(|state| {
+                            state.bounds.origin = Point::new(
+                                x as f64 / ctx.scale_factor.get(),
+                                y as f64 / ctx.scale_factor.get(),
+                            );
+                        });
                         // Fire per-window on_moved callback
                         ctx.callbacks.dispatch_moved();
 
@@ -1138,17 +1185,24 @@ impl WindowsPlatform {
 
                     // Dispatch ScaleFactorChanged event
                     if let Some(ctx) = ctx {
+                        ctx.scale_factor.set(new_scale);
+                        let mut client = RECT::default();
+                        let client_size = GetClientRect(hwnd, &raw mut client).is_ok().then(|| {
+                            Size::new(
+                                (client.right - client.left) as f64 / new_scale,
+                                (client.bottom - client.top) as f64 / new_scale,
+                            )
+                        });
+                        ctx.update_window_state(|state| {
+                            state.scale_factor = new_scale;
+                            if let Some(size) = client_size {
+                                state.bounds.size = size;
+                            }
+                        });
                         ctx.dispatch_event(WindowEvent::ScaleFactorChanged {
                             window_id: ctx.window_id,
                             scale_factor: new_scale,
                         });
-
-                        // Update context scale factor through the shared
-                        // reference already held above — see the field doc
-                        // on `WindowContext::scale_factor` for why this must
-                        // not go through a second `&mut` reborrow of
-                        // `ctx_ptr`.
-                        ctx.scale_factor.set(new_scale);
 
                         // Suggested rect for new DPI
                         //
@@ -1425,6 +1479,7 @@ impl WindowsPlatform {
                     tracing::debug!("Window Focused");
 
                     if let Some(ctx) = ctx {
+                        ctx.update_window_state(|state| state.focused = true);
                         // Fire per-window on_active_status_change callback
                         ctx.callbacks.dispatch_active_status_change(true);
 
@@ -1442,6 +1497,7 @@ impl WindowsPlatform {
                     tracing::debug!("Window Unfocused");
 
                     if let Some(ctx) = ctx {
+                        ctx.update_window_state(|state| state.focused = false);
                         // Fire per-window on_active_status_change callback
                         ctx.callbacks.dispatch_active_status_change(false);
 

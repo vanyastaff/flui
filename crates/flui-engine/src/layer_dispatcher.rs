@@ -355,11 +355,36 @@ impl CommandRenderer for LayerDispatcher<'_> {
         paint: Option<&Paint>,
         transform: &Matrix4,
     ) {
-        // Thread paint.blend_mode to the GPU-level composite.
-        // SrcOver is the correct default when no Paint is supplied.
-        let blend_mode = paint.map_or(flui_painting::BlendMode::SrcOver, |p| p.blend_mode);
+        self.render_image_region(
+            image,
+            Rect::from_xywh(
+                0.0,
+                0.0,
+                f64::from(image.width()),
+                f64::from(image.height()),
+            ),
+            dst,
+            None,
+            flui_painting::paint::ImageRepeat::NoRepeat,
+            None,
+            paint,
+            transform,
+        );
+    }
+
+    fn render_image_region(
+        &mut self,
+        image: &Image,
+        src: Rect<f64>,
+        dst: Rect<f64>,
+        tile: Option<Rect<f64>>,
+        repeat: flui_painting::paint::ImageRepeat,
+        filter: Option<flui_painting::paint::ColorFilter>,
+        paint: Option<&Paint>,
+        transform: &Matrix4,
+    ) {
         self.with_transform(transform, |painter| {
-            painter.draw_image(image, dst, blend_mode);
+            painter.draw_image_region(image, src, dst, tile, repeat, filter, paint);
         });
     }
 
@@ -370,14 +395,12 @@ impl CommandRenderer for LayerDispatcher<'_> {
         transforms: &[Matrix4],
         colors: Option<&[Color]>,
         blend_mode: BlendMode,
-        _paint: Option<&Paint>,
+        paint: Option<&Paint>,
         transform: &Matrix4,
     ) {
-        // Thread blend_mode to the painter so advanced modes divert to
-        // DrawItem::AdvancedShape. SrcOver takes the
-        // per-sprite cached_images path unchanged.
+        let tint = Paint::fill(paint.map_or(Color::WHITE, |p| p.color)).with_blend_mode(blend_mode);
         self.with_transform(transform, |painter| {
-            painter.draw_atlas(image, sprites, transforms, colors, blend_mode);
+            painter.draw_atlas_painted(image, sprites, transforms, colors, Some(&tint));
         });
     }
 
@@ -385,14 +408,25 @@ impl CommandRenderer for LayerDispatcher<'_> {
         &mut self,
         image: &Image,
         dst: Rect<f64>,
-        repeat: flui_painting::paint::image::ImageRepeat,
+        repeat: flui_painting::paint::ImageRepeat,
         paint: Option<&Paint>,
         transform: &Matrix4,
     ) {
-        let blend_mode = paint.map_or(flui_painting::BlendMode::SrcOver, |p| p.blend_mode);
-        self.with_transform(transform, |painter| {
-            painter.draw_image_repeat(image, dst, repeat, blend_mode);
-        });
+        self.render_image_region(
+            image,
+            Rect::from_xywh(
+                0.0,
+                0.0,
+                f64::from(image.width()),
+                f64::from(image.height()),
+            ),
+            dst,
+            None,
+            repeat,
+            None,
+            paint,
+            transform,
+        );
     }
 
     fn render_image_nine_slice(
@@ -403,9 +437,8 @@ impl CommandRenderer for LayerDispatcher<'_> {
         paint: Option<&Paint>,
         transform: &Matrix4,
     ) {
-        let blend_mode = paint.map_or(flui_painting::BlendMode::SrcOver, |p| p.blend_mode);
         self.with_transform(transform, |painter| {
-            painter.draw_image_nine_slice(image, center_slice, dst, blend_mode);
+            painter.draw_image_nine_slice_painted(image, center_slice, dst, paint);
         });
     }
 
@@ -413,18 +446,25 @@ impl CommandRenderer for LayerDispatcher<'_> {
         &mut self,
         image: &Image,
         dst: Rect<f64>,
-        filter: flui_painting::paint::image::ColorFilter,
+        filter: flui_painting::paint::ColorFilter,
         paint: Option<&Paint>,
         transform: &Matrix4,
     ) {
-        // Thread paint.blend_mode as the GPU-level composite mode.
-        // ColorFilter bakes pixels CPU-side; paint.blend_mode composites the
-        // result GPU-side against the framebuffer. These two modes are independent.
-        // See DrawBatcher::draw_image_filtered for the boundary contract.
-        let paint_blend_mode = paint.map_or(flui_painting::BlendMode::SrcOver, |p| p.blend_mode);
-        self.with_transform(transform, |painter| {
-            painter.draw_image_filtered(image, dst, filter, paint_blend_mode);
-        });
+        self.render_image_region(
+            image,
+            Rect::from_xywh(
+                0.0,
+                0.0,
+                f64::from(image.width()),
+                f64::from(image.height()),
+            ),
+            dst,
+            None,
+            flui_painting::paint::ImageRepeat::NoRepeat,
+            Some(filter),
+            paint,
+            transform,
+        );
     }
 
     fn render_texture(

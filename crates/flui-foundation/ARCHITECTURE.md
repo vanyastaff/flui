@@ -13,6 +13,77 @@ instantiations are the device-pixel grid (`DevicePoint`, `DeviceSize`, `DeviceRe
 lives here too: `snap`, `snap_point`, `snap_edges`, `cover`, `device_rect_covering`,
 `device_size` and `resolve_stroke_width`; the engine decides where they apply.
 
+Floating `Point::midpoint` and its `Line::midpoint` delegate average through
+`FloatUnit::midpoint`: `f32` and `f64` use their native standard-library operation,
+so same-sign finite extremes do not overflow and subnormals retain native rounding.
+The trait default uses the existing `f64` conversions for custom scalar implementations.
+NaN operands and opposite infinities produce NaN in the affected coordinate;
+equal infinities keep their sign. Integer geometry does not expose midpoint.
+The public family `floating_geometry_midpoints_preserve_the_scalar_range`
+checks these boundaries through points and lines.
+
+Point distances convert each coordinate to `f64` before subtraction, matching
+their returned scalar. Thus a distance between finite `f32` endpoints can exceed
+`f32::MAX` while remaining finite, including the squared result. `f64` differences
+and squared results can still exceed their representable range. The public family
+`single_precision_geometry_distances_use_double_precision_range` checks point
+distances and their line-length delegates against exact power-of-two results.
+
+Vector normalization refuses non-finite components and preserves its existing
+`f64::EPSILON` near-zero threshold. When finite components have an overflowing
+magnitude, scaling before `hypot` preserves their unit direction instead of
+returning zero. `vector_normalization_keeps_finite_directions_and_refuses_invalid_input`
+checks ordinary and extreme vectors, fallback admission, and the actual
+`Line::direction` and `Circle::nearest_point` consumers. Endpoint subtraction
+and other vector operations retain their own floating-point range limits. `Offset::normalize`
+delegates to the same `Vec2` policy, including zero and near-zero refusal and
+non-finite components returning zero. Infinite offsets previously produced NaN
+components; that invalid normalized output is deliberately refused. The family
+also checks `Offset::move_towards` taking a finite unit step toward a target with
+an overflowing magnitude. Its subtraction and maximum-distance policies are
+unchanged.
+
+Transform decomposition computes column lengths with `hypot`. It keeps a finite,
+nonzero direct determinant before dividing by the first scale: prematurely
+normalizing an anisotropic column can erase a smaller representable signed scale.
+When direct products overflow or underflow to zero, it uses the normalized
+column determinant. The existing epsilon threshold still selects zero rotation
+and an unsigned second-column length. Public consumer test
+`affine_decomposition_retains_finite_extreme_scales` checks ordinary rotation,
+reflections, extreme columns, anisotropic shear and determinant underflow.
+
+`Transform::then` applies transformations in declaration order with column-vector
+matrices. Horizontal and vertical shear use the same `Matrix4::skew_2d` mapping;
+two-axis shear inversion delegates to the existing glam-backed matrix inverse
+rather than negating angles. The public family
+`affine_composition_and_shear_follow_coordinate_contract` checks actual mapped
+coordinates, inverse round trips and flattened composition order.
+
+Matrix inverse admission requires finite input, a finite nonzero computed
+determinant and finite computed inverse entries (ADR-0113). The maintained
+glam fallible inverse replaces the absolute epsilon cutoff; a finite tiny
+scale is admitted. `is_invertible` computes the same inverse, and failed
+in-place inversion preserves the original coordinates. Determinant/cofactor
+underflow or overflow can still refuse mathematically invertible matrices;
+there is no additional conditioning estimate or full-range inversion promise.
+The public family `matrix_inverse_requires_a_finite_computed_result` checks
+known point coordinates, tiny scaling and each refusal boundary.
+
+Simple `Transform::inverse` variants retain analytical translation, rotation
+and scale values. They require finite inputs and finite nonzero scale
+reciprocals without an epsilon cutoff. Thus analytical scaling can succeed
+where a general matrix determinant would exceed its computed range; complex
+variants retain the matrix admission policy above. The existing public family
+`affine_composition_and_shear_follow_coordinate_contract` checks tiny scales,
+ordinary mapped coordinates and invalid scalar refusal, followed by a healthy
+inverse operation (ADR-0113).
+
+Approximate matrix equality and identity require finite components and a finite,
+nonnegative tolerance. NaN must not enable the identity optimization that
+removes a transform; zero tolerance permits exact equality. The public family
+`matrix_tolerance_requires_finite_values` covers these admission boundaries and
+checks that conversion preserves a NaN-bearing matrix rather than dropping it.
+
 ---
 
 ## The signal read contract (`read_scope`)
@@ -52,7 +123,13 @@ before containment regains control. After a reader or graph panic, the retained 
 callback envelope and any later opaque result or panic payload are deliberately leaked:
 Rust drop glue can destroy a second captured field while the first field's destructor is
 unwinding, so no generic `catch_unwind` wrapper can safely retire that aggregate. Normal
-reads still destroy the callback and result normally. This exceptional-path leak is the
+reads still destroy the callback and result normally. The typed adapter records the
+original reader payload outside the graph invocation, then propagates a destructor-free
+unit unwind marker through the erased reader. This makes failure visible to the graph
+before it finalizes a released loan while preserving the original payload's priority
+over graph cleanup and subscription failures. The released-read subprocess rows in
+`flui-view`'s `signal_read_and_write_matrix` cover that actual cross-crate bridge.
+This exceptional-path leak is the
 strongest continuation-safe contract available without constraining public callback and
 result types to destructor-free values.
 
@@ -86,6 +163,17 @@ does. `two_trains_refuse_to_resolve` in `tools/xtask` builds two copies of this 
 manifest's `links` value into one graph and requires the resolver to refuse it. Dropping the key,
 or moving it to a crate that not every train depends on, re-opens the E0308 failure the guard
 exists to prevent.
+
+---
+
+## Diagnostics serialization
+
+Diagnostics nodes expose their structured properties and children and their
+human-readable tree formatting. The existing `serde` feature implements value
+serialization through serde, including string escaping. There is no separate
+JSON string exporter: the removed hand-written exporter had no callers and
+could emit unescaped ASCII control characters. Agent transports serialize the
+typed protocol tree rather than this diagnostics representation (ADR-0095).
 
 ---
 
@@ -136,3 +224,80 @@ Items below are concrete cleanups visible from `flui-foundation` outward. Each i
 - **State-notification surface decided** — `Notifier`/`ChangeNotifier` in this crate is the listener-notification mechanism. The signals crate that the summary table once pointed at (`flui-reactivity`) was removed 2026-07-28. Realm-scoped signals (ADR-0074) are not a crate: their read contract is this crate's `read_scope` module and their graph lives in `flui-view` (ADR-0085). The `Arc<Mutex<…>>` notifier stays for `Send + Sync` users until the UI callback surface loses `Send` (ADR-0091 §1), when a `Listenable` adapter over a signal replaces it.
 
 ---
+
+## Mapping decisions
+
+### Notification channels retain only the surfaces they serve
+
+`Notifier<T>` lends typed arguments; `ChangeNotifier` adapts it to zero-argument
+listeners. `ValueNotifier<T>` owns its value without a `Clone` requirement on
+reading, mutation or extraction. Its derived `Clone` remains available for
+cloneable values, copying the value while sharing the listener channel.
+`into_value` disposes that shared channel before extracting the value.
+The public `notifier_ownership_and_recovery` family includes a non-Clone owned
+value's mutation/extraction sequence and clone compatibility.
+
+The separate `ListenerRegistry`/`ListenerSubscription` surface is removed.
+It had no production consumer; its lazy first/last hooks duplicated notification
+ownership and exposed a callback-under-lock transaction. Typed and zero-argument
+notification continue through the channels above.
+
+### Claim slots commit outcomes before delivering borrowed wakes
+
+The ADR-0039 claim-slot state machine remains the authority for ownership of a
+reply. Executor cloning and displaced-waker destruction run outside the slot's
+locks; a clone can synchronously deliver, and the subsequent state check must
+observe that outcome. Delivery and owner disconnection publish their terminal
+state before notifying blocked or asynchronous requesters. Abandonment retains
+the reply for the owner to reclaim even when its wake callback fails, and still
+attempts the task wake.
+
+Wake invocation borrows an owning executor envelope held outside catch_unwind.
+The first caught wake or retirement failure propagates during ordinary calls;
+later failures and failures during an existing unwind are retained. After a
+caught failure or during active unwind, shared state and opaque envelopes are
+retained so reply or callback captures cannot introduce a competing destructor
+failure. Successful ordinary retirement still runs destructors, and an
+individual aggregate that double-panics before containment regains control can
+abort. This is exceptional-path retention, not a guarantee against arbitrary
+destruction inside user callbacks.
+
+The public subprocess family `claim_slot_executor_and_owner_recovery` covers
+clone reentry, failed clone and replacement retirement, committed delivery
+followed by wake or retirement failure, owner disconnection during unwind,
+owner/task failure competition on abandonment, and reclamation of an unclaimed
+reply after failure. Each scenario also checks the next request.
+
+### Borrow arguments and retain exceptional notification obligations
+
+Typed notification callbacks borrow their argument and do not require Clone.
+The notifier's owned snapshot prevents a removed callback from disappearing
+while it runs. After a caught listener failure, the payload and snapshot remain
+retained: opaque capture or panic-payload aggregates can double-panic during
+drop before catch_unwind regains control. Later listeners and later notification
+rounds still progress. Reporting borrows the original payload behind a separate
+unwind boundary; a panicking tracing subscriber cannot interrupt notification,
+and its secondary payload is also retained. Normal success retires callback
+envelopes one at a time in registration order; a retirement failure propagates
+after retaining the remaining envelopes. An individual aggregate double-panic
+during ordinary successful-round retirement keeps Rust's abort behavior.
+
+The public subprocess table `notifier_ownership_and_recovery` checks borrowed
+non-Clone arguments, hostile payloads and self-removal captures, tracing failure
+in competition with a listener failure, chronological retirement competition
+and subsequent progress. The common exceptional-payload operation is
+`panic::retain_opaque_payload`, used by notifications, signal reads
+and the test-table runner. This contract is recorded in
+[ADR-0104](../../docs/adr/ADR-0104-borrowed-notification-and-opaque-panic-retention.md).
+
+
+## Circle intersections require a computed line direction
+
+`Circle::intersect_line` treats its input as an infinite line, not an endpoint
+segment. A computed squared direction of zero returns `None`, including coincident
+endpoints and directions whose squared magnitude underflows to zero. Dividing
+by that zero previously reported NaN intersections. Ordinary crossings, tangents
+and misses retain their quadratic calculation; no wider-range quadratic solution
+is promised. Public family `circle_line_intersection_requires_a_computed_direction`
+checks refusals followed by a healthy crossing and intersections outside the
+endpoint segment.

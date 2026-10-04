@@ -137,12 +137,19 @@ fn dropping_an_attached_hook_joins_its_watcher() {
     let _ = std::fs::remove_dir_all(path.parent().expect("scratch dir"));
 }
 
-#[test]
 fn scene_frame_without_a_loaded_plugin_draws_nothing() {
     let path = scratch_worker("no-scene").with_file_name(ScenePluginHook::LIBRARY_NAME);
     let mut hook = ScenePluginHook::new(&path);
     let mut renders = 0;
-    assert!(!hook.scene_frame(100.0, 100.0, &mut |_scene| renders += 1));
+    // SAFETY: no image is loaded, and this callback retains no scene data.
+    #[expect(unsafe_code)]
+    let rendered = unsafe {
+        hook.scene_frame(100.0, 100.0, &mut |_scene, _reset_fonts| {
+            renders += 1;
+            true
+        })
+    };
+    assert!(!rendered);
     assert_eq!(renders, 0, "no plugin, nothing rendered");
     assert_eq!(hook.poll(), ReloadEvent::Unchanged);
     let _ = std::fs::remove_dir_all(path.parent().expect("scratch dir"));
@@ -158,4 +165,104 @@ fn the_device_library_path_is_where_flui_run_scene_pushes_it() {
         ScenePluginHook::device_library_path(None),
         Path::new("/data/local/tmp/libflui_scene.so")
     );
+}
+
+fn first_render_and_replacement_reset_fonts() {
+    let path = scratch_worker("font-reset-generations");
+    let mut hook = ScenePluginHook::new(&path);
+    let scene = Scene::default();
+    assert!(hook.render_loaded_scene(&scene, &mut |_, reset| {
+        assert!(reset, "first image requires its own font namespace");
+        true
+    }));
+    hook.observe_image_update(false);
+    assert!(hook.render_loaded_scene(&scene, &mut |_, reset| {
+        assert!(!reset, "successful rendering acknowledged the reset");
+        true
+    }));
+    hook.observe_image_update(true);
+    assert!(hook.render_loaded_scene(&scene, &mut |_, reset| {
+        assert!(reset, "replacement image may reuse font identifiers");
+        true
+    }));
+    assert!(hook.render_loaded_scene(&scene, &mut |_, reset| {
+        assert!(!reset, "replacement reset acknowledged exactly once");
+        true
+    }));
+    let _ = std::fs::remove_dir_all(path.parent().expect("scratch directory"));
+}
+
+fn failed_render_preserves_font_reset_for_retry() {
+    let path = scratch_worker("font-reset-refusal");
+    let mut hook = ScenePluginHook::new(&path);
+    let scene = Scene::default();
+    assert!(!hook.render_loaded_scene(&scene, &mut |_, reset| {
+        assert!(reset);
+        false
+    }));
+    hook.observe_image_update(false);
+    assert!(hook.render_loaded_scene(&scene, &mut |_, reset| {
+        assert!(reset, "unchanged image must still retry the failed reset");
+        true
+    }));
+    assert!(hook.render_loaded_scene(&scene, &mut |_, reset| {
+        assert!(!reset);
+        true
+    }));
+    let _ = std::fs::remove_dir_all(path.parent().expect("scratch directory"));
+}
+
+fn panicking_render_preserves_font_reset_for_retry() {
+    let path = scratch_worker("font-reset-panic");
+    let mut hook = ScenePluginHook::new(&path);
+    let scene = Scene::default();
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        hook.render_loaded_scene(&scene, &mut |_, reset| {
+            assert!(reset);
+            panic!("render failure");
+        });
+    }));
+    assert!(outcome.is_err());
+    hook.observe_image_update(false);
+    assert!(hook.render_loaded_scene(&scene, &mut |_, reset| {
+        assert!(
+            reset,
+            "unwinding render cannot acknowledge the namespace reset"
+        );
+        true
+    }));
+    assert!(hook.render_loaded_scene(&scene, &mut |_, reset| {
+        assert!(!reset);
+        true
+    }));
+    let _ = std::fs::remove_dir_all(path.parent().expect("scratch directory"));
+}
+
+#[test]
+fn scene_frame_reset_recovery_matrix() {
+    let cases: &[(&str, fn())] = &[
+        (
+            "no_plugin",
+            scene_frame_without_a_loaded_plugin_draws_nothing,
+        ),
+        (
+            "first_and_replacement",
+            first_render_and_replacement_reset_fonts,
+        ),
+        (
+            "render_refused",
+            failed_render_preserves_font_reset_for_retry,
+        ),
+        (
+            "render_panicked",
+            panicking_render_preserves_font_reset_for_retry,
+        ),
+    ];
+    let mut failures = Vec::new();
+    for &(name, case) in cases {
+        if std::panic::catch_unwind(case).is_err() {
+            failures.push(name);
+        }
+    }
+    assert!(failures.is_empty(), "failed cases: {failures:?}");
 }

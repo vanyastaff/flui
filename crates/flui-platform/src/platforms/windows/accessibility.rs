@@ -110,11 +110,12 @@ impl Drop for WindowsAccessibility {
             // owner thread's message dispatch; leaking the hook is safe
             // (the window is on its way down with it) and sound, so it is
             // the only acceptable fallback.
-            tracing::warn!(
-                "leaking a UIA subclass adapter dropped off its owner thread \
-                 (unhooking cross-thread would race message dispatch)"
-            );
-            std::mem::forget(adapter);
+            crate::shared::panic_boundary::retain_off_owner_resource(adapter, || {
+                tracing::warn!(
+                    "leaking a UIA subclass adapter dropped off its owner thread \
+                     (unhooking cross-thread would race message dispatch)"
+                );
+            });
         }
     }
 }

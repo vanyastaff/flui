@@ -17,10 +17,12 @@ impl WebDisplay {
     pub fn from_browser() -> Self {
         let window = web_sys::window().expect("no global window");
         let screen = window.screen().expect("no screen");
+        let scale_factor = window.device_pixel_ratio();
+        // Screen dimensions are CSS pixels; PlatformDisplay exposes device pixels.
         Self {
-            width: screen.width().unwrap_or(1920),
-            height: screen.height().unwrap_or(1080),
-            scale_factor: window.device_pixel_ratio(),
+            width: (f64::from(screen.width().unwrap_or(1920)) * scale_factor).round() as i32,
+            height: (f64::from(screen.height().unwrap_or(1080)) * scale_factor).round() as i32,
+            scale_factor,
         }
     }
 }

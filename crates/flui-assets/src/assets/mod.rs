@@ -3,7 +3,7 @@
 //! This module provides ready-to-use asset types that implement the [`Asset`](crate::Asset) trait:
 //!
 //! - [`FontAsset`] - TrueType/OpenType font files (always available)
-//! - [`ImageAsset`] - Image files (requires `images` feature)
+//! - `ImageAsset` - Image files (requires `images` feature)
 //!
 //! # Examples
 //!
@@ -41,7 +41,9 @@
 //! ```
 
 pub mod font;
+#[cfg(feature = "images")]
 pub mod image;
 
 pub use font::FontAsset;
+#[cfg(feature = "images")]
 pub use image::ImageAsset;

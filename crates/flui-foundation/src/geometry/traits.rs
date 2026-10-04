@@ -51,6 +51,15 @@ pub trait NumericUnit: Unit + Add<Output = Self> + Sub<Output = Self> {
 pub trait FloatUnit: NumericUnit + Into<f64> {
     /// Converts from `f64`, rounding to the nearest representable value.
     fn from_f64(value: f64) -> Self;
+
+    /// Returns the average without overflowing finite operands.
+    ///
+    /// The default computes in `f64` before converting back. Primitive float
+    /// implementations use their native standard-library midpoint and rounding.
+    /// NaN operands or opposite infinities produce NaN.
+    fn midpoint(self, other: Self) -> Self {
+        Self::from_f64(f64::midpoint(self.into(), other.into()))
+    }
 }
 
 macro_rules! impl_float_scalar {
@@ -116,12 +125,22 @@ impl FloatUnit for f32 {
     fn from_f64(value: f64) -> Self {
         value as f32
     }
+
+    #[inline]
+    fn midpoint(self, other: Self) -> Self {
+        f32::midpoint(self, other)
+    }
 }
 
 impl FloatUnit for f64 {
     #[inline]
     fn from_f64(value: f64) -> Self {
         value
+    }
+
+    #[inline]
+    fn midpoint(self, other: Self) -> Self {
+        f64::midpoint(self, other)
     }
 }
 
@@ -450,7 +469,7 @@ impl ApproxEq for f64 {
 impl ApproxEq for i32 {
     #[inline]
     fn approx_eq_eps(&self, other: &Self, epsilon: f64) -> bool {
-        f64::from((self - other).abs()) <= epsilon
+        f64::from(self.abs_diff(*other)) <= epsilon
     }
 }
 

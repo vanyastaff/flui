@@ -112,7 +112,7 @@ fn main() {
 //! that ADR's allowlist of crates permitted to depend on both: the facade is
 //! the app-level aggregation point, not a core crate.
 
-// Ship bar (wave 4): every public item is documented; keep it that way.
+// Every public facade item is documented; keep it that way.
 #![deny(missing_docs)]
 
 pub mod interaction;

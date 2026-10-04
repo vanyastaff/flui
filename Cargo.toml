@@ -233,7 +233,8 @@ accesskit_consumer = "0.39"
 windows = "0.62"
 
 # COLLECTIONS - Used by multiple crates
-smallvec = { version = "1.13", features = ["serde", "union", "const_generics"] }
+smallvec = { version = "1.13", features = ["union", "const_generics"] }
+slab = "0.4.12"
 
 # SERIALIZATION - Core functionality
 serde = { version = "1.0", features = ["derive", "rc"] }
@@ -242,6 +243,9 @@ serde_json = "1.0"
 # feature) and the desktop agent server's tool parameters.
 schemars = "1.0"
 cargo_metadata = "0.23.1"
+# Core wasm import inspection in xtask. No validator, component model or serde.
+wasmparser = { version = "0.261", default-features = false, features = ["std"] }
+sha2 = { version = "0.11", default-features = false }
 # Parity-inventory manifest parsing (flui-widgets dev-dep) + flui-cli config.
 toml = "1.1"
 
@@ -266,6 +270,9 @@ flui-protocol = { path = "crates/flui-protocol", version = "=0.2.0-dev" }
 
 # WORKSPACE PROC-MACROS
 flui-macros = { path = "crates/flui-macros", version = "=0.2.0-dev" }
+
+# RENDER CONTRACTS — shared by concrete objects and dev-only render consumers
+flui-rendering = { path = "crates/flui-rendering", version = "=0.2.0-dev" }
 
 # OBJECT CATALOG — sits above flui-rendering (depends on it), below flui-view/app
 flui-objects = { path = "crates/flui-objects", version = "=0.2.0-dev" }
@@ -357,8 +364,8 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg",
 # === Engine/geometry shared math dependencies ===
 # glam: SIMD GPU math used by flui-engine (serde+bytemuck features) and
 # flui-foundation (geometry: `Matrix4` over `DMat4`). The workspace entry carries the common
-# base features; each crate adds its own extras via per-crate `features = [...]`.
-glam = { version = "0.33", features = ["bytemuck"] }
+# floating-point types with std math; each crate adds its own integrations.
+glam = { version = "0.33", default-features = false, features = ["std", "f64"] }
 # kurbo: the curve model behind flui-painting's `Path` (ADR-0098 §7): arcs and ovals as
 # curves, exact winding and tight bounds. Crate-internal; no kurbo type is public.
 kurbo = "0.13"
@@ -417,7 +424,7 @@ percent-encoding = "2"
 swash = { version = "0.2.10", default-features = false, features = ["std", "scale", "render"] }
 # Host font discovery (ADR-0092 §7): one scan of the platform's font
 # directories, and fontconfig's configuration through a pure-Rust parser.
-fontdb = { version = "0.23", default-features = false, features = [
+fontdb = { version = "0.24", default-features = false, features = [
     "std",
     "fs",
     "memmap",
@@ -464,7 +471,7 @@ insta = "1"
 # generated inputs. Test-only; not compiled in release.
 proptest = "1"
 
-# Workspace-wide lints for consistent code quality (Rust 1.74+)
+# Workspace-wide lints inherited by every member
 [workspace.lints.rust]
 unsafe_code = "warn"
 missing_docs = "warn"
@@ -488,6 +495,9 @@ unsafe_op_in_unsafe_fn = "deny"
 # unused_must_use: a dropped `Result` from a layout/paint/commit call is silent
 # by construction — there is no log, no panic, just a skipped effect.
 unused_must_use = "deny"
+# Rust 1.99: create raw pointers directly, without an intermediate reference
+# whose aliasing and validity requirements the FFI call does not need.
+raw_borrows_via_references = "warn"
 
 [workspace.lints.clippy]
 # Lint groups need lower priority to allow individual lint overrides
@@ -542,6 +552,18 @@ unimplemented = "warn"
 # a destructor that re-enters the same lock deadlocks. Bind the value with
 # `let` first, then branch on it.
 significant_drop_in_scrutinee = "warn"
+# Selected nursery checks: avoid redundant ownership copies and temporary
+# collections, and catch a collection populated but never consumed.
+# Enable individual checks rather than the entire evolving nursery group.
+redundant_clone = "warn"
+needless_collect = "warn"
+collection_is_never_read = "warn"
+# Keep stack-heavy async work visible even if the pedantic group changes.
+large_futures = "warn"
+# Preserve small differences and representable lengths in floating-point math.
+imprecise_flops = "warn"
+# A mutating debug assertion changes behavior between debug and release builds.
+debug_assert_with_mut_call = "warn"
 # Allow reasonable exceptions
 cast_precision_loss = "allow"
 module_name_repetitions = "allow"
@@ -578,10 +600,8 @@ struct_excessive_bools = "allow"
 # signature even when that particular impl has nothing to await — the lint's fix
 # (`fn … -> impl Future<Output = …>` plus `future::ready`) desugars one impl of a
 # trait whose other impls stay `async fn`, so the family stops reading alike for
-# no runtime difference. It also has no answer for the feature-gated stub pairs
-# (`flui-assets`'s `network`-off `load_url`/`load_text`), where the `async` is
-# what keeps the two configurations' signatures identical. Fires on `flui-assets`
-# and `flui-cli`'s build pipeline today; new in Rust 1.98's pedantic set.
+# no runtime difference. Keep the trait implementation family consistent;
+# this also applies to custom Asset implementations with immediately ready data.
 unused_async_trait_impl = "allow"
 
 [package]

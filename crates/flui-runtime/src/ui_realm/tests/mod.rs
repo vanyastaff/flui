@@ -31,7 +31,7 @@ fn test_window() -> crate::presentation::PresentationWindow {
     crate::presentation::PresentationWindow::new(host, accessibility)
 }
 
-fn new_runtime(wake: Arc<dyn Fn() + Send + Sync>) -> Result<UiRealm, UiRealmError> {
+pub(super) fn new_runtime(wake: Arc<dyn Fn() + Send + Sync>) -> Result<UiRealm, UiRealmError> {
     UiRealm::new(
         wake,
         test_window(),
@@ -374,6 +374,8 @@ mod global_key_lookup_during_frame;
 // Cross-thread signal writes run against the graph that minted the slot,
 // in whichever presentation owns it (ADR-0085 §1).
 // ========================================================================
+#[cfg(feature = "hot-reload")]
+mod hot_reload_recovery;
 mod signal_write_routing;
 
 #[test]
@@ -387,6 +389,14 @@ fn wake_debt_and_signal_write_matrix() {
             ("signal_write_routing::an_older_overlapping_wake_cannot_clear_newer_failed_delivery_debt", signal_write_routing::an_older_overlapping_wake_cannot_clear_newer_failed_delivery_debt as fn()),
             ("redraw_wake_routing::a_cross_thread_frame_request_reaches_the_realms_platform_wake", redraw_wake_routing::a_cross_thread_frame_request_reaches_the_realms_platform_wake as fn()),
             ("addressed_input_routing::panicking_keyboard_dispatch_keeps_priority_over_a_panicking_wake", addressed_input_routing::panicking_keyboard_dispatch_keeps_priority_over_a_panicking_wake as fn()),
+            #[cfg(feature = "hot-reload")]
+            ("hot_reload_recovery::failed_reload_wake_rearms_the_accepted_tail", hot_reload_recovery::failed_reload_wake_rearms_the_accepted_tail as fn()),
+            #[cfg(feature = "hot-reload")]
+            ("hot_reload_recovery::competing_reload_wakes_preserve_the_first_failure_and_retry", hot_reload_recovery::competing_reload_wakes_preserve_the_first_failure_and_retry as fn()),
+            #[cfg(feature = "hot-reload")]
+            ("hot_reload_recovery::reassemble_failure_keeps_priority_over_a_failed_rearm", hot_reload_recovery::reassemble_failure_keeps_priority_over_a_failed_rearm as fn()),
+            #[cfg(feature = "hot-reload")]
+            ("hot_reload_recovery::reassemble_failure_rearms_the_accepted_tail", hot_reload_recovery::reassemble_failure_rearms_the_accepted_tail as fn()),
             ("full_inbox_retries_outstanding_wake_debt_before_rejecting", full_inbox_retries_outstanding_wake_debt_before_rejecting as fn()),
         ],
     );
@@ -397,6 +407,7 @@ fn realm_and_presentation_isolation_matrix() {
     crate::table_test::run_table(
         "realm_and_presentation_isolation_matrix",
         &[
+            ("exhausted_incarnations_never_alias_previous_realms", crate::realm_services::exhausted_incarnations_never_alias_previous_realms as fn()),
             ("addressed_input_routing::input_stamped_for_b_never_reaches_as_arena", addressed_input_routing::input_stamped_for_b_never_reaches_as_arena as fn()),
             ("async_completion_isolation::async_completion_after_presentation_teardown_fails_closed_no_sibling_reach", async_completion_isolation::async_completion_after_presentation_teardown_fails_closed_no_sibling_reach as fn()),
             ("closing_one_presentation_is_invisible_to_siblings::closing_presentation_a_leaves_sibling_layer_tree_identical", closing_one_presentation_is_invisible_to_siblings::closing_presentation_a_leaves_sibling_layer_tree_identical as fn()),
@@ -428,9 +439,18 @@ fn frame_pacing_and_pump_matrix() {
 
 #[test]
 fn frame_failure_containment_matrix() {
+    if let Ok(kind) = std::env::var("FLUI_OPAQUE_FRAME_CHILD") {
+        frame_failure_containment::run_opaque_frame_child(&kind);
+        return;
+    }
     crate::table_test::run_table(
         "frame_failure_containment_matrix",
         &[
+            ("frame_failure_containment::a_failed_handler_envelope_is_retained_through_realm_teardown", frame_failure_containment::a_failed_handler_envelope_is_retained_through_realm_teardown as fn()),
+            ("frame_failure_containment::competing_opaque_frame_failures_keep_one_report_and_retry", frame_failure_containment::competing_opaque_frame_failures_keep_one_report_and_retry as fn()),
+            ("frame_failure_containment::opaque_diagnostics_cannot_suppress_the_frame_handler", frame_failure_containment::opaque_diagnostics_cannot_suppress_the_frame_handler as fn()),
+            ("frame_failure_containment::an_opaque_handler_failure_preserves_frame_recovery", frame_failure_containment::an_opaque_handler_failure_preserves_frame_recovery as fn()),
+            ("frame_failure_containment::a_segment_opaque_payload_is_retained_before_recovery", frame_failure_containment::a_segment_opaque_payload_is_retained_before_recovery as fn()),
             ("frame_failure_containment::an_escaped_segment_panic_is_contained_to_its_own_presentation_and_the_sibling_still_frames", frame_failure_containment::an_escaped_segment_panic_is_contained_to_its_own_presentation_and_the_sibling_still_frames as fn()),
             ("frame_failure_containment::consecutive_failures_count_up_and_reset_on_a_clean_segment", frame_failure_containment::consecutive_failures_count_up_and_reset_on_a_clean_segment as fn()),
             ("frame_failure_containment::a_panicking_handler_during_a_pipeline_report_is_delivered_once_not_re_reported", frame_failure_containment::a_panicking_handler_during_a_pipeline_report_is_delivered_once_not_re_reported as fn()),

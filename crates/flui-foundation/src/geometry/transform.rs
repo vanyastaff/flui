@@ -417,17 +417,7 @@ impl Transform {
 
             Transform::ScaleXY { x, y } => Matrix4::scaling(*x, *y, 1.0),
 
-            Transform::Skew { x, y } => {
-                // Skew matrix:
-                // [ 1      tan(y)  0  0 ]
-                // [ tan(x) 1       0  0 ]
-                // [ 0      0       1  0 ]
-                // [ 0      0       0  1 ]
-                let mut matrix = Matrix4::identity();
-                matrix.m[4] = y.tan(); // m[1][0] = tan(y)
-                matrix.m[1] = x.tan(); // m[0][1] = tan(x)
-                matrix
-            }
+            Transform::Skew { x, y } => Matrix4::skew_2d(*x, *y),
 
             Transform::RotateAround {
                 angle,
@@ -457,7 +447,7 @@ impl Transform {
                 transforms
                     .iter()
                     .map(Transform::to_matrix_internal)
-                    .fold(Matrix4::identity(), |acc, matrix| acc * matrix)
+                    .fold(Matrix4::identity(), |acc, matrix| matrix * acc)
             }
 
             Transform::Matrix(matrix) => *matrix,
@@ -532,48 +522,45 @@ impl Transform {
 
     // ===== Inversion =====
 
-    /// Compute the inverse transform (if possible)
+    /// Computes a finite inverse, preserving simple analytical variants.
     ///
-    /// Returns None if the transform is not invertible (e.g., scale by 0).
+    /// Translation and rotation require finite inputs. Scaling requires finite,
+    /// nonzero inputs with finite reciprocals; there is no epsilon cutoff.
+    /// Complex variants use [`Matrix4::try_inverse`] and its computed range limits.
     #[inline]
     pub fn inverse(&self) -> Option<Transform> {
-        // For simple transforms, we can compute analytical inverses
-        // For complex cases, fall back to matrix inversion
+        fn finite_reciprocal(value: f64) -> Option<f64> {
+            if !value.is_finite() || value == 0.0 {
+                return None;
+            }
+            let reciprocal = value.recip();
+            if reciprocal.is_finite() {
+                Some(reciprocal)
+            } else {
+                None
+            }
+        }
+
         match self {
             Transform::Identity => Some(Transform::Identity),
-
-            Transform::Translate { x, y } => Some(Transform::Translate { x: -x, y: -y }),
-
-            Transform::Rotate { angle } => Some(Transform::Rotate { angle: -angle }),
-
+            Transform::Translate { x, y } if x.is_finite() && y.is_finite() => {
+                Some(Transform::Translate { x: -x, y: -y })
+            }
+            Transform::Rotate { angle } if angle.is_finite() => {
+                Some(Transform::Rotate { angle: -angle })
+            }
+            Transform::Translate { .. } | Transform::Rotate { .. } => None,
             Transform::Scale { factor } => {
-                if factor.abs() < f64::EPSILON {
-                    None
-                } else {
-                    Some(Transform::Scale {
-                        factor: 1.0 / factor,
-                    })
-                }
+                finite_reciprocal(*factor).map(|factor| Transform::Scale { factor })
             }
-
-            Transform::ScaleXY { x, y } => {
-                if x.abs() < f64::EPSILON || y.abs() < f64::EPSILON {
-                    None
-                } else {
-                    Some(Transform::ScaleXY {
-                        x: 1.0 / x,
-                        y: 1.0 / y,
-                    })
-                }
-            }
-
-            Transform::Skew { x, y } => Some(Transform::Skew { x: -x, y: -y }),
-
-            // For complex transforms, use matrix inversion
-            _ => {
-                let matrix: Matrix4 = self.clone().into();
-                matrix.try_inverse().map(Transform::Matrix)
-            }
+            Transform::ScaleXY { x, y } => Some(Transform::ScaleXY {
+                x: finite_reciprocal(*x)?,
+                y: finite_reciprocal(*y)?,
+            }),
+            _ => self
+                .to_matrix_internal()
+                .try_inverse()
+                .map(Transform::Matrix),
         }
     }
 
@@ -586,7 +573,11 @@ impl Transform {
     ///
     /// # Returns
     ///
-    /// A tuple of (translation, rotation_radians, scale_x, scale_y)
+    /// A tuple of (translation, rotation_radians, scale_x, scale_y).
+    /// Column lengths use `f64::hypot`, and the signed second scale uses a
+    /// normalized determinant when direct products overflow or underflow,
+    /// avoiding intermediate range loss for finite scales. Below the existing epsilon threshold, rotation is
+    /// zero and the second scale is its unsigned column length.
     ///
     /// # Examples
     ///
@@ -618,12 +609,19 @@ impl Transform {
         let d = matrix.m[5];
 
         // Extract scale from column vectors
-        let sx = (a * a + b * b).sqrt();
-        let det = a * d - b * c;
+        let sx = a.hypot(b);
         let sy = if sx > f64::EPSILON {
-            det / sx
+            let det = a * d - b * c;
+            if det.is_finite() && det != 0.0 {
+                // Keep direct products when representable: normalizing a much
+                // smaller component first can underflow it before multiplication.
+                det / sx
+            } else {
+                // Normalize only at range loss, preserving the reflection sign.
+                (a / sx) * d - (b / sx) * c
+            }
         } else {
-            (c * c + d * d).sqrt()
+            c.hypot(d)
         };
 
         // Extract rotation from normalized column vector

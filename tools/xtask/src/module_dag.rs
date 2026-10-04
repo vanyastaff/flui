@@ -29,7 +29,8 @@
 //! `use` items, types, expressions, patterns, bounds, impl headers, a macro's
 //! path and the tokens of macro invocations and `macro_rules!` bodies. A path
 //! through a root re-export, a transparent module, a glob re-export or a
-//! `#[macro_export]` macro is followed to the module that owns the name. Doc
+//! `#[macro_export]` macro is followed to the module that owns the name.
+//! Conditional named re-exports contribute every possible owning module. Doc
 //! comments, string literals and `pub(in ...)` restrictions are not
 //! dependencies. What the scan cannot attribute is a finding, never skipped.
 //!
@@ -558,36 +559,38 @@ fn check(declaration: &Declaration, scan: &Scan, adr_files: &[String]) -> Outcom
         if transparent.contains(&reference.from) {
             continue; // a relay's own `use` items are not edges
         }
-        let to = match scan.resolve(&reference.path, &transparent) {
-            Resolved::Module(to) => to,
-            // The root is no node: its own code is not scanned, so an edge
-            // into it could hide one out of it.
-            Resolved::Root(name) => {
-                findings.push(Finding::Unattributed {
-                    from: reference.from.clone(),
-                    site: reference.site.clone(),
-                    why: format!(
-                        "it names `{name}`, an item of the crate root itself; move it into a \
-                         module"
-                    ),
-                });
-                continue;
+        for resolved in scan.resolve(&reference.path, &transparent) {
+            let to = match resolved {
+                Resolved::Module(to) => to,
+                // The root is no node: its own code is not scanned, so an edge
+                // into it could hide one out of it.
+                Resolved::Root(name) => {
+                    findings.push(Finding::Unattributed {
+                        from: reference.from.clone(),
+                        site: reference.site.clone(),
+                        why: format!(
+                            "it names `{name}`, an item of the crate root itself; move it into a \
+                             module"
+                        ),
+                    });
+                    continue;
+                }
+                Resolved::External => continue,
+                Resolved::Unattributed(why) => {
+                    findings.push(Finding::Unattributed {
+                        from: reference.from.clone(),
+                        site: reference.site.clone(),
+                        why,
+                    });
+                    continue;
+                }
+            };
+            if to != reference.from {
+                edges
+                    .entry((reference.from.clone(), to))
+                    .or_default()
+                    .push(reference.site.clone());
             }
-            Resolved::External => continue,
-            Resolved::Unattributed(why) => {
-                findings.push(Finding::Unattributed {
-                    from: reference.from.clone(),
-                    site: reference.site.clone(),
-                    why,
-                });
-                continue;
-            }
-        };
-        if to != reference.from {
-            edges
-                .entry((reference.from.clone(), to))
-                .or_default()
-                .push(reference.site.clone());
         }
     }
     for sites in edges.values_mut() {

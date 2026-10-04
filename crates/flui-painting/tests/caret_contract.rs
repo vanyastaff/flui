@@ -8,7 +8,9 @@
 use std::sync::Arc;
 
 use flui_foundation::geometry::Offset;
-use flui_painting::typography::{TextAffinity, TextDirection, TextPosition, TextSpan, TextStyle};
+use flui_painting::typography::{
+    TextAffinity, TextAlign, TextDirection, TextPosition, TextSpan, TextStyle,
+};
 use flui_painting::{Canvas, DrawOp, FontCollection, ShapedParagraph, TextContext, TextPainter};
 
 const SIZE: f64 = 32.0;
@@ -119,6 +121,34 @@ pub(crate) fn two_space_run_word_boundary() {
         "inside the gap: the whole two-space run"
     );
     assert_eq!(word_at(5), (5, 8), "\"bar\"");
+}
+
+pub(crate) fn byte_offsets_snap_backward_and_clamp_at_the_text_end() {
+    for text in ["é a", "中 a", "😀 a"] {
+        let painter = ltr(text);
+        let scalar_end = text.chars().next().expect("a first scalar").len_utf8();
+        for offset in 1..scalar_end {
+            assert_eq!(
+                caret(&painter, offset),
+                caret(&painter, 0),
+                "{text:?} {offset}"
+            );
+            let word = painter.get_word_boundary(TextPosition::downstream(offset));
+            assert_eq!((word.start, word.end), (0, scalar_end), "{text:?} {offset}");
+        }
+        for offset in [text.len() + 1, usize::MAX] {
+            assert_eq!(
+                caret(&painter, offset),
+                caret(&painter, text.len()),
+                "{text:?} {offset}"
+            );
+            assert_eq!(
+                painter.get_word_boundary(TextPosition::downstream(offset)),
+                painter.get_word_boundary(TextPosition::downstream(text.len())),
+                "{text:?} {offset}"
+            );
+        }
+    }
 }
 
 /// `e` and a combining acute are one grapheme: a hit anywhere over it
@@ -404,7 +434,7 @@ pub(crate) fn truncated_text_without_an_ellipsis_stays_in_its_kept_line() {
 /// trailing space before a newline is in `end_index` but not in
 /// `end_excluding_whitespace`; and a short line aligned right starts where
 /// its glyphs are painted. Line metrics are in the paragraph's own box, the
-/// painter's alignment offset left out.
+/// allocated paragraph box.
 pub(crate) fn line_metrics_index_each_line() {
     let ltr_lines = ltr("ab \ncd");
     let got: Vec<_> = ltr_lines
@@ -513,5 +543,322 @@ pub(crate) fn a_lam_alef_ligature_is_one_glyph_and_two_caret_stops() {
         hits,
         [2, 4, 4, 6],
         "each quarter of the ligature answers its nearest stop"
+    );
+}
+
+fn aligned_painter(
+    text: &str,
+    align: TextAlign,
+    direction: TextDirection,
+    min: f64,
+    max: f64,
+) -> TextPainter {
+    let mut painter = painter(text, direction).with_text_align(align);
+    painter.layout(&mut TextContext::new(&FontCollection::new()), min, max);
+    painter
+}
+
+fn compare_aligned_lines(left: &TextPainter, aligned: &TextPainter, factor: f64) {
+    let lines = left.get_line_metrics();
+    let (left_paragraph, left_offset) = painted(left);
+    let (paragraph, offset) = painted(aligned);
+    assert_eq!(paragraph.line_count(), lines.len());
+    let left_runs: Vec<_> = left_paragraph.runs().collect();
+    let runs: Vec<_> = paragraph.runs().collect();
+    assert_eq!(runs.len(), left_runs.len());
+    for (index, line) in lines.iter().enumerate() {
+        let shift = (aligned.width() - line.width) * factor;
+        let actual = caret(aligned, line.start_index);
+        let original = caret(left, line.start_index);
+        assert!(
+            (actual.dx - original.dx - shift).abs() < EPS,
+            "line {index}: {actual:?}, shift {shift}"
+        );
+        assert_eq!(
+            hit(aligned, actual.dx, line_middle(aligned, index)),
+            line.start_index
+        );
+        let boxes =
+            aligned.get_boxes_for_selection(line.start_index, line.end_excluding_whitespace);
+        assert!(!boxes.is_empty());
+        assert!((boxes[0].rect.left() - actual.dx).abs() < EPS);
+        for (glyph, old) in runs[index].glyphs().iter().zip(left_runs[index].glyphs()) {
+            let delta = f64::from(glyph.x - old.x) + offset.dx - left_offset.dx;
+            assert!(
+                (delta - shift).abs() < EPS,
+                "line {index} painted shift {delta}, expected {shift}"
+            );
+        }
+    }
+}
+
+fn unequal_lines(align: TextAlign, direction: TextDirection, min: f64, max: f64, factor: f64) {
+    let text = "WWWW\ni";
+    let left = aligned_painter(text, TextAlign::Left, direction, min, max);
+    let aligned = aligned_painter(text, align, direction, min, max);
+    assert_eq!(aligned.get_line_metrics().len(), 2);
+    assert!((aligned.width() - left.width()).abs() < EPS);
+    compare_aligned_lines(&left, &aligned, factor);
+}
+
+pub(crate) fn centered_lines_use_the_tight_allocated_box() {
+    unequal_lines(TextAlign::Center, TextDirection::Ltr, 200.0, 200.0, 0.5);
+}
+
+pub(crate) fn right_aligned_lines_use_the_tight_allocated_box() {
+    unequal_lines(TextAlign::Right, TextDirection::Ltr, 200.0, 200.0, 1.0);
+}
+
+pub(crate) fn loose_centered_lines_stay_inside_the_measured_box() {
+    unequal_lines(TextAlign::Center, TextDirection::Ltr, 0.0, 200.0, 0.5);
+}
+
+pub(crate) fn unbounded_centered_lines_align_without_wrapping() {
+    unequal_lines(
+        TextAlign::Center,
+        TextDirection::Ltr,
+        0.0,
+        f64::INFINITY,
+        0.5,
+    );
+}
+
+pub(crate) fn rtl_start_aligns_each_line_right() {
+    unequal_lines(TextAlign::Start, TextDirection::Rtl, 200.0, 200.0, 1.0);
+}
+
+pub(crate) fn rtl_end_aligns_each_line_left() {
+    unequal_lines(TextAlign::End, TextDirection::Rtl, 200.0, 200.0, 0.0);
+    let aligned = aligned_painter("WWWW\ni", TextAlign::End, TextDirection::Rtl, 200.0, 200.0);
+    for line in aligned.get_line_metrics() {
+        assert!(caret(&aligned, line.start_index).dx.abs() < EPS);
+    }
+}
+
+fn native_rtl_alignment(align: TextAlign, factor: f64) {
+    let text = "אבגד\nא";
+    let left = aligned_painter(text, TextAlign::Left, TextDirection::Ltr, 200.0, 200.0);
+    let aligned = aligned_painter(text, align, TextDirection::Rtl, 200.0, 200.0);
+    let lines = left.get_line_metrics();
+    assert_eq!(lines.len(), 2);
+    assert!(lines[1].width < lines[0].width);
+    let (old, old_offset) = painted(&left);
+    let (paragraph, offset) = painted(&aligned);
+    let old_runs: Vec<_> = old.runs().collect();
+    let runs: Vec<_> = paragraph.runs().collect();
+    assert_eq!(runs.len(), 2);
+    assert_eq!(runs.len(), old_runs.len());
+    for (index, line) in lines.iter().enumerate() {
+        let shift = (200.0 - line.width) * factor;
+        for position in [line.start_index, line.end_excluding_whitespace] {
+            assert!((caret(&aligned, position).dx - caret(&left, position).dx - shift).abs() < EPS);
+        }
+        let original =
+            left.get_boxes_for_selection(line.start_index, line.end_excluding_whitespace);
+        let placed =
+            aligned.get_boxes_for_selection(line.start_index, line.end_excluding_whitespace);
+        assert!(!original.is_empty());
+        assert_eq!(placed.len(), original.len());
+        for (a, b) in placed.iter().zip(&original) {
+            assert!((a.rect.left() - b.rect.left() - shift).abs() < EPS);
+            assert!((a.rect.right() - b.rect.right() - shift).abs() < EPS);
+        }
+        let inside = original[0].rect.center().x;
+        assert_eq!(
+            hit(&aligned, inside + shift, line_middle(&aligned, index)),
+            hit(&left, inside, line_middle(&left, index))
+        );
+        assert_ne!(runs[index].glyphs(), []);
+        assert_eq!(runs[index].glyphs().len(), old_runs[index].glyphs().len());
+        for (a, b) in runs[index].glyphs().iter().zip(old_runs[index].glyphs()) {
+            assert!((f64::from(a.x - b.x) + offset.dx - old_offset.dx - shift).abs() < EPS);
+        }
+    }
+}
+
+pub(crate) fn native_rtl_lines_center_in_the_allocated_box() {
+    native_rtl_alignment(TextAlign::Center, 0.5);
+}
+
+pub(crate) fn native_rtl_lines_align_to_the_right_edge() {
+    native_rtl_alignment(TextAlign::Right, 1.0);
+}
+
+pub(crate) fn a_last_kept_soft_line_retains_native_justification() {
+    let text = "one two three four five six seven eight nine";
+    let left = aligned_painter(text, TextAlign::Left, TextDirection::Ltr, 200.0, 200.0);
+    let mut justified = painter(text, TextDirection::Ltr)
+        .with_text_align(TextAlign::Justify)
+        .with_max_lines(Some(1));
+    justified.layout(&mut TextContext::new(&FontCollection::new()), 200.0, 200.0);
+    let original = left.get_line_metrics();
+    assert!(original.len() > 1);
+    assert!(!original[0].hard_break);
+    assert!(justified.did_exceed_max_lines());
+    let kept = justified.get_line_metrics();
+    assert_eq!(kept.len(), 1);
+    assert!((kept[0].width - 200.0).abs() < EPS);
+    assert!(kept[0].width > original[0].width + 1.0);
+    let edge =
+        justified.get_offset_for_caret(TextPosition::upstream(kept[0].end_excluding_whitespace));
+    assert!((edge.dx - 200.0).abs() < EPS);
+    let boxes =
+        justified.get_boxes_for_selection(kept[0].start_index, kept[0].end_excluding_whitespace);
+    assert!((boxes.last().expect("kept selection").rect.right() - edge.dx).abs() < EPS);
+    let (paragraph, _) = painted(&justified);
+    let (old, _) = painted(&left);
+    let last = paragraph
+        .runs()
+        .next()
+        .expect("kept line")
+        .glyphs()
+        .last()
+        .expect("kept glyph")
+        .x;
+    let old_last = old
+        .runs()
+        .next()
+        .expect("original line")
+        .glyphs()
+        .last()
+        .expect("original glyph")
+        .x;
+    assert!(last - old_last > 1.0);
+}
+
+pub(crate) fn trailing_whitespace_does_not_shift_visible_alignment() {
+    let left = aligned_painter(
+        "WWWW \ni",
+        TextAlign::Left,
+        TextDirection::Ltr,
+        200.0,
+        200.0,
+    );
+    let centered = aligned_painter(
+        "WWWW \ni",
+        TextAlign::Center,
+        TextDirection::Ltr,
+        200.0,
+        200.0,
+    );
+    compare_aligned_lines(&left, &centered, 0.5);
+}
+
+pub(crate) fn justification_expands_soft_lines_but_not_the_final_line() {
+    let text = "one two three four five six seven eight nine";
+    let mut context = TextContext::new(&FontCollection::new());
+    let mut left = painter(text, TextDirection::Ltr).with_text_align(TextAlign::Left);
+    left.layout(&mut context, 200.0, 200.0);
+    let mut justified = painter(text, TextDirection::Ltr).with_text_align(TextAlign::Justify);
+    justified.layout(&mut context, 200.0, 200.0);
+    let lines = justified.get_line_metrics();
+    let original = left.get_line_metrics();
+    assert!(lines.len() > 1);
+    assert!(!lines[0].hard_break);
+    assert!(
+        (lines[0].width - 200.0).abs() < EPS,
+        "justified visible width {}",
+        lines[0].width
+    );
+    assert!(lines[0].width > original[0].width + 1.0);
+    let last = lines.last().expect("final line");
+    assert!((last.width - original.last().expect("original final line").width).abs() < EPS);
+    let edge =
+        justified.get_offset_for_caret(TextPosition::upstream(lines[0].end_excluding_whitespace));
+    assert!(
+        (edge.dx - 200.0).abs() < EPS,
+        "justified caret edge {edge:?}"
+    );
+    let boxes =
+        justified.get_boxes_for_selection(lines[0].start_index, lines[0].end_excluding_whitespace);
+    assert!((boxes.last().expect("first line selection").rect.right() - edge.dx).abs() < EPS);
+    let (paragraph, offset) = painted(&justified);
+    let (old, old_offset) = painted(&left);
+    let last_glyph = paragraph
+        .runs()
+        .next()
+        .expect("first painted line")
+        .glyphs()
+        .last()
+        .expect("last glyph")
+        .x;
+    let old_glyph = old
+        .runs()
+        .next()
+        .expect("original first line")
+        .glyphs()
+        .last()
+        .expect("original last glyph")
+        .x;
+    assert!(f64::from(last_glyph - old_glyph) + offset.dx - old_offset.dx > 1.0);
+    assert!(
+        (left.min_intrinsic_width(&mut context) - justified.min_intrinsic_width(&mut context))
+            .abs()
+            < EPS
+    );
+}
+
+pub(crate) fn justification_leaves_hard_break_lines_unstretched() {
+    let text = "one two\nthree four";
+    let left = aligned_painter(text, TextAlign::Left, TextDirection::Ltr, 200.0, 200.0);
+    let justified = aligned_painter(text, TextAlign::Justify, TextDirection::Ltr, 200.0, 200.0);
+    compare_aligned_lines(&left, &justified, 0.0);
+    for (a, b) in left
+        .get_line_metrics()
+        .iter()
+        .zip(justified.get_line_metrics())
+    {
+        assert!((a.width - b.width).abs() < EPS);
+    }
+}
+
+pub(crate) fn alignment_change_replaces_cached_positions() {
+    let mut context = TextContext::new(&FontCollection::new());
+    let mut changed = painter("WWWW\ni", TextDirection::Ltr).with_text_align(TextAlign::Left);
+    changed.layout(&mut context, 200.0, 200.0);
+    let left = aligned_painter("WWWW\ni", TextAlign::Left, TextDirection::Ltr, 200.0, 200.0);
+    changed.set_text_align(TextAlign::Center);
+    changed.layout(&mut context, 200.0, 200.0);
+    compare_aligned_lines(&left, &changed, 0.5);
+    let before = painted(&changed).0;
+    changed.set_text_align(TextAlign::Center);
+    changed.layout(&mut context, 200.0, 200.0);
+    assert!(
+        Arc::ptr_eq(&before, &painted(&changed).0),
+        "unchanged alignment retains paint records"
+    );
+    changed.set_text_align(TextAlign::Right);
+    changed.layout(&mut context, 200.0, 200.0);
+    compare_aligned_lines(&left, &changed, 1.0);
+}
+
+pub(crate) fn ellipsized_lines_align_only_the_kept_text() {
+    let text = "WWWW\ni\na much longer dropped line";
+    let mut context = TextContext::new(&FontCollection::new());
+    let build = |align| {
+        painter(text, TextDirection::Ltr)
+            .with_text_align(align)
+            .with_max_lines(Some(2))
+            .with_ellipsis(Some("…".to_string()))
+    };
+    let mut left = build(TextAlign::Left);
+    left.layout(&mut context, 200.0, 200.0);
+    let mut centered = build(TextAlign::Center);
+    centered.layout(&mut context, 200.0, 200.0);
+    assert!(centered.did_exceed_max_lines());
+    assert_eq!(painted(&centered).0.line_count(), 2);
+    assert!(painted(&centered).0.text().ends_with('…'));
+    compare_aligned_lines(&left, &centered, 0.5);
+    let end = centered.get_offset_for_caret(TextPosition::upstream(text.len()));
+    assert!(end.dy < centered.height());
+}
+
+pub(crate) fn unbounded_breaking_uses_the_minimum_allocated_width() {
+    unequal_lines(
+        TextAlign::Right,
+        TextDirection::Ltr,
+        200.0,
+        f64::INFINITY,
+        1.0,
     );
 }

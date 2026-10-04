@@ -17,6 +17,52 @@ use thiserror::Error;
 
 use crate::vertex::Vertex;
 
+/// Finalize a contour without turning its closed on-dash seam into two caps.
+fn finish_dashed_contour(
+    paths: &mut Vec<Path>,
+    current: &mut Option<lyon::path::BuilderWithAttributes>,
+    started: &mut bool,
+    contour_start: usize,
+    join_seam: bool,
+) {
+    if *started && let Some(mut builder) = current.take() {
+        builder.end(false);
+        paths.push(builder.build());
+    }
+    *started = false;
+    if !join_seam || paths.len() == contour_start {
+        return;
+    }
+    let count = paths.len() - contour_start;
+    let last = paths.pop().expect("BUG: a covered seam has a dash");
+    let first = (count > 1).then(|| &paths[contour_start]);
+    let mut builder = Path::builder_with_attributes(0);
+    let mut begun = false;
+    // Walk the final fragment through the seam into the first fragment. With
+    // only one fragment the whole contour is covered and must be closed.
+    for part in std::iter::once(&last).chain(first) {
+        for event in part {
+            match event {
+                lyon::path::PathEvent::Begin { at } if !begun => {
+                    builder.begin(at, &[]);
+                    begun = true;
+                }
+                lyon::path::PathEvent::Line { to, .. } => {
+                    builder.line_to(to, &[]);
+                }
+                _ => {}
+            }
+        }
+    }
+    builder.end(count == 1);
+    let merged = builder.build();
+    if count == 1 {
+        paths.push(merged);
+    } else {
+        paths[contour_start] = merged;
+    }
+}
+
 /// Device-space chord-error budget for curve flattening, in device pixels.
 ///
 /// Mirrors Impeller's `kCircleTolerance = 0.1f` (`impeller/tessellator/
@@ -790,33 +836,6 @@ impl Tessellator {
             return self.tessellate_stroke(path, paint);
         }
 
-        // Collect all line segments from the path by flattening curves
-        let mut segments: Vec<(lyon::geom::Point<f32>, lyon::geom::Point<f32>)> = Vec::new();
-        let mut current_pos = lyon::geom::point(0.0f32, 0.0);
-
-        // Flatten the path to line segments. Scale-aware: the dash walker runs
-        // in local space but the result is baked through the world transform, so
-        // divide the device-space budget by the scale to keep facets sub-pixel.
-        for event in path.iter().flattened(self.dash_tolerance()) {
-            match event {
-                PathEvent::Begin { at } => {
-                    current_pos = at;
-                }
-                PathEvent::Line { from: _, to } => {
-                    segments.push((current_pos, to));
-                    current_pos = to;
-                }
-                PathEvent::End { .. } | PathEvent::Quadratic { .. } | PathEvent::Cubic { .. } => {
-                    // End is a no-op; Quadratic/Cubic should have been flattened
-                    // to lines by `flattened()` above.
-                }
-            }
-        }
-
-        if segments.is_empty() {
-            return Ok((Vec::new(), Vec::new()));
-        }
-
         // Walk the segments and generate dash sub-paths
         let mut dash_paths: Vec<Path> = Vec::new();
         let mut phase = dash_pattern.phase as f32 % cycle_length;
@@ -845,67 +864,113 @@ impl Tessellator {
             current_builder = Some(Path::builder_with_attributes(0));
         }
         let mut started_subpath = false;
+        let mut contour_start = 0;
+        let mut starts_on_dash = false;
+        let mut ends_on_dash = false;
 
-        for (from, to) in &segments {
+        // Lyon lazily flattens curves while preserving contour events. Keep
+        // those events: End carries the implicit closing edge, and Begin must
+        // terminate a dash before a disconnected contour starts. Dash phase
+        // continues across contours, counting only their travelled lengths.
+        for event in path.iter().flattened(self.dash_tolerance()) {
+            let (from, to, closed) = match event {
+                PathEvent::Begin { .. } => {
+                    contour_start = dash_paths.len();
+                    starts_on_dash = drawing;
+                    ends_on_dash = false;
+                    current_builder = drawing.then(|| Path::builder_with_attributes(0));
+                    continue;
+                }
+                PathEvent::Line { from, to } => (from, to, false),
+                PathEvent::End {
+                    last,
+                    first,
+                    close: true,
+                } => (last, first, true),
+                PathEvent::End { close: false, .. } => {
+                    finish_dashed_contour(
+                        &mut dash_paths,
+                        &mut current_builder,
+                        &mut started_subpath,
+                        contour_start,
+                        false,
+                    );
+                    continue;
+                }
+                PathEvent::Quadratic { .. } | PathEvent::Cubic { .. } => continue,
+            };
             let dx = to.x - from.x;
             let dy = to.y - from.y;
-            let seg_length = (dx * dx + dy * dy).sqrt();
-            if seg_length < f32::EPSILON {
-                continue;
+            let seg_length = dx.hypot(dy);
+            if !seg_length.is_finite() {
+                return Err(TessellationError::StrokeFailed(
+                    "dashed contour has non-finite segment length".to_owned(),
+                ));
             }
-            let dir_x = dx / seg_length;
-            let dir_y = dy / seg_length;
+            if seg_length >= f32::EPSILON {
+                let dir_x = dx / seg_length;
+                let dir_y = dy / seg_length;
 
-            let mut offset = 0.0f32;
+                let mut offset = 0.0f32;
 
-            while offset < seg_length {
-                let available = seg_length - offset;
-                let consume = remaining.min(available);
-
-                let start_x = from.x + dir_x * offset;
-                let start_y = from.y + dir_y * offset;
-                let end_x = from.x + dir_x * (offset + consume);
-                let end_y = from.y + dir_y * (offset + consume);
-
-                if drawing && let Some(ref mut builder) = current_builder {
-                    if !started_subpath {
-                        builder.begin(lyon::geom::point(start_x, start_y), &[]);
-                        started_subpath = true;
+                while offset < seg_length {
+                    let available = seg_length - offset;
+                    let consume = remaining.min(available);
+                    let next_offset = offset + consume;
+                    // A positive interval can still round back to the old offset.
+                    // Refuse before emitting geometry so the whole stroke is absent.
+                    if !next_offset.is_finite() || next_offset <= offset {
+                        return Err(TessellationError::StrokeFailed(
+                            "dashed interval does not advance at raster precision".to_owned(),
+                        ));
                     }
-                    builder.line_to(lyon::geom::point(end_x, end_y), &[]);
-                }
 
-                remaining -= consume;
-                offset += consume;
+                    let start_x = from.x + dir_x * offset;
+                    let start_y = from.y + dir_y * offset;
+                    let end_x = from.x + dir_x * next_offset;
+                    let end_y = from.y + dir_y * next_offset;
 
-                if remaining <= f32::EPSILON {
-                    // Finished current interval, move to next
-                    if drawing && started_subpath {
-                        if let Some(mut builder) = current_builder.take() {
-                            builder.end(false);
-                            dash_paths.push(builder.build());
+                    ends_on_dash = drawing;
+                    if drawing && let Some(ref mut builder) = current_builder {
+                        if !started_subpath {
+                            builder.begin(lyon::geom::point(start_x, start_y), &[]);
+                            started_subpath = true;
                         }
-                        started_subpath = false;
+                        builder.line_to(lyon::geom::point(end_x, end_y), &[]);
                     }
-                    interval_idx = (interval_idx + 1) % effective_intervals.len();
-                    drawing = interval_idx.is_multiple_of(2);
-                    remaining = effective_intervals[interval_idx];
-                    if drawing {
-                        current_builder = Some(Path::builder_with_attributes(0));
-                    } else {
-                        current_builder = None;
+
+                    remaining -= consume;
+                    offset = next_offset;
+
+                    if remaining <= f32::EPSILON {
+                        // Finished current interval, move to next
+                        if drawing && started_subpath {
+                            if let Some(mut builder) = current_builder.take() {
+                                builder.end(false);
+                                dash_paths.push(builder.build());
+                            }
+                            started_subpath = false;
+                        }
+                        interval_idx = (interval_idx + 1) % effective_intervals.len();
+                        drawing = interval_idx.is_multiple_of(2);
+                        remaining = effective_intervals[interval_idx];
+                        if drawing {
+                            current_builder = Some(Path::builder_with_attributes(0));
+                        } else {
+                            current_builder = None;
+                        }
                     }
                 }
             }
-        }
-
-        // Finish any in-progress dash
-        if drawing
-            && started_subpath
-            && let Some(mut builder) = current_builder.take()
-        {
-            builder.end(false);
-            dash_paths.push(builder.build());
+            if closed {
+                finish_dashed_contour(
+                    &mut dash_paths,
+                    &mut current_builder,
+                    &mut started_subpath,
+                    contour_start,
+                    starts_on_dash && ends_on_dash,
+                );
+            }
         }
 
         // Now tessellate all dash sub-paths and combine the geometry
@@ -950,15 +1015,6 @@ impl Tessellator {
 
         Ok((all_vertices, all_indices))
     }
-
-    // `tessellate_flui_path_dashed_stroke` was removed: a workspace-wide
-    // search found no callers. The live dashed-stroke entry point is
-    // `tessellate_dashed_stroke` on a lyon `Path` (used by the painter's
-    // outline pipeline). The FLUI-to-lyon conversion lives in the
-    // `IntoLyonPath` trait below -- a caller can do
-    // `tessellate_dashed_stroke(&flui_path.to_lyon_path(), paint, dp)`
-    // in one line if the helper is needed again, but no one needs
-    // it today.
 }
 
 /// Helper trait for creating lyon paths from FLUI types

@@ -2,8 +2,170 @@
 //! `crates/flui-painting/src/text_painter/mod.rs` during the text-painter
 //! module split.
 
-use flui_painting::TextPainter;
-use flui_painting::typography::{TextDirection, TextSpan};
+use std::sync::Arc;
+
+use flui_foundation::geometry::Offset;
+use flui_painting::typography::{
+    FontFeature, FontVariation, TextDirection, TextPosition, TextSpan, TextStyle,
+};
+use flui_painting::{Canvas, DrawOp, FontCollection, ShapedParagraph, TextContext, TextPainter};
+
+fn painted_style_paragraph(painter: &TextPainter) -> Arc<ShapedParagraph> {
+    let mut canvas = Canvas::new();
+    painter.paint(&mut canvas, Offset::ZERO);
+    canvas
+        .finish()
+        .iter()
+        .find_map(|command| match &command.op {
+            DrawOp::Paragraph { paragraph, .. } => Some(Arc::clone(paragraph)),
+            _ => None,
+        })
+        .expect("a laid-out painter records the measured paragraph")
+}
+
+fn styled_probe(fonts: &FontCollection, text: &str, style: TextStyle) -> TextPainter {
+    let mut painter = TextPainter::new()
+        .with_text(TextSpan::styled(text, style))
+        .with_text_direction(TextDirection::Ltr);
+    painter.layout(&mut TextContext::new(fonts), 0.0, 400.0);
+    painter
+}
+
+fn word_spacing_changes_geometry(in_child: bool) {
+    let fonts = FontCollection::new();
+    let baseline = styled_probe(&fonts, "A A A", TextStyle::default());
+    let style = TextStyle::default().with_word_spacing(4.0);
+    let span = TextSpan::styled("A A A", style);
+    let mut spaced = TextPainter::new()
+        .with_text(if in_child {
+            TextSpan::new("").with_child(span)
+        } else {
+            span
+        })
+        .with_text_direction(TextDirection::Ltr);
+    spaced.layout(&mut TextContext::new(&fonts), 0.0, 400.0);
+    assert!(
+        (spaced.width() - baseline.width() - 8.0).abs() < 1e-3,
+        "two spaces each grow by four logical pixels"
+    );
+    let painted = painted_style_paragraph(&spaced);
+    assert_eq!(painted.size(), spaced.size());
+    let end = spaced.get_offset_for_caret(TextPosition::downstream(5));
+    assert!(
+        (end.dx - spaced.width()).abs() < 1e-3,
+        "the caret reads the spaced layout"
+    );
+}
+
+pub(crate) fn root_word_spacing_reaches_measurement_paint_and_carets() {
+    word_spacing_changes_geometry(false);
+}
+
+pub(crate) fn span_word_spacing_reaches_measurement_paint_and_carets() {
+    word_spacing_changes_geometry(true);
+}
+
+fn feature_probe(features: Vec<FontFeature>) {
+    let fonts = FontCollection::new();
+    fonts
+        .register_font(include_bytes!("../assets/fonts/probe-arabic-ligature.ttf"))
+        .expect("the generated Arabic face loads");
+    let text = "\u{0627}\u{0644}\u{0627}\u{0633}\u{0645}";
+    let style = TextStyle {
+        font_family: Some("FLUI Probe Arabic".to_owned()),
+        font_size: Some(32.0),
+        font_features: features,
+        ..TextStyle::default()
+    };
+    let painter = styled_probe(&fonts, text, style);
+    let paragraph = painted_style_paragraph(&painter);
+    let glyphs: Vec<_> = paragraph
+        .runs()
+        .flat_map(|run| run.glyphs().iter().map(|glyph| glyph.id))
+        .collect();
+    assert_eq!(
+        glyphs.len(),
+        5,
+        "disabled rlig paints individual letters: {glyphs:?}"
+    );
+    assert!(!glyphs.contains(&6), "the lam-alef ligature is disabled");
+    assert!(
+        (painter.width() - 62.4).abs() < 1e-3,
+        "the five generated advances are measured: {}",
+        painter.width()
+    );
+    assert_eq!(paragraph.size(), painter.size());
+}
+
+pub(crate) fn font_features_change_the_measured_and_painted_glyphs() {
+    feature_probe(vec![FontFeature::disable("rlig")]);
+}
+
+pub(crate) fn invalid_font_features_do_not_replace_valid_settings() {
+    feature_probe(vec![
+        FontFeature::disable("rlig"),
+        FontFeature::new("rlig", -1),
+        FontFeature::new("rlig", 65536),
+        FontFeature::enable("rl"),
+        FontFeature::enable("r\nig"),
+        FontFeature::new("rlig", 65537),
+    ]);
+}
+
+fn variation_coords(variations: Vec<FontVariation>) -> Vec<i16> {
+    let fonts = FontCollection::new();
+    fonts
+        .register_font(include_bytes!("../assets/fonts/probe-variable-wght.ttf"))
+        .expect("the generated variable face loads");
+    let painter = styled_probe(
+        &fonts,
+        "AA",
+        TextStyle {
+            font_family: Some("FLUI Probe Variable".to_owned()),
+            font_variations: variations,
+            ..TextStyle::default()
+        },
+    );
+    let paragraph = painted_style_paragraph(&painter);
+    assert_eq!(paragraph.size(), painter.size());
+    let mut runs = paragraph.runs();
+    let coords = runs
+        .next()
+        .expect("the two letters produce a run")
+        .coords()
+        .to_vec();
+    assert!(runs.next().is_none(), "the generated family shapes one run");
+    coords
+}
+
+pub(crate) fn font_variations_select_the_painted_run_instance() {
+    let low = variation_coords(vec![FontVariation::new("wght", 100.0)]);
+    let high = variation_coords(vec![FontVariation::new("wght", 900.0)]);
+    assert_eq!(low.len(), 1, "the generated font has one axis");
+    assert_eq!(high.len(), 1);
+    assert!(
+        low[0] < 0 && high[0] > 0,
+        "opposite sides of the default instance: {low:?}/{high:?}"
+    );
+}
+
+pub(crate) fn invalid_font_variations_do_not_replace_valid_settings() {
+    let valid = variation_coords(vec![FontVariation::new("wght", 100.0)]);
+    let filtered = variation_coords(vec![
+        FontVariation::new("wght", 100.0),
+        FontVariation::new("wght", f64::NAN),
+        FontVariation::new("wght", f64::INFINITY),
+        FontVariation::new("wght", f64::MAX),
+        FontVariation::new("wg", 100.0),
+        FontVariation::new("w\ngt", 100.0),
+    ]);
+    assert_eq!(filtered, valid);
+    assert_eq!(filtered.len(), 1);
+    assert!(
+        filtered[0] < 0,
+        "the valid low-weight instance still reaches paint"
+    );
+}
 
 /// A text context over a fresh collection, lent to each measurement.
 fn text_cx() -> flui_painting::TextContext {
@@ -225,6 +387,8 @@ pub(crate) mod parley_measurement {
                 default_style: None,
                 font_size: SIZE as f32,
                 max_width: None,
+                min_width: 0.0,
+                text_align: flui_painting::typography::TextAlign::Start,
                 line_height: None,
                 direction: TextDirection::Ltr,
                 max_lines: None,

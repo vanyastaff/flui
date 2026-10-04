@@ -7,6 +7,7 @@
 //! See `docs/designs/2026-06-28-hot-reload-runtime-protocol.md`.
 
 use std::collections::HashMap;
+use std::mem::ManuallyDrop;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
@@ -50,11 +51,10 @@ struct BuildPtr(*const ());
 // thread at the C ABI and refuses a foreign-thread call instead of racing
 // one — the worker build-pointer registry has no equivalent guard.
 //
-// Lifetime: the address is only as live as the worker image it points into.
-// [`WorkerPlugin`]'s `Drop` prunes this plugin's entries from `WORKER_BUILDS`
-// BEFORE `DynLib::drop` unmaps the image, so a map hit implies the image is
-// still mapped (single-threaded host loop; a caller racing an unload from
-// another thread is outside the supported dev-loop).
+// Lifetime: every admitted WorkerPlugin retains its loader reference for the
+// process lifetime (ADR-0111). Registry pruning stops fresh dispatch to obsolete
+// workers without invalidating previously returned addresses or plugin-backed
+// view values and callbacks that escaped into the host tree.
 #[expect(unsafe_code)]
 unsafe impl Send for BuildPtr {}
 #[expect(unsafe_code)]
@@ -83,8 +83,7 @@ extern "C" fn host_register_worker_build(fingerprint: u64, build: *const ()) {
         tracing::warn!(
             fingerprint,
             "worker build registered outside flui_worker_init — the entry \
-             cannot be pruned on unload and will dangle after the image is \
-             unmapped"
+             cannot be pruned with its owner; register only from flui_worker_init"
         );
     }
     tracing::debug!(fingerprint, "worker build registered in host");
@@ -98,17 +97,14 @@ pub fn host_register_fn() -> RegisterWorkerBuildFn {
 
 /// Look up a worker-registered build function by layout fingerprint.
 ///
-/// Returns `None` when no live worker has registered this fingerprint —
-/// including after an unload or a failed reload: [`WorkerPlugin`]'s `Drop`
-/// prunes its own registrations from the registry BEFORE the image is
-/// unmapped, so a `Some` here points into a still-mapped image. Treat `None`
-/// as "worker unavailable" and fall back (or fail loudly), never cache a
-/// previously returned pointer across frames.
-///
-/// The one unpruned case: a registration made outside `flui_worker_init`
-/// (logged as a warning at registration time) belongs to no plugin and WILL
-/// dangle after that image unloads — workers must register from their init
-/// hook only.
+/// Returns `None` when no current worker registered the fingerprint, including
+/// after its registration owner is dropped or a reload fails. Previously
+/// returned addresses remain mapped because admitted worker images are retained
+/// until process exit (ADR-0111); do not cache a pointer when dispatch should
+/// follow the newest registration. Calling an address still requires its exact
+/// function signature and matching host/worker Rust-ABI contract.
+/// Registrations must be made from `flui_worker_init` so ownership and pruning
+/// remain defined.
 #[must_use]
 pub fn get_worker_build_ptr(fingerprint: u64) -> Option<*const ()> {
     worker_builds()
@@ -126,13 +122,15 @@ type WorkerAbiTokenFn = extern "C" fn() -> u64;
 /// A loaded hot-reload worker dylib (`my_app_logic.dll`).
 #[expect(missing_debug_implementations)]
 pub struct WorkerPlugin {
-    lib: DynLib,
+    // Admission is permanent: arbitrary Rust-ABI descendants can escape the
+    // tree and carry image-owned code, vtables or storage (ADR-0111).
+    lib: ManuallyDrop<DynLib>,
     init_fn: WorkerInitFn,
     fingerprint_fn: Option<WorkerFingerprintFn>,
     version: u32,
-    mtime: u64,
+    mtime: Option<std::time::SystemTime>,
     /// The `(fingerprint, ptr)` pairs this plugin's init hook registered in
-    /// `WORKER_BUILDS` — pruned by `Drop` before the image is unmapped.
+    /// `WORKER_BUILDS` — pruned by `Drop`; the admitted image stays mapped.
     registered: Mutex<Vec<(u64, BuildPtr)>>,
 }
 
@@ -194,9 +192,9 @@ impl WorkerPlugin {
                 .symbol("flui_worker_fingerprint")
                 .map(|ptr| std::mem::transmute::<_, WorkerFingerprintFn>(ptr));
 
-            let mtime = dynlib::file_mtime(lib_path);
+            let mtime = dynlib::file_revision(lib_path);
             let plugin = WorkerPlugin {
-                lib,
+                lib: ManuallyDrop::new(lib),
                 init_fn,
                 fingerprint_fn,
                 version,
@@ -241,13 +239,19 @@ impl WorkerPlugin {
 
     /// Whether the on-disk library changed since load.
     pub fn has_update(&self) -> bool {
-        dynlib::file_mtime(self.lib.path()) != self.mtime
+        dynlib::file_revision(self.lib.path()) != self.mtime
     }
 
-    /// Unload the worker library.
+    /// Retire this worker's registrations.
+    ///
+    /// Its admitted image remains mapped until process exit so host-retained
+    /// Rust values and callbacks can still be used and destroyed safely.
+    /// Restart the development host to reclaim older images and staged files.
     pub fn unload(self) {
-        tracing::info!(version = self.version, "Worker plugin unloaded");
-        // Drop prunes this plugin's registry entries, then DynLib unmaps.
+        tracing::info!(
+            version = self.version,
+            "Worker registrations retired; image retained"
+        );
     }
 
     /// Path this worker was loaded from.
@@ -263,13 +267,9 @@ impl WorkerPlugin {
 
 impl Drop for WorkerPlugin {
     fn drop(&mut self) {
-        // Prune this plugin's registrations BEFORE `self.lib` drops (fields
-        // drop in declaration order; `lib` is declared first but `Drop::drop`
-        // runs before ANY field drops), so `get_worker_build_ptr` can never
-        // observe an address into an unmapped image. An entry is removed only
-        // while it still holds the pointer this plugin registered — a newer
-        // plugin that re-registered the same fingerprint keeps its (live)
-        // entry.
+        // Remove only entries still owned by this registration. A newer worker
+        // registering the same fingerprint keeps its entry. The loader reference
+        // is permanently retained independently of this registry and its lock.
         let registered = std::mem::take(
             &mut *self
                 .registered
@@ -359,10 +359,10 @@ fn resolve_worker_path(lib_path: &Path) -> PathBuf {
 /// share an mtime, but they never share a path. Comparing only the mtime would
 /// miss that second build.
 #[must_use]
-pub fn worker_artifact_stamp(lib_path: &Path) -> (PathBuf, u64) {
+pub fn worker_artifact_stamp(lib_path: &Path) -> (PathBuf, Option<std::time::SystemTime>) {
     let resolved = resolve_worker_path(lib_path);
-    let mtime = dynlib::file_mtime(&resolved);
-    (resolved, mtime)
+    let revision = dynlib::file_revision(&resolved);
+    (resolved, revision)
 }
 
 /// Polls a worker dylib path and reloads on mtime changes.
@@ -466,7 +466,7 @@ impl WorkerReloadDriver {
                 // A changed fingerprint means the shared `types` layout moved
                 // under the host: surface the degradation instead of
                 // reporting a healthy reload. (The old worker's registry
-                // entries were pruned on its unload, and the host's
+                // entries were pruned on retirement, and the host's
                 // fingerprint-keyed lookups miss the new ones, so builds
                 // degrade to "worker unavailable" rather than calling across
                 // an incompatible layout.)

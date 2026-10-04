@@ -14,16 +14,10 @@ use flui_objects::{ImageAlignment, ImageFit, RenderImage};
 use flui_painting::paint::Image as FluiImage;
 use flui_view::{BuildContext, IntoView, RenderView, StatelessView, View, ViewExt};
 
-/// Decoded image data shared across UI rebuilds.
-#[derive(Clone)]
-struct SharedImage {
-    data: std::sync::Arc<FluiImage>,
-}
-
 /// Render view for the image display.
 #[derive(Clone)]
 struct ImageDisplay {
-    image: SharedImage,
+    image: FluiImage,
 }
 
 impl RenderView for ImageDisplay {
@@ -35,7 +29,7 @@ impl RenderView for ImageDisplay {
         _ctx: &flui_view::RenderObjectContext<'_>,
     ) -> Self::RenderObject {
         RenderImage::from_image(
-            (*self.image.data).clone(),
+            self.image.clone(),
             ImageFit::Contain,
             ImageAlignment::Center,
         )
@@ -46,7 +40,7 @@ impl RenderView for ImageDisplay {
         _ctx: &flui_view::RenderObjectContext<'_>,
         render_object: &mut Self::RenderObject,
     ) -> flui_rendering::RenderUpdateImpact {
-        render_object.set_image(Some((*self.image.data).clone()))
+        render_object.set_image(Some(self.image.clone()))
     }
 }
 
@@ -55,7 +49,7 @@ flui_view::impl_render_view!(ImageDisplay);
 /// Stateless app that wraps the image display.
 #[derive(Clone)]
 struct App {
-    image: SharedImage,
+    image: FluiImage,
 }
 
 impl StatelessView for App {
@@ -73,14 +67,14 @@ impl View for App {
     }
 }
 
-fn load_image() -> anyhow::Result<SharedImage> {
+fn load_image() -> anyhow::Result<FluiImage> {
     let input = std::env::args().nth(1).map_or_else(
         || std::env::temp_dir().join("flui_test_cat.jpg"),
         std::path::PathBuf::from,
     );
     println!("Loading image: {}", input.display());
 
-    let decoded = image::open(&input)?.to_rgba8();
+    let decoded = image::open(&input)?.into_rgba8();
     let (iw, ih) = decoded.dimensions();
     let rgba = decoded.into_raw();
     println!("Source image: {iw}x{ih} ({} bytes RGBA)", rgba.len());
@@ -91,9 +85,7 @@ fn load_image() -> anyhow::Result<SharedImage> {
     println!("FluiImage size: {:?}", flui_image.size());
     println!("FluiImage byte_count: {}", flui_image.byte_count());
 
-    Ok(SharedImage {
-        data: std::sync::Arc::new(flui_image),
-    })
+    Ok(flui_image)
 }
 
 fn main() -> anyhow::Result<()> {

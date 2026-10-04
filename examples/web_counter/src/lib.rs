@@ -1,7 +1,7 @@
-//! The counter template, in a browser.
+//! A Material counter, in a browser.
 //!
-//! This is `flui create --template counter`'s widget tree behind a
-//! `#[wasm_bindgen(start)]` entry point instead of `fn main`: `run_app`
+//! A `StateCell` counter uses a `#[wasm_bindgen(start)]` entry point:
+//! `run_app`
 //! dispatches to the web runner on `wasm32`, which mounts the tree into the
 //! page's `#flui-canvas` (or appends one) and renders through WebGPU. It is
 //! the Web row's executable evidence in `docs/BETA.md`.

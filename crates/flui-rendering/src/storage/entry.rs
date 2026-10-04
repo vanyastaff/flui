@@ -433,12 +433,22 @@ impl<P: Protocol> RenderEntry<P> {
                     // `unwrap()` in user widget code), Poisoned is the
                     // catch-all bucket for "we don't know more".
                     Err(payload) => {
-                        let msg = payload_text(&*payload).unwrap_or("(non-string panic payload)");
-                        tracing::error!(
-                            render_object = debug_name,
-                            panic_msg = msg,
-                            "perform_layout panicked — surfacing as RenderError::Poisoned",
-                        );
+                        // Reporting can call a subscriber; retain opaque destruction
+                        // before that foreign call as well as on ordinary return.
+                        let payload = std::mem::ManuallyDrop::new(payload);
+                        let msg = payload_text(&**payload).unwrap_or("(non-string panic payload)");
+                        if let Err(reporting_payload) =
+                            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                tracing::error!(
+                                    render_object = debug_name,
+                                    panic_msg = msg,
+                                    "perform_layout panicked — surfacing as RenderError::Poisoned",
+                                );
+                            }))
+                        {
+                            // Reporting is secondary; do not retire its opaque failure or report it again.
+                            std::mem::forget(reporting_payload);
+                        }
                         Err(crate::error::RenderError::poisoned(
                             debug_name,
                             crate::error::PoisonPhase::Layout,

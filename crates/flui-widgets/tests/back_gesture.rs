@@ -92,3 +92,59 @@ pub(crate) fn release_matrix_fling_and_slow_release() {
 // ---- full settle after release: did_stop fires, counter clears ----
 
 // ---- dispose while awaiting settle (post-release, pre-poll): counter clears ----
+
+pub(crate) fn cancelling_a_back_swipe_past_halfway_keeps_the_route() {
+    use crate::common::{lay_out_animated, tight};
+    use flui_animation::Vsync;
+    use flui_painting::styling::Color;
+    use flui_widgets::{ColoredBox, VsyncScope};
+    let navigator = NavigatorHandle::new();
+    navigator.seed_initial(SimpleRoute::<i32>::new(|_| {
+        ColoredBox::new(Color::BLACK).boxed()
+    }));
+    let vsync = Vsync::new();
+    let mut laid = lay_out_animated(
+        VsyncScope::new(vsync.clone(), Navigator::new(navigator.clone())),
+        tight(300.0, 300.0),
+        vsync,
+    );
+    let route = PageRoute::<i32>::new(|_, _, _| ColoredBox::new(Color::WHITE).boxed())
+        .back_gesture(true)
+        .transition_duration(Duration::from_millis(100));
+    laid.enter_owner_scope(|| {
+        drop(navigator.push(route));
+    });
+    for _ in 0..40 {
+        laid.pump_for(Duration::from_millis(16));
+    }
+    let top = navigator.current().expect("pushed route is current");
+    assert_eq!(navigator.route_ids().len(), 2);
+    laid.dispatch_pointer_down(10.0, 150.0);
+    laid.dispatch_pointer_move(210.0, 150.0);
+    assert!(
+        navigator.user_gesture_in_progress(),
+        "actual edge gesture started"
+    );
+    laid.dispatch_pointer_cancel();
+    for _ in 0..40 {
+        laid.pump_for(Duration::from_millis(16));
+    }
+    assert_eq!(
+        navigator.current(),
+        Some(top),
+        "cancel never commits a pop past halfway"
+    );
+    assert!(!navigator.user_gesture_in_progress());
+    laid.dispatch_pointer_down(10.0, 150.0);
+    laid.dispatch_pointer_move(210.0, 150.0);
+    laid.dispatch_pointer_up(210.0, 150.0);
+    for _ in 0..40 {
+        laid.pump_for(Duration::from_millis(16));
+    }
+    assert_eq!(
+        navigator.route_ids().len(),
+        1,
+        "next completed swipe still pops"
+    );
+    assert!(!navigator.user_gesture_in_progress());
+}

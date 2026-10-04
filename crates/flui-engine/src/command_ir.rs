@@ -583,9 +583,15 @@ pub(crate) struct DrawSegment {
     /// Cached image draws queued for this segment.
     ///
     /// The third element is the scissor rect active at draw time, forwarded to
-    /// `flush_texture_batch` so clipped images don't spill outside their clip region.
-    pub(crate) cached_images:
-        crate::recording_budget::BudgetVec<(TextureKey, TextureInstance, ScissorRect)>,
+    /// image replay so clipped images do not spill outside their clip region.
+    /// The fourth is the fixed-function mode; advanced groups record SrcOver
+    /// internally and apply their operator once at the group boundary.
+    pub(crate) cached_images: crate::recording_budget::BudgetVec<(
+        TextureKey,
+        TextureInstance,
+        ScissorRect,
+        flui_painting::BlendMode,
+    )>,
     /// Allocation, alpha and sampling are frozen at recording. Texel contents
     /// remain live: writes into the same allocation are visible at submission.
     pub(crate) external_images: crate::recording_budget::BudgetVec<(

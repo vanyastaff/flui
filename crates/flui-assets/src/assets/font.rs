@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use tokio::fs;
+use crate::loaders::BytesFileLoader;
 
 use crate::core::{Asset, AssetMetadata};
 use crate::error::AssetError;
@@ -79,12 +79,7 @@ impl Asset for FontAsset {
             bytes.clone()
         } else {
             // Load from file
-            fs::read(&self.path)
-                .await
-                .map_err(|e| AssetError::LoadFailed {
-                    path: self.path.clone(),
-                    reason: format!("Failed to read file: {e}"),
-                })?
+            BytesFileLoader::new("").load_bytes(&self.path).await?
         };
 
         // Validate it's a valid font by checking magic bytes

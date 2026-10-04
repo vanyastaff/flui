@@ -1885,3 +1885,138 @@ build time and called from an event is deferred
 until a consumer needs one. `is_enabled` and `to_key_event_result` stay
 queries. **Tests:** `tests/actions.rs` (resolution through key dispatch),
 `tests/shortcuts.rs`'s `event_cx_tests`.
+
+### Refresh pulls accumulate outside the clamped scroll position
+
+`RefreshIndicator` retains the distance pulled beyond the top separately from
+its scroll position, which stays at the minimum extent. Each pointer delta adds
+to that distance; reversed motion consumes it before advancing ordinary scroll
+content. Releasing at the threshold starts one refresh. Gesture updates while
+refreshing do not alter its pull or content, and releasing a gesture does not
+start a ballistic run; `finish` permits a new operation.
+`incremental_pulls_refresh_once_and_finish_allows_the_next_gesture` and
+`reversing_a_pull_consumes_it_before_scrolling_content` exercise this through
+pointer dispatch in `scroll_physics_and_activity`. The row
+`a_fast_gesture_while_refreshing_does_not_start_a_fling` advances virtual frames
+after a fast upward gesture to distinguish ignored direct motion from an
+erroneously started fling, then checks post-finish scrolling and coasting.
+Ballistic motion requires an ambient `VsyncScope`; the internal controller has
+no ticker or wall-clock fallback.
+
+A changed `ScrollPosition` identity stops the simulation based on the retired
+position's metrics and replaces the fling listener's target. Reconfiguration
+with the same position preserves the active run. The listener is removed and
+replaced outside any controller or position guard; its captured handles can
+retire without holding those locks. The rows
+`a_refresh_controller_swap_retires_the_old_fling_and_drives_the_new_position`
+and `rebuilding_refresh_content_with_the_same_position_preserves_its_fling`
+use virtual frames to observe actual position changes.
+
+The design follows this widget's synchronous completion and logical-pixel
+threshold contract. As a comparison after choosing it, Flutter's
+[refresh notification handler](https://github.com/flutter/flutter/blob/main/packages/flutter/lib/src/material/refresh_indicator.dart)
+also accumulates updates and overscroll into its drag offset. FLUI does not
+adopt its notification-based routing, viewport-relative threshold or futures.
+
+
+### Scroll resistance and controller attachment ownership
+
+`BouncingScrollPhysics` resists additional outward displacement from the current
+overscrolled position, or from the boundary when first crossing it. It does not
+reapply resistance to accumulated overscroll: zero input preserves the position,
+and movement toward the valid range is unrestricted. Crossing the whole range
+uses the newly crossed edge. Public rows `bouncing_lower_edge_preserves_outward_direction`,
+`bouncing_upper_edge_preserves_outward_direction`,
+`bouncing_stationary_input_preserves_overscroll` and
+`bouncing_inward_motion_and_crossing_respect_the_new_edge` pin these decisions in
+`scroll_physics_and_activity`.
+
+Changing a `Scrollable` controller's position identity stops the old trajectory
+before changing its value/status listeners, then detaches the old command
+listener and cancellation hook. A stopped trajectory cannot transfer its old
+metrics to the new position. Rebuilding with the same identity preserves the
+run. Cancellation hooks have an owning attachment: detaching or disposing an
+older attachment removes its hook and pending command only if that hook is
+still installed. Hook comparison/take is under the private lock; retired hooks,
+command values and animation callbacks retire or execute after it is released.
+This does not introduce multi-position commands or arbitration between several
+scrollables driving one position. The public rows
+`a_scrollable_swap_stops_old_motion_and_retires_its_jump_hook`,
+`a_same_position_scrollable_rebuild_preserves_motion` and
+`retiring_one_scrollable_preserves_a_later_owners_jump_hook` exercise virtual
+frames, retired-controller commands and a shared-controller detach.
+
+
+### Accepted gesture cancellation does not commit a release action
+
+Accepted drag cancellation still reaches `on_end`, carrying
+`GestureEndReason::Cancelled`; normal release carries `Completed` (ADR-0112).
+Pre-acceptance rejection remains `on_cancel`. Recognizers clear their contact
+before either terminal callback and invoke it without a state lock.
+`horizontal_drag_pointer_cancel_after_acceptance_ends_and_does_not_wedge_the_detector`
+observes both reasons and a subsequent contact.
+
+`Scrollable` excludes measured velocity on cancellation. In-range cancellation
+ends activity and resets direction to idle; overscroll uses zero-impulse physics
+recovery, with the existing ambient-vsync requirement. Public rows
+`cancelling_an_in_range_scroll_ends_activity_without_coasting` and
+`cancelling_bouncing_overscroll_settles_without_release_velocity` advance virtual
+frames and then perform a new gesture. `RefreshIndicator` resets a cancelled
+pull without starting refresh, even past its threshold, and permits only the
+same zero-impulse boundary recovery; an already-active refresh remains active.
+`cancelling_a_threshold_refresh_pull_does_not_refresh` distinguishes cancellation
+from the next completed pull.
+
+`Dismissible` cancels drag ownership before reversing to its original location,
+including a drag at its completed move bound. It discards transient completion
+rather than applying dismissal thresholds or release velocity. Public horizontal
+and vertical rows `a_cancelled_horizontal_dismiss_restores_the_card` and
+`a_cancelled_vertical_dismiss_restores_the_card` check no dismissal, restored
+hit location and the next completed dismissal in `animation_and_visibility`.
+The row `cancelling_a_fully_slid_card_restores_it_without_dismissal` covers the
+completed-bound bypass through an actual out-of-bounds pointer move.
+A cancelled back swipe restores the still-current route regardless of its
+position or velocity; a route already navigated away retains the existing
+active-route settling policy. The public PageRoute row
+`cancelling_a_back_swipe_past_halfway_keeps_the_route` checks the route, gesture
+counter and next completed swipe.
+
+`InteractiveViewer` clears pan bookkeeping and forwards the reason to
+`InteractionEndDetails`. Discrete wheel and panzoom updates synthesize
+`Completed`, without claiming a physical pointer release.
+`viewer_reports_cancelled_then_completed_interactions` checks what the public
+callback observes. The viewer still has no built-in pan inertia.
+
+
+### Text-store exact points use source scalar intervals in either direction
+
+`TextStoreRead::index_at_point(Exact)` tests the interval between consecutive
+source-scalar carets using its minimum and maximum x coordinate. An RTL pair
+therefore names its source scalar rather than being treated as outside the text.
+This retains the per-scalar caret contract; it does not introduce a visual-run
+hit topology for discontinuous mixed-bidi ranges. `Nearest` remains a boundary
+query. **Test:** `rtl_scalar_rect_midpoints_resolve_to_the_source_scalar`.
+
+### Selection dragging belongs to the mounted field and its contact
+
+`EditableText` retains the source anchor and typed contact in its state. A
+same-controller configuration rebuild preserves that drag; only the first active
+contact can move or terminate it. Disablement, actual controller replacement and
+disposal retire it. Double-tap word selection deliberately takes over and clears
+ordinary drag tracking. Admission precedes focus callbacks; a callback that
+retires the contact prevents the subsequent caret write.
+**Tests:** `selection_drag_survives_a_same_controller_rebuild`,
+`foreign_release_preserves_the_selection_contact`,
+`foreign_cancel_preserves_the_selection_contact`,
+`disabling_the_field_retires_its_selection_contact`,
+`replacing_the_controller_retires_the_old_selection_contact`.
+
+### Non-IME splices collapse after the resulting grapheme
+
+`TextEditingController::insert_str` moves its collapsed caret forward to the
+next ICU extended-grapheme boundary of the resulting document. Inserted bytes
+can join a following combining mark, and deleting a selected separator can join
+regional indicators; neither leaves Backspace starting inside the new cluster.
+Raw text-store/IME scalar selection remains exact under ADR-0090.
+**Tests:** `insertion_keeps_the_caret_after_the_joined_combining_cluster`,
+`deleting_a_separator_keeps_the_caret_after_the_joined_flag`.

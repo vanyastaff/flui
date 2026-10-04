@@ -4,31 +4,20 @@ Internal architecture of `flui_animation`.
 
 ## System Overview
 
-`flui_animation` is the framework-agnostic animation **engine**. The widget
-layer that consumes it (`AnimatedFoo`, `AnimatedBuilder`, implicit animations,
-`TickerProvider` ownership) is **planned, not yet implemented** — shown dashed
-below.
+`flui_animation` supplies animation values, controllers, curves and simulations.
+The widget layer consumes them through `flui-widgets`' `animated` and
+`transitions` modules: implicit animations own controllers, while transition
+widgets and `AnimatedBuilder` observe existing animations. Ticker ownership
+comes from the scheduler and the widget's vsync scope.
 
-```
-┌ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┐
-   widget layer (planned, not yet built)
-│  AnimatedFoo, AnimatedBuilder, ImplicitAnimations        │
-└ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┬ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┘
-                       │ will use
-┌──────────────────────▼──────────────────────────────────┐
-│                 flui_animation                          │
-│  ┌────────────────────────────────────────────────────┐ │
-│  │ Stateful: Animation<T>, AnimationController,       │ │
-│  │           CurvedAnimation, TweenAnimation          │ │
-│  ├────────────────────────────────────────────────────┤ │
-│  │ Data: Curve, Tween, AnimationStatus, Simulation    │ │
-│  └────────────────────────────────────────────────────┘ │
-└──────────────────────┬──────────────────────────────────┘
-                       │ uses
-┌──────────────────────▼──────────────────────────────────┐
-│              flui-scheduler                             │
-│  UpdateScheduler, Ticker, FrameBudget, Priority         │
-└─────────────────────────────────────────────────────────┘
+```text
+flui-widgets: animated / transitions
+                   │
+                   ▼
+flui-animation: Animation<T> / AnimationController / Curve / Simulation
+                   │
+                   ▼
+flui-scheduler: Ticker / Scheduler
 ```
 
 ## Module Structure
@@ -82,7 +71,7 @@ where
 ```
 
 Design decisions:
-- **Generic over T** — any value type (f32, Color, Size)
+- **Generic over T** — any value type (f64, Color, Size)
 - **Extends Listenable** — integrates with change notification system
 - **Send + Sync** — thread-safe by default
 - **Debug required** — all animations inspectable
@@ -95,7 +84,7 @@ Maps unit interval to unit interval:
 pub trait Curve {
     /// Transform t ∈ [0,1] → output ∈ [0,1]
     /// Contract: transform(0) = 0, transform(1) = 1
-    fn transform(&self, t: f32) -> f32;
+    fn transform(&self, t: f64) -> f64;
     
     fn flipped(self) -> FlippedCurve<Self>;
     fn reversed(self) -> ReverseCurve<Self>;
@@ -107,14 +96,14 @@ pub trait Curve {
 ```rust
 /// Maps t ∈ [0,1] → value of type T
 pub trait Animatable<T>: Clone + Send + Sync + Debug {
-    fn transform(&self, t: f32) -> T;
+    fn transform(&self, t: f64) -> T;
 }
 
 /// Animatable with explicit begin/end
 pub trait Tween<T>: Animatable<T> {
     fn begin(&self) -> &T;
     fn end(&self) -> &T;
-    fn lerp(&self, t: f32) -> T;
+    fn lerp(&self, t: f64) -> T;
 }
 ```
 
@@ -125,13 +114,13 @@ Physics-based value generation:
 ```rust
 pub trait Simulation: Send + Sync {
     /// Position at time t
-    fn x(&self, time: f32) -> f32;
+    fn x(&self, time: f64) -> f64;
     
     /// Velocity at time t
-    fn dx(&self, time: f32) -> f32;
+    fn dx(&self, time: f64) -> f64;
     
     /// Has simulation settled?
-    fn is_done(&self, time: f32) -> bool;
+    fn is_done(&self, time: f64) -> bool;
     
     fn tolerance(&self) -> Tolerance;
 }
@@ -149,23 +138,23 @@ pub struct AnimationController {
 
 struct AnimationControllerInner {
     // Current state
-    value: f32,
+    value: f64,
     status: AnimationStatus,
     direction: AnimationDirection,
     
     // Configuration
     duration: Duration,
     reverse_duration: Option<Duration>,
-    lower_bound: f32,
-    upper_bound: f32,
+    lower_bound: f64,
+    upper_bound: f64,
     
     // Animation state. Time comes from the ticker's elapsed seconds (scaled by
     // time_dilation), not wall-clock Instants: `restart_ticker` always begins a
     // fresh run's Ticker at elapsed zero, so that elapsed time IS the elapsed
     // time since the run started — no per-run epoch to subtract.
     run_duration: Option<Duration>, // per-run override (animate_to), never clobbers `duration`
-    start_value: f32,
-    target_value: f32,
+    start_value: f64,
+    target_value: f64,
     
     // Physics
     simulation: Option<Box<dyn Simulation>>,
@@ -193,8 +182,8 @@ struct AnimationControllerInner {
 // synchronously and returned. See `AnimationControllerInner::repeat_sample`.
 struct RepeatRun {
     reverse: bool,
-    min: f32,
-    max: f32,
+    min: f64,
+    max: f64,
     period_ns: u128,
     count: Option<u32>,
     initial_ns: u128,
@@ -505,15 +494,15 @@ contract rather than introducing a repeat-specific special case. Pinned by
 ### Unbounded is a constructor fact; bound-targeting runs on it are refused; no path reads NaN
 
 **Issue #1183.** `AnimationController::unbounded`/`unbounded_without_ticker`/
-`unbounded_with_detached_ticker` fix bounds at `(f32::NEG_INFINITY,
-f32::INFINITY)` and are infallible: unboundedness is a constructor fact,
+`unbounded_with_detached_ticker` fix bounds at `(f64::NEG_INFINITY,
+f64::INFINITY)` and are infallible: unboundedness is a constructor fact,
 never a bound VALUE.
 
 `with_bounds`/`without_ticker_bounds`/`with_detached_ticker_bounds` (and
 `AnimationControllerBuilder::bounds`, which duplicates the same check) now
 REJECT any bound that is not finite, including a wide-open
 `(NEG_INFINITY, INFINITY)` pair, AND reject a pair whose finite endpoints
-still overflow `f32` as a RANGE (`(-f32::MAX, f32::MAX)`; a bounded run's
+still overflow `f64` as a RANGE (`(-f64::MAX, f64::MAX)`; a bounded run's
 `target - value`/`target - start` arithmetic needs the SPAN to be finite,
 not just each endpoint).
 
@@ -566,7 +555,7 @@ on an unbounded controller WORKS: an explicit finite range is not
 "unbounded" in the relevant sense.
 
 **On ANY controller** (bounded too: FLUI's declared behavior CHANGE, since
-`f32::clamp` today passes `NaN` through unchanged and PANICS on a NaN
+`f64::clamp` today passes `NaN` through unchanged and PANICS on a NaN
 *bound* even in release), `animate_to`/`animate_back`(`_curved`) refuse a
 non-finite `target`, and `forward_from`/`reverse_from` refuse a non-finite
 `from`. `NaN` always refuses; `+-inf` clamps to the bound it points at
@@ -576,7 +565,7 @@ refuses when that bound is itself infinite.
 `fling`/`fling_with` additionally refuse a non-finite `velocity` (a NaN
 velocity took the `Forward` branch and built a spring whose `is_done`
 never fires). `animate_to`/`animate_back` also refuse when
-`target - value` overflows `f32` (an extreme `set_value` followed by an
+`target - value` overflows `f64` (an extreme `set_value` followed by an
 extreme `animate_to`), and `drive_simulation`/`animate_with` refuse a
 simulation whose `x(0.0)` is already non-finite.
 
@@ -595,14 +584,14 @@ caller bug.
 
 **`repeat_with`'s NaN endpoint is `InvalidBounds`, a range-SHAPE error,
 distinct from the unbounded-range `NonFiniteTarget` above.** A
-caller-supplied `Some(f32::NAN)` `min`/`max` is checked BEFORE defaulting
+caller-supplied `Some(f64::NAN)` `min`/`max` is checked BEFORE defaulting
 against the controller's own bounds, on ANY controller: it widens
 `lo >= hi`'s inversion check to include non-finite endpoints (`!(lo < hi)
 || !lo.is_finite() || !hi.is_finite()`).
 
-Unguarded, `repeat_with(Some(f32::NAN), ..)` reached
+Unguarded, `repeat_with(Some(f64::NAN), ..)` reached
 `inner.value.clamp(lo, hi)` with `lo = NaN` as the clamp's own `min`
-PARAMETER and PANICKED (`f32::clamp` asserts `min <= max`), worse than
+PARAMETER and PANICKED (`f64::clamp` asserts `min <= max`), worse than
 silently installing a broken run.
 
 The unbounded-range case (both `min`/`max` unset, or one side unset on an
@@ -692,33 +681,52 @@ tests were rewritten (not merely patched) to assert the rejection plus the
 unbounded constructor's own `0.0` start, each documenting why the old
 assertion no longer holds.
 
+### Friction numerical range
+
+Friction displacement uses `exp_m1(log_drag * time)`, and inverse arrival time
+uses `ln_1p` of the relative displacement. This retains small finite movement
+as drag approaches one without changing constructor validation, velocity
+sampling or the existing near-origin inverse threshold. Public consumer test
+`friction_preserves_small_decay_and_position_time_roundtrips` checks the
+constant-velocity limit, positive and negative normal flings, position/time
+round trips and unreachable/non-finite queries.
+
+### Smoothing survives an idle tick
+
+`SmoothDamp`'s overshoot guard places the follower exactly at its target and
+sets its velocity to zero. That assignment does not divide by elapsed time:
+a zero-duration tick while at rest must leave the follower usable for its
+next target. `damped_motion_remains_usable_after_idle_ticks` checks positive
+and negative retargeting after a zero-duration idle tick, with an ordinary
+idle tick as a control, through the public smoothing API.
+
 ## Composition Model
 
-Animations compose via `Arc<dyn Animation<f32>>`:
+Animations compose via `Arc<dyn Animation<f64>>`:
 
 ```
 AnimationController (produces 0.0 → 1.0)
         │
-        ▼ Arc<dyn Animation<f32>>
+        ▼ Arc<dyn Animation<f64>>
 CurvedAnimation (applies easing curve)
         │
-        ▼ Arc<dyn Animation<f32>>
+        ▼ Arc<dyn Animation<f64>>
 TweenAnimation<Color> (maps to Color)
         │
         ▼ Animation<Color>
 ```
 
-Each wrapper stores parent as `Arc<dyn Animation<f32>>`:
+Each wrapper stores parent as `Arc<dyn Animation<f64>>`:
 
 ```rust
 pub struct CurvedAnimation<C: Curve> {
-    parent: Arc<dyn Animation<f32>>,
+    parent: Arc<dyn Animation<f64>>,
     curve: C,
     reverse_curve: Option<C>,
 }
 
-impl<C: Curve> Animation<f32> for CurvedAnimation<C> {
-    fn value(&self) -> f32 {
+impl<C: Curve> Animation<f64> for CurvedAnimation<C> {
+    fn value(&self) -> f64 {
         let t = self.parent.value();
         self.curve.transform(t)
     }
@@ -740,10 +748,9 @@ All types are `Send + Sync`. Synchronization strategy:
 | Status listeners | Inside `Inner` | Updated with state |
 | Disposed flag | Inside `Inner` | Checked under lock |
 
-Using `parking_lot::Mutex`:
-- 2-3x faster than std
-- No poisoning on panic
-- Smaller memory footprint
+`parking_lot::Mutex` does not poison on panic. Controller code must restore its
+own invariants and invoke user callbacks outside the state lock; choosing this
+primitive is not a measured throughput claim.
 
 ## Error Handling
 
@@ -805,21 +812,21 @@ Add fluent APIs without cluttering core types:
 ### AnimationExt
 
 ```rust
-pub trait AnimationExt: Animation<f32> + Sized + 'static {
+pub trait AnimationExt: Animation<f64> + Sized + 'static {
     fn curved<C: Curve>(self: Arc<Self>, curve: C) -> Arc<CurvedAnimation<C>>;
     fn reversed(self: Arc<Self>) -> Arc<ReverseAnimation>;
-    fn add(self: Arc<Self>, other: Arc<dyn Animation<f32>>) -> Arc<CompoundAnimation>;
+    fn add(self: Arc<Self>, other: Arc<dyn Animation<f64>>) -> Arc<CompoundAnimation>;
     // ...
 }
 
-impl<A: Animation<f32> + 'static> AnimationExt for A {}
+impl<A: Animation<f64> + 'static> AnimationExt for A {}
 ```
 
 ### AnimatableExt
 
 ```rust
 pub trait AnimatableExt<T>: Animatable<T> {
-    fn animate<A: Animation<f32>>(self, parent: Arc<A>) -> TweenAnimation<T, Self>;
+    fn animate<A: Animation<f64>>(self, parent: Arc<A>) -> TweenAnimation<T, Self>;
     fn chain<B: Animatable<T>>(self, next: B) -> ChainedTween<Self, B>;
     fn with_curve<C: Curve>(self, curve: C) -> ChainedTween<CurveTween<C>, Self>;
     fn reversed(self) -> ReverseTween<T, Self>;
@@ -834,3 +841,64 @@ pub trait CurveExt: Curve + Sized {
     fn then<C: Curve>(self, next: C) -> ChainedCurve<Self, C>;
 }
 ```
+
+### Proxy queries release the parent guard before user code
+
+A custom `Animation` may replace a proxy's parent from its `value` or `status`
+query. Proxy queries clone the current parent under the read guard, then invoke
+that parent after the guard is released. The query returns the sampled parent's
+result; the next query observes the replacement. The old-status sample during
+`set_parent` follows the same rule. This does not serialize concurrent setters
+or claim that their separate subscription swaps are atomic.
+
+`proxy_parent_queries_allow_reentrant_replacement` uses public custom animation
+implementations for value, status and old-status-during-swap reentry, then checks
+the next parent change still delivers notifications. Each case runs in a bounded
+child process so a reverted read guard cannot hang the parent test runner.
+
+### Integer tweens cover the full endpoint range
+
+`IntTween` and `StepTween` convert both integer endpoints to `f64` before
+subtracting them. Every `i32` endpoint is exactly representable there, whereas
+subtracting `i32::MIN` from `i32::MAX` in the integer domain panics or wraps.
+Existing rounding, flooring and progress clamping remain deliberate.
+The public consumer family `integer_tweens_interpolate_across_the_full_range`
+checks both directions across the full range and ordinary rounding.
+
+### Weighted progress uses relative weights and exact endpoints
+
+`TweenSequence` revalidates each item's finite positive weight after caller edits
+to the public item fields. Evaluation scales weights by the largest weight, so
+finite inputs whose raw sum overflows still describe usable relative durations.
+The `total_weight` accessor retains the original sum and may return infinity;
+it does not drive interpolation. Exact progress endpoints return the first and
+last tween's endpoints. Interior progress divides by the actual relative weight,
+without an arbitrary epsilon that discards short segments. A relative interval
+that underflows to zero cannot be selected by representable interior progress,
+but its endpoint remains reachable.
+
+Public consumer families `weighted_sequences_preserve_endpoints_and_relative_progress`
+and `weighted_sequences_reject_invalid_edited_configuration` cover overflowing
+finite weights, small first and final intervals, ordinary weighted progress,
+edited invalid configuration and a subsequent valid sequence.
+
+### Controller sources execute outside the state lock
+
+Custom `Simulation::x`, `dx`, `is_done` and `Curve::transform` implementations may
+read or change their controller. Sampling snapshots the source and inputs under
+the state lock, then calls user code after releasing it. A run generation and
+sample epoch reject a result after replacement, stop or a newer nested tick;
+the older call cannot rewind the controller or finish its replacement run.
+
+Displaced simulations, curves and status callbacks retire after the lock is
+released. Opaque envelopes keep their source alive across sampling and delivery;
+if a call unwinds, its remaining envelopes are retained without invoking user
+`Drop`. On ordinary return they retire normally, so an ordinary destructor panic
+still propagates. This protects other envelopes during that unwind; it does not
+contain competing destructors inside a user's own aggregate.
+
+`controller_sources_allow_reentry_and_preserve_run_ownership` tests public source
+queries, replacement, stop, nested ticks, ordinary retirement reentry, competing
+sampling/status and destructor failures, and the next operation. Each row runs
+in a bounded child process because the previous implementation calls these
+sources while holding a non-reentrant mutex.

@@ -5,6 +5,8 @@
 //!   cd examples/painting_demo && wasm-pack build --target web --out-dir pkg
 //! Then serve with any HTTP server and open index.html.
 
+#![cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+
 use std::sync::Arc;
 
 use flui_painting::parley_text::ParagraphSpec;
@@ -37,27 +39,9 @@ pub async fn main() {
         ..wgpu::InstanceDescriptor::new_without_display_handle()
     });
 
-    // SAFETY: The boxed JsValue is heap-allocated and lives for the duration of
-    // the unsafe block; NonNull is non-null by construction via Box::into_raw.
-    // The resulting surface is used immediately in this function and the canvas
-    // outlives both the surface and the wgpu instance (canvas is owned by the
-    // calling JS context for the page lifetime).
-    #[expect(unsafe_code)]
-    let surface = unsafe {
-        use std::ptr::NonNull;
-        let obj: JsValue = canvas.clone().into();
-        let ptr = NonNull::new_unchecked(Box::into_raw(Box::new(obj)).cast::<std::ffi::c_void>());
-        let handle = raw_window_handle::WebCanvasWindowHandle::new(ptr);
-        let raw_window = raw_window_handle::RawWindowHandle::WebCanvas(handle);
-        let raw_display =
-            raw_window_handle::RawDisplayHandle::Web(raw_window_handle::WebDisplayHandle::new());
-        let target = wgpu::SurfaceTargetUnsafe::RawHandle {
-            raw_display_handle: Some(raw_display),
-            raw_window_handle: raw_window,
-        };
-        instance.create_surface_unsafe(target)
-    }
-    .expect("failed to create surface from canvas");
+    let surface = instance
+        .create_surface(wgpu::SurfaceTarget::Canvas(canvas))
+        .expect("failed to create surface from canvas");
 
     let adapter = instance
         .request_adapter(&wgpu::RequestAdapterOptions {
@@ -369,9 +353,11 @@ fn label(
             spans: &spans,
             default_style: None,
             font_size,
+            min_width: 0.0,
             max_width: None,
             line_height: None,
             direction: TextDirection::Ltr,
+            text_align: flui_painting::typography::TextAlign::Start,
             max_lines: None,
             ellipsis: None,
         })

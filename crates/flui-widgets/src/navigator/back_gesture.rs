@@ -120,6 +120,14 @@ impl BackGestureController {
     /// inline, in which case the gesture is already fully closed out
     /// (`did_stop_user_gesture` already called).
     pub fn drag_end(&self, velocity: f64) -> bool {
+        self.finish(velocity, false)
+    }
+
+    fn cancel(&self) -> bool {
+        self.finish(0.0, true)
+    }
+
+    fn finish(&self, velocity: f64, cancelled: bool) -> bool {
         let curve: Arc<dyn Curve + Send + Sync> = Arc::new(Curves::FastEaseInToSlowEaseOut); // see `PopPacing`'s doc (binding.rs) — same erased easing-curve boundary
         let is_current = self.navigator.current() == Some(self.route);
         let animate_forward = if !is_current {
@@ -127,6 +135,8 @@ impl BackGestureController {
             // stack) animates by whether it is still active, never by
             // velocity or drag position.
             self.navigator.route_is_active(self.route)
+        } else if cancelled {
+            true
         } else if velocity.abs() >= MIN_FLING_VELOCITY {
             velocity <= 0.0
         } else {
@@ -302,6 +312,10 @@ impl BackGestureRuntime {
     }
 
     fn on_drag_end(&self, details: DragEndDetails) {
+        if details.reason == flui_interaction::GestureEndReason::Cancelled {
+            self.on_drag_cancel();
+            return;
+        }
         let velocity = convert_to_logical(
             details.primary_velocity / self.normalized_width(),
             self.direction.get(),
@@ -311,8 +325,13 @@ impl BackGestureRuntime {
 
     fn on_drag_cancel(&self) {
         // A cancel can arrive even if the drag never started, so
-        // `finish_drag` is a no-op if no gesture is in flight.
-        self.finish_drag(0.0);
+        // cancellation is a no-op if no gesture is in flight.
+        let Some(gesture) = self.gesture.borrow_mut().take() else {
+            return;
+        };
+        if gesture.cancel() {
+            self.awaiting_settle.set(true);
+        }
     }
 
     /// Release the in-flight gesture at `velocity` (logical screen-widths per
@@ -577,7 +596,7 @@ impl BackGestureDetectorState {
         let update_runtime = Rc::clone(&self.runtime);
         let end_runtime = Rc::clone(&self.runtime);
         let cancel_runtime = Rc::clone(&self.runtime);
-        let drag = horizontal_drag(arena.clone())
+        let drag = horizontal_drag(arena)
             .with_on_start(move |details| start_runtime.on_drag_start(details))
             .with_on_update(move |details| update_runtime.on_drag_update(details))
             .with_on_end(move |details| end_runtime.on_drag_end(details))

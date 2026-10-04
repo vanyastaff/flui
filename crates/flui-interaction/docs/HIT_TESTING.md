@@ -73,12 +73,11 @@ result.with_paint_offset(Offset::new(10.0, 20.0), |result| {
 });
 
 // `with_paint_transform` takes the forward paint matrix and pushes its
-// inverse internally (falling back to the singular forward matrix if the
-// transform is not invertible — see its doc).
+// inverse internally. Refusal skips the closure and returns None.
 let rotation = Matrix4::rotation_z(std::f64::consts::FRAC_PI_4);
-result.with_paint_transform(rotation, |result| {
-    child.hit_test(position, result);
-});
+let hit = result.with_paint_transform(rotation, |result| {
+    child.hit_test(position, result)
+}).unwrap_or(false);
 ```
 
 `push_offset`/`push_transform` are the raw primitives underneath — they push
@@ -89,8 +88,9 @@ scope-helper's closure shape does not fit; `with_paint_offset`/
 
 Each entry captures the current (already-inverted) transform. During dispatch
 the event is transformed into that entry's local coordinate space.
-Non-invertible transforms compose to a singular matrix and are skipped at
-delivery.
+A paint-transform scope without an admitted finite computed inverse returns
+`None` before traversal can publish an entry. Callers map refusal to a subtree
+miss. Raw pushes remain the caller's responsibility (ADR-0113).
 
 ### Sliver child transforms
 

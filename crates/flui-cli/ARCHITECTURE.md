@@ -188,3 +188,58 @@ nothing in a running app does. Keeping it here is what lets
 `cargo install flui-cli` compile no framework code: the runtime half of hot
 reload, `flui-hot-reload`, is linked by the app, and the two halves share
 only a pair of environment-variable names.
+
+### Finishing a probe transfers its captured output
+
+The pipe reader owns a mutex-protected byte buffer shared with its drain thread.
+At the deadline, finishing takes those bytes under the same lock rather than
+cloning an entire output stream. A detached reader may subsequently append to
+the empty buffer; it cannot change the returned snapshot. The existing
+`grandchild_holding_the_pipe_does_not_hang_the_probe` checks the deadline and
+captured prefix on Unix. CLI output integration tests check the delivered bytes;
+no allocation-count claim is inferred from those behavior tests.
+
+### Build selectors reach the selected platform unit
+
+Web builds forward `--example` and `--package` through the existing Cargo target
+resolver. Android APK builds currently require the current package's cdylib;
+unsupported selectors are rejected before SDK probing rather than ignored.
+`platform_build_selectors_reach_the_selected_cargo_unit_or_refuse` drives the
+public CLI. Its portable fixture delegates metadata and project discovery to
+real Cargo, substitutes tool availability, and refuses compilation while
+reporting the actual selected Cargo arguments. It verifies selection without
+claiming a wasm compilation or Android delivery run.
+
+
+### Generated crate names respect Rust's reserved edition keywords
+
+Project names become bare crate identifiers in generated application source,
+so validation refuses `gen` and `try` along with the other reserved keywords.
+`create_with_an_invalid_project_name_is_rejected` includes public CLI rows for both names;
+accepting either would create source that the selected Rust edition rejects.
+
+### Worker staging uses durable content identity
+
+Staged worker paths include the full SHA-256 digest of the exact bytes read for
+that build. The host can retain a dynamic-loader mapping after a staged file is
+pruned, so a later path reuse is valid only for identical content. SHA-256's
+cryptographic collision resistance is the deliberate content-identity assumption;
+the old 32-bit FNV address space admitted practical collisions and silently
+served an earlier image. An existing path is also checked against the built bytes.
+Differing or interrupted staging is refused without overwriting a potentially
+loaded image. Removing the corrupt staged copy permits the next admission.
+
+`commands::run::tests::run_contract` includes
+`staged_worker_content_identity_survives_reuse_and_pruning` with two distinct
+images that collide under the previous hash, unchanged-file reuse and a pruned
+image's return. `corrupt_staged_worker_is_refused_without_overwriting_a_loaded_path`
+pins refusal, preservation of both files and the next staging operation. These
+private orchestration seams exercise the actual writer the host consumes without
+requiring a compiled plugin or platform loader; they do not certify dyld unloading.
+
+Staging publishes a fully written same-directory temporary file with no-clobber
+persistence. Concurrent identical admissions verify and reuse the first complete
+snapshot instead of truncating it. The published bytes preserve cargo's source
+signature and are never re-signed. `concurrent_identical_workers_publish_one_complete_immutable_snapshot`
+coordinates three actual staging calls at the private pre-publication seam and
+checks unpublished completeness, shared final identity and next-operation reuse.

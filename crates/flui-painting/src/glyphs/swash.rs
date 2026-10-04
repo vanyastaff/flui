@@ -25,6 +25,12 @@ impl SwashRasterizer {
         Self::default()
     }
 
+    /// A rasterizer that owns copied font bytes, for unloadable scene sources.
+    #[must_use]
+    pub fn with_owned_fonts() -> Self {
+        Self::with_fonts(FontRegistry::with_owned_sources())
+    }
+
     /// A rasterizer over `fonts`.
     #[must_use]
     pub fn with_fonts(fonts: FontRegistry) -> Self {

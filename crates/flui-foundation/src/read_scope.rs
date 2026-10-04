@@ -393,6 +393,14 @@ fn invoke_reader<T: 'static, R>(
                     expected: type_name::<T>(),
                 }),
             });
+            if matches!(&out, Some(Ok(Err(_)))) {
+                // The owning graph must observe reader failure before loan
+                // finalization: otherwise a released opaque value can abort
+                // while retiring over this hidden first failure. Keep the
+                // authoritative payload in `out` and propagate an inert,
+                // destructor-free unwind marker through the erased callback.
+                std::panic::resume_unwind(Box::new(()));
+            }
         })
     }));
     (out, graph_outcome)
@@ -535,7 +543,7 @@ fn discard_secondary<T>(value: T) {
 fn discard_panic_payload(payload: Box<dyn Any + Send>) {
     // A panic payload is opaque and may itself contain multiple hostile
     // destructors. Retiring it through `drop` cannot be made unwind-safe.
-    std::mem::forget(payload);
+    crate::panic::retain_opaque_payload(payload);
 }
 
 impl<T: 'static> Signal<T> {

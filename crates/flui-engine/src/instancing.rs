@@ -619,8 +619,8 @@ impl ArcInstance {
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Pod, Zeroable)]
 pub(crate) struct TextureInstance {
-    /// Destination rectangle [x, y, width, height] in screen space
-    pub dst_rect: [f32; 4],
+    /// Device origin and horizontal basis [ox, oy, xx, xy].
+    pub origin_and_x: [f32; 4],
 
     /// Source UV coordinates [u_min, v_min, u_max, v_max] in 0-1 range
     /// For whole texture: [0.0, 0.0, 1.0, 1.0]
@@ -631,10 +631,8 @@ pub(crate) struct TextureInstance {
     /// Use [1.0, 1.0, 1.0, 1.0] for no tint
     pub tint: [f32; 4],
 
-    /// Transform (rotation and additional translation)
-    /// [cos(angle), sin(angle), translate_x, translate_y]
-    /// For no rotation: [1.0, 0.0, 0.0, 0.0]
-    pub transform: [f32; 4],
+    /// Vertical basis [yx, yy, 0, 0] in device pixels.
+    pub axis_y: [f32; 4],
 
     /// SDF clip rounded rectangle, same layout and sentinel as
     /// [`RectInstance::clip_rrect`]: `[x, y, width, height, radius_tl,
@@ -662,6 +660,9 @@ pub(crate) struct TextureInstance {
     /// Device-to-clip-local translation, padded to a `vec4` attribute:
     /// `[tx, ty, 0, 0]`.
     pub clip_local_origin: [f32; 4],
+    /// Original decoded image region in texture UVs, independent of source crop.
+    /// Bilinear taps clamp to this image's texels rather than atlas gutters.
+    pub original_image_uv: [f32; 4],
 }
 
 impl TextureInstance {
@@ -677,7 +678,13 @@ impl TextureInstance {
     /// Apply after recording the clip, which populates this packed slot.
     pub(crate) fn with_linear_straight_source(mut self) -> Self {
         self.clip_kind[1] = 2;
-        self.tint = [self.tint[3]; 4];
+        let alpha = self.tint[3];
+        self.tint = [
+            self.tint[0] * alpha,
+            self.tint[1] * alpha,
+            self.tint[2] * alpha,
+            alpha,
+        ];
         self
     }
 
@@ -693,19 +700,20 @@ impl TextureInstance {
     #[must_use]
     pub(crate) fn new(dst_rect: flui_foundation::geometry::Rect<f64>, tint: Color) -> Self {
         Self {
-            dst_rect: [
+            origin_and_x: [
                 (dst_rect.left() as f32),
                 (dst_rect.top() as f32),
                 (dst_rect.width() as f32),
-                (dst_rect.height() as f32),
+                0.0,
             ],
             src_uv: [0.0, 0.0, 1.0, 1.0], // Full texture
             tint: tint.to_f32_array(),
-            transform: [1.0, 0.0, 0.0, 0.0], // No rotation
+            axis_y: [0.0, dst_rect.height() as f32, 0.0, 0.0], // No rotation
             clip_rrect: [0.0; 8],
             clip_kind: [0; 4],
             clip_device_to_local: [1.0, 0.0, 0.0, 1.0],
             clip_local_origin: [0.0; 4],
+            original_image_uv: [0.0, 0.0, 1.0, 1.0],
         }
     }
 
@@ -722,30 +730,22 @@ impl TextureInstance {
         tint: Color,
     ) -> Self {
         Self {
-            dst_rect: [
+            origin_and_x: [
                 (dst_rect.left() as f32),
                 (dst_rect.top() as f32),
                 (dst_rect.width() as f32),
-                (dst_rect.height() as f32),
+                0.0,
             ],
             src_uv,
             tint: tint.to_f32_array(),
-            transform: [1.0, 0.0, 0.0, 0.0],
+            axis_y: [0.0, dst_rect.height() as f32, 0.0, 0.0],
             clip_rrect: [0.0; 8],
             clip_kind: [0; 4],
             clip_device_to_local: [1.0, 0.0, 0.0, 1.0],
             clip_local_origin: [0.0; 4],
+            original_image_uv: [0.0, 0.0, 1.0, 1.0],
         }
     }
-
-    // `TextureInstance::with_rotation(dst_rect, angle, tint)` was
-    // deleted. Zero callsites -- production paths use
-    // `TextureInstance::with_uv` (canonical, 5 callsites in
-    // painter) and the painter's matrix stack handles rotation
-    // composition. `TextureInstance::with_uv` was kept despite an
-    // earlier code-review pass recommending its removal, because it
-    // IS live (that pass claimed otherwise; grep proved 5 painter
-    // callsites).
 
     /// Create a textured quad with custom UV and a raw `[f32; 4]` tint.
     ///
@@ -760,33 +760,57 @@ impl TextureInstance {
         tint: [f32; 4],
     ) -> Self {
         Self {
-            dst_rect: [
+            origin_and_x: [
                 (dst_rect.left() as f32),
                 (dst_rect.top() as f32),
                 (dst_rect.width() as f32),
-                (dst_rect.height() as f32),
+                0.0,
             ],
             src_uv,
             tint,
-            transform: [1.0, 0.0, 0.0, 0.0],
+            axis_y: [0.0, dst_rect.height() as f32, 0.0, 0.0],
             clip_rrect: [0.0; 8],
             clip_kind: [0; 4],
             clip_device_to_local: [1.0, 0.0, 0.0, 1.0],
             clip_local_origin: [0.0; 4],
+            original_image_uv: [0.0, 0.0, 1.0, 1.0],
         }
+    }
+
+    /// Set a validated device-space affine quad while preserving UV and clip.
+    pub(crate) fn with_quad(mut self, origin: [f32; 2], x: [f32; 2], y: [f32; 2]) -> Self {
+        self.origin_and_x = [origin[0], origin[1], x[0], x[1]];
+        self.axis_y = [y[0], y[1], 0.0, 0.0];
+        self
+    }
+
+    pub(crate) fn with_original_image_uv(mut self, bounds: [f32; 4]) -> Self {
+        self.original_image_uv = bounds;
+        self
+    }
+
+    pub(crate) fn corners(&self) -> [[f32; 2]; 4] {
+        let [ox, oy, xx, xy] = self.origin_and_x;
+        let [yx, yy, _, _] = self.axis_y;
+        [
+            [ox, oy],
+            [ox + xx, oy + xy],
+            [ox + xx + yx, oy + xy + yy],
+            [ox + yx, oy + yy],
+        ]
     }
 
     /// Get wgpu vertex buffer layout for instance data
     #[must_use]
     pub(crate) fn desc() -> wgpu::VertexBufferLayout<'static> {
         const ATTRIBUTES: &[wgpu::VertexAttribute] = &wgpu::vertex_attr_array![
-            // Destination rect (location 2)
+            // Device origin and x basis (location 2)
             2 => Float32x4,
             // Source UV (location 3)
             3 => Float32x4,
             // Tint color (location 4)
             4 => Float32x4,
-            // Transform (location 5)
+            // Device y basis (location 5)
             5 => Float32x4,
             // Clip rrect part 1: [x, y, width, height] (location 6)
             6 => Float32x4,
@@ -798,6 +822,8 @@ impl TextureInstance {
             9 => Float32x4,
             // Device-to-clip-local translation, padded (location 10)
             10 => Float32x4,
+            // Original full image UV region (location 11)
+            11 => Float32x4,
         ];
 
         wgpu::VertexBufferLayout {
@@ -1068,7 +1094,7 @@ impl RadialGradientInstance {
     pub(crate) fn desc() -> wgpu::VertexBufferLayout<'static> {
         // Adjacent geometry pairs share a vec4, and count/offset share a uvec2.
         // This preserves the existing Rust byte layout while keeping the full
-        // unit-quad + instance input within 13 attributes (locations 0..12).
+        // unit-quad + instance input within 13 attributes (quad0, instances2..13).
         const ATTRIBUTES: &[wgpu::VertexAttribute] = &wgpu::vertex_attr_array![
             2 => Float32x4, // bounds
             3 => Float32x4, // linear parameter / radial center-radius / sweep center-angles
@@ -1081,6 +1107,7 @@ impl RadialGradientInstance {
             10 => Float32x4, // clip-local translation
             11 => Float32x4, // local-to-device linear part
             12 => Float32x4, // local-to-device translation
+            13 => Float32x4, // focal centre, initial radius, inverse scale
         ];
 
         wgpu::VertexBufferLayout {

@@ -467,6 +467,14 @@ sim.is_done(0.1); // Within tolerance?
 
 ### FrictionSimulation
 
+Friction displacement uses `f64::exp_m1`, and inverse position-to-time uses
+`f64::ln_1p`, so finite drag approaching one retains small motion instead of
+rounding it to zero. The public integration test
+`friction_preserves_small_decay_and_position_time_roundtrips` in the
+[consumer tests](tests/contracts/simulation.rs) checks the constant-velocity
+limit, normal positive and negative flings, position/time round trips, and
+unreachable/non-finite queries.
+
 Deceleration with drag:
 
 ```rust,ignore

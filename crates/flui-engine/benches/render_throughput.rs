@@ -196,6 +196,8 @@ fn render_throughput(c: &mut Criterion) {
                 default_style: None,
                 font_size: 24.0,
                 max_width: None,
+                min_width: 0.0,
+                text_align: flui_painting::typography::TextAlign::Start,
                 line_height: None,
                 direction: flui_painting::typography::TextDirection::Ltr,
                 max_lines: None,
@@ -289,6 +291,49 @@ fn alloc_micro(c: &mut Criterion) {
         });
     }
 
+    group.finish();
+}
+
+/// The public recording path on warm geometry, including colour/transform
+/// reconstruction and the recording budget. No GPU encoding is timed.
+fn warm_path_recording(c: &mut Criterion) {
+    use flui_foundation::geometry::Point;
+    use flui_painting::paint::path::Path;
+
+    let Some((device, queue)) = try_create_gpu() else {
+        return;
+    };
+    let mut path = Path::new();
+    for i in 0..128 {
+        let angle = f64::from(i) * std::f64::consts::TAU / 128.0;
+        let point = Point::new(64.0 + 48.0 * angle.cos(), 64.0 + 48.0 * angle.sin());
+        if i == 0 {
+            path.move_to(point);
+        } else {
+            path.line_to(point);
+        }
+    }
+    path.close();
+    // Strokes use the normal tessellated path rather than allocating an SSAA
+    // segment per draw. The benchmark measures the actual cache consumer.
+    let paint = Paint::stroke(Color::RED, 2.0).with_anti_alias(false);
+    let mut painter =
+        WgpuPainter::with_shared_device(device, queue, wgpu::TextureFormat::Rgba8Unorm, (128, 128));
+    painter.begin_frame().expect("warm path frame begins");
+    painter.draw_path(&path, &paint);
+    painter.finish_frame();
+    let mut group = c.benchmark_group("warm_path_cpu_record");
+    for count in [1, 64] {
+        group.bench_function(count.to_string(), |b| {
+            b.iter(|| {
+                painter.begin_frame().expect("path recording frame begins");
+                for _ in 0..count {
+                    painter.draw_path(black_box(&path), black_box(&paint));
+                }
+                painter.finish_frame();
+            });
+        });
+    }
     group.finish();
 }
 
@@ -971,6 +1016,6 @@ criterion_group!(
     ordered_primitives,
     external_bindings
 );
-criterion_group!(alloc_benches, alloc_micro);
+criterion_group!(alloc_benches, alloc_micro, warm_path_recording);
 criterion_group!(damage_benches, damage_scissor, damage_retained_target);
 criterion_main!(benches, damage_benches, alloc_benches);

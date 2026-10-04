@@ -88,3 +88,42 @@ in the same phase at the same time. And the realm coalesces pointer moves
 until the next frame; the harness flushes the queue after each event, through
 the same dispatch code the frame would run, so a test observes a move
 immediately.
+
+### Logical render roots follow reconciliation
+
+`LaidOut::root`, `current_root` and render-type traversal resolve the caller's
+live render subtree after every frame. A composition root remains mounted while
+its child changes render type or a contained build failure installs an error
+view; a cached render ID would then point at the detached child. The
+`logical_render_root_tracks_replacement_and_build_recovery` row in
+`headless_frame_driver_matrix` checks healthy replacement, the rendered error
+slot and recovery through the root's own rebuild handle.
+
+### The conformance kit retains caught opaque panic payloads
+
+`Case::run` borrows its fixture and converts a caught panic into a named
+`CaseFailure`. After extracting string diagnostics, it retains the opaque
+payload: arbitrary aggregate destructors may panic twice during one Drop. This
+exceptional retention does not retain the fixture or alter normal fixture
+teardown. The isolated `kit_retains_opaque_failure_payloads_and_continues` row
+in `text_store_kit_matrix` injects two independent aggregate payloads through
+public fixture reset, checks both named failures, then runs the kit successfully
+again. Neither aggregate destructor executes.
+
+The kit's deliberately panicking-grant case also confirms that the supplied
+grant actually ran. A store panic before invocation is reported through the
+outer case boundary; its payload is retained before any next grant. The
+`kit_reports_pre_grant_failure_without_destroying_its_payload` isolated row
+exercises that distinction and then issues a successful grant on the same
+consumer store. Store ownership remains with the fixture in these regressions;
+normal arbitrary store destructor behavior is governed by Rust's unwind rules.
+
+### A reused signal probe follows its current mount
+
+Each build refreshes the probe's observed signal and reactive graph together.
+A sequential remount creates a new signal, so retaining the first pair would
+read a released slot while the new mount remained live. Old graph retirement
+occurs outside the observation cell's borrow.
+`a_signal_probe_reads_and_writes_its_current_mount_after_remount` in
+`headless_frame_driver_matrix` writes through actual pointer callbacks before
+and after remount, and reads the new initial value between them.

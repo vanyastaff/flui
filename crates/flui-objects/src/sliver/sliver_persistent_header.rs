@@ -1288,9 +1288,8 @@ impl<M: FloatingHeaderMode> RenderSliver for RenderSliverFloatingHeaderBase<M> {
 
     fn attach(&mut self, handle: RenderInvalidationHandle) {
         if let Some(controller) = self.controller.as_ref() {
-            let mark_handle = handle.clone();
             self.listener_id = Some(controller.add_listener(Arc::new(move || {
-                let _ = mark_handle.mark_needs_layout();
+                let _ = handle.mark_needs_layout();
             })));
         }
     }

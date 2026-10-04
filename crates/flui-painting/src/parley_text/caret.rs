@@ -2,10 +2,8 @@
 //! the [`ParagraphLayout`] that measured and painted (flui-painting
 //! `ARCHITECTURE.md`, mapping decision 15).
 //!
-//! Every answer is in the painted box's coordinates: each cluster edge is
-//! moved by the same per-line shift paint moves glyphs by
-//! ([`ParagraphLayout::line_shift`]), so a caret sits on the glyph it
-//! follows. Only the kept text is reachable: an offset past it, in dropped
+//! Every answer is in the painted box's coordinates: cluster edges use
+//! Parley's aligned line offsets and advances, just as painted glyphs do. Only the kept text is reachable: an offset past it, in dropped
 //! lines or in an appended ellipsis, answers its end.
 
 use std::ops::Range;
@@ -81,13 +79,12 @@ impl ParagraphLayout {
 
     /// Places the kept lines' clusters where paint puts their glyphs.
     fn place_lines(&self) -> Vec<PlacedLine> {
-        let (box_width, _) = self.kept_extent();
         self.layout
             .lines()
             .take(self.kept())
             .map(|line| {
                 let metrics = line.metrics();
-                let start = self.line_start(metrics, box_width) + metrics.inline_min_coord;
+                let start = metrics.offset + metrics.inline_min_coord;
                 let mut x = start;
                 let mut clusters = Vec::new();
                 for run in line.runs() {
@@ -120,11 +117,7 @@ impl ParagraphLayout {
 
     /// `offset` clamped to the kept text and snapped down to a char boundary.
     fn clamp_offset(&self, offset: usize) -> usize {
-        let mut offset = offset.min(self.kept_text);
-        while offset > 0 && !self.text.is_char_boundary(offset) {
-            offset -= 1;
-        }
-        offset
+        self.text.floor_char_boundary(offset.min(self.kept_text))
     }
 
     /// The caret before the text at `offset`: its x and the index of its line.
@@ -316,7 +309,6 @@ impl ParagraphLayout {
     /// which `end_including_newline` keeps. A layout with no line reports one
     /// line box of the paragraph's line height.
     pub(crate) fn line_metrics(&self) -> Vec<LineMetrics> {
-        let (box_width, _) = self.kept_extent();
         let mut metrics: Vec<LineMetrics> = self
             .layout
             .lines()
@@ -343,8 +335,8 @@ impl ParagraphLayout {
                     f64::from(m.block_max_coord - m.baseline),
                     f64::from(m.baseline - m.block_min_coord),
                     f64::from(m.block_max_coord - m.block_min_coord),
-                    f64::from(m.advance - m.trailing_whitespace),
-                    f64::from(self.line_start(m, box_width) + m.inline_min_coord + hang),
+                    f64::from(Self::visible_line_width(&line)),
+                    f64::from(m.offset + m.inline_min_coord + hang),
                     f64::from(m.baseline),
                     number,
                     start,
@@ -417,6 +409,8 @@ mod tests {
                 default_style: None,
                 font_size: 16.0,
                 max_width: None,
+                min_width: 0.0,
+                text_align: crate::typography::TextAlign::Start,
                 line_height: None,
                 direction: TextDirection::Ltr,
                 max_lines: None,

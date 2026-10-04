@@ -68,6 +68,26 @@ fn parley_oracle_contract() {
                 "rasterizing_a_key_twice_draws_the_same_bitmap",
                 parley_oracle::rasterizing_a_key_twice_draws_the_same_bitmap,
             ),
+            (
+                "registered_fonts_release_the_source_and_keep_rasterizing",
+                parley_oracle::registered_fonts_release_the_source_and_keep_rasterizing,
+            ),
+            (
+                "subpixel_split_is_total_across_the_float_domain",
+                parley_oracle::subpixel_split_is_total_across_the_float_domain,
+            ),
+            (
+                "placed_glyphs_omit_unrepresentable_coordinates",
+                parley_oracle::placed_glyphs_omit_unrepresentable_coordinates,
+            ),
+            (
+                "placed_glyphs_keep_representable_extremes_and_hinting",
+                parley_oracle::placed_glyphs_keep_representable_extremes_and_hinting,
+            ),
+            (
+                "placed_glyphs_keep_cancelling_vertical_coordinates",
+                parley_oracle::placed_glyphs_keep_cancelling_vertical_coordinates,
+            ),
         ],
     );
 }
@@ -107,6 +127,58 @@ fn value_contract() {
         "value",
         &[
             (
+                "negative_linear_stops_are_rejected",
+                values::negative_linear_stops_are_rejected,
+            ),
+            (
+                "radial_stops_above_one_are_rejected",
+                values::radial_stops_above_one_are_rejected,
+            ),
+            (
+                "extreme_negative_sweep_stops_are_rejected",
+                values::extreme_negative_sweep_stops_are_rejected,
+            ),
+            (
+                "extreme_positive_linear_stops_are_rejected",
+                values::extreme_positive_linear_stops_are_rejected,
+            ),
+            (
+                "linear_nan_stops_are_rejected",
+                values::linear_nan_stops_are_rejected,
+            ),
+            (
+                "radial_infinite_stops_are_rejected",
+                values::radial_infinite_stops_are_rejected,
+            ),
+            (
+                "sweep_descending_stops_are_rejected",
+                values::sweep_descending_stops_are_rejected,
+            ),
+            (
+                "empty_equal_gradients_are_rejected",
+                values::empty_equal_gradients_are_rejected,
+            ),
+            (
+                "mismatched_equal_gradient_stops_are_rejected",
+                values::mismatched_equal_gradient_stops_are_rejected,
+            ),
+            (
+                "nan_gradient_interpolation_is_rejected",
+                values::nan_gradient_interpolation_is_rejected,
+            ),
+            (
+                "linear_interpolation_keeps_hard_transitions",
+                values::linear_interpolation_keeps_hard_transitions,
+            ),
+            (
+                "radial_interpolation_keeps_hard_transitions",
+                values::radial_interpolation_keeps_hard_transitions,
+            ),
+            (
+                "sweep_interpolation_keeps_hard_transitions",
+                values::sweep_interpolation_keeps_hard_transitions,
+            ),
+            (
                 "font_weight_from_css_breaks_ties_like_css",
                 values::font_weight_from_css_breaks_ties_like_css,
             ),
@@ -117,6 +189,21 @@ fn value_contract() {
             (
                 "an_arc_joins_an_open_contour_and_starts_a_closed_one_fresh",
                 values::an_arc_joins_an_open_contour_and_starts_a_closed_one_fresh,
+            ),
+            #[cfg(feature = "serde")]
+            (
+                "deserialized_paths_keep_geometry_authoritative",
+                values::deserialized_paths_keep_geometry_authoritative,
+            ),
+            #[cfg(feature = "serde")]
+            (
+                "serialized_factory_paths_preserve_their_shapes",
+                values::serialized_factory_paths_preserve_their_shapes,
+            ),
+            #[cfg(feature = "serde")]
+            (
+                "deserialized_images_validate_rgba_dimensions_and_data",
+                values::deserialized_images_validate_rgba_dimensions_and_data,
             ),
         ],
     );
@@ -130,6 +217,10 @@ fn recording_contract() {
             (
                 "save_restore_tracks_the_save_count",
                 recording::save_restore_tracks_the_save_count,
+            ),
+            (
+                "shear_factors_map_the_named_axes_in_recorded_commands",
+                recording::shear_factors_map_the_named_axes_in_recorded_commands,
             ),
             #[cfg(debug_assertions)]
             (
@@ -199,6 +290,22 @@ fn decoration_contract() {
         "decoration",
         &[
             (
+                "hidden_uniform_rectangle_borders_do_not_paint",
+                decoration_unit::hidden_uniform_rectangle_borders_do_not_paint,
+            ),
+            (
+                "hidden_uniform_circle_borders_do_not_paint",
+                decoration_unit::hidden_uniform_circle_borders_do_not_paint,
+            ),
+            (
+                "hidden_table_borders_do_not_paint",
+                decoration_unit::hidden_table_borders_do_not_paint,
+            ),
+            (
+                "hidden_edges_do_not_shorten_visible_neighboring_edges",
+                decoration_unit::hidden_edges_do_not_shorten_visible_neighboring_edges,
+            ),
+            (
                 "paint_order_is_shadow_background_border",
                 decoration_unit::paint_order_is_shadow_background_border,
             ),
@@ -219,6 +326,12 @@ fn text_contract() {
     run_cases(
         "text",
         &[
+            ("root_word_spacing_reaches_measurement_paint_and_carets", text_painter_unit::root_word_spacing_reaches_measurement_paint_and_carets),
+            ("span_word_spacing_reaches_measurement_paint_and_carets", text_painter_unit::span_word_spacing_reaches_measurement_paint_and_carets),
+            ("font_features_change_the_measured_and_painted_glyphs", text_painter_unit::font_features_change_the_measured_and_painted_glyphs),
+            ("invalid_font_features_do_not_replace_valid_settings", text_painter_unit::invalid_font_features_do_not_replace_valid_settings),
+            ("font_variations_select_the_painted_run_instance", text_painter_unit::font_variations_select_the_painted_run_instance),
+            ("invalid_font_variations_do_not_replace_valid_settings", text_painter_unit::invalid_font_variations_do_not_replace_valid_settings),
             (
                 "styled_text_pipeline",
                 text_layout_pipeline::full_pipeline_with_styled_text,
@@ -261,8 +374,72 @@ fn caret_contract() {
         &[
             ("caret_position", cc::caret_position),
             (
+                "unbounded_breaking_uses_the_minimum_allocated_width",
+                cc::unbounded_breaking_uses_the_minimum_allocated_width,
+            ),
+            (
+                "centered_lines_use_the_tight_allocated_box",
+                cc::centered_lines_use_the_tight_allocated_box,
+            ),
+            (
+                "right_aligned_lines_use_the_tight_allocated_box",
+                cc::right_aligned_lines_use_the_tight_allocated_box,
+            ),
+            (
+                "loose_centered_lines_stay_inside_the_measured_box",
+                cc::loose_centered_lines_stay_inside_the_measured_box,
+            ),
+            (
+                "unbounded_centered_lines_align_without_wrapping",
+                cc::unbounded_centered_lines_align_without_wrapping,
+            ),
+            (
+                "rtl_start_aligns_each_line_right",
+                cc::rtl_start_aligns_each_line_right,
+            ),
+            (
+                "rtl_end_aligns_each_line_left",
+                cc::rtl_end_aligns_each_line_left,
+            ),
+            (
+                "native_rtl_lines_center_in_the_allocated_box",
+                cc::native_rtl_lines_center_in_the_allocated_box,
+            ),
+            (
+                "native_rtl_lines_align_to_the_right_edge",
+                cc::native_rtl_lines_align_to_the_right_edge,
+            ),
+            (
+                "a_last_kept_soft_line_retains_native_justification",
+                cc::a_last_kept_soft_line_retains_native_justification,
+            ),
+            (
+                "trailing_whitespace_does_not_shift_visible_alignment",
+                cc::trailing_whitespace_does_not_shift_visible_alignment,
+            ),
+            (
+                "justification_expands_soft_lines_but_not_the_final_line",
+                cc::justification_expands_soft_lines_but_not_the_final_line,
+            ),
+            (
+                "justification_leaves_hard_break_lines_unstretched",
+                cc::justification_leaves_hard_break_lines_unstretched,
+            ),
+            (
+                "alignment_change_replaces_cached_positions",
+                cc::alignment_change_replaces_cached_positions,
+            ),
+            (
+                "ellipsized_lines_align_only_the_kept_text",
+                cc::ellipsized_lines_align_only_the_kept_text,
+            ),
+            (
                 "two_space_run_word_boundary",
                 cc::two_space_run_word_boundary,
+            ),
+            (
+                "byte_offsets_snap_backward_and_clamp_at_the_text_end",
+                cc::byte_offsets_snap_backward_and_clamp_at_the_text_end,
             ),
             (
                 "a_combining_mark_is_one_hit_target",

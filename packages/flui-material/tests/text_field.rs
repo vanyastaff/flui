@@ -61,7 +61,7 @@ pub fn tapping_the_decorated_area_focuses_the_field_and_reaches_the_decorator() 
     let mut laid = lay_out(
         Theme::new(
             theme,
-            TextField::new(controller.clone()).focus_node(Rc::clone(&focus_node)),
+            TextField::new(controller).focus_node(Rc::clone(&focus_node)),
         ),
         tight(300.0, 100.0),
     );

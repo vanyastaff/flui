@@ -133,6 +133,18 @@ realm's context through a mounted `Text`.
 
 ---
 
+### Finite sizing survives intermediate normalization overflow
+
+An intrinsic quantum smaller than the representable spacing of a finite size
+cannot enlarge that size. `RenderIntrinsicWidth` keeps the finite intrinsic
+answer when dividing by its positive quantum overflows, while ordinary stepping
+still rounds upward. `family_intrinsics` checks a tiny quantum against the
+child's natural width and an ordinary step against the next multiple.
+
+`family_sizing` also checks a large finite constrained width against a distinct
+parent maximum, plus ordinary hundredth quantization. Rounding extra constraints
+must not turn that finite width into infinity and force the parent maximum.
+
 ## Thread safety
 
 No locks. Catalog objects are mutated on the UI realm's layout/paint thread
@@ -145,3 +157,15 @@ through `PipelineOwner`; they hold no shared mutable state of their own.
 | Item | Notes |
 |------|-------|
 | Shared `classify_cache_window` helper across list + grid | Grid owns its classify today; list uses `finite_leading_cache_edge`. Consolidating into one module is optional follow-up once a third consumer appears. |
+
+
+### RenderImage source fitting
+
+RenderImage uses painting's BoxFit::apply for both the cropped source and the
+fitted destination (ADR-0115). Alignment positions both rectangles. Its logical
+intrinsic/scale source converts back to decoded texel coordinates before Canvas
+records an ImageRegion, so Cover paints inside the allocated box and high-DPI
+source cropping uses the decoded image's coordinates. The actual object/tree
+consumer is `render_image_scaled_cover`, a row of the engine's existing
+`painter_images_and_offscreen_results_read_back_as_specified` GPU family; the
+objects catalog still owns its layout/paint-presence harness rows.

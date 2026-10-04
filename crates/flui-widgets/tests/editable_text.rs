@@ -400,6 +400,39 @@ pub(crate) mod text_store {
         slot.take().expect("the grant ran")
     }
 
+    pub(crate) fn rtl_scalar_rect_midpoints_resolve_to_the_source_scalar() {
+        use flui_foundation::geometry::Point;
+        use flui_platform_api::text_store::{PointMode, Utf16Range};
+        let controller = TextEditingController::with_text("אב");
+        let (harness, _focus) = focused(&controller);
+        let field = store(&harness);
+        read(&field, |session| {
+            for scalar in 0..2 {
+                let from = session
+                    .rect_for_range(Utf16Range::collapsed(at(scalar)))
+                    .expect("laid-out scalar caret")
+                    .bounds;
+                let to = session
+                    .rect_for_range(Utf16Range::collapsed(at(scalar + 1)))
+                    .expect("laid-out next scalar caret")
+                    .bounds;
+                assert!(from.origin.x > to.origin.x, "Hebrew source carets descend");
+                let point = Point::new(
+                    from.origin.x.midpoint(to.origin.x),
+                    from.origin.y + from.size.height / 2.0,
+                );
+                assert_eq!(
+                    session.index_at_point(point, PointMode::Exact),
+                    Ok(at(scalar))
+                );
+                assert_eq!(
+                    session.index_at_point(from.origin, PointMode::Nearest),
+                    Ok(at(scalar))
+                );
+            }
+        });
+    }
+
     /// The store's UTF-16 offsets and the controller's UTF-8 bytes name the
     /// same positions, in both directions.
     pub(crate) fn store_offsets_match_controller_bytes_across_surrogates_and_graphemes() {
@@ -546,4 +579,215 @@ pub(crate) mod event_cx {
         assert_eq!(controller.text(), "a", "the edit itself landed");
         assert_eq!(probe.value(), Ok(0));
     }
+}
+
+/// Inserting before an existing mark joins a cluster; Backspace removes it whole.
+pub(crate) fn insertion_keeps_the_caret_after_the_joined_combining_cluster() {
+    let controller = TextEditingController::with_text("\u{301}");
+    controller.set_caret_byte_offset(0);
+    controller.insert_str("e");
+    assert_eq!(controller.text(), "e\u{301}");
+    assert_eq!(controller.caret_byte_offset(), controller.text().len());
+    controller.backspace();
+    assert_eq!(controller.text(), "");
+    controller.insert_str("ok");
+    assert_eq!(controller.caret_byte_offset(), 2);
+}
+
+pub(crate) fn deleting_a_separator_keeps_the_caret_after_the_joined_flag() {
+    let controller = TextEditingController::with_text("🇦 🇧");
+    controller.set_selection(4, 5);
+    controller.insert_str("");
+    assert_eq!(controller.text(), "🇦🇧");
+    assert_eq!(controller.caret_byte_offset(), 8);
+    controller.backspace();
+    assert_eq!(controller.text(), "");
+    controller.insert_str("x");
+    assert_eq!(controller.caret_byte_offset(), 1);
+}
+
+fn selection_contact(id: u64) -> flui_interaction::PointerId {
+    flui_interaction::PointerId::new(id).expect("nonzero fixture contact")
+}
+
+fn selection_field() -> (crate::common::LaidOut, TextEditingController, Rc<FocusNode>) {
+    use flui_foundation::geometry::Size;
+    use flui_rendering::constraints::BoxConstraints;
+    let controller = TextEditingController::with_text("hello world");
+    let focus = FocusNode::with_debug_label("persistent selection contact");
+    let tree = crate::common::lay_out(
+        EditableText::new(controller.clone(), Rc::clone(&focus)),
+        BoxConstraints::tight(Size::new(500.0, 40.0)),
+    );
+    (tree, controller, focus)
+}
+
+pub(crate) fn selection_drag_survives_a_same_controller_rebuild() {
+    use flui_foundation::geometry::Offset;
+    use flui_interaction::events::{
+        PointerType, make_cancel_event_for_id, make_down_event_for_id, make_move_event_for_id,
+    };
+    let (mut tree, controller, focus) = selection_field();
+    let contact = selection_contact(41);
+    tree.dispatch_pointer_event(&make_down_event_for_id(
+        contact,
+        Offset::new(1.0, 5.0),
+        PointerType::Touch,
+    ));
+    let anchor = controller.caret_byte_offset();
+    assert_eq!(anchor, 0);
+    tree.pump_widget(EditableText::new(controller.clone(), Rc::clone(&focus)).caret_height(19.0));
+    tree.dispatch_pointer_event(&make_move_event_for_id(
+        contact,
+        Offset::new(400.0, 5.0),
+        PointerType::Touch,
+    ));
+    assert_eq!(controller.selection().start, anchor);
+    assert!(controller.selection().end > anchor);
+    tree.dispatch_pointer_event(&make_cancel_event_for_id(contact, PointerType::Touch));
+    let next = selection_contact(42);
+    tree.dispatch_pointer_event(&make_down_event_for_id(
+        next,
+        Offset::new(400.0, 5.0),
+        PointerType::Touch,
+    ));
+    let next_anchor = controller.caret_byte_offset();
+    tree.dispatch_pointer_event(&make_move_event_for_id(
+        next,
+        Offset::new(1.0, 5.0),
+        PointerType::Touch,
+    ));
+    assert!(controller.caret_byte_offset() < next_anchor);
+}
+
+fn foreign_selection_terminal(cancel: bool) {
+    use flui_foundation::geometry::Offset;
+    use flui_interaction::events::{
+        PointerType, make_cancel_event_for_id, make_down_event_for_id, make_move_event_for_id,
+        make_up_event_for_id,
+    };
+    let (tree, controller, _focus) = selection_field();
+    let own = selection_contact(51);
+    let foreign = selection_contact(52);
+    tree.dispatch_pointer_event(&make_down_event_for_id(
+        own,
+        Offset::new(1.0, 5.0),
+        PointerType::Touch,
+    ));
+    let anchor = controller.caret_byte_offset();
+    tree.dispatch_pointer_event(&make_down_event_for_id(
+        foreign,
+        Offset::new(150.0, 5.0),
+        PointerType::Touch,
+    ));
+    assert_eq!(
+        controller.caret_byte_offset(),
+        anchor,
+        "first contact owns selection"
+    );
+    tree.dispatch_pointer_event(&make_move_event_for_id(
+        foreign,
+        Offset::new(400.0, 5.0),
+        PointerType::Touch,
+    ));
+    assert_eq!(
+        controller.caret_byte_offset(),
+        anchor,
+        "foreign move cannot select"
+    );
+    let terminal = if cancel {
+        make_cancel_event_for_id(foreign, PointerType::Touch)
+    } else {
+        make_up_event_for_id(foreign, Offset::new(400.0, 5.0), PointerType::Touch)
+    };
+    tree.dispatch_pointer_event(&terminal);
+    tree.dispatch_pointer_event(&make_move_event_for_id(
+        own,
+        Offset::new(400.0, 5.0),
+        PointerType::Touch,
+    ));
+    assert_eq!(controller.selection().start, anchor);
+    assert!(
+        controller.selection().end > anchor,
+        "foreign terminal preserves own drag"
+    );
+    tree.dispatch_pointer_event(&make_cancel_event_for_id(own, PointerType::Touch));
+    let next = selection_contact(53);
+    tree.dispatch_pointer_event(&make_down_event_for_id(
+        next,
+        Offset::new(400.0, 5.0),
+        PointerType::Touch,
+    ));
+    let next_anchor = controller.caret_byte_offset();
+    tree.dispatch_pointer_event(&make_move_event_for_id(
+        next,
+        Offset::new(1.0, 5.0),
+        PointerType::Touch,
+    ));
+    assert!(controller.caret_byte_offset() < next_anchor);
+}
+
+pub(crate) fn foreign_release_preserves_the_selection_contact() {
+    foreign_selection_terminal(false);
+}
+pub(crate) fn foreign_cancel_preserves_the_selection_contact() {
+    foreign_selection_terminal(true);
+}
+
+fn selection_retarget(replace: bool) {
+    use flui_foundation::geometry::Offset;
+    use flui_interaction::events::{
+        PointerType, make_cancel_event_for_id, make_down_event_for_id, make_move_event_for_id,
+    };
+    let (mut tree, old, focus) = selection_field();
+    let own = selection_contact(61);
+    tree.dispatch_pointer_event(&make_down_event_for_id(
+        own,
+        Offset::new(1.0, 5.0),
+        PointerType::Touch,
+    ));
+    let current = if replace {
+        TextEditingController::with_text("replacement")
+    } else {
+        old
+    };
+    tree.pump_widget(EditableText::new(current.clone(), Rc::clone(&focus)).enabled(replace));
+    if !replace {
+        tree.pump_widget(EditableText::new(current.clone(), Rc::clone(&focus)));
+    }
+    let before = current.caret_byte_offset();
+    tree.dispatch_pointer_event(&make_move_event_for_id(
+        own,
+        Offset::new(if replace { 1.0 } else { 400.0 }, 5.0),
+        PointerType::Touch,
+    ));
+    assert_eq!(
+        current.caret_byte_offset(),
+        before,
+        "retired contact cannot edit the current document"
+    );
+    tree.dispatch_pointer_event(&make_cancel_event_for_id(own, PointerType::Touch));
+    let next = selection_contact(62);
+    tree.dispatch_pointer_event(&make_down_event_for_id(
+        next,
+        Offset::new(400.0, 5.0),
+        PointerType::Touch,
+    ));
+    let anchor = current.caret_byte_offset();
+    tree.dispatch_pointer_event(&make_move_event_for_id(
+        next,
+        Offset::new(1.0, 5.0),
+        PointerType::Touch,
+    ));
+    assert!(
+        current.caret_byte_offset() < anchor,
+        "new contact edits after retirement"
+    );
+}
+
+pub(crate) fn disabling_the_field_retires_its_selection_contact() {
+    selection_retarget(false);
+}
+pub(crate) fn replacing_the_controller_retires_the_old_selection_contact() {
+    selection_retarget(true);
 }

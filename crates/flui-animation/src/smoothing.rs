@@ -204,7 +204,7 @@ impl SmoothDamp {
         // for large x; clamp to the target and zero the outward velocity.
         if (original_target - current > 0.0) == (output > original_target) {
             output = original_target;
-            self.velocity = (output - original_target) / dt;
+            self.velocity = 0.0;
         }
         output
     }

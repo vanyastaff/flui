@@ -432,8 +432,12 @@ impl SemanticsTree {
         }
     }
 
-    /// Removes a child from a parent SemanticsNode.
+    /// Detaches a child from its current parent. A missing parent or child,
+    /// or a child belonging to another parent, leaves the tree unchanged.
     pub fn remove_child(&mut self, parent_id: SemanticsId, child_id: SemanticsId) {
+        if !self.contains(parent_id) || self.parent(child_id) != Some(parent_id) {
+            return;
+        }
         // Update parent's children
         if let Some(parent) = self.get_mut(parent_id) {
             parent.remove_child(child_id);

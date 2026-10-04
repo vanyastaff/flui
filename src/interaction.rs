@@ -4,7 +4,7 @@
 //! contracts when naming callback payloads or integrating a recognizer with
 //! the presentation's [`crate::widgets::GestureArenaScope`]. Lifecycle hooks can
 //! also retain the focus, hit-test, and text-input handles provided by
-//! [`crate::view::BuildContext`], using the callback and result types below.
+//! [`crate::view::LifecycleContext`], using the callback and result types below.
 //! Owners and backend adapter construction remain internal to the runtime.
 
 pub use flui_interaction::arena::{
@@ -26,8 +26,8 @@ pub use flui_interaction::recognizers::{GestureRecognizerState, RecognizerBase};
 pub use flui_interaction::{
     CustomGestureRecognizer, DoubleTapGestureRecognizer, DragAxis, DragDownDetails, DragEndDetails,
     DragGestureRecognizer, DragStartDetails, DragUpdateDetails, EagerGestureRecognizer,
-    ForcePressGestureRecognizer, GestureRecognizer, GestureRecognizerExt, GestureSettings,
-    HorizontalDragGestureRecognizer, LongPressGestureRecognizer, MultiDragAxis,
+    ForcePressGestureRecognizer, GestureEndReason, GestureRecognizer, GestureRecognizerExt,
+    GestureSettings, HorizontalDragGestureRecognizer, LongPressGestureRecognizer, MultiDragAxis,
     MultiDragEndDetails, MultiDragGestureRecognizer, MultiDragHandle, MultiDragUpdateDetails,
     MultiTapGestureRecognizer, PanGestureRecognizer, PointerId, PointerPanZoomEvent,
     ScaleGestureRecognizer, TapAndDragGestureRecognizer, TapDragDownDetails, TapDragEndDetails,

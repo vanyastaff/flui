@@ -1,13 +1,11 @@
 //! Window Features Demo
 //!
-//! Demonstrates cross-platform window features and platform-specific
-//! extensions.
+//! Opens a native window and reports its display and geometry properties.
 //!
 //! This example shows:
 //! - Cross-platform Window trait API
-//! - Window state management (minimize, maximize, fullscreen)
-//! - Window properties (resizable, title, size)
-//! - Platform-specific features (Mica on Windows, Liquid Glass on macOS)
+//! - Window creation options (resizable, title, size)
+//! - Logical size, physical size, scale, visibility and focus
 //!
 //! Usage:
 //! ```bash
@@ -71,7 +69,7 @@ fn main() -> anyhow::Result<()> {
         tracing::info!("  Focused:       {}", window.is_focused());
 
         tracing::info!("Platform ready, window is open");
-        // Keep window alive via closure capture
+        // The platform registry owns the native window after readiness.
         let _window = window;
         Ok(())
     }))?;

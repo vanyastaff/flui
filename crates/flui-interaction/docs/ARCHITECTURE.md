@@ -8,7 +8,7 @@ Crate-level design notes for `flui_interaction`: subsystems, ownership, mapping 
 |---|---|
 | `arena` | Owner-local conflict resolution between competing recognisers. Tracks per-pointer `SmallVec<[Arc<dyn GestureArenaMember>; 4]>` (inline for ≤ 4 members), exact generational slots, held generations detached across pointer-ID reuse, and a lifecycle (Open → Held → Closed → Resolved). Eager acceptors win when the arena closes; teams enable multi-winner resolution. |
 | `recognizers` | The 11+ recogniser types. Each implements `GestureRecognizer` (the `add_pointer` / `handle_event` / `dispose` lifecycle) and gets `GestureArenaMember` for free via the `CustomGestureRecognizer` blanket impl. State machines are kept inline per file (TapState, LongPressPhase, etc.) — no shared trait-object dispatch. |
-| `processing` | Per-pointer derived data: `VelocityTracker` (LSQ fit on 20-sample circular buffer, 100 ms horizon, 40 ms stationary gate), `PointerEventResampler` (frame-rate adaptation with 100-event cap and 1 ms minimum sample interval), `InputPredictor` (kalman-style pointer extrapolation), `RawInputHandler` (low-level stream adapter), and the shared `lsq_solver` + `sampling_clock` helpers. |
+| `processing` | Per-pointer derived data: `VelocityTracker` (LSQ fit on 20-sample circular buffer, 100 ms horizon, 40 ms stationary gate), `PointerEventResampler` (frame-rate adaptation with 100-event cap and 1 ms minimum sample interval), `InputPredictor` (velocity extrapolation with optional acceleration and prediction smoothing), `RawInputHandler` (low-level stream adapter), and the shared `lsq_solver` + `sampling_clock` helpers. |
 | `routing` | Event dispatch infrastructure: `EventRouter`, `PointerRouter`, owner-thread TLS `FocusManager`, `FocusScopeNode` / reading-order Tab traversal, `MouseTracker` (enter/exit/hover), hit testing, and the `TransformGuard` stack-RAII for the transform stack. Off the per-pointer hot path. |
 | `binding` | `GestureBinding` — owner-local glue that hosts the arena, resolves and retains the Down hit route, coalesces/resamples Moves, and runs route → arena lifecycle ordering. Contact generations prevent frame-delayed samples from crossing a reused platform pointer ID. |
 | `observability` | Observability substrate. `GestureEvent` is a typed `Display` enum of recogniser / arena event names; `SPAN_RECOGNIZER` and `SPAN_ARENA` are span-name constants; `pointer_event_kind` summarises a `PointerEvent` to a short string for span fields. `#[tracing::instrument]` is applied on `RecognizerBase` start_tracking / stop_tracking and on every public `GestureArena` method. |
@@ -61,6 +61,8 @@ Local design choices and why. Each entry names the conflict, the choice, and the
 
   FLUI's `request_focus`/`unfocus` are synchronous and must return a decision immediately (an existing, unrelated contract), so "defer to a microtask that doesn't exist yet at this point in a synchronous call stack" isn't available. `FocusManager` instead queues a reentrant request (`pending_focus_transitions: RefCell<VecDeque<Option<Rc<FocusNode>>>>`, `None` = unfocus) and applies every queued request FIFO once the in-flight notification (`notification_depth: Cell<u32>`, held by a `NotificationDepthGuard` that decrements — and, on unwind, also discards the queue — even if a listener panics) returns to zero — each re-validated for eligibility (attached, focusable, still owned by this manager) immediately before it applies, since a listener earlier in the same chain can detach a queued target or revoke its focusability before its turn comes. Each application gets its own commit, node-listener pass, and manager-listener publication, in request order. This gives a chronological guarantee ("a reentrant request becomes the next transition, never an earlier one republished late") without the up-to-one-frame lag, and without Compose's revert-plus-cancellation-event surface (a synchronous manager has no torn-down transaction to revert — every accepted request either commits or is still queued, never both, so there is nothing a cancellation event would need to announce) and without the browsers' unbounded, uncontrolled recursion. `finish_node_replacement` publishes its own outer edge under the same guard, firing only when primary identity actually changed across the replacement — a replacement that only changes a focused node's ancestry publishes no manager-level edge, since the affected ancestors' node-level listeners already cover it. `close` keeps a related but distinct contract instead of taking the guard itself: its own node-level notification always runs, nested inside whatever notification is already in flight, while its manager-level publication is skipped — rather than interleaved out of order — whenever one is already in flight. A reentrant chain with no natural end (two listeners that keep re-requesting each other) has no analogue among the six references above that FLUI can lean on as-is, so the drain is bounded at `FocusManager::REENTRANT_FOCUS_DRAIN_BUDGET` (32) applications per outermost call and drops the remainder with one latched `tracing::warn!` naming the last-requested node id and the count of dropped requests (`ping_pong_listeners_are_bounded_and_warned`). Listener dispatch is also removal-safe: both `FocusManager::notify_listeners` and `FocusNode::notify_listeners_after_tree_change` re-check that a listener is still registered immediately before calling it, so one listener removing another (or itself) mid-dispatch is never called again in that same dispatch. **Unasserted:** no test pins this.
 
+- **Scoped hit-test transforms survive caught panics.** `with_paint_offset` and `with_paint_transform` restore their entry transform depth through `TransformGuard`, whether the callback returns or unwinds. Pending transform parts may have become globalized while entries were added, so rollback restores the combined depth rather than blindly popping one part. The rendering consumer `hit_test_matrix` catches a transformed descendant failure and checks the healthy sibling's emitted local coordinates. Raw pushes still require balanced pops; scopes do not authorize removing their ancestors' transforms.
+
 ## Testing strategy
 
 | Command | Purpose |
@@ -86,14 +88,18 @@ the app boundary; the crate does not install one. Filter via
 ## Friction log
 
 - **`docs/ARCHITECTURE.md` (this file) is the template-driven version;** the pre-template `crates/flui-interaction/docs/ARCHITECTURE.md` body (gesture state-machine diagrams, hit testing walk) lives as a companion. Relocation to crate root is deferred to a doc-tidying pass.
-- **`is_resolved(pointer)` returns `bool` not `Result`.** Arena resolution can't fail in this design (the worst case is a `parking_lot::Mutex` poison — the `Deref` impl swallows it for ergonomics, and the arena entry is dropped). If you need poison-detection, wrap the call site in `catch_unwind` rather than changing the API.
+- **`is_resolved(pointer)` is a state query.** Callback failure is handled at
+  resolution boundaries; `parking_lot::Mutex` does not poison. Catching an
+  unwind is not a query for poisoned state.
 - **`make_*_event` test helpers are `#[cfg(any(test, feature = "testing"))]`.** The benches depend on the `testing` feature being enabled in `dev-dependencies`. Documented at `Cargo.toml`; the gates will surface any missing opt-in.
 
 ## Outstanding refactors
 
 - **Doc-test sweep: convert the remaining 72 `rust,ignore` to runnable.** The `processing::InputPredictor` and `routing::FocusManager` doc-tests are the next highest-value targets. The `testing` module builders (`ModifiersBuilder`, `KeyEventBuilder`) are the third tier. Land as a follow-up PR.
 - **Property tests for the gesture arena** (deferred). `proptest` over a sequence of `add` / `close` / `sweep` operations, asserting: every reachable pointer has a state, no arena has two winners, `is_resolved` ⇔ `winner_count >= 1` after `close`. Bench time + property-cost justifies a separate `flui-interaction/tests/proptest_arena.rs` file.
-- **Loom test coverage for the arena's DashMap + Mutex pairing** (deferred). `loom` over a small parallel `add` / `resolve` workload. Same precedent as `flui-rendering` — needs a `#[cfg(loom)]` gate.
+- **Concurrency models must match ownership.** The executable arena is
+  owner-local; a parallel `add` / `resolve` model would test an unsupported
+  execution contract. Deferred data-plane synchronization needs its own model.
 - **Bench fidelity pass: realistic workloads.** Current benches use synthetic events; the next pass should replay recorded gesture traces from `flui-app` (TBD where they live). The `testing::recording` module is the substrate.
 - **Re-export the `pub mod observability` at `crate::prelude`** once the devtools substrate is stable — currently only the `GestureEvent` / `SPAN_*` items are re-exported at the crate root.
 
@@ -107,3 +113,33 @@ subsystem-level deep-dives:
 - [`docs/HIT_TESTING.md`](HIT_TESTING.md) — hit-test walk.
 - [`docs/PERFORMANCE.md`](PERFORMANCE.md) — performance notes
   (60 fps / 16 ms / 0 alloc on hot path).
+
+
+## Accepted drag terminal reason
+
+`DragEndDetails::reason` reports `GestureEndReason::Completed` for pointer Up and
+`Cancelled` for an accepted pointer Cancel (ADR-0112). The end callback remains
+common to both outcomes; pre-acceptance rejection still reports the cancel
+callback. Velocity retains its measured value in either outcome, so consumers
+choose cancellation policy from the reason rather than inferring it from a
+zero velocity. Contact state and tracking retire before callback delivery,
+without holding the drag-state guard. The widget consumer row
+`horizontal_drag_pointer_cancel_after_acceptance_ends_and_does_not_wedge_the_detector`
+observes actual cancellation, subsequent release and both reasons.
+
+## Hit transform admission
+
+`HitTestResult::with_paint_transform` returns `Option<R>` (ADR-0113). It obtains
+an admitted inverse through `Matrix4::try_inverse` before changing the stack or
+calling the descendant. Refusal publishes no descendant entries; callers can
+map `None` to a subtree miss. The callback capture is retired normally even on
+refusal; the helper introduces no callback panic containment. Successful scopes
+keep the existing combined-depth unwind guard. The public
+`hit_test_transform_admission` family covers singular, non-finite and computed
+range refusals, tiny finite scales, a healthy scope after each refusal, and
+caught descendant failure after entries have globalized the transform stack.
+The row `refused_callback_retirement_failure_preserves_the_next_scope` owns a
+callback capture whose ordinary destructor panics: refusal does not invoke the
+callback, the retirement failure propagates, and a healthy sibling still uses
+the parent coordinate space. It does not promise containment of multiple
+panicking destructors within one opaque capture.

@@ -315,8 +315,15 @@ and validates a replacement value before `set`; a future transactional primitive
 needs its own consumer and contract. Notification stays deferred through the
 existing rebuild inbox and never invokes signal readers inline. An explicit
 `Reactive::release` of that same slot from inside its closure remains
-authoritative: it destroys the loaned value and reader set, so no commit
-survives to invalidate.
+authoritative: the value and reader set are no longer live, so no commit
+survives to invalidate. Loan finalization returns a still-live value before any
+retirement. When a callback has already failed, a released loan's opaque value
+is retained instead of destroyed: aggregate drop glue can abort before an outer
+catch observes a secondary failure, and nested release obligations must not run
+while that first failure has priority. Successful callbacks still retire released
+values normally, outside the graph borrow. Restoration keeps the value owned by
+the loan until the slot check completes; a restoration failure likewise retains
+that value before resuming its payload.
 
 Rust also provides no generic way to recover from aggregate drop glue when two
 fields both panic: the second panic occurs while the first is unwinding and the
@@ -330,6 +337,17 @@ Pinned by the reactive graph unit tests for replacement/equality/destructor and
 updater/wake/telemetry panics,
 `flui-foundation`'s subscribe-before-unwind test, and
 `tests/signal_reads.rs` for mounted partial-commit and first-build recovery.
+Its `released_update_retains_aggregate_before_resuming_failure`,
+`released_read_retains_aggregate_before_resuming_failure`,
+`released_update_retains_nested_release_obligations` and
+`released_read_retains_nested_release_obligations` rows join
+`signal_read_and_write_matrix` and run in child processes. They pin the primary
+payload, released-slot behavior, retained destructors and the next live update.
+The companion `released_update_reports_ordinary_retirement_failure` and
+`released_read_reports_ordinary_retirement_failure` rows preserve normal released
+value retirement: its first destructor failure propagates while callback captures
+are retained. The subprocess boundary makes an old-code aggregate abort a
+table-row failure.
 
 ### Reconciliation emits typed events on the live path
 
@@ -414,3 +432,202 @@ A branded `Cx<'build>` token (its role is taken by the `BuildContext`/`Lifecycle
 ADR-0078); a `Mounted<'_>` re-entry token with RAII effect scopes (async and listener re-entry go
 through `RebuildHandle` and the realm inbox, ADR-0027 §3; derived state and effects are
 ADR-0075's subject); shrinking `ElementBase` into a capability-typed `Element<V, P>`.
+
+### A scene-plugin rendering callback has an explicit unsafe lifetime contract
+
+`DevReloadHook::scene_frame` is unsafe: a scene borrow allows cloning layers
+and shared annotations whose code belongs to a plugin image. Its caller must
+retain none of those image-dependent payloads after the callback boundary,
+including an unwinding call. The hook may then unload on the next frame or
+on drop. A `compile_fail,E0133` doctest pins mandatory acknowledgement at the
+public invocation. Ordinary worker polling remains safe and unchanged.
+
+The scene callback also receives a pending font namespace reset and returns a
+rendering verdict. The host uses the dedicated plugin renderer entry point;
+only a true callback result acknowledges that reset. Plugin image replacement
+can reuse font IDs for different bytes, so this boundary carries the image
+transition independently of an ordinary font cache lookup (ADR-0108).
+
+### Exhausted element identities refuse removal before teardown
+
+An element slot's next nonzero generation is checked before eager removal or
+finalized retirement unregisters dependencies, invokes unmount or frees storage.
+The checked generation is committed only after slot removal. A caught exhaustion
+panic therefore leaves the original occupant live rather than freeing a slot
+that could reuse its identity. Subtree removal preflights every live slot it
+will finalize before detaching keyed descendants or retiring any node. Under
+`DeactivateKeyed`, the snapshot excludes keyed boundaries and their surviving
+descendants; those slots require no generation advance. Under `Finalize`, every
+node is admitted before deepest-first teardown. Keyed soft removal does not
+free storage and does not advance the generation.
+
+The three exhaustion rows of `element_tree_contract_matrix` inject the otherwise
+unreachable maximum counter, then use the tree's removal, lookup and insertion
+surface. Each refuses repeated retirement while preserving the active occupant,
+and proves a subsequent ordinary sibling can be removed and replaced without
+reviving its stale ID. Unannounced retirement shares the finalized primitive.
+Six subtree rows inject exhaustion at the root, intermediate node or leaf for
+both removal modes and assert that repeated refusal leaves every occupant,
+parent/child link and active lifecycle intact, with no unmount observation.
+An independent sibling still retires and remints afterward. A separate exhausted
+wrapper row preserves its keyed descendant's active lifecycle and registration
+before any soft detach. The terminal keyed subtree control checks that soft
+removal preserves the keyed boundary and its exhausted descendant instead of
+imposing a generation advance on retained slots.
+
+
+### Object keys own their identity
+
+`ObjectKey` stores the erased owning Arc alone. `Arc::ptr_eq` compares its
+allocation identity, while hash and debug formatting use its data address.
+Cloned keys keep that allocation live; equal values in separate allocations
+remain different keys. Automatic Send/Sync follow the stored Arc's bounds,
+without duplicate pointer state or manual unsafe implementations.
+
+The public constructor doctest distinguishes shared and separate allocations.
+`object_keys_follow_retained_allocations_through_reorder` in
+`dense_and_production_reconcile_matrix` checks that real keyed reconciliation
+moves the original elements for equal-valued separate objects and keeps the
+source allocation alive after its original owner is dropped.
+
+### Observer containment retains exceptional ownership before reporting
+
+**Rule.** Tree emission and outgoing `detached()` callbacks borrow their owned
+observer envelopes inside the unwind boundary (ADR-0040). A caught failure
+retains its opaque payload and the failed observer Arc before any diagnostics
+run. Emission clears the slot without invoking `detached()`; replacement keeps
+its newly installed observer. Failure reporting has its own unwind boundary and
+retains a competing subscriber payload. No opaque destructor is attempted after
+an observer callback has already failed.
+
+Successful `detached()` calls retain ordinary Arc retirement semantics. This
+boundary does not recover from an abort inside callback code, or from several
+panicking capture destructors during otherwise successful retirement. It neither
+changes the observer's non-reentrancy rule nor covers `replay_mounts`, whose
+install failure policy remains ADR-0040's.
+
+The public `lifecycle_panic_containment_matrix` includes isolated observer
+children for aggregate payloads, final capture envelopes, competing failures,
+and a hostile scoped tracing subscriber. Each child verifies that the real tree
+mount completes, the failed observer is disarmed, and a healthy observer receives
+the following builds. Replacement also checks that its new observer survives an
+outgoing `detached()` failure.
+
+### Build recovery retains opaque failure ownership before substitution
+
+Build failure classification borrows the original payload, then retains that
+opaque payload before reactive build finalization, the recovery factory or
+diagnostics can fail. Its destructor is never invoked on this exceptional path.
+The recovery factory keeps its existing failure authority: a factory unwind
+publishes no successful build-recovery record.
+
+Committed recovery records are stored before reporting. A subscriber failure
+has a separate unwind boundary and its opaque payload is retained, so it cannot
+erase attribution or unwind a returned recovery view. Staged lifecycle reporting
+is likewise contained, while its owned diagnostic token is committed only after
+the containing replacement succeeds. This does not make recovery factory code
+or simultaneous panicking destructors inside otherwise ordinary user-owned
+aggregates recoverable.
+
+Six isolated rows in `lifecycle_panic_containment_matrix`, defined in
+`tests/support/build_payload_recovery.rs`, exercise original aggregate payloads,
+subscriber failure alone and in competition, recovery-view capture ownership,
+factory failure priority and staged init-state attribution. Each child checks
+actual ErrorView or configured-view substitution where recovery commits, the
+original hook and element record exactly once, and following healthy builds.
+
+### Lifecycle retirement follows the existing first failure
+
+**Rule.** Lifecycle delivery keeps the first callback or retirement panic
+through cancellation and terminal cleanup (ADR-0035). A cancelled callback
+envelope is retained after a caught failure. Terminal release shares the active
+drain's failure accumulator and retains later envelopes once the first ordinary
+retirement fails. Subscription and source destruction during an independent
+unwind retain callbacks without entering their opaque drop glue. Cancellation
+and close still publish their state before retirement, and healthy eligible
+listeners receive queued FIFO events before the original panic resumes.
+The active drain publishes its caught-failure status before invoking another
+callback. Nested cancellation and source retirement consult that same status,
+so cancelling a pending callback cannot retire a hostile capture aggregate
+after an earlier callback failed. The status is cleared when drain ownership
+ends; later successful cancellation keeps ordinary capture destruction.
+`caught_failure_protects_nested_pending_subscription_retirement` covers an
+earlier callback panic, a later callback cancelling a pending aggregate, queued
+FIFO delivery and the next healthy operation in a bounded child.
+
+Rejected lifecycle admission owns its incoming generic callback even though no
+listener was registered. Closing/closed-source rejection releases the state
+borrow before retirement. A caught failure in the active source drain, or an
+independent unwind including a dead weak source, retains that callback without
+calling its body or destructor. Ordinary rejection still destroys captures and
+allows their destructors to query the source without a borrow conflict.
+`caught_failure_retains_rejected_lifecycle_callback`,
+`live_source_rejection_during_unwind_retains_captures` and
+`dead_source_rejection_during_unwind_retains_captures` join the public containment
+family. They preserve the original string failure, prove queued FIFO tail/terminal
+delivery or independent unwind, then check ordinary rejected retirement and a
+fresh source's next operation.
+
+With no prior failure and no active unwind, callback retirement keeps ordinary
+Rust destruction semantics. A first envelope with two panicking fields can
+abort before `catch_unwind` returns; this boundary cannot recover it. Live
+callbacks that panic without cancelling remain registered, as before.
+
+The public `lifecycle_panic_containment_matrix` exercises self-cancellation,
+competing payload/capture aggregates, terminal cleanup, first retirement failure,
+and subscription/source Drop during independent unwind in bounded children.
+Healthy FIFO delivery and the next source operation distinguish retention from
+lost work; `successful_lifecycle_cancellation_retires_captures_and_keeps_fifo`
+ensures ordinary successful cancellation still releases captures.
+
+### Async snapshot publication precedes generic retirement
+
+**Rule.** Future and stream completions construct their incoming snapshot and
+publish it under the subscription-generation fence. Old snapshot retirement
+and the matching rebuild request run after the slot Mutex is released. If old
+retirement panics, rebuild scheduling is still attempted; the first panic then
+resumes, and a competing wake payload is retained. The new snapshot already
+belongs to the slot, so unwinding the old value cannot destroy it. Inline future
+completion still suppresses a redundant rebuild and keeps its `Done` guard.
+Connection-state-only transitions preserve owned data/error without retirement.
+Stale incoming values retire outside the slot lock and schedule no rebuild.
+
+The task that panicked remains failed under the driver's policy. Recovery means
+that the queued next build can read the published snapshot and a fresh keyed
+subscription can publish again. This does not promise continued polling of the
+failed producer, arbitrary user-builder containment, or recovery from two
+panicking fields within the first ordinary retired aggregate.
+
+The public `lifecycle_panic_containment_matrix` includes FutureBuilder and
+StreamBuilder children for old retirement alone, competing old/new values, and
+old retirement plus a failed rebuild wake. Each observes the committed incoming
+value on a real build without test-induced dirtiness, then changes the key and
+observes a second completion.
+
+The borrowed caller Arc stays live through retirement and wake catches. After
+an accepted-update failure, one owning slot Arc is cloned and retained before
+resuming, so disposal of the failed producer or eagerly initialized element
+cannot retire the published incoming value in competition. Healthy updates
+perform no additional Arc clone/drop. The guarantee retains the slot's lifetime,
+not an immutable historical value across later writes.
+
+The accepted-update guard costs one Arc clone only on a caught failure path. The private
+`accepted_publication_guard_retains_incoming_after_caller_disposal` row joins
+`future_builder_matrix`: it calls the same production `apply_update` with no
+driver-owned Arc, catches old retirement, and disposes the final caller owner.
+The public eager-disposal row separately checks a real builder; retained failed
+task ownership can also pin its snapshot, so that row is not a guard-only oracle.
+
+### GlobalKey identity exhaustion is permanent
+
+`GlobalKey::new` issues every identity in `1..=u64::MAX` once, then refuses
+all further allocations. Zero is an internal exhaustion sentinel, never a key.
+The atomic transition publishes the last identity and sentinel together, so
+catching a refusal cannot wrap the allocator into an earlier identity. This
+changes identity admission only; GlobalKey registries remain realm-owned.
+
+`exhausted_global_key_counter_never_reissues_an_identity` joins the existing
+private `element_tree_contract_matrix`. It drives the production mint helper
+with a local terminal counter because a consumer cannot exhaust the real
+identity space. It admits both final identities, catches repeated refusal and
+checks subsequent ordinary allocation from an independent local counter.

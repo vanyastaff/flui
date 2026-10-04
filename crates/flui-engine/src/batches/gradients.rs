@@ -118,6 +118,132 @@ fn packed_linear_parameter(
     Ok(packed)
 }
 
+/// Both circles share a normalized, bounds-local coordinate system.
+#[derive(Clone, Copy)]
+struct PackedRadial {
+    center: glam::Vec2,
+    radius: f32,
+    focal: [f32; 4],
+    tile: f32,
+}
+
+fn packed_radial(
+    shader: &Shader,
+    bounds: Rect<f64>,
+) -> Result<PackedRadial, crate::error::GeometryError> {
+    use crate::error::GeometryError;
+    use flui_painting::paint::TileMode;
+    let Shader::RadialGradient {
+        center,
+        radius,
+        focal,
+        focal_radius,
+        tile_mode,
+        ..
+    } = shader
+    else {
+        return Err(GeometryError::Unrepresentable {
+            context: "radial shader kind",
+        });
+    };
+    let focal = focal.unwrap_or(*center);
+    let r0 = focal_radius.unwrap_or(0.0);
+    let coordinates = [center.dx, center.dy, focal.dx, focal.dy, *radius, r0];
+    if coordinates.iter().any(|v| !v.is_finite()) {
+        return Err(GeometryError::NonFinite {
+            context: "radial circles",
+        });
+    }
+    if *radius < 0.0 || r0 < 0.0 {
+        return Err(GeometryError::InvalidRadius);
+    }
+    if focal == *center && r0 == *radius && r0 != 0.0 {
+        return Err(GeometryError::Unrepresentable {
+            context: "coincident radial circles",
+        });
+    }
+    let local = [
+        center.dx - bounds.left(),
+        center.dy - bounds.top(),
+        focal.dx - bounds.left(),
+        focal.dy - bounds.top(),
+    ];
+    let scale = local.iter().fold(
+        bounds
+            .width()
+            .abs()
+            .max(bounds.height().abs())
+            .max(*radius)
+            .max(r0),
+        |scale, v| scale.max(v.abs()),
+    );
+    let scale = if scale == 0.0 { 1.0 } else { scale };
+    let values = [
+        local[0] / scale,
+        local[1] / scale,
+        *radius / scale,
+        local[2] / scale,
+        local[3] / scale,
+        r0 / scale,
+        scale.recip(),
+    ];
+    if values
+        .iter()
+        .any(|&v| !v.is_finite() || !(v as f32).is_finite() || (v != 0.0 && v as f32 == 0.0))
+    {
+        return Err(GeometryError::Unrepresentable {
+            context: "radial normalization",
+        });
+    }
+    let packed = values.map(|v| v as f32);
+    let normalized_width = bounds.width() as f32 * packed[6];
+    let normalized_height = bounds.height() as f32 * packed[6];
+    if (bounds.width() != 0.0
+        && (normalized_width == 0.0 || normalized_width - packed[3] == -packed[3]))
+        || (bounds.height() != 0.0
+            && (normalized_height == 0.0 || normalized_height - packed[4] == -packed[4]))
+    {
+        return Err(GeometryError::Unrepresentable {
+            context: "radial fragment coordinates",
+        });
+    }
+    let dx = packed[0] - packed[3];
+    let dy = packed[1] - packed[4];
+    let dr = packed[2] - packed[5];
+    let a = dx * dx + dy * dy - dr * dr;
+    let native_dx = values[0] - values[3];
+    let native_dy = values[1] - values[4];
+    let native_dr = values[2] - values[5];
+    let native_a = native_dx * native_dx + native_dy * native_dy - native_dr * native_dr;
+    // A collapsed circle difference or quadratic changes which equation is solved.
+    if (native_dx != 0.0 && dx == 0.0)
+        || (native_dy != 0.0 && dy == 0.0)
+        || (native_dr != 0.0 && dr == 0.0)
+        || (native_a != 0.0 && a == 0.0)
+        || (native_a == 0.0 && a != 0.0)
+        || (native_a > 0.0 && a < 0.0)
+        || (native_a < 0.0 && a > 0.0)
+        || !a.is_finite()
+        || !(bounds.width() as f32 * packed[6]).is_finite()
+        || !(bounds.height() as f32 * packed[6]).is_finite()
+    {
+        return Err(GeometryError::Unrepresentable {
+            context: "radial equation",
+        });
+    }
+    Ok(PackedRadial {
+        center: glam::vec2(packed[0], packed[1]),
+        radius: packed[2],
+        focal: [packed[3], packed[4], packed[5], packed[6]],
+        tile: match tile_mode {
+            TileMode::Clamp => 0.0,
+            TileMode::Repeat => 1.0,
+            TileMode::Mirror => 2.0,
+            TileMode::Decal => 3.0,
+        },
+    })
+}
+
 // Validate the payload before stop storage or a destination-read segment is admitted.
 // Coordinates are rebased in f64 first: a large logical origin is not itself
 // an unrepresentable local gradient.
@@ -145,34 +271,6 @@ fn validate_gradient_payload(
     };
     pack(bounds.width())?;
     pack(bounds.height())?;
-    // Bound the shader's intermediate products, not only its input casts.
-    // Half MAX leaves room for f32 rounding of the two-term dot/length sum.
-    let arithmetic_limit = f64::from(f32::MAX) * 0.5;
-    let arithmetic = |value: f64| {
-        if value.is_finite() && value <= arithmetic_limit {
-            Ok(())
-        } else {
-            Err(GeometryError::Unrepresentable {
-                context: "gradient arithmetic",
-            })
-        }
-    };
-    let local = |x: f64, y: f64| {
-        [
-            f64::from((x - bounds.left()) as f32),
-            f64::from((y - bounds.top()) as f32),
-        ]
-    };
-    let maximum_offset = |origin: [f64; 2]| {
-        [
-            origin[0]
-                .abs()
-                .max((f64::from(bounds.width() as f32) - origin[0]).abs()),
-            origin[1]
-                .abs()
-                .max((f64::from(bounds.height() as f32) - origin[1]).abs()),
-        ]
-    };
     let (colors, stops) = match shader {
         Shader::LinearGradient {
             from,
@@ -184,25 +282,8 @@ fn validate_gradient_payload(
             packed_linear_parameter([from.dx, from.dy], [to.dx, to.dy], bounds)?;
             (colors, stops)
         }
-        Shader::RadialGradient {
-            center,
-            radius,
-            colors,
-            stops,
-            ..
-        } => {
-            point(center.dx, center.dy)?;
-            pack(*radius)?;
-            if *radius < 0.0 {
-                return Err(GeometryError::InvalidRadius);
-            }
-            let offset = maximum_offset(local(center.dx, center.dy));
-            let squared_distance = offset[0] * offset[0] + offset[1] * offset[1];
-            arithmetic(squared_distance)?;
-            let packed_radius = *radius as f32;
-            if packed_radius > 0.0001 {
-                arithmetic(squared_distance.sqrt() / f64::from(packed_radius))?;
-            }
+        Shader::RadialGradient { colors, stops, .. } => {
+            packed_radial(shader, bounds)?;
             (colors, stops)
         }
         Shader::SweepGradient {
@@ -339,22 +420,15 @@ impl DrawBatcher {
     /// * `segment`        — current accumulation buffer
     /// * `state`          — read-only transform/scissor queries
     /// * `bounds`         — rectangle bounds in local space
-    /// * `center`         — gradient center (local to `bounds`)
-    /// * `radius`         — gradient radius
+    /// * `radial`         — validated, normalized two-circle equation
     /// * `stops`          — validated gradient color stops
     /// * `corner_radii`   — per-corner radii `[tl, tr, br, bl]` (0.0 = sharp)
     /// * `blend`          — the paint's fixed-function blend mode (never advanced)
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "borrow-seam design: segment/state are disjoint WgpuPainter fields; \
-                  the remaining args mirror the gradient's own parameters"
-    )]
-    pub(in super::super) fn draw_radial_gradient_rect(
+    fn draw_radial_gradient_rect(
         segment: &mut DrawSegment,
         state: &GpuStateStack,
         bounds: Rect<f64>,
-        center: glam::Vec2,
-        radius: f32,
+        radial: PackedRadial,
         stops: &[GradientStop],
         corner_radii: [f32; 4],
         blend: BlendMode,
@@ -380,11 +454,12 @@ impl DrawBatcher {
                 (bounds.width() as f32),
                 (bounds.height() as f32),
             ],
-            center,
-            radius,
+            radial.center,
+            radial.radius,
             corner_radii,
             stop_count as u32,
         )
+        .with_circles(radial.focal, radial.tile)
         .with_stop_offset(stop_offset);
         let instance = state.apply_active_clip(instance.with_transform(
             glam::DMat4::from_cols_array(&state.current_transform_matrix().m),
@@ -714,12 +789,10 @@ impl DrawBatcher {
                         BlendMode::SrcOver,
                     );
                 }
-                Shader::RadialGradient { center, radius, .. } => {
+                Shader::RadialGradient { .. } => {
                     use crate::instancing::RadialGradientInstance;
-                    let c = glam::Vec2::new(
-                        (center.dx - bounds.left()) as f32,
-                        (center.dy - bounds.top()) as f32,
-                    );
+                    let radial = packed_radial(shader, bounds)
+                        .expect("BUG: radial circles validated before recording");
                     let instance = RadialGradientInstance::new(
                         [
                             (bounds.left() as f32),
@@ -727,11 +800,12 @@ impl DrawBatcher {
                             (bounds.width() as f32),
                             (bounds.height() as f32),
                         ],
-                        c,
-                        *radius as f32,
+                        radial.center,
+                        radial.radius,
                         corner_radii,
                         stop_count as u32,
                     )
+                    .with_circles(radial.focal, radial.tile)
                     .with_stop_offset(0);
                     let instance = state.apply_active_clip(instance.with_transform(
                         glam::DMat4::from_cols_array(&state.current_transform_matrix().m),
@@ -844,17 +918,14 @@ impl DrawBatcher {
                     paint.blend_mode,
                 );
             }
-            Shader::RadialGradient { center, radius, .. } => {
-                let c = glam::Vec2::new(
-                    (center.dx - bounds.left()) as f32,
-                    (center.dy - bounds.top()) as f32,
-                );
+            Shader::RadialGradient { .. } => {
+                let radial = packed_radial(shader, bounds)
+                    .expect("BUG: radial circles validated before recording");
                 Self::draw_radial_gradient_rect(
                     segment,
                     state,
                     bounds,
-                    c,
-                    *radius as f32,
+                    radial,
                     &stops,
                     corner_radii,
                     paint.blend_mode,

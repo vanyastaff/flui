@@ -8,7 +8,7 @@ FLUI Foundation provides fundamental building blocks used throughout the FLUI UI
 
 - **Tree IDs**: Type-safe `Id<T>` with wgpu-style marker traits, and generational keys (`ElementId`, `RenderId`, `RealmId`) for slots that are reused
 - **Keys**: `Key`, `ValueKey`, `UniqueKey` for widget identity (GlobalKey/ObjectKey in flui-view)
-- **Change Notification**: `ChangeNotifier`, `ValueNotifier`, the generic `Notifier<Arg>` and `ListenerRegistry`
+- **Change Notification**: `ChangeNotifier`, `ValueNotifier`, and the generic `Notifier<Arg>`
 - **Diagnostics**: `DiagnosticsNode` trees and the `Diagnosticable` trait
 - **Callbacks**: Type-safe callback aliases (`VoidCallback`, `ValueChanged`, etc.)
 - **Geometry**: `geometry` module — `Point`, `Offset`, `Size`, `Rect`, `RRect`, `EdgeInsets`, `Matrix4`, device-grid types and snapping (ADR-0098)

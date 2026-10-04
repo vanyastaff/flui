@@ -124,7 +124,14 @@ pub(crate) const SHADOW: &str = concat!(
 /// Instanced texture rendering shader.
 pub(crate) const TEXTURE_INSTANCED: &str = concat!(
     include_str!("common/clip.wgsl"),
-    include_str!("texture_instanced.wgsl")
+    include_str!("texture_instanced.wgsl"),
+    "\n@fragment fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> { return folded_image(input); }\n"
+);
+/// Image color and independent clip coverage over a cropped attachment.
+pub(crate) const TEXTURE_ISOLATION: &str = concat!(
+    include_str!("common/clip.wgsl"),
+    include_str!("texture_instanced.wgsl"),
+    include_str!("texture_isolation.wgsl")
 );
 /// Instanced glyph rendering shader (the glyph atlas' consumer).
 pub(crate) const GLYPH_INSTANCED: &str = concat!(

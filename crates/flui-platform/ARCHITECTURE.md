@@ -1003,3 +1003,146 @@ readable without touching UIKit. The native weak-view probe verifies both
 retention through logical close and eventual release after a worker's final drop.
 OwnerSignal/GCD carries typed process wake/quit independently of display links;
 it grants no operating-system background execution entitlement.
+
+### A ready task imposes no executor bounds on its result
+
+`Task<T>` moves its result out and never exposes a pinned borrow to it.
+The handle is therefore `Unpin` independently of `T`, as is the native
+`JoinHandle<T>` variant. Its `Future` implementation accepts local, borrowed
+and non-`Unpin` results; `Send + 'static` belongs to executor admission,
+where work crosses threads, rather than to polling a completed value.
+Dropping a spawned handle detaches the Tokio task; it does not cancel it.
+Pinned by `ready_tasks_return_results_without_executor_bounds` through the
+public API.
+
+### Browser display units, held buttons and callback reentry
+
+Browser screen dimensions are CSS pixels; display bounds expose rounded device
+pixels after applying the device pixel ratio. Pointer coordinates retain the
+platform input contract of logical pixels, including the upstream
+`PhysicalPosition` storage name. DOM button masks preserve X1/X2 on down, up,
+move and wheel events. The `browser_input_probe` example records translated
+public input and display results for real DOM dispatch at a non-unit DPR.
+
+Platform window-event handlers are leased outside the state mutex and restored
+unless the callback installed a replacement. Setter retirement also occurs
+outside the mutex. Quit commits stopped state and consumes its callback before
+invoking it, so reentry cannot invoke the same quit callback again. Owning
+callback envelopes remain outside the caught invocation; a failed displaced
+callback is retained rather than destroyed while propagating its first failure.
+`created_callback_probe` and `quit_callback_probe` in that example exercise
+reentrant clipboard access. Each probe requires a fresh page and an external
+deadline: the previous implementation blocks or aborts the browser thread under the
+state mutex. Source inspection and type checking do not prove browser execution
+or arbitrary aggregate destructor containment.
+
+### Off-owner accessibility adapter retention precedes diagnostics
+
+The Win32 and AppKit accessibility adapters cannot retire their native subclass
+state off its owner thread. Their existing exceptional retention fallback moves
+the adapter into permanent retention before attempting diagnostics. A subscriber
+failure is contained independently; it cannot restore a destructor obligation on
+the wrong thread or replace an unwind already in progress.
+
+The private shared `retain_off_owner_resource` seam is used by both adapter
+Drop paths. `the_owner_thread_machinery_honours_its_contracts` exercises the same
+production boundary with an opaque aggregate resource surrogate: successful
+reporting, an opaque reporting failure, an earlier teardown failure alone and
+competing with reporting, and a subsequent callback. These rows do not execute real UIA or
+NSAccessibility adapters; they prove the shared boundary. Native wiring remains source-reviewed and subject to
+platform type-checking.
+
+### Input processing has no unused platform-side duplicate
+
+ADR-0082 §5's helper retirement removes the zero-consumer `PlatformEmbedder`
+abstraction and platform velocity/timestamp helper types. Backends retain their
+actual event clocks and translation paths; interaction owns velocity tracking.
+The compile-fail example on `flui_platform::traits` checks that retired imports
+are unavailable through the consumer surface. This does not adopt the ADR's
+remaining backend consolidation or capability removals.
+
+### Android has no separate page-aligned container
+
+Android exposes no framework allocator or page-aligned vector. The removed
+container had no production consumers, while its generic element retirement
+could leave already-dropped elements marked initialized after a destructor
+panic. Framework buffers use standard owning containers; wgpu owns GPU
+allocation and its backend alignment requirements. A device's native page size
+does not require every application-side vector to use a custom allocator.
+This removes an unused unsafe surface rather than asserting native allocation
+behavior: Android execution remains unavailable on this host.
+
+### AppKit tab joins borrow live windows
+
+`MacOSWindowExt::add_tab_to_window` takes `&dyn HostWindow` and returns whether
+AppKit received the join. A numeric ID cannot establish ownership of an
+Objective-C object. The backend rejects a different backend, different owner
+lanes, non-main lanes, closed windows and joining a window to itself before
+messaging AppKit. Both borrowed wrappers own their NSWindows, which are created
+with `releasedWhenClosed:NO`; explicit native retains span the callback-capable
+join on their shared main owner lane. No state or registry mutex spans that call.
+
+The method's public compile-fail doctest rejects numeric IDs, and its compiling
+example pins the borrowed-window signature and boolean result. These compiler
+checks do not prove native tab grouping or close/reentry behavior. AppKit runtime
+execution remains unverified on the Windows audit host.
+
+### Win32 observations and closed-window tracking
+
+A window context holds weak references to the wrapper's observation cache and
+platform registry. Native size, position, visibility, focus and DPI messages
+publish cache changes before invoking callbacks; no cache mutex spans a user
+callback or native call. Initial dimensions are the native client dimensions,
+and setters do not overwrite a synchronous native observation with their
+requested outer dimensions. Minimization keeps the last non-minimized size.
+
+`WM_DESTROY` clears userdata and retires its context ledger before removing the
+matching window identity from tracking. The removed owning Arc is dropped outside
+the registry mutex. Consequently its destructor cannot recursively destroy the
+in-flight native window, and an old wrapper cannot remove a reused HWND's newer
+registry entry. Weak context references do not alter the wrapper's final-state
+owner count or introduce another cycle. WNDPROC callback failures retain the
+existing fail-stop policy; this does not claim recoverable native unwinding.
+
+`test_window_lifecycle_contract` adds bounded Windows subprocess rows
+`native_close_retires_final_registry_owner`, `closed_window_retires_tracking`,
+`close_callback_releases_external_owner`,
+`resize_callback_observes_current_client_bounds` and
+`hidden_popup_is_natively_hidden` and
+`move_callback_observes_full_native_coordinates`. These create actual hidden native windows,
+check owner retirement (including the registry's final owner during native
+`WM_CLOSE`) and subsequent opening, compare getters inside and after
+real native resize delivery, query native popup visibility and compare full
+client-origin observations across a native move beyond signed16 coordinates
+and a subsequent ordinary move. Cache and Moved events use `ClientToScreen`;
+packed message coordinates remain a fallback only if that query fails. These rows do not
+exercise monitor DPI migration or interactive focus changes.
+
+
+`resize_callback_preserves_large_native_dimensions` pins unsigned `WM_SIZE`
+decoding in the same bounded native family. A hidden popup is resized separately
+to a width and height above 32767, comparing `GetClientRect` with callback sizes
+and public getters inside and after delivery, followed by an ordinary resize.
+The row requires the actual native dimension to reach the unsigned range; an OS
+limit reports an unavailable witness instead of allowing a false positive.
+Zero-size clamping and minimized-window handling retain their existing behavior.
+
+### Winit primary display selection uses monitor identity
+
+`init_displays` queries available monitors before the primary monitor and maps
+that iterator directly into display records. The private mapping core selects
+by `MonitorHandle::PartialEq`; a missing primary capability selects only index
+zero, while a reported primary absent from the iterator selects no substitute.
+Names are labels, not identity. Installed winit 0.30.13
+[derives handle equality and documents a human-readable name](https://github.com/rust-windowing/winit/blob/e9809ef54b18499bb4f2cac945719ecc2a61061b/src/monitor.rs#L102).
+Its macOS backend [compares monitor UUIDs](https://github.com/rust-windowing/winit/blob/e9809ef54b18499bb4f2cac945719ecc2a61061b/src/platform_impl/macos/monitor.rs#L164)
+and [formats the model number as the name](https://github.com/rust-windowing/winit/blob/e9809ef54b18499bb4f2cac945719ecc2a61061b/src/platform_impl/macos/monitor.rs#L224).
+Two displays of the same model therefore share a name while remaining distinct
+handles. Wayland [reports no primary](https://github.com/rust-windowing/winit/blob/e9809ef54b18499bb4f2cac945719ecc2a61061b/src/platform_impl/linux/wayland/output.rs#L18).
+
+`platforms::winit::platform::tests::monitor_display_mapping_matrix` tests the
+actual production enumeration/selection/factory core with identity fixtures.
+Produced records cover duplicate model labels, a primary after index zero,
+changed labels for the same identity, the no-primary fallback, absent primary
+identity and empty input. This does not execute native discovery or validate a
+physical two-monitor macOS setup; that native path remains unverified.

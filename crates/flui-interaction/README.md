@@ -4,6 +4,12 @@ Event routing, hit testing, focus management, and gesture recognition for FLUI.
 
 ## Core Concepts
 
+Multi-tap recognition uses the event's pointer identity for each contact's
+motion and release. Only a tracked contact can cancel the pair. The public
+`multi_contact_events_keep_independent_pointer_identity` test covers release
+order, secondary-contact slop, unrelated cancellation and a new pair after
+cancellation. This does not change arena arbitration or callback unwind policy.
+
 ### Event Flow
 
 ```

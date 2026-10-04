@@ -117,22 +117,14 @@
 //! ## `ScaffoldMessenger` wiring
 //!
 //! `ScaffoldState` registers with the nearest ancestor
-//! [`crate::ScaffoldMessengerScope`] (if any) — not `build` (ADR-0018/trigger
-//! #22, same reasoning the drawer wiring section above gives). **Not**
-//! `did_change_dependencies` alone, either: `ScaffoldMessengerScope::maybe_of`
-//! is a no-dependency ambient lookup (`ctx.get`, matching `ScaffoldScope`'s
-//! own `DrawerHandle` lookup — see that type's doc), and this substrate's
-//! `did_change_dependencies` only fires when a TRACKED (`ctx.depend_on`)
-//! inherited ancestor's `update_should_notify` returns `true` since the last
-//! build — never merely "this element was just mounted under some ancestor".
-//! So the actual, guaranteed registration point is `ViewState::init_state`
-//! (the same proven pattern `DrawerControllerState::init_state` already uses
-//! for its own `VsyncScope` lookup); `did_change_dependencies` re-runs the
-//! identical `ScaffoldState::sync_messenger_registration` helper as a
-//! best-effort re-home for the rare case it DOES fire, but nothing depends
-//! on it firing. Registration is keyed by this scaffold's own `ElementId` and
-//! idempotent; a messenger-identity change (`ScaffoldMessengerHandle::ptr_eq`)
-//! unregisters from the old messenger before registering with the new one,
+//! [`crate::ScaffoldMessengerScope`] (if any) during `init_state`, outside
+//! `build`. The scope's handle lookup itself is untracked, while Scaffold's
+//! Theme and MediaQuery lookups establish inherited dependencies. Reactivating
+//! a retained GlobalKey scaffold therefore schedules `did_change_dependencies`,
+//! which re-runs `sync_messenger_registration` against its current ancestry.
+//! An ordinary same-type messenger rebuild keeps the same handle identity.
+//! Registration is keyed by the scaffold's `ElementId` and idempotent; an
+//! identity change unregisters from the old messenger before registering anew,
 //! and `dispose` unregisters unconditionally. `build` reads
 //! `crate::ScaffoldMessengerHandle::current_entry` (private) fresh every call and, if
 //! `Some`, mounts a `SnackBarPresenter` at `SLOT_SNACK_BAR` — see
@@ -512,15 +504,9 @@ impl ViewState<Scaffold> for ScaffoldState {
     }
 
     fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
-        // Best-effort re-home: `ScaffoldMessengerScope::maybe_of` is a
-        // no-dependency ambient lookup (`ctx.get`, not `ctx.depend_on`),
-        // per its own doc — so this hook only fires here if some OTHER
-        // depended-upon inherited ancestor notifies in the same rebuild,
-        // not on a `ScaffoldMessenger` swap by itself. `init_state` above
-        // is what actually guarantees the initial registration; this call
-        // is a defensive no-op the rest of the time (see
-        // `Self::sync_messenger_registration`'s own identity-comparison
-        // short-circuit).
+        // Reactivation of a retained scaffold refreshes its tracked inherited
+        // dependencies, allowing this lifecycle hook to rehome the registration.
+        // The helper is a no-op when the current messenger identity is unchanged.
         self.sync_messenger_registration(ctx);
     }
 

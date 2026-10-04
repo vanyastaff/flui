@@ -258,24 +258,36 @@ impl LockArbiter {
         open: &mut dyn FnMut(LockGrant),
     ) -> Result<LockOutcome, TextStoreError> {
         if self.locked.get() || !self.may_commit() {
-            return match timing {
-                LockTiming::Sync => Err(TextStoreError::SyncLockUnavailable),
-                LockTiming::Async => {
-                    let mut queue = self.queue.borrow_mut();
-                    if queue.len() >= DEFERRED_LOCK_CAPACITY {
-                        return Err(TextStoreError::DeferredQueueFull);
-                    }
-                    queue.push_back(grant);
-                    Ok(LockOutcome::Deferred)
-                }
-            };
+            return self.defer_or_refuse(grant, timing);
         }
         // Earlier requests first, so this one cannot overtake them.
         self.drain(open);
+        // An earlier grant may have closed the presentation's transaction gate.
+        if !self.may_commit() {
+            return self.defer_or_refuse(grant, timing);
+        }
         self.run_one(grant, open);
         // Whatever this grant queued runs now that its lock is released.
         self.drain(open);
         Ok(LockOutcome::Granted)
+    }
+
+    fn defer_or_refuse(
+        &self,
+        grant: LockGrant,
+        timing: LockTiming,
+    ) -> Result<LockOutcome, TextStoreError> {
+        match timing {
+            LockTiming::Sync => Err(TextStoreError::SyncLockUnavailable),
+            LockTiming::Async => {
+                let mut queue = self.queue.borrow_mut();
+                if queue.len() >= DEFERRED_LOCK_CAPACITY {
+                    return Err(TextStoreError::DeferredQueueFull);
+                }
+                queue.push_back(grant);
+                Ok(LockOutcome::Deferred)
+            }
+        }
     }
 
     /// Run every queued grant, in request order, when the store is unlocked
@@ -312,6 +324,9 @@ impl LockArbiter {
     fn drain(&self, open: &mut dyn FnMut(LockGrant)) -> usize {
         let mut ran = 0;
         loop {
+            if !self.may_commit() {
+                return ran;
+            }
             let next = self.queue.borrow_mut().pop_front();
             let Some(grant) = next else {
                 return ran;

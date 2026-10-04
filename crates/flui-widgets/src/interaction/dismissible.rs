@@ -872,6 +872,7 @@ impl ViewState<Dismissible> for DismissibleState {
                             vsync_for_end.as_ref(),
                             &rebuild_for_end,
                             constraints,
+                            details.reason,
                             details.velocity.pixels_per_second.dx,
                             details.velocity.pixels_per_second.dy,
                         );
@@ -904,6 +905,7 @@ impl ViewState<Dismissible> for DismissibleState {
                             vsync_for_end.as_ref(),
                             &rebuild_for_end,
                             constraints,
+                            details.reason,
                             details.velocity.pixels_per_second.dy,
                             details.velocity.pixels_per_second.dx,
                         );
@@ -1116,7 +1118,7 @@ fn handle_drag_update(
 }
 
 /// Ends a drag: fling, threshold, or spring back.
-#[expect(clippy::too_many_arguments)] // the seven pieces of state the release handler needs are not otherwise grouped
+#[expect(clippy::too_many_arguments)] // the release handler receives its captured state and terminal details
 fn handle_drag_end(
     drag: &Rc<DragState>,
     move_controller: &AnimationController,
@@ -1124,6 +1126,7 @@ fn handle_drag_end(
     vsync: Option<&Vsync>,
     rebuild: &RebuildHandle,
     constraints: BoxConstraints,
+    reason: flui_interaction::GestureEndReason,
     primary_velocity: f64,
     cross_velocity: f64,
 ) {
@@ -1131,6 +1134,12 @@ fn handle_drag_end(
         return;
     }
     drag.drag_underway.set(false);
+    if reason == flui_interaction::GestureEndReason::Cancelled {
+        discard_transient_move_completion(drag);
+        ensure_move_controller_registered(drag, move_controller, vsync);
+        let _ = move_controller.reverse();
+        return;
+    }
     if move_controller.is_completed() {
         // The direct bypass for a drag released exactly at 100%. Calls
         // `run_move_completion` unconditionally, NOT the counter-gated

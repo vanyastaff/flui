@@ -373,14 +373,13 @@ fn colour_emoji_on_line_two(renderer: &crate::headless::HeadlessRenderer) {
     );
 }
 
-/// Under `Rtl` at a finite width each line's visible end is at the
-/// paragraph box's right edge, the shorter second line included: each line
-/// is aligned in the paragraph's own box, which the paint offset places at
-/// the right of the width it was laid out at.
+/// RTL lines end at their allocated box's right edge, including the shorter
+/// second line. Tight allocation fills its width; a loose wrap cap does not
+/// expand the paragraph beyond the independently measured longest line.
 fn arabic_rtl_right_aligns_each_line(renderer: &crate::headless::HeadlessRenderer) {
     let fonts = FontCollection::with_host_fonts(&flui_painting::HostFonts::scan());
     let max_width = f64::from(WIDE.0) - 16.0;
-    let painter = laid_out(
+    let mut painter = laid_out(
         &fonts,
         "مرحبا بالعالم\u{2028}عالم",
         black(32.0),
@@ -391,24 +390,42 @@ fn arabic_rtl_right_aligns_each_line(renderer: &crate::headless::HeadlessRendere
         println!("arabic_rtl_right_aligns_each_line: skipped, no host face covers Arabic");
         return;
     }
-    let pixels = read_back(renderer, &painter, 1.0);
-    let right = ORIGIN.dx + max_width;
-    for line in 0..2 {
-        let ink = ink_in(&pixels, band(&painter, line), everywhere(), inked);
-        let edge = ink
-            .iter()
-            .map(|(x, _)| *x)
-            .max()
-            .expect("each line is inked");
-        // Within a sixth of an em: the right side bearing of the line's
-        // last visual glyph. A line left in its Parley alignment box, or
-        // shifted by the paint offset a second time, lands a line's slack
-        // (here tens of pixels) away.
-        assert!(
-            (f64::from(edge) + 1.0 - right).abs() <= 32.0 / 6.0,
-            "line {} ends its ink at {edge}, the box's right edge is {right}",
-            line + 1
+    let longest = laid_out(
+        &fonts,
+        "مرحبا بالعالم",
+        black(32.0),
+        TextDirection::Rtl,
+        f64::INFINITY,
+    )
+    .width();
+    assert!(
+        longest + 32.0 < max_width,
+        "the loose and tight boxes differ"
+    );
+    for (min_width, allocation) in [(0.0, longest), (max_width, max_width)] {
+        painter.layout(
+            &mut flui_painting::TextContext::new(&fonts),
+            min_width,
+            max_width,
         );
+        assert!((painter.width() - allocation).abs() < 0.01);
+        let pixels = read_back(renderer, &painter, 1.0);
+        let right = ORIGIN.dx + allocation;
+        for line in 0..2 {
+            let ink = ink_in(&pixels, band(&painter, line), everywhere(), inked);
+            let edge = ink
+                .iter()
+                .map(|(x, _)| *x)
+                .max()
+                .expect("each line is inked");
+            // Allow the visual glyph's side bearing, but not a line's slack
+            // or a second alignment shift at replay.
+            assert!(
+                (f64::from(edge) + 1.0 - right).abs() <= 32.0 / 6.0,
+                "min width {min_width}, line {} ends at {edge}, expected right edge {right}",
+                line + 1
+            );
+        }
     }
 }
 
@@ -496,6 +513,141 @@ fn selection_highlights_the_second_line(renderer: &crate::headless::HeadlessRend
     );
 }
 
+/// Two image-local font namespaces can reuse a complete glyph key.
+fn colliding_font_scene(text: &str, family: &str) -> flui_layer::Scene {
+    let fonts = flui_painting::FontCollection::new();
+    let mut context = flui_painting::TextContext::new(&fonts);
+    let style = TextStyle::new().with_font_family(family);
+    let spans = [(text.to_owned(), None)];
+    let paragraph = context
+        .shape(&flui_painting::parley_text::ParagraphSpec {
+            spans: &spans,
+            default_style: Some(&style),
+            font_size: 48.0,
+            max_width: None,
+            min_width: 0.0,
+            text_align: flui_painting::typography::TextAlign::Start,
+            line_height: None,
+            direction: TextDirection::Ltr,
+            max_lines: None,
+            ellipsis: None,
+        })
+        .to_shaped(None);
+    let paragraph = std::sync::Arc::new(
+        flui_painting::testing::paragraph_with_font_ids(&paragraph, 1)
+            .expect("fixture font ids fit u64"),
+    );
+    assert_eq!(
+        paragraph.runs().len(),
+        1,
+        "the fixture has no fallback face"
+    );
+    let run = paragraph.runs().next().expect("the fixture shapes one run");
+    assert_eq!(
+        run.face().key(),
+        flui_painting::glyphs::FaceKey {
+            blob_id: 1,
+            index: 0
+        }
+    );
+    assert_eq!(run.glyphs().len(), 1);
+    assert_eq!(
+        run.glyphs()[0].id,
+        36,
+        "vendored fonts share this glyph key"
+    );
+    let mut canvas = Canvas::new();
+    canvas.draw_paragraph(&paragraph, Offset::new(8.0, 8.0), Color::BLACK);
+    let mut builder = SceneBuilder::new();
+    builder.add_picture(canvas.finish());
+    flui_layer::Scene::new(builder.build())
+}
+
+#[derive(Clone, Copy)]
+enum FontTransition {
+    OrdinaryToPlugin,
+    ReloadedPlugin,
+    PluginToOrdinary,
+}
+
+fn check_font_transition(renderer: &crate::headless::HeadlessRenderer, transition: FontTransition) {
+    use crate::raster::{PresentDisposition, RasterBackend};
+
+    let before = colliding_font_scene("?", "Roboto");
+    let after = colliding_font_scene("w", "Material Icons");
+    let expected = |scene: &flui_layer::Scene| {
+        let mut capture = renderer
+            .retained_capture((SIDE, SIDE))
+            .expect("reference capture");
+        capture.render_scene(scene).expect("reference renders");
+        capture.read_rgba().expect("reference readback")
+    };
+    let before_pixels = expected(&before);
+    let after_pixels = expected(&after);
+    assert_ne!(
+        before_pixels, after_pixels,
+        "the two fonts draw distinct ink"
+    );
+    let mut capture = renderer
+        .retained_capture((SIDE, SIDE))
+        .expect("transition capture");
+    match transition {
+        FontTransition::OrdinaryToPlugin => {
+            capture.render_scene(&before).expect("ordinary frame");
+        }
+        FontTransition::ReloadedPlugin | FontTransition::PluginToOrdinary => {
+            capture
+                .render_plugin_scene(&before, true)
+                .expect("plugin frame");
+            // Consume unmanaged-frame damage promotion without changing source.
+            capture
+                .render_plugin_frame(&before, false)
+                .expect("managed plugin frame");
+        }
+    }
+    assert_eq!(capture.read_rgba().expect("before readback"), before_pixels);
+    let unchanged = match transition {
+        FontTransition::OrdinaryToPlugin => capture.render_scene(&before),
+        FontTransition::ReloadedPlugin | FontTransition::PluginToOrdinary => {
+            capture.render_plugin_frame(&before, false)
+        }
+    }
+    .expect("unchanged frame");
+    assert_eq!(
+        unchanged,
+        PresentDisposition::NoDamage,
+        "the transition starts with no producer damage or pending promotion"
+    );
+    let disposition = match transition {
+        FontTransition::OrdinaryToPlugin => capture.render_plugin_frame(&after, false),
+        FontTransition::ReloadedPlugin => capture.render_plugin_frame(&after, true),
+        FontTransition::PluginToOrdinary => capture.render_scene(&after),
+    }
+    .expect("the new font namespace renders");
+    assert_eq!(
+        disposition,
+        PresentDisposition::Presented,
+        "source admission must repaint without producer damage"
+    );
+    assert_eq!(
+        capture.read_rgba().expect("after readback"),
+        after_pixels,
+        "a reused font key must draw the current source's ink"
+    );
+}
+
+fn ordinary_to_plugin_repaints_with_the_new_font(renderer: &crate::headless::HeadlessRenderer) {
+    check_font_transition(renderer, FontTransition::OrdinaryToPlugin);
+}
+
+fn a_reloaded_plugin_repaints_with_the_new_font(renderer: &crate::headless::HeadlessRenderer) {
+    check_font_transition(renderer, FontTransition::ReloadedPlugin);
+}
+
+fn plugin_to_ordinary_repaints_with_the_new_font(renderer: &crate::headless::HeadlessRenderer) {
+    check_font_transition(renderer, FontTransition::PluginToOrdinary);
+}
+
 /// Parley's runs read back as laid out: hard breaks, synthesis, fallback
 /// faces, right alignment and the device baseline, each sampled where Parley
 /// paint and the cosmic-text paint it replaced differ.
@@ -505,7 +657,19 @@ fn parley_runs_read_back() {
         return;
     };
     type Row = (&'static str, fn(&crate::headless::HeadlessRenderer));
-    let rows: [Row; 8] = [
+    let rows: [Row; 11] = [
+        (
+            "ordinary_to_plugin_repaints_with_the_new_font",
+            ordinary_to_plugin_repaints_with_the_new_font,
+        ),
+        (
+            "a_reloaded_plugin_repaints_with_the_new_font",
+            a_reloaded_plugin_repaints_with_the_new_font,
+        ),
+        (
+            "plugin_to_ordinary_repaints_with_the_new_font",
+            plugin_to_ordinary_repaints_with_the_new_font,
+        ),
         (
             "latin_breaks_at_a_line_separator",
             latin_breaks_at_a_line_separator,
@@ -667,6 +831,8 @@ fn overlay_frames_do_not_grow_the_glyph_registry(renderer: &crate::headless::Hea
             default_style: None,
             font_size: 14.0,
             max_width: None,
+            min_width: 0.0,
+            text_align: flui_painting::typography::TextAlign::Start,
             line_height: None,
             direction: TextDirection::Ltr,
             max_lines: None,
