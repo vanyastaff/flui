@@ -420,3 +420,13 @@ no user destructor under that mutex. Taking a snapshot and replacing the list
 would discard concurrent admission. `compaction_preserves_concurrently_admitted_future_and_next_work`
 in `execution_lane_matrix` uses a private before-lock seam to admit a real public
 spawn exactly at that boundary, then proves both that task and the next task run.
+
+### Refused first-frame counter operations preserve existing deferrals
+
+An unmatched release or exhausted deferral count refuses its atomic update
+before mutation. Catching that refusal therefore leaves later valid operations
+usable. The public `unmatched_first_frame_release_preserves_the_next_deferral`
+row in `flui-testing`'s `headless_frame_driver_matrix` proves real painted output
+is withheld and then delivered after recovery. `draw_frame_returns_layer_tree_and_defers_when_gated`
+also contains the terminal-count row; only its initial count is injected
+privately because the public boundary requires billions of calls to reach.

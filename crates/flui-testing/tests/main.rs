@@ -41,6 +41,8 @@ mod owner_scope;
 mod pointer_script_replay;
 #[path = "post_frame_after_layout.rs"]
 mod post_frame_after_layout;
+#[path = "first_frame_deferral.rs"]
+mod first_frame_deferral;
 #[path = "realm_driver.rs"]
 mod realm_driver;
 #[path = "self_rescheduling_local_post_frame.rs"]
@@ -63,6 +65,7 @@ fn headless_frame_driver_matrix() {
     run_table(
         "headless_frame_driver_matrix",
         &[
+            ("first_frame_deferral::unmatched_first_frame_release_preserves_the_next_deferral", first_frame_deferral::unmatched_first_frame_release_preserves_the_next_deferral as fn()),
             ("realm_driver::a_zero_capacity_performance_window_retains_no_frame_samples", realm_driver::a_zero_capacity_performance_window_retains_no_frame_samples as fn()),
             ("realm_driver::logical_render_root_tracks_replacement_and_build_recovery", realm_driver::logical_render_root_tracks_replacement_and_build_recovery as fn()),
             ("a11y_query::a_button_in_the_render_tree_is_findable_by_role", a11y_query::a_button_in_the_render_tree_is_findable_by_role as fn()),

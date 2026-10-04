@@ -306,9 +306,16 @@ impl RenderingBinding {
     /// sent to the engine and will not appear on screen.
     ///
     /// Calling this has no effect after the first frame has been sent.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the deferral count is exhausted, preserving all existing deferrals.
     pub fn defer_first_frame(&self) {
         self.first_frame_deferred_count
-            .fetch_add(1, Ordering::Relaxed);
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |count| {
+                count.checked_add(1)
+            })
+            .expect("first-frame deferral count exhausted");
     }
 
     /// Called after [`defer_first_frame`](Self::defer_first_frame) to tell
@@ -327,13 +334,11 @@ impl RenderingBinding {
     /// count is already zero) — a caller-contract violation, mirroring the
     /// oracle's `assert(_firstFrameDeferredCount > 0)`.
     pub fn allow_first_frame(&self) {
-        let prev = self
-            .first_frame_deferred_count
-            .fetch_sub(1, Ordering::Relaxed);
-        assert!(
-            prev > 0,
-            "allow_first_frame called without matching defer_first_frame"
-        );
+        self.first_frame_deferred_count
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |count| {
+                count.checked_sub(1)
+            })
+            .expect("allow_first_frame called without matching defer_first_frame");
 
         // Schedule a warm-up frame even if the count is not down to zero
         // yet: removing one deferral may uncover a NEW one further down the
@@ -600,8 +605,7 @@ mod tests {
     /// and hand to the renderer), and withholds it while the first
     /// frame is deferred. Uses an isolated (non-singleton) binding so
     /// no other test's pipeline state can interfere.
-    #[test]
-    fn draw_frame_returns_layer_tree_and_defers_when_gated() {
+    fn deferred_frame_returns_the_painted_tree_after_release() {
         use flui_foundation::geometry::Size;
         use flui_objects::RenderColoredBox;
         use flui_rendering::constraints::BoxConstraints;
@@ -646,6 +650,48 @@ mod tests {
         assert!(
             tree.len() > 1,
             "the produced layer tree must carry the painted content under its root",
+        );
+    }
+
+    fn an_exhausted_deferral_count_preserves_all_existing_deferrals() {
+        let binding = RenderingBinding::new(TextContextHandle::standalone());
+        // Exhausting the public counter would require billions of calls. Seed
+        // this failure boundary, then exercise only the public gate operations.
+        binding
+            .first_frame_deferred_count
+            .store(u32::MAX, Ordering::Relaxed);
+        for _ in 0..2 {
+            assert!(
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    binding.defer_first_frame();
+                }))
+                .is_err()
+            );
+            assert!(!binding.send_frames_to_engine());
+        }
+        binding.allow_first_frame();
+        assert!(
+            !binding.send_frames_to_engine(),
+            "other deferrals remain live"
+        );
+        binding.defer_first_frame();
+        assert!(!binding.send_frames_to_engine());
+    }
+
+    #[test]
+    fn draw_frame_returns_layer_tree_and_defers_when_gated() {
+        crate::table_test::run_table(
+            "draw_frame_returns_layer_tree_and_defers_when_gated",
+            &[
+                (
+                    "deferred_frame_returns_the_painted_tree_after_release",
+                    deferred_frame_returns_the_painted_tree_after_release,
+                ),
+                (
+                    "an_exhausted_deferral_count_preserves_all_existing_deferrals",
+                    an_exhausted_deferral_count_preserves_all_existing_deferrals,
+                ),
+            ],
         );
     }
 }
