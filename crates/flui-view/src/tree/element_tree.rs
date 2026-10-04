@@ -3452,6 +3452,11 @@ mod tests {
             "element_tree_contract_matrix",
             &[
                 (
+                    "exhausted_global_key_counter_never_reissues_an_identity",
+                    crate::GlobalKey::<()>::exhausted_global_key_counter_never_reissues_an_identity
+                        as fn(),
+                ),
+                (
                     "removing_an_unkeyed_subtree_deactivates_a_keyed_descendant",
                     removing_an_unkeyed_subtree_deactivates_a_keyed_descendant as fn(),
                 ),

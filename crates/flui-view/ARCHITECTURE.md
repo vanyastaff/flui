@@ -585,3 +585,16 @@ driver-owned Arc, catches old retirement, and disposes the final caller owner.
 The public eager-disposal row separately checks a real builder; retained failed
 task ownership can also pin its snapshot, so that row is not a guard-only oracle.
 
+### GlobalKey identity exhaustion is permanent
+
+`GlobalKey::new` issues every identity in `1..=u64::MAX` once, then refuses
+all further allocations. Zero is an internal exhaustion sentinel, never a key.
+The atomic transition publishes the last identity and sentinel together, so
+catching a refusal cannot wrap the allocator into an earlier identity. This
+changes identity admission only; GlobalKey registries remain realm-owned.
+
+`exhausted_global_key_counter_never_reissues_an_identity` joins the existing
+private `element_tree_contract_matrix`. It drives the production mint helper
+with a local terminal counter because a consumer cannot exhaust the real
+identity space. It admits both final identities, catches repeated refusal and
+checks subsequent ordinary allocation from an independent local counter.
