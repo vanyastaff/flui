@@ -2,6 +2,24 @@
 
 Research date: 2026-10-03. Baseline: Rust 1.99.0 and main at `465b8e13d`.
 
+## Coverage and limits
+
+This report records a verified set of modernization changes, not an exhaustive
+functional or architecture audit of every crate or every module. Workspace-wide
+Clippy, tests, documentation and dependency checks do not establish that all
+subsystems have been inspected for design problems.
+
+The branch changes files in 18 of the 27 members directly under `crates/` and
+`packages/`, counted with `git diff --name-only origin/main...HEAD` against their
+manifests. The facade, examples and xtask are additional workspace members.
+
+| Scope | Members and inspected areas |
+|---|---|
+| Substantive subsystem work | `flui-foundation`: notification ownership, read adapters and geometry; `flui-scheduler`: async polling, wake delivery, ticker resolution and frame completion; `flui-assets`: admission, loaders, cache ownership and runtime bridging; `flui-engine`: recording allocations, texture reuse, scale calculations and dashed contours; `flui-view`: reactive loan recovery. These are selected areas, not complete crate audits. |
+| Targeted numerical work | `flui-animation`: friction simulation; `flui-rendering`: constraint diagonals. |
+| Local lint/API-consumer adaptations | `flui-app`, `flui-cli`, `flui-hot-reload`, `flui-interaction`, `flui-objects`, `flui-platform`, `flui-runtime`, `flui-testing`, `flui-widgets`, `flui-material`, `flui-cupertino`. File changes here do not imply a full functional review. |
+| No crate-specific modernization changes | `flui-layer`, `flui-log`, `flui-macros`, `flui-painting`, `flui-platform-api`, `flui-protocol`, `flui-sdk`, `flui-semantics`, `flui-devtools`. Global checks and downstream compilation cover them, but they have not received a complete independent architecture audit in this work. |
+
 ## Sources and applicability
 
 The [Rust 1.99 changelog](https://releases.rs/docs/1.99.0/) and
