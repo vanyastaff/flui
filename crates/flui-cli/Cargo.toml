@@ -63,6 +63,7 @@ pkg-fmt = "zip"
 # directories, and `process`/`io-util` for the async builders.
 cargo_metadata = { workspace = true }
 tempfile = { workspace = true }
+sha2 = { workspace = true }
 
 # Source watcher for the dev loop.
 notify-debouncer-mini = "0.7"

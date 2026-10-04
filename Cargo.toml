@@ -245,6 +245,7 @@ schemars = "1.0"
 cargo_metadata = "0.23.1"
 # Core wasm import inspection in xtask. No validator, component model or serde.
 wasmparser = { version = "0.261", default-features = false, features = ["std"] }
+sha2 = { version = "0.11", default-features = false }
 # Parity-inventory manifest parsing (flui-widgets dev-dep) + flui-cli config.
 toml = "1.1"
 

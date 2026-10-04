@@ -1678,6 +1678,15 @@ const STAGING_INFIX: &str = "-hot-";
 /// locked by the running host, so the host loads the copy instead. The `use_staging`
 /// flag preserves the direct-load path for callers that do not need it.
 fn stage_worker_artifact(built: &Path, canonical: &Path, use_staging: bool) -> CliResult<PathBuf> {
+    stage_worker_artifact_before_publish(built, canonical, use_staging, |_| {})
+}
+
+fn stage_worker_artifact_before_publish(
+    built: &Path,
+    canonical: &Path,
+    use_staging: bool,
+    before_publish: impl FnOnce(&Path),
+) -> CliResult<PathBuf> {
     if !use_staging {
         return Ok(built.to_path_buf());
     }
@@ -1706,43 +1715,76 @@ fn stage_worker_artifact(built: &Path, canonical: &Path, use_staging: bool) -> C
             built.display()
         )
     })?;
-    let dest = parent.join(format!("{stem}{STAGING_INFIX}{:08x}{ext}", fnv1a(&bytes)));
+    use sha2::{Digest, Sha256};
+    use std::fmt::Write as _;
+    let hash = Sha256::digest(&bytes)
+        .iter()
+        .fold(String::with_capacity(64), |mut hex, byte| {
+            write!(hex, "{byte:02x}").expect("BUG: writing to a String cannot fail");
+            hex
+        });
+    let dest = parent.join(format!("{stem}{STAGING_INFIX}{hash}{ext}"));
 
-    // An existing file with this hash already holds these exact bytes. Leave it
+    // SHA-256 content identity makes path reuse deliberate for identical builds.
+    // As with other content-addressed caches, cryptographic collisions are outside
+    // this identity contract. Leave an existing file
     // in place — rewriting a shared library the host may have mapped is what the
     // deferred-unmap hazard turns into a stale image.
     if dest.exists() {
+        let existing = std::fs::read(&dest)
+            .with_context(|| format!("failed to verify staged worker at {}", dest.display()))?;
+        if existing != bytes {
+            return Err(CliError::BuildFailed {
+                platform: "desktop".to_string(),
+                details: format!(
+                    "staged worker content differs from its identity at {}; refusing to overwrite a potentially loaded image",
+                    dest.display()
+                ),
+            });
+        }
         return Ok(dest);
     }
 
-    std::fs::write(&dest, &bytes)
-        .with_context(|| format!("failed to stage worker to {}", dest.display()))?;
-
-    // Defensive only: cargo already ad-hoc linker-signs dylibs on macOS
-    // (`flags=adhoc,linker-signed`), and the host runs the worker under the same
-    // un-hardened `cargo run` image, so an unsigned staged copy loads today. This
-    // keeps a future hardened-runtime/library-validation host from refusing it,
-    // and never fails the reload (a missing `codesign` is a warning, not an error).
-    #[cfg(target_os = "macos")]
-    codesign_ad_hoc(&dest);
+    // Publish complete immutable bytes without replacing a concurrent winner.
+    // Copying cargo's signed Mach-O bytes retains their signature; signing after
+    // publication would change the content identity of a possibly mapped image.
+    use std::io::Write;
+    let mut temporary = tempfile::NamedTempFile::new_in(parent)
+        .context("failed to create temporary worker snapshot")?;
+    temporary
+        .write_all(&bytes)
+        .context("failed to write temporary worker snapshot")?;
+    before_publish(temporary.path());
+    match temporary.persist_noclobber(&dest) {
+        Ok(_) => {}
+        Err(failure) if failure.error.kind() == std::io::ErrorKind::AlreadyExists => {
+            let existing = std::fs::read(&dest).with_context(|| {
+                format!(
+                    "failed to verify concurrent staged worker at {}",
+                    dest.display()
+                )
+            })?;
+            if existing != bytes {
+                return Err(CliError::BuildFailed {
+                    platform: "desktop".to_string(),
+                    details: format!(
+                        "staged worker content differs from its identity at {}; refusing to overwrite a potentially loaded image",
+                        dest.display()
+                    ),
+                });
+            }
+            return Ok(dest);
+        }
+        Err(failure) => {
+            return Err(failure.error).with_context(|| {
+                format!("failed to publish worker snapshot at {}", dest.display())
+            });
+        }
+    }
 
     prune_stale_staged_workers(parent, stem, &ext, &dest);
 
     Ok(dest)
-}
-
-/// FNV-1a (32-bit) over `bytes` — a tiny, dependency-free content hash whose
-/// only job is to give distinct builds distinct staging names. It is not a
-/// security boundary and collisions are not a correctness risk here: a
-/// collision would merely reuse an existing staged file (the bytes are compared
-/// by the host, not by this hash).
-fn fnv1a(bytes: &[u8]) -> u32 {
-    let mut hash: u32 = 0x811c_9dc5;
-    for &byte in bytes {
-        hash ^= u32::from(byte);
-        hash = hash.wrapping_mul(0x0100_0193);
-    }
-    hash
 }
 
 /// Best-effort removal of superseded staged workers. Errors are ignored: a file
@@ -1763,38 +1805,6 @@ fn prune_stale_staged_workers(parent: &Path, stem: &str, ext: &str, keep: &Path)
         };
         if name.starts_with(&prefix) && name.ends_with(ext) {
             let _ = std::fs::remove_file(&path);
-        }
-    }
-}
-
-/// Ad-hoc sign `path` (`codesign --sign -`). Best-effort: a missing binary or a
-/// failed sign is logged and ignored — see `stage_worker_artifact` for why this
-/// is defensive rather than load-bearing today.
-#[cfg(target_os = "macos")]
-fn codesign_ad_hoc(path: &Path) {
-    let output = std::process::Command::new("codesign")
-        .args(["--sign", "-", "-v", "--force"])
-        .arg(path)
-        .output();
-    match output {
-        Ok(output) if output.status.success() => {
-            ui::debug(format!(
-                "ad-hoc signed the staged worker {}",
-                path.display()
-            ));
-        }
-        Ok(output) => {
-            let _ = ui::warning(format!(
-                "codesign of the staged worker {} failed; continuing (load may still succeed): {}",
-                path.display(),
-                String::from_utf8_lossy(&output.stderr).trim()
-            ));
-        }
-        Err(error) => {
-            let _ = ui::warning(format!(
-                "could not run codesign for {}; continuing (load may still succeed): {error}",
-                path.display()
-            ));
         }
     }
 }
@@ -2342,9 +2352,186 @@ mod tests {
         assert_eq!(missing.exit_code(), 5);
     }
 
+    // Staging is private CLI orchestration: exercise the same file-writing path
+    // the worker host loads, without requiring a compiled DSO or native loader.
+    fn staged_worker_content_identity_survives_reuse_and_pruning() {
+        let directory = tempfile::tempdir().expect("worker staging directory");
+        let canonical = directory.path().join("worker.bin");
+        // These distinct byte strings collide under the previous 32-bit FNV hash.
+        let first = [
+            0x26, 0x0a, 0x53, 0x09, 0xc4, 0x9d, 0xde, 0x1a, 0xb9, 0x0b, 0xb6, 0x38,
+        ];
+        let second = [
+            0x0a, 0x28, 0x0c, 0x76, 0x3f, 0xd7, 0x39, 0xa2, 0x6a, 0xae, 0xc6, 0x8e,
+        ];
+        std::fs::write(&canonical, first).expect("first build");
+        let first_path =
+            super::stage_worker_artifact(&canonical, &canonical, true).expect("stage first build");
+        assert_eq!(
+            std::fs::read(&first_path).expect("first staged bytes"),
+            first
+        );
+        let stamp = std::time::UNIX_EPOCH + std::time::Duration::from_secs(123);
+        std::fs::File::options()
+            .write(true)
+            .open(&first_path)
+            .expect("staged file")
+            .set_times(std::fs::FileTimes::new().set_modified(stamp))
+            .expect("staged timestamp");
+        let reused = super::stage_worker_artifact(&canonical, &canonical, true)
+            .expect("reuse identical build");
+        assert_eq!(reused, first_path);
+        assert_eq!(
+            std::fs::metadata(&reused)
+                .expect("staged metadata")
+                .modified()
+                .expect("modified"),
+            stamp
+        );
+        std::fs::write(&canonical, second).expect("second build");
+        let second_path =
+            super::stage_worker_artifact(&canonical, &canonical, true).expect("stage second build");
+        assert_ne!(
+            second_path, first_path,
+            "different images must not reuse a loader path"
+        );
+        assert_eq!(
+            std::fs::read(&second_path).expect("second staged bytes"),
+            second
+        );
+        // Explicit removal also covers Windows, where a live mapped image may
+        // prevent the best-effort pruning that already ran above.
+        if first_path.exists() {
+            std::fs::remove_file(&first_path).expect("remove old staging");
+        }
+        std::fs::write(&canonical, first).expect("return to first build");
+        let returned = super::stage_worker_artifact(&canonical, &canonical, true)
+            .expect("restage original image");
+        assert_eq!(
+            returned, first_path,
+            "same content can safely reuse a cached loader identity"
+        );
+        assert_eq!(std::fs::read(returned).expect("restaged bytes"), first);
+        assert_eq!(std::fs::read(canonical).expect("canonical remains"), first);
+    }
+
+    fn corrupt_staged_worker_is_refused_without_overwriting_a_loaded_path() {
+        let directory = tempfile::tempdir().expect("worker staging directory");
+        let canonical = directory.path().join("worker.bin");
+        std::fs::write(&canonical, b"fresh image").expect("build bytes");
+        let staged =
+            super::stage_worker_artifact(&canonical, &canonical, true).expect("first staging");
+        std::fs::write(&staged, b"incomplete staging").expect("corrupt staging fixture");
+        let failure = super::stage_worker_artifact(&canonical, &canonical, true)
+            .expect_err("corrupted identity must be refused");
+        assert!(
+            failure.to_string().contains("refusing to overwrite"),
+            "{failure}"
+        );
+        assert_eq!(
+            std::fs::read(&staged).expect("staged bytes"),
+            b"incomplete staging"
+        );
+        assert_eq!(
+            std::fs::read(&canonical).expect("build bytes remain"),
+            b"fresh image"
+        );
+        std::fs::remove_file(&staged).expect("remove corrupt staging");
+        let recovered = super::stage_worker_artifact(&canonical, &canonical, true)
+            .expect("next staging after corruption removed");
+        assert_eq!(
+            std::fs::read(recovered).expect("recovered bytes"),
+            b"fresh image"
+        );
+    }
+
+    fn concurrent_identical_workers_publish_one_complete_immutable_snapshot() {
+        let directory = tempfile::tempdir().expect("worker staging directory");
+        let canonical = directory.path().join("worker.dll");
+        let bytes = vec![0x5a; 64 * 1024];
+        std::fs::write(&canonical, &bytes).expect("fresh worker bytes");
+        let barrier = std::sync::Barrier::new(3);
+        let published = std::sync::Barrier::new(3);
+        let stamp = std::time::UNIX_EPOCH + std::time::Duration::from_secs(123);
+        let staged = std::thread::scope(|scope| {
+            let mut workers = Vec::new();
+            for index in 0..3 {
+                let canonical = &canonical;
+                let bytes = &bytes;
+                let barrier = &barrier;
+                let published = &published;
+                workers.push(scope.spawn(move || {
+                    let staged = super::stage_worker_artifact_before_publish(
+                        canonical,
+                        canonical,
+                        true,
+                        |temporary| {
+                            assert_eq!(
+                                std::fs::read(temporary).expect("complete unpublished snapshot"),
+                                *bytes
+                            );
+                            barrier.wait();
+                            if index != 0 {
+                                published.wait();
+                            }
+                        },
+                    )
+                    .expect("concurrent staging succeeds");
+                    if index == 0 {
+                        std::fs::File::options()
+                            .write(true)
+                            .open(&staged)
+                            .expect("winning snapshot")
+                            .set_times(std::fs::FileTimes::new().set_modified(stamp))
+                            .expect("winning snapshot stamp");
+                        published.wait();
+                    }
+                    staged
+                }));
+            }
+            workers
+                .into_iter()
+                .map(|worker| worker.join().expect("staging worker joins"))
+                .collect::<Vec<_>>()
+        });
+        assert!(staged.iter().all(|path| path == &staged[0]));
+        assert_eq!(
+            std::fs::read(&staged[0]).expect("published snapshot"),
+            bytes
+        );
+        assert_eq!(
+            std::fs::metadata(&staged[0])
+                .expect("snapshot metadata")
+                .modified()
+                .expect("snapshot stamp"),
+            stamp,
+            "losing publishers never overwrite the winner"
+        );
+        assert_eq!(
+            std::fs::read(&canonical).expect("canonical preserved"),
+            bytes
+        );
+        assert_eq!(
+            super::stage_worker_artifact(&canonical, &canonical, true).expect("next staging"),
+            staged[0]
+        );
+    }
+
     #[test]
     fn run_contract() {
         crate::test_cases::run_cases(&[
+            (
+                "concurrent identical workers publish one complete immutable snapshot",
+                concurrent_identical_workers_publish_one_complete_immutable_snapshot,
+            ),
+            (
+                "corrupt staged worker is refused without overwriting a loaded path",
+                corrupt_staged_worker_is_refused_without_overwriting_a_loaded_path,
+            ),
+            (
+                "staged worker content identity survives reuse and pruning",
+                staged_worker_content_identity_survives_reuse_and_pruning,
+            ),
             ("env names match the runtime", env_names_match_the_runtime),
             (
                 "device selection prefers exact id then name then unique prefix",
