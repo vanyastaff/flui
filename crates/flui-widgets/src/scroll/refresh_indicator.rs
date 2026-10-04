@@ -409,16 +409,22 @@ impl StatefulView for RefreshIndicator {
     }
 }
 
+impl RefreshIndicatorState {
+    fn install_fling_listener(&mut self) {
+        if let Some(id) = self.fling_listener_id.take() {
+            self.fling_controller.remove_listener(id);
+        }
+        let fling = self.fling_controller.clone();
+        let scroll = self.scroll_controller.clone();
+        self.fling_listener_id = Some(self.fling_controller.add_listener(Arc::new(move || {
+            scroll.set_pixels(fling.value());
+        })));
+    }
+}
+
 impl ViewState<RefreshIndicator> for RefreshIndicatorState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        // Push the fling simulation's current pixel value into the scroll
-        // controller on each tick — the same wiring Scrollable uses.
-        let fling_ref = self.fling_controller.clone();
-        let scroll_ref = self.scroll_controller.clone();
-        let listener_id = self.fling_controller.add_listener(Arc::new(move || {
-            scroll_ref.set_pixels(fling_ref.value());
-        }));
-        self.fling_listener_id = Some(listener_id);
+        self.install_fling_listener();
 
         // Register with the ambient VsyncScope so the binding ticks the fling
         // controller on each virtual frame deterministically.
@@ -427,8 +433,8 @@ impl ViewState<RefreshIndicator> for RefreshIndicatorState {
             self.vsync = Some(vsync);
             self.vsync_registration = Some(registration);
         }
-        // Without a VsyncScope the fling controller falls back to wall-clock
-        // scheduling — still functional on a real display, not deterministic in tests.
+        // This controller has no ticker: without a VsyncScope registration,
+        // gesture updates still work but ballistic runs do not advance.
     }
 
     fn build(&self, view: &RefreshIndicator, _ctx: &dyn BuildContext) -> impl IntoView {
@@ -461,6 +467,7 @@ impl ViewState<RefreshIndicator> for RefreshIndicatorState {
 
                 // Gesture clones — each closure needs its own Arc-counted handle.
                 let fling_stop = fc_inner.clone();
+                let rc_start = rc_outer.clone();
                 let sc_update = sc_inner.clone();
                 let rc_update = rc_outer.clone();
                 let ph_update = ph_inner.clone();
@@ -495,6 +502,9 @@ impl ViewState<RefreshIndicator> for RefreshIndicatorState {
                     .on_pan_start(move |_cx, _details| {
                         // Halt any in-flight fling when the user grabs the content.
                         let _ = fling_stop.stop();
+                        if !rc_start.is_refreshing() {
+                            rc_start.set_pull_distance_px(0.0);
+                        }
                     })
                     .on_pan_update(move |_cx, details| {
                         // Ignore scroll/pull updates while a refresh is in progress
@@ -505,7 +515,10 @@ impl ViewState<RefreshIndicator> for RefreshIndicatorState {
                         // Positive dy (finger moving DOWN) maps to a decrease in
                         // scroll offset (reveals content above).
                         let raw_delta_y = details.delta.dy;
-                        let proposed = sc_update.pixels() - raw_delta_y;
+                        // Pull remains outside the clamped scroll position. Consume
+                        // it first when the finger reverses toward ordinary scrolling.
+                        let proposed =
+                            sc_update.pixels() - rc_update.pull_distance_px() - raw_delta_y;
 
                         if proposed < sc_update.min_scroll_extent() {
                             // Overscroll at top: track how far past the boundary
@@ -521,6 +534,9 @@ impl ViewState<RefreshIndicator> for RefreshIndicatorState {
                         }
                     })
                     .on_pan_end(move |cx, details| {
+                        if rc_end.is_refreshing() {
+                            return;
+                        }
                         let pull = rc_end.pull_distance_px();
                         if pull >= threshold_px {
                             // Sufficient overscroll: enter refreshing state and
@@ -554,7 +570,17 @@ impl ViewState<RefreshIndicator> for RefreshIndicatorState {
     }
 
     fn did_update_view(&mut self, _old_view: &RefreshIndicator, new_view: &RefreshIndicator) {
-        self.scroll_controller = new_view.scroll_controller.clone();
+        if !self
+            .scroll_controller
+            .position()
+            .ptr_eq(&new_view.scroll_controller.position())
+        {
+            // A run samples the old position's metrics. Do not carry that
+            // simulation into a replacement position with different bounds.
+            let _ = self.fling_controller.stop();
+            self.scroll_controller = new_view.scroll_controller.clone();
+            self.install_fling_listener();
+        }
     }
 
     fn dispose(&mut self) {

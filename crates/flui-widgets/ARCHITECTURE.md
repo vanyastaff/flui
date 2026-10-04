@@ -1885,3 +1885,35 @@ build time and called from an event is deferred
 until a consumer needs one. `is_enabled` and `to_key_event_result` stay
 queries. **Tests:** `tests/actions.rs` (resolution through key dispatch),
 `tests/shortcuts.rs`'s `event_cx_tests`.
+
+### Refresh pulls accumulate outside the clamped scroll position
+
+`RefreshIndicator` retains the distance pulled beyond the top separately from
+its scroll position, which stays at the minimum extent. Each pointer delta adds
+to that distance; reversed motion consumes it before advancing ordinary scroll
+content. Releasing at the threshold starts one refresh. Gesture updates while
+refreshing do not alter its pull or content, and releasing a gesture does not
+start a ballistic run; `finish` permits a new operation.
+`incremental_pulls_refresh_once_and_finish_allows_the_next_gesture` and
+`reversing_a_pull_consumes_it_before_scrolling_content` exercise this through
+pointer dispatch in `scroll_physics_and_activity`. The row
+`a_fast_gesture_while_refreshing_does_not_start_a_fling` advances virtual frames
+after a fast upward gesture to distinguish ignored direct motion from an
+erroneously started fling, then checks post-finish scrolling and coasting.
+Ballistic motion requires an ambient `VsyncScope`; the internal controller has
+no ticker or wall-clock fallback.
+
+A changed `ScrollPosition` identity stops the simulation based on the retired
+position's metrics and replaces the fling listener's target. Reconfiguration
+with the same position preserves the active run. The listener is removed and
+replaced outside any controller or position guard; its captured handles can
+retire without holding those locks. The rows
+`a_refresh_controller_swap_retires_the_old_fling_and_drives_the_new_position`
+and `rebuilding_refresh_content_with_the_same_position_preserves_its_fling`
+use virtual frames to observe actual position changes.
+
+The design follows this widget's synchronous completion and logical-pixel
+threshold contract. As a comparison after choosing it, Flutter's
+[refresh notification handler](https://github.com/flutter/flutter/blob/main/packages/flutter/lib/src/material/refresh_indicator.dart)
+also accumulates updates and overscroll into its drag offset. FLUI does not
+adopt its notification-based routing, viewport-relative threshold or futures.

@@ -212,6 +212,11 @@ fn scroll_physics_and_activity() {
     run_cases(
         "scroll_physics_and_activity",
         &[
+            ("scroll::a_fast_gesture_while_refreshing_does_not_start_a_fling", crate::scroll::a_fast_gesture_while_refreshing_does_not_start_a_fling as fn()),
+            ("scroll::incremental_pulls_refresh_once_and_finish_allows_the_next_gesture", crate::scroll::incremental_pulls_refresh_once_and_finish_allows_the_next_gesture as fn()),
+            ("scroll::reversing_a_pull_consumes_it_before_scrolling_content", crate::scroll::reversing_a_pull_consumes_it_before_scrolling_content as fn()),
+            ("scroll::a_refresh_controller_swap_retires_the_old_fling_and_drives_the_new_position", crate::scroll::a_refresh_controller_swap_retires_the_old_fling_and_drives_the_new_position as fn()),
+            ("scroll::rebuilding_refresh_content_with_the_same_position_preserves_its_fling", crate::scroll::rebuilding_refresh_content_with_the_same_position_preserves_its_fling as fn()),
             (
                 "scroll::a_wheel_tick_over_nested_scrollables_moves_only_the_inner",
                 crate::scroll::a_wheel_tick_over_nested_scrollables_moves_only_the_inner as fn(),
