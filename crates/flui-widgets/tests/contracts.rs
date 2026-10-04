@@ -2,31 +2,7 @@
 //! scenario functions of that family. A failing row is named in the panic message, and
 //! one failing row never hides the others.
 
-use std::panic::{AssertUnwindSafe, catch_unwind};
-
-type Case = (&'static str, fn());
-
-/// Runs every row, then panics once naming each row that failed.
-fn run_cases(family: &str, cases: &[Case]) {
-    let mut failures = Vec::new();
-    for (name, case) in cases {
-        if let Err(payload) = catch_unwind(AssertUnwindSafe(case)) {
-            let message = payload
-                .downcast_ref::<String>()
-                .map(String::as_str)
-                .or_else(|| payload.downcast_ref::<&str>().copied())
-                .unwrap_or("<non-string panic payload>");
-            failures.push(format!("  {name}: {message}"));
-        }
-    }
-    assert!(
-        failures.is_empty(),
-        "{family}: {} of {} rows failed:\n{}",
-        failures.len(),
-        cases.len(),
-        failures.join("\n")
-    );
-}
+use crate::common::cases::run_cases;
 
 /// Navigator failure paths: panicking hooks and factories, mismatched result types,
 /// undeliverable results, and every re-entrant push or observer callback that must not

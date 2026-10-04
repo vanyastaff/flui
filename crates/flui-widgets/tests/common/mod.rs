@@ -6,3 +6,6 @@
 //! importing through `crate::common::…`; only the definition moved.
 
 pub use flui_testing::widgets::*;
+
+#[allow(dead_code)]
+pub mod cases;

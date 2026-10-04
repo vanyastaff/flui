@@ -56,6 +56,10 @@ pub struct AssetRegistry {
     /// Backs bridged loads' runtime resolution — see [`BridgeRuntime`].
     #[cfg(feature = "images")]
     bridge_runtime: BridgeRuntime,
+
+    /// One HTTP connection pool per registry, initialized on the loading runtime.
+    #[cfg(all(feature = "images", feature = "network"))]
+    network_loader: Arc<tokio::sync::OnceCell<crate::NetworkLoader>>,
 }
 
 impl std::fmt::Debug for AssetRegistry {
@@ -81,6 +85,8 @@ impl AssetRegistry {
             injected_runtime_handle: None,
             #[cfg(feature = "images")]
             bridge_runtime: BridgeRuntime::new(),
+            #[cfg(all(feature = "images", feature = "network"))]
+            network_loader: Arc::new(tokio::sync::OnceCell::new()),
         }
     }
 
@@ -90,12 +96,15 @@ impl AssetRegistry {
     fn with_injected_handle(
         default_capacity: usize,
         injected_runtime_handle: Option<tokio::runtime::Handle>,
+        #[cfg(feature = "network")] network_loader: Option<crate::NetworkLoader>,
     ) -> Self {
         Self {
             caches: Arc::new(RwLock::new(HashMap::new())),
             default_capacity,
             injected_runtime_handle,
             bridge_runtime: BridgeRuntime::new(),
+            #[cfg(feature = "network")]
+            network_loader: Arc::new(tokio::sync::OnceCell::new_with(network_loader)),
         }
     }
 
@@ -177,6 +186,8 @@ impl AssetRegistry {
     ///
     /// Requires both the `images` (decode) and `network` (HTTP client)
     /// features.
+    /// Requests share this registry's lazily initialized HTTP connection pool.
+    /// Client initialization errors are returned and a later load may retry.
     ///
     /// # Errors
     ///
@@ -197,11 +208,23 @@ impl AssetRegistry {
         let (tx, rx) = tokio::sync::oneshot::channel();
 
         let spawn_url = url.clone();
+        let network_loader = Arc::clone(&self.network_loader);
         match handle {
             Ok(handle) => {
                 handle.spawn(async move {
                     let outcome = async {
-                        let loader = crate::loaders::NetworkLoader::new();
+                        let loader = network_loader
+                            .get_or_try_init(|| async {
+                                crate::NetworkLoader::new().map_err(|error| {
+                                    AssetError::LoadFailed {
+                                        path: spawn_url.clone(),
+                                        reason: format!(
+                                            "HTTP client initialization failed: {error}"
+                                        ),
+                                    }
+                                })
+                            })
+                            .await?;
                         let bytes = loader.load_url(&spawn_url).await?;
                         let asset =
                             crate::assets::image::ImageAsset::from_bytes(spawn_url.clone(), bytes);
@@ -456,6 +479,8 @@ pub struct AssetRegistryBuilder<C = NoCapacity> {
     /// [`AssetRegistryBuilder::<HasCapacity>::build`].
     #[cfg(feature = "images")]
     runtime_handle: Option<tokio::runtime::Handle>,
+    #[cfg(all(feature = "images", feature = "network"))]
+    network_loader: Option<crate::NetworkLoader>,
 }
 
 // ===== Initial State: NoCapacity =====
@@ -476,6 +501,8 @@ impl AssetRegistryBuilder<NoCapacity> {
             capacity: NoCapacity,
             #[cfg(feature = "images")]
             runtime_handle: None,
+            #[cfg(all(feature = "images", feature = "network"))]
+            network_loader: None,
         }
     }
 
@@ -504,6 +531,8 @@ impl AssetRegistryBuilder<NoCapacity> {
             capacity: HasCapacity(capacity_bytes),
             #[cfg(feature = "images")]
             runtime_handle: self.runtime_handle,
+            #[cfg(all(feature = "images", feature = "network"))]
+            network_loader: self.network_loader,
         }
     }
 
@@ -523,11 +552,34 @@ impl AssetRegistryBuilder<NoCapacity> {
             capacity: HasCapacity(100 * 1024 * 1024), // 100 MB
             #[cfg(feature = "images")]
             runtime_handle: self.runtime_handle,
+            #[cfg(all(feature = "images", feature = "network"))]
+            network_loader: self.network_loader,
         }
     }
 }
 
 impl<C> AssetRegistryBuilder<C> {
+    /// Builds a fresh configured HTTP client for bridged network image requests.
+    ///
+    /// Configure deadlines, proxies, headers and redirects through the client
+    /// builder. Accepting a builder rather than an already-used client prevents
+    /// importing connections driven by another runtime. A fresh client establishes
+    /// connections on the bridge's selected loading runtime; configuration does
+    /// not change runtime selection.
+    ///
+    /// Without configuration, a default loader initializes lazily on the loading
+    /// runtime.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for invalid client configuration or failed TLS/resolver
+    /// initialization.
+    #[cfg(all(feature = "images", feature = "network"))]
+    pub fn with_network_client(mut self, client: reqwest::ClientBuilder) -> reqwest::Result<Self> {
+        self.network_loader = Some(crate::NetworkLoader::with_client(client.build()?));
+        Ok(self)
+    }
+
     /// Injects a tokio runtime handle for
     /// [`AssetRegistry::load_image_bridged`] to spawn onto, instead of
     /// reusing an ambient runtime or starting an owned background one.
@@ -581,7 +633,12 @@ impl AssetRegistryBuilder<HasCapacity> {
     pub fn build(self) -> AssetRegistry {
         #[cfg(feature = "images")]
         {
-            AssetRegistry::with_injected_handle(self.capacity.0, self.runtime_handle)
+            AssetRegistry::with_injected_handle(
+                self.capacity.0,
+                self.runtime_handle,
+                #[cfg(feature = "network")]
+                self.network_loader,
+            )
         }
         #[cfg(not(feature = "images"))]
         {
@@ -607,6 +664,8 @@ impl AssetRegistryBuilder<HasCapacity> {
             capacity: HasCapacity(capacity_bytes),
             #[cfg(feature = "images")]
             runtime_handle: self.runtime_handle,
+            #[cfg(all(feature = "images", feature = "network"))]
+            network_loader: self.network_loader,
         }
     }
 }

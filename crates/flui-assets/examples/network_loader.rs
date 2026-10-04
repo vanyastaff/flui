@@ -13,7 +13,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     {
         println!("=== FLUI Assets Network Loader Example ===\n");
 
-        let loader = NetworkLoader::new();
+        let client = reqwest::Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(10))
+            .timeout(std::time::Duration::from_secs(30))
+            .build()?;
+        let loader = NetworkLoader::with_client(client);
 
         // Example 1: Load data from a public API
         println!("1. Loading Random Bytes from httpbin.org");

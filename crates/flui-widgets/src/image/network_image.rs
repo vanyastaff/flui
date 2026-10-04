@@ -8,7 +8,7 @@ use std::sync::Arc;
 use flui_assets::AssetRegistry;
 use flui_painting::paint::Image as PixelImage;
 
-use super::cache_key::ImageCacheKey;
+use super::cache_key::{ImageCacheKey, NetworkImageKey};
 use super::decode_cache;
 use super::provider::{ImageProvider, ImageProviderError};
 
@@ -20,6 +20,9 @@ use super::provider::{ImageProvider, ImageProviderError};
 /// constructor argument, so the request
 /// runs on whichever background runtime and byte-loader machinery the
 /// application already owns.
+/// Cached responses and pending loads are shared only by providers using the
+/// same registry and URL, because client headers and policies can change the
+/// response at an otherwise identical URL.
 ///
 /// Prefer [`Image::network`](crate::Image::network) as the ergonomic
 /// constructor.
@@ -45,12 +48,12 @@ impl NetworkImage {
     }
 
     fn cache_key_value(&self) -> ImageCacheKey {
-        ImageCacheKey::Network(self.url.clone())
+        ImageCacheKey::Network(NetworkImageKey::new(&self.registry, self.url.clone()))
     }
 }
 
 impl ImageProvider for NetworkImage {
-    /// Returns the decode cache's current entry for this URL, if any.
+    /// Returns the decode cache's current entry for this registry and URL, if any.
     ///
     /// `NetworkImage` never performs a blocking network request here — see
     /// [`AssetImage::resolve`](super::AssetImage) for the same contract on
