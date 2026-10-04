@@ -111,7 +111,7 @@ impl FrameProtocol {
         reset_fonts: bool,
     ) {
         if self.font_source != source || reset_fonts {
-            painter.reset_scene_fonts();
+            painter.reset_scene_fonts(source);
             self.font_source = source;
             self.damage.mark_full_repaint();
         }

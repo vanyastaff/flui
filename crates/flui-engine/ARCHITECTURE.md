@@ -664,8 +664,10 @@ read back two distinct fonts sharing a glyph key, against independent fresh
 captures. Each transition starts with `NoDamage`. The private retained capture
 uses the production source selector and frame protocol; painting's
 `testing::paragraph_with_font_ids` models image-local counters restarting, which
-cannot be injected through the production paragraph constructors. Copying a newly
-admitted font into host-owned bytes is painting's decision 18; switching sources
+cannot be injected through the production paragraph constructors. Plugin atlases
+use `SwashRasterizer::with_owned_fonts` to copy a newly admitted font into
+host-owned bytes (painting's decision 18); ordinary atlases retain shared sources
+to preserve their weak source-cache identity. Switching sources
 also allocates a fresh atlas, while frames within one source retain it.
 
 `parley_runs_read_back` reads back what paint now

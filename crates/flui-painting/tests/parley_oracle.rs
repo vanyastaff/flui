@@ -337,7 +337,7 @@ pub(crate) fn registered_fonts_release_the_source_and_keep_rasterizing() {
         reads: Arc::clone(&reads),
         drops: Arc::clone(&drops),
     });
-    let mut rasterizer = SwashRasterizer::new();
+    let mut rasterizer = SwashRasterizer::with_owned_fonts();
     rasterizer
         .fonts_mut()
         .register_face(face, source.clone())

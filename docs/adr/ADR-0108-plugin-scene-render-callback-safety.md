@@ -34,8 +34,8 @@ The Android host supplies only the synchronous `Renderer::render_plugin_scene` c
 That engine path ignores annotation payloads and records concrete geometry,
 matrices, instances and GPU leases. Its texture cache may retain concrete `Image`
 allocations backed by host-compatible byte vectors; these do not carry a plugin's
-opaque vtable. Font registry admission must copy font bytes into concrete owned
-storage while the source image is live: an erased `FontBlob` can carry a plugin
+opaque vtable. Plugin font registry admission must copy font bytes into concrete
+owned storage while the source image is live: an erased `FontBlob` can carry a plugin
 vtable or a borrowed slice into its read-only data even for bundled fonts. The
 existing loader ABI handshake remains required for shared Rust values.
 
@@ -54,7 +54,11 @@ frames and plugin frames use the same source selector; a transition owes full
 repaint even when the scene differ reports no damage. Submitted GPU commands
 own their previous resources, so replacing the atlas requires no GPU wait.
 Warm frames within one image keep their atlas and perform no font copy or hash
-merely to establish image identity.
+merely to establish image identity. Ordinary registries retain the original shared
+font source, preserving the weak-cache blob identity contract in ADR-0092 §5.
+Only the plugin atlas uses `SwashRasterizer::with_owned_fonts`, which constructs
+`FontRegistry::with_owned_sources`; returning to ordinary scenes restores the
+shared-source policy alongside the atlas.
 
 ## Evidence and limits
 
@@ -64,7 +68,9 @@ test retain their existing behavior with explicitly justified unsafe calls.
 `polling_an_unavailable_plugin_reports_no_change` pins the safe polling result.
 
 `registered_fonts_release_the_source_and_keep_rasterizing` checks source
-retirement and subsequent glyph pixels. `scene_frame_reset_recovery_matrix`
+retirement and subsequent glyph pixels in the explicit owning registry.
+`a_held_blob_keeps_its_keys_across_a_prune` preserves the ordinary registry
+contract: its shared source keeps the shaper cache's blob ID alive. `scene_frame_reset_recovery_matrix`
 checks the actual hook's first-image, replacement, refusal and panic paths.
 Three rows of `parley_runs_read_back` render different fonts under identical
 face/glyph keys, start from `NoDamage`, and compare the transitioned frame with

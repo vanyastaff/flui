@@ -777,14 +777,17 @@ table of the blobs this frame's recorders named would miss a replayed
 paragraph's faces; a paragraph that carries its faces is complete by
 construction, for the cost of one shared handle per distinct face per
 paragraph. Holding the handle also keeps fontique's weakly cached blob, and so
-its id, alive while a paragraph names it. The raster registry retains the
-blob id but copies a newly registered face into concrete `Arc<[u8]>` storage.
-It keeps neither the source's erased `AsRef` vtable nor a borrowed slice into
-an unloadable plugin image; the source can retire after registration.
+its id, alive while a paragraph or an ordinary raster registry names it.
+The default registry retains the shared source, preserving fontique's weak
+source-cache identity across pruning. A plugin rasterizer instead uses
+`FontRegistry::with_owned_sources` through `SwashRasterizer::with_owned_fonts`:
+it copies each newly registered face into concrete `Arc<[u8]>` storage, retaining
+neither the source's erased `AsRef` vtable nor a borrowed slice into an unloadable
+image. The plugin source can retire after registration.
 `registered_fonts_release_the_source_and_keep_rasterizing`
-(`tests/parley_oracle.rs`, `parley_oracle_contract`) drops a custom font source
-and then rasterizes its first glyph, checking the bitmap and absence of calls
-back into the retired source. The bin and the device
+(`tests/parley_oracle.rs`, `parley_oracle_contract`) uses the owning rasterizer,
+drops a custom font source and then rasterizes its first glyph, checking the
+bitmap and absence of calls back into the retired source. The bin and the device
 row depend on the device transform, which only the replay knows. Parley aligns
 a line within the width it was broken at; the painter's box is the measured
 width, so lines are re-aligned in it, or an `Rtl` paragraph would be shifted
