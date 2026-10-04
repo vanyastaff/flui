@@ -1015,6 +1015,27 @@ Dropping a spawned handle detaches the Tokio task; it does not cancel it.
 Pinned by `ready_tasks_return_results_without_executor_bounds` through the
 public API.
 
+### Browser display units, held buttons and callback reentry
+
+Browser screen dimensions are CSS pixels; display bounds expose rounded device
+pixels after applying the device pixel ratio. Pointer coordinates retain the
+platform input contract of logical pixels, including the upstream
+`PhysicalPosition` storage name. DOM button masks preserve X1/X2 on down, up,
+move and wheel events. The `browser_input_probe` example records translated
+public input and display results for real DOM dispatch at a non-unit DPR.
+
+Platform window-event handlers are leased outside the state mutex and restored
+unless the callback installed a replacement. Setter retirement also occurs
+outside the mutex. Quit commits stopped state and consumes its callback before
+invoking it, so reentry cannot invoke the same quit callback again. Owning
+callback envelopes remain outside the caught invocation; a failed displaced
+callback is retained rather than destroyed while propagating its first failure.
+`created_callback_probe` and `quit_callback_probe` in that example exercise
+reentrant clipboard access. Each probe requires a fresh page and an external
+deadline: the previous implementation blocks or aborts the browser thread under the
+state mutex. Source inspection and type checking do not prove browser execution
+or arbitrary aggregate destructor containment.
+
 ### Android has no separate page-aligned container
 
 Android exposes no framework allocator or page-aligned vector. The removed

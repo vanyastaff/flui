@@ -1,0 +1,87 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>FLUI browser contracts</title>
+<style>
+body { font: 16px monospace; }
+nav { position: fixed; right: 12px; top: 12px; z-index: 9999; background: white; padding: 12px; }
+pre { position: relative; z-index: 9999; background: white; width: max-content; }
+</style>
+<nav>
+  <button id="input">Install input</button>
+  <button id="events">Check pointer and wheel events</button>
+  <button id="display">Check display</button>
+  <button id="created">Check created callback</button>
+  <button id="quit">Check quit callback</button>
+</nav>
+<pre id="loaded">Loading wasm</pre>
+<script type="module">
+import init, {
+  input_probe, display_probe, created_callback_probe, quit_callback_probe,
+} from './browser_input_probe.js';
+
+const report = (id, text) => {
+  let node = document.getElementById(id);
+  if (!node) {
+    node = document.createElement('pre');
+    node.id = id;
+    document.body.append(node);
+  }
+  node.textContent = text;
+};
+const check = (id, run) => {
+  try {
+    run();
+    report(id, 'PASS');
+  } catch (error) {
+    report(id, `FAIL: ${error}`);
+  }
+};
+const equal = (actual, expected) => {
+  for (const [key, value] of Object.entries(expected)) {
+    if (actual[key] !== value) {
+      throw new Error(`${key}: expected ${value}, got ${actual[key]}`);
+    }
+  }
+};
+
+await init();
+report('loaded', 'wasm loaded');
+document.getElementById('input').onclick = () => check('input-check', input_probe);
+document.getElementById('display').onclick = () => check('display-check', () => {
+  const actual = JSON.parse(display_probe());
+  const expected = {
+    width: Math.round(screen.width * devicePixelRatio),
+    height: Math.round(screen.height * devicePixelRatio),
+    scale: devicePixelRatio,
+  };
+  report('display-result', JSON.stringify(actual));
+  report('display-expected', JSON.stringify(expected));
+  equal(actual, expected);
+});
+document.getElementById('created').onclick = () => check('created-check', () => {
+  created_callback_probe();
+  equal({ result: document.getElementById('created-finished')?.textContent }, { result: 'returned' });
+});
+document.getElementById('quit').onclick = () => check('quit-check', () => {
+  quit_callback_probe();
+  equal({ result: document.getElementById('quit-finished')?.textContent }, { result: 'returned' });
+});
+document.getElementById('events').onclick = () => check('events-check', () => {
+  const canvas = document.querySelector('canvas');
+  if (!canvas) throw new Error('Install input first');
+  const rect = canvas.getBoundingClientRect();
+  const common = {
+    clientX: rect.left + 80, clientY: rect.top + 40,
+    pointerId: 1, pointerType: 'mouse', bubbles: true,
+  };
+  canvas.dispatchEvent(new PointerEvent('pointerdown', { ...common, button: 3, buttons: 24 }));
+  canvas.dispatchEvent(new PointerEvent('pointermove', { ...common, button: -1, buttons: 24 }));
+  canvas.dispatchEvent(new WheelEvent('wheel', { ...common, buttons: 24, deltaX: 3, deltaY: 6, deltaMode: 0 }));
+  canvas.dispatchEvent(new PointerEvent('pointerup', { ...common, button: 4, buttons: 8 }));
+  for (const kind of ['down', 'move', 'scroll', 'up']) {
+    const actual = JSON.parse(document.getElementById(kind)?.textContent ?? 'null');
+    if (!actual) throw new Error(`${kind} was not delivered`);
+    equal(actual, { x: 80, y: 40, scale: devicePixelRatio, x1: true, x2: kind !== 'up' });
+  }
+});
+</script>
