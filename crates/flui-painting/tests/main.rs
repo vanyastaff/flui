@@ -187,6 +187,10 @@ fn recording_contract() {
                 "save_restore_tracks_the_save_count",
                 recording::save_restore_tracks_the_save_count,
             ),
+            (
+                "shear_factors_map_the_named_axes_in_recorded_commands",
+                recording::shear_factors_map_the_named_axes_in_recorded_commands,
+            ),
             #[cfg(debug_assertions)]
             (
                 "finish_panics_in_debug_on_unrestored_save",

@@ -59,6 +59,11 @@ and a `tracing::warn!`, then the list ships as recorded, which is what
 `PictureRecorder.endRecording()` does in release. `restore()` on an empty
 stack is a silent no-op for the same reason.
 
+`Canvas::skew` takes shear factors, mapping `(x, y)` to
+`(x + sx * y, y + sy * x)` before the existing canvas transform. The public
+`shear_factors_map_the_named_axes_in_recorded_commands` row of
+`recording_contract` checks mapped coordinates and the recorded damage extent.
+
 ---
 
 ## Text
