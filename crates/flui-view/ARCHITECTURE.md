@@ -501,3 +501,26 @@ mount completes, the failed observer is disarmed, and a healthy observer receive
 the following builds. Replacement also checks that its new observer survives an
 outgoing `detached()` failure.
 
+### Build recovery retains opaque failure ownership before substitution
+
+Build failure classification borrows the original payload, then retains that
+opaque payload before reactive build finalization, the recovery factory or
+diagnostics can fail. Its destructor is never invoked on this exceptional path.
+The recovery factory keeps its existing failure authority: a factory unwind
+publishes no successful build-recovery record.
+
+Committed recovery records are stored before reporting. A subscriber failure
+has a separate unwind boundary and its opaque payload is retained, so it cannot
+erase attribution or unwind a returned recovery view. Staged lifecycle reporting
+is likewise contained, while its owned diagnostic token is committed only after
+the containing replacement succeeds. This does not make recovery factory code
+or simultaneous panicking destructors inside otherwise ordinary user-owned
+aggregates recoverable.
+
+Six isolated rows in `lifecycle_panic_containment_matrix`, defined in
+`tests/support/build_payload_recovery.rs`, exercise original aggregate payloads,
+subscriber failure alone and in competition, recovery-view capture ownership,
+factory failure priority and staged init-state attribution. Each child checks
+actual ErrorView or configured-view substitution where recovery commits, the
+original hook and element record exactly once, and following healthy builds.
+

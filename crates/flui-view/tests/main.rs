@@ -97,6 +97,10 @@ fn global_key_contract_matrix() {
 
 #[test]
 fn lifecycle_panic_containment_matrix() {
+    if let Ok(kind) = std::env::var("FLUI_BUILD_PAYLOAD_RECOVERY_CHILD") {
+        lifecycle_panic_containment::build_payload_recovery::dispatch_child(&kind);
+        return;
+    }
     if let Ok(kind) = std::env::var("FLUI_OBSERVER_RECOVERY_CHILD") {
         lifecycle_panic_containment::observer_recovery::dispatch_child(&kind);
         return;
@@ -109,6 +113,12 @@ fn lifecycle_panic_containment_matrix() {
             ("lifecycle_panic_containment::a_dispose_panic_on_a_global_keyed_element_still_clears_the_registry", lifecycle_panic_containment::a_dispose_panic_on_a_global_keyed_element_still_clears_the_registry as fn()),
             ("lifecycle_panic_containment::a_deactivate_panic_is_contained_and_the_element_is_still_parked_inactive", lifecycle_panic_containment::a_deactivate_panic_is_contained_and_the_element_is_still_parked_inactive as fn()),
             ("recovered_panics::a_contained_build_panic_is_recorded_once_with_its_element_and_hook", recovered_panics::a_contained_build_panic_is_recorded_once_with_its_element_and_hook as fn()),
+            ("build_payload_recovery::aggregate_build_payload_is_retained_before_recovery", lifecycle_panic_containment::build_payload_recovery::aggregate_build_payload_is_retained_before_recovery as fn()),
+            ("build_payload_recovery::recovery_reporting_preserves_original_attribution", lifecycle_panic_containment::build_payload_recovery::recovery_reporting_preserves_original_attribution as fn()),
+            ("build_payload_recovery::original_and_reporting_payloads_do_not_compete_at_retirement", lifecycle_panic_containment::build_payload_recovery::original_and_reporting_payloads_do_not_compete_at_retirement as fn()),
+            ("build_payload_recovery::recovery_view_survives_reporting_with_opaque_captures", lifecycle_panic_containment::build_payload_recovery::recovery_view_survives_reporting_with_opaque_captures as fn()),
+            ("build_payload_recovery::recovery_factory_failure_keeps_its_authority_after_opaque_build_failure", lifecycle_panic_containment::build_payload_recovery::recovery_factory_failure_keeps_its_authority_after_opaque_build_failure as fn()),
+            ("build_payload_recovery::staged_lifecycle_attribution_survives_reporting_failure", lifecycle_panic_containment::build_payload_recovery::staged_lifecycle_attribution_survives_reporting_failure as fn()),
             ("observer_recovery::emission_retains_aggregate_payload", lifecycle_panic_containment::observer_recovery::emission_retains_aggregate_payload as fn()),
             ("observer_recovery::emission_retains_failed_capture_envelope", lifecycle_panic_containment::observer_recovery::emission_retains_failed_capture_envelope as fn()),
             ("observer_recovery::emission_retains_competing_payload_and_captures", lifecycle_panic_containment::observer_recovery::emission_retains_competing_payload_and_captures as fn()),

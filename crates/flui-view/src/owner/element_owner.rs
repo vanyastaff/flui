@@ -606,31 +606,41 @@ impl ElementOwner<'_> {
     /// attach — see `build_or_recover` — logs directly instead, because it
     /// has nothing to push here).
     pub(crate) fn push_recovered_panic(&mut self, panic: RecoveredPanic) {
-        tracing::error!(
-            at = ?panic.at,
-            hook = %panic.hook,
-            internal_invariant = panic.internal_invariant,
-            panic_message = %panic.error.message,
-            "lifecycle hook panicked; contained"
-        );
         self.recovered_panics.push(panic);
+        let panic = self
+            .recovered_panics
+            .last()
+            .expect("BUG: just recorded a recovered panic");
+        if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            tracing::error!(
+                at = ?panic.at,
+                hook = %panic.hook,
+                internal_invariant = panic.internal_invariant,
+                panic_message = %panic.error.message,
+                "lifecycle hook panicked; contained"
+            );
+        })) {
+            flui_foundation::panic::retain_opaque_payload(payload);
+        }
     }
 
     /// Stage a behavior-attributed panic while its containing transaction is
     /// still deciding whether recovery can commit.
     ///
-    /// The trace is deliberately transaction-neutral: the configurable error
-    /// view factory and the replacement itself have not succeeded yet. The
-    /// containing seam either consumes this owned token after committing the
-    /// replacement or drops it before propagating a recovery failure.
+    /// Reporting is transaction-neutral and cannot discard the staged token.
+    /// The containing seam commits it only after the replacement succeeds.
     fn stage_recovered_panic(panic: RecoveredPanic) -> StagedRecoveredPanic {
-        tracing::error!(
-            at = ?panic.at,
-            hook = %panic.hook,
-            internal_invariant = panic.internal_invariant,
-            panic_message = %panic.error.message,
-            "lifecycle hook panicked; recovery transaction pending"
-        );
+        if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            tracing::error!(
+                at = ?panic.at,
+                hook = %panic.hook,
+                internal_invariant = panic.internal_invariant,
+                panic_message = %panic.error.message,
+                "lifecycle hook panicked; recovery transaction pending"
+            );
+        })) {
+            flui_foundation::panic::retain_opaque_payload(payload);
+        }
         StagedRecoveredPanic::new(panic)
     }
 
