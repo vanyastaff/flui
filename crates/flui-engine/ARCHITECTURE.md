@@ -463,6 +463,12 @@ fixture `renderer_new_rejects_borrowed_window` pins that a borrow cannot be
 handed in; `surface_lease.rs`'s tests pin the drop order and that a released
 lease cannot present.
 
+`cancelling_renderer_new` exercises the production `probe_then_build` seam
+with a CPU-only handle source and a builder that remains pending. After the
+external owner is dropped, the target stays alive while construction is
+pending and its destructor runs when that future is cancelled. This pins
+construction ownership without initializing a GPU or requiring a window.
+
 ### 4. Clip coverage mixes the complete operator result with the destination
 
 Coverage is independent of source alpha. Destination-destructive operators
