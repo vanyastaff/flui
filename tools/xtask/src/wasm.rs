@@ -4,7 +4,7 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use anyhow::{Context, bail, ensure};
+use anyhow::{Context, ensure};
 
 use crate::util::{read, repo_root};
 
@@ -15,6 +15,7 @@ const ALLOWLIST: &str = "tools/xtask/fixtures/wasm/import-allowlist.txt";
 #[derive(Debug, clap::Args)]
 pub(crate) struct WasmImportsArgs {
     /// Linked wasm modules to check.
+    #[arg(required = true, num_args = 1..)]
     wasm: Vec<PathBuf>,
 }
 
@@ -67,126 +68,24 @@ pub(crate) fn wasm_imports(args: &WasmImportsArgs) -> anyhow::Result<ExitCode> {
     Ok(status)
 }
 
-/// A cursor over a wasm binary.
-struct Reader<'a> {
-    bytes: &'a [u8],
-    pos: usize,
-}
-
-impl<'a> Reader<'a> {
-    fn new(bytes: &'a [u8]) -> Self {
-        Self { bytes, pos: 0 }
-    }
-
-    fn at_end(&self) -> bool {
-        self.pos >= self.bytes.len()
-    }
-
-    fn take(&mut self, len: usize) -> anyhow::Result<&'a [u8]> {
-        let end = self
-            .pos
-            .checked_add(len)
-            .filter(|end| *end <= self.bytes.len())
-            .with_context(|| format!("truncated at byte {}", self.pos))?;
-        let slice = &self.bytes[self.pos..end];
-        self.pos = end;
-        Ok(slice)
-    }
-
-    fn byte(&mut self) -> anyhow::Result<u8> {
-        Ok(self.take(1)?[0])
-    }
-
-    /// An unsigned or signed LEB128 of up to 64 bits; the value only matters
-    /// for lengths and counts, so the sign of an `s33` heap type is ignored.
-    fn leb(&mut self) -> anyhow::Result<u64> {
-        let mut value = 0_u64;
-        for shift in (0..70).step_by(7) {
-            let byte = self.byte()?;
-            value |= u64::from(byte & 0x7f) << shift.min(63);
-            if byte & 0x80 == 0 {
-                return Ok(value);
-            }
-        }
-        bail!("LEB128 longer than 10 bytes at byte {}", self.pos)
-    }
-
-    fn len(&mut self) -> anyhow::Result<usize> {
-        usize::try_from(self.leb()?).context("length does not fit in usize")
-    }
-
-    fn name(&mut self) -> anyhow::Result<&'a str> {
-        let len = self.len()?;
-        std::str::from_utf8(self.take(len)?).context("import name is not UTF-8")
-    }
-
-    /// A value or reference type; the GC proposal's `(ref null? ht)` carries a heap type.
-    fn val_type(&mut self) -> anyhow::Result<()> {
-        if matches!(self.byte()?, 0x63 | 0x64) {
-            self.leb()?;
-        }
-        Ok(())
-    }
-
-    /// Table/memory limits: min, optional max, optional custom page size.
-    fn limits(&mut self) -> anyhow::Result<()> {
-        let flags = self.byte()?;
-        self.leb()?;
-        if flags & 0x01 != 0 {
-            self.leb()?;
-        }
-        if flags & 0x08 != 0 {
-            self.leb()?;
-        }
-        Ok(())
-    }
-}
-
 /// The distinct module names of a core wasm module's imports, sorted.
 ///
-/// Read straight from the binary's import section, so the check needs no
-/// external disassembler.
+/// Use wasmparser's maintained binary grammar, including compact imports and
+/// bounded u32 lengths. Iterate import readers fully to detect malformed entries
+/// and trailing bytes. This inspects the import surface, not full module semantics;
+/// compilation and the browser runner remain responsible for module validation.
 fn import_modules(bytes: &[u8]) -> anyhow::Result<BTreeSet<String>> {
-    let mut reader = Reader::new(bytes);
-    ensure!(reader.take(4)? == b"\0asm", "not a wasm binary (bad magic)");
-    let version = reader.take(4)?;
     ensure!(
-        version == [1, 0, 0, 0],
-        "not a core wasm module (version/layer bytes {version:02x?}; a component?)"
+        wasmparser::Parser::is_core_wasm(bytes),
+        "not a core wasm module (bad magic, version or a component)"
     );
     let mut modules = BTreeSet::new();
-    while !reader.at_end() {
-        let id = reader.byte()?;
-        let len = reader.len()?;
-        let payload = reader.take(len)?;
-        if id != 2 {
-            continue;
-        }
-        let mut section = Reader::new(payload);
-        for _ in 0..section.leb()? {
-            modules.insert(section.name()?.to_owned());
-            section.name()?;
-            match section.byte()? {
-                0x00 => {
-                    section.leb()?;
-                }
-                0x01 => {
-                    section.val_type()?;
-                    section.limits()?;
-                }
-                0x02 => section.limits()?,
-                0x03 => {
-                    section.val_type()?;
-                    section.byte()?;
-                }
-                0x04 => {
-                    section.byte()?;
-                    section.leb()?;
-                }
-                kind => bail!("unknown import kind 0x{kind:02x}"),
+    for payload in wasmparser::Parser::new(0).parse_all(bytes) {
+        if let wasmparser::Payload::ImportSection(section) = payload? {
+            for import in section.into_imports() {
+                modules.insert(import?.module.to_owned());
             }
         }
-        ensure!(section.at_end(), "import section has trailing bytes");
     }
     Ok(modules)
 }
@@ -385,6 +284,65 @@ mod tests {
         assert!(import_modules(b"MZ\x90\0\x03\0\0\0").is_err(), "bad magic");
     }
 
+    fn import_counts_refuse_overwide_u32_encodings() {
+        let mut legal = b"\0asm\x01\0\0\0".to_vec();
+        section(2, &[0x80, 0x80, 0x80, 0x80, 0], &mut legal);
+        assert!(
+            import_modules(&legal)
+                .expect("legal padded u32 zero")
+                .is_empty()
+        );
+        for width in 6..=10 {
+            let mut bytes = b"\0asm\x01\0\0\0".to_vec();
+            let mut count = vec![0x80; width - 1];
+            count.push(0);
+            section(2, &count, &mut bytes);
+            assert!(
+                import_modules(&bytes).is_err(),
+                "u32 count used {width} bytes"
+            );
+        }
+    }
+
+    fn an_import_check_requires_at_least_one_module() {
+        use clap::{Args, FromArgMatches};
+        let parse = |argv: &[&str]| -> Result<WasmImportsArgs, clap::Error> {
+            let matches = WasmImportsArgs::augment_args(clap::Command::new("xtask"))
+                .try_get_matches_from(argv)?;
+            WasmImportsArgs::from_arg_matches(&matches)
+        };
+        assert!(parse(&["xtask"]).is_err());
+        let args = parse(&["xtask", "module.wasm"]).expect("a module is required");
+        assert_eq!(args.wasm, [PathBuf::from("module.wasm")]);
+    }
+
+    fn compact_import_groups_reach_the_same_module_allowlist() {
+        // wasmparser 0.261's core/imports reader: an empty field name followed
+        // by 0x7f shares a module; 0x7e shares both module and type.
+        let mut imports = vec![2];
+        name("env", &mut imports);
+        name("", &mut imports);
+        imports.extend_from_slice(&[0x7f, 2]);
+        name("function", &mut imports);
+        imports.extend_from_slice(&[0, 0]);
+        name("memory", &mut imports);
+        imports.extend_from_slice(&[2, 0, 1]);
+        name("wasi", &mut imports);
+        name("", &mut imports);
+        imports.extend_from_slice(&[0x7e, 0, 0, 2]);
+        name("first", &mut imports);
+        name("second", &mut imports);
+        let mut bytes = b"\0asm\x01\0\0\0".to_vec();
+        section(2, &imports, &mut bytes);
+        assert_eq!(
+            import_modules(&bytes)
+                .expect("compact groups")
+                .into_iter()
+                .collect::<Vec<_>>(),
+            ["env", "wasi"]
+        );
+    }
+
     fn committed_allowlist_admits_wasm_bindgen_and_refuses_env() {
         let allowlist = read(ALLOWLIST).expect("allowlist is committed");
         let allowed: BTreeSet<&str> = allowlist.lines().map(str::trim).collect();
@@ -413,6 +371,18 @@ mod tests {
         crate::table_test::run_table(
             "wasm_gate_contract",
             &[
+                (
+                    "an_import_check_requires_at_least_one_module",
+                    an_import_check_requires_at_least_one_module as fn(),
+                ),
+                (
+                    "import_counts_refuse_overwide_u32_encodings",
+                    import_counts_refuse_overwide_u32_encodings as fn(),
+                ),
+                (
+                    "compact_import_groups_reach_the_same_module_allowlist",
+                    compact_import_groups_reach_the_same_module_allowlist as fn(),
+                ),
                 (
                     "import_modules_are_read_from_the_binary",
                     import_modules_are_read_from_the_binary as fn(),
