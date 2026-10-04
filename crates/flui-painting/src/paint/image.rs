@@ -23,7 +23,7 @@ use flui_foundation::geometry::Size;
 /// println!("Image size: {}x{}", image.width(), image.height());
 /// ```
 #[derive(Clone, Debug)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct Image {
     /// The width of the image in pixels.
     width: u32,
@@ -34,6 +34,21 @@ pub struct Image {
     /// The image data (RGBA8 format).
     /// Wrapped in Arc for cheap cloning.
     data: Arc<Vec<u8>>,
+}
+
+#[cfg(feature = "serde")]
+impl<'de> serde::Deserialize<'de> for Image {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(serde::Deserialize)]
+        struct ImageRepr {
+            width: u32,
+            height: u32,
+            data: Vec<u8>,
+        }
+
+        let repr = <ImageRepr as serde::Deserialize>::deserialize(deserializer)?;
+        Self::try_from_rgba8(repr.width, repr.height, repr.data).map_err(serde::de::Error::custom)
+    }
 }
 
 /// Why RGBA8 pixel data was rejected by [`Image::try_from_rgba8`].

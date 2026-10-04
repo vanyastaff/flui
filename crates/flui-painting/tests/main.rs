@@ -174,6 +174,21 @@ fn value_contract() {
                 "an_arc_joins_an_open_contour_and_starts_a_closed_one_fresh",
                 values::an_arc_joins_an_open_contour_and_starts_a_closed_one_fresh,
             ),
+            #[cfg(feature = "serde")]
+            (
+                "deserialized_paths_keep_geometry_authoritative",
+                values::deserialized_paths_keep_geometry_authoritative,
+            ),
+            #[cfg(feature = "serde")]
+            (
+                "serialized_factory_paths_preserve_their_shapes",
+                values::serialized_factory_paths_preserve_their_shapes,
+            ),
+            #[cfg(feature = "serde")]
+            (
+                "deserialized_images_validate_rgba_dimensions_and_data",
+                values::deserialized_images_validate_rgba_dimensions_and_data,
+            ),
         ],
     );
 }

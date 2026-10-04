@@ -882,6 +882,28 @@ Locked by `a_lam_alef_ligature_is_one_glyph_and_two_caret_stops`
 the middle caret at the midpoint, each quarter of the ligature answering its
 nearest stop.
 
+### 20. Serialized paint values pass the constructor's admission rules
+
+`Image` deserialization uses `try_from_rgba8`: a serialized buffer must match
+the checked `width * height * 4` byte count, including zero-sized images.
+Serialization preserves the existing dimensions and byte-array representation.
+`deserialized_images_validate_rgba_dimensions_and_data` in `value_contract`
+checks rejected lengths and dimensions followed by a valid round trip.
+
+`Path` deserialization replays commands through its builders. A shape hint is
+retained only when the corresponding canonical constructor reproduces those
+commands exactly; submitted geometry remains authoritative. The engine uses
+rounded-rectangle hints to choose an analytic shadow, so an unrelated hint must
+not replace a polygon's shadow silhouette. `deserialized_paths_keep_geometry_authoritative`
+checks a triangle carrying another shape's hint, and
+`serialized_factory_paths_preserve_their_shapes` checks exact commands and hints
+through a lossless value round trip, and geometry and containment after a JSON
+string round trip (both rows of `value_contract`, enabled with `serde`). A format
+that changes floating-point coordinates may discard the hint even when the
+geometric difference is tiny. Retaining the submitted geometry takes priority
+over keeping an analytic rendering shortcut; no approximate hint admission is
+used.
+
 ---
 
 ### 21. Hidden borders contribute neither paint nor neighboring edge insets

@@ -230,3 +230,103 @@ pub(crate) fn an_arc_joins_an_open_contour_and_starts_a_closed_one_fresh() {
     ));
     assert_eq!(move_tos(&rrect), 1);
 }
+
+#[cfg(feature = "serde")]
+pub(crate) fn deserialized_paths_keep_geometry_authoritative() {
+    let rounded = Path::from_rrect(RRect::from_rect_xy(
+        Rect::from_ltrb(0.0, 0.0, 40.0, 20.0),
+        4.0,
+        4.0,
+    ));
+    let triangle = Path::polygon(&[
+        Point::new(0.0, 0.0),
+        Point::new(40.0, 0.0),
+        Point::new(0.0, 20.0),
+    ]);
+    let mut submitted = serde_json::to_value(&triangle).expect("a path serializes");
+    let rounded_wire = serde_json::to_value(&rounded).expect("a rounded path serializes");
+    submitted["hint"] = rounded_wire["hint"].clone();
+    let restored: Path = serde_json::from_value(submitted).expect("path commands deserialize");
+    assert!(restored.rrect_hint().is_none());
+    assert_eq!(
+        restored.commands().collect::<Vec<_>>(),
+        triangle.commands().collect::<Vec<_>>()
+    );
+    assert!(restored.contains(Point::new(5.0, 5.0)));
+    assert!(!restored.contains(Point::new(30.0, 15.0)));
+}
+
+#[cfg(feature = "serde")]
+pub(crate) fn serialized_factory_paths_preserve_their_shapes() {
+    let rect = Rect::from_ltrb(2.0, 3.0, 42.0, 23.0);
+    for original in [
+        Path::rectangle(rect),
+        Path::oval(rect),
+        Path::from_rrect(RRect::from_rect_xy(rect, 4.0, 4.0)),
+    ] {
+        let lossless_wire = serde_json::to_value(&original).expect("a factory path serializes");
+        let lossless: Path =
+            serde_json::from_value(lossless_wire).expect("factory path values deserialize");
+        assert_eq!(lossless.rrect_hint(), original.rrect_hint());
+        assert_eq!(
+            lossless.commands().collect::<Vec<_>>(),
+            original.commands().collect::<Vec<_>>()
+        );
+        let wire = serde_json::to_string(&original).expect("a factory path serializes");
+        let restored: Path = serde_json::from_str(&wire).expect("a factory path deserializes");
+        assert_eq!(restored.fill_type(), original.fill_type());
+        assert_eq!(restored.commands().count(), original.commands().count());
+        // JSON float parsing can move the curve coordinates a few ULPs.
+        // These fixtures occupy at most 42 logical pixels; 1e-12 remains
+        // far below the path constructor's geometric tolerance.
+        let point_eq = |actual: Point<f64>, expected: Point<f64>| {
+            assert!((actual.x - expected.x).abs() <= 1e-12);
+            assert!((actual.y - expected.y).abs() <= 1e-12);
+        };
+        for (actual, expected) in restored.commands().zip(original.commands()) {
+            match (actual, expected) {
+                (PathCommand::MoveTo(a), PathCommand::MoveTo(b))
+                | (PathCommand::LineTo(a), PathCommand::LineTo(b)) => point_eq(a, b),
+                (PathCommand::QuadraticTo(a, b), PathCommand::QuadraticTo(c, d)) => {
+                    point_eq(a, c);
+                    point_eq(b, d);
+                }
+                (
+                    PathCommand::CubicTo(actual_first, actual_second, actual_end),
+                    PathCommand::CubicTo(expected_first, expected_second, expected_end),
+                ) => {
+                    point_eq(actual_first, expected_first);
+                    point_eq(actual_second, expected_second);
+                    point_eq(actual_end, expected_end);
+                }
+                (PathCommand::Close, PathCommand::Close) => {}
+                _ => panic!("path round trip changed contour commands: {actual:?}, {expected:?}"),
+            }
+        }
+        assert!(restored.contains(Point::new(22.0, 13.0)));
+        assert!(!restored.contains(Point::new(43.0, 13.0)));
+    }
+}
+
+#[cfg(feature = "serde")]
+pub(crate) fn deserialized_images_validate_rgba_dimensions_and_data() {
+    use flui_painting::paint::Image;
+
+    for rejected in [
+        serde_json::json!({"width": 1, "height": 1, "data": []}),
+        serde_json::json!({"width": 1, "height": 1, "data": [255, 0, 0, 255, 0]}),
+        serde_json::json!({"width": u32::MAX, "height": u32::MAX, "data": []}),
+    ] {
+        assert!(serde_json::from_value::<Image>(rejected).is_err());
+    }
+    let original = Image::from_rgba8(1, 1, vec![255, 0, 0, 255]);
+    let wire = serde_json::to_value(&original).expect("an image serializes");
+    let restored: Image = serde_json::from_value(wire).expect("a valid image deserializes");
+    assert_eq!(restored.size(), original.size());
+    assert_eq!(restored.data(), original.data());
+    let empty: Image = serde_json::from_value(
+        serde_json::to_value(Image::default()).expect("an empty image serializes"),
+    )
+    .expect("a zero-sized image remains valid");
+    assert_eq!(empty.data(), [0_u8; 0]);
+}

@@ -2142,6 +2142,7 @@ dependencies = [
  "parley",
  "proptest",
  "serde",
+ "serde_json",
  "swash",
  "sys-locale",
  "thiserror 2.0.20",
