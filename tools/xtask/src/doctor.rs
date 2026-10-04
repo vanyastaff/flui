@@ -99,7 +99,7 @@ impl Doctor {
 
     fn check_bin(&mut self, scope: Scope, bin: &str, install: &str, version_args: &[&str]) {
         match Command::new(bin).args(version_args).output() {
-            Ok(out) => {
+            Ok(out) if out.status.success() => {
                 let version = first_line(&out.stdout);
                 let detail = if version.is_empty() {
                     "present"
@@ -108,6 +108,13 @@ impl Doctor {
                 };
                 self.row(scope, bin, true, detail, "");
             }
+            Ok(out) => self.row(
+                scope,
+                bin,
+                false,
+                &format!("version probe failed ({})", out.status),
+                install,
+            ),
             Err(_) => self.row(scope, bin, false, "not on PATH", install),
         }
     }
@@ -399,11 +406,33 @@ mod tests {
         }
     }
 
+    fn a_failing_binary_probe_is_not_an_available_tool() {
+        let mut report = doctor(Mode::Ci);
+        report.check_bin(
+            Scope::Ci,
+            "cargo",
+            "install cargo",
+            &["--no-such-flag-xtask"],
+        );
+        assert!(report.summary().contains("1 missing for `cargo xtask ci`"));
+        let mut healthy = doctor(Mode::Ci);
+        healthy.check_bin(Scope::Ci, "cargo", "install cargo", &["--version"]);
+        assert!(
+            healthy
+                .summary()
+                .contains("everything `cargo xtask ci` needs is here")
+        );
+    }
+
     #[test]
     fn doctor_contract() {
         crate::table_test::run_table(
             "doctor_contract",
             &[
+                (
+                    "a_failing_binary_probe_is_not_an_available_tool",
+                    a_failing_binary_probe_is_not_an_available_tool as fn(),
+                ),
                 (
                     "full_rows_are_required_only_in_full_mode",
                     full_rows_are_required_only_in_full_mode as fn(),
