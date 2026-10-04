@@ -79,7 +79,10 @@ impl LifecycleHandle {
     /// Cancellation releases callback captures outside source borrows; an active
     /// callback releases its captures after returning if it was cancelled. A
     /// capture-destructor panic cannot undo cancellation or skip siblings, and
-    /// does not replace an earlier callback panic.
+    /// does not replace an earlier callback panic. After a caught failure, or
+    /// during an independent unwind, retiring callback envelopes are retained.
+    /// Otherwise they have ordinary Rust destruction semantics: two panicking
+    /// fields in the first retired envelope can abort before containment.
     ///
     /// # Errors
     /// Returns [`LifecycleClosed`] once terminal close begins or the owner dies.
@@ -135,13 +138,10 @@ impl Drop for LifecycleSubscription {
         // A leased callback is dropped by the dispatcher after invocation.
         let callback = listener.callback.borrow_mut().take();
         drop(removed);
-        let failure = catch_unwind(AssertUnwindSafe(|| drop(callback))).err();
-        if let Some(payload) = failure {
-            if std::thread::panicking() {
-                std::mem::forget(payload);
-            } else {
-                resume_unwind(payload);
-            }
+        let mut first = None;
+        retire_callback(callback, &mut first);
+        if let Some(payload) = first {
+            resume_unwind(payload);
         }
     }
 }
@@ -153,6 +153,18 @@ pub(crate) fn preserve(first: &mut Option<Panic>, next: Option<Panic>) {
         } else {
             std::mem::forget(payload);
         }
+    }
+}
+
+/// Retire one envelope only while no failure already owns the unwind.
+fn retire_callback(callback: Option<Callback>, first: &mut Option<Panic>) {
+    if first.is_some() || std::thread::panicking() {
+        std::mem::forget(callback);
+    } else {
+        preserve(
+            first,
+            catch_unwind(AssertUnwindSafe(|| drop(callback))).err(),
+        );
     }
 }
 
@@ -275,19 +287,13 @@ impl LifecycleSource {
                     let previous = listener.callback.replace(Some(callback));
                     drop(previous);
                 } else {
-                    preserve(
-                        &mut first,
-                        catch_unwind(AssertUnwindSafe(|| drop(callback))).err(),
-                    );
+                    retire_callback(Some(callback), &mut first);
                 }
             }
         }
         self.inner.0.borrow_mut().draining = false;
         if self.inner.0.borrow().finish_requested {
-            preserve(
-                &mut first,
-                catch_unwind(AssertUnwindSafe(|| self.release())).err(),
-            );
+            self.release(&mut first);
         }
         if let Some(payload) = first {
             resume_unwind(payload);
@@ -302,31 +308,27 @@ impl LifecycleSource {
         // terminal event. It must not erase an event still awaiting delivery.
         self.drain();
     }
-    fn release(&self) {
+    fn release(&self, first: &mut Option<Panic>) {
         let listeners = {
             let mut state = self.inner.0.borrow_mut();
             state.phase = Phase::Closed;
             state.pending.clear();
             std::mem::take(&mut state.listeners)
         };
-        let mut first = None;
         for listener in listeners {
             listener.active.set(false);
             let callback = listener.callback.borrow_mut().take();
-            preserve(
-                &mut first,
-                catch_unwind(AssertUnwindSafe(|| drop(callback))).err(),
-            );
-        }
-        if let Some(payload) = first {
-            resume_unwind(payload);
+            retire_callback(callback, first);
         }
     }
 }
 impl Drop for LifecycleSource {
     fn drop(&mut self) {
-        if let Err(payload) = catch_unwind(AssertUnwindSafe(|| self.release())) {
-            std::mem::forget(payload);
+        let mut first = None;
+        let failure = catch_unwind(AssertUnwindSafe(|| self.release(&mut first))).err();
+        preserve(&mut first, failure);
+        if let Some(payload) = first {
+            flui_foundation::panic::retain_opaque_payload(payload);
         }
     }
 }

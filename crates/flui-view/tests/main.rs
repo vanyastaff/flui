@@ -29,6 +29,8 @@ mod global_key_reparent;
 mod inherited_dependency;
 #[path = "lifecycle_panic_containment.rs"]
 mod lifecycle_panic_containment;
+#[path = "support/lifecycle_recovery.rs"]
+mod lifecycle_recovery;
 #[path = "lifecycle_tests.rs"]
 mod lifecycle_tests;
 #[path = "notifications.rs"]
@@ -97,6 +99,10 @@ fn global_key_contract_matrix() {
 
 #[test]
 fn lifecycle_panic_containment_matrix() {
+    if let Ok(kind) = std::env::var("FLUI_LIFECYCLE_RECOVERY_CHILD") {
+        lifecycle_recovery::dispatch_child(&kind);
+        return;
+    }
     if let Ok(kind) = std::env::var("FLUI_BUILD_PAYLOAD_RECOVERY_CHILD") {
         lifecycle_panic_containment::build_payload_recovery::dispatch_child(&kind);
         return;
@@ -113,6 +119,13 @@ fn lifecycle_panic_containment_matrix() {
             ("lifecycle_panic_containment::a_dispose_panic_on_a_global_keyed_element_still_clears_the_registry", lifecycle_panic_containment::a_dispose_panic_on_a_global_keyed_element_still_clears_the_registry as fn()),
             ("lifecycle_panic_containment::a_deactivate_panic_is_contained_and_the_element_is_still_parked_inactive", lifecycle_panic_containment::a_deactivate_panic_is_contained_and_the_element_is_still_parked_inactive as fn()),
             ("recovered_panics::a_contained_build_panic_is_recorded_once_with_its_element_and_hook", recovered_panics::a_contained_build_panic_is_recorded_once_with_its_element_and_hook as fn()),
+            ("lifecycle_recovery::self_cancelled_callback_failure_retains_its_capture_aggregate", lifecycle_recovery::self_cancelled_callback_failure_retains_its_capture_aggregate as fn()),
+            ("lifecycle_recovery::self_cancellation_retains_competing_payload_and_capture_aggregates", lifecycle_recovery::self_cancellation_retains_competing_payload_and_capture_aggregates as fn()),
+            ("lifecycle_recovery::terminal_release_keeps_the_earlier_callback_failure", lifecycle_recovery::terminal_release_keeps_the_earlier_callback_failure as fn()),
+            ("lifecycle_recovery::release_retains_later_envelopes_after_first_retirement_failure", lifecycle_recovery::release_retains_later_envelopes_after_first_retirement_failure as fn()),
+            ("lifecycle_recovery::subscription_retirement_during_unwind_retains_its_envelope", lifecycle_recovery::subscription_retirement_during_unwind_retains_its_envelope as fn()),
+            ("lifecycle_recovery::source_retirement_during_unwind_retains_its_envelopes", lifecycle_recovery::source_retirement_during_unwind_retains_its_envelopes as fn()),
+            ("lifecycle_recovery::successful_lifecycle_cancellation_retires_captures_and_keeps_fifo", lifecycle_recovery::successful_lifecycle_cancellation_retires_captures_and_keeps_fifo as fn()),
             ("build_payload_recovery::aggregate_build_payload_is_retained_before_recovery", lifecycle_panic_containment::build_payload_recovery::aggregate_build_payload_is_retained_before_recovery as fn()),
             ("build_payload_recovery::recovery_reporting_preserves_original_attribution", lifecycle_panic_containment::build_payload_recovery::recovery_reporting_preserves_original_attribution as fn()),
             ("build_payload_recovery::original_and_reporting_payloads_do_not_compete_at_retirement", lifecycle_panic_containment::build_payload_recovery::original_and_reporting_payloads_do_not_compete_at_retirement as fn()),

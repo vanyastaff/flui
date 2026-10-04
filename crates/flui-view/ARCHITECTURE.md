@@ -524,3 +524,26 @@ factory failure priority and staged init-state attribution. Each child checks
 actual ErrorView or configured-view substitution where recovery commits, the
 original hook and element record exactly once, and following healthy builds.
 
+### Lifecycle retirement follows the existing first failure
+
+**Rule.** Lifecycle delivery keeps the first callback or retirement panic
+through cancellation and terminal cleanup (ADR-0035). A cancelled callback
+envelope is retained after a caught failure. Terminal release shares the active
+drain's failure accumulator and retains later envelopes once the first ordinary
+retirement fails. Subscription and source destruction during an independent
+unwind retain callbacks without entering their opaque drop glue. Cancellation
+and close still publish their state before retirement, and healthy eligible
+listeners receive queued FIFO events before the original panic resumes.
+
+With no prior failure and no active unwind, callback retirement keeps ordinary
+Rust destruction semantics. A first envelope with two panicking fields can
+abort before `catch_unwind` returns; this boundary cannot recover it. Live
+callbacks that panic without cancelling remain registered, as before.
+
+The public `lifecycle_panic_containment_matrix` exercises self-cancellation,
+competing payload/capture aggregates, terminal cleanup, first retirement failure,
+and subscription/source Drop during independent unwind in bounded children.
+Healthy FIFO delivery and the next source operation distinguish retention from
+lost work; `successful_lifecycle_cancellation_retires_captures_and_keeps_fifo`
+ensures ordinary successful cancellation still releases captures.
+
