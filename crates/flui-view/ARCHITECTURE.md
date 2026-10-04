@@ -534,6 +534,14 @@ retirement fails. Subscription and source destruction during an independent
 unwind retain callbacks without entering their opaque drop glue. Cancellation
 and close still publish their state before retirement, and healthy eligible
 listeners receive queued FIFO events before the original panic resumes.
+The active drain publishes its caught-failure status before invoking another
+callback. Nested cancellation and source retirement consult that same status,
+so cancelling a pending callback cannot retire a hostile capture aggregate
+after an earlier callback failed. The status is cleared when drain ownership
+ends; later successful cancellation keeps ordinary capture destruction.
+`caught_failure_protects_nested_pending_subscription_retirement` covers an
+earlier callback panic, a later callback cancelling a pending aggregate, queued
+FIFO delivery and the next healthy operation in a bounded child.
 
 With no prior failure and no active unwind, callback retirement keeps ordinary
 Rust destruction semantics. A first envelope with two panicking fields can

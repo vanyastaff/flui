@@ -138,6 +138,7 @@ fn lifecycle_panic_containment_matrix() {
             ("lifecycle_recovery::release_retains_later_envelopes_after_first_retirement_failure", lifecycle_recovery::release_retains_later_envelopes_after_first_retirement_failure as fn()),
             ("lifecycle_recovery::subscription_retirement_during_unwind_retains_its_envelope", lifecycle_recovery::subscription_retirement_during_unwind_retains_its_envelope as fn()),
             ("lifecycle_recovery::source_retirement_during_unwind_retains_its_envelopes", lifecycle_recovery::source_retirement_during_unwind_retains_its_envelopes as fn()),
+            ("lifecycle_recovery::caught_failure_protects_nested_pending_subscription_retirement", lifecycle_recovery::caught_failure_protects_nested_pending_subscription_retirement as fn()),
             ("lifecycle_recovery::successful_lifecycle_cancellation_retires_captures_and_keeps_fifo", lifecycle_recovery::successful_lifecycle_cancellation_retires_captures_and_keeps_fifo as fn()),
             ("build_payload_recovery::aggregate_build_payload_is_retained_before_recovery", lifecycle_panic_containment::build_payload_recovery::aggregate_build_payload_is_retained_before_recovery as fn()),
             ("build_payload_recovery::recovery_reporting_preserves_original_attribution", lifecycle_panic_containment::build_payload_recovery::recovery_reporting_preserves_original_attribution as fn()),

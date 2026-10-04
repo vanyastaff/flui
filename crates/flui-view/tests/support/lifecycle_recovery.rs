@@ -105,6 +105,101 @@ fn cancelled_failure(opaque_payload: bool, terminal: bool) {
     assert_eq!(capture_drops.load(Ordering::SeqCst), 0);
 }
 
+fn nested_cancellation_after_caught_failure() {
+    struct CountDrop(Arc<AtomicUsize>);
+    impl Drop for CountDrop {
+        fn drop(&mut self) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+    let source = Rc::new(LifecycleSource::new());
+    let handle = source.handle();
+    let weak = Rc::downgrade(&source);
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let log = Rc::clone(&events);
+    let (_, first) = handle
+        .subscribe(move |state| {
+            log.borrow_mut().push((1, state));
+            if state == Inactive {
+                let owner = weak.upgrade().expect("source");
+                owner.commit(Hidden).expect("queued event");
+                panic!("earlier lifecycle body");
+            }
+        })
+        .expect("first callback");
+    let pending = Rc::new(RefCell::new(None::<LifecycleSubscription>));
+    let cancel = Rc::clone(&pending);
+    let log = Rc::clone(&events);
+    let (_, second) = handle
+        .subscribe(move |state| {
+            log.borrow_mut().push((2, state));
+            let cancelled = cancel.borrow_mut().take();
+            drop(cancelled);
+        })
+        .expect("cancelling callback");
+    let capture_drops = Arc::new(AtomicUsize::new(0));
+    let captures = aggregate(&capture_drops);
+    let (_, third) = handle
+        .subscribe(move |_| {
+            let _keep = &captures;
+            panic!("cancelled callback must never run");
+        })
+        .expect("pending callback");
+    *pending.borrow_mut() = Some(third);
+    let log = Rc::clone(&events);
+    let (_, healthy) = handle
+        .subscribe(move |state| log.borrow_mut().push((4, state)))
+        .expect("healthy callback");
+    source.commit(Inactive).expect("first event");
+    let failure = catch_unwind(AssertUnwindSafe(|| source.drain()))
+        .expect_err("first failure resumes after FIFO delivery");
+    assert_first(failure, "earlier lifecycle body");
+    assert_eq!(
+        *events.borrow(),
+        [
+            (1, Inactive),
+            (2, Inactive),
+            (4, Inactive),
+            (1, Hidden),
+            (2, Hidden),
+            (4, Hidden)
+        ]
+    );
+    assert_eq!(capture_drops.load(Ordering::SeqCst), 0);
+    source.commit(Resumed).expect("next healthy operation");
+    source.drain();
+    assert_eq!(
+        *events.borrow(),
+        [
+            (1, Inactive),
+            (2, Inactive),
+            (4, Inactive),
+            (1, Hidden),
+            (2, Hidden),
+            (4, Hidden),
+            (1, Resumed),
+            (2, Resumed),
+            (4, Resumed)
+        ]
+    );
+    let ordinary_drops = Arc::new(AtomicUsize::new(0));
+    let ordinary = CountDrop(Arc::clone(&ordinary_drops));
+    let (_, token) = handle
+        .subscribe(move |_| {
+            let _keep = &ordinary;
+        })
+        .expect("subscription after recovery");
+    drop(token);
+    assert_eq!(
+        ordinary_drops.load(Ordering::SeqCst),
+        1,
+        "caught-failure retention ends with the original drain"
+    );
+    drop((first, second, healthy));
+    drop(source);
+    assert_eq!(capture_drops.load(Ordering::SeqCst), 0);
+}
+
 fn release_retirement_failure() {
     let source = LifecycleSource::new();
     let handle = source.handle();
@@ -181,6 +276,7 @@ pub(crate) fn dispatch_child(kind: &str) {
         "cancel_opaque" => cancelled_failure(true, false),
         "terminal" => cancelled_failure(false, true),
         "retirement" => release_retirement_failure(),
+        "nested_cancel" => nested_cancellation_after_caught_failure(),
         "token_unwind" => independent_unwind(false),
         "source_unwind" => independent_unwind(true),
         _ => panic!("unknown lifecycle child"),
@@ -267,4 +363,8 @@ pub(crate) fn successful_lifecycle_cancellation_retires_captures_and_keeps_fifo(
     source.finish_close();
     drop(healthy);
     assert_eq!(drops.load(Ordering::SeqCst), 1);
+}
+
+pub(crate) fn caught_failure_protects_nested_pending_subscription_retirement() {
+    child("nested_cancel");
 }

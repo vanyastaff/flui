@@ -33,6 +33,8 @@ struct State {
     listeners: Vec<Rc<Listener>>,
     pending: VecDeque<Event>,
     draining: bool,
+    // Caught drain failures also fence retirement from nested callbacks.
+    retirement_failed: bool,
     finish_requested: bool,
 }
 struct Inner(RefCell<State>);
@@ -127,19 +129,25 @@ impl Drop for LifecycleSubscription {
             return;
         };
         listener.active.set(false);
-        let removed = self.source.upgrade().and_then(|source| {
+        let (removed, prior_failure) = self.source.upgrade().map_or((None, false), |source| {
             let mut state = source.0.borrow_mut();
-            state
+            let prior_failure = state.retirement_failed;
+            let removed = state
                 .listeners
                 .iter()
                 .position(|entry| Rc::ptr_eq(entry, &listener))
-                .map(|index| state.listeners.remove(index))
+                .map(|index| state.listeners.remove(index));
+            (removed, prior_failure)
         });
         // A leased callback is dropped by the dispatcher after invocation.
         let callback = listener.callback.borrow_mut().take();
         drop(removed);
         let mut first = None;
-        retire_callback(callback, &mut first);
+        if prior_failure {
+            std::mem::forget(callback);
+        } else {
+            retire_callback(callback, &mut first);
+        }
         if let Some(payload) = first {
             resume_unwind(payload);
         }
@@ -198,6 +206,7 @@ impl LifecycleSource {
                 listeners: Vec::new(),
                 pending: VecDeque::new(),
                 draining: false,
+                retirement_failed: false,
                 finish_requested: false,
             }))),
         }
@@ -261,6 +270,7 @@ impl LifecycleSource {
                 return;
             }
             state.draining = true;
+            state.retirement_failed = false;
         }
         let mut first = None;
         loop {
@@ -283,17 +293,27 @@ impl LifecycleSource {
                     &mut first,
                     catch_unwind(AssertUnwindSafe(|| callback(event.state))).err(),
                 );
+                if first.is_some() {
+                    self.inner.0.borrow_mut().retirement_failed = true;
+                }
                 if listener.active.get() && self.inner.0.borrow().phase != Phase::Closed {
                     let previous = listener.callback.replace(Some(callback));
                     drop(previous);
                 } else {
                     retire_callback(Some(callback), &mut first);
+                    if first.is_some() {
+                        self.inner.0.borrow_mut().retirement_failed = true;
+                    }
                 }
             }
         }
-        self.inner.0.borrow_mut().draining = false;
         if self.inner.0.borrow().finish_requested {
             self.release(&mut first);
+        }
+        {
+            let mut state = self.inner.0.borrow_mut();
+            state.draining = false;
+            state.retirement_failed = false;
         }
         if let Some(payload) = first {
             resume_unwind(payload);
@@ -318,7 +338,14 @@ impl LifecycleSource {
         for listener in listeners {
             listener.active.set(false);
             let callback = listener.callback.borrow_mut().take();
-            retire_callback(callback, first);
+            if self.inner.0.borrow().retirement_failed {
+                std::mem::forget(callback);
+            } else {
+                retire_callback(callback, first);
+            }
+            if first.is_some() {
+                self.inner.0.borrow_mut().retirement_failed = true;
+            }
         }
     }
 }
