@@ -494,3 +494,136 @@ pub(super) fn crop_keeps_original_neighbors() {
     near(pixel_at(&rgba, 32, 11, 9), [0, 159, 96, 255]);
     near(pixel_at(&rgba, 32, 7, 9), [0, 0, 255, 255]);
 }
+
+fn decoration_cover_outside_alignment(
+    alignment: flui_painting::Alignment,
+    vertical: bool,
+    expected: [[u8; 4]; 2],
+    repeat: flui_painting::paint::ImageRepeat,
+) {
+    use flui_painting::{
+        BoxFit,
+        decoration::{DecorationPaintOptions, paint_box_decoration},
+        styling::{BoxDecoration, DecorationImage},
+    };
+    let (width, height) = if vertical { (4, 8) } else { (8, 4) };
+    let source = Image::from_rgba8(width, height, [255, 255, 255, 255].repeat(32));
+    let rgba = draw(32, |p| {
+        let mut canvas = flui_painting::Canvas::new();
+        paint_box_decoration(
+            &mut canvas,
+            Rect::from_xywh(8.0, 8.0, 4.0, 4.0),
+            &BoxDecoration::with_image(
+                DecorationImage::new(source)
+                    .with_fit(BoxFit::Cover)
+                    .with_alignment(alignment)
+                    .with_repeat(repeat),
+            ),
+            DecorationPaintOptions::default(),
+        );
+        canvas.draw_rect(
+            Rect::from_xywh(22.0, 22.0, 3.0, 3.0),
+            &Paint::fill(Color::RED),
+        );
+        replay_canvas(p, canvas);
+    });
+    let points = if vertical {
+        [(9, 9), (9, 11)]
+    } else {
+        [(9, 9), (11, 9)]
+    };
+    for (point, expected) in points.into_iter().zip(expected) {
+        near(pixel_at(&rgba, 32, point.0, point.1), expected);
+    }
+    near(pixel_at(&rgba, 32, 7, 9), [0, 0, 255, 255]);
+    near(pixel_at(&rgba, 32, 23, 23), [255, 0, 0, 255]);
+}
+pub(super) fn decoration_cover_positive_overshoot() {
+    decoration_cover_outside_alignment(
+        flui_painting::Alignment::new(2.0, 0.0),
+        false,
+        [[255; 4], [0, 0, 255, 255]],
+        flui_painting::paint::ImageRepeat::NoRepeat,
+    );
+}
+pub(super) fn decoration_cover_negative_overshoot() {
+    decoration_cover_outside_alignment(
+        flui_painting::Alignment::new(-2.0, 0.0),
+        false,
+        [[0, 0, 255, 255], [255; 4]],
+        flui_painting::paint::ImageRepeat::NoRepeat,
+    );
+}
+pub(super) fn decoration_cover_vertical_overshoot() {
+    decoration_cover_outside_alignment(
+        flui_painting::Alignment::new(0.0, 2.0),
+        true,
+        [[255; 4], [0, 0, 255, 255]],
+        flui_painting::paint::ImageRepeat::NoRepeat,
+    );
+}
+pub(super) fn decoration_cover_fully_outside() {
+    decoration_cover_outside_alignment(
+        flui_painting::Alignment::new(4.0, 0.0),
+        false,
+        [[0, 0, 255, 255]; 2],
+        flui_painting::paint::ImageRepeat::NoRepeat,
+    );
+}
+
+pub(super) fn decoration_cover_repeat_overshoot() {
+    decoration_cover_outside_alignment(
+        flui_painting::Alignment::new(2.0, 0.0),
+        false,
+        [[255; 4], [0, 0, 255, 255]],
+        flui_painting::paint::ImageRepeat::Repeat,
+    );
+}
+pub(super) fn decoration_cover_repeat_x_overshoot() {
+    decoration_cover_outside_alignment(
+        flui_painting::Alignment::new(-2.0, 0.0),
+        false,
+        [[0, 0, 255, 255], [255; 4]],
+        flui_painting::paint::ImageRepeat::RepeatX,
+    );
+}
+pub(super) fn decoration_cover_repeat_y_overshoot() {
+    decoration_cover_outside_alignment(
+        flui_painting::Alignment::new(0.0, 2.0),
+        true,
+        [[255; 4], [0, 0, 255, 255]],
+        flui_painting::paint::ImageRepeat::RepeatY,
+    );
+}
+pub(super) fn decoration_none_crop_keeps_other_axis_repeat() {
+    use flui_painting::{
+        Alignment, BoxFit,
+        decoration::{DecorationPaintOptions, paint_box_decoration},
+        paint::ImageRepeat,
+        styling::{BoxDecoration, DecorationImage},
+    };
+    let rgba = draw(32, |p| {
+        let mut canvas = flui_painting::Canvas::new();
+        let image = Image::from_rgba8(8, 2, [255, 255, 255, 255].repeat(16));
+        paint_box_decoration(
+            &mut canvas,
+            Rect::from_xywh(8.0, 8.0, 4.0, 6.0),
+            &BoxDecoration::with_image(
+                DecorationImage::new(image)
+                    .with_fit(BoxFit::None)
+                    .with_alignment(Alignment::new(2.0, 0.0))
+                    .with_repeat(ImageRepeat::RepeatY),
+            ),
+            DecorationPaintOptions::default(),
+        );
+        canvas.draw_rect(
+            Rect::from_xywh(22.0, 22.0, 3.0, 3.0),
+            &Paint::fill(Color::RED),
+        );
+        replay_canvas(p, canvas);
+    });
+    near(pixel_at(&rgba, 32, 9, 8), [255; 4]);
+    near(pixel_at(&rgba, 32, 9, 13), [255; 4]);
+    near(pixel_at(&rgba, 32, 11, 10), [0, 0, 255, 255]);
+    near(pixel_at(&rgba, 32, 23, 23), [255, 0, 0, 255]);
+}

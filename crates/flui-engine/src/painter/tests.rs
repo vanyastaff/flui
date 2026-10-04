@@ -220,12 +220,44 @@ fn clear_offscreen_result(nested: bool) {
 /// composites with its own blend mode.
 #[test]
 fn painter_images_and_offscreen_results_read_back_as_specified() {
-    let cases: [(&str, fn()); 80] = [
+    let cases: [(&str, fn()); 88] = [
         (
             "image feathered Src transparent texels",
             image_boundary::feathered_src_transparency,
         ),
         ("decoration Cover crop", image_boundary::decoration_cover),
+        (
+            "decoration Cover Repeat alignment overshoot",
+            image_boundary::decoration_cover_repeat_overshoot,
+        ),
+        (
+            "decoration Cover RepeatX alignment overshoot",
+            image_boundary::decoration_cover_repeat_x_overshoot,
+        ),
+        (
+            "decoration Cover RepeatY alignment overshoot",
+            image_boundary::decoration_cover_repeat_y_overshoot,
+        ),
+        (
+            "decoration None crop preserves other-axis repeat",
+            image_boundary::decoration_none_crop_keeps_other_axis_repeat,
+        ),
+        (
+            "decoration Cover positive alignment overshoot",
+            image_boundary::decoration_cover_positive_overshoot,
+        ),
+        (
+            "decoration Cover negative alignment overshoot",
+            image_boundary::decoration_cover_negative_overshoot,
+        ),
+        (
+            "decoration Cover vertical alignment overshoot",
+            image_boundary::decoration_cover_vertical_overshoot,
+        ),
+        (
+            "decoration Cover fully outside source",
+            image_boundary::decoration_cover_fully_outside,
+        ),
         (
             "decoration filter and opacity",
             image_boundary::decoration_filter_opacity,

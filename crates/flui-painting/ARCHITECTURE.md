@@ -1056,6 +1056,19 @@ performance improvement claim. It does not override inferred bidi base direction
 The image-region display command carries source texels separately from logical
 destination and optional fitted repeat placement. Decoration and RenderImage use
 `BoxFit::apply` plus alignment to crop the source into the allocated box.
+For decoration images, alignment may move the fitted source beyond
+its decoded texels. The recorder intersects that source with the image bounds
+and trims the destination proportionally, preserving scale and leaving the
+unavailable part empty. Fully outside sources record no image; later commands
+still paint. The engine family rows `decoration_cover_positive_overshoot`,
+`decoration_cover_negative_overshoot`, `decoration_cover_vertical_overshoot` and
+`decoration_cover_fully_outside` exercise the actual decoration producer.
+Cover and the cropping FitWidth/FitHeight branches fill the allocation, so
+repeating them adds no visible tile. They record the clipped image once.
+For a mixed-axis None fit, trimming a cropped axis preserves the other axis's
+fitted repeat period and phase. `decoration_cover_repeat_overshoot`,
+`decoration_cover_repeat_x_overshoot`, `decoration_cover_repeat_y_overshoot` and
+`decoration_none_crop_keeps_other_axis_repeat` pin these actual producer paths.
 Fitted repeats preserve logical tile scale and aligned phase; legacy Canvas
 repeat retains natural tile size and destination-origin phase. Color filters
 and optional Paint survive dispatch. ADR-0115 specifies the command, instance

@@ -510,6 +510,37 @@ fn paint_decoration_image(
         fitted.destination.width,
         fitted.destination.height,
     );
+    let repeat = if tile == rect {
+        ImageRepeat::NoRepeat
+    } else {
+        image.repeat
+    };
+    let repeated = repeat != ImageRepeat::NoRepeat;
+    // A cropped source axis fills the allocation on that axis. Intersecting
+    // decoded texels therefore trims coverage there without changing any
+    // repeating period on the other, uncropped axis.
+    let Some(clipped) = src.intersect(&Rect::from_xywh(0.0, 0.0, input.width, input.height)) else {
+        return;
+    };
+    let sx = tile.width() / src.width();
+    let sy = tile.height() / src.height();
+    let left_trim = (clipped.left() - src.left()) * sx;
+    let top_trim = (clipped.top() - src.top()) * sy;
+    let right_trim = (src.right() - clipped.right()) * sx;
+    let bottom_trim = (src.bottom() - clipped.bottom()) * sy;
+    let coverage = Rect::from_ltrb(
+        rect.left() + left_trim,
+        rect.top() + top_trim,
+        rect.right() - right_trim,
+        rect.bottom() - bottom_trim,
+    );
+    let tile = Rect::from_xywh(
+        tile.left() + left_trim,
+        tile.top() + top_trim,
+        clipped.width() * sx,
+        clipped.height() * sy,
+    );
+    let src = clipped;
     let paint = (image.opacity < 1.0).then(|| {
         Paint::fill(Color::rgba(
             255,
@@ -518,13 +549,12 @@ fn paint_decoration_image(
             (image.opacity.clamp(0.0, 1.0) * 255.0).round() as u8,
         ))
     });
-    let repeated = image.repeat != ImageRepeat::NoRepeat;
     canvas.draw_image_region_effects(
         image.image.clone(),
         src,
-        if repeated { rect } else { tile },
+        if repeated { coverage } else { tile },
         repeated.then_some(tile),
-        image.repeat,
+        repeat,
         image.color_filter,
         paint.as_ref(),
     );
