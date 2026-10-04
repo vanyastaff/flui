@@ -1369,3 +1369,12 @@ exercise it — is precisely the shape this crate deletes on sight.
 
 **Trade-off accepted:** none. Nothing outside this crate observed `clear`'s
 existence.
+
+### Identity exhaustion refuses reuse until explicit reset
+
+`IdGenerator` atomically checks its increment and reserves `usize::MAX` as
+an exhaustion state. Once reached, every later allocation panics without
+wrapping through zero and restarting at one. An explicit `reset` retains its
+documented deterministic-test behavior. `update_scheduler_bounds_matrix`
+includes repeated caught exhaustion, reset, and concurrent last-value admission
+through the public API. The ordinary sequence starts at one and is unchanged.
