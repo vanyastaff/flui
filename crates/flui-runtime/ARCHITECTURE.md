@@ -410,3 +410,13 @@ time and FPS stay zero. A nonzero window still records platform-clock intervals.
 The consumer row `a_zero_capacity_performance_window_retains_no_frame_samples`
 in flui-testing's `headless_frame_driver_matrix` distinguishes the two through
 the public timing methods. Production overlays retain their default 120 samples.
+
+### Deterministic execution preserves concurrent admission during compaction
+
+Completed deterministic tasks retire under the task-list mutex; pending futures
+stay in the same list, including tasks admitted by another producer before the
+lock is acquired. Removed slots contain no future, so their retirement invokes
+no user destructor under that mutex. Taking a snapshot and replacing the list
+would discard concurrent admission. `compaction_preserves_concurrently_admitted_future_and_next_work`
+in `execution_lane_matrix` uses a private before-lock seam to admit a real public
+spawn exactly at that boundary, then proves both that task and the next task run.
