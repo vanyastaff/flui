@@ -704,6 +704,17 @@ again; its allocation is freed at the end of the frame if the frame already
 drew from it, so no other glyph is packed into a region a recorded draw
 samples. `swash_glyphs_land_and_equal_keys_share_a_slot` pins the placement
 path a real rasterizer takes.
+`failed_glyph_replay_retries_without_reusing_recorded_regions` models a missing
+bitmap, malformed bitmap and both failures on independent keys through the private
+rasterizer seam. Failed replay removes the cache entry even when the rasterizer
+returns `None`; the replacement texture contains no uploaded bitmap for that key.
+The next use retries, healthy keys remain cached, and retry allocations cannot
+reuse regions already referenced by the current frame. This checks recovery and
+allocation ownership, without claiming that a failed bitmap can still be drawn
+in the frame which first requested it.
+The same family rejects an overflowing color-bitmap byte count before upload and
+proves that a subsequent valid bitmap for the key can still be admitted. Expected
+byte length uses checked arithmetic even when a rasterizer violates its contract.
 
 ### 17. One rounding rule per purpose: hard edges snap, bounds cover — [ADR-0098 §6](../../docs/adr/ADR-0098-owned-f64-geometry-values.md)
 

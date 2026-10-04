@@ -9,7 +9,10 @@
 
 # `group()` filtersets (the two stages of `cargo xtask test`, below) arrived in
 # 0.9.133; an older nextest stops here with an upgrade hint instead.
-nextest-version = { required = "0.9.133" }
+# 0.9.145 also fixes sibling capture-pipe inheritance on Unix (notably Apple),
+# which can produce false leaked-handles reports under parallel execution.
+# Recommend the fixed runner without rejecting runners that support our config.
+nextest-version = { required = "0.9.133", recommended = "0.9.145" }
 
 [profile.default]
 # Report a test as SLOW after 60 s and kill it after ten periods (10 min): a
