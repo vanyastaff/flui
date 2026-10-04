@@ -87,3 +87,6 @@ pub(crate) fn run_table(cases: &[(&str, fn())]) {
         panic!("failed numerical cases: {names:?}");
     }
 }
+
+#[path = "leaf_payload.rs"]
+mod leaf_payload;

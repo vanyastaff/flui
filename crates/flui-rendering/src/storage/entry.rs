@@ -433,7 +433,10 @@ impl<P: Protocol> RenderEntry<P> {
                     // `unwrap()` in user widget code), Poisoned is the
                     // catch-all bucket for "we don't know more".
                     Err(payload) => {
-                        let msg = payload_text(&*payload).unwrap_or("(non-string panic payload)");
+                        // Reporting can call a subscriber; retain opaque destruction
+                        // before that foreign call as well as on ordinary return.
+                        let payload = std::mem::ManuallyDrop::new(payload);
+                        let msg = payload_text(&**payload).unwrap_or("(non-string panic payload)");
                         tracing::error!(
                             render_object = debug_name,
                             panic_msg = msg,
