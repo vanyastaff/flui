@@ -104,6 +104,9 @@ pub enum FontStyle {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 /// An OpenType feature setting (e.g. `"smcp"` for small caps) applied
 /// during text shaping.
+///
+/// Shaping ignores settings whose tag is not four printable ASCII bytes or
+/// whose value is outside `0..=65535`. Other valid settings still apply.
 pub struct FontFeature {
     /// OpenType feature tag (4 characters).
     pub feature: String,
@@ -138,6 +141,10 @@ impl FontFeature {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 /// A variable-font axis setting (e.g. `"wght"` for weight) applied
 /// during text shaping.
+///
+/// Shaping ignores settings whose tag is not four printable ASCII bytes or
+/// whose value is not finite in the shaper's `f32` coordinate space. Unknown
+/// valid axis tags are left to the font's shaping implementation.
 pub struct FontVariation {
     /// Variation axis tag (4 characters).
     pub axis: String,

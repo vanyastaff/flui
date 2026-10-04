@@ -19,9 +19,10 @@ use crate::typography::{FontStyle, TextDirection, TextStyle};
 use flui_foundation::geometry::{Rect, Size};
 use parley::fontique::Collection;
 use parley::layout::PositionedLayoutItem;
+use parley::setting::{FontFeature, FontVariation, Tag};
 use parley::style::{
-    FontFamily, FontFamilyName, FontStyle as ParleyFontStyle, FontWeight, GenericFamily,
-    LineHeight, OverflowWrap, StyleProperty,
+    FontFamily, FontFamilyName, FontFeatures, FontStyle as ParleyFontStyle, FontVariations,
+    FontWeight, GenericFamily, LineHeight, OverflowWrap, StyleProperty,
 };
 use parley::{Alignment, AlignmentOptions, FontData, Layout};
 
@@ -810,6 +811,39 @@ fn properties(
     }
     if let Some(spacing) = style.letter_spacing {
         properties.push(StyleProperty::LetterSpacing(spacing as f32));
+    }
+    if let Some(spacing) = style.word_spacing {
+        properties.push(StyleProperty::WordSpacing(spacing as f32));
+    }
+    let features: Vec<_> = style
+        .font_features
+        .iter()
+        .filter_map(|feature| {
+            Some(FontFeature::new(
+                Tag::parse(&feature.feature)?,
+                u16::try_from(feature.value).ok()?,
+            ))
+        })
+        .collect();
+    if !features.is_empty() {
+        properties.push(StyleProperty::FontFeatures(FontFeatures::List(Cow::Owned(
+            features,
+        ))));
+    }
+    let variations: Vec<_> = style
+        .font_variations
+        .iter()
+        .filter_map(|variation| {
+            let value = variation.value as f32;
+            value
+                .is_finite()
+                .then_some(FontVariation::new(Tag::parse(&variation.axis)?, value))
+        })
+        .collect();
+    if !variations.is_empty() {
+        properties.push(StyleProperty::FontVariations(FontVariations::List(
+            Cow::Owned(variations),
+        )));
     }
     if let Some(height) = style.height {
         properties.push(StyleProperty::LineHeight(LineHeight::FontSizeRelative(

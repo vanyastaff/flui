@@ -921,6 +921,32 @@ endpoints whose subtraction would overflow outside the admitted range.
 `sweep_interpolation_keeps_hard_transitions` pin both colors of a red-to-blue
 hard edge interpolated toward black.
 
+### 23. Text styles reach Parley's spacing and OpenType setting properties
+
+Word spacing, feature lists and variation lists are applied alongside size,
+weight and letter spacing, both for paragraph defaults and span ranges. Parley
+owns the converted lists for the builder; measurement, painted runs and caret
+queries continue to share the resulting layout.
+
+OpenType tags are admitted by Parley's `Tag::parse`. Feature values must fit
+`u16`; variation values must remain finite when narrowed to Parley's `f32`
+coordinate space. Invalid entries are ignored individually, so they cannot
+override earlier valid settings. An empty admitted list supplies no override.
+Unknown valid features and axes are interpreted by the font and shaper.
+
+The public `text_contract` rows
+`root_word_spacing_reaches_measurement_paint_and_carets` and
+`span_word_spacing_reaches_measurement_paint_and_carets` pin an eight-pixel
+increase across two spaces. `font_features_change_the_measured_and_painted_glyphs`
+disables the generated Arabic face's lam-alef ligature, checking five painted
+glyphs and their measured advances.
+`font_variations_select_the_painted_run_instance` selects opposite sides of the
+generated `wght` axis and reads the painted run's normalized coordinates; that
+fixture has no outline deltas, so the test makes no width or rasterization claim.
+`invalid_font_features_do_not_replace_valid_settings` and
+`invalid_font_variations_do_not_replace_valid_settings` cover admission alongside
+valid settings.
+
 ## Open items
 
 - **`Save`/`Restore` carry a transform nobody reads.** Every command is
