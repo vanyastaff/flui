@@ -1074,6 +1074,15 @@ a hostile destructor, two competing field destructors, and successful layout
 through a replacement object. Bounded child processes isolate an old-source
 aggregate abort from the parent test runner.
 
+### Finite grid windows saturate index arithmetic before item bounds
+
+A finite scroll or cache extent may exceed the range of `usize` rows. Grid
+layout saturates row-to-item multiplication before the render object clips to
+its finite item count. A huge cache therefore covers existing items, while a
+huge leading offset lies beyond them; neither wraps into an unrelated row.
+`sliver_grid_golden_geometry` runs both public layout cases and an ordinary band
+control, checking published extents and the cached items' committed geometry.
+
 ## Thread safety
 
 `flui-rendering` runs in the render pipeline; per strategy clause "sync hot path", the hot frame loop is single-threaded. Sync primitives in this crate are limited to shared-infrastructure objects and lock-free atomics on per-node state. No primitive sits inside `perform_layout` / `paint` on a per-node basis.
