@@ -1117,3 +1117,12 @@ client-origin observations across a native move beyond signed16 coordinates
 and a subsequent ordinary move. Cache and Moved events use `ClientToScreen`;
 packed message coordinates remain a fallback only if that query fails. These rows do not
 exercise monitor DPI migration or interactive focus changes.
+
+
+`resize_callback_preserves_large_native_dimensions` pins unsigned `WM_SIZE`
+decoding in the same bounded native family. A hidden popup is resized separately
+to a width and height above 32767, comparing `GetClientRect` with callback sizes
+and public getters inside and after delivery, followed by an ordinary resize.
+The row requires the actual native dimension to reach the unsigned range; an OS
+limit reports an unavailable witness instead of allowing a false positive.
+Zero-size clamping and minimized-window handling retain their existing behavior.

@@ -920,8 +920,10 @@ impl WindowsPlatform {
                 WM_SIZE => {
                     use super::util::{SIZE_MAXIMIZED, SIZE_MINIMIZED, SIZE_RESTORED};
 
-                    let width = get_x_lparam(lparam).max(1);
-                    let height = get_y_lparam(lparam).max(1);
+                    // WM_SIZE dimensions are unsigned16, unlike signed
+                    // mouse and WM_MOVE coordinates packed in the same shape.
+                    let width = (lparam.0 as u32 & 0xffff).max(1) as i32;
+                    let height = hiword(lparam.0 as u32).max(1) as i32;
                     let size_type = wparam.0 as u32;
 
                     if let Some(ctx) = ctx {

@@ -174,16 +174,20 @@ mod native_windows {
         time::{Duration, Instant},
     };
     use windows::Win32::{
-        Foundation::{LPARAM, POINT, WPARAM},
+        Foundation::{LPARAM, POINT, RECT, WPARAM},
         Graphics::Gdi::ClientToScreen,
         UI::WindowsAndMessaging::{
-            IsWindowVisible, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, SendMessageW, SetWindowPos,
-            WM_CLOSE,
+            GetClientRect, IsWindowVisible, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
+            SendMessageW, SetWindowPos, WM_CLOSE,
         },
     };
 
     const CHILD: &str = "FLUI_NATIVE_WINDOW_CONTRACT_CHILD";
     const CASES: &[(&str, fn())] = &[
+        (
+            "resize_callback_preserves_large_native_dimensions",
+            resize_callback_preserves_large_native_dimensions,
+        ),
         (
             "move_callback_observes_full_native_coordinates",
             move_callback_observes_full_native_coordinates,
@@ -417,6 +421,94 @@ mod native_windows {
         );
         let next = open(&platform, true);
         next.close();
+    }
+
+    #[expect(
+        unsafe_code,
+        reason = "actual owned hidden Win32 resize and client-dimension queries"
+    )]
+    fn resize_callback_preserves_large_native_dimensions() {
+        let platform = WindowsPlatform::new().expect("native Windows platform");
+        let window = open(&platform, false);
+        let hwnd = window
+            .as_any()
+            .downcast_ref::<WindowsWindow>()
+            .expect("Win32 backend")
+            .hwnd();
+        let weak = Arc::downgrade(&window);
+        let observations = Arc::new(Mutex::new(Vec::new()));
+        let callback_observations = Arc::clone(&observations);
+        window.on_resize(Box::new(move |size, scale| {
+            let window = weak.upgrade().expect("live resize window");
+            let hwnd = window
+                .as_any()
+                .downcast_ref::<WindowsWindow>()
+                .expect("Win32 backend")
+                .hwnd();
+            let mut client = RECT::default();
+            // SAFETY: the live wrapper owns this HWND on its creating thread;
+            // client is a correctly sized, initialized native out-parameter.
+            unsafe { GetClientRect(hwnd, &raw mut client) }.expect("native client size");
+            let actual = Size::new(client.right - client.left, client.bottom - client.top);
+            callback_observations
+                .lock()
+                .expect("resize observations")
+                .push((
+                    actual,
+                    size,
+                    scale,
+                    window.logical_size(),
+                    window.physical_size(),
+                ));
+        }));
+        for (width, height) in [(40_000, 100), (100, 40_000), (320, 240)] {
+            observations.lock().expect("resize observations").clear();
+            // SAFETY: this wrapper owns the HWND on the creating thread. The
+            // resize supplies only dimensions and flags, with no caller memory.
+            unsafe {
+                SetWindowPos(
+                    hwnd,
+                    None,
+                    0,
+                    0,
+                    width,
+                    height,
+                    SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE,
+                )
+            }
+            .expect("native hidden resize");
+            let values = observations.lock().expect("resize observations");
+            let &(actual, delivered, scale, observed, physical) =
+                values.last().expect("native resize delivered");
+            if width >= 32_768 {
+                assert!(
+                    actual.width >= 32_768,
+                    "OS capped width; unsigned-dimension witness unavailable: {actual:?}"
+                );
+            }
+            if height >= 32_768 {
+                assert!(
+                    actual.height >= 32_768,
+                    "OS capped height; unsigned-dimension witness unavailable: {actual:?}"
+                );
+            }
+            let logical = Size::new(actual.width as f64 / scale, actual.height as f64 / scale);
+            assert_eq!(
+                delivered, logical,
+                "native dimensions corrupted in resize delivery"
+            );
+            assert_eq!(
+                observed, logical,
+                "callback getter corrupted native dimensions"
+            );
+            assert_eq!(physical, actual);
+            assert_eq!(
+                window.logical_size(),
+                logical,
+                "getter corrupted after resize"
+            );
+        }
+        window.close();
     }
 
     fn resize_callback_observes_current_client_bounds() {
