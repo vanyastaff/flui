@@ -1053,6 +1053,14 @@ text node it ever built. Locked by `font_change_contract` (`tests/text_context.r
 `the_record_stays_bounded_without_a_font_change` row rebuilds a paragraph 500 times.
 
 
+### Hundredth quantization preserves large finite constraints
+
+`BoxConstraints::round_for_cache` multiplies by 100 only when the product remains
+finite. Larger finite values already have representable spacing far above a
+hundredth and remain unchanged. The objects consumer `family_sizing` checks a
+large finite requested width under a different finite parent maximum, and
+ordinary hundredth rounding; this pins actual geometry rather than a getter.
+
 ## Thread safety
 
 `flui-rendering` runs in the render pipeline; per strategy clause "sync hot path", the hot frame loop is single-threaded. Sync primitives in this crate are limited to shared-infrastructure objects and lock-free atomics on per-node state. No primitive sits inside `perform_layout` / `paint` on a per-node basis.

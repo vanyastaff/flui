@@ -133,6 +133,18 @@ realm's context through a mounted `Text`.
 
 ---
 
+### Finite sizing survives intermediate normalization overflow
+
+An intrinsic quantum smaller than the representable spacing of a finite size
+cannot enlarge that size. `RenderIntrinsicWidth` keeps the finite intrinsic
+answer when dividing by its positive quantum overflows, while ordinary stepping
+still rounds upward. `family_intrinsics` checks a tiny quantum against the
+child's natural width and an ordinary step against the next multiple.
+
+`family_sizing` also checks a large finite constrained width against a distinct
+parent maximum, plus ordinary hundredth quantization. Rounding extra constraints
+must not turn that finite width into infinity and force the parent maximum.
+
 ## Thread safety
 
 No locks. Catalog objects are mutated on the UI realm's layout/paint thread

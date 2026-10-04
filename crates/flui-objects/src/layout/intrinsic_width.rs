@@ -40,7 +40,16 @@ fn apply_step(input: f64, step: Option<f64>) -> f64 {
     match step {
         None => input,
         Some(s) if s <= 0.0 || !s.is_finite() => input,
-        Some(s) => (input / s).ceil() * s,
+        Some(s) => {
+            let intervals = input / s;
+            // A finite input with an overflowing ratio has a quantum smaller
+            // than its representable spacing; snapping cannot move it.
+            if input.is_finite() && !intervals.is_finite() {
+                input
+            } else {
+                intervals.ceil() * s
+            }
+        }
     }
 }
 

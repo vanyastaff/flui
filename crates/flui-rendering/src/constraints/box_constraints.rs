@@ -736,7 +736,7 @@ impl BoxConstraints {
 /// Rounds a logical length to hundredths precision.
 #[inline]
 fn round_pixels_to_hundredths(value: f64) -> f64 {
-    if value.is_finite() {
+    if value.is_finite() && value.abs() <= f64::MAX / 100.0 {
         (value * 100.0).round() / 100.0
     } else {
         value
