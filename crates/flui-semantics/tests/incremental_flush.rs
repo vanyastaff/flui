@@ -15,7 +15,9 @@
 //! it, flush. The tests deliberately use only API that predates the diff so
 //! they can run — and fail — against the pre-diff implementation.
 
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use flui_foundation::RenderId;
 use flui_semantics::{SemanticsNode, SemanticsOwner, TreeUpdate};
@@ -167,4 +169,145 @@ fn detaching_checks_the_actual_parent_and_preserves_reparenting() {
     owner.add_child(first, child);
     assert_eq!(owner.tree().parent(child), Some(first));
     assert_eq!(owner.tree().children(first), Some(&[child][..]));
+}
+
+fn failed_label_delivery_retries_unchanged_input() {
+    assert_delivery_recovers(|owner, _, child| {
+        owner
+            .get_mut(child)
+            .expect("live child")
+            .config_mut()
+            .set_label("changed");
+    });
+}
+
+fn failed_focus_delivery_retries_unchanged_input() {
+    assert_delivery_recovers(|owner, _, child| {
+        owner
+            .get_mut(child)
+            .expect("live child")
+            .config_mut()
+            .set_focused(true);
+    });
+}
+
+fn failed_removal_delivery_retries_unchanged_input() {
+    assert_delivery_recovers(|owner, _, child| {
+        drop(owner.remove(child));
+    });
+}
+
+fn assert_delivery_recovers(
+    change: fn(&mut SemanticsOwner, flui_foundation::SemanticsId, flui_foundation::SemanticsId),
+) {
+    let fail_delivery = Arc::new(AtomicBool::new(false));
+    let received = Arc::new(Mutex::new(Vec::<TreeUpdate>::new()));
+    let sink = Arc::clone(&received);
+    let fail = Arc::clone(&fail_delivery);
+    let mut owner = SemanticsOwner::new(Arc::new(move |update| {
+        assert!(
+            !fail.load(Ordering::Relaxed),
+            "delivery failed before acceptance"
+        );
+        sink.lock().push(update.clone());
+    }));
+    let root = owner.insert(node(0, "root"));
+    let child = owner.insert(node(1, "original"));
+    owner.add_child(root, child);
+    owner.set_root(Some(root));
+    assert_eq!(owner.flush(), 2);
+    change(&mut owner, root, child);
+    let expected = owner.to_accesskit_tree_update(None).expect("rooted tree");
+
+    fail_delivery.store(true, Ordering::Relaxed);
+    let failure = catch_unwind(AssertUnwindSafe(|| owner.flush()))
+        .expect_err("the callback rejects this attempt");
+    let is_delivery_failure = failure
+        .downcast_ref::<String>()
+        .is_some_and(|message| message.contains("delivery failed before acceptance"))
+        || failure
+            .downcast_ref::<&str>()
+            .is_some_and(|message| message.contains("delivery failed before acceptance"));
+    std::mem::forget(failure);
+    assert!(
+        is_delivery_failure,
+        "the original delivery failure remains authoritative"
+    );
+    assert!(owner.needs_flush(), "failed delivery keeps work pending");
+    assert_eq!(received.lock().len(), 1);
+
+    fail_delivery.store(false, Ordering::Relaxed);
+    owner.flush();
+    {
+        let updates = received.lock();
+        assert_eq!(updates.len(), 2, "unchanged input must retry delivery");
+        let mut actual = updates[0]
+            .nodes
+            .iter()
+            .cloned()
+            .collect::<std::collections::HashMap<_, _>>();
+        for (id, node) in &updates[1].nodes {
+            actual.insert(*id, node.clone());
+        }
+        // Removal is conveyed by the parent's child list, not a tombstone.
+        for (id, node) in &expected.nodes {
+            assert_eq!(
+                actual.get(id),
+                Some(node),
+                "retry delivers the current node"
+            );
+        }
+        assert_eq!(
+            updates[1].focus, expected.focus,
+            "retry delivers current focus"
+        );
+    }
+    assert!(!owner.needs_flush());
+    assert_eq!(owner.flush(), 0);
+    assert_eq!(
+        received.lock().len(),
+        2,
+        "accepted retry leaves no duplicate debt"
+    );
+
+    owner
+        .get_mut(root)
+        .expect("root remains live")
+        .config_mut()
+        .set_label("next operation");
+    assert_eq!(owner.flush(), 1);
+    assert_eq!(
+        received.lock().len(),
+        3,
+        "the next operation still progresses"
+    );
+}
+
+#[test]
+fn failed_incremental_delivery_preserves_retry_and_progress() {
+    let cases: &[(&str, fn())] = &[
+        (
+            "failed_label_delivery_retries_unchanged_input",
+            failed_label_delivery_retries_unchanged_input,
+        ),
+        (
+            "failed_focus_delivery_retries_unchanged_input",
+            failed_focus_delivery_retries_unchanged_input,
+        ),
+        (
+            "failed_removal_delivery_retries_unchanged_input",
+            failed_removal_delivery_retries_unchanged_input,
+        ),
+    ];
+    let mut failures = Vec::new();
+    for &(name, run) in cases {
+        if let Err(payload) = catch_unwind(run) {
+            failures.push(name);
+            std::mem::forget(payload);
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "delivery recovery rows failed: {failures:?}"
+    );
 }

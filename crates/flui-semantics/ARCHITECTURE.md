@@ -12,6 +12,21 @@ shape.
 
 ## Mapping decisions
 
+### Failed incremental publication keeps delivery pending
+
+The published-node mirror and published focus advance only after the platform
+callback returns successfully. A callback panic propagates to the caller; dirty
+nodes remain pending, so retrying the same input delivers its changed payload
+and focus. Removal bookkeeping can prune absent identities before delivery:
+the dirty parent's changed child list remains different from the delivered
+mirror and therefore retries. Focus claimant bookkeeping describes current
+tree state rather than delivered state and may likewise advance before delivery.
+The callback may have accepted an update before panicking, so retries can repeat
+delivery; this boundary promises progress, not exactly-once delivery.
+`failed_incremental_delivery_preserves_retry_and_progress` checks failed label,
+focus, and removal updates, a retry without further mutation, an idle flush,
+and a subsequent independent change.
+
 ### Parent-specific detachment preserves both sides of a link
 
 `SemanticsTree::remove_child` detaches only a child whose current parent is the

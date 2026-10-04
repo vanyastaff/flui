@@ -847,11 +847,6 @@ impl SemanticsOwner {
             return 0;
         }
 
-        for (id, node) in &changed {
-            state.nodes.insert(*id, node.clone());
-        }
-        state.focus = focus;
-
         let update = crate::TreeUpdate {
             nodes: changed,
             tree: None,
@@ -863,6 +858,13 @@ impl SemanticsOwner {
         if let Some(callback) = callback {
             callback(&update);
         }
+
+        // The mirror describes delivery, not the attempted update. A failed
+        // callback leaves the dirty nodes available to retry unchanged input.
+        for (id, node) in &update.nodes {
+            state.nodes.insert(*id, node.clone());
+        }
+        state.focus = focus;
 
         self.tree.mark_all_clean();
         update.nodes.len()
