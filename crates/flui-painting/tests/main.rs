@@ -265,6 +265,10 @@ fn caret_contract() {
                 cc::two_space_run_word_boundary,
             ),
             (
+                "byte_offsets_snap_backward_and_clamp_at_the_text_end",
+                cc::byte_offsets_snap_backward_and_clamp_at_the_text_end,
+            ),
+            (
                 "a_combining_mark_is_one_hit_target",
                 cc::a_combining_mark_is_one_hit_target,
             ),

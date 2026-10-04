@@ -120,11 +120,7 @@ impl ParagraphLayout {
 
     /// `offset` clamped to the kept text and snapped down to a char boundary.
     fn clamp_offset(&self, offset: usize) -> usize {
-        let mut offset = offset.min(self.kept_text);
-        while offset > 0 && !self.text.is_char_boundary(offset) {
-            offset -= 1;
-        }
-        offset
+        self.text.floor_char_boundary(offset.min(self.kept_text))
     }
 
     /// The caret before the text at `offset`: its x and the index of its line.

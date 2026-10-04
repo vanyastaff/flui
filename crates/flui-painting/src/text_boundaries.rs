@@ -185,10 +185,7 @@ pub(crate) fn grapheme_bounds(text: &str, offset: usize) -> (usize, usize) {
 ///   a double-tap on the second character of a CJK run selects it.
 pub(crate) fn word_at(text: &str, offset: usize) -> (usize, usize) {
     let total = text.len();
-    let mut offset = offset.min(total);
-    while offset > 0 && !text.is_char_boundary(offset) {
-        offset -= 1;
-    }
+    let offset = text.floor_char_boundary(offset);
     if offset == 0 {
         return word_segments(text)
             .next()

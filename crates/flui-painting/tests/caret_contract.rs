@@ -121,6 +121,34 @@ pub(crate) fn two_space_run_word_boundary() {
     assert_eq!(word_at(5), (5, 8), "\"bar\"");
 }
 
+pub(crate) fn byte_offsets_snap_backward_and_clamp_at_the_text_end() {
+    for text in ["é a", "中 a", "😀 a"] {
+        let painter = ltr(text);
+        let scalar_end = text.chars().next().expect("a first scalar").len_utf8();
+        for offset in 1..scalar_end {
+            assert_eq!(
+                caret(&painter, offset),
+                caret(&painter, 0),
+                "{text:?} {offset}"
+            );
+            let word = painter.get_word_boundary(TextPosition::downstream(offset));
+            assert_eq!((word.start, word.end), (0, scalar_end), "{text:?} {offset}");
+        }
+        for offset in [text.len() + 1, usize::MAX] {
+            assert_eq!(
+                caret(&painter, offset),
+                caret(&painter, text.len()),
+                "{text:?} {offset}"
+            );
+            assert_eq!(
+                painter.get_word_boundary(TextPosition::downstream(offset)),
+                painter.get_word_boundary(TextPosition::downstream(text.len())),
+                "{text:?} {offset}"
+            );
+        }
+    }
+}
+
 /// `e` and a combining acute are one grapheme: a hit anywhere over it
 /// answers its start or its end, never the offset between the two scalars.
 /// The caret at that offset still lies strictly between the two, so an input
