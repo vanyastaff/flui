@@ -22,3 +22,22 @@ completed frames still contribute to aggregate frame and jank counters, while
 `frame_history` is empty and `frame_stats` returns `None`. The zero-capacity
 row in `developer_history_respects_capacity_and_clear` pins both retention and
 counter progress. Phase values are owned data without user destructors.
+
+### Timeline admission evaluates consumer conversions outside the mutex
+
+Event names accept consumer-defined `Into<String>` implementations. Conversion
+runs before locking the timeline, so it may inspect or clear the same timeline.
+The three admission paths use this ordering; isolated rows in
+`developer_history_respects_capacity_and_clear` exercise each public method and
+then admit another event. A child deadline distinguishes the old mutex deadlock
+without blocking the remaining family rows. Converted names own plain strings.
+
+### Timeline durations preserve their microsecond range
+
+`TimelineEvent::duration` reconstructs seconds and subsecond nanoseconds from
+its public `u128` microseconds instead of narrowing the entire value to `u64`.
+Representable durations remain exact at microsecond precision; values beyond
+`Duration::MAX` saturate. The large-duration row in
+`developer_history_respects_capacity_and_clear` records a completed event through
+the public timeline, reads its duration back, and exercises saturation of a
+consumer-modified event value.
