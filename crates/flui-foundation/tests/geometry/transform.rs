@@ -80,3 +80,64 @@ fn affine_decomposition_retains_finite_extreme_scales() {
         ),
     ]);
 }
+
+fn assert_point(matrix: Matrix4, input: (f64, f64), expected: (f64, f64)) {
+    let actual = matrix.transform_point(input.0, input.1);
+    assert!(
+        (actual.0 - expected.0).abs() < 1e-12,
+        "x: {actual:?} != {expected:?}"
+    );
+    assert!(
+        (actual.1 - expected.1).abs() < 1e-12,
+        "y: {actual:?} != {expected:?}"
+    );
+}
+fn horizontal_shear() {
+    assert_point(
+        Transform::skew(0.2, 0.0).into(),
+        (2.0, 3.0),
+        (2.0 + 3.0 * 0.2_f64.tan(), 3.0),
+    );
+}
+fn vertical_shear() {
+    assert_point(
+        Transform::skew(0.0, 0.3).into(),
+        (2.0, 3.0),
+        (2.0, 3.0 + 2.0 * 0.3_f64.tan()),
+    );
+}
+fn two_axis_shear_inverse() {
+    let forward = Transform::skew(0.2, 0.3);
+    let inverse = forward.inverse().expect("finite shear is invertible");
+    assert_point(forward.then(inverse).into(), (2.0, 3.0), (2.0, 3.0));
+}
+fn then_applies_translation_before_scale() {
+    assert_point(
+        Transform::translate(10.0, 5.0)
+            .then(Transform::scale(2.0))
+            .into(),
+        (2.0, 3.0),
+        (24.0, 16.0),
+    );
+}
+fn nested_compositions_keep_application_order() {
+    let first = Transform::translate(10.0, 5.0).then(Transform::scale(2.0));
+    let second = Transform::translate(-4.0, 3.0).then(Transform::scale_xy(3.0, 4.0));
+    assert_point(first.then(second).into(), (2.0, 3.0), (60.0, 76.0));
+}
+#[test]
+fn affine_composition_and_shear_follow_coordinate_contract() {
+    crate::run_table(&[
+        ("horizontal shear", horizontal_shear),
+        ("vertical shear", vertical_shear),
+        ("two axis shear inverse", two_axis_shear_inverse),
+        (
+            "translation before scale",
+            then_applies_translation_before_scale,
+        ),
+        (
+            "nested application order",
+            nested_compositions_keep_application_order,
+        ),
+    ]);
+}

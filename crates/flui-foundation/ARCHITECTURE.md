@@ -22,6 +22,13 @@ and an unsigned second-column length. Public consumer test
 `affine_decomposition_retains_finite_extreme_scales` checks ordinary rotation,
 reflections, extreme columns, anisotropic shear and determinant underflow.
 
+`Transform::then` applies transformations in declaration order with column-vector
+matrices. Horizontal and vertical shear use the same `Matrix4::skew_2d` mapping;
+two-axis shear inversion delegates to the existing glam-backed matrix inverse
+rather than negating angles. The public family
+`affine_composition_and_shear_follow_coordinate_contract` checks actual mapped
+coordinates, inverse round trips and flattened composition order.
+
 ---
 
 ## The signal read contract (`read_scope`)

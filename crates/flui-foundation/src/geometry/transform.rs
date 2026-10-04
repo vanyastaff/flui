@@ -417,17 +417,7 @@ impl Transform {
 
             Transform::ScaleXY { x, y } => Matrix4::scaling(*x, *y, 1.0),
 
-            Transform::Skew { x, y } => {
-                // Skew matrix:
-                // [ 1      tan(y)  0  0 ]
-                // [ tan(x) 1       0  0 ]
-                // [ 0      0       1  0 ]
-                // [ 0      0       0  1 ]
-                let mut matrix = Matrix4::identity();
-                matrix.m[4] = y.tan(); // m[1][0] = tan(y)
-                matrix.m[1] = x.tan(); // m[0][1] = tan(x)
-                matrix
-            }
+            Transform::Skew { x, y } => Matrix4::skew_2d(*x, *y),
 
             Transform::RotateAround {
                 angle,
@@ -457,7 +447,7 @@ impl Transform {
                 transforms
                     .iter()
                     .map(Transform::to_matrix_internal)
-                    .fold(Matrix4::identity(), |acc, matrix| acc * matrix)
+                    .fold(Matrix4::identity(), |acc, matrix| matrix * acc)
             }
 
             Transform::Matrix(matrix) => *matrix,
@@ -567,13 +557,11 @@ impl Transform {
                 }
             }
 
-            Transform::Skew { x, y } => Some(Transform::Skew { x: -x, y: -y }),
-
             // For complex transforms, use matrix inversion
-            _ => {
-                let matrix: Matrix4 = self.clone().into();
-                matrix.try_inverse().map(Transform::Matrix)
-            }
+            _ => self
+                .to_matrix_internal()
+                .try_inverse()
+                .map(Transform::Matrix),
         }
     }
 
