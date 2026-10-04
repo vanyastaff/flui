@@ -85,6 +85,8 @@ impl LifecycleHandle {
     /// during an independent unwind, retiring callback envelopes are retained.
     /// Otherwise they have ordinary Rust destruction semantics: two panicking
     /// fields in the first retired envelope can abort before containment.
+    /// Rejected callbacks follow the same exceptional-retention rule and retire
+    /// only after the source borrow has been released.
     ///
     /// # Errors
     /// Returns [`LifecycleClosed`] once terminal close begins or the owner dies.
@@ -92,9 +94,15 @@ impl LifecycleHandle {
         &self,
         callback: impl FnMut(AppLifecycleState) + 'static,
     ) -> Result<(Option<AppLifecycleState>, LifecycleSubscription), LifecycleClosed> {
-        let inner = self.inner.upgrade().ok_or(LifecycleClosed)?;
+        let Some(inner) = self.inner.upgrade() else {
+            retire_rejected_callback(callback, false);
+            return Err(LifecycleClosed);
+        };
         let mut state = inner.0.borrow_mut();
         if state.phase != Phase::Open {
+            let prior_failure = state.retirement_failed;
+            drop(state);
+            retire_rejected_callback(callback, prior_failure);
             return Err(LifecycleClosed);
         }
         let listener = Rc::new(Listener {
@@ -161,6 +169,16 @@ pub(crate) fn preserve(first: &mut Option<Panic>, next: Option<Panic>) {
         } else {
             std::mem::forget(payload);
         }
+    }
+}
+
+// Rejected admission owns the generic callback too. It must release source
+// borrows before ordinary retirement, and cannot compete with an earlier failure.
+fn retire_rejected_callback(callback: impl FnMut(AppLifecycleState), prior_failure: bool) {
+    if prior_failure || std::thread::panicking() {
+        std::mem::forget(callback);
+    } else {
+        drop(callback);
     }
 }
 

@@ -200,6 +200,159 @@ fn nested_cancellation_after_caught_failure() {
     assert_eq!(capture_drops.load(Ordering::SeqCst), 0);
 }
 
+fn rejected_after_caught_failure() {
+    let source = Rc::new(LifecycleSource::new());
+    let weak = Rc::downgrade(&source);
+    let handle = source.handle();
+    let (_, first) = handle
+        .subscribe(move |state| {
+            if state == Inactive {
+                weak.upgrade()
+                    .expect("source")
+                    .commit(Hidden)
+                    .expect("queued event");
+                panic!("earlier rejected-admission failure");
+            }
+        })
+        .expect("first listener");
+    let drops = Arc::new(AtomicUsize::new(0));
+    let bodies = Arc::new(AtomicUsize::new(0));
+    let weak = Rc::downgrade(&source);
+    let rejected_handle = handle.clone();
+    let capture_drops = Arc::clone(&drops);
+    let calls = Arc::clone(&bodies);
+    let (_, second) = handle
+        .subscribe(move |state| {
+            if state == Inactive {
+                let source = weak.upgrade().expect("source");
+                source.begin_close();
+                source
+                    .commit_terminal(Detached)
+                    .expect("terminal FIFO event");
+                let captures = aggregate(&capture_drops);
+                let called = Arc::clone(&calls);
+                let result = rejected_handle.subscribe(move |_| {
+                    let _keep = &captures;
+                    called.fetch_add(1, Ordering::SeqCst);
+                });
+                assert!(matches!(result, Err(LifecycleClosed)));
+            }
+        })
+        .expect("second listener");
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let log = Rc::clone(&events);
+    let (_, healthy) = handle
+        .subscribe(move |state| log.borrow_mut().push(state))
+        .expect("healthy tail listener");
+    source.commit(Inactive).expect("first event");
+    let payload = catch_unwind(AssertUnwindSafe(|| source.drain()))
+        .expect_err("original callback failure resumes");
+    assert_first(payload, "earlier rejected-admission failure");
+    assert_eq!(*events.borrow(), [Inactive, Hidden, Detached]);
+    assert_eq!(bodies.load(Ordering::SeqCst), 0);
+    assert_eq!(drops.load(Ordering::SeqCst), 0);
+    source.finish_close();
+    assert_eq!(handle.snapshot(), Err(LifecycleClosed));
+    drop((first, second, healthy, source));
+    assert_eq!(drops.load(Ordering::SeqCst), 0);
+    ordinary_rejected_callback_and_next_source();
+}
+
+fn rejected_during_independent_unwind(dead: bool) {
+    struct RejectOnDrop {
+        handle: flui_view::LifecycleHandle,
+        captures: Arc<AtomicUsize>,
+        bodies: Arc<AtomicUsize>,
+        refusals: Arc<AtomicUsize>,
+    }
+    impl Drop for RejectOnDrop {
+        fn drop(&mut self) {
+            let captures = aggregate(&self.captures);
+            let called = Arc::clone(&self.bodies);
+            let result = self.handle.subscribe(move |_| {
+                let _keep = &captures;
+                called.fetch_add(1, Ordering::SeqCst);
+            });
+            assert!(matches!(result, Err(LifecycleClosed)));
+            self.refusals.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+    let source = LifecycleSource::new();
+    let handle = source.handle();
+    source.begin_close();
+    let source = if dead {
+        drop(source);
+        None
+    } else {
+        Some(source)
+    };
+    let drops = Arc::new(AtomicUsize::new(0));
+    let bodies = Arc::new(AtomicUsize::new(0));
+    let refusals = Arc::new(AtomicUsize::new(0));
+    let payload = catch_unwind(AssertUnwindSafe(|| {
+        let _reject = RejectOnDrop {
+            handle,
+            captures: Arc::clone(&drops),
+            bodies: Arc::clone(&bodies),
+            refusals: Arc::clone(&refusals),
+        };
+        panic!("independent rejection failure");
+    }))
+    .expect_err("independent unwind remains authoritative");
+    assert_first(payload, "independent rejection failure");
+    assert_eq!(drops.load(Ordering::SeqCst), 0);
+    assert_eq!(bodies.load(Ordering::SeqCst), 0);
+    assert_eq!(refusals.load(Ordering::SeqCst), 1);
+    if let Some(source) = source {
+        source.finish_close();
+    }
+    ordinary_rejected_callback_and_next_source();
+}
+
+fn ordinary_rejected_callback_and_next_source() {
+    struct Retirement {
+        handle: flui_view::LifecycleHandle,
+        drops: Arc<AtomicUsize>,
+    }
+    impl Drop for Retirement {
+        fn drop(&mut self) {
+            // This query needs the same RefCell: retirement must be outside its borrow.
+            assert_eq!(self.handle.snapshot(), Ok(None));
+            self.drops.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+    let source = LifecycleSource::new();
+    let handle = source.handle();
+    source.begin_close();
+    let drops = Arc::new(AtomicUsize::new(0));
+    let capture = Retirement {
+        handle: handle.clone(),
+        drops: Arc::clone(&drops),
+    };
+    let result = handle.subscribe(move |_| {
+        let _keep = &capture;
+    });
+    assert!(matches!(result, Err(LifecycleClosed)));
+    assert_eq!(
+        drops.load(Ordering::SeqCst),
+        1,
+        "ordinary rejection retires its captures"
+    );
+    source.finish_close();
+    let next = LifecycleSource::new();
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let log = Rc::clone(&events);
+    let (_, token) = next
+        .handle()
+        .subscribe(move |state| log.borrow_mut().push(state))
+        .expect("fresh healthy subscription");
+    next.commit(Resumed).expect("next source operation");
+    next.drain();
+    assert_eq!(*events.borrow(), [Resumed]);
+    next.finish_close();
+    drop(token);
+}
+
 fn release_retirement_failure() {
     let source = LifecycleSource::new();
     let handle = source.handle();
@@ -277,6 +430,9 @@ pub(crate) fn dispatch_child(kind: &str) {
         "terminal" => cancelled_failure(false, true),
         "retirement" => release_retirement_failure(),
         "nested_cancel" => nested_cancellation_after_caught_failure(),
+        "rejected_caught" => rejected_after_caught_failure(),
+        "rejected_live_unwind" => rejected_during_independent_unwind(false),
+        "rejected_dead_unwind" => rejected_during_independent_unwind(true),
         "token_unwind" => independent_unwind(false),
         "source_unwind" => independent_unwind(true),
         _ => panic!("unknown lifecycle child"),
@@ -367,4 +523,14 @@ pub(crate) fn successful_lifecycle_cancellation_retires_captures_and_keeps_fifo(
 
 pub(crate) fn caught_failure_protects_nested_pending_subscription_retirement() {
     child("nested_cancel");
+}
+
+pub(crate) fn caught_failure_retains_rejected_lifecycle_callback() {
+    child("rejected_caught");
+}
+pub(crate) fn live_source_rejection_during_unwind_retains_captures() {
+    child("rejected_live_unwind");
+}
+pub(crate) fn dead_source_rejection_during_unwind_retains_captures() {
+    child("rejected_dead_unwind");
 }

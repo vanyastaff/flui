@@ -543,6 +543,19 @@ ends; later successful cancellation keeps ordinary capture destruction.
 earlier callback panic, a later callback cancelling a pending aggregate, queued
 FIFO delivery and the next healthy operation in a bounded child.
 
+Rejected lifecycle admission owns its incoming generic callback even though no
+listener was registered. Closing/closed-source rejection releases the state
+borrow before retirement. A caught failure in the active source drain, or an
+independent unwind including a dead weak source, retains that callback without
+calling its body or destructor. Ordinary rejection still destroys captures and
+allows their destructors to query the source without a borrow conflict.
+`caught_failure_retains_rejected_lifecycle_callback`,
+`live_source_rejection_during_unwind_retains_captures` and
+`dead_source_rejection_during_unwind_retains_captures` join the public containment
+family. They preserve the original string failure, prove queued FIFO tail/terminal
+delivery or independent unwind, then check ordinary rejected retirement and a
+fresh source's next operation.
+
 With no prior failure and no active unwind, callback retirement keeps ordinary
 Rust destruction semantics. A first envelope with two panicking fields can
 abort before `catch_unwind` returns; this boundary cannot recover it. Live
