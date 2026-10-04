@@ -249,22 +249,12 @@ pub fn action_press_closes_the_snack_bar_and_is_single_fire() {
 //    tree — the practical shape "re-homing" actually takes in this
 //    substrate.
 //
-// A literal "the SAME Scaffold element persists in place while its ANCESTOR
-// messenger identity changes" scenario is not exercised here: FLUI
-// reconciles `ScaffoldMessenger::new(...)` at the same type+position
-// in the tree as an UPDATE to the existing element, not a fresh mount — so
-// two structurally-identical `ScaffoldMessenger::new(...)` calls in
-// sequence are the SAME element/handle, not "old" vs "new" (confirmed
-// empirically: `pump_widget` with a second, differently-parameterized
-// `ScaffoldMessenger::new(...)` at the same tree shape yields
-// `first_handle.ptr_eq(&second_handle) == true`). Reaching a genuinely
-// different ancestor identity without remounting the Scaffold would need
-// `GlobalKey`-based reparenting across two structurally distinct branches,
-// which `ScaffoldMessengerScope::maybe_of`'s no-dependency ambient lookup
-// (see `scaffold.rs`'s own module docs' "`ScaffoldMessenger` wiring"
-// section) cannot pick up anyway, since `did_change_dependencies` never
-// fires for it — a documented, honest limitation, not silently papered
-// over.
+// A same-type messenger configuration update keeps its mounted handle, so it
+// does not exercise an ancestor identity transition. GlobalKey reparenting
+// between distinct messenger branches can retain Scaffold state; its tracked
+// Theme/MediaQuery dependencies schedule did_change_dependencies on reactivation,
+// which rehomes the registration. That retained transition has no dedicated
+// behavior row here; the absence of coverage is not evidence of broken wiring.
 // ============================================================================
 
 // ============================================================================
