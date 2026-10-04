@@ -269,6 +269,22 @@ fn navigation_and_layout_contracts() {
             navigation_bar::tapping_a_disabled_destination_does_not_fire_the_callback,
         ),
         (
+            "navigation_bar::an empty destination list is rejected",
+            navigation_bar::an_empty_destination_list_is_rejected,
+        ),
+        (
+            "navigation_bar::a single destination is rejected",
+            navigation_bar::a_single_destination_is_rejected,
+        ),
+        (
+            "navigation_bar::an index at the destination count is rejected",
+            navigation_bar::an_index_at_the_destination_count_is_rejected,
+        ),
+        (
+            "navigation_bar::an unrepresentable destination index is rejected",
+            navigation_bar::an_unrepresentable_destination_index_is_rejected,
+        ),
+        (
             "tabs::default tab controller survives a length shrink past the selected index",
             tabs::default_tab_controller_survives_a_length_shrink_past_the_selected_index,
         ),

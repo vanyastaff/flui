@@ -229,3 +229,19 @@ elsewhere in the widget layer.
 |------|-------|
 | Cupertino tab index still `debug_assert!` | `flui-cupertino` `CupertinoTabScaffold` — audit for the same policy when that surface is retouched. |
 | Bounded `TabIndex` API | Optional follow-up if mutation ergonomics need fallible `try_set_index` without panic. |
+
+### NavigationBar configuration bounds hold in every profile
+
+`NavigationBar` requires at least two destinations and a selected index within
+that immutable list. Construction and the selection setter reject violations
+in release as well as debug; no bar can publish a selection outside its own
+list. These are the existing programmer-error contracts, now enforced where
+the configuration is constructed. There is no mutable controller or externally
+replaceable list on this widget, so adding a public count/index type would add
+a conversion without removing another source of count disagreement.
+
+`navigation_and_layout_contracts` includes the public rows
+`an_empty_destination_list_is_rejected`, `a_single_destination_is_rejected`,
+`an_index_at_the_destination_count_is_rejected` and
+`an_unrepresentable_destination_index_is_rejected`; pointer delivery and disabled
+destinations remain covered in that family.

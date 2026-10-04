@@ -101,5 +101,13 @@ fn navigation_contracts() {
             "tab_scaffold::tapping a tab item switches the active tab",
             tab_scaffold::tapping_a_tab_item_switches_the_active_tab,
         ),
+        (
+            "tab_scaffold::out of range controller selection reports error and recovers",
+            tab_scaffold::out_of_range_controller_selection_reports_error_and_recovers,
+        ),
+        (
+            "tab_scaffold::standalone bar rejects an out of range selection",
+            tab_scaffold::standalone_bar_rejects_an_out_of_range_selection,
+        ),
     ]);
 }

@@ -8,9 +8,9 @@
 //! ## What it does
 //!
 //! - The tab-switching mechanic: every tab mounts a slot up front, but
-//!   a tab's content is only ever *built* the first time it becomes active
-//!   (`should_build_tab`, tracked per index and never reset — "once
-//!   visited, stays built"), and every non-active tab is
+//!   a tab's content is first built when it becomes active. Visited tabs
+//!   keep their mounted subtrees; subsequent scaffold rebuilds call their
+//!   builders again to reconcile updated configuration. Every non-active tab is
 //!   [`HeroMode`]-disabled + [`Offstage`]-hidden + [`TickerMode`]-disabled
 //!   rather than unmounted — so an inactive tab's own state (a counter, a
 //!   scroll position, a nested `Navigator` stack) survives a switch away and
@@ -250,23 +250,11 @@ impl ViewState<CupertinoTabScaffold> for CupertinoTabScaffoldState {
         let current_index = view.controller.index();
         let tab_count = view.tab_bar.items().len();
 
-        // A controller index at or past the tab count is a caller bug, checked
-        // by a debug-only assertion. This build has no per-tab focus array
-        // (see the module doc's "Deferred, named" — no per-tab focus-scope
-        // wiring), so it has no unconditional check of its own: release
-        // builds (where `debug_assert!` compiles out) fall through to every
-        // tab `Offstage`-hidden and `tab_builder` never invoked for
-        // `current_index`. Do not "fix" this by silently clamping
-        // `current_index`.
-        //
-        // A panic here is caught by this crate's own build-error boundary
-        // (`flui-view`'s `build_or_recover`) and
-        // substitutes an `ErrorView` for this whole subtree rather than
-        // unwinding to the caller. So this failure is loud
-        // (a rendered error) rather than silent, but it is not a raw unwind
-        // out of `build`.
-        debug_assert!(
-            is_valid_tab_index(current_index, tab_count),
+        // The bar may change size while keeping its controller. Validate the
+        // selection against this build's count; an invalid configuration must
+        // recover through ErrorView instead of silently hiding every tab.
+        assert!(
+            current_index < tab_count,
             "CupertinoTabScaffold's current index {current_index} is out of bounds for \
              the tab bar with {tab_count} tabs"
         );
@@ -362,12 +350,4 @@ impl ViewState<CupertinoTabScaffold> for CupertinoTabScaffoldState {
                 .boxed(),
         ]))
     }
-}
-
-/// Whether `current_index` is a mountable tab index for `tab_count` tabs.
-/// Extracted from `build`'s `debug_assert!` so the exact guard condition is
-/// unit-testable without mounting a render tree — see `build`'s comment for
-/// the full failure-mode rationale.
-fn is_valid_tab_index(current_index: usize, tab_count: usize) -> bool {
-    current_index < tab_count
 }
