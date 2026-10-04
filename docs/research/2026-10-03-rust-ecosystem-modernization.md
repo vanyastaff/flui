@@ -680,4 +680,47 @@ was not run on Windows. Wasm assertions run under Node, without browser/WebGPU
 execution. Nightly 1.101 dated 2026-09-30 is installed, but its Miri component is
 absent, so no local Miri proof is claimed. Pixel and numerical proofs retain the
 documented backend/range boundaries; release benchmark linking is not a speed
-comparison. GitHub CI has not run this unpushed modernization branch.
+comparison. These results were recorded before the branch was pushed or GitHub CI ran it.
+The subsequent review section records later repairs.
+
+
+## Subsequent review repairs
+
+Review of PR #1417 identified two gaps after the completed audit runs above.
+Subtree generation checks ran per node during deepest-first teardown, allowing
+an exhausted ancestor to refuse after descendants had already been destroyed.
+Removal now preflights the entire finalized snapshot before any keyed detach or
+teardown. Retained keyed boundaries and their descendants still require no
+advance. Eight rows join the existing private element-tree family: terminal
+root/intermediate/leaf in both removal modes, refusal before keyed descendant
+detachment, and a terminal keyed subtree that must remain eligible for soft
+removal. Repeated refusal preserves active topology and produces no unmount
+observation; an independent next removal and slot reuse still work.
+
+Decoration alignment outside [-1, 1] could create a partly out-of-bounds Cover
+source crop that replay rejected entirely. Source intersection now trims the
+logical destination proportionally, preserving scale and leaving unavailable
+content empty. Coverage and tile placement preserve repeats on an uncropped
+axis. Eight rows join the existing image family, covering positive/negative
+horizontal overshoot, vertical overshoot, fully absent content with a healthy
+later command, three repeat modes and mixed-axis None fitting. Alternating white
+and green rows distinguish the unchanged repeat period and phase from stretching.
+
+The first GitHub cross-typecheck run failed only at the Android runner's
+redundant ScenePlugin clone. Moving its final owner into the frame callback
+removes that lint without an exemption. The exact app/facade Android Clippy
+command passes under Rust 1.99. Android standard-library files came from the
+official Rust archive, verified against its published SHA-256, into a worktree-only
+sysroot. Target-specific subprocess flags use the existing LLVM tools; no global
+toolchain installation or native Android execution is claimed.
+
+Both affected behavioral families pass, including all 88 image rows with GPU
+required. Removing only the new subtree preflight fails exactly seven new rows;
+restoring the pre-review decoration source likewise fails exactly seven new
+rows. Retained-keyed and fully-outside-image controls remain healthy. Each
+persisted source snapshot restores its exact SHA-256 in a finally path. Strict
+all-target Clippy for view, painting and engine with engine testing enabled
+passes. Raw outputs and restoration journals are in target/pr1417-repair-*.log
+and target/pr1417-control-*.json. These are scoped repair results; the full
+workspace and platform runs above precede the review repairs. GitHub CI supplies
+fresh whole-branch verification after publication.
