@@ -604,7 +604,9 @@ pub(super) fn decoration_none_crop_keeps_other_axis_repeat() {
     };
     let rgba = draw(32, |p| {
         let mut canvas = flui_painting::Canvas::new();
-        let image = Image::from_rgba8(8, 2, [255, 255, 255, 255].repeat(16));
+        let mut texels = [255, 255, 255, 255].repeat(8);
+        texels.extend([0, 255, 0, 255].repeat(8));
+        let image = Image::from_rgba8(8, 2, texels);
         paint_box_decoration(
             &mut canvas,
             Rect::from_xywh(8.0, 8.0, 4.0, 6.0),
@@ -622,8 +624,14 @@ pub(super) fn decoration_none_crop_keeps_other_axis_repeat() {
         );
         replay_canvas(p, canvas);
     });
-    near(pixel_at(&rgba, 32, 9, 8), [255; 4]);
-    near(pixel_at(&rgba, 32, 9, 13), [255; 4]);
+    for y in 8..14 {
+        let expected = if y % 2 == 0 {
+            [255; 4]
+        } else {
+            [0, 255, 0, 255]
+        };
+        near(pixel_at(&rgba, 32, 9, y), expected);
+    }
     near(pixel_at(&rgba, 32, 11, 10), [0, 0, 255, 255]);
     near(pixel_at(&rgba, 32, 23, 23), [255, 0, 0, 255]);
 }
