@@ -477,3 +477,27 @@ The public constructor doctest distinguishes shared and separate allocations.
 `dense_and_production_reconcile_matrix` checks that real keyed reconciliation
 moves the original elements for equal-valued separate objects and keeps the
 source allocation alive after its original owner is dropped.
+
+### Observer containment retains exceptional ownership before reporting
+
+**Rule.** Tree emission and outgoing `detached()` callbacks borrow their owned
+observer envelopes inside the unwind boundary (ADR-0040). A caught failure
+retains its opaque payload and the failed observer Arc before any diagnostics
+run. Emission clears the slot without invoking `detached()`; replacement keeps
+its newly installed observer. Failure reporting has its own unwind boundary and
+retains a competing subscriber payload. No opaque destructor is attempted after
+an observer callback has already failed.
+
+Successful `detached()` calls retain ordinary Arc retirement semantics. This
+boundary does not recover from an abort inside callback code, or from several
+panicking capture destructors during otherwise successful retirement. It neither
+changes the observer's non-reentrancy rule nor covers `replay_mounts`, whose
+install failure policy remains ADR-0040's.
+
+The public `lifecycle_panic_containment_matrix` includes isolated observer
+children for aggregate payloads, final capture envelopes, competing failures,
+and a hostile scoped tracing subscriber. Each child verifies that the real tree
+mount completes, the failed observer is disarmed, and a healthy observer receives
+the following builds. Replacement also checks that its new observer survives an
+outgoing `detached()` failure.
+

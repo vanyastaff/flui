@@ -97,6 +97,10 @@ fn global_key_contract_matrix() {
 
 #[test]
 fn lifecycle_panic_containment_matrix() {
+    if let Ok(kind) = std::env::var("FLUI_OBSERVER_RECOVERY_CHILD") {
+        lifecycle_panic_containment::observer_recovery::dispatch_child(&kind);
+        return;
+    }
     run_table(
         "lifecycle_panic_containment_matrix",
         &[
@@ -105,6 +109,15 @@ fn lifecycle_panic_containment_matrix() {
             ("lifecycle_panic_containment::a_dispose_panic_on_a_global_keyed_element_still_clears_the_registry", lifecycle_panic_containment::a_dispose_panic_on_a_global_keyed_element_still_clears_the_registry as fn()),
             ("lifecycle_panic_containment::a_deactivate_panic_is_contained_and_the_element_is_still_parked_inactive", lifecycle_panic_containment::a_deactivate_panic_is_contained_and_the_element_is_still_parked_inactive as fn()),
             ("recovered_panics::a_contained_build_panic_is_recorded_once_with_its_element_and_hook", recovered_panics::a_contained_build_panic_is_recorded_once_with_its_element_and_hook as fn()),
+            ("observer_recovery::emission_retains_aggregate_payload", lifecycle_panic_containment::observer_recovery::emission_retains_aggregate_payload as fn()),
+            ("observer_recovery::emission_retains_failed_capture_envelope", lifecycle_panic_containment::observer_recovery::emission_retains_failed_capture_envelope as fn()),
+            ("observer_recovery::emission_retains_competing_payload_and_captures", lifecycle_panic_containment::observer_recovery::emission_retains_competing_payload_and_captures as fn()),
+            ("observer_recovery::emission_contains_reporting_failure", lifecycle_panic_containment::observer_recovery::emission_contains_reporting_failure as fn()),
+            ("observer_recovery::emission_contains_all_opaque_obligations", lifecycle_panic_containment::observer_recovery::emission_contains_all_opaque_obligations as fn()),
+            ("observer_recovery::detach_retains_aggregate_payload", lifecycle_panic_containment::observer_recovery::detach_retains_aggregate_payload as fn()),
+            ("observer_recovery::detach_retains_failed_capture_envelope", lifecycle_panic_containment::observer_recovery::detach_retains_failed_capture_envelope as fn()),
+            ("observer_recovery::detach_contains_all_opaque_obligations", lifecycle_panic_containment::observer_recovery::detach_contains_all_opaque_obligations as fn()),
+            ("observer_recovery::replacement_preserves_its_new_observer_after_detach_failure", lifecycle_panic_containment::observer_recovery::replacement_preserves_its_new_observer_after_detach_failure as fn()),
         ],
     );
 }

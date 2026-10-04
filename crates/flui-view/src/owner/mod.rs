@@ -72,12 +72,21 @@ pub(crate) fn emit_observation(
     slot: &mut Option<std::sync::Arc<dyn flui_foundation::observe::TreeObserver>>,
     f: impl FnOnce(&dyn flui_foundation::observe::TreeObserver),
 ) {
-    if let Some(observer) = slot.as_deref()
-        && std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(observer))).is_err()
-    {
-        *slot = None;
-        tracing::error!(
-            "TreeObserver panicked during emission; observer detached (no detached() call)"
-        );
+    let Some(observer) = slot.as_deref() else {
+        return;
+    };
+    if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(observer))) {
+        // Retain both opaque obligations before reporting: either one's drop
+        // glue may contain several panicking fields.
+        flui_foundation::panic::retain_opaque_payload(payload);
+        std::mem::forget(slot.take());
+        let reported = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            tracing::error!(
+                "TreeObserver panicked during emission; observer detached (no detached() call)"
+            );
+        }));
+        if let Err(payload) = reported {
+            flui_foundation::panic::retain_opaque_payload(payload);
+        }
     }
 }

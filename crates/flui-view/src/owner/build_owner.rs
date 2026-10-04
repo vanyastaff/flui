@@ -1294,8 +1294,7 @@ impl BuildOwner {
     /// `WidgetsBinding::install_tree_observer` — never from a frame phase.
     pub fn set_tree_observer(&mut self, observer: Arc<dyn flui_foundation::observe::TreeObserver>) {
         if let Some(previous) = self.tree_observer.replace(observer) {
-            tracing::debug!("tree observer replaced; notifying the outgoing observer");
-            notify_detached(&*previous);
+            notify_detached(previous);
         }
     }
 
@@ -1303,7 +1302,7 @@ impl BuildOwner {
     /// Fires `detached()` on the outgoing observer. Idempotent.
     pub fn clear_tree_observer(&mut self) {
         if let Some(previous) = self.tree_observer.take() {
-            notify_detached(&*previous);
+            notify_detached(previous);
         }
     }
 
@@ -2923,9 +2922,18 @@ impl Drop for BuildScopeGuard<'_> {
 /// `detached()` runs third-party observer code from realm setup/teardown —
 /// the same containment that guards event emission applies here: a panic is
 /// caught and logged, never unwound through the owner.
-fn notify_detached(observer: &dyn flui_foundation::observe::TreeObserver) {
-    if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| observer.detached())).is_err() {
-        tracing::error!("TreeObserver::detached() panicked; ignored");
+fn notify_detached(observer: Arc<dyn flui_foundation::observe::TreeObserver>) {
+    if let Err(payload) =
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| observer.detached()))
+    {
+        flui_foundation::panic::retain_opaque_payload(payload);
+        std::mem::forget(observer);
+        let reported = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            tracing::error!("TreeObserver::detached() panicked; ignored");
+        }));
+        if let Err(payload) = reported {
+            flui_foundation::panic::retain_opaque_payload(payload);
+        }
     }
 }
 
