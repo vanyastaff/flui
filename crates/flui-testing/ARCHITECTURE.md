@@ -98,3 +98,13 @@ view; a cached render ID would then point at the detached child. The
 `logical_render_root_tracks_replacement_and_build_recovery` row in
 `headless_frame_driver_matrix` checks healthy replacement, the rendered error
 slot and recovery through the root's own rebuild handle.
+
+### A reused signal probe follows its current mount
+
+Each build refreshes the probe's observed signal and reactive graph together.
+A sequential remount creates a new signal, so retaining the first pair would
+read a released slot while the new mount remained live. Old graph retirement
+occurs outside the observation cell's borrow.
+`a_signal_probe_reads_and_writes_its_current_mount_after_remount` in
+`headless_frame_driver_matrix` writes through actual pointer callbacks before
+and after remount, and reads the new initial value between them.

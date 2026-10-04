@@ -166,9 +166,8 @@ impl ViewState<ProbeRoot> for ProbeRootState {
 
     fn build(&self, view: &ProbeRoot, ctx: &dyn BuildContext) -> impl IntoView {
         let seen = &view.probe.seen;
-        seen.count
-            .borrow_mut()
-            .get_or_insert_with(|| (self.count, ctx.reactive()));
+        let previous = seen.count.replace(Some((self.count, ctx.reactive())));
+        drop(previous);
         seen.writer.borrow_mut().clone_from(&self.writer);
         seen.reads.borrow_mut().push(self.count.get(ctx));
         (view.probe.builder)(ProbeSignals {

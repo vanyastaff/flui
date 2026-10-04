@@ -23,6 +23,8 @@ mod a11y_query;
 mod async_driver;
 #[path = "controller_restart.rs"]
 mod controller_restart;
+#[path = "first_frame_deferral.rs"]
+mod first_frame_deferral;
 #[path = "headless_realm.rs"]
 mod headless_realm;
 #[path = "layout_builder_seam.rs"]
@@ -41,8 +43,6 @@ mod owner_scope;
 mod pointer_script_replay;
 #[path = "post_frame_after_layout.rs"]
 mod post_frame_after_layout;
-#[path = "first_frame_deferral.rs"]
-mod first_frame_deferral;
 #[path = "realm_driver.rs"]
 mod realm_driver;
 #[path = "self_rescheduling_local_post_frame.rs"]
@@ -65,6 +65,7 @@ fn headless_frame_driver_matrix() {
     run_table(
         "headless_frame_driver_matrix",
         &[
+            ("realm_driver::a_signal_probe_reads_and_writes_its_current_mount_after_remount", realm_driver::a_signal_probe_reads_and_writes_its_current_mount_after_remount as fn()),
             ("first_frame_deferral::unmatched_first_frame_release_preserves_the_next_deferral", first_frame_deferral::unmatched_first_frame_release_preserves_the_next_deferral as fn()),
             ("realm_driver::a_zero_capacity_performance_window_retains_no_frame_samples", realm_driver::a_zero_capacity_performance_window_retains_no_frame_samples as fn()),
             ("realm_driver::logical_render_root_tracks_replacement_and_build_recovery", realm_driver::logical_render_root_tracks_replacement_and_build_recovery as fn()),

@@ -15,6 +15,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use flui_foundation::geometry::Size;
 use flui_interaction::routing::FocusNode;
+use flui_painting::styling::Color;
 use flui_platform_api::text_store::{
     LockGrant, LockOutcome, LockTiming, TextStoreError, TextStoreRead, Utf16Offset,
 };
@@ -26,8 +27,8 @@ use flui_testing::{A11yTree, Action, ActionRequest, TreeId};
 use flui_view::prelude::*;
 use flui_view::{RenderView, View};
 use flui_widgets::{
-    EditableText, GestureDetector, MediaQuery, MediaQueryData, MouseRegion, Padding, Semantics,
-    SizedBox, Text, TextEditingController,
+    ColoredBox, EditableText, GestureDetector, MediaQuery, MediaQueryData, MouseRegion, Padding,
+    Semantics, SizedBox, Text, TextEditingController,
 };
 
 // ---------------------------------------------------------------------------
@@ -533,4 +534,25 @@ pub fn a_zero_capacity_performance_window_retains_no_frame_samples() {
     assert!(enabled.fps() > 0.0);
     disabled.record_frame();
     assert_eq!(disabled.avg_frame_time_ms(), 0.0);
+}
+
+/// A reused probe follows the new owning realm rather than its released signal.
+pub fn a_signal_probe_reads_and_writes_its_current_mount_after_remount() {
+    let probe = SignalProbe::new(|ProbeSignals { count, .. }| {
+        GestureDetector::new()
+            .on_tap(move |cx| count.update(cx, |value| *value += 1))
+            .child(ColoredBox::new(Color::WHITE))
+    });
+    let mut first = lay_out(probe.view(), tight(100.0, 100.0));
+    first.dispatch_pointer_down(50.0, 50.0);
+    first.dispatch_pointer_up(50.0, 50.0);
+    first.tick();
+    assert_eq!(probe.value(), Ok(1));
+    drop(first);
+    let mut current = lay_out(probe.view(), tight(100.0, 100.0));
+    assert_eq!(probe.value(), Ok(0), "the new mount owns a new live signal");
+    current.dispatch_pointer_down(50.0, 50.0);
+    current.dispatch_pointer_up(50.0, 50.0);
+    current.tick();
+    assert_eq!(probe.value(), Ok(1));
 }
