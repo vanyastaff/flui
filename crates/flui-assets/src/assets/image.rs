@@ -1,5 +1,6 @@
 //! Image asset implementation.
 
+use std::borrow::Cow;
 use std::path::Path;
 
 use crate::loaders::BytesFileLoader;
@@ -77,10 +78,10 @@ impl Asset for ImageAsset {
     async fn load(&self) -> Result<Self::Data, Self::Error> {
         // Get bytes either from memory or file
         let bytes = if let Some(ref bytes) = self.bytes {
-            bytes.clone()
+            Cow::Borrowed(bytes.as_slice())
         } else {
             // Load from file
-            BytesFileLoader::new("").load_bytes(&self.path).await?
+            Cow::Owned(BytesFileLoader::new("").load_bytes(&self.path).await?)
         };
 
         {
@@ -91,7 +92,7 @@ impl Asset for ImageAsset {
             })?;
 
             // Convert to RGBA8
-            let rgba = img.to_rgba8();
+            let rgba = img.into_rgba8();
             let (width, height) = rgba.dimensions();
             let data = rgba.into_raw();
 
