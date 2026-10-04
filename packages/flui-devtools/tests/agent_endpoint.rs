@@ -420,7 +420,7 @@ impl Owner {
 fn reads_the_counter_and_taps_it_over_the_endpoint() {
     let address = Address::new();
     let mut owner = Owner::new(AgentServer::new(address.endpoint()));
-    let at = address.address.clone();
+    let at = address.address;
     owner.drive(move |_| {
         let mut client = Client::hello(&at);
         let window = client.only_window();
@@ -442,7 +442,7 @@ fn a_connection_without_the_right_token_is_closed_unread() {
         .endpoint()
         .with_handshake_timeout(Duration::from_millis(300));
     let mut owner = Owner::new(AgentServer::new(endpoint));
-    let at = address.address.clone();
+    let at = address.address;
     owner.drive(move |_| {
         let mut no_hello = Client::connect(&at);
         no_hello.send(&json!({ "id": 1, "op": "windows" }));
@@ -468,7 +468,7 @@ fn a_connection_without_the_right_token_is_closed_unread() {
 fn a_client_leaving_mid_request_does_not_stall_the_next() {
     let address = Address::new();
     let mut owner = Owner::new(AgentServer::new(address.endpoint()));
-    let at = address.address.clone();
+    let at = address.address;
     owner.drive(move |owner| {
         let mut leaving = Client::hello(&at);
         let window = leaving.only_window();
@@ -488,7 +488,7 @@ fn an_unanswered_request_times_out_and_a_timed_out_act_still_runs() {
         .endpoint()
         .with_reply_timeout(Duration::from_millis(200));
     let mut owner = Owner::new(AgentServer::new(endpoint));
-    let at = address.address.clone();
+    let at = address.address;
     let presses = Arc::clone(&owner.presses);
     owner.drive(move |owner| {
         let mut client = Client::hello(&at);
@@ -517,7 +517,7 @@ fn an_unanswered_request_times_out_and_a_timed_out_act_still_runs() {
 fn malformed_and_oversized_lines() {
     let address = Address::new();
     let mut owner = Owner::new(AgentServer::new(address.endpoint()));
-    let at = address.address.clone();
+    let at = address.address;
     owner.drive(move |_| {
         let mut client = Client::hello(&at);
         client
@@ -547,7 +547,7 @@ fn malformed_and_oversized_lines() {
 fn a_closed_window_answers_gone_and_leaves_the_list() {
     let address = Address::new();
     let mut owner = Owner::new(AgentServer::new(address.endpoint()));
-    let at = address.address.clone();
+    let at = address.address;
     owner.drive(move |owner| {
         let mut client = Client::hello(&at);
         let window = client.only_window();
@@ -573,7 +573,7 @@ fn a_closed_window_answers_gone_and_leaves_the_list() {
 fn detach_closes_the_endpoint() {
     let address = Address::new();
     let mut owner = Owner::new(AgentServer::new(address.endpoint()));
-    let at = address.address.clone();
+    let at = address.address;
     owner.drive(move |owner| {
         let mut client = Client::hello(&at);
         client.only_window();
@@ -600,7 +600,7 @@ fn detach_closes_the_endpoint() {
 fn a_client_that_stops_reading_does_not_hold_up_detach() {
     let address = Address::new();
     let mut owner = Owner::new(AgentServer::new(address.endpoint()));
-    let at = address.address.clone();
+    let at = address.address;
     owner.drive(move |owner| {
         let mut client = Client::hello(&at);
         client.only_window();
@@ -655,7 +655,7 @@ fn a_bind_failure_leaves_the_realm_running() {
     let first = HeadlessDevAgent::attach(AgentServer::new(address.endpoint()));
     let mut owner = Owner::new(AgentServer::new(address.endpoint()));
     assert!(first.is_attached());
-    let at = address.address.clone();
+    let at = address.address;
     owner.drive(move |_| {
         let mut client = Client::hello(&at);
         assert!(
@@ -738,7 +738,7 @@ fn traces_carry_no_labels_or_values() {
         .endpoint()
         .with_reply_timeout(Duration::from_millis(200));
     let mut owner = Owner::new(AgentServer::new(endpoint));
-    let at = address.address.clone();
+    let at = address.address;
     owner.drive(move |owner| {
         let mut client = Client::hello(&at);
         let window = client.only_window();
@@ -796,7 +796,7 @@ fn unbounded_timeouts_wait_without_a_deadline() {
         .with_handshake_timeout(Duration::MAX)
         .with_reply_timeout(Duration::MAX);
     let mut owner = Owner::new(AgentServer::new(endpoint));
-    let at = address.address.clone();
+    let at = address.address;
     owner.drive(move |_| {
         let mut client = Client::hello(&at);
         let window = client.only_window();
