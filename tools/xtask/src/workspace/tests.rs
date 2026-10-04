@@ -500,6 +500,57 @@ fn an_undeclared_tests_main_is_reported() {
     );
 }
 
+fn commented_modules_do_not_mount_tests() {
+    for source in [
+        "/*\nmod orphan;\n*/\n",
+        "// #[path = \"orphan.rs\"] mod omitted;\n",
+    ] {
+        let fixture = Fixture::new();
+        fixture.edit(
+            "crates/a/Cargo.toml",
+            "repository.workspace = true\n",
+            "repository.workspace = true\nautotests = false\n\n[[test]]\nname = \"a_it\"\npath = \"tests/main.rs\"\n",
+        );
+        fixture.write("crates/a/tests/main.rs", source);
+        fixture.write("crates/a/tests/orphan.rs", "");
+        assert_one(&fixture.findings(), "crates/a/tests/orphan.rs never runs");
+    }
+}
+
+fn string_literals_do_not_mount_tests() {
+    let fixture = Fixture::new();
+    fixture.edit(
+        "crates/a/Cargo.toml",
+        "repository.workspace = true\n",
+        "repository.workspace = true\nautotests = false\n\n[[test]]\nname = \"a_it\"\npath = \"tests/main.rs\"\n",
+    );
+    fixture.write(
+        "crates/a/tests/main.rs",
+        "const EXAMPLE: &str = r#\"#[path = \"orphan.rs\"] mod omitted;\"#;\n",
+    );
+    fixture.write("crates/a/tests/orphan.rs", "");
+    assert_one(&fixture.findings(), "crates/a/tests/orphan.rs never runs");
+}
+
+fn implicit_cargo_test_paths_mount_tests() {
+    for name in ["main", "contract"] {
+        let fixture = Fixture::new();
+        fixture.edit(
+            "crates/a/Cargo.toml",
+            "repository.workspace = true\n",
+            &format!(
+                "repository.workspace = true\nautotests = false\n\n[[test]]\nname = \"{name}\"\n"
+            ),
+        );
+        fixture.write(
+            &format!("crates/a/tests/{name}.rs"),
+            "#[path = \"mounted.rs\"]\npub(crate) mod mounted;\n",
+        );
+        fixture.write("crates/a/tests/mounted.rs", "");
+        assert_eq!(fixture.findings(), Vec::<String>::new());
+    }
+}
+
 fn duplicate_adr_numbers_are_reported() {
     let fixture = Fixture::new();
     fixture.write("docs/adr/ADR-0001-second.md", "# ADR-0001\n");
@@ -891,6 +942,18 @@ fn workspace_gate_contract() {
             (
                 "an_undeclared_tests_main_is_reported",
                 an_undeclared_tests_main_is_reported as fn(),
+            ),
+            (
+                "commented_modules_do_not_mount_tests",
+                commented_modules_do_not_mount_tests as fn(),
+            ),
+            (
+                "string_literals_do_not_mount_tests",
+                string_literals_do_not_mount_tests as fn(),
+            ),
+            (
+                "implicit_cargo_test_paths_mount_tests",
+                implicit_cargo_test_paths_mount_tests as fn(),
             ),
             (
                 "duplicate_adr_numbers_are_reported",

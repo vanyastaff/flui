@@ -64,11 +64,9 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use std::sync::LazyLock;
 
 use anyhow::{Context, bail};
 use cargo_metadata::{DependencyKind, Metadata};
-use regex::Regex;
 use serde_json::Value as Json;
 use toml::{Table, Value as Toml};
 
@@ -121,7 +119,7 @@ fn check(root: &Path, metadata: &Metadata) -> anyhow::Result<(Vec<String>, Strin
     );
     tiers::check_adr_citations(root, &members, &mut findings);
     let (layers, edges) = check_layers(&members, &metadata.workspace_metadata, &mut findings)?;
-    check_manifests(root, &members, &mut findings)?;
+    check_manifests(root, &members, metadata, &mut findings)?;
     check_unique_adr_numbers(root, &mut findings)?;
     Ok((
         findings,
@@ -599,6 +597,7 @@ const INHERITED: [&str; 6] = [
 fn check_manifests(
     root: &Path,
     members: &Members,
+    metadata: &Metadata,
     findings: &mut Vec<String>,
 ) -> anyhow::Result<()> {
     for member in members.iter() {
@@ -653,7 +652,18 @@ fn check_manifests(
             let crate_dir = manifest_path
                 .parent()
                 .expect("BUG: a manifest path has a parent directory");
-            check_test_reachability(root, member.name(), crate_dir, &manifest, findings)?;
+            let package = metadata
+                .workspace_packages()
+                .into_iter()
+                .find(|package| package.name.as_str() == member.name())
+                .expect("BUG: every loaded workspace member has Cargo metadata");
+            let declared = package
+                .targets
+                .iter()
+                .filter(|target| target.is_test())
+                .map(|target| normalize(target.src_path.as_std_path()))
+                .collect();
+            check_test_reachability(root, member.name(), crate_dir, &declared, findings)?;
         }
     }
     Ok(())
@@ -688,15 +698,6 @@ fn inherits_workspace(value: Option<&Toml>) -> bool {
     })
 }
 
-static PATH_MOD: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"#\[path\s*=\s*"(?P<path>[^"]+)"\]\s*(?:pub\s+)?mod\s+(?P<name>\w+)\s*;"#)
-        .expect("BUG: static regex is valid")
-});
-
-static BARE_MOD: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?m)^\s*(?:pub\s+)?mod\s+(?P<name>\w+)\s*;").expect("BUG: static regex is valid")
-});
-
 /// Every top-level `tests/*.rs` file is its own `[[test]]` target or is mounted
 /// (`mod` / `#[path] mod`) from one. A `tests/main.rs` that no `[[test]]`
 /// declares is itself a finding: Cargo never compiles it, so trusting its `mod`
@@ -705,22 +706,13 @@ fn check_test_reachability(
     root: &Path,
     name: &str,
     crate_dir: &Path,
-    manifest: &Table,
+    declared: &BTreeSet<PathBuf>,
     findings: &mut Vec<String>,
 ) -> anyhow::Result<()> {
     let tests_dir = crate_dir.join("tests");
     if !tests_dir.is_dir() {
         return Ok(());
     }
-    let declared: BTreeSet<PathBuf> = manifest
-        .get("test")
-        .and_then(Toml::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|target| target.get("path").and_then(Toml::as_str))
-        .map(|path| normalize(&crate_dir.join(path)))
-        .collect();
-
     let main_rs = normalize(&tests_dir.join("main.rs"));
     if main_rs.is_file() && !declared.contains(&main_rs) {
         findings.push(format!(
@@ -737,19 +729,41 @@ fn check_test_reachability(
         let dir = source
             .parent()
             .expect("BUG: a file path has a parent directory");
-        let mut pathed = BTreeSet::new();
-        for found in PATH_MOD.captures_iter(&text) {
-            pathed.insert(found["name"].to_owned());
-            reachable.insert(normalize(&dir.join(&found["path"])));
-        }
-        // A bare `mod foo;` resolves next to the mounting file, which is
-        // `tests/` only when that file lives there.
-        if normalize(dir) == normalize(&tests_dir) {
-            for found in BARE_MOD.captures_iter(&text) {
-                if !pathed.contains(&found["name"]) {
-                    reachable.insert(normalize(&tests_dir.join(format!("{}.rs", &found["name"]))));
-                }
+        let parsed = syn::parse_file(&text)
+            .with_context(|| format!("parsing test target {}", source.display()))?;
+        for item in parsed.items {
+            let syn::Item::Mod(module) = item else {
+                continue;
+            };
+            if module.content.is_some() {
+                continue;
             }
+            let path = module
+                .attrs
+                .iter()
+                .find(|attribute| attribute.path().is_ident("path"))
+                .map(|attribute| {
+                    let syn::Meta::NameValue(value) = &attribute.meta else {
+                        bail!("module path in {} is not a string", source.display());
+                    };
+                    let syn::Expr::Lit(syn::ExprLit {
+                        lit: syn::Lit::Str(path),
+                        ..
+                    }) = &value.value
+                    else {
+                        bail!("module path in {} is not a string", source.display());
+                    };
+                    Ok(path.value())
+                })
+                .transpose()?;
+            // Only direct modules of a declared target are counted. Their
+            // syntax is parsed, so comments and string literals cannot mount
+            // a file. Cargo owns the target's implicit/default source path.
+            let mounted = path.map_or_else(
+                || dir.join(format!("{}.rs", module.ident)),
+                |path| dir.join(path),
+            );
+            reachable.insert(normalize(&mounted));
         }
     }
 

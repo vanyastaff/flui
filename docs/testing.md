@@ -132,6 +132,12 @@ cargo xtask test                          # nextest over the local scope, flui-p
 cargo test --workspace --locked --doc     # doc-tests (flui-platform included — its doctests need no display server)
 ```
 
+The workspace test-reachability check takes test target source paths from Cargo
+metadata, including targets with an implicit path. It parses direct external
+module declarations with `syn`; a commented declaration or an example inside
+a string cannot mount a test file. This checks direct mounts, not arbitrary
+macro expansion or conditional module graphs.
+
 The first three are `cargo xtask gate`, the non-test half. Locally, `checks`
 skips typos, taplo or lychee with a message when they are not installed; CI
 passes `--strict`, which makes a missing one a failure. The flui-platform step
