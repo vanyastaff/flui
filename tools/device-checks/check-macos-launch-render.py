@@ -283,7 +283,8 @@ def content_histogram(bmp):
     data = bmp.read_bytes()
     offset = struct.unpack_from("<I", data, 10)[0]
     width = struct.unpack_from("<i", data, 18)[0]
-    height = abs(struct.unpack_from("<i", data, 22)[0])
+    stored_height = struct.unpack_from("<i", data, 22)[0]
+    height = abs(stored_height)
     bits = struct.unpack_from("<H", data, 28)[0]
     stride = ((width * bits // 8) + 3) // 4 * 4
     step = max(bits // 8, 1)
@@ -292,7 +293,8 @@ def content_histogram(bmp):
     top, bottom = int(height * 0.13), int(height * 0.95)
     for y in range(top, bottom, 3):
         for x in range(left, right, 3):
-            pixel = offset + y * stride + x * step
+            stored_y = height - 1 - y if stored_height > 0 else y
+            pixel = offset + stored_y * stride + x * step
             blue, green, red = data[pixel], data[pixel + 1], data[pixel + 2]
             counts[(red // BUCKET * BUCKET, green // BUCKET * BUCKET, blue // BUCKET * BUCKET)] += 1
     return width, height, counts
@@ -408,6 +410,8 @@ def main():
     parser.add_argument("--expect", help="R,G,B the content must contain, e.g. 240,0,0")
     parser.add_argument("--output", type=pathlib.Path, default=ROOT / "target/macos-launch-render")
     options = parser.parse_args()
+    if options.runs <= 0:
+        parser.error("--runs must be greater than zero")
     if sys.platform != "darwin":
         cannot_verify("this check needs macOS with an active GUI session; a window that never "
                       "goes on screen cannot be photographed")
