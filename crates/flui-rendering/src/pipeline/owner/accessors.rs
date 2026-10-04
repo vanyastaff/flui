@@ -653,18 +653,9 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         // so a caller pushing the forward (paint-direction) matrix here
         // recorded the wrong composition for any chain mixing this transform
         // with an outer offset -- correct only when the whole chain
-        // commutes (pure translations). A non-invertible `hit_test_transform`
-        // (e.g. a zero-scale `Transform`) falls back to pushing the
-        // still-singular forward matrix: when the determinant is exactly
-        // zero, the composed chain stays singular, so delivery still
-        // detects and skips it (`LocalEventTransform::capture`). For a
-        // merely near-singular transform (`0 < |det| < f64::EPSILON`, which
-        // `Matrix4::is_invertible` also rejects) the skip is only
-        // threshold-relative, not guaranteed: determinants compose
-        // multiplicatively, so a large-determinant ancestor can lift the
-        // product back above `f64::EPSILON`, and delivery then hands the
-        // entry a garbage local position instead of skipping it -- out of
-        // scope to change that skip behavior here.
+        // commutes (pure translations). A transform without an admitted finite
+        // inverse refuses this subtree before any descendant can publish an
+        // entry; its forward matrix is never used as a substitute (ADR-0113).
         let hit_transform = render_object.hit_test_transform(own_size);
         // A resolved follower offset rides the SAME transform-stack
         // lifecycle as `hit_test_transform` (flui-rendering ARCHITECTURE.md, follower hit-testing) — the same
@@ -744,9 +735,9 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
                 };
 
                 match local_transform {
-                    Some(local_transform) => {
-                        result.with_paint_transform(local_transform, dispatch_child)
-                    }
+                    Some(local_transform) => result
+                        .with_paint_transform(local_transform, dispatch_child)
+                        .unwrap_or(false),
                     None => dispatch_child(result),
                 }
             };
@@ -794,7 +785,9 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
             None => hit_node(result),
         };
         match hit_transform {
-            Some(transform) => result.with_paint_transform(transform, hit_follower),
+            Some(transform) => result
+                .with_paint_transform(transform, hit_follower)
+                .unwrap_or(false),
             None => hit_follower(result),
         }
     }

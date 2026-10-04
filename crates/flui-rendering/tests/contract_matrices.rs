@@ -127,6 +127,26 @@ fn layout_protocol_matrix() {
 fn hit_test_matrix() {
     let cases: &[(&str, fn())] = &[
         (
+            "hit_test_pipeline::nested_tiny_transforms_emit_the_correct_local_hit_point",
+            crate::hit_test_pipeline::nested_tiny_transforms_emit_the_correct_local_hit_point,
+        ),
+        (
+            "hit_test_pipeline::singular_node_transform_refuses_before_hit_and_preserves_sibling",
+            crate::hit_test_pipeline::singular_node_transform_refuses_before_hit_and_preserves_sibling,
+        ),
+        (
+            "hit_test_pipeline::nonfinite_node_transform_refuses_before_hit_and_preserves_sibling",
+            crate::hit_test_pipeline::nonfinite_node_transform_refuses_before_hit_and_preserves_sibling,
+        ),
+        (
+            "hit_test_pipeline::singular_context_transform_refuses_before_hit_and_preserves_sibling",
+            crate::hit_test_pipeline::singular_context_transform_refuses_before_hit_and_preserves_sibling,
+        ),
+        (
+            "hit_test_pipeline::nonfinite_context_transform_refuses_before_hit_and_preserves_sibling",
+            crate::hit_test_pipeline::nonfinite_context_transform_refuses_before_hit_and_preserves_sibling,
+        ),
+        (
             "hit_test_pipeline::flex_lays_out_and_hits_children_at_layout_offsets",
             crate::hit_test_pipeline::flex_lays_out_and_hits_children_at_layout_offsets,
         ),

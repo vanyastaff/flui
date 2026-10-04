@@ -522,42 +522,41 @@ impl Transform {
 
     // ===== Inversion =====
 
-    /// Compute the inverse transform (if possible)
+    /// Computes a finite inverse, preserving simple analytical variants.
     ///
-    /// Returns None if the transform is not invertible (e.g., scale by 0).
+    /// Translation and rotation require finite inputs. Scaling requires finite,
+    /// nonzero inputs with finite reciprocals; there is no epsilon cutoff.
+    /// Complex variants use [`Matrix4::try_inverse`] and its computed range limits.
     #[inline]
     pub fn inverse(&self) -> Option<Transform> {
-        // For simple transforms, we can compute analytical inverses
-        // For complex cases, fall back to matrix inversion
+        fn finite_reciprocal(value: f64) -> Option<f64> {
+            if !value.is_finite() || value == 0.0 {
+                return None;
+            }
+            let reciprocal = value.recip();
+            if reciprocal.is_finite() {
+                Some(reciprocal)
+            } else {
+                None
+            }
+        }
+
         match self {
             Transform::Identity => Some(Transform::Identity),
-
-            Transform::Translate { x, y } => Some(Transform::Translate { x: -x, y: -y }),
-
-            Transform::Rotate { angle } => Some(Transform::Rotate { angle: -angle }),
-
+            Transform::Translate { x, y } if x.is_finite() && y.is_finite() => {
+                Some(Transform::Translate { x: -x, y: -y })
+            }
+            Transform::Rotate { angle } if angle.is_finite() => {
+                Some(Transform::Rotate { angle: -angle })
+            }
+            Transform::Translate { .. } | Transform::Rotate { .. } => None,
             Transform::Scale { factor } => {
-                if factor.abs() < f64::EPSILON {
-                    None
-                } else {
-                    Some(Transform::Scale {
-                        factor: 1.0 / factor,
-                    })
-                }
+                finite_reciprocal(*factor).map(|factor| Transform::Scale { factor })
             }
-
-            Transform::ScaleXY { x, y } => {
-                if x.abs() < f64::EPSILON || y.abs() < f64::EPSILON {
-                    None
-                } else {
-                    Some(Transform::ScaleXY {
-                        x: 1.0 / x,
-                        y: 1.0 / y,
-                    })
-                }
-            }
-
-            // For complex transforms, use matrix inversion
+            Transform::ScaleXY { x, y } => Some(Transform::ScaleXY {
+                x: finite_reciprocal(*x)?,
+                y: finite_reciprocal(*y)?,
+            }),
             _ => self
                 .to_matrix_internal()
                 .try_inverse()

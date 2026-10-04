@@ -53,6 +53,25 @@ rather than negating angles. The public family
 `affine_composition_and_shear_follow_coordinate_contract` checks actual mapped
 coordinates, inverse round trips and flattened composition order.
 
+Matrix inverse admission requires finite input, a finite nonzero computed
+determinant and finite computed inverse entries (ADR-0113). The maintained
+glam fallible inverse replaces the absolute epsilon cutoff; a finite tiny
+scale is admitted. `is_invertible` computes the same inverse, and failed
+in-place inversion preserves the original coordinates. Determinant/cofactor
+underflow or overflow can still refuse mathematically invertible matrices;
+there is no additional conditioning estimate or full-range inversion promise.
+The public family `matrix_inverse_requires_a_finite_computed_result` checks
+known point coordinates, tiny scaling and each refusal boundary.
+
+Simple `Transform::inverse` variants retain analytical translation, rotation
+and scale values. They require finite inputs and finite nonzero scale
+reciprocals without an epsilon cutoff. Thus analytical scaling can succeed
+where a general matrix determinant would exceed its computed range; complex
+variants retain the matrix admission policy above. The existing public family
+`affine_composition_and_shear_follow_coordinate_contract` checks tiny scales,
+ordinary mapped coordinates and invalid scalar refusal, followed by a healthy
+inverse operation (ADR-0113).
+
 Approximate matrix equality and identity require finite components and a finite,
 nonnegative tolerance. NaN must not enable the identity optimization that
 removes a transform; zero tolerance permits exact equality. The public family

@@ -128,6 +128,74 @@ fn nested_compositions_keep_application_order() {
 #[test]
 fn affine_composition_and_shear_follow_coordinate_contract() {
     crate::run_table(&[
+        (
+            "tiny_uniform_scale_has_finite_analytical_inverse",
+            tiny_uniform_scale_has_finite_analytical_inverse,
+        ),
+        (
+            "tiny_axis_scale_has_finite_analytical_inverse",
+            tiny_axis_scale_has_finite_analytical_inverse,
+        ),
+        (
+            "large_scale_keeps_finite_analytical_inverse",
+            large_scale_keeps_finite_analytical_inverse,
+        ),
+        (
+            "finite_translation_keeps_inverse_coordinates",
+            finite_translation_keeps_inverse_coordinates,
+        ),
+        (
+            "finite_rotation_keeps_inverse_coordinates",
+            finite_rotation_keeps_inverse_coordinates,
+        ),
+        (
+            "zero_uniform_scale_refuses_analytical_inverse",
+            zero_uniform_scale_refuses_analytical_inverse,
+        ),
+        (
+            "zero_axis_scale_refuses_analytical_inverse",
+            zero_axis_scale_refuses_analytical_inverse,
+        ),
+        (
+            "overflowing_uniform_reciprocal_refuses_analytical_inverse",
+            overflowing_uniform_reciprocal_refuses_analytical_inverse,
+        ),
+        (
+            "overflowing_axis_reciprocal_refuses_analytical_inverse",
+            overflowing_axis_reciprocal_refuses_analytical_inverse,
+        ),
+        (
+            "nan_uniform_scale_refuses_analytical_inverse",
+            nan_uniform_scale_refuses_analytical_inverse,
+        ),
+        (
+            "infinite_uniform_scale_refuses_analytical_inverse",
+            infinite_uniform_scale_refuses_analytical_inverse,
+        ),
+        (
+            "negative_infinite_x_scale_refuses_analytical_inverse",
+            negative_infinite_x_scale_refuses_analytical_inverse,
+        ),
+        (
+            "nan_y_scale_refuses_analytical_inverse",
+            nan_y_scale_refuses_analytical_inverse,
+        ),
+        (
+            "nan_x_translation_refuses_analytical_inverse",
+            nan_x_translation_refuses_analytical_inverse,
+        ),
+        (
+            "infinite_y_translation_refuses_analytical_inverse",
+            infinite_y_translation_refuses_analytical_inverse,
+        ),
+        (
+            "nan_rotation_refuses_analytical_inverse",
+            nan_rotation_refuses_analytical_inverse,
+        ),
+        (
+            "negative_infinite_rotation_refuses_analytical_inverse",
+            negative_infinite_rotation_refuses_analytical_inverse,
+        ),
         ("horizontal shear", horizontal_shear),
         ("vertical shear", vertical_shear),
         ("two axis shear inverse", two_axis_shear_inverse),
@@ -140,4 +208,92 @@ fn affine_composition_and_shear_follow_coordinate_contract() {
             nested_compositions_keep_application_order,
         ),
     ]);
+}
+
+fn assert_inverse_point(forward: Transform, input: (f64, f64), expected: (f64, f64)) {
+    let inverse = forward
+        .inverse()
+        .expect("finite analytical inverse is admitted");
+    assert_point(inverse.into(), input, expected);
+}
+
+fn assert_inverse_refusal(forward: Transform) {
+    assert!(
+        forward.inverse().is_none(),
+        "invalid inverse admitted for {forward:?}"
+    );
+    // Refusal does not compromise a subsequent ordinary geometry operation.
+    assert_inverse_point(Transform::translate(3.0, 5.0), (8.0, 12.0), (5.0, 7.0));
+}
+
+fn tiny_uniform_scale_has_finite_analytical_inverse() {
+    assert_inverse_point(Transform::scale(1e-20), (5e-20, 7e-20), (5.0, 7.0));
+}
+
+fn tiny_axis_scale_has_finite_analytical_inverse() {
+    assert_inverse_point(Transform::scale_xy(1e-20, -2.0), (5e-20, -14.0), (5.0, 7.0));
+}
+
+fn large_scale_keeps_finite_analytical_inverse() {
+    assert_inverse_point(Transform::scale(f64::MAX), (f64::MAX, f64::MAX), (1.0, 1.0));
+}
+
+fn finite_translation_keeps_inverse_coordinates() {
+    assert_inverse_point(Transform::translate(3.0, 5.0), (8.0, 12.0), (5.0, 7.0));
+}
+
+fn finite_rotation_keeps_inverse_coordinates() {
+    assert_inverse_point(
+        Transform::rotate(std::f64::consts::FRAC_PI_2),
+        (-7.0, 5.0),
+        (5.0, 7.0),
+    );
+}
+
+fn zero_uniform_scale_refuses_analytical_inverse() {
+    assert_inverse_refusal(Transform::scale(0.0));
+}
+
+fn zero_axis_scale_refuses_analytical_inverse() {
+    assert_inverse_refusal(Transform::scale_xy(1.0, 0.0));
+}
+
+fn overflowing_uniform_reciprocal_refuses_analytical_inverse() {
+    assert_inverse_refusal(Transform::scale(f64::from_bits(1)));
+}
+
+fn overflowing_axis_reciprocal_refuses_analytical_inverse() {
+    assert_inverse_refusal(Transform::scale_xy(f64::from_bits(1), 1.0));
+}
+
+fn nan_uniform_scale_refuses_analytical_inverse() {
+    assert_inverse_refusal(Transform::scale(f64::NAN));
+}
+
+fn infinite_uniform_scale_refuses_analytical_inverse() {
+    assert_inverse_refusal(Transform::scale(f64::INFINITY));
+}
+
+fn negative_infinite_x_scale_refuses_analytical_inverse() {
+    assert_inverse_refusal(Transform::scale_xy(f64::NEG_INFINITY, 1.0));
+}
+
+fn nan_y_scale_refuses_analytical_inverse() {
+    assert_inverse_refusal(Transform::scale_xy(1.0, f64::NAN));
+}
+
+fn nan_x_translation_refuses_analytical_inverse() {
+    assert_inverse_refusal(Transform::translate(f64::NAN, 1.0));
+}
+
+fn infinite_y_translation_refuses_analytical_inverse() {
+    assert_inverse_refusal(Transform::translate(1.0, f64::INFINITY));
+}
+
+fn nan_rotation_refuses_analytical_inverse() {
+    assert_inverse_refusal(Transform::rotate(f64::NAN));
+}
+
+fn negative_infinite_rotation_refuses_analytical_inverse() {
+    assert_inverse_refusal(Transform::rotate(f64::NEG_INFINITY));
 }

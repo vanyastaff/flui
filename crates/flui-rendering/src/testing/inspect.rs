@@ -108,17 +108,12 @@ pub fn hit_path_with_transforms<P: PipelinePhase + Sync>(
 /// (see `HitTestEntry::transform`'s doc), so this applies it directly with no
 /// further inversion.
 ///
-/// Returns `None` when `transform` is singular (non-invertible). This is
-/// guaranteed whenever a degenerate ancestor transform (e.g. a zero-scale
-/// `Transform`) contributed an exactly-zero determinant somewhere in the
-/// composed chain. For a merely near-singular ancestor (`0 < |det| <
-/// f64::EPSILON`, which `Matrix4::is_invertible` also rejects) the composed
-/// `transform` is not guaranteed to stay singular -- determinants compose
-/// multiplicatively, so a large-determinant ancestor elsewhere in the chain
-/// can lift the product back above `f64::EPSILON`. In that case this
-/// function returns `Some` with a meaningless local point instead of
-/// `None`, so a `Some` result is not proof the whole chain was
-/// well-conditioned.
+/// Returns `None` when the recorded transform does not admit a computed finite
+/// inverse under [`Matrix4::is_invertible`] (ADR-0113). The traversal refuses
+/// invalid forward transform scopes before recording descendant entries.
+/// This check concerns the computed matrix; it does not estimate numerical
+/// conditioning or guarantee an inverse for every mathematically invertible
+/// transform.
 ///
 /// # Usage
 ///

@@ -518,12 +518,10 @@ impl LocalEventTransform {
             // `HitTestResult` composes `transform` by left-multiplying each
             // ancestor level's own inverse as the walk descends (see
             // `HitTestEntry::transform`'s doc), so it already maps global to
-            // local -- no further inversion here. `is_invertible` is only a
-            // well-formedness probe (cheaper than computing and discarding
-            // the inverse): a degenerate ancestor transform (e.g. a
-            // zero-scale `Transform`) propagates as a singular composed
-            // `transform`, and such an entry must still skip delivery rather
-            // than report a bogus point (unchanged pre-existing behavior).
+            // local; the computed inverse is used only for admission, not
+            // applied to the point again. This also refuses invalid composed
+            // transforms on entries supplied directly by callers outside the
+            // pipeline's guarded traversal (ADR-0113).
             Some(transform) => {
                 if transform.is_invertible() {
                     Self::Local(transform)

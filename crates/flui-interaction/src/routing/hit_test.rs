@@ -440,49 +440,25 @@ impl HitTestResult {
     /// callers that need a full 4x4 transform rather than a paint-offset --
     /// same caller-supplies-the-forward-matrix, callee-inverts-it contract.
     ///
-    /// # Known limitations
+    /// Returns `None` without invoking `f` or changing the transform stack if
+    /// the computed inverse is not admitted by [`Matrix4::try_inverse`].
+    /// Otherwise returns `Some(f(...))`. The inverse uses the full matrix,
+    /// including perspective; this scope does not remove perspective terms.
     ///
-    /// 1. **Non-invertible transforms.** A hard refusal (returning `false`
-    ///    to say the subtree is not hittable) would need a `bool` threaded
-    ///    through every caller. This method instead falls
-    ///    back to pushing the still-singular forward matrix, the same
-    ///    convention `PipelineOwner::hit_test_subtree` already uses for
-    ///    `RenderBox::hit_test_transform`
-    ///    (`crates/flui-rendering/src/pipeline/owner/accessors.rs`:
-    ///    `t.try_inverse().unwrap_or(t)`): when the determinant is exactly
-    ///    zero, the composed chain stays singular, so delivery still
-    ///    detects and skips it (`LocalEventTransform::capture`) without
-    ///    this method needing to thread a `bool` result back through every
-    ///    caller. The skip is only threshold-relative, not guaranteed, for
-    ///    a merely near-singular transform (`0 < |det| < f64::EPSILON`,
-    ///    which `Matrix4::is_invertible` also rejects): determinants
-    ///    compose multiplicatively, so a large-determinant ancestor
-    ///    elsewhere in the chain can lift the product back above
-    ///    `f64::EPSILON`. In that case delivery sees an invertible
-    ///    composite and delivers the entry with a garbage local position --
-    ///    a wider gap than the still-singular fallback above covers by
-    ///    itself.
-    /// 2. **No perspective removal.** Stripping the perspective row/column
-    ///    before inverting would let a perspective-projected transform still
-    ///    invert to a usable affine map. This method calls
-    ///    `transform.try_inverse()` directly, with no perspective removal.
-    ///    Low reachability today: nothing in the widget layer constructs a
-    ///    perspective (non-affine) transform, so every `transform` reaching
-    ///    this method in practice is already affine. Perspective removal is
-    ///    intentionally not implemented here (out of scope); a
-    ///    perspective-producing widget added later would make this
-    ///    limitation live and worth revisiting.
-    pub fn with_paint_transform<F, R>(&mut self, transform: Matrix4, f: F) -> R
+    /// The entry transform depth is restored on return and unwind, just as for
+    /// [`with_paint_offset`](Self::with_paint_offset).
+    pub fn with_paint_transform<F, R>(&mut self, transform: Matrix4, f: F) -> Option<R>
     where
         F: FnOnce(&mut Self) -> R,
     {
+        let inverse = transform.try_inverse()?;
         let depth = self.transforms.len() + self.local_transforms.len();
-        self.push_transform(transform.try_inverse().unwrap_or(transform));
+        self.push_transform(inverse);
         let guard = TransformGuard {
             result: self,
             depth,
         };
-        f(&mut *guard.result)
+        Some(f(&mut *guard.result))
     }
 
     /// Returns the number of entries.

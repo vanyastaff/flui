@@ -1211,3 +1211,21 @@ These deep-dives stay as companion documents (not under the per-crate template d
 ## Notes
 
 - **No lint yet for a lock on per-node render storage.** The clippy lint vocabulary cannot today express "field of type `RwLock<X>` where `X` is a trait object locked in method `foo`", so the rule is held by the storage shape and review; promoting it to a lint waits for ecosystem expressivity (`dylint` plugin or a future clippy feature).
+
+### Hit traversal refuses transforms without a computed finite inverse
+
+At both node-hook and context-child boundaries the pipeline maps failed
+`HitTestResult::with_paint_transform` admission to a miss (ADR-0113). It never
+uses the forward matrix as a substitute for the inverse. Refusal occurs before
+the descendant callback, so the rejected subtree contributes no entries and
+cannot block a healthy sibling. Successful scopes keep their existing unwind
+restoration.
+
+The public `hit_test_matrix` rows in `tests/hit_test_pipeline.rs` include
+`nested_tiny_transforms_emit_the_correct_local_hit_point` (real nested
+`RenderTransform` objects), and the `singular_*_transform_refuses_before_hit_and_preserves_sibling`
+and `nonfinite_*_transform_refuses_before_hit_and_preserves_sibling` rows for
+node and context boundaries. The latter use consumer-defined render objects
+that would claim a hit if invoked, then check a healthy sibling's emitted local
+point and repeat the walk. Existing `caught_*_scope_restores_hit_coordinates`
+rows retain the unwind contract.

@@ -126,3 +126,20 @@ zero velocity. Contact state and tracking retire before callback delivery,
 without holding the drag-state guard. The widget consumer row
 `horizontal_drag_pointer_cancel_after_acceptance_ends_and_does_not_wedge_the_detector`
 observes actual cancellation, subsequent release and both reasons.
+
+## Hit transform admission
+
+`HitTestResult::with_paint_transform` returns `Option<R>` (ADR-0113). It obtains
+an admitted inverse through `Matrix4::try_inverse` before changing the stack or
+calling the descendant. Refusal publishes no descendant entries; callers can
+map `None` to a subtree miss. The callback capture is retired normally even on
+refusal; the helper introduces no callback panic containment. Successful scopes
+keep the existing combined-depth unwind guard. The public
+`hit_test_transform_admission` family covers singular, non-finite and computed
+range refusals, tiny finite scales, a healthy scope after each refusal, and
+caught descendant failure after entries have globalized the transform stack.
+The row `refused_callback_retirement_failure_preserves_the_next_scope` owns a
+callback capture whose ordinary destructor panics: refusal does not invoke the
+callback, the retirement failure propagates, and a healthy sibling still uses
+the parent coordinate space. It does not promise containment of multiple
+panicking destructors within one opaque capture.
