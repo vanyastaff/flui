@@ -1,7 +1,6 @@
 //! Object key - key based on object identity (pointer equality).
 //!
-//! This module is part of the widgets layer.
-#![expect(unsafe_code)]
+//! The owning Arc keeps the allocation alive for the key's lifetime.
 
 use std::{any::Any, fmt, sync::Arc};
 
@@ -32,37 +31,20 @@ use flui_foundation::ViewKey;
 /// ```
 #[derive(Clone)]
 pub struct ObjectKey {
-    ptr: *const (),
-    _holder: Arc<dyn Any + Send + Sync>,
+    holder: Arc<dyn Any + Send + Sync>,
 }
-
-// SAFETY: ObjectKey is Send + Sync because:
-// 1. The raw pointer `ptr` is never dereferenced - it's only used for identity
-//    comparison via `std::ptr::eq()` which compares addresses, not values
-// 2. The `_holder` field is `Arc<dyn Any + Send + Sync>` which keeps the object
-//    alive and is itself Send + Sync
-// 3. The pointer value is derived from Arc::as_ptr() and remains valid as long
-//    as the Arc exists, which is guaranteed by the struct's lifetime
-unsafe impl Send for ObjectKey {}
-// SAFETY: see the `Send` justification above — it covers `Sync` unchanged,
-// since the pointer is never dereferenced and the holder is already Sync.
-unsafe impl Sync for ObjectKey {}
 
 impl ObjectKey {
     /// Create a new object key from an Arc.
     pub fn new<T: Send + Sync + 'static>(object: Arc<T>) -> Self {
-        let ptr = Arc::as_ptr(&object).cast::<()>();
-        Self {
-            ptr,
-            _holder: object,
-        }
+        Self { holder: object }
     }
 }
 
 impl fmt::Debug for ObjectKey {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ObjectKey")
-            .field("ptr", &self.ptr)
+            .field("ptr", &Arc::as_ptr(&self.holder).cast::<()>())
             .finish_non_exhaustive()
     }
 }
@@ -76,11 +58,11 @@ impl ViewKey for ObjectKey {
         other
             .as_any()
             .downcast_ref::<Self>()
-            .is_some_and(|other| std::ptr::eq(self.ptr, other.ptr))
+            .is_some_and(|other| Arc::ptr_eq(&self.holder, &other.holder))
     }
 
     fn key_hash(&self) -> u64 {
-        self.ptr as u64
+        Arc::as_ptr(&self.holder).cast::<()>() as u64
     }
 
     fn clone_key(&self) -> Box<dyn ViewKey> {
@@ -88,6 +70,6 @@ impl ViewKey for ObjectKey {
     }
 
     fn debug_fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "ObjectKey({:p})", self.ptr)
+        write!(f, "ObjectKey({:p})", Arc::as_ptr(&self.holder).cast::<()>())
     }
 }

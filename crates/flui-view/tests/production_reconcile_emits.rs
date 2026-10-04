@@ -22,14 +22,14 @@
     reason = "a panic is the failure report in a test scenario"
 )]
 
-use std::any::TypeId;
+use std::{any::TypeId, sync::Arc};
 
 use flui_foundation::{ElementId, ValueKey, ViewKey};
 use flui_objects::RenderSizedBox;
 use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
 use flui_rendering::protocol::BoxProtocol;
 use flui_view::{
-    BoxedView, BuildOwner, ElementTree, ErrorView, GlobalKey, RenderView, View, ViewExt,
+    BoxedView, BuildOwner, ElementTree, ErrorView, GlobalKey, ObjectKey, RenderView, View, ViewExt,
     tree::ReconcileEventKind,
 };
 use serial_test::serial;
@@ -38,8 +38,8 @@ use crate::dense_reconcile_containment::DensePanicsOnCreate;
 use crate::reconcile_capture::capture;
 
 #[derive(Clone)]
-struct KeyedLeafBox {
-    key: ValueKey<u32>,
+struct KeyedLeafBox<K = ValueKey<u32>> {
+    key: K,
 }
 
 impl KeyedLeafBox {
@@ -50,7 +50,7 @@ impl KeyedLeafBox {
     }
 }
 
-impl RenderView for KeyedLeafBox {
+impl<K: ViewKey + Clone + 'static> RenderView for KeyedLeafBox<K> {
     type Protocol = BoxProtocol;
     type RenderObject = RenderSizedBox;
 
@@ -70,7 +70,7 @@ impl RenderView for KeyedLeafBox {
     }
 }
 
-impl View for KeyedLeafBox {
+impl<K: ViewKey + Clone + 'static> View for KeyedLeafBox<K> {
     fn create_element(&self) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::render_variable(self)
     }
@@ -462,5 +462,57 @@ pub(crate) fn failed_dense_mount_production_reconcile_emits_only_final_slots() {
         &events,
         root_id,
         TypeId::of::<DensePanicsOnCreate>(),
+    );
+}
+
+pub(crate) fn object_keys_follow_retained_allocations_through_reorder() {
+    let pipeline = PipelineCell::new(PipelineOwner::new(
+        flui_rendering::TextContextHandle::standalone(),
+    ));
+    let mut owner = BuildOwner::new();
+    let mut tree = ElementTree::new();
+    let first = Arc::new(42);
+    let second = Arc::new(42);
+    let first_key = ObjectKey::new(Arc::clone(&first));
+    let second_key = ObjectKey::new(second);
+    let retained = Arc::downgrade(&first);
+    drop(first);
+    let root = MultiBox::host(
+        0,
+        vec![
+            KeyedLeafBox {
+                key: first_key.clone(),
+            }
+            .boxed(),
+            KeyedLeafBox {
+                key: second_key.clone(),
+            }
+            .boxed(),
+        ],
+    );
+    let root_id =
+        tree.mount_root_with_pipeline_owner(&root, Some(pipeline), &mut owner.element_owner_mut());
+    owner.schedule_build_for(root_id, 0, flui_view::RebuildReason::InitialMount);
+    owner.build_scope(&mut tree);
+    let before = direct_children_in_slot_order(&tree, root_id);
+    assert_eq!(before.len(), 2);
+    let next = MultiBox::host(
+        0,
+        vec![
+            KeyedLeafBox { key: second_key }.boxed(),
+            KeyedLeafBox { key: first_key }.boxed(),
+        ],
+    );
+    tree.update(root_id, &next, &mut owner.element_owner_mut());
+    owner.schedule_build_for(root_id, 0, flui_view::RebuildReason::ParentUpdate);
+    owner.build_scope(&mut tree);
+    assert_eq!(
+        direct_children_in_slot_order(&tree, root_id),
+        vec![before[1], before[0]],
+        "same-valued distinct allocations must move their own elements"
+    );
+    assert!(
+        retained.upgrade().is_some(),
+        "keys retain the source allocation"
     );
 }

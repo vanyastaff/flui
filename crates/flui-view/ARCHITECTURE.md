@@ -462,3 +462,18 @@ unreachable maximum counter, then use the tree's removal, lookup and insertion
 surface. Each refuses repeated retirement while preserving the active occupant,
 and proves a subsequent ordinary sibling can be removed and replaced without
 reviving its stale ID. Unannounced retirement shares the finalized primitive.
+
+
+### Object keys own their identity
+
+`ObjectKey` stores the erased owning Arc alone. `Arc::ptr_eq` compares its
+allocation identity, while hash and debug formatting use its data address.
+Cloned keys keep that allocation live; equal values in separate allocations
+remain different keys. Automatic Send/Sync follow the stored Arc's bounds,
+without duplicate pointer state or manual unsafe implementations.
+
+The public constructor doctest distinguishes shared and separate allocations.
+`object_keys_follow_retained_allocations_through_reorder` in
+`dense_and_production_reconcile_matrix` checks that real keyed reconciliation
+moves the original elements for equal-valued separate objects and keeps the
+source allocation alive after its original owner is dropped.
