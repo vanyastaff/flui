@@ -75,10 +75,16 @@ const TEST_FEATURES: &str = "flui/material,flui/cupertino,flui-devtools/agent";
 /// target whose `required-features` those features leave off (devtools'
 /// `profiler_demo`, the engine's `testing` benches): `feature-matrix`
 /// compiles them per feature, and nothing links them.
+/// The driver itself is already built by the cargo alias. Exclude it here:
+/// Windows cannot replace its running executable when workspace feature
+/// unification changes the driver's dependency artifacts. Its test binary
+/// remains part of the workspace test run, and lint checks all its targets.
 fn build_all_targets() -> Cmd {
     Cmd::cargo([
         "build",
         "--workspace",
+        "--exclude",
+        "xtask",
         "--all-targets",
         "--locked",
         "--features",
@@ -1280,7 +1286,7 @@ mod tests {
         assert_eq!(
             lines(&[build_all_targets().into()]),
             [format!(
-                "$ cargo build --workspace --all-targets --locked --features {TEST_FEATURES}"
+                "$ cargo build --workspace --exclude xtask --all-targets --locked --features {TEST_FEATURES}"
             )]
         );
         assert!(SCOPE.ends_with(&format!("--features {TEST_FEATURES}")));
