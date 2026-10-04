@@ -289,3 +289,15 @@ and subsequent progress. The common exceptional-payload operation is
 `panic::retain_opaque_payload`, used by notifications, signal reads
 and the test-table runner. This contract is recorded in
 [ADR-0104](../../docs/adr/ADR-0104-borrowed-notification-and-opaque-panic-retention.md).
+
+
+## Circle intersections require a computed line direction
+
+`Circle::intersect_line` treats its input as an infinite line, not an endpoint
+segment. A computed squared direction of zero returns `None`, including coincident
+endpoints and directions whose squared magnitude underflows to zero. Dividing
+by that zero previously reported NaN intersections. Ordinary crossings, tangents
+and misses retain their quadratic calculation; no wider-range quadratic solution
+is promised. Public family `circle_line_intersection_requires_a_computed_direction`
+checks refusals followed by a healthy crossing and intersections outside the
+endpoint segment.

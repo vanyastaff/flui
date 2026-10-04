@@ -284,3 +284,56 @@ fn vector_normalization_keeps_finite_directions_and_refuses_invalid_input() {
         ),
     ]);
 }
+
+fn coincident_line_endpoints_have_no_circle_intersection() {
+    let circle = Circle::new(Point::new(0.0, 0.0), 2.0);
+    for point in [
+        Point::new(0.0, 0.0),
+        Point::new(2.0, 0.0),
+        Point::new(3.0, 0.0),
+    ] {
+        assert_eq!(circle.intersect_line(&Line::new(point, point)), None);
+    }
+    // Squaring this nonzero direction underflows to the same computed zero.
+    assert_eq!(
+        circle.intersect_line(&Line::new(
+            Point::new(0.0, 0.0),
+            Point::new(f64::from_bits(1), 0.0)
+        )),
+        None
+    );
+    let hits = circle
+        .intersect_line(&Line::new(Point::new(-3.0, 0.0), Point::new(3.0, 0.0)))
+        .expect("ordinary crossing after refusal");
+    assert_eq!(hits, (Point::new(-2.0, 0.0), Point::new(2.0, 0.0)));
+}
+
+fn circle_intersection_keeps_infinite_line_and_tangent_behavior() {
+    let circle = Circle::new(Point::new(0.0, 0.0), 2.0);
+    let hits = circle
+        .intersect_line(&Line::new(Point::new(3.0, 0.0), Point::new(4.0, 0.0)))
+        .expect("intersection outside the endpoint segment");
+    assert_eq!(hits, (Point::new(-2.0, 0.0), Point::new(2.0, 0.0)));
+    assert_eq!(
+        circle.intersect_line(&Line::new(Point::new(-1.0, 2.0), Point::new(1.0, 2.0))),
+        Some((Point::new(0.0, 2.0), Point::new(0.0, 2.0)))
+    );
+    assert_eq!(
+        circle.intersect_line(&Line::new(Point::new(-1.0, 3.0), Point::new(1.0, 3.0))),
+        None
+    );
+}
+
+#[test]
+fn circle_line_intersection_requires_a_computed_direction() {
+    crate::run_table(&[
+        (
+            "coincident endpoints",
+            coincident_line_endpoints_have_no_circle_intersection,
+        ),
+        (
+            "infinite line and tangent",
+            circle_intersection_keeps_infinite_line_and_tangent_behavior,
+        ),
+    ]);
+}
