@@ -29,6 +29,12 @@ rather than negating angles. The public family
 `affine_composition_and_shear_follow_coordinate_contract` checks actual mapped
 coordinates, inverse round trips and flattened composition order.
 
+Approximate matrix equality and identity require finite components and a finite,
+nonnegative tolerance. NaN must not enable the identity optimization that
+removes a transform; zero tolerance permits exact equality. The public family
+`matrix_tolerance_requires_finite_values` covers these admission boundaries and
+checks that conversion preserves a NaN-bearing matrix rather than dropping it.
+
 ---
 
 ## The signal read contract (`read_scope`)

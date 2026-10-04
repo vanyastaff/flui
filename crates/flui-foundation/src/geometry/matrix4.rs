@@ -335,14 +335,11 @@ impl Matrix4 {
         self.is_identity_with_epsilon(1e-5)
     }
 
-    /// Returns whether this is an identity matrix with custom epsilon.
+    /// Returns whether this finite matrix is identity within `epsilon`.
+    ///
+    /// The tolerance must be finite and nonnegative; otherwise returns false.
     pub fn is_identity_with_epsilon(&self, epsilon: f64) -> bool {
-        for i in 0..16 {
-            if (self.m[i] - Self::IDENTITY.m[i]).abs() > epsilon {
-                return false;
-            }
-        }
-        true
+        self.approx_eq_eps(&Self::IDENTITY, epsilon)
     }
 
     /// This matrix as a pure 2D translation `(dx, dy)`, or `None` if it is
@@ -645,15 +642,17 @@ impl Eq for Matrix4 {}
 impl Matrix4 {
     /// Checks approximate equality with a custom epsilon.
     ///
-    /// Returns true if all elements differ by at most `epsilon`.
+    /// Returns true if all finite elements differ by at most `epsilon`.
+    /// The tolerance must be finite and nonnegative; otherwise returns false.
     #[must_use]
     pub fn approx_eq_eps(&self, other: &Self, epsilon: f64) -> bool {
-        for i in 0..16 {
-            if (self.m[i] - other.m[i]).abs() > epsilon {
-                return false;
-            }
-        }
-        true
+        epsilon.is_finite()
+            && epsilon >= 0.0
+            && self
+                .m
+                .iter()
+                .zip(other.m.iter())
+                .all(|(&a, &b)| a.is_finite() && b.is_finite() && (a - b).abs() <= epsilon)
     }
 
     /// Checks approximate equality with default epsilon (1e-5).

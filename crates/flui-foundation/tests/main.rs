@@ -9,6 +9,9 @@ mod claim_slot;
 #[path = "geometry/transform.rs"]
 mod transform;
 
+#[path = "geometry/matrix.rs"]
+mod matrix;
+
 /// Execute every named scenario before reporting failures. Keep opaque panic
 /// payloads alive until all rows complete, without invoking arbitrary Drop.
 pub(crate) fn run_table(cases: &[(&str, fn())]) {
