@@ -141,7 +141,8 @@ host.
   `SemanticsHost`, `PerformanceStats`, the commit epoch) or, for
   `ExecutionServices`, one host loop, constructed only by the host's
   composition root. The one static is `realm_services`' incarnation counter,
-  a monotonic ID counter the globals gate exempts.
+  an identity counter with an explicit ADR-0097 counter grant. Its `try_update`
+  helper preserves permanent exhaustion instead of wrapping into a previous realm.
 - **The realm's surface is the host's, not an embedder's.** `UiRealm`,
   `PresentationState` and their methods are `pub` only where `flui-app`
   calls them; what only `flui-app`'s tests call is `pub` under
