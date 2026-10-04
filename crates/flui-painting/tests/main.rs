@@ -111,6 +111,58 @@ fn value_contract() {
         "value",
         &[
             (
+                "negative_linear_stops_are_rejected",
+                values::negative_linear_stops_are_rejected,
+            ),
+            (
+                "radial_stops_above_one_are_rejected",
+                values::radial_stops_above_one_are_rejected,
+            ),
+            (
+                "extreme_negative_sweep_stops_are_rejected",
+                values::extreme_negative_sweep_stops_are_rejected,
+            ),
+            (
+                "extreme_positive_linear_stops_are_rejected",
+                values::extreme_positive_linear_stops_are_rejected,
+            ),
+            (
+                "linear_nan_stops_are_rejected",
+                values::linear_nan_stops_are_rejected,
+            ),
+            (
+                "radial_infinite_stops_are_rejected",
+                values::radial_infinite_stops_are_rejected,
+            ),
+            (
+                "sweep_descending_stops_are_rejected",
+                values::sweep_descending_stops_are_rejected,
+            ),
+            (
+                "empty_equal_gradients_are_rejected",
+                values::empty_equal_gradients_are_rejected,
+            ),
+            (
+                "mismatched_equal_gradient_stops_are_rejected",
+                values::mismatched_equal_gradient_stops_are_rejected,
+            ),
+            (
+                "nan_gradient_interpolation_is_rejected",
+                values::nan_gradient_interpolation_is_rejected,
+            ),
+            (
+                "linear_interpolation_keeps_hard_transitions",
+                values::linear_interpolation_keeps_hard_transitions,
+            ),
+            (
+                "radial_interpolation_keeps_hard_transitions",
+                values::radial_interpolation_keeps_hard_transitions,
+            ),
+            (
+                "sweep_interpolation_keeps_hard_transitions",
+                values::sweep_interpolation_keeps_hard_transitions,
+            ),
+            (
                 "font_weight_from_css_breaks_ties_like_css",
                 values::font_weight_from_css_breaks_ties_like_css,
             ),

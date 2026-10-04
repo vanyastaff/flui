@@ -4,8 +4,138 @@
 use flui_foundation::geometry::{Point, RRect, Rect};
 use flui_painting::Alignment;
 use flui_painting::paint::{Path, PathCommand};
-use flui_painting::styling::{Color, RadialGradient, TileMode};
+use flui_painting::styling::{
+    Color, Gradient, LinearGradient, RadialGradient, SweepGradient, TileMode,
+};
 use flui_painting::typography::FontWeight;
+
+fn healthy_gradient_like(gradient: &Gradient) -> Gradient {
+    let colors = vec![Color::RED, Color::BLUE];
+    match gradient {
+        Gradient::Linear(_) => Gradient::Linear(LinearGradient::horizontal(colors)),
+        Gradient::Radial(_) => Gradient::Radial(RadialGradient::circular(colors)),
+        Gradient::Sweep(_) => Gradient::Sweep(SweepGradient::centered(colors)),
+    }
+}
+
+fn rejects_invalid_gradient(bad: &Gradient) {
+    let healthy = healthy_gradient_like(bad);
+    assert!(Gradient::lerp(bad, &healthy, 0.5).is_none());
+    assert!(Gradient::lerp(&healthy, bad, 0.5).is_none());
+    assert!(
+        Gradient::lerp(bad, bad, 0.5).is_none(),
+        "equal invalid inputs"
+    );
+    let next =
+        Gradient::lerp(&healthy, &healthy, 0.5).expect("valid interpolation after rejection");
+    assert_eq!(next.colors(), &[Color::RED, Color::BLUE]);
+}
+
+pub(crate) fn linear_nan_stops_are_rejected() {
+    let mut gradient = LinearGradient::horizontal(vec![Color::GREEN, Color::BLUE]);
+    gradient.stops = Some(vec![0.0, f64::NAN]);
+    rejects_invalid_gradient(&Gradient::Linear(gradient));
+}
+
+pub(crate) fn radial_infinite_stops_are_rejected() {
+    let mut gradient = RadialGradient::circular(vec![Color::GREEN, Color::BLUE]);
+    gradient.stops = Some(vec![0.0, f64::INFINITY]);
+    rejects_invalid_gradient(&Gradient::Radial(gradient));
+}
+
+pub(crate) fn negative_linear_stops_are_rejected() {
+    let mut gradient = LinearGradient::horizontal(vec![Color::GREEN, Color::BLUE]);
+    gradient.stops = Some(vec![-0.1, 1.0]);
+    rejects_invalid_gradient(&Gradient::Linear(gradient));
+}
+
+pub(crate) fn radial_stops_above_one_are_rejected() {
+    let mut gradient = RadialGradient::circular(vec![Color::GREEN, Color::BLUE]);
+    gradient.stops = Some(vec![0.0, 1.1]);
+    rejects_invalid_gradient(&Gradient::Radial(gradient));
+}
+
+pub(crate) fn extreme_negative_sweep_stops_are_rejected() {
+    let mut gradient = SweepGradient::centered(vec![Color::GREEN, Color::BLUE]);
+    gradient.stops = Some(vec![-f64::MAX, 1.0]);
+    rejects_invalid_gradient(&Gradient::Sweep(gradient));
+}
+
+pub(crate) fn extreme_positive_linear_stops_are_rejected() {
+    let mut gradient = LinearGradient::horizontal(vec![Color::GREEN, Color::BLUE]);
+    gradient.stops = Some(vec![0.0, f64::MAX]);
+    rejects_invalid_gradient(&Gradient::Linear(gradient));
+}
+
+pub(crate) fn sweep_descending_stops_are_rejected() {
+    let mut gradient = SweepGradient::centered(vec![Color::GREEN, Color::BLUE]);
+    gradient.stops = Some(vec![1.0, 0.0]);
+    rejects_invalid_gradient(&Gradient::Sweep(gradient));
+}
+
+pub(crate) fn empty_equal_gradients_are_rejected() {
+    rejects_invalid_gradient(&Gradient::Linear(LinearGradient::horizontal(Vec::new())));
+}
+
+pub(crate) fn mismatched_equal_gradient_stops_are_rejected() {
+    let mut gradient = RadialGradient::circular(vec![Color::GREEN, Color::BLUE]);
+    gradient.stops = Some(vec![0.0]);
+    rejects_invalid_gradient(&Gradient::Radial(gradient));
+}
+
+pub(crate) fn nan_gradient_interpolation_is_rejected() {
+    let gradient = SweepGradient::centered(vec![Color::RED, Color::BLUE]);
+    assert!(SweepGradient::lerp(&gradient, &gradient, f64::NAN).is_none());
+    assert_eq!(
+        SweepGradient::lerp(&gradient, &gradient, 0.5)
+            .expect("valid interpolation after rejection")
+            .colors,
+        [Color::RED, Color::BLUE]
+    );
+}
+
+fn keeps_hard_gradient_transition(gradient: Gradient) {
+    let black = vec![Color::BLACK, Color::BLACK];
+    let other = match &gradient {
+        Gradient::Linear(_) => Gradient::Linear(LinearGradient::horizontal(black)),
+        Gradient::Radial(_) => Gradient::Radial(RadialGradient::circular(black)),
+        Gradient::Sweep(_) => Gradient::Sweep(SweepGradient::centered(black)),
+    };
+    let mixed =
+        Gradient::lerp(&gradient, &other, 0.5).expect("valid hard-edge gradients interpolate");
+    assert_eq!(mixed.stops(), Some([0.0, 0.5, 0.5, 1.0].as_slice()));
+    assert_eq!(
+        mixed.colors(),
+        &[
+            Color::rgb(128, 0, 0),
+            Color::rgb(128, 0, 0),
+            Color::rgb(0, 0, 128),
+            Color::rgb(0, 0, 128),
+        ],
+        "both sides of the red-to-blue discontinuity survive interpolation"
+    );
+}
+
+pub(crate) fn linear_interpolation_keeps_hard_transitions() {
+    let mut gradient =
+        LinearGradient::horizontal(vec![Color::RED, Color::RED, Color::BLUE, Color::BLUE]);
+    gradient.stops = Some(vec![0.0, 0.5, 0.5, 1.0]);
+    keeps_hard_gradient_transition(Gradient::Linear(gradient));
+}
+
+pub(crate) fn radial_interpolation_keeps_hard_transitions() {
+    let mut gradient =
+        RadialGradient::circular(vec![Color::RED, Color::RED, Color::BLUE, Color::BLUE]);
+    gradient.stops = Some(vec![0.0, 0.5, 0.5, 1.0]);
+    keeps_hard_gradient_transition(Gradient::Radial(gradient));
+}
+
+pub(crate) fn sweep_interpolation_keeps_hard_transitions() {
+    let mut gradient =
+        SweepGradient::centered(vec![Color::RED, Color::RED, Color::BLUE, Color::BLUE]);
+    gradient.stops = Some(vec![0.0, 0.5, 0.5, 1.0]);
+    keeps_hard_gradient_transition(Gradient::Sweep(gradient));
+}
 
 /// A CSS weight snaps to the closest hundred, and an exact half goes the way
 /// CSS font matching searches: lighter below 400, heavier from 400 up.

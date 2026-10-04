@@ -892,6 +892,30 @@ zero-width solid borders is unchanged; it is distinct from a hidden style.
 `hidden_edges_do_not_shorten_visible_neighboring_edges`: positive hidden widths
 draw nothing, while a visible neighboring edge spans the full box height.
 
+### 22. Gradient interpolation validates its inputs and preserves discontinuities
+
+All three gradient kinds reject empty colors, stop/color count mismatches,
+stops outside the documented closed `0..=1` range, descending stops, and a NaN
+interpolation fraction before the equal-input shortcut. Ordered repeated stops
+within the range are valid. Their left and
+right colors remain separate output stops at the same position; interpolation
+samples both limits with `slice::partition_point`, rather than approximating a
+left limit with an epsilon. Ordinary stops still merge into one ordered union.
+
+The public `value_contract` rows `linear_nan_stops_are_rejected`,
+`radial_infinite_stops_are_rejected`, `sweep_descending_stops_are_rejected`,
+`empty_equal_gradients_are_rejected`,
+`mismatched_equal_gradient_stops_are_rejected` and
+`nan_gradient_interpolation_is_rejected` cover refusal and the next valid call.
+`negative_linear_stops_are_rejected`, `radial_stops_above_one_are_rejected`,
+`extreme_negative_sweep_stops_are_rejected` and
+`extreme_positive_linear_stops_are_rejected` pin range refusal, including finite
+endpoints whose subtraction would overflow outside the admitted range.
+`linear_interpolation_keeps_hard_transitions`,
+`radial_interpolation_keeps_hard_transitions` and
+`sweep_interpolation_keeps_hard_transitions` pin both colors of a red-to-blue
+hard edge interpolated toward black.
+
 ## Open items
 
 - **`Save`/`Restore` carry a transform nobody reads.** Every command is

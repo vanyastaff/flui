@@ -185,10 +185,17 @@ impl LinearGradient {
     /// stop wherever either side has one, each coloured by lerping the two
     /// gradients sampled there, so gradients with different colour counts or stops interpolate.
     ///
-    /// Returns `None` if either side has no colours, or explicit stops
-    /// that do not match its colours one for one.
+    /// Returns `None` if either side has no colours, explicit stops do not
+    /// match its colours one for one, stops are outside `0..=1` or descending, or
+    /// `t` is NaN. Repeated stops preserve a hard transition.
     #[inline]
     pub fn lerp(a: &Self, b: &Self, t: f64) -> Option<Self> {
+        if t.is_nan()
+            || !valid_stops(&a.colors, a.stops.as_deref())
+            || !valid_stops(&b.colors, b.stops.as_deref())
+        {
+            return None;
+        }
         // Equal gradients short-circuit to `a`.
         if a == b {
             return Some(a.clone());
@@ -316,6 +323,12 @@ impl RadialGradient {
     /// anywhere else.
     #[inline]
     pub fn lerp(a: &Self, b: &Self, t: f64) -> Option<Self> {
+        if t.is_nan()
+            || !valid_stops(&a.colors, a.stops.as_deref())
+            || !valid_stops(&b.colors, b.stops.as_deref())
+        {
+            return None;
+        }
         // Equal gradients short-circuit to `a`.
         if a == b {
             return Some(a.clone());
@@ -412,6 +425,12 @@ impl SweepGradient {
     /// combine as in [`LinearGradient::lerp`]; the angles never go below zero.
     #[inline]
     pub fn lerp(a: &Self, b: &Self, t: f64) -> Option<Self> {
+        if t.is_nan()
+            || !valid_stops(&a.colors, a.stops.as_deref())
+            || !valid_stops(&b.colors, b.stops.as_deref())
+        {
+            return None;
+        }
         // Equal gradients short-circuit to `a`.
         if a == b {
             return Some(a.clone());
@@ -437,13 +456,23 @@ fn lerp_f32(a: f64, b: f64, t: f64) -> f64 {
     a + (b - a) * t
 }
 
+fn valid_stops(colors: &[Color], stops: Option<&[f64]>) -> bool {
+    !colors.is_empty()
+        && stops.is_none_or(|stops| {
+            stops.len() == colors.len()
+                && stops.iter().all(|stop| (0.0..=1.0).contains(stop))
+                && stops.windows(2).all(|pair| pair[0] <= pair[1])
+        })
+}
+
 /// The explicit stops, or the colours
 /// spread evenly from 0 to 1. `None` for stops that do not pair one for
 /// one with the colours, or no colours at all.
 fn implied_stops(colors: &[Color], stops: Option<&[f64]>) -> Option<Vec<f64>> {
+    if !valid_stops(colors, stops) {
+        return None;
+    }
     match stops {
-        _ if colors.is_empty() => None,
-        Some(stops) if stops.len() != colors.len() => None,
         Some(stops) => Some(stops.to_vec()),
         None if colors.len() == 1 => Some(vec![0.0]),
         None => {
@@ -457,26 +486,18 @@ fn implied_stops(colors: &[Color], stops: Option<&[f64]>) -> Option<Vec<f64>> {
 
 /// The colour at `t` along `colors` placed at
 /// `stops`, holding the end colours beyond the first and last stop.
-#[expect(
-    clippy::expect_used,
-    reason = "`t` lies strictly inside the stops here, so a stop at or below it exists"
-)]
-fn sample(colors: &[Color], stops: &[f64], t: f64) -> Color {
-    let (first, last) = (stops[0], stops[stops.len() - 1]);
-    if t <= first {
+fn sample(colors: &[Color], stops: &[f64], t: f64, before: bool) -> Color {
+    let index = stops.partition_point(|&stop| if before { stop < t } else { stop <= t });
+    if index == 0 {
         return colors[0];
     }
-    if t >= last {
+    if index == stops.len() {
         return colors[colors.len() - 1];
     }
-    let i = stops
-        .iter()
-        .rposition(|&s| s <= t)
-        .expect("BUG: t > the first stop, so some stop is at or below it");
     Color::lerp(
-        colors[i],
-        colors[i + 1],
-        (t - stops[i]) / (stops[i + 1] - stops[i]),
+        colors[index - 1],
+        colors[index],
+        (t - stops[index - 1]) / (stops[index] - stops[index - 1]),
     )
 }
 
@@ -492,17 +513,28 @@ fn interpolate_colors_and_stops(
     let mut stops: Vec<f64> = a_stops.iter().chain(&b_stops).copied().collect();
     stops.sort_by(f64::total_cmp);
     stops.dedup();
-    let colors = stops
-        .iter()
-        .map(|&s| {
-            Color::lerp(
-                sample(a_colors, &a_stops, s),
-                sample(b_colors, &b_stops, s),
+    let mut colors = Vec::with_capacity(stops.len());
+    let mut merged_stops = Vec::with_capacity(stops.len());
+    for stop in stops {
+        let repeated = |stops: &[f64]| {
+            stops.partition_point(|&s| s <= stop) - stops.partition_point(|&s| s < stop) > 1
+        };
+        if repeated(&a_stops) || repeated(&b_stops) {
+            merged_stops.push(stop);
+            colors.push(Color::lerp(
+                sample(a_colors, &a_stops, stop, true),
+                sample(b_colors, &b_stops, stop, true),
                 t,
-            )
-        })
-        .collect();
-    Some((colors, stops))
+            ));
+        }
+        merged_stops.push(stop);
+        colors.push(Color::lerp(
+            sample(a_colors, &a_stops, stop, false),
+            sample(b_colors, &b_stops, stop, false),
+            t,
+        ));
+    }
+    Some((colors, merged_stops))
 }
 
 /// Base trait for gradient transformations.
