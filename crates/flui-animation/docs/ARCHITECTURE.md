@@ -855,3 +855,29 @@ or claim that their separate subscription swaps are atomic.
 implementations for value, status and old-status-during-swap reentry, then checks
 the next parent change still delivers notifications. Each case runs in a bounded
 child process so a reverted read guard cannot hang the parent test runner.
+
+### Integer tweens cover the full endpoint range
+
+`IntTween` and `StepTween` convert both integer endpoints to `f64` before
+subtracting them. Every `i32` endpoint is exactly representable there, whereas
+subtracting `i32::MIN` from `i32::MAX` in the integer domain panics or wraps.
+Existing rounding, flooring and progress clamping remain deliberate.
+The public consumer family `integer_tweens_interpolate_across_the_full_range`
+checks both directions across the full range and ordinary rounding.
+
+### Weighted progress uses relative weights and exact endpoints
+
+`TweenSequence` revalidates each item's finite positive weight after caller edits
+to the public item fields. Evaluation scales weights by the largest weight, so
+finite inputs whose raw sum overflows still describe usable relative durations.
+The `total_weight` accessor retains the original sum and may return infinity;
+it does not drive interpolation. Exact progress endpoints return the first and
+last tween's endpoints. Interior progress divides by the actual relative weight,
+without an arbitrary epsilon that discards short segments. A relative interval
+that underflows to zero cannot be selected by representable interior progress,
+but its endpoint remains reachable.
+
+Public consumer families `weighted_sequences_preserve_endpoints_and_relative_progress`
+and `weighted_sequences_reject_invalid_edited_configuration` cover overflowing
+finite weights, small first and final intervals, ordinary weighted progress,
+edited invalid configuration and a subsequent valid sequence.

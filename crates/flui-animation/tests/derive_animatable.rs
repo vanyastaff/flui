@@ -15,6 +15,9 @@ mod simulation;
 #[path = "contracts/proxy.rs"]
 mod proxy;
 
+#[path = "contracts/tween.rs"]
+mod tween;
+
 #[derive(Clone, Animatable)]
 struct Translation {
     x: f64,
