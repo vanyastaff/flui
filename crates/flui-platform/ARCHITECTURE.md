@@ -1003,3 +1003,14 @@ readable without touching UIKit. The native weak-view probe verifies both
 retention through logical close and eventual release after a worker's final drop.
 OwnerSignal/GCD carries typed process wake/quit independently of display links;
 it grants no operating-system background execution entitlement.
+
+### A ready task imposes no executor bounds on its result
+
+`Task<T>` moves its result out and never exposes a pinned borrow to it.
+The handle is therefore `Unpin` independently of `T`, as is the native
+`JoinHandle<T>` variant. Its `Future` implementation accepts local, borrowed
+and non-`Unpin` results; `Send + 'static` belongs to executor admission,
+where work crosses threads, rather than to polling a completed value.
+Dropping a spawned handle detaches the Tokio task; it does not cancel it.
+Pinned by `ready_tasks_return_results_without_executor_bounds` through the
+public API.

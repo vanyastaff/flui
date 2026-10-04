@@ -56,7 +56,7 @@ impl std::fmt::Display for TaskLabel {
 /// // Fire-and-forget
 /// executor.spawn(async { log_analytics() }).detach();
 /// ```
-#[must_use = "tasks are cancelled when dropped; use `.detach()` to run in background"]
+#[must_use = "await the task to observe its result, or use `.detach()` to discard it"]
 pub struct Task<T>(TaskState<T>);
 
 enum TaskState<T> {
@@ -97,7 +97,11 @@ impl<T> Task<T> {
     }
 }
 
-impl<T: Send + Unpin + 'static> Future for Task<T> {
+// Results are moved out, never exposed through a pinned reference. The spawned
+// variant contains only a JoinHandle, which is Unpin independently of T.
+impl<T> Unpin for Task<T> {}
+
+impl<T> Future for Task<T> {
     type Output = T;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
@@ -106,12 +110,6 @@ impl<T: Send + Unpin + 'static> Future for Task<T> {
         #[cfg(target_arch = "wasm32")]
         let _ = cx;
 
-        // No unsafe pin-projection needed: `Task<T>` never establishes a
-        // pinning invariant (no `PhantomPinned`, no self-referential field,
-        // nothing here treats an address as fixed) — the `T: Unpin` bound
-        // above just makes that already-true fact provable to the compiler,
-        // so `Pin::get_mut` (safe) replaces what used to be a justified
-        // `get_unchecked_mut`.
         let this = self.get_mut();
         match &mut this.0 {
             TaskState::Ready(val) => {
