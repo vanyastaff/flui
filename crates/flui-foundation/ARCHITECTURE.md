@@ -13,6 +13,15 @@ instantiations are the device-pixel grid (`DevicePoint`, `DeviceSize`, `DeviceRe
 lives here too: `snap`, `snap_point`, `snap_edges`, `cover`, `device_rect_covering`,
 `device_size` and `resolve_stroke_width`; the engine decides where they apply.
 
+Floating `Point::midpoint` and its `Line::midpoint` delegate average through
+`FloatUnit::midpoint`: `f32` and `f64` use their native standard-library operation,
+so same-sign finite extremes do not overflow and subnormals retain native rounding.
+The trait default uses the existing `f64` conversions for custom scalar implementations.
+NaN operands and opposite infinities produce NaN in the affected coordinate;
+equal infinities keep their sign. Integer geometry does not expose midpoint.
+The public family `floating_geometry_midpoints_preserve_the_scalar_range`
+checks these boundaries through points and lines.
+
 Transform decomposition computes column lengths with `hypot`. It keeps a finite,
 nonzero direct determinant before dividing by the first scale: prematurely
 normalizing an anisotropic column can erase a smaller representable signed scale.

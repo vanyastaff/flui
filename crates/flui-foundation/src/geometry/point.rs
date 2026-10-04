@@ -316,6 +316,10 @@ where
 
     /// Midpoint between this point and another.
     ///
+    /// Finite coordinates cannot overflow while averaging. Primitive floats use
+    /// their native standard-library midpoint; NaN coordinates or opposite
+    /// infinities produce NaN in that coordinate.
+    ///
     /// # Examples
     ///
     /// ```
@@ -328,11 +332,10 @@ where
     #[inline]
     #[must_use]
     pub fn midpoint(self, other: Self) -> Self {
-        let sum_x = self.x + other.x;
-        let sum_y = self.y + other.y;
-        let sum_x_f32: f64 = sum_x.into();
-        let sum_y_f32: f64 = sum_y.into();
-        Self::new(T::from_f64(sum_x_f32 / 2.0), T::from_f64(sum_y_f32 / 2.0))
+        Self::new(
+            FloatUnit::midpoint(self.x, other.x),
+            FloatUnit::midpoint(self.y, other.y),
+        )
     }
 }
 
