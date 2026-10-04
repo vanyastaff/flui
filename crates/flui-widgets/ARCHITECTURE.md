@@ -1996,3 +1996,17 @@ therefore names its source scalar rather than being treated as outside the text.
 This retains the per-scalar caret contract; it does not introduce a visual-run
 hit topology for discontinuous mixed-bidi ranges. `Nearest` remains a boundary
 query. **Test:** `rtl_scalar_rect_midpoints_resolve_to_the_source_scalar`.
+
+### Selection dragging belongs to the mounted field and its contact
+
+`EditableText` retains the source anchor and typed contact in its state. A
+same-controller configuration rebuild preserves that drag; only the first active
+contact can move or terminate it. Disablement, actual controller replacement and
+disposal retire it. Double-tap word selection deliberately takes over and clears
+ordinary drag tracking. Admission precedes focus callbacks; a callback that
+retires the contact prevents the subsequent caret write.
+**Tests:** `selection_drag_survives_a_same_controller_rebuild`,
+`foreign_release_preserves_the_selection_contact`,
+`foreign_cancel_preserves_the_selection_contact`,
+`disabling_the_field_retires_its_selection_contact`,
+`replacing_the_controller_retires_the_old_selection_contact`.

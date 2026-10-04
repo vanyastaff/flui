@@ -14,7 +14,7 @@ use flui_foundation::geometry::{Bounds, Offset, Point, Rect};
 use flui_foundation::notifier::Listenable;
 use flui_interaction::PointerDispatch;
 use flui_interaction::events::PointerEventExt;
-use flui_interaction::events::{Key, KeyState, Modifiers, NamedKey};
+use flui_interaction::events::{Key, KeyState, Modifiers, NamedKey, PointerId};
 use flui_interaction::routing::{
     FocusAttachment, FocusManager, FocusNode, FocusNodeRegistration, KeyEventHandler,
     KeyEventResult, RectProvider,
@@ -43,6 +43,13 @@ use crate::text::controller::TextEditingController;
 use crate::text::text_store::{EditableTextStore, FieldParts, with_editable_global};
 
 type ImeFocusTransition = Rc<dyn Fn(bool)>;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct SelectionDrag {
+    contact: PointerId,
+    source_anchor: usize,
+}
+
 /// Callback for [`EditableText::on_submitted`] — see that method's doc.
 /// Exported (not crate-private) so [`RawTextField`](super::text_field::RawTextField)'s
 /// own `on_submitted` passthrough and `flui_material::TextField`'s can share
@@ -685,6 +692,7 @@ pub struct EditableTextState {
     /// The presentation's clipboard, acquired in `init_state`. `None` only
     /// on a bare owner; the clipboard actions are then disabled.
     clipboard: Option<ClipboardHandle>,
+    selection_drag: Rc<Cell<Option<SelectionDrag>>>,
     /// Whether the field is obscured, read by the copy action at key time
     /// and kept current by `did_update_view`.
     obscure: Rc<Cell<bool>>,
@@ -747,6 +755,7 @@ impl StatefulView for EditableText {
             on_submitted: Rc::new(RefCell::new(self.on_submitted.clone())),
             on_changed: Rc::new(RefCell::new(self.on_changed.clone())),
             clipboard: None,
+            selection_drag: Rc::new(Cell::new(None)),
             obscure: Rc::new(Cell::new(self.obscure_text)),
             obscuring_character: Rc::new(Cell::new(self.obscuring_character)),
             text_store: None,
@@ -778,7 +787,7 @@ impl EditableTextState {
         &self,
         field: crate::interaction::Listener,
         view: &EditableText,
-        drag_anchor: Rc<Cell<Option<usize>>>,
+        drag_anchor: Rc<Cell<Option<SelectionDrag>>>,
     ) -> impl IntoView {
         let enabled = view.enabled;
         let obscuring = view.obscure_text.then_some(view.obscuring_character);
@@ -786,7 +795,7 @@ impl EditableTextState {
         let anchor = self.inner_anchor.clone();
         let controller = Rc::clone(&self.controller);
         let focus_node = Rc::clone(&self.focus_node);
-        // `drag_anchor` is where the current drag began, in SOURCE byte
+        // The first active contact owns `drag_anchor`, in SOURCE byte
         // space, shared with `wrap_double_tap_word_select` (this method's
         // caller passes the SAME cell to both). `None` means no drag of
         // ours is in flight, which is what makes a move that started
@@ -814,18 +823,24 @@ impl EditableTextState {
             let focus_node = Rc::clone(&focus_node);
             let drag_anchor = Rc::clone(&drag_anchor);
             move |_cx: &mut EventCx<'_>, dispatch: PointerDispatch<'_>| {
-                if !enabled {
+                if !enabled || drag_anchor.get().is_some() {
                     return;
                 }
-                // Focus first: a tap on an unfocused field must both focus it
-                // and place the caret, and the caret would otherwise be set on
-                // a field that then rebuilds without it.
-                focus_node.request_focus();
+                // Admit the contact before focus observers run. Reentrant
+                // disablement or controller replacement can retire it before
+                // the caret is written to the current document.
                 let Some(offset) = resolve(dispatch.global.position()) else {
                     return;
                 };
-                controller.borrow().set_caret_byte_offset(offset);
-                drag_anchor.set(Some(offset));
+                let drag = SelectionDrag {
+                    contact: flui_interaction::events::extract_pointer_id(dispatch.global),
+                    source_anchor: offset,
+                };
+                drag_anchor.set(Some(drag));
+                focus_node.request_focus();
+                if drag_anchor.get() == Some(drag) {
+                    controller.borrow().set_caret_byte_offset(offset);
+                }
             }
         };
 
@@ -833,16 +848,19 @@ impl EditableTextState {
             let controller = Rc::clone(&controller);
             let drag_anchor = Rc::clone(&drag_anchor);
             move |_cx: &mut EventCx<'_>, dispatch: PointerDispatch<'_>| {
-                let Some(from) = drag_anchor.get() else {
+                let Some(drag) = drag_anchor.get() else {
                     return;
                 };
+                if flui_interaction::events::extract_pointer_id(dispatch.global) != drag.contact {
+                    return;
+                }
                 let Some(to) = resolve(dispatch.global.position()) else {
                     return;
                 };
                 // The anchor stays where the drag began; the caret follows the
                 // pointer, including backwards. `set_selection` is a no-op
                 // when neither moved, which a move stream reports constantly.
-                controller.borrow().set_selection(from, to);
+                controller.borrow().set_selection(drag.source_anchor, to);
             }
         };
 
@@ -852,11 +870,23 @@ impl EditableTextState {
         // gesture entirely — extend a selection the user abandoned.
         let release = {
             let drag_anchor = Rc::clone(&drag_anchor);
-            move |_: &mut EventCx<'_>, _: PointerDispatch<'_>| drag_anchor.set(None)
+            move |_: &mut EventCx<'_>, dispatch: PointerDispatch<'_>| {
+                if drag_anchor.get().is_some_and(|drag| {
+                    drag.contact == flui_interaction::events::extract_pointer_id(dispatch.global)
+                }) {
+                    drag_anchor.set(None);
+                }
+            }
         };
         let cancel = {
             let drag_anchor = Rc::clone(&drag_anchor);
-            move |_: &mut EventCx<'_>, _: PointerDispatch<'_>| drag_anchor.set(None)
+            move |_: &mut EventCx<'_>, dispatch: PointerDispatch<'_>| {
+                if drag_anchor.get().is_some_and(|drag| {
+                    drag.contact == flui_interaction::events::extract_pointer_id(dispatch.global)
+                }) {
+                    drag_anchor.set(None);
+                }
+            }
         };
 
         field
@@ -907,7 +937,7 @@ impl EditableTextState {
         &self,
         child: impl IntoView,
         view: &EditableText,
-        drag_anchor: Rc<Cell<Option<usize>>>,
+        drag_anchor: Rc<Cell<Option<SelectionDrag>>>,
     ) -> impl IntoView {
         let obscuring = view.obscure_text.then_some(view.obscuring_character);
         let owner = self.pipeline_owner.clone();
@@ -1356,6 +1386,9 @@ impl ViewState<EditableText> for EditableTextState {
     }
 
     fn did_update_view(&mut self, _old_view: &EditableText, new_view: &EditableText) {
+        if !new_view.enabled {
+            self.selection_drag.set(None);
+        }
         // Cheap and unconditional: a closure has no identity worth comparing,
         // so every rebuild just installs whatever `on_submitted` the latest
         // view carries — read through this cell at dispatch time by the key
@@ -1390,6 +1423,7 @@ impl ViewState<EditableText> for EditableTextState {
             .borrow()
             .is_same_controller(&new_view.controller)
         {
+            self.selection_drag.set(None);
             if let Some(id) = self.controller_listener_id.take() {
                 self.controller.borrow().remove_listener(id);
             }
@@ -1521,12 +1555,13 @@ impl ViewState<EditableText> for EditableTextState {
         // Shared with `wrap_double_tap_word_select` below: a double-tap that
         // lands on this same contact must be able to silence the drag this
         // anchor otherwise starts for it — see that method's doc.
-        let drag_anchor: Rc<Cell<Option<usize>>> = Rc::new(Cell::new(None));
+        let drag_anchor = Rc::clone(&self.selection_drag);
         let field = self.install_pointer_handlers(field, view, Rc::clone(&drag_anchor));
         self.wrap_double_tap_word_select(field, view, drag_anchor)
     }
 
     fn dispose(&mut self) {
+        self.selection_drag.set(None);
         let owns_attachment = self
             .focus_attachment
             .as_ref()
