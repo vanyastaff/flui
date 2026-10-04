@@ -202,6 +202,14 @@ quick. `.config/nextest.toml` names each group with one filter;
 `cargo nextest show-config test-groups` lists the members. Selecting by group needs nextest 0.9.133 or newer (the
 config's `nextest-version` enforces it).
 
+The configuration also recommends nextest 0.9.145 or newer. That release fixes
+[capture-pipe inheritance on Unix, notably Apple platforms](https://github.com/nextest-rs/nextest/releases/tag/cargo-nextest-0.9.145),
+which could falsely report leaked handles when tests spawn concurrently. A runner
+below the recommended version warns and still runs; below the required version
+it refuses. Check the installed runner with `cargo nextest show-config version`
+before diagnosing an intermittent leak. This command returns advisory exit code
+10 below the recommendation, whereas ordinary test runs only warn.
+
 - `cargo xtask test` (and so `cargo xtask ci`) runs
   `-E 'not (group(nested-cargo) | group(trybuild))'` first, then
   `-E 'group(nested-cargo) | group(trybuild)'` as its last stage. Nothing is
