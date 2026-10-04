@@ -16,7 +16,7 @@
 
 use crate::common;
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -207,6 +207,11 @@ pub fn action_press_closes_the_snack_bar_and_is_single_fire() {
         "the action must fire on press"
     );
 
+    // The installed callback must reject another contact before rebuilding.
+    laid.dispatch_pointer_down(tap_x, tap_y);
+    laid.dispatch_pointer_up(tap_x, tap_y);
+    assert_eq!(action_presses.load(Ordering::SeqCst), 1);
+
     pump_ms(&mut laid, ENTRY.as_millis() as u64);
     assert_eq!(
         snack_bar_material_count(&laid),
@@ -214,10 +219,7 @@ pub fn action_press_closes_the_snack_bar_and_is_single_fire() {
         "pressing the action must close the snack bar (SnackBarClosedReason::Action)"
     );
 
-    // A second dispatch at the same coordinates hits whatever is now
-    // mounted there (the body, since the snack bar closed) — confirms the
-    // action truly stopped being interactable, not merely that its
-    // callback happens not to have re-fired for an unrelated reason.
+    // After dismissal the same coordinates no longer reach the action.
     laid.dispatch_pointer_down(tap_x, tap_y);
     laid.dispatch_pointer_up(tap_x, tap_y);
     assert_eq!(
@@ -328,4 +330,77 @@ pub fn a_snack_bar_completion_cannot_write_another_presentations_signal() {
         Some(Err(flui_sdk::view::SignalError::ForeignGraph { .. }))
     ));
     assert_eq!(probe.value(), Ok(0));
+}
+
+/// A failed action stays claimed, publishes disabled semantics on the next
+/// frame, and does not prevent a newly mounted action from being pressed.
+pub fn action_callback_panic_disables_the_button_and_fresh_action_progresses() {
+    let vsync = Vsync::new();
+    let calls = Rc::new(Cell::new(0));
+    let callback_calls = Rc::clone(&calls);
+    let mut laid = lay_out_animated(
+        themed_animated(
+            &vsync,
+            SnackBarAction::new("UNDO", move |_cx| -> () {
+                callback_calls.set(callback_calls.get() + 1);
+                panic!("action failed");
+            }),
+        ),
+        tight(160.0, 48.0),
+        vsync.clone(),
+    );
+    laid.enable_semantics();
+    laid.pump();
+    assert!(
+        !laid
+            .a11y_tree()
+            .expect("semantics enabled")
+            .find_by_label("UNDO")
+            .expect("action button labelled")
+            .is_disabled()
+    );
+    laid.dispatch_pointer_down(80.0, 24.0);
+    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        laid.dispatch_pointer_up(80.0, 24.0);
+    }))
+    .expect_err("the action panic must propagate");
+    assert_eq!(failure.downcast_ref::<&str>(), Some(&"action failed"));
+    assert_eq!(calls.get(), 1);
+
+    // A second contact before the frame cannot retry the failed callback.
+    laid.dispatch_pointer_down(80.0, 24.0);
+    laid.dispatch_pointer_up(80.0, 24.0);
+    assert_eq!(calls.get(), 1);
+    laid.pump();
+    assert!(
+        laid.a11y_tree()
+            .expect("semantics enabled")
+            .find_by_label("UNDO")
+            .expect("action button retained")
+            .is_disabled()
+    );
+
+    // Remove the old state rather than merely updating its configuration:
+    // the one-shot claim belongs to the retained action state.
+    laid.pump_widget(themed_animated(&vsync, SizedBox::new(160.0, 48.0)));
+    laid.pump();
+    let fresh_calls = Rc::clone(&calls);
+    laid.pump_widget(themed_animated(
+        &vsync,
+        SnackBarAction::new("RETRY", move |_cx| {
+            fresh_calls.set(fresh_calls.get() + 1);
+        }),
+    ));
+    laid.pump();
+    laid.dispatch_pointer_down(80.0, 24.0);
+    laid.dispatch_pointer_up(80.0, 24.0);
+    assert_eq!(calls.get(), 2, "a fresh action must still receive input");
+    laid.pump();
+    assert!(
+        laid.a11y_tree()
+            .expect("semantics enabled")
+            .find_by_label("RETRY")
+            .expect("fresh action labelled")
+            .is_disabled()
+    );
 }

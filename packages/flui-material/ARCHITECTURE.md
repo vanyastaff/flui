@@ -245,3 +245,21 @@ a conversion without removing another source of count disagreement.
 `an_index_at_the_destination_count_is_rejected` and
 `an_unrepresentable_destination_index_is_rejected`; pointer delivery and disabled
 destinations remain covered in that family.
+
+### SnackBarAction claims activation before invoking application code
+
+The one-shot claim belongs to the retained action state. Its installed
+callback claims the shared `Cell` at event time, so two complete pointer
+contacts before a rebuild cannot execute the action twice. It schedules the
+disabled configuration before invoking application code. A callback panic
+propagates with the action still claimed; dismissal follows only a successful
+callback. A newly mounted action starts with a fresh claim.
+
+The `overlay_contracts` rows
+`tests/snack_bar.rs::action_press_closes_the_snack_bar_and_is_single_fire`
+and `action_callback_panic_disables_the_button_and_fresh_action_progresses`
+exercise consecutive contacts before a frame, successful dismissal, disabled
+button semantics after an ordinary callback panic, and fresh-action input.
+The pointer recovery row observes the resulting disabled button; it does not
+isolate scheduling order because `InkWell` also schedules pressed-state
+updates before invoking the action.

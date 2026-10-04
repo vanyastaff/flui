@@ -209,11 +209,8 @@ impl std::fmt::Debug for SnackBarAction {
     }
 }
 
-/// State for [`SnackBarAction`] — the `_haveTriggeredAction` single-fire
-/// latch. `triggered` is `Rc<Cell<bool>>`, not a plain `bool`: the press
-/// closure is `'static` (outlives the `&self` borrow `build` takes) and must
-/// flip the latch itself, matching the oracle's `setState(() {
-/// _haveTriggeredAction = true; })` inside `_handlePressed`.
+/// Retains the one-shot claim across rebuilds. The installed press closure
+/// shares the latch so another activation before the next build is ignored.
 #[derive(Debug, Default)]
 pub struct SnackBarActionState {
     triggered: Rc<Cell<bool>>,
@@ -263,12 +260,14 @@ impl ViewState<SnackBarAction> for SnackBarActionState {
                 .clone()
                 .expect("BUG: init_state runs before the first build");
             button = button.on_pressed(move |cx| {
-                triggered.set(true);
+                if triggered.replace(true) {
+                    return;
+                }
+                rebuild.schedule(flui_sdk::view::RebuildReason::StateChange);
                 on_pressed(cx);
                 if let Some(messenger) = &messenger {
                     messenger.hide_current_snack_bar_because(SnackBarClosedReason::Action);
                 }
-                rebuild.schedule(flui_sdk::view::RebuildReason::StateChange);
             });
         }
         button

@@ -234,6 +234,10 @@ fn overlay_contracts() {
             snack_bar::action_press_closes_the_snack_bar_and_is_single_fire,
         ),
         (
+            "action_callback_panic_disables_the_button_and_fresh_action_progresses",
+            snack_bar::action_callback_panic_disables_the_button_and_fresh_action_progresses,
+        ),
+        (
             "drawer::a fast release below halfway flings the drawer open rather than snapping shut",
             drawer::a_fast_release_below_halfway_flings_the_drawer_open_rather_than_snapping_shut,
         ),
