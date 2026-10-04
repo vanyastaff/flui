@@ -1917,3 +1917,31 @@ threshold contract. As a comparison after choosing it, Flutter's
 [refresh notification handler](https://github.com/flutter/flutter/blob/main/packages/flutter/lib/src/material/refresh_indicator.dart)
 also accumulates updates and overscroll into its drag offset. FLUI does not
 adopt its notification-based routing, viewport-relative threshold or futures.
+
+
+### Scroll resistance and controller attachment ownership
+
+`BouncingScrollPhysics` resists additional outward displacement from the current
+overscrolled position, or from the boundary when first crossing it. It does not
+reapply resistance to accumulated overscroll: zero input preserves the position,
+and movement toward the valid range is unrestricted. Crossing the whole range
+uses the newly crossed edge. Public rows `bouncing_lower_edge_preserves_outward_direction`,
+`bouncing_upper_edge_preserves_outward_direction`,
+`bouncing_stationary_input_preserves_overscroll` and
+`bouncing_inward_motion_and_crossing_respect_the_new_edge` pin these decisions in
+`scroll_physics_and_activity`.
+
+Changing a `Scrollable` controller's position identity stops the old trajectory
+before changing its value/status listeners, then detaches the old command
+listener and cancellation hook. A stopped trajectory cannot transfer its old
+metrics to the new position. Rebuilding with the same identity preserves the
+run. Cancellation hooks have an owning attachment: detaching or disposing an
+older attachment removes its hook and pending command only if that hook is
+still installed. Hook comparison/take is under the private lock; retired hooks,
+command values and animation callbacks retire or execute after it is released.
+This does not introduce multi-position commands or arbitration between several
+scrollables driving one position. The public rows
+`a_scrollable_swap_stops_old_motion_and_retires_its_jump_hook`,
+`a_same_position_scrollable_rebuild_preserves_motion` and
+`retiring_one_scrollable_preserves_a_later_owners_jump_hook` exercise virtual
+frames, retired-controller commands and a shared-controller detach.

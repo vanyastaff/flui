@@ -278,6 +278,7 @@ pub struct ScrollableState {
     /// currently holds, so a controller SWAP moves both onto the new
     /// controller in the same call.
     scroll_controller: ScrollController,
+    stop_hook: Option<super::scroll_controller::StopHook>,
     /// The ballistic simulation driver. Bounds span `(NEG_INFINITY, INFINITY)`
     /// so pixel-space simulation positions are not clamped to `[0, 1]`.
     ///
@@ -347,6 +348,7 @@ impl StatefulView for Scrollable {
 
         ScrollableState {
             scroll_controller: self.controller.clone(),
+            stop_hook: None,
             fling_controller,
             fling_listener_id: None,
             fling_status_listener_id: None,
@@ -385,11 +387,21 @@ impl ScrollableState {
     /// AND `did_update_view` (a controller swap must move the hook onto the
     /// NEW controller — see `scroll_controller`'s field doc), always against
     /// whatever `self.scroll_controller` currently is.
-    fn install_stop_hook(&self) {
+    fn install_stop_hook(&mut self) {
         let fling = self.fling_controller.clone();
-        self.scroll_controller.set_stop_hook(Arc::new(move || {
+        let hook: super::scroll_controller::StopHook = Arc::new(move || {
             let _ = fling.stop();
-        }));
+        });
+        self.scroll_controller.set_stop_hook(hook.clone());
+        self.stop_hook = Some(hook);
+    }
+
+    fn detach_stop_hook(&mut self) {
+        if let Some(hook) = self.stop_hook.take()
+            && self.scroll_controller.clear_stop_hook(&hook)
+        {
+            self.scroll_controller.clear_pending_command();
+        }
     }
 
     /// Installs (or re-installs) the fling value listener that pushes the
@@ -760,43 +772,23 @@ impl ViewState<Scrollable> for ScrollableState {
     }
 
     fn did_update_view(&mut self, _old_view: &Scrollable, new_view: &Scrollable) {
-        // Track the current controller so the fling listener and stop hook
-        // stay in sync if a parent rebuild hands us a new configuration —
-        // both re-installs below always read `self.scroll_controller` as
-        // just updated here.
-        // A swapped-out position is no longer scrolled by this scrollable:
-        // end its activity NOW, or a swap mid-drag/mid-fling leaves the old
-        // position's `is_scrolling` stuck true forever (its status listener
-        // is about to be moved onto the new controller's position).
-        if !self
+        if self
             .scroll_controller
             .position()
             .ptr_eq(&new_view.controller.position())
         {
-            self.scroll_controller.position().set_is_scrolling(false);
+            return;
         }
+        // Stop the retired trajectory while its listeners still target the
+        // old position; its metrics must never drive the incoming position.
+        let _ = self.fling_controller.stop();
+        self.scroll_controller.position().set_is_scrolling(false);
+        self.remove_command_listener();
+        self.detach_stop_hook();
         self.scroll_controller = new_view.controller.clone();
-
-        // Re-install the fling value listener on the (possibly new)
-        // controller. `install_fling_listener` is idempotent (removes any
-        // previous listener first), so this is cheap even when the
-        // controller didn't actually change. Without this, a controller
-        // SWAP would leave the listener pushing ticks into the OLD
-        // controller forever: an `animate_to`/fling driven on the NEW
-        // controller would move `fling_controller`'s value, but nothing
-        // would ever copy it into the new controller's own `ScrollPosition`
-        // — its pixels would never move.
         self.install_fling_listener();
         self.install_fling_status_listener();
         self.install_command_listener();
-
-        // Re-install the stop hook on the (possibly new) controller —
-        // `install_stop_hook` is idempotent (see its doc), so this is cheap
-        // even when the controller didn't actually change. Without this, a
-        // controller SWAP would leave the hook on the OLD controller only:
-        // the new controller's `jump_to` would silently lose the
-        // synchronous cancel path (see `ScrollController`'s `stop_hook`
-        // field docs for the one-frame gap that reopens).
         self.install_stop_hook();
     }
 
@@ -830,8 +822,7 @@ impl ViewState<Scrollable> for ScrollableState {
         // a command queued while still attached to THIS widget would
         // otherwise resurface against a DIFFERENT `ScrollableState` if the
         // same controller is later re-attached to a new `Scrollable`.
-        self.scroll_controller.clear_stop_hook();
-        self.scroll_controller.clear_pending_command();
+        self.detach_stop_hook();
         self.fling_controller.dispose();
     }
 }

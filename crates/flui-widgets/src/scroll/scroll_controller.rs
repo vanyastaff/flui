@@ -62,7 +62,7 @@ use flui_rendering::view::{ScrollPosition, ViewportOffset};
 
 /// The synchronous `jump_to` cancellation hook — see [`ScrollController`]'s
 /// `stop_hook` field docs.
-type StopHook = Arc<dyn Fn() + Send + Sync>;
+pub(crate) type StopHook = Arc<dyn Fn() + Send + Sync>;
 
 // ---------------------------------------------------------------------------
 // Pending command — the animate_to/jump_to <-> ScrollableState handoff
@@ -396,23 +396,34 @@ impl ScrollController {
     /// mirroring `ScrollPosition::set_flush_handle`'s own re-install
     /// tolerance.
     pub(crate) fn set_stop_hook(&self, hook: StopHook) {
-        *self
+        let retired = self
             .stop_hook
             .lock()
-            .expect("BUG: stop_hook mutex poisoned — a panic escaped a locked section") =
-            Some(hook);
+            .expect("BUG: stop_hook mutex poisoned — a panic escaped a locked section")
+            .replace(hook);
+        drop(retired);
     }
 
-    /// Removes the stop hook, if any — called from `ScrollableState::dispose`
-    /// so a disposed `ScrollableState`'s fling controller isn't kept
-    /// reachable (and invoked, however harmlessly per `AnimationController::
-    /// stop`'s own `Disposed` guard) forever through an `Arc` the user-held
-    /// controller still holds after the widget that installed it is gone.
-    pub(crate) fn clear_stop_hook(&self) {
-        *self
-            .stop_hook
-            .lock()
-            .expect("BUG: stop_hook mutex poisoned — a panic escaped a locked section") = None;
+    /// Detach only the hook this owner installed. A later attachment may
+    /// have replaced it on the same shared controller.
+    pub(crate) fn clear_stop_hook(&self, owned: &StopHook) -> bool {
+        let retired = {
+            let mut hook = self
+                .stop_hook
+                .lock()
+                .expect("BUG: stop_hook mutex poisoned — a panic escaped a locked section");
+            if hook
+                .as_ref()
+                .is_some_and(|current| Arc::ptr_eq(current, owned))
+            {
+                hook.take()
+            } else {
+                None
+            }
+        };
+        let removed = retired.is_some();
+        drop(retired);
+        removed
     }
 
     /// Overwrites the pending-command slot — a later command always

@@ -594,3 +594,145 @@ pub(crate) fn a_wheel_tick_over_nested_scrollables_moves_only_the_inner() {
         "the outer scrollable must NOT also scroll — the inner claimed the tick"
     );
 }
+
+fn assert_bounce(current: f64, proposed: f64, expected: f64) {
+    use flui_widgets::{ScrollMetrics, ScrollPhysics};
+    let actual = BouncingScrollPhysics::new()
+        .apply_boundary_conditions(&ScrollMetrics::new(current, 0.0, 100.0, 300.0), proposed);
+    assert!(
+        (actual - expected).abs() < 1e-10,
+        "current={current}, proposed={proposed}: expected={expected}, actual={actual}"
+    );
+}
+
+pub(crate) fn bouncing_lower_edge_preserves_outward_direction() {
+    assert_bounce(0.0, -100.0, -52.0);
+    assert_bounce(-52.0, -62.0, -57.2);
+}
+
+pub(crate) fn bouncing_upper_edge_preserves_outward_direction() {
+    assert_bounce(100.0, 200.0, 152.0);
+    assert_bounce(152.0, 162.0, 157.2);
+}
+
+pub(crate) fn bouncing_stationary_input_preserves_overscroll() {
+    assert_bounce(-52.0, -52.0, -52.0);
+    assert_bounce(152.0, 152.0, 152.0);
+}
+
+pub(crate) fn bouncing_inward_motion_and_crossing_respect_the_new_edge() {
+    assert_bounce(-52.0, -42.0, -42.0);
+    assert_bounce(152.0, 142.0, 142.0);
+    assert_bounce(-52.0, 120.0, 110.4);
+    assert_bounce(152.0, -20.0, -10.4);
+}
+
+fn animated_scroll_content(scroll: &ScrollController, vsync: &Vsync) -> impl flui_view::View {
+    VsyncScope::new(
+        vsync.clone(),
+        Scrollable::new()
+            .controller(scroll.clone())
+            .child(SizedBox::new(300.0, 5000.0)),
+    )
+}
+
+fn advance_scroll_run(laid: &mut LaidOut) {
+    for _ in 0..3 {
+        laid.pump_for(Duration::from_millis(16));
+    }
+}
+
+pub(crate) fn a_scrollable_swap_stops_old_motion_and_retires_its_jump_hook() {
+    let old = ScrollController::new();
+    let new = ScrollController::new();
+    let vsync = Vsync::new();
+    let mut laid = crate::common::lay_out_animated(
+        animated_scroll_content(&old, &vsync),
+        tight(300.0, 300.0),
+        vsync.clone(),
+    );
+    old.animate_to(1000.0, Duration::from_millis(300), Arc::new(Curves::Linear));
+    advance_scroll_run(&mut laid);
+    assert!(old.pixels() > 0.0);
+    let retired = old.pixels();
+    laid.pump_widget(animated_scroll_content(&new, &vsync));
+    laid.pump_for(Duration::from_millis(16));
+    assert_eq!(
+        new.pixels(),
+        0.0,
+        "old trajectory must not drive the new position"
+    );
+    assert_eq!(old.pixels(), retired);
+    new.animate_to(900.0, Duration::from_millis(300), Arc::new(Curves::Linear));
+    advance_scroll_run(&mut laid);
+    let before = new.pixels();
+    assert!(before > 0.0);
+    old.jump_to(42.0);
+    laid.pump_for(Duration::from_millis(16));
+    assert!(
+        new.pixels() > before,
+        "retired controller must not stop the new run"
+    );
+    assert_eq!(old.pixels(), 42.0);
+}
+
+pub(crate) fn a_same_position_scrollable_rebuild_preserves_motion() {
+    let scroll = ScrollController::new();
+    let vsync = Vsync::new();
+    let mut laid = crate::common::lay_out_animated(
+        animated_scroll_content(&scroll, &vsync),
+        tight(300.0, 300.0),
+        vsync.clone(),
+    );
+    scroll.animate_to(1000.0, Duration::from_millis(300), Arc::new(Curves::Linear));
+    advance_scroll_run(&mut laid);
+    let before = scroll.pixels();
+    assert!(before > 0.0);
+    laid.pump_widget(animated_scroll_content(&scroll, &vsync));
+    laid.pump_for(Duration::from_millis(16));
+    assert!(
+        scroll.pixels() > before,
+        "same position keeps its active trajectory"
+    );
+}
+
+pub(crate) fn retiring_one_scrollable_preserves_a_later_owners_jump_hook() {
+    let scroll = ScrollController::new();
+    let first_vsync = Vsync::new();
+    let second_vsync = Vsync::new();
+    let mut first = crate::common::lay_out_animated(
+        animated_scroll_content(&scroll, &first_vsync),
+        tight(300.0, 300.0),
+        first_vsync.clone(),
+    );
+    let mut second = crate::common::lay_out_animated(
+        animated_scroll_content(&scroll, &second_vsync),
+        tight(300.0, 300.0),
+        second_vsync.clone(),
+    );
+    second.dispatch_pointer_down(150.0, 250.0);
+    second.dispatch_pointer_move(150.0, 180.0);
+    second.dispatch_pointer_move(150.0, 150.0);
+    second.dispatch_pointer_up(150.0, 150.0);
+    let released = scroll.pixels();
+    advance_scroll_run(&mut second);
+    assert!(
+        scroll.pixels() > released,
+        "later attachment has its own live fling"
+    );
+    let before = scroll.pixels();
+    assert!(before > 0.0);
+    first.pump_widget(SizedBox::new(300.0, 300.0));
+    // Equal-value jumps emit no position notification. Only the surviving
+    // owner's synchronous hook can stop its run before the next tick writes.
+    scroll.jump_to(before);
+    second.pump_for(Duration::from_millis(16));
+    assert_eq!(
+        scroll.pixels(),
+        before,
+        "detaching a different owner must preserve cancellation"
+    );
+    scroll.animate_to(900.0, Duration::from_millis(300), Arc::new(Curves::Linear));
+    advance_scroll_run(&mut second);
+    assert!(scroll.pixels() > before, "next command still progresses");
+}

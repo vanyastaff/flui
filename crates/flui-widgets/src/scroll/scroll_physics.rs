@@ -260,8 +260,8 @@ impl ScrollPhysics for ClampingScrollPhysics {
 // BouncingScrollPhysics — iOS-style overscroll + spring-back
 // ---------------------------------------------------------------------------
 
-/// Allows the scroll position to move past the content edge with increasing
-/// resistance, then springs back to the boundary on release.
+/// Resists outward motion past the content edge, then springs back to the
+/// boundary on release. Motion toward the edge is unrestricted.
 ///
 /// During a drag, positions past `[min, max]` are allowed but dampened by the
 /// `overscroll_spring_coefficient` (default 0.52). On release, a
@@ -302,14 +302,19 @@ impl Default for BouncingScrollPhysics {
 
 impl ScrollPhysics for BouncingScrollPhysics {
     fn apply_boundary_conditions(&self, metrics: &ScrollMetrics, proposed_pixels: f64) -> f64 {
-        if proposed_pixels < metrics.min_scroll_extent {
-            // Allow overscroll past the top/left, but dampen it.
-            let overscroll = proposed_pixels - metrics.min_scroll_extent;
-            metrics.min_scroll_extent + overscroll * self.overscroll_spring_coefficient
+        let anchor = if proposed_pixels < metrics.min_scroll_extent {
+            metrics.pixels.min(metrics.min_scroll_extent)
         } else if proposed_pixels > metrics.max_scroll_extent {
-            // Allow overscroll past the bottom/right, but dampen it.
-            let overscroll = proposed_pixels - metrics.max_scroll_extent;
-            metrics.max_scroll_extent + overscroll * self.overscroll_spring_coefficient
+            metrics.pixels.max(metrics.max_scroll_extent)
+        } else {
+            return proposed_pixels;
+        };
+        // Resist only the additional motion away from the edge. Reapplying
+        // resistance to the total overshoot reverses small outward drags.
+        if (proposed_pixels < metrics.min_scroll_extent && proposed_pixels < anchor)
+            || (proposed_pixels > metrics.max_scroll_extent && proposed_pixels > anchor)
+        {
+            anchor + (proposed_pixels - anchor) * self.overscroll_spring_coefficient
         } else {
             proposed_pixels
         }
