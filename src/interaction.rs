@@ -26,8 +26,8 @@ pub use flui_interaction::recognizers::{GestureRecognizerState, RecognizerBase};
 pub use flui_interaction::{
     CustomGestureRecognizer, DoubleTapGestureRecognizer, DragAxis, DragDownDetails, DragEndDetails,
     DragGestureRecognizer, DragStartDetails, DragUpdateDetails, EagerGestureRecognizer,
-    ForcePressGestureRecognizer, GestureRecognizer, GestureRecognizerExt, GestureSettings,
-    HorizontalDragGestureRecognizer, LongPressGestureRecognizer, MultiDragAxis,
+    ForcePressGestureRecognizer, GestureEndReason, GestureRecognizer, GestureRecognizerExt,
+    GestureSettings, HorizontalDragGestureRecognizer, LongPressGestureRecognizer, MultiDragAxis,
     MultiDragEndDetails, MultiDragGestureRecognizer, MultiDragHandle, MultiDragUpdateDetails,
     MultiTapGestureRecognizer, PanGestureRecognizer, PointerId, PointerPanZoomEvent,
     ScaleGestureRecognizer, TapAndDragGestureRecognizer, TapDragDownDetails, TapDragEndDetails,

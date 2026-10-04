@@ -113,3 +113,16 @@ subsystem-level deep-dives:
 - [`docs/HIT_TESTING.md`](HIT_TESTING.md) — hit-test walk.
 - [`docs/PERFORMANCE.md`](PERFORMANCE.md) — performance notes
   (60 fps / 16 ms / 0 alloc on hot path).
+
+
+## Accepted drag terminal reason
+
+`DragEndDetails::reason` reports `GestureEndReason::Completed` for pointer Up and
+`Cancelled` for an accepted pointer Cancel (ADR-0112). The end callback remains
+common to both outcomes; pre-acceptance rejection still reports the cancel
+callback. Velocity retains its measured value in either outcome, so consumers
+choose cancellation policy from the reason rather than inferring it from a
+zero velocity. Contact state and tracking retire before callback delivery,
+without holding the drag-state guard. The widget consumer row
+`horizontal_drag_pointer_cancel_after_acceptance_ends_and_does_not_wedge_the_detector`
+observes actual cancellation, subsequent release and both reasons.

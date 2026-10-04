@@ -736,3 +736,112 @@ pub(crate) fn retiring_one_scrollable_preserves_a_later_owners_jump_hook() {
     advance_scroll_run(&mut second);
     assert!(scroll.pixels() > before, "next command still progresses");
 }
+
+pub(crate) fn cancelling_an_in_range_scroll_ends_activity_without_coasting() {
+    let scroll = ScrollController::new();
+    let vsync = Vsync::new();
+    let mut laid = crate::common::lay_out_animated(
+        animated_scroll_content(&scroll, &vsync),
+        tight(300.0, 300.0),
+        vsync.clone(),
+    );
+    laid.dispatch_pointer_down(150.0, 250.0);
+    laid.dispatch_pointer_move(150.0, 180.0);
+    laid.dispatch_pointer_move(150.0, 150.0);
+    let cancelled_at = scroll.pixels();
+    assert!(cancelled_at > 0.0);
+    assert!(scroll.position().is_scrolling());
+    laid.dispatch_pointer_cancel();
+    for _ in 0..8 {
+        laid.pump_for(Duration::from_millis(16));
+    }
+    assert_eq!(
+        scroll.pixels(),
+        cancelled_at,
+        "cancel supplies no fling impulse"
+    );
+    assert!(!scroll.position().is_scrolling());
+    assert_eq!(
+        scroll.position().user_scroll_direction(),
+        ScrollDirection::Idle
+    );
+    laid.dispatch_pointer_down(150.0, 250.0);
+    laid.dispatch_pointer_move(150.0, 180.0);
+    laid.dispatch_pointer_move(150.0, 150.0);
+    laid.dispatch_pointer_up(150.0, 150.0);
+    let released_at = scroll.pixels();
+    advance_scroll_run(&mut laid);
+    assert!(
+        scroll.pixels() > released_at,
+        "next completed gesture still flings"
+    );
+}
+
+pub(crate) fn cancelling_bouncing_overscroll_settles_without_release_velocity() {
+    let scroll = ScrollController::new();
+    let vsync = Vsync::new();
+    let mut laid = crate::common::lay_out_animated(
+        VsyncScope::new(
+            vsync.clone(),
+            Scrollable::new()
+                .controller(scroll.clone())
+                .physics(Arc::new(BouncingScrollPhysics::new()))
+                .child(SizedBox::new(300.0, 800.0)),
+        ),
+        tight(300.0, 300.0),
+        vsync,
+    );
+    laid.dispatch_pointer_down(150.0, 40.0);
+    laid.dispatch_pointer_move(150.0, 100.0);
+    laid.dispatch_pointer_move(150.0, 140.0);
+    let overscroll = scroll.pixels();
+    assert!(overscroll < 0.0);
+    laid.dispatch_pointer_cancel();
+    laid.pump_for(Duration::from_millis(16));
+    laid.pump_for(Duration::from_millis(16));
+    assert!(
+        scroll.pixels() > overscroll,
+        "zero-impulse spring immediately recovers toward edge"
+    );
+    for _ in 0..160 {
+        laid.pump_for(Duration::from_millis(16));
+    }
+    assert!(scroll.pixels().abs() < 1.0);
+    assert!(!scroll.position().is_scrolling());
+    laid.dispatch_pointer_down(150.0, 250.0);
+    laid.dispatch_pointer_move(150.0, 180.0);
+    laid.dispatch_pointer_up(150.0, 180.0);
+    assert!(scroll.pixels() > 0.0, "next gesture advances content");
+}
+
+pub(crate) fn cancelling_a_threshold_refresh_pull_does_not_refresh() {
+    let scroll = ScrollController::new();
+    let refresh = RefreshController::new();
+    let calls = Rc::new(Cell::new(0));
+    let recorded = Rc::clone(&calls);
+    let vsync = Vsync::new();
+    let mut laid = crate::common::lay_out_animated(
+        VsyncScope::new(
+            vsync.clone(),
+            refresh_content(&scroll, &refresh)
+                .on_refresh(move |_| recorded.set(recorded.get() + 1)),
+        ),
+        tight(300.0, 300.0),
+        vsync,
+    );
+    laid.dispatch_pointer_down(150.0, 40.0);
+    laid.dispatch_pointer_move(150.0, 140.0);
+    assert!(refresh.pull_distance_px() >= 100.0);
+    laid.dispatch_pointer_cancel();
+    for _ in 0..8 {
+        laid.pump_for(Duration::from_millis(16));
+    }
+    assert_eq!(calls.get(), 0);
+    assert!(!refresh.is_refreshing());
+    assert_eq!(refresh.pull_distance_px(), 0.0);
+    assert_eq!(scroll.pixels(), 0.0);
+    laid.dispatch_pointer_down(150.0, 40.0);
+    laid.dispatch_pointer_move(150.0, 140.0);
+    laid.dispatch_pointer_up(150.0, 140.0);
+    assert_eq!(calls.get(), 1, "normal release still starts refresh");
+}

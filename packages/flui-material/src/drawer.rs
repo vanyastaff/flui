@@ -74,6 +74,7 @@ use flui_sdk::animation::{
 };
 use flui_sdk::foundation::Listenable;
 use flui_sdk::geometry::Radius;
+use flui_sdk::interaction::GestureEndReason;
 use flui_sdk::painting::{Alignment, Clip};
 use flui_sdk::painting::{BorderRadius, BorderRadiusExt, Color};
 use flui_sdk::rendering::{BoxConstraints, HitTestBehavior};
@@ -847,7 +848,10 @@ fn closed_edge_strip(
         GestureDetector::new()
             .on_horizontal_drag_update(move |_cx, details| move_core.move_by(details.primary_delta))
             .on_horizontal_drag_end(move |_cx, details| {
-                settle_core.settle(details.primary_velocity);
+                settle_core.settle(match details.reason {
+                    GestureEndReason::Completed => details.primary_velocity,
+                    GestureEndReason::Cancelled => 0.0,
+                });
             })
             .behavior(HitTestBehavior::Translucent)
             .child(SizedBox::new(drag_area_width, f64::INFINITY)),
@@ -894,7 +898,12 @@ fn open_panel(core: &Rc<DrawerControllerCore>, view: &DrawerController) -> impl 
             },
         )
         .on_horizontal_drag_update(move |_cx, details| update_core.move_by(details.primary_delta))
-        .on_horizontal_drag_end(move |_cx, details| end_core.settle(details.primary_velocity))
+        .on_horizontal_drag_end(move |_cx, details| {
+            end_core.settle(match details.reason {
+                GestureEndReason::Completed => details.primary_velocity,
+                GestureEndReason::Cancelled => 0.0,
+            });
+        })
         .on_horizontal_drag_cancel(move |_cx| cancel_core.handle_drag_cancel())
         .child(scoped)
 }

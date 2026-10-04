@@ -218,6 +218,14 @@ fn text_input_contracts() {
 fn overlay_contracts() {
     common::run_cases(&[
         (
+            "drawer::cancelled fast edge drag settles closed below halfway",
+            drawer::cancelled_fast_edge_drag_settles_closed_below_halfway,
+        ),
+        (
+            "drawer::cancelled fast panel drag settles open above halfway",
+            drawer::cancelled_fast_panel_drag_settles_open_above_halfway,
+        ),
+        (
             "dialog::a tap on an action fires its handler",
             dialog::a_tap_on_an_action_fires_its_handler,
         ),

@@ -66,7 +66,7 @@ pub use double_tap::{DoubleTapDetails, DoubleTapGestureRecognizer};
 pub use drag::{
     DragCancelCallback, DragDownCallback, DragDownDetails, DragEndCallback, DragEndDetails,
     DragGestureRecognizer, DragStartCallback, DragStartDetails, DragUpdateCallback,
-    DragUpdateDetails,
+    DragUpdateDetails, GestureEndReason,
 };
 pub use eager::EagerGestureRecognizer;
 pub use force_press::ForcePressGestureRecognizer;

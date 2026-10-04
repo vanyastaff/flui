@@ -64,7 +64,7 @@ use flui_foundation::geometry::{EdgeInsets, Offset, Point, Rect};
 use flui_interaction::Velocity;
 use flui_interaction::events::{Modifiers, ScrollEventData};
 use flui_interaction::routing::EventPropagation;
-use flui_interaction::{DragEndDetails, DragStartDetails, DragUpdateDetails};
+use flui_interaction::{DragEndDetails, DragStartDetails, DragUpdateDetails, GestureEndReason};
 use flui_objects::SubtreeAnchor;
 use flui_painting::Alignment;
 use flui_painting::paint::Clip;
@@ -135,6 +135,8 @@ pub struct InteractionUpdateDetails {
 /// Details passed to `on_interaction_end`.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct InteractionEndDetails {
+    /// Normal completion or an interrupted pointer gesture.
+    pub reason: GestureEndReason,
     /// The gesture's release velocity. [`Velocity::ZERO`] for a discrete
     /// wheel-scale interaction (there is no release to measure).
     pub velocity: Velocity,
@@ -576,6 +578,7 @@ impl ViewState<InteractiveViewer> for InteractiveViewerState {
                     callback(
                         cx,
                         InteractionEndDetails {
+                            reason: details.reason,
                             velocity: details.velocity,
                         },
                     );
@@ -672,6 +675,7 @@ impl ViewState<InteractiveViewer> for InteractiveViewerState {
                         callback(
                             cx,
                             InteractionEndDetails {
+                                reason: GestureEndReason::Completed,
                                 velocity: Velocity::ZERO,
                             },
                         );
@@ -802,6 +806,7 @@ impl ViewState<InteractiveViewer> for InteractiveViewerState {
                         callback(
                             cx,
                             InteractionEndDetails {
+                                reason: GestureEndReason::Completed,
                                 velocity: Velocity::ZERO,
                             },
                         );

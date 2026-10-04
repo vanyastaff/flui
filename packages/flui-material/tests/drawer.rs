@@ -34,23 +34,8 @@
 //! synchronous effects (a bare `set_value`, or a same-tick status flip) and
 //! never call `pump_for`/`tick_all` expecting real animation progress.
 //!
-//! # Harness limitation: no pointer capture
-//!
-//! `LaidOut::dispatch_pointer_move` re-hit-tests at the NEW position on every
-//! call (`packages/flui-material/tests/common/mod.rs`'s own doc: "no pointer
-//! capture") — a real windowing backend instead keeps routing every
-//! subsequent move/up to whoever captured the down, regardless of where the
-//! pointer physically is now. The default closed-state edge strip is only
-//! 20px wide (`_kEdgeDragWidth`) — a REALISTIC open-drag immediately carries
-//! the pointer outside those 20px, so a headless re-hit-test at the new
-//! position finds nothing there and the recognizer silently stops receiving
-//! events. This is a genuine, structural harness gap (shared by both
-//! `flui-widgets` and `flui-material`'s copies of the harness), not a
-//! `Drawer`/`Scaffold` bug — production dispatch has real pointer capture.
-//! Tests below that need a drag to travel more than ~18px (the default pan
-//! slop) past its start use `Scaffold::drawer_edge_drag_width` to widen the
-//! strip to cover the whole drag path, working around the harness gap
-//! without touching production defaults.
+//! Pointer moves and cancellation use the binding's captured Down route.
+//! Cancellation coverage below uses the ordinary edge width.
 
 use crate::common;
 
@@ -191,9 +176,7 @@ pub fn scrim_mounts_when_open_and_a_tap_closes_the_drawer() {
         themed_animated(
             Scaffold::new()
                 .drawer(Drawer::new())
-                // Widened so the opening drag stays within the strip's own
-                // hit-test bounds — see the module docs' "harness
-                // limitation" note (no pointer capture in this harness).
+                // Exercise an explicitly widened edge activation region.
                 .drawer_edge_drag_width(400.0)
                 .body(probe),
             &vsync,
@@ -283,9 +266,7 @@ pub fn a_fast_release_below_halfway_flings_the_drawer_open_rather_than_snapping_
         themed_animated(
             Scaffold::new()
                 .drawer(Drawer::new())
-                // Widened so the whole drag path stays within the strip's own
-                // hit-test bounds — see the module docs' "harness limitation"
-                // note (no pointer capture in this harness).
+                // Exercise an explicitly widened edge activation region.
                 .drawer_edge_drag_width(400.0)
                 .body(probe),
             &vsync,
@@ -329,3 +310,88 @@ pub fn a_fast_release_below_halfway_flings_the_drawer_open_rather_than_snapping_
 // ============================================================================
 // 6. End-drawer mirror + dynamic ordering with both drawers configured.
 // ============================================================================
+
+pub fn cancelled_fast_edge_drag_settles_closed_below_halfway() {
+    cancelled_fast_drag_settles_by_position(false);
+}
+
+pub fn cancelled_fast_panel_drag_settles_open_above_halfway() {
+    cancelled_fast_drag_settles_by_position(true);
+}
+
+fn cancelled_fast_drag_settles_by_position(initially_open: bool) {
+    let vsync = Vsync::new();
+    let handle_slot = Rc::new(RefCell::new(None));
+    let probe = HandleProbe {
+        slot: Rc::clone(&handle_slot),
+        on_tap: Rc::new(|_handle| {}),
+    };
+    let mut laid = lay_out_animated(
+        themed_animated(Scaffold::new().drawer(Drawer::new()).body(probe), &vsync),
+        tight(400.0, 800.0),
+        vsync,
+    );
+    let handle = handle_slot
+        .borrow()
+        .clone()
+        .expect("drawer handle captured");
+    if initially_open {
+        laid.enter_owner_scope(|| handle.open_drawer());
+        for _ in 0..FLING_SETTLE_PUMPS {
+            laid.pump_for(FRAME);
+        }
+        assert!(handle.is_drawer_open());
+        laid.dispatch_pointer_down(250.0, 400.0);
+        laid.dispatch_pointer_move(215.0, 400.0);
+        laid.dispatch_pointer_move(185.0, 400.0);
+        laid.dispatch_pointer_move(155.0, 400.0);
+    } else {
+        laid.dispatch_pointer_down(5.0, 400.0);
+        laid.dispatch_pointer_move(40.0, 400.0);
+        laid.dispatch_pointer_move(70.0, 400.0);
+        laid.dispatch_pointer_move(100.0, 400.0);
+    }
+    laid.dispatch_pointer_cancel();
+    for _ in 0..FLING_SETTLE_PUMPS {
+        laid.pump_for(FRAME);
+    }
+    assert_eq!(
+        handle.is_drawer_open(),
+        initially_open,
+        "cancellation must settle from position instead of the last fast movement"
+    );
+    assert_eq!(
+        laid.try_find_by_render_type("RenderDecoratedBox").is_some(),
+        initially_open,
+        "the settled scrim must agree with the drawer's open state"
+    );
+
+    // A fresh completed gesture must still use its measured velocity and
+    // settle to the opposite endpoint after cancellation cleared the contact.
+    if initially_open {
+        laid.dispatch_pointer_down(250.0, 400.0);
+        laid.dispatch_pointer_move(215.0, 400.0);
+        laid.dispatch_pointer_move(185.0, 400.0);
+        laid.dispatch_pointer_move(155.0, 400.0);
+        laid.dispatch_pointer_up(155.0, 400.0);
+    } else {
+        laid.dispatch_pointer_down(5.0, 400.0);
+        laid.dispatch_pointer_move(40.0, 400.0);
+        laid.dispatch_pointer_move(70.0, 400.0);
+        laid.dispatch_pointer_move(100.0, 400.0);
+        laid.dispatch_pointer_up(100.0, 400.0);
+    }
+    for _ in 0..FLING_SETTLE_PUMPS {
+        laid.pump_for(FRAME);
+    }
+    assert_eq!(
+        handle.is_drawer_open(),
+        !initially_open,
+        "a completed gesture after cancellation must still commit its release"
+    );
+    assert_eq!(
+        laid.try_find_by_render_type("RenderDecoratedBox").is_some(),
+        !initially_open,
+        "the recovered gesture must settle the visible drawer too"
+    );
+}

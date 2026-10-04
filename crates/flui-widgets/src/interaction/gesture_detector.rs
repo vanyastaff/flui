@@ -337,6 +337,8 @@ impl GestureDetector {
     /// Called once when the pan/drag ends (pointer up), carrying the release
     /// velocity.
     #[must_use]
+    /// Accepted pointer cancellation also delivers this callback, with
+    /// [`DragEndDetails::reason`] set to [`flui_interaction::GestureEndReason::Cancelled`].
     pub fn on_pan_end<F, R>(mut self, callback: F) -> Self
     where
         F: Fn(&mut EventCx<'_>, DragEndDetails) -> R + 'static,
@@ -389,6 +391,8 @@ impl GestureDetector {
     /// release velocity. Mutually exclusive with `on_pan_*` on one detector;
     /// see the type docs.
     #[must_use]
+    /// Accepted pointer cancellation delivers an end with
+    /// [`DragEndDetails::reason`] set to [`flui_interaction::GestureEndReason::Cancelled`].
     pub fn on_horizontal_drag_end<F, R>(mut self, callback: F) -> Self
     where
         F: Fn(&mut EventCx<'_>, DragEndDetails) -> R + 'static,

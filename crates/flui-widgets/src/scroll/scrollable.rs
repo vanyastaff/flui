@@ -641,10 +641,15 @@ impl ViewState<Scrollable> for ScrollableState {
                     // direction the scroll offset increases when the finger
                     // moves the opposite way, so we negate; for a reversed one
                     // (`up`/`left`) the two negations cancel.
-                    let raw_velocity = match scroll_direction {
-                        Axis::Vertical => details.velocity.pixels_per_second.dy,
-                        Axis::Horizontal => details.velocity.pixels_per_second.dx,
-                    };
+                    let raw_velocity =
+                        if details.reason == flui_interaction::GestureEndReason::Cancelled {
+                            0.0
+                        } else {
+                            match scroll_direction {
+                                Axis::Vertical => details.velocity.pixels_per_second.dy,
+                                Axis::Horizontal => details.velocity.pixels_per_second.dx,
+                            }
+                        };
                     let fling_velocity_px_per_sec = if axis_direction.is_reversed() {
                         raw_velocity
                     } else {

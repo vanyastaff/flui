@@ -1945,3 +1945,44 @@ scrollables driving one position. The public rows
 `a_same_position_scrollable_rebuild_preserves_motion` and
 `retiring_one_scrollable_preserves_a_later_owners_jump_hook` exercise virtual
 frames, retired-controller commands and a shared-controller detach.
+
+
+### Accepted gesture cancellation does not commit a release action
+
+Accepted drag cancellation still reaches `on_end`, carrying
+`GestureEndReason::Cancelled`; normal release carries `Completed` (ADR-0112).
+Pre-acceptance rejection remains `on_cancel`. Recognizers clear their contact
+before either terminal callback and invoke it without a state lock.
+`horizontal_drag_pointer_cancel_after_acceptance_ends_and_does_not_wedge_the_detector`
+observes both reasons and a subsequent contact.
+
+`Scrollable` excludes measured velocity on cancellation. In-range cancellation
+ends activity and resets direction to idle; overscroll uses zero-impulse physics
+recovery, with the existing ambient-vsync requirement. Public rows
+`cancelling_an_in_range_scroll_ends_activity_without_coasting` and
+`cancelling_bouncing_overscroll_settles_without_release_velocity` advance virtual
+frames and then perform a new gesture. `RefreshIndicator` resets a cancelled
+pull without starting refresh, even past its threshold, and permits only the
+same zero-impulse boundary recovery; an already-active refresh remains active.
+`cancelling_a_threshold_refresh_pull_does_not_refresh` distinguishes cancellation
+from the next completed pull.
+
+`Dismissible` cancels drag ownership before reversing to its original location,
+including a drag at its completed move bound. It discards transient completion
+rather than applying dismissal thresholds or release velocity. Public horizontal
+and vertical rows `a_cancelled_horizontal_dismiss_restores_the_card` and
+`a_cancelled_vertical_dismiss_restores_the_card` check no dismissal, restored
+hit location and the next completed dismissal in `animation_and_visibility`.
+The row `cancelling_a_fully_slid_card_restores_it_without_dismissal` covers the
+completed-bound bypass through an actual out-of-bounds pointer move.
+A cancelled back swipe restores the still-current route regardless of its
+position or velocity; a route already navigated away retains the existing
+active-route settling policy. The public PageRoute row
+`cancelling_a_back_swipe_past_halfway_keeps_the_route` checks the route, gesture
+counter and next completed swipe.
+
+`InteractiveViewer` clears pan bookkeeping and forwards the reason to
+`InteractionEndDetails`. Discrete wheel and panzoom updates synthesize
+`Completed`, without claiming a physical pointer release.
+`viewer_reports_cancelled_then_completed_interactions` checks what the public
+callback observes. The viewer still has no built-in pan inertia.

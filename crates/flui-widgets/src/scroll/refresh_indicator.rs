@@ -537,6 +537,14 @@ impl ViewState<RefreshIndicator> for RefreshIndicatorState {
                         if rc_end.is_refreshing() {
                             return;
                         }
+                        if details.reason == flui_interaction::GestureEndReason::Cancelled {
+                            rc_end.set_pull_distance_px(0.0);
+                            let metrics = ScrollMetrics::from(&sc_end.position());
+                            if let Some(sim) = ph_end.create_ballistic_simulation(&metrics, 0.0) {
+                                let _ = fc_fling.animate_with(sim);
+                            }
+                            return;
+                        }
                         let pull = rc_end.pull_distance_px();
                         if pull >= threshold_px {
                             // Sufficient overscroll: enter refreshing state and

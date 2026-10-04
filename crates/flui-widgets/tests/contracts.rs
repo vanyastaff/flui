@@ -149,6 +149,7 @@ fn pointer_and_gesture_recognition() {
     run_cases(
         "pointer_and_gesture_recognition",
         &[
+            ("gesture_detector::viewer_reports_cancelled_then_completed_interactions", crate::gesture_detector::viewer_reports_cancelled_then_completed_interactions as fn()),
             ("gesture_detector::gesture_detector_fires_on_tap_for_a_down_up_on_the_child", crate::gesture_detector::gesture_detector_fires_on_tap_for_a_down_up_on_the_child as fn()),
             ("gesture_detector::gesture_detector_recognizes_a_pan_and_suppresses_the_tap", crate::gesture_detector::gesture_detector_recognizes_a_pan_and_suppresses_the_tap),
             ("gesture_detector_advanced::double_tap_combined_with_tap_fires_double_tap_once_and_tap_never", crate::gesture_detector_advanced::double_tap_combined_with_tap_fires_double_tap_once_and_tap_never),
@@ -212,6 +213,9 @@ fn scroll_physics_and_activity() {
     run_cases(
         "scroll_physics_and_activity",
         &[
+            ("scroll::cancelling_an_in_range_scroll_ends_activity_without_coasting", crate::scroll::cancelling_an_in_range_scroll_ends_activity_without_coasting as fn()),
+            ("scroll::cancelling_bouncing_overscroll_settles_without_release_velocity", crate::scroll::cancelling_bouncing_overscroll_settles_without_release_velocity as fn()),
+            ("scroll::cancelling_a_threshold_refresh_pull_does_not_refresh", crate::scroll::cancelling_a_threshold_refresh_pull_does_not_refresh as fn()),
             ("scroll::bouncing_lower_edge_preserves_outward_direction", crate::scroll::bouncing_lower_edge_preserves_outward_direction as fn()),
             ("scroll::bouncing_upper_edge_preserves_outward_direction", crate::scroll::bouncing_upper_edge_preserves_outward_direction as fn()),
             ("scroll::bouncing_stationary_input_preserves_overscroll", crate::scroll::bouncing_stationary_input_preserves_overscroll as fn()),
@@ -275,6 +279,7 @@ fn navigator_and_overlay() {
     run_cases(
         "navigator_and_overlay",
         &[
+            ("back_gesture::cancelling_a_back_swipe_past_halfway_keeps_the_route", crate::back_gesture::cancelling_a_back_swipe_past_halfway_keeps_the_route as fn()),
             ("navigator::local_history::an_entry_pops_before_the_route_and_observers_stay_silent", crate::navigator::local_history::an_entry_pops_before_the_route_and_observers_stay_silent as fn()),
             ("navigator::navigator_pop_removes_top_route_and_completes_result", crate::navigator::navigator_pop_removes_top_route_and_completes_result),
             ("navigator::navigator_push_builds_new_route_and_rearranges_overlay", crate::navigator::navigator_push_builds_new_route_and_rearranges_overlay),
@@ -339,6 +344,9 @@ fn animation_and_visibility() {
     run_cases(
         "animation_and_visibility",
         &[
+            ("dismissible::cancelling_a_fully_slid_card_restores_it_without_dismissal", crate::dismissible::cancelling_a_fully_slid_card_restores_it_without_dismissal as fn()),
+            ("dismissible::a_cancelled_horizontal_dismiss_restores_the_card", crate::dismissible::a_cancelled_horizontal_dismiss_restores_the_card as fn()),
+            ("dismissible::a_cancelled_vertical_dismiss_restores_the_card", crate::dismissible::a_cancelled_vertical_dismiss_restores_the_card as fn()),
             ("animated_size::animated_size_interpolates_to_a_new_child_size_over_frames", crate::animated_size::animated_size_interpolates_to_a_new_child_size_over_frames as fn()),
             ("implicit_animations::animated_container_interpolates_size_over_frames", crate::implicit_animations::animated_container_interpolates_size_over_frames),
             ("implicit_animations::animated_opacity_retargets_from_the_current_value_midflight", crate::implicit_animations::animated_opacity_retargets_from_the_current_value_midflight),

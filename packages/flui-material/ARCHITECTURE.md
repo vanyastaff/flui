@@ -263,3 +263,20 @@ button semantics after an ordinary callback panic, and fresh-action input.
 The pointer recovery row observes the resulting disabled button; it does not
 isolate scheduling order because `InkWell` also schedules pressed-state
 updates before invoking the action.
+
+### Drawer cancellation settles without release momentum
+
+Drawer edge and panel consumers use measured velocity only for
+`GestureEndReason::Completed`. For `Cancelled` they settle with zero velocity,
+choosing the resting endpoint from the current position, as the panel's
+preacceptance cancellation already does. Cancellation cannot turn a short
+fast movement into a fling toward the opposite endpoint.
+
+The `overlay_contracts` rows
+`tests/drawer.rs::cancelled_fast_edge_drag_settles_closed_below_halfway`
+and `cancelled_fast_panel_drag_settles_open_above_halfway` dispatch pointer
+cancellation, tick the settle animation and check both the public handle and
+the mounted scrim, then complete a fresh gesture to the opposite endpoint.
+The existing
+`a_fast_release_below_halfway_flings_the_drawer_open_rather_than_snapping_shut`
+row preserves the ordinary-release velocity contract.

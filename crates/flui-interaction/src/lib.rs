@@ -251,12 +251,13 @@ pub use recognizers::{
     DoubleTapDetails, DoubleTapGestureRecognizer, DragCancelCallback, DragDownCallback,
     DragDownDetails, DragEndCallback, DragEndDetails, DragGestureRecognizer, DragStartCallback,
     DragStartDetails, DragUpdateCallback, DragUpdateDetails, EagerGestureRecognizer,
-    ForcePressGestureRecognizer, GestureRecognizer, LongPressGestureRecognizer, MultiDragAxis,
-    MultiDragEndDetails, MultiDragGestureRecognizer, MultiDragHandle, MultiDragStartCallback,
-    MultiDragUpdateDetails, MultiTapGestureRecognizer, ScaleGestureRecognizer,
-    TapAndDragGestureRecognizer, TapDragDownCallback, TapDragDownDetails, TapDragEndCallback,
-    TapDragEndDetails, TapDragStartCallback, TapDragStartDetails, TapDragUpCallback,
-    TapDragUpDetails, TapDragUpdateCallback, TapDragUpdateDetails, TapGestureRecognizer,
+    ForcePressGestureRecognizer, GestureEndReason, GestureRecognizer, LongPressGestureRecognizer,
+    MultiDragAxis, MultiDragEndDetails, MultiDragGestureRecognizer, MultiDragHandle,
+    MultiDragStartCallback, MultiDragUpdateDetails, MultiTapGestureRecognizer,
+    ScaleGestureRecognizer, TapAndDragGestureRecognizer, TapDragDownCallback, TapDragDownDetails,
+    TapDragEndCallback, TapDragEndDetails, TapDragStartCallback, TapDragStartDetails,
+    TapDragUpCallback, TapDragUpDetails, TapDragUpdateCallback, TapDragUpdateDetails,
+    TapGestureRecognizer,
 };
 // Re-exports for the drag axis sub-recognisers (vertical, horizontal, pan).
 // Aliased to `DragGestureRecognizer` so a recogniser's axis is fixed at the
