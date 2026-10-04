@@ -400,6 +400,39 @@ pub(crate) mod text_store {
         slot.take().expect("the grant ran")
     }
 
+    pub(crate) fn rtl_scalar_rect_midpoints_resolve_to_the_source_scalar() {
+        use flui_foundation::geometry::Point;
+        use flui_platform_api::text_store::{PointMode, Utf16Range};
+        let controller = TextEditingController::with_text("אב");
+        let (harness, _focus) = focused(&controller);
+        let field = store(&harness);
+        read(&field, |session| {
+            for scalar in 0..2 {
+                let from = session
+                    .rect_for_range(Utf16Range::collapsed(at(scalar)))
+                    .expect("laid-out scalar caret")
+                    .bounds;
+                let to = session
+                    .rect_for_range(Utf16Range::collapsed(at(scalar + 1)))
+                    .expect("laid-out next scalar caret")
+                    .bounds;
+                assert!(from.origin.x > to.origin.x, "Hebrew source carets descend");
+                let point = Point::new(
+                    from.origin.x.midpoint(to.origin.x),
+                    from.origin.y + from.size.height / 2.0,
+                );
+                assert_eq!(
+                    session.index_at_point(point, PointMode::Exact),
+                    Ok(at(scalar))
+                );
+                assert_eq!(
+                    session.index_at_point(from.origin, PointMode::Nearest),
+                    Ok(at(scalar))
+                );
+            }
+        });
+    }
+
     /// The store's UTF-16 offsets and the controller's UTF-8 bytes name the
     /// same positions, in both directions.
     pub(crate) fn store_offsets_match_controller_bytes_across_surrogates_and_graphemes() {
@@ -547,3 +580,4 @@ pub(crate) mod event_cx {
         assert_eq!(probe.value(), Ok(0));
     }
 }
+

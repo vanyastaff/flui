@@ -1986,3 +1986,13 @@ counter and next completed swipe.
 `Completed`, without claiming a physical pointer release.
 `viewer_reports_cancelled_then_completed_interactions` checks what the public
 callback observes. The viewer still has no built-in pan inertia.
+
+
+### Text-store exact points use source scalar intervals in either direction
+
+`TextStoreRead::index_at_point(Exact)` tests the interval between consecutive
+source-scalar carets using its minimum and maximum x coordinate. An RTL pair
+therefore names its source scalar rather than being treated as outside the text.
+This retains the per-scalar caret contract; it does not introduce a visual-run
+hit topology for discontinuous mixed-bidi ranges. `Nearest` remains a boundary
+query. **Test:** `rtl_scalar_rect_midpoints_resolve_to_the_source_scalar`.
