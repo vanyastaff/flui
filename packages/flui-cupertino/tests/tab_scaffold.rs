@@ -142,7 +142,7 @@ pub fn out_of_range_controller_selection_reports_error_and_recovers() {
         SizedBox::new(400.0, 800.0).child(MediaQuery::new(MediaQueryData::default(), scaffold)),
         tight(400.0, 800.0),
     );
-    assert!(laid.find_all_by_render_type("RenderErrorBox").is_empty());
+    assert_eq!(laid.find_all_by_render_type("RenderErrorBox"), []);
 
     controller.set_index(2);
     laid.tick();
@@ -153,7 +153,7 @@ pub fn out_of_range_controller_selection_reports_error_and_recovers() {
 
     controller.set_index(1);
     laid.tick();
-    assert!(laid.find_all_by_render_type("RenderErrorBox").is_empty());
+    assert_eq!(laid.find_all_by_render_type("RenderErrorBox"), []);
     laid.dispatch_pointer_down(100.0, 790.0);
     laid.dispatch_pointer_up(100.0, 790.0);
     laid.tick();

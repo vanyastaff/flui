@@ -509,7 +509,7 @@ pub fn logical_render_root_tracks_replacement_and_build_recovery() {
                 assert!(laid.try_size(root).is_some());
             }
             _ => {
-                assert!(laid.find_all_by_render_type("RenderErrorBox").is_empty());
+                assert_eq!(laid.find_all_by_render_type("RenderErrorBox"), []);
                 assert_eq!(root, laid.find_by_render_type("RenderConstrainedBox"));
                 assert_eq!(laid.size(root), Size::new(20.0, 10.0));
             }

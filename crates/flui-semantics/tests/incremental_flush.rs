@@ -154,7 +154,7 @@ fn detaching_checks_the_actual_parent_and_preserves_reparenting() {
                 .expect("changed parent published")
                 .1
         };
-        assert!(published(first_id.as_u64()).children().is_empty());
+        assert_eq!(published(first_id.as_u64()).children(), []);
         assert_eq!(
             published(second_id.as_u64()).children(),
             &[accesskit::NodeId(child_id.as_u64())]
