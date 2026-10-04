@@ -373,14 +373,13 @@ fn colour_emoji_on_line_two(renderer: &crate::headless::HeadlessRenderer) {
     );
 }
 
-/// Under `Rtl` at a finite width each line's visible end is at the
-/// paragraph box's right edge, the shorter second line included: each line
-/// is aligned in the paragraph's own box, which the paint offset places at
-/// the right of the width it was laid out at.
+/// RTL lines end at their allocated box's right edge, including the shorter
+/// second line. Tight allocation fills its width; a loose wrap cap does not
+/// expand the paragraph beyond the independently measured longest line.
 fn arabic_rtl_right_aligns_each_line(renderer: &crate::headless::HeadlessRenderer) {
     let fonts = FontCollection::with_host_fonts(&flui_painting::HostFonts::scan());
     let max_width = f64::from(WIDE.0) - 16.0;
-    let painter = laid_out(
+    let mut painter = laid_out(
         &fonts,
         "مرحبا بالعالم\u{2028}عالم",
         black(32.0),
@@ -391,24 +390,42 @@ fn arabic_rtl_right_aligns_each_line(renderer: &crate::headless::HeadlessRendere
         println!("arabic_rtl_right_aligns_each_line: skipped, no host face covers Arabic");
         return;
     }
-    let pixels = read_back(renderer, &painter, 1.0);
-    let right = ORIGIN.dx + max_width;
-    for line in 0..2 {
-        let ink = ink_in(&pixels, band(&painter, line), everywhere(), inked);
-        let edge = ink
-            .iter()
-            .map(|(x, _)| *x)
-            .max()
-            .expect("each line is inked");
-        // Within a sixth of an em: the right side bearing of the line's
-        // last visual glyph. A line left in its Parley alignment box, or
-        // shifted by the paint offset a second time, lands a line's slack
-        // (here tens of pixels) away.
-        assert!(
-            (f64::from(edge) + 1.0 - right).abs() <= 32.0 / 6.0,
-            "line {} ends its ink at {edge}, the box's right edge is {right}",
-            line + 1
+    let longest = laid_out(
+        &fonts,
+        "مرحبا بالعالم",
+        black(32.0),
+        TextDirection::Rtl,
+        f64::INFINITY,
+    )
+    .width();
+    assert!(
+        longest + 32.0 < max_width,
+        "the loose and tight boxes differ"
+    );
+    for (min_width, allocation) in [(0.0, longest), (max_width, max_width)] {
+        painter.layout(
+            &mut flui_painting::TextContext::new(&fonts),
+            min_width,
+            max_width,
         );
+        assert!((painter.width() - allocation).abs() < 0.01);
+        let pixels = read_back(renderer, &painter, 1.0);
+        let right = ORIGIN.dx + allocation;
+        for line in 0..2 {
+            let ink = ink_in(&pixels, band(&painter, line), everywhere(), inked);
+            let edge = ink
+                .iter()
+                .map(|(x, _)| *x)
+                .max()
+                .expect("each line is inked");
+            // Allow the visual glyph's side bearing, but not a line's slack
+            // or a second alignment shift at replay.
+            assert!(
+                (f64::from(edge) + 1.0 - right).abs() <= 32.0 / 6.0,
+                "min width {min_width}, line {} ends at {edge}, expected right edge {right}",
+                line + 1
+            );
+        }
     }
 }
 
