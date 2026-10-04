@@ -691,6 +691,15 @@ sampling or the existing near-origin inverse threshold. Public consumer test
 constant-velocity limit, positive and negative normal flings, position/time
 round trips and unreachable/non-finite queries.
 
+### Smoothing survives an idle tick
+
+`SmoothDamp`'s overshoot guard places the follower exactly at its target and
+sets its velocity to zero. That assignment does not divide by elapsed time:
+a zero-duration tick while at rest must leave the follower usable for its
+next target. `damped_motion_remains_usable_after_idle_ticks` checks positive
+and negative retargeting after a zero-duration idle tick, with an ordinary
+idle tick as a control, through the public smoothing API.
+
 ## Composition Model
 
 Animations compose via `Arc<dyn Animation<f64>>`:

@@ -1,6 +1,6 @@
-//! Public friction simulation behavior.
+//! Public numerical simulation and smoothing behavior.
 
-use flui_animation::{FrictionSimulation, Simulation};
+use flui_animation::{FrictionSimulation, Simulation, SmoothDamp};
 
 fn weak_drag_preserves_frame_motion() {
     // Only public simulation operations: constant velocity is the
@@ -73,6 +73,62 @@ fn friction_preserves_small_decay_and_position_time_roundtrips() {
         (
             "unreachable and stationary queries",
             unreachable_and_stationary_queries,
+        ),
+    ]);
+}
+
+fn damp_follows_target_after_idle_tick(initial: f64, target: f64, idle_dt: f64) {
+    let mut damp = SmoothDamp::new(0.2);
+    assert_eq!(damp.step(initial, initial, idle_dt), initial);
+    let mut position = initial;
+    for _ in 0..240 {
+        let next = damp.step(position, target, 1.0 / 120.0);
+        assert!(
+            next.is_finite(),
+            "motion after an idle tick must stay finite"
+        );
+        assert!(
+            next >= initial.min(target) && next <= initial.max(target),
+            "a damped follower must stay between start and target: {next}"
+        );
+        assert!(
+            (next - target).abs() <= (position - target).abs(),
+            "motion must approach its new target"
+        );
+        position = next;
+    }
+    assert!(
+        (position - target).abs() < 0.5,
+        "follower must settle: {position}"
+    );
+}
+
+fn zero_elapsed_idle_then_positive_target() {
+    damp_follows_target_after_idle_tick(0.0, 100.0, 0.0);
+}
+
+fn zero_elapsed_idle_then_negative_target() {
+    damp_follows_target_after_idle_tick(10.0, -90.0, 0.0);
+}
+
+fn ordinary_idle_then_positive_target() {
+    damp_follows_target_after_idle_tick(0.0, 100.0, 1.0 / 120.0);
+}
+
+#[test]
+fn damped_motion_remains_usable_after_idle_ticks() {
+    crate::run_table(&[
+        (
+            "zero elapsed idle then positive target",
+            zero_elapsed_idle_then_positive_target,
+        ),
+        (
+            "zero elapsed idle then negative target",
+            zero_elapsed_idle_then_negative_target,
+        ),
+        (
+            "ordinary idle then positive target",
+            ordinary_idle_then_positive_target,
         ),
     ]);
 }
