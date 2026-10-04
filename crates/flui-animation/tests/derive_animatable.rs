@@ -12,6 +12,9 @@ use flui_animation::{Animatable, TwoWayConverter};
 #[path = "contracts/simulation.rs"]
 mod simulation;
 
+#[path = "contracts/proxy.rs"]
+mod proxy;
+
 #[derive(Clone, Animatable)]
 struct Translation {
     x: f64,

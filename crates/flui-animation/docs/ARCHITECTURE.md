@@ -841,3 +841,17 @@ pub trait CurveExt: Curve + Sized {
     fn then<C: Curve>(self, next: C) -> ChainedCurve<Self, C>;
 }
 ```
+
+### Proxy queries release the parent guard before user code
+
+A custom `Animation` may replace a proxy's parent from its `value` or `status`
+query. Proxy queries clone the current parent under the read guard, then invoke
+that parent after the guard is released. The query returns the sampled parent's
+result; the next query observes the replacement. The old-status sample during
+`set_parent` follows the same rule. This does not serialize concurrent setters
+or claim that their separate subscription swaps are atomic.
+
+`proxy_parent_queries_allow_reentrant_replacement` uses public custom animation
+implementations for value, status and old-status-during-swap reentry, then checks
+the next parent change still delivers notifications. Each case runs in a bounded
+child process so a reverted read guard cannot hang the parent test runner.
