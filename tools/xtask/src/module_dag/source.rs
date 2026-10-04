@@ -1,6 +1,7 @@
 //! One crate's module tree read with syn: its top-level modules, every
 //! `crate`-relative path its non-test code names, and the `use` items that
-//! relay a name from one module to another.
+//! relay a name from one module to another. Conditional bindings retain every
+//! source, so every possible owning module contributes an edge.
 //!
 //! Everything here is pure over [`Sources`], so the tests and the self-test
 //! run it on crates that exist only in memory.
@@ -95,12 +96,13 @@ enum Target {
 /// The non-test `use` items directly in one module.
 #[derive(Debug, Default)]
 struct UseTable {
-    names: BTreeMap<String, Target>,
+    // Non-test cfg alternatives must not overwrite each other.
+    names: BTreeMap<String, Vec<Target>>,
     globs: Vec<Target>,
 }
 
 /// What an absolute path resolves to.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(super) enum Resolved {
     /// An item of this top-level module.
     Module(String),
@@ -193,7 +195,13 @@ impl Loader<'_> {
     ) -> anyhow::Result<()> {
         for item in items {
             let test_only = test_only || implies_test(item_attrs(item));
+            let test_only = if let Item::Mod(child) = item {
+                !self.module(module, child, file, dir, test_only)?
+            } else {
+                test_only
+            };
             if let [top] = module
+                && !test_only
                 && !matches!(item, Item::Use(_))
             {
                 self.scan
@@ -206,10 +214,7 @@ impl Loader<'_> {
                     });
             }
             match item {
-                Item::Mod(child) => {
-                    self.module(module, child, file, dir, test_only)?;
-                    continue;
-                }
+                Item::Mod(_) => continue,
                 Item::Use(item_use) if !test_only && module.len() <= 1 => {
                     let table = match module.first() {
                         None => &mut self.scan.root_uses,
@@ -229,7 +234,7 @@ impl Loader<'_> {
                         };
                         match leaf.binds {
                             Some(name) if name != "_" => {
-                                table.names.insert(name, target);
+                                table.names.entry(name).or_default().push(target);
                             }
                             Some(_) => {}
                             None => table.globs.push(target),
@@ -279,7 +284,8 @@ impl Loader<'_> {
     }
 
     /// A `mod` item inside `module`, whose own items live in `file` and
-    /// whose `mod x;` children live under `dir`.
+    /// whose `mod x;` children live under `dir`. Returns whether the module
+    /// is compiled outside tests after both outer and file-level cfgs.
     fn module(
         &mut self,
         module: &[String],
@@ -287,7 +293,7 @@ impl Loader<'_> {
         file: &str,
         dir: &str,
         mut test_only: bool,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<bool> {
         let name = child.ident.to_string();
         let path: Vec<String> = module.iter().cloned().chain([name.clone()]).collect();
         let line = child.mod_token.span.start().line;
@@ -333,7 +339,7 @@ impl Loader<'_> {
         if module.is_empty() && !test_only {
             self.scan.modules.insert(name, child_file);
         }
-        Ok(())
+        Ok(!test_only)
     }
 }
 
@@ -734,10 +740,14 @@ fn token_paths(tokens: TokenStream, aliases: &[String], out: &mut Vec<(Vec<Strin
 }
 
 impl Scan {
-    /// The node an absolute path names. A path through a `transparent`
+    /// Every owner an absolute path can name. A path through a `transparent`
     /// module, a root re-export, a glob re-export or a `#[macro_export]`
     /// macro counts as a path to what it relays.
-    pub(super) fn resolve(&self, path: &[String], transparent: &BTreeSet<String>) -> Resolved {
+    pub(super) fn resolve(
+        &self,
+        path: &[String],
+        transparent: &BTreeSet<String>,
+    ) -> BTreeSet<Resolved> {
         self.resolve_in(path.to_vec(), false, transparent, &mut BTreeSet::new())
     }
 
@@ -749,23 +759,27 @@ impl Scan {
         plain: bool,
         transparent: &BTreeSet<String>,
         seen: &mut BTreeSet<Vec<String>>,
-    ) -> Resolved {
+    ) -> BTreeSet<Resolved> {
         if !seen.insert(path.clone()) {
-            return Resolved::Unattributed("its re-exports form a loop".to_owned());
+            return BTreeSet::from([Resolved::Unattributed(
+                "its re-exports form a loop".to_owned(),
+            )]);
         }
         let Some(first) = path.first() else {
-            return Resolved::Unattributed("it names the crate root itself".to_owned());
+            return BTreeSet::from([Resolved::Unattributed(
+                "it names the crate root itself".to_owned(),
+            )]);
         };
         if !self.modules.contains_key(first) {
             return self.through(None, first, &path[1..], plain, transparent, seen);
         }
         if !transparent.contains(first) {
-            return Resolved::Module(first.clone());
+            return BTreeSet::from([Resolved::Module(first.clone())]);
         }
         let Some(name) = path.get(1) else {
-            return Resolved::Unattributed(format!(
+            return BTreeSet::from([Resolved::Unattributed(format!(
                 "it names the transparent module `{first}` itself"
-            ));
+            ))]);
         };
         self.through(Some(first), name, &path[2..], false, transparent, seen)
     }
@@ -780,7 +794,7 @@ impl Scan {
         plain: bool,
         transparent: &BTreeSet<String>,
         seen: &mut BTreeSet<Vec<String>>,
-    ) -> Resolved {
+    ) -> BTreeSet<Resolved> {
         let empty = UseTable::default();
         let table = match module {
             None => &self.root_uses,
@@ -811,33 +825,49 @@ impl Scan {
                             .cloned()
                             .collect();
                         if !seen.insert(key) {
-                            return Resolved::Unattributed("its re-exports form a loop".to_owned());
+                            return BTreeSet::from([Resolved::Unattributed(
+                                "its re-exports form a loop".to_owned(),
+                            )]);
                         }
                         let rest: Vec<String> = rest.iter().cloned().chain(tail).collect();
                         self.through(Some(relay), first, &rest, true, transparent, seen)
                     }
-                    (Some(_), None) => Resolved::External,
+                    (Some(_), None) => BTreeSet::from([Resolved::External]),
                 },
-                Target::External => Resolved::External,
+                Target::External => BTreeSet::from([Resolved::External]),
             };
-        if let Some(target) = table.names.get(name) {
-            return follow(target, rest.to_vec(), seen);
+        if let Some(targets) = table.names.get(name) {
+            let Some((first, alternatives)) = targets.split_first() else {
+                return BTreeSet::from([Resolved::Unattributed(format!(
+                    "re-export `{name}` has no source"
+                ))]);
+            };
+            if alternatives.is_empty() {
+                return follow(first, rest.to_vec(), seen);
+            }
+            // A sibling alternative must not inherit paths visited by another
+            // branch. Retain errors alongside every known owning module.
+            let mut owners = follow(first, rest.to_vec(), &mut seen.clone());
+            for target in alternatives {
+                owners.extend(follow(target, rest.to_vec(), &mut seen.clone()));
+            }
+            return owners;
         }
         if module.is_none() {
             if let Some(owner) = self.macro_exports.get(name) {
-                return if owner.is_empty() {
+                return BTreeSet::from([if owner.is_empty() {
                     Resolved::Root(name.to_owned())
                 } else {
                     Resolved::Module(owner.clone())
-                };
+                }]);
             }
             if self.root_items.contains(name) {
-                return Resolved::Root(name.to_owned());
+                return BTreeSet::from([Resolved::Root(name.to_owned())]);
             }
         }
         if plain {
             // A plain first segment nothing here binds is another crate's name.
-            return Resolved::External;
+            return BTreeSet::from([Resolved::External]);
         }
         let internal: Vec<&Target> = table
             .globs
@@ -856,10 +886,10 @@ impl Scan {
         match internal.as_slice() {
             [glob] => return follow(glob, tail(), seen),
             [_, _, ..] => {
-                return Resolved::Unattributed(format!(
+                return BTreeSet::from([Resolved::Unattributed(format!(
                     "more than one glob re-export in `{}` could supply `{name}`",
                     module.map_or("crate", String::as_str)
-                ));
+                ))]);
             }
             [] => {}
         }
@@ -868,11 +898,11 @@ impl Scan {
             .iter()
             .any(|glob| !matches!(glob, Target::Absolute(_)))
         {
-            return Resolved::External;
+            return BTreeSet::from([Resolved::External]);
         }
-        Resolved::Unattributed(format!(
+        BTreeSet::from([Resolved::Unattributed(format!(
             "`{}` has no module, re-export or item `{name}`",
             module.map_or("crate", String::as_str)
-        ))
+        ))])
     }
 }

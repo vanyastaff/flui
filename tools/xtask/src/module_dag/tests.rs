@@ -5,12 +5,12 @@
 use std::collections::BTreeSet;
 
 use super::source::{self, Sources};
-use super::{Finding, Identity, check, declaration_from_toml};
+use super::{Finding, Identity, Outcome, check, declaration_from_toml};
 use crate::util;
 
-/// The findings over a crate `c` with `files` under `c/src/` and the
+/// The evaluated graph over a crate `c` with `files` under `c/src/` and the
 /// declaration `toml`; ADR-0001 exists.
-fn findings(toml: &str, files: &[(&str, &str)]) -> Vec<Finding> {
+fn outcome(toml: &str, files: &[(&str, &str)]) -> Outcome {
     let sources = files
         .iter()
         .fold(Sources::default(), |sources, (rel, text)| {
@@ -18,7 +18,11 @@ fn findings(toml: &str, files: &[(&str, &str)]) -> Vec<Finding> {
         });
     let scan = source::scan(&sources, "c/src/lib.rs").expect("the test crate scans");
     let declaration = declaration_from_toml(toml).expect("the test declaration reads");
-    check(&declaration, &scan, &["ADR-0001-test.md".to_owned()]).findings
+    check(&declaration, &scan, &["ADR-0001-test.md".to_owned()])
+}
+
+fn findings(toml: &str, files: &[(&str, &str)]) -> Vec<Finding> {
+    outcome(toml, files).findings
 }
 
 fn identities(toml: &str, files: &[(&str, &str)]) -> BTreeSet<Identity> {
@@ -129,6 +133,292 @@ fn a_path_through_a_root_reexport_counts_as_its_source_module() {
     );
     // Only the first segment would read `Detector`, which is no module.
     assert_eq!(found, set(&[("text", "interaction", "refused")]));
+}
+
+fn assert_root_alternatives_retain_the_high_owner(aliases: &str) {
+    let lib = format!("pub mod low; pub mod high;\n{aliases}");
+    let found = findings(
+        TWO,
+        &[
+            ("lib.rs", &lib),
+            ("low.rs", "pub struct Low; use crate::X;"),
+            ("high.rs", "pub struct High;"),
+        ],
+    );
+    assert_eq!(
+        found.iter().map(Finding::identity).collect::<BTreeSet<_>>(),
+        set(&[("low", "high", "refused")]),
+    );
+    assert!(found[0].to_string().contains("imports high"));
+}
+
+fn conditional_root_reexports_do_not_hide_the_first_owner() {
+    assert_root_alternatives_retain_the_high_owner(
+        "#[cfg(windows)] pub use high::High as X;\n#[cfg(unix)] pub use low::Low as X;",
+    );
+}
+
+fn conditional_root_reexports_do_not_hide_the_last_owner() {
+    assert_root_alternatives_retain_the_high_owner(
+        "#[cfg(unix)] pub use low::Low as X;\n#[cfg(windows)] pub use high::High as X;",
+    );
+}
+
+fn conditional_external_reexports_do_not_hide_an_internal_owner() {
+    assert_root_alternatives_retain_the_high_owner(
+        "#[cfg(windows)] pub use high::High as X;\n#[cfg(unix)] pub use ::external::X;",
+    );
+}
+
+fn conditional_internal_reexports_do_not_hide_an_external_owner() {
+    assert_root_alternatives_retain_the_high_owner(
+        "#[cfg(unix)] pub use ::external::X;\n#[cfg(windows)] pub use high::High as X;",
+    );
+}
+
+const RELAY: &str = "layers = [[\"low\"], [\"high\"]]\ntransparent = [\"relay\"]";
+const RELAY_LIB: (&str, &str) = ("lib.rs", "pub mod low; pub mod high; pub mod relay;");
+
+fn conditional_relay_reexports_are_not_overwritten() {
+    assert_eq!(
+        identities(
+            RELAY,
+            &[
+                RELAY_LIB,
+                ("low.rs", "pub struct Low; use crate::relay::X;"),
+                ("high.rs", "pub struct High;"),
+                (
+                    "relay.rs",
+                    "#[cfg(windows)] pub use crate::high::High as X;\n\
+                     #[cfg(unix)] pub use crate::low::Low as X;",
+                ),
+            ],
+        ),
+        set(&[("low", "high", "refused")]),
+    );
+}
+
+fn conditional_reexports_with_the_same_owner_remain_attributable() {
+    assert_eq!(
+        identities(
+            TWO,
+            &[
+                (
+                    "lib.rs",
+                    "pub mod low; pub mod high;\n\
+                     pub use low::Low as A; pub use low::Other as B;\n\
+                     #[cfg(windows)] pub use A as X;\n\
+                     #[cfg(unix)] pub use B as X;\n\
+                     #[cfg(windows)] pub use A as Y;\n\
+                     #[cfg(unix)] pub use A as Y;",
+                ),
+                ("low.rs", "pub struct Low; pub struct Other;"),
+                ("high.rs", "use crate::{X, Y};"),
+            ],
+        ),
+        set(&[]),
+    );
+}
+
+fn a_cyclic_conditional_reexport_cannot_hide_behind_a_healthy_branch() {
+    assert_eq!(
+        identities(
+            TWO,
+            &[
+                (
+                    "lib.rs",
+                    "pub mod low; pub mod high;\n\
+                     #[cfg(windows)] pub use X as X;\n\
+                     #[cfg(unix)] pub use low::Low as X;",
+                ),
+                ("low.rs", "pub struct Low; use crate::X;"),
+                ("high.rs", ""),
+            ],
+        ),
+        set(&[("low", "crate::X", "unattributed")]),
+    );
+}
+
+fn test_only_relay_items_do_not_change_production_attribution() {
+    assert_eq!(
+        identities(
+            RELAY,
+            &[
+                RELAY_LIB,
+                ("low.rs", "pub struct Low;"),
+                ("high.rs", "pub struct High; use crate::relay::Low;"),
+                (
+                    "relay.rs",
+                    "pub use crate::low::Low;\n\
+                     #[cfg(test)] mod tests { use crate::high::High; }\n\
+                     #[cfg(test)] fn test_helper() -> crate::high::High { loop {} }",
+                ),
+            ],
+        ),
+        set(&[]),
+    );
+}
+
+fn inner_test_only_relay_modules_do_not_change_production_attribution() {
+    assert_eq!(
+        identities(
+            RELAY,
+            &[
+                RELAY_LIB,
+                ("low.rs", "pub struct Low;"),
+                ("high.rs", "pub struct High; use crate::relay::Low;"),
+                ("relay.rs", "pub use crate::low::Low; mod tests;"),
+                ("relay/tests.rs", "#![cfg(test)]\nuse crate::high::High;"),
+            ],
+        ),
+        set(&[]),
+    );
+}
+
+fn a_feature_enabled_relay_item_is_still_production_code() {
+    assert_eq!(
+        identities(
+            RELAY,
+            &[
+                RELAY_LIB,
+                ("low.rs", "pub struct Low;"),
+                ("high.rs", ""),
+                (
+                    "relay.rs",
+                    "pub use crate::low::Low;\n\
+                     #[cfg(any(test, feature = \"testing\"))] fn helper() {}",
+                ),
+            ],
+        ),
+        set(&[("relay", "", "relay item")]),
+    );
+}
+
+fn assert_allowed_alternative_edges(aliases: &str, relay: bool) {
+    let lib = if relay {
+        "pub mod low_a; pub mod low_b; pub mod consumer; pub mod relay;".to_owned()
+    } else {
+        format!("pub mod low_a; pub mod low_b; pub mod consumer;\n{aliases}")
+    };
+    let declaration = if relay {
+        "layers = [[\"low_a\"], [\"low_b\"], [\"consumer\"]]\ntransparent = [\"relay\"]"
+    } else {
+        "layers = [[\"low_a\"], [\"low_b\"], [\"consumer\"]]"
+    };
+    let consumer = if relay {
+        "use crate::relay::X;"
+    } else {
+        "use crate::X;"
+    };
+    let mut files = vec![
+        ("lib.rs", lib.as_str()),
+        ("low_a.rs", "pub struct A;"),
+        ("low_b.rs", "pub struct B;"),
+        ("consumer.rs", consumer),
+    ];
+    if relay {
+        files.push(("relay.rs", aliases));
+    }
+    let evaluated = outcome(declaration, &files);
+    assert!(evaluated.findings.is_empty(), "{:#?}", evaluated.findings);
+    let edges: BTreeSet<_> = evaluated
+        .edges
+        .keys()
+        .map(|(from, to)| (from.as_str(), to.as_str()))
+        .collect();
+    assert_eq!(
+        edges,
+        BTreeSet::from([("consumer", "low_a"), ("consumer", "low_b")])
+    );
+}
+
+fn distinct_allowed_root_owners_both_contribute_edges() {
+    assert_allowed_alternative_edges(
+        "#[cfg(windows)] pub use crate::low_a::A as X;\n\
+         #[cfg(unix)] pub use crate::low_b::B as X;",
+        false,
+    );
+}
+
+fn reordered_distinct_allowed_root_owners_both_contribute_edges() {
+    assert_allowed_alternative_edges(
+        "#[cfg(unix)] pub use crate::low_b::B as X;\n\
+         #[cfg(windows)] pub use crate::low_a::A as X;",
+        false,
+    );
+}
+
+fn distinct_allowed_relay_owners_both_contribute_edges() {
+    assert_allowed_alternative_edges(
+        "#[cfg(windows)] pub use crate::low_a::A as X;\n\
+         #[cfg(unix)] pub use crate::low_b::B as X;",
+        true,
+    );
+}
+
+fn assert_nested_alternatives_retain_the_high_owner(aliases: &str) {
+    let lib = format!("pub mod low; pub mod high;\n{aliases}");
+    assert_eq!(
+        identities(
+            TWO,
+            &[
+                ("lib.rs", &lib),
+                ("low.rs", "pub struct Low; use crate::Y;"),
+                ("high.rs", "pub struct High;"),
+            ]
+        ),
+        set(&[("low", "high", "refused")]),
+    );
+}
+
+fn nested_conditional_reexports_retain_the_high_owner() {
+    assert_nested_alternatives_retain_the_high_owner(
+        "#[cfg(windows)] pub use low::Low as X;\n\
+         #[cfg(unix)] pub use high::High as X;\n\
+         #[cfg(unix)] pub use X as Y;\n\
+         #[cfg(windows)] pub use low::Low as Y;",
+    );
+}
+
+fn reordered_nested_conditional_reexports_retain_the_high_owner() {
+    assert_nested_alternatives_retain_the_high_owner(
+        "#[cfg(unix)] pub use high::High as X;\n\
+         #[cfg(windows)] pub use low::Low as X;\n\
+         #[cfg(windows)] pub use low::Low as Y;\n\
+         #[cfg(unix)] pub use X as Y;",
+    );
+}
+
+fn assert_cyclic_and_forbidden_alternatives_are_both_reported(aliases: &str) {
+    let lib = format!("pub mod low; pub mod high;\n{aliases}");
+    assert_eq!(
+        identities(
+            TWO,
+            &[
+                ("lib.rs", &lib),
+                ("low.rs", "use crate::X;"),
+                ("high.rs", "pub struct High;"),
+            ]
+        ),
+        set(&[
+            ("low", "high", "refused"),
+            ("low", "crate::X", "unattributed")
+        ]),
+    );
+}
+
+fn a_cyclic_branch_does_not_erase_a_forbidden_owner() {
+    assert_cyclic_and_forbidden_alternatives_are_both_reported(
+        "#[cfg(windows)] pub use X as X;\n\
+         #[cfg(unix)] pub use high::High as X;",
+    );
+}
+
+fn a_forbidden_owner_does_not_erase_a_cyclic_branch() {
+    assert_cyclic_and_forbidden_alternatives_are_both_reported(
+        "#[cfg(unix)] pub use high::High as X;\n\
+         #[cfg(windows)] pub use X as X;",
+    );
 }
 
 fn a_path_through_a_transparent_module_counts_as_its_source() {
@@ -606,6 +896,74 @@ fn module_dag_contract() {
             (
                 "the_wildcard_layer_leaves_its_members_unchecked_among_themselves",
                 the_wildcard_layer_leaves_its_members_unchecked_among_themselves as fn(),
+            ),
+            (
+                "conditional_root_reexports_do_not_hide_the_first_owner",
+                conditional_root_reexports_do_not_hide_the_first_owner as fn(),
+            ),
+            (
+                "conditional_root_reexports_do_not_hide_the_last_owner",
+                conditional_root_reexports_do_not_hide_the_last_owner as fn(),
+            ),
+            (
+                "conditional_external_reexports_do_not_hide_an_internal_owner",
+                conditional_external_reexports_do_not_hide_an_internal_owner as fn(),
+            ),
+            (
+                "conditional_internal_reexports_do_not_hide_an_external_owner",
+                conditional_internal_reexports_do_not_hide_an_external_owner as fn(),
+            ),
+            (
+                "conditional_relay_reexports_are_not_overwritten",
+                conditional_relay_reexports_are_not_overwritten as fn(),
+            ),
+            (
+                "conditional_reexports_with_the_same_owner_remain_attributable",
+                conditional_reexports_with_the_same_owner_remain_attributable as fn(),
+            ),
+            (
+                "a_cyclic_conditional_reexport_cannot_hide_behind_a_healthy_branch",
+                a_cyclic_conditional_reexport_cannot_hide_behind_a_healthy_branch as fn(),
+            ),
+            (
+                "test_only_relay_items_do_not_change_production_attribution",
+                test_only_relay_items_do_not_change_production_attribution as fn(),
+            ),
+            (
+                "inner_test_only_relay_modules_do_not_change_production_attribution",
+                inner_test_only_relay_modules_do_not_change_production_attribution as fn(),
+            ),
+            (
+                "a_feature_enabled_relay_item_is_still_production_code",
+                a_feature_enabled_relay_item_is_still_production_code as fn(),
+            ),
+            (
+                "distinct_allowed_root_owners_both_contribute_edges",
+                distinct_allowed_root_owners_both_contribute_edges as fn(),
+            ),
+            (
+                "reordered_distinct_allowed_root_owners_both_contribute_edges",
+                reordered_distinct_allowed_root_owners_both_contribute_edges as fn(),
+            ),
+            (
+                "distinct_allowed_relay_owners_both_contribute_edges",
+                distinct_allowed_relay_owners_both_contribute_edges as fn(),
+            ),
+            (
+                "nested_conditional_reexports_retain_the_high_owner",
+                nested_conditional_reexports_retain_the_high_owner as fn(),
+            ),
+            (
+                "reordered_nested_conditional_reexports_retain_the_high_owner",
+                reordered_nested_conditional_reexports_retain_the_high_owner as fn(),
+            ),
+            (
+                "a_cyclic_branch_does_not_erase_a_forbidden_owner",
+                a_cyclic_branch_does_not_erase_a_forbidden_owner as fn(),
+            ),
+            (
+                "a_forbidden_owner_does_not_erase_a_cyclic_branch",
+                a_forbidden_owner_does_not_erase_a_cyclic_branch as fn(),
             ),
             (
                 "a_path_through_a_root_reexport_counts_as_its_source_module",
