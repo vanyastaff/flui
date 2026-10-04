@@ -9,9 +9,10 @@ functional or architecture audit of every crate or every module. Workspace-wide
 Clippy, tests, documentation and dependency checks do not establish that all
 subsystems have been inspected for design problems.
 
-The branch changes files in 18 of the 27 members directly under `crates/` and
+The initial pass changed files in 18 of the 27 members directly under `crates/` and
 `packages/`, counted with `git diff --name-only origin/main...HEAD` against their
-manifests. The facade, examples and xtask are additional workspace members.
+manifests. The following first-pass table is historical; renewed source coverage
+appears below. The facade, examples and xtask are additional workspace members.
 
 | Scope | Members and inspected areas |
 |---|---|
@@ -35,6 +36,7 @@ reads. A stabilization PR mentioned in TWIR is not evidence that its API is avai
 | What causes resource growth and repeated GPU allocations? | [GPUI memory investigation](https://sot.dev/cutting-a-rust-gpui-launcher-idle-memory.html), independently checked against FLUI's pool admission code; [engawa texture ownership](https://docs.rs/engawa-wgpu/latest/engawa_wgpu/) | Correct FLUI's own full-pool admission: evict the oldest returned idle texture, permitting the resized working set to become reusable. No environment-wide Vulkan driver filtering or allocator tuning is inferred from another application's measurements. |
 | Are newer libraries preferable to existing implementations? | [SIMD survey](https://shnatsel.github.io/state-of-simd-rust-2026/) and [glam feature documentation](https://docs.rs/glam/0.33.7/glam/#feature-gates) | Retain glam and its SIMD/std behavior, compile only used floating families, and enable bytemuck only in the engine. Do not add another SIMD crate without a measured kernel bottleneck. |
 | Do Cargo/Clippy settings reflect the current compiler? | [Cargo changelog](https://doc.rust-lang.org/nightly/cargo/CHANGELOG.html), root profiles and workspace lint table | Existing resolver 3, edition 2024, selective graphics backends, line-table development debug info, dependency optimization and thin release LTO are already modern. Audit additional lints before making them merge requirements. |
+| Which retained UTF-8 loops can std replace? | [str boundary APIs](https://doc.rust-lang.org/stable/std/primitive.str.html#method.floor_char_boundary), stable since 1.91, and [Rust 1.91 notes](https://releases.rs/docs/1.91.0/) | Use floor/ceil_char_boundary for byte clamping, preserving direction. Keep grapheme segmentation and exact UTF-16 errors. |
 | Can invariants replace repeated validation? | [Rusty thoughts on Parse, don't validate](https://eli.thegreenplace.net/2026/rusty-thoughts-on-parse-dont-validate/) and FLUI's foundation/runtime architecture | Existing NonZero IDs, geometry types, lifecycle capability acquisition and realm ownership already follow this principle. A wholesale API rewrite needs a concrete invalid state to eliminate. |
 
 ## Changes selected from code evidence
@@ -197,3 +199,144 @@ Commands and their full output are retained under the worktree's gitignored `tar
 - Dependency bans, licenses, sources, advisories and cargo-shear passed again (`target/modernization-deps-final.log`). macOS platform Clippy passed over all targets with the final lint policy (`target/modernization-platform-macos-final.log`); this remains typechecking, not a macOS execution result.
 - Closed-contour review also exposed two caps at a seam covered by a dash. The engine closes one uninterrupted fragment or merges covered first/last fragments; actual gaps retain their caps. Restoring the prior tessellator fails all three covered-seam pixel rows while the gap row passes (`target/modernization-dash-seam-baseline.log`). Four independent named rows compare the miter corner with a solid stroke and verify an on-dash edge. The final required-GPU suite after this correction passed 59/59, zero skipped (`target/modernization-gpu-seam-final.log`). A separate agent reviewed the restored seam implementation and found no concrete blocker.
 - After the final reporting and seam corrections, `cargo xtask check-changed` completed with exit 0: 620 tests passed, 10 configured suite skips; workspace and engine-testing Clippy, strict rustdoc including private items, doctests, platform a11y typechecks on Windows/macOS, Windows CLI and desktop MCP on Windows/macOS all passed (`target/modernization-check-changed-final.log`). Android/iOS/wasm targets and Linux platform execution remain unavailable locally. `cargo xtask checks` also passed (`target/modernization-checks-final.log`). The available macOS lanes are compile checks; no macOS runtime execution is claimed.
+
+## Renewed source coverage
+
+The first modernization pass did not review every crate. The renewed pass
+inventoried manifests and source modules across the 27 framework crates and
+official packages, then read selected implementation seams and their production
+callers. This table records those reads and their limits; it is not a claim that
+every line, feature combination or platform behavior was audited.
+
+Discovery used `rg --files` on each source root, manifest and architecture reads,
+and scoped searches for old std substitutes, UTF-8 loops, erased ownership,
+unchecked counters, collection copies, numerical cancellation and debug-only
+validation. Search hits were inspected with callers. The detailed working
+inventories are `target/audit-values-contracts.md`,
+`target/audit-render-catalog.md`, `target/audit-runtime-tooling.md` and
+`target/audit-facade-tooling.md`; these are local evidence rather than published
+artifacts.
+
+| Crate/package | Implementation seams read; resulting choice | Not fully examined in this pass |
+|---|---|---|
+| flui-foundation | ClaimSlot registration, delivery, abandonment and owner Drop; executor cloning leaves locks and failures retain opaque ownership. Preserve request/reclaim state machine. | Complete geometry, diagnostics, deep platform teardown |
+| flui-macros | Runtime crate-path resolution and Diagnosticable field bounds; correct SDK-first resolver comments. Keep syn/quote. | Every derive expansion and routing order |
+| flui-platform-api | IME projection, exact UTF-16 conversion, transfer limits and offer identity. Use std ceil_char_boundary only for UTF-8 clamping. | LockArbiter callback competition and native consumers |
+| flui-protocol | Version canonical parsing, handle vocabulary/schema and action request shape. Keep dependency-free default error implementation and canonical wire spellings. | Full unknown-name/schema evolution |
+| flui-log | Filter resolution, subscriber ownership and selected backend/redaction boundaries. Keep tracing EnvFilter and composition-root ownership. | Full privacy corpus, native shutdown/callsite lifecycle |
+| flui-semantics | Parent/child mutation, dirty publishing and AccessKit projection. Reject wrong/missing parents before detaching. | Arbitrarily corrupted graphs and complete deep traversal |
+| flui-sdk | Complete re-export source and evolving manifest contract. No duplicate wrappers added. | Every downstream feature combination |
+| flui-layer | Immutable graph construction, rectangle damage union and selected differ/LIS logic. Preserve typed content identity and append-only topology. | Full effect damage/follower propagation |
+| flui-painting | UTF-8 caret/word boundaries, Parley font ownership and glyph registry. Use std boundary APIs; copy plugin font bytes into concrete host ownership while ordinary registries retain shared sources. | Complete typography/style cache keys and font-feed failures |
+| flui-engine | Uniform/buffer/texture ownership and plugin font-source transition; prior stream/dash/numerical work retained. Keep wgpu/lyon/etagere. | Every shader, replay/filter branch and raster mailbox path |
+| flui-rendering | Tagged erased protocol values, generational tree resolution and dirty membership/drain. Keep domain enums and safe dynamic subtree borrowing. | Complete virtualization and pipeline/protocol methods |
+| flui-objects | FittedBox layout, paint and hit-test transform agreement, scroll/text architecture. No replacement chosen by age alone. | Every render object's intrinsics/semantics/layout |
+| flui-animation | Animation/Curve bounds, spring retargeting and smoothing; prior numerical/ticker fixes. Correct obsolete widget and performance documentation. | Complete curve catalog and proxy/listener competition |
+| flui-interaction | Prediction sampling/extrapolation and One Euro filters. Correct unsupported Kalman claims; retain owner-local arena state. | Complete recognizers, focus, teams and mouse routing |
+| flui-widgets | Router parsing/encoding and image decode coalescing/subscriber lifetime. Keep domain path parser and shared future contract. | Most widget/form/navigation/text/scroll state machines |
+| flui-assets | Asset keys/handles, cache/registry admission and locked Moka initializer implementation. Coalesce cold registry loads and remove always-empty registry stats. | Fresh full decoder/network protocol review |
+| flui-material | Navigation bar count/selection and controller policy. Enforce configuration in release profiles. | Complete themes, drawers, decoration and messenger |
+| flui-cupertino | Tab scaffold controller/build and standalone bar selection. Validate current bar and preserve recovery; correct lazy-builder description. | Other routes, buttons, themes and navigation bars |
+| flui-app | Composition/module map, retry backoff and plugin render callback. Wire explicit plugin lifetime and font transition obligations. | Every native run loop, lifecycle and embedder adapter |
+| flui-cli | Complete process probe reader and iOS version parsing. Transfer captured output with mem::take; inherit shared serde. | Build/scaffold/deploy/watch command bodies |
+| flui-hot-reload | Dynamic loader, scene driver, image ownership, artifact stamps and render hook. Separate polling/building and preserve subsecond revisions. | Every dispatch registry race and live native image reload |
+| flui-platform | Complete Task/executor source and ready-task consumers. Remove unnecessary result bounds; keep spawn bounds. | Native OS backends and event translation |
+| flui-runtime | Execution ownership prefix, held-input prefix and architecture. Preserve realm-bound synchronous frame topology. | Full shutdown/replay/presentation/telemetry bodies |
+| flui-scheduler | Task recovery seams and complete ID generator. Use checked atomic try_update for sticky exhaustion. | Full pacing, budgets and telemetry algorithms |
+| flui-testing | Architecture, replay prefix and widget harness root/finder resolution. Remove the stale render-root cache and verify replacement/error/recovery. | Complete text-store kit, accessibility and host bootstrap |
+| flui-view | Seq implementation, StateCell prefix, reload trait and prior reactive recovery work. Inherit slab and preserve owner-local state. | Complete reconciliation, contexts, elements and sliver services |
+| flui-devtools | Profiler history/config and timeline guard/clear/export ownership. Respect zero capacity and invalidate old guards at clear. | Full agent endpoint, tracing interleavings and inspector |
+
+The facade exports, Cargo profiles/lints/configuration and selected xtask
+execution, classification, dependency, documentation and device-capture code
+were read separately. Std io::pipe/LazyLock and owned UTF-8 conversion were
+already present. Platform linkers and optimization profiles were retained
+without inventing performance claims. Selected counter/web/scene examples were
+read; native deployment and browser execution remain separate validation.
+
+Focused regressions were verified independently of this inventory.
+Before the final gate, nine targeted contract families passed in
+`target/audit-contracts-recovery-fixed.log`, and the Cupertino navigation family
+passed in `target/audit-cupertino-fixed.log`. Those focused runs do not replace
+the final changed-crate gate.
+
+## Renewed regression evidence
+
+- Restoring the old ClaimSlot source makes the reentrant clone child reach its
+  timeout and hostile wake/destructor children abort. The corrected family
+  passes its 15 isolated scenarios (`target/audit-claim-slot-fixed.log`,
+  `target/audit-claim-slot-old-source.log`). Exceptional opaque retention
+  preserves progress and failure priority; it is not a guarantee against
+  competing panics inside user-defined aggregate destruction.
+- Old Task bounds reject Rc, PhantomPinned and borrowed results at compile time.
+  Old developer history fails zero-capacity, stale-guard and fresh-guard rows.
+  Old scheduler identity allocation admits IDs after exhaustion. Old registry
+  admission starts duplicate loads and fails cancellation/error sharing
+  (`target/audit-task-old-source.log`, `target/audit-history-old-source.log`,
+  `target/audit-identity-old-source.log`, `target/audit-coalescing-old-source.log`).
+- The navigation families pass with debug assertions disabled specifically in
+  both catalog packages. Under the same Cargo profile overrides, original
+  sources fail all four Material invalid-configuration rows and both Cupertino
+  selection/error-recovery rows. This exercises release validation semantics;
+  it is not a claim that the complete release/LTO profile was built
+  (`target/audit-navigation-no-debug-fixed.log`,
+  `target/audit-navigation-no-debug-old-source.log`).
+- Replacing explicit plugin font ownership with ordinary shared retention calls the retired source when rasterizing.
+  Coarse timestamps lose a same-second artifact replacement. The old harness
+  cannot find the newly mounted RenderPadding
+  (`target/audit-font-owning-policy-mutant.log`,
+  `target/audit-coarse-revision-mutant.log`,
+  `target/audit-cached-render-root-mutant.log`).
+- Required-GPU paragraph readback passes with three font transition rows.
+  Removing source admission fails repaint from NoDamage in all three; keeping
+  repaint but removing atlas replacement fails actual pixels in all three
+  (`target/audit-font-transitions-fixed.log`,
+  `target/audit-font-no-repaint-mutant.log`,
+  `target/audit-font-stale-atlas-mutant.log`). The headless path shares the
+  production selector; windowed method wiring received source review.
+- Five final recovery families pass, including the actual scene-hook reset
+  acknowledgement and public harness replacement/error/recovery
+  (`target/audit-new-recovery-final.log`). Independent source reviews found no
+  remaining concrete blocker in the new claim, coalescing, navigation, font
+  transition and harness fixes.
+
+The first renewed full gate passed 625 of 626 tests and exposed a contract
+regression in blanket font copying: the ordinary registry no longer held the
+shaper cache source alive, so pruning changed its blob ID. The existing
+`a_held_blob_keeps_its_keys_across_a_prune` test was retained unchanged. Admission
+now copies only in the plugin atlas; ordinary admission preserves shared source
+ownership. Independent review checked both constructor paths and atlas policy
+changes. Final verification of this correction is recorded below.
+
+## Renewed final verification
+
+The corrected final production source passed the following commands with one
+compiling worker and one nextest test thread. Logs are local evidence in the
+ignored target directory, rather than CI or native-platform execution claims.
+
+| Command | Observed result | Log |
+|---|---|---|
+| `cargo xtask checks` | Source, manifest, architecture, documentation and registry gates passed | `target/audit-checks-final.log` |
+| `cargo xtask check-changed` | Full workspace Clippy and engine testing Clippy passed; nextest 626 passed, 10 configured skips; strict rustdoc and doctests passed; available Windows/macOS cross-Clippy passed | `target/audit-check-changed-final.log` |
+| `cargo xtask deps` | Bans, licenses, sources and advisories passed; cargo-shear found no issues | `target/audit-deps-final.log` |
+| `FLUI_REQUIRE_GPU=1 cargo nextest run -p flui-engine --features testing --lib --test raster_backpressure_allocation --locked --no-fail-fast --test-threads 1` | 59 passed, zero skipped | `target/audit-gpu-final.log` |
+| `cargo nextest run -p flui-painting --lib --tests --locked --no-fail-fast` | 36 passed, zero skipped, including the unchanged cache-prune identity test and the owning-source regression | `target/audit-font-policy-fixed.log` |
+
+The doctest result summaries record 617 passed and 390 ignored; ignored
+examples were not executed. The font policy counterfactual replaced
+`SwashRasterizer::with_owned_fonts` with ordinary source retention: the
+owning-source regression failed because rasterization called the retired
+source (`target/audit-font-owning-policy-mutant.log`). The earlier full-gate
+identity failure is preserved in
+`target/audit-check-changed-prune-regression.log`; no existing identity
+assertion was weakened. Required-GPU source transitions passed again after
+the conditional policy repair. Independent source and report reviews found
+no remaining concrete blocker in the selected changes.
+
+Android, iOS and wasm targets are absent on this host. The Linux platform
+suite needs Xvfb and was not run; its native non-UTF-8 library-path fixture
+was not executed here. Windows/macOS cross-Clippy establishes compilation,
+not native event translation or plugin reload behavior. Android live reload,
+macOS GUI execution and exhaustive per-feature combinations remain unverified.
+The per-crate table identifies implementation areas still needing deeper
+behavioral review; passing these gates does not remove that distinction.
