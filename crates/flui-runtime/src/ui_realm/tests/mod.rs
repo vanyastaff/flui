@@ -374,6 +374,8 @@ mod global_key_lookup_during_frame;
 // Cross-thread signal writes run against the graph that minted the slot,
 // in whichever presentation owns it (ADR-0085 §1).
 // ========================================================================
+#[cfg(feature = "hot-reload")]
+mod hot_reload_recovery;
 mod signal_write_routing;
 
 #[test]
@@ -387,6 +389,14 @@ fn wake_debt_and_signal_write_matrix() {
             ("signal_write_routing::an_older_overlapping_wake_cannot_clear_newer_failed_delivery_debt", signal_write_routing::an_older_overlapping_wake_cannot_clear_newer_failed_delivery_debt as fn()),
             ("redraw_wake_routing::a_cross_thread_frame_request_reaches_the_realms_platform_wake", redraw_wake_routing::a_cross_thread_frame_request_reaches_the_realms_platform_wake as fn()),
             ("addressed_input_routing::panicking_keyboard_dispatch_keeps_priority_over_a_panicking_wake", addressed_input_routing::panicking_keyboard_dispatch_keeps_priority_over_a_panicking_wake as fn()),
+            #[cfg(feature = "hot-reload")]
+            ("hot_reload_recovery::failed_reload_wake_rearms_the_accepted_tail", hot_reload_recovery::failed_reload_wake_rearms_the_accepted_tail as fn()),
+            #[cfg(feature = "hot-reload")]
+            ("hot_reload_recovery::competing_reload_wakes_preserve_the_first_failure_and_retry", hot_reload_recovery::competing_reload_wakes_preserve_the_first_failure_and_retry as fn()),
+            #[cfg(feature = "hot-reload")]
+            ("hot_reload_recovery::reassemble_failure_keeps_priority_over_a_failed_rearm", hot_reload_recovery::reassemble_failure_keeps_priority_over_a_failed_rearm as fn()),
+            #[cfg(feature = "hot-reload")]
+            ("hot_reload_recovery::reassemble_failure_rearms_the_accepted_tail", hot_reload_recovery::reassemble_failure_rearms_the_accepted_tail as fn()),
             ("full_inbox_retries_outstanding_wake_debt_before_rejecting", full_inbox_retries_outstanding_wake_debt_before_rejecting as fn()),
         ],
     );

@@ -478,14 +478,14 @@ impl UiRealm {
         self.redraw_pending.swap(false, Ordering::AcqRel)
     }
 
-    fn rearm_after_signal_command_panic(&self, payload: Box<dyn std::any::Any + Send>) -> ! {
+    fn rearm_after_command_panic(&self, payload: Box<dyn std::any::Any + Send>) -> ! {
         let wake_panic = catch_unwind(AssertUnwindSafe(|| {
             self.sender_prototype.wake_owner();
         }))
         .err();
         let mut first_panic = Some(payload);
-        preserve_first_input_panic(&mut first_panic, wake_panic, "signal-write redraw wake");
-        let payload = first_panic.expect("BUG: the original signal-write panic must be preserved");
+        preserve_first_input_panic(&mut first_panic, wake_panic, "command redraw wake");
+        let payload = first_panic.expect("BUG: the original command panic must be preserved");
         resume_unwind(payload);
     }
 
@@ -529,19 +529,19 @@ impl UiRealm {
             match command {
                 #[cfg(feature = "hot-reload")]
                 UiCommand::HotReload(tier) => {
-                    // Reuse the SAME fan-out `Self::apply_hot_reload` the
-                    // direct `perform_hot_reload_entered` path calls --
-                    // calling `self.presentations.primary().apply_hot_reload`
-                    // here instead (as this arm once did) reassembles only
-                    // the primary and silently skips every other
-                    // presentation, exactly the class of bug
-                    // `reassemble_fans_out_to_all_presentations_in_mount_
-                    // order` exists to catch on the direct path; this
-                    // inbox arm is the untested twin of that same call, and
-                    // the desktop worker's own hot-reload trigger goes
-                    // through THIS arm, not the direct one.
-                    if self.apply_hot_reload(tier) {
-                        self.redraw_pending.store(true, Ordering::Release);
+                    // A failed reassemble may already have changed a tree. Keep
+                    // redraw demand and the accepted FIFO tail live before resuming.
+                    let outcome = catch_unwind(AssertUnwindSafe(|| self.apply_hot_reload(tier)));
+                    match outcome {
+                        Ok(changed) => {
+                            if changed {
+                                self.redraw_pending.store(true, Ordering::Release);
+                            }
+                        }
+                        Err(payload) => {
+                            self.redraw_pending.store(true, Ordering::Release);
+                            self.rearm_after_command_panic(payload);
+                        }
                     }
                     report.invoked += 1;
                 }
@@ -690,7 +690,7 @@ impl UiRealm {
                             // could be retired. Retain it so aggregate drop
                             // glue cannot replace that panic.
                             std::mem::forget(apply);
-                            self.rearm_after_signal_command_panic(payload);
+                            self.rearm_after_command_panic(payload);
                         }
 
                         // The stale envelope can contain several hostile
@@ -704,7 +704,7 @@ impl UiRealm {
                             }))
                         {
                             std::mem::forget(apply);
-                            self.rearm_after_signal_command_panic(payload);
+                            self.rearm_after_command_panic(payload);
                         }
                         if let Err(payload) = catch_unwind(AssertUnwindSafe(|| drop(apply))) {
                             // A producer can enqueue after the empty-inbox
@@ -756,7 +756,7 @@ impl UiRealm {
                     // An external wake panic must not replace the command's
                     // original payload.
                     if let Some(payload) = command_panic {
-                        self.rearm_after_signal_command_panic(payload);
+                        self.rearm_after_command_panic(payload);
                     }
                     report.invoked += 1;
                 }

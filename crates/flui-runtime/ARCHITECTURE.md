@@ -297,6 +297,17 @@ later host opportunity. A send refused because the bounded inbox is full is
 also a host opportunity: it retries existing debt before returning the rejected
 command, because otherwise no successful ingress could reach the wake path.
 
+A queued `HotReload` follows the same failure ordering. If reassembly or its
+frame-request callback panics, partial tree changes retain redraw demand and a
+fresh owner wake is attempted before the first panic resumes. A failed retry
+keeps shared delivery debt for the next ingress or owner boundary. The accepted
+FIFO tail is neither discarded nor executed inside the failed turn. This does
+not roll back reassembly or promise a host turn after every delivery fails.
+`failed_reload_wake_rearms_the_accepted_tail` and
+`competing_reload_wakes_preserve_the_first_failure_and_retry`, and
+`reassemble_failure_keeps_priority_over_a_failed_rearm` exercise the real
+widget reassembly callback with a queued agent read.
+
 This is continuation safety, not rollback or callback isolation. The panic
 still leaves the dispatch boundary, and arbitrary external effects remain the
 application's responsibility. Pinned by the panicking secondary-presentation
