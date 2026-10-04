@@ -198,3 +198,14 @@ the empty buffer; it cannot change the returned snapshot. The existing
 `grandchild_holding_the_pipe_does_not_hang_the_probe` checks the deadline and
 captured prefix on Unix. CLI output integration tests check the delivered bytes;
 no allocation-count claim is inferred from those behavior tests.
+
+### Build selectors reach the selected platform unit
+
+Web builds forward `--example` and `--package` through the existing Cargo target
+resolver. Android APK builds currently require the current package's cdylib;
+unsupported selectors are rejected before SDK probing rather than ignored.
+`platform_build_selectors_reach_the_selected_cargo_unit_or_refuse` drives the
+public CLI. Its portable fixture delegates metadata and project discovery to
+real Cargo, substitutes tool availability, and refuses compilation while
+reporting the actual selected Cargo arguments. It verifies selection without
+claiming a wasm compilation or Android delivery run.

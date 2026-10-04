@@ -181,6 +181,11 @@ pub(crate) fn execute(
 /// already rejects them, before this function ever runs. Duplicating that
 /// check here would be dead code.
 fn validate_options(target: BuildTarget, options: &BuildOptions) -> CliResult<()> {
+    if target == BuildTarget::Android && (options.example.is_some() || options.package.is_some()) {
+        return Err(CliError::Usage(
+            "Android APK builds select the current package's cdylib; --example and --package are unsupported".into(),
+        ));
+    }
     if options.library && target != BuildTarget::Ios {
         return Err(CliError::Usage(
             "--lib is an iOS-only option; pass it with `flui build ios --lib`".into(),
@@ -473,6 +478,7 @@ fn build_web(options: &BuildOptions, output: Option<&PathBuf>) -> CliResult<Vec<
         .with_platform(Platform::Web {
             target: "web".to_string(),
         })
+        .with_target(options.cargo_target())
         .with_profile(profile);
 
     if let Some(out) = output {

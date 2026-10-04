@@ -28,3 +28,6 @@ mod cli_errors;
 mod cli_platform;
 #[path = "cli_run.rs"]
 mod cli_run;
+
+#[path = "../src/test_cases.rs"]
+mod test_cases;
