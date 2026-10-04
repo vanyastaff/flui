@@ -29,6 +29,14 @@ and squared results can still exceed their representable range. The public famil
 `single_precision_geometry_distances_use_double_precision_range` checks point
 distances and their line-length delegates against exact power-of-two results.
 
+Vector normalization refuses non-finite components and preserves its existing
+`f64::EPSILON` near-zero threshold. When finite components have an overflowing
+magnitude, scaling before `hypot` preserves their unit direction instead of
+returning zero. `vector_normalization_keeps_finite_directions_and_refuses_invalid_input`
+checks ordinary and extreme vectors, fallback admission, and the actual
+`Line::direction` and `Circle::nearest_point` consumers. Endpoint subtraction
+and other vector operations retain their own floating-point range limits.
+
 Transform decomposition computes column lengths with `hypot`. It keeps a finite,
 nonzero direct determinant before dividing by the first scale: prematurely
 normalizing an anisotropic column can erase a smaller representable signed scale.

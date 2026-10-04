@@ -1,5 +1,5 @@
 //! Scalar geometry across the representable coordinate range.
-use flui_foundation::geometry::{ApproxEq, DevicePoint, Line, Point};
+use flui_foundation::geometry::{ApproxEq, Circle, DevicePoint, Line, Point, Vec2};
 fn opposite_extremes_are_distinct() {
     let min = DevicePoint::new(i32::MIN, 0);
     let max = DevicePoint::new(i32::MAX, 0);
@@ -168,6 +168,73 @@ fn single_precision_geometry_distances_use_double_precision_range() {
         (
             "ordinary and coincident distances",
             ordinary_and_coincident_distances_keep_their_geometry,
+        ),
+    ]);
+}
+
+fn extreme_finite_vectors_keep_a_unit_direction() {
+    let diagonal = std::f64::consts::FRAC_1_SQRT_2;
+    for (x, y) in [(f64::MAX, f64::MAX), (-f64::MAX, f64::MAX)] {
+        let unit = Vec2::new(x, y).try_normalize().expect("finite direction");
+        assert!((unit.x - diagonal.copysign(x)).abs() < 1e-15);
+        assert!((unit.y - diagonal).abs() < 1e-15);
+        assert!((unit.length() - 1.0).abs() < 1e-15);
+    }
+    let unit = Vec2::new(f64::MAX, f64::MAX / 2.0)
+        .try_normalize()
+        .expect("anisotropic finite direction");
+    assert!((unit.length() - 1.0).abs() < 1e-15);
+    assert_eq!(unit.x, unit.y * 2.0);
+}
+
+fn invalid_and_near_zero_vectors_use_the_fallback() {
+    let fallback = Vec2::new(2.0, 3.0);
+    for vector in [
+        Vec2::ZERO,
+        Vec2::new(f64::EPSILON, 0.0),
+        Vec2::new(f64::from_bits(1), 0.0),
+        Vec2::new(f64::INFINITY, 1.0),
+        Vec2::new(1.0, f64::NEG_INFINITY),
+        Vec2::new(f64::NAN, f64::INFINITY),
+    ] {
+        assert_eq!(vector.try_normalize(), None);
+        assert_eq!(vector.normalize(), Vec2::ZERO);
+        assert_eq!(vector.normalize_or(fallback), fallback);
+    }
+    assert_eq!(Vec2::new(3.0, 4.0).normalize(), Vec2::new(0.6, 0.8));
+    assert_eq!(Vec2::new(f64::EPSILON * 2.0, 0.0).normalize(), Vec2::X);
+    assert_eq!(Vec2::new(f32::MAX, 0.0).normalize(), Vec2::X);
+}
+
+fn line_consumer_keeps_the_extreme_direction() {
+    let target = Point::new(f64::MAX, f64::MAX);
+    let direction = Line::new(Point::new(0.0, 0.0), target).direction();
+    assert!((direction.length() - 1.0).abs() < 1e-15);
+}
+
+fn circle_consumer_keeps_the_extreme_direction() {
+    let target = Point::new(f64::MAX, f64::MAX);
+    let circle = Circle::new(Point::new(0.0, 0.0), 4.0);
+    let nearest = circle.nearest_point(target);
+    assert!((nearest.distance(circle.center) - 4.0).abs() < 1e-14);
+    assert!(nearest.x > 0.0 && nearest.y > 0.0);
+}
+
+#[test]
+fn vector_normalization_keeps_finite_directions_and_refuses_invalid_input() {
+    crate::run_table(&[
+        (
+            "finite extremes",
+            extreme_finite_vectors_keep_a_unit_direction,
+        ),
+        (
+            "fallback admission",
+            invalid_and_near_zero_vectors_use_the_fallback,
+        ),
+        ("line consumer", line_consumer_keeps_the_extreme_direction),
+        (
+            "circle consumer",
+            circle_consumer_keeps_the_extreme_direction,
         ),
     ]);
 }
