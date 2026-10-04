@@ -1956,29 +1956,37 @@ impl MacOSWindowExtTrait for MacOSWindow {
         });
     }
 
-    fn add_tab_to_window(&mut self, other_window_id: u64) {
+    fn add_tab_to_window(&mut self, other: &dyn crate::traits::HostWindow) -> bool {
+        let Some(other) = other.as_any().downcast_ref::<Self>() else {
+            return false;
+        };
+        if !self.owner_is_main
+            || !other.owner_is_main
+            || !std::ptr::eq(self.owner, other.owner)
+            || self.ns_window == other.ns_window
+        {
+            return false;
+        }
         let owner = self.owner;
         let owner_is_main = self.owner_is_main;
         let this = &*self;
         route_on_owner(owner, owner_is_main, || unsafe {
-            // SAFETY: `other_window_id` round-trips an NSWindow pointer that
-            // was handed out as a window id; nil is rejected before messaging;
-            // the body runs on the owner thread — inline on the OS main thread
-            // for a main-lane owner, or dispatched onto the lane under the
-            // reentrancy guard — before the message is sent. Capturing `this`
-            // (a `&MacOSWindow`) rather than the
-            // raw-pointer field is what keeps the closure `Send`:
-            // `&MacOSWindow: Send` via the `unsafe impl Sync`.
-            // Window ids are NSWindow pointers (see `WindowTrait::id`)
-            let other_ns_window = other_window_id as *mut Object;
-
-            if other_ns_window == NIL {
-                tracing::warn!("Cannot add tab: window {:?} not found", other_window_id);
-            } else {
-                let _: () = msg_send![this.ns_window, addTabbedWindow:other_ns_window ordered:0]; // NSWindowAbove
-                tracing::debug!("Added tab to window {:p}", other_ns_window);
+            // SAFETY: both borrowed wrappers own live NSWindows, constructed
+            // with releasedWhenClosed:NO. The checks above establish one main
+            // owner lane; this route executes there. Extra retains keep both
+            // receivers alive through synchronous AppKit callback reentry.
+            if this.closed.load(Ordering::Acquire) || other.closed.load(Ordering::Acquire) {
+                return false;
             }
-        });
+            let Some(_this_pin) = objc2::rc::Retained::retain(this.ns_window) else {
+                return false;
+            };
+            let Some(_other_pin) = objc2::rc::Retained::retain(other.ns_window) else {
+                return false;
+            };
+            let _: () = msg_send![this.ns_window, addTabbedWindow:other.ns_window ordered:0]; // NSWindowAbove
+            true
+        })
     }
 
     fn toggle_native_fullscreen(&mut self) {

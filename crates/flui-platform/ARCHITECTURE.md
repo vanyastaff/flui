@@ -1071,3 +1071,18 @@ allocation and its backend alignment requirements. A device's native page size
 does not require every application-side vector to use a custom allocator.
 This removes an unused unsafe surface rather than asserting native allocation
 behavior: Android execution remains unavailable on this host.
+
+### AppKit tab joins borrow live windows
+
+`MacOSWindowExt::add_tab_to_window` takes `&dyn HostWindow` and returns whether
+AppKit received the join. A numeric ID cannot establish ownership of an
+Objective-C object. The backend rejects a different backend, different owner
+lanes, non-main lanes, closed windows and joining a window to itself before
+messaging AppKit. Both borrowed wrappers own their NSWindows, which are created
+with `releasedWhenClosed:NO`; explicit native retains span the callback-capable
+join on their shared main owner lane. No state or registry mutex spans that call.
+
+The method's public compile-fail doctest rejects numeric IDs, and its compiling
+example pins the borrowed-window signature and boolean result. These compiler
+checks do not prove native tab grouping or close/reentry behavior. AppKit runtime
+execution remains unverified on the Windows audit host.
