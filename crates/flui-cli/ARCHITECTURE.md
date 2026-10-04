@@ -188,3 +188,13 @@ nothing in a running app does. Keeping it here is what lets
 `cargo install flui-cli` compile no framework code: the runtime half of hot
 reload, `flui-hot-reload`, is linked by the app, and the two halves share
 only a pair of environment-variable names.
+
+### Finishing a probe transfers its captured output
+
+The pipe reader owns a mutex-protected byte buffer shared with its drain thread.
+At the deadline, finishing takes those bytes under the same lock rather than
+cloning an entire output stream. A detached reader may subsequently append to
+the empty buffer; it cannot change the returned snapshot. The existing
+`grandchild_holding_the_pipe_does_not_hang_the_probe` checks the deadline and
+captured prefix on Unix. CLI output integration tests check the delivered bytes;
+no allocation-count claim is inferred from those behavior tests.

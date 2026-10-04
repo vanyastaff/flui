@@ -4,7 +4,7 @@
 //! contracts when naming callback payloads or integrating a recognizer with
 //! the presentation's [`crate::widgets::GestureArenaScope`]. Lifecycle hooks can
 //! also retain the focus, hit-test, and text-input handles provided by
-//! [`crate::view::BuildContext`], using the callback and result types below.
+//! [`crate::view::LifecycleContext`], using the callback and result types below.
 //! Owners and backend adapter construction remain internal to the runtime.
 
 pub use flui_interaction::arena::{

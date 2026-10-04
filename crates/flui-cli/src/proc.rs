@@ -148,11 +148,11 @@ impl PipeReader {
         let remaining = deadline.saturating_duration_since(Instant::now());
         let _ = self.done.recv_timeout(remaining);
         // A poisoned lock means the reader panicked; keep what it appended.
-        let guard = self
+        let mut guard = self
             .buffer
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        guard.clone()
+        std::mem::take(&mut *guard)
     }
 }
 

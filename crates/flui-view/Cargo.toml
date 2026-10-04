@@ -45,7 +45,7 @@ flui-protocol = { workspace = true }
 
 # Core dependencies
 parking_lot.workspace = true
-slab = "0.4"
+slab.workspace = true
 smallvec.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
