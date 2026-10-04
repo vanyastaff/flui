@@ -547,3 +547,41 @@ Healthy FIFO delivery and the next source operation distinguish retention from
 lost work; `successful_lifecycle_cancellation_retires_captures_and_keeps_fifo`
 ensures ordinary successful cancellation still releases captures.
 
+### Async snapshot publication precedes generic retirement
+
+**Rule.** Future and stream completions construct their incoming snapshot and
+publish it under the subscription-generation fence. Old snapshot retirement
+and the matching rebuild request run after the slot Mutex is released. If old
+retirement panics, rebuild scheduling is still attempted; the first panic then
+resumes, and a competing wake payload is retained. The new snapshot already
+belongs to the slot, so unwinding the old value cannot destroy it. Inline future
+completion still suppresses a redundant rebuild and keeps its `Done` guard.
+Connection-state-only transitions preserve owned data/error without retirement.
+Stale incoming values retire outside the slot lock and schedule no rebuild.
+
+The task that panicked remains failed under the driver's policy. Recovery means
+that the queued next build can read the published snapshot and a fresh keyed
+subscription can publish again. This does not promise continued polling of the
+failed producer, arbitrary user-builder containment, or recovery from two
+panicking fields within the first ordinary retired aggregate.
+
+The public `lifecycle_panic_containment_matrix` includes FutureBuilder and
+StreamBuilder children for old retirement alone, competing old/new values, and
+old retirement plus a failed rebuild wake. Each observes the committed incoming
+value on a real build without test-induced dirtiness, then changes the key and
+observes a second completion.
+
+The borrowed caller Arc stays live through retirement and wake catches. After
+an accepted-update failure, one owning slot Arc is cloned and retained before
+resuming, so disposal of the failed producer or eagerly initialized element
+cannot retire the published incoming value in competition. Healthy updates
+perform no additional Arc clone/drop. The guarantee retains the slot's lifetime,
+not an immutable historical value across later writes.
+
+The accepted-update guard costs one Arc clone only on a caught failure path. The private
+`accepted_publication_guard_retains_incoming_after_caller_disposal` row joins
+`future_builder_matrix`: it calls the same production `apply_update` with no
+driver-owned Arc, catches old retirement, and disposes the final caller owner.
+The public eager-disposal row separately checks a real builder; retained failed
+task ownership can also pin its snapshot, so that row is not a guard-only oracle.
+

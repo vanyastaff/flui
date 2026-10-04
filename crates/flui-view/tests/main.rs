@@ -13,6 +13,8 @@
 
 #[path = "ancestor_finders.rs"]
 mod ancestor_finders;
+#[path = "support/async_snapshot_recovery.rs"]
+mod async_snapshot_recovery;
 #[path = "build_owner_tests.rs"]
 mod build_owner_tests;
 #[path = "dense_reconcile_containment.rs"]
@@ -99,6 +101,10 @@ fn global_key_contract_matrix() {
 
 #[test]
 fn lifecycle_panic_containment_matrix() {
+    if let Ok(kind) = std::env::var("FLUI_ASYNC_SNAPSHOT_CHILD") {
+        async_snapshot_recovery::dispatch_child(&kind);
+        return;
+    }
     if let Ok(kind) = std::env::var("FLUI_LIFECYCLE_RECOVERY_CHILD") {
         lifecycle_recovery::dispatch_child(&kind);
         return;
@@ -119,6 +125,13 @@ fn lifecycle_panic_containment_matrix() {
             ("lifecycle_panic_containment::a_dispose_panic_on_a_global_keyed_element_still_clears_the_registry", lifecycle_panic_containment::a_dispose_panic_on_a_global_keyed_element_still_clears_the_registry as fn()),
             ("lifecycle_panic_containment::a_deactivate_panic_is_contained_and_the_element_is_still_parked_inactive", lifecycle_panic_containment::a_deactivate_panic_is_contained_and_the_element_is_still_parked_inactive as fn()),
             ("recovered_panics::a_contained_build_panic_is_recorded_once_with_its_element_and_hook", recovered_panics::a_contained_build_panic_is_recorded_once_with_its_element_and_hook as fn()),
+            ("async_snapshot_recovery::future_publication_survives_old_value_retirement", async_snapshot_recovery::future_publication_survives_old_value_retirement as fn()),
+            ("async_snapshot_recovery::future_publication_keeps_competing_incoming_value_alive", async_snapshot_recovery::future_publication_keeps_competing_incoming_value_alive as fn()),
+            ("async_snapshot_recovery::future_retirement_panic_keeps_priority_over_rebuild_wake", async_snapshot_recovery::future_retirement_panic_keeps_priority_over_rebuild_wake as fn()),
+            ("async_snapshot_recovery::stream_publication_survives_old_value_retirement", async_snapshot_recovery::stream_publication_survives_old_value_retirement as fn()),
+            ("async_snapshot_recovery::stream_publication_keeps_competing_incoming_value_alive", async_snapshot_recovery::stream_publication_keeps_competing_incoming_value_alive as fn()),
+            ("async_snapshot_recovery::stream_retirement_panic_keeps_priority_over_rebuild_wake", async_snapshot_recovery::stream_retirement_panic_keeps_priority_over_rebuild_wake as fn()),
+            ("async_snapshot_recovery::eager_failure_keeps_incoming_aggregate_owned_after_state_disposal", async_snapshot_recovery::eager_failure_keeps_incoming_aggregate_owned_after_state_disposal as fn()),
             ("lifecycle_recovery::self_cancelled_callback_failure_retains_its_capture_aggregate", lifecycle_recovery::self_cancelled_callback_failure_retains_its_capture_aggregate as fn()),
             ("lifecycle_recovery::self_cancellation_retains_competing_payload_and_capture_aggregates", lifecycle_recovery::self_cancellation_retains_competing_payload_and_capture_aggregates as fn()),
             ("lifecycle_recovery::terminal_release_keeps_the_earlier_callback_failure", lifecycle_recovery::terminal_release_keeps_the_earlier_callback_failure as fn()),

@@ -47,7 +47,9 @@ use flui_scheduler::{AsyncDriver, TaskToken};
 use futures_core::Stream;
 use parking_lot::Mutex;
 
-use super::async_slot::{InitialDataFactory, SharedSlot, Slot, SnapshotBuilder, apply_fold};
+use super::async_slot::{
+    InitialDataFactory, SharedSlot, Slot, SnapshotBuilder, SnapshotUpdate, apply_update,
+};
 use crate::{
     RebuildHandle,
     context::{BuildContext, LifecycleContext},
@@ -63,17 +65,23 @@ pub type StreamFactory<T, E> = Rc<dyn Fn() -> BoxedResultStream<T, E>>;
 
 /// Fold a stream event into the shared snapshot, honouring the generation guard.
 ///
-/// Returns whether a rebuild must be scheduled.
+/// Returns whether the live subscription accepted the event.
 fn apply_event<T, E>(
     slot: &SharedSlot<T, E>,
     generation: u64,
     event: Option<Result<T, E>>,
+    handle: &RebuildHandle,
 ) -> bool {
-    apply_fold(slot, generation, |snapshot| match event {
-        Some(Ok(data)) => snapshot.after_data(data),
-        Some(Err(error)) => snapshot.after_error(error),
-        None => snapshot.after_done(),
-    })
+    let update = match event {
+        Some(Ok(data)) => {
+            SnapshotUpdate::Replace(AsyncSnapshot::with_data(ConnectionState::Active, data))
+        }
+        Some(Err(error)) => {
+            SnapshotUpdate::Replace(AsyncSnapshot::with_error(ConnectionState::Active, error))
+        }
+        None => SnapshotUpdate::State(ConnectionState::Done),
+    };
+    apply_update(slot, generation, update, handle)
 }
 
 // ============================================================================
@@ -274,11 +282,9 @@ where
                 // `StreamBuilder` never opens an inline window, so `false` here
                 // means exactly one thing: the subscription was replaced or
                 // disposed. Stop, and do not wake a frame for it.
-                if !apply_event(&slot_for_task, generation, event) {
+                if !apply_event(&slot_for_task, generation, event, &handle) {
                     return;
                 }
-
-                handle.schedule(crate::RebuildReason::AsyncCompletion);
 
                 if is_end {
                     return;
@@ -286,7 +292,9 @@ where
             }
         }));
 
-        self.slot.lock().fold(AsyncSnapshot::after_connected);
+        self.slot
+            .lock()
+            .set_connection_state(ConnectionState::Waiting);
 
         self.token = Some(token);
         self.key = Some(key);
@@ -306,10 +314,12 @@ where
         self.handle = Some(ctx.rebuild_handle());
         self.driver = ctx.async_driver();
 
-        self.slot.lock().snapshot = match &self.initial_data {
+        let initial = match &self.initial_data {
             Some(initial_data) => AsyncSnapshot::with_data(ConnectionState::None, initial_data()),
             None => AsyncSnapshot::nothing(),
         };
+        let previous = core::mem::replace(&mut self.slot.lock().snapshot, initial);
+        drop(previous);
 
         // An absent key means no stream: no subscription, snapshot stays
         // where `initial` left it.
@@ -339,7 +349,7 @@ where
 
         if self.token.is_some() || self.key.is_some() {
             self.unsubscribe();
-            self.slot.lock().fold(AsyncSnapshot::after_disconnected);
+            self.slot.lock().set_connection_state(ConnectionState::None);
         }
 
         if let Some(key) = new_view.key.clone() {

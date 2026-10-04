@@ -49,7 +49,9 @@ use flui_foundation::{AsyncSnapshot, ConnectionState};
 use flui_scheduler::{AsyncDriver, TaskToken};
 use parking_lot::Mutex;
 
-use super::async_slot::{InitialDataFactory, SharedSlot, Slot, SnapshotBuilder, apply_fold};
+use super::async_slot::{
+    InitialDataFactory, SharedSlot, Slot, SnapshotBuilder, SnapshotUpdate, apply_update,
+};
 use crate::{
     RebuildHandle,
     context::{BuildContext, LifecycleContext},
@@ -66,12 +68,18 @@ pub type FutureFactory<T, E> = Rc<dyn Fn() -> BoxedResultFuture<T, E>>;
 /// Fold a completion into the shared snapshot, honouring the generation guard.
 ///
 /// `Ok` ⇒ `after_success` (Done + data); `Err` ⇒ `after_failure` (Done + error).
-/// Returns whether a rebuild must be scheduled.
-fn apply_completion<T, E>(slot: &SharedSlot<T, E>, generation: u64, result: Result<T, E>) -> bool {
-    apply_fold(slot, generation, |snapshot| match result {
-        Ok(data) => snapshot.after_success(data),
-        Err(error) => snapshot.after_failure(error),
-    })
+/// Publish, retire the old value, and schedule outside the snapshot lock.
+fn apply_completion<T, E>(
+    slot: &SharedSlot<T, E>,
+    generation: u64,
+    result: Result<T, E>,
+    handle: &RebuildHandle,
+) {
+    let snapshot = match result {
+        Ok(data) => AsyncSnapshot::with_data(ConnectionState::Done, data),
+        Err(error) => AsyncSnapshot::with_error(ConnectionState::Done, error),
+    };
+    apply_update(slot, generation, SnapshotUpdate::Replace(snapshot), handle);
 }
 
 // ============================================================================
@@ -269,15 +277,15 @@ where
 
         let token = driver.spawn_local_eager(Box::pin(async move {
             let result = future.await;
-            if apply_completion(&slot_for_task, generation, result) {
-                handle.schedule(crate::RebuildReason::AsyncCompletion);
-            }
+            apply_completion(&slot_for_task, generation, result, &handle);
         }));
 
         {
             let mut slot = self.slot.lock();
             slot.inline_window = false;
-            slot.fold(AsyncSnapshot::after_subscribe);
+            if slot.snapshot.connection_state() != ConnectionState::Done {
+                slot.set_connection_state(ConnectionState::Waiting);
+            }
         }
 
         self.token = token;
@@ -299,10 +307,12 @@ where
         self.driver = ctx.async_driver();
 
         // `initial(Some(d))` is `with_data(None, d)`; `initial(None)` is `nothing()`.
-        self.slot.lock().snapshot = match &self.initial_data {
+        let initial = match &self.initial_data {
             Some(initial_data) => AsyncSnapshot::with_data(ConnectionState::None, initial_data()),
             None => AsyncSnapshot::nothing(),
         };
+        let previous = core::mem::replace(&mut self.slot.lock().snapshot, initial);
+        drop(previous);
 
         // An absent key means no future: no subscription, snapshot stays
         // where `initial` left it.
@@ -332,7 +342,7 @@ where
 
         if self.token.is_some() || self.key.is_some() {
             self.unsubscribe();
-            self.slot.lock().fold(AsyncSnapshot::after_disconnected);
+            self.slot.lock().set_connection_state(ConnectionState::None);
         }
 
         if let Some(key) = new_view.key.clone() {
@@ -573,9 +583,17 @@ mod tests {
 
     #[test]
     fn future_builder_matrix() {
+        if std::env::var_os("FLUI_SNAPSHOT_GUARD_CHILD").is_some() {
+            super::super::async_slot::tests::guard_child();
+            return;
+        }
         crate::table_test::run_table(
             "future_builder_matrix",
             &[
+                (
+                    "accepted_publication_guard_retains_incoming_after_caller_disposal",
+                    super::super::async_slot::tests::accepted_publication_guard_retains_incoming_after_caller_disposal as fn(),
+                ),
                 (
                     "future_builder_pending_future_waits_then_completes_with_data",
                     future_builder_pending_future_waits_then_completes_with_data as fn(),
