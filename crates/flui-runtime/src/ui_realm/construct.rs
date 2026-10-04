@@ -373,7 +373,9 @@ impl UiRealm {
             disposition,
             consecutive_failures,
         };
-        match &report.kind {
+        // Diagnostics are foreign code through tracing subscribers. A failed
+        // diagnostic must not prevent the report's callback or sibling frames.
+        if let Err(payload) = catch_unwind(AssertUnwindSafe(|| match &report.kind {
             FrameFailureKind::SegmentPanic {
                 message,
                 phase,
@@ -423,41 +425,40 @@ impl UiRealm {
                     "lifecycle panic contained; frame continued for this presentation"
                 );
             }
+        })) {
+            flui_foundation::panic::retain_opaque_payload(payload);
         }
         let handler = self.frame_failure_handler.borrow().clone();
         if let Some(handler) = handler {
-            // The handler is embedder code running INSIDE the frame pump —
-            // for a segment-panic report, OUTSIDE the per-presentation
-            // `catch_unwind` (the boundary's `Err` arm already returned
-            // from it). An uncontained handler panic would therefore
-            // reopen exactly the process-fatal path this boundary exists
-            // to close: unwind through the remaining siblings' segments
-            // and into the runner's `resume_unwind`. On the
-            // pipeline-error path (reported from inside the segment) it
-            // was subtly worse: the boundary caught the HANDLER's panic
-            // as a segment panic and re-reported it — invoking the same
-            // panicking handler a second time, now uncontained.
-            //
-            // So the delivery itself is contained. A panicking handler is
-            // an EMBEDDER bug: it is logged at error level (no `BUG:`
-            // classification — that prefix asserts a FLUI invariant) and
-            // the report it was given is already fully traced above, so
-            // no diagnostics are lost. The handler stays registered — each
-            // future delivery is individually contained (one call per
-            // report, never a retry loop), and a transiently-broken
-            // handler keeps receiving reports once it stops panicking.
-            // Automatic disarming would silently cut off the embedder's
-            // failure feed on the strength of a heuristic, which is the
-            // "silent skip" shape this route exists to avoid.
-            if catch_unwind(AssertUnwindSafe(|| handler.call(&report))).is_err() {
-                tracing::error!(
-                    { flui_foundation::diagnostics::PRESENTATION_ID } =
-                        report.address.presentation_id.as_u64(),
-                    realm_id = report.address.realm_id.as_u64(),
-                    "the registered FrameFailureHandler panicked while receiving this \
-                     report — embedder bug; the panic was contained and the report was \
-                     already traced above"
-                );
+            // Keep the owning envelope outside the callback's unwind boundary.
+            // It may be the final owner after callback-driven unregistration.
+            let failed = match catch_unwind(AssertUnwindSafe(|| handler.call(&report))) {
+                Ok(()) => match catch_unwind(AssertUnwindSafe(|| drop(handler))) {
+                    Ok(()) => false,
+                    Err(payload) => {
+                        flui_foundation::panic::retain_opaque_payload(payload);
+                        true
+                    }
+                },
+                Err(payload) => {
+                    // Aggregate capture destruction is unsafe while preserving
+                    // another failure; retain the opaque callback envelope.
+                    std::mem::forget(handler);
+                    flui_foundation::panic::retain_opaque_payload(payload);
+                    true
+                }
+            };
+            if failed
+                && let Err(payload) = catch_unwind(AssertUnwindSafe(|| {
+                    tracing::error!(
+                        { flui_foundation::diagnostics::PRESENTATION_ID } =
+                            report.address.presentation_id.as_u64(),
+                        realm_id = report.address.realm_id.as_u64(),
+                        "FrameFailureHandler delivery failed; the frame failure remains contained"
+                    );
+                }))
+            {
+                flui_foundation::panic::retain_opaque_payload(payload);
             }
         }
     }

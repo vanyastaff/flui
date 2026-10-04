@@ -411,6 +411,7 @@ The consumer row `a_zero_capacity_performance_window_retains_no_frame_samples`
 in flui-testing's `headless_frame_driver_matrix` distinguishes the two through
 the public timing methods. Production overlays retain their default 120 samples.
 
+
 ### Deterministic execution preserves concurrent admission during compaction
 
 Completed deterministic tasks retire under the task-list mutex; pending futures
@@ -430,3 +431,22 @@ row in `flui-testing`'s `headless_frame_driver_matrix` proves real painted outpu
 is withheld and then delivered after recovery. `draw_frame_returns_layer_tree_and_defers_when_gated`
 also contains the terminal-count row; only its initial count is injected
 privately because the public boundary requires billions of calls to reach.
+
+### Frame failure delivery isolates diagnostics and opaque ownership
+
+A segment failure is classified by borrowing its payload, then the opaque payload
+is retained before recovery or diagnostics can run. The typed report owns only
+framework values and strings. Diagnostics and the registered handler run under
+separate boundaries: subscriber failure cannot suppress callback delivery, and
+neither can replace the presentation's original failure or stop sibling frames.
+A failed callback's owning envelope is retained before secondary payload handling;
+ordinary successful-envelope retirement still runs under its own boundary. Rust
+cannot contain two panicking fields in an aggregate's first ordinary destruction.
+
+`frame_failure_containment_matrix` isolates aggregate payload and callback-capture
+cases in subprocesses: producer alone, handler alone, diagnostics alone, competing
+failures, and failed-handler retirement during realm teardown. Each case asserts
+one segment report, no partial submission and the next automatic retry presenting.
+The existing private segment probe injects a failure that consumers cannot place
+at this exact outer boundary; the registered report handler and real frame driver
+are the production paths.

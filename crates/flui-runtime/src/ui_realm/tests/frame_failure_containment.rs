@@ -376,3 +376,147 @@ pub(crate) fn a_panicking_handler_during_a_pipeline_report_is_delivered_once_not
          the panicking handler a second time)"
     );
 }
+
+struct OpaqueFailureDrop(Arc<std::sync::atomic::AtomicUsize>);
+impl Drop for OpaqueFailureDrop {
+    fn drop(&mut self) {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        panic!("opaque failure destructor");
+    }
+}
+
+fn opaque_failure(drops: &Arc<std::sync::atomic::AtomicUsize>) -> ! {
+    std::panic::panic_any((
+        OpaqueFailureDrop(Arc::clone(drops)),
+        OpaqueFailureDrop(Arc::clone(drops)),
+    ));
+}
+
+struct FailingDiagnostics(Arc<std::sync::atomic::AtomicUsize>);
+impl tracing::Subscriber for FailingDiagnostics {
+    fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+        true
+    }
+    fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+        tracing::span::Id::from_u64(1)
+    }
+    fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+    fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+    fn event(&self, event: &tracing::Event<'_>) {
+        if *event.metadata().level() == tracing::Level::ERROR {
+            opaque_failure(&self.0);
+        }
+    }
+    fn enter(&self, _: &tracing::span::Id) {}
+    fn exit(&self, _: &tracing::span::Id) {}
+}
+
+pub(crate) fn run_opaque_frame_child(kind: &str) {
+    let realm = UiRealm::for_test();
+    realm
+        .attach_root_widget(&SizedBox::new(10.0, 10.0))
+        .expect("root attaches");
+    let drops = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let count = Arc::clone(&calls);
+    let handler_drops = Arc::clone(&drops);
+    let fail_handler = matches!(kind, "handler" | "competition");
+    let fail_captures = kind == "captures";
+    let captures = fail_captures.then(|| {
+        (
+            OpaqueFailureDrop(Arc::clone(&drops)),
+            OpaqueFailureDrop(Arc::clone(&drops)),
+        )
+    });
+    realm.set_frame_failure_handler(Some(FrameFailureHandler::new(move |report| {
+        let _captures = &captures;
+        assert!(matches!(report.kind, FrameFailureKind::SegmentPanic { .. }));
+        count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if fail_handler {
+            opaque_failure(&handler_drops);
+        }
+        assert!(!fail_captures, "handler failed with opaque captures");
+    })));
+    let armed = Rc::new(Cell::new(true));
+    let probe = Rc::clone(&armed);
+    let producer_drops = Arc::clone(&drops);
+    let fail_producer = matches!(kind, "producer" | "competition");
+    realm.presentations.primary().set_segment_probe(
+        SegmentPhase::Build,
+        Some(Box::new(move || {
+            if probe.replace(false) {
+                if fail_producer {
+                    opaque_failure(&producer_drops);
+                }
+                panic!("original frame failure");
+            }
+        })),
+    );
+    let mut backend = ScriptedSink::always_presents();
+    let diagnostics = matches!(kind, "diagnostics" | "competition")
+        .then(|| tracing::subscriber::set_default(FailingDiagnostics(Arc::clone(&drops))));
+    assert!(
+        !realm.render_frame(&mut backend),
+        "failed frame is never submitted"
+    );
+    drop(diagnostics);
+    assert_eq!(
+        calls.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "one authoritative report"
+    );
+    assert!(
+        realm.render_frame(&mut backend),
+        "next automatic retry presents"
+    );
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    drop(realm);
+    assert_eq!(drops.load(std::sync::atomic::Ordering::SeqCst), 0);
+}
+
+fn opaque_frame_child(kind: &str) {
+    use std::process::{Command, Stdio};
+    use std::time::{Duration, Instant};
+    let mut child = Command::new(std::env::current_exe().expect("test executable"))
+        .args([
+            "--exact",
+            "ui_realm::tests::frame_failure_containment_matrix",
+            "--nocapture",
+        ])
+        .env("FLUI_OPAQUE_FRAME_CHILD", kind)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn frame child");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while child.try_wait().expect("child status").is_none() {
+        if Instant::now() >= deadline {
+            child.kill().expect("kill blocked child");
+            let output = child.wait_with_output().expect("reap child");
+            panic!("frame failure containment blocked: {output:?}");
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let output = child.wait_with_output().expect("child output");
+    assert!(
+        output.status.success() && String::from_utf8_lossy(&output.stdout).contains("1 passed"),
+        "opaque frame failure containment failed: {output:?}"
+    );
+}
+
+pub(crate) fn a_segment_opaque_payload_is_retained_before_recovery() {
+    opaque_frame_child("producer");
+}
+pub(crate) fn an_opaque_handler_failure_preserves_frame_recovery() {
+    opaque_frame_child("handler");
+}
+pub(crate) fn opaque_diagnostics_cannot_suppress_the_frame_handler() {
+    opaque_frame_child("diagnostics");
+}
+pub(crate) fn competing_opaque_frame_failures_keep_one_report_and_retry() {
+    opaque_frame_child("competition");
+}
+
+pub(crate) fn a_failed_handler_envelope_is_retained_through_realm_teardown() {
+    opaque_frame_child("captures");
+}

@@ -344,13 +344,16 @@ pub struct FrameFailureReport {
 /// Embedders that forward repeated deterministic recoveries own any desired
 /// deduplication or throttling.
 ///
-/// A handler that itself panics is contained at the delivery site (its
-/// panic cannot re-enter the frame boundary or take down sibling
-/// presentations), logged at error level as an embedder bug, and — since
-/// the report was already fully traced before delivery — loses no
-/// diagnostics. Delivery is one call per report, never a retry loop, and
-/// the handler stays registered: a transiently-broken handler resumes
-/// receiving reports once it stops panicking.
+/// A failed callback, callback retirement or tracing subscriber is contained
+/// independently so the report and sibling presentations still progress.
+/// Callback delivery is attempted even when tracing fails. Delivery is one call
+/// per report, never a retry loop, and the handler stays registered. Opaque
+/// failure payloads and a callback envelope whose invocation failed are retained
+/// permanently: destroying arbitrary aggregate captures after another failure
+/// could abort before an unwind boundary can regain control. Ordinary successful
+/// callback retirement still runs; its first destructor failure is contained.
+/// If an ordinary aggregate destructor panics again while unwinding its first
+/// failure, Rust aborts before the catch boundary can regain control.
 #[derive(Clone)]
 pub struct FrameFailureHandler(std::sync::Arc<dyn Fn(&FrameFailureReport) + Send + Sync>);
 
