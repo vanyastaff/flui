@@ -353,9 +353,11 @@ fn label(
             spans: &spans,
             default_style: None,
             font_size,
+            min_width: 0.0,
             max_width: None,
             line_height: None,
             direction: TextDirection::Ltr,
+            text_align: flui_painting::typography::TextAlign::Start,
             max_lines: None,
             ellipsis: None,
         })
