@@ -88,3 +88,13 @@ in the same phase at the same time. And the realm coalesces pointer moves
 until the next frame; the harness flushes the queue after each event, through
 the same dispatch code the frame would run, so a test observes a move
 immediately.
+
+### Logical render roots follow reconciliation
+
+`LaidOut::root`, `current_root` and render-type traversal resolve the caller's
+live render subtree after every frame. A composition root remains mounted while
+its child changes render type or a contained build failure installs an error
+view; a cached render ID would then point at the detached child. The
+`logical_render_root_tracks_replacement_and_build_recovery` row in
+`headless_frame_driver_matrix` checks healthy replacement, the rendered error
+slot and recovery through the root's own rebuild handle.
