@@ -450,7 +450,7 @@ impl ApproxEq for f64 {
 impl ApproxEq for i32 {
     #[inline]
     fn approx_eq_eps(&self, other: &Self, epsilon: f64) -> bool {
-        f64::from((self - other).abs()) <= epsilon
+        f64::from(self.abs_diff(*other)) <= epsilon
     }
 }
 

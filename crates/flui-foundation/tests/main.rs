@@ -12,6 +12,9 @@ mod transform;
 #[path = "geometry/matrix.rs"]
 mod matrix;
 
+#[path = "geometry/scalar.rs"]
+mod scalar;
+
 /// Execute every named scenario before reporting failures. Keep opaque panic
 /// payloads alive until all rows complete, without invoking arbitrary Drop.
 pub(crate) fn run_table(cases: &[(&str, fn())]) {
