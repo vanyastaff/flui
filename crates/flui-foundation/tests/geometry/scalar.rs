@@ -113,3 +113,61 @@ fn floating_geometry_midpoints_preserve_the_scalar_range() {
         ),
     ]);
 }
+
+fn single_precision_distance_uses_the_returned_double_range() {
+    let a = Point::new(1.701_411_8e38_f32, 0.0);
+    let b = Point::new(-1.701_411_8e38_f32, 0.0);
+    // Endpoints are +/- 2^127; their distance is exactly 2^128.
+    let expected = 3.402_823_669_209_385e38;
+    assert_eq!(a.distance(b), expected);
+    assert_eq!(b.distance(a), expected);
+    assert_eq!(Line::new(a, b).length(), expected);
+    let a = Point::new(0.0, a.x);
+    let b = Point::new(0.0, b.x);
+    assert_eq!(Line::new(a, b).length(), expected);
+}
+
+fn single_precision_squared_distance_uses_the_returned_double_range() {
+    let a = Point::new(1.701_411_8e38_f32, 0.0);
+    let b = Point::new(-1.701_411_8e38_f32, 0.0);
+    // The squared distance is exactly 2^256, still finite in f64.
+    let expected = 1.157_920_892_373_162e77;
+    assert_eq!(a.distance_squared(b), expected);
+    assert_eq!(b.distance_squared(a), expected);
+    assert_eq!(Line::new(a, b).length_squared(), expected);
+    let a = Point::new(0.0, a.x);
+    let b = Point::new(0.0, b.x);
+    assert_eq!(Line::new(a, b).length_squared(), expected);
+}
+
+fn ordinary_and_coincident_distances_keep_their_geometry() {
+    let a = Point::new(1.0_f32, 2.0);
+    let b = Point::new(4.0_f32, 6.0);
+    assert_eq!(a.distance(b), 5.0);
+    assert_eq!(Line::new(a, b).length_squared(), 25.0);
+    let endpoint = Point::new(f32::MAX, -f32::MAX);
+    assert_eq!(endpoint.distance(endpoint), 0.0);
+    assert_eq!(Line::new(endpoint, endpoint).length_squared(), 0.0);
+    let a = Point::new(1.0_f64, 2.0);
+    let b = Point::new(4.0_f64, 6.0);
+    assert_eq!(Line::new(a, b).length(), 5.0);
+    assert_eq!(a.distance_squared(b), 25.0);
+}
+
+#[test]
+fn single_precision_geometry_distances_use_double_precision_range() {
+    crate::run_table(&[
+        (
+            "distance range",
+            single_precision_distance_uses_the_returned_double_range,
+        ),
+        (
+            "squared distance range",
+            single_precision_squared_distance_uses_the_returned_double_range,
+        ),
+        (
+            "ordinary and coincident distances",
+            ordinary_and_coincident_distances_keep_their_geometry,
+        ),
+    ]);
+}

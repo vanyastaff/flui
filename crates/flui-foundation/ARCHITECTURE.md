@@ -22,6 +22,13 @@ equal infinities keep their sign. Integer geometry does not expose midpoint.
 The public family `floating_geometry_midpoints_preserve_the_scalar_range`
 checks these boundaries through points and lines.
 
+Point distances convert each coordinate to `f64` before subtraction, matching
+their returned scalar. Thus a distance between finite `f32` endpoints can exceed
+`f32::MAX` while remaining finite, including the squared result. `f64` differences
+and squared results can still exceed their representable range. The public family
+`single_precision_geometry_distances_use_double_precision_range` checks point
+distances and their line-length delegates against exact power-of-two results.
+
 Transform decomposition computes column lengths with `hypot`. It keeps a finite,
 nonzero direct determinant before dividing by the first scale: prematurely
 normalizing an anisotropic column can erase a smaller representable signed scale.

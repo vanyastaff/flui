@@ -284,6 +284,9 @@ where
 {
     /// Euclidean distance to another point.
     ///
+    /// Coordinates are converted to `f64` before subtraction so `f32`
+    /// differences can use the full range of the returned type.
+    ///
     /// # Examples
     ///
     /// ```
@@ -296,22 +299,22 @@ where
     #[inline]
     #[must_use]
     pub fn distance(self, other: Self) -> f64 {
-        let dx: f64 = T::sub(other.x, self.x).into();
-        let dy: f64 = T::sub(other.y, self.y).into();
+        let dx = other.x.into() - self.x.into();
+        let dy = other.y.into() - self.y.into();
         dx.hypot(dy)
     }
 
     /// Squared euclidean distance to another point.
     ///
-    /// This is faster than [`distance`](Self::distance) when you only need
+    /// Coordinates are converted to `f64` before subtraction, as in
+    /// [`distance`](Self::distance). Comparing squared distances avoids the
+    /// square root, but the result may overflow sooner than the distance.
     #[inline]
     #[must_use]
     pub fn distance_squared(self, other: Self) -> f64 {
-        let dx = T::sub(other.x, self.x);
-        let dy = T::sub(other.y, self.y);
-        let dx_f32: f64 = dx.into();
-        let dy_f32: f64 = dy.into();
-        dx_f32 * dx_f32 + dy_f32 * dy_f32
+        let dx = other.x.into() - self.x.into();
+        let dy = other.y.into() - self.y.into();
+        dx * dx + dy * dy
     }
 
     /// Midpoint between this point and another.
