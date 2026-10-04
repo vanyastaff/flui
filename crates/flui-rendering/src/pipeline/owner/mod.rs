@@ -769,11 +769,15 @@ mod tests {
     /// `perform_layout_raw` panics. Used to test catch_unwind on the
     /// layout phase through `RenderEntry::layout`.
     #[derive(Debug)]
-    struct PanickingLayoutBox;
+    struct PanickingLayoutBox {
+        owned_payload: bool,
+    }
 
     impl PanickingLayoutBox {
         fn new() -> Self {
-            Self
+            Self {
+                owned_payload: false,
+            }
         }
     }
 
@@ -797,6 +801,9 @@ mod tests {
             // same path. Bridge-detected contract violations go through
             // the typed `Result` chain instead and surface as
             // `RenderError::ContractViolation`.
+            if self.owned_payload {
+                std::panic::panic_any(String::from("owned layout panic"));
+            }
             panic!("PanickingLayoutBox::perform_layout_raw -- intentional test panic");
         }
 
@@ -835,6 +842,10 @@ mod tests {
             (
                 "test_render_entry_layout_catches_panic",
                 test_render_entry_layout_catches_panic,
+            ),
+            (
+                "render_entry_layout_catches_owned_string_panic",
+                render_entry_layout_catches_owned_string_panic,
             ),
         ];
         for &(name, case) in cases {
@@ -913,6 +924,16 @@ mod tests {
     /// Mythos Outstanding Refactors list), so this test exercises the
     /// entry directly rather than through `run_frame`.
     fn test_render_entry_layout_catches_panic() {
+        render_entry_layout_catches_text_panic(PanickingLayoutBox::new());
+    }
+
+    fn render_entry_layout_catches_owned_string_panic() {
+        render_entry_layout_catches_text_panic(PanickingLayoutBox {
+            owned_payload: true,
+        });
+    }
+
+    fn render_entry_layout_catches_text_panic(render_object: PanickingLayoutBox) {
         use crate::error::{PoisonPhase, RenderError};
         use crate::storage::RenderEntry;
         use flui_foundation::geometry::Size;
@@ -920,9 +941,8 @@ mod tests {
         let prev = std::panic::take_hook();
         std::panic::set_hook(Box::new(|_| {}));
 
-        let mut entry =
-            RenderEntry::<crate::protocol::BoxProtocol>::new(Box::new(PanickingLayoutBox::new())
-                as Box<dyn crate::traits::RenderObject<crate::protocol::BoxProtocol>>);
+        let mut entry = RenderEntry::<crate::protocol::BoxProtocol>::new(Box::new(render_object)
+            as Box<dyn crate::traits::RenderObject<crate::protocol::BoxProtocol>>);
 
         let result = {
             let text = crate::pipeline::TextContextHandle::standalone();
