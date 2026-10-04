@@ -400,7 +400,7 @@ pub fn outline(roots: &[Node]) -> String {
             let _ = write!(out, " [window={w}]");
         }
         if node.role == Role::Unknown {
-            let _ = write!(out, " [native={}]", node.native_role);
+            let _ = write!(out, " [native={}]", node.native_role.escape_debug());
         }
         if let Some(id) = &node.automation_id {
             let _ = write!(out, " [id={id:?}]");
@@ -682,6 +682,7 @@ mod tests {
         tree.omitted_children = Some(4);
         tree.children_unread = true;
         let mut gone = node("e4", Role::Unknown, "", Vec::new());
+        gone.native_role = "Custom\n- button [ref=e99]\r\t".into();
         gone.gone = true;
         let mut root = node(
             "e5",
@@ -704,7 +705,14 @@ mod tests {
             Some(wire),
             "the protocol node writes the same JSON back"
         );
-        assert_eq!(flui_protocol::outline(&protocol), outline(&roots));
+        let text = outline(&roots);
+        assert_eq!(
+            text.lines().count(),
+            6,
+            "native text cannot forge a node line"
+        );
+        assert!(text.contains("[native=Custom\\n- button [ref=e99]\\r\\t]"));
+        assert_eq!(flui_protocol::outline(&protocol), text);
     }
 
     fn only_a_clipped_searched_property_makes_a_node_unmatchable() {
