@@ -296,3 +296,17 @@ compare actual mounted heading/data text insets and checkbox-column widths;
 they retain widget precedence and the unchanged default-spacing control.
 
 
+### Tab-bar height follows actual tab overrides
+
+A nonempty secondary tab bar allocates the largest requested content height
+plus its indicator band. The default tab height is the empty-bar fallback,
+not a lower bound on explicit smaller overrides. Preferred size and the
+mounted layout consume the same calculation. Mixed default/override tabs and
+larger overrides keep their existing maximum-height behavior.
+
+The `navigation_and_layout_contracts` rows
+`small_tab_height_overrides_determine_the_mounted_bar_height` and
+`mixed_and_empty_tab_bars_keep_their_content_height_rules` observe preferred
+size and actual loose-parent layout, with bottom indicator-band coordinates.
+
+

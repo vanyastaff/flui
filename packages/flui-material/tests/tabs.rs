@@ -133,3 +133,55 @@ pub fn default_tab_controller_survives_a_length_shrink_past_the_selected_index()
         "exactly one indicator band must be opaque after the post-shrink tap"
     );
 }
+
+/// Loose height permits the bar's own allocation to be observed, rather than
+/// forcing the expected size from the parent.
+pub fn small_tab_height_overrides_determine_the_mounted_bar_height() {
+    assert_mounted_tab_height(
+        vec![
+            Tab::new().text("One").height(20.0),
+            Tab::new().text("Two").height(28.0),
+        ],
+        30.0,
+    );
+}
+
+pub fn mixed_and_empty_tab_bars_keep_their_content_height_rules() {
+    assert_mounted_tab_height(
+        vec![Tab::new().text("One").height(20.0), Tab::new().text("Two")],
+        48.0,
+    );
+    assert_mounted_tab_height(
+        vec![
+            Tab::new().text("One").height(60.0),
+            Tab::new().text("Two").height(28.0),
+        ],
+        62.0,
+    );
+    assert_mounted_tab_height(Vec::new(), 48.0);
+}
+
+fn assert_mounted_tab_height(tabs: Vec<Tab>, expected: f64) {
+    use flui_sdk::widgets::PreferredSizeView;
+    let tab_count = tabs.len();
+    let controller = TabController::new(tab_count, 0);
+    let bar = TabBar::secondary(tabs).controller(controller);
+    assert_eq!(bar.preferred_size().height, expected);
+    let laid = lay_out(
+        themed(ThemeData::light(), bar),
+        bar_constraints(200.0, 120.0),
+    );
+    assert_eq!(laid.size(laid.root()).height, expected);
+    let bands = laid
+        .find_all_by_render_type("RenderContainer")
+        .into_iter()
+        .filter(|&id| laid.size(id).height == 2.0 && laid.size(id).width == 100.0)
+        .collect::<Vec<_>>();
+    assert_eq!(bands.len(), tab_count);
+    for band in bands {
+        assert_eq!(
+            laid.absolute_offset(band).dy + laid.size(band).height,
+            expected
+        );
+    }
+}

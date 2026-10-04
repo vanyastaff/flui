@@ -269,6 +269,14 @@ fn overlay_contracts() {
 fn navigation_and_layout_contracts() {
     common::run_cases(&[
         (
+            "tabs::small tab height overrides determine the mounted bar height",
+            tabs::small_tab_height_overrides_determine_the_mounted_bar_height,
+        ),
+        (
+            "tabs::mixed and empty tab bars keep their content height rules",
+            tabs::mixed_and_empty_tab_bars_keep_their_content_height_rules,
+        ),
+        (
             "app_bar::tapping the implied back button pops the route",
             app_bar::tapping_the_implied_back_button_pops_the_route,
         ),
