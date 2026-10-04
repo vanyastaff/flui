@@ -2158,7 +2158,6 @@ dependencies = [
  "flui-engine",
  "flui-foundation",
  "flui-painting",
- "raw-window-handle",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",

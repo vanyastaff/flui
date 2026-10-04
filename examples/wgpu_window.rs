@@ -1,8 +1,7 @@
 //! wgpu Window - Platform-driven GPU rendering integration test
 //!
 //! Demonstrates the full integration path:
-//! flui-platform (Platform::run + PlatformWindow) -> raw-window-handle -> wgpu
-//! -> GPU
+//! flui-platform (Platform::run + PlatformWindow) -> owned wgpu surface -> GPU
 //!
 //! Run with: cargo run --example wgpu_window
 
@@ -32,13 +31,9 @@ impl GpuState {
     fn new(window: &Arc<dyn PlatformWindow>) -> Self {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
 
-        // Safety: PlatformWindow outlives the surface (held in Arc)
-        #[expect(unsafe_code)]
-        let surface = unsafe {
-            instance
-                .create_surface_unsafe(wgpu::SurfaceTargetUnsafe::from_window(window).unwrap())
-                .expect("Failed to create surface")
-        };
+        let surface = instance
+            .create_surface(Arc::clone(window))
+            .expect("Failed to create surface");
 
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::HighPerformance,
@@ -200,17 +195,24 @@ fn main() {
     let gpu = Arc::new(Mutex::new(GpuState::new(&window)));
 
     // Register frame callback
-    let gpu_for_frame = Arc::clone(&gpu);
+    // The surface owns the window; callbacks borrow GPU ownership weakly.
+    let gpu_for_frame = Arc::downgrade(&gpu);
     window.on_request_frame(Box::new(move || {
-        gpu_for_frame.lock().unwrap().render_frame();
+        let Some(gpu) = gpu_for_frame.upgrade() else {
+            return;
+        };
+        gpu.lock().unwrap().render_frame();
     }));
 
     // Register resize callback
-    let gpu_for_resize = Arc::clone(&gpu);
+    let gpu_for_resize = Arc::downgrade(&gpu);
     window.on_resize(Box::new(move |size, scale_factor| {
+        let Some(gpu) = gpu_for_resize.upgrade() else {
+            return;
+        };
         let width = (size.width * scale_factor) as u32;
         let height = (size.height * scale_factor) as u32;
-        gpu_for_resize.lock().unwrap().resize(width, height);
+        gpu.lock().unwrap().resize(width, height);
     }));
 
     // Register input callback for logging
@@ -225,14 +227,14 @@ fn main() {
     tracing::info!("Setup complete - starting event loop with wgpu rendering");
 
     platform
-        .run(Box::new(move |_owner| {
+        .run(Box::new(|_owner| {
             tracing::info!("Platform ready");
-            // Keep window and gpu alive via closure capture
-            let _window = &window;
-            let _gpu = &gpu;
             Ok(())
         }))
         .expect("platform event loop exited with an error");
+
+    drop(gpu);
+    drop(window);
 
     tracing::info!("Application finished");
 }
