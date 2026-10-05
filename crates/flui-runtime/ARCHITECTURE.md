@@ -466,3 +466,16 @@ one segment report, no partial submission and the next automatic retry presentin
 The existing private segment probe injects a failure that consumers cannot place
 at this exact outer boundary; the registered report handler and real frame driver
 are the production paths.
+
+## Exceptional terminal presentation ownership
+
+ADR-0123 defines close after a host-held failure or active unwind. Mandatory
+presentation authority and platform withdrawal precede retention of opaque
+ownership. Scoped lane targets, saved routes, graph/writer/rebuild capabilities,
+local and realm keys and agent ports fail closed while siblings remain live.
+Healthy close still disposes normally; ordinary lifecycle draining retains its
+all-eligible-callback contract. `realm_and_presentation_isolation_matrix` pins
+this through `presentation_close_retirement_failures_preserve_focus_ime_and_siblings`.
+The private host seam supplies platform failures and saved mixed-owner routes
+that the public widget harness cannot construct. Generated ordinary aggregate
+Drop remains outside this exceptional ownership guarantee.

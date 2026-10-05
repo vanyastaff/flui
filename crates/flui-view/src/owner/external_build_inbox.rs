@@ -22,12 +22,27 @@ type WakeToken = Arc<AtomicBool>;
 /// Shared external work and wake-retry state for one build owner.
 #[derive(Default)]
 pub(crate) struct ExternalBuildInbox {
+    closed: AtomicBool,
     pending: Mutex<HashMap<ElementId, RebuildReasons>>,
     current_wake: Mutex<Option<WakeToken>>,
     wake_state: Mutex<WakeState>,
 }
 
 impl ExternalBuildInbox {
+    pub(crate) fn is_closed(&self) -> bool {
+        self.closed.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn close(&self) {
+        let mut pending = self.pending.lock();
+        self.closed.store(true, Ordering::Release);
+        pending.clear();
+        drop(pending);
+        let token = self.current_wake.lock().take();
+        if let Some(token) = token {
+            token.store(true, Ordering::Release);
+        }
+    }
     pub(crate) fn lock(&self) -> parking_lot::MutexGuard<'_, HashMap<ElementId, RebuildReasons>> {
         self.pending.lock()
     }
@@ -64,6 +79,9 @@ impl ExternalBuildInbox {
         has_fresh_work: bool,
         request_frame: Option<&(dyn Fn() + Send + Sync)>,
     ) {
+        if self.is_closed() {
+            return;
+        }
         let Some(request_frame) = request_frame else {
             return;
         };

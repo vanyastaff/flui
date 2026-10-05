@@ -51,6 +51,7 @@ use flui_platform_api::ImeEvent;
 use flui_platform_api::PlatformTextInput;
 use flui_platform_api::text_store::{CommitGate, TextStore, project_ime_event};
 
+use crate::__runtime::{CloseMode, ClosePanic, CloseTombstone};
 use crate::{retain::Retain, routing::RoutePanic};
 
 /// Identity returned by [`TextInputHandle::attach`].
@@ -195,6 +196,7 @@ impl OwnerState {
 /// The returned `Rc` is intentional: widgets receive weak handles derived from
 /// this exact owner, while the presentation retains the only strong ownership.
 pub struct TextInputOwner {
+    close_mode: CloseTombstone,
     platform: Option<Arc<dyn PlatformTextInput>>, // direct OS text-input capability owned by one presentation; no intermediary.
     next_token: Cell<NonZeroU64>,
     /// Shut while the presentation is inside a frame transaction, where text
@@ -211,6 +213,7 @@ impl TextInputOwner {
         platform: Option<Arc<dyn PlatformTextInput>>, // direct presentation OS capability.
     ) -> Rc<Self> {
         Rc::new(Self {
+            close_mode: CloseTombstone::default(),
             platform,
             next_token: Cell::new(NonZeroU64::MIN),
             gate: CommitGate::new(),
@@ -227,6 +230,7 @@ impl TextInputOwner {
     pub fn handle(self: &Rc<Self>) -> TextInputHandle {
         TextInputHandle {
             owner: Rc::downgrade(self),
+            close_mode: self.close_mode.clone(),
         }
     }
 
@@ -239,7 +243,12 @@ impl TextInputOwner {
     }
 
     fn attach(&self, client: TextInputClient) -> Result<ClientToken, TextInputError> {
-        self.ensure_open()?;
+        if let Err(error) = self.ensure_open() {
+            let mut failure = ClosePanic::for_rejection(self.close_mode.mode());
+            failure.retire(client);
+            failure.finish();
+            return Err(error);
+        }
         let platform = self.platform.as_ref().ok_or(TextInputError::Unsupported)?;
 
         let current = self.next_token.get();
@@ -255,7 +264,12 @@ impl TextInputOwner {
         // ever requested on a store that does not yet follow the frame.
         client.store.set_commit_gate(self.gate.clone());
         // A user-defined store may close the owner while installing its gate.
-        self.ensure_open()?;
+        if let Err(error) = self.ensure_open() {
+            let mut failure = ClosePanic::for_rejection(self.close_mode.mode());
+            failure.retire(client);
+            failure.finish();
+            return Err(error);
+        }
         let transaction_open = self.is_transaction_open();
         let (enable_platform, replaced) = {
             let mut state = self.state.borrow_mut();
@@ -457,6 +471,11 @@ impl TextInputOwner {
     /// owned by this presentation is disabled once. Existing weak handles
     /// subsequently return [`TextInputError::Closed`].
     pub fn close(&self) {
+        self.close_with_mode(CloseMode::Ordinary);
+    }
+
+    pub(crate) fn close_with_mode(&self, mode: CloseMode) {
+        let mut failure = ClosePanic::for_close(mode, self.close_mode.clone());
         let (retired, active) = {
             let mut state = self.state.borrow_mut();
             if state.lifecycle == OwnerLifecycle::Closed {
@@ -465,18 +484,25 @@ impl TextInputOwner {
             state.lifecycle = OwnerLifecycle::Closed;
             (std::mem::take(&mut state.retired), state.active.take())
         };
-        let mut failure = RoutePanic::capture(|| {
+        failure.invoke(|| {
             if active.is_some()
                 && let Some(platform) = &self.platform
             {
                 platform.set_ime_allowed(false);
             }
         });
-        retire_client(active, &mut failure);
-        retire_stores(retired, &mut failure);
-        if let Some(failure) = failure {
-            failure.resume();
+        if let Some(active) = active {
+            let TextInputClient {
+                store,
+                on_session_start,
+            } = active.client;
+            failure.retire(on_session_start);
+            failure.retire(store);
         }
+        for store in retired {
+            failure.retire(store);
+        }
+        failure.finish();
     }
 
     /// Whether `token` currently names the active client.
@@ -515,29 +541,40 @@ impl std::fmt::Debug for TextInputOwner {
 
 impl Drop for TextInputOwner {
     fn drop(&mut self) {
+        let mut failure = ClosePanic::for_close(CloseMode::Ordinary, self.close_mode.clone());
         let state = self.state.get_mut();
         let disable = state.lifecycle == OwnerLifecycle::Open && state.active.is_some();
         state.lifecycle = OwnerLifecycle::Closed;
         let active = state.active.take();
         let retired = std::mem::take(&mut state.retired);
-        // Explicit close propagates the first failure. Drop is best effort: it
-        // follows close's retirement order, retains the owners left after a
-        // failure or during an unwind, and retains the failure's payload.
-        let mut failure = RoutePanic::capture(|| {
-            if disable && let Some(platform) = &self.platform {
+        // Keep platform custody outside the invocation, including a callback
+        // that releases its other last owner before it unwinds.
+        let platform = self.platform.take();
+        failure.invoke(|| {
+            if disable && let Some(platform) = &platform {
                 platform.set_ime_allowed(false);
             }
         });
-        retire_client(active, &mut failure);
-        retire_stores(retired, &mut failure);
-        failure.retain();
+        if let Some(active) = active {
+            let TextInputClient {
+                store,
+                on_session_start,
+            } = active.client;
+            failure.retire(on_session_start);
+            failure.retire(store);
+        }
+        for store in retired {
+            failure.retire(store);
+        }
+        failure.retire(platform);
+        failure.finish_contained();
     }
 }
-
 /// Weak, owner-local text-input capability stored by mounted widgets.
 #[derive(Clone)]
 pub struct TextInputHandle {
     owner: Weak<TextInputOwner>,
+    close_mode: CloseTombstone,
 }
 
 impl TextInputHandle {
@@ -548,7 +585,15 @@ impl TextInputHandle {
     /// Attach `client` as this presentation's active IME client, installing
     /// the presentation's commit gate into its store.
     pub fn attach(&self, client: TextInputClient) -> Result<ClientToken, TextInputError> {
-        self.owner()?.attach(client)
+        match self.owner() {
+            Ok(owner) => owner.attach(client),
+            Err(error) => {
+                let mut failure = ClosePanic::for_rejection(self.close_mode.mode());
+                failure.retire(client);
+                failure.finish();
+                Err(error)
+            }
+        }
     }
 
     /// Whether the presentation still takes text input.

@@ -340,8 +340,56 @@ impl Drop for UiRealm {
         // lookup during realm teardown is out of scope for this fix; the
         // registries this realm's `WidgetsBinding`s expose are simply
         // inactive here, matching every other un-entered context.
-        for presentation in self.presentations.iter() {
-            presentation.close();
+        let presentations = self.presentations.take_all();
+        let mut first = None;
+        for presentation in &presentations {
+            let mode = if first.is_some() || std::thread::panicking() {
+                flui_interaction::__runtime::CloseMode::PreservingFailure
+            } else {
+                flui_interaction::__runtime::CloseMode::Ordinary
+            };
+            let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                presentation.close_with_mode_in(mode, &self.interaction_lane);
+            }))
+            .err();
+            crate::lifecycle_state::preserve_first_lifecycle_panic(
+                &mut first,
+                failure,
+                "realm presentation shutdown",
+            );
+        }
+        for presentation in presentations {
+            if first.is_some() || std::thread::panicking() || presentation.preserving_close() {
+                let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    presentation.close_with_mode_in(
+                        flui_interaction::__runtime::CloseMode::PreservingFailure,
+                        &self.interaction_lane,
+                    );
+                }))
+                .err();
+                crate::lifecycle_state::preserve_first_lifecycle_panic(
+                    &mut first,
+                    failure,
+                    "realm presentation withdrawal",
+                );
+                std::mem::forget(presentation);
+            } else {
+                let failure =
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(presentation)))
+                        .err();
+                crate::lifecycle_state::preserve_first_lifecycle_panic(
+                    &mut first,
+                    failure,
+                    "realm presentation retirement",
+                );
+            }
+        }
+        if let Some(payload) = first {
+            if std::thread::panicking() {
+                flui_foundation::panic::retain_opaque_payload(payload);
+            } else {
+                std::panic::resume_unwind(payload);
+            }
         }
     }
 }

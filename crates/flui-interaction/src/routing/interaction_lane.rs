@@ -534,6 +534,7 @@ impl LocalEventTransform {
 }
 
 struct ResolvedHitEntry {
+    owner: Option<std::sync::Arc<DispatchOwner>>,
     handler_cell: Rc<HandlerCell>,
     local_transform: LocalEventTransform,
 }
@@ -552,6 +553,13 @@ impl ResolvedHitRoute {
     fn invoke(&self, event: &PointerEvent) -> Option<RoutePanic> {
         let mut first_panic = None;
         for entry in &self.entries {
+            if entry
+                .owner
+                .as_ref()
+                .is_some_and(|owner| owner.closed.load(std::sync::atomic::Ordering::Acquire))
+            {
+                continue;
+            }
             let local_event = match &entry.local_transform {
                 LocalEventTransform::Global => None,
                 LocalEventTransform::Local(local) => Some(transform_pointer_event(event, local)),
@@ -741,6 +749,7 @@ impl HitTestSnapshot {
 }
 
 struct LocalLaneInner {
+    target_owners: RefCell<HashMap<TargetId, std::sync::Arc<DispatchOwner>>>,
     ticket: LaneTicket,
     target_ids: MonotonicIdSource,
     route_ids: MonotonicIdSource,
@@ -780,6 +789,7 @@ impl InteractionLane {
     pub fn try_new() -> Result<Self, InteractionDispatchError> {
         let lane_id = try_mint_lane_id(&NEXT_LANE_ID)?;
         let inner = Rc::new(LocalLaneInner {
+            target_owners: RefCell::new(HashMap::new()),
             ticket: LaneTicket {
                 lane_id,
                 owner: thread::current().id(),
@@ -806,6 +816,7 @@ impl InteractionLane {
     pub fn dispatch_handle(&self) -> InteractionDispatchHandle {
         InteractionDispatchHandle {
             ticket: self.inner.ticket,
+            owner: None,
         }
     }
 
@@ -961,16 +972,181 @@ impl Drop for LaneActivation<'_> {
 
 /// Send-safe ticket for owner-local interaction registration and route access.
 ///
-/// It carries identity only. Calls succeed exclusively while its lane is the
+/// It carries identity and an optional terminal owner latch. Calls succeed while its lane is the
 /// active top scope on the owner thread.
 #[doc(hidden)]
 #[derive(Clone)]
 pub struct InteractionDispatchHandle {
     ticket: LaneTicket,
+    owner: Option<std::sync::Arc<DispatchOwner>>,
+}
+
+#[derive(Default)]
+struct DispatchOwner {
+    closed: std::sync::atomic::AtomicBool,
+    mode: crate::__runtime::CloseTombstone,
 }
 
 impl InteractionDispatchHandle {
+    pub(crate) fn scoped_owner(&self) -> Self {
+        Self {
+            ticket: self.ticket,
+            owner: Some(std::sync::Arc::new(DispatchOwner::default())),
+        }
+    }
+
+    fn admit<T>(&self, value: T) -> Result<T, InteractionDispatchError> {
+        if let Some(owner) = &self.owner
+            && owner.closed.load(std::sync::atomic::Ordering::Acquire)
+        {
+            let mut failure = crate::__runtime::ClosePanic::for_rejection(owner.mode.mode());
+            failure.retire(value);
+            failure.finish();
+            return Err(InteractionDispatchError::OwnerGone);
+        }
+        Ok(value)
+    }
+
+    fn stamp(&self, lane: &LocalLaneInner, id: TargetId) {
+        if let Some(owner) = &self.owner {
+            lane.target_owners
+                .borrow_mut()
+                .insert(id, std::sync::Arc::clone(owner));
+        }
+    }
+
+    pub(crate) fn close_owner(&self, mode: crate::__runtime::CloseMode) {
+        let lane = LOCAL_LANES
+            .try_with(|lanes| {
+                lanes
+                    .borrow()
+                    .get(&self.ticket.lane_id)
+                    .and_then(Weak::upgrade)
+            })
+            .ok()
+            .flatten();
+        self.close_owner_inner(lane.as_deref(), mode);
+    }
+
+    pub(crate) fn close_owner_in(&self, lane: &InteractionLane, mode: crate::__runtime::CloseMode) {
+        assert!(
+            self.ticket == lane.inner.ticket,
+            "BUG: terminal dispatch owner belongs to another realm"
+        );
+        self.close_owner_inner(Some(&lane.inner), mode);
+    }
+
+    fn close_owner_inner(&self, lane: Option<&LocalLaneInner>, mode: crate::__runtime::CloseMode) {
+        let Some(owner) = &self.owner else {
+            return;
+        };
+        let mut failure = crate::__runtime::ClosePanic::for_close(mode, owner.mode.clone());
+        owner
+            .closed
+            .store(true, std::sync::atomic::Ordering::Release);
+        let Some(lane) = lane else {
+            return;
+        };
+        let ids = {
+            let mut owners = lane.target_owners.borrow_mut();
+            let mut ids: Vec<_> = owners
+                .iter()
+                .filter_map(|(id, held)| std::sync::Arc::ptr_eq(held, owner).then_some(*id))
+                .collect();
+            ids.sort_unstable();
+            for id in &ids {
+                owners.remove(id);
+            }
+            ids
+        };
+        // Cached mixed routes can outlive target removal. Snapshot this owner's
+        // cells as physical custody too, including a later preserving close of
+        // an owner which first closed normally. Live neighbors remain in place.
+        let route_cells: Vec<_> = lane
+            .routes
+            .borrow()
+            .values()
+            .flat_map(|route| {
+                route
+                    .entries
+                    .iter()
+                    .filter(|entry| {
+                        entry
+                            .owner
+                            .as_ref()
+                            .is_some_and(|candidate| std::sync::Arc::ptr_eq(candidate, owner))
+                    })
+                    .map(|entry| Rc::clone(&entry.handler_cell))
+            })
+            .collect();
+        // Detach every typed target before any capture can reenter this lane.
+        let pointers: Vec<_> = ids
+            .iter()
+            .filter_map(|id| lane.targets.borrow_mut().remove(id))
+            .collect();
+        let mice: Vec<_> = ids
+            .iter()
+            .filter_map(|id| lane.mouse_targets.borrow_mut().remove(id))
+            .collect();
+        let scrolls: Vec<_> = ids
+            .iter()
+            .filter_map(|id| lane.scroll_targets.borrow_mut().remove(id))
+            .collect();
+        let pans: Vec<_> = ids
+            .iter()
+            .filter_map(|id| lane.pan_zoom_targets.borrow_mut().remove(id))
+            .collect();
+        let clips: Vec<_> = ids
+            .iter()
+            .filter_map(|id| lane.path_clip_targets.borrow_mut().remove(id))
+            .collect();
+        let masks: Vec<_> = ids
+            .iter()
+            .filter_map(|id| lane.shader_mask_targets.borrow_mut().remove(id))
+            .collect();
+        let payloads: Vec<_> = ids
+            .iter()
+            .filter_map(|id| lane.payload_targets.borrow_mut().remove(id))
+            .collect();
+        for cell in route_cells {
+            failure.retire(cell);
+        }
+        for cell in pointers {
+            failure.retire(cell);
+        }
+        for cell in mice {
+            let callbacks = cell.replace(MouseRegionCallbacks::default());
+            failure.retire(callbacks.on_enter);
+            failure.retire(callbacks.on_exit);
+            failure.retire(callbacks.on_hover);
+            failure.retire(cell);
+        }
+        for cell in scrolls {
+            failure.retire(cell);
+        }
+        for cell in pans {
+            failure.retire(cell);
+        }
+        for cell in clips {
+            failure.retire(cell);
+        }
+        for cell in masks {
+            failure.retire(cell);
+        }
+        for payload in payloads {
+            failure.retire(payload);
+        }
+        failure.finish();
+    }
+
     fn active_lane(&self) -> Result<Rc<LocalLaneInner>, InteractionDispatchError> {
+        if self
+            .owner
+            .as_ref()
+            .is_some_and(|owner| owner.closed.load(std::sync::atomic::Ordering::Acquire))
+        {
+            return Err(InteractionDispatchError::OwnerGone);
+        }
         if thread::current().id() != self.ticket.owner {
             return Err(InteractionDispatchError::WrongThread);
         }
@@ -1020,8 +1196,10 @@ impl InteractionDispatchHandle {
         &self,
         handler: impl Fn(PointerDispatch<'_>) + 'static,
     ) -> Result<PointerTarget, InteractionDispatchError> {
+        let handler = self.admit(handler)?;
         let lane = self.active_lane()?;
         let target_id = TargetId(lane.target_ids.try_next()?);
+        self.stamp(&lane, target_id);
         lane.targets
             .borrow_mut()
             .insert(target_id, Rc::new(HandlerCell::new(Rc::new(handler))));
@@ -1037,6 +1215,7 @@ impl InteractionDispatchHandle {
         target: PointerTarget,
         handler: impl Fn(PointerDispatch<'_>) + 'static,
     ) -> Result<(), InteractionDispatchError> {
+        let handler = self.admit(handler)?;
         let lane = self.active_lane()?;
         self.validate_lane(target.lane_id)?;
         let cell = lane
@@ -1062,6 +1241,7 @@ impl InteractionDispatchHandle {
             .borrow_mut()
             .remove(&target.target_id)
             .ok_or(InteractionDispatchError::TargetGone)?;
+        lane.target_owners.borrow_mut().remove(&target.target_id);
         drop(removed);
         Ok(())
     }
@@ -1071,8 +1251,10 @@ impl InteractionDispatchHandle {
         &self,
         callbacks: MouseRegionCallbacks,
     ) -> Result<MouseRegionTarget, InteractionDispatchError> {
+        let callbacks = self.admit(callbacks)?;
         let lane = self.active_lane()?;
         let target_id = TargetId(lane.target_ids.try_next()?);
+        self.stamp(&lane, target_id);
         lane.mouse_targets
             .borrow_mut()
             .insert(target_id, Rc::new(MouseRegionCell::new(callbacks)));
@@ -1088,6 +1270,7 @@ impl InteractionDispatchHandle {
         target: MouseRegionTarget,
         callbacks: MouseRegionCallbacks,
     ) -> Result<(), InteractionDispatchError> {
+        let callbacks = self.admit(callbacks)?;
         let lane = self.active_lane()?;
         self.validate_lane(target.lane_id)?;
         let cell = lane
@@ -1169,6 +1352,7 @@ impl InteractionDispatchHandle {
     ) -> Result<Rc<MouseRegionCell>, InteractionDispatchError> {
         let lane = self.active_lane()?;
         self.validate_lane(target.lane_id)?;
+        lane.target_owners.borrow_mut().remove(&target.target_id);
         lane.mouse_targets
             .borrow_mut()
             .remove(&target.target_id)
@@ -1193,8 +1377,10 @@ impl InteractionDispatchHandle {
         &self,
         handler: impl Fn(&ScrollEventData) -> EventPropagation + 'static,
     ) -> Result<ScrollTarget, InteractionDispatchError> {
+        let handler = self.admit(handler)?;
         let lane = self.active_lane()?;
         let target_id = TargetId(lane.target_ids.try_next()?);
+        self.stamp(&lane, target_id);
         lane.scroll_targets
             .borrow_mut()
             .insert(target_id, Rc::new(ScrollCell::new(Rc::new(handler))));
@@ -1210,6 +1396,7 @@ impl InteractionDispatchHandle {
         target: ScrollTarget,
         handler: impl Fn(&ScrollEventData) -> EventPropagation + 'static,
     ) -> Result<(), InteractionDispatchError> {
+        let handler = self.admit(handler)?;
         let lane = self.active_lane()?;
         self.validate_lane(target.lane_id)?;
         let cell = lane
@@ -1232,6 +1419,7 @@ impl InteractionDispatchHandle {
             .borrow_mut()
             .remove(&target.target_id)
             .ok_or(InteractionDispatchError::TargetGone)?;
+        lane.target_owners.borrow_mut().remove(&target.target_id);
         drop(removed);
         Ok(())
     }
@@ -1266,8 +1454,10 @@ impl InteractionDispatchHandle {
         &self,
         handler: impl Fn(&PointerPanZoomEvent) -> EventPropagation + 'static,
     ) -> Result<PanZoomTarget, InteractionDispatchError> {
+        let handler = self.admit(handler)?;
         let lane = self.active_lane()?;
         let target_id = TargetId(lane.target_ids.try_next()?);
+        self.stamp(&lane, target_id);
         lane.pan_zoom_targets
             .borrow_mut()
             .insert(target_id, Rc::new(PanZoomCell::new(Rc::new(handler))));
@@ -1288,6 +1478,7 @@ impl InteractionDispatchHandle {
         target: PanZoomTarget,
         handler: impl Fn(&PointerPanZoomEvent) -> EventPropagation + 'static,
     ) -> Result<(), InteractionDispatchError> {
+        let handler = self.admit(handler)?;
         let lane = self.active_lane()?;
         self.validate_lane(target.lane_id)?;
         let cell = lane
@@ -1318,6 +1509,7 @@ impl InteractionDispatchHandle {
             .borrow_mut()
             .remove(&target.target_id)
             .ok_or(InteractionDispatchError::TargetGone)?;
+        lane.target_owners.borrow_mut().remove(&target.target_id);
         drop(removed);
         Ok(())
     }
@@ -1352,8 +1544,10 @@ impl InteractionDispatchHandle {
         &self,
         clipper: impl Fn(Size) -> Path + 'static,
     ) -> Result<PathClipTarget, InteractionDispatchError> {
+        let clipper = self.admit(clipper)?;
         let lane = self.active_lane()?;
         let target_id = TargetId(lane.target_ids.try_next()?);
+        self.stamp(&lane, target_id);
         lane.path_clip_targets
             .borrow_mut()
             .insert(target_id, Rc::new(PathClipCell::new(Rc::new(clipper))));
@@ -1369,6 +1563,7 @@ impl InteractionDispatchHandle {
         target: PathClipTarget,
         clipper: impl Fn(Size) -> Path + 'static,
     ) -> Result<(), InteractionDispatchError> {
+        let clipper = self.admit(clipper)?;
         let lane = self.active_lane()?;
         self.validate_lane(target.lane_id)?;
         let cell = lane
@@ -1394,6 +1589,7 @@ impl InteractionDispatchHandle {
             .borrow_mut()
             .remove(&target.target_id)
             .ok_or(InteractionDispatchError::TargetGone)?;
+        lane.target_owners.borrow_mut().remove(&target.target_id);
         drop(removed);
         Ok(())
     }
@@ -1423,8 +1619,10 @@ impl InteractionDispatchHandle {
         &self,
         factory: impl Fn(Rect<f64>) -> Shader + 'static,
     ) -> Result<ShaderMaskTarget, InteractionDispatchError> {
+        let factory = self.admit(factory)?;
         let lane = self.active_lane()?;
         let target_id = TargetId(lane.target_ids.try_next()?);
+        self.stamp(&lane, target_id);
         lane.shader_mask_targets
             .borrow_mut()
             .insert(target_id, Rc::new(ShaderMaskCell::new(Rc::new(factory))));
@@ -1440,6 +1638,7 @@ impl InteractionDispatchHandle {
         target: ShaderMaskTarget,
         factory: impl Fn(Rect<f64>) -> Shader + 'static,
     ) -> Result<(), InteractionDispatchError> {
+        let factory = self.admit(factory)?;
         let lane = self.active_lane()?;
         self.validate_lane(target.lane_id)?;
         let cell = lane
@@ -1465,6 +1664,7 @@ impl InteractionDispatchHandle {
             .borrow_mut()
             .remove(&target.target_id)
             .ok_or(InteractionDispatchError::TargetGone)?;
+        lane.target_owners.borrow_mut().remove(&target.target_id);
         drop(removed);
         Ok(())
     }
@@ -1499,8 +1699,10 @@ impl InteractionDispatchHandle {
         &self,
         payload: Rc<dyn Any>,
     ) -> Result<LocalPayloadTarget, InteractionDispatchError> {
+        let payload = self.admit(payload)?;
         let lane = self.active_lane()?;
         let target_id = TargetId(lane.target_ids.try_next()?);
+        self.stamp(&lane, target_id);
         lane.payload_targets.borrow_mut().insert(target_id, payload);
         Ok(LocalPayloadTarget {
             lane_id: self.ticket.lane_id,
@@ -1522,6 +1724,7 @@ impl InteractionDispatchHandle {
         target: LocalPayloadTarget,
         payload: Rc<dyn Any>,
     ) -> Result<(), InteractionDispatchError> {
+        let payload = self.admit(payload)?;
         let lane = self.active_lane()?;
         self.validate_lane(target.lane_id)?;
         let previous = {
@@ -1555,6 +1758,7 @@ impl InteractionDispatchHandle {
             .borrow_mut()
             .remove(&target.target_id)
             .ok_or(InteractionDispatchError::TargetGone)?;
+        lane.target_owners.borrow_mut().remove(&target.target_id);
         drop(removed);
         Ok(())
     }
@@ -1604,6 +1808,7 @@ impl InteractionDispatchHandle {
                 };
                 if let Some(cell) = registered.get(&target.target_id) {
                     entries.push(ResolvedHitEntry {
+                        owner: lane.target_owners.borrow().get(&target.target_id).cloned(),
                         handler_cell: Rc::clone(cell),
                         local_transform: LocalEventTransform::capture(entry.transform),
                     });
@@ -1670,6 +1875,33 @@ impl InteractionDispatchHandle {
             .remove(&token.route_id)
             .ok_or(InteractionDispatchError::StaleRoute)?;
         drop(removed);
+        Ok(())
+    }
+
+    pub(crate) fn release_route_for_close(
+        &self,
+        token: ResolvedRouteToken,
+        failure: &mut crate::__runtime::ClosePanic,
+    ) -> Result<(), InteractionDispatchError> {
+        let lane = self.active_lane()?;
+        self.validate_lane(token.lane_id)?;
+        let removed = lane
+            .routes
+            .borrow_mut()
+            .remove(&token.route_id)
+            .ok_or(InteractionDispatchError::StaleRoute)?;
+        if failure.preserving() {
+            failure.retire(removed);
+        } else {
+            match Rc::try_unwrap(removed) {
+                Ok(route) => {
+                    for entry in route.entries {
+                        failure.retire(entry.handler_cell);
+                    }
+                }
+                Err(shared) => failure.retire(shared),
+            }
+        }
         Ok(())
     }
 
@@ -1852,7 +2084,10 @@ pub(crate) fn active_dispatch_handle() -> Result<InteractionDispatchHandle, Inte
 {
     let ticket = ACTIVE_LANES.with(|active| active.borrow().last().copied());
     ticket
-        .map(|ticket| InteractionDispatchHandle { ticket })
+        .map(|ticket| InteractionDispatchHandle {
+            ticket,
+            owner: None,
+        })
         .ok_or(InteractionDispatchError::InactiveRealm)
 }
 

@@ -305,3 +305,12 @@ and misses retain their quadratic calculation; no wider-range quadratic solution
 is promised. Public family `circle_line_intersection_requires_a_computed_direction`
 checks refusals followed by a healthy crossing and intersections outside the
 endpoint segment.
+
+### Closed signal graph
+
+A presentation's terminal graph rejects reads, creation and writes with the
+non-exhaustive `SignalError::OwnerClosed` variant after owner withdrawal
+(ADR-0123). Existing signals may remain physically retained during exceptional
+close, but retained ownership does not retain executable graph authority. The
+runtime `presentation_close_retirement_failures_preserve_focus_ime_and_siblings`
+row exercises this through the closed presentation and a live sibling.

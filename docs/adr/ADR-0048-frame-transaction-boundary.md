@@ -2,6 +2,8 @@
 
 - **Status:** Accepted
 - **Date:** 2026-08-18
+- **Superseded-by:** [ADR-0123](ADR-0123-exceptional-presentation-close.md),
+  only optional disposal during an exceptional terminal presentation close.
 - **Related:** [ADR-0027](ADR-0027-owner-affine-ui-realms.md) (runtime topology
   is a sanctioned leapfrog zone); [ADR-0043](ADR-0043-presentation-bundled-trees-and-realm-globalkey-scope.md)
   (`PresentationState` bundles the trees this boundary scopes);

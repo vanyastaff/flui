@@ -609,7 +609,31 @@ impl UiRealm {
         .err();
         // Membership removal must complete even when an observer or disposer panics.
         let removed = self.presentations.remove(id);
-        let failure = catch_unwind(AssertUnwindSafe(|| drop(removed))).err();
+        let preserving = first_panic.is_some()
+            || std::thread::panicking()
+            || removed
+                .as_ref()
+                .is_some_and(crate::presentation::PresentationState::preserving_close);
+        let failure = if preserving {
+            // The closed envelope keeps generic field Drop out of a recovery
+            // transaction whose first payload already belongs to the caller.
+            if let Some(presentation) = &removed {
+                let failure = catch_unwind(AssertUnwindSafe(|| {
+                    presentation
+                        .close_with_mode(flui_interaction::__runtime::CloseMode::PreservingFailure);
+                }))
+                .err();
+                crate::lifecycle_state::preserve_first_lifecycle_panic(
+                    &mut first_panic,
+                    failure,
+                    "removed presentation withdrawal",
+                );
+            }
+            std::mem::forget(removed);
+            None
+        } else {
+            catch_unwind(AssertUnwindSafe(|| drop(removed))).err()
+        };
         crate::lifecycle_state::preserve_first_lifecycle_panic(
             &mut first_panic,
             failure,
@@ -622,7 +646,11 @@ impl UiRealm {
             "surviving presentation lifecycle",
         );
         if let Some(payload) = first_panic {
-            resume_unwind(payload);
+            if std::thread::panicking() {
+                flui_foundation::panic::retain_opaque_payload(payload);
+            } else {
+                resume_unwind(payload);
+            }
         }
         true
     }

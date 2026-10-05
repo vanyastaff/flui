@@ -239,6 +239,18 @@ grant ordering, gate changes and the next operation;
 store whose destructor panics twice after a failed callback and under an
 unwinding owner drop, each in its own process.
 
+### Presentation-scoped terminal withdrawal
+
+ADR-0123's hidden runtime close mode carries an already held failure through
+focus, text input, gesture, mouse and interaction-lane retirement. Each actual
+presentation handle owns admission authority; cached mixed-owner routes refuse
+closed targets while leaving sibling targets callable. Outgoing opaque callback
+owners leave guards before destruction; preserving close retains later tails,
+while healthy close and ordinary closed rejection destroy normally. The runtime
+`presentation_close_retirement_failures_preserve_focus_ime_and_siblings` row
+pins actual owner withdrawal and the next sibling frame rather than callback
+labels. Standalone lower aggregate destruction has its own limits.
+
 ## Terminal drag ownership
 
 The physical shared drag callback owner guards independently owned callbacks

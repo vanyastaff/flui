@@ -180,6 +180,8 @@ mod sealed {
 /// as `use flui_view::__runtime::BindingRuntime as _;` and keep calling the
 /// methods on the binding.
 pub trait BindingRuntime: sealed::Sealed {
+    /// Withdraw graph, rebuild and key authority without invoking widget code.
+    fn withdraw_root_owner(&self, preserving: bool);
     /// Run one owner-runtime entry with this binding's `GlobalKey` registry
     /// active on the current thread.
     ///
@@ -212,6 +214,9 @@ pub trait BindingRuntime: sealed::Sealed {
 }
 
 impl BindingRuntime for WidgetsBinding {
+    fn withdraw_root_owner(&self, preserving: bool) {
+        WidgetsBinding::withdraw_root_owner(self, preserving);
+    }
     fn with_global_key_registry<R>(&self, f: impl FnOnce() -> R) -> R {
         crate::key::registry::with_active_registry(&self.global_key_registry, f)
     }

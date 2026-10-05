@@ -526,6 +526,9 @@ impl WidgetsBinding {
                 let Some(inner) = inner.try_read_recursive() else {
                     return Err(RegistryBusy);
                 };
+                if inner.build_owner.owner_closed() {
+                    return Ok(None);
+                }
                 Ok(inner.build_owner.element_for_global_key(key))
             },
             move |id, f| {
@@ -535,6 +538,9 @@ impl WidgetsBinding {
                 let Some(inner) = inner.try_read_recursive() else {
                     return Err(RegistryBusy);
                 };
+                if inner.build_owner.owner_closed() {
+                    return Ok(());
+                }
                 if let Some(node) = inner.element_tree.get(id) {
                     f(node.element());
                 }
@@ -824,6 +830,31 @@ impl WidgetsBinding {
                 crate::tree::SubtreeRemoval::Finalize,
             );
             tracing::debug!(?root_id, "Root widget detached");
+        }
+    }
+
+    pub(crate) fn withdraw_root_owner(&self, preserving: bool) {
+        let keys = {
+            let mut inner = self.inner.write();
+            let keys = inner.build_owner.withdraw_owner(preserving);
+            if preserving {
+                inner.root_element.take();
+            }
+            keys
+        };
+        let mut first = None;
+        for key in keys {
+            if preserving || first.is_some() || std::thread::panicking() {
+                std::mem::forget(key);
+            } else {
+                crate::lifecycle::preserve(
+                    &mut first,
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(key))).err(),
+                );
+            }
+        }
+        if let Some(payload) = first {
+            std::panic::resume_unwind(payload);
         }
     }
 

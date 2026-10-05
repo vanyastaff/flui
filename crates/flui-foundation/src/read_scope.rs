@@ -106,6 +106,8 @@ impl SignalSlot {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum SignalError {
+    /// The presentation owning the graph has permanently withdrawn it.
+    OwnerClosed,
     /// The slot was released (its owning element unmounted) and possibly
     /// reused; the handle's generation no longer matches.
     Released {
@@ -158,6 +160,7 @@ pub enum SignalError {
 impl fmt::Display for SignalError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::OwnerClosed => f.write_str("signal owner is closed"),
             Self::Released { index, generation } => {
                 write!(
                     f,

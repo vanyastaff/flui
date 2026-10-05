@@ -35,6 +35,7 @@ struct State {
     draining: bool,
     // Caught drain failures also fence retirement from nested callbacks.
     retirement_failed: bool,
+    preserving_close: bool,
     finish_requested: bool,
 }
 struct Inner(RefCell<State>);
@@ -100,7 +101,7 @@ impl LifecycleHandle {
         };
         let mut state = inner.0.borrow_mut();
         if state.phase != Phase::Open {
-            let prior_failure = state.retirement_failed;
+            let prior_failure = state.retirement_failed || state.preserving_close;
             drop(state);
             retire_rejected_callback(callback, prior_failure);
             return Err(LifecycleClosed);
@@ -139,7 +140,7 @@ impl Drop for LifecycleSubscription {
         listener.active.set(false);
         let (removed, prior_failure) = self.source.upgrade().map_or((None, false), |source| {
             let mut state = source.0.borrow_mut();
-            let prior_failure = state.retirement_failed;
+            let prior_failure = state.retirement_failed || state.preserving_close;
             let removed = state
                 .listeners
                 .iter()
@@ -225,6 +226,7 @@ impl LifecycleSource {
                 pending: VecDeque::new(),
                 draining: false,
                 retirement_failed: false,
+                preserving_close: false,
                 finish_requested: false,
             }))),
         }
@@ -254,6 +256,17 @@ impl LifecycleSource {
             state.phase = Phase::Closing;
         }
     }
+    /// Seed terminal recovery without finishing the host's lifecycle ladder.
+    pub fn begin_close_with_mode(&self, mode: flui_interaction::__runtime::CloseMode) {
+        self.begin_close();
+        if mode == flui_interaction::__runtime::CloseMode::PreservingFailure
+            || std::thread::panicking()
+        {
+            let mut state = self.inner.0.borrow_mut();
+            state.preserving_close = true;
+            state.pending.clear();
+        }
+    }
     /// Commit an authorized terminal ladder step after `begin_close`.
     /// # Errors
     /// Returns [`LifecycleClosed`] outside the terminal notification phase.
@@ -271,11 +284,13 @@ impl LifecycleSource {
         }
         if state.current != Some(current) {
             state.current = Some(current);
-            let listeners = state.listeners.iter().map(Rc::downgrade).collect();
-            state.pending.push_back(Event {
-                state: current,
-                listeners,
-            });
+            if !state.preserving_close {
+                let listeners = state.listeners.iter().map(Rc::downgrade).collect();
+                state.pending.push_back(Event {
+                    state: current,
+                    listeners,
+                });
+            }
         }
         Ok(())
     }
@@ -340,7 +355,12 @@ impl LifecycleSource {
     /// Invalidate capabilities and release callbacks before widget disposal.
     /// Cleanup completes before any callback-capture destructor panic resumes.
     pub fn finish_close(&self) {
-        self.begin_close();
+        self.finish_close_with_mode(flui_interaction::__runtime::CloseMode::Ordinary);
+    }
+
+    /// Complete terminal release while preserving a failure caught by the host.
+    pub fn finish_close_with_mode(&self, mode: flui_interaction::__runtime::CloseMode) {
+        self.begin_close_with_mode(mode);
         self.inner.0.borrow_mut().finish_requested = true;
         // A reentrant close is completed by the active FIFO walk after its
         // terminal event. It must not erase an event still awaiting delivery.
@@ -356,13 +376,14 @@ impl LifecycleSource {
         for listener in listeners {
             listener.active.set(false);
             let callback = listener.callback.borrow_mut().take();
-            if self.inner.0.borrow().retirement_failed {
+            if self.inner.0.borrow().retirement_failed || self.inner.0.borrow().preserving_close {
                 std::mem::forget(callback);
             } else {
                 retire_callback(callback, first);
             }
             if first.is_some() {
                 self.inner.0.borrow_mut().retirement_failed = true;
+                self.inner.0.borrow_mut().preserving_close = true;
             }
         }
     }

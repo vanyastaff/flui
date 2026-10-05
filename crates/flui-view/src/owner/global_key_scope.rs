@@ -295,29 +295,48 @@ impl GlobalKeyScope {
         }
     }
 
-    /// Traced reclamation of every claim still tagged to `owner`.
+    /// Extract every claim tagged to `owner` without retiring arbitrary keys.
     ///
     /// Called from [`BuildOwner`](super::BuildOwner)'s `Drop` impl so a
     /// dropped owner's stale claims cannot wedge the scope forever. Asserts
     /// nothing — an owner-drop reclaim is expected background cleanup, not a bug:
     /// an owner dropped with zero live claims (the common case — every key
     /// was already unregistered through the normal unmount path) reclaims
-    /// silently. Returns the number of claims reclaimed.
-    pub(crate) fn reclaim_owner(&self, owner: OwnerTag) -> usize {
+    /// silently. The caller retires keys after releasing its binding guard.
+    pub(crate) fn take_owner_claims(&self, owner: OwnerTag) -> Vec<Box<dyn ViewKey>> {
         let mut state = self.state.borrow_mut();
-        let mut reclaimed = 0;
-        state.claims.retain(|_, bucket| {
-            let before = bucket.len();
-            bucket.retain(|claim| claim.owner != owner);
-            reclaimed += before - bucket.len();
-            !bucket.is_empty()
-        });
-        if reclaimed > 0 {
-            tracing::debug!(
-                owner = %owner,
-                reclaimed,
-                "GlobalKeyScope: reclaimed stale claims tagged to a dropped owner"
-            );
+        let mut removed = Vec::new();
+        for bucket in state.claims.values_mut() {
+            let mut index = 0;
+            while index < bucket.len() {
+                if bucket[index].owner == owner {
+                    let claim = bucket.remove(index);
+                    removed.push(claim.key);
+                } else {
+                    index += 1;
+                }
+            }
+        }
+        state.claims.retain(|_, bucket| !bucket.is_empty());
+        removed
+    }
+
+    pub(crate) fn reclaim_owner(&self, owner: OwnerTag) -> usize {
+        let removed = self.take_owner_claims(owner);
+        let reclaimed = removed.len();
+        let mut first = None;
+        for key in removed {
+            if first.is_some() || std::thread::panicking() {
+                std::mem::forget(key);
+            } else {
+                crate::lifecycle::preserve(
+                    &mut first,
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(key))).err(),
+                );
+            }
+        }
+        if let Some(payload) = first {
+            std::panic::resume_unwind(payload);
         }
         reclaimed
     }

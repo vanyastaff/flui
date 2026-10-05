@@ -152,6 +152,8 @@ impl std::fmt::Debug for MouseTracker {
 pub type CursorChangeCallback = Rc<dyn Fn(DeviceId, CursorIcon) + 'static>;
 
 struct MouseTrackerInner {
+    closed: bool,
+    close_mode: crate::__runtime::CloseTombstone,
     /// State for each mouse device.
     devices: HashMap<DeviceId, DeviceState>,
     /// Last resolved annotations by region.
@@ -171,6 +173,8 @@ impl MouseTracker {
     pub fn new() -> Self {
         Self {
             inner: Rc::new(RefCell::new(MouseTrackerInner {
+                closed: false,
+                close_mode: crate::__runtime::CloseTombstone::default(),
                 devices: HashMap::new(),
                 annotations: HashMap::new(),
                 mouse_connected: false,
@@ -186,6 +190,9 @@ impl MouseTracker {
     /// annotations; it succeeds only while the matching interaction lane is
     /// active.
     pub fn register_annotation(&self, annotation: MouseTrackerAnnotation) {
+        if self.inner.borrow().closed {
+            return;
+        }
         if let Some(resolved) = resolve_annotation(annotation) {
             self.inner
                 .borrow_mut()
@@ -214,6 +221,9 @@ impl MouseTracker {
         position: Offset<f64>,
     ) {
         let mut inner = self.inner.borrow_mut();
+        if inner.closed {
+            return;
+        }
         inner
             .devices
             .entry(device_id)
@@ -248,6 +258,9 @@ impl MouseTracker {
     /// Per-callback panics are isolated exactly like a motion update's: the
     /// first is resumed after every callback ran.
     pub fn dispatch_window_left(&self) {
+        if self.inner.borrow().closed {
+            return;
+        }
         let sweeps: Vec<DeviceWork> = {
             let mut inner = self.inner.borrow_mut();
             let inner = &mut *inner;
@@ -317,6 +330,9 @@ impl MouseTracker {
         kind: PointerMotionKind,
         hit_test_result: &HitTestResult,
     ) {
+        if self.inner.borrow().closed {
+            return;
+        }
         if !matches!(event, PointerEvent::Move(_)) {
             return;
         }
@@ -607,12 +623,55 @@ impl MouseTracker {
 
     /// Sets the callback for cursor changes.
     pub fn set_cursor_change_callback(&self, callback: CursorChangeCallback) {
-        self.inner.borrow_mut().cursor_change_callback = Some(callback);
+        let (outgoing, mode) = {
+            let mut inner = self.inner.borrow_mut();
+            let mode = inner.close_mode.mode();
+            let outgoing = if inner.closed {
+                Some(callback)
+            } else {
+                inner.cursor_change_callback.replace(callback)
+            };
+            (outgoing, mode)
+        };
+        let mut failure = crate::__runtime::ClosePanic::for_rejection(mode);
+        failure.retire(outgoing);
+        failure.finish();
     }
 
     /// Clears the cursor change callback.
     pub fn clear_cursor_change_callback(&self) {
-        self.inner.borrow_mut().cursor_change_callback = None;
+        let (outgoing, mode) = {
+            let mut inner = self.inner.borrow_mut();
+            (inner.cursor_change_callback.take(), inner.close_mode.mode())
+        };
+        let mut failure = crate::__runtime::ClosePanic::for_rejection(mode);
+        failure.retire(outgoing);
+        failure.finish();
+    }
+
+    pub(crate) fn close_with_mode(&self, mode: crate::__runtime::CloseMode) {
+        let (callback, annotations, terminal) = {
+            let mut inner = self.inner.borrow_mut();
+            let terminal = inner.close_mode.clone();
+            // Commit the terminal mode before any callback ownership retires.
+            if mode == crate::__runtime::CloseMode::PreservingFailure || std::thread::panicking() {
+                terminal.preserve();
+            }
+            inner.closed = true;
+            inner.devices.clear();
+            inner.mouse_connected = false;
+            (
+                inner.cursor_change_callback.take(),
+                std::mem::take(&mut inner.annotations),
+                terminal,
+            )
+        };
+        let mut failure = crate::__runtime::ClosePanic::for_close(mode, terminal);
+        failure.retire(callback);
+        for annotation in annotations.into_values() {
+            failure.retire(annotation);
+        }
+        failure.finish();
     }
 
     /// Gets the current cursor for the primary mouse device (device 0).

@@ -27,6 +27,9 @@ use std::sync::{
 use flui_semantics::{Assertiveness, SemanticsEvent};
 use parking_lot::RwLock;
 
+type AnnounceCallback = Arc<dyn Fn(&str, Assertiveness) + Send + Sync>;
+type EventCallback = Arc<dyn Fn(&SemanticsEvent) + Send + Sync>;
+
 /// RAII handle that keeps semantics enabled on its owning [`SemanticsHost`]
 /// while held.
 ///
@@ -104,8 +107,7 @@ pub struct SemanticsHost {
     /// clears this unconditionally in production (see
     /// [`Self::clear_announce_callback`]); `announce()`'s read side still
     /// has no production caller until a platform embedder wires delivery.
-    #[expect(clippy::type_complexity)]
-    announce_callback: RwLock<Option<Arc<dyn Fn(&str, Assertiveness) + Send + Sync>>>,
+    announce_callback: RwLock<Option<AnnounceCallback>>,
 
     /// Callback for semantics events dispatched via `Self::dispatch_event`/
     /// `Self::tooltip`. Set by the platform embedder when the
@@ -113,8 +115,7 @@ pub struct SemanticsHost {
     /// silent (or the presentation closes — see
     /// [`Self::clear_event_callback`]). Mirrors [`Self::announce_callback`]'s
     /// shape.
-    #[expect(clippy::type_complexity)]
-    event_callback: RwLock<Option<Arc<dyn Fn(&SemanticsEvent) + Send + Sync>>>,
+    event_callback: RwLock<Option<EventCallback>>,
 }
 
 impl SemanticsHost {
@@ -291,6 +292,12 @@ impl SemanticsHost {
     /// of `announce`.
     pub fn clear_event_callback(&self) {
         let _prev = self.event_callback.write().take();
+    }
+
+    pub(crate) fn take_close_callbacks(&self) -> (Option<AnnounceCallback>, Option<EventCallback>) {
+        let announce = self.announce_callback.write().take();
+        let event = self.event_callback.write().take();
+        (announce, event)
     }
 
     /// Dispatches a semantics event to the registered platform callback,

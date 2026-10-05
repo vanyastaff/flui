@@ -553,6 +553,12 @@ impl Drop for DevAgentSlot {
     }
 }
 
+impl DevAgentSlot {
+    pub(crate) fn withdraw(&self) {
+        self.agent.close();
+    }
+}
+
 /// Sends `result` to an agent that may have stopped waiting. A receiver that
 /// is gone is traced by the element and code alone: the answer can carry
 /// labels and values, which stay out of the log.

@@ -74,6 +74,8 @@ pub type GlobalPointerHandler = Rc<dyn Fn(&PointerEvent)>;
 /// router.route(&pointer_event);
 /// ```
 pub struct PointerRouter {
+    closed: std::cell::Cell<bool>,
+    close_mode: crate::__runtime::CloseTombstone,
     /// Routes per pointer ID
     routes: RefCell<HashMap<PointerId, Vec<PointerRouteHandler>>>,
 
@@ -113,6 +115,8 @@ impl PointerRouter {
     /// Create a new pointer router.
     pub fn new() -> Self {
         Self {
+            closed: std::cell::Cell::new(false),
+            close_mode: crate::__runtime::CloseTombstone::default(),
             routes: RefCell::new(HashMap::new()),
             global_handlers: RefCell::new(Vec::new()),
         }
@@ -132,6 +136,12 @@ impl PointerRouter {
     /// router.add_route(pointer_id, handler);
     /// ```
     pub fn add_route(&self, pointer: PointerId, handler: PointerRouteHandler) {
+        if self.closed.get() {
+            let mut failure = crate::__runtime::ClosePanic::for_rejection(self.close_mode.mode());
+            failure.retire(handler);
+            failure.finish();
+            return;
+        }
         let mut routes = self.routes.borrow_mut();
         routes.entry(pointer).or_default().push(handler);
 
@@ -190,8 +200,25 @@ impl PointerRouter {
     /// Global handlers are called after per-pointer handlers.
     /// Useful for logging, debugging, or modal event capture.
     pub fn add_global_handler(&self, handler: GlobalPointerHandler) {
+        if self.closed.get() {
+            let mut failure = crate::__runtime::ClosePanic::for_rejection(self.close_mode.mode());
+            failure.retire(handler);
+            failure.finish();
+            return;
+        }
         self.global_handlers.borrow_mut().push(handler);
         tracing::trace!("Added global pointer handler");
+    }
+
+    pub(crate) fn close_with_mode(&self, mode: crate::__runtime::CloseMode) {
+        let mut failure = crate::__runtime::ClosePanic::for_close(mode, self.close_mode.clone());
+        self.closed.set(true);
+        let routes = std::mem::take(&mut *self.routes.borrow_mut());
+        let globals = std::mem::take(&mut *self.global_handlers.borrow_mut());
+        for handler in routes.into_values().flatten().chain(globals) {
+            failure.retire(handler);
+        }
+        failure.finish();
     }
 
     /// Remove a global handler.
@@ -241,6 +268,9 @@ impl PointerRouter {
     /// Per-pointer handlers run in their registration order (insertion order in the
     /// HashMap entry's Vec); global handlers fire afterward.
     pub fn route(&self, event: &PointerEvent) {
+        if self.closed.get() {
+            return;
+        }
         if let Some(panic) = self.route_capturing_panics(event) {
             panic.resume();
         }
@@ -249,6 +279,9 @@ impl PointerRouter {
     /// Route every callback while returning the first captured panic to the
     /// binding transaction that owns later hit-route/lifecycle cleanup.
     pub(crate) fn route_capturing_panics(&self, event: &PointerEvent) -> Option<RoutePanic> {
+        if self.closed.get() {
+            return None;
+        }
         let pointer = get_pointer_id(event);
 
         // Snapshot per-pointer handlers (clone the `Rc`s) so the borrow is

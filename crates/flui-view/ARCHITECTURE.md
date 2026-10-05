@@ -645,3 +645,15 @@ private `element_tree_contract_matrix`. It drives the production mint helper
 with a local terminal counter because a consumer cannot exhaust the real
 identity space. It admits both final identities, catches repeated refusal and
 checks subsequent ordinary allocation from an independent local counter.
+
+### Closed presentation authority
+
+ADR-0123 withdraws a presentation's graph, external build inbox, rebuild handles
+and both local and realm GlobalKey lookup before optional terminal callbacks.
+Graph creation and writes return `SignalError::OwnerClosed`; saved writer
+capabilities reject the detached owner. Arbitrary key owners leave guarded maps
+before retirement. Ordinary LifecycleSource draining still attempts every
+eligible callback before resuming its first panic; host preserving mode suppresses
+later optional rounds while required terminal commits continue. The runtime
+`presentation_close_retirement_failures_preserve_focus_ime_and_siblings` row
+covers retained keys, stale capabilities, competing failures and sibling recovery.
