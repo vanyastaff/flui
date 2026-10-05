@@ -157,8 +157,9 @@ so its name remains live until that handle is released too.
 2. The registry validates it before any cache lookup or loading.
 3. Its key and asset `TypeId` select a typed cache handle, cloned outside the
    registry map guard before asynchronous operations begin.
-4. A retained hit shares its existing `Arc<Data>`. Concurrent cold requests use
-   Moka's entry selector to share one initializer or failure.
+4. A retained hit shares its existing `Arc<Data>`. Concurrent cold font requests
+   through the registry use Moka's entry selector to share one initializer or
+   failure. Images, custom assets and public cache initializers run independently.
 5. Successful loading supplies an `Arc<Data>` to Moka and the consumer handle.
    The capacity policy may subsequently evict cache ownership; consumer
    ownership remains independent. Errors are not retained.
