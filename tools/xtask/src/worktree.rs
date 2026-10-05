@@ -14,7 +14,10 @@
 //! the verdict.
 //!
 //! A worktree is removed only on a positive merge signal, and only when nothing
-//! in it is modified or untracked and unignored (a root `TASKS.md` aside).
+//! in it is modified, untracked or ignored, except what is disposable: a root
+//! `TASKS.md` and `target/` directories. `git worktree remove` deletes ignored
+//! files without asking, and an ignored `.env`, key or tool state is not
+//! anyone's to throw away.
 //! This repository merges pull requests with merge commits, so a merged
 //! branch's tip is an ancestor of origin/main that is *not* on origin/main's
 //! first-parent chain: it entered as a merge's second parent. A tip on that
@@ -242,29 +245,50 @@ fn parse_upstreams(refs: &str) -> BTreeMap<String, bool> {
 }
 
 /// What a worktree holds beyond its commit.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum Changes {
+    /// Nothing, or only disposable ignored entries.
     None,
-    /// Only an untracked root `TASKS.md`, which `git worktree remove` needs
-    /// `--force` to delete.
+    /// Only an untracked, unignored root `TASKS.md` (beside disposable ignored
+    /// entries), which `git worktree remove` needs `--force` to delete.
     TasksOnly,
+    /// Ignored entries that are not disposable, in `git status` order.
+    Ignored(Vec<String>),
     /// Modified tracked files or untracked, unignored ones.
     Work,
 }
 
 impl Changes {
-    /// Reads `git status --porcelain=v1 -z --untracked-files=normal`.
+    /// Reads `git status --porcelain=v1 -z --untracked-files=normal
+    /// --ignored=matching`.
     fn from_status(status: &str) -> Self {
         let mut tasks = false;
+        let mut ignored = Vec::new();
         for record in status.split('\0').filter(|record| !record.is_empty()) {
-            if record == format!("?? {TASKS_FILE}") {
+            if let Some(path) = record.strip_prefix("!! ") {
+                if !disposable(path) {
+                    ignored.push(path.to_owned());
+                }
+            } else if record == format!("?? {TASKS_FILE}") {
                 tasks = true;
             } else {
                 return Self::Work;
             }
         }
-        if tasks { Self::TasksOnly } else { Self::None }
+        if !ignored.is_empty() {
+            Self::Ignored(ignored)
+        } else if tasks {
+            Self::TasksOnly
+        } else {
+            Self::None
+        }
     }
+}
+
+/// An ignored entry `prune` may delete with its worktree: a `target/`
+/// directory at any depth, or the root `TASKS.md`.
+fn disposable(path: &str) -> bool {
+    path == TASKS_FILE || path == "target/" || path.ends_with("/target/")
 }
 
 /// What git says of a branch tip against origin/main.
@@ -337,7 +361,7 @@ enum Role {
 }
 
 /// What `classify` decides from.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct Facts {
     role: Role,
     /// `None` when detached.
@@ -348,7 +372,7 @@ struct Facts {
 }
 
 /// What `prune` does with a worktree.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum Decision {
     /// Remove the worktree (with `--force` when only `TASKS.md` stands in the
     /// way) and delete its branch: origin/main contains it.
@@ -359,7 +383,7 @@ enum Decision {
 }
 
 /// Why `prune` keeps a worktree.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum Reason {
     MainCheckout,
     Current,
@@ -367,9 +391,17 @@ enum Reason {
     Missing,
     Detached,
     Dirty,
+    /// Ignored entries that are not disposable, in `git status` order.
+    Ignored(Vec<String>),
     Unstarted,
-    Unmerged { ahead: u64, upstream_gone: bool },
+    Unmerged {
+        ahead: u64,
+        upstream_gone: bool,
+    },
 }
+
+/// How many ignored entries a [`Reason::Ignored`] line names.
+const IGNORED_SHOWN: usize = 3;
 
 impl fmt::Display for Reason {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -380,6 +412,14 @@ impl fmt::Display for Reason {
             Self::Missing => f.write_str("directory gone; `git worktree prune` drops the record"),
             Self::Detached => f.write_str("detached HEAD, no branch to judge"),
             Self::Dirty => f.write_str("uncommitted or untracked changes"),
+            Self::Ignored(paths) => {
+                let shown = paths.get(..IGNORED_SHOWN).unwrap_or(paths);
+                write!(f, "ignored files: {}", shown.join(", "))?;
+                if paths.len() > shown.len() {
+                    write!(f, " (+{} more)", paths.len() - shown.len())?;
+                }
+                Ok(())
+            }
             Self::Unstarted => write!(
                 f,
                 "tip is one of {BASE}'s own commits: not started, or merged without a merge commit"
@@ -407,8 +447,9 @@ fn classify(facts: &Facts) -> Decision {
         Role::Current => Reason::Current,
         Role::Other if facts.locked => Reason::Locked,
         Role::Other if facts.missing => Reason::Missing,
-        Role::Other => match (Integration::of(facts.tip), facts.changes) {
+        Role::Other => match (Integration::of(facts.tip), &facts.changes) {
             (_, Changes::Work) => Reason::Dirty,
+            (_, Changes::Ignored(paths)) => Reason::Ignored(paths.clone()),
             (Integration::Detached, _) => Reason::Detached,
             (Integration::Unstarted { .. }, _) => Reason::Unstarted,
             (
@@ -423,7 +464,7 @@ fn classify(facts: &Facts) -> Decision {
             },
             (Integration::Merged { .. }, changes) => {
                 return Decision::Remove {
-                    force: changes == Changes::TasksOnly,
+                    force: *changes == Changes::TasksOnly,
                 };
             }
         },
@@ -482,6 +523,7 @@ impl fmt::Display for Worktree {
         } else {
             match self.facts.changes {
                 Changes::None | Changes::TasksOnly => "clean",
+                Changes::Ignored(_) => "clean, ignored files",
                 Changes::Work => "dirty",
             }
         };
@@ -581,6 +623,7 @@ fn survey(git: &Git) -> anyhow::Result<Vec<Worktree>> {
                 "--porcelain=v1",
                 "-z",
                 "--untracked-files=normal",
+                "--ignored=matching",
             ])?)
         };
         let outside_root = role != Role::Main

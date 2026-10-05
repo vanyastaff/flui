@@ -119,6 +119,36 @@ fn status_reads_tasks_md_alone_as_no_work() {
     assert_eq!(Changes::from_status("R  new.rs\0old.rs\0"), Changes::Work);
 }
 
+fn status_keeps_ignored_entries_that_are_not_disposable() {
+    let ignored =
+        |paths: &[&str]| Changes::Ignored(paths.iter().map(|p| (*p).to_owned()).collect());
+    let cases = [
+        ("!! target/\0", Changes::None),
+        (
+            "!! TASKS.md\0!! target/\0!! tools/x/target/\0",
+            Changes::None,
+        ),
+        ("?? TASKS.md\0!! target/\0", Changes::TasksOnly),
+        ("!! .env\0", ignored(&[".env"])),
+        (
+            "!! target/\0!! .env\0!! keys/\0",
+            ignored(&[".env", "keys/"]),
+        ),
+        ("?? TASKS.md\0!! .env\0", ignored(&[".env"])),
+        ("!! docs/TASKS.md\0", ignored(&["docs/TASKS.md"])),
+        (
+            "!! target.bak\0!! mytarget/\0",
+            ignored(&["target.bak", "mytarget/"]),
+        ),
+        ("!! .env\0 M src/lib.rs\0", Changes::Work),
+    ];
+    for (status, expected) in cases {
+        assert_eq!(Changes::from_status(status), expected, "{status:?}");
+    }
+    let many = Reason::Ignored(["a", "b", "c", "d", "e"].map(str::to_owned).to_vec());
+    assert_eq!(many.to_string(), "ignored files: a, b, c (+2 more)");
+}
+
 const MERGED: Option<Tip> = Some(Tip {
     reachable: true,
     first_parent: false,
@@ -212,6 +242,14 @@ fn only_a_clean_merged_ordinary_worktree_is_removed() {
         (
             facts(Role::Current, MERGED, Changes::None),
             Decision::Keep(Reason::Current),
+        ),
+        (
+            facts(
+                Role::Other,
+                MERGED,
+                Changes::Ignored(vec![".env".to_owned()]),
+            ),
+            Decision::Keep(Reason::Ignored(vec![".env".to_owned()])),
         ),
         (
             facts(Role::Other, MERGED, Changes::Work),
@@ -443,6 +481,46 @@ fn a_commit_made_after_the_verdict_keeps_the_branch() {
     );
 }
 
+/// A merged worktree with `target/` and, unless `secret` is `None`, an
+/// ignored file of that name; returns its path after a real prune.
+fn prune_merged_with_ignored(secret: Option<&str>) -> (Fixture, PathBuf, PruneReport) {
+    let fixture = Fixture::new();
+    let merged = fixture.new_worktree("t/merged");
+    commit(&merged, "merged.txt");
+    fixture.merge("t/merged");
+    let target = merged.join("target");
+    std::fs::create_dir(&target).expect("mkdir");
+    std::fs::write(target.join("blob"), [0_u8; 64]).expect("write");
+    if let Some(secret) = secret {
+        let exclude = fixture.main.join(".git").join("info").join("exclude");
+        std::fs::write(&exclude, format!("{secret}\n")).expect("write");
+        std::fs::write(merged.join(secret), "KEY=1\n").expect("write");
+    }
+    let report = prune(&fixture.git(), false).expect("prune");
+    assert!(!report.failed, "{:?}", report.lines);
+    (fixture, merged, report)
+}
+
+fn an_ignored_file_keeps_a_merged_worktree() {
+    let (fixture, merged, report) = prune_merged_with_ignored(Some(".env"));
+    assert!(merged.join(".env").is_file(), "{:?}", report.lines);
+    assert!(fixture.has_branch("t/merged"));
+    assert!(
+        report
+            .lines
+            .iter()
+            .any(|l| l.starts_with("kept:") && l.ends_with("ignored files: .env")),
+        "{:?}",
+        report.lines
+    );
+}
+
+fn a_merged_worktree_holding_only_target_is_removed() {
+    let (fixture, merged, report) = prune_merged_with_ignored(None);
+    assert!(!merged.exists(), "{:?}", report.lines);
+    assert!(!fixture.has_branch("t/merged"));
+}
+
 fn a_dry_run_fetches_nothing() {
     let fixture = Fixture::new();
     let git = fixture.git();
@@ -495,6 +573,10 @@ fn worktree_contract() {
                 status_reads_tasks_md_alone_as_no_work,
             ),
             (
+                "status_keeps_ignored_entries_that_are_not_disposable",
+                status_keeps_ignored_entries_that_are_not_disposable,
+            ),
+            (
                 "a_tip_is_merged_only_off_mains_first_parent_chain",
                 a_tip_is_merged_only_off_mains_first_parent_chain,
             ),
@@ -513,6 +595,14 @@ fn worktree_contract() {
             (
                 "a_commit_made_after_the_verdict_keeps_the_branch",
                 a_commit_made_after_the_verdict_keeps_the_branch,
+            ),
+            (
+                "an_ignored_file_keeps_a_merged_worktree",
+                an_ignored_file_keeps_a_merged_worktree,
+            ),
+            (
+                "a_merged_worktree_holding_only_target_is_removed",
+                a_merged_worktree_holding_only_target_is_removed,
             ),
             ("a_dry_run_fetches_nothing", a_dry_run_fetches_nothing),
         ],
