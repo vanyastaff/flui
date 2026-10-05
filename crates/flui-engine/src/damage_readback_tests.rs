@@ -762,36 +762,53 @@ fn mismatches(partial: &[u8], full: &[u8], tolerance: u8) -> Vec<(u32, u32, [u8;
         .collect()
 }
 
-/// Horizontal reflection preserves the analytical shadow's silhouette and
-/// soft penumbra, rather than feeding a negative width to its distance field.
+/// Axis-aligned reflections and half-turns preserve the analytical shadow's
+/// silhouette and soft penumbra, rather than feeding a negative width or
+/// height to its distance field. Each row places the same device-space card
+/// through a different transform and compares it with the untransformed one.
 #[test]
 fn reflected_shadow_matches_its_untransformed_shape() {
     use flui_foundation::geometry::RRect;
+
+    /// A transform and the local card origin it maps onto the reference's
+    /// device rectangle, `(40, 20)..(80, 60)`.
+    type Placement = fn(&mut Canvas) -> (f64, f64);
+    fn untransformed(_: &mut Canvas) -> (f64, f64) {
+        (40.0, 20.0)
+    }
+    fn horizontal_reflection(canvas: &mut Canvas) -> (f64, f64) {
+        canvas.translate(100.0, 0.0);
+        canvas.scale(-1.0, 1.0);
+        (20.0, 20.0)
+    }
+    fn vertical_reflection(canvas: &mut Canvas) -> (f64, f64) {
+        canvas.translate(0.0, 80.0);
+        canvas.scale(1.0, -1.0);
+        (40.0, 20.0)
+    }
+    fn half_turn(canvas: &mut Canvas) -> (f64, f64) {
+        canvas.translate(120.0, 80.0);
+        canvas.rotate(std::f64::consts::PI);
+        (40.0, 20.0)
+    }
 
     let Some(renderer) = crate::test_support::renderer_or_skip() else {
         return;
     };
     let (root, card) = (ContentToken::mint(), ContentToken::mint());
-    let draw = |reflected: bool| {
-        move |canvas: &mut Canvas| {
+    let capture = |place: Placement| {
+        let paint = move |canvas: &mut Canvas| {
             canvas.draw_rect(
                 Rect::from_xywh(0.0, 0.0, f64::from(SIDE), f64::from(SIDE)),
                 &Paint::fill(Color::WHITE),
             );
-            let left = if reflected { 20.0 } else { 40.0 };
+            let (left, top) = place(canvas);
             let shape = Path::from_rrect(RRect::from_rect_circular(
-                Rect::from_xywh(left, 20.0, 40.0, 40.0),
+                Rect::from_xywh(left, top, 40.0, 40.0),
                 8.0,
             ));
-            if reflected {
-                canvas.translate(100.0, 0.0);
-                canvas.scale(-1.0, 1.0);
-            }
             canvas.draw_shadow(&shape, Color::BLACK, 2.0);
-        }
-    };
-    let capture = |reflected| {
-        let paint = draw(reflected);
+        };
         let scene = scene(
             &root,
             &[Boundary {
@@ -804,23 +821,43 @@ fn reflected_shadow_matches_its_untransformed_shape() {
         );
         full_frame_pixels(&renderer, &scene)
     };
-    let reference = capture(false);
-    let reflected = capture(true);
-    for (name, x, y) in [
+    let reference = capture(untransformed);
+    let samples = [
         ("center", 60, 40),
         ("upper penumbra", 60, 18),
         ("lower penumbra", 60, 63),
-    ] {
-        let expected = px(&reference, x, y);
-        assert_ne!(expected, WHITE, "precondition: {name} contains shadow ink");
-        let actual = px(&reflected, x, y);
-        assert!(
-            near(actual, expected, 2),
-            "{name}: reflected {actual:?}, reference {expected:?}"
+        ("left penumbra", 38, 40),
+        ("right penumbra", 82, 40),
+    ];
+    for (name, x, y) in samples {
+        assert_ne!(
+            px(&reference, x, y),
+            WHITE,
+            "precondition: {name} contains shadow ink"
         );
     }
     assert_eq!(px(&reference, 20, 40), WHITE, "reference exterior");
-    assert_eq!(px(&reflected, 20, 40), WHITE, "reflected exterior");
+
+    let rows: [(&str, Placement); 3] = [
+        ("horizontal reflection", horizontal_reflection),
+        ("vertical reflection", vertical_reflection),
+        ("half turn", half_turn),
+    ];
+    let mut failures = Vec::new();
+    for (row, place) in rows {
+        let transformed = capture(place);
+        for (name, x, y) in samples {
+            let (expected, actual) = (px(&reference, x, y), px(&transformed, x, y));
+            if !near(actual, expected, 2) {
+                failures.push(format!("{row}, {name}: {actual:?}, reference {expected:?}"));
+            }
+        }
+        let exterior = px(&transformed, 20, 40);
+        if exterior != WHITE {
+            failures.push(format!("{row}, exterior: {exterior:?}"));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
 /// A removed boundary's shadow leaves no penumbra behind: the damage its

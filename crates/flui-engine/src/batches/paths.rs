@@ -185,18 +185,22 @@ impl DrawBatcher {
         let scale = state.max_scale();
 
         // Bake the CTM into the rectangle's endpoint coordinates.
-        // An axis-aligned horizontal reflection reverses these endpoints,
-        // but the analytical SDF still needs a positive width.
+        // An axis-aligned reflection or half-turn reverses these endpoints
+        // on either axis, but the analytical SDF needs a positive extent.
         let top_left = state.apply_transform(Point::new(rrect.rect.left(), rrect.rect.top()));
         let bottom_right =
             state.apply_transform(Point::new(rrect.rect.right(), rrect.rect.bottom()));
-        let (left, right) = if state.is_axis_aligned() {
-            (top_left.x.min(bottom_right.x), top_left.x.max(bottom_right.x))
+        let ordered = |a: f64, b: f64| (a.min(b), a.max(b));
+        let ((left, right), (top, bottom)) = if state.is_axis_aligned() {
+            (
+                ordered(top_left.x, bottom_right.x),
+                ordered(top_left.y, bottom_right.y),
+            )
         } else {
-            (top_left.x, bottom_right.x)
+            ((top_left.x, bottom_right.x), (top_left.y, bottom_right.y))
         };
-        let rect_pos = [left, top_left.y];
-        let rect_size = [right - left, bottom_right.y - top_left.y];
+        let rect_pos = [left, top];
+        let rect_size = [right - left, bottom - top];
         let corner_radius = rrect.top_left.x * f64::from(scale);
 
         // Elevation → shadow shape, in the same device space as `rect_pos`.
