@@ -60,7 +60,8 @@ A container that owns user values retires them outside its borrows, stops
 dropping them after the first failure in the same operation, and never drops
 them while the thread is already panicking: it retains (leaks) them instead,
 because a second panic during unwinding aborts the process. Framework-owned
-handles and non-last reference-counted clones are dropped normally. The full
+handles and non-last single-threaded `Rc` clones are dropped normally; a
+thread-shared `Arc` clone is retained. The full
 rule and its costs are in
 [ADR-0127](adr/ADR-0127-exceptional-path-retention.md).
 
