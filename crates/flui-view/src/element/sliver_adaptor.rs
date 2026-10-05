@@ -176,6 +176,45 @@ pub struct StaticChildren {
     delegate_pair: std::cell::OnceCell<(ItemBuilder, FindIndexByKey)>,
 }
 
+/// Outgoing independent envelopes stay owned until their own retirement starts.
+struct RetiringStaticChildren {
+    children: Vec<BoxedView>,
+    map: Option<Rc<dyn Fn(BoxedView) -> BoxedView>>,
+    delegate_pair: Option<(ItemBuilder, FindIndexByKey)>,
+}
+
+impl Drop for RetiringStaticChildren {
+    fn drop(&mut self) {
+        if std::thread::panicking() {
+            std::mem::forget(std::mem::take(&mut self.children));
+            std::mem::forget(self.map.take());
+            std::mem::forget(self.delegate_pair.take());
+        }
+    }
+}
+
+impl Drop for StaticChildren {
+    fn drop(&mut self) {
+        // Empty physical ownership before the first opaque destructor runs.
+        // The guard also protects an incoming unwind without retiring captures.
+        let mut outgoing = RetiringStaticChildren {
+            children: std::mem::take(&mut self.children),
+            map: self.map.take(),
+            delegate_pair: self.delegate_pair.take(),
+        };
+        if std::thread::panicking() {
+            return;
+        }
+        // Vec's ordinary field destruction visits children in insertion order.
+        outgoing.children.reverse();
+        while let Some(child) = outgoing.children.pop() {
+            drop(child);
+        }
+        drop(outgoing.map.take());
+        drop(outgoing.delegate_pair.take());
+    }
+}
+
 impl StaticChildren {
     /// Wrap `children` as a shared delegate.
     #[must_use]

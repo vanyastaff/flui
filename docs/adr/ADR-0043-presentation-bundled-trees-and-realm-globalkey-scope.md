@@ -1,6 +1,7 @@
 # ADR-0043: Presentation-bundled UI trees and the realm GlobalKey scope
 
 - **Status:** Accepted
+- **Superseded-by:** [ADR-0126](ADR-0126-reentrant-scoped-key-comparisons.md), only §3's exhaustive outcome claim for custom key callbacks
 - **Date:** 2026-08-05
 - **Superseded in part by:** [ADR-0050](ADR-0050-global-key-identity-and-frame-reservations.md) (§2's hash-keyed authorities are now key-identity-keyed, and a per-frame duplicate check joins them)
 - **Related:** [ADR-0027](ADR-0027-owner-affine-ui-realms.md) (owner-affine `UiRealm`s — the realm/thread-affinity model this ADR builds a presentation topology on top of, and whose §8 GlobalKey bullet this ADR corrects); [ADR-0037](ADR-0037-presentation-ownership-domains.md) (the three physical owners — `WindowHost`, `PresentationState`, `RasterOwner` — one presentation identity coordinates; this ADR is what `PresentationState` contains)
