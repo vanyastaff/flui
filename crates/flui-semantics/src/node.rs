@@ -290,6 +290,7 @@ impl SemanticsNode {
             actions: self.config.effective_actions_as_bits(),
             label: self.config.label().map(|l| l.string.clone()),
             value: self.config.value().map(|v| v.string.clone()),
+            numeric_range: self.config.numeric_range(),
             increased_value: self.config.increased_value().map(|v| v.string.clone()),
             decreased_value: self.config.decreased_value().map(|v| v.string.clone()),
             hint: self.config.hint().map(|h| h.string.clone()),

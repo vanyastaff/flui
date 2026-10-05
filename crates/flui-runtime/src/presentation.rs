@@ -30,8 +30,7 @@ use flui_scheduler::{
 };
 use flui_semantics::platform::PlatformAccessibility;
 use flui_semantics::{
-    AccessibilityNodeId, SemanticsActionError, SemanticsActionRequest, semantics_action_args_for,
-    semantics_action_for,
+    AccessibilityNodeId, SemanticsActionError, SemanticsActionRequest, semantics_action_request_for,
 };
 use flui_view::{
     __runtime::{BindingRuntime as _, FramePhaseMarker},
@@ -416,10 +415,10 @@ impl PresentationState {
     ///   and resolve at the next Idle drain. Requests FLUI cannot route (a
     ///   zero node id, an action with no counterpart, a full inbox) are
     ///   traced drops, since screen readers may act on a stale snapshot. Typed action payloads
-    ///   (`accesskit::ActionData`) translate via
-    ///   [`semantics_action_args_for`]; a payload kind FLUI cannot express
-    ///   routes the action argument-free with a trace rather than killing
-    ///   the whole request.
+    ///   (`accesskit::ActionData`) translate with the whole request through
+    ///   [`semantics_action_request_for`]. Numeric setters remain distinct from
+    ///   text edits, and expand/collapse preserve their explicit direction.
+    ///   The current owner validates payloads before invoking a handler.
     ///
     /// A window without the capability (`bridge` is `None`) wires nothing:
     /// the pipeline keeps its documented publish-nowhere placeholder.
@@ -473,39 +472,17 @@ impl PresentationState {
         }
 
         bridge.set_action_listener(Arc::new(move |request| {
-            let Some(node_id) = AccessibilityNodeId::from_u64(request.target_node.0) else {
+            if AccessibilityNodeId::from_u64(request.target_node.0).is_none() {
                 tracing::warn!(
                     "dropping accessibility action addressed to the zero node id (out of \
                      contract: no published tree ever exports it)"
                 );
                 return;
-            };
-            let Some(action) = semantics_action_for(request.action) else {
-                tracing::trace!(
-                    action = ?request.action,
-                    "dropping accessibility action FLUI has no counterpart for"
-                );
+            }
+            let Some(semantics_request) = semantics_action_request_for(&request) else {
+                tracing::trace!(action = ?request.action, "dropping unsupported accessibility action");
                 return;
             };
-            let arguments = request.data.as_ref().and_then(|data| {
-                let translated = semantics_action_args_for(data, request.target_node);
-                if translated.is_none() {
-                    // The action still routes; only its payload is lost.
-                    // Traced because a SetValue without its value reaches a
-                    // handler as a no-op edit, which is otherwise invisible.
-                    // Two cases share this branch: a payload kind FLUI has no
-                    // argument shape for, and a payload untranslatable for
-                    // THIS request (a cross-node text selection).
-                    tracing::trace!(
-                        action = ?request.action,
-                        "accessibility action payload not translatable (unsupported kind, or \
-                         invalid for this target); routing the action argument-free"
-                    );
-                }
-                translated
-            });
-            let mut semantics_request = SemanticsActionRequest::new(node_id, action);
-            semantics_request.arguments = arguments;
             if let Err(error) = command_sender.send_semantics_action(semantics_request) {
                 tracing::warn!(
                     ?error,

@@ -263,6 +263,7 @@ layers = [
     ],
     [
         "text",
+        "controls",
         "scroll",
         "navigator",
     ],

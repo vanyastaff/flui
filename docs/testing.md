@@ -890,6 +890,17 @@ element actions and send real input, on any application. Its ignored
 `tests/live_windows.rs` drives `a11y_probe` through it; the scripted Windows gates are
 `cargo xtask device windows-a11y` and `windows-input`.
 
+`windows-a11y` invokes the counter and exercises native ExpandCollapse and
+RangeValue patterns on the probe's generic semantics controls. It checks
+disclosure state, repeated-action refusal, fractional and endpoint values,
+unchanged published state after an out-of-range request, and a later valid
+action. Independent visible state labels and an intervening counter action
+observe the resulting frames. This does not establish native acceptance of the
+catalog's `Disclosure` or `Slider`, IME, or screen-reader announcements.
+`windows-input` separately sends pointer input followed by Tab and Enter.
+Both checks require an interactive Windows desktop; an unavailable desktop or
+UI Automation result is recorded as CANNOT VERIFY rather than a passing run.
+
 ## CI Expectations
 
 CI runs the same local gates plus repository-wide source checks. Every job is

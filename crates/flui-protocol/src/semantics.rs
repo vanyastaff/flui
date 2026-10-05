@@ -185,9 +185,8 @@ vocabulary! {
     ///
     /// `Tap` through `Focus` take `1 << 0` to `1 << 22`. Bits `1 << 23` to
     /// `1 << 25` are kept as [`RESERVED_BITS`](Self::RESERVED_BITS): there
-    /// is no expand or collapse action (an expandable node toggles through
-    /// its tap handler), and [`ScrollToOffset`](Self::ScrollToOffset) sits
-    /// at `1 << 26`.
+    /// [`ScrollToOffset`](Self::ScrollToOffset) uses `1 << 26`, while the
+    /// directional and numeric actions use `1 << 27` through `1 << 29`.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
     #[repr(u64)]
     pub enum SemanticsAction {
@@ -239,6 +238,12 @@ vocabulary! {
         Focus = 1 << 22 => "focus",
         /// Scroll to a specific offset.
         ScrollToOffset = 1 << 26 => "scrollToOffset",
+        /// Set an expandable control to its expanded state.
+        Expand = 1 << 27 => "expand",
+        /// Set an expandable control to its collapsed state.
+        Collapse = 1 << 28 => "collapse",
+        /// Set an exact numeric value within the control's admitted range.
+        SetNumericValue = 1 << 29 => "setNumericValue",
     }
 }
 
@@ -248,10 +253,8 @@ impl SemanticsAction {
     ///
     /// Platform accessibility bit layouts (`dart:ui`'s among them) assign
     /// these three bits to other actions, so an action placed here would
-    /// collide with them. FLUI keeps the expanded state on the
-    /// `HasExpandedState`/`IsExpanded` flags and routes a platform expand or
-    /// collapse to the tap handler; un-focus belongs to the platform's focus
-    /// management.
+    /// collide with them. Discrete expand and collapse use distinct FLUI-owned
+    /// slots; un-focus belongs to the platform's focus management.
     pub const RESERVED_BITS: u64 = (1 << 23) | (1 << 24) | (1 << 25);
 
     /// Returns the bitmask value for this action (see the enum doc for the

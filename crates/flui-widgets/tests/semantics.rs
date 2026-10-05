@@ -474,12 +474,20 @@ pub(crate) fn the_actions_the_platform_cannot_reach_are_exactly_the_documented_d
         .iter()
         .copied()
         .filter(|action| {
-            // Reachable if any platform action translates back to it, which is
-            // the live table's answer rather than a restatement of it.
-            PLATFORM_ACTIONS
-                .iter()
-                .copied()
-                .any(|platform| semantics_action_for(platform) == Some(*action))
+            // Reachability examines whole requests, including the numeric
+            // SetValue payload whose action-only route is necessarily textual.
+            PLATFORM_ACTIONS.iter().copied().any(|platform| {
+                [None, Some(ActionData::NumericValue(0.0))]
+                    .into_iter()
+                    .any(|data| {
+                        flui_rendering::semantics::semantics_action_request_for(&request(
+                            platform,
+                            NodeId(1),
+                            data,
+                        ))
+                        .is_some_and(|translated| translated.action == *action)
+                    })
+            })
         })
         .collect();
 
@@ -536,4 +544,186 @@ pub(crate) fn the_exhaustive_routing_list_agrees_with_the_translation_table() {
             "the exhaustive list and the production table disagree about {action:?}",
         );
     }
+}
+
+/// Platform actions preserve direction and exact values across queued delivery.
+/// The signal write forces the real frame producer to republish the result.
+pub(crate) fn queued_directional_actions_and_numeric_values_reach_the_frame_producer() {
+    use flui_rendering::semantics::NumericRange;
+
+    let state = Rc::new(Cell::new(false));
+    let described = Rc::clone(&state);
+    let expanded = SignalProbe::new(move |ProbeSignals { count, .. }| {
+        let expand = Rc::clone(&described);
+        let collapse = Rc::clone(&described);
+        let toggle = Rc::clone(&described);
+        host()
+            .expanded(described.get())
+            .on_expand(move |cx| {
+                expand.set(true);
+                count.set(cx, 1)
+            })
+            .on_collapse(move |cx| {
+                collapse.set(false);
+                count.set(cx, 0)
+            })
+            .on_tap(move |cx| {
+                let next = !toggle.get();
+                toggle.set(next);
+                count.set(cx, u32::from(next))
+            })
+            .child(SizedBox::new(40.0, 20.0))
+    });
+    let (mut laid, _, node_id) = pump_labelled(expanded.view());
+    let listener = laid
+        .accessibility_action_listener()
+        .expect("production platform listener");
+    listener(request(Action::Expand, node_id, None));
+    listener(request(Action::Expand, node_id, None));
+    laid.tick();
+    assert_eq!(expanded.value(), Ok(1), "two expands must not toggle twice");
+    let tree = laid.a11y_tree().expect("published expanded frame");
+    let node = tree.find_by_label(LABEL).expect("control remains live");
+    assert_eq!(node.raw().is_expanded(), Some(true));
+    assert!(node.supports_action(Action::Collapse));
+    assert!(!node.supports_action(Action::Expand));
+    listener(request(Action::Collapse, node_id, None));
+    listener(request(Action::Collapse, node_id, None));
+    laid.tick();
+    assert_eq!(expanded.value(), Ok(0), "two collapses remain collapsed");
+    listener(request(Action::Click, node_id, None));
+    listener(request(Action::Expand, node_id, None));
+    laid.tick();
+    assert_eq!(
+        expanded.value(),
+        Ok(1),
+        "a pending pointer toggle cannot reverse an explicit expand"
+    );
+
+    let value = Rc::new(Cell::new(0.0_f64));
+    let current = Rc::clone(&value);
+    let numeric = SignalProbe::new(move |ProbeSignals { count, .. }| {
+        let changed = Rc::clone(&current);
+        host()
+            .numeric_range(
+                NumericRange::new(current.get(), 0.0, 10.0, 1.0).expect("finite fixture"),
+            )
+            .on_set_numeric_value(move |cx, exact| {
+                changed.set(exact);
+                count.update(cx, |n| *n += 1)
+            })
+            .child(SizedBox::new(40.0, 20.0))
+    });
+    let (mut laid, _, node_id) = pump_labelled(numeric.view());
+    let listener = laid
+        .accessibility_action_listener()
+        .expect("production platform listener");
+    listener(request(
+        Action::SetValue,
+        node_id,
+        Some(ActionData::NumericValue(2.375)),
+    ));
+    laid.tick();
+    assert_eq!(
+        value.get(),
+        2.375,
+        "the step must not round the requested value"
+    );
+    assert_eq!(numeric.value(), Ok(1));
+    let tree = laid.a11y_tree().expect("numeric frame republished");
+    let node = tree
+        .find_by_label(LABEL)
+        .expect("range control remains live");
+    assert_eq!(node.raw().numeric_value(), Some(2.375));
+    assert_eq!(node.raw().min_numeric_value(), Some(0.0));
+    assert_eq!(node.raw().max_numeric_value(), Some(10.0));
+    assert_eq!(node.raw().numeric_value_step(), Some(1.0));
+    for rejected in [f64::NAN, f64::INFINITY, -0.5, 10.5] {
+        listener(request(
+            Action::SetValue,
+            node_id,
+            Some(ActionData::NumericValue(rejected)),
+        ));
+        laid.tick();
+        assert_eq!(
+            value.get(),
+            2.375,
+            "invalid numeric payload reached the callback"
+        );
+        assert_eq!(
+            numeric.value(),
+            Ok(1),
+            "rejected request must not perform a signal write"
+        );
+    }
+    listener(request(
+        Action::SetValue,
+        node_id,
+        Some(ActionData::NumericValue(10.0)),
+    ));
+    laid.tick();
+    assert_eq!(
+        value.get(),
+        10.0,
+        "the next valid request survives rejected values"
+    );
+    assert_eq!(numeric.value(), Ok(2));
+}
+
+/// Native range metadata cannot admit non-finite values or reversed bounds.
+pub(crate) fn numeric_range_admission_and_owner_payload_validation() {
+    use flui_rendering::semantics::{ActionArgs, NumericRange, NumericRangeError};
+    for (value, min, max, step, error) in [
+        (f64::NAN, 0.0, 1.0, 1.0, NumericRangeError::NonFinite),
+        (
+            0.0,
+            f64::NEG_INFINITY,
+            1.0,
+            1.0,
+            NumericRangeError::NonFinite,
+        ),
+        (0.0, 1.0, 0.0, 1.0, NumericRangeError::ReversedBounds),
+        (2.0, 0.0, 1.0, 1.0, NumericRangeError::ValueOutOfRange),
+        (0.0, 0.0, 1.0, 0.0, NumericRangeError::NonPositiveStep),
+    ] {
+        assert_eq!(NumericRange::new(value, min, max, step), Err(error));
+    }
+    let count = Rc::new(Cell::new(0));
+    let changed = Rc::clone(&count);
+    let (laid, tree, node_id) = pump_labelled(
+        host()
+            .numeric_range(NumericRange::new(4.0, 4.0, 4.0, 1.0).expect("zero-span range is valid"))
+            .on_set_numeric_value(move |_cx, value| {
+                assert_eq!(value, 4.0);
+                changed.set(changed.get() + 1);
+            })
+            .child(SizedBox::new(40.0, 20.0)),
+    );
+    assert!(
+        tree.find_by_label(LABEL)
+            .expect("range exists")
+            .supports_action(Action::SetValue)
+    );
+    for arguments in [
+        None,
+        Some(ActionArgs::SetText { text: "4".into() }),
+        Some(ActionArgs::SetNumericValue { value: 4.1 }),
+    ] {
+        let refused = laid.pipeline_owner().with(|owner| {
+            owner.resolve_semantics_action(SemanticsActionRequest {
+                node_id: AccessibilityNodeId::from_u64(node_id.0).expect("published identity"),
+                action: SemanticsAction::SetNumericValue,
+                arguments,
+            })
+        });
+        assert!(refused.is_err(), "malformed numeric request was admitted");
+    }
+    assert_eq!(count.get(), 0);
+    laid.invoke_semantics_action(request(
+        Action::SetValue,
+        node_id,
+        Some(ActionData::NumericValue(4.0)),
+    ))
+    .expect("exact zero-span value is admitted");
+    assert_eq!(count.get(), 1);
 }

@@ -511,6 +511,55 @@ impl Semantics {
         self.on_plain_action(SemanticsAction::ScrollDown, handler)
     }
 
+    /// Publishes a validated numeric range for native range-value controls.
+    #[must_use]
+    pub fn numeric_range(mut self, range: flui_rendering::semantics::NumericRange) -> Self {
+        self.configuration.set_numeric_range(range);
+        self
+    }
+
+    /// Sets this control to expanded when requested by assistive technology.
+    /// The handler must set the requested state, including repeated requests.
+    #[must_use]
+    pub fn on_expand<F, R>(self, handler: F) -> Self
+    where
+        F: Fn(&mut EventCx<'_>) -> R + 'static,
+        R: EventOutcome,
+    {
+        self.on_plain_action(SemanticsAction::Expand, handler)
+    }
+
+    /// Sets this control to collapsed when requested by assistive technology.
+    /// The handler must set the requested state, including repeated requests.
+    #[must_use]
+    pub fn on_collapse<F, R>(self, handler: F) -> Self
+    where
+        F: Fn(&mut EventCx<'_>) -> R + 'static,
+        R: EventOutcome,
+    {
+        self.on_plain_action(SemanticsAction::Collapse, handler)
+    }
+
+    /// Receives the exact finite numeric value admitted by the current range.
+    /// Step metadata does not quantize assistive-technology values.
+    #[must_use]
+    pub fn on_set_numeric_value<F, R>(mut self, handler: F) -> Self
+    where
+        F: Fn(&mut EventCx<'_>, f64) -> R + 'static,
+        R: EventOutcome,
+    {
+        let handler = value_callback(handler);
+        self.event_actions.insert(
+            SemanticsAction::SetNumericValue,
+            Rc::new(move |cx, args| {
+                if let Some(ActionArgs::SetNumericValue { value }) = args {
+                    handler(cx, value);
+                }
+            }),
+        );
+        self
+    }
+
     /// Invoke `handler` when assistive technology increments this node's value.
     ///
     /// The one-step-up counterpart to [`Self::on_decrease`], for sliders and

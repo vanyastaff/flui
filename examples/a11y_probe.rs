@@ -1,4 +1,4 @@
-//! `a11y_probe` — the generated counter, run for an assistive technology.
+//! `a11y_probe` — counter and action fixtures, run for an assistive technology.
 //!
 //! The tree is the CLI `counter` template's (`Center` → `Column` → prompt
 //! `Text` / count `Text` / `ElevatedButton`), built with the facade's `a11y`
@@ -11,6 +11,9 @@
 //! which reads the window's `NSAccessibility` tree through `AXUIElement`, finds the button
 //! by its label, performs `AXPress`, and reads the count back — the
 //! screen-reader path end to end, with no pointer event anywhere.
+//! The Windows UIA client also drives explicit expand/collapse and numeric
+//! range actions, reading both native properties and visible sibling text.
+//! Those two controls are semantics fixtures, not the widget catalog controls.
 //!
 //! Without the `a11y` feature this compiles and runs, and the client finds
 //! an empty tree: the feature is what installs the adapter.
@@ -31,6 +34,8 @@ struct Counter;
 
 struct CounterState {
     count: StateCell<usize>,
+    expanded: StateCell<bool>,
+    numeric: StateCell<f64>,
 }
 
 impl StatefulView for Counter {
@@ -39,6 +44,8 @@ impl StatefulView for Counter {
     fn create_state(&self) -> Self::State {
         CounterState {
             count: StateCell::new(0),
+            expanded: StateCell::new(false),
+            numeric: StateCell::new(0.0),
         }
     }
 }
@@ -46,10 +53,21 @@ impl StatefulView for Counter {
 impl ViewState<Counter> for CounterState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         self.count.bind(ctx);
+        self.expanded.bind(ctx);
+        self.numeric.bind(ctx);
     }
 
     fn build(&self, _view: &Counter, _ctx: &dyn BuildContext) -> impl IntoView {
         let count = self.count.clone();
+        let expand = self.expanded.clone();
+        let collapse = self.expanded.clone();
+        let numeric = self.numeric.clone();
+        let details = if self.expanded.get() {
+            "Details expanded"
+        } else {
+            "Details collapsed"
+        };
+        let range_text = format!("Range value: {}", self.numeric.get());
         Theme::new(
             ThemeData::light(),
             Center::new().child(
@@ -60,6 +78,47 @@ impl ViewState<Counter> for CounterState {
                     SizedBox::height(16.0),
                     ElevatedButton::new(Text::new("Increment"))
                         .on_pressed(move |_cx| count.update(|n| n + 1)),
+                    SizedBox::height(16.0),
+                    Focus::new(
+                        Semantics::new()
+                            .container(true)
+                            .button(true)
+                            .label("Probe disclosure")
+                            .expanded(self.expanded.get())
+                            .exclude_semantics(true)
+                            .on_expand(move |_cx| expand.set(true))
+                            .on_collapse(move |_cx| collapse.set(false))
+                            .child(Text::new(details))
+                    ),
+                    // This visible sibling is outside the control's excluded
+                    // subtree, so the native client can read the frame result.
+                    Text::new(format!(
+                        "Disclosure state: {}",
+                        if self.expanded.get() {
+                            "expanded"
+                        } else {
+                            "collapsed"
+                        }
+                    )),
+                    SizedBox::height(16.0),
+                    Focus::new(
+                        Semantics::new()
+                            .container(true)
+                            .label("Probe numeric range")
+                            .numeric_range(
+                                flui::rendering::NumericRange::new(
+                                    self.numeric.get(),
+                                    0.0,
+                                    10.0,
+                                    1.0
+                                )
+                                .expect("BUG: probe value is admitted by its range action")
+                            )
+                            .exclude_semantics(true)
+                            .on_set_numeric_value(move |_cx, value| numeric.set(value))
+                            .child(Text::new(range_text))
+                    ),
+                    Text::new(format!("Published range value: {}", self.numeric.get())),
                 ])
                 .main_axis_alignment(MainAxisAlignment::Center),
             ),
@@ -85,7 +144,7 @@ fn main() {
     .with_config(
         AppConfig::new()
             .with_title("FLUI Accessibility Probe")
-            .with_size(480, 320),
+            .with_size(480, 420),
     )
     .with_startup_window(StartupWindow::Open)
     .run();

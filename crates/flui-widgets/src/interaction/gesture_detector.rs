@@ -485,6 +485,8 @@ struct Recognizers {
 /// built in `init_state` (which has the `BuildContext` needed to read the
 /// ambient arena) and read — never rebuilt — by `build`.
 pub struct GestureDetectorState {
+    /// Shared admission authority for captured pointer and semantics delivery.
+    mounted: Rc<Cell<bool>>,
     /// The live `on_tap`, refreshed each `build`. The recognizer reads THIS slot
     /// rather than a frozen capture, so a rebuild with a new closure is honored.
     tap_slot: Rc<RefCell<Option<GestureCallback>>>,
@@ -529,7 +531,7 @@ struct SemanticsDeliveryTarget {
     tap_slot: Rc<RefCell<Option<GestureCallback>>>,
     long_press_slot: Rc<RefCell<Option<GestureCallback>>>,
     writer: WriterSource,
-    mounted: Cell<bool>,
+    mounted: Rc<Cell<bool>>,
 }
 
 impl SemanticsDeliveryTarget {
@@ -595,6 +597,7 @@ impl StatefulView for GestureDetector {
         // Allocate the live callback slots only — recognizers are built in
         // `init_state`, which has the context needed to read the ambient arena.
         GestureDetectorState {
+            mounted: Rc::new(Cell::new(true)),
             tap_slot: Rc::new(RefCell::new(self.on_tap.clone())),
             secondary_tap_slot: Rc::new(RefCell::new(self.on_secondary_tap.clone())),
             long_press_slot: Rc::new(RefCell::new(self.on_long_press.clone())),
@@ -701,7 +704,7 @@ impl ViewState<GestureDetector> for GestureDetectorState {
             tap_slot: Rc::clone(&self.tap_slot),
             long_press_slot: Rc::clone(&self.long_press_slot),
             writer: writer.clone(),
-            mounted: Cell::new(true),
+            mounted: Rc::clone(&self.mounted),
         }));
         let arena = GestureArenaScope::of(ctx);
         self.rebuild = Some(ctx.rebuild_handle());
@@ -898,9 +901,10 @@ impl ViewState<GestureDetector> for GestureDetectorState {
     }
 
     fn dispose(&mut self) {
-        if let Some(delivery) = self.semantics_delivery.as_ref() {
-            delivery.mounted.set(false);
-        }
+        // Cached Listener routes remain deliverable through their terminal
+        // event. Revoke this group's admission before recognizer retirement can
+        // invoke cancellation callbacks or reenter pointer dispatch.
+        self.mounted.set(false);
         if let Some(recognizers) = self.recognizers.as_ref() {
             recognizers.tap.dispose();
             recognizers.long_press.dispose();
@@ -944,6 +948,7 @@ impl GestureDetectorState {
     /// does not let its tap recognizer steal the first up.
     fn make_listener(&self, recognizers: &Recognizers) -> Listener {
         let group = RecognizerGroup {
+            mounted: Rc::clone(&self.mounted),
             tap: Arc::clone(&recognizers.tap),
             long_press: Arc::clone(&recognizers.long_press),
             double_tap: Arc::clone(&recognizers.double_tap),
@@ -981,6 +986,7 @@ impl GestureDetectorState {
 /// the [`Listener`] callbacks. One shared bundle, cloned once per callback.
 #[derive(Clone)]
 struct RecognizerGroup {
+    mounted: Rc<Cell<bool>>,
     tap: Arc<TapGestureRecognizer>,
     long_press: Arc<LongPressGestureRecognizer>,
     double_tap: Arc<DoubleTapGestureRecognizer>,
@@ -999,12 +1005,13 @@ impl RecognizerGroup {
     /// The tap recognizer participates iff a primary- OR secondary-tap callback
     /// is currently set.
     fn tap_active(&self) -> bool {
-        slot_is_some(&self.tap_slot) || slot_is_some(&self.secondary_tap_slot)
+        self.mounted.get()
+            && (slot_is_some(&self.tap_slot) || slot_is_some(&self.secondary_tap_slot))
     }
 
     /// The long-press recognizer participates iff `on_long_press` is set.
     fn long_press_active(&self) -> bool {
-        slot_is_some(&self.long_press_slot)
+        self.mounted.get() && slot_is_some(&self.long_press_slot)
     }
 
     /// The double-tap recognizer participates iff `on_double_tap` OR
@@ -1012,11 +1019,15 @@ impl RecognizerGroup {
     /// latter (word selection, which never needs `on_double_tap` itself)
     /// must still join the arena, or its own callback would never fire.
     fn double_tap_active(&self) -> bool {
-        slot_is_some(&self.double_tap_slot) || slot_is_some(&self.double_tap_down_slot)
+        self.mounted.get()
+            && (slot_is_some(&self.double_tap_slot) || slot_is_some(&self.double_tap_down_slot))
     }
 
     /// The drag recognizer participates iff any pan callback is set.
     fn drag_active(&self) -> bool {
+        if !self.mounted.get() {
+            return false;
+        }
         let pan = self.pan_slot.borrow();
         pan.start.is_some() || pan.update.is_some() || pan.end.is_some()
     }
@@ -1024,6 +1035,9 @@ impl RecognizerGroup {
     /// The horizontal-drag recognizer participates iff any horizontal-drag
     /// callback is set.
     fn horizontal_drag_active(&self) -> bool {
+        if !self.mounted.get() {
+            return false;
+        }
         let horizontal = self.horizontal_drag_slot.borrow();
         horizontal.down.is_some()
             || horizontal.start.is_some()
@@ -1037,6 +1051,9 @@ impl RecognizerGroup {
     /// Down has reached the entire hit-test path, so overlapping detectors can
     /// all join before the single close.
     fn handle_down(&self, dispatch: PointerDispatch<'_>) {
+        if !self.mounted.get() {
+            return;
+        }
         let event = dispatch.local;
         let pointer = event.pointer_id();
         let position = event.position();
@@ -1048,7 +1065,9 @@ impl RecognizerGroup {
             // Forward the real Down so the recognizer refines the provisional
             // Primary button `add_pointer` staged to the actual button
             // (Primary / Secondary / Tertiary).
-            self.tap.handle_event(dispatch);
+            if self.mounted.get() {
+                self.tap.handle_event(dispatch);
+            }
         }
         if self.long_press_active() {
             self.long_press
@@ -1088,6 +1107,11 @@ impl RecognizerGroup {
 
     /// Forward a move / up / cancel event to every participating recognizer.
     fn forward(&self, dispatch: PointerDispatch<'_>) {
+        if !self.mounted.get() {
+            return;
+        }
+        // Each active predicate rechecks admission: an earlier recognizer's
+        // callback may synchronously unmount and dispose this whole group.
         if self.tap_active() {
             self.tap.handle_event(dispatch);
         }
@@ -1109,7 +1133,9 @@ impl RecognizerGroup {
         // CALLBACK itself still won't fire while disabled — that is
         // gated separately, by the live slot the callback closure reads
         // at call time, not by this participation check.
-        self.double_tap.handle_event(dispatch);
+        if self.mounted.get() {
+            self.double_tap.handle_event(dispatch);
+        }
         if self.drag_active() {
             self.drag.handle_event(dispatch);
         }
@@ -1173,7 +1199,7 @@ mod tests {
                 tap_slot: Rc::clone(&state.tap_slot),
                 long_press_slot: Rc::clone(&state.long_press_slot),
                 writer: writer.clone(),
-                mounted: Cell::new(true),
+                mounted: Rc::clone(&state.mounted),
             }));
             state.local_post_frame = Some(lane.local_handle());
             state.semantics_requests.push(PendingSemanticsAction::Tap);

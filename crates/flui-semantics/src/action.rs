@@ -39,6 +39,12 @@ pub enum ActionArgs {
         text: String,
     },
 
+    /// An exact numeric value, validated against the current node before dispatch.
+    SetNumericValue {
+        /// Requested finite value.
+        value: f64,
+    },
+
     /// Custom action arguments.
     CustomAction {
         /// The custom action ID.
