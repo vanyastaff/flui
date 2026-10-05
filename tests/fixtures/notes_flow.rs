@@ -501,6 +501,24 @@ mod notes_flow {
         assert_eq!(field_text(&laid), "Entrance draft");
     }
 
+    fn settings_pressed_twice_leaves_with_one_back() {
+        let mut laid = ready();
+        tap_text(&mut laid, "Settings");
+        rendered_text(&laid, "Compact rows: false");
+        // Press Settings again wherever the Settings page still offers it.
+        let again = active_text(&laid, "Settings");
+        if !again.is_empty() {
+            tap_text(&mut laid, "Settings");
+        }
+        tap_text(&mut laid, "Back");
+        assert!(
+            active_text(&laid, "Compact rows: false").is_empty(),
+            "one Back leaves Settings"
+        );
+        rendered_text(&laid, "Note 0");
+        assert!(again.is_empty(), "Settings is not offered on its own page");
+    }
+
     fn pointer_drag_changes_lazy_band_and_route_roundtrip_preserves_position() {
         let mut laid = ready();
         assert!(
@@ -643,7 +661,7 @@ mod notes_flow {
 
     #[test]
     fn notes_public_input_flow_matrix() {
-        let cases: [(&str, fn()); 5] = [
+        let cases: [(&str, fn()); 6] = [
             (
                 "loading_retry_replacement_and_unmount_retire_old_service_work",
                 loading_retry_replacement_and_unmount_retire_old_service_work,
@@ -659,6 +677,10 @@ mod notes_flow {
             (
                 "queued_settings_toggle_during_entrance_settles_to_one_active_page",
                 queued_settings_toggle_during_entrance_settles_to_one_active_page,
+            ),
+            (
+                "settings_pressed_twice_leaves_with_one_back",
+                settings_pressed_twice_leaves_with_one_back,
             ),
             (
                 "pointer_drag_changes_lazy_band_and_route_roundtrip_preserves_position",

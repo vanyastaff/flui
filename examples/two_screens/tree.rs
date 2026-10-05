@@ -11,7 +11,7 @@ use flui::material::{ButtonStyle, InputDecoration, TextButton, TextFormField, Th
 use flui::prelude::*;
 use flui::widgets::{
     BoxedResultFuture, Form, FormHandle, FutureBuilder, SafeArea, Scrollable, WidgetStateProperty,
-    column, row,
+    column,
 };
 
 /// The application's readiness operation; a real service can replace the local
@@ -193,21 +193,36 @@ impl ViewState<Screen> for ScreenState {
                 .boxed()
             }
         };
-        let settings = router.clone();
         let reload = shared.attempt.clone();
-        SafeArea::new().child(Column::new(column![
-            Row::new(row![
-                Text::new("FLUI Notes"),
-                TextButton::new(Text::new("Settings")).on_pressed(move |_cx| {
-                    settings.push(Route::Settings).expect("BUG: mounted Router");
-                }),
-                TextButton::new(Text::new("Back")).on_pressed(move |_cx| {
+        let mut header = vec![Text::new("FLUI Notes").boxed()];
+        // Settings is offered only where it leads somewhere: pushing it over
+        // itself would stack an identical page that Back appears not to leave.
+        if view.route != Route::Settings {
+            let settings = router.clone();
+            header.push(
+                TextButton::new(Text::new("Settings"))
+                    .on_pressed(move |_cx| {
+                        settings.push(Route::Settings).expect("BUG: mounted Router");
+                    })
+                    .boxed(),
+            );
+        }
+        header.push(
+            TextButton::new(Text::new("Back"))
+                .on_pressed(move |_cx| {
                     router.pop().expect("BUG: mounted Router");
-                }),
-                TextButton::new(Text::new("Reload notes")).on_pressed(move |_cx| {
+                })
+                .boxed(),
+        );
+        header.push(
+            TextButton::new(Text::new("Reload notes"))
+                .on_pressed(move |_cx| {
                     reload.update(|attempt| *attempt = attempt.saturating_add(1));
-                }),
-            ]),
+                })
+                .boxed(),
+        );
+        SafeArea::new().child(Column::new(column![
+            Row::new(header),
             Text::new(shared.status.with(Clone::clone)),
             Expanded::new(content),
         ]))
