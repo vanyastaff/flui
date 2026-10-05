@@ -2,11 +2,19 @@
 
 - **Status:** Accepted
 - **Date:** 2026-10-05
-- **Extends:** [ADR-0080](ADR-0080-agent-protocol-desktop-contract.md) and [ADR-0095](ADR-0095-agent-protocol-schema-crate.md)
+- **Supersedes:** [ADR-0095](ADR-0095-agent-protocol-schema-crate.md), in part: its
+  in-process route of `expand` and `collapse` to the tap handler, with the double-toggle race
+  it leaves open, and a numeric `set_value` that arrives without its number.
+- **Related:** [ADR-0080](ADR-0080-agent-protocol-desktop-contract.md), whose wire
+  vocabulary (`expand`, `collapse`, `set_value`) is unchanged
 
 ## Decision
 
-Expand and collapse are distinct requests, never activation aliases. Numeric
+Expand and collapse are distinct requests, never activation aliases. A node
+with an expanded state that registers neither discrete action but has a tap
+handler still offers the one transition its state allows; the owner routes it
+to that handler, which carries no direction, so repeated requests before the
+next frame can toggle it back. Numeric
 setters carry a finite numeric payload independently of text editing. The
 platform listener translates the entire request before admitting it to the
 presentation inbox. Existing action bits remain unchanged; expand, collapse
@@ -32,7 +40,9 @@ user aggregate retains its own double-panic limit.
 
 `semantics_translation_and_routing` exercises queued platform requests through
 actual frame producers. `numeric_setters_are_checked_against_the_current_range`
-checks numeric admission against the current range.
+checks numeric admission against the current range, and
+`disclosure_requests_follow_the_expanded_state` drives discrete and tap-only
+disclosure nodes through the wire and platform paths.
 `focus_actions_and_shortcuts` includes real mounted platform focus.
 `controlled_slider_input_and_geometry` covers allocated geometry, RTL, finite
 extremes, controlled proposals and retired actions.

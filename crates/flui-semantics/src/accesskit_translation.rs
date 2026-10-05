@@ -227,21 +227,30 @@ fn apply_state(node: &mut Node, flags: u64) {
 /// interface, not as tree actions). `Dismiss` likewise has no equivalent. They
 /// are dropped rather than approximated, so nothing claims support it lacks.
 ///
-/// A node with an expanded state and a tap handler also advertises the one
-/// transition its state allows. Discrete actions preserve the requested
-/// direction even when several requests precede the next published frame.
+/// A node with an expanded state advertises only the one transition its state
+/// allows: `Expand` while collapsed, `Collapse` while expanded. It advertises
+/// that transition when it registers the matching discrete action, or, when it
+/// registers neither discrete action, when it has a tap handler; the owner
+/// then routes the request to that handler
+/// ([`tap_disclosure_transition`](crate::action::tap_disclosure_transition)).
+/// AccessKit does not count a node with an expanded state as invocable
+/// (`accesskit_consumer` 0.39, `Node::is_invocable`), so without this a
+/// tap-only expandable node could be neither invoked nor expanded.
 fn apply_actions(node: &mut Node, actions: u64, flags: u64) {
     if has_action(actions, SemanticsAction::Tap) {
         node.add_action(accesskit::Action::Click);
     }
     if has_flag(flags, SemanticsFlag::HasExpandedState) {
+        let fallback = crate::action::tap_disclosure_transition(actions, flags);
         if !has_flag(flags, SemanticsFlag::IsExpanded)
-            && has_action(actions, SemanticsAction::Expand)
+            && (has_action(actions, SemanticsAction::Expand)
+                || fallback == Some(SemanticsAction::Expand))
         {
             node.add_action(accesskit::Action::Expand);
         }
         if has_flag(flags, SemanticsFlag::IsExpanded)
-            && has_action(actions, SemanticsAction::Collapse)
+            && (has_action(actions, SemanticsAction::Collapse)
+                || fallback == Some(SemanticsAction::Collapse))
         {
             node.add_action(accesskit::Action::Collapse);
         }
@@ -313,8 +322,10 @@ fn apply_actions(node: &mut Node, actions: u64, flags: u64) {
 /// - `Blur` maps to `DidLoseAccessibilityFocus`, which IS the notification,
 ///   because that is the only vocabulary FLUI has for it.
 ///
-/// `Expand` and `Collapse` retain their directions. `SetValue` defaults to
-/// text when only its action is known; [`semantics_action_request_for`] also
+/// `Expand` and `Collapse` map to the discrete actions. A tap-only expandable
+/// node still receives the transition its state allows through its tap
+/// handler, which the owner resolves at dispatch. `SetValue` defaults to text
+/// when only its action is known; [`semantics_action_request_for`] also
 /// examines its payload to route numeric values distinctly.
 ///
 /// The match names every AccessKit action, with no wildcard arm:
