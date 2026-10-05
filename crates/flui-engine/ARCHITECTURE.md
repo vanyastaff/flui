@@ -250,6 +250,25 @@ loom backend or the mailbox moves to `std::sync`.
 
 ## Mapping decisions
 
+### Shared clip helpers compile with optimized FXC
+
+Shared clip coverage and rounded-superellipse distance helpers initialize their
+results and use one return path. Fragment derivatives are evaluated before the
+terminal discard. This preserves analytic membership and fractional coverage
+while avoiding an optimized FXC fragment translation failure in the specialized
+shape pipeline. The DEBUG instance flag skips FXC optimization and would hide
+the failure, so the contract test runs without it.
+
+`optimized_fxc_tessellated_clip_readback` runs inside
+`renderer_surface_selection_and_layer_compositing_read_back_as_specified` on
+Windows with an actual DX12 adapter, explicitly selected FXC and no DEBUG flag.
+It records direct vertex meshes through the production scene and painter, checks
+validation and internal error scopes, and reads pixels for unclipped, hard and
+antialiased superellipse clips, nested masks, Src, Clear and reflection. The
+helpers with early returns fail to compile under this configuration. Each case
+creates its own painter, so the row does not cover painter state carried across
+frames.
+
 ### Command transforms do not own clips
 
 The dispatcher caches a command matrix separately from its ambient layer CTM.
