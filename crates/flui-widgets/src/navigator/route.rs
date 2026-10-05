@@ -146,8 +146,19 @@ impl RouteId {
     /// id **before** the route is boxed, so it can hand the route a
     /// `RouteBinding` pre-bound to it.
     pub(crate) fn next() -> Self {
+        Self::next_from(Self::counter())
+    }
+
+    fn counter() -> &'static AtomicU64 {
         static COUNTER: AtomicU64 = AtomicU64::new(1);
-        Self::next_from(&COUNTER)
+        &COUNTER
+    }
+
+    /// Leave exactly `remaining` process route identities. Only for a test
+    /// that runs alone in its own child process.
+    #[cfg(test)]
+    pub(crate) fn leave_process_identities(remaining: u64) {
+        Self::counter().store(u64::MAX - remaining, Ordering::Relaxed);
     }
 
     pub(super) fn next_from(counter: &AtomicU64) -> Self {

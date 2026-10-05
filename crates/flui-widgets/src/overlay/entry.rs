@@ -60,12 +60,34 @@ pub(crate) type OverlayBuilder = Rc<dyn Fn(&dyn BuildContext) -> BoxedView>;
 pub struct OverlayEntryId(u64);
 
 impl OverlayEntryId {
-    fn next() -> Self {
-        static COUNTER: AtomicU64 = AtomicU64::new(1);
-        Self::from_counter(&COUNTER)
+    /// Mint the next identity.
+    ///
+    /// `pub(crate)` so an operation that publishes something before it builds
+    /// its entry can reserve the identity first: capacity refusal then fails
+    /// the operation before any of its side effects.
+    pub(crate) fn next() -> Self {
+        Self::from_counter(Self::counter())
     }
 
-    fn from_counter(counter: &AtomicU64) -> Self {
+    fn counter() -> &'static AtomicU64 {
+        static COUNTER: AtomicU64 = AtomicU64::new(1);
+        &COUNTER
+    }
+
+    /// Leave exactly `remaining` process entry identities. Only for a test
+    /// that runs alone in its own child process.
+    #[cfg(test)]
+    pub(crate) fn leave_process_identities(remaining: u64) {
+        // The last identity is MAX; the counter then parks at the zero sentinel.
+        let next = if remaining == 0 {
+            0
+        } else {
+            u64::MAX - (remaining - 1)
+        };
+        Self::counter().store(next, Ordering::Relaxed);
+    }
+
+    pub(crate) fn from_counter(counter: &AtomicU64) -> Self {
         // Zero is a permanent exhausted sentinel, never an admitted identity.
         // The final nonzero identity remains usable without wrapping to one.
         let id = counter
@@ -152,6 +174,15 @@ impl OverlayEntry {
     #[must_use]
     pub fn new(builder: impl Fn(&dyn BuildContext) -> BoxedView + 'static) -> Self {
         Self::new_allocated(builder, OverlayEntryId::next)
+    }
+
+    /// [`new`](Self::new) under an identity the caller already reserved with
+    /// [`OverlayEntryId::next`]. Cannot fail on capacity.
+    pub(crate) fn with_reserved_id(
+        id: OverlayEntryId,
+        builder: impl Fn(&dyn BuildContext) -> BoxedView + 'static,
+    ) -> Self {
+        Self::new_allocated(builder, move || id)
     }
 
     fn new_allocated(
