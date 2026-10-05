@@ -167,18 +167,22 @@ fn test_window_lifecycle_contract() {
 mod native_windows {
     use flui_foundation::geometry::Size;
     use flui_platform::platforms::windows::WindowsWindow;
-    use flui_platform::{HostWindow, Platform, WindowOptions, WindowsPlatform};
+    use flui_platform::{HostWindow, OwnerPlatform, Platform, WindowOptions, WindowsPlatform};
     use std::{
+        cell::RefCell,
         process::{Command, Stdio},
-        sync::{Arc, Mutex},
+        sync::{
+            Arc, Mutex,
+            atomic::{AtomicBool, AtomicUsize, Ordering},
+        },
         time::{Duration, Instant},
     };
     use windows::Win32::{
         Foundation::{LPARAM, POINT, RECT, WPARAM},
         Graphics::Gdi::ClientToScreen,
         UI::WindowsAndMessaging::{
-            GetClientRect, IsWindowVisible, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
-            SendMessageW, SetWindowPos, WM_CLOSE,
+            GetClientRect, IsWindowVisible, PostMessageW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+            SWP_NOZORDER, SendMessageW, SetWindowPos, WM_CLOSE,
         },
     };
 
@@ -211,6 +215,22 @@ mod native_windows {
         (
             "hidden_popup_is_natively_hidden",
             hidden_popup_is_natively_hidden,
+        ),
+        (
+            "closing_the_last_window_ends_the_loop",
+            closing_the_last_window_ends_the_loop,
+        ),
+        (
+            "exit_policy_veto_holds_until_a_reevaluation_allows_exit",
+            exit_policy_veto_holds_until_a_reevaluation_allows_exit,
+        ),
+        (
+            "window_opened_by_the_exit_policy_keeps_the_loop",
+            window_opened_by_the_exit_policy_keeps_the_loop,
+        ),
+        (
+            "panicking_exit_policy_vetoes_and_stays_installed",
+            panicking_exit_policy_vetoes_and_stays_installed,
         ),
     ];
 
@@ -563,5 +583,188 @@ mod native_windows {
         assert!(!unsafe { IsWindowVisible(native.hwnd()) }.as_bool());
         assert!(!window.is_visible());
         window.close();
+    }
+
+    /// Runs `platform`'s message loop with `ready` as its bootstrap; returns
+    /// once the loop ends. A loop that never ends is the child's timeout.
+    fn run_loop(platform: WindowsPlatform, ready: impl FnOnce(OwnerPlatform) + 'static) {
+        Box::new(platform)
+            .run(Box::new(move |owner| {
+                ready(owner);
+                Ok(())
+            }))
+            .expect("Win32 message loop");
+    }
+
+    fn open_owned(owner: &OwnerPlatform) -> Arc<dyn HostWindow> {
+        owner
+            .open_window(WindowOptions {
+                visible: false,
+                size: Size::new(320.0, 240.0),
+                ..Default::default()
+            })
+            .expect("create actual hidden Win32 window")
+            .try_ready()
+            .expect("owner-thread window opens directly")
+    }
+
+    /// Queues a native close, so the running loop delivers it as a user's
+    /// close would.
+    #[expect(
+        unsafe_code,
+        reason = "posting a native close to an owned Win32 window"
+    )]
+    fn post_close(window: &Arc<dyn HostWindow>) {
+        let hwnd = window
+            .as_any()
+            .downcast_ref::<WindowsWindow>()
+            .expect("Win32 backend")
+            .hwnd();
+        // SAFETY: the platform still tracks this live HWND; WM_CLOSE carries
+        // no message data and the post dereferences no caller memory.
+        unsafe { PostMessageW(Some(hwnd), WM_CLOSE, WPARAM(0), LPARAM(0)) }
+            .expect("post native close");
+    }
+
+    fn closing_the_last_window_ends_the_loop() {
+        let platform = WindowsPlatform::new().expect("native Windows platform");
+        run_loop(platform, |owner| post_close(&open_owned(&owner)));
+    }
+
+    fn exit_policy_veto_holds_until_a_reevaluation_allows_exit() {
+        let platform = WindowsPlatform::new().expect("native Windows platform");
+        let answers = Arc::new(Mutex::new(Vec::new()));
+        let releaser = Arc::new(Mutex::new(None));
+        run_loop(platform, {
+            let answers = Arc::clone(&answers);
+            let releaser = Arc::clone(&releaser);
+            move |owner| {
+                let allow = Arc::new(AtomicBool::new(false));
+                let shared = owner.shared();
+                shared.set_exit_policy_hook(Box::new({
+                    let allow = Arc::clone(&allow);
+                    let answers = Arc::clone(&answers);
+                    move || {
+                        let answer = allow.load(Ordering::SeqCst);
+                        answers.lock().expect("hook answers").push(answer);
+                        answer
+                    }
+                }));
+                post_close(&open_owned(&owner));
+                // Once the hook has vetoed, a worker lets the loop run on,
+                // then allows exit and asks for a fresh decision.
+                let worker = std::thread::spawn(move || {
+                    let start = Instant::now();
+                    while answers.lock().expect("hook answers").is_empty() {
+                        assert!(
+                            start.elapsed() < Duration::from_secs(10),
+                            "hook never consulted"
+                        );
+                        std::thread::sleep(Duration::from_millis(5));
+                    }
+                    std::thread::sleep(Duration::from_millis(200));
+                    allow.store(true, Ordering::SeqCst);
+                    shared.request_exit_policy_reevaluation();
+                });
+                *releaser.lock().expect("releaser") = Some(worker);
+            }
+        });
+        releaser
+            .lock()
+            .expect("releaser")
+            .take()
+            .expect("worker spawned")
+            .join()
+            .expect("worker");
+        assert_eq!(
+            *answers.lock().expect("hook answers"),
+            [false, true],
+            "the loop ended on a veto, or without the reevaluation"
+        );
+    }
+
+    fn panicking_exit_policy_vetoes_and_stays_installed() {
+        let platform = WindowsPlatform::new().expect("native Windows platform");
+        let calls = Arc::new(AtomicUsize::new(0));
+        let releaser = Arc::new(Mutex::new(None));
+        run_loop(platform, {
+            let calls = Arc::clone(&calls);
+            let releaser = Arc::clone(&releaser);
+            move |owner| {
+                let shared = owner.shared();
+                shared.set_exit_policy_hook(Box::new({
+                    let calls = Arc::clone(&calls);
+                    move || {
+                        // The first answer is a panic inside the owner
+                        // procedure; the second allows exit.
+                        assert!(
+                            calls.fetch_add(1, Ordering::SeqCst) > 0,
+                            "first exit-policy answer panics"
+                        );
+                        true
+                    }
+                }));
+                post_close(&open_owned(&owner));
+                let worker = std::thread::spawn(move || {
+                    let start = Instant::now();
+                    while calls.load(Ordering::SeqCst) == 0 {
+                        assert!(
+                            start.elapsed() < Duration::from_secs(10),
+                            "hook never consulted"
+                        );
+                        std::thread::sleep(Duration::from_millis(5));
+                    }
+                    std::thread::sleep(Duration::from_millis(200));
+                    shared.request_exit_policy_reevaluation();
+                });
+                *releaser.lock().expect("releaser") = Some(worker);
+            }
+        });
+        releaser
+            .lock()
+            .expect("releaser")
+            .take()
+            .expect("worker spawned")
+            .join()
+            .expect("worker");
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            2,
+            "a panicking hook must veto without aborting and stay installed"
+        );
+    }
+
+    thread_local! {
+        static OWNER: RefCell<Option<OwnerPlatform>> = const { RefCell::new(None) };
+    }
+
+    fn window_opened_by_the_exit_policy_keeps_the_loop() {
+        let platform = WindowsPlatform::new().expect("native Windows platform");
+        let consultations = Arc::new(AtomicUsize::new(0));
+        run_loop(platform, {
+            let consultations = Arc::clone(&consultations);
+            move |owner| {
+                // The first consultation opens (and queues the close of) a
+                // replacement window yet allows exit; the loop must outlive
+                // that answer and end only after the replacement closes.
+                owner.shared().set_exit_policy_hook(Box::new(move || {
+                    if consultations.fetch_add(1, Ordering::SeqCst) == 0 {
+                        OWNER.with(|slot| {
+                            let slot = slot.borrow();
+                            post_close(&open_owned(slot.as_ref().expect("owner platform")));
+                        });
+                    }
+                    true
+                }));
+                post_close(&open_owned(&owner));
+                OWNER.with(|slot| *slot.borrow_mut() = Some(owner));
+            }
+        });
+        drop(OWNER.with(|slot| slot.borrow_mut().take()));
+        assert_eq!(
+            consultations.load(Ordering::SeqCst),
+            2,
+            "the loop ended with the hook's replacement window still open"
+        );
     }
 }

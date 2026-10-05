@@ -227,6 +227,23 @@ hosts and unknown case names fail explicitly. The older close-path and frame-pum
 probes retain their narrower lifecycle/frame assertions.
 
 
+### Win32 decides the exit policy on an owner-window turn
+
+A `WM_DESTROY` that leaves the platform tracking no top-level window does not
+consult the exit-policy hook itself: it posts one coalesced message to the
+owner message-only window, and `request_exit_policy_reevaluation` posts the
+same message from any thread (refused once the owner window is closed). The
+owner procedure then checks that no window is tracked and no quit is under way,
+leases the hook out of the handler set, runs it with no borrow held, restores it
+unless a newer hook replaced it, and checks the window count again, since the
+hook may have opened a replacement window. An allowed exit ends the loop the way
+`quit` does. No hook allows the exit, as on winit. Deferring the decision keeps
+the hook, which re-enters the embedder, out of a `WM_DESTROY` nested inside
+embedder code that closed the window. The native rows in `tests/contract.rs`
+(`closing_the_last_window_ends_the_loop`,
+`exit_policy_veto_holds_until_a_reevaluation_allows_exit`,
+`window_opened_by_the_exit_policy_keeps_the_loop`) run the real message loop.
+
 ### The winit backend delegates the whole keyboard event to `ui-events-winit`; Win32/AppKit keep hand-written tables
 
 **Rule:** every native keyboard event this crate receives must be normalized
