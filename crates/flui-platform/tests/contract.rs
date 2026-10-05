@@ -188,11 +188,11 @@ mod native_windows {
             GetKeyState, GetKeyboardState, SetKeyboardState, VK_LMENU, VK_MENU,
         },
         UI::WindowsAndMessaging::{
-            CWPSTRUCT, CallNextHookEx, DispatchMessageW, GetClientRect, IsWindowVisible, MSG,
-            PM_REMOVE, PeekMessageW, PostMessageW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
-            SWP_NOZORDER, SendMessageW, SetWindowPos, SetWindowsHookExW, UnhookWindowsHookEx,
-            WH_CALLWNDPROC, WM_CHAR, WM_CLOSE, WM_ENTERMENULOOP, WM_KEYDOWN, WM_SYSKEYDOWN,
-            WM_SYSKEYUP,
+            CWPSTRUCT, CallNextHookEx, DispatchMessageW, GetClientRect, IsIconic, IsWindowVisible,
+            MSG, PM_REMOVE, PeekMessageW, PostMessageW, SW_MINIMIZE, SWP_NOACTIVATE, SWP_NOMOVE,
+            SWP_NOSIZE, SWP_NOZORDER, SendMessageW, SetWindowPos, SetWindowsHookExW, ShowWindow,
+            UnhookWindowsHookEx, WH_CALLWNDPROC, WM_CHAR, WM_CLOSE, WM_ENTERMENULOOP, WM_KEYDOWN,
+            WM_SYSKEYDOWN, WM_SYSKEYUP,
         },
     };
 
@@ -217,6 +217,10 @@ mod native_windows {
         (
             "deadline_query_unwind_retains_replaced_hostile_captures",
             deadline_query_unwind_retains_replaced_hostile_captures,
+        ),
+        (
+            "deadline_reaches_minimized_window",
+            deadline_reaches_minimized_window,
         ),
         (
             "unhandled_system_key_closes_window",
@@ -482,6 +486,69 @@ mod native_windows {
         assert!(
             weak.upgrade().is_none(),
             "subsequent native owner still retires windows"
+        );
+    }
+
+    #[expect(
+        unsafe_code,
+        reason = "actual owned Win32 minimize and iconic query on its creating thread"
+    )]
+    fn deadline_reaches_minimized_window() {
+        use flui_platform::WindowOpen;
+
+        // A minimized window paints nothing, so a due deadline must reach its
+        // frame callback by another route or stay stranded until input.
+        let serviced = Arc::new(Mutex::new(None::<bool>));
+        let result = Arc::clone(&serviced);
+        Box::new(WindowsPlatform::new().expect("native Windows platform"))
+            .run(Box::new(move |owner| {
+                let WindowOpen::Ready(window) = owner
+                    .open_window(WindowOptions {
+                        visible: true,
+                        size: Size::new(160.0, 120.0),
+                        ..Default::default()
+                    })
+                    .expect("open minimizable window")
+                else {
+                    panic!("Win32 on-ready window was deferred");
+                };
+                let hwnd = window
+                    .as_any()
+                    .downcast_ref::<WindowsWindow>()
+                    .expect("Win32 backend")
+                    .hwnd();
+                // SAFETY: the live wrapper owns this HWND, minimized on its
+                // creating thread.
+                let _ = unsafe { ShowWindow(hwnd, SW_MINIMIZE) };
+                // SAFETY: as above; a query of the same owned HWND.
+                assert!(unsafe { IsIconic(hwnd) }.as_bool(), "window minimized");
+                let due = web_time::Instant::now() + Duration::from_millis(60);
+                let pending = Arc::new(Mutex::new(Some(due)));
+                let callback_pending = Arc::clone(&pending);
+                let proxy = owner.proxy();
+                let raw_hwnd = hwnd.0 as isize;
+                window.on_request_frame(Box::new(move || {
+                    let mut pending = callback_pending.lock().expect("deadline state");
+                    if pending.is_none_or(|due| web_time::Instant::now() < due) {
+                        return;
+                    }
+                    *pending = None;
+                    // SAFETY: the frame callback runs on the window's
+                    // creating thread while its wrapper is alive.
+                    let iconic = unsafe { IsIconic(HWND(raw_hwnd as *mut _)) }.as_bool();
+                    *serviced.lock().expect("serviced state") = Some(iconic);
+                    proxy.request_quit().expect("quit after minimized deadline");
+                }));
+                owner.shared().set_wake_deadline_hook(Box::new(move || {
+                    *pending.lock().expect("deadline state")
+                }));
+                Ok(())
+            }))
+            .expect("native minimized deadline loop returns normally");
+        assert_eq!(
+            *result.lock().expect("serviced state"),
+            Some(true),
+            "a due deadline reaches a minimized window's frame callback"
         );
     }
 

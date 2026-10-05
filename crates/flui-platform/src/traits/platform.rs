@@ -195,8 +195,9 @@ pub trait Platform: Send + Sync + 'static {
     /// for the earliest wall-clock instant something upstream needs the
     /// loop to wake at. The winit backend uses
     /// [`ControlFlow::WaitUntil`](https://docs.rs/winit/latest/winit/event_loop/enum.ControlFlow.html)
-    /// and native Win32 bounds its message wait and invalidates live windows
-    /// when an admitted deadline becomes due. `None` means no upstream
+    /// and native Win32 bounds its message wait and, when an admitted deadline
+    /// becomes due, invalidates live windows (requesting a minimized one's
+    /// frame directly, since it is not painted). `None` means no upstream
     /// deadline is pending and permits the backend's ordinary idle wait.
     ///
     /// This is issue #556's wall-clock-wake seam: a gesture recognizer's

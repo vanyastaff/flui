@@ -1825,8 +1825,9 @@ impl WindowsPlatform {
 
     fn redraw_deadline_windows(&self) {
         // Traverse a bounded identity snapshot without a per-frame Vec.
-        // InvalidateRect never invokes user callbacks; each owning Arc is
-        // cloned under the registry lock and used only after releasing it.
+        // A minimized window's frame request runs user code, which may open
+        // or close windows; each owning Arc is cloned under the registry
+        // lock and used only after releasing it.
         let limit = self
             .windows
             .lock()
@@ -1850,13 +1851,22 @@ impl WindowsPlatform {
                 break;
             };
             after = window.identity.0.get();
-            let live = with_window_context_checked(window.hwnd(), "deadline redraw", |context| {
-                context.identity == window.identity
-            })
-            .unwrap_or(false);
-            if live {
-                crate::traits::PlatformWindow::request_redraw(window.as_ref());
-            }
+            let _ = with_window_context_checked(window.hwnd(), "deadline redraw", |context| {
+                if context.identity != window.identity {
+                    return;
+                }
+                if context.mode.get().is_minimized() {
+                    // WM_PAINT skips a minimized window's frame request, and
+                    // Windows rarely paints one at all, so an invalidation
+                    // would strand the delivered deadline until unrelated
+                    // input. Request the frame directly instead: the owner
+                    // already saw the window hidden (WM_SIZE), so its frame
+                    // services timers and gestures without presenting.
+                    context.callbacks.dispatch_request_frame();
+                } else {
+                    crate::traits::PlatformWindow::request_redraw(window.as_ref());
+                }
+            });
         }
     }
 
