@@ -65,88 +65,135 @@ pub(in crate::navigator) fn navigator_command_identity_exhaustion_preserves_targ
     assert_eq!(independent.current(), None);
 }
 
-/// Selects the one case a re-executed child runs.
-const CHILD_CASE: &str = "FLUI_NAVIGATOR_IDENTITY_EXHAUSTION_CASE";
-/// Exit status only a child that completed its case reports. libtest exits 0
-/// when its filter matches nothing and 101 when a test fails.
-const CHILD_COMPLETED: i32 = 73;
+use crate::support::child_process::child_test;
 
-/// Each case runs in a child process: the failure it guards against is an
-/// abort from a competing destructor during capacity unwind (ADR-0127).
-#[test]
-fn navigator_identity_exhaustion_retains_admission_ownership() {
-    use std::io::Read;
-    use std::process::{Command, Stdio};
-    use std::time::Instant;
-    const TEST: &str = "navigator::navigator::identity_tests::navigator_identity_exhaustion_retains_admission_ownership";
-    let cases = [
-        "healthy",
-        "route",
-        "commit",
-        "both",
-        "tail-route",
-        "tail-commit",
-        "tail-both",
-    ];
-    if let Ok(case) = std::env::var(CHILD_CASE) {
-        assert!(
-            cases.contains(&case.as_str()),
-            "known identity exhaustion child"
-        );
-        assert_identity_admission_custody(&case);
-        std::process::exit(CHILD_COMPLETED);
+// Each case runs in its own child process: the failure it guards against is an
+// abort from a competing destructor during capacity unwind (ADR-0127), and the
+// named-operation cases spend the process-global identity counters.
+
+child_test! {
+    fn admission_at_the_last_identity_is_healthy() {
+        assert_identity_admission_custody("healthy");
     }
-    let mut failures = Vec::new();
-    for case in cases {
-        let mut child = Command::new(std::env::current_exe().expect("test executable"))
-            .args(["--exact", TEST, "--nocapture", "--test-threads=1"])
-            .env(CHILD_CASE, case)
-            .env("RUST_BACKTRACE", "0")
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .expect("identity custody child");
-        let mut stdout = child.stdout.take().expect("child stdout");
-        let mut stderr = child.stderr.take().expect("child stderr");
-        let out = std::thread::spawn(move || {
-            let mut text = String::new();
-            stdout.read_to_string(&mut text).expect("child output");
-            text
-        });
-        let err = std::thread::spawn(move || {
-            let mut text = String::new();
-            stderr.read_to_string(&mut text).expect("child errors");
-            text
-        });
-        let started = Instant::now();
-        let mut timed_out = false;
-        while child.try_wait().expect("child status").is_none() {
-            if started.elapsed() > Duration::from_secs(10) {
-                timed_out = true;
-                child.kill().expect("kill owned timed-out child");
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(10));
-        }
-        let status = child.wait().expect("reap owned child");
-        let stdout = out.join().expect("stdout reader");
-        let stderr = err.join().expect("stderr reader");
-        if timed_out || status.code() != Some(CHILD_COMPLETED) {
-            failures.push(format!(
-                "{case}: {status}; timeout={timed_out}
-{stdout}
-{stderr}"
-            ));
+}
+child_test! {
+    fn admission_refusal_retains_the_route() {
+        assert_identity_admission_custody("route");
+    }
+}
+child_test! {
+    fn admission_refusal_retains_the_commit() {
+        assert_identity_admission_custody("commit");
+    }
+}
+child_test! {
+    fn admission_refusal_retains_route_and_commit() {
+        assert_identity_admission_custody("both");
+    }
+}
+child_test! {
+    fn batch_refusal_retains_the_routes() {
+        assert_identity_batch_admission_custody("tail-route");
+    }
+}
+child_test! {
+    fn batch_refusal_retains_the_commit() {
+        assert_identity_batch_admission_custody("tail-commit");
+    }
+}
+child_test! {
+    fn batch_refusal_retains_routes_and_commit() {
+        assert_identity_batch_admission_custody("tail-both");
+    }
+}
+child_test! {
+    fn batch_overlay_refusal_publishes_nothing() {
+        assert_identity_batch_admission_custody("tail-entry");
+    }
+}
+child_test! {
+    fn pop_and_push_named_refusal_keeps_the_departing_route() {
+        assert_named_refusal_changes_nothing("pop_and_push_named");
+    }
+}
+child_test! {
+    fn pop_and_push_named_with_refusal_retains_result_and_request() {
+        assert_named_refusal_changes_nothing("pop_and_push_named_with");
+    }
+}
+child_test! {
+    fn push_named_typed_refusal_retains_the_request() {
+        assert_named_refusal_changes_nothing("push_named_typed");
+    }
+}
+
+/// A user value whose destructor panics once armed: dropping it during a
+/// capacity unwind would abort the process.
+struct ArmedPayload {
+    armed: Arc<AtomicBool>,
+    drops: Arc<AtomicU32>,
+}
+
+impl Drop for ArmedPayload {
+    fn drop(&mut self) {
+        if self.armed.load(Ordering::SeqCst) {
+            self.drops.fetch_add(1, Ordering::SeqCst);
+            panic!("competing payload destruction");
         }
     }
-    assert!(
-        failures.is_empty(),
-        "{}",
-        failures.join(
-            "
-"
-        )
+}
+
+/// A named operation refused at route-identity exhaustion fails whole: the
+/// departing route stays, nothing is pushed, the caller's request arguments
+/// and result are retained rather than dropped during unwind, and the same
+/// handle keeps navigating.
+fn assert_named_refusal_changes_nothing(operation: &str) {
+    use crate::navigator::named_route::RouteRequest;
+    use crate::navigator::overlay_route::SimpleRoute;
+    let armed = Arc::new(AtomicBool::new(false));
+    let drops = Arc::new(AtomicU32::new(0));
+    let payload = || ArmedPayload {
+        armed: Arc::clone(&armed),
+        drops: Arc::clone(&drops),
+    };
+    let navigator = NavigatorHandle::new();
+    navigator.route("/next", |_request: &RouteRequest<'_>| {
+        Some(SimpleRoute::<()>::new(|_| crate::Text::new("next").boxed()))
+    });
+    navigator.push(SimpleRoute::<()>::new(|_| crate::Text::new("base").boxed()));
+    navigator.push(SimpleRoute::<()>::new(|_| {
+        crate::Text::new("departing").boxed()
+    }));
+    let before = navigator.route_ids();
+    let departing = navigator.current().expect("departing route");
+    RouteId::leave_process_identities(0);
+    let request = RouteSettings::named("/next").with_arguments(payload());
+    let result = (operation == "pop_and_push_named_with").then(payload);
+    armed.store(true, Ordering::SeqCst);
+    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match operation {
+        "pop_and_push_named" => navigator.pop_and_push_named(request).map(|_| ()),
+        "pop_and_push_named_with" => navigator
+            .pop_and_push_named_with(request, result.expect("caller result"))
+            .map(|_| ()),
+        "push_named_typed" => navigator.push_named_typed::<()>(request).map(|_| ()),
+        other => unreachable!("unknown named operation {other}"),
+    }))
+    .expect_err("route identity refusal fails the operation");
+    assert_eq!(
+        flui_foundation::panic::payload_text(failure.as_ref()),
+        Some("BUG: route identity capacity exhausted"),
+        "the capacity failure stays authoritative"
     );
+    assert_eq!(
+        drops.load(Ordering::SeqCst),
+        0,
+        "no caller value dropped during unwind"
+    );
+    armed.store(false, Ordering::SeqCst);
+    assert_eq!(navigator.route_ids(), before, "nothing dismissed or pushed");
+    assert_eq!(navigator.current(), Some(departing));
+    assert!(navigator.pop(), "the same handle keeps navigating");
+    assert_eq!(navigator.route_ids(), before[..1].to_vec());
 }
 
 fn assert_identity_admission_custody(case: &str) {
@@ -207,14 +254,19 @@ fn assert_identity_admission_custody(case: &str) {
     navigator.push(SimpleRoute::<()>::new(|_| crate::Text::new("base").boxed()));
     let base = navigator.current().expect("base route");
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        navigator.push_prepared_using(
+        navigator.push_prepared(
             "push",
             route,
+            || {
+                RouteReservation::reserve_using(
+                    || RouteId::next_from(&counter),
+                    OverlayEntryId::next,
+                )
+            },
             move |history, id, route| {
                 let _keep = &commit_capture;
                 history.push_with_id(id, route).1
             },
-            || RouteId::next_from(&counter),
         )
     }));
     if case == "healthy" {
@@ -333,7 +385,11 @@ fn assert_identity_batch_admission_custody(case: &str) {
     }));
     let base = navigator.current().expect("batch base");
     let before_history = navigator.route_ids();
-    let counter = AtomicU64::new(u64::MAX - 1);
+    // Two batch members fit; the third reservation is refused — by the route
+    // counter, or, for `tail-entry`, by the overlay-entry counter.
+    let entry_refused = case == "tail-entry";
+    let counter = AtomicU64::new(if entry_refused { 1 } else { u64::MAX - 2 });
+    let entries = AtomicU64::new(if entry_refused { u64::MAX - 1 } else { 1 });
     let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         navigator.replace_tail_using(
             Some(base),
@@ -343,13 +399,22 @@ fn assert_identity_batch_admission_custody(case: &str) {
                 let _keep = &commit;
                 ids
             },
-            || RouteId::next_from(&counter),
+            || {
+                RouteReservation::reserve_using(
+                    || RouteId::next_from(&counter),
+                    || OverlayEntryId::from_counter(&entries),
+                )
+            },
         )
     }))
-    .expect_err("second batch reservation refuses before publication");
+    .expect_err("the last batch reservation refuses before publication");
     assert_eq!(
         flui_foundation::panic::payload_text(failure.as_ref()),
-        Some("BUG: route identity capacity exhausted")
+        Some(if entry_refused {
+            "overlay entry identity space exhausted: 0"
+        } else {
+            "BUG: route identity capacity exhausted"
+        })
     );
     assert_eq!(
         drops.get(),
