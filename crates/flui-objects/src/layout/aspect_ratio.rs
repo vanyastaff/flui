@@ -129,10 +129,14 @@ impl From<AspectRatioFactor> for f64 {
 ///
 /// # Constraints requirement
 ///
-/// At least one of `max_width` / `max_height` must be bounded. With both
-/// unbounded, the layout is undefined (there is no finite size that
-/// satisfies the ratio); the box falls back to `Size::ZERO` and emits a
-/// `tracing::warn!`.
+/// With both maxima unbounded, the box chooses the smallest ratio-preserving
+/// size that covers the minimum dimensions. Zero minima therefore yield zero
+/// size. An unbounded axis still has a representable upper limit of `f64::MAX`:
+/// if the ratio cannot fit the minimum dimensions within that limit, finite
+/// geometry and the parent's constraints take precedence over the ratio.
+/// This finite sizing contract requires normalized constraints with finite
+/// minimum dimensions. Infinite minima cannot admit finite geometry; their
+/// minimum size is returned for the pipeline to reject as invalid geometry.
 ///
 /// # Example
 ///
@@ -178,14 +182,39 @@ impl RenderAspectRatio {
     /// Computes the size implied by the aspect ratio for the given
     /// constraints.
     fn apply_aspect_ratio(&self, constraints: BoxConstraints) -> Size {
-        // At least one dimension must be bounded.
-        if !constraints.has_bounded_width() && !constraints.has_bounded_height() {
+        let ratio = self.aspect_ratio.value();
+        if !ratio.is_finite() || ratio <= 0.0 {
             tracing::warn!(
-                ratio = self.aspect_ratio.value(),
-                "RenderAspectRatio: both width and height are unbounded; \
-                 falling back to Size::ZERO"
+                ratio,
+                "RenderAspectRatio: invalid ratio; using minimum size"
             );
-            return Size::ZERO;
+            return constraints.smallest();
+        }
+
+        // Normalized constraints can still force an infinite dimension. No
+        // finite answer satisfies them; preserve the minimum for the pipeline's
+        // typed geometry rejection instead of constructing an inverted range.
+        if !constraints.min_width.is_finite() || !constraints.min_height.is_finite() {
+            return constraints.smallest();
+        }
+
+        // Infinity admits any finite length, but not an infinite layout output.
+        // Clamp intermediate overflow against the representable range as well
+        // as the parent's bounds before returning geometry.
+        let finite_constraints = BoxConstraints::new(
+            constraints.min_width,
+            constraints.max_width.min(f64::MAX),
+            constraints.min_height,
+            constraints.max_height.min(f64::MAX),
+        );
+        if !constraints.has_bounded_width() && !constraints.has_bounded_height() {
+            let mut width = constraints.min_width;
+            let mut height = width / ratio;
+            if height < constraints.min_height {
+                height = constraints.min_height;
+                width = height * ratio;
+            }
+            return finite_constraints.constrain(Size::new(width, height));
         }
 
         // Tight constraints — the size is fully determined; the ratio is
@@ -193,8 +222,6 @@ impl RenderAspectRatio {
         if constraints.is_tight() {
             return constraints.smallest();
         }
-
-        let ratio = self.aspect_ratio.value();
 
         let mut width = constraints.max_width;
         let mut height: f64;
@@ -207,12 +234,12 @@ impl RenderAspectRatio {
         }
 
         // Bias toward inflexibility: check tighter bounds first.
-        if width > constraints.max_width {
-            width = constraints.max_width;
+        if width > finite_constraints.max_width {
+            width = finite_constraints.max_width;
             height = width / ratio;
         }
-        if height > constraints.max_height {
-            height = constraints.max_height;
+        if height > finite_constraints.max_height {
+            height = finite_constraints.max_height;
             width = height * ratio;
         }
         if width < constraints.min_width {
@@ -224,7 +251,7 @@ impl RenderAspectRatio {
             width = height * ratio;
         }
 
-        constraints.constrain(Size::new(width, height))
+        finite_constraints.constrain(Size::new(width, height))
     }
 }
 

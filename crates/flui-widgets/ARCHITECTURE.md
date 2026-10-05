@@ -119,6 +119,53 @@ find one with `rg <name> tests/`.
 
 ## Mapping decisions
 
+### Focused document selection uses the normal action chain
+
+`DefaultFocusTraversal` binds `SelectAllTextIntent` to Cmd+A on macOS/iOS and
+Ctrl+A elsewhere, using the existing command activator and primary-focus
+resolution (ADR-0023, ADR-0079). `EditableText` records its nearest action on
+its focus node. Selection covers the complete UTF-8 document, including an
+obscured field, without changing text, reporting `on_changed`, or acquiring a
+clipboard. The action declines during IME composition and resumes after commit.
+Disabled fields cannot retain focus. The `text_editing` family pins this with
+`select_all_replaces_the_complete_unicode_document_without_reporting_selection_as_an_edit`,
+`select_all_without_a_focused_text_field_leaves_the_key_unconsumed`, and
+`select_all_defers_to_an_active_composition_and_recovers_after_commit`.
+
+### Navigation commits precede observer effects
+
+Router mutations commit the navigator history and typed route stack before
+delivering observer callbacks. A reentrant pop therefore sees the admitted
+route. `go` recomputes its shared prefix after popup dismissal, which can itself
+reenter navigation. Outgoing and temporary route values retire outside stack
+borrows; after a failure, remaining opaque owners are retained to preserve that
+failure. This implements ADR-0093's single navigation authority.
+`router_and_widgets_app` covers reentrant push/replace/go, popup-prefix changes,
+observer failure and next navigation. The separate bounded
+`router_observer_failure_and_retirement_competition` test contains competing
+observer and route-destructor failures. Terminal destruction of all router and
+navigator owner fields remains outside this operation-level containment.
+
+### Scrollbar drag takes ownership of scroll activity
+
+A minimum thumb length is capped by the available track. Thumb dragging jumps
+the position through its activity protocol, cancelling animation before later
+ticks can overwrite the drag. The `scroll_physics_and_activity` rows
+`scrollbar_thumb_stays_inside_short_tracks_and_drag_remains_bounded` and
+`dragging_a_scrollbar_thumb_interrupts_animation_before_the_next_tick` drive
+actual pointer input, timed ticks and a subsequent animation.
+
+### Editable text separates its document from the visible viewport
+
+Single-line editing retains full document measurement while horizontal
+displacement reveals the caret. Pointer queries add that displacement; IME
+rectangles subtract it and intersect the actual allocated viewport. Exact
+queries outside it return `PointOutside`. Glyphs, selection, composition and
+caret paint share the viewport clip. The `text_editing` rows
+`long_input_reveals_the_caret_and_maps_visible_pointer_positions` and
+`editable_paint_places_long_text_under_the_viewport_clip` pin the producer and
+paint commands, including RTL and obscured cases; they do not certify native IME.
+
 ### Network responses belong to their registry
 
 `NetworkImage` includes its registry's weak allocation identity in both decoded
@@ -2055,3 +2102,19 @@ cold failure followed by recovery.
 uses a private local cache because production capacity is not a consumer
 contract. `decode_cache_coalescing_contracts` exercises unused capture reentry
 through the public asset provider on completed and pending hits.
+
+## Route-location encoding preserves segment identity
+
+`RoutePath` uses percent-encoding's UTF-8 encoder with a context-specific ASCII
+set and appends its string chunks directly to the owned route buffer. Its parser
+validates percent escapes before the library's deliberately permissive decoder
+and rejects invalid decoded UTF-8. It separates encoded segments before decoding
+exactly once, so an escaped slash stays part of one route value. Plus remains
+literal path data; this is not form query decoding. Dot segments remain literal
+route values rather than a relative-URL operation.
+
+The public `route_locations_preserve_encoded_segment_identity` family checks
+canonical spellings, derived route interpretation, encoded prefixes, readable
+punctuation, control/backslash encoding and malformed percent/UTF-8 rejection.
+It complements `derived_routable_round_trips`, whose generated inputs already have
+valid encodings and cannot establish rejection or exact canonical spelling.

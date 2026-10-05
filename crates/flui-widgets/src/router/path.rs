@@ -5,10 +5,10 @@ use std::fmt;
 
 use percent_encoding::{AsciiSet, CONTROLS, percent_decode_str, utf8_percent_encode};
 
-/// The bytes a path segment percent-encodes: the WHATWG URL path-segment set
-/// (C0 controls, space, `"`, `#`, `<`, `>`, `?`, `` ` ``, `{`, `}`, `/`, `%`),
-/// plus `\`, which special URL schemes read as a separator. Every non-ASCII
-/// byte is encoded too.
+/// Bytes a route segment percent-encodes: the WHATWG URL path set
+/// (C0 controls, space, `"`, `#`, `<`, `>`, `?`, `` ` ``, `{`, `}`), plus
+/// `/` and `%` to preserve segment boundaries and escapes, and `\`, which
+/// special URL schemes read as a separator. Non-ASCII bytes are encoded too.
 const SEGMENT: &AsciiSet = &CONTROLS
     .add(b' ')
     .add(b'"')
@@ -30,6 +30,12 @@ const SEGMENT: &AsciiSet = &CONTROLS
 /// Each segment is stored in one canonical encoding, so comparing two
 /// `RoutePath`s compares the locations they name: `/tag/a b`, `/tag/a%20b`
 /// and `/tag/a%20b/` are the same path.
+///
+/// Escapes are decoded exactly once. A literal `+` stays `+`; it is not a form
+/// query's space. Encoded `/`, `?`, `#` and backslashes remain data within one
+/// segment, while malformed escapes and invalid UTF-8 are rejected. This is
+/// route-location normalization, not whole-URL parsing: `.` and `..` remain
+/// literal route values rather than resolving relative to another location.
 ///
 /// ```
 /// use flui_widgets::RoutePath;

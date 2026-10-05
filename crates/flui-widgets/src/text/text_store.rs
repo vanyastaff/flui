@@ -418,6 +418,21 @@ impl EditableTextStore {
         })
         .unwrap_or(Err(TextStoreError::NoLayout))
     }
+
+    /// The allocated field box, independently of the shaped line's extent.
+    fn viewport(&self) -> Result<Rect, TextStoreError> {
+        let pipeline = self.pipeline.as_ref().ok_or(TextStoreError::NoLayout)?;
+        let anchor = self.inner_anchor.get().ok_or(TextStoreError::NoLayout)?;
+        pipeline
+            .try_with(|owner| {
+                let tree = owner.render_tree();
+                let editable = *tree.children(anchor).first()?;
+                let size = tree.get(editable)?.size()?;
+                Some(Rect::from_origin_size(Point::ZERO, size))
+            })
+            .flatten()
+            .ok_or(TextStoreError::NoLayout)
+    }
 }
 
 /// The smallest change turning `old` into `new`, as `TS_TEXTCHANGE` in
@@ -559,13 +574,15 @@ impl TextStoreRead for Session<'_> {
 
     fn rect_for_range(&self, range: Utf16Range) -> Result<RangeRect, TextStoreError> {
         utf16::byte_range(&self.doc.text, range)?;
+        let viewport = self.store.viewport()?;
         self.store.with_layout(&self.doc, |editable, to_root| {
             let local = self.local_rect(editable, range)?;
             Ok(RangeRect {
                 bounds: bounds_from_rect(to_root.transform_rect(&local)),
-                // Single-line and unscrolled: nothing of the text is ever
-                // outside the field's box.
-                clipped: false,
+                clipped: local.left() < viewport.left()
+                    || local.top() < viewport.top()
+                    || local.right() > viewport.right()
+                    || local.bottom() > viewport.bottom(),
             })
         })
     }
@@ -590,11 +607,15 @@ impl TextStoreRead for Session<'_> {
         point: Point<f64>,
         mode: PointMode,
     ) -> Result<Utf16Offset, TextStoreError> {
+        let viewport = self.store.viewport()?;
         let rendered = self.store.with_layout(&self.doc, |editable, to_root| {
             let (x, y) = to_root
                 .try_inverse()
                 .ok_or(TextStoreError::NoLayout)?
                 .transform_point(point.x, point.y);
+            if mode == PointMode::Exact && !viewport.contains(Point::new(x, y)) {
+                return Err(TextStoreError::PointOutside);
+            }
             rendered_offset_at(editable, Offset::new(x, y), mode)
         })?;
         let source = self.store.source_offset(&self.doc.text, rendered);

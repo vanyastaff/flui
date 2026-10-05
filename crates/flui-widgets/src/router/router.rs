@@ -4,6 +4,7 @@
 use std::any::type_name;
 use std::cell::{Cell, RefCell};
 use std::fmt;
+use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::rc::{Rc, Weak};
 use std::sync::Arc;
 use std::time::Duration;
@@ -201,7 +202,6 @@ impl<R: Routable> StatefulView for Router<R> {
             transitions: Rc::new(RefCell::new(self.transitions.clone())),
             transition_duration: Cell::new(self.transition_duration),
             mounted: Cell::new(false),
-            reconciling: Cell::new(false),
         });
         let observer: Arc<dyn NavigatorObserver> = Arc::new(RouterObserver {
             shared: Rc::downgrade(&shared),
@@ -287,6 +287,30 @@ pub(super) struct RouterEntry<R> {
     pub(super) route: R,
 }
 
+/// Outgoing route values are retired without a stack borrow. An earlier
+/// observer failure owns unwind: retain these opaque values rather than
+/// invoking a competing destructor. On a healthy path, retire individually
+/// and retain the unprocessed tail if one destructor fails. A route value
+/// whose own fields double-panic before the catch remains outside containment.
+pub(super) struct RouterRetiredValues<T>(pub(super) Vec<T>);
+
+impl<T> Drop for RouterRetiredValues<T> {
+    fn drop(&mut self) {
+        let entries = std::mem::take(&mut self.0);
+        if std::thread::panicking() {
+            std::mem::forget(entries);
+            return;
+        }
+        let mut entries = entries.into_iter();
+        while let Some(entry) = entries.next() {
+            if let Err(payload) = catch_unwind(AssertUnwindSafe(|| drop(entry))) {
+                std::mem::forget(entries);
+                resume_unwind(payload);
+            }
+        }
+    }
+}
+
 /// What a [`RouterState`] and every [`RouterHandle`] to it share.
 pub(super) struct RouterShared<R: Routable> {
     /// The navigator the pages live on, addressed so its facade refuses pages
@@ -304,9 +328,6 @@ pub(super) struct RouterShared<R: Routable> {
     /// with.
     transition_duration: Cell<Option<Duration>>,
     pub(super) mounted: Cell<bool>,
-    /// Set while the router replaces its own tail, whose removals it records
-    /// itself once the navigator has applied them.
-    pub(super) reconciling: Cell<bool>,
 }
 
 impl<R: Routable> RouterShared<R> {
@@ -353,10 +374,14 @@ impl<R: Routable> RouterShared<R> {
 
     /// Drop the page `id` names, if it is one of this router's.
     fn forget(&self, id: RouteId) {
-        if self.reconciling.get() {
-            return;
-        }
-        self.stack.borrow_mut().retain(|entry| entry.id != id);
+        let retired = {
+            let mut stack = self.stack.borrow_mut();
+            stack
+                .iter()
+                .position(|entry| entry.id == id)
+                .map(|index| stack.remove(index))
+        };
+        drop(RouterRetiredValues(retired.into_iter().collect()));
     }
 }
 

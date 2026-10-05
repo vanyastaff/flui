@@ -34,7 +34,7 @@ use crate::navigator::overlay_route::NavigatorRoute;
 use crate::navigator::result::{Completer, RouteResult};
 use crate::navigator::route::{Route, RouteId, RouteSettings};
 
-use super::NavigatorHandle;
+use super::{NavigatorHandle, report_undelivered};
 
 /// What a Router's navigator knows about the Router: its route type, and
 /// which routes are its pages.
@@ -219,32 +219,52 @@ impl NavigatorHandle {
         self.seed_reporting_id(route).0
     }
 
-    /// Push a Router page with its entrance transition.
-    pub(crate) fn push_page<P: NavigatorRoute>(&self, route: P) -> RouteId {
-        self.push_reporting_id(route).0
+    /// Push a Router page with its entrance transition. Commit its typed
+    /// entry before observers receive the push.
+    pub(crate) fn push_page<P: NavigatorRoute, O>(
+        &self,
+        route: P,
+        commit: impl FnOnce(RouteId) -> O,
+    ) -> O {
+        let id = self.prepare(&route);
+        self.commit_pages(
+            "push",
+            |history| history.push_with_id(id, route).1,
+            || commit(id),
+        )
     }
 
     /// Push a Router page that replaces `target`: a push-replacement aimed at
-    /// one captured route.
-    pub(crate) fn push_replacement_page<P: NavigatorRoute>(
+    /// one captured route. Commit its typed replacement before delivery.
+    pub(crate) fn push_replacement_page<P: NavigatorRoute, O>(
         &self,
         target: RouteId,
         route: P,
-    ) -> RouteId {
-        self.push_replacement_erased_reporting_id(route, Some(ReplaceTarget::Route(target)), None)
-            .0
+        commit: impl FnOnce(RouteId) -> O,
+    ) -> O {
+        let id = self.prepare(&route);
+        self.commit_pages(
+            "push_replacement",
+            |history| {
+                history
+                    .push_replacement_with_id(id, Some(ReplaceTarget::Route(target)), route, None)
+                    .1
+            },
+            || commit(id),
+        )
     }
 
     /// Replace every route above `keep` (every route, for `None`) with `below`
     /// and `top` in one flush: the leaving routes are removed, `below` is added
     /// quietly, and only `top` runs an entrance transition. Returns the new
-    /// routes' ids, bottom to top.
-    pub(crate) fn replace_tail<P: NavigatorRoute>(
+    /// routes' ids to the typed commit, bottom to top, before delivery.
+    pub(crate) fn replace_tail<P: NavigatorRoute, O>(
         &self,
         keep: Option<RouteId>,
         below: Vec<P>,
         top: P,
-    ) -> Vec<RouteId> {
+        commit: impl FnOnce(Vec<RouteId>) -> O,
+    ) -> O {
         let below: Vec<(RouteId, P)> = below
             .into_iter()
             .map(|route| (self.prepare(&route), route))
@@ -252,9 +272,33 @@ impl NavigatorHandle {
         let top_id = self.prepare(&top);
         let mut ids: Vec<RouteId> = below.iter().map(|(id, _)| *id).collect();
         ids.push(top_id);
-        self.shared.mutate("replace_tail", |history| {
-            history.replace_tail_with_ids(keep, below, (top_id, top));
-        });
-        ids
+        self.commit_pages(
+            "replace_tail",
+            |history| history.replace_tail_with_ids(keep, below, (top_id, top)),
+            || commit(ids),
+        )
+    }
+
+    /// Commit the Router's typed stack before the flush delivers user effects.
+    /// The framework-only commit runs without the history lock. Its return
+    /// value owns outgoing entries until delivery finishes, including unwind.
+    fn commit_pages<V, O>(
+        &self,
+        operation: &'static str,
+        mutate: impl FnOnce(&mut RouteHistory) -> V,
+        commit: impl FnOnce() -> O,
+    ) -> O {
+        let (value, outcome, undelivered) = {
+            let mut history = self.shared.history.lock();
+            let value = mutate(&mut history);
+            (value, history.take_outcome(), history.take_undelivered())
+        };
+        let retired = commit();
+        if let Some(outcome) = outcome {
+            self.shared.apply(outcome);
+        }
+        report_undelivered(operation, undelivered);
+        drop(value);
+        retired
     }
 }

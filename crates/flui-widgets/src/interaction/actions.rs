@@ -490,3 +490,10 @@ impl Intent for CopySelectionTextIntent {}
 #[derive(Debug, Clone, Copy, Default)]
 pub struct PasteTextIntent;
 impl Intent for PasteTextIntent {}
+
+/// Select all text in the focused field without changing its contents.
+/// Bound to Ctrl+A (Cmd+A on Apple platforms) by [`DefaultFocusTraversal`](super::shortcuts::DefaultFocusTraversal).
+/// An active IME composition retains ownership of its selection.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SelectAllTextIntent;
+impl Intent for SelectAllTextIntent {}

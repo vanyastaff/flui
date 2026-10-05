@@ -1457,6 +1457,143 @@ fn harness_aspect_ratio_enforces_ratio() {
     );
 }
 
+fn harness_aspect_ratio_unbounded_minima_remain_finite() {
+    fn check(ratio: AspectRatioFactor, constraints: BoxConstraints, expected: Size) {
+        let mut run = RenderTester::mount(
+            box_node(RenderAspectRatio::new(ratio))
+                .child(box_node(RenderColoredBox::red(10.0, 10.0)).label("child")),
+        )
+        .with_constraints(constraints)
+        .run_layout();
+        assert_eq!(run.box_geometry(run.root()), expected);
+        assert_eq!(run.box_geometry(run.id("child")), expected);
+        assert_eq!(run.dry_layout(run.root(), constraints), expected);
+    }
+    fn ratio(value: f64) -> AspectRatioFactor {
+        AspectRatioFactor::new(value).expect("valid ratio")
+    }
+    fn height_minimum() {
+        check(
+            ratio(2.0),
+            BoxConstraints::new(40.0, f64::INFINITY, 30.0, f64::INFINITY),
+            Size::new(60.0, 30.0),
+        );
+    }
+    fn width_minimum() {
+        check(
+            ratio(2.0),
+            BoxConstraints::new(80.0, f64::INFINITY, 30.0, f64::INFINITY),
+            Size::new(80.0, 40.0),
+        );
+    }
+    fn zero_minima() {
+        check(ratio(2.0), BoxConstraints::UNCONSTRAINED, Size::ZERO);
+    }
+    fn tiny_ratio() {
+        // MAX = (2 - 2^-52) * 2^1023: multiplying by 2^-1022
+        // gives the representable predecessor of 4, without overflow.
+        check(
+            ratio(f64::MIN_POSITIVE),
+            BoxConstraints::new(0.0, 100.0, 0.0, f64::INFINITY),
+            Size::new(f64::from_bits(0x400f_ffff_ffff_ffff), f64::MAX),
+        );
+    }
+    fn huge_ratio() {
+        check(
+            ratio(f64::MAX),
+            BoxConstraints::new(0.0, f64::INFINITY, 0.0, 100.0),
+            Size::new(f64::MAX, 1.0),
+        );
+    }
+    fn unrepresentable_ratio_with_minimum() {
+        check(
+            ratio(f64::MIN_POSITIVE),
+            BoxConstraints::new(100.0, f64::INFINITY, 30.0, f64::INFINITY),
+            Size::new(100.0, f64::MAX),
+        );
+    }
+    fn tight_constraints() {
+        check(
+            ratio(2.0),
+            BoxConstraints::tight(Size::new(40.0, 30.0)),
+            Size::new(40.0, 30.0),
+        );
+    }
+    fn unrepresentable_inverse() {
+        // The reciprocal of the smallest positive value is not representable.
+        check(
+            ratio(f64::from_bits(1)).inverse(),
+            BoxConstraints::new(40.0, 100.0, 30.0, 100.0),
+            Size::new(40.0, 30.0),
+        );
+    }
+    run_family(
+        "aspect ratio finite geometry",
+        &[
+            ("height_minimum", height_minimum),
+            ("width_minimum", width_minimum),
+            ("zero_minima", zero_minima),
+            ("tiny_ratio", tiny_ratio),
+            ("huge_ratio", huge_ratio),
+            (
+                "unrepresentable_ratio_with_minimum",
+                unrepresentable_ratio_with_minimum,
+            ),
+            ("tight_constraints", tight_constraints),
+            ("unrepresentable_inverse", unrepresentable_inverse),
+        ],
+    );
+}
+
+fn harness_aspect_ratio_infinite_minima_reject_without_panicking() {
+    fn check(additional: BoxConstraints) {
+        let mut run = RenderTester::mount(
+            box_node(RenderConstrainedBox::new(additional))
+                .child(box_node(RenderAspectRatio::new(AspectRatioFactor::SQUARE)).label("ratio")),
+        )
+        .with_constraints(BoxConstraints::UNCONSTRAINED)
+        .run_layout();
+        let ratio = run.id("ratio");
+        // Descendant failures are contained as stand-in geometry. Re-arm the
+        // affected node and use the same production driver directly to inspect
+        // its typed rejection rather than the parent's contained result.
+        run.owner_mut().mark_needs_layout(ratio);
+        let error = run
+            .owner_mut()
+            .layout_dirty_root(ratio, additional)
+            .expect_err("infinite minima cannot admit finite geometry");
+        assert!(
+            matches!(
+                error,
+                flui_rendering::RenderError::InvalidGeometry {
+                    render_object,
+                    ..
+                } if render_object == std::any::type_name::<RenderAspectRatio>()
+            ),
+            "expected typed geometry rejection, got {error:?}"
+        );
+
+        // A real parent update must make the same child usable again.
+        let root = run.root();
+        run.update::<RenderConstrainedBox>(root, |parent| {
+            // LayoutRun::update marks this node for layout.
+            let _ = parent.set_additional_constraints(BoxConstraints::tight(Size::new(40.0, 30.0)));
+        });
+        run.relayout();
+        assert_eq!(run.box_geometry(ratio), Size::new(40.0, 30.0));
+    }
+    fn both_axes() {
+        check(BoxConstraints::expand());
+    }
+    fn width_only() {
+        check(BoxConstraints::tight_for(Some(f64::INFINITY), None));
+    }
+    run_family(
+        "aspect ratio infinite minimum rejection",
+        &[("both_axes", both_axes), ("width_only", width_only)],
+    );
+}
+
 fn harness_constrained_box_enforces_minimums() {
     let extra = BoxConstraints::new(100.0, f64::INFINITY, 100.0, f64::INFINITY);
     let run = RenderTester::mount(
@@ -5533,6 +5670,14 @@ fn family_sizing() {
             (
                 "aspect_ratio_enforces_ratio",
                 harness_aspect_ratio_enforces_ratio,
+            ),
+            (
+                "aspect_ratio_unbounded_minima_remain_finite",
+                harness_aspect_ratio_unbounded_minima_remain_finite,
+            ),
+            (
+                "aspect_ratio_infinite_minima_reject_without_panicking",
+                harness_aspect_ratio_infinite_minima_reject_without_panicking,
             ),
             (
                 "constrained_box_enforces_minimums",

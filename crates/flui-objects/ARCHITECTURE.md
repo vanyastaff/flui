@@ -145,6 +145,28 @@ child's natural width and an ordinary step against the next multiple.
 parent maximum, plus ordinary hundredth quantization. Rounding extra constraints
 must not turn that finite width into infinity and force the parent maximum.
 
+### Aspect-ratio sizing admits finite geometry deliberately
+
+With normalized finite nonnegative minima and finite or unbounded maxima,
+`RenderAspectRatio` selects a finite size covering the minima where the ratio
+permits it. Intermediate overflow is capped at the representable range; parent
+constraints take precedence when preserving the ratio is impossible. Invalid
+unchecked factors use the minimum size. Infinite minima cannot admit finite
+geometry and reach the pipeline's typed geometry rejection, without a clamp
+panic. The `family_sizing` rows
+`aspect_ratio_unbounded_minima_remain_finite` and
+`aspect_ratio_infinite_minima_reject_without_panicking` exercise the real
+constrained-parent producer and recovery after a finite parent update.
+
+### Editable text scrolls its content within the allocated viewport
+
+`RenderEditable` keeps full text layout for single-line caret movement while
+clipping text, selection, composition and caret to the allocated viewport.
+Painting subtracts the horizontal displacement; pointer lookup adds it back.
+Caret movement reveals the active caret without changing the allocated width.
+The widgets text-editing contract table checks actual editing and pointer
+selection through the viewport, including RTL and obscured text.
+
 ## Thread safety
 
 No locks. Catalog objects are mutated on the UI realm's layout/paint thread

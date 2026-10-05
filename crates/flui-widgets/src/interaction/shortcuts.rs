@@ -17,7 +17,7 @@
 //! is found (ADR-0079).
 //!
 //! Of the standard text-editing shortcuts, [`DefaultFocusTraversal`] binds only
-//! copy, cut and paste; select-all, the Insert-key clipboard chords
+//! copy, cut, paste and select-all; the Insert-key clipboard chords
 //! (Ctrl/Shift+Insert, Shift+Delete) and the caret-movement intents are not
 //! bound (`EditableText`'s own key handler moves the caret).
 
@@ -33,7 +33,8 @@ use flui_view::{EventCx, EventOutcome};
 
 use super::actions::{
     ActionChainProvider, Actions, ActivateIntent, CopySelectionTextIntent, Intent, NextFocusAction,
-    NextFocusIntent, PasteTextIntent, PreviousFocusAction, PreviousFocusIntent, chain_at, resolve,
+    NextFocusIntent, PasteTextIntent, PreviousFocusAction, PreviousFocusIntent,
+    SelectAllTextIntent, chain_at, resolve,
 };
 use super::focus::Focus;
 use crate::support::event_callback;
@@ -394,7 +395,8 @@ impl ViewState<Shortcuts> for ShortcutsState {
 /// move the focus, Enter, Space and Select activate the focused control
 /// ([`ActivateIntent`]), and Ctrl+C, Ctrl+X and Ctrl+V (Cmd on macOS and
 /// iOS) copy, cut and paste in the focused text field
-/// ([`CopySelectionTextIntent`], [`PasteTextIntent`]).
+/// ([`CopySelectionTextIntent`], [`PasteTextIntent`]). Ctrl+A (Cmd+A on Apple
+/// platforms) selects all its text ([`SelectAllTextIntent`]).
 ///
 /// The application root is where these bindings are meant to be installed.
 /// Numpad Enter reaches FLUI as the
@@ -450,18 +452,20 @@ enum ClipboardBinding {
 /// The clipboard chords `platform` uses: Cmd on macOS and iOS, Control
 /// everywhere else.
 fn clipboard_activators(platform: TargetPlatform) -> [(SingleActivator, ClipboardBinding); 3] {
-    let chord = |key: &str| {
-        let activator = SingleActivator::character(key);
-        match platform {
-            TargetPlatform::MacOS | TargetPlatform::iOS => activator.meta(),
-            _ => activator.control(),
-        }
-    };
+    let chord = |key: &str| command_activator(platform, key);
     [
         (chord("c"), ClipboardBinding::Copy),
         (chord("x"), ClipboardBinding::Cut),
         (chord("v"), ClipboardBinding::Paste),
     ]
+}
+
+fn command_activator(platform: TargetPlatform, key: &str) -> SingleActivator {
+    let activator = SingleActivator::character(key);
+    match platform {
+        TargetPlatform::MacOS | TargetPlatform::iOS => activator.meta(),
+        _ => activator.control(),
+    }
 }
 
 impl std::fmt::Debug for DefaultFocusTraversalState {
@@ -539,7 +543,8 @@ impl ViewState<DefaultFocusTraversal> for DefaultFocusTraversalState {
             )
             .shortcut(SingleActivator::named(NamedKey::Enter), ActivateIntent)
             .shortcut(SingleActivator::character(" "), ActivateIntent)
-            .shortcut(SingleActivator::named(NamedKey::Select), ActivateIntent);
+            .shortcut(SingleActivator::named(NamedKey::Select), ActivateIntent)
+            .shortcut(command_activator(self.platform, "a"), SelectAllTextIntent);
         for (activator, binding) in clipboard_activators(self.platform) {
             shortcuts = match binding {
                 ClipboardBinding::Copy => {
