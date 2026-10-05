@@ -184,9 +184,11 @@ vocabulary! {
     /// # Bit layout
     ///
     /// `Tap` through `Focus` take `1 << 0` to `1 << 22`. Bits `1 << 23` to
-    /// `1 << 25` are kept as [`RESERVED_BITS`](Self::RESERVED_BITS): there
-    /// [`ScrollToOffset`](Self::ScrollToOffset) uses `1 << 26`, while the
-    /// directional and numeric actions use `1 << 27` through `1 << 29`.
+    /// `1 << 25` are kept as [`RESERVED_BITS`](Self::RESERVED_BITS) and no
+    /// action uses them. [`ScrollToOffset`](Self::ScrollToOffset) takes
+    /// `1 << 26`, and [`Expand`](Self::Expand), [`Collapse`](Self::Collapse)
+    /// and [`SetNumericValue`](Self::SetNumericValue) take `1 << 27` through
+    /// `1 << 29`.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
     #[repr(u64)]
     pub enum SemanticsAction {
