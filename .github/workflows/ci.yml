@@ -194,6 +194,7 @@ jobs:
       - name: Rust cache (xtask)
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
+          cache-bin: false
           shared-key: xtask
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
@@ -260,6 +261,7 @@ jobs:
       - name: Rust cache (xtask)
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
+          cache-bin: false
           shared-key: xtask
           save-if: false
 
@@ -376,6 +378,7 @@ jobs:
       - name: Cache cargo registry + target
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
+          cache-bin: false
           cache-on-failure: true
           # `test-nested` restores this entry: the same TEST_SCOPE build.
           shared-key: workspace-tests-v2
@@ -446,6 +449,7 @@ jobs:
       - name: Cache cargo registry + target
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
+          cache-bin: false
           cache-on-failure: true
           # `test`'s entry: the same TEST_SCOPE build. Restore only, so the
           # nested-cargo builds add no cache entry of their own.
@@ -477,6 +481,7 @@ jobs:
       - name: Cache cargo registry + target
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
+          cache-bin: false
           cache-on-failure: true
           # `test`'s entry: the same TEST_SCOPE build. Restore only, so the
           # nested-cargo builds add no cache entry of their own.
@@ -525,6 +530,7 @@ jobs:
       - name: Cache cargo registry + target
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
+          cache-bin: false
           cache-on-failure: true
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
@@ -616,6 +622,7 @@ jobs:
       - name: Cache cargo registry + target
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
+          cache-bin: false
           cache-on-failure: true
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
@@ -754,6 +761,7 @@ jobs:
       - name: Rust cache (xtask)
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
+          cache-bin: false
           shared-key: xtask
           save-if: false
 
@@ -937,6 +945,7 @@ jobs:
       - name: Cache cargo registry + target
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
+          cache-bin: false
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: cargo xtask wasm-check
@@ -1087,6 +1096,7 @@ jobs:
       - name: Rust cache (xtask)
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
+          cache-bin: false
           shared-key: xtask
           save-if: false
 
