@@ -280,15 +280,14 @@ fn semantics_listener_retirement_child(mode: &str) {
         );
         drop(binding);
     } else if mode == "registered-callback" {
-        // The panicking snapshot was not the last owner of either envelope,
-        // so the binding still frees both captures when it drops.
+        // The panicking snapshot retains its thread-shared clones, so the
+        // binding's own drop leaves both captures retained.
         let binding = retained_binding.expect("caller keeps the binding");
         assert_eq!(*events.lock().expect("event log"), [("semantics A", true)]);
         drop(binding);
-        assert_eq!(
-            *drops.lock().expect("drop log"),
-            ["semantics A", "semantics B"],
-            "registered captures free once the binding drops after a caught callback panic"
+        assert!(
+            drops.lock().expect("drop log").is_empty(),
+            "a panicking snapshot retains thread-shared captures"
         );
     } else if mode == "physical-reentry" {
         let replacement = SEMANTICS_OWNER
