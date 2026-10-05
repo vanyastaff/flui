@@ -252,17 +252,13 @@ loom backend or the mailbox moves to `std::sync`.
 
 ### Solid shader fills own the source RGBA
 
-A `Shader::Solid` fill on a rectangle, rounded rectangle or circle replaces the
-paint's complete RGBA. Two identical gradient stops and a constant linear
-parameter reuse the existing geometry, transform, captured clip and blend routes.
-Advanced modes render the constant source with `SrcOver` inside their isolation
-and apply the requested operator once at the destination composite. Save-layer
-opacity remains a group composite.
-`painter_solid_shaders_use_effective_colors_for_compositing` compares direct and
-Canvas-recorded Solid fills with a separately drawn plain paint of the shader's
-color. Named rows cover each served shape, opaque, translucent and transparent
-sources, contradictory paint alpha, affine shear, captured clips, parent opacity,
-`Src` and `Multiply`, with plain-paint and exterior controls.
+A `Shader::Solid` fill on a rectangle, rounded rectangle or circle takes its
+whole RGBA from the shader and ignores `Paint::color`, alpha included, as every
+gradient shader does. It is drawn as two identical gradient stops, so transforms,
+captured clips and blend modes take the gradient routes, and save-layer opacity
+stays a group composite.
+`painter_solid_shaders_use_effective_colors_for_compositing` compares it with a
+plain paint of the shader's color.
 
 ### Vertex colors and clip coverage own the source alpha
 
@@ -1268,13 +1264,3 @@ concentric/linear/repeated-root/cone, tiling, decoration, affine and refusal/rec
 readback rows. CPU geometry normalization and computed shader roots retain their
 documented numeric limits; exact conical geometry at every floating range is
 not promised.
-
-### Horizontally reflected analytical shadows preserve their silhouette
-
-Analytical rounded-rectangle shadows normalize horizontally reflected
-axis-aligned bounds before building their SDF instance. Horizontal reflection
-preserves the positive-scale penumbra and alpha curve.
-`reflected_shadow_matches_its_untransformed_shape` checks center, upper and
-lower penumbra, and exterior pixels against an independently recorded equivalent
-translated shape through public Canvas capture. This does not establish rotated,
-vertically reflected, elliptical or asymmetric-corner shadow fidelity.
