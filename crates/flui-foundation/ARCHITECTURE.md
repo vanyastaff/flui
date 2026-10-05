@@ -237,6 +237,14 @@ cloneable values, copying the value while sharing the listener channel.
 The public `notifier_ownership_and_recovery` family includes a non-Clone owned
 value's mutation/extraction sequence and clone compatibility.
 
+Terminal custody adds an intentional pre-1.0 drop-check requirement: references
+inside `ValueNotifier<T>`'s owned value remain valid through wrapper destruction.
+The former generated destruction could admit an already expired inert reference
+at implicit scope exit. Declare the notifier inside the referent's scope, after
+the referent, or extend that referent's lifetime. Extracting while it is valid
+remains supported; owned, non-Clone values and non-static references remain
+admitted. This is a lifetime admission change, not a `T: 'static` requirement.
+
 The separate `ListenerRegistry`/`ListenerSubscription` surface is removed.
 It had no production consumer; its lazy first/last hooks duplicated notification
 ownership and exposed a callback-under-lock transaction. Typed and zero-argument
@@ -269,6 +277,22 @@ owner/task failure competition on abandonment, and reclamation of an unclaimed
 reply after failure. Each scenario also checks the next request.
 
 ### Borrow arguments and retain exceptional notification obligations
+
+The final shared listener-storage owner detaches its map before retiring callbacks
+individually in registration order. An incoming unwind retains those envelopes;
+the first ordinary retirement failure propagates while the untouched tail remains
+retained. Ordinary final-owner destruction still destroys every healthy capture,
+and surviving notifier clones keep the registry alive. `ValueNotifier` extracts
+its separately owned value and channel before destruction or channel disposal in
+`into_value`, protecting the value when disposal fails. Its healthy destruction
+keeps value-before-channel ordering, and extraction still disposes the shared
+channel before returning the value. The public `notifier_ownership_and_recovery`
+subprocess family checks these owners and chronological competition. A borrowed
+reference inside the argument type must remain valid until notifier destruction;
+the channel does not require that reference to be static. A failure caught earlier
+by a caller must be carried by that caller: ordinary retirement cannot infer it
+from `thread::panicking()`. Individual opaque user aggregates retain their own
+double-panic limit.
 
 Typed notification callbacks borrow their argument and do not require Clone.
 The notifier's owned snapshot prevents a removed callback from disappearing

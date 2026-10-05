@@ -345,10 +345,66 @@ impl Listenable for ChangeNotifier {
 /// Reading, mutating and extracting the owned value do not require `Clone`.
 /// Cloning the notifier requires `T: Clone`: it copies the value and shares
 /// the listener channel.
+/// Terminal retirement drops the value before its channel during ordinary
+/// destruction; an incoming unwind retains both opaque owners. If channel
+/// disposal fails during extraction, the value remains retained instead of
+/// introducing a competing destructor failure.
+///
+/// Borrowed data inside `T` must remain valid until the notifier is destroyed.
+/// Declare the notifier inside its referent's scope, after the referent, or
+/// keep the referent alive longer. Extraction remains supported while the
+/// referent is valid; no `T: 'static` bound is required.
+///
+/// ```
+/// use flui_foundation::ValueNotifier;
+/// let message = String::from("borrowed value");
+/// let notifier = ValueNotifier::new(message.as_str());
+/// let value = notifier.into_value();
+/// assert_eq!(value, "borrowed value");
+/// ```
+///
+/// An inner referent cannot expire before implicit notifier destruction:
+///
+/// ```compile_fail
+/// use flui_foundation::ValueNotifier;
+/// let _notifier;
+/// {
+///     let message = String::from("temporary");
+///     _notifier = ValueNotifier::new(message.as_str());
+/// }
+/// ```
 #[derive(Clone)]
 pub struct ValueNotifier<T> {
-    value: T,
-    notifier: ChangeNotifier,
+    value: Option<T>,
+    notifier: Option<ChangeNotifier>,
+}
+
+/// Custody for the two separately owned terminal obligations, after their
+/// physical owner has been emptied. Healthy paths drain both fields explicitly.
+struct RetiringValueNotifier<T> {
+    value: Option<T>,
+    notifier: Option<ChangeNotifier>,
+}
+
+impl<T> Drop for RetiringValueNotifier<T> {
+    fn drop(&mut self) {
+        if std::thread::panicking() {
+            std::mem::forget(self.value.take());
+            std::mem::forget(self.notifier.take());
+        }
+    }
+}
+
+impl<T> Drop for ValueNotifier<T> {
+    fn drop(&mut self) {
+        let mut retiring = self.extract_owned();
+        if !std::thread::panicking() {
+            // Match the former value-then-channel field order while preventing
+            // the channel from retiring if the value's destruction fails.
+            drop(retiring.value.take());
+            drop(retiring.notifier.take());
+        }
+    }
 }
 
 impl<T> ValueNotifier<T> {
@@ -356,35 +412,75 @@ impl<T> ValueNotifier<T> {
     #[must_use]
     pub fn new(value: T) -> Self {
         Self {
-            value,
-            notifier: ChangeNotifier::new(),
+            value: Some(value),
+            notifier: Some(ChangeNotifier::new()),
+        }
+    }
+
+    fn notifier(&self) -> &ChangeNotifier {
+        self.notifier
+            .as_ref()
+            .expect("BUG: a live ValueNotifier owns its listener channel")
+    }
+
+    fn extract_owned(&mut self) -> RetiringValueNotifier<T> {
+        RetiringValueNotifier {
+            value: self.value.take(),
+            notifier: self.notifier.take(),
         }
     }
 
     /// Returns a reference to the current value.
+    ///
+    /// # Panics
+    ///
+    /// Panics if an internal ownership invariant is violated.
     #[must_use]
     #[inline]
     pub const fn value(&self) -> &T {
-        &self.value
+        self.value
+            .as_ref()
+            .expect("BUG: a live ValueNotifier owns its value")
     }
 
     /// Returns a mutable reference to the current value.
     ///
     /// Note: This does NOT notify listeners. Call `notify()` manually if
     /// needed.
+    ///
+    /// # Panics
+    ///
+    /// Panics if an internal ownership invariant is violated.
     #[inline]
     pub const fn value_mut(&mut self) -> &mut T {
-        &mut self.value
+        self.value
+            .as_mut()
+            .expect("BUG: a live ValueNotifier owns its value")
     }
 
     /// Consumes the notifier and returns the inner value.
     ///
     /// Disposes the shared listener channel before returning the value.
+    ///
+    /// # Panics
+    ///
+    /// Propagates a panic while disposing or retiring the listener channel.
+    /// Panics if an internal ownership invariant is violated.
     #[must_use]
     #[inline]
-    pub fn into_value(self) -> T {
-        self.notifier.dispose();
-        self.value
+    pub fn into_value(mut self) -> T {
+        let mut retiring = self.extract_owned();
+        retiring
+            .notifier
+            .as_ref()
+            .expect("BUG: extraction owns the listener channel")
+            .dispose();
+        // Keep the value under custody until every channel owner has retired.
+        drop(retiring.notifier.take());
+        retiring
+            .value
+            .take()
+            .expect("BUG: extraction owns the value")
     }
 
     /// Replaces the value and returns the old value.
@@ -394,9 +490,9 @@ impl<T> ValueNotifier<T> {
     where
         T: PartialEq,
     {
-        let old_value = std::mem::replace(&mut self.value, new_value);
-        if self.value != old_value {
-            self.notifier.notify_listeners();
+        let old_value = std::mem::replace(self.value_mut(), new_value);
+        if self.value() != &old_value {
+            self.notifier().notify_listeners();
         }
         old_value
     }
@@ -408,8 +504,8 @@ impl<T> ValueNotifier<T> {
     where
         T: Default,
     {
-        let value = std::mem::take(&mut self.value);
-        self.notifier.notify_listeners();
+        let value = std::mem::take(self.value_mut());
+        self.notifier().notify_listeners();
         value
     }
 
@@ -418,9 +514,9 @@ impl<T> ValueNotifier<T> {
     where
         T: PartialEq,
     {
-        if self.value != new_value {
-            self.value = new_value;
-            self.notifier.notify_listeners();
+        if self.value() != &new_value {
+            *self.value_mut() = new_value;
+            self.notifier().notify_listeners();
         }
     }
 
@@ -428,8 +524,8 @@ impl<T> ValueNotifier<T> {
     ///
     /// Always notifies listeners, even if the value didn't change.
     pub fn set_value_force(&mut self, new_value: T) {
-        self.value = new_value;
-        self.notifier.notify_listeners();
+        *self.value_mut() = new_value;
+        self.notifier().notify_listeners();
     }
 
     /// Update the value using a function.
@@ -439,8 +535,8 @@ impl<T> ValueNotifier<T> {
     where
         F: FnOnce(&mut T),
     {
-        f(&mut self.value);
-        self.notifier.notify_listeners();
+        f(self.value_mut());
+        self.notifier().notify_listeners();
     }
 
     /// Manually notify all listeners.
@@ -448,36 +544,36 @@ impl<T> ValueNotifier<T> {
     /// Useful when the value is mutated through `value_mut()`.
     #[inline]
     pub fn notify(&self) {
-        self.notifier.notify_listeners();
+        self.notifier().notify_listeners();
     }
 
     /// Returns the number of listeners currently registered
     #[must_use]
     #[inline]
     pub fn len(&self) -> usize {
-        self.notifier.len()
+        self.notifier().len()
     }
 
     /// Checks if there are no listeners registered
     #[must_use]
     #[inline]
     pub fn is_empty(&self) -> bool {
-        self.notifier.is_empty()
+        self.notifier().is_empty()
     }
 
     /// Whether any listeners are currently registered
     #[must_use]
     #[inline]
     pub fn has_listeners(&self) -> bool {
-        self.notifier.has_listeners()
+        self.notifier().has_listeners()
     }
 }
 
 impl<T: fmt::Debug> fmt::Debug for ValueNotifier<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ValueNotifier")
-            .field("value", &self.value)
-            .field("listeners", &self.notifier.len())
+            .field("value", self.value())
+            .field("listeners", &self.notifier().len())
             .finish()
     }
 }
@@ -492,7 +588,7 @@ impl<T: fmt::Debug> fmt::Debug for ValueNotifier<T> {
 impl<T: PartialEq> PartialEq for ValueNotifier<T> {
     #[inline]
     fn eq(&self, other: &Self) -> bool {
-        self.value == other.value
+        self.value() == other.value()
     }
 }
 
@@ -500,7 +596,7 @@ impl<T: Eq> Eq for ValueNotifier<T> {}
 
 impl<T: fmt::Display> fmt::Display for ValueNotifier<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt::Display::fmt(&self.value, f)
+        fmt::Display::fmt(self.value(), f)
     }
 }
 
@@ -509,34 +605,34 @@ impl<T> Deref for ValueNotifier<T> {
 
     #[inline]
     fn deref(&self) -> &Self::Target {
-        &self.value
+        self.value()
     }
 }
 
 impl<T> AsRef<T> for ValueNotifier<T> {
     #[inline]
     fn as_ref(&self) -> &T {
-        &self.value
+        self.value()
     }
 }
 
 impl<T: Send + Sync> Listenable for ValueNotifier<T> {
     fn add_listener(&self, listener: ListenerCallback) -> ListenerId {
-        self.notifier.add_listener(listener)
+        self.notifier().add_listener(listener)
     }
 
     fn remove_listener(&self, id: ListenerId) {
-        self.notifier.remove_listener(id);
+        self.notifier().remove_listener(id);
     }
 
     fn remove_all_listeners(&self) {
-        self.notifier.remove_all_listeners();
+        self.notifier().remove_all_listeners();
     }
 }
 
 impl<T: Send + Sync> ValueListenable<T> for ValueNotifier<T> {
     fn value(&self) -> &T {
-        &self.value
+        self.value()
     }
 }
 
