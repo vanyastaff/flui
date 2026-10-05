@@ -237,13 +237,9 @@ cloneable values, copying the value while sharing the listener channel.
 The public `notifier_ownership_and_recovery` family includes a non-Clone owned
 value's mutation/extraction sequence and clone compatibility.
 
-Terminal custody adds an intentional pre-1.0 drop-check requirement: references
-inside `ValueNotifier<T>`'s owned value remain valid through wrapper destruction.
-The former generated destruction could admit an already expired inert reference
-at implicit scope exit. Declare the notifier inside the referent's scope, after
-the referent, or extend that referent's lifetime. Extracting while it is valid
-remains supported; owned, non-Clone values and non-static references remain
-admitted. This is a lifetime admission change, not a `T: 'static` requirement.
+`ValueNotifier<T>` implements `Drop` to order and retain its owned parts, so borrowed data inside `T` must
+outlive the notifier; this is a drop-check requirement, not a `T: 'static`
+bound.
 
 The separate `ListenerRegistry`/`ListenerSubscription` surface is removed.
 It had no production consumer; its lazy first/last hooks duplicated notification
@@ -278,21 +274,15 @@ reply after failure. Each scenario also checks the next request.
 
 ### Borrow arguments and retain exceptional notification obligations
 
-The final shared listener-storage owner detaches its map before retiring callbacks
-individually in registration order. An incoming unwind retains those envelopes;
-the first ordinary retirement failure propagates while the untouched tail remains
-retained. Ordinary final-owner destruction still destroys every healthy capture,
-and surviving notifier clones keep the registry alive. `ValueNotifier` extracts
-its separately owned value and channel before destruction or channel disposal in
-`into_value`, protecting the value when disposal fails. Its healthy destruction
-keeps value-before-channel ordering, and extraction still disposes the shared
-channel before returning the value. The public `notifier_ownership_and_recovery`
-subprocess family checks these owners and chronological competition. A borrowed
-reference inside the argument type must remain valid until notifier destruction;
-the channel does not require that reference to be static. A failure caught earlier
-by a caller must be carried by that caller: ordinary retirement cannot infer it
-from `thread::panicking()`. Individual opaque user aggregates retain their own
-double-panic limit.
+Clearing, disposal and final-owner destruction take the listener map out of
+its lock, then drop callbacks one at a time in registration order; surviving
+notifier clones keep the map alive. `ValueNotifier` drops its value, then its
+channel; `into_value` disposes the channel before returning the value. After
+the first destructor panic in one of these operations, or when one starts while
+the thread is already panicking, the remaining captures and the value are
+retained (ADR-0127). A failure a caller caught earlier is not visible through
+`thread::panicking()`, so that caller retains its own failed value. Pinned by
+`notifier_ownership_and_recovery`.
 
 Typed notification callbacks borrow their argument and do not require Clone.
 The notifier's owned snapshot prevents a removed callback from disappearing

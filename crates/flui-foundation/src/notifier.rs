@@ -345,15 +345,15 @@ impl Listenable for ChangeNotifier {
 /// Reading, mutating and extracting the owned value do not require `Clone`.
 /// Cloning the notifier requires `T: Clone`: it copies the value and shares
 /// the listener channel.
-/// Terminal retirement drops the value before its channel during ordinary
-/// destruction; an incoming unwind retains both opaque owners. If channel
-/// disposal fails during extraction, the value remains retained instead of
-/// introducing a competing destructor failure.
 ///
-/// Borrowed data inside `T` must remain valid until the notifier is destroyed.
-/// Declare the notifier inside its referent's scope, after the referent, or
-/// keep the referent alive longer. Extraction remains supported while the
-/// referent is valid; no `T: 'static` bound is required.
+/// Dropping the notifier drops the value, then the channel. Once one of them
+/// panics, or if the thread is already panicking, the rest is retained rather
+/// than dropped (ADR-0127); the same holds for the value when
+/// [`into_value`](Self::into_value) fails to dispose the channel.
+///
+/// Borrowed data inside `T` must outlive the notifier: declare the notifier
+/// after its referent, or keep the referent alive longer. `T: 'static` is not
+/// required.
 ///
 /// ```
 /// use flui_foundation::ValueNotifier;
@@ -379,8 +379,8 @@ pub struct ValueNotifier<T> {
     notifier: Option<ChangeNotifier>,
 }
 
-/// Custody for the two separately owned terminal obligations, after their
-/// physical owner has been emptied. Healthy paths drain both fields explicitly.
+/// The value and channel withdrawn from a `ValueNotifier`; retains whatever is
+/// left in it if dropped while the thread is panicking (ADR-0127).
 struct RetiringValueNotifier<T> {
     value: Option<T>,
     notifier: Option<ChangeNotifier>,
@@ -399,8 +399,8 @@ impl<T> Drop for ValueNotifier<T> {
     fn drop(&mut self) {
         let mut retiring = self.extract_owned();
         if !std::thread::panicking() {
-            // Match the former value-then-channel field order while preventing
-            // the channel from retiring if the value's destruction fails.
+            // Value, then channel. If the value's destructor panics, the guard
+            // retains the channel on unwind.
             drop(retiring.value.take());
             drop(retiring.notifier.take());
         }

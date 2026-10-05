@@ -82,12 +82,10 @@ fn retire_listener<Arg>(listener: Option<ArgCallback<Arg>>) {
 /// flag (`Arc`-backed), so a callback holding its own clone observes disposal
 /// performed elsewhere — matching `ChangeNotifier`'s semantics.
 ///
-/// Clearing and final-owner destruction retire callbacks outside locks in
-/// registration order. A destructor panic propagates with the remaining
-/// envelopes retained. Retirement during an incoming unwind retains captures
-/// without invoking them. An earlier failure already caught by a caller is not
-/// an incoming unwind; that caller must retain its own failed envelope. A single
-/// callback capture aggregate can still double-panic before control returns.
+/// Removal, clearing, disposal and final-owner destruction drop callbacks
+/// outside the lock, in registration order. After the first destructor panic,
+/// or while the thread is already panicking, the remaining callbacks are
+/// retained rather than dropped (ADR-0127).
 pub struct Notifier<Arg> {
     listeners: Arc<ListenerStorage<Arg>>,
     next_id: Arc<AtomicUsize>,
