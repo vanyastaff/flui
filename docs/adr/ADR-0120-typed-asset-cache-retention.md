@@ -1,4 +1,4 @@
-# ADR-0119: Typed asset-cache retention and shared initialization
+# ADR-0120: Typed asset-cache retention and shared initialization
 
 - **Status:** Accepted
 - **Date:** 2026-10-04

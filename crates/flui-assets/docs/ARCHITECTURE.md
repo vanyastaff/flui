@@ -418,7 +418,7 @@ The retirement row checks completion, cancellation of elected work and disposal
 of an unselected waiter's captures. The ancestry key is owned outside Moka's
 initializer future so its destructor runs after the backend waiter retires.
 
-[ADR-0119](../../../docs/adr/ADR-0119-typed-asset-cache-retention.md)
+[ADR-0120](../../../docs/adr/ADR-0120-typed-asset-cache-retention.md)
 records the cache configuration and shared-initialization contract.
 
 `AssetRegistry::load` validates every descriptor before looking up its typed
