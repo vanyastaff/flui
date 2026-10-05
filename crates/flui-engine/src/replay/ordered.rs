@@ -20,9 +20,10 @@ impl QuadReplayState {
         rect: ScissorRect,
         w: u32,
         h: u32,
+        origin: (i64, i64),
     ) -> bool {
         let rect = match rect {
-            Some((x, y, rw, rh)) => clamp_scissor_to_attachment(x, y, rw, rh, w, h),
+            Some((x, y, rw, rh)) => clamp_scissor_to_attachment(x, y, rw, rh, w, h, origin),
             None => Some((0, 0, w, h)),
         };
         let Some(rect) = rect else {
@@ -359,6 +360,7 @@ impl super::GpuReplay {
                                     run,
                                     stop_binding.as_ref(),
                                     viewport_size,
+                                    self.attachment_origin,
                                     pipelines,
                                     &mut pass,
                                     &mut state,
@@ -421,7 +423,7 @@ impl super::GpuReplay {
         }
         let (w, h) = viewport_size;
         if matches!(run, DrawRun::Shadow(_)) {
-            if state.scissor(pass, None, w, h) {
+            if state.scissor(pass, None, w, h, self.attachment_origin) {
                 pass.draw_indexed(0..6, 0, range.start as u32..range.end as u32);
             }
         } else {
@@ -433,7 +435,8 @@ impl super::GpuReplay {
             {
                 let start = range.start.max(region.start as usize);
                 let end = range.end.min((region.start + region.count) as usize);
-                if start < end && state.scissor(pass, region.scissor, w, h) {
+                if start < end && state.scissor(pass, region.scissor, w, h, self.attachment_origin)
+                {
                     pass.draw_indexed(0..6, 0, start as u32..end as u32);
                 }
             }
@@ -447,6 +450,7 @@ impl super::GpuReplay {
         draw: &DrawRun,
         stops: Option<&wgpu::BindGroup>,
         viewport_size: (u32, u32),
+        origin: (i64, i64),
         pipelines: &PipelineSet,
         pass: &mut wgpu::RenderPass<'_>,
         state: &mut QuadReplayState,
@@ -478,7 +482,7 @@ impl super::GpuReplay {
                 pass.set_bind_group(1, stops, &[]);
                 state.secondary = Some(2);
             }
-            if state.scissor(pass, run.scissor, w, h) {
+            if state.scissor(pass, run.scissor, w, h, origin) {
                 pass.draw_indexed(0..6, 0, start as u32..end as u32);
             }
         }

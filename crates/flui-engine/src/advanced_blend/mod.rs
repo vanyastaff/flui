@@ -180,7 +180,7 @@ pub(crate) fn copy_backdrop_region(
 /// 4. Pooled textures (foreground, backdrop copy) are returned to the pool on drop.
 #[expect(clippy::too_many_arguments)]
 pub(crate) fn flush_advanced_layer(
-    op: AdvancedBlendOp,
+    mut op: AdvancedBlendOp,
     surface_texture: &wgpu::Texture,
     surface_view: &wgpu::TextureView,
     surface_format: wgpu::TextureFormat,
@@ -190,7 +190,21 @@ pub(crate) fn flush_advanced_layer(
     device: &wgpu::Device,
     encoder: &mut wgpu::CommandEncoder,
     mask_binding: Option<&wgpu::BindGroup>,
+    attachment_origin: (i64, i64),
 ) {
+    let (x, y) = (attachment_origin.0 as f64, attachment_origin.1 as f64);
+    op.device_bounds = Rect::from_ltrb(
+        op.device_bounds.left() - x,
+        op.device_bounds.top() - y,
+        op.device_bounds.right() - x,
+        op.device_bounds.bottom() - y,
+    );
+    if let Some(clip) = &mut op.clip {
+        clip.device_to_local[4] +=
+            clip.device_to_local[0] * x as f32 + clip.device_to_local[2] * y as f32;
+        clip.device_to_local[5] +=
+            clip.device_to_local[1] * x as f32 + clip.device_to_local[3] * y as f32;
+    }
     // Step 1: copy backdrop region.
     let Some(backdrop) = copy_backdrop_region(
         surface_texture,
@@ -776,6 +790,7 @@ mod synthetic_op_tests {
                     &device,
                     &mut encoder,
                     Some(mask_binding),
+                    (0, 0),
                 );
 
                 queue.submit(std::iter::once(encoder.finish()));

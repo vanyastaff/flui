@@ -161,11 +161,16 @@ fn uniform_linear(state: &GpuStateStack, scale: f32) -> Option<[f32; 4]> {
 }
 
 /// Whether a `w × h` quad at `(x, y)` shares no pixel with `scissor`.
-fn outside_scissor(scissor: Option<(u32, u32, u32, u32)>, x: i64, y: i64, w: i64, h: i64) -> bool {
+fn outside_scissor(
+    scissor: crate::command_ir::ScissorRect,
+    x: i64,
+    y: i64,
+    w: i64,
+    h: i64,
+) -> bool {
     let Some((sx, sy, sw, sh)) = scissor else {
         return false;
     };
-    let (sx, sy) = (sx as i64, sy as i64);
     let (sr, sb) = (sx + sw as i64, sy + sh as i64);
     x + w <= sx || y + h <= sy || x >= sr || y >= sb
 }

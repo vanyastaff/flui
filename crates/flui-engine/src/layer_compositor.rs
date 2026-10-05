@@ -251,6 +251,13 @@ impl LayerCompositor {
         self.layer_stack.len()
     }
 
+    /// Image filters still enclosing the current recording scope.
+    pub(super) fn image_filters(&self) -> impl Iterator<Item = &ImageFilterSpec> {
+        self.layer_stack
+            .iter()
+            .filter_map(|layer| layer.image_filter.as_ref())
+    }
+
     pub(super) fn force_current_layer_isolation(&mut self) {
         if let Some(layer) = self.layer_stack.last_mut() {
             layer.force_isolation = true;

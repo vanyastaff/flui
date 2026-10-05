@@ -134,6 +134,97 @@ impl GpuResources {
         self.retain_external_binding_charge(&permit)
     }
 
+    /// Admit a foreground filter before any offscreen allocation or GPU pass.
+    /// Charges conservative H/V destination storage and per-pass preparation;
+    /// reusable idle pool residency remains a separate accounting scope.
+    pub(crate) fn admit_foreground_filter(
+        &mut self,
+        dimensions: (u32, u32),
+        format: wgpu::TextureFormat,
+        passes: &[crate::command_ir::ImageFilterPass],
+        budget: &crate::recording_budget::RecordingBudget,
+    ) -> crate::error::EngineResult<()> {
+        use crate::command_ir::ImageFilterPass;
+        let limit = self.domain.device().limits().max_texture_dimension_2d;
+        if dimensions.0 == 0 || dimensions.1 == 0 || dimensions.0.max(dimensions.1) > limit {
+            return Err(crate::error::EngineError::PreparedResourceLimit {
+                resource: "foreground filter dimension",
+                requested: dimensions.0.max(dimensions.1) as usize,
+                limit: limit as usize,
+            });
+        }
+        let overflow = || crate::error::EngineError::PreparedResourceOverflow;
+        let pixels = (dimensions.0 as usize)
+            .checked_mul(dimensions.1 as usize)
+            .ok_or_else(overflow)?;
+        let mut work = 0usize;
+        let mut subpasses = 0usize;
+        for pass in passes {
+            let (rx, ry) = pass.support_radius()?;
+            let (taps, count) = match pass {
+                ImageFilterPass::Blur { .. } | ImageFilterPass::Morph { .. } => {
+                    let taps = (rx as usize)
+                        .checked_add(ry as usize)
+                        .and_then(|r| r.checked_mul(2))
+                        .and_then(|r| r.checked_add(2))
+                        .ok_or_else(overflow)?;
+                    (taps, 2)
+                }
+                ImageFilterPass::ColorMatrix(_) => (1, 1),
+                ImageFilterPass::Identity => (0, 0),
+            };
+            work = work
+                .checked_add(pixels.checked_mul(taps).ok_or_else(overflow)?)
+                .ok_or_else(overflow)?;
+            subpasses = subpasses.checked_add(count).ok_or_else(overflow)?;
+        }
+        budget.admit_effect_work(work)?;
+        let texel_bytes = format.block_copy_size(None).ok_or_else(overflow)? as usize;
+        let uniform_bytes = subpasses.checked_mul(80).ok_or_else(overflow)?;
+        let destinations = if subpasses == 0 { 0 } else { 2 };
+        let bytes = pixels
+            .checked_mul(texel_bytes)
+            .and_then(|v| v.checked_mul(destinations))
+            .and_then(|v| v.checked_add(uniform_bytes))
+            .ok_or_else(overflow)?;
+        let objects = subpasses.checked_mul(6).ok_or_else(overflow)?;
+        self.reserve_prepared(crate::device_domain::PreparedCost {
+            gpu_bytes: bytes,
+            cpu_bytes: subpasses.checked_mul(64).ok_or_else(overflow)?,
+            objects,
+        })
+    }
+
+    /// Admit attachment storage for an input or nested target in a foreground
+    /// filter domain. The caller separately admits pass work and metadata.
+    pub(crate) fn admit_foreground_target(
+        &mut self,
+        dimensions: (u32, u32),
+        format: wgpu::TextureFormat,
+        count: usize,
+    ) -> crate::error::EngineResult<()> {
+        let limit = self.domain.device().limits().max_texture_dimension_2d;
+        if dimensions.0 == 0 || dimensions.1 == 0 || dimensions.0.max(dimensions.1) > limit {
+            return Err(crate::error::EngineError::PreparedResourceLimit {
+                resource: "foreground attachment dimension",
+                requested: dimensions.0.max(dimensions.1) as usize,
+                limit: limit as usize,
+            });
+        }
+        let overflow = || crate::error::EngineError::PreparedResourceOverflow;
+        let texel_bytes = format.block_copy_size(None).ok_or_else(overflow)? as usize;
+        let bytes = (dimensions.0 as usize)
+            .checked_mul(dimensions.1 as usize)
+            .and_then(|pixels| pixels.checked_mul(texel_bytes))
+            .and_then(|bytes| bytes.checked_mul(count))
+            .ok_or_else(overflow)?;
+        self.reserve_prepared(crate::device_domain::PreparedCost {
+            gpu_bytes: bytes,
+            cpu_bytes: 0,
+            objects: count.checked_mul(2).ok_or_else(overflow)?,
+        })
+    }
+
     pub(crate) fn prepared_epoch(&self) -> Option<u64> {
         self.prepared_epoch
     }

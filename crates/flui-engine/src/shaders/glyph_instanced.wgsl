@@ -46,7 +46,7 @@ struct VertexOutput {
 
 struct Viewport {
     size: vec2<f32>,
-    _padding: vec2<f32>,
+    root_origin: vec2<f32>,
 }
 
 @group(0) @binding(0)
@@ -73,8 +73,8 @@ fn vs_main(vertex: VertexInput, instance: InstanceInput) -> VertexOutput {
         instance.transform.y * local.x + instance.transform.w * local.y,
     ) + instance.origin.xy;
 
-    let clip_x = (world_pos.x / viewport.size.x) * 2.0 - 1.0;
-    let clip_y = 1.0 - (world_pos.y / viewport.size.y) * 2.0;
+    let clip_x = ((world_pos.x - viewport.root_origin.x) / viewport.size.x) * 2.0 - 1.0;
+    let clip_y = 1.0 - ((world_pos.y - viewport.root_origin.y) / viewport.size.y) * 2.0;
     out.position = vec4<f32>(clip_x, clip_y, 0.0, 1.0);
 
     let page = u32(instance.atlas.z);

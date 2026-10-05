@@ -21,6 +21,11 @@
 lcov.info
 perf.data*
 flamegraph.svg
+# Local logs produced by the graphics research runners; reports and samples stay tracked.
+/docs/research/engine-filter-*.log
+/docs/research/engine-filter-*.log.gz
+/docs/research/foreground-filter-*.log
+/docs/research/foreground-filter-*.log.gz
 
 # ── Build output outside target/ ─────────────────────────────────────────────
 # mdBook (`mdbook build book/`; .github/workflows/docs.yml deploys it).

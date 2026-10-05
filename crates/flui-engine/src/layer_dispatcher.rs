@@ -874,6 +874,9 @@ impl LayerStateStack for LayerDispatcher<'_> {
         use flui_painting::paint::effects::ImageFilter;
 
         self.flush_active_transform();
+        if let Err(error) = validate_image_filter_parameters(filter) {
+            self.painter.reject_image_filter_parameter(error);
+        }
 
         match filter {
             ImageFilter::Blur { sigma_x, sigma_y } => {
@@ -1060,4 +1063,42 @@ pub(crate) fn flatten_compose(
             }
         }
     }
+}
+
+/// Reject nonfinite and lossy-to-zero parameters before narrowing to GPU values.
+fn validate_image_filter_parameters(
+    filter: &flui_painting::paint::effects::ImageFilter,
+) -> Result<(), crate::error::GeometryError> {
+    use crate::error::GeometryError;
+    use flui_painting::paint::effects::ImageFilter;
+    let validate = |value: f64| {
+        if !value.is_finite() {
+            return Err(GeometryError::NonFinite {
+                context: "image filter parameter",
+            });
+        }
+        if value < 0.0 {
+            return Err(GeometryError::InvalidRadius);
+        }
+        if !(value as f32).is_finite() || (value > 0.0 && value as f32 == 0.0) {
+            return Err(GeometryError::Unrepresentable {
+                context: "image filter parameter",
+            });
+        }
+        Ok(())
+    };
+    match filter {
+        ImageFilter::Blur { sigma_x, sigma_y } => {
+            validate(*sigma_x)?;
+            validate(*sigma_y)?;
+        }
+        ImageFilter::Dilate { radius } | ImageFilter::Erode { radius } => validate(*radius)?,
+        ImageFilter::Compose(filters) => {
+            for filter in filters {
+                validate_image_filter_parameters(filter)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
 }

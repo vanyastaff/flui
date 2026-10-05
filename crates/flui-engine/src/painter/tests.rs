@@ -220,7 +220,7 @@ fn clear_offscreen_result(nested: bool) {
 /// composites with its own blend mode.
 #[test]
 fn painter_images_and_offscreen_results_read_back_as_specified() {
-    let cases: [(&str, fn()); 88] = [
+    let cases: [(&str, fn()); 89] = [
         (
             "image feathered Src transparent texels",
             image_boundary::feathered_src_transparency,
@@ -469,8 +469,8 @@ fn painter_images_and_offscreen_results_read_back_as_specified() {
             recording_quota_is_shared_by_isolated_layers,
         ),
         (
-            "recording clone peak",
-            recording_quota_charges_filter_remap_clone,
+            "foreground filter within recording allowance",
+            foreground_filter_renders_within_recording_allowance,
         ),
         (
             "recording admission recovery",
@@ -483,6 +483,10 @@ fn painter_images_and_offscreen_results_read_back_as_specified() {
         (
             "frozen viewport between flushes",
             viewport_bindings_survive_resize_before_submit,
+        ),
+        (
+            "live SSAA clone recording allowance",
+            recording_quota_charges_live_ssaa_clone,
         ),
         ("atlas sharpness", atlas_image_is_sharp_at_one_to_one),
         (
@@ -1090,22 +1094,86 @@ fn recording_quota_is_shared_by_isolated_layers() {
         painter.restore_layer();
     });
 }
-fn recording_quota_charges_filter_remap_clone() {
-    recording_quota_case(1024 * 1024, 3, |painter| {
-        use crate::layer_state_stack::LayerStateStack;
-        use flui_painting::{Paint, paint::effects::ImageFilter, styling::Color};
-        {
-            let mut dispatcher = crate::layer_dispatcher::LayerDispatcher::new(painter);
-            dispatcher.push_image_filter(&ImageFilter::blur(1.0));
-        }
-        painter.draw_rect(
-            Rect::from_xywh(16.0, 16.0, 24.0, 24.0),
-            &Paint::fill(Color::RED).with_anti_alias(false),
-        );
-        painter.restore_layer();
+fn foreground_filter_renders_within_recording_allowance() {
+    use flui_painting::{Paint, styling::Color};
+    let (device, queue) = test_device_and_queue();
+    let (target, view) = crate::test_support::create_sampleable_target(
+        &device,
+        "bounded foreground recording",
+        64,
+        64,
+        READBACK_FORMAT,
+    );
+    crate::test_support::clear_target(&device, &queue, &view, wgpu::Color::BLACK);
+    let mut painter = WgpuPainter::with_shared_device(
+        Arc::clone(&device),
+        Arc::clone(&queue),
+        READBACK_FORMAT,
+        (64, 64),
+    );
+    painter
+        .begin_frame()
+        .expect("bounded foreground frame begins");
+    painter.current_segment = crate::command_ir::DrawSegment::with_budget(
+        crate::recording_budget::RecordingBudget::new(1024 * 1024, 3),
+    );
+    painter.save_layer_with_image_filter(crate::command_ir::ImageFilterSpec::Blur {
+        sigma_x: 1.0,
+        sigma_y: 1.0,
     });
+    painter.draw_rect(
+        Rect::from_xywh(16.0, 16.0, 24.0, 24.0),
+        &Paint::fill(Color::RED).with_anti_alias(false),
+    );
+    painter.restore_layer();
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+    painter
+        .render_to_texture(&target, &mut encoder)
+        .expect("the filter must fit the same recording allowance as its recorded source");
+    painter
+        .submit_encoder(encoder)
+        .expect("bounded filter submits");
+    painter.finish_frame();
+    let pixels = crate::test_support::readback_bytes(&device, &queue, &target, 64, 64);
+    assert_eq!(
+        pixel_at(&pixels, 64, 28, 28),
+        [255, 0, 0, 255],
+        "admitted filter source must visibly render"
+    );
+    painter.begin_frame().expect("next bounded frame begins");
+    painter.draw_rect(
+        Rect::from_xywh(0.0, 0.0, 64.0, 64.0),
+        &Paint::fill(Color::GREEN).with_anti_alias(false),
+    );
+    let mut next = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+    painter
+        .render_to_texture(&target, &mut next)
+        .expect("following frame encodes");
+    painter
+        .submit_encoder(next)
+        .expect("following frame submits");
+    painter.finish_frame();
+    let next_pixels = crate::test_support::readback_bytes(&device, &queue, &target, 64, 64);
+    assert_eq!(
+        pixel_at(&next_pixels, 64, 28, 28),
+        [0, 255, 0, 255],
+        "following frame must remain deliverable"
+    );
 }
 
+fn recording_quota_charges_live_ssaa_clone() {
+    recording_quota_case(1024 * 1024, 20, |painter| {
+        use flui_painting::{Paint, paint::Path, styling::Color};
+        painter.draw_path(
+            &Path::rectangle(Rect::from_xywh(8.0, 8.0, 48.0, 48.0)),
+            &Paint::fill(Color::RED),
+        );
+        painter
+            .current_segment
+            .recording_result()
+            .expect("source fits before the required simultaneous SSAA copy");
+    });
+}
 fn offscreen_only_flushes_freeze_viewport_after_resize() {
     use flui_painting::Paint;
     let (device, queue) = test_device_and_queue();
