@@ -51,6 +51,42 @@ use flui_scheduler::{UpdateScheduler, WeakUpdateScheduler};
 /// trait without repeating the trait's own long-hand spelling here.
 type SemanticsEnabledListener = Arc<dyn Fn(bool) + Send + Sync>;
 
+/// Physical listener custody, separate from the binding's other owned fields.
+struct SemanticsListenerStorage {
+    entries: RwLock<Vec<SemanticsEnabledListener>>,
+}
+
+impl Drop for SemanticsListenerStorage {
+    fn drop(&mut self) {
+        // Exclusive physical ownership needs no infrastructure lock guard.
+        RetiringSemanticsListeners(std::mem::take(self.entries.get_mut())).retire();
+    }
+}
+
+/// A callback snapshot is also an owner after reentrant registration removal.
+struct RetiringSemanticsListeners(Vec<SemanticsEnabledListener>);
+
+impl RetiringSemanticsListeners {
+    fn retire(mut self) {
+        if !std::thread::panicking() {
+            self.0.reverse();
+            while let Some(listener) = self.0.pop() {
+                drop(listener);
+            }
+        }
+    }
+}
+
+impl Drop for RetiringSemanticsListeners {
+    fn drop(&mut self) {
+        if std::thread::panicking() {
+            // Preserve the incoming or first propagated failure without
+            // invoking independent, potentially hostile capture destructors.
+            std::mem::forget(std::mem::take(&mut self.0));
+        }
+    }
+}
+
 /// Shared body for [`RenderingBinding::redirty_root_for_represent`]:
 /// operates on the bare [`PipelineCell`] (rather than requiring a full
 /// `RenderingBinding` reference) so a caller that only holds that
@@ -133,7 +169,7 @@ pub struct RenderingBinding {
     semantics_enabled: AtomicBool,
 
     /// Listeners for semantics enabled changes.
-    semantics_listeners: RwLock<Vec<SemanticsEnabledListener>>,
+    semantics_listeners: SemanticsListenerStorage,
 
     /// Counter for deferred first frame.
     first_frame_deferred_count: AtomicU32,
@@ -234,7 +270,9 @@ impl RenderingBinding {
             root_pipeline_owner: pipeline_owner,
             render_views: RwLock::new(HashMap::new()),
             semantics_enabled: AtomicBool::new(false),
-            semantics_listeners: RwLock::new(Vec::new()),
+            semantics_listeners: SemanticsListenerStorage {
+                entries: RwLock::new(Vec::new()),
+            },
             first_frame_deferred_count: AtomicU32::new(0),
             first_frame_sent: AtomicBool::new(false),
             scheduler: scheduler.downgrade(),
@@ -472,6 +510,12 @@ impl RenderingBinding {
     /// `SemanticsHost` and wants it to track this toggle registers
     /// [`Self::add_semantics_enabled_listener`] and calls
     /// `SemanticsHost::set_platform_semantics_enabled` from that listener.
+    ///
+    /// A callback panic propagates unchanged. Its owned snapshot retains
+    /// callback envelopes during that unwind; healthy snapshot retirement
+    /// follows registration order, retaining the remaining envelopes after
+    /// the first capture-destructor panic. This cannot protect competing
+    /// destructors inside one opaque callback's capture aggregate.
     pub fn set_semantics_enabled(&self, enabled: bool) {
         let was_enabled = self.semantics_enabled.swap(enabled, Ordering::Relaxed);
         if was_enabled != enabled {
@@ -482,10 +526,12 @@ impl RenderingBinding {
             // write lock while this thread still held the read guard and
             // deadlock (same read-then-write reentrancy `PaintingBinding`'s
             // `notify_listeners` guards against).
-            let listeners = self.semantics_listeners.read().clone();
-            for listener in &listeners {
+            let listeners =
+                RetiringSemanticsListeners(self.semantics_listeners.entries.read().clone());
+            for listener in &listeners.0 {
                 listener(enabled);
             }
+            listeners.retire();
         }
     }
 }
@@ -514,11 +560,11 @@ impl RendererBinding for RenderingBinding {
     }
 
     fn add_semantics_enabled_listener(&self, listener: SemanticsEnabledListener) {
-        self.semantics_listeners.write().push(listener);
+        self.semantics_listeners.entries.write().push(listener);
     }
 
     fn remove_semantics_enabled_listener(&self, listener: &SemanticsEnabledListener) {
-        let mut listeners = self.semantics_listeners.write();
+        let mut listeners = self.semantics_listeners.entries.write();
         listeners.retain(|l| !Arc::ptr_eq(l, listener));
     }
 

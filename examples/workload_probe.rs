@@ -502,7 +502,7 @@ impl ViewState<WorkloadDriver> for WorkloadDriverState {
 
     fn dispose(&mut self) {
         if let Some((vsync, registration)) = self.registration.take() {
-            vsync.unregister(registration);
+            vsync.unregister(&registration);
         }
     }
 

@@ -486,3 +486,13 @@ Accessibility input uses the whole-request translator of ADR-0124 before
 presentation inbox admission, preserving numeric values and explicit
 expand/collapse requests. Payload admission remains with the current semantics
 owner at delivery.
+
+The renderer's semantics-listener collection and each actual dispatch snapshot
+secure independently owned callback envelopes during physical retirement. Healthy
+retirement follows registration order; incoming unwind and the first propagated
+capture failure retain the untouched tail. Callback failures still stop that
+snapshot and propagate, with committed semantics state intact. The public
+`semantics_listener_retirement_preserves_independent_envelopes` row in the testing
+crate covers final ownership, removal during dispatch, nested state changes,
+competing failures and the next operation. This does not protect the binding's
+other fields or competing destructors inside one opaque closure aggregate.

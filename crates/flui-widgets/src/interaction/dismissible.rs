@@ -478,12 +478,12 @@ struct DragState {
     /// `move_controller`'s current `Vsync` registration — re-registered (not
     /// just registered once) on every direct `set_value` while dragging; see
     /// `reanchor_move_controller_vsync`'s doc for why.
-    move_vsync_registration: Cell<Option<VsyncRegistration>>,
+    move_vsync_registration: RefCell<Option<VsyncRegistration>>,
 
     /// Lazily created once the move animation completes past threshold.
     resize_controller: RefCell<Option<AnimationController>>,
     resize_listener_id: RefCell<Option<ListenerId>>,
-    resize_vsync_registration: Cell<Option<VsyncRegistration>>,
+    resize_vsync_registration: RefCell<Option<VsyncRegistration>>,
 
     /// Bumped by `move_controller`'s status listener on every transition to
     /// `Completed`. `Send + Sync` (an atomic), so the listener may touch it
@@ -683,7 +683,7 @@ impl ViewState<Dismissible> for DismissibleState {
 
         if let Some(vsync) = ctx.get::<VsyncScope, _>(|scope| scope.vsync().clone()) {
             let registration = vsync.register(self.move_controller.clone());
-            self.drag.move_vsync_registration.set(Some(registration));
+            *self.drag.move_vsync_registration.borrow_mut() = Some(registration);
             self.vsync = Some(vsync);
         }
 
@@ -929,7 +929,7 @@ impl ViewState<Dismissible> for DismissibleState {
         if let (Some(vsync), Some(registration)) =
             (&self.vsync, self.drag.move_vsync_registration.take())
         {
-            vsync.unregister(registration);
+            vsync.unregister(&registration);
         }
         self.move_controller.dispose();
 
@@ -941,7 +941,7 @@ impl ViewState<Dismissible> for DismissibleState {
             if let (Some(vsync), Some(registration)) =
                 (&self.vsync, self.drag.resize_vsync_registration.take())
             {
-                vsync.unregister(registration);
+                vsync.unregister(&registration);
             }
             resize_controller.dispose();
         }
@@ -989,7 +989,7 @@ fn unregister_move_controller_vsync(drag: &DragState, vsync: Option<&Vsync>) {
     let (Some(vsync), Some(registration)) = (vsync, drag.move_vsync_registration.take()) else {
         return;
     };
-    vsync.unregister(registration);
+    vsync.unregister(&registration);
 }
 
 /// Re-registers `move_controller` with `vsync` if it is not already
@@ -1004,11 +1004,11 @@ fn ensure_move_controller_registered(
     vsync: Option<&Vsync>,
 ) {
     let Some(vsync) = vsync else { return };
-    if drag.move_vsync_registration.get().is_some() {
+    if drag.move_vsync_registration.borrow().is_some() {
         return;
     }
     let registration = vsync.register(move_controller.clone());
-    drag.move_vsync_registration.set(Some(registration));
+    *drag.move_vsync_registration.borrow_mut() = Some(registration);
 }
 
 /// Marks whatever `move_completed_runs` currently holds as already
@@ -1302,7 +1302,7 @@ fn start_resize_animation(
 
     if let Some(vsync) = vsync {
         let registration = vsync.register(resize_controller.clone());
-        drag.resize_vsync_registration.set(Some(registration));
+        *drag.resize_vsync_registration.borrow_mut() = Some(registration);
     }
 
     let _ = resize_controller.forward();

@@ -572,7 +572,7 @@ impl MessengerCore {
         if let Some(registration) = self.duration_vsync_registration.borrow_mut().take()
             && let Some(vsync) = self.vsync.borrow().as_ref()
         {
-            vsync.unregister(registration);
+            vsync.unregister(&registration);
         }
         let taken = self.duration_controller.borrow_mut().take();
         if let Some(controller) = taken {
@@ -726,7 +726,7 @@ impl ScaffoldMessengerHandle {
         if let Some(registration) = self.shared.entry_vsync_registration.borrow_mut().take()
             && let Some(vsync) = self.shared.vsync.borrow_mut().take()
         {
-            vsync.unregister(registration);
+            vsync.unregister(&registration);
         }
         self.shared.entry_controller.dispose();
     }

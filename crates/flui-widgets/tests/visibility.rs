@@ -68,7 +68,7 @@ impl ViewState<AnimationProbe> for AnimationProbeState {
     fn dispose(&mut self) {
         self.dispose_count.fetch_add(1, Ordering::Relaxed);
         if let Some((vsync, registration)) = self.registration.take() {
-            vsync.unregister(registration);
+            vsync.unregister(&registration);
         }
     }
 

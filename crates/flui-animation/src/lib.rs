@@ -141,7 +141,7 @@ pub use spring::{AnimatedValue, TwoWayConverter};
 pub use flui_macros::Animatable;
 pub use switch::AnimationSwitch;
 pub use tween::{TweenAnimation, animate};
-pub use vsync::{Vsync, VsyncRegistration};
+pub use vsync::{Vsync, VsyncRegistration, VsyncRegistrationError};
 
 // Re-exports from data type modules
 pub use curve::{

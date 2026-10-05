@@ -806,7 +806,7 @@ impl ViewState<DrawerController> for DrawerControllerState {
             self.core.vsync.borrow_mut().take(),
             self.core.vsync_registration.borrow_mut().take(),
         ) {
-            vsync.unregister(registration);
+            vsync.unregister(&registration);
         }
         self.core.controller.dispose();
     }
