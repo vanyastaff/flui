@@ -53,12 +53,13 @@ use crate::{
 
 #[expect(clippy::too_many_arguments)]
 impl GpuReplay {
-    /// Flat input uses a cropped intermediate; ordered nested input keeps the
-    /// viewport coordinate system so all child effects and clips remain valid.
+    /// Replay in a bounded root-space working domain. Each target binding is
+    /// immutable, so nested effects can change the attachment without changing
+    /// bindings already captured by encoded work. Restore CPU state on refusal.
     pub(crate) fn render_filter_input(
         &mut self,
         op: &mut crate::command_ir::FilterOp,
-        viewport_size: (u32, u32),
+        _viewport_size: (u32, u32),
         surface_format: wgpu::TextureFormat,
         device: &Arc<wgpu::Device>,
         queue: &Arc<wgpu::Queue>,
@@ -66,45 +67,58 @@ impl GpuReplay {
         resources: &mut GpuResources,
         encoder: &mut wgpu::CommandEncoder,
     ) -> EngineResult<PooledTexture> {
-        if op.items.is_empty() {
-            return self.render_segment_to_grown_offscreen(
+        resources.admit_foreground_filter(
+            op.fb_dim,
+            surface_format,
+            &op.passes,
+            &op.input.budget,
+        )?;
+        let previous_depth = self.filter_attachment_depth;
+        self.filter_attachment_depth += 1;
+        let previous_origin = std::mem::replace(&mut self.attachment_origin, op.fb_origin);
+        let previous_size = std::mem::replace(&mut self.uniform_size, op.fb_dim);
+        let previous_binding = self.viewport_bind_group.clone();
+        let result = if op.items.is_empty() {
+            self.render_segment_to_offscreen(
                 &op.input,
-                op.fb_origin,
                 op.fb_dim,
-                viewport_size,
                 surface_format,
                 device,
                 queue,
                 pipelines,
                 resources,
                 encoder,
-            );
-        }
-        debug_assert_eq!(op.fb_origin, (0, 0));
-        debug_assert_eq!(op.fb_dim, viewport_size);
-        let mut layer = PendingOpacityLayer {
-            items: std::mem::take(&mut op.items),
-            final_segment: {
-                let replacement = op.input.empty_sibling();
-                std::mem::replace(&mut op.input, replacement.seal())
-            },
-            opacity: 1.0,
-            tint_rgb: [1.0; 3],
-            bounds: op.content_bounds,
-            blend: flui_painting::paint::BlendMode::SrcOver,
-            filters: LayerFilterChain::default(),
-            composite_clip: None,
+            )
+        } else {
+            let mut layer = PendingOpacityLayer {
+                items: std::mem::take(&mut op.items),
+                final_segment: {
+                    let replacement = op.input.empty_sibling();
+                    std::mem::replace(&mut op.input, replacement.seal())
+                },
+                opacity: 1.0,
+                tint_rgb: [1.0; 3],
+                bounds: op.input_support,
+                blend: flui_painting::paint::BlendMode::SrcOver,
+                filters: LayerFilterChain::default(),
+                composite_clip: None,
+            };
+            self.render_layer_to_offscreen(
+                &mut layer,
+                op.fb_dim,
+                surface_format,
+                device,
+                queue,
+                pipelines,
+                resources,
+                encoder,
+            )
         };
-        self.render_layer_to_offscreen(
-            &mut layer,
-            viewport_size,
-            surface_format,
-            device,
-            queue,
-            pipelines,
-            resources,
-            encoder,
-        )
+        self.filter_attachment_depth = previous_depth;
+        self.attachment_origin = previous_origin;
+        self.uniform_size = previous_size;
+        self.viewport_bind_group = previous_binding;
+        result
     }
 
     /// Render a single [`DrawSegment`] into a fresh full-viewport pooled
@@ -137,6 +151,9 @@ impl GpuReplay {
         encoder: &mut wgpu::CommandEncoder,
     ) -> EngineResult<PooledTexture> {
         let (vp_w, vp_h) = viewport_size;
+        if self.filter_attachment_depth != 0 {
+            resources.admit_foreground_target(viewport_size, surface_format, 1)?;
+        }
 
         // Acquire a full-viewport pooled texture for the foreground.
         let offscreen = resources
@@ -182,76 +199,9 @@ impl GpuReplay {
         Ok(offscreen)
     }
 
-    /// Render a single [`DrawSegment`] into a **grown-bounds** pooled offscreen
-    /// texture for a [`DrawItem::Filter`] intermediate.
-    ///
-    /// Unlike [`Self::render_segment_to_offscreen`] (which acquires a full-viewport
-    /// texture), this method acquires a texture sized to `fb_dim` (the integer-
-    /// aligned grown bounds computed in `painter::layer`'s `restore_layer`). The segment
-    /// vertices are pre-transformed so that dividing by the UNCHANGED shared viewport
-    /// uniform yields the correct NDC inside the `fb_dim` render target.
-    ///
-    /// ## Why not touch `render_segment_to_offscreen`
-    ///
-    /// That method is the advanced-shape hot path. Keeping it byte-identical is a
-    /// structural bit-identity firewall — changes there would affect every
-    /// `AdvancedShape` and `SsaaPath` arm. The grown-offscreen variant is a new
-    /// method rather than a parameterised version (rule-of-three: only 2 callers,
-    /// scale-1 vs scale-2 diverge in the scissor factor).
-    ///
-    /// ## Vertex pre-transform
-    ///
-    /// The shape shader computes `clip_x = (pos.x / vp_w) * 2 - 1` against the
-    /// UNCHANGED shared viewport uniform `(vp_w, vp_h)`. We cannot hot-patch that
-    /// uniform mid-encoder. A vertex at full-frame device pixel `(px, py)` must fill
-    /// the `fb_dim` render target as if it were the whole viewport:
-    ///
-    /// ```text
-    /// new_pos.x = (px - fb_origin.x) * (vp_w / fb_dim.x)
-    /// new_pos.y = (py - fb_origin.y) * (vp_h / fb_dim.y)
-    /// ```
-    ///
-    /// Denominator MUST be integer `fb_dim`, NOT float `grown.width()` (SSAA-tile
-    /// bug class: they differ by one floor/ceil ulp on fractional regions).
-    ///
-    /// ## Scissor remap (mirrors ssaa.rs:483-512 without ×2)
-    ///
-    /// Full-frame scissors are rebased to `fb_origin` and clamped to `[0, fb_dim]`.
-    /// Empty-intersection uses the sentinel `(fb_dim.x, fb_dim.y, 1, 1)` (wgpu
-    /// requires non-zero extent; the sentinel is outside the attachment → nothing
-    /// drawn, matching the SSAA approach without the ×2 supersampling factor).
-    ///
-    /// Cross-reference: `ssaa.rs` `GpuReplay::render_ssaa_path` lines 443-512
-    /// for the analogous full-frame→tile remap at 2× scale.
-    /// Rebase and scale a device-space SDF clip slot into a grown offscreen's
-    /// local space.
-    ///
-    /// Every instance kind that carries `clip_rrect` needs exactly this, so it
-    /// lives in one function rather than once per batch loop: the rect loop had it
-    /// inline and the circle loop did not, which is precisely how a clip ends up
-    /// evaluated against the wrong coordinate space.
-    ///
-    /// Radii are dimension-like and scale proportionally. For a non-square
-    /// framebuffer crop (`scale_x != scale_y`) this slightly warps corner radii —
-    /// acceptable for a filter intermediate, since the composite restores the shape.
-    ///
-    /// A cleared slot (`clip_kind[0] == 0`) is left untouched: the all-zero sentinel
-    /// must stay bit-exact, and scaling zeros could introduce signed zeros.
-    /// Rebase EVERY SDF clip in `segment` into a shrunken intermediate's local
-    /// space.
-    ///
-    /// One call covering every clip carrier, rather than a line inside each
-    /// batch's transform loop. That shape is deliberate: the rect loop carried
-    /// this inline and the circle loop did not, and a clip left in the wrong
-    /// space is invisible until something is drawn inside a blur or filter
-    /// layer. A carrier added later is covered by editing the one place that
-    /// already reads them all.
-    ///
-    /// Two kinds are deliberately absent, neither by oversight. `ArcInstance`
-    /// carries no clip slot at all. Gradients carry one but, like shadows and
-    /// images, are excluded from the shrunken path by `content_aabb`; if that
-    /// gate ever admits them, their clips must be added here in the same
-    /// change.
+    /// Compose the supersample tile mapping into analytic clips. Foreground
+    /// filters keep geometry and analytic clips in root space and use the
+    /// attachment origin in the viewport binding instead.
     pub(super) fn remap_segment_clips(
         segment: &mut crate::command_ir::DrawSegment,
         origin: (f32, f32),
@@ -339,258 +289,6 @@ impl GpuReplay {
         }
     }
 
-    pub(crate) fn render_segment_to_grown_offscreen(
-        &mut self,
-        segment: &DrawSegment,
-        fb_origin: (u32, u32),
-        fb_dim: (u32, u32),
-        viewport_size: (u32, u32),
-        surface_format: wgpu::TextureFormat,
-        device: &Arc<wgpu::Device>,
-        queue: &Arc<wgpu::Queue>,
-        pipelines: &mut PipelineSet,
-        resources: &mut GpuResources,
-        encoder: &mut wgpu::CommandEncoder,
-    ) -> EngineResult<PooledTexture> {
-        let (vp_w, vp_h) = viewport_size;
-        let (fb_x, fb_y) = fb_origin;
-        let (fb_w, fb_h) = fb_dim;
-
-        // Acquire a pooled texture sized to the grown bounds (not the full viewport).
-        let offscreen = resources
-            .layer_texture_pool_mut()
-            .acquire(fb_w, fb_h, surface_format);
-        let offscreen_view = offscreen.view();
-
-        // R3: Clear the offscreen target to fully transparent.
-        {
-            let _clear_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Grown-Bounds Filter Offscreen Clear Pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: offscreen_view,
-                    resolve_target: None,
-                    depth_slice: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            // Pass dropped immediately — just clearing.
-        }
-
-        // ── Vertex pre-transform ──────────────────────────────────────────────
-        //
-        // Mirror ssaa.rs:443-461 with scale = vp / fb_dim (not vp / (tile * 2)):
-        //   new_pos = (old_pos - fb_origin) * (vp / fb_dim_f32)
-        //
-        // Denominator = INTEGER fb_dim, NOT grown.width() — using float grown width
-        // gives the wrong scale when grown_bounds is fractional (the SSAA-tile bug
-        // class). The integer fb_dim is exactly what the pool acquired.
-        let scale_x = vp_w as f32 / fb_w as f32;
-        let scale_y = vp_h as f32 / fb_h as f32;
-        let origin_x = fb_x as f32;
-        let origin_y = fb_y as f32;
-
-        let mut remapped_segment = segment.try_clone_for_remap()?;
-        remapped_segment.rebase_attachment(f64::from(origin_x), f64::from(origin_y), 1.0, 1.0);
-        for v in &mut remapped_segment.vertices {
-            v.position[0] = (v.position[0] - origin_x) * scale_x;
-            v.position[1] = (v.position[1] - origin_y) * scale_y;
-        }
-
-        // ── Instanced-batch pre-transform (extends vertex remap to rect/circle/arc) ──
-        //
-        // The rect shader computes NDC from instance.bounds.xy (baked-AABB path) or
-        // instance.transform_translate.xy (affine path) using the STATIC viewport
-        // uniform (original vp_w × vp_h).  To render at the correct fb-local
-        // position in the fb_dim-sized texture the device-pixel position must be
-        // remapped by the same formula as the tessellated vertices:
-        //   new_pos = (old_pos - fb_origin) * (vp / fb_dim)
-        //
-        // The width/height must also scale (vp/fb_dim) because they contribute to
-        // the device-pixel extent.  After the pre-transform the shader's NDC
-        // computation yields the correct fb-local clip coordinate.
-        //
-        // Circle/arc: center lives in transform_translate; the transform 2×2 matrix
-        // holds the radius-as-scale.  Rebasing transform_translate and scaling the
-        // linear columns yields the correct fb-local center and radius.
-        //
-        // Rule-of-three note: this helper duplicates the SSAA vertex remap logic;
-        // SSAA only touches tessellated vertices (its DrawSegment never holds rect
-        // instances).  There are now 2 callers of this remapping pattern.  Extract
-        // into a shared helper if a third caller appears.
-        //
-        // Clip rrect: stored in device-pixel space ([x, y, w, h, radii…]); apply
-        // the same (pos-origin)*scale, dim*scale transform to x/y/w/h.
-        // Identity-transform and zero-translate are painter-set constants, not
-        // computed floats — the bit-pattern checks below are intentional exact
-        // equality, not a floating-point near-equal question.
-        for inst in &mut remapped_segment.rect_batch.instances {
-            let is_identity_transform =
-                inst.transform.map(f32::to_bits) == [1.0_f32, 0.0, 0.0, 1.0].map(f32::to_bits);
-            let is_zero_translate =
-                inst.transform_translate.map(f32::to_bits) == [0.0_f32; 4].map(f32::to_bits);
-            let is_baked_aabb = is_identity_transform && is_zero_translate;
-
-            if is_baked_aabb {
-                // Baked-AABB: device origin is in bounds.xy; w/h scale proportionally.
-                inst.bounds[0] = (inst.bounds[0] - origin_x) * scale_x;
-                inst.bounds[1] = (inst.bounds[1] - origin_y) * scale_y;
-                inst.bounds[2] *= scale_x;
-                inst.bounds[3] *= scale_y;
-            } else {
-                // Affine path: constant translation is in transform_translate;
-                // scale the linear 2×2 columns by the corresponding axis scale.
-                inst.transform_translate[0] = (inst.transform_translate[0] - origin_x) * scale_x;
-                inst.transform_translate[1] = (inst.transform_translate[1] - origin_y) * scale_y;
-                // Scale x-column and y-column of the 2×2 linear part.
-                inst.transform[0] *= scale_x; // a: x-col.x
-                inst.transform[1] *= scale_y; // b: x-col.y  (cross-axis — scale_y)
-                inst.transform[2] *= scale_x; // c: y-col.x  (cross-axis — scale_x)
-                inst.transform[3] *= scale_y; // d: y-col.y
-            }
-        }
-
-        // Circle and arc instances: center is in transform_translate; the linear
-        // 2×2 matrix encodes the radius (baked fast path: [r,0,0,r]; affine: radius
-        // varies).  Apply the same scale/translate remap as for affine rects.
-        for inst in &mut remapped_segment.circle_batch.instances {
-            inst.transform_translate[0] = (inst.transform_translate[0] - origin_x) * scale_x;
-            inst.transform_translate[1] = (inst.transform_translate[1] - origin_y) * scale_y;
-            inst.transform[0] *= scale_x;
-            inst.transform[1] *= scale_y;
-            inst.transform[2] *= scale_x;
-            inst.transform[3] *= scale_y;
-        }
-        for inst in &mut remapped_segment.arc_batch.instances {
-            inst.transform_translate[0] = (inst.transform_translate[0] - origin_x) * scale_x;
-            inst.transform_translate[1] = (inst.transform_translate[1] - origin_y) * scale_y;
-            inst.transform[0] *= scale_x;
-            inst.transform[1] *= scale_y;
-            inst.transform[2] *= scale_x;
-            inst.transform[3] *= scale_y;
-        }
-
-        // Preserve local gradient coordinates while composing the attachment rebase.
-        macro_rules! rebase_gradients {
-            ($batch:expr) => {
-                for inst in &mut $batch.instances {
-                    inst.transform_translate[0] =
-                        (inst.transform_translate[0] - origin_x) * scale_x;
-                    inst.transform_translate[1] =
-                        (inst.transform_translate[1] - origin_y) * scale_y;
-                    inst.transform[0] *= scale_x;
-                    inst.transform[1] *= scale_y;
-                    inst.transform[2] *= scale_x;
-                    inst.transform[3] *= scale_y;
-                }
-            };
-        }
-        rebase_gradients!(remapped_segment.linear_gradient_batch);
-        rebase_gradients!(remapped_segment.radial_gradient_batch);
-        rebase_gradients!(remapped_segment.sweep_gradient_batch);
-
-        // Each clip's device-to-local mapping consumes a device-space
-        // position, so the rebase above has to be composed into it. One call
-        // covering every clip carrier, rather than a line per transform loop
-        // above — see `remap_segment_clips`.
-        Self::remap_segment_clips(
-            &mut remapped_segment,
-            (origin_x, origin_y),
-            (scale_x, scale_y),
-        );
-
-        // ── Scissor remap: full-frame → fb-local ─────────────────────────────
-        //
-        // Mirror ssaa.rs:483-512 without the ×2 supersampling factor:
-        //   1. Intersect full-frame scissor with [fb_origin, fb_origin+fb_dim].
-        //   2. Translate to fb-local coords (subtract fb_origin).
-        //   3. On empty intersection: emit sentinel (fb_w, fb_h, 1, 1).
-        //
-        // Applied to every scissor type in the segment: tess_batches,
-        // rect_scissors, circle_scissors, arc_scissors.
-        //
-        // Shadow / gradient / image scissors are NOT remapped here because those
-        // kinds are excluded from the sub-viewport path by the `content_aabb` gate
-        // (which returns `None` when any of those kinds is non-empty, forcing
-        // `fb_dim == viewport` → identity remap → those fields render correctly
-        // without any repositioning).
-        //
-        // Factored as a closure to eliminate the 4× identical copy of the
-        // intersect+remap+sentinel logic.  The closure borrows `fb_x`, `fb_y`,
-        // `fb_w`, `fb_h` from the enclosing scope (all non-`Copy` references are
-        // immutable; `u32` copies are fine).
-        let remap_scissor = |scissor: &mut Option<(u32, u32, u32, u32)>| {
-            if let Some((sx, sy, sw, sh)) = *scissor {
-                let fb_right = fb_x + fb_w;
-                let fb_bottom = fb_y + fb_h;
-
-                let scis_right = sx + sw;
-                let scis_bottom = sy + sh;
-
-                // Intersect full-frame scissor with fb region.
-                let inter_x = sx.max(fb_x);
-                let inter_y = sy.max(fb_y);
-                let inter_right = scis_right.min(fb_right);
-                let inter_bottom = scis_bottom.min(fb_bottom);
-
-                if inter_right <= inter_x || inter_bottom <= inter_y {
-                    // Empty intersection — nothing should draw here.
-                    // Sentinel: off-target 1×1 rect (wgpu requires non-zero extent).
-                    *scissor = Some((fb_w, fb_h, 1, 1));
-                } else {
-                    // Translate to fb-local (no scale factor — 1:1 not 2×).
-                    *scissor = Some((
-                        inter_x - fb_x,
-                        inter_y - fb_y,
-                        inter_right - inter_x,
-                        inter_bottom - inter_y,
-                    ));
-                }
-            }
-        };
-
-        // Tess-batch scissors (one per TessellatedBatch, directly on `batch.scissor`).
-        for batch in &mut remapped_segment.tess_batches {
-            remap_scissor(&mut batch.scissor);
-        }
-
-        // Instanced-kind scissors: rect / circle / arc.
-        // Each ScissorRegion covers a contiguous run of instances that share a
-        // scissor; remap each region's scissor from full-frame to fb-local.
-        for region in &mut remapped_segment.rect_scissors {
-            remap_scissor(&mut region.scissor);
-        }
-        for region in &mut remapped_segment.circle_scissors {
-            remap_scissor(&mut region.scissor);
-        }
-        for region in &mut remapped_segment.arc_scissors {
-            remap_scissor(&mut region.scissor);
-        }
-
-        // Flush the remapped segment into the fb-sized texture.
-        // viewport_size = fb_dim so flush_segment sets its scissor against the
-        // fb attachment; the static viewport uniform (vp_w, vp_h) combined with
-        // the pre-scaled positions yields correct NDC.
-        self.flush_segment(
-            &remapped_segment,
-            fb_dim,
-            device,
-            queue,
-            pipelines,
-            resources,
-            encoder,
-            RenderTarget::sampleable(offscreen_view, offscreen.texture()),
-        )?;
-
-        Ok(offscreen)
-    }
-
     /// Render a pending opacity layer's content to a pooled offscreen texture.
     ///
     /// Acquires an offscreen texture from the pool, clears it to transparent,
@@ -627,6 +325,9 @@ impl GpuReplay {
         encoder: &mut wgpu::CommandEncoder,
     ) -> EngineResult<PooledTexture> {
         let (vp_w, vp_h) = viewport_size;
+        if self.filter_attachment_depth != 0 {
+            resources.admit_foreground_target(viewport_size, surface_format, 1)?;
+        }
 
         // Acquire a pooled offscreen texture for the layer's content.
         let offscreen = resources
@@ -732,16 +433,25 @@ impl GpuReplay {
                             opacity: 1.0,
                             tint: [1.0, 1.0, 1.0],
                             src_uv_min: [
-                                (op.device_bounds.left() / f64::from(viewport_width_f32)) as f32,
-                                (op.device_bounds.top() / f64::from(viewport_height_f32)) as f32,
+                                ((op.device_bounds.left() - self.attachment_origin.0 as f64)
+                                    / f64::from(viewport_width_f32))
+                                    as f32,
+                                ((op.device_bounds.top() - self.attachment_origin.1 as f64)
+                                    / f64::from(viewport_height_f32))
+                                    as f32,
                             ],
                             src_uv_max: [
-                                (op.device_bounds.right() / f64::from(viewport_width_f32)) as f32,
-                                (op.device_bounds.bottom() / f64::from(viewport_height_f32)) as f32,
+                                ((op.device_bounds.right() - self.attachment_origin.0 as f64)
+                                    / f64::from(viewport_width_f32))
+                                    as f32,
+                                ((op.device_bounds.bottom() - self.attachment_origin.1 as f64)
+                                    / f64::from(viewport_height_f32))
+                                    as f32,
                             ],
                             clip: None,
                         };
                         self.prepare_viewport_binding(device, pipelines, resources)?;
+                        self.admit_filter_composite(viewport_size, surface_format, resources)?;
                         flush_advanced_layer(
                             blend_op,
                             backdrop_texture,
@@ -753,6 +463,7 @@ impl GpuReplay {
                             device,
                             encoder,
                             Some(&self.viewport_bind_group),
+                            self.attachment_origin,
                         );
                         tracing::trace!(
                             mode = ?op.mode,
@@ -807,7 +518,7 @@ impl GpuReplay {
                     let filtered_tex = apply_image_filter_passes(
                         &op.passes,
                         content_tex,
-                        op.content_bounds,
+                        op.input_support,
                         op.fb_origin,
                         op.fb_dim,
                         surface_format,
@@ -815,55 +526,38 @@ impl GpuReplay {
                         resources,
                         device,
                         encoder,
-                    );
-                    // 3. Integer-grid composite:
-                    //    dst_rect = Rect(fb_origin, fb_far); src_uv = [0, 0, 1, 1].
-                    //
-                    //    The intermediate is `fb_dim`-sized with the content starting
-                    //    at pixel (0,0) of the texture.  src_uv = [0, 0, 1, 1] maps the
-                    //    whole fb texture onto dst_rect — a pixel-aligned 1:1 blit.
-                    //    Using the fractional `grown_bounds` as dst_rect over an
-                    //    integer-origin texture would shift every pixel by
-                    //    frac(grown_left) (the composite-grid shift).
-                    let (fb_origin_x, fb_origin_y) = op.fb_origin;
-                    let (fb_w, fb_h) = op.fb_dim;
-                    let dst_rect = flui_foundation::geometry::Rect::from_xywh(
-                        f64::from(fb_origin_x as f32),
-                        f64::from(fb_origin_y as f32),
-                        f64::from(fb_w as f32),
-                        f64::from(fb_h as f32),
-                    );
-                    let unclipped = crate::clip_chain::ClipChain::default();
-                    let prefix = op
-                        .composite_clip
-                        .as_ref()
-                        .map_or(&unclipped, |clip| &clip.chain);
-                    self.viewport_bind_group = self.prepare_clip_binding(
-                        &op.input,
-                        prefix,
-                        viewport_size,
-                        device,
-                        pipelines,
-                        resources,
-                        encoder,
                     )?;
-                    let instance = crate::instancing::TextureInstance::with_uv(
+                    // Restrict the final composite, independently of the wider
+                    // input/intermediate working frame. Integer texel-grid UVs
+                    // preserve a 1:1 sample at fractional source boundaries.
+                    let dst_rect = op.output_support;
+                    let uv = [
+                        ((dst_rect.left() - op.fb_origin.0 as f64) / f64::from(op.fb_dim.0)) as f32,
+                        ((dst_rect.top() - op.fb_origin.1 as f64) / f64::from(op.fb_dim.1)) as f32,
+                        ((dst_rect.right() - op.fb_origin.0 as f64) / f64::from(op.fb_dim.0))
+                            as f32,
+                        ((dst_rect.bottom() - op.fb_origin.1 as f64) / f64::from(op.fb_dim.1))
+                            as f32,
+                    ];
+                    self.composite_group_texture(
+                        filtered_tex,
                         dst_rect,
-                        [0.0, 0.0, 1.0, 1.0],
-                        flui_painting::styling::Color::WHITE,
-                    );
-                    let _ = self.texture_batch.add(instance);
-                    self.flush_texture_batch_premultiplied(
+                        uv,
+                        1.0,
+                        [1.0; 3],
+                        flui_painting::paint::BlendMode::SrcOver,
+                        op.composite_clip.as_ref(),
+                        &op.input,
+                        viewport_size,
+                        surface_format,
                         device,
                         queue,
                         pipelines,
                         resources,
-                        viewport_size,
                         encoder,
-                        offscreen_target.view,
-                        filtered_tex.view(),
+                        offscreen_target,
                         None,
-                    );
+                    )?;
                     tracing::trace!(
                         passes = op.passes.len(),
                         fb_origin = ?op.fb_origin,
@@ -985,6 +679,33 @@ impl GpuReplay {
             encoder,
         )?;
 
+        if self.filter_attachment_depth != 0 && !layer.filters.is_empty() {
+            let work = (viewport_size.0 as usize)
+                .checked_mul(viewport_size.1 as usize)
+                .and_then(|pixels| pixels.checked_mul(layer.filters.len()))
+                .ok_or(crate::error::EngineError::PreparedResourceOverflow)?;
+            layer.final_segment.budget.admit_effect_work(work)?;
+            resources.admit_foreground_target(
+                viewport_size,
+                surface_format,
+                layer.filters.len(),
+            )?;
+            let metadata = layer
+                .filters
+                .len()
+                .checked_mul(80)
+                .ok_or(crate::error::EngineError::PreparedResourceOverflow)?;
+            resources.reserve_prepared(crate::device_domain::PreparedCost {
+                gpu_bytes: metadata,
+                cpu_bytes: metadata,
+                objects: layer
+                    .filters
+                    .len()
+                    .checked_mul(6)
+                    .ok_or(crate::error::EngineError::PreparedResourceOverflow)?,
+            })?;
+        }
+
         // ── Color-filter chain fold (ping-pong) ──────────────────────────────
         //
         // Fold `layer.filters` left-to-right over the offscreen texture:
@@ -1008,11 +729,17 @@ impl GpuReplay {
             encoder,
         );
 
+        let local_bounds = flui_foundation::geometry::Rect::from_ltrb(
+            layer.bounds.left() - self.attachment_origin.0 as f64,
+            layer.bounds.top() - self.attachment_origin.1 as f64,
+            layer.bounds.right() - self.attachment_origin.0 as f64,
+            layer.bounds.bottom() - self.attachment_origin.1 as f64,
+        );
         let uv = [
-            (layer.bounds.left() / f64::from(vp_w)) as f32,
-            (layer.bounds.top() / f64::from(vp_h)) as f32,
-            (layer.bounds.right() / f64::from(vp_w)) as f32,
-            (layer.bounds.bottom() / f64::from(vp_h)) as f32,
+            (local_bounds.left() / f64::from(vp_w)) as f32,
+            (local_bounds.top() / f64::from(vp_h)) as f32,
+            (local_bounds.right() / f64::from(vp_w)) as f32,
+            (local_bounds.bottom() / f64::from(vp_h)) as f32,
         ];
         self.composite_group_texture(
             offscreen,
@@ -1132,19 +859,19 @@ fn fold_layer_filter_chain(
 /// Folds the chain for [`DrawItem::Filter`] replay. Each arm acquires a fresh
 /// destination texture sized to `fb_dim` (the integer-aligned grown bounds),
 /// renders the pass, and drops the prior `acc` (returning it to the pool) —
-/// the ≤2-live-textures ping-pong discipline, identical to `fold_layer_filter_chain`.
+/// the bounded ping-pong discipline, identical to `fold_layer_filter_chain`.
 ///
 /// The match has **no `_ =>` catch-all**: Slice 4 (`Blur`) is compiler-forced to
 /// add an arm when its variant is introduced.
 ///
 /// ## Parameters shared across all arms
 ///
-/// - `content_bounds` — AABB of the content in physical pixels; used by the
+/// - `input_support` — AABB of the content in physical pixels; used by the
 ///   morphology/blur passes to compute the decal UV guard (samples outside
-///   `content_bounds` return the neutral element rather than the clamped edge texel).
+///   `input_support` return the neutral element rather than the clamped edge texel).
 /// - `fb_origin` — integer-aligned top-left of the offscreen frame in device pixels.
-///   Used by blur/morph to rebase `content_bounds` into `fb`-local UV coordinates
-///   (`content_rect_uv = (content_bounds - fb_origin) / fb_dim`).
+///   Used by blur/morph to rebase `input_support` into `fb`-local UV coordinates
+///   (`content_rect_uv = (input_support - fb_origin) / fb_dim`).
 /// - `fb_dim` — integer dimensions of the intermediate textures; all pool acquires
 ///   use this size, and the `texture_size` uniform in blur/morph shaders is set to
 ///   `fb_dim` (the denominator must be integer fb_dim, not float
@@ -1159,15 +886,24 @@ fn fold_layer_filter_chain(
 pub(crate) fn apply_image_filter_passes(
     passes: &[ImageFilterPass],
     input_tex: PooledTexture,
-    content_bounds: flui_foundation::geometry::Rect<f64>,
-    fb_origin: (u32, u32),
+    input_support: flui_foundation::geometry::Rect<f64>,
+    fb_origin: (i64, i64),
     fb_dim: (u32, u32),
     surface_format: wgpu::TextureFormat,
     pipelines: &mut PipelineSet,
     resources: &mut GpuResources,
     device: &Arc<wgpu::Device>,
     encoder: &mut wgpu::CommandEncoder,
-) -> PooledTexture {
+) -> EngineResult<PooledTexture> {
+    // Each pass consumes the preceding intermediate support, not the original
+    // source bounds. The working frame is the bounded backwards dependency.
+    let frame = flui_foundation::geometry::Rect::from_xywh(
+        fb_origin.0 as f64,
+        fb_origin.1 as f64,
+        f64::from(fb_dim.0),
+        f64::from(fb_dim.1),
+    );
+    let mut support = input_support;
     // Fold left-to-right; `acc` owns the current intermediate texture.
     let mut acc = input_tex;
     for pass in passes {
@@ -1181,7 +917,7 @@ pub(crate) fn apply_image_filter_passes(
                     *radius,
                     *op,
                     &acc,
-                    content_bounds,
+                    support,
                     fb_origin,
                     fb_dim,
                     surface_format,
@@ -1196,14 +932,14 @@ pub(crate) fn apply_image_filter_passes(
 
             ImageFilterPass::Blur { sigma_x, sigma_y } => {
                 // Two separable sub-passes (H then V) inside apply_blur.
-                // The H pass decals at `content_bounds` rebased to fb-local UV
+                // The H pass decals at current intermediate support in fb-local UV
                 // (fb-local, not full-frame): samples outside contribute transparent black.
                 // The V pass decals at the texture edge [0,1] to read the full H halo.
                 apply_blur(
                     *sigma_x,
                     *sigma_y,
                     &acc,
-                    content_bounds,
+                    support,
                     fb_origin,
                     fb_dim,
                     surface_format,
@@ -1224,7 +960,7 @@ pub(crate) fn apply_image_filter_passes(
                 // inside `apply_color_matrix`), so no prior halo leaks through.
                 //
                 // `acc` drops after `apply_color_matrix` returns, returning the
-                // prior intermediate to the pool (≤2-live ping-pong preserved).
+                // prior intermediate to the pool (bounded ping-pong preserved).
                 apply_color_matrix(
                     *matrix,
                     &acc,
@@ -1237,6 +973,18 @@ pub(crate) fn apply_image_filter_passes(
                 )
             }
         };
+        let (rx, ry) = pass.support_radius()?;
+        support = flui_foundation::geometry::Rect::from_ltrb(
+            support.left() - f64::from(rx),
+            support.top() - f64::from(ry),
+            support.right() + f64::from(rx),
+            support.bottom() + f64::from(ry),
+        )
+        .intersect(&frame)
+        .unwrap_or_default();
+        if matches!(pass, ImageFilterPass::ColorMatrix(matrix) if matrix[19] > 0.0) {
+            support = frame;
+        }
     }
-    acc
+    Ok(acc)
 }

@@ -1,0 +1,807 @@
+[
+  {
+    "name": "left",
+    "sample": 0,
+    "passes": 5,
+    "pool_allocation_high_water_bytes": 4608,
+    "allocations": [
+      [
+        16,
+        24
+      ],
+      [
+        16,
+        24
+      ],
+      [
+        16,
+        24
+      ]
+    ],
+    "elapsed_ms": 6.0563,
+    "visible": true
+  },
+  {
+    "name": "left",
+    "sample": 1,
+    "passes": 5,
+    "pool_allocation_high_water_bytes": 0,
+    "allocations": [],
+    "elapsed_ms": 1.0107,
+    "visible": true
+  },
+  {
+    "name": "left",
+    "sample": 2,
+    "passes": 5,
+    "pool_allocation_high_water_bytes": 0,
+    "allocations": [],
+    "elapsed_ms": 0.9479,
+    "visible": true
+  },
+  {
+    "name": "left",
+    "sample": 3,
+    "passes": 5,
+    "pool_allocation_high_water_bytes": 0,
+    "allocations": [],
+    "elapsed_ms": 0.8593,
+    "visible": true
+  },
+  {
+    "name": "left",
+    "sample": 4,
+    "passes": 5,
+    "pool_allocation_high_water_bytes": 0,
+    "allocations": [],
+    "elapsed_ms": 0.8642,
+    "visible": true
+  },
+  {
+    "name": "left",
+    "sample": 5,
+    "passes": 5,
+    "pool_allocation_high_water_bytes": 0,
+    "allocations": [],
+    "elapsed_ms": 0.7327,
+    "visible": true
+  },
+  {
+    "name": "left",
+    "sample": 6,
+    "passes": 5,
+    "pool_allocation_high_water_bytes": 0,
+    "allocations": [],
+    "elapsed_ms": 0.7752,
+    "visible": true
+  },
+  {
+    "name": "left",
+    "sample": 7,
+    "passes": 5,
+    "pool_allocation_high_water_bytes": 0,
+    "allocations": [],
+    "elapsed_ms": 0.8712,
+    "visible": true
+  },
+  {
+    "name": "left",
+    "sample": 8,
+    "passes": 5,
+    "pool_allocation_high_water_bytes": 0,
+    "allocations": [],
+    "elapsed_ms": 0.8012,
+    "visible": true
+  },
+  {
+    "name": "left",
+    "sample": 9,
+    "passes": 5,
+    "pool_allocation_high_water_bytes": 0,
+    "allocations": [],
+    "elapsed_ms": 0.8678,
+    "visible": true
+  },
+  {
+    "name": "left",
+    "sample": 10,
+    "passes": 5,
+    "pool_allocation_high_water_bytes": 0,
+    "allocations": [],
+    "elapsed_ms": 0.7759,
+    "visible": true
+  },
+  {
+    "name": "left",
+    "sample": 11,
+    "passes": 5,
+    "pool_allocation_high_water_bytes": 0,
+    "allocations": [],
+    "elapsed_ms": 0.8183,
+    "visible": true
+  },
+  {
+    "name": "left",
+    "sample": 12,
+    "passes": 5,
+    "pool_allocation_high_water_bytes": 0,
+    "allocations": [],
+    "elapsed_ms": 0.8565,
+    "visible": true
+  },
+  {
+    "name": "nested_filter",
+    "sample": 0,
+    "passes": 9,
+    "pool_allocation_high_water_bytes": 29028,
+    "allocations": [
+      [
+        47,
+        47
+      ],
+      [
+        14,
+        15
+      ],
+      [
+        14,
+        15
+      ],
+      [
+        14,
+        15
+      ],
+      [
+        47,
+        47
+      ],
+      [
+        47,
+        47
+      ]
+    ],
+    "elapsed_ms": 3.0373,
+    "visible": true
+  },
+  {
+    "name": "nested_filter",
+    "sample": 1,
+    "passes": 9,
+    "pool_allocation_high_water_bytes": 29028,
+    "allocations": [
+      [
+        14,
+        15
+      ],
+      [
+        14,
+        15
+      ],
+      [
+        47,
+        47
+      ]
+    ],
+    "elapsed_ms": 1.6188,
+    "visible": true
+  },
+  {
+    "name": "nested_filter",
+    "sample": 2,
+    "passes": 9,
+    "pool_allocation_high_water_bytes": 29028,
+    "allocations": [
+      [
+        14,
+        15
+      ],
+      [
+        14,
+        15
+      ],
+      [
+        47,
+        47
+      ]
+    ],
+    "elapsed_ms": 1.4468,
+    "visible": true
+  },
+  {
+    "name": "nested_filter",
+    "sample": 3,
+    "passes": 9,
+    "pool_allocation_high_water_bytes": 29028,
+    "allocations": [
+      [
+        14,
+        15
+      ],
+      [
+        14,
+        15
+      ],
+      [
+        47,
+        47
+      ]
+    ],
+    "elapsed_ms": 1.2456,
+    "visible": true
+  },
+  {
+    "name": "nested_filter",
+    "sample": 4,
+    "passes": 9,
+    "pool_allocation_high_water_bytes": 29028,
+    "allocations": [
+      [
+        14,
+        15
+      ],
+      [
+        14,
+        15
+      ],
+      [
+        47,
+        47
+      ]
+    ],
+    "elapsed_ms": 1.359,
+    "visible": true
+  },
+  {
+    "name": "nested_filter",
+    "sample": 5,
+    "passes": 9,
+    "pool_allocation_high_water_bytes": 29028,
+    "allocations": [
+      [
+        14,
+        15
+      ],
+      [
+        14,
+        15
+      ],
+      [
+        47,
+        47
+      ]
+    ],
+    "elapsed_ms": 1.3404,
+    "visible": true
+  },
+  {
+    "name": "nested_filter",
+    "sample": 6,
+    "passes": 9,
+    "pool_allocation_high_water_bytes": 29028,
+    "allocations": [
+      [
+        14,
+        15
+      ],
+      [
+        14,
+        15
+      ],
+      [
+        47,
+        47
+      ]
+    ],
+    "elapsed_ms": 1.3469,
+    "visible": true
+  },
+  {
+    "name": "nested_filter",
+    "sample": 7,
+    "passes": 9,
+    "pool_allocation_high_water_bytes": 29028,
+    "allocations": [
+      [
+        14,
+        15
+      ],
+      [
+        14,
+        15
+      ],
+      [
+        47,
+        47
+      ]
+    ],
+    "elapsed_ms": 1.2181,
+    "visible": true
+  },
+  {
+    "name": "nested_filter",
+    "sample": 8,
+    "passes": 9,
+    "pool_allocation_high_water_bytes": 29028,
+    "allocations": [
+      [
+        14,
+        15
+      ],
+      [
+        14,
+        15
+      ],
+      [
+        47,
+        47
+      ]
+    ],
+    "elapsed_ms": 1.2661,
+    "visible": true
+  },
+  {
+    "name": "nested_filter",
+    "sample": 9,
+    "passes": 9,
+    "pool_allocation_high_water_bytes": 29028,
+    "allocations": [
+      [
+        14,
+        15
+      ],
+      [
+        14,
+        15
+      ],
+      [
+        47,
+        47
+      ]
+    ],
+    "elapsed_ms": 1.1942,
+    "visible": true
+  },
+  {
+    "name": "nested_filter",
+    "sample": 10,
+    "passes": 9,
+    "pool_allocation_high_water_bytes": 29028,
+    "allocations": [
+      [
+        14,
+        15
+      ],
+      [
+        14,
+        15
+      ],
+      [
+        47,
+        47
+      ]
+    ],
+    "elapsed_ms": 1.2286,
+    "visible": true
+  },
+  {
+    "name": "nested_filter",
+    "sample": 11,
+    "passes": 9,
+    "pool_allocation_high_water_bytes": 29028,
+    "allocations": [
+      [
+        14,
+        15
+      ],
+      [
+        14,
+        15
+      ],
+      [
+        47,
+        47
+      ]
+    ],
+    "elapsed_ms": 1.2835,
+    "visible": true
+  },
+  {
+    "name": "nested_filter",
+    "sample": 12,
+    "passes": 9,
+    "pool_allocation_high_water_bytes": 29028,
+    "allocations": [
+      [
+        14,
+        15
+      ],
+      [
+        14,
+        15
+      ],
+      [
+        47,
+        47
+      ]
+    ],
+    "elapsed_ms": 1.4325,
+    "visible": true
+  },
+  {
+    "name": "double_blur",
+    "sample": 0,
+    "passes": 7,
+    "pool_allocation_high_water_bytes": 14040,
+    "allocations": [
+      [
+        30,
+        39
+      ],
+      [
+        30,
+        39
+      ],
+      [
+        30,
+        39
+      ]
+    ],
+    "elapsed_ms": 1.5839,
+    "visible": true
+  },
+  {
+    "name": "double_blur",
+    "sample": 1,
+    "passes": 7,
+    "pool_allocation_high_water_bytes": 0,
+    "allocations": [],
+    "elapsed_ms": 0.9077,
+    "visible": true
+  },
+  {
+    "name": "double_blur",
+    "sample": 2,
+    "passes": 7,
+    "pool_allocation_high_water_bytes": 0,
+    "allocations": [],
+    "elapsed_ms": 0.8492,
+    "visible": true
+  },
+  {
+    "name": "double_blur",
+    "sample": 3,
+    "passes": 7,
+    "pool_allocation_high_water_bytes": 0,
+    "allocations": [],
+    "elapsed_ms": 0.979,
+    "visible": true
+  },
+  {
+    "name": "double_blur",
+    "sample": 4,
+    "passes": 7,
+    "pool_allocation_high_water_bytes": 0,
+    "allocations": [],
+    "elapsed_ms": 0.984,
+    "visible": true
+  },
+  {
+    "name": "double_blur",
+    "sample": 5,
+    "passes": 7,
+    "pool_allocation_high_water_bytes": 0,
+    "allocations": [],
+    "elapsed_ms": 0.8736,
+    "visible": true
+  },
+  {
+    "name": "double_blur",
+    "sample": 6,
+    "passes": 7,
+    "pool_allocation_high_water_bytes": 0,
+    "allocations": [],
+    "elapsed_ms": 0.8344,
+    "visible": true
+  },
+  {
+    "name": "double_blur",
+    "sample": 7,
+    "passes": 7,
+    "pool_allocation_high_water_bytes": 0,
+    "allocations": [],
+    "elapsed_ms": 0.8246,
+    "visible": true
+  },
+  {
+    "name": "double_blur",
+    "sample": 8,
+    "passes": 7,
+    "pool_allocation_high_water_bytes": 0,
+    "allocations": [],
+    "elapsed_ms": 0.8322,
+    "visible": true
+  },
+  {
+    "name": "double_blur",
+    "sample": 9,
+    "passes": 7,
+    "pool_allocation_high_water_bytes": 0,
+    "allocations": [],
+    "elapsed_ms": 0.9205,
+    "visible": true
+  },
+  {
+    "name": "double_blur",
+    "sample": 10,
+    "passes": 7,
+    "pool_allocation_high_water_bytes": 0,
+    "allocations": [],
+    "elapsed_ms": 0.9441,
+    "visible": true
+  },
+  {
+    "name": "double_blur",
+    "sample": 11,
+    "passes": 7,
+    "pool_allocation_high_water_bytes": 0,
+    "allocations": [],
+    "elapsed_ms": 0.9017,
+    "visible": true
+  },
+  {
+    "name": "double_blur",
+    "sample": 12,
+    "passes": 7,
+    "pool_allocation_high_water_bytes": 0,
+    "allocations": [],
+    "elapsed_ms": 0.8788,
+    "visible": true
+  },
+  {
+    "name": "huge_source",
+    "sample": 0,
+    "passes": 5,
+    "pool_allocation_high_water_bytes": 26508,
+    "allocations": [
+      [
+        47,
+        47
+      ],
+      [
+        47,
+        47
+      ],
+      [
+        47,
+        47
+      ]
+    ],
+    "elapsed_ms": 1.1125,
+    "visible": true
+  },
+  {
+    "name": "huge_source",
+    "sample": 1,
+    "passes": 5,
+    "pool_allocation_high_water_bytes": 0,
+    "allocations": [],
+    "elapsed_ms": 0.7264,
+    "visible": true
+  },
+  {
+    "name": "huge_source",
+    "sample": 2,
+    "passes": 5,
+    "pool_allocation_high_water_bytes": 0,
+    "allocations": [],
+    "elapsed_ms": 0.7446,
+    "visible": true
+  },
+  {
+    "name": "huge_source",
+    "sample": 3,
+    "passes": 5,
+    "pool_allocation_high_water_bytes": 0,
+    "allocations": [],
+    "elapsed_ms": 0.7194,
+    "visible": true
+  },
+  {
+    "name": "huge_source",
+    "sample": 4,
+    "passes": 5,
+    "pool_allocation_high_water_bytes": 0,
+    "allocations": [],
+    "elapsed_ms": 0.6948,
+    "visible": true
+  },
+  {
+    "name": "huge_source",
+    "sample": 5,
+    "passes": 5,
+    "pool_allocation_high_water_bytes": 0,
+    "allocations": [],
+    "elapsed_ms": 0.7027,
+    "visible": true
+  },
+  {
+    "name": "huge_source",
+    "sample": 6,
+    "passes": 5,
+    "pool_allocation_high_water_bytes": 0,
+    "allocations": [],
+    "elapsed_ms": 0.8799,
+    "visible": true
+  },
+  {
+    "name": "huge_source",
+    "sample": 7,
+    "passes": 5,
+    "pool_allocation_high_water_bytes": 0,
+    "allocations": [],
+    "elapsed_ms": 0.7882,
+    "visible": true
+  },
+  {
+    "name": "huge_source",
+    "sample": 8,
+    "passes": 5,
+    "pool_allocation_high_water_bytes": 0,
+    "allocations": [],
+    "elapsed_ms": 0.7573,
+    "visible": true
+  },
+  {
+    "name": "huge_source",
+    "sample": 9,
+    "passes": 5,
+    "pool_allocation_high_water_bytes": 0,
+    "allocations": [],
+    "elapsed_ms": 0.7324,
+    "visible": true
+  },
+  {
+    "name": "huge_source",
+    "sample": 10,
+    "passes": 5,
+    "pool_allocation_high_water_bytes": 0,
+    "allocations": [],
+    "elapsed_ms": 0.7445,
+    "visible": true
+  },
+  {
+    "name": "huge_source",
+    "sample": 11,
+    "passes": 5,
+    "pool_allocation_high_water_bytes": 0,
+    "allocations": [],
+    "elapsed_ms": 0.7526,
+    "visible": true
+  },
+  {
+    "name": "huge_source",
+    "sample": 12,
+    "passes": 5,
+    "pool_allocation_high_water_bytes": 0,
+    "allocations": [],
+    "elapsed_ms": 0.7542,
+    "visible": true
+  },
+  {
+    "name": "distant_large_coordinates",
+    "sample": 0,
+    "passes": 0,
+    "pool_allocation_high_water_bytes": 0,
+    "allocations": [],
+    "elapsed_ms": 0.7522,
+    "visible": false
+  },
+  {
+    "name": "distant_large_coordinates",
+    "sample": 1,
+    "passes": 0,
+    "pool_allocation_high_water_bytes": 0,
+    "allocations": [],
+    "elapsed_ms": 0.5821,
+    "visible": false
+  },
+  {
+    "name": "distant_large_coordinates",
+    "sample": 2,
+    "passes": 0,
+    "pool_allocation_high_water_bytes": 0,
+    "allocations": [],
+    "elapsed_ms": 0.4414,
+    "visible": false
+  },
+  {
+    "name": "distant_large_coordinates",
+    "sample": 3,
+    "passes": 0,
+    "pool_allocation_high_water_bytes": 0,
+    "allocations": [],
+    "elapsed_ms": 0.4239,
+    "visible": false
+  },
+  {
+    "name": "distant_large_coordinates",
+    "sample": 4,
+    "passes": 0,
+    "pool_allocation_high_water_bytes": 0,
+    "allocations": [],
+    "elapsed_ms": 0.4264,
+    "visible": false
+  },
+  {
+    "name": "distant_large_coordinates",
+    "sample": 5,
+    "passes": 0,
+    "pool_allocation_high_water_bytes": 0,
+    "allocations": [],
+    "elapsed_ms": 0.4174,
+    "visible": false
+  },
+  {
+    "name": "distant_large_coordinates",
+    "sample": 6,
+    "passes": 0,
+    "pool_allocation_high_water_bytes": 0,
+    "allocations": [],
+    "elapsed_ms": 0.4222,
+    "visible": false
+  },
+  {
+    "name": "distant_large_coordinates",
+    "sample": 7,
+    "passes": 0,
+    "pool_allocation_high_water_bytes": 0,
+    "allocations": [],
+    "elapsed_ms": 0.4158,
+    "visible": false
+  },
+  {
+    "name": "distant_large_coordinates",
+    "sample": 8,
+    "passes": 0,
+    "pool_allocation_high_water_bytes": 0,
+    "allocations": [],
+    "elapsed_ms": 0.4088,
+    "visible": false
+  },
+  {
+    "name": "distant_large_coordinates",
+    "sample": 9,
+    "passes": 0,
+    "pool_allocation_high_water_bytes": 0,
+    "allocations": [],
+    "elapsed_ms": 0.413,
+    "visible": false
+  },
+  {
+    "name": "distant_large_coordinates",
+    "sample": 10,
+    "passes": 0,
+    "pool_allocation_high_water_bytes": 0,
+    "allocations": [],
+    "elapsed_ms": 0.4081,
+    "visible": false
+  },
+  {
+    "name": "distant_large_coordinates",
+    "sample": 11,
+    "passes": 0,
+    "pool_allocation_high_water_bytes": 0,
+    "allocations": [],
+    "elapsed_ms": 0.4071,
+    "visible": false
+  },
+  {
+    "name": "distant_large_coordinates",
+    "sample": 12,
+    "passes": 0,
+    "pool_allocation_high_water_bytes": 0,
+    "allocations": [],
+    "elapsed_ms": 0.4033,
+    "visible": false
+  }
+]

@@ -6,7 +6,7 @@
 // Viewport uniform (for screen-space to clip-space conversion)
 struct Viewport {
     size: vec2<f32>,      // Viewport size in pixels
-    _padding: vec2<f32>,
+    root_origin: vec2<f32>,
 }
 
 @group(0) @binding(0)
@@ -46,8 +46,8 @@ fn vs_main(input: VertexInput) -> VertexOutput {
     var output: VertexOutput;
 
     // Convert pixel coordinates to clip space [-1, 1] using viewport uniform
-    let clip_x = (input.position.x / viewport.size.x) * 2.0 - 1.0;
-    let clip_y = 1.0 - (input.position.y / viewport.size.y) * 2.0; // Flip Y for screen coords
+    let clip_x = ((input.position.x - viewport.root_origin.x) / viewport.size.x) * 2.0 - 1.0;
+    let clip_y = 1.0 - ((input.position.y - viewport.root_origin.y) / viewport.size.y) * 2.0; // Flip Y for screen coords
 
     output.clip_position = vec4<f32>(clip_x, clip_y, 0.0, 1.0);
     output.color = input.color;

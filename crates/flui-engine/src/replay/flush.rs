@@ -30,19 +30,11 @@ struct PreparedTess {
 // Scissor clamping
 // =============================================================================
 //
-// Every recorded scissor is captured against the frame's full viewport, but a
-// flush can target a smaller offscreen attachment (a grown-bounds opacity
-// layer, an SSAA supersample tile). `opacity_layer.rs::render_segment_to_grown_offscreen`
-// and `ssaa.rs`'s tile remap intersect each recorded scissor with the
-// attachment's local bounds and, on an empty intersection, emit a deliberate
-// off-target sentinel — `(full_w, full_h, 1, 1)` — to mean "fully clipped,
-// draw nothing". That sentinel's origin sits exactly on the attachment's far
-// edge, so `x + w` / `y + h` overshoot the attachment by one pixel: passed
-// straight to `set_scissor_rect` it fails wgpu's scissor-containment
-// validation. `TexturePool::acquire` sizes the offscreen target to the exact
-// requested bounds, so no margin absorbs the overshoot by accident — every
-// consumer of a recorded scissor must clamp it before calling
-// `set_scissor_rect`, not just the tessellated-geometry path.
+// Recorded scissors remain signed in root device pixels. Translate by the
+// actual attachment origin before intersecting its dimensions; only this final
+// result becomes a wgpu scissor. SSAA remaps its geometry and scissors into its
+// local supersample attachment and replays with origin zero. An empty or
+// off-target sentinel skips drawing instead of reaching wgpu validation.
 
 /// Clamp a `(x, y, w, h)` scissor rect (physical pixels) to fit inside a
 /// `(full_w, full_h)` render attachment.
@@ -53,21 +45,26 @@ struct PreparedTess {
 /// `[0, full_w) × [0, full_h)` otherwise (a no-op for an already in-bounds
 /// rect).
 fn clamp_scissor_to_attachment(
-    x: u32,
-    y: u32,
+    x: i64,
+    y: i64,
     w: u32,
     h: u32,
     full_w: u32,
     full_h: u32,
+    origin: (i64, i64),
 ) -> Option<(u32, u32, u32, u32)> {
-    let clamped_x = x.min(full_w);
-    let clamped_y = y.min(full_h);
-    let clamped_w = w.min(full_w - clamped_x);
-    let clamped_h = h.min(full_h - clamped_y);
+    let x = x.saturating_sub(origin.0);
+    let y = y.saturating_sub(origin.1);
+    let clamped_x = x.clamp(0, i64::from(full_w));
+    let clamped_y = y.clamp(0, i64::from(full_h));
+    let right = x.saturating_add(i64::from(w)).clamp(0, i64::from(full_w));
+    let bottom = y.saturating_add(i64::from(h)).clamp(0, i64::from(full_h));
+    let clamped_w = right.saturating_sub(clamped_x).max(0) as u32;
+    let clamped_h = bottom.saturating_sub(clamped_y).max(0) as u32;
     if clamped_w == 0 || clamped_h == 0 {
         None
     } else {
-        Some((clamped_x, clamped_y, clamped_w, clamped_h))
+        Some((clamped_x as u32, clamped_y as u32, clamped_w, clamped_h))
     }
 }
 
@@ -87,9 +84,10 @@ fn set_clamped_scissor(
     scissor: ScissorRect,
     full_w: u32,
     full_h: u32,
+    origin: (i64, i64),
 ) -> bool {
     let clamped = match scissor {
-        Some((x, y, w, h)) => clamp_scissor_to_attachment(x, y, w, h, full_w, full_h),
+        Some((x, y, w, h)) => clamp_scissor_to_attachment(x, y, w, h, full_w, full_h, origin),
         None => Some((0, 0, full_w, full_h)),
     };
     let Some((x, y, w, h)) = clamped else {
@@ -231,7 +229,13 @@ impl GpuReplay {
                 active_key = Some(batch.pipeline_key);
             }
 
-            if !set_clamped_scissor(&mut render_pass, batch.scissor, full_w, full_h) {
+            if !set_clamped_scissor(
+                &mut render_pass,
+                batch.scissor,
+                full_w,
+                full_h,
+                self.attachment_origin,
+            ) {
                 // Fully clipped (a zero-area clamp, or the SSAA/opacity-layer
                 // remap's off-target sentinel) — nothing to draw for this batch.
                 continue;
@@ -580,7 +584,13 @@ impl GpuReplay {
         );
 
         let (full_w, full_h) = viewport_size;
-        if set_clamped_scissor(&mut render_pass, scissor, full_w, full_h) {
+        if set_clamped_scissor(
+            &mut render_pass,
+            scissor,
+            full_w,
+            full_h,
+            self.attachment_origin,
+        ) {
             render_pass.draw_indexed(0..6, 0, 0..self.texture_batch.len() as u32);
         }
         drop(render_pass);
@@ -680,7 +690,13 @@ impl GpuReplay {
         );
 
         let (full_w, full_h) = viewport_size;
-        if set_clamped_scissor(&mut render_pass, scissor, full_w, full_h) {
+        if set_clamped_scissor(
+            &mut render_pass,
+            scissor,
+            full_w,
+            full_h,
+            self.attachment_origin,
+        ) {
             render_pass.draw_indexed(0..6, 0, 0..self.texture_batch.len() as u32);
         }
         drop(render_pass);

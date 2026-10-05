@@ -60,7 +60,7 @@ struct VertexOutput {
 // Uniforms
 struct Viewport {
     size: vec2<f32>,
-    _padding: vec2<f32>,
+    root_origin: vec2<f32>,
 }
 
 @group(0) @binding(0)
@@ -134,8 +134,8 @@ fn vs_main(
     let world_pos = mat2x2<f32>(instance.transform.xy, instance.transform.zw) * local_absolute + instance.transform_translate.xy;
 
     // Convert to clip space
-    let clip_x = (world_pos.x / viewport.size.x) * 2.0 - 1.0;
-    let clip_y = 1.0 - (world_pos.y / viewport.size.y) * 2.0;
+    let clip_x = ((world_pos.x - viewport.root_origin.x) / viewport.size.x) * 2.0 - 1.0;
+    let clip_y = 1.0 - ((world_pos.y - viewport.root_origin.y) / viewport.size.y) * 2.0;
 
     out.clip_position = vec4<f32>(clip_x, clip_y, 0.0, 1.0);
     out.world_pos = world_pos;

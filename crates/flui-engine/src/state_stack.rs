@@ -33,7 +33,7 @@ pub(super) struct GpuStateStack {
 
     /// Current active scissor rectangle in physical pixels `(x, y, w, h)`.
     /// `None` means no axis-aligned scissor clip is active.
-    current_scissor: Option<(u32, u32, u32, u32)>,
+    current_scissor: crate::command_ir::ScissorRect,
 
     /// Active SDF rounded-rectangle clip uniform. All-zeros means no clip.
     current_rrect_clip: [f32; 8],
@@ -71,7 +71,7 @@ pub(super) struct GpuStateStack {
 struct SavedState {
     clip_chain: crate::clip_chain::ClipChain,
     transform: glam::DMat4,
-    scissor: Option<(u32, u32, u32, u32)>,
+    scissor: crate::command_ir::ScissorRect,
     rrect_clip: [f32; 8],
     rsuperellipse_clip: [f32; 12],
     clip_hard: bool,
@@ -411,7 +411,7 @@ impl GpuStateStack {
     ///
     /// Returns by **copy**.
     #[inline]
-    pub(super) fn current_scissor(&self) -> Option<(u32, u32, u32, u32)> {
+    pub(super) fn current_scissor(&self) -> crate::command_ir::ScissorRect {
         self.current_scissor
     }
 
@@ -421,10 +421,8 @@ impl GpuStateStack {
 
     /// Set an axis-aligned scissor clip, intersecting with any existing one.
     ///
-    /// `surface_size` is `(width_px, height_px)` of the render surface and is
-    /// used to clamp the scissor to the surface bounds. It is passed as a
-    /// parameter rather than stored on the stack so the painter remains the
-    /// single owner of the surface dimensions.
+    /// Membership keeps signed coordinates outside the viewport. Replay
+    /// intersects it with the actual attachment, including filter input halos.
     ///
     /// A hard edge (ADR-0098 §6): under a translation plus a positive
     /// axis-aligned scale each device edge snaps to the nearest pixel boundary,
@@ -457,8 +455,7 @@ impl GpuStateStack {
     /// pixel ratio. Growing before the transform is not merely insufficient,
     /// it is inert.
     pub(super) fn clip_rect_enclosing(&mut self, rect: Rect<f64>, surface_size: (u32, u32)) {
-        let scissor =
-            Self::clamp_to_surface(geometry::cover(self.device_bounds(rect)), surface_size);
+        let scissor = Self::recorded_scissor(geometry::cover(self.device_bounds(rect)));
         self.commit_scissor(rect, scissor, surface_size);
     }
 
@@ -487,15 +484,22 @@ impl GpuStateStack {
         )
     }
 
-    /// A pixel-aligned device rect clamped to the attachment, as a scissor
-    /// `(x, y, width, height)`.
-    fn clamp_to_surface(rect: Rect<f64>, (width, height): (u32, u32)) -> (u32, u32, u32, u32) {
-        let clamp = |v: f64, max: u32| v.clamp(0.0, f64::from(max)) as u32;
-        let x = clamp(rect.left(), width);
-        let y = clamp(rect.top(), height);
-        let right = clamp(rect.right(), width);
-        let bottom = clamp(rect.bottom(), height);
-        (x, y, right.saturating_sub(x), bottom.saturating_sub(y))
+    /// Preserve signed device coordinates; replay clips against its attachment.
+    fn recorded_scissor(rect: Rect<f64>) -> (i64, i64, u32, u32) {
+        // All admitted filter frames lie within the exact f32 integer lattice
+        // (2^24). Clamp BOTH edges to a wider conservative range before deriving
+        // u32 extents; saturating an extent alone could erase an enclosing clip.
+        const COORD_LIMIT: i64 = (1 << 30) - 1;
+        let x = (rect.left() as i64).clamp(-COORD_LIMIT, COORD_LIMIT);
+        let y = (rect.top() as i64).clamp(-COORD_LIMIT, COORD_LIMIT);
+        let right = (rect.right() as i64).clamp(-COORD_LIMIT, COORD_LIMIT);
+        let bottom = (rect.bottom() as i64).clamp(-COORD_LIMIT, COORD_LIMIT);
+        (
+            x,
+            y,
+            right.saturating_sub(x).clamp(0, i64::from(u32::MAX)) as u32,
+            bottom.saturating_sub(y).clamp(0, i64::from(u32::MAX)) as u32,
+        )
     }
 
     /// The clip rect's axis-aligned bounding box in device space, unrounded.
@@ -547,62 +551,45 @@ impl GpuStateStack {
 
     /// The hard-edge scissor of [`Self::clip_rect`]: edges snapped under a
     /// translation plus a positive scale, the bounding box covered otherwise.
-    fn scissor_of(&self, rect: Rect<f64>, surface_size: (u32, u32)) -> (u32, u32, u32, u32) {
+    fn scissor_of(&self, rect: Rect<f64>, _surface_size: (u32, u32)) -> (i64, i64, u32, u32) {
         let device = self.device_bounds(rect);
         let aligned = if self.is_translate_scale() {
             geometry::snap_edges(device)
         } else {
             geometry::cover(device)
         };
-        Self::clamp_to_surface(aligned, surface_size)
+        Self::recorded_scissor(aligned)
     }
 
-    /// Intersect a freshly computed scissor with any active one, clamp it to
-    /// the attachment, and store it.
-    ///
-    /// wgpu rejects a scissor whose origin or right/bottom edge lies outside
-    /// the attachment, and the origin is the half the AABB maths above leaves
-    /// unclamped — a clip lying entirely past the right or bottom edge would
-    /// emit an out-of-bounds `x`/`y`, and clamping the origin first keeps the
-    /// `surface - origin` extent subtraction from underflowing.
+    /// Intersect membership without clipping a foreground filter's input halo.
     fn commit_scissor(
         &mut self,
         rect: Rect<f64>,
-        scissor: (u32, u32, u32, u32),
-        surface_size: (u32, u32),
+        scissor: (i64, i64, u32, u32),
+        _surface_size: (u32, u32),
     ) {
         let (x, y, width, height) = scissor;
-        let new_scissor = if let Some((cur_x, cur_y, cur_w, cur_h)) = self.current_scissor {
-            let inter_x = x.max(cur_x);
-            let inter_y = y.max(cur_y);
-            let inter_w = (x + width).min(cur_x + cur_w).saturating_sub(inter_x);
-            let inter_h = (y + height).min(cur_y + cur_h).saturating_sub(inter_y);
-            (inter_x, inter_y, inter_w, inter_h)
+        let new_scissor = if let Some((cx, cy, cw, ch)) = self.current_scissor {
+            let intersection_left = x.max(cx);
+            let intersection_top = y.max(cy);
+            let right = x
+                .saturating_add(i64::from(width))
+                .min(cx.saturating_add(i64::from(cw)));
+            let bottom = y
+                .saturating_add(i64::from(height))
+                .min(cy.saturating_add(i64::from(ch)));
+            (
+                intersection_left,
+                intersection_top,
+                right.saturating_sub(intersection_left).max(0) as u32,
+                bottom.saturating_sub(intersection_top).max(0) as u32,
+            )
         } else {
-            (x, y, width, height)
+            scissor
         };
-
-        let (raw_x, raw_y, raw_w, raw_h) = new_scissor;
-        let clamped_x = raw_x.min(surface_size.0);
-        let clamped_y = raw_y.min(surface_size.1);
-        let clamped_scissor = (
-            clamped_x,
-            clamped_y,
-            raw_w.min(surface_size.0 - clamped_x),
-            raw_h.min(surface_size.1 - clamped_y),
-        );
-
-        self.current_scissor = Some(clamped_scissor);
-
+        self.current_scissor = Some(new_scissor);
         #[cfg(debug_assertions)]
-        tracing::trace!(
-            "GpuStateStack::clip_rect: rect={:?} → scissor=({}, {}, {}, {})",
-            rect,
-            clamped_scissor.0,
-            clamped_scissor.1,
-            clamped_scissor.2,
-            clamped_scissor.3,
-        );
+        tracing::trace!(?rect, ?new_scissor, "Recorded device scissor");
         #[cfg(not(debug_assertions))]
         let _ = rect;
     }
@@ -863,5 +850,10 @@ mod tests {
         scaled.scale(2.0, 2.0);
         scaled.clip_rect(Rect::from_ltrb(0.3, 0.3, 5.3, 5.3), surface);
         assert_eq!(scaled.current_scissor(), Some((1, 1, 10, 10)));
+        let mut outside = identity_stack();
+        outside.clip_rect(Rect::from_ltrb(-12.0, -8.0, 72.0, 80.0), surface);
+        assert_eq!(outside.current_scissor(), Some((-12, -8, 84, 88)));
+        outside.clip_rect(Rect::from_ltrb(-6.0, -20.0, 70.0, 75.0), surface);
+        assert_eq!(outside.current_scissor(), Some((-6, -8, 76, 83)));
     }
 }

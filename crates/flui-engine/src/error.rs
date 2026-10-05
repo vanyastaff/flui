@@ -49,8 +49,8 @@ pub enum GeometryError {
     /// Rectangle edges are reversed or their difference overflows.
     #[error("invalid clip rectangle extent")]
     InvalidExtent,
-    /// Corner radii must be finite and nonnegative.
-    #[error("invalid clip corner radius")]
+    /// Corner and filter radii must be finite and nonnegative.
+    #[error("invalid radius")]
     InvalidRadius,
     /// A path exceeds its input command allowance.
     #[error("clip path has {requested} commands, limit {limit}")]

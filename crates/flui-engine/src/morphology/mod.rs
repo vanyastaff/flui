@@ -54,7 +54,7 @@ use generated::morphology;
 /// - `radius` — kernel half-radius in physical pixels; the shader samples
 ///   `[-ceil(radius) ..= ceil(radius)]` texels in each direction.
 /// - `morph_op` — `Dilate` (max) or `Erode` (min).
-/// - `source_tex` — premultiplied RGBA offscreen from `render_segment_to_grown_offscreen`.
+/// - `source_tex` — premultiplied RGBA offscreen from `render_filter_input`.
 /// - `content_bounds` — the AABB of the actual content in **full-frame** physical pixels;
 ///   rebased to fb-local UV by subtracting `fb_origin` before dividing by `fb_dim`.
 /// - `fb_origin` — integer-aligned top-left of the offscreen frame in device pixels.
@@ -82,7 +82,7 @@ pub(crate) fn apply_morphology(
     morph_op: MorphOp,
     source_tex: &PooledTexture,
     content_bounds: Rect<f64>,
-    fb_origin: (u32, u32),
+    fb_origin: (i64, i64),
     fb_dim: (u32, u32),
     surface_format: wgpu::TextureFormat,
     pipeline: &MorphologyPipeline,
@@ -100,10 +100,10 @@ pub(crate) fn apply_morphology(
     // subtracting fb_origin the UV is in viewport space, which would be wrong for an
     // off-origin grown-bounds texture (content UV would not fall in [0, fb_dim]).
     let content_rect_uv_h = [
-        (content_bounds.left() - f64::from(fb_origin_x as f32)) / f64::from(fb_w as f32),
-        (content_bounds.top() - f64::from(fb_origin_y as f32)) / f64::from(fb_h as f32),
-        (content_bounds.right() - f64::from(fb_origin_x as f32)) / f64::from(fb_w as f32),
-        (content_bounds.bottom() - f64::from(fb_origin_y as f32)) / f64::from(fb_h as f32),
+        (content_bounds.left() - fb_origin_x as f64) / f64::from(fb_w as f32),
+        (content_bounds.top() - fb_origin_y as f64) / f64::from(fb_h as f32),
+        (content_bounds.right() - fb_origin_x as f64) / f64::from(fb_w as f32),
+        (content_bounds.bottom() - fb_origin_y as f64) / f64::from(fb_h as f32),
     ];
     // The V pass reads the H-pass OUTPUT, whose content extent has already grown
     // (dilate) horizontally beyond `content_bounds` into the halo. Decaling the V
