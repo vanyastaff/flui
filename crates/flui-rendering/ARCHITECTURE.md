@@ -30,39 +30,27 @@ deepest-first element unmount so view lifecycle hooks remain canonical.
 
 ## Mapping decisions
 
-### Physical storage retirement preserves independent owners
+This section records design decisions and why they were taken. Each entry follows the "Accepted trade-offs" format established by [`docs/plans/2026-03-31-custom-render-callback-design.md`](https://github.com/vanyastaff/flui/blob/e30ab7194d50ac1c11ffe17c59230958d2fbeecd/docs/plans/2026-03-31-custom-render-callback-design.md): state the rule (or absence of rule), the choice, the alternatives considered, the trade-off accepted.
 
-Healthy physical destruction retires render objects before their parent data,
-and tree entries in slab-slot order. On an incoming unwind or the first
-destructor failure, storage retains the remaining independent ownership
-envelopes. The first panic propagates. This guarantee covers physical tree and
-entry destruction; it does not invoke semantic `dispose` or establish panic
-safety for explicit clearing or recursive removal.
+### Render storage and pipeline callbacks retain user values on failure
 
-`render_tree_retirement_preserves_independent_envelopes` in `lifecycle_matrix`
-exercises twelve bounded public cases, including detached entries during
-incoming unwind, competing object and parent-data failures, shared pipeline
-ownership, sparse slots, and layout through a fresh owner after containment.
-One opaque object's internally competing destructors remain outside this
-boundary's guarantee.
-
-`VisualUpdateNotifier` likewise withdraws its three independent callback
-envelopes before retirement, preserving visual-update, created, then disposed
-order on the healthy path. Ten additional cases in the same family cover those
-owners, incoming unwind, pairwise failure competition, shared ownership and
-replacement through an external owning slot.
+Dropping a render entry drops its render object, then its parent data; a
+render tree drops its entries in slot order, and a `VisualUpdateNotifier` its
+visual-update, created, then disposed callbacks. Once one of those destructors
+panics, or when the drop begins while the thread is already panicking, the
+remaining render objects, parent data and callback captures are retained, not
+dropped, and the first panic propagates (ADR-0127). Framework-owned entry
+state (geometry, links, layout cache) still drops normally. Semantic `dispose`
+is not invoked by physical destruction. Pinned by
+`render_tree_retirement_preserves_independent_envelopes`.
 
 ### Callback replacement retires captures after unlocking
 
-Pipeline callback setters commit the new callback while holding the notifier
-write guard, transfer the outgoing callback out, then release that guard before
-retiring captures. A retained render invalidation handle can therefore enqueue
-and wake from an outgoing capture's destructor. A panic does not restore the
-displaced callback. `pipeline_callback_replacement_reentry` exercises all three
-setter kinds through public handles, with healthy retirement, a destructor
-failure, and subsequent delivery.
-
-This section records design decisions and why they were taken. Each entry follows the "Accepted trade-offs" format established by [`docs/plans/2026-03-31-custom-render-callback-design.md`](https://github.com/vanyastaff/flui/blob/e30ab7194d50ac1c11ffe17c59230958d2fbeecd/docs/plans/2026-03-31-custom-render-callback-design.md): state the rule (or absence of rule), the choice, the alternatives considered, the trade-off accepted.
+Pipeline callback setters install the new callback under the notifier write
+guard and drop the displaced one after releasing it, so a displaced capture's
+destructor can mark a node dirty and wake the pipeline. A panic in that
+destructor propagates and leaves the new callback installed. Pinned by
+`pipeline_callback_replacement_reentry`.
 
 ### Caught hit-test panics do not change sibling coordinates
 

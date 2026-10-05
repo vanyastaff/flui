@@ -111,33 +111,6 @@ impl Default for RenderTree {
     }
 }
 
-/// Custody for independent nodes after the physical tree has been emptied.
-struct RetiringNodes(Vec<RenderNode>);
-
-impl Drop for RetiringNodes {
-    fn drop(&mut self) {
-        if std::thread::panicking() {
-            std::mem::forget(std::mem::take(&mut self.0));
-        }
-    }
-}
-
-impl Drop for RenderTree {
-    fn drop(&mut self) {
-        let nodes = std::mem::take(&mut self.nodes);
-        self.root = None;
-        let mut retiring = RetiringNodes(nodes.into_iter().map(|(_, node)| node).collect());
-        retiring.0.reverse();
-        if !std::thread::panicking() {
-            // Match the slab's slot order. A first failure unwinds through the
-            // custody guard, which retains successors instead of dropping them.
-            while let Some(node) = retiring.0.pop() {
-                drop(node);
-            }
-        }
-    }
-}
-
 impl RenderTree {
     /// Creates a new empty RenderTree.
     pub fn new() -> Self {

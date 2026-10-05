@@ -106,7 +106,12 @@ pub struct RenderEntry<P: Protocol> {
     attachment: AttachmentState,
 }
 
-/// Custody for the separately owned render object and parent data.
+/// Custody for the user-owned render object and parent data.
+///
+/// While the thread is panicking both are retained rather than dropped
+/// (ADR-0127); the entry's framework-owned state still drops normally. A
+/// `RenderTree` relies on this: its slab drops entries in slot order, and an
+/// entry dropped after an earlier one failed retains its user values.
 struct RetiringEntry<P: Protocol> {
     object: Option<Box<dyn RenderObject<P>>>,
     parent_data: Option<Box<dyn crate::parent_data::ParentData>>,
@@ -128,8 +133,8 @@ impl<P: Protocol> Drop for RenderEntry<P> {
             parent_data: self.state.take_parent_data(),
         };
         if !std::thread::panicking() {
-            // Preserve the former object-before-state field order. A first
-            // failure retains the independent parent-data envelope on unwind.
+            // Object before parent data. If the object's destructor panics,
+            // the guard retains the parent data on unwind.
             drop(retiring.object.take());
             drop(retiring.parent_data.take());
         }

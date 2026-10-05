@@ -41,10 +41,10 @@ impl Drop for RetiringCallbacks {
 /// When set, `fire_*` calls the closure synchronously. Callbacks are
 /// `Send + Sync` so the notifier itself is `Send + Sync`, matching the
 /// pipeline-owner trait bound.
-/// Healthy destruction retires visual-update, created, then disposed captures.
-/// On an incoming unwind or the first capture-destructor panic, remaining
-/// event envelopes are retained. One capture's own aggregate can still
-/// double-panic before this boundary regains control.
+///
+/// Dropping the notifier drops the visual-update, created, then disposed
+/// captures; once one of them panics, or if the thread is already panicking,
+/// the rest are retained (ADR-0127).
 #[derive(Default)]
 pub struct VisualUpdateNotifier {
     need_visual_update: Option<Callback>,
