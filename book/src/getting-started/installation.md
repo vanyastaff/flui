@@ -4,8 +4,7 @@ This page covers the app-author path: install the toolchain, generate an applica
 `flui create`, and run it. For the fuller reference (full prerequisites table, every bundled
 example, troubleshooting) see
 [`docs/getting-started.md`](https://github.com/vanyastaff/flui/blob/main/docs/getting-started.md)
-in the repository — this page is the short version, copied verbatim from the commands there so it
-never invents a step the full doc doesn't have.
+in the repository.
 
 If you want to work on FLUI itself rather than build an app with it, see
 [Contributing to FLUI](contributing.md) instead — the setup is different (a workspace checkout,
@@ -15,7 +14,8 @@ not a generated application).
 
 | Tool | Minimum version | Notes |
 |------|-----------------|-------|
-| Rust | 1.99 | MSRV floor in `workspace.package.rust-version`; `rustup` installs the pinned dev toolchain automatically on first `cargo` invocation. |
+| Rust via `rustup` | 1.99 | The checkout pins 1.99.0 in `rust-toolchain.toml`; an application outside it needs its own toolchain selection (below). |
+| Git | any recent | Used to clone FLUI and initialize the generated application. |
 | Native toolchain | platform-specific | MSVC on Windows, Xcode CLT on macOS, NDK on Android (only if targeting Android). |
 
 The `flui` CLI is published on crates.io as `flui-cli` (`cargo install flui-cli --locked`); the
@@ -26,14 +26,32 @@ CLI and the framework share one source tree.
 
 ## Install the CLI and create an app
 
-Run these commands from a checkout of the [flui repository](https://github.com/vanyastaff/flui):
+Clone the [flui repository](https://github.com/vanyastaff/flui), then install its CLI:
 
 ```bash
+git clone https://github.com/vanyastaff/flui
+cd flui
 cargo install --path crates/flui-cli --locked
-flui create my_app --local --path ../apps
+flui create my_app --local --path ../apps --no-check
 cd ../apps/my_app
+rustup override set 1.99.0
+cargo check
+flui doctor
 flui run
 ```
+
+`--no-check` postpones the scaffold's compile check until you have selected the
+application's toolchain. The generated project does not contain a
+`rust-toolchain.toml`, and a path dependency on FLUI does not select the checkout's
+toolchain for it. `rustup override set` selects Rust for this application directory;
+it leaves your global default unchanged. Run the commands one at a time and fix
+any failed check before proceeding to `flui run`.
+
+The default template is `counter`. A desktop window should show a count and an
+**Increment** button. Press the button to update the count; close the window to
+exit. The application lives in `src/lib.rs`; `src/main.rs` mounts its root with
+`flui::run_app`. The template also generates headless interaction tests: run
+`cargo test` from the application directory to exercise them.
 
 The generated application can live outside the FLUI repository. Bare `--local` uses the current
 directory as its source checkout; from another directory, use `--local=/path/to/flui`. The source
@@ -43,8 +61,9 @@ absolute path. `flui` is the application's only framework dependency; UI code st
 `flui::cupertino`, add `features = ["material"]` (or `"cupertino"`) to the `flui` dependency in
 the generated `Cargo.toml`.
 
-Add `--hot-reload` to `flui create` to generate the host/worker/types workspace used by the reload
-runner — see the
+Add `--hot-reload` to `flui create` to generate the host/worker/types workspace used by the
+desktop reload runner. That workspace cannot run on Android or in a browser; use the ordinary
+application template for those targets. See the
 [CLI guide](https://github.com/vanyastaff/flui/blob/main/crates/flui-cli/README.md) for template
 and build options.
 
@@ -54,12 +73,35 @@ To try FLUI without generating a project first, run one of the bundled examples 
 repository checkout:
 
 ```bash
-cargo run --example counter
+cargo run --locked --example counter
 ```
 
 A window opens showing a count and an "Increment" button — the same shape `flui create`'s
 `counter` template generates. See the full example table and web/Android instructions in
 [`docs/getting-started.md`](https://github.com/vanyastaff/flui/blob/main/docs/getting-started.md#run-an-example).
+
+## Diagnose a failed first run
+
+Run `flui doctor --verbose` from the application directory to inspect the selected
+Rust version and tool paths. Optional Android, iOS, and Web tooling can produce
+warnings without blocking a desktop app. For a target-specific check, use
+`flui doctor --android`, `--ios`, or `--web`.
+
+| Symptom | Next step |
+|---------|-----------|
+| `flui` command not found after installation | Put Cargo's binary directory on `PATH` (`~/.cargo/bin`, or `%USERPROFILE%\.cargo\bin` on Windows), then open a new terminal. |
+| Rust version below 1.99 | Run `rustup override set 1.99.0` in the application directory, then retry `cargo check`. |
+| Windows cannot find or run `link.exe` | Install Visual Studio Build Tools with the Desktop development with C++ workload and Windows SDK. |
+| `flui::material` or `flui::cupertino` import is unresolved | Enable the corresponding facade feature in the application's `Cargo.toml`. |
+| Local FLUI dependency cannot be found | Keep the source checkout at its original location, or update its absolute path in the application's `Cargo.toml`. |
+
+For application logs, set `RUST_LOG=flui_app=debug,flui_engine=debug` before
+`flui run` (Bash: `export RUST_LOG=flui_app=debug,flui_engine=debug`;
+PowerShell: `$env:RUST_LOG = "flui_app=debug,flui_engine=debug"`). CLI diagnostics
+use `flui -v run`; they are separate from application logs. A successful compile
+does not verify your window system or GPU: consult the
+[platform evidence](https://github.com/vanyastaff/flui/blob/main/docs/BETA.md#platform-evidence)
+before choosing a deployment target.
 
 ## Next steps
 

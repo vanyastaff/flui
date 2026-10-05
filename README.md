@@ -34,9 +34,17 @@ Prerequisites: Rust 1.99 (edition 2024). The repository is a Cargo workspace con
 ```bash
 git clone https://github.com/vanyastaff/flui
 cd flui
-cargo build --workspace
-cargo run --example widgets_gallery
+cargo run --locked --example counter
 ```
+
+Press **Increment** to update the count; close the window to exit. This
+builds the example and its dependencies. A full workspace build is for
+contributors, rather than a prerequisite for trying an application.
+
+To create your own application against the checkout, follow the
+[installation and first-run guide](book/src/getting-started/installation.md).
+It installs the CLI from the same source and selects the toolchain for the
+generated project outside the checkout.
 
 Repository tasks beyond plain `cargo` (the CI gates, the change-scoped pre-PR check, the device checks) are `cargo xtask <command>` — `cargo xtask --help` lists them. There is no separate task runner to install; `cargo xtask doctor` names the tools the gates use (cargo-nextest, typos, taplo, lychee, Python 3.10+) and how to install each.
 
@@ -69,6 +77,8 @@ flui = { path = "…" }
 | `localizations` | off | nothing: deprecated and empty; the global widgets localizations are in `flui::widgets` |
 | `hot-reload` | off | desktop/Android development reload machinery; absent from an ordinary production graph |
 | `a11y` | off | native accessibility: the AccessKit adapters that hand the semantics tree to VoiceOver / Narrator / Orca (off by default because the Linux adapter carries a D-Bus stack) |
+| `testing` | off | `flui::testing` for headless application tests; add it to the development dependency, as the counter template does |
+| `serde` | off | serialization for supported geometry, painting, locale, layout, interaction, and animation values |
 
 A module whose feature is off is *absent*, not empty. Every supported
 combination is compiled in isolation by CI (`cargo xtask facade-combos`), so a
