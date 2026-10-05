@@ -2,6 +2,8 @@
 
 - **Status:** Accepted
 - **Date:** 2026-10-04
+- **Superseded-by:** [ADR-0127](ADR-0127-exceptional-path-retention.md),
+  only the sentence keeping callback, obligation and render-object policies.
 - **Supersedes:** [ADR-0104](ADR-0104-borrowed-notification-and-opaque-panic-retention.md)
   decision 4's unconditional payload retention, and the corresponding payload
   policy retained by [ADR-0109](ADR-0109-notification-channel-surface.md)
@@ -34,9 +36,9 @@ invoking the separately contained tracing subscriber. After that borrow ends,
 they transfer it to the shared operation. Secondary reporting payloads use the
 same operation and do not replace the original `RenderError::Poisoned`.
 
-This changes payload retirement only. Callback captures, queued obligations,
-render-object destruction and arbitrary aggregate failures retain their existing
-ownership policies. Containment still cannot recover an abort during user code
+This changes payload retirement only. Superseded in part by ADR-0127, which
+sets the retention rule for callback captures, queued obligations and
+render-object destruction. Containment still cannot recover an abort during user code
 or destruction before control returns to the boundary.
 
 ## Verification
