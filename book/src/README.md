@@ -24,8 +24,8 @@ source for the exact API and required features.
 - New to FLUI and want to build an application: [Getting Started](getting-started/installation.md).
 - Ready to change a working example: [Counter → Todo](getting-started/tutorial-todo.md), then
   the [Cookbook](cookbook/overview.md) for forms, async work, themes, animation, and testing.
-- Following the combined application work: [Notes showcase source draft](getting-started/showcase.md).
-  The chapter records the source and verification still needed before its walkthrough can run.
+- Ready for an application with several screens: the [Notes showcase](getting-started/showcase.md)
+  runs with `cargo run --example two_screens --features material` and has a headless flow test.
 - Choosing a state model or learning how a view becomes a frame:
   [Concepts](concepts/overview.md) and [State](concepts/state.md).
 - Coming from Flutter and want the vocabulary mapping first:

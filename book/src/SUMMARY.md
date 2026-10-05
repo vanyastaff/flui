@@ -6,7 +6,7 @@
 
 - [Installation and first run](getting-started/installation.md)
 - [Tutorial: counter → todo](getting-started/tutorial-todo.md)
-- [Notes showcase: source draft](getting-started/showcase.md)
+- [Notes showcase](getting-started/showcase.md)
 - [Contributing to FLUI](getting-started/contributing.md)
 
 # Concepts

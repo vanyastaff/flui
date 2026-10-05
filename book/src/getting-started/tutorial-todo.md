@@ -170,5 +170,5 @@ is the fastest way to see how the pieces fit together as one `build`.
 
 Todo teaches event-driven writes and a bounded list. Continue with
 [Notes: from Todo to a showcase](showcase.md) to study shared state across routes, a lazy list,
-form validation and an asynchronous retry flow. That page identifies the source revision and
-the verification still needed before treating Notes as a working showcase.
+form validation and an asynchronous retry flow. That page shows how to run Notes and how its
+headless flow test checks it.
