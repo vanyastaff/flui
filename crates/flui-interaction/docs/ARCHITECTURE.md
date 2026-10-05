@@ -208,6 +208,11 @@ in bounded child processes. An aggregate user capture whose own destructors
 double-panic before returning to the containment boundary remains outside this
 guarantee.
 
+Retention keeps only what dropping would destroy. A callback, handler or
+policy snapshot that is not the last `Rc` owner is released after a caught
+failure, so its captures still die with the manager, node or scope that
+registered them (`caught_callback_failures_leave_captures_with_their_owner`).
+
 Closed-manager rejection uses the same ownership fence for incoming callbacks,
 contexts, rectangle providers and traversal policies. Healthy rejected values
 retire outside borrows; an existing unwind retains opaque incoming ownership.

@@ -15,6 +15,7 @@ use flui_foundation::geometry::Offset;
 use parking_lot::Mutex;
 
 use super::recognizer::{GestureRecognizer, RecognizerBase};
+use crate::retain::Retain;
 use crate::{
     arena::GestureArenaMember,
     events::{PointerEvent, PointerType},
@@ -231,7 +232,7 @@ impl Drop for DragCallbacks {
 
 fn retire_drag_callback<T: ?Sized>(callback: Option<Rc<T>>, first: &mut Option<RoutePanic>) {
     if first.is_some() || std::thread::panicking() {
-        std::mem::forget(callback);
+        callback.retain();
     } else {
         RoutePanic::preserve_first(
             first,
@@ -258,7 +259,7 @@ fn invoke_drag_callback<T: ?Sized>(
     retire_drag_callback(callback, &mut first);
     if let Some(panic) = first {
         if incoming_failure {
-            std::mem::forget(panic);
+            panic.retain();
         } else {
             panic.resume();
         }
@@ -864,7 +865,7 @@ impl GestureRecognizer for DragGestureRecognizer {
         callbacks.retire(&mut first);
         if let Some(panic) = first {
             if incoming_failure {
-                std::mem::forget(panic);
+                panic.retain();
             } else {
                 panic.resume();
             }

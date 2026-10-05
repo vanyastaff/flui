@@ -16,3 +16,6 @@ mod text_input_retirement;
 
 #[path = "hit_test_transform.rs"]
 mod hit_test_transform;
+
+#[path = "focus_retention.rs"]
+mod focus_retention;

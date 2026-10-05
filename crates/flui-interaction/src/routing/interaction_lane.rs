@@ -651,15 +651,21 @@ impl RoutePanic {
             // Panic payloads are arbitrary user values and may themselves
             // panic in Drop. Discarding a secondary payload normally could
             // therefore replace the first panic (or abort during unwind).
-            // This exceptional path deliberately leaks it to preserve the
-            // transaction's deterministic first-panic guarantee.
-            std::mem::forget(candidate);
+            // Only a known inert payload is released.
+            crate::retain::Retain::retain(candidate);
         }
     }
 
     /// Continue unwinding with the captured payload.
     pub fn resume(self) -> ! {
         resume_unwind(self.payload)
+    }
+}
+
+impl crate::retain::Retain for RoutePanic {
+    /// Retain a failure already superseded or reported (ADR-0119).
+    fn retain(self) {
+        flui_foundation::panic::retain_opaque_payload(self.payload);
     }
 }
 

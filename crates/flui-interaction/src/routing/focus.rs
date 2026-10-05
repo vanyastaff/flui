@@ -16,6 +16,7 @@ use flui_foundation::ListenerId;
 
 use crate::{
     events::KeyEvent,
+    retain::Retain,
     routing::focus_scope::{FocusNode, FocusScopeNode, KeyEventResult},
 };
 
@@ -62,12 +63,12 @@ impl FocusClosePanic {
         }
     }
 
-    pub(super) fn retire<T>(&mut self, value: T) {
+    pub(super) fn retire<T: Retain>(&mut self, value: T) {
         if self.unwinding || self.first.is_some() {
             // Retain the actual outgoing value, before invoking arbitrary
             // destruction. Catching its Drop would not contain two fields
             // that panic while the same aggregate is being destroyed.
-            std::mem::forget(value);
+            value.retain();
         } else {
             self.run(|| drop(value));
         }
@@ -79,11 +80,11 @@ impl FocusClosePanic {
         }
     }
 
-    pub(super) fn finish_with<T: Default>(self, value: T) -> T {
+    pub(super) fn finish_with<T: Default + Retain>(self, value: T) -> T {
         if self.unwinding || self.first.is_some() {
             // The result may itself own arbitrary user state. Move that
             // custody out of the unwind path before resuming the first panic.
-            std::mem::forget(value);
+            value.retain();
             self.finish();
             T::default()
         } else {

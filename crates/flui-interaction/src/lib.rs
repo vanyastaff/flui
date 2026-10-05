@@ -168,6 +168,7 @@ pub mod recognizers;
 // ============================================================================
 
 pub mod processing;
+mod retain;
 
 // ============================================================================
 // Testing utilities — gated behind `testing` Cargo feature
