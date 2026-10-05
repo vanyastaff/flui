@@ -9,20 +9,11 @@ representation of a scene.
 
 ### Rebuild hook generations never return after exhaustion
 
-The hook allocator admits its final nonzero generation once, then permanently
-refuses registration. A stale registration guard cannot withdraw the current
-hook after a caller catches a capacity panic. Incoming hook ownership is guarded
-before allocation and retained during exhaustion unwind; the current hook slot
-is untouched by refusal. Healthy replacement still destroys the outgoing hook
-outside the slot lock.
-
-The private local-counter row
-`hook_generation_exhaustion_preserves_current_registration` runs under the
-existing rebuild-hook test lock, before the existing racing-clone family acquires
-that lock. It exercises actual registration, stale-guard retirement, delivery,
-repeated refusal, rejected captures, and the next healthy registration. This
-admission policy does not establish containment for an arbitrary aggregate that
-double-panics while its own fields are being destroyed.
+The hook allocator admits its final nonzero generation once and then refuses
+every registration permanently. A refused registration leaves the current hook
+installed, so a stale registration guard cannot withdraw it, and the rejected
+hook is retained rather than dropped (ADR-0127). Healthy replacement still
+destroys the outgoing hook outside the slot lock.
 
 ### Typed scene factories and explicit ownership transfer
 
