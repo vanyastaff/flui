@@ -762,6 +762,67 @@ fn mismatches(partial: &[u8], full: &[u8], tolerance: u8) -> Vec<(u32, u32, [u8;
         .collect()
 }
 
+/// Horizontal reflection preserves the analytical shadow's silhouette and
+/// soft penumbra, rather than feeding a negative width to its distance field.
+#[test]
+fn reflected_shadow_matches_its_untransformed_shape() {
+    use flui_foundation::geometry::RRect;
+
+    let Some(renderer) = crate::test_support::renderer_or_skip() else {
+        return;
+    };
+    let (root, card) = (ContentToken::mint(), ContentToken::mint());
+    let draw = |reflected: bool| {
+        move |canvas: &mut Canvas| {
+            canvas.draw_rect(
+                Rect::from_xywh(0.0, 0.0, f64::from(SIDE), f64::from(SIDE)),
+                &Paint::fill(Color::WHITE),
+            );
+            let left = if reflected { 20.0 } else { 40.0 };
+            let shape = Path::from_rrect(RRect::from_rect_circular(
+                Rect::from_xywh(left, 20.0, 40.0, 40.0),
+                8.0,
+            ));
+            if reflected {
+                canvas.translate(100.0, 0.0);
+                canvas.scale(-1.0, 1.0);
+            }
+            canvas.draw_shadow(&shape, Color::BLACK, 2.0);
+        }
+    };
+    let capture = |reflected| {
+        let paint = draw(reflected);
+        let scene = scene(
+            &root,
+            &[Boundary {
+                id: 2,
+                token: &card,
+                at: Offset::ZERO,
+                paint: &paint,
+            }],
+            None,
+        );
+        full_frame_pixels(&renderer, &scene)
+    };
+    let reference = capture(false);
+    let reflected = capture(true);
+    for (name, x, y) in [
+        ("center", 60, 40),
+        ("upper penumbra", 60, 18),
+        ("lower penumbra", 60, 63),
+    ] {
+        let expected = px(&reference, x, y);
+        assert_ne!(expected, WHITE, "precondition: {name} contains shadow ink");
+        let actual = px(&reflected, x, y);
+        assert!(
+            near(actual, expected, 2),
+            "{name}: reflected {actual:?}, reference {expected:?}"
+        );
+    }
+    assert_eq!(px(&reference, 20, 40), WHITE, "reference exterior");
+    assert_eq!(px(&reflected, 20, 40), WHITE, "reflected exterior");
+}
+
 /// A removed boundary's shadow leaves no penumbra behind: the damage its
 /// display list reports reaches as far as the GPU shadow's ink, which the
 /// analytic rounded-rect shadow spreads three sigma past a rect offset half

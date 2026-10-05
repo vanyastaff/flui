@@ -184,14 +184,19 @@ impl DrawBatcher {
     ) {
         let scale = state.max_scale();
 
-        // Bake the CTM: device-space AABB from the transformed rect corners.
-        // Material shadows are axis-aligned (no rotation), so the two-corner
-        // AABB is exact.
+        // Bake the CTM into the rectangle's endpoint coordinates.
+        // An axis-aligned horizontal reflection reverses these endpoints,
+        // but the analytical SDF still needs a positive width.
         let top_left = state.apply_transform(Point::new(rrect.rect.left(), rrect.rect.top()));
         let bottom_right =
             state.apply_transform(Point::new(rrect.rect.right(), rrect.rect.bottom()));
-        let rect_pos = [top_left.x, top_left.y];
-        let rect_size = [bottom_right.x - top_left.x, bottom_right.y - top_left.y];
+        let (left, right) = if state.is_axis_aligned() {
+            (top_left.x.min(bottom_right.x), top_left.x.max(bottom_right.x))
+        } else {
+            (top_left.x, bottom_right.x)
+        };
+        let rect_pos = [left, top_left.y];
+        let rect_size = [right - left, bottom_right.y - top_left.y];
         let corner_radius = rrect.top_left.x * f64::from(scale);
 
         // Elevation → shadow shape, in the same device space as `rect_pos`.

@@ -1268,3 +1268,13 @@ concentric/linear/repeated-root/cone, tiling, decoration, affine and refusal/rec
 readback rows. CPU geometry normalization and computed shader roots retain their
 documented numeric limits; exact conical geometry at every floating range is
 not promised.
+
+### Horizontally reflected analytical shadows preserve their silhouette
+
+Analytical rounded-rectangle shadows normalize horizontally reflected
+axis-aligned bounds before building their SDF instance. Horizontal reflection
+preserves the positive-scale penumbra and alpha curve.
+`reflected_shadow_matches_its_untransformed_shape` checks center, upper and
+lower penumbra, and exterior pixels against an independently recorded equivalent
+translated shape through public Canvas capture. This does not establish rotated,
+vertically reflected, elliptical or asymmetric-corner shadow fidelity.
