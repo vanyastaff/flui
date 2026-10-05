@@ -400,49 +400,49 @@ hot-reload = ["notify"]
   [ADR-0105](../../../docs/adr/ADR-0105-asset-validation-and-bridge-progress.md)
   records the host and asset contracts.
 
-### Public cold initialization shares Moka entries and failures
+### Generic initialization is independent; font loads share work
 
-Initializer ancestry belongs to each typed cache and is shared by its clones.
-The scope is entered while polling or retiring user work and is retired on
-pending, completion or unwind. Same-key reentry through a clone first uses a
-completed entry if available; otherwise it runs the nested initializer directly
-and returns an uncached handle. The outer initializer owns publication. This
-prevents waiting on the entry that the caller itself must complete, including
-after suspension. Other keys and cache instances remain independent, and
-ordinary concurrent requests still coalesce. The ancestry tracker's lock never
-spans key comparison, future polling or retirement. Separately spawned dependency
-cycles are outside this ancestry contract. The reentry row in
-`cold_registry_loads_share_work_and_recover` pins progress, outer publication,
-independent cache/key behavior, nested failure and the next successful request.
-The retirement row checks completion, cancellation of elected work and disposal
-of an unselected waiter's captures. The ancestry key is owned outside Moka's
-initializer future so its destructor runs after the backend waiter retires.
+The public cache helper performs get, initialize and insert without joining a
+pending same-key initializer. Each successful call publishes; later completion
+can replace earlier data. Existing handles retain their own allocations. Errors
+are owned and never cached. Cancellation drops only that initializer, while
+independent work continues. A panic reaches its caller; subsequent calls can
+retry. No exactly-once side effects or generic cold-load coalescing is promised.
+This covers direct reentry, destructor reentry and awaited native spawned work
+without ancestry trackers, runtime-specific context or a global wait graph.
+
+Registry loading validates each descriptor before lookup. The crate-private
+AssetCache::load boundary checks the exact TypeId identity of the closed
+FontAsset producer. Only fonts enter the private borrowed-key Moka initializer;
+FontAsset reads bytes through standard file IO and wraps them in Arc
+without custom asset or decoder callbacks. There is no custom opt-in switch, public
+coalescing closure API, specialization or unsafe conversion. ImageAsset and generic Asset
+implementations use the independent public helper and keep owned AssetError
+results. Wrapping a font asset in a custom type does not inherit singleflight.
+Image decoding keeps image crate registered format/decoder hooks, which can
+reenter the registry, so images cannot enter this singleflight boundary.
+
+Font cold contenders share an allocation or failure; failures are not cached.
+Moka waiters can restart after elected cancellation or panic, subject to its
+finite retry policy. Font loading must tolerate restart. Only fresh returned
+entries count as completed font insertions. Generic initialization counts each
+successful publication; presence and count observations can race concurrent writes.
+Cancellation after backend publication can leave data without a completed count.
 
 [ADR-0120](../../../docs/adr/ADR-0120-typed-asset-cache-retention.md)
-records the cache configuration and shared-initialization contract.
+records this boundary. The public
+`cold_registry_loads_preserve_publication_and_recover` family pins independent
+custom loads, late completion overwrite and retained handle ownership, direct
+and two-thread spawned reentry, errors, cancellation, panic and healthy retry.
+Spawned rows have five-second timeouts. Its cold font/image rows occupy the
+runtime-local IO worker before polling both
+requests, then assert shared font allocation and independent image allocations.
+`builtin_initialization_shares_work_and_recovers` is a private failure-path
+matrix because the public font loader cannot deterministically suspend at each
+IO/cancellation/panic boundary. It invokes the actual private Moka helper and
+pins one accepted initializer, shared data/error, waiter restart and next hit.
 
-`AssetRegistry::load` validates every descriptor before looking up its typed
-cache. Both registry loading and the public `AssetCache::get_or_insert_with`
-helper use Moka's borrowed-key entry selector with `or_try_insert_with`, sharing
-one loaded allocation or `Arc<Error>`. Custom errors need not implement `Clone`.
-Registry loads clone the shared `AssetError` into their owned error result.
-Errors are not cached. A cancelled initializer releases Moka's waiters; a
-remaining accepted descriptor can restart the load. An initializer panic reaches
-its caller while a waiter can retry. Repeated cancellation and panic retries
-remain subject to Moka's finite retry limit.
-
-Hit/miss statistics record each initial presence observation, which can race
-concurrent writes. Only a fresh returned entry counts as a completed insertion;
-a cold waiter is not another insertion. Cancellation after backend publication
-can leave an entry without a completed insertion count. The public
-`cold_registry_loads_share_work_and_recover` family checks registry allocation
-sharing, shared errors and cancellation recovery.
-`public_cache_waiters_share_data_and_non_clone_errors` and
-`public_cache_waiters_recover_after_cancellation_or_panic` check those contracts
-through the public cache helper.
-
-This coalesces ordinary registry loads, including decoded image results. Bridged
-image loads bypass the typed cache and retain the widget LRU's synchronous
+Bridged image loads bypass typed caching and retain the widget LRU's synchronous
 frame-path probe and subscriber-lifetime contract.
 
 ### Observation and invalidation have distinct effects
@@ -485,3 +485,10 @@ handles, alongside their shared operation counts and statistics reset.
 - [TinyLFU Paper](https://arxiv.org/abs/1512.00727)
 - [Lasso String Interning](https://docs.rs/lasso)
 - [parking_lot Performance](https://github.com/Amanieu/parking_lot#performance)
+
+The separate `registered_image_hook_can_await_same_key_spawned_work` consumer test
+registers a real image decoder hook, starts a same-key child from it and bounds
+its synchronous bridge to three seconds. It checks child publication, independent
+parent/child handles, unchanged registered-hook decoding and the next cache hit.
+Its dedicated process is necessary because image registrations are global and
+cannot be removed. No hook registration enters the ordinary integration binary.

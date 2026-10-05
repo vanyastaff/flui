@@ -42,8 +42,8 @@ let registry = AssetRegistryBuilder::new()
 ```
 
 Use `CacheCapacity::Disabled` to retain no completed entries. Concurrent cold
-requests still coalesce; later requests reload. Full configuration independently
-selects lifetime and idle expiration:
+custom requests run independently; font requests share pending work. Later
+requests reload. Full configuration independently selects lifetime and idle expiration:
 
 ```rust
 use flui_assets::{AssetCacheConfig, AssetRegistryBuilder, CacheCapacity, CacheExpiration};
@@ -174,21 +174,22 @@ println!("Invalidation requests: {}", cache.stats().invalidations);
 ```
 
 `contains` is synchronous and does not count a request or refresh idle expiration.
-Same-key reentry from an initializer through a cache clone uses completed data
-if present; otherwise it runs the nested initializer independently and returns
-uncached data. The outer initializer owns publication. This works after
-suspension and during initializer retirement, without introducing a self-wait.
-Cycles through separately spawned tasks are outside this ancestry contract.
+Generic `get_or_insert_with` gets completed data or runs its own initializer,
+then inserts each successful result. Cold calls, including direct or awaited
+spawned reentry, do not wait on pending same-key work. Late completion may replace
+an earlier entry; existing handles keep their data. Errors remain owned and are
+not cached. Cancellation affects only that call; independent work survives and
+later requests can retry. No exactly-once side effects are guaranteed.
 
-`get` retrieves data asynchronously. `get_or_insert_with` coalesces cold requests
-and returns shared `Arc<Error>` failures without requiring errors to be Clone.
-Errors are not cached; a later call can retry. An initializer panic reaches that
-caller; remaining waiters can retry from their own closure. Repeated cancellation
-or panic recovery is bounded by Moka's retry policy.
+Registry loading validates every descriptor. Only closed built-in FontAsset producers share pending work through Moka.
+ImageAsset keeps registered image decoder hooks and uses the independent helper,
+as custom assets do. Font failures are shared but not cached; cancellation or
+panic allows a waiter to restart subject to Moka's finite retry policy. No public
+custom coalescing opt-in or mandatory spawn API is introduced.
 
 Counters are shared across clones. Hit/miss counts for initialization describe
 an initial presence probe; concurrent changes can race it. Insertions count
-completed explicit inserts and fresh returned initializer results, not guaranteed
+every generic publication and fresh returned built-in results, not guaranteed
 resident entries. `invalidations` includes requests for absent keys and excludes
 automatic eviction. `len` and utilization are estimates, not memory measurements.
 

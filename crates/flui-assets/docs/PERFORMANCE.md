@@ -47,16 +47,18 @@ already returned to consumers or cancel in-flight initializers.
 
 ## Coalescing
 
-`AssetCache::get_or_insert_with` delegates fallible initialization to Moka's entry
-API. Concurrent cold callers for one typed key share one allocation or one
-`Arc<Error>`. Errors are not cached. After cancellation or an initializer panic,
-a remaining waiter can initialize from its own closure; Moka imposes a finite
-retry limit for repeated failures. An initializer must not recursively wait for
-its own unfinished key.
+Generic `get_or_insert_with` gets completed data or runs its own initializer,
+then inserts each successful result. Cold calls, including direct or awaited
+spawned reentry, do not wait on pending same-key work. Late completion may replace
+an earlier entry; existing handles keep their data. Errors remain owned and are
+not cached. Cancellation affects only that call; independent work survives and
+later requests can retry. No exactly-once side effects are guaranteed.
 
-Registry loads use the same operation after validating every descriptor,
-including descriptors supplied on cache hits. The registry returns its existing
-owned `AssetError` by cloning the shared failure.
+Registry loading validates every descriptor. Only closed built-in FontAsset producers share pending work through Moka.
+ImageAsset keeps registered image decoder hooks and uses the independent helper,
+as custom assets do. Font failures are shared but not cached; cancellation or
+panic allows a waiter to restart subject to Moka's finite retry policy. No public
+custom coalescing opt-in or mandatory spawn API is introduced.
 
 ## Observing a typed cache
 
@@ -73,7 +75,7 @@ println!("Hits: {}, misses: {}, invalidation requests: {}",
 ```
 
 Counters are shared across cache clones and saturate rather than wrap. For
-coalesced loading, hits and misses describe the initial presence observation,
+initialization, hits and misses describe the initial presence observation,
 which can race concurrent changes. A fresh returned entry counts as a completed
 insertion; cancellation after backend publication can leave an entry without
 that completed count. `invalidations` counts explicit invalidation requests,

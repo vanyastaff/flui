@@ -24,20 +24,27 @@ Defaults remain five minutes and one minute. `CacheExpiration::NEVER` disables
 one expiration rule; its checked constructor admits zero through 1,000 years of
 365 days and rejects longer durations before Moka's builder can panic.
 
-Moka's default TinyLFU admission and LRU eviction remain appropriate for concurrent
-typed asset loading. `AssetCache::get_or_insert_with` and registry loading share
-the borrowed-key fallible entry initializer. Concurrent callers receive the same
-allocation or shared `Arc<Error>`; failures are not retained. A waiter can retry
-after an initializer is cancelled or panics, subject to Moka's retry limits.
-Registry loading continues to return an owned `AssetError` and validate before
-cache lookup. Successful initializers must be safe to restart after cancellation.
+Moka's default TinyLFU admission and LRU eviction remain appropriate for
+concurrent typed retention. Generic public initialization performs get, load
+and insert without awaiting pending same-key work. Each successful invocation
+publishes; a late completion may replace earlier data while its returned handles
+remain valid. Errors stay owned and are not retained. Cancellation and panic leave
+independent work unaffected and later calls free to retry. No exactly-once loading
+or side-effect guarantee is made. This permits direct and awaited native spawned
+reentry without runtime-specific context or inference of arbitrary wait graphs.
 
-Coalescing covers independent requests. An initializer's same-key reentry through
-a clone uses completed data if present, otherwise returns independently initialized
-uncached data; its outer initializer retains publication ownership. Poll-scoped
-ancestry belongs to the typed cache, and no infrastructure guard spans user work.
-This includes reentry after suspension, but cannot identify cycles through
-separately spawned tasks. The public cold-load family pins reentry and recovery.
+Registry admission validates every descriptor. Custom Asset implementations use
+that independent path and return owned AssetError values. Only the exact built-in
+FontAsset type enters the private Moka borrowed-key fallible initializer. Its
+closed producer reads bytes through standard file IO and wraps them in Arc,
+without custom asset or decoder callbacks. ImageAsset preserves registered
+image decoder hooks, which can reenter, and uses independent initialization. A wrapper or custom Asset cannot opt in;
+TypeId checks do not cast data or duplicate loader implementations.
+
+Font same-key contenders share one allocation or failure; errors are not
+cached. Moka waiters retry after elected cancellation or panic subject to its
+finite retry limit. These producers must tolerate restart. No infrastructure
+guard spans arbitrary user initialization or retirement.
 
 Presence is a synchronous observation using `contains_key`: it records no
 retrieval, clones no data, and changes neither popularity nor idle expiration.
@@ -57,8 +64,8 @@ user destructors, including aggregates that double-panic.
 
 ## Consequences
 
-This is a breaking change to capacity configuration, cache initializer error
-ownership, synchronous presence, statistics naming and count width. It removes
+This is a breaking change to capacity configuration, custom registry cold-load
+behavior, synchronous presence, statistics naming and count width. It removes
 the guessed-byte contract rather than adding a misleading generic weigher.
 A future byte policy requires an explicit trustworthy asset-weight contract.
 
@@ -69,10 +76,24 @@ Explicit callers can still populate both caches; no sharing of their allocations
 or combined memory budget is promised.
 
 `asset_cache_retention_and_observation_contracts` pins small and disabled capacity,
-coalescing followed by reload, finite metrics and checked expiration.
-`cold_registry_loads_share_work_and_recover` exercises shared non-Clone errors,
+independent loading followed by reload, finite metrics and checked expiration.
+`cold_registry_loads_preserve_publication_and_recover` exercises independent owned
+non-Clone errors and spawned child progress,
 cancellation, panic and subsequent retry through public handles.
 `cache_clones_report_shared_operations_and_reset` checks observational presence
 and shared counters.
 `registry_cache_retirement_commits_ownership_before_data_drop` exercises reentry
 through a live registry and the absent-owner fallback after last-owner release.
+
+The generic helper retains its pre-audit independent publication behavior and
+owned error type. Custom registry cold loads change from universal singleflight
+to independent work because arbitrary Asset::load can await same-key children.
+Font producers retain singleflight; image/custom producers remain independent. The private
+`builtin_initialization_shares_work_and_recovers` matrix pins built-in failure
+sharing and waiter recovery; public font/image rows prove shared fonts and independent images.
+
+`registered_image_hook_can_await_same_key_spawned_work` pins the actual callback
+boundary: registered decoding is preserved, an awaited same-key child finishes,
+its successful result publishes, parent replacement preserves the child handle,
+and a subsequent cache hit performs no decoding. Its hook registrations run in
+an isolated test process. Built-in-only image decoding is not introduced here.
