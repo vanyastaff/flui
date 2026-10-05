@@ -288,15 +288,7 @@ impl NavigatorHandle {
         mutate: impl FnOnce(&mut RouteHistory) -> V,
         commit: impl FnOnce() -> O,
     ) -> O {
-        let (value, outcome, undelivered) = {
-            let mut history = self.shared.history.lock();
-            let value = mutate(&mut history);
-            (value, history.take_outcome(), history.take_undelivered())
-        };
-        let retired = commit();
-        if let Some(outcome) = outcome {
-            self.shared.apply(outcome);
-        }
+        let (value, retired, undelivered) = self.shared.mutate_committing(mutate, commit);
         report_undelivered(operation, undelivered);
         drop(value);
         retired

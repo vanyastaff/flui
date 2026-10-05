@@ -562,11 +562,26 @@ impl NavigatorShared {
         &self,
         mutate: impl FnOnce(&mut RouteHistory) -> R,
     ) -> (R, Vec<UndeliveredResult>) {
+        let (value, (), undelivered) = self.mutate_committing(mutate, || ());
+        (value, undelivered)
+    }
+
+    /// [`mutate_deferring_report`](Self::mutate_deferring_report) with a
+    /// framework-only `commit` between releasing the history lock and applying
+    /// the flushed outcome, so state it publishes is visible to every observer
+    /// and lifecycle hook `apply` reaches. The commit's value is returned, and
+    /// dropped by unwind if `apply` panics.
+    fn mutate_committing<R, C>(
+        &self,
+        mutate: impl FnOnce(&mut RouteHistory) -> R,
+        commit: impl FnOnce() -> C,
+    ) -> (R, C, Vec<UndeliveredResult>) {
         let (value, outcome, undelivered) = {
             let mut history = self.history.lock();
             let value = mutate(&mut history);
             (value, history.take_outcome(), history.take_undelivered())
         };
+        let committed = commit();
         // Guard released. Both of the following may re-enter this navigator — a
         // `Route` lifecycle hook or observer inside `apply`, and the `Drop` of a
         // caller-supplied result inside `report_undelivered`.
@@ -584,7 +599,7 @@ impl NavigatorShared {
         if let Some(outcome) = outcome {
             self.apply(outcome);
         }
-        (value, undelivered)
+        (value, committed, undelivered)
     }
 }
 
