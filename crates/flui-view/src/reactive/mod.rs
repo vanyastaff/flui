@@ -342,6 +342,8 @@ impl Reactive {
             Self::release_index(&mut inner, slot.index())
         };
         Self::retire_released(std::iter::once(retired));
+        // After retirement: a subscriber failure here owns no released value.
+        tracing::trace!(target: "flui::signals", slot = ?slot, "signal released");
     }
 
     fn release_index(inner: &mut Inner, index: u32) -> Option<Box<dyn Any>> {
@@ -466,13 +468,23 @@ impl Reactive {
             if let Some(owned) = inner.owned_by_element.remove(&element) {
                 for slot in owned {
                     if self.check(&inner, slot).is_ok() {
-                        retired.push(Self::release_index(&mut inner, slot.index()));
+                        retired.push((slot, Self::release_index(&mut inner, slot.index())));
                     }
                 }
             }
             retired
         };
-        Self::retire_released(retired);
+        let (slots, values): (Vec<_>, Vec<_>) = retired.into_iter().unzip();
+        Self::retire_released(values);
+        // After retirement: a subscriber failure here owns no released value.
+        for slot in slots {
+            tracing::trace!(
+                target: "flui::signals",
+                slot = ?slot,
+                ?element,
+                "signal released with its element"
+            );
+        }
     }
 
     /// Elements currently registered as readers of `slot` (test/diagnostic

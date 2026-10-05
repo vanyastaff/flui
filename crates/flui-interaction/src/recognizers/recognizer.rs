@@ -324,20 +324,20 @@ impl RecognizerBase {
             entry.sweep();
         }
         if pointer.is_some() {
-            let _span = tracing::debug_span!(
-                "recognizer.stop_tracking",
+            tracing::debug!(
+                name: "recognizer.stop_tracking",
                 ?pointer,
                 event = %crate::observability::GestureEvent::StoppedTracking,
-            )
-            .entered();
+                "recognizer stopped tracking"
+            );
         }
     }
 
     /// Reject this gesture (lose the arena or explicit rejection)
     ///
     /// Local tracking and arena membership are withdrawn before diagnostics.
-    /// A subscriber can fail or reenter during span creation without leaving
-    /// this recognizer admitted under its retired contact.
+    /// A subscriber can fail or reenter while recording the event without
+    /// leaving this recognizer admitted under its retired contact.
     pub fn reject(&self) {
         let pointer = self.primary_pointer();
         // Withdraw ONLY this recognizer from the arena, using the stable member
@@ -359,13 +359,13 @@ impl RecognizerBase {
         }
         if pointer.is_some() {
             // Subscriber callbacks are arbitrary user code. The complete
-            // rejection transaction must precede creation/entry of its span.
-            let _span = tracing::debug_span!(
-                "recognizer.reject",
+            // rejection transaction precedes the event.
+            tracing::debug!(
+                name: "recognizer.reject",
                 ?pointer,
                 event = %crate::observability::GestureEvent::ArenaRejected,
-            )
-            .entered();
+                "recognizer rejected"
+            );
         }
     }
 }

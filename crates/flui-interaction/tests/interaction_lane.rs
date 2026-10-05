@@ -965,19 +965,21 @@ fn drag_disposal_commits_tracking_before_rejection_diagnostics() {
     use flui_interaction::sealed::CustomGestureRecognizer;
     use flui_interaction::{DragAxis, DragGestureRecognizer, GestureRecognizer, Offset, PointerId};
 
-    struct RejectSpanPanic(Arc<AtomicBool>);
-    impl tracing::Subscriber for RejectSpanPanic {
+    struct RejectEventPanic(Arc<AtomicBool>);
+    impl tracing::Subscriber for RejectEventPanic {
         fn enabled(&self, metadata: &tracing::Metadata<'_>) -> bool {
             metadata.name() == "recognizer.reject" && *metadata.level() == tracing::Level::DEBUG
         }
-        fn new_span(&self, attributes: &tracing::span::Attributes<'_>) -> tracing::span::Id {
-            assert_eq!(attributes.metadata().name(), "recognizer.reject");
-            self.0.store(true, Ordering::Relaxed);
-            panic!("recognizer rejection diagnostic failure");
+        fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+            tracing::span::Id::from_u64(1)
         }
         fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
         fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
-        fn event(&self, _: &tracing::Event<'_>) {}
+        fn event(&self, event: &tracing::Event<'_>) {
+            assert_eq!(event.metadata().name(), "recognizer.reject");
+            self.0.store(true, Ordering::Relaxed);
+            panic!("recognizer rejection diagnostic failure");
+        }
         fn enter(&self, _: &tracing::span::Id) {}
         fn exit(&self, _: &tracing::span::Id) {}
     }
@@ -1003,17 +1005,18 @@ fn drag_disposal_commits_tracking_before_rejection_diagnostics() {
     assert_eq!(arena.member_count(PointerId::PRIMARY), 2);
 
     let diagnostic_ran = Arc::new(AtomicBool::new(false));
-    let result = tracing::subscriber::with_default(RejectSpanPanic(diagnostic_ran.clone()), || {
-        catch_unwind(AssertUnwindSafe(|| recognizer.dispose()))
-    });
-    let payload = result.expect_err("the actual debug span subscriber must fail");
+    let result =
+        tracing::subscriber::with_default(RejectEventPanic(diagnostic_ran.clone()), || {
+            catch_unwind(AssertUnwindSafe(|| recognizer.dispose()))
+        });
+    let payload = result.expect_err("the actual debug event subscriber must fail");
     assert_eq!(
         payload.downcast_ref::<&str>(),
         Some(&"recognizer rejection diagnostic failure")
     );
     assert!(
         diagnostic_ran.load(Ordering::Relaxed),
-        "new_span was actually executed"
+        "the event actually ran"
     );
     assert!(
         recognizer.primary_pointer().is_none(),
@@ -1048,20 +1051,22 @@ fn drag_completion_commits_tracking_before_stop_diagnostics() {
         atomic::{AtomicBool, Ordering},
     };
 
-    struct StopSpanPanic(Arc<AtomicBool>);
-    impl tracing::Subscriber for StopSpanPanic {
+    struct StopEventPanic(Arc<AtomicBool>);
+    impl tracing::Subscriber for StopEventPanic {
         fn enabled(&self, metadata: &tracing::Metadata<'_>) -> bool {
             metadata.name() == "recognizer.stop_tracking"
                 && *metadata.level() == tracing::Level::DEBUG
         }
-        fn new_span(&self, attributes: &tracing::span::Attributes<'_>) -> tracing::span::Id {
-            assert_eq!(attributes.metadata().name(), "recognizer.stop_tracking");
-            self.0.store(true, Ordering::Relaxed);
-            panic!("recognizer stop diagnostic failure");
+        fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+            tracing::span::Id::from_u64(1)
         }
         fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
         fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
-        fn event(&self, _: &tracing::Event<'_>) {}
+        fn event(&self, event: &tracing::Event<'_>) {
+            assert_eq!(event.metadata().name(), "recognizer.stop_tracking");
+            self.0.store(true, Ordering::Relaxed);
+            panic!("recognizer stop diagnostic failure");
+        }
         fn enter(&self, _: &tracing::span::Id) {}
         fn exit(&self, _: &tracing::span::Id) {}
     }
@@ -1082,19 +1087,19 @@ fn drag_completion_commits_tracking_before_stop_diagnostics() {
     assert_eq!(starts.get(), 1);
 
     let diagnostic_ran = Arc::new(AtomicBool::new(false));
-    let result = tracing::subscriber::with_default(StopSpanPanic(diagnostic_ran.clone()), || {
+    let result = tracing::subscriber::with_default(StopEventPanic(diagnostic_ran.clone()), || {
         catch_unwind(AssertUnwindSafe(|| {
             recognizer.handle_event(PointerDispatch::at_root(&release));
         }))
     });
-    let payload = result.expect_err("the actual stop debug span must fail");
+    let payload = result.expect_err("the actual stop debug event must fail");
     assert_eq!(
         payload.downcast_ref::<&str>(),
         Some(&"recognizer stop diagnostic failure")
     );
     assert!(
         diagnostic_ran.load(Ordering::Relaxed),
-        "new_span actually ran"
+        "the event actually ran"
     );
     assert!(
         recognizer.primary_pointer().is_none(),
