@@ -35,21 +35,23 @@ the `flui-cli` project templates, the README badge and `llms.txt` together —
 drift from `rust-toolchain.toml`'s channel. Full procedure:
 `rust-toolchain.toml`'s header comment.
 
-## Clone and Build
+## Clone and Try an Example
 
 ```bash
 git clone https://github.com/vanyastaff/flui
 cd flui
-cargo build --workspace
+cargo run --locked --example counter
 ```
 
-The workspace builds in dependency order automatically (foundation → core → rendering → framework → application). See [`crates.md`](crates.md) for the crate map and `Cargo.toml` for workspace membership.
+This builds the counter and its dependencies. Press **Increment** to change the
+count, then close the window to exit. A full workspace build is useful for
+framework contributors; it is not required to try an application. See
+[`crates.md`](crates.md) for the crate map and `Cargo.toml` for workspace membership.
 
-For a clean rebuild:
+For contributors rebuilding the whole workspace:
 
 ```bash
-cargo clean
-cargo build --workspace
+cargo build --locked --workspace
 ```
 
 ## Create an Application
@@ -62,10 +64,20 @@ this checkout instead, run these commands from the checkout root:
 
 ```bash
 cargo install --path crates/flui-cli --locked
-flui create my_app --local --path ../apps
+flui create my_app --local --path ../apps --no-check
 cd ../apps/my_app
+rustup override set 1.99.0
+cargo check
+flui doctor
 flui run
 ```
+
+`--no-check` defers the scaffold's compile check until the application's
+toolchain is selected. Generated applications do not contain a
+`rust-toolchain.toml`; a path dependency does not make Cargo inherit the source
+checkout's toolchain. The directory override selects the checkout's pinned
+Rust version for this application without changing your global default. Run
+the commands one at a time and resolve a failed check before launching.
 
 The generated application can live outside the FLUI repository. Bare `--local`
 uses the current directory as its source checkout; from another directory, use
@@ -79,7 +91,8 @@ The facade turns no design system on by default: to use `flui::material` or
 dependency in the generated `Cargo.toml`.
 
 Add `--hot-reload` to `flui create` to generate the host/worker/types workspace
-used by the reload runner. See the [CLI guide](../crates/flui-cli/README.md) for
+used by the desktop reload runner. This workspace cannot run on Android or in
+a browser; use the ordinary template for those targets. See the [CLI guide](../crates/flui-cli/README.md) for
 template and build options. Current release requirements and unverified areas
 are tracked in [Beta release criteria](BETA.md).
 
@@ -91,7 +104,7 @@ the same shape `flui create`'s `counter` template generates (see the
 source):
 
 ```bash
-cargo run --example counter
+cargo run --locked --example counter
 ```
 
 A window should open showing a count and an "Increment" button; press it to
