@@ -14,13 +14,24 @@
 //! present in the tree and silent to a screen reader, which is exactly what
 //! the first run of this check found.
 //!
+//! The disclosure and range fixtures additionally require their UIA patterns,
+//! properties and visible sibling text to agree after native actions. These
+//! are synthetic semantics fixtures, not a widget catalog or Narrator session.
+//!
 //! Exit 0 on PASS, 1 on FAIL (with the tree dumped), 2 when this host cannot
 //! take the measurement (UI Automation could not be instantiated).
 
 use std::path::Path;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use windows::Win32::UI::Accessibility::{IUIAutomationInvokePattern, UIA_InvokePatternId};
+use windows::Win32::UI::Accessibility::{
+    ExpandCollapseState, ExpandCollapseState_Collapsed, ExpandCollapseState_Expanded,
+    IUIAutomationElement, IUIAutomationExpandCollapsePattern, IUIAutomationInvokePattern,
+    IUIAutomationRangeValuePattern, UIA_CONTROLTYPE_ID, UIA_E_INVALIDOPERATION,
+    UIA_ExpandCollapsePatternId, UIA_InvokePatternId, UIA_RangeValuePatternId,
+    UIA_SliderControlTypeId,
+};
+use windows::core::HRESULT;
 
 use super::uia::{self, BUTTON, Session, Start, TEXT};
 
@@ -30,6 +41,10 @@ pub(super) const INCREMENT: &str = "Increment";
 
 /// How long the count gets to advance after an action.
 pub(super) const ADVANCE_WITHIN: Duration = Duration::from_secs(5);
+const POLL: Duration = Duration::from_millis(100);
+const UNCHANGED_FOR: Duration = Duration::from_secs(1);
+const DISCLOSURE: &str = "Probe disclosure";
+const RANGE: &str = "Probe numeric range";
 
 /// Runs the check against the built probe and returns its exit code.
 pub(super) fn run(probe: &Path) -> anyhow::Result<u8> {
@@ -87,5 +102,270 @@ fn drive(session: &mut Session) -> anyhow::Result<bool> {
     };
     println!("tree after the invoke:");
     uia::dump(&after);
+    match drive_patterns(session, &window) {
+        Ok(passed) => Ok(passed),
+        Err(error) => {
+            println!("FAIL: native pattern or property request failed: {error:#}");
+            uia::dump(&session.walk(&window));
+            Ok(false)
+        }
+    }
+}
+
+fn drive_patterns(session: &Session, window: &IUIAutomationElement) -> anyhow::Result<bool> {
+    if !wait_for_state(session, window, "initial disclosure and range", |nodes| {
+        let (Some(disclosure), Some(range)) = (disclosure_pattern(nodes)?, range_pattern(nodes)?)
+        else {
+            return Ok(false);
+        };
+        // SAFETY: live UIA patterns on the session's COM thread. Read current
+        // properties rather than cached properties from an earlier frame.
+        let valid = unsafe {
+            disclosure.CurrentExpandCollapseState()? == ExpandCollapseState_Collapsed
+                && range.CurrentValue()?.to_bits() == 0.0_f64.to_bits()
+                && range.CurrentMinimum()?.to_bits() == 0.0_f64.to_bits()
+                && range.CurrentMaximum()?.to_bits() == 10.0_f64.to_bits()
+                && range.CurrentSmallChange()?.to_bits() == 1.0_f64.to_bits()
+                && range.CurrentLargeChange()?.to_bits() == 1.0_f64.to_bits()
+                && !range.CurrentIsReadOnly()?.as_bool()
+        };
+        Ok(valid
+            && uia::has(nodes, TEXT, "Disclosure state: collapsed")
+            && uia::has(nodes, TEXT, "Published range value: 0"))
+    })? {
+        return Ok(false);
+    }
+    println!("UIA patterns ready: disclosure collapsed; writable range 0..10, value 0, step 1");
+
+    for (expanded, text) in [
+        (true, "Disclosure state: expanded"),
+        (false, "Disclosure state: collapsed"),
+        (true, "Disclosure state: expanded"),
+    ] {
+        let pattern = disclosure_pattern(&session.walk(window))?
+            .ok_or_else(|| anyhow::anyhow!("disclosure disappeared before its action"))?;
+        // SAFETY: live pattern on the session's COM thread; no arguments.
+        unsafe {
+            if expanded {
+                pattern.Expand()?;
+            } else {
+                pattern.Collapse()?;
+            }
+        }
+        let expected = if expanded {
+            ExpandCollapseState_Expanded
+        } else {
+            ExpandCollapseState_Collapsed
+        };
+        if !wait_for_state(session, window, text, |nodes| {
+            disclosure_matches(nodes, expected, text)
+        })? {
+            return Ok(false);
+        }
+        println!("UIA disclosure: {text}");
+
+        // AccessKit 0.35.1 refuses a request for the already published state.
+        // Require that exact HRESULT, then watch both state and visible text;
+        // successful enqueue alone would not establish an idempotent result.
+        let pattern = disclosure_pattern(&session.walk(window))?
+            .ok_or_else(|| anyhow::anyhow!("disclosure disappeared before its repeat"))?;
+        // SAFETY: as above.
+        let repeated = unsafe {
+            if expanded {
+                pattern.Expand()
+            } else {
+                pattern.Collapse()
+            }
+        };
+        match repeated {
+            Err(error) if error.code() == HRESULT(UIA_E_INVALIDOPERATION.cast_signed()) => {}
+            result => {
+                println!(
+                    "FAIL: repeated disclosure request must return UIA_E_INVALIDOPERATION: {result:?}"
+                );
+                return Ok(false);
+            }
+        }
+        if !require_unchanged(session, window, text, |nodes| {
+            disclosure_matches(nodes, expected, text)
+        })? {
+            return Ok(false);
+        }
+        println!("UIA disclosure repeat refused without changing {text:?}");
+    }
+
+    for value in [2.375, 10.0] {
+        if !set_range_and_wait(session, window, value)? {
+            return Ok(false);
+        }
+    }
+    let range = range_pattern(&session.walk(window))?
+        .ok_or_else(|| anyhow::anyhow!("range disappeared before its rejected value"))?;
+    // SAFETY: live pattern on the COM thread; the plain f64 is intentional.
+    // AccessKit queues this request and returns success. The current owner
+    // rejects 11; only unchanged state/text proves that downstream rejection.
+    unsafe { range.SetValue(11.0) }?;
+    if !require_unchanged(session, window, "out-of-range 11 refused", |nodes| {
+        range_matches(nodes, 10.0, "Published range value: 10")
+    })? {
+        return Ok(false);
+    }
+    println!("UIA range: out-of-range 11 left value 10 unchanged");
+    let nodes = session.walk(window);
+    let increment = unique_element(&nodes, BUTTON, INCREMENT)?
+        .ok_or_else(|| anyhow::anyhow!("Increment disappeared before the rejection barrier"))?;
+    // SAFETY: live element and pattern on the session's COM thread. This
+    // independent action must produce a frame before another valid numeric
+    // request could conceal a delayed, incorrectly accepted value of 11.
+    unsafe {
+        increment
+            .GetCurrentPatternAs::<IUIAutomationInvokePattern>(UIA_InvokePatternId)?
+            .Invoke()?;
+    }
+    if !wait_for_state(
+        session,
+        window,
+        "count 2 with rejected range still 10",
+        |nodes| {
+            Ok(uia::has(nodes, TEXT, "2")
+                && range_matches(nodes, 10.0, "Published range value: 10")?)
+        },
+    )? {
+        return Ok(false);
+    }
+    println!("UIA rejection barrier: count 2 and exact range value 10");
+    if !set_range_and_wait(session, window, 4.625)? {
+        return Ok(false);
+    }
+    if !uia::has(&session.walk(window), TEXT, "2") {
+        println!("FAIL: disclosure or range actions changed the independent counter");
+        uia::dump(&session.walk(window));
+        return Ok(false);
+    }
     Ok(true)
+}
+
+fn unique_element<'a>(
+    nodes: &'a [uia::Node],
+    control: UIA_CONTROLTYPE_ID,
+    name: &str,
+) -> anyhow::Result<Option<&'a IUIAutomationElement>> {
+    let mut matches = nodes
+        .iter()
+        .filter(|node| node.control == control && node.name == name);
+    let first = matches.next();
+    anyhow::ensure!(
+        matches.next().is_none(),
+        "duplicate UIA control named {name:?}"
+    );
+    Ok(first.map(|node| &node.element))
+}
+
+fn disclosure_pattern(
+    nodes: &[uia::Node],
+) -> anyhow::Result<Option<IUIAutomationExpandCollapsePattern>> {
+    let Some(element) = unique_element(nodes, BUTTON, DISCLOSURE)? else {
+        return Ok(None);
+    };
+    // SAFETY: live element on the session's COM thread.
+    Ok(Some(unsafe {
+        element.GetCurrentPatternAs::<IUIAutomationExpandCollapsePattern>(
+            UIA_ExpandCollapsePatternId,
+        )?
+    }))
+}
+
+fn range_pattern(nodes: &[uia::Node]) -> anyhow::Result<Option<IUIAutomationRangeValuePattern>> {
+    let Some(element) = unique_element(nodes, UIA_SliderControlTypeId, RANGE)? else {
+        return Ok(None);
+    };
+    // SAFETY: live element on the session's COM thread.
+    Ok(Some(unsafe {
+        element.GetCurrentPatternAs::<IUIAutomationRangeValuePattern>(UIA_RangeValuePatternId)?
+    }))
+}
+
+fn disclosure_matches(
+    nodes: &[uia::Node],
+    state: ExpandCollapseState,
+    text: &str,
+) -> anyhow::Result<bool> {
+    let Some(pattern) = disclosure_pattern(nodes)? else {
+        return Ok(false);
+    };
+    // SAFETY: live pattern on the session's COM thread.
+    Ok(unsafe { pattern.CurrentExpandCollapseState()? } == state && uia::has(nodes, TEXT, text))
+}
+
+fn range_matches(nodes: &[uia::Node], value: f64, text: &str) -> anyhow::Result<bool> {
+    let Some(pattern) = range_pattern(nodes)? else {
+        return Ok(false);
+    };
+    // SAFETY: live pattern on the session's COM thread. All tested fractions
+    // are exactly representable in binary; no tolerance hides quantization.
+    Ok(
+        unsafe { pattern.CurrentValue()? }.to_bits() == value.to_bits()
+            && uia::has(nodes, TEXT, text),
+    )
+}
+
+fn set_range_and_wait(
+    session: &Session,
+    window: &IUIAutomationElement,
+    value: f64,
+) -> anyhow::Result<bool> {
+    let range = range_pattern(&session.walk(window))?
+        .ok_or_else(|| anyhow::anyhow!("range disappeared before SetValue"))?;
+    // SAFETY: live pattern on the COM thread; value is an admitted finite f64.
+    unsafe { range.SetValue(value) }?;
+    let text = format!("Published range value: {value}");
+    let passed = wait_for_state(session, window, &text, |nodes| {
+        range_matches(nodes, value, &text)
+    })?;
+    if passed {
+        println!("UIA range: exact value {value}");
+    }
+    Ok(passed)
+}
+
+fn wait_for_state(
+    session: &Session,
+    window: &IUIAutomationElement,
+    description: &str,
+    mut predicate: impl FnMut(&[uia::Node]) -> anyhow::Result<bool>,
+) -> anyhow::Result<bool> {
+    let deadline = Instant::now() + ADVANCE_WITHIN;
+    loop {
+        let nodes = session.walk(window);
+        if predicate(&nodes)? {
+            return Ok(true);
+        }
+        if Instant::now() >= deadline {
+            println!("FAIL: {description} not published within {ADVANCE_WITHIN:?}");
+            uia::dump(&nodes);
+            return Ok(false);
+        }
+        std::thread::sleep(POLL);
+    }
+}
+
+fn require_unchanged(
+    session: &Session,
+    window: &IUIAutomationElement,
+    description: &str,
+    mut predicate: impl FnMut(&[uia::Node]) -> anyhow::Result<bool>,
+) -> anyhow::Result<bool> {
+    let deadline = Instant::now() + UNCHANGED_FOR;
+    loop {
+        let nodes = session.walk(window);
+        if !predicate(&nodes)? {
+            println!("FAIL: {description} changed during {UNCHANGED_FOR:?} observation");
+            uia::dump(&nodes);
+            return Ok(false);
+        }
+        if Instant::now() >= deadline {
+            return Ok(true);
+        }
+        std::thread::sleep(POLL);
+    }
 }

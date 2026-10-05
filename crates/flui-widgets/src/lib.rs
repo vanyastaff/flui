@@ -92,6 +92,7 @@ pub mod app;
 mod async_builders;
 pub mod clip;
 mod container;
+pub mod controls;
 pub mod flex;
 pub mod form;
 pub mod icon;
@@ -167,6 +168,7 @@ pub use async_builders::{
     SnapshotBuilder, Stream, StreamBuilder, StreamFactory,
 };
 pub use container::Container;
+pub use controls::{Disclosure, DisclosureState, ExpansionState, Slider, SliderState};
 pub use flex::{Column, Expanded, Flex, Flexible, Row, Spacer};
 pub use flui_objects::{ImageAlignment, ImageFit};
 pub use icon::{Icon, IconData, IconTheme, IconThemeData};
@@ -310,7 +312,7 @@ pub use flui_interaction::{
     PointerPanZoomEvent,
 };
 pub use flui_rendering::semantics::{
-    SemanticsConfiguration, SemanticsProperties, SemanticsRole,
+    NumericRange, NumericRangeError, SemanticsConfiguration, SemanticsProperties, SemanticsRole,
     TextDirection as SemanticsTextDirection,
 };
 
@@ -340,31 +342,32 @@ pub mod prelude {
         ConstrainedBox, Container, CopySelectionTextIntent, CustomMultiChildLayout, CustomPaint,
         CustomScrollView, CustomSingleChildLayout, DecoratedBox, DefaultFocusTraversal,
         DefaultFocusTraversalState, DefaultTextStyle, DefaultWidgetsLocalizations, Directionality,
-        DragTarget, Draggable, EditableText, EditableTextState, ExcludeFocus, ExcludeSemantics,
-        Expanded, FittedBox, Flex, FlexFit, Flexible, FlightDirection, Flow, Focus, FocusRoot,
-        FocusScope, Form, FormField, FormFieldHandle, FormHandle, FractionalTranslation,
-        FractionallySizedBox, FutureBuilder, GestureArenaScope, GestureDetector, GridView, Hero,
-        HeroController, HeroMode, Icon, IconData, IconTheme, IconThemeData, IgnoreBaseline,
-        IgnorePointer, Image, ImageAlignment, ImageFit, ImageProvider, IndexedSemantics,
-        IndexedStack, InheritedTheme, Intent, IntrinsicHeight, IntrinsicWidth, LayoutBuilder,
-        LayoutId, LimitedBox, ListBody, ListView, Listener, Localizations, LocalizationsDelegate,
-        MediaQuery, MediaQueryData, MergeSemantics, MouseRegion, Navigator, NavigatorHandle,
-        NextFocusAction, NextFocusIntent, Offstage, Opacity, OverflowBox, OverflowBoxFit, Overlay,
-        OverlayEntry, OverlayEntryId, OverlayHandle, Padding, PageController, PageRoute,
-        PageScrollPhysics, PageView, PasteTextIntent, PhysicalModel, PhysicalShape, PopScope,
-        PopupRoute, Positioned, PreferredSize, PreferredSizeView, PreviousFocusAction,
-        PreviousFocusIntent, RawButton, RawTextField, RawTextFieldState, RawTextFormField,
-        RepaintBoundary, RichText, RotatedBox, Routable, RoutePath, Router, RouterHandle, Row,
-        SafeArea, ScrollController, Scrollable, Scrollbar, SelectAllTextIntent, Semantics,
-        Shortcuts, ShrinkWrappingViewport, SimpleRoute, SingleActivator, SingleChildScrollView,
-        SizedBox, SizedOverflowBox, SliverChildBuilderDelegate, SliverFillRemaining,
-        SliverFillRemainingAndOverscroll, SliverFillRemainingWithScrollable, SliverFillViewport,
-        SliverFixedExtentList, SliverGrid, SliverIgnorePointer, SliverList, SliverOffstage,
-        SliverOpacity, SliverPadding, SliverToBoxAdapter, Spacer, Stack, StreamBuilder,
-        SubmitCallback, Table, TableCell, TableRow, Text, TextEditingController, TickerMode,
-        Transform, UnconstrainedBox, ValueListenableBuilder, Viewport, Visibility, VisibilityGate,
-        WidgetState, WidgetStateConstraint, WidgetStateProperty, WidgetStates,
-        WidgetStatesController, WidgetsApp, WidgetsLocalizations, Wrap,
+        Disclosure, DisclosureState, DragTarget, Draggable, EditableText, EditableTextState,
+        ExcludeFocus, ExcludeSemantics, Expanded, ExpansionState, FittedBox, Flex, FlexFit,
+        Flexible, FlightDirection, Flow, Focus, FocusRoot, FocusScope, Form, FormField,
+        FormFieldHandle, FormHandle, FractionalTranslation, FractionallySizedBox, FutureBuilder,
+        GestureArenaScope, GestureDetector, GridView, Hero, HeroController, HeroMode, Icon,
+        IconData, IconTheme, IconThemeData, IgnoreBaseline, IgnorePointer, Image, ImageAlignment,
+        ImageFit, ImageProvider, IndexedSemantics, IndexedStack, InheritedTheme, Intent,
+        IntrinsicHeight, IntrinsicWidth, LayoutBuilder, LayoutId, LimitedBox, ListBody, ListView,
+        Listener, Localizations, LocalizationsDelegate, MediaQuery, MediaQueryData, MergeSemantics,
+        MouseRegion, Navigator, NavigatorHandle, NextFocusAction, NextFocusIntent, Offstage,
+        Opacity, OverflowBox, OverflowBoxFit, Overlay, OverlayEntry, OverlayEntryId, OverlayHandle,
+        Padding, PageController, PageRoute, PageScrollPhysics, PageView, PasteTextIntent,
+        PhysicalModel, PhysicalShape, PopScope, PopupRoute, Positioned, PreferredSize,
+        PreferredSizeView, PreviousFocusAction, PreviousFocusIntent, RawButton, RawTextField,
+        RawTextFieldState, RawTextFormField, RepaintBoundary, RichText, RotatedBox, Routable,
+        RoutePath, Router, RouterHandle, Row, SafeArea, ScrollController, Scrollable, Scrollbar,
+        SelectAllTextIntent, Semantics, Shortcuts, ShrinkWrappingViewport, SimpleRoute,
+        SingleActivator, SingleChildScrollView, SizedBox, SizedOverflowBox, Slider, SliderState,
+        SliverChildBuilderDelegate, SliverFillRemaining, SliverFillRemainingAndOverscroll,
+        SliverFillRemainingWithScrollable, SliverFillViewport, SliverFixedExtentList, SliverGrid,
+        SliverIgnorePointer, SliverList, SliverOffstage, SliverOpacity, SliverPadding,
+        SliverToBoxAdapter, Spacer, Stack, StreamBuilder, SubmitCallback, Table, TableCell,
+        TableRow, Text, TextEditingController, TickerMode, Transform, UnconstrainedBox,
+        ValueListenableBuilder, Viewport, Visibility, VisibilityGate, WidgetState,
+        WidgetStateConstraint, WidgetStateProperty, WidgetStates, WidgetStatesController,
+        WidgetsApp, WidgetsLocalizations, Wrap,
     };
 
     // Common configuration value types, so an app author needs only this import.
@@ -372,11 +375,11 @@ pub mod prelude {
     pub use crate::{
         AspectRatioDelegate, BoxedLocalizationsDelegate, BoxedWidgetsLocalizations,
         CenterLayoutDelegate, CustomPainter, DefaultWidgetsLocalizationsDelegate, FlowDelegate,
-        FlowPaintingContext, MultiChildLayoutContext, MultiChildLayoutDelegate,
-        SemanticsConfiguration, SemanticsProperties, SemanticsRole, SemanticsTextDirection,
-        SingleChildLayoutDelegate, SliverGridDelegate, SliverGridDelegateWithFixedCrossAxisCount,
-        SliverGridDelegateWithMaxCrossAxisExtent, SliverGridLayout, TableBorder,
-        TableCellVerticalAlignment, TableColumnWidth,
+        FlowPaintingContext, MultiChildLayoutContext, MultiChildLayoutDelegate, NumericRange,
+        NumericRangeError, SemanticsConfiguration, SemanticsProperties, SemanticsRole,
+        SemanticsTextDirection, SingleChildLayoutDelegate, SliverGridDelegate,
+        SliverGridDelegateWithFixedCrossAxisCount, SliverGridDelegateWithMaxCrossAxisExtent,
+        SliverGridLayout, TableBorder, TableCellVerticalAlignment, TableColumnWidth,
     };
     pub use flui_foundation::geometry::Axis;
     pub use flui_foundation::geometry::{EdgeInsets, Matrix4};

@@ -747,3 +747,189 @@ fn semantics_property_presence_includes_every_public_annotation() {
         "property presence rows failed: {failures:?}"
     );
 }
+
+/// A public owner fixture exposing one native numeric control.
+struct NumericControl {
+    owner: SemanticsOwner,
+    id: flui_foundation::SemanticsId,
+    target: flui_semantics::AccessibilityNodeId,
+    received: Arc<Mutex<Vec<Option<f64>>>>,
+}
+
+impl NumericControl {
+    fn new() -> Self {
+        use flui_semantics::{ActionArgs, NumericRange, SemanticsAction};
+        let (mut owner, _) = recording_owner();
+        let mut control = node(1, "numeric control");
+        let target = control.accessibility_id().expect("render-backed identity");
+        let received = Arc::new(Mutex::new(Vec::new()));
+        let numeric = Arc::clone(&received);
+        let tap = Arc::clone(&received);
+        control
+            .config_mut()
+            .set_numeric_range(NumericRange::new(0.0, 0.0, 10.0, 1.0).expect("finite fixture"));
+        control.config_mut().add_action(
+            SemanticsAction::SetNumericValue,
+            Arc::new(move |_, args| {
+                let Some(ActionArgs::SetNumericValue { value }) = args else {
+                    panic!("numeric callback lost its payload");
+                };
+                numeric.lock().push(Some(value));
+            }),
+        );
+        control.config_mut().add_action(
+            SemanticsAction::Tap,
+            Arc::new(move |_, _| tap.lock().push(None)),
+        );
+        let id = owner.insert(control);
+        owner.set_root(Some(id));
+        owner.flush();
+        Self {
+            owner,
+            id,
+            target,
+            received,
+        }
+    }
+
+    fn resolve(&self, value: f64) -> flui_semantics::SemanticsActionInvocation {
+        use flui_semantics::{ActionArgs, SemanticsAction, SemanticsActionRequest};
+        self.owner
+            .resolve_action(SemanticsActionRequest::with_arguments(
+                self.target,
+                SemanticsAction::SetNumericValue,
+                ActionArgs::SetNumericValue { value },
+            ))
+            .expect("current range admits the requested value")
+    }
+
+    fn narrow_and_publish(&mut self) {
+        self.owner
+            .get_mut(self.id)
+            .expect("control remains live")
+            .config_mut()
+            .set_numeric_range(
+                flui_semantics::NumericRange::new(0.0, 0.0, 5.0, 1.0)
+                    .expect("finite narrower range"),
+            );
+        self.owner.mark_dirty(self.id);
+        assert_eq!(
+            self.owner.flush(),
+            1,
+            "the narrower metadata reaches the adapter"
+        );
+    }
+}
+
+fn cached_numeric_invocation_is_refused_after_narrower_publication() {
+    use flui_semantics::SemanticsActionError;
+    let mut control = NumericControl::new();
+    let old = control.resolve(9.0);
+    control.narrow_and_publish();
+    assert_eq!(
+        old.try_invoke(),
+        Err(SemanticsActionError::NumericAuthorityExpired {
+            node_id: control.target
+        })
+    );
+    assert!(
+        control.received.lock().is_empty(),
+        "the old handler must not receive 9"
+    );
+    control
+        .resolve(4.375)
+        .try_invoke()
+        .expect("the new range admits an exact valid value");
+    assert_eq!(*control.received.lock(), [Some(4.375)]);
+}
+
+fn numeric_authority_is_per_owner_and_tap_keeps_accepted_ownership() {
+    use flui_semantics::{SemanticsAction, SemanticsActionRequest};
+    let independent = NumericControl::new();
+    let accepted = independent.resolve(9.0);
+    let mut changed = NumericControl::new();
+    let tap = changed
+        .owner
+        .resolve_action(SemanticsActionRequest::new(
+            changed.target,
+            SemanticsAction::Tap,
+        ))
+        .expect("tap is exposed");
+    changed.narrow_and_publish();
+    accepted
+        .try_invoke()
+        .expect("another owner cannot revoke this control");
+    tap.try_invoke()
+        .expect("ordinary tap retains its accepted handler");
+    assert_eq!(*independent.received.lock(), [Some(9.0)]);
+    assert_eq!(*changed.received.lock(), [None]);
+}
+
+fn disabled_numeric_authority_recovers_on_reenable() {
+    let mut control = NumericControl::new();
+    let old = control.resolve(9.0);
+    control.owner.disable();
+    assert!(old.try_invoke().is_err());
+    control.owner.enable();
+    control
+        .resolve(2.0)
+        .try_invoke()
+        .expect("reenabling mints current authority");
+    assert_eq!(*control.received.lock(), [Some(2.0)]);
+}
+
+fn removed_disposed_and_dropped_owners_refuse_cached_numeric_invocations() {
+    let mut removed = NumericControl::new();
+    let old = removed.resolve(9.0);
+    removed.owner.remove(removed.id);
+    assert!(old.try_invoke().is_err());
+    assert!(removed.received.lock().is_empty());
+
+    let mut disposed = NumericControl::new();
+    let old = disposed.resolve(9.0);
+    disposed.owner.dispose();
+    assert!(old.try_invoke().is_err());
+    assert!(disposed.received.lock().is_empty());
+
+    let dropped = NumericControl::new();
+    let old = dropped.resolve(9.0);
+    let received = Arc::clone(&dropped.received);
+    drop(dropped);
+    assert!(old.try_invoke().is_err());
+    assert!(received.lock().is_empty());
+}
+
+/// Cached numeric requests follow their owner-tree generation, independently
+/// of other owners; retirement refuses stale requests before user callbacks.
+#[test]
+fn numeric_invocations_follow_current_owner_authority() {
+    let cases: &[(&str, fn())] = &[
+        (
+            "narrower_publication",
+            cached_numeric_invocation_is_refused_after_narrower_publication,
+        ),
+        (
+            "owner_independence_and_tap",
+            numeric_authority_is_per_owner_and_tap_keeps_accepted_ownership,
+        ),
+        (
+            "disable_and_reenable",
+            disabled_numeric_authority_recovers_on_reenable,
+        ),
+        (
+            "remove_dispose_drop",
+            removed_disposed_and_dropped_owners_refuse_cached_numeric_invocations,
+        ),
+    ];
+    let mut failures = Vec::new();
+    for &(name, run) in cases {
+        if let Err(payload) = catch_unwind(run) {
+            failures.push(name);
+            std::mem::forget(payload);
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "numeric invocation authority rows failed: {failures:?}"
+    );
+}

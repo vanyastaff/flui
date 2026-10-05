@@ -18,10 +18,7 @@ use std::fmt::{self, Write as _};
 
 use accesskit::{Node, TreeUpdate};
 use flui_rendering::PipelineCell;
-use flui_semantics::{
-    AccessibilityNodeId, SemanticsActionError, SemanticsActionRequest, semantics_action_args_for,
-    semantics_action_for,
-};
+use flui_semantics::{AccessibilityNodeId, SemanticsActionError, semantics_action_request_for};
 
 // AccessKit's vocabulary is this module's vocabulary, so a consumer writes
 // `use flui_testing::a11y::Role` and never has to add accesskit itself at a
@@ -469,25 +466,15 @@ pub enum InvokeActionError {
 /// moment one presentation can host more than one tree, which is why it is
 /// named here rather than silently ignored.
 ///
-/// **Silent where the production adapter traces.** When
-/// [`semantics_action_args_for`] answers `None` this helper routes the action
-/// argument-free and says nothing; the real adapter's `set_action_listener`
-/// closure in `flui-app`'s `app/presentation.rs` wraps the identical `and_then`
-/// in a `tracing::trace!`, because an argument-free `SetValue` reaches a
-/// handler as a no-op edit that is otherwise invisible in the field. The
-/// divergence is diagnostic and not behavioral — the request that reaches the
-/// owner is argument-free in both cases — and a test process installs no
-/// subscriber that would render such a trace anyway; a test observes the drop
-/// through an assertion on the handler, as
-/// `a_set_text_request_without_a_payload_is_dropped_rather_than_emptied` does.
-/// Named so a reader does not infer from this silence that production is silent
-/// too.
+/// The whole platform request crosses the production translator. Numeric
+/// values stay typed and are checked against the current node's range by the
+/// owner; a malformed or out-of-range value never invokes its callback.
+/// Text requests without a payload remain non-destructive, as pinned by
+/// `a_set_text_request_without_a_payload_is_dropped_rather_than_emptied`.
 ///
-/// **No expanded-state guard.** `Expand` and `Collapse` route to the node's tap
-/// handler ([`semantics_action_for`]), which toggles it. The Windows adapter
-/// that emits them refuses a transition to the state the node already has; this
-/// helper does not, so a `Collapse` sent here to a collapsed node runs the tap
-/// handler and expands it. Send only the transition the node advertises.
+/// Expand and collapse retain their explicit direction. The helper resolves
+/// the current node's supported action; the consumer sets the requested state
+/// idempotently even when repeated requests precede publication.
 ///
 /// # Errors
 ///
@@ -503,22 +490,11 @@ pub(crate) fn invoke_semantics_action(
     cell: &PipelineCell,
     request: accesskit::ActionRequest,
 ) -> Result<(), InvokeActionError> {
-    let node_id = AccessibilityNodeId::from_u64(request.target_node.0)
+    let _node_id = AccessibilityNodeId::from_u64(request.target_node.0)
         .ok_or(InvokeActionError::MalformedNodeIdentity)?;
-    let action = semantics_action_for(request.action)
+    let translated = semantics_action_request_for(&request)
         .ok_or(InvokeActionError::UnroutablePlatformAction(request.action))?;
-    let arguments = request
-        .data
-        .as_ref()
-        .and_then(|data| semantics_action_args_for(data, request.target_node));
-
-    let invocation = cell.with(|owner| {
-        owner.resolve_semantics_action(SemanticsActionRequest {
-            node_id,
-            action,
-            arguments,
-        })
-    })?;
+    let invocation = cell.with(|owner| owner.resolve_semantics_action(translated))?;
 
     invocation.invoke();
     Ok(())

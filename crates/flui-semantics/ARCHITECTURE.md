@@ -360,3 +360,13 @@ compile time. Public family
 `semantics_property_presence_includes_every_public_annotation` covers each field
 and a selection-only annotation published through a consumer's empty-annotation
 filter and `SemanticsOwner`.
+
+## Numeric and directional input
+
+ADR-0124 distinguishes expand/collapse from activation and numeric setters from
+text edits. `NumericRange` admits only finite inclusive values and positive
+finite steps. Whole-request platform translation preserves numeric payloads.
+Numeric invocations carry owner-local generation authority; current-tree
+mutation or owner retirement invalidates cached numeric requests, and exhaustion
+refuses permanently. `numeric_invocations_follow_current_owner_authority` pins
+this authority without changing ordinary accepted activation behavior.

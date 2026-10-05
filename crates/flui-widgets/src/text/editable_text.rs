@@ -591,10 +591,15 @@ pub struct EditableTextState {
     /// Shared identity read by manager listeners so a live widget can replace
     /// its explicit node without reinstalling presentation subscriptions.
     observed_focus_node: Rc<RefCell<Rc<FocusNode>>>,
+    /// Refuses a resumed accessibility edit after disablement or disposal,
+    /// even if an external node is subsequently attached to another field.
+    accepts_semantics_actions: Rc<Cell<bool>>,
     /// Exact manager acquired from the mounting build owner.
     focus_manager: Option<Rc<FocusManager>>,
-    /// Generation-checked attachment owned by this mounted state.
-    focus_attachment: Option<FocusAttachment>,
+    /// The one generation-checked attachment owned by this mounted state.
+    /// Shared privately with accessibility delivery; cloning the `Rc` does
+    /// not mint a second attachment or expose reparenting to a consumer.
+    focus_attachment: Rc<RefCell<Option<Rc<FocusAttachment>>>>,
     /// Geometry provider retained so a replacement external node receives the
     /// same live render-anchor measurement.
     rect_provider: Option<RectProvider>,
@@ -740,8 +745,9 @@ impl StatefulView for EditableText {
         EditableTextState {
             focus_node: Rc::clone(&focus_node),
             observed_focus_node: Rc::new(RefCell::new(focus_node)),
+            accepts_semantics_actions: Rc::new(Cell::new(self.enabled)),
             focus_manager: None,
-            focus_attachment: None,
+            focus_attachment: Rc::new(RefCell::new(None)),
             rect_provider: None,
             rect_provider_registration: None,
             key_handler_registration: None,
@@ -1092,6 +1098,55 @@ struct SelectAllTextAction {
     focus_node: Rc<RefCell<Rc<FocusNode>>>,
 }
 
+/// Accessibility edits use the same current document and notification path as
+/// keyboard input. The semantics wrapper's owner-local ticket fences delivery;
+/// this check also refuses a field whose attachment has detached or been
+/// superseded, even when its external node remains in the live focus tree.
+#[derive(Clone)]
+struct FieldSemanticsActions {
+    focus_node: Rc<RefCell<Rc<FocusNode>>>,
+    attachment: Rc<RefCell<Option<Rc<FocusAttachment>>>>,
+    enabled: Rc<Cell<bool>>,
+    edits: EditObserver,
+    store: Option<Rc<EditableTextStore>>,
+}
+
+impl FieldSemanticsActions {
+    fn live_node(&self) -> Option<Rc<FocusNode>> {
+        let attachment = self.attachment.borrow().clone()?;
+        let node = Rc::clone(&self.focus_node.borrow());
+        (self.enabled.get() && attachment.is_attached()).then_some(node)
+    }
+
+    fn focus(&self, cx: &EventCx<'_>) {
+        if self.edits.writer.check_context(cx).is_err() {
+            return;
+        }
+        if let Some(node) = self.live_node().filter(|node| node.can_request_focus()) {
+            node.request_focus();
+        }
+    }
+
+    fn set_text(&self, cx: &EventCx<'_>, text: &str) {
+        if self.edits.writer.check_context(cx).is_err() || self.live_node().is_none() {
+            return;
+        }
+        // Accepted platform grants precede app edits, just as they precede a
+        // key edit. A grant can re-enter and replace or detach the field.
+        if let Some(store) = &self.store {
+            store.run_deferred_before_app_edit();
+        }
+        if self.edits.writer.check_context(cx).is_err() || self.live_node().is_none() {
+            return;
+        }
+        let controller = self.edits.controller.borrow().clone();
+        self.edits.around(|| controller.set_text(text));
+        if let Some(store) = &self.store {
+            store.controller_changed();
+        }
+    }
+}
+
 impl Action<SelectAllTextIntent> for SelectAllTextAction {
     fn is_enabled(&self, _intent: &SelectAllTextIntent) -> bool {
         self.focus_node.borrow().can_request_focus() && !self.controller.borrow().is_composing()
@@ -1409,14 +1464,15 @@ impl ViewState<EditableText> for EditableTextState {
         // covers a route scope's pending first-focus intent: either path may
         // synchronously focus this node during attachment, after both the
         // caret rebuild and IME listeners are ready.
-        self.focus_attachment = Some(
-            parent
-                .attach_node(&self.focus_node)
-                .expect("BUG: EditableText could not attach its explicit focus node"),
-        );
+        let attachment = parent
+            .attach_node(&self.focus_node)
+            .expect("BUG: EditableText could not attach its explicit focus node");
+        let previous = self.focus_attachment.replace(Some(Rc::new(attachment)));
+        drop(previous);
     }
 
     fn did_update_view(&mut self, _old_view: &EditableText, new_view: &EditableText) {
+        self.accepts_semantics_actions.set(new_view.enabled);
         if !new_view.enabled {
             self.selection_drag.set(None);
         }
@@ -1498,8 +1554,13 @@ impl ViewState<EditableText> for EditableTextState {
             // switching the observed identity.
             let attachment = self
                 .focus_attachment
-                .take()
+                .borrow()
+                .clone()
                 .expect("BUG: a mounted EditableText must retain its FocusAttachment");
+            // A rejected replacement leaves the current authority in place.
+            // Once replacement commits, the old generation is already stale
+            // before focus listeners run, so semantic reentry is refused until
+            // the returned replacement authority is installed below.
             let replacement_attachment = attachment
                 .replace_node(&replacement)
                 .expect("BUG: EditableText could not atomically replace its focus node");
@@ -1515,7 +1576,10 @@ impl ViewState<EditableText> for EditableTextState {
                 &mut *self.observed_focus_node.borrow_mut(),
                 Rc::clone(&self.focus_node),
             );
-            self.focus_attachment = Some(replacement_attachment);
+            let previous = self
+                .focus_attachment
+                .replace(Some(Rc::new(replacement_attachment)));
+            drop(previous);
 
             if self.focus_node.has_primary_focus() {
                 self.rebuild_notifier.notify_listeners();
@@ -1541,9 +1605,12 @@ impl ViewState<EditableText> for EditableTextState {
             .as_ref()
             .is_none_or(|held| !Rc::ptr_eq(held, &parent))
         {
-            self.focus_attachment
-                .as_ref()
-                .expect("BUG: a mounted EditableText must retain its FocusAttachment")
+            let attachment = self
+                .focus_attachment
+                .borrow()
+                .clone()
+                .expect("BUG: a mounted EditableText must retain its FocusAttachment");
+            attachment
                 .reparent(&parent)
                 .expect("BUG: EditableText could not reparent within its presentation");
             self.parent = Some(parent);
@@ -1554,6 +1621,13 @@ impl ViewState<EditableText> for EditableTextState {
     fn build(&self, view: &EditableText, _ctx: &dyn BuildContext) -> impl IntoView {
         let controller = Rc::clone(&self.controller);
         let focus_node = Rc::clone(&self.focus_node);
+        let semantics_actions = FieldSemanticsActions {
+            focus_node: Rc::clone(&self.observed_focus_node),
+            attachment: Rc::clone(&self.focus_attachment),
+            enabled: Rc::clone(&self.accepts_semantics_actions),
+            edits: self.edit_observer(),
+            store: self.text_store.clone(),
+        };
         let enabled = view.enabled;
         let appearance = FieldAppearance {
             caret_height: view.caret_height,
@@ -1579,6 +1653,7 @@ impl ViewState<EditableText> for EditableTextState {
                         enabled,
                         &appearance,
                         inner_anchor.clone(),
+                        &semantics_actions,
                     )
                 }),
             ));
@@ -1592,11 +1667,12 @@ impl ViewState<EditableText> for EditableTextState {
     }
 
     fn dispose(&mut self) {
+        self.accepts_semantics_actions.set(false);
+        let attachment = self.focus_attachment.borrow_mut().take();
         self.selection_drag.set(None);
-        let owns_attachment = self
-            .focus_attachment
+        let owns_attachment = attachment
             .as_ref()
-            .is_some_and(FocusAttachment::is_attached);
+            .is_some_and(|attachment| attachment.is_attached());
         if owns_attachment {
             self.rect_provider_registration.take();
             self.key_handler_registration.take();
@@ -1657,7 +1733,7 @@ impl ViewState<EditableText> for EditableTextState {
         }
 
         // Detach through the generation-checked lifecycle authority.
-        if let Some(attachment) = self.focus_attachment.take() {
+        if let Some(attachment) = attachment {
             let _ = attachment.detach();
         }
         self.parent = None;
@@ -2196,6 +2272,7 @@ fn build_field_view(
     enabled: bool,
     appearance: &FieldAppearance,
     inner_anchor: flui_objects::SubtreeAnchor,
+    actions: &FieldSemanticsActions,
 ) -> BoxedView {
     // `enabled` is defensive here: `did_update_view` already unfocuses a
     // field that becomes disabled while focused, so `has_primary_focus`
@@ -2229,13 +2306,23 @@ fn build_field_view(
     // The field's node for assistive technology (text field, obscured, value),
     // outside the inner anchor so the IME loop still finds the editable as that anchor's first child. The
     // value is the text the render object shows — the mask when obscured.
-    let semantics = Semantics::new()
+    let mut semantics = Semantics::new()
         .container(true)
         .text_field(true)
         .obscured(appearance.obscure_text)
         .enabled(enabled)
         .focused(focused)
         .value(text.clone());
+    if enabled {
+        let edit = actions.clone();
+        semantics = semantics.on_set_text(move |cx, text| edit.set_text(cx, text));
+        // Focus eligibility is independent of the enabled document's value
+        // mutability. A queued focus request rechecks eligibility at delivery.
+        if focus_node.can_request_focus() {
+            let focus = actions.clone();
+            semantics = semantics.on_focus(move |cx| focus.focus(cx));
+        }
+    }
     let field = crate::__private::AnchoredBox::new(
         inner_anchor,
         EditableTextRenderView {

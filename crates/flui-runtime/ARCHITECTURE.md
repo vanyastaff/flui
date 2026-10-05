@@ -481,3 +481,8 @@ window and the accessibility bridge are framework-owned and are released in
 either mode. A healthy close drops everything normally, and a lifecycle drain
 still runs every eligible callback before propagating its first failure. Tested
 by `presentation_close_retirement_failures_preserve_focus_ime_and_siblings`.
+
+Accessibility input uses the whole-request translator of ADR-0124 before
+presentation inbox admission, preserving numeric values and explicit
+expand/collapse requests. Payload admission remains with the current semantics
+owner at delivery.

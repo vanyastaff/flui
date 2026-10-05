@@ -85,6 +85,12 @@ fn text_editing() {
     run_cases(
         "text_editing",
         &[
+            ("editable_text::native_actions::queued_focus_and_text_reach_the_current_field_and_event_context", crate::editable_text::native_actions::queued_focus_and_text_reach_the_current_field_and_event_context),
+            ("editable_text::native_actions::native_actions_follow_the_replacement_controller_and_focus_node", crate::editable_text::native_actions::native_actions_follow_the_replacement_controller_and_focus_node),
+            ("editable_text::native_actions::disabled_unmounted_and_closed_fields_refuse_native_actions", crate::editable_text::native_actions::disabled_unmounted_and_closed_fields_refuse_native_actions),
+            ("editable_text::native_actions::a_deferred_focus_change_preserves_the_semantic_edit_that_follows_it", crate::editable_text::native_actions::a_deferred_focus_change_preserves_the_semantic_edit_that_follows_it),
+            ("editable_text::native_actions::re_adoption_before_queued_delivery_retires_the_old_field_authority", crate::editable_text::native_actions::re_adoption_before_queued_delivery_retires_the_old_field_authority),
+            ("editable_text::native_actions::re_adoption_during_a_deferred_grant_refuses_the_resumed_semantic_edit", crate::editable_text::native_actions::re_adoption_during_a_deferred_grant_refuses_the_resumed_semantic_edit),
             ("editable_text::a_double_tap_selects_the_word_under_it", crate::editable_text::a_double_tap_selects_the_word_under_it as fn()),
             ("editable_text::a_drag_selects_from_its_start_to_the_pointer", crate::editable_text::a_drag_selects_from_its_start_to_the_pointer),
             ("editable_text::disabling_the_field_retires_its_selection_contact", crate::editable_text::disabling_the_field_retires_its_selection_contact),
@@ -160,6 +166,7 @@ fn focus_actions_and_shortcuts() {
     run_cases(
         "focus_actions_and_shortcuts",
         &[
+            ("focus::platform_focus_requests_the_mounted_node_and_rejects_disabled_focus", crate::focus::platform_focus_requests_the_mounted_node_and_rejects_disabled_focus as fn()),
             ("actions::the_nearest_enabled_action_wins_and_receives_the_payload", crate::actions::the_nearest_enabled_action_wins_and_receives_the_payload as fn()),
             ("actions::callback_action_writes_through_the_key_events_cx", crate::actions::callback_action_writes_through_the_key_events_cx),
             ("actions::a_refused_write_in_a_callback_action_is_reported_not_panicked", crate::actions::a_refused_write_in_a_callback_action_is_reported_not_panicked),
@@ -186,6 +193,8 @@ fn semantics_translation_and_routing() {
     run_cases(
         "semantics_translation_and_routing",
         &[
+            ("semantics::queued_directional_actions_and_numeric_values_reach_the_frame_producer", crate::semantics::queued_directional_actions_and_numeric_values_reach_the_frame_producer as fn()),
+            ("semantics::numeric_range_admission_and_owner_payload_validation", crate::semantics::numeric_range_admission_and_owner_payload_validation as fn()),
             ("semantics::a_set_text_request_without_a_payload_is_dropped_rather_than_emptied", crate::semantics::a_set_text_request_without_a_payload_is_dropped_rather_than_emptied as fn()),
             ("semantics::a_tap_handler_round_trips_from_a_platform_click_to_the_callback", crate::semantics::a_tap_handler_round_trips_from_a_platform_click_to_the_callback),
             ("semantics::merge_semantics_collapses_its_descendants_in_the_a11y_tree", crate::semantics::merge_semantics_collapses_its_descendants_in_the_a11y_tree),
@@ -392,4 +401,30 @@ fn forms_and_async_builders() {
             ("stream_builder::stream_builder_data_error_data_then_done", crate::stream_builder::stream_builder_data_error_data_then_done),
         ],
     );
+}
+
+#[test]
+fn controlled_slider_input_and_geometry() {
+    run_cases("controlled_slider_input_and_geometry", &[
+        ("catalog_slider::slider_uses_allocated_fractional_bounds_for_paint_and_pointer_mapping", crate::catalog_slider::slider_uses_allocated_fractional_bounds_for_paint_and_pointer_mapping as fn()),
+        ("catalog_slider::slider_drag_proposals_do_not_commit_without_parent_update", crate::catalog_slider::slider_drag_proposals_do_not_commit_without_parent_update as fn()),
+        ("catalog_slider::slider_ambient_rtl_and_explicit_override_mirror_input_and_thumb", crate::catalog_slider::slider_ambient_rtl_and_explicit_override_mirror_input_and_thumb as fn()),
+        ("catalog_slider::slider_extreme_range_interpolation_and_step_remain_finite", crate::catalog_slider::slider_extreme_range_interpolation_and_step_remain_finite as fn()),
+        ("catalog_slider::slider_degenerate_geometry_or_span_is_inert", crate::catalog_slider::slider_degenerate_geometry_or_span_is_inert as fn()),
+        ("catalog_slider::slider_focus_keys_and_semantic_actions_share_controlled_proposals", crate::catalog_slider::slider_focus_keys_and_semantic_actions_share_controlled_proposals as fn()),
+        ("catalog_slider::slider_disable_callback_replacement_and_unmount_retire_old_actions", crate::catalog_slider::slider_disable_callback_replacement_and_unmount_retire_old_actions as fn()),
+        ("catalog_slider::slider_focus_manager_close_during_pointer_focus_rejects_proposal", crate::catalog_slider::slider_focus_manager_close_during_pointer_focus_rejects_proposal as fn()),
+    ]);
+}
+
+#[test]
+fn controlled_disclosure_state_and_geometry() {
+    run_cases("controlled_disclosure_state_and_geometry", &[
+        ("catalog_disclosure::disclosure_proposes_controlled_changes_and_retains_real_header_focus", crate::catalog_disclosure::disclosure_proposes_controlled_changes_and_retains_real_header_focus as fn()),
+        ("catalog_disclosure::disclosure_disabled_and_replaced_handlers_do_not_run_old_proposals", crate::catalog_disclosure::disclosure_disabled_and_replaced_handlers_do_not_run_old_proposals as fn()),
+        ("catalog_disclosure::disclosure_indicator_obeys_constraints_and_explicit_reading_direction", crate::catalog_disclosure::disclosure_indicator_obeys_constraints_and_explicit_reading_direction as fn()),
+        ("catalog_disclosure::disclosure_focus_reentry_cannot_activate_after_focus_manager_close", crate::catalog_disclosure::disclosure_focus_reentry_cannot_activate_after_focus_manager_close as fn()),
+        ("catalog_disclosure::disclosure_retained_expand_after_unmount_cannot_reach_a_new_control", crate::catalog_disclosure::disclosure_retained_expand_after_unmount_cannot_reach_a_new_control as fn()),
+        ("catalog_disclosure::disclosure_owns_constructor_clone_and_retirement_failure_tails", crate::catalog_disclosure::disclosure_owns_constructor_clone_and_retirement_failure_tails as fn()),
+    ]);
 }

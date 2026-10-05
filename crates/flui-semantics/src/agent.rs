@@ -138,11 +138,9 @@ pub enum WireActionError {
 #[must_use]
 pub(crate) fn semantics_action_for_wire(action: ActionName) -> Option<SemanticsAction> {
     Some(match action {
-        ActionName::Invoke
-        | ActionName::Toggle
-        | ActionName::Select
-        | ActionName::Expand
-        | ActionName::Collapse => SemanticsAction::Tap,
+        ActionName::Invoke | ActionName::Toggle | ActionName::Select => SemanticsAction::Tap,
+        ActionName::Expand => SemanticsAction::Expand,
+        ActionName::Collapse => SemanticsAction::Collapse,
         ActionName::SetValue => SemanticsAction::SetText,
         ActionName::Focus => SemanticsAction::Focus,
         ActionName::ScrollIntoView => SemanticsAction::ShowOnScreen,
@@ -598,10 +596,8 @@ impl SemanticsOwner {
     /// and `collapse` are advertised only toward the state the element lacks,
     /// so `expand` on an element the tree shows expanded is refused.
     ///
-    /// The tree is the last committed one, so the check does not close the
-    /// double-toggle race of mapping decision 5: two `expand`s resolved
-    /// before the frame that shows the first one's effect both pass, and the
-    /// second collapses the element again.
+    /// The tree is the last committed one. Repeated requests resolved before
+    /// the next frame retain their explicit direction, rather than toggling.
     ///
     /// # Errors
     ///
@@ -626,15 +622,34 @@ impl SemanticsOwner {
                     action: request.action,
                 });
             }
-            Ok(())
+            Ok(node
+                .numeric_value()
+                .map(|_| (node.min_numeric_value(), node.max_numeric_value())))
         });
-        match checked {
+        let numeric = match checked {
             Ok(result) => result?,
             Err(Published::NoTree) => return Err(WireActionError::NoTree),
             Err(Published::Malformed) => return Err(WireActionError::Malformed),
-        }
+        };
 
         let arguments = match (request.action, &request.value) {
+            (ActionName::SetValue, Some(text)) if numeric.is_some() => {
+                let value = text
+                    .parse::<f64>()
+                    .ok()
+                    .filter(|value| value.is_finite())
+                    .ok_or(WireActionError::InvalidArgument {
+                        reason: "numeric set_value needs a finite number",
+                    })?;
+                if numeric.is_some_and(|(min, max)| {
+                    min.is_some_and(|min| value < min) || max.is_some_and(|max| value > max)
+                }) {
+                    return Err(WireActionError::InvalidArgument {
+                        reason: "numeric set_value lies outside the published range",
+                    });
+                }
+                Some(ActionArgs::SetNumericValue { value })
+            }
             (ActionName::SetValue, Some(text)) => Some(ActionArgs::SetText { text: text.clone() }),
             (ActionName::SetValue, None) => {
                 return Err(WireActionError::InvalidArgument {
@@ -648,12 +663,15 @@ impl SemanticsOwner {
             }
             (_, None) => None,
         };
-        let action = semantics_action_for_wire(request.action).ok_or(
-            WireActionError::ActionUnsupported {
-                element,
-                action: request.action,
-            },
-        )?;
+        let action = if request.action == ActionName::SetValue && numeric.is_some() {
+            Some(SemanticsAction::SetNumericValue)
+        } else {
+            semantics_action_for_wire(request.action)
+        }
+        .ok_or(WireActionError::ActionUnsupported {
+            element,
+            action: request.action,
+        })?;
         let node_id = AccessibilityNodeId::from_u64(element.get())
             .ok_or(WireActionError::NotFound { element })?;
         Ok(SemanticsActionRequest {
