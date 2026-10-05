@@ -198,20 +198,26 @@ where
     }
 
     /// Returns `true` if the point is inside or on the circle's boundary.
+    ///
+    /// For valid circles and finite points, compares the distance without
+    /// squaring the radius, preserving very large and very small finite ranges.
     #[inline]
     #[must_use]
     pub fn contains(&self, point: Point<T>) -> bool {
         let r: f64 = self.radius.into();
-        self.center.distance_squared(point) <= r * r
+        self.center.distance(point) <= r
     }
 
     /// Returns `true` if the point is strictly inside the circle (not on
     /// boundary).
+    ///
+    /// Uses the same distance comparison as [`contains`](Self::contains).
+    /// A zero-radius circle has no strict interior.
     #[inline]
     #[must_use]
     pub fn contains_strict(&self, point: Point<T>) -> bool {
         let r: f64 = self.radius.into();
-        self.center.distance_squared(point) < r * r
+        self.center.distance(point) < r
     }
 
     /// Returns `true` if this circle completely contains the other circle.
