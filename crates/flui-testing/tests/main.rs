@@ -17,9 +17,11 @@
 //! default subscriber slot, so nothing here can observe another module's
 //! capture.
 //!
-//! Semantics-listener retirement uses scoped test-only thread-local relays in
-//! bounded child processes so Send + Sync callbacks can reenter their actual
-//! owner-thread binding. The parent does not mutate process environment.
+//! `semantics_listener_retirement_preserves_independent_envelopes` re-executes
+//! this binary once per case, because the failure it guards against is an
+//! abort. It is a test of its own rather than a table row, so each child runs
+//! exactly one case, and it sets the child's environment only on the spawned
+//! command.
 
 #[path = "a11y_query.rs"]
 mod a11y_query;
@@ -90,18 +92,18 @@ fn headless_frame_driver_matrix() {
 
 #[test]
 fn containment_and_isolation_matrix() {
-    if std::env::var_os("FLUI_SEMANTICS_LISTENER_RETIREMENT_CHILD").is_some() {
-        owner_scope::semantics_listener_retirement_preserves_independent_envelopes();
-        return;
-    }
     run_table(
         "containment_and_isolation_matrix",
         &[
             ("lifecycle_panic_containment::lifecycle_panic_containment_init_state_paints_exact_error_slot", lifecycle_panic_containment::lifecycle_panic_containment_init_state_paints_exact_error_slot as fn()),
             ("owner_scope::interaction_targets_are_isolated_between_headless_bindings", owner_scope::interaction_targets_are_isolated_between_headless_bindings as fn()),
             ("owner_scope::pointer_route_panic_still_runs_the_down_arena_lifecycle", owner_scope::pointer_route_panic_still_runs_the_down_arena_lifecycle as fn()),
-            ("owner_scope::semantics_listener_retirement_preserves_independent_envelopes", owner_scope::semantics_listener_retirement_preserves_independent_envelopes as fn()),
             ("multi_presentation_clock::two_presentations_at_independent_scripted_cadences_tick_and_advance_independently", multi_presentation_clock::two_presentations_at_independent_scripted_cadences_tick_and_advance_independently as fn()),
         ],
     );
+}
+
+#[test]
+fn semantics_listener_retirement_preserves_independent_envelopes() {
+    owner_scope::semantics_listener_retirement_preserves_independent_envelopes();
 }
