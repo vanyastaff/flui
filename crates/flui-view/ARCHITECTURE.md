@@ -648,12 +648,15 @@ checks subsequent ordinary allocation from an independent local counter.
 
 ### Closed presentation authority
 
-ADR-0123 withdraws a presentation's graph, external build inbox, rebuild handles
-and both local and realm GlobalKey lookup before optional terminal callbacks.
-Graph creation and writes return `SignalError::OwnerClosed`; saved writer
-capabilities reject the detached owner. Arbitrary key owners leave guarded maps
-before retirement. Ordinary LifecycleSource draining still attempts every
-eligible callback before resuming its first panic; host preserving mode suppresses
-later optional rounds while required terminal commits continue. The runtime
-`presentation_close_retirement_failures_preserve_focus_ime_and_siblings` row
-covers retained keys, stale capabilities, competing failures and sibling recovery.
+Closing a presentation withdraws its signal graph, external build inbox,
+rebuild handles and local and realm GlobalKey lookup before any optional
+terminal callback runs
+([ADR-0123](../../docs/adr/ADR-0123-exceptional-presentation-close.md)). The
+closed graph refuses reads, writes and new signals with
+`SignalError::OwnerClosed`, and a saved writer reports its owner detached. Key
+owners are removed from their registries before they are dropped. A
+`LifecycleSource` drain runs every eligible callback before propagating its
+first failure; in preserving mode the host skips the optional rounds after it
+while the required terminal commits still happen. The value or closure a closed
+graph rejects is dropped normally unless the thread is already panicking
+([ADR-0127](../../docs/adr/ADR-0127-exceptional-path-retention.md)).

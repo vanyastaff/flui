@@ -308,9 +308,9 @@ endpoint segment.
 
 ### Closed signal graph
 
-A presentation's terminal graph rejects reads, creation and writes with the
-non-exhaustive `SignalError::OwnerClosed` variant after owner withdrawal
-(ADR-0123). Existing signals may remain physically retained during exceptional
-close, but retained ownership does not retain executable graph authority. The
-runtime `presentation_close_retirement_failures_preserve_focus_ime_and_siblings`
-row exercises this through the closed presentation and a live sibling.
+Once a presentation closes, its signal graph refuses reads, writes and new
+signals with `SignalError::OwnerClosed`
+([ADR-0123](../../docs/adr/ADR-0123-exceptional-presentation-close.md)). After an
+exceptional close the graph's existing values are retained rather than dropped
+([ADR-0127](../../docs/adr/ADR-0127-exceptional-path-retention.md)), but they
+cannot be read or written through it.

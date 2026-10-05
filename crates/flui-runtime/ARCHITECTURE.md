@@ -469,13 +469,15 @@ are the production paths.
 
 ## Exceptional terminal presentation ownership
 
-ADR-0123 defines close after a host-held failure or active unwind. Mandatory
-presentation authority and platform withdrawal precede retention of opaque
-ownership. Scoped lane targets, saved routes, graph/writer/rebuild capabilities,
-local and realm keys and agent ports fail closed while siblings remain live.
-Healthy close still disposes normally; ordinary lifecycle draining retains its
-all-eligible-callback contract. `realm_and_presentation_isolation_matrix` pins
-this through `presentation_close_retirement_failures_preserve_focus_ime_and_siblings`.
-The private host seam supplies platform failures and saved mixed-owner routes
-that the public widget harness cannot construct. Generated ordinary aggregate
-Drop remains outside this exceptional ownership guarantee.
+A presentation close that holds a failure, or runs inside an unwind, is in
+preserving mode ([ADR-0123](../../docs/adr/ADR-0123-exceptional-presentation-close.md)).
+The close first withdraws the presentation's authority: its lane targets and
+cached routes, signal graph, writers, rebuild handles, local and realm
+GlobalKeys and agent ports refuse further use, while siblings stay live. It then
+retains the values the presentation still owns (its trees and their callbacks)
+instead of dropping them, and skips optional disposal
+([ADR-0127](../../docs/adr/ADR-0127-exceptional-path-retention.md)). The platform
+window and the accessibility bridge are framework-owned and are released in
+either mode. A healthy close drops everything normally, and a lifecycle drain
+still runs every eligible callback before propagating its first failure. Tested
+by `presentation_close_retirement_failures_preserve_focus_ime_and_siblings`.
