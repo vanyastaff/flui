@@ -51,7 +51,7 @@ use std::marker::PhantomData;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use flui_foundation::RenderId;
-use flui_foundation::panic::payload_text;
+use flui_foundation::panic::{payload_text, retain_opaque_payload};
 use parking_lot::Mutex;
 #[cfg(any(test, feature = "testing"))]
 use rustc_hash::FxHashMap;
@@ -1398,8 +1398,9 @@ unsafe fn layout_subtree_borrowed_impl(
                     }))
                 {
                     // Reporting is secondary; do not retire its opaque failure or report it again.
-                    std::mem::forget(reporting_payload);
+                    retain_opaque_payload(reporting_payload);
                 }
+                retain_opaque_payload(std::mem::ManuallyDrop::into_inner(payload));
                 return Err(crate::error::RenderError::poisoned(
                     debug_name,
                     crate::error::PoisonPhase::Layout,
@@ -2077,8 +2078,9 @@ unsafe fn layout_sliver_subtree_borrowed_impl(
                     }))
                 {
                     // Reporting is secondary; do not retire its opaque failure or report it again.
-                    std::mem::forget(reporting_payload);
+                    retain_opaque_payload(reporting_payload);
                 }
+                retain_opaque_payload(std::mem::ManuallyDrop::into_inner(payload));
                 return Err(crate::error::RenderError::poisoned(
                     debug_name,
                     crate::error::PoisonPhase::Layout,

@@ -786,24 +786,11 @@ jobs:
         run: cargo test --workspace --locked --doc
 
   # ─────────────────────────────────────────────────────────────────────────
-  # miri — undefined-behavior check for the workspace's densest unsafe hot
-  # spot: flui-rendering's subtree arena (raw-pointer arena with ~49 unsafe
-  # sites). flui-rendering has no wgpu dependency, so miri can execute it;
-  # the test filter keeps runtime sane (workspace-wide miri is not realistic
-  # on this stack). Blocking: 67 green runs of 67 by 2026-09-30.
-  #
-  # SCOPE widened: `pipeline::owner::subtree_arena` -> `pipeline::owner`,
-  # picking up `cell.rs`'s PipelineCell checkout tests and two new
-  # real-NodePtr walks (an owner-local full run_frame, and a
-  # reentrant-layout mid-layout child-request) alongside the original
-  # subtree_arena suite -- see `cargo xtask miri`'s doc comment
-  # (tools/xtask) for the full breakdown. Measured 55 tests / ~21s wall, in
-  # budget.
-  #
-  # SCOPE widened again (ADR-0050): a second invocation runs flui-view's
-  # `owner::global_key` surface -- the identity registry, the cross-owner
-  # claim table, and the per-frame reservation ledger, including the
-  # tree-driving verification and repair tests. See that step's own comment.
+  # miri checks selected ownership and containment contracts without a GPU:
+  # rendering owner failure/publishing families, public GlobalKey migration,
+  # surface-before-target destruction and cancellation of renderer construction.
+  # The same scopes are used by `cargo xtask miri`; they are not a full
+  # workspace memory-safety audit.
   # ─────────────────────────────────────────────────────────────────────────
   miri:
     name: miri
@@ -837,31 +824,25 @@ jobs:
       - name: cargo miri test (pipeline::owner)
         run: cargo +nightly miri test -p flui-rendering --lib --locked pipeline::owner
 
-      # The GlobalKey plane (ADR-0050): the identity registry, the cross-owner
-      # claim table, and the per-frame reservation ledger, plus the tree-driving
-      # verification and repair tests that run a real `ElementTree` through
+      # Public GlobalKey behavior (ADR-0050): state migration, duplicate-parent
+      # grafting and frame-boundary diagnostics run a real `ElementTree` through
       # `BuildOwner::finalize_tree`. No `unsafe` of its own — the point is the
       # slab-backed element arena and the reborrow chains it drives underneath.
-      # Measured 28 tests / ~7s wall, in budget.
-      - name: cargo miri test (owner::global_key)
-        run: cargo +nightly miri test -p flui-view --lib --locked owner::global_key
+      - name: cargo miri test (global_key_contract_matrix)
+        run: cargo +nightly miri test -p flui-view --test view_it --locked global_key_contract_matrix
 
-      # The surface-ownership protocol (ADR-0063, issue #1043): the whole
-      # wgpu-free `SurfaceLease` protocol, which is where the two test-only
-      # `borrow_raw` calls and the load-bearing surface-before-target drop
-      # order live. `SurfaceLease` is generic over its surface type precisely
-      # so this needs no GPU — the lib target links wgpu, but Miri never
-      # enters it. Measured 6 tests / ~3.3s warm, in budget.
-      - name: cargo miri test (wgpu::surface_lease)
-        run: cargo +nightly miri test -p flui-engine --lib --locked wgpu::surface_lease
+      # The surface-ownership drop order (ADR-0063, issue #1043): a generic
+      # `SurfaceLease` fixture observes the surface dropping before its target.
+      # The lib target links wgpu, but this test never enters GPU code.
+      - name: cargo miri test (surface_lease)
+        run: cargo +nightly miri test -p flui-engine --lib --locked surface_lease
 
       # The cancellation oracle for `Renderer::new` (issue #1149): drives the
       # production `probe_then_build` seam with a builder that suspends
-      # forever, then drops the future and asserts the target's strong count
-      # returned to its pre-call value. GPU-free by construction — the
+      # forever, then releases the external owner and observes target destruction
+      # after dropping the future. GPU-free by construction — the
       # synthetic builder is what keeps wgpu out of the path, since a first
       # poll of the production builder enters `wgpu::Instance::new`.
-      # Measured 1 test / ~1.7s warm.
       - name: cargo miri test (cancelling_renderer_new)
         run: cargo +nightly miri test -p flui-engine --lib --locked cancelling_renderer_new
 

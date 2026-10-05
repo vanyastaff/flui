@@ -289,6 +289,10 @@ and subsequent progress. The common exceptional-payload operation is
 `panic::retain_opaque_payload`, used by notifications, signal reads
 and the test-table runner. This contract is recorded in
 [ADR-0104](../../docs/adr/ADR-0104-borrowed-notification-and-opaque-panic-retention.md).
+As refined by [ADR-0119](../../docs/adr/ADR-0119-inert-panic-payload-retirement.md),
+the shared operation releases exact `&'static str` and `String` payloads, whose
+destruction cannot call user code. Other dynamic payload types remain retained;
+callback snapshot retention and recovery ordering are unchanged.
 
 
 ## Circle intersections require a computed line direction

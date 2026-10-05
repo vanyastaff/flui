@@ -2175,6 +2175,76 @@ impl crate::frame_protocol::FrameSteps for SwapchainFrame<'_> {
     }
 }
 
+#[cfg(test)]
+mod cancellation_tests {
+    use std::future::Future;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+    use std::task::{Context, Waker};
+
+    use raw_window_handle::{
+        DisplayHandle, HandleError, HasDisplayHandle, HasWindowHandle, WindowHandle,
+    };
+
+    use super::Renderer;
+    use crate::fake_window_target::FakeTarget;
+    use crate::window_target::WindowTarget;
+
+    struct RecordingTarget {
+        inner: FakeTarget,
+        dropped: Arc<AtomicBool>,
+    }
+
+    impl Drop for RecordingTarget {
+        fn drop(&mut self) {
+            self.dropped.store(true, Ordering::SeqCst);
+        }
+    }
+
+    impl HasWindowHandle for RecordingTarget {
+        fn window_handle(&self) -> Result<WindowHandle<'_>, HandleError> {
+            self.inner.window_handle()
+        }
+    }
+
+    impl HasDisplayHandle for RecordingTarget {
+        fn display_handle(&self) -> Result<DisplayHandle<'_>, HandleError> {
+            self.inner.display_handle()
+        }
+    }
+
+    #[test]
+    fn cancelling_renderer_new() {
+        let dropped = Arc::new(AtomicBool::new(false));
+        let started = Arc::new(AtomicBool::new(false));
+        let target: Arc<dyn WindowTarget> = Arc::new(RecordingTarget {
+            inner: FakeTarget::new(1),
+            dropped: Arc::clone(&dropped),
+        });
+        let builder_started = Arc::clone(&started);
+        let mut construction = Box::pin(Renderer::probe_then_build(
+            Arc::clone(&target),
+            move |target| async move {
+                builder_started.store(true, Ordering::SeqCst);
+                std::future::pending::<()>().await;
+                Ok((target, ()))
+            },
+        ));
+        drop(target);
+        assert!(!dropped.load(Ordering::SeqCst));
+
+        let mut context = Context::from_waker(Waker::noop());
+        assert!(construction.as_mut().poll(&mut context).is_pending());
+        assert!(started.load(Ordering::SeqCst));
+        assert!(!dropped.load(Ordering::SeqCst));
+
+        drop(construction);
+        assert!(dropped.load(Ordering::SeqCst));
+    }
+}
+
 #[cfg(all(test, feature = "testing"))]
 mod tests {
     use super::*;

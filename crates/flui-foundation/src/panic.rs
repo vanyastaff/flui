@@ -50,8 +50,15 @@ pub fn is_internal_invariant(text: &str) -> bool {
 /// inside `catch_unwind` can still abort when a second field panics during the
 /// first field's unwind. Exceptional-path retention deliberately leaks the
 /// payload; it does not run arbitrary destruction after a caught failure.
+/// Exact `&'static str` and `String` payloads are released instead: their
+/// destruction cannot invoke user code. No other payload type is inspected
+/// for whether its destructor might be safe.
 /// Boundaries that propagate the original failure should use `resume_unwind`
 /// instead. This operation is for a failure already reported or superseded.
 pub fn retain_opaque_payload(payload: Box<dyn Any + Send>) {
-    std::mem::forget(payload);
+    if payload.is::<&'static str>() || payload.is::<String>() {
+        drop(payload);
+    } else {
+        std::mem::forget(payload);
+    }
 }
