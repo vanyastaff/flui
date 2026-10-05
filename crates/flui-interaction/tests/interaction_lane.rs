@@ -371,6 +371,19 @@ fn assert_router_retirement_recovery(cleanup: RouterCleanup, competing: bool, ac
         }
     }
 
+    // A handler the test still owns sits in the retired tail: dropping the
+    // router's clone runs no user code, so retirement must release it.
+    let shared: flui_interaction::PointerRouteHandler = Rc::new(|_| {});
+    if matches!(cleanup, RouterCleanup::Pointer) {
+        binding
+            .pointer_router()
+            .add_route(PointerId::PRIMARY, Rc::clone(&shared));
+    } else {
+        binding
+            .pointer_router()
+            .add_global_handler(Rc::clone(&shared));
+    }
+
     let removal = catch_unwind(AssertUnwindSafe(|| {
         if active_unwind {
             let _cleanup = UnwindCleanup {
@@ -392,6 +405,11 @@ fn assert_router_retirement_recovery(cleanup: RouterCleanup, competing: bool, ac
     );
     assert_eq!(first_drops.get(), usize::from(!active_unwind));
     assert_eq!(second_drops.get(), 0, "the opaque tail must be retained");
+    assert_eq!(
+        Rc::strong_count(&shared),
+        1,
+        "a clone another owner still holds is released, not leaked"
+    );
 
     if active_unwind {
         let deliveries = Rc::clone(&deliveries);
