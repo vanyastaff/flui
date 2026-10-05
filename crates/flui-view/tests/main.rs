@@ -197,6 +197,10 @@ fn signal_read_and_write_matrix() {
                 signal_reads::owner_release_commits_the_batch_before_the_first_destructor_failure,
             ),
             (
+                "signal_reads::owner_release_releases_signals_its_destructors_reintroduce",
+                signal_reads::owner_release_releases_signals_its_destructors_reintroduce,
+            ),
+            (
                 "signal_reads::release_during_unwind_preserves_the_primary_failure",
                 signal_reads::release_during_unwind_preserves_the_primary_failure,
             ),
