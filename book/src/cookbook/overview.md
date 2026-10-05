@@ -12,13 +12,11 @@ checkout root used in [Installation](../getting-started/installation.md).
 | Animate a value over time | [Animation](animation.md) |
 | Exercise a view without opening a window | [Testing](testing.md) |
 
-For typed navigation, run `cargo run --example two_screens`. The current example roots an app in
-`WidgetsApp::router` over a `#[derive(Routable)]` route enum, and its pages push and pop route
-values through a `RouterHandle` (ADR-0093; see the [mapping](../mapping.md) notes).
-Read its [source](https://github.com/vanyastaff/flui/blob/main/examples/two_screens.rs)
-for the current composition and callbacks.
+For typed navigation, run `cargo run --example two_screens --features material`. It roots an
+app in `WidgetsApp::router` over a `#[derive(Routable)]` route enum, and its pages push and pop
+route values through a `RouterHandle` (ADR-0093; see the [mapping](../mapping.md) notes).
+Read its [source](https://github.com/vanyastaff/flui/blob/main/examples/two_screens/tree.rs)
+for the composition and callbacks.
 
-The [Notes showcase chapter](../getting-started/showcase.md) follows a source draft that combines
-navigation, editing, validation, lazy rows, and retry. Its additions need integration and
-execution before the walkthrough can be followed; use the chapter's source and evidence notes
-to distinguish that candidate from the current two-screen example.
+The [Notes showcase chapter](../getting-started/showcase.md) walks through that example, which
+combines navigation, editing, validation, lazy rows, and retry.
