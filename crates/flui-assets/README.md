@@ -4,9 +4,9 @@ High-performance asset management system for FLUI framework with smart caching, 
 
 ## Features
 
-- 🚀 **High Performance** - Lock-free caching with TinyLFU eviction algorithm
+- 🚀 **High Performance** - Concurrent Moka caching with TinyLFU admission
 - 🔒 **Thread-Safe** - Built on tokio, parking_lot, and moka for concurrent access
-- 💾 **Smart Caching** - Automatic memory management with configurable capacity
+- 💾 **Smart Caching** - Explicit entry capacity and configurable expiration
 - 🎯 **Type-Safe** - `Asset` trait with typed `Data`, `Key` and `Error`
 - ⚡ **Async I/O** - Non-blocking loading with tokio runtime
 - 🔑 **Efficient Keys** - 4-byte interned keys for fast hashing and comparison
@@ -29,7 +29,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("Font loaded: {} bytes", handle.bytes.len());
 
-    // Subsequent loads use the cache (instant!)
+    // Subsequent loads share cached data while it remains retained
     let handle2 = registry.load(FontAsset::file("assets/Roboto-Regular.ttf")).await?;
 
     Ok(())
@@ -53,11 +53,12 @@ AssetHandle<T, K> (Arc) - Smart handles with weak references
 The registry uses a type-state builder for compile-time validation:
 
 ```rust
-use flui_assets::AssetRegistryBuilder;
+use flui_assets::{AssetRegistryBuilder, CacheCapacity};
+use std::num::NonZeroU64;
 
 // ✅ This compiles
 let registry = AssetRegistryBuilder::new()
-    .with_capacity(10 * 1024 * 1024)
+    .with_capacity(CacheCapacity::Entries(NonZeroU64::new(256).expect("nonzero entry limit")))
     .build();
 
 // ❌ This doesn't compile - cannot build without capacity
@@ -69,7 +70,7 @@ let registry = AssetRegistryBuilder::new()
 Convenience methods without bloating core API:
 
 ```rust
-use flui_assets::{AssetHandle, AssetHandleExt, AssetCache, AssetCacheExt};
+use flui_assets::{AssetHandle, AssetHandleExt, AssetCache, AssetCacheExt, CacheCapacity, FontAsset};
 
 let handle = registry.load(font).await?;
 
@@ -81,7 +82,7 @@ let size = handle.map(|font| font.bytes.len());
 println!("Total refs: {}", handle.total_ref_count());
 
 // Cache extensions
-let cache: AssetCache<FontAsset> = AssetCache::new(1024 * 1024);
+let cache: AssetCache<FontAsset> = AssetCache::new(CacheCapacity::default());
 println!("Hit rate: {:.1}%", cache.hit_rate() * 100.0);
 if cache.is_efficient() {
     println!("Cache performing well (>70% hit rate)");
@@ -101,7 +102,7 @@ let handle = registry.load(font).await?;
 
 // Or from bytes
 let bytes = std::fs::read("font.ttf")?;
-let font = FontAsset::from_bytes(bytes);
+let font = FontAsset::from_bytes("embedded-font", bytes);
 let handle = registry.load(font).await?;
 ```
 
@@ -199,9 +200,24 @@ as a file-backed asset; the registry caches its decoded result.
 
 ### Cache Behavior
 
-Moka manages cache entries and admission. Cache operations also update statistics
-behind a separate lock. `AssetCache::stats()` reports that typed cache's counters;
-the registry does not aggregate statistics across asset types.
+Moka caches typed loaded results, including decoded images and fonts. Capacity
+counts entries separately for each type: the default is 10,240 entries, not a
+byte budget. `CacheCapacity::Disabled` retains no completed entries while still
+sharing concurrent cold initialization. Default expiration is a five-minute
+lifetime and one-minute idle interval; `AssetCacheConfig` can configure either.
+Consumer handles retain data after cache eviction.
+
+`get_or_insert_with` shares data or an `Arc<Error>` between cold callers. Errors
+are not cached. Registry loads validate every descriptor, including cache hits,
+and preserve their owned `AssetError` contract. Widget bridge methods bypass this
+typed cache and deliver decoded images to the widget layer's synchronous LRU.
+
+`contains` is synchronous and does not count reads or refresh idle expiration.
+`insert_many` inserts sequentially. Counters share a short lock across clones;
+`invalidations` counts explicit invalidation requests, not automatic removals.
+`len` and utilization are estimated entry metrics, not memory measurements.
+`AssetCache::stats()` reports that typed cache's counters; the registry does not
+expose typed-cache lookup or aggregate statistics across asset types.
 
 ### Thread Safety
 

@@ -76,7 +76,9 @@ fn block_on<F: Future>(future: F) -> F::Output {
 /// removed or broken — a plain `#[test]` has no tokio context to fall back on.
 fn load_image_bridged_starts_an_owned_runtime_and_decodes_the_fixture() {
     let registry = AssetRegistryBuilder::new()
-        .with_capacity(1024 * 1024)
+        .with_capacity(flui_assets::CacheCapacity::Entries(
+            std::num::NonZeroU64::new(102).expect("nonzero test capacity"),
+        ))
         .build();
 
     let decoded = block_on(registry.load_image_bridged(fixture_path()))
@@ -94,7 +96,9 @@ fn load_image_bridged_starts_an_owned_runtime_and_decodes_the_fixture() {
 /// the success path.
 fn load_image_bridged_reports_a_missing_file_as_an_error_not_a_hang() {
     let registry = AssetRegistryBuilder::new()
-        .with_capacity(1024 * 1024)
+        .with_capacity(flui_assets::CacheCapacity::Entries(
+            std::num::NonZeroU64::new(102).expect("nonzero test capacity"),
+        ))
         .build();
 
     let missing = concat!(

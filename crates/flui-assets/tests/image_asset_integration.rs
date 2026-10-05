@@ -18,7 +18,9 @@ fn fixture_path() -> &'static str {
 #[tokio::test]
 async fn image_asset_file_loads_a_committed_png_fixture_to_its_real_dimensions() {
     let registry = AssetRegistryBuilder::new()
-        .with_capacity(1024 * 1024)
+        .with_capacity(flui_assets::CacheCapacity::Entries(
+            std::num::NonZeroU64::new(102).expect("nonzero test capacity"),
+        ))
         .build();
 
     let handle = registry

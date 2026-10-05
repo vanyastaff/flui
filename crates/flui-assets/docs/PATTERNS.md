@@ -1,514 +1,118 @@
-# Design Patterns in flui_assets
+# Design patterns in flui_assets
 
-This document explains the design patterns used in `flui_assets` and their rationale.
+## Type-state configuration
 
-## 1. Extension Trait Pattern
-
-### Problem
-You want to add convenience methods without bloating the core API or breaking compatibility.
-
-### Solution
-Use sealed core traits with blanket extension trait implementations.
-
-### Example
+`AssetRegistryBuilder<NoCapacity>` cannot build a registry until the caller
+selects capacity or a complete cache configuration. `with_default_capacity`
+selects 10,240 completed entries per asset type. Explicit capacity separates
+disabled retention from a positive count:
 
 ```rust
-// Step 1: Create sealed trait module
-mod sealed {
-    pub trait Sealed {}
-    impl<T, K> Sealed for AssetHandle<T, K> {}
-}
+use flui_assets::{AssetRegistryBuilder, CacheCapacity};
+use std::num::NonZeroU64;
 
-// Step 2: Core trait (minimal, stable API)
-pub trait AssetHandleCore<T, K>: sealed::Sealed {
-    fn get(&self) -> &T;
-    fn key(&self) -> &K;
-    fn strong_count(&self) -> usize;
-    fn weak_count(&self) -> usize;
-}
-
-// Step 3: Extension trait (convenience methods)
-pub trait AssetHandleExt<T, K>: AssetHandleCore<T, K> {
-    fn is_unique(&self) -> bool {
-        self.strong_count() == 1
-    }
-
-    fn has_weak_refs(&self) -> bool {
-        self.weak_count() > 0
-    }
-
-    fn map<U, F>(&self, f: F) -> U
-    where F: FnOnce(&T) -> U
-    {
-        f(self.get())
-    }
-
-    fn total_ref_count(&self) -> usize {
-        self.strong_count() + self.weak_count()
-    }
-}
-
-// Step 4: Blanket implementation
-impl<H, T, K> AssetHandleExt<T, K> for H
-where H: AssetHandleCore<T, K> + ?Sized
-{}
-```
-
-### Benefits
-- ✅ **Backward compatible** - Can add new methods to extension trait
-- ✅ **Clean separation** - Core API stays minimal and stable
-- ✅ **Zero cost** - Extension methods inline completely
-- ✅ **Sealed** - Users can't implement core trait, preventing breakage
-
-### When to Use
-- Adding convenience methods to existing types
-- Building on a stable core API
-- Library development where API stability matters
-
-### Implementation in flui_assets
-- `AssetHandleCore` + `AssetHandleExt` (6 convenience methods)
-- `AssetCacheCore` + `AssetCacheExt` (5 convenience methods)
-
-## 2. Type State Builder Pattern
-
-### Problem
-Want compile-time validation that builder configuration is valid.
-
-### Solution
-Use marker types to represent builder states, making `build()` only available in valid states.
-
-### Example
-
-```rust
-// Step 1: Define state markers
-#[derive(Debug, Clone, Copy)]
-pub struct NoCapacity;
-
-#[derive(Debug, Clone, Copy)]
-pub struct HasCapacity(pub(crate) usize);
-
-// Step 2: Generic builder with state parameter
-pub struct AssetRegistryBuilder<C = NoCapacity> {
-    capacity: C,
-}
-
-// Step 3: Initial state methods
-impl AssetRegistryBuilder<NoCapacity> {
-    pub fn new() -> Self {
-        Self { capacity: NoCapacity }
-    }
-
-    // Transition to HasCapacity state
-    pub fn with_capacity(self, capacity: usize) -> AssetRegistryBuilder<HasCapacity> {
-        assert!(capacity > 0, "Capacity must be greater than 0");
-        AssetRegistryBuilder {
-            capacity: HasCapacity(capacity),
-        }
-    }
-}
-
-// Step 4: Final state methods
-impl AssetRegistryBuilder<HasCapacity> {
-    // build() only available in HasCapacity state
-    pub fn build(self) -> AssetRegistry {
-        AssetRegistry::new(self.capacity.0)
-    }
-}
-```
-
-### Usage
-
-```rust
-// ✅ This compiles
 let registry = AssetRegistryBuilder::new()
-    .with_capacity(1024)
+    .with_capacity(CacheCapacity::Entries(NonZeroU64::new(128).expect("nonzero entry limit")))
     .build();
 
-// ❌ This doesn't compile - no build() method on NoCapacity
-let registry = AssetRegistryBuilder::new()
-    .build(); // ERROR: no method `build` found
+let uncached = AssetRegistryBuilder::new()
+    .with_capacity(CacheCapacity::Disabled)
+    .build();
 ```
 
-### Benefits
-- ✅ **Compile-time safety** - Invalid states cannot compile
-- ✅ **Clear API progression** - Type system guides usage
-- ✅ **Zero runtime overhead** - States are marker types
-- ✅ **Self-documenting** - Type signatures show requirements
+`with_cache_config` supplies `AssetCacheConfig`, including independently validated
+lifetime and idle expiration. Capacity transitions preserve configured expiration
+and any host runtime or HTTP policy. The type-state transition requires an
+explicit policy; it does not claim a memory budget.
 
-### When to Use
-- Builders with required configuration
-- APIs with sequential steps
-- Preventing misuse at compile time
+## Shared handle ownership
 
-## 3. Sealed Trait Pattern
-
-### Problem
-You want to provide a trait for users to use, but not implement.
-
-### Solution
-Use a private `Sealed` super-trait that users cannot implement.
-
-### Example
+`AssetHandle<Data, Key>` owns an `Arc<Data>` and a caller-selected key. Cloning a
+handle shares data and clones its key; data does not need to implement `Clone`.
+A weak handle observes that ownership without extending the data's lifetime.
+Eviction removes cache ownership, not ownership held by existing handles.
 
 ```rust
-// Private sealed trait
-mod sealed {
-    pub trait Sealed {}
+use flui_assets::{AssetHandle, AssetKey};
+use std::sync::Arc;
 
-    // Only implement for types in your crate
-    impl Sealed for OurType1 {}
-    impl Sealed for OurType2 {}
-}
-
-// Public trait with sealed super-trait
-pub trait PublicTrait: sealed::Sealed {
-    fn method(&self);
-}
-
-// Users can use the trait
-fn use_trait<T: PublicTrait>(value: &T) {
-    value.method();
-}
-
-// But cannot implement it
-// impl PublicTrait for MyType {} // ERROR: sealed::Sealed is private
+let first = AssetHandle::new(Arc::new(vec![1, 2, 3]), AssetKey::new("bytes"));
+let shared = first.clone();
+let independent = AssetHandle::new(Arc::new(vec![1, 2, 3]), AssetKey::new("bytes"));
+assert!(first.ptr_eq(&shared));
+assert!(!first.ptr_eq(&independent));
 ```
 
-### Benefits
-- ✅ **API evolution** - Can add trait methods without breaking users
-- ✅ **Internal guarantees** - Only your types implement the trait
-- ✅ **Clear intent** - Users know they shouldn't implement it
+Equal keys identify equivalent requested assets, not equal allocation ownership.
+Reloading an evicted key may create another allocation while old handles remain
+live. `ptr_eq` checks shared ownership directly.
 
-### When to Use
-- Extension trait core traits
-- Traits that may evolve over time
-- Internal traits with public visibility
+## Sealed core traits and extensions
 
-### Implementation in flui_assets
-- `AssetHandleCore` is sealed
-- `AssetCacheCore` is sealed
-
-## 4. Smart Handle Pattern (Arc + Key)
-
-### Problem
-Need efficient shared ownership of cached data with identity.
-
-### Solution
-Combine `Arc<T>` for sharing with a key for identity and cache operations.
-
-### Example
+`AssetHandleCore` and `AssetCacheCore` are sealed. Their extension traits provide
+convenience operations for the supported handles and caches. Presence and
+capacity are core cache observations; batch insertion is an extension operation.
 
 ```rust
-pub struct AssetHandle<T, K> {
-    data: Arc<T>,   // Shared ownership
-    key: K,         // Identity
-}
+use flui_assets::{AssetCache, AssetCacheExt, AssetKey, CacheCapacity, FontAsset};
 
-impl<T, K> AssetHandle<T, K> {
-    pub fn new(data: Arc<T>, key: K) -> Self {
-        Self { data, key }
-    }
-
-    pub fn get(&self) -> &T {
-        &self.data
-    }
-
-    pub fn key(&self) -> &K {
-        &self.key
-    }
-
-    // Clone is cheap - just clones Arc
-    pub fn clone(&self) -> Self {
-        Self {
-            data: self.data.clone(),
-            key: self.key.clone(),
-        }
-    }
-
-    // Create weak reference
-    pub fn downgrade(&self) -> WeakAssetHandle<T, K> {
-        WeakAssetHandle {
-            data: Arc::downgrade(&self.data),
-            key: self.key.clone(),
-        }
-    }
-}
+let cache = AssetCache::<FontAsset>::new(CacheCapacity::default());
+let key = AssetKey::new("font.ttf");
+assert!(!cache.contains(&key));
+assert_eq!(cache.stats().total_requests(), 0);
+assert_eq!(cache.utilization(), 0.0);
 ```
 
-### Benefits
-- ✅ **Efficient cloning** - O(1) atomic increment
-- ✅ **Cache-aware** - Key enables cache invalidation
-- ✅ **Memory management** - Arc handles cleanup
-- ✅ **Weak references** - Prevent cache bloat
+`contains` is synchronous and does not refresh idle expiration. `get` retrieves
+shared data asynchronously and records a request. Sealing controls who implements
+the core traits; it does not make every public API change backward compatible.
 
-### When to Use
-- Cached resources with identity
-- Shared ownership with many clones
-- Cache invalidation needs
+## Fallible shared initialization
 
-## 5. String Interning Pattern
-
-### Problem
-String keys waste memory and are slow to compare/hash.
-
-### Solution
-Intern strings to unique integers, storing string once.
-
-### Example
+Moka's `entry_by_ref(...).or_try_insert_with(...)` selects one cold initializer
+per typed key and shares its result with waiting callers. The public helper
+returns `Arc<Asset::Error>`, so custom errors do not need a `Clone` implementation.
+Only a fresh returned entry counts as a completed insertion.
 
 ```rust
-use lasso::{Rodeo, Spur};
-use parking_lot::RwLock;
-use once_cell::sync::Lazy;
+use flui_assets::{Asset, AssetCache, CacheCapacity, FontAsset};
 
-// Global interner
-static INTERNER: Lazy<RwLock<Rodeo>> = Lazy::new(|| {
-    RwLock::new(Rodeo::new())
-});
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct AssetKey(Spur); // 4 bytes
-
-impl AssetKey {
-    pub fn new(s: &str) -> Self {
-        let mut interner = INTERNER.write();
-        Self(interner.get_or_intern(s))
-    }
-
-    pub fn as_str(&self) -> String {
-        let interner = INTERNER.read();
-        interner.resolve(&self.0).to_string()
-    }
-}
-
-impl Hash for AssetKey {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.0.into_inner().get().hash(state); // Hash u32
-    }
-}
+let cache = AssetCache::<FontAsset>::new(CacheCapacity::default());
+let font = FontAsset::file("font.ttf");
+let handle = cache.get_or_insert_with(font.key(), || font.load()).await?;
 ```
 
-### Performance Impact
+Registry loading first calls `validate`, then uses this same helper and maps
+shared `AssetError` into its owned error contract. Validation still runs for
+cache hits. Failed loads are not retained. Cancellation and an initializer panic
+allow another waiter to retry; repeated failures are bounded by Moka's retry
+policy. Invalidation affects completed entries, not pending initialization.
 
-```rust
-// Without interning
-let key1 = "texture.png".to_string(); // 24+ bytes, heap allocation
-let key2 = "texture.png".to_string(); // 24+ bytes, heap allocation
-key1 == key2; // O(n) string comparison
+## Type-erased registry storage
 
-// With interning
-let key1 = AssetKey::new("texture.png"); // 4 bytes, stack
-let key2 = AssetKey::new("texture.png"); // 4 bytes, stack
-key1 == key2; // O(1) u32 comparison
-```
+A registry maps each asset type's `TypeId` to its typed `AssetCache`. An existing
+cache is cloned under the map lock, then used after releasing that lock. Moka
+entries and FLUI operation counters remain shared across these clones.
 
-### Benefits
+`clear_all` detaches the map under its write guard and retires the outgoing map
+after releasing that guard. Generic data destructors may reenter the same
+registry and observe the committed state. Last-owner teardown exposes an
+absent-owner fallback through weak ownership; it cannot resurrect the registry.
 
-- Keys compare and hash an integer instead of string contents.
-- Repeated keys share the interned string storage.
+## Source and presentation boundaries
 
-### Trade-offs
+An `Asset` selects bytes, validates its descriptor and decodes its typed data.
+`BytesFileLoader` and `NetworkLoader` supply byte sources; they are not generic
+cache-key-to-asset factories. Embedded constructors take an identifier and owned
+bytes. Ordinary registry loads cache loaded results, including decoded images.
 
-- The process-wide interner retains strings for the process lifetime.
-- Creating a key requires an interner lookup; a new string also needs storage.
+Widget bridge methods bypass registry caching and deliver decoded images to the
+widget layer's synchronous LRU. This preserves synchronous build/layout/paint
+while async IO runs at the loading edge. Subscriber ownership determines when
+abandoned shared widget loads leave their pending map.
 
-### When to Use
-- Identifiers with many duplicates
-- Frequent comparison/hashing operations
-- Limited key space (thousands, not millions)
+## References
 
-## 6. Type Erasure with TypeId
-
-### Problem
-Need to store different cache types in a single collection.
-
-### Solution
-Use `TypeId` as key with `Box<dyn Any>` as value.
-
-### Example
-
-```rust
-use std::any::{Any, TypeId};
-use std::collections::HashMap;
-
-pub struct AssetRegistry {
-    caches: Arc<RwLock<HashMap<TypeId, Box<dyn Any + Send + Sync>>>>,
-}
-
-impl AssetRegistry {
-    pub fn get_cache<T: Asset>(&self) -> Option<Arc<AssetCache<T>>> {
-        let caches = self.caches.read();
-        let type_id = TypeId::of::<T>();
-
-        caches.get(&type_id)
-            .and_then(|cache| cache.downcast_ref::<AssetCache<T>>())
-            .map(|cache| cache.clone())
-    }
-
-    pub fn create_cache<T: Asset>(&self) {
-        let mut caches = self.caches.write();
-        let type_id = TypeId::of::<T>();
-
-        caches.insert(
-            type_id,
-            Box::new(AssetCache::<T>::new(self.default_capacity)),
-        );
-    }
-}
-```
-
-### Benefits
-- ✅ **Type-safe** - Downcasting is checked
-- ✅ **Zero-cost abstraction** - TypeId is compile-time
-- ✅ **Flexible** - Can store any type
-- ✅ **Thread-safe** - Works with Send + Sync
-
-### Trade-offs
-- ⚠️ Runtime downcasting cost (but amortized)
-- ⚠️ Less obvious than enums
-- ⚠️ Requires `'static` types
-
-### When to Use
-- Heterogeneous collections of typed data
-- Plugin systems
-- Dynamic type dispatch
-
-## 7. Extension Method Pattern (Convenience)
-
-### Problem
-Want to provide helper methods without modifying original type.
-
-### Solution
-Implement methods on existing types via extension traits.
-
-### Example
-
-```rust
-pub trait AssetCacheExt<T: Asset>: AssetCacheCore<T> {
-    /// Get cache hit rate (0.0 - 1.0)
-    fn hit_rate(&self) -> f64 {
-        let stats = self.stats();
-        stats.hit_rate()
-    }
-
-    /// Get cache miss rate (0.0 - 1.0)
-    fn miss_rate(&self) -> f64 {
-        1.0 - self.hit_rate()
-    }
-
-    /// Check if cache is efficient (>70% hit rate)
-    fn is_efficient(&self) -> bool {
-        self.hit_rate() > 0.7
-    }
-
-    /// Async check if key exists
-    fn contains(&self, key: &T::Key) -> impl Future<Output = bool> + Send
-    where Self: Sync
-    {
-        async move {
-            self.get(key).await.is_some()
-        }
-    }
-}
-```
-
-### Benefits
-- ✅ **Non-invasive** - Doesn't modify original type
-- ✅ **Composable** - Can build on other traits
-- ✅ **Default implementations** - Users get them for free
-
-### When to Use
-- Adding utility methods to library types
-- Building higher-level APIs
-- Providing optional functionality
-
-## Pattern Combinations
-
-### Extension Trait + Sealed + Type State
-
-The three patterns work together in `AssetRegistryBuilder`:
-
-```rust
-// 1. Sealed trait (prevents external implementation)
-mod sealed {
-    pub trait Sealed {}
-    impl Sealed for NoCapacity {}
-    impl Sealed for HasCapacity {}
-}
-
-// 2. Type state markers
-pub struct NoCapacity;
-pub struct HasCapacity(usize);
-
-// 3. Core trait with type state
-pub trait BuilderCore<C>: sealed::Sealed {
-    fn capacity(&self) -> Option<usize>;
-}
-
-// 4. Extension trait with convenience methods
-pub trait BuilderExt<C>: BuilderCore<C> {
-    fn is_configured(&self) -> bool {
-        self.capacity().is_some()
-    }
-}
-
-// 5. Blanket implementation
-impl<B, C> BuilderExt<C> for B where B: BuilderCore<C> {}
-```
-
-## Anti-Patterns to Avoid
-
-### ❌ Overly Generic APIs
-
-```rust
-// BAD: Too generic, hard to understand
-pub trait GenericAsset<T, K, E, M> {
-    fn load(&self) -> Result<T, E>;
-}
-
-// GOOD: Clear associated types
-pub trait Asset {
-    type Data;
-    type Key;
-    type Error;
-
-    fn load(&self) -> Result<Self::Data, Self::Error>;
-}
-```
-
-### ❌ Leaky Abstractions
-
-```rust
-// BAD: Exposes internal cache implementation
-pub fn get_moka_cache<T: Asset>(&self) -> &Cache<T::Key, T::Data>;
-
-// GOOD: Abstract cache operations
-pub async fn get<T: Asset>(&self, key: &T::Key) -> Option<Arc<T::Data>>;
-```
-
-### ❌ Unnecessary Cloning
-
-```rust
-// BAD: Clones heavy data
-pub fn get_data(&self) -> T {
-    self.data.clone()
-}
-
-// GOOD: Returns reference or Arc
-pub fn get_data(&self) -> &T {
-    &self.data
-}
-```
-
-## Summary
-
-| Pattern | Use Case | Benefit |
-|---------|----------|---------|
-| Extension Trait | Add methods | Backward compatibility |
-| Type State | Compile-time validation | Safety |
-| Sealed Trait | Prevent implementation | API evolution |
-| Smart Handle | Shared ownership | Efficiency |
-| String Interning | Efficient keys | Performance |
-| Type Erasure | Heterogeneous storage | Flexibility |
-
-These patterns combine to create a high-performance, type-safe, and maintainable asset system.
+- [Architecture](ARCHITECTURE.md)
+- [User guide](GUIDE.md)
+- [Cache behavior and performance](PERFORMANCE.md)

@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use parking_lot::RwLock;
 
-use crate::cache::AssetCache;
+use crate::cache::{AssetCache, AssetCacheConfig, CacheCapacity};
 use crate::core::Asset;
 use crate::error::{AssetError, Result};
 use crate::types::AssetHandle;
@@ -43,8 +43,8 @@ pub struct AssetRegistry {
     /// Value: `Box<dyn Any>` containing `AssetCache<T>`
     caches: Arc<RwLock<HashMap<TypeId, Box<dyn Any + Send + Sync>>>>,
 
-    /// Default cache capacity in bytes.
-    pub(crate) default_capacity: usize,
+    /// Count capacity and expiration applied separately to each asset type.
+    pub(crate) cache_config: AssetCacheConfig,
 
     /// A host-supplied runtime handle for [`load_image_bridged`](Self::load_image_bridged)
     /// to spawn onto, set at construction via
@@ -66,7 +66,7 @@ impl std::fmt::Debug for AssetRegistry {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AssetRegistry")
             .field("cache_count", &self.caches.read().len())
-            .field("default_capacity", &self.default_capacity)
+            .field("cache_config", &self.cache_config)
             // The bridge-runtime fields (images feature only) are omitted:
             // a runtime handle's own Debug output is not diagnostically
             // useful here, and printing whether one has been resolved yet
@@ -77,10 +77,10 @@ impl std::fmt::Debug for AssetRegistry {
 
 impl AssetRegistry {
     /// Creates a new empty registry with the given default capacity.
-    fn new(default_capacity: usize) -> Self {
+    fn new(cache_config: AssetCacheConfig) -> Self {
         Self {
             caches: Arc::new(RwLock::new(HashMap::new())),
-            default_capacity,
+            cache_config,
             #[cfg(feature = "images")]
             injected_runtime_handle: None,
             #[cfg(feature = "images")]
@@ -94,13 +94,13 @@ impl AssetRegistry {
     /// handle for bridged image loads to spawn onto.
     #[cfg(feature = "images")]
     fn with_injected_handle(
-        default_capacity: usize,
+        cache_config: AssetCacheConfig,
         injected_runtime_handle: Option<tokio::runtime::Handle>,
         #[cfg(feature = "network")] network_loader: Option<crate::NetworkLoader>,
     ) -> Self {
         Self {
             caches: Arc::new(RwLock::new(HashMap::new())),
-            default_capacity,
+            cache_config,
             injected_runtime_handle,
             bridge_runtime: BridgeRuntime::new(),
             #[cfg(feature = "network")]
@@ -282,8 +282,9 @@ impl AssetRegistry {
         let cache = self.get_or_create_cache::<T>();
 
         cache
-            .get_or_insert_coalesced_with(key, || asset.load())
+            .get_or_insert_with(key, || asset.load())
             .await
+            .map_err(|error| (*error).clone())
     }
 
     /// Gets an asset from cache without loading.
@@ -362,14 +363,19 @@ impl AssetRegistry {
         }
     }
 
-    /// Clears all caches in the registry.
+    /// Detaches all typed caches before retiring their ownership. Generic data
+    /// destructors may reenter this registry and create fresh caches.
+    /// In-flight loads can still return handles from their detached cache.
     #[expect(
         clippy::unused_async,
         reason = "public API: uniform async surface with the genuinely-async `invalidate`/`clear` siblings"
     )]
     pub async fn clear_all(&self) {
-        let mut caches = self.caches.write();
-        caches.clear();
+        let retired = {
+            let mut caches = self.caches.write();
+            std::mem::take(&mut *caches)
+        };
+        drop(retired);
     }
 
     /// Gets the cache for a specific asset type, if it exists.
@@ -415,7 +421,7 @@ impl AssetRegistry {
         }
 
         // Create new cache
-        let cache = AssetCache::<T>::new(self.default_capacity);
+        let cache = AssetCache::<T>::with_config(self.cache_config);
         caches.insert(type_id, Box::new(cache.clone()));
         cache
     }
@@ -423,7 +429,7 @@ impl AssetRegistry {
 
 impl Default for AssetRegistry {
     fn default() -> Self {
-        Self::new(100 * 1024 * 1024) // 100 MB
+        Self::new(AssetCacheConfig::default())
     }
 }
 
@@ -435,7 +441,7 @@ pub struct NoCapacity;
 
 /// Type-state marker: Capacity has been set.
 #[derive(Debug, Clone, Copy)]
-pub struct HasCapacity(pub(crate) usize);
+pub struct HasCapacity(pub(crate) AssetCacheConfig);
 
 /// Builder for constructing an asset registry with compile-time validation.
 ///
@@ -455,7 +461,7 @@ pub struct HasCapacity(pub(crate) usize);
 ///
 /// // This compiles - capacity is set
 /// let registry = AssetRegistryBuilder::new()
-///     .with_capacity(200 * 1024 * 1024) // 200 MB
+///     .with_capacity(flui_assets::CacheCapacity::Entries(std::num::NonZeroU64::new(1_024).expect("nonzero capacity"))) // entry count
 ///     .build();
 ///
 /// // This won't compile - capacity not set
@@ -468,7 +474,7 @@ pub struct HasCapacity(pub(crate) usize);
 ///
 /// ```rust,ignore
 /// let registry = AssetRegistryBuilder::new()
-///     .with_default_capacity() // 100 MB
+///     .with_default_capacity() // entry count
 ///     .build();
 /// ```
 #[derive(Debug)]
@@ -506,29 +512,32 @@ impl AssetRegistryBuilder<NoCapacity> {
         }
     }
 
-    /// Sets a custom cache capacity in bytes.
+    /// Sets completed-entry retention separately for each asset type.
     ///
     /// This capacity is used for each asset type's cache.
     ///
     /// # Arguments
     ///
-    /// * `capacity_bytes` - Cache capacity in bytes (must be > 0)
-    ///
-    /// # Panics
-    ///
-    /// Panics if `capacity_bytes` is 0.
+    /// * `capacity` - An explicit count bound or disabled retention.
     ///
     /// # Examples
     ///
     /// ```rust,ignore
     /// let registry = AssetRegistryBuilder::new()
-    ///     .with_capacity(500 * 1024 * 1024) // 500 MB
+    ///     .with_capacity(flui_assets::CacheCapacity::Entries(std::num::NonZeroU64::new(1_024).expect("nonzero capacity"))) // entry count
     ///     .build();
     /// ```
-    pub fn with_capacity(self, capacity_bytes: usize) -> AssetRegistryBuilder<HasCapacity> {
-        assert!(capacity_bytes > 0, "Capacity must be greater than 0");
+    pub fn with_capacity(self, capacity: CacheCapacity) -> AssetRegistryBuilder<HasCapacity> {
+        self.with_cache_config(AssetCacheConfig {
+            capacity,
+            ..AssetCacheConfig::default()
+        })
+    }
+
+    /// Configures count capacity and expiration for every typed cache.
+    pub fn with_cache_config(self, config: AssetCacheConfig) -> AssetRegistryBuilder<HasCapacity> {
         AssetRegistryBuilder {
-            capacity: HasCapacity(capacity_bytes),
+            capacity: HasCapacity(config),
             #[cfg(feature = "images")]
             runtime_handle: self.runtime_handle,
             #[cfg(all(feature = "images", feature = "network"))]
@@ -536,7 +545,7 @@ impl AssetRegistryBuilder<NoCapacity> {
         }
     }
 
-    /// Sets the default cache capacity (100 MB).
+    /// Sets the default capacity (10,240 entries per asset type).
     ///
     /// This is a convenience method for the common case.
     ///
@@ -548,13 +557,7 @@ impl AssetRegistryBuilder<NoCapacity> {
     ///     .build();
     /// ```
     pub fn with_default_capacity(self) -> AssetRegistryBuilder<HasCapacity> {
-        AssetRegistryBuilder {
-            capacity: HasCapacity(100 * 1024 * 1024), // 100 MB
-            #[cfg(feature = "images")]
-            runtime_handle: self.runtime_handle,
-            #[cfg(all(feature = "images", feature = "network"))]
-            network_loader: self.network_loader,
-        }
+        self.with_cache_config(AssetCacheConfig::default())
     }
 }
 
@@ -602,7 +605,7 @@ impl<C> AssetRegistryBuilder<C> {
     /// use flui_assets::AssetRegistryBuilder;
     ///
     /// let registry = AssetRegistryBuilder::new()
-    ///     .with_capacity(50 * 1024 * 1024)
+    ///     .with_capacity(flui_assets::CacheCapacity::Entries(std::num::NonZeroU64::new(1_024).expect("nonzero capacity")))
     ///     .with_runtime_handle(tokio::runtime::Handle::current())
     ///     .build();
     /// # let _ = registry;
@@ -627,7 +630,7 @@ impl AssetRegistryBuilder<HasCapacity> {
     ///
     /// ```rust,ignore
     /// let registry = AssetRegistryBuilder::new()
-    ///     .with_capacity(200 * 1024 * 1024)
+    ///     .with_capacity(flui_assets::CacheCapacity::Entries(std::num::NonZeroU64::new(1_024).expect("nonzero capacity")))
     ///     .build();
     /// ```
     pub fn build(self) -> AssetRegistry {
@@ -654,14 +657,20 @@ impl AssetRegistryBuilder<HasCapacity> {
     ///
     /// ```rust,ignore
     /// let registry = AssetRegistryBuilder::new()
-    ///     .with_capacity(100 * 1024 * 1024)
-    ///     .with_capacity(200 * 1024 * 1024) // Override previous value
+    ///     .with_capacity(flui_assets::CacheCapacity::Entries(std::num::NonZeroU64::new(1_024).expect("nonzero capacity")))
+    ///     .with_capacity(flui_assets::CacheCapacity::Entries(std::num::NonZeroU64::new(1_024).expect("nonzero capacity"))) // Override previous value
     ///     .build();
     /// ```
-    pub fn with_capacity(self, capacity_bytes: usize) -> AssetRegistryBuilder<HasCapacity> {
-        assert!(capacity_bytes > 0, "Capacity must be greater than 0");
+    pub fn with_capacity(self, capacity: CacheCapacity) -> AssetRegistryBuilder<HasCapacity> {
+        let mut config = self.capacity.0;
+        config.capacity = capacity;
+        self.with_cache_config(config)
+    }
+
+    /// Replaces the typed-cache capacity and expiration configuration.
+    pub fn with_cache_config(self, config: AssetCacheConfig) -> AssetRegistryBuilder<HasCapacity> {
         AssetRegistryBuilder {
-            capacity: HasCapacity(capacity_bytes),
+            capacity: HasCapacity(config),
             #[cfg(feature = "images")]
             runtime_handle: self.runtime_handle,
             #[cfg(all(feature = "images", feature = "network"))]

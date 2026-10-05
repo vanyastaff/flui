@@ -21,6 +21,122 @@ struct OwnedAsset {
     drops: Arc<AtomicUsize>,
 }
 
+struct ReentrantValue {
+    registry: std::sync::Weak<flui_assets::AssetRegistry>,
+    observed: Arc<AtomicUsize>,
+}
+
+impl Drop for ReentrantValue {
+    fn drop(&mut self) {
+        use std::future::Future;
+        use std::task::{Context, Poll, Waker};
+
+        let observation = if let Some(registry) = self.registry.upgrade() {
+            let key = "reentrant".to_owned();
+            let mut lookup = std::pin::pin!(registry.get::<ReentrantAsset>(&key));
+            match lookup
+                .as_mut()
+                .poll(&mut Context::from_waker(Waker::noop()))
+            {
+                Poll::Ready(None) => 1,
+                Poll::Ready(Some(_)) | Poll::Pending => 3,
+            }
+        } else {
+            2
+        };
+        self.observed.store(observation, Ordering::Relaxed);
+    }
+}
+
+struct ReentrantAsset {
+    registry: std::sync::Weak<flui_assets::AssetRegistry>,
+    observed: Arc<AtomicUsize>,
+}
+
+impl Asset for ReentrantAsset {
+    type Data = ReentrantValue;
+    type Key = String;
+    type Error = AssetError;
+
+    fn key(&self) -> String {
+        "reentrant".into()
+    }
+
+    async fn load(&self) -> Result<ReentrantValue, AssetError> {
+        Ok(ReentrantValue {
+            registry: self.registry.clone(),
+            observed: Arc::clone(&self.observed),
+        })
+    }
+}
+
+fn retirement_commits_before_reentry(release_owner: bool) {
+    let (sender, receiver) = std::sync::mpsc::channel();
+    let worker = std::thread::spawn(move || {
+        let observation = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("retirement runtime starts")
+            .block_on(async {
+                let registry =
+                    Arc::new(AssetRegistryBuilder::new().with_default_capacity().build());
+                let observed = Arc::new(AtomicUsize::new(0));
+                let data = registry
+                    .load(ReentrantAsset {
+                        registry: Arc::downgrade(&registry),
+                        observed: Arc::clone(&observed),
+                    })
+                    .await
+                    .expect("reentrant data loads");
+                drop(data);
+                if release_owner {
+                    drop(registry);
+                } else {
+                    registry.clear_all().await;
+                    let fresh = registry
+                        .load(CheckedAsset {
+                            accepted: true,
+                            loads: Arc::new(AtomicUsize::new(0)),
+                        })
+                        .await
+                        .expect("fresh cache works after retirement");
+                    assert_eq!(*fresh, 42);
+                }
+                observed.load(Ordering::Relaxed)
+            });
+        sender
+            .send(observation)
+            .expect("retirement result is delivered");
+    });
+    let observed = receiver
+        .recv_timeout(std::time::Duration::from_secs(3))
+        .expect("cache retirement permits destructor reentry before the deadline");
+    worker.join().expect("retirement worker completes");
+    assert_eq!(observed, if release_owner { 2 } else { 1 });
+}
+
+fn clearing_detaches_the_map_before_destructor_reentry() {
+    retirement_commits_before_reentry(false);
+}
+
+fn releasing_the_last_owner_has_an_absent_owner_fallback() {
+    retirement_commits_before_reentry(true);
+}
+
+#[test]
+fn registry_cache_retirement_commits_ownership_before_data_drop() {
+    crate::cases::run_cases(&[
+        (
+            "clear permits reentry",
+            clearing_detaches_the_map_before_destructor_reentry,
+        ),
+        (
+            "last owner is absent",
+            releasing_the_last_owner_has_an_absent_owner_fallback,
+        ),
+    ]);
+}
+
 impl Asset for OwnedAsset {
     type Data = OwnedValue;
     type Key = String;
@@ -425,6 +541,14 @@ fn cold_registry_loads_share_work_and_recover() {
             "canceling the initializer restarts a waiting load",
             canceling_the_initializer_restarts_a_waiting_load,
         ),
+        (
+            "public cache waiters share data and non-Clone errors",
+            public_cache_waiters_share_data_and_non_clone_errors,
+        ),
+        (
+            "public cache waiters recover after cancellation or panic",
+            public_cache_waiters_recover_after_cancellation_or_panic,
+        ),
     ]);
 }
 
@@ -433,7 +557,14 @@ fn cold_registry_loads_share_work_and_recover() {
 async fn cache_clones_report_shared_operations_and_reset() {
     use flui_assets::AssetCache;
 
-    let cache = AssetCache::<GatedAsset>::with_config(100, std::time::Duration::from_mins(1));
+    let cache = AssetCache::<GatedAsset>::with_config(flui_assets::AssetCacheConfig {
+        capacity: flui_assets::CacheCapacity::Entries(
+            std::num::NonZeroU64::new(100).expect("nonzero test capacity"),
+        ),
+        time_to_live: flui_assets::CacheExpiration::after(std::time::Duration::from_mins(1))
+            .expect("supported test expiration"),
+        ..flui_assets::AssetCacheConfig::default()
+    });
     let key = "shared".to_owned();
     cache.insert(key.clone(), 7).await;
     let observer = cache.clone();
@@ -446,10 +577,22 @@ async fn cache_clones_report_shared_operations_and_reset() {
     );
     assert!(cache.get(&"missing".to_owned()).await.is_none());
     let counts = |stats: flui_assets::cache::CacheStats| {
-        (stats.hits, stats.misses, stats.insertions, stats.evictions)
+        (
+            stats.hits,
+            stats.misses,
+            stats.insertions,
+            stats.invalidations,
+        )
     };
     assert_eq!(counts(cache.stats()), (1, 1, 1, 0));
     assert_eq!(counts(observer.stats()), (1, 1, 1, 0));
+    assert!(cache.contains(&key));
+    assert!(!observer.contains(&"absent".to_owned()));
+    assert_eq!(
+        counts(cache.stats()),
+        (1, 1, 1, 0),
+        "presence is observational"
+    );
 
     observer.invalidate(&key).await;
     assert!(
@@ -458,6 +601,12 @@ async fn cache_clones_report_shared_operations_and_reset() {
     );
     assert_eq!(counts(cache.stats()), (1, 2, 1, 1));
     assert_eq!(counts(observer.stats()), (1, 2, 1, 1));
+    observer.invalidate(&"absent".to_owned()).await;
+    assert_eq!(
+        counts(cache.stats()),
+        (1, 2, 1, 2),
+        "invalidation counts requests"
+    );
     cache.insert(key.clone(), 9).await;
     observer.clear().await;
     assert_eq!(
@@ -471,4 +620,302 @@ async fn cache_clones_report_shared_operations_and_reset() {
     );
     observer.reset_stats();
     assert_eq!(counts(cache.stats()), (0, 0, 0, 0));
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("attempt {0}")]
+struct NonCloneLoadError(usize);
+
+struct PublicCacheAsset;
+
+impl Asset for PublicCacheAsset {
+    type Data = usize;
+    type Key = String;
+    type Error = NonCloneLoadError;
+
+    fn key(&self) -> String {
+        "public".to_owned()
+    }
+
+    async fn load(&self) -> Result<usize, NonCloneLoadError> {
+        Ok(1)
+    }
+}
+
+fn public_cache_waiters_share_data_and_non_clone_errors() {
+    run_cold_load_case(async {
+        for fail in [false, true] {
+            let cache = flui_assets::AssetCache::<PublicCacheAsset>::new(
+                flui_assets::CacheCapacity::default(),
+            );
+            let observer = cache.clone();
+            let key = "shared".to_owned();
+            let loads = Arc::new(AtomicUsize::new(0));
+            let gate = Arc::new(tokio::sync::Semaphore::new(0));
+            let initialize = || async {
+                let attempt = loads.fetch_add(1, Ordering::Relaxed) + 1;
+                gate.acquire().await.expect("gate remains open").forget();
+                if fail {
+                    Err(NonCloneLoadError(attempt))
+                } else {
+                    Ok(attempt)
+                }
+            };
+            let mut first = Box::pin(cache.get_or_insert_with(key.clone(), initialize));
+            let mut second = Box::pin(observer.get_or_insert_with(key.clone(), initialize));
+            poll_until_loading(first.as_mut(), &loads, 1).await;
+            poll_waiter(second.as_mut()).await;
+            assert_eq!(
+                loads.load(Ordering::Relaxed),
+                1,
+                "public helper coalesces work"
+            );
+            gate.add_permits(2);
+            let first = first.await;
+            let second = second.await;
+            if fail {
+                let first = first.expect_err("initializer fails");
+                let second = second.expect_err("waiter shares failure");
+                assert!(
+                    Arc::ptr_eq(&first, &second),
+                    "non-Clone errors share ownership"
+                );
+                let recovered = cache
+                    .get_or_insert_with(key.clone(), || async {
+                        Ok(loads.fetch_add(1, Ordering::Relaxed) + 1)
+                    })
+                    .await
+                    .expect("failed initialization is retryable");
+                assert_eq!(*recovered, 2);
+            } else {
+                let first = first.expect("initializer succeeds");
+                let second = second.expect("waiter succeeds");
+                assert!(first.ptr_eq(&second), "one loaded allocation is returned");
+                let cached = cache
+                    .get_or_insert_with(key, || async { Ok(99) })
+                    .await
+                    .expect("completed value is reused");
+                assert!(first.ptr_eq(&cached));
+                assert_eq!(loads.load(Ordering::Relaxed), 1);
+            }
+            assert_eq!(cache.stats().insertions, 1, "one completed fresh result");
+        }
+    });
+}
+
+fn public_cache_waiters_recover_after_cancellation_or_panic() {
+    run_cold_load_case(async {
+        for panic_first in [false, true] {
+            let cache = flui_assets::AssetCache::<PublicCacheAsset>::new(
+                flui_assets::CacheCapacity::default(),
+            );
+            let key = "recover".to_owned();
+            let loads = Arc::new(AtomicUsize::new(0));
+            let gate = Arc::new(tokio::sync::Semaphore::new(0));
+            let mut first = Box::pin(cache.get_or_insert_with(key.clone(), || async {
+                let attempt = loads.fetch_add(1, Ordering::Relaxed) + 1;
+                gate.acquire().await.expect("gate remains open").forget();
+                assert!(!panic_first, "initializer panic");
+                Ok(attempt)
+            }));
+            let mut second = Box::pin(cache.get_or_insert_with(key.clone(), || async {
+                let attempt = loads.fetch_add(1, Ordering::Relaxed) + 1;
+                gate.acquire().await.expect("gate remains open").forget();
+                if panic_first {
+                    Err(NonCloneLoadError(attempt))
+                } else {
+                    Ok(attempt)
+                }
+            }));
+            poll_until_loading(first.as_mut(), &loads, 1).await;
+            poll_waiter(second.as_mut()).await;
+            assert_eq!(loads.load(Ordering::Relaxed), 1);
+            if panic_first {
+                gate.add_permits(1);
+                std::future::poll_fn(|cx| {
+                    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        first.as_mut().poll(cx)
+                    }));
+                    match outcome {
+                        Err(payload) => {
+                            assert_eq!(payload.downcast_ref::<&str>(), Some(&"initializer panic"));
+                            std::task::Poll::Ready(())
+                        }
+                        Ok(std::task::Poll::Pending) => std::task::Poll::Pending,
+                        Ok(std::task::Poll::Ready(_)) => panic!("initializer must panic"),
+                    }
+                })
+                .await;
+            }
+            drop(first);
+            poll_until_loading(second.as_mut(), &loads, 2).await;
+            gate.add_permits(1);
+            let second = second.await;
+            if panic_first {
+                assert_eq!(
+                    second
+                        .expect_err("restarted waiter can fail independently")
+                        .0,
+                    2
+                );
+                let next = cache
+                    .get_or_insert_with(key, || async { Ok(3) })
+                    .await
+                    .expect("next request recovers after both failures");
+                assert_eq!(*next, 3);
+            } else {
+                assert_eq!(*second.expect("waiter restarts after cancellation"), 2);
+            }
+        }
+    });
+}
+
+fn count_capacity_bounds_entries_and_preserves_consumer_handles() {
+    run_cold_load_case(async {
+        use flui_assets::{AssetCache, CacheCapacity};
+        let cache = AssetCache::<PublicCacheAsset>::new(CacheCapacity::Entries(
+            std::num::NonZeroU64::new(2).expect("nonzero test capacity"),
+        ));
+        let retained = cache.insert("a".into(), 1).await;
+        cache.insert("b".into(), 2).await;
+        cache.insert("c".into(), 3).await;
+        cache.sync().await;
+        assert!(
+            cache.len() <= 2,
+            "configured count bound applies after maintenance"
+        );
+        assert_eq!(*retained, 1, "retirement does not invalidate consumer data");
+    });
+}
+
+fn disabled_retention_coalesces_then_reloads() {
+    run_cold_load_case(async {
+        use flui_assets::{AssetCache, CacheCapacity};
+        let cache = AssetCache::<PublicCacheAsset>::new(CacheCapacity::Disabled);
+        let key = "disabled".to_owned();
+        let loads = Arc::new(AtomicUsize::new(0));
+        let gate = Arc::new(tokio::sync::Semaphore::new(0));
+        let initialize = || async {
+            let attempt = loads.fetch_add(1, Ordering::Relaxed) + 1;
+            gate.acquire().await.expect("gate remains open").forget();
+            Ok(attempt)
+        };
+        let mut first = Box::pin(cache.get_or_insert_with(key.clone(), initialize));
+        let mut second = Box::pin(cache.get_or_insert_with(key.clone(), initialize));
+        poll_until_loading(first.as_mut(), &loads, 1).await;
+        poll_waiter(second.as_mut()).await;
+        gate.add_permits(2);
+        let first = first.await.expect("initializer succeeds without retention");
+        let second = second.await.expect("waiter shares accepted work");
+        assert!(first.ptr_eq(&second));
+        assert!(!cache.contains(&key));
+        let next = cache
+            .get_or_insert_with(key, || async {
+                Ok(loads.fetch_add(1, Ordering::Relaxed) + 1)
+            })
+            .await
+            .expect("later request reloads");
+        assert_eq!(*next, 2);
+        assert!(!first.ptr_eq(&next));
+        cache.sync().await;
+        assert_eq!(cache.len(), 0);
+    });
+}
+
+fn utilization_reports_the_configured_capacity_and_rates_remain_finite() {
+    run_cold_load_case(async {
+        use flui_assets::{AssetCache, AssetCacheExt, CacheCapacity};
+        let cache = AssetCache::<PublicCacheAsset>::new(CacheCapacity::Entries(
+            std::num::NonZeroU64::new(4).expect("nonzero test capacity"),
+        ));
+        cache.insert("a".into(), 1).await;
+        cache.insert("b".into(), 2).await;
+        cache.sync().await;
+        assert_eq!(
+            cache.utilization(),
+            0.5,
+            "two entries occupy half of four slots"
+        );
+        for _ in 0..8 {
+            cache
+                .get(&"a".to_owned())
+                .await
+                .expect("retrieving a hot entry");
+        }
+        assert_eq!(
+            cache.utilization(),
+            0.5,
+            "historical requests are not capacity"
+        );
+        let disabled = AssetCache::<PublicCacheAsset>::new(CacheCapacity::Disabled);
+        disabled.insert("a".into(), 1).await;
+        assert_eq!(disabled.utilization(), 0.0);
+
+        let large = flui_assets::cache::CacheStats {
+            hits: usize::MAX,
+            misses: usize::MAX,
+            ..Default::default()
+        };
+        assert_eq!(large.hit_rate(), 0.5);
+        assert_eq!(large.miss_rate(), 0.5);
+        assert_eq!(large.total_requests(), usize::MAX);
+        assert_eq!(flui_assets::cache::CacheStats::default().miss_rate(), 0.0);
+    });
+}
+
+fn expiration_is_checked_before_cache_construction() {
+    run_cold_load_case(async {
+        use flui_assets::{AssetCache, AssetCacheConfig, CacheExpiration};
+        assert!(CacheExpiration::after(std::time::Duration::MAX).is_err());
+        let max = CacheExpiration::after(std::time::Duration::from_hours(1_000 * 365 * 24))
+            .expect("maximum supported expiration is admitted");
+        for expiration in [CacheExpiration::NEVER, max] {
+            let cache = AssetCache::<PublicCacheAsset>::with_config(AssetCacheConfig {
+                time_to_live: expiration,
+                time_to_idle: expiration,
+                ..Default::default()
+            });
+            cache.insert("a".into(), 7).await;
+            assert_eq!(
+                *cache
+                    .get(&"a".to_owned())
+                    .await
+                    .expect("supported config loads"),
+                7
+            );
+        }
+        let immediate = AssetCache::<PublicCacheAsset>::with_config(AssetCacheConfig {
+            time_to_idle: CacheExpiration::after(std::time::Duration::ZERO)
+                .expect("immediate expiration is supported"),
+            ..Default::default()
+        });
+        let held = immediate.insert("a".into(), 9).await;
+        assert!(
+            !immediate.contains(&"a".to_owned()),
+            "configured idle expiration applies"
+        );
+        assert_eq!(*held, 9, "expiration preserves consumer ownership");
+    });
+}
+
+#[test]
+fn asset_cache_retention_and_observation_contracts() {
+    crate::cases::run_cases(&[
+        (
+            "count bound preserves consumer handles",
+            count_capacity_bounds_entries_and_preserves_consumer_handles,
+        ),
+        (
+            "disabled retention coalesces then reloads",
+            disabled_retention_coalesces_then_reloads,
+        ),
+        (
+            "utilization and finite counter arithmetic",
+            utilization_reports_the_configured_capacity_and_rates_remain_finite,
+        ),
+        (
+            "supported expiration construction",
+            expiration_is_checked_before_cache_construction,
+        ),
+    ]);
 }

@@ -1,31 +1,33 @@
 //! Asset caching system with Moka.
 //!
 //! Provides high-performance caching using Moka's TinyLFU eviction algorithm.
-//! The cache is async-friendly and lock-free for maximum concurrency.
+//! Moka provides concurrent async operations; statistics use a short lock.
 
 use std::sync::Arc;
-use std::time::Duration;
 
 use moka::future::Cache as MokaCache;
 
 use crate::core::Asset;
 use crate::types::AssetHandle;
 
+mod config;
 pub mod stats;
 
+pub use config::{AssetCacheConfig, CacheCapacity, CacheExpiration, ExpirationTooLong};
 pub use stats::CacheStats;
 
 /// High-performance asset cache using Moka.
 ///
 /// This cache uses the TinyLFU admission policy which provides better hit rates
-/// than traditional LRU caches. It's also completely lock-free and async-friendly.
+/// than traditional LRU caches for frequency-biased workloads. Moka's admission
+/// and maintenance are concurrent and eventually consistent.
 ///
 /// # Examples
 ///
 /// ```rust,ignore
 /// use flui_assets::cache::AssetCache;
 ///
-/// let cache = AssetCache::<ImageAsset>::new(100_000_000); // 100 MB
+/// let cache = AssetCache::<ImageAsset>::new(flui_assets::CacheCapacity::default()); // entry count
 ///
 /// // Insert an asset
 /// cache.insert(key, data).await;
@@ -56,43 +58,58 @@ where
 }
 
 impl<T: Asset> AssetCache<T> {
-    /// Creates a new asset cache with the given capacity in bytes.
+    /// Creates a count-bounded cache with default expiration.
     ///
     /// # Arguments
     ///
-    /// * `capacity_bytes` - Maximum cache size in bytes (approximate)
+    /// * `capacity` - Completed-entry retention; it does not bound decoded bytes.
     ///
     /// # Examples
     ///
     /// ```rust,ignore
-    /// // 100 MB cache
-    /// let cache = AssetCache::<ImageAsset>::new(100 * 1024 * 1024);
+    /// // entry count cache
+    /// let cache = AssetCache::<ImageAsset>::new(flui_assets::CacheCapacity::default());
     /// ```
-    pub fn new(capacity_bytes: usize) -> Self {
-        // Estimate capacity in number of items (rough heuristic)
-        // Assume average asset is ~10KB
-        let estimated_items = (capacity_bytes / 10_240).max(100);
-
-        Self::with_config(estimated_items, Duration::from_mins(5))
+    pub fn new(capacity: CacheCapacity) -> Self {
+        Self::with_config(AssetCacheConfig {
+            capacity,
+            ..AssetCacheConfig::default()
+        })
     }
 
     /// Creates a cache with custom configuration.
     ///
-    /// # Arguments
-    ///
-    /// * `max_capacity` - Maximum number of items to cache
-    /// * `time_to_live` - How long items stay in cache after insertion
-    pub fn with_config(max_capacity: usize, time_to_live: Duration) -> Self {
-        let cache = MokaCache::builder()
-            .max_capacity(max_capacity as u64)
-            .time_to_live(time_to_live)
-            .time_to_idle(Duration::from_mins(1))
-            .build();
+    pub fn with_config(config: AssetCacheConfig) -> Self {
+        let mut builder = MokaCache::builder().max_capacity(config.capacity.limit());
+        if let Some(duration) = config.time_to_live.duration() {
+            builder = builder.time_to_live(duration);
+        }
+        if let Some(duration) = config.time_to_idle.duration() {
+            builder = builder.time_to_idle(duration);
+        }
+        let cache = builder.build();
 
         Self {
             cache,
             stats: Arc::new(parking_lot::RwLock::new(CacheStats::default())),
         }
+    }
+
+    /// Observes presence without cloning data, recording requests, promoting
+    /// popularity, or refreshing idle expiration. Concurrent mutation may
+    /// change the result immediately after this observation.
+    pub fn contains(&self, key: &T::Key) -> bool {
+        self.cache.contains_key(key)
+    }
+
+    /// Configured completed-entry retention policy.
+    pub fn capacity(&self) -> CacheCapacity {
+        let limit = self
+            .cache
+            .policy()
+            .max_capacity()
+            .expect("BUG: asset caches always configure a maximum capacity");
+        std::num::NonZeroU64::new(limit).map_or(CacheCapacity::Disabled, CacheCapacity::Entries)
     }
 
     /// Gets an asset from the cache.
@@ -113,9 +130,9 @@ impl<T: Asset> AssetCache<T> {
         {
             let mut stats = self.stats.write();
             if result.is_some() {
-                stats.hits += 1;
+                stats.hits = stats.hits.saturating_add(1);
             } else {
-                stats.misses += 1;
+                stats.misses = stats.misses.saturating_add(1);
             }
         }
 
@@ -137,13 +154,22 @@ impl<T: Asset> AssetCache<T> {
         // Update stats
         {
             let mut stats = self.stats.write();
-            stats.insertions += 1;
+            stats.insertions = stats.insertions.saturating_add(1);
         }
 
         AssetHandle::new(arc_data, key)
     }
 
-    /// Gets an asset, or inserts it if not present.
+    /// Gets an asset, or coalesces concurrent cold initializers for its key.
+    ///
+    /// Waiters share one allocation or one `Arc` error, without requiring the
+    /// error to implement `Clone`. Errors are not cached. Moka allows a waiter
+    /// to restart after the elected initializer is cancelled or panics.
+    ///
+    /// Hit/miss counters describe the initial presence observation; concurrent
+    /// changes may race that probe. Fresh returned entries count as completed
+    /// insertions. Cancellation after backend publication can leave an entry
+    /// without a completed insertion count.
     ///
     /// # Examples
     ///
@@ -157,50 +183,34 @@ impl<T: Asset> AssetCache<T> {
         &self,
         key: T::Key,
         f: F,
-    ) -> Result<AssetHandle<T::Data, T::Key>, T::Error>
+    ) -> Result<AssetHandle<T::Data, T::Key>, Arc<T::Error>>
     where
         F: FnOnce() -> Fut,
         Fut: std::future::Future<Output = Result<T::Data, T::Error>>,
     {
-        // Try to get from cache first
-        if let Some(handle) = self.get(&key).await {
-            return Ok(handle);
+        let present = self.contains(&key);
+        {
+            let mut stats = self.stats.write();
+            if present {
+                stats.hits = stats.hits.saturating_add(1);
+            } else {
+                stats.misses = stats.misses.saturating_add(1);
+            }
         }
-
-        // Not in cache, load it
-        let data = f().await?;
-        Ok(self.insert(key, data).await)
-    }
-
-    /// Coalesce registry cold loads while preserving its owned error type.
-    /// A cold contender counts as a miss; only the successful initializer
-    /// counts as an insertion. Moka owns waiting and cancellation recovery.
-    pub(crate) async fn get_or_insert_coalesced_with<F, Fut>(
-        &self,
-        key: T::Key,
-        f: F,
-    ) -> Result<AssetHandle<T::Data, T::Key>, T::Error>
-    where
-        F: FnOnce() -> Fut,
-        Fut: std::future::Future<Output = Result<T::Data, T::Error>>,
-        T::Error: Clone,
-    {
-        if let Some(handle) = self.get(&key).await {
-            return Ok(handle);
-        }
-        let data = self
+        let entry = self
             .cache
-            .try_get_with(key.clone(), async {
-                let data = Arc::new(f().await?);
-                self.stats.write().insertions += 1;
-                Ok::<_, T::Error>(data)
-            })
-            .await
-            .map_err(|error| (*error).clone())?;
-        Ok(AssetHandle::new(data, key))
+            .entry_by_ref(&key)
+            .or_try_insert_with(async { f().await.map(Arc::new) })
+            .await?;
+        if entry.is_fresh() {
+            let mut stats = self.stats.write();
+            stats.insertions = stats.insertions.saturating_add(1);
+        }
+        Ok(AssetHandle::new(entry.into_value(), key))
     }
 
-    /// Invalidates (removes) an asset from the cache.
+    /// Invalidates a completed entry. This does not cancel an in-flight
+    /// initializer, which may insert after invalidation.
     ///
     /// # Examples
     ///
@@ -211,10 +221,12 @@ impl<T: Asset> AssetCache<T> {
         self.cache.invalidate(key).await;
 
         let mut stats = self.stats.write();
-        stats.evictions += 1;
+        stats.invalidations = stats.invalidations.saturating_add(1);
     }
 
-    /// Clears all assets from the cache.
+    /// Invalidates completed entries and resets operation counters after
+    /// pending maintenance. In-flight initializers may insert afterward;
+    /// this is not a generation barrier or immediate physical deallocation.
     ///
     /// # Examples
     ///
@@ -226,7 +238,7 @@ impl<T: Asset> AssetCache<T> {
         self.cache.run_pending_tasks().await;
 
         let mut stats = self.stats.write();
-        stats.evictions = 0;
+        stats.invalidations = 0;
         stats.hits = 0;
         stats.misses = 0;
         stats.insertions = 0;
@@ -234,14 +246,15 @@ impl<T: Asset> AssetCache<T> {
 
     /// Runs any pending maintenance tasks.
     ///
-    /// This is useful for tests to ensure all async operations complete.
+    /// This improves estimated counts after quiescence. Concurrent operations
+    /// can continue; this is not a snapshot or physical deallocation barrier.
     pub async fn sync(&self) {
         self.cache.run_pending_tasks().await;
     }
 
-    /// Returns the number of items currently in the cache.
-    pub fn len(&self) -> usize {
-        self.cache.entry_count() as usize
+    /// Returns Moka's eventually consistent estimate of the entry count.
+    pub fn len(&self) -> u64 {
+        self.cache.entry_count()
     }
 
     /// Returns whether the cache is empty.
@@ -288,6 +301,11 @@ pub mod sealed {
 /// This trait is sealed to prevent external implementations, allowing
 /// the API to evolve without breaking changes.
 pub trait AssetCacheCore<T: Asset>: sealed::Sealed {
+    /// Observes presence without recording a retrieving cache read.
+    fn contains(&self, key: &T::Key) -> bool;
+
+    /// Configured completed-entry retention policy.
+    fn capacity(&self) -> CacheCapacity;
     /// Gets an asset from the cache.
     fn get(
         &self,
@@ -305,13 +323,20 @@ pub trait AssetCacheCore<T: Asset>: sealed::Sealed {
     fn stats(&self) -> CacheStats;
 
     /// Returns the number of items in the cache.
-    fn len(&self) -> usize;
+    fn len(&self) -> u64;
 
     /// Returns whether the cache is empty.
     fn is_empty(&self) -> bool;
 }
 
 impl<T: Asset> AssetCacheCore<T> for AssetCache<T> {
+    fn contains(&self, key: &T::Key) -> bool {
+        self.contains(key)
+    }
+
+    fn capacity(&self) -> CacheCapacity {
+        self.capacity()
+    }
     #[inline]
     async fn get(&self, key: &T::Key) -> Option<AssetHandle<T::Data, T::Key>> {
         self.get(key).await
@@ -328,7 +353,7 @@ impl<T: Asset> AssetCacheCore<T> for AssetCache<T> {
     }
 
     #[inline]
-    fn len(&self) -> usize {
+    fn len(&self) -> u64 {
         self.len()
     }
 
@@ -348,7 +373,7 @@ impl<T: Asset> AssetCacheCore<T> for AssetCache<T> {
 /// ```rust,ignore
 /// use flui_assets::{AssetCache, AssetCacheExt};
 ///
-/// let cache = AssetCache::<ImageAsset>::new(100_000_000);
+/// let cache = AssetCache::<ImageAsset>::new(flui_assets::CacheCapacity::default());
 ///
 /// // Check hit rate
 /// let hit_rate = cache.hit_rate();
@@ -361,7 +386,7 @@ impl<T: Asset> AssetCacheCore<T> for AssetCache<T> {
 /// ]).await;
 ///
 /// // Check if cached
-/// if cache.contains(&key).await {
+/// if cache.contains(&key) {
 ///     println!("Asset is cached!");
 /// }
 /// ```
@@ -391,31 +416,10 @@ pub trait AssetCacheExt<T: Asset>: AssetCacheCore<T> {
     /// ```
     #[inline]
     fn miss_rate(&self) -> f64 {
-        1.0 - self.hit_rate()
+        self.stats().miss_rate()
     }
 
-    /// Checks if an asset exists in the cache without retrieving it.
-    ///
-    /// This is more efficient than `get()` when you only need to check presence.
-    ///
-    /// # Examples
-    ///
-    /// ```rust,ignore
-    /// if cache.contains(&key).await {
-    ///     println!("Asset is already cached");
-    /// }
-    /// ```
-    #[inline]
-    fn contains(&self, key: &T::Key) -> impl std::future::Future<Output = bool> + Send
-    where
-        Self: Sync,
-    {
-        async move { self.get(key).await.is_some() }
-    }
-
-    /// Inserts multiple assets into the cache concurrently.
-    ///
-    /// This is more efficient than inserting one at a time.
+    /// Inserts assets sequentially and returns handles in input order.
     ///
     /// # Examples
     ///
@@ -445,7 +449,9 @@ pub trait AssetCacheExt<T: Asset>: AssetCacheCore<T> {
 
     /// Returns the capacity utilization as a fraction (0.0 - 1.0).
     ///
-    /// Note: This is approximate since cache size is measured in items, not bytes.
+    /// Uses the configured entry capacity and Moka's estimated count. Returns
+    /// zero when retention is disabled and clamps concurrent maintenance lag
+    /// to one. This does not measure decoded bytes or process memory.
     ///
     /// # Examples
     ///
@@ -457,14 +463,11 @@ pub trait AssetCacheExt<T: Asset>: AssetCacheCore<T> {
     /// ```
     #[inline]
     fn utilization(&self) -> f64 {
-        // This is a rough estimate since we don't track actual byte usage
-        let len = self.len() as f64;
-        let stats = self.stats();
-        let total_accessed = (stats.hits + stats.misses) as f64;
-        if total_accessed > 0.0 {
-            len / total_accessed.max(len)
-        } else {
-            0.0
+        match self.capacity() {
+            CacheCapacity::Disabled => 0.0,
+            CacheCapacity::Entries(capacity) => {
+                (self.len() as f64 / capacity.get() as f64).min(1.0)
+            }
         }
     }
 

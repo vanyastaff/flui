@@ -5,13 +5,13 @@
 //!
 //! # Why not `flui-assets`' own cache?
 //!
-//! `flui_assets::AssetCache` (moka-backed) has a hardcoded 5-minute
-//! time-to-live and 1-minute time-to-idle — sensible for a byte-loader cache
-//! that re-fetches cheaply on expiry, wrong for a decoded-image cache a UI
-//! layer wants to hold onto for as long as it is actually displayed, however
-//! long that is. `flui-assets`' registry stays the byte/asset loader only;
-//! this module is the count-bounded, non-expiring cache a UI layer probes
-//! synchronously before deciding whether to spawn a load at all.
+//! `flui_assets::AssetCache` stores typed loaded results, including decoded
+//! images, through Moka's async API with configurable capacity and expiration.
+//! Ordinary registry loads use that cache. Widget image providers instead use
+//! registry bridge methods, which bypass it and return decoded images to this
+//! cache. The synchronous frame path probes this non-expiring LRU before
+//! deciding whether to spawn an async load. Displayed images remain owned by
+//! their consumers even after the LRU evicts its copy.
 //!
 //! # Coalescing
 //!

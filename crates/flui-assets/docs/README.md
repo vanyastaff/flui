@@ -1,63 +1,14 @@
 # flui_assets Documentation
 
-Welcome to the `flui_assets` documentation! This directory contains comprehensive guides, architectural explanations, and performance tips.
+## Guides
 
-## Quick Links
+- [User guide](GUIDE.md): registry ownership, typed assets and cache operations.
+- [Architecture](ARCHITECTURE.md): locking, data flow and behavior decisions.
+- [Design patterns](PATTERNS.md): type-state configuration and shared handles.
+- [Cache behavior and performance](PERFORMANCE.md): count capacity, expiration,
+  maintenance and diagnostics.
 
-- **[User Guide](GUIDE.md)** - Complete guide to using flui_assets
-- **[Architecture](ARCHITECTURE.md)** - Deep dive into system design
-- **[Design Patterns](PATTERNS.md)** - Patterns used and why
-- **[Performance](PERFORMANCE.md)** - Optimization techniques
-
-## Documentation Structure
-
-### For New Users
-
-Start here if you're new to `flui_assets`:
-
-1. **[User Guide](GUIDE.md)** - Read this first
-   - Quick start
-   - Basic usage
-   - Asset types
-   - Common patterns
-   - Troubleshooting
-
-### For Advanced Users
-
-Deep dive into internals and optimization:
-
-2. **[Architecture](ARCHITECTURE.md)** - System design
-   - Three-layer architecture
-   - Core components
-   - Data flow
-   - Thread safety
-   - Performance characteristics
-
-3. **[Design Patterns](PATTERNS.md)** - Code patterns
-   - Extension Trait Pattern
-   - Type State Builder Pattern
-   - Sealed Trait Pattern
-   - String Interning
-   - Type Erasure
-
-4. **[Performance](PERFORMANCE.md)** - Optimization guide
-   - Memory efficiency
-   - Cache tuning
-   - Async performance
-   - Benchmarking
-   - Common issues
-
-## Quick Reference
-
-### Installation
-
-```toml
-[dependencies]
-flui-assets = { git = "https://github.com/vanyastaff/flui" }
-tokio = { version = "1.0", features = ["macros", "rt-multi-thread"] }
-```
-
-### Basic Example
+## Quick reference
 
 ```rust
 use flui_assets::{AssetRegistryBuilder, FontAsset};
@@ -66,243 +17,50 @@ use flui_assets::{AssetRegistryBuilder, FontAsset};
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let registry = AssetRegistryBuilder::new().with_default_capacity().build();
     let font = registry.load(FontAsset::file("font.ttf")).await?;
-    println!("Loaded: {} bytes", font.bytes.len());
+    println!("Loaded bytes: {}", font.bytes.len());
     Ok(())
 }
 ```
 
-### Feature Flags
+Default caches retain up to 10,240 completed entries per asset type after pending
+maintenance settles, with five-minute lifetime and one-minute idle expiration.
+`CacheCapacity::Entries(NonZeroU64)` selects a positive count;
+`CacheCapacity::Disabled` retains no completed entries. `AssetCacheConfig`
+configures capacity and validated `CacheExpiration` policies. These are entry
+bounds, not decoded-byte budgets.
+
+Ordinary registry loading validates descriptors and shares concurrent cold
+initialization through Moka. Successful results include decoded images and fonts.
+Errors are not cached. Strong handles retain their data after eviction; weak
+handles do not retain data. Widget bridge methods bypass registry caching and
+feed a synchronous widget image LRU.
+
+A standalone typed `AssetCache` exposes shared operation counters, estimated
+entry count and utilization. `contains` observes presence synchronously without
+refreshing idle expiration. `insert_many` inserts sequentially. Registry typed
+cache lookup is private and no public aggregated registry statistics API exists.
+
+## Optional features
 
 | Feature | Description |
 |---------|-------------|
-| `serde` | Enable serde serialization |
-| `images` | Enable image loading |
-| `network` | Enable HTTP/HTTPS loading |
-| `full` | Enable all stable features |
+| `images` | Image asset decoding |
+| `network` | HTTP/HTTPS byte loading |
+| `full` | Both stable optional features |
 
-## Key Concepts
+## Commands
 
-### 1. Asset Registry
-
-Central hub for asset loading and caching.
-
-```rust
-// Default capacity (100 MB)
-let registry = AssetRegistryBuilder::new().with_default_capacity().build();
-
-// Custom capacity
-let registry = AssetRegistryBuilder::new()
-    .with_capacity(100 * 1024 * 1024)
-    .build();
-```
-
-### 2. Asset Types
-
-Built-in and custom asset types via `Asset` trait.
-
-**Built-in**:
-- `FontAsset` - TrueType/OpenType fonts
-- `ImageAsset` - Images (requires `images` feature)
-
-**Custom**:
-```rust
-impl Asset for MyAsset {
-    type Data = MyData;
-    type Key = AssetKey;
-    type Error = AssetError;
-
-    fn key(&self) -> AssetKey { /* ... */ }
-    async fn load(&self) -> Result<MyData, AssetError> { /* ... */ }
-}
-```
-
-### 3. Caching
-
-Automatic caching with TinyLFU eviction.
-
-- **TinyLFU**: Better hit rates than LRU (~10% improvement)
-- **Lock-free**: Concurrent access via moka
-- **Statistics**: Monitor hit rate, misses, utilization
-
-### 4. Performance
-
-Highly optimized for efficiency:
-
-- **AssetKey**: 4 bytes (vs 24+ for String)
-- **String interning**: 10x faster comparison
-- **Cache hit**: ~30ns
-- **Async I/O**: Non-blocking operations
-
-## Architecture Overview
-
-```
-Application
-     ↓
-AssetRegistry (per app)
-     ↓
-AssetCache<T> (Per Type) - Moka TinyLFU
-     ↓
-AssetHandle<T, K> (Arc) - Smart pointers
-```
-
-## Common Patterns
-
-### Preloading
-
-```rust
-// Preload critical assets at startup
-let assets = vec![
-    FontAsset::file("ui_font.ttf"),
-    ImageAsset::file("logo.png"),
-];
-
-for asset in assets {
-    registry.preload(asset).await?;
-}
-```
-
-### Weak References
-
-```rust
-// Avoid keeping assets alive
-let font = registry.load(FontAsset::file("font.ttf")).await?;
-let weak = font.downgrade();
-drop(font);
-
-// Later
-if let Some(strong) = weak.upgrade() {
-    use_font(&strong);
-}
-```
-
-### Parallel Loading
-
-```rust
-use futures::future::join_all;
-
-let handles = (0..10)
-    .map(|i| registry.load(FontAsset::file(&format!("font{}.ttf", i))))
-    .collect::<Vec<_>>();
-
-let results = join_all(handles).await;
-```
-
-## Performance Tips
-
-1. **Cache Size**: Set appropriate for your hardware
-   - Mobile: 50-100 MB
-   - Desktop: 200-500 MB
-   - Server: 1-2 GB
-
-2. **Monitor Hit Rate**: Aim for > 70%
-   ```rust
-   let cache: AssetCache<FontAsset> = registry.get_cache().unwrap();
-   println!("Hit rate: {:.1}%", cache.hit_rate() * 100.0);
-   ```
-
-3. **Use Weak References**: Prevent cache bloat
-   ```rust
-   struct UI {
-       font: WeakAssetHandle<FontData, AssetKey>,
-   }
-   ```
-
-4. **Preload Critical Assets**: Reduce latency
-   ```rust
-   registry.preload(FontAsset::file("critical.ttf")).await?;
-   ```
-
-## API Reference
-
-Full API documentation available at:
-- `cargo doc -p flui-assets --open`
-
-## Examples
-
-Located in `crates/flui-assets/examples/`:
-
-- `assets_basic_usage.rs` - Simple font loading
-- `network_loader.rs` - Loading assets over HTTP/HTTPS (`network` feature)
-
-Run with:
 ```bash
+cargo test -p flui-assets --all-features
+cargo doc -p flui-assets --all-features --open
 cargo run -p flui-assets --example assets_basic_usage
+cargo run -p flui-assets --features network --example network_loader
 ```
 
-## Best Practices
+## Project information
 
-### ✅ Do
-
-- Build one registry with `AssetRegistryBuilder` and share it
-- Preload critical assets at startup
-- Monitor cache performance in production
-- Use weak references in long-lived structures
-- Handle errors gracefully with fallbacks
-
-### ❌ Don't
-
-- Create multiple registries unnecessarily
-- Keep strong references to all assets
-- Ignore cache statistics
-- Block on I/O operations
-- Panic on asset load failures
-
-## Troubleshooting
-
-### Asset Not Found
-
-```rust
-// Check working directory
-println!("{:?}", std::env::current_dir());
-
-// Use absolute path for testing
-let font = FontAsset::file("/absolute/path/to/font.ttf");
-```
-
-### Low Cache Hit Rate
-
-```rust
-// Increase cache size
-let registry = AssetRegistryBuilder::new()
-    .with_capacity(200 * 1024 * 1024)  // Increase to 200 MB
-    .build();
-```
-
-### High Memory Usage
-
-```rust
-// Use weak references
-let weak_handles: Vec<WeakAssetHandle<_, _>> =
-    handles.iter().map(|h| h.downgrade()).collect();
-```
-
-## Contributing
-
-See [../../../CONTRIBUTING.md](../../../CONTRIBUTING.md) for contribution guidelines.
-
-## License
-
-Licensed under either of:
-
-- Apache License, Version 2.0 ([LICENSE-APACHE](../../../LICENSE-APACHE))
-- MIT License ([LICENSE](../../../LICENSE))
-
-at your option.
-
-## See Also
-
-- [Main README](../README.md) - Project overview
-- [FLUI Framework](../../../README.md) - Parent project
-
-## Documentation Quality
-
-This documentation achieves:
-
-- ✅ **96% API Guidelines compliance**
-- ✅ **100% public API documented**
-- ✅ **Comprehensive examples**
-- ✅ **Architecture explanations**
-- ✅ **Performance guidance**
-- ✅ **Troubleshooting guides**
-
-Last updated: 2025-11-28
+- [Crate README](../README.md)
+- [FLUI README](../../../README.md)
+- [Contributing](../../../CONTRIBUTING.md)
+- [Apache license](../../../LICENSE-APACHE)
+- [MIT license](../../../LICENSE)

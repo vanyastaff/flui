@@ -1,486 +1,119 @@
-# Performance Guide
+# Cache behavior and performance
 
-This document explains the performance characteristics of `flui_assets` and how to optimize for your use case.
+Moka manages concurrent admission and eviction of typed loaded results. FLUI
+stores each result in an `Arc`, so a cache hit shares data instead of copying a
+decoded image or font. No project benchmark establishes a latency, throughput,
+memory-layout or hit-rate advantage over another cache.
 
-## Performance Overview
+## Capacity
 
-### Memory Efficiency
-
-| Component | Size | Notes |
-|-----------|------|-------|
-| `AssetKey` | **4 bytes** | String interning via lasso |
-| `AssetHandle<T, K>` | **12 bytes** | Arc (8) + Key (4) |
-| Cache entry | **12 bytes + data** | Key + Arc pointer + actual data |
-| `AssetRegistry` | **8 bytes + caches** | Arc to HashMap |
-
-**Example**: Loading 1000 font files
-```
-Without flui_assets:
-- 1000 × String (24 bytes) = 24KB in keys
-- 1000 × Arc<FontData> (8 bytes) = 8KB in pointers
-- Total overhead: ~32KB
-
-With flui_assets:
-- 1000 × AssetKey (4 bytes) = 4KB in keys
-- 1000 × Arc<FontData> (8 bytes) = 8KB in pointers
-- Total overhead: ~12KB (2.7x reduction)
-```
-
-### Time Complexity
-
-| Operation | Complexity | Actual Time | Notes |
-|-----------|-----------|-------------|-------|
-| `load()` | O(1) + I/O | ~50-100μs + I/O | Cache miss |
-| `get()` | O(1) | ~30ns | Cache hit |
-| `insert()` | O(1) amortized | ~50ns | Lock-free |
-| `evict()` | O(1) amortized | ~40ns | TinyLFU decision |
-| Key creation | O(1) amortized | ~100ns | First intern slower |
-
-**Benchmarks on M1 MacBook Pro (2021)**:
-```
-test cache_insert     ... bench:      48 ns/iter
-test cache_get_hit    ... bench:      29 ns/iter
-test cache_get_miss   ... bench:      42 ns/iter
-test key_creation     ... bench:      97 ns/iter
-test key_comparison   ... bench:       2 ns/iter
-```
-
-## Cache Performance
-
-### TinyLFU Algorithm
-
-flui_assets uses **TinyLFU** (Tiny Least Frequently Used) for cache eviction, which provides better hit rates than traditional LRU.
-
-**How it works**:
-1. **Frequency sketch**: Count-Min Sketch tracks access frequency
-2. **Admission policy**: New items must be accessed more frequently than victim
-3. **Recency component**: Recent items get slight boost
-
-**Performance comparison** (typical workload):
-```
-LRU hit rate:      72%
-LFU hit rate:      75%
-TinyLFU hit rate:  82%  ← 10% improvement over LRU
-```
-
-**Why TinyLFU is better**:
-- Resistant to cache pollution from one-time scans
-- Balances frequency and recency
-- O(1) admission decision (no sorting)
-
-### Cache Configuration
+Capacity counts completed entries separately for each asset type:
 
 ```rust
-use flui_assets::AssetRegistryBuilder;
+use flui_assets::{AssetRegistryBuilder, CacheCapacity};
+use std::num::NonZeroU64;
 
-// Small cache for mobile (50MB)
 let registry = AssetRegistryBuilder::new()
-    .with_capacity(50 * 1024 * 1024)
-    .build();
-
-// Large cache for desktop (500MB)
-let registry = AssetRegistryBuilder::new()
-    .with_capacity(500 * 1024 * 1024)
-    .build();
-
-// Unlimited cache (testing only)
-let registry = AssetRegistryBuilder::new()
-    .with_capacity(usize::MAX)
+    .with_capacity(CacheCapacity::Entries(NonZeroU64::new(256).expect("nonzero entry limit")))
     .build();
 ```
 
-**Capacity guidelines**:
-- **Mobile**: 50-100 MB
-- **Desktop**: 200-500 MB
-- **Server**: 1-2 GB
+The default is 10,240 entries per type. `CacheCapacity::Disabled` loads data
+without retaining completed entries. Concurrent cold callers still share an
+initializer; a subsequent request loads again.
 
-### Cache Statistics
+This policy does not bound decoded bytes or process memory. Entry sizes can vary
+widely, and consumer handles retain their data after cache eviction. Select a
+count from measured asset sizes and access patterns rather than interpreting it
+as a byte budget. Reducing the count can reduce cache ownership, but cannot free
+data that a consumer still owns.
 
-Monitor cache performance in production:
+Moka applies its capacity policy during maintenance. `len()` is an estimated
+`u64` entry count; `sync().await` improves accuracy after operations settle.
+Concurrent operations and expiration can still change the result.
 
-```rust
-use flui_assets::{AssetCache, AssetCacheExt, FontAsset};
+## Expiration
 
-let cache: AssetCache<FontAsset> = registry.get_cache().unwrap();
+`AssetCacheConfig` independently configures lifetime and idle expiration. Defaults
+are five minutes since insertion and one minute since a retrieving cache read.
+`CacheExpiration::NEVER` disables either policy. `CacheExpiration::after` returns
+an error for intervals above Moka's supported 1,000-year maximum; zero expires
+immediately.
 
-// Get statistics
-println!("Hit rate: {:.1}%", cache.hit_rate() * 100.0);
-println!("Miss rate: {:.1}%", cache.miss_rate() * 100.0);
-println!("Utilization: {:.1}%", cache.utilization() * 100.0);
+A synchronous `contains(&key)` is an observation: it does not clone data, record
+requests, update popularity or refresh idle expiration. `get(&key).await` retrieves
+shared data and records a read. Expiration and invalidation do not revoke handles
+already returned to consumers or cancel in-flight initializers.
 
-// Check efficiency
-if !cache.is_efficient() {
-    println!("Warning: Cache hit rate below 70%");
-    println!("Consider increasing cache size");
-}
-```
+## Coalescing
 
-**Target metrics**:
-- Hit rate: **> 70%** (good), **> 85%** (excellent)
-- Utilization: **> 60%** (not wasting memory)
-- Miss rate: **< 30%**
+`AssetCache::get_or_insert_with` delegates fallible initialization to Moka's entry
+API. Concurrent cold callers for one typed key share one allocation or one
+`Arc<Error>`. Errors are not cached. After cancellation or an initializer panic,
+a remaining waiter can initialize from its own closure; Moka imposes a finite
+retry limit for repeated failures. An initializer must not recursively wait for
+its own unfinished key.
 
-## String Interning Performance
+Registry loads use the same operation after validating every descriptor,
+including descriptors supplied on cache hits. The registry returns its existing
+owned `AssetError` by cloning the shared failure.
 
-### Why Interning Matters
-
-String interning provides significant performance benefits for asset keys:
-
-**Without interning**:
-```rust
-let key1 = "textures/grass.png".to_string();
-let key2 = "textures/grass.png".to_string();
-
-// Comparison: O(n) - must compare each character
-key1 == key2; // ~20-30ns for short strings
-
-// Hashing: O(n) - must hash entire string
-let hash = calculate_hash(&key1); // ~40-60ns
-```
-
-**With interning**:
-```rust
-let key1 = AssetKey::new("textures/grass.png");
-let key2 = AssetKey::new("textures/grass.png");
-
-// Comparison: O(1) - single u32 comparison
-key1 == key2; // ~2ns (10x faster)
-
-// Hashing: O(1) - hash single u32
-let hash = calculate_hash(&key1); // ~8ns (5x faster)
-```
-
-### Interning Overhead
-
-**First use** (cold):
-```rust
-let key = AssetKey::new("new_texture.png"); // ~100ns
-```
-
-**Subsequent uses** (hot):
-```rust
-let key = AssetKey::new("new_texture.png"); // ~15ns
-```
-
-**Trade-off**:
-- ✅ Much faster lookups (10x)
-- ✅ Smaller memory footprint (6x)
-- ⚠️ One-time interning cost (~100ns)
-- ⚠️ Strings never deallocated
-
-**Is it worth it?**
-
-Yes, if:
-- Same keys accessed multiple times (typical for assets)
-- Large number of unique keys (thousands)
-- HashMap lookups are hot path
-
-No, if:
-- Keys used exactly once
-- Very few unique keys (< 100)
-
-## Async Performance
-
-### Non-Blocking I/O
-
-All I/O operations are async to avoid blocking:
+## Observing a typed cache
 
 ```rust
-// ❌ BAD: Blocking I/O
-let bytes = std::fs::read("texture.png")?; // Blocks thread
+use flui_assets::{AssetCache, AssetCacheExt, CacheCapacity, FontAsset};
 
-// ✅ GOOD: Async I/O
-let bytes = tokio::fs::read("texture.png").await?; // Non-blocking
+let cache = AssetCache::<FontAsset>::new(CacheCapacity::default());
+cache.sync().await;
+println!("Estimated entries: {}", cache.len());
+println!("Entry utilization: {:.1}%", cache.utilization() * 100.0);
+let stats = cache.stats();
+println!("Hits: {}, misses: {}, invalidation requests: {}",
+    stats.hits, stats.misses, stats.invalidations);
 ```
 
-**Impact**:
-- Without async: 1 thread per concurrent load
-- With async: Thousands of concurrent loads on few threads
-
-### Parallel Loading
-
-Load multiple assets concurrently:
-
-```rust
-use futures::future::join_all;
-
-let registry = AssetRegistryBuilder::new().with_default_capacity().build();
-
-// Load 100 fonts concurrently; every future borrows the one registry
-let handles = (0..100)
-    .map(|i| {
-        let registry = &registry;
-        async move {
-            registry.load(FontAsset::file(&format!("font{}.ttf", i))).await
-        }
-    })
-    .collect::<Vec<_>>();
-
-// Wait for all to complete
-let results = join_all(handles).await;
-```
-
-**Performance**:
-- Sequential: 100 × 10ms = 1000ms
-- Parallel (10 threads): ~100-200ms (5-10x faster)
-
-## Memory Management
-
-### Weak References
-
-Use weak references to avoid keeping assets alive unnecessarily:
-
-```rust
-use flui_assets::{AssetHandle, WeakAssetHandle};
-
-// Strong reference keeps asset in memory
-let handle: AssetHandle<FontData, AssetKey> = registry.load(font).await?;
-
-// Convert to weak reference
-let weak: WeakAssetHandle<_, _> = handle.downgrade();
-drop(handle); // Asset can be evicted now
-
-// Later, try to upgrade
-if let Some(strong) = weak.upgrade() {
-    // Asset still in cache
-    use_font(&strong);
-} else {
-    // Asset was evicted, need to reload
-    let strong = registry.load(font).await?;
-}
-```
-
-**Pattern**: Store weak references in long-lived structures, upgrade when needed.
-
-### Cache Size Tuning
-
-**Too small cache**:
-- High miss rate
-- Frequent reloading
-- Wasted I/O bandwidth
-
-**Too large cache**:
-- Wasted memory
-- Slower GC (if applicable)
-- May not fit in RAM
-
-**Finding optimal size**:
-1. Start with conservative estimate (100 MB)
-2. Monitor hit rate in production
-3. Increase if hit rate < 70%
-4. Decrease if memory pressure
-
-**Rule of thumb**:
-```
-Cache size = Working set × 1.5
-
-Where working set = typical assets used in 5-minute period
-```
-
-## Optimization Techniques
-
-### 1. Preloading
-
-Load assets before they're needed:
-
-```rust
-// Preload critical assets at startup
-let registry = AssetRegistryBuilder::new().with_default_capacity().build();
-
-let assets = vec![
-    FontAsset::file("ui_font.ttf"),
-    ImageAsset::file("logo.png"),
-    ImageAsset::file("background.jpg"),
-];
-
-for asset in assets {
-    registry.preload(asset).await?;
-}
-```
-
-**Benefit**: Assets available immediately when needed (zero latency).
-
-### 2. Batch Loading
-
-Load multiple assets with shared setup:
-
-```rust
-use flui_assets::loaders::BytesFileLoader;
-
-let loader = BytesFileLoader::new("assets");
-
-// Load multiple files with single loader instance
-let handles = join_all(
-    paths.iter().map(|path| loader.load_bytes(path))
-).await;
-```
-
-**Benefit**: Amortize loader initialization cost.
-
-### 3. Custom Cache per Asset Type
-
-Different asset types may need different cache sizes:
-
-```rust
-// Large cache for images (200 MB)
-let image_cache = AssetCache::<ImageAsset>::new(200 * 1024 * 1024);
-
-// Small cache for configs (1 MB)
-let config_cache = AssetCache::<ConfigAsset>::new(1024 * 1024);
-```
-
-### 4. Lazy Loading
-
-Only load assets when actually used:
-
-```rust
-// ❌ BAD: Eager loading
-let all_textures = load_all_textures().await?;
-
-// ✅ GOOD: Lazy loading
-let texture_keys = get_texture_keys();
-// Load on-demand when rendering
-```
-
-## Benchmarking
-
-### Using hyperfine
-
-```bash
-# Benchmark cold start (no cache)
-hyperfine --warmup 0 --runs 10 \
-  "cargo run --release -- load-assets"
-
-# Benchmark hot start (cache populated)
-hyperfine --warmup 5 --runs 20 \
-  "cargo run --release -- load-assets"
-```
-
-### Using criterion
-
-```rust
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use flui_assets::{AssetRegistryBuilder, FontAsset};
-
-fn bench_load(c: &mut Criterion) {
-    let runtime = tokio::runtime::Runtime::new().unwrap();
-    let registry = AssetRegistryBuilder::new().with_default_capacity().build();
-
-    c.bench_function("load_font", |b| {
-        b.to_async(&runtime).iter(|| async {
-            let font = FontAsset::file("font.ttf");
-            black_box(registry.load(font).await)
-        });
-    });
-}
-
-criterion_group!(benches, bench_load);
-criterion_main!(benches);
-```
-
-## Performance Checklist
-
-### Development
-- [ ] Profile hot paths with `cargo flamegraph`
-- [ ] Check cache hit rates in tests
-- [ ] Measure asset load times
-- [ ] Monitor memory usage
-
-### Production
-- [ ] Set appropriate cache size for target hardware
-- [ ] Monitor cache statistics
-- [ ] Use weak references for long-lived structures
-- [ ] Preload critical assets at startup
-- [ ] Profile with production data
-
-### Optimization
-- [ ] Use batch loading where possible
-- [ ] Implement lazy loading for rarely-used assets
-- [ ] Consider custom caches per asset type
-- [ ] Use async I/O throughout
-- [ ] Profile and eliminate blocking operations
-
-## Common Performance Issues
-
-### Issue 1: Low Cache Hit Rate
-
-**Symptoms**:
-- High I/O wait times
-- Frequent asset reloading
-- Hit rate < 70%
-
-**Solutions**:
-1. Increase cache size
-2. Preload frequently-used assets
-3. Use weak references to avoid premature eviction
-4. Profile access patterns
-
-### Issue 2: Memory Pressure
-
-**Symptoms**:
-- High memory usage
-- OOM crashes on low-end devices
-- Slow GC pauses
-
-**Solutions**:
-1. Decrease cache size
-2. Use streaming for large assets
-3. Implement LRU eviction for specific types
-4. Profile memory usage by asset type
-
-### Issue 3: Slow Startup
-
-**Symptoms**:
-- Long initial load time
-- UI frozen during startup
-- Users waiting for assets
-
-**Solutions**:
-1. Lazy load non-critical assets
-2. Show loading screen with progress
-3. Preload in background thread
-4. Cache assets to disk (future feature)
-
-### Issue 4: Thread Contention
-
-**Symptoms**:
-- High CPU usage
-- Lock contention in profiler
-- Slower than expected performance
-
-**Solutions**:
-1. Use more granular caches (per asset type)
-2. Reduce synchronous operations
-3. Profile with `cargo flamegraph`
-4. Consider sharding cache by key hash
-
-## Future Optimizations
-
-### Planned Features
-
-1. **Memory-mapped fonts** (`mmap-fonts` feature)
-   - Zero-copy loading
-   - Shared across processes
-   - Estimated 30-50% memory reduction
-
-2. **Parallel decoding** (`parallel-decode` feature)
-   - Decode images/videos in parallel
-   - Use rayon thread pool
-   - Estimated 2-4x faster loading
-
-3. **Persistent cache**
-   - Cache to disk between runs
-   - Instant startup
-   - Reduce repeated I/O
-
-4. **Streaming assets**
-   - Load large assets in chunks
-   - Reduce memory spikes
-   - Better for low-memory devices
+Counters are shared across cache clones and saturate rather than wrap. For
+coalesced loading, hits and misses describe the initial presence observation,
+which can race concurrent changes. A fresh returned entry counts as a completed
+insertion; cancellation after backend publication can leave an entry without
+that completed count. `invalidations` counts explicit invalidation requests,
+including absent keys; it does not count capacity eviction or expiration.
+
+`utilization()` divides the estimated count by configured entry capacity and
+clamps maintenance lag to one. It returns zero for disabled retention and does
+not measure bytes. `clear().await` invalidates completed entries and resets
+counters; `reset_stats()` resets counters without invalidation. Neither operation
+is a snapshot of concurrent requests. The registry exposes no public typed-cache
+lookup or aggregated statistics API.
+
+`insert_many` performs sequential inserts and returns handles in input order.
+Use independent async loads when concurrency is needed, keeping expensive IO and
+decoding outside the synchronous build/layout/paint path.
+
+## Widget image loading
+
+Ordinary `registry.load(ImageAsset)` caches decoded images in Moka. Widget image
+providers use the registry's bridge methods, which bypass that typed cache. Their
+small non-expiring LRU supports a synchronous frame-path probe and shares
+in-flight work by subscriber lifetime. This routing avoids a second typed-cache
+lookup for bridged loads; it is not a claim that all applications should maintain
+two image caches.
+
+## Measuring an application
+
+Measure cold IO/decoding separately from warm cache retrieval, and record feature
+flags, input assets and runtime configuration. Inspect retained handles alongside
+cache counts when investigating memory pressure. A high miss rate can result
+from expiration, insufficient entry capacity, disabled retention or distinct
+keys; increasing capacity does not address every cause.
+
+Use real workload measurements before changing admission policy, hashers or
+expiration defaults. Moka already supplies concurrency and TinyLFU admission;
+wrapping its whole cache in an application mutex would serialize those operations.
+FLUI's statistics have a separate short lock.
 
 ## References
 
-- [TinyLFU Paper](https://arxiv.org/abs/1512.00727)
-- [Moka Performance](https://github.com/moka-rs/moka#performance)
-- [String Interning Performance](https://matklad.github.io/2020/03/22/fast-simple-rust-interner.html)
-- [Async Performance in Rust](https://rust-lang.github.io/async-book/04_pinning/01_chapter.html)
+- [Moka future cache](https://docs.rs/moka/0.12.16/moka/future/struct.Cache.html)
+- [Moka entry selector](https://docs.rs/moka/0.12.16/moka/future/struct.RefKeyEntrySelector.html)
+- [Architecture and behavior tests](ARCHITECTURE.md)

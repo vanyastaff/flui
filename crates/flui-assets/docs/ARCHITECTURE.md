@@ -64,7 +64,7 @@ with `AssetRegistryBuilder` and owns it; there is no process-wide instance.
 pub struct AssetRegistry {
     // TypeId -> Box<dyn Any> where Any is AssetCache<T>
     caches: Arc<RwLock<HashMap<TypeId, Box<dyn Any + Send + Sync>>>>,
-    default_capacity: usize,
+    cache_config: AssetCacheConfig,
 }
 ```
 
@@ -80,9 +80,9 @@ pub struct AssetRegistry {
 
 **Key Features**:
 - Built on `moka` with TinyLFU eviction algorithm
-- Better hit rates than LRU (admission policy)
+- Frequency and recency inform TinyLFU admission
 - Concurrent cache access; statistics updates take a write lock
-- Real-time statistics
+- Shared best-effort operation counters
 
 **Implementation**:
 ```rust
@@ -148,55 +148,38 @@ assert_eq!(key1, key2);                          // Same Spur value
 
 ### Loading an Asset
 
-```
-1. User calls: registry.load(FontAsset::file("font.ttf"))
-                      │
-2. Registry extracts TypeId of FontAsset
-                      │
-3. Get or create AssetCache<FontAsset>
-                      │
-4. Generate AssetKey from path ("font.ttf" → Spur(42))
-                      │
-5. Check cache with key
-   ├─ Cache HIT ──→ Return existing Arc<FontData>
-   │                       │
-   └─ Cache MISS ──→ Call asset.load()
-                           │
-                     Load from filesystem
-                           │
-                     Create Arc<FontData>
-                           │
-                     Insert into cache
-                           │
-                     Return Arc<FontData>
-```
+1. The caller supplies a typed descriptor to `registry.load`.
+2. The registry validates it before any cache lookup or loading.
+3. Its key and asset `TypeId` select a typed cache handle, cloned outside the
+   registry map guard before asynchronous operations begin.
+4. A retained hit shares its existing `Arc<Data>`. Concurrent cold requests use
+   Moka's entry selector to share one initializer or failure.
+5. Successful loading supplies an `Arc<Data>` to Moka and the consumer handle.
+   The capacity policy may subsequently evict cache ownership; consumer
+   ownership remains independent. Errors are not retained.
 
 ### Cache Eviction
 
-TinyLFU admission policy:
-```
-New asset arrives
-      │
-Is cache full?
-   ├─ NO ──→ Insert immediately
-   │
-   └─ YES ──→ Admission policy
-                    │
-              Compare frequency:
-              new_freq vs victim_freq
-                    │
-              ├─ new_freq > victim_freq ──→ Evict victim, insert new
-              └─ new_freq ≤ victim_freq ──→ Reject new asset
-```
+Admission and capacity eviction are delegated to Moka's TinyLFU policy. Its
+frequency and recency bookkeeping are not a strict LRU contract, and weighted
+asset sizes are not configured. Pending maintenance applies the entry bound;
+returned consumer handles retain ownership independently of admission decisions.
 
 ## Capacity and synchronization
 
-`AssetCache::new(capacity_bytes)` converts its byte hint to an estimated entry
-count, assuming 10 KiB per entry and retaining a minimum of 100 entries.
-`with_config` configures Moka by entry count. Neither constructor weighs decoded
-assets or bounds their actual byte footprint. Handles held outside the cache
-retain their data after eviction; the public
-`non_clone_data_retains_evicted_handles_across_reload` case pins that ownership.
+`AssetCache::new` accepts `CacheCapacity::Entries(NonZeroU64)` or
+`CacheCapacity::Disabled`. `AssetCacheConfig` independently configures lifetime
+and idle expiration through validated `CacheExpiration` values. Defaults are
+10,240 completed entries per asset type, a five-minute lifetime and a one-minute
+idle interval. Neither entry count nor expiration bounds decoded bytes or memory
+retained by consumer handles.
+
+`len()` reports Moka's estimated `u64` entry count. `sync().await` improves
+accuracy after quiescence without becoming a concurrent snapshot or physical
+retirement barrier. Utilization uses the configured count capacity and clamps
+maintenance lag to one; disabled retention reports zero. The public
+`asset_cache_retention_and_observation_contracts` family checks count eviction,
+disabled retention, held ownership, finite diagnostics and supported expiration.
 
 | Component | Synchronization |
 |-----------|-----------------|
@@ -237,14 +220,18 @@ write lock.
 
 Implement `Asset` trait:
 ```rust
-pub trait Asset {
-    type Data: Send + Sync + 'static;
-    type Key: Hash + Eq + Clone;
+use std::{error::Error, future::Future, hash::Hash};
+use flui_assets::AssetMetadata;
+
+pub trait Asset: Send + Sync + 'static {
+    type Data: Send + Sync;
+    type Key: Hash + Eq + Clone + Send + Sync;
     type Error: Error + Send + Sync + 'static;
 
     fn key(&self) -> Self::Key;
-    async fn load(&self) -> Result<Self::Data, Self::Error>;
+    fn load(&self) -> impl Future<Output = Result<Self::Data, Self::Error>> + Send;
     fn metadata(&self) -> Option<AssetMetadata> { None }
+    fn validate(&self) -> Result<(), Self::Error> { Ok(()) }
 }
 ```
 
@@ -305,7 +292,7 @@ impl<H, T, K> AssetHandleExt<T, K> for H where H: AssetHandleCore<T, K> {}
 ```rust
 // Type states
 pub struct NoCapacity;
-pub struct HasCapacity(usize);
+pub struct HasCapacity(AssetCacheConfig);
 
 // Builder with state
 pub struct AssetRegistryBuilder<C = NoCapacity> {
@@ -315,7 +302,8 @@ pub struct AssetRegistryBuilder<C = NoCapacity> {
 // Initial state - cannot build
 impl AssetRegistryBuilder<NoCapacity> {
     pub fn new() -> Self;
-    pub fn with_capacity(self, capacity: usize) -> AssetRegistryBuilder<HasCapacity>;
+    pub fn with_capacity(self, capacity: CacheCapacity) -> AssetRegistryBuilder<HasCapacity>;
+    pub fn with_cache_config(self, config: AssetCacheConfig) -> AssetRegistryBuilder<HasCapacity>;
 }
 
 // Final state - can build
@@ -354,27 +342,6 @@ hot-reload = ["notify"]
 ```
 
 **Benefit**: Automatically reload assets when files change (development mode).
-
-## Comparison with Alternatives
-
-### vs Manual HashMap
-
-| Feature | flui_assets | Manual HashMap |
-|---------|-------------|----------------|
-| Type safety | ✅ Compile-time | ❌ Runtime casts |
-| Eviction | ✅ Automatic (TinyLFU) | ❌ Manual |
-| Thread safety | ✅ Built-in | ❌ Manual locking |
-| Statistics | ✅ Built-in | ❌ Manual tracking |
-| Memory efficiency | ✅ 4-byte keys | ❌ 24+ byte strings |
-
-### vs bevy_asset
-
-| Feature | flui_assets | bevy_asset |
-|---------|-------------|------------|
-| Dependencies | ✅ Minimal | ❌ Heavy (ECS) |
-| Simplicity | ✅ Simple API | ⚠️ Complex |
-| Performance | ✅ TinyLFU cache | ✅ Similar |
-| Flexibility | ✅ Easy extension | ⚠️ ECS-coupled |
 
 ## Mapping decisions
 
@@ -433,29 +400,59 @@ hot-reload = ["notify"]
   [ADR-0105](../../../docs/adr/ADR-0105-asset-validation-and-bridge-progress.md)
   records the host and asset contracts.
 
-## References
+### Public cold initialization shares Moka entries and failures
 
-- [Moka Cache Documentation](https://docs.rs/moka)
-- [TinyLFU Paper](https://arxiv.org/abs/1512.00727)
-- [Lasso String Interning](https://docs.rs/lasso)
-- [parking_lot Performance](https://github.com/Amanieu/parking_lot#performance)
-
-### Concurrent registry misses share maintained cache initialization
+[ADR-0119](../../../docs/adr/ADR-0119-typed-asset-cache-retention.md)
+records the cache configuration and shared-initialization contract.
 
 `AssetRegistry::load` validates every descriptor before looking up its typed
-cache. Concurrent cold requests for that key use Moka's `try_get_with`, sharing
-one loaded allocation or initialization error. Errors are cloned back into the
-existing owned `AssetError` result and are not cached. A cancelled initializing
-future releases Moka's waiters; a remaining accepted descriptor can restart the
-load. The generic public cache convenience helper keeps its existing error API.
+cache. Both registry loading and the public `AssetCache::get_or_insert_with`
+helper use Moka's borrowed-key entry selector with `or_try_insert_with`, sharing
+one loaded allocation or `Arc<Error>`. Custom errors need not implement `Clone`.
+Registry loads clone the shared `AssetError` into their owned error result.
+Errors are not cached. A cancelled initializer releases Moka's waiters; a
+remaining accepted descriptor can restart the load. An initializer panic reaches
+its caller while a waiter can retry. Repeated cancellation and panic retries
+remain subject to Moka's finite retry limit.
 
-Statistics count each initial cold probe as a miss and a successful initializer
-as one insertion; waiting on another request is not another insertion. The
-public `cold_registry_loads_share_work_and_recover` family checks shared
-allocation identity, shared failure followed by retry, and waiter progress after
-initializer cancellation. This coalesces ordinary registry loads; bridged image
-loads retain the widget decode cache's subscriber-lifetime contract.
+Hit/miss statistics record each initial presence observation, which can race
+concurrent writes. Only a fresh returned entry counts as a completed insertion;
+a cold waiter is not another insertion. Cancellation after backend publication
+can leave an entry without a completed insertion count. The public
+`cold_registry_loads_share_work_and_recover` family checks registry allocation
+sharing, shared errors and cancellation recovery.
+`public_cache_waiters_share_data_and_non_clone_errors` and
+`public_cache_waiters_recover_after_cancellation_or_panic` check those contracts
+through the public cache helper.
 
+This coalesces ordinary registry loads, including decoded image results. Bridged
+image loads bypass the typed cache and retain the widget LRU's synchronous
+frame-path probe and subscriber-lifetime contract.
+
+### Observation and invalidation have distinct effects
+
+`contains` delegates to Moka's synchronous presence observation without cloning
+data, counting requests, updating popularity or refreshing idle expiration.
+Retrieving operations still record reads. `insert_many` inserts sequentially and
+returns handles in input order.
+
+`invalidations` counts explicit invalidation requests, including absent keys;
+it does not count automatic capacity or expiration removals. Counters saturate,
+and rate arithmetic remains finite at their boundary. Clearing a typed cache
+invalidates completed entries and resets counters after maintenance. Neither
+invalidation nor clearing cancels in-flight initialization, which may publish
+afterward; these operations do not define a generation barrier.
+
+### Registry retirement commits ownership before user destruction
+
+`clear_all` detaches the cache map while guarded, then retires the outgoing map
+after releasing the registry guard. Generic loaded data can reenter the same
+registry during destruction and observe the committed empty map. Releasing the
+last registry owner gives weak references an absent-owner fallback. The public
+`registry_cache_retirement_commits_ownership_before_data_drop` family covers
+clear-time reentry, subsequent healthy loading and last-owner release. This
+ownership policy does not promise containment of arbitrary aggregate destructor
+panics.
 
 ### Cache clones observe one cache and its counters
 
@@ -465,3 +462,10 @@ handles must not reset counters or allocate a new statistics lock per lookup.
 `cache_clones_report_shared_operations_and_reset` in `tests/load_contract.rs`
 checks real insertion, lookup, invalidation and clearing through different
 handles, alongside their shared operation counts and statistics reset.
+
+## References
+
+- [Moka Cache Documentation](https://docs.rs/moka)
+- [TinyLFU Paper](https://arxiv.org/abs/1512.00727)
+- [Lasso String Interning](https://docs.rs/lasso)
+- [parking_lot Performance](https://github.com/Amanieu/parking_lot#performance)
