@@ -54,6 +54,16 @@ failure would leave a raw-pointer structure half-updated must either be
 hoisted above the unsafe region or the SAFETY comment must cover the
 unwind path.
 
+## Destructor failures and unwinding
+
+A container that owns user values retires them outside its borrows, stops
+dropping them after the first failure in the same operation, and never drops
+them while the thread is already panicking: it retains (leaks) them instead,
+because a second panic during unwinding aborts the process. Framework-owned
+handles and non-last reference-counted clones are dropped normally. The full
+rule and its costs are in
+[ADR-0127](adr/ADR-0127-exceptional-path-retention.md).
+
 ## Enforcement
 
 `[workspace.lints.clippy]` sets `unwrap_used = "warn"`, and the clippy CI job
