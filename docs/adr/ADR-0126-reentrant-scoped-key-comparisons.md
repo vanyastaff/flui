@@ -59,7 +59,3 @@ unrelated bucket mutation, equivalent insertion, same-length replacement,
 bounded refusal, callback failures, first and later snapshot retirement,
 independent progress, passive release, retake, stale ownership and a mounted
 keyed `DenseRow` through normal build and finalization.
-
-Behavioral execution and restored-defect evidence are recorded separately in
-the [release evidence](../plans/2026-10-04-community-release.md); source review
-does not establish that those runs passed.
