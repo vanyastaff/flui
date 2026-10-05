@@ -368,7 +368,7 @@ fn history_reentrancy_and_completion_contracts() {
         ),
         (
             "navigator_command_identity_exhaustion_preserves_target_authority",
-            super::navigator::navigator_command_identity_exhaustion_preserves_target_authority,
+            super::navigator::identity_tests::navigator_command_identity_exhaustion_preserves_target_authority,
         ),
         (
             "terminal_binding_authority_is_closed_before_route_retirement",
