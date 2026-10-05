@@ -19,8 +19,9 @@ let registry = AssetRegistryBuilder::new()
 ```
 
 The default is 10,240 entries per type. `CacheCapacity::Disabled` loads data
-without retaining completed entries. Concurrent cold callers still share an
-initializer; a subsequent request loads again.
+without retaining completed entries. Concurrent `Registry::load(FontAsset)`
+requests share pending work; images, custom assets and the public cache helper
+initialize independently. A subsequent request loads again.
 
 This policy does not bound decoded bytes or process memory. Entry sizes can vary
 widely, and consumer handles retain their data after cache eviction. Select a
