@@ -577,7 +577,6 @@ mod native_windows {
                         .copied()
                         .min()
                 }));
-                println!("native deadline fixture initialized: {mode}");
                 Ok(())
             }))
             .expect("native deadline loop returns normally");

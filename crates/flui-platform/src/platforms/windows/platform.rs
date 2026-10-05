@@ -106,19 +106,13 @@ impl DeadlineArm {
 pub(super) struct WindowIdentity(std::num::NonZeroU64);
 
 impl WindowIdentity {
+    /// Mint a fresh identity, panicking once the source is exhausted. Call
+    /// it before acquiring any native resource the identity will own, so a
+    /// refusal leaves nothing to release.
     pub(super) fn mint() -> Self {
-        Self::admit(|identity| identity)
-    }
-
-    pub(super) fn admit<R>(acquire: impl FnOnce(Self) -> R) -> R {
         // A monotonic id source, not shared state: nothing reads it back.
         static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
-        Self::admit_from(&NEXT, acquire)
-    }
-
-    fn admit_from<R>(next: &std::sync::atomic::AtomicU64, acquire: impl FnOnce(Self) -> R) -> R {
-        let identity = Self::mint_from(next);
-        acquire(identity)
+        Self::mint_from(&NEXT)
     }
 
     fn mint_from(next: &std::sync::atomic::AtomicU64) -> Self {
