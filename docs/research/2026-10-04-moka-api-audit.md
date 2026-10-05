@@ -42,6 +42,25 @@ Read/write recording and maintenance are eventually consistent. Writes can await
 maintenance capacity; the wrapper also uses locks for statistics and registry maps.
 This is not a completely lock-free API. Arc values avoid cloning decoded payloads.
 Moka initializes per key and error type; failed initializers are not stored.
+Same-key initializer reentry cannot join its own pending entry. The FLUI helper
+tracks poll and retirement ancestry per cache, shared by clones. It reuses
+completed data when available, otherwise returns independently initialized
+uncached data and leaves publication to the outer initializer. The public cold
+load family covers clone reentry after suspension, independent caches/keys,
+nested failure and recovery, plus destructor reentry during completion,
+elected cancellation and unselected-waiter retirement. No global task state or
+user callback under a tracking lock is introduced; separately spawned task
+cycles are outside this ancestry contract.
+
+The reentry repair was checked with two serial production controls. Disabling
+the same-key bypass makes the real public reentry row time out after five
+seconds. Disabling retirement ancestry lets cancellation's destructor publish
+its nested result, and the real cancellation row fails because the cache is no
+longer empty. Each row was run through a temporary filterable test wrapper;
+neither its inputs nor assertions were changed. Exact production and test bytes
+were restored in `finally` before subsequent compilation. The restored
+full-feature suite passes all 14 tests, and all ten feature-powerset/all-target
+Clippy configurations pass with warnings denied.
 Cancellation or panic allows another caller's initializer to retry, with a bounded
 upstream retry policy. Callers must tolerate restart and must not treat clear as
 cancellation. Generic destructor retirement is outside the registry lock, without
@@ -77,3 +96,14 @@ Each control runs serially, preserving exact production bytes in a finally path.
 Wrong historical utilization and overflowing integer-rate arithmetic also fail their real consumer cases. Whole-workspace check-changed passed: 652 tests passed/10 skipped, strict private rustdoc, 619 doctests passed/388 ignored, available Windows/macOS/WASM compilation. flui-assets itself was compiled and executed on Windows; the broader cross-target gates do not establish another platform execution for Moka. assets_basic_usage ran successfully with full features (font allocation sharing, decoded image, invalidation and preload). Android/iOS targets and the Linux xvfb platform suite were unavailable locally. No benchmark,
 interactive example, absent-target runtime or general memory-performance claim
 follows from reading or compilation.
+
+Repair verification: cargo xtask check-changed --base
+7a477e972032ecfc076e3f98a89701d0bdbc76cb passed over flui-assets and
+20 dependent packages. Nextest executed 292 tests: 292 passed, zero skipped.
+Strict private rustdoc passed; doctests passed 236 cases with 178 ignored.
+The gate compiled the available Windows CLI and WASM paths and passed both
+30-configuration each-feature Clippy matrices (library/binaries and
+tests/benches/examples). Android and iOS runners were unavailable; cross-target
+compilation is not evidence of asset-cache execution on another platform.
+The repair's independent asset feature powerset passed all 10 all-target
+configurations; default/full tests and both defect controls executed on Windows.

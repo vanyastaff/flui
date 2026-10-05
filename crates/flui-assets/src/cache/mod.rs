@@ -11,6 +11,7 @@ use crate::core::Asset;
 use crate::types::AssetHandle;
 
 mod config;
+mod initialization;
 pub mod stats;
 
 pub use config::{AssetCacheConfig, CacheCapacity, CacheExpiration, ExpirationTooLong};
@@ -43,6 +44,7 @@ pub struct AssetCache<T: Asset> {
 
     /// Cache statistics.
     stats: Arc<parking_lot::RwLock<CacheStats>>,
+    initializers: Arc<initialization::Initializers<T::Key>>,
 }
 
 impl<T: Asset> std::fmt::Debug for AssetCache<T>
@@ -92,6 +94,7 @@ impl<T: Asset> AssetCache<T> {
         Self {
             cache,
             stats: Arc::new(parking_lot::RwLock::new(CacheStats::default())),
+            initializers: Arc::new(initialization::Initializers::new()),
         }
     }
 
@@ -166,6 +169,13 @@ impl<T: Asset> AssetCache<T> {
     /// error to implement `Clone`. Errors are not cached. Moka allows a waiter
     /// to restart after the elected initializer is cancelled or panics.
     ///
+    /// A same-key call polled inside this cache's initializer (including through
+    /// a clone, and after suspension) runs its own initializer independently.
+    /// It returns an uncached handle; the outer initializer remains responsible
+    /// for publication. This avoids waiting on its own in-flight entry. Other
+    /// keys and independent requests still use Moka. Dependency cycles through
+    /// separately spawned tasks are not detected by poll-scoped ancestry.
+    ///
     /// Hit/miss counters describe the initial presence observation; concurrent
     /// changes may race that probe. Fresh returned entries count as completed
     /// insertions. Cancellation after backend publication can leave an entry
@@ -197,10 +207,21 @@ impl<T: Asset> AssetCache<T> {
                 stats.misses = stats.misses.saturating_add(1);
             }
         }
+        if self.initializers.is_reentrant(&key) {
+            if let Some(data) = self.cache.get(&key).await {
+                return Ok(AssetHandle::new(data, key));
+            }
+            let data = f().await.map(Arc::new).map_err(Arc::new)?;
+            return Ok(AssetHandle::new(data, key));
+        }
+        let initializer_key = Arc::new(key.clone());
         let entry = self
             .cache
             .entry_by_ref(&key)
-            .or_try_insert_with(async { f().await.map(Arc::new) })
+            .or_try_insert_with(
+                self.initializers
+                    .run(&initializer_key, async { f().await.map(Arc::new) }),
+            )
             .await?;
         if entry.is_fresh() {
             let mut stats = self.stats.write();
@@ -494,6 +515,7 @@ impl<T: Asset> Clone for AssetCache<T> {
     fn clone(&self) -> Self {
         Self {
             cache: self.cache.clone(),
+            initializers: Arc::clone(&self.initializers),
             stats: Arc::clone(&self.stats),
         }
     }

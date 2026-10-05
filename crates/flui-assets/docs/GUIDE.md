@@ -174,6 +174,12 @@ println!("Invalidation requests: {}", cache.stats().invalidations);
 ```
 
 `contains` is synchronous and does not count a request or refresh idle expiration.
+Same-key reentry from an initializer through a cache clone uses completed data
+if present; otherwise it runs the nested initializer independently and returns
+uncached data. The outer initializer owns publication. This works after
+suspension and during initializer retirement, without introducing a self-wait.
+Cycles through separately spawned tasks are outside this ancestry contract.
+
 `get` retrieves data asynchronously. `get_or_insert_with` coalesces cold requests
 and returns shared `Arc<Error>` failures without requiring errors to be Clone.
 Errors are not cached; a later call can retry. An initializer panic reaches that

@@ -546,6 +546,26 @@ fn cold_registry_loads_share_work_and_recover() {
             public_cache_waiters_share_data_and_non_clone_errors,
         ),
         (
+            "public initializer reentry preserves outer publication",
+            public_cache_initializer_reentry_preserves_publication_and_recovers,
+        ),
+        (
+            "public initializer reentry recovers after errors",
+            public_cache_initializer_reentry_recovers_after_errors,
+        ),
+        (
+            "completed initializer retirement permits same-key reentry",
+            completed_initializer_retirement_permits_same_key_reentry,
+        ),
+        (
+            "canceled initializer retirement permits same-key reentry",
+            canceled_initializer_retirement_permits_same_key_reentry,
+        ),
+        (
+            "unselected initializer retirement permits same-key reentry",
+            unselected_initializer_retirement_permits_same_key_reentry,
+        ),
+        (
             "public cache waiters recover after cancellation or panic",
             public_cache_waiters_recover_after_cancellation_or_panic,
         ),
@@ -700,6 +720,173 @@ fn public_cache_waiters_share_data_and_non_clone_errors() {
             }
             assert_eq!(cache.stats().insertions, 1, "one completed fresh result");
         }
+    });
+}
+
+fn public_cache_initializer_reentry_preserves_publication_and_recovers() {
+    public_cache_initializer_reentry_case(false);
+}
+
+fn public_cache_initializer_reentry_recovers_after_errors() {
+    public_cache_initializer_reentry_case(true);
+}
+
+fn public_cache_initializer_reentry_case(fail: bool) {
+    run_cold_load_case(async {
+        let cache =
+            flui_assets::AssetCache::<PublicCacheAsset>::new(flui_assets::CacheCapacity::default());
+        let nested = cache.clone();
+        let separate =
+            flui_assets::AssetCache::<PublicCacheAsset>::new(flui_assets::CacheCapacity::default());
+        let key = "recursive".to_owned();
+        let result = cache
+            .get_or_insert_with(key.clone(), || async {
+                // Reentry must still be detected on a later poll.
+                tokio::task::yield_now().await;
+                let independent = separate
+                    .get_or_insert_with(key.clone(), || async { Ok(3) })
+                    .await
+                    .expect("another cache owns an independent initializer");
+                assert_eq!(*independent, 3);
+                assert!(separate.contains(&key));
+                let other = nested
+                    .get_or_insert_with("other".to_owned(), || async { Ok(4) })
+                    .await
+                    .expect("another key initializes normally");
+                assert_eq!(*other, 4);
+                assert!(nested.contains(&"other".to_owned()));
+                let inner = nested
+                    .get_or_insert_with(key.clone(), || async {
+                        tokio::task::yield_now().await;
+                        if fail {
+                            Err(NonCloneLoadError(7))
+                        } else {
+                            Ok(7)
+                        }
+                    })
+                    .await;
+                assert!(
+                    !nested.contains(&key),
+                    "nested initialization leaves publication to its outer owner"
+                );
+                if fail {
+                    assert_eq!(
+                        inner.expect_err("nested error returns without waiting").0,
+                        7
+                    );
+                    Err(NonCloneLoadError(8))
+                } else {
+                    Ok(*inner.expect("same-key clone reentry makes progress") + 1)
+                }
+            })
+            .await;
+        if fail {
+            assert_eq!(result.expect_err("outer failure is shared normally").0, 8);
+            assert!(!cache.contains(&key));
+            let recovered = cache
+                .get_or_insert_with(key.clone(), || async { Ok(9) })
+                .await
+                .expect("next request recovers after nested and outer errors");
+            assert_eq!(*recovered, 9);
+        } else {
+            let outer = result.expect("outer initializer completes after reentry");
+            assert_eq!(*outer, 8);
+            let completed = cache.get(&key).await.expect("outer result is published");
+            assert!(outer.ptr_eq(&completed));
+        }
+    });
+}
+
+struct ReenteringInitializer {
+    cache: flui_assets::AssetCache<PublicCacheAsset>,
+    retired: Arc<AtomicUsize>,
+    pending: bool,
+}
+
+impl std::future::Future for ReenteringInitializer {
+    type Output = Result<usize, NonCloneLoadError>;
+
+    fn poll(
+        self: std::pin::Pin<&mut Self>,
+        _: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Self::Output> {
+        if self.pending {
+            std::task::Poll::Pending
+        } else {
+            std::task::Poll::Ready(Ok(1))
+        }
+    }
+}
+
+impl Drop for ReenteringInitializer {
+    fn drop(&mut self) {
+        use std::future::Future;
+        let mut nested = std::pin::pin!(
+            self.cache
+                .get_or_insert_with("retirement".to_owned(), || async { Ok(7) })
+        );
+        let result = nested
+            .as_mut()
+            .poll(&mut std::task::Context::from_waker(std::task::Waker::noop()));
+        let std::task::Poll::Ready(Ok(handle)) = result else {
+            panic!("initializer retirement must not wait on its own pending entry");
+        };
+        self.retired.store(*handle, Ordering::Relaxed);
+    }
+}
+
+fn completed_initializer_retirement_permits_same_key_reentry() {
+    public_cache_initializer_retirement_case(0);
+}
+
+fn canceled_initializer_retirement_permits_same_key_reentry() {
+    public_cache_initializer_retirement_case(1);
+}
+
+fn unselected_initializer_retirement_permits_same_key_reentry() {
+    public_cache_initializer_retirement_case(2);
+}
+
+fn public_cache_initializer_retirement_case(mode: u8) {
+    run_cold_load_case(async {
+        let cache =
+            flui_assets::AssetCache::<PublicCacheAsset>::new(flui_assets::CacheCapacity::default());
+        let retired = Arc::new(AtomicUsize::new(0));
+        let initializer = ReenteringInitializer {
+            cache: cache.clone(),
+            retired: Arc::clone(&retired),
+            pending: mode != 0,
+        };
+        let mut first = Box::pin(cache.get_or_insert_with("retirement".to_owned(), || initializer));
+        if mode == 0 {
+            assert_eq!(*first.await.expect("ready initializer completes"), 1);
+        } else {
+            poll_waiter(first.as_mut()).await;
+            if mode == 2 {
+                let waiter_retired = Arc::new(AtomicUsize::new(0));
+                let unused = ReenteringInitializer {
+                    cache: cache.clone(),
+                    retired: Arc::clone(&waiter_retired),
+                    pending: true,
+                };
+                let mut waiter =
+                    Box::pin(cache.get_or_insert_with("retirement".to_owned(), || unused));
+                poll_waiter(waiter.as_mut()).await;
+                drop(waiter);
+                assert_eq!(waiter_retired.load(Ordering::Relaxed), 7);
+            }
+            drop(first);
+            assert!(!cache.contains(&"retirement".to_owned()));
+        }
+        assert_eq!(retired.load(Ordering::Relaxed), 7);
+        cache.invalidate(&"retirement".to_owned()).await;
+        assert_eq!(
+            *cache
+                .get_or_insert_with("retirement".to_owned(), || async { Ok(9) })
+                .await
+                .expect("request after retirement recovers"),
+            9,
+        );
     });
 }
 

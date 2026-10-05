@@ -32,6 +32,13 @@ after an initializer is cancelled or panics, subject to Moka's retry limits.
 Registry loading continues to return an owned `AssetError` and validate before
 cache lookup. Successful initializers must be safe to restart after cancellation.
 
+Coalescing covers independent requests. An initializer's same-key reentry through
+a clone uses completed data if present, otherwise returns independently initialized
+uncached data; its outer initializer retains publication ownership. Poll-scoped
+ancestry belongs to the typed cache, and no infrastructure guard spans user work.
+This includes reentry after suspension, but cannot identify cycles through
+separately spawned tasks. The public cold-load family pins reentry and recovery.
+
 Presence is a synchronous observation using `contains_key`: it records no
 retrieval, clones no data, and changes neither popularity nor idle expiration.
 Counts remain `u64` estimates. Utilization divides the estimated count by the

@@ -69,6 +69,13 @@ the core traits; it does not make every public API change backward compatible.
 
 ## Fallible shared initialization
 
+Ordinary concurrent requests coalesce. Same-key calls inside an initializer or
+its destructor cannot wait for that initializer: they reuse completed data when
+available, otherwise return independently initialized uncached handles. Only the
+outer elected initializer publishes its result. Ancestry is shared by cache
+clones and scoped to polling and retirement, including after suspension; it does
+not detect cycles through separately spawned tasks.
+
 Moka's `entry_by_ref(...).or_try_insert_with(...)` selects one cold initializer
 per typed key and shares its result with waiting callers. The public helper
 returns `Arc<Asset::Error>`, so custom errors do not need a `Clone` implementation.

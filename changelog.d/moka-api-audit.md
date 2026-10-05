@@ -10,3 +10,4 @@
 ### Fixed
 
 - Registry-wide cache clearing retires generic data after releasing the registry guard so data destructors can reenter safely.
+- Same-key initializer reentry through a cache clone makes progress after suspension; nested initialization returns uncached data while the outer initializer retains publication ownership.

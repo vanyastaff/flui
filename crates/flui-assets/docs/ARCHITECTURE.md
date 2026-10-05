@@ -402,6 +402,22 @@ hot-reload = ["notify"]
 
 ### Public cold initialization shares Moka entries and failures
 
+Initializer ancestry belongs to each typed cache and is shared by its clones.
+The scope is entered while polling or retiring user work and is retired on
+pending, completion or unwind. Same-key reentry through a clone first uses a
+completed entry if available; otherwise it runs the nested initializer directly
+and returns an uncached handle. The outer initializer owns publication. This
+prevents waiting on the entry that the caller itself must complete, including
+after suspension. Other keys and cache instances remain independent, and
+ordinary concurrent requests still coalesce. The ancestry tracker's lock never
+spans key comparison, future polling or retirement. Separately spawned dependency
+cycles are outside this ancestry contract. The reentry row in
+`cold_registry_loads_share_work_and_recover` pins progress, outer publication,
+independent cache/key behavior, nested failure and the next successful request.
+The retirement row checks completion, cancellation of elected work and disposal
+of an unselected waiter's captures. The ancestry key is owned outside Moka's
+initializer future so its destructor runs after the backend waiter retires.
+
 [ADR-0119](../../../docs/adr/ADR-0119-typed-asset-cache-retention.md)
 records the cache configuration and shared-initialization contract.
 
