@@ -162,7 +162,8 @@ mod tests {
 
     use super::*;
 
-    pub(crate) fn hook_generation_exhaustion_preserves_current_registration() {
+    #[test]
+    fn hook_generation_exhaustion_preserves_current_registration() {
         struct DropBomb(Arc<AtomicUsize>);
         impl Drop for DropBomb {
             fn drop(&mut self) {
@@ -242,7 +243,6 @@ mod tests {
 
     #[test]
     fn replacing_registration_is_generation_safe_for_racing_old_clone() {
-        hook_generation_exhaustion_preserves_current_registration();
         let _registry = REBUILD_HOOK_TEST_LOCK.lock();
         let a_calls = Arc::new(AtomicUsize::new(0));
         let a_in_hook = Arc::clone(&a_calls);
