@@ -10,7 +10,7 @@ use super::host::{
     with_owner_platform,
 };
 use super::realm_dispatch::{
-    PlatformToUi, RealmTask, dispatch_platform_realm, install_platform_realm,
+    PlatformToUi, RealmTask, dispatch_platform_realm, install_input_wiring, install_platform_realm,
     install_surface_applier, teardown_platform_realm,
 };
 use super::surface_lifecycle::{
@@ -78,10 +78,7 @@ where
     use std::sync::Arc;
 
     use flui_engine::Renderer;
-    use flui_platform::{
-        AndroidPlatform, Platform, WindowOptions,
-        traits::{DispatchEventResult, PlatformInput},
-    };
+    use flui_platform::{AndroidPlatform, Platform, WindowOptions};
     use parking_lot::Mutex;
 
     use crate::app::hot_reload::ScenePlugin;
@@ -278,13 +275,7 @@ where
         }
 
         // 5. Register input callback -> entered realm input dispatch
-        window.on_input(Box::new(move |input: PlatformInput| {
-            let _ = dispatch_platform_realm(
-                realm_dispatch,
-                RealmTask::Event(PlatformToUi::Input(input)),
-            );
-            DispatchEventResult::resolved(false, true)
-        }));
+        install_input_wiring(realm_dispatch, window.as_ref());
 
         // 6. Register frame callback -- with hot-reload plugin override
         let lane_frame = Arc::clone(&lane);

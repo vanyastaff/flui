@@ -1,6 +1,6 @@
 use crate::app::hot_reload::WorkerReload;
 use flui_engine::Renderer;
-use flui_platform::traits::{DispatchEventResult, HostWindow, PlatformInput, PlatformWindow};
+use flui_platform::traits::{HostWindow, PlatformWindow};
 use flui_scheduler::AppLifecycleState;
 use flui_view::{StatelessView, View};
 use parking_lot::Mutex;
@@ -20,7 +20,7 @@ use super::host::{
 };
 use super::realm_dispatch::{
     PlatformToUi, RealmDispatcher, RealmTask, close_this_window, dispatch_platform_realm,
-    install_realm_alongside, install_surface_applier,
+    install_input_wiring, install_realm_alongside, install_surface_applier,
 };
 use crate::app::AppConfig;
 
@@ -339,11 +339,7 @@ where
     }
 
     // 5. Register input callback -> entered realm input dispatch
-    window.on_input(Box::new(move |input: PlatformInput| {
-        let _ =
-            dispatch_platform_realm(realm_dispatch, RealmTask::Event(PlatformToUi::Input(input)));
-        DispatchEventResult::resolved(false, true)
-    }));
+    install_input_wiring(realm_dispatch, window.as_ref());
 
     // 6. Register frame callback -> the wake gate, then UiRealm::pump
     let lane_frame = Arc::clone(&lane);

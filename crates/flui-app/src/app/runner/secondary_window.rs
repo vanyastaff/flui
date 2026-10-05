@@ -25,7 +25,7 @@ use super::host::{APP_RUNTIME, runtime_wake_callback, with_owner_platform};
 ))]
 use super::realm_dispatch::{
     PlatformToUi, RealmDispatcher, RealmTask, close_this_window, dispatch_platform_realm,
-    install_presentation_alongside, install_realm_alongside,
+    install_input_wiring, install_presentation_alongside, install_realm_alongside,
 };
 #[cfg(all(
     not(target_os = "android"),
@@ -925,7 +925,6 @@ fn finish_open_secondary_window(
         }
     }
     let mut uninstalled = Uninstalled(Some(Arc::clone(&window)));
-    use flui_platform::traits::{DispatchEventResult, PlatformInput};
     if !secondary_install_admitted(&config.loop_identity) || !config.reservation.0.begin_install() {
         return Err(AppWindowError::AdmissionClosed);
     }
@@ -1002,11 +1001,7 @@ fn finish_open_secondary_window(
     // sibling's.
     super::install_close_request_wiring(realm_dispatch.address, &window, close_request_handler);
 
-    window.on_input(Box::new(move |input: PlatformInput| {
-        let _ =
-            dispatch_platform_realm(realm_dispatch, RealmTask::Event(PlatformToUi::Input(input)));
-        DispatchEventResult::resolved(false, true)
-    }));
+    install_input_wiring(realm_dispatch, window.as_ref());
 
     window.on_resize(Box::new(move |size, scale_factor| {
         let _ = dispatch_platform_realm(
