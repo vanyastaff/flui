@@ -364,9 +364,9 @@ filter and `SemanticsOwner`.
 ## Numeric and directional input
 
 ADR-0124 distinguishes expand/collapse from activation and numeric setters from
-text edits. `NumericRange` admits only finite inclusive values and positive
-finite steps. Whole-request platform translation preserves numeric payloads.
-Numeric invocations carry owner-local generation authority; current-tree
-mutation or owner retirement invalidates cached numeric requests, and exhaustion
-refuses permanently. `numeric_invocations_follow_current_owner_authority` pins
-this authority without changing ordinary accepted activation behavior.
+text edits. `NumericRange` admits only finite inclusive
+values and positive finite steps, and `set_numeric_range` marks the node as a
+slider. Whole-request platform translation preserves numeric payloads, and
+`SemanticsOwner::resolve_action` refuses a numeric setter whose value is
+missing, non-finite or outside the node's current range
+(`numeric_setters_are_checked_against_the_current_range`).
