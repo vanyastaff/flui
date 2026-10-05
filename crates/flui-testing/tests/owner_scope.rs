@@ -178,6 +178,9 @@ fn semantics_listener_retirement_child(mode: &str) {
                     std::panic::panic_any("semantics callback first");
                 }
             }
+            if callback_mode == "registered-callback" && label == "semantics A" {
+                std::panic::panic_any("registered callback first");
+            }
         });
         if snapshot {
             SEMANTICS_HANDLES.with(|slot| slot.borrow_mut().push(Arc::downgrade(&listener)));
@@ -196,9 +199,13 @@ fn semantics_listener_retirement_child(mode: &str) {
             binding.add_semantics_enabled_listener(listener);
         }
     }
-    let retained_binding = snapshot.then(|| binding.clone());
+    let retained_binding = (snapshot || mode == "registered-callback").then(|| binding.clone());
     let outcome = if snapshot {
         catch_unwind(AssertUnwindSafe(|| binding.set_semantics_enabled(true)))
+    } else if mode == "registered-callback" {
+        let outcome = catch_unwind(AssertUnwindSafe(|| binding.set_semantics_enabled(true)));
+        drop(binding);
+        outcome
     } else {
         catch_unwind(AssertUnwindSafe(|| {
             if mode == "physical-incoming" {
@@ -225,6 +232,7 @@ fn semantics_listener_retirement_child(mode: &str) {
         "physical-B" | "snapshot-B" => (Some("semantics B"), &["semantics A", "semantics B"]),
         "physical-incoming" => (Some("incoming semantics failure"), &[]),
         "snapshot-callback" => (Some("semantics callback first"), &[]),
+        "registered-callback" => (Some("registered callback first"), &[]),
         "physical-healthy"
         | "physical-shared"
         | "physical-reentry"
@@ -271,6 +279,17 @@ fn semantics_listener_retirement_child(mode: &str) {
             "same owner delivers the next operation"
         );
         drop(binding);
+    } else if mode == "registered-callback" {
+        // The panicking snapshot was not the last owner of either envelope,
+        // so the binding still frees both captures when it drops.
+        let binding = retained_binding.expect("caller keeps the binding");
+        assert_eq!(*events.lock().expect("event log"), [("semantics A", true)]);
+        drop(binding);
+        assert_eq!(
+            *drops.lock().expect("drop log"),
+            ["semantics A", "semantics B"],
+            "registered captures free once the binding drops after a caught callback panic"
+        );
     } else if mode == "physical-reentry" {
         let replacement = SEMANTICS_OWNER
             .with(|slot| slot.borrow_mut().take())
@@ -319,6 +338,7 @@ pub(crate) fn semantics_listener_retirement_preserves_independent_envelopes() {
         "snapshot-pair",
         "snapshot-callback",
         "snapshot-nested",
+        "registered-callback",
     ] {
         use std::io::Read;
         let mut child =

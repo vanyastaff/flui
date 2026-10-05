@@ -81,8 +81,17 @@ impl Drop for RetiringSemanticsListeners {
     fn drop(&mut self) {
         if std::thread::panicking() {
             // Preserve the incoming or first propagated failure without
-            // invoking independent, potentially hostile capture destructors.
-            std::mem::forget(std::mem::take(&mut self.0));
+            // invoking independent, potentially hostile capture destructors
+            // (ADR-0127). Only a last owner would run a capture destructor;
+            // releasing a shared clone keeps the registration's owner able to
+            // free the capture once it is removed or the binding drops.
+            for listener in std::mem::take(&mut self.0) {
+                if Arc::strong_count(&listener) == 1 {
+                    std::mem::forget(listener);
+                } else {
+                    drop(listener);
+                }
+            }
         }
     }
 }
@@ -511,11 +520,13 @@ impl RenderingBinding {
     /// [`Self::add_semantics_enabled_listener`] and calls
     /// `SemanticsHost::set_platform_semantics_enabled` from that listener.
     ///
-    /// A callback panic propagates unchanged. Its owned snapshot retains
-    /// callback envelopes during that unwind; healthy snapshot retirement
-    /// follows registration order, retaining the remaining envelopes after
-    /// the first capture-destructor panic. This cannot protect competing
-    /// destructors inside one opaque callback's capture aggregate.
+    /// A callback panic propagates unchanged. During that unwind the owned
+    /// snapshot retains only the envelopes it is the last owner of (those a
+    /// callback removed from the binding) and releases its other clones, so
+    /// captures still registered free when the binding drops (ADR-0127).
+    /// Healthy snapshot retirement follows registration order, with the same
+    /// rule after the first capture-destructor panic. This cannot protect
+    /// competing destructors inside one opaque callback's capture aggregate.
     pub fn set_semantics_enabled(&self, enabled: bool) {
         let was_enabled = self.semantics_enabled.swap(enabled, Ordering::Relaxed);
         if was_enabled != enabled {
