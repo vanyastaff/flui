@@ -52,7 +52,7 @@ on a pull request when the PR carries `full-ci` (read from the API, `ci.yml:342-
 
 - `docs` when every file matches `DOCS_ONLY` (`classify.rs:32-44`);
 - heavy and `full` when a file matches `HEAVY_TRIGGERS` (`classify.rs:49-62`: root `Cargo.toml`,
-  `Cargo.lock`, `.cargo/**`, the toolchain file, `.github/workflows/**`, `**/*.wgsl`, `deny.toml`)
+  `Cargo.lock`, `.cargo/**`, the toolchain file, `.github/workflows/**`, `.github/actions/**`, `**/*.wgsl`, `deny.toml`)
   or an xtask module a heavy job runs (`heavy_job_inputs`, `classify.rs:174`);
 - `full` when a file matches `FULL_TRIGGERS` (`classify.rs:65-77`) or no package owns it
   (`classify.rs:613-619`);
