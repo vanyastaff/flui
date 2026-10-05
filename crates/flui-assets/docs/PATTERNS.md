@@ -29,8 +29,15 @@ explicit policy; it does not claim a memory budget.
 
 `AssetHandle<Data, Key>` owns an `Arc<Data>` and a caller-selected key. Cloning a
 handle shares data and clones its key; data does not need to implement `Clone`.
-A weak handle observes that ownership without extending the data's lifetime.
-Eviction removes cache ownership, not ownership held by existing handles.
+A weak handle observes data ownership without extending the data's lifetime,
+but still owns its generic key strongly. Eviction removes cache ownership, not
+ownership held by existing handles.
+
+`AssetKey` owns a nonempty `Arc<str>`. Clones share its allocation, while equality
+and hashing use contents even for independently constructed names. Its borrowed
+`as_str` result cannot outlive the key. Font and image descriptors keep shared
+names and clone them when producing keys. Name reclamation follows those owners;
+there is no process-global retaining arena or integer identity.
 
 ```rust
 use flui_assets::{AssetHandle, AssetKey};

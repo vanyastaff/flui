@@ -3,9 +3,10 @@
 - **Status:** Accepted in part (2026-09-26): §1–§4, the gate (`cargo xtask globals`) and its
   seeded allowlist; removing each global remains with its exit ADR. Of the entries whose exit
   is this ADR, the asset `REGISTRY` is removed (`AssetRegistry::global` is deleted; an
-  application builds and owns its registry). For the rest (`TIME_DILATION`, the asset
-  `INTERNER`, `ERROR_VIEW_BUILDER`, the decoded-image `CACHE`), removal is the part of this ADR
-  still Proposed.
+  application builds and owns its registry). The asset `INTERNER` is also removed:
+  ADR-0121 makes each name owned shared data instead of a process-wide arena.
+  For the rest (`TIME_DILATION`, `ERROR_VIEW_BUILDER`, the decoded-image `CACHE`),
+  removal is the part of this ADR still Proposed.
 - **Date:** 2026-09-25
 - **Amends:** [ADR-0027](ADR-0027-owner-affine-ui-realms.md) (its open question "the runner's
   thread-local `AppRuntime` slot is the sanctioned transitional form" becomes a named,

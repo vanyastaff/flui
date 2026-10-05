@@ -123,26 +123,31 @@ pub struct AssetHandle<T, K> {
 
 ### 4. AssetKey
 
-**Purpose**: Efficient string-based identifiers.
+**Purpose**: Nonempty names with shared ownership independent of a registry.
 
-**Key Features**:
-- String interning with `lasso`
-- Only 4 bytes per key
-- O(1) comparison and hashing
-- Global interner (thread-safe)
+`AssetKey` owns an `Arc<str>`. Cloning shares its string allocation; independently
+constructed names compare and hash by contents. There is no global interner,
+integer namespace or retaining arena. `as_str()` borrows from the key, so callers
+must keep an owner alive rather than rely on a static string. Keys are Clone,
+not Copy; no fixed representation size or constant-time string hashing is promised.
 
-**Why String Interning?**
 ```rust
-// Without interning:
-let key1 = "textures/grass.png".to_string(); // 24+ bytes
-let key2 = "textures/grass.png".to_string(); // 24+ bytes
-assert_ne!(key1.as_ptr(), key2.as_ptr());    // Different allocations
+use flui_assets::AssetKey;
+use std::sync::Arc;
 
-// With interning:
-let key1 = AssetKey::new("textures/grass.png"); // 4 bytes
-let key2 = AssetKey::new("textures/grass.png"); // 4 bytes
-assert_eq!(key1, key2);                          // Same Spur value
+let name: Arc<str> = Arc::from("textures/grass.png");
+let first = AssetKey::from(Arc::clone(&name));
+let shared = first.clone();
+let independent = AssetKey::new("textures/grass.png");
+assert_eq!(first, shared);
+assert_eq!(first, independent);
 ```
+
+`FontAsset` and `ImageAsset` constructors accept `Into<Arc<str>>`. They retain the
+name, and `key()` clones its existing storage. Pass `path.as_str()` for a borrowed
+`String`, or pass owned `String`, `&str` or `Arc<str>` directly. Empty `AssetKey`
+construction remains rejected. A weak data handle still owns its generic key,
+so its name remains live until that handle is released too.
 
 ## Data Flow
 
@@ -187,10 +192,10 @@ disabled retention, held ownership, finite diagnostics and supported expiration.
 | Registry cache map | `parking_lot::RwLock`; typed handles leave the lock before loading |
 | Typed cache | Moka's concurrent cache |
 | Statistics | `parking_lot::RwLock`, written on hits, misses and mutations |
-| Key interner | Lasso's `ThreadedRodeo` |
+| Asset names | Standard-library `Arc<str>` shared ownership |
 
-Cache lookup, admission, eviction and string interning use their dependencies'
-implementations. IO and decoding costs depend on the source and data; no timing
+Cache lookup, admission and eviction use Moka's implementation; asset names use
+standard-library shared string ownership. IO and decoding costs depend on the source and data; no timing
 or hit-rate measurements are recorded here. `AssetCache::stats` reports its
 typed cache's counters. The registry exposes no aggregated statistics API; its
 former method returned an empty vector without inspecting caches.
@@ -205,7 +210,7 @@ let handles: Vec<_> = (0..10)
     .map(|i| {
         let registry = registry.clone();
         tokio::spawn(async move {
-            registry.load(FontAsset::file(&format!("font{}.ttf", i))).await
+            registry.load(FontAsset::file(format!("font{}.ttf", i))).await
         })
     })
     .collect();
@@ -346,6 +351,19 @@ hot-reload = ["notify"]
 
 ## Mapping decisions
 
+- Asset keys own nonempty shared strings rather than borrowing from a process-wide
+  interner. Equality and hashing use contents across independently constructed
+  keys; cloning shares string storage. Built-in font and image descriptors retain
+  the same name storage that their keys and consumer handles use. Dropping a
+  registry does not invalidate a live consumer's name, and dropping the final
+  descriptor, key and handle releases that name independently of unrelated names.
+  Weak asset handles still own their keys strongly while holding only weak data
+  references. `asset_key_names_follow_consumer_ownership` exercises independent
+  equal-key lookup, sharing, registry release, retained names and final reclamation
+  through public font/image descriptors and handles. The compile-fail doctest on
+  `AssetKey::as_str` rejects borrowing a name beyond the owning key's lifetime.
+  ADR-0121 records this ownership contract.
+
 - Default network image loads share a lazily initialized HTTP client per registry,
   constructed on the loading runtime. Initialization returns a typed error and
   remains retryable. `NetworkLoader::new` is fallible rather than hiding external
@@ -484,7 +502,7 @@ handles, alongside their shared operation counts and statistics reset.
 
 - [Moka Cache Documentation](https://docs.rs/moka)
 - [TinyLFU Paper](https://arxiv.org/abs/1512.00727)
-- [Lasso String Interning](https://docs.rs/lasso)
+- [Standard-library shared ownership](https://doc.rust-lang.org/std/sync/struct.Arc.html)
 - [parking_lot Performance](https://github.com/Amanieu/parking_lot#performance)
 
 The separate `registered_image_hook_can_await_same_key_spawned_work` consumer test

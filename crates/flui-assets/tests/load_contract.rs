@@ -5,6 +5,89 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use flui_assets::{Asset, AssetError, AssetKey, AssetRegistryBuilder, FontAsset};
 
+fn owned_key_names_follow_handles<T>(make: impl Fn(Arc<str>) -> T)
+where
+    T: Asset<Key = AssetKey, Error = AssetError>,
+{
+    run_cold_load_case(async {
+        let name: Arc<str> = Arc::from("owned-name");
+        let weak_name = Arc::downgrade(&name);
+        let descriptor = make(name);
+        let key = descriptor.key();
+        let registry = AssetRegistryBuilder::new().with_default_capacity().build();
+        let first = registry
+            .load(make(Arc::from("owned-name")))
+            .await
+            .expect("independent name loads");
+        // The descriptor's shared allocation becomes the key of the cache-hit
+        // handle even when the cache's key was independently constructed.
+        let shared = registry.load(descriptor).await.expect("equal name hits");
+        assert!(
+            first.ptr_eq(&shared),
+            "equal contents identify one typed asset"
+        );
+        let retrieved = registry
+            .get::<T>(&key)
+            .await
+            .expect("independently owned key retrieves cached data");
+        assert!(shared.ptr_eq(&retrieved));
+
+        let other = registry
+            .load(make(Arc::from("other-name")))
+            .await
+            .expect("distinct name loads independently");
+        assert!(!shared.ptr_eq(&other));
+        let cloned = shared.clone();
+        let weak_data = shared.downgrade();
+        drop((registry, first, shared, retrieved, key));
+        assert_eq!(cloned.key().as_str(), "owned-name");
+        assert!(
+            weak_name.upgrade().is_some(),
+            "consumer keys own their names"
+        );
+        drop(cloned);
+        assert!(
+            weak_data.upgrade().is_none(),
+            "no strong data owner remains"
+        );
+        assert!(
+            weak_name.upgrade().is_some(),
+            "a weak data handle still owns its key name"
+        );
+        drop(weak_data);
+        assert!(
+            weak_name.upgrade().is_none(),
+            "the final name owner releases storage despite other live names"
+        );
+        assert_eq!(other.key().as_str(), "other-name");
+    });
+}
+
+fn font_key_names_follow_consumer_ownership() {
+    owned_key_names_follow_handles(|name| {
+        FontAsset::from_bytes(
+            name,
+            include_bytes!("../../flui-painting/assets/fonts/probe-sans-400.ttf").to_vec(),
+        )
+    });
+}
+
+#[cfg(feature = "images")]
+fn image_key_names_follow_consumer_ownership() {
+    owned_key_names_follow_handles(|name| {
+        flui_assets::ImageAsset::from_bytes(name, include_bytes!("fixtures/tiny.png").to_vec())
+    });
+}
+
+#[test]
+fn asset_key_names_follow_consumer_ownership() {
+    crate::cases::run_cases(&[
+        ("font names", font_key_names_follow_consumer_ownership),
+        #[cfg(feature = "images")]
+        ("image names", image_key_names_follow_consumer_ownership),
+    ]);
+}
+
 struct OwnedValue {
     generation: usize,
     drops: Arc<AtomicUsize>,

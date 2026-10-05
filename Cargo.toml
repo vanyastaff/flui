@@ -451,8 +451,6 @@ trybuild = "1.0"
 # deterministic + faster than std SipHash for small keys like RenderId)
 rustc-hash = "2.1"
 
-# STRING INTERNING - Used by flui-assets
-lasso = { version = "0.7", features = ["multi-threaded"] }
 
 # PERFORMANCE & PROFILING
 criterion = { version = "0.8", default-features = false, features = [

@@ -1,22 +1,12 @@
-//! Performance-optimized types for the asset system.
+//! Asset values and shared ownership handles.
 //!
-//! This module provides highly-optimized types that minimize memory usage and
-//! maximize performance:
-//!
-//! - [`AssetKey`] - Interned string keys (4 bytes vs 24+ for `String`)
-//! - [`AssetHandle`] - Arc-based handles with weak references (8 bytes)
-//! - [`AssetHandleCore`] - Core handle operations (sealed trait)
-//! - [`AssetHandleExt`] - Extension trait with convenience methods
-//! - [`WeakAssetHandle`] - Weak reference for cache-friendly patterns
-//! - [`LoadState`] - State machine for tracking async loading
-//! - [`FontData`] - Font-specific data container
-//!
-//! # Performance Characteristics
-//!
-//! - **AssetKey**: 4 bytes (string interning with lasso)
-//! - **AssetHandle**: 8 bytes (single Arc pointer)
-//! - **Hashing**: O(1) for interned keys
-//! - **Comparison**: O(1) for interned keys
+//! - [`AssetKey`] owns a nonempty name through `Arc<str>`. Clones share
+//!   storage; independently constructed equal names compare and hash by contents.
+//! - [`AssetHandle`] shares loaded data and owns its key.
+//! - [`AssetHandleCore`] and [`AssetHandleExt`] provide handle operations.
+//! - [`WeakAssetHandle`] weakly observes data while still owning its key.
+//! - [`LoadState`] tracks async loading.
+//! - [`FontData`] contains loaded font data.
 //!
 //! # Examples
 //!
@@ -24,15 +14,15 @@
 //! use flui_assets::{AssetKey, AssetHandle, AssetHandleExt};
 //! use std::sync::Arc;
 //!
-//! // Keys are interned for efficiency
+//! // Independently owned equal names identify the same request
 //! let key1 = AssetKey::new("texture.png");
 //! let key2 = AssetKey::new("texture.png");
-//! assert_eq!(key1, key2); // Fast comparison
+//! assert_eq!(key1, key2); // Equal contents
 //!
 //! // Handles provide cheap cloning
 //! let data = vec![1, 2, 3, 4];
 //! let handle = AssetHandle::new(Arc::new(data), key1);
-//! let handle2 = handle.clone(); // Just clones Arc
+//! let handle2 = handle.clone(); // Shares data and clones the key
 //!
 //! // Extension traits provide convenience methods
 //! assert!(!handle.is_unique()); // Two handles exist

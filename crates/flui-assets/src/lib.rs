@@ -10,7 +10,7 @@
 //! - 💾 **Smart Caching** - Explicit entry retention and expiration
 //! - 🎯 **Type-Safe** - Generic `Asset<T>` trait for compile-time guarantees
 //! - ⚡ **Async I/O** - Non-blocking loading with tokio runtime
-//! - 🔑 **Efficient Keys** - 4-byte interned keys for fast hashing and comparison
+//! - 🔑 **Efficient Keys** - Owned shared names with content equality
 //! - 📦 **Arc-Based Handles** - Cheap cloning with automatic cleanup via weak references
 //! - 🎨 **Built-in Assets** - Images (optional), fonts, with extensible system
 //!
@@ -133,7 +133,7 @@
 //!
 //! ## Memory Efficiency
 //!
-//! - **AssetKey**: 4 bytes (vs 24+ for `String`)
+//! - **AssetKey**: shared name ownership; clones retain the string allocation
 //! - **AssetHandle**: stores a key and an `Arc` sharing the loaded data
 //! - **Cache**: Moka manages entries and admission; statistics use a separate lock
 //!
