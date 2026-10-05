@@ -645,7 +645,7 @@ fn fallback_mutation() {
         assert_eq!(
             slot.borrow()[0].0.element_for_global_key(neighbor.as_ref()),
             None
-        )
+        );
     });
     next(&shared, &events);
     clear();
@@ -677,7 +677,7 @@ fn losing_clone() {
         assert_eq!(
             slot.borrow()[0].0.element_for_global_key(b.as_ref()),
             Some(element(92))
-        )
+        );
     });
     assert_eq!(shared.claim_count(), 2);
     drop(incoming);
@@ -781,7 +781,7 @@ fn mounted() {
     presentation.schedule_build_for(root, 0, RebuildReason::ParentUpdate);
     presentation.build_scope(&mut tree);
     presentation.finalize_tree(&mut tree);
-    assert!(tree.get(root).expect("root").child_ids().is_empty());
+    assert_eq!(tree.get(root).expect("root").child_ids(), []);
     assert_eq!(shared.claim_count(), 0);
     assert_eq!(presentation.element_for_global_key(a.as_ref()), None);
     assert_eq!(presentation.element_for_global_key(b.as_ref()), None);

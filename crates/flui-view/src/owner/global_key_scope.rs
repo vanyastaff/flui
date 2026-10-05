@@ -149,12 +149,9 @@ struct SnapshotClaim {
     identity: ClaimIdentity,
 }
 
-struct UnstableComparison;
-
-impl UnstableComparison {
-    fn raise(self) -> ! {
-        panic!("GlobalKey comparison changed scope repeatedly")
-    }
+/// Refuse a key whose comparison mutated the scope bucket on every attempt.
+fn refuse_unstable_comparison() -> ! {
+    panic!("GlobalKey comparison changed scope repeatedly")
 }
 
 fn retire_snapshot(snapshot: Vec<SnapshotClaim>) {
@@ -328,7 +325,10 @@ impl GlobalKeyScope {
     ) -> Result<ClaimGuard<'_>, ClaimConflict> {
         let hash = key.key_hash();
         let mut prepared = None;
-        for round in 0..2 {
+        // One retry: a second mismatch means the key's comparison mutates
+        // the bucket every time it runs, and that is refused.
+        let mut retried = false;
+        loop {
             let snapshot = self.snapshot(hash);
             let matching = snapshot.iter().find(|claim| claim.key.as_ref().key_eq(key));
             let identity = matching.map(|claim| claim.identity.clone());
@@ -338,9 +338,10 @@ impl GlobalKeyScope {
             let mut state = self.state.borrow_mut();
             if !state.matches_snapshot(hash, &snapshot) {
                 drop(state);
-                if round == 1 {
-                    UnstableComparison.raise();
+                if retried {
+                    refuse_unstable_comparison();
                 }
+                retried = true;
                 retire_snapshot(snapshot);
                 continue;
             }
@@ -386,14 +387,14 @@ impl GlobalKeyScope {
             retire_snapshot(snapshot);
             return Ok(guard);
         }
-        unreachable!("BUG: bounded comparison either returns or refuses")
     }
 
     /// Resolve a missing local registration without holding a scope borrow
     /// during user hashing or equality. Matching local identities bypass this.
     pub(super) fn take_claim(&self, key: &dyn ViewKey, owner: OwnerTag) -> Option<ScopedKeyOwner> {
         let hash = key.key_hash();
-        for round in 0..2 {
+        let mut retried = false;
+        loop {
             let snapshot = self.snapshot(hash);
             let identity = snapshot
                 .iter()
@@ -402,9 +403,10 @@ impl GlobalKeyScope {
             let state = self.state.borrow();
             if !state.matches_snapshot(hash, &snapshot) {
                 drop(state);
-                if round == 1 {
-                    UnstableComparison.raise();
+                if retried {
+                    refuse_unstable_comparison();
                 }
+                retried = true;
                 retire_snapshot(snapshot);
                 continue;
             }
@@ -415,7 +417,6 @@ impl GlobalKeyScope {
             retire_snapshot(snapshot);
             return removed;
         }
-        unreachable!("BUG: bounded comparison either returns or refuses")
     }
 
     fn take_identity(&self, identity: &ClaimIdentity) -> Option<ScopedKeyOwner> {
