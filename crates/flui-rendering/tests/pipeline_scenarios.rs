@@ -35,16 +35,12 @@ use flui_rendering::{
 #[test]
 fn pipeline_callback_replacement_reentry() {
     use flui_rendering::pipeline::{PipelineOwner, RenderInvalidationHandle};
-    use std::io::Read;
-    use std::process::{Command, Stdio};
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::time::{Duration, Instant};
 
     const CHILD: &str = "FLUI_PIPELINE_REPLACEMENT_CHILD";
     if let Ok(case) = std::env::var(CHILD) {
         struct RetiredWake {
-            case: String,
             handle: RenderInvalidationHandle,
             drops: Arc<AtomicUsize>,
             fail: bool,
@@ -52,7 +48,6 @@ fn pipeline_callback_replacement_reentry() {
         impl Drop for RetiredWake {
             fn drop(&mut self) {
                 self.drops.fetch_add(1, Ordering::Relaxed);
-                println!("pipeline replacement retirement entered: {}", self.case);
                 self.handle
                     .mark_needs_paint()
                     .expect("retiring capture can enqueue and wake");
@@ -88,7 +83,6 @@ fn pipeline_callback_replacement_reentry() {
         }
         let drops = Arc::new(AtomicUsize::new(0));
         let retired = RetiredWake {
-            case: case.clone(),
             handle: handle.clone(),
             drops: Arc::clone(&drops),
             fail: failure == "drop",
@@ -164,82 +158,26 @@ fn pipeline_callback_replacement_reentry() {
             1,
             "subsequent replacement stays authoritative"
         );
-        println!("pipeline replacement completed: {case}");
-        return;
+        crate::common::isolated_case_passed();
     }
-    let mut failures = Vec::new();
-    let selected = std::env::var("FLUI_PIPELINE_REPLACEMENT_CONTROL").ok();
-    if let Some(selected) = &selected {
-        assert!(
-            matches!(
-                selected.as_str(),
-                "visual-healthy"
-                    | "visual-drop"
-                    | "created-healthy"
-                    | "created-drop"
-                    | "disposed-healthy"
-                    | "disposed-drop"
-            ),
-            "unknown replacement control row"
-        );
-    }
-    for case in [
+    let failures: Vec<String> = [
         "visual-healthy",
         "visual-drop",
         "created-healthy",
         "created-drop",
         "disposed-healthy",
         "disposed-drop",
-    ] {
-        if selected.as_deref().is_some_and(|selected| selected != case) {
-            continue;
-        }
-        let mut child = Command::new(std::env::current_exe().expect("test executable"))
-            .args([
-                "--exact",
-                "pipeline_scenarios::pipeline_callback_replacement_reentry",
-                "--nocapture",
-            ])
-            .env(CHILD, case)
-            .env("RUST_BACKTRACE", "0")
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .expect("pipeline replacement child");
-        let mut stdout = child.stdout.take().expect("stdout");
-        let mut stderr = child.stderr.take().expect("stderr");
-        let stdout_reader = std::thread::spawn(move || {
-            let mut text = String::new();
-            stdout.read_to_string(&mut text).expect("stdout read");
-            text
-        });
-        let stderr_reader = std::thread::spawn(move || {
-            let mut text = String::new();
-            stderr.read_to_string(&mut text).expect("stderr read");
-            text
-        });
-        let started = Instant::now();
-        let mut timed_out = false;
-        while child.try_wait().expect("child status").is_none() {
-            if started.elapsed() > Duration::from_secs(10) {
-                timed_out = true;
-                child.kill().expect("kill stalled child");
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(10));
-        }
-        let status = child.wait().expect("child exit");
-        let stdout = stdout_reader.join().expect("stdout reader");
-        let stderr = stderr_reader.join().expect("stderr reader");
-        if !status.success()
-            || !stdout.contains("1 passed; 0 failed")
-            || !stdout.contains(&format!("pipeline replacement completed: {case}"))
-        {
-            failures.push(format!(
-                "{case}: timed_out={timed_out}, {status}\n{stdout}\n{stderr}"
-            ));
-        }
-    }
+    ]
+    .into_iter()
+    .filter_map(|case| {
+        crate::common::run_isolated(
+            "pipeline_scenarios::pipeline_callback_replacement_reentry",
+            CHILD,
+            case,
+        )
+        .err()
+    })
+    .collect();
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 

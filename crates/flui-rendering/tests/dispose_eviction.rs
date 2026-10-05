@@ -339,16 +339,25 @@ fn visual_notifier_retirement_child(mode: &str) {
     drop(next);
 }
 
-/// Public producers run in bounded children: restored collection drop glue
-/// would abort before an outer catch could report the first failure.
-pub(crate) fn render_tree_retirement_preserves_independent_envelopes() {
-    const CHILD: &str = "FLUI_RENDER_TREE_RETIREMENT_CHILD";
-    if let Ok(mode) = std::env::var(CHILD) {
+const RETIREMENT_CASE: &str = "FLUI_RENDER_TREE_RETIREMENT_CASE";
+
+/// Child-process entry for one row of
+/// [`render_tree_retirement_preserves_independent_envelopes`]; a no-op
+/// unless the parent names the row.
+#[test]
+#[ignore = "runs only as a child of render_tree_retirement_preserves_independent_envelopes"]
+fn render_tree_retirement_case() {
+    if let Ok(mode) = std::env::var(RETIREMENT_CASE) {
         retirement_child(&mode);
-        return;
+        crate::common::isolated_case_passed();
     }
-    let mut failures = Vec::new();
-    for mode in [
+}
+
+/// Each row runs in a bounded child process: a container that drops its
+/// remaining values after a failure aborts before an outer catch could
+/// report the first one (ADR-0127).
+pub(crate) fn render_tree_retirement_preserves_independent_envelopes() {
+    let failures: Vec<String> = [
         "healthy",
         "object",
         "data",
@@ -371,56 +380,17 @@ pub(crate) fn render_tree_retirement_preserves_independent_envelopes() {
         "visual-incoming",
         "visual-shared",
         "visual-reentry",
-    ] {
-        use std::io::Read;
-        let mut child =
-            std::process::Command::new(std::env::current_exe().expect("test executable"))
-                .args([
-                    "--exact",
-                    "contract_matrices::lifecycle_matrix",
-                    "--nocapture",
-                ])
-                .env(CHILD, mode)
-                .env("RUST_BACKTRACE", "0")
-                .env("RUST_LIB_BACKTRACE", "0")
-                .stdout(std::process::Stdio::piped())
-                .stderr(std::process::Stdio::piped())
-                .spawn()
-                .expect("retirement child");
-        let mut stdout = child.stdout.take().expect("stdout pipe");
-        let mut stderr = child.stderr.take().expect("stderr pipe");
-        let stdout = std::thread::spawn(move || {
-            let mut bytes = Vec::new();
-            stdout.read_to_end(&mut bytes).expect("stdout read");
-            bytes
-        });
-        let stderr = std::thread::spawn(move || {
-            let mut bytes = Vec::new();
-            stderr.read_to_end(&mut bytes).expect("stderr read");
-            bytes
-        });
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-        let (status, timed_out) = loop {
-            if let Some(status) = child.try_wait().expect("child status") {
-                break (status, false);
-            }
-            if std::time::Instant::now() >= deadline {
-                child.kill().expect("kill timed out child");
-                break (child.wait().expect("reap timed out child"), true);
-            }
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        };
-        let stdout = stdout.join().expect("stdout reader");
-        let stderr = stderr.join().expect("stderr reader");
-        let output = String::from_utf8_lossy(&stdout);
-        if timed_out || !status.success() || !output.contains("1 passed; 0 failed") {
-            failures.push(format!(
-                "{mode}: {status}, timeout={timed_out}\n{}\n{}",
-                output,
-                String::from_utf8_lossy(&stderr)
-            ));
-        }
-    }
+    ]
+    .into_iter()
+    .filter_map(|mode| {
+        crate::common::run_isolated(
+            "dispose_eviction::render_tree_retirement_case",
+            RETIREMENT_CASE,
+            mode,
+        )
+        .err()
+    })
+    .collect();
     assert!(
         failures.is_empty(),
         "retirement children failed:\n{}",

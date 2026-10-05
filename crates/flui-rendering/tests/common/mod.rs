@@ -66,6 +66,59 @@ pub fn sliver_geometry(owner: &PipelineOwner<Layout>, id: RenderId) -> SliverGeo
     inspect::sliver_geometry(owner, id).expect("sliver geometry is committed")
 }
 
+/// Exit status of an isolated case that ran to completion. libtest exits 0
+/// when its filter matches no test, so success must be a status only the
+/// case itself can produce.
+const ISOLATED_CASE_PASSED: i32 = 42;
+
+/// Ends an isolated child process after its case completed.
+pub fn isolated_case_passed() -> ! {
+    std::process::exit(ISOLATED_CASE_PASSED)
+}
+
+/// Runs the test named `test` in a child process with `selector=case` in its
+/// environment, bounded by a timeout. The child must finish through
+/// [`isolated_case_passed`]; an abort, a failed assertion, a stall or a
+/// filter that matched nothing is an error carrying the child's stderr.
+pub fn run_isolated(test: &str, selector: &str, case: &str) -> Result<(), String> {
+    use std::io::Read;
+    use std::process::{Command, Stdio};
+    use std::time::{Duration, Instant};
+
+    let mut child = Command::new(std::env::current_exe().expect("test executable"))
+        .args(["--exact", test, "--include-ignored", "--nocapture"])
+        .env(selector, case)
+        .env("RUST_BACKTRACE", "0")
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn isolated case");
+    let mut stderr = child.stderr.take().expect("stderr pipe");
+    let stderr = std::thread::spawn(move || {
+        let mut text = String::new();
+        stderr.read_to_string(&mut text).expect("stderr read");
+        text
+    });
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let (status, timed_out) = loop {
+        if let Some(status) = child.try_wait().expect("child status") {
+            break (status, false);
+        }
+        if Instant::now() >= deadline {
+            child.kill().expect("kill stalled child");
+            break (child.wait().expect("reap stalled child"), true);
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    let stderr = stderr.join().expect("stderr reader");
+    if !timed_out && status.code() == Some(ISOLATED_CASE_PASSED) {
+        Ok(())
+    } else {
+        let stall = if timed_out { " (timed out)" } else { "" };
+        Err(format!("{case}: {status}{stall}\n{stderr}"))
+    }
+}
+
 /// Vertical sliver constraints for the shared 300-wide × 100-tall test
 /// viewport: 100 px of paint room, a 120 px cache window starting 20 px
 /// before the leading edge.
