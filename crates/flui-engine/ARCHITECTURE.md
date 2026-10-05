@@ -250,6 +250,23 @@ loom backend or the mailbox moves to `std::sync`.
 
 ## Mapping decisions
 
+### Vertex colors and clip coverage own the source alpha
+
+Supplied mesh colors replace `Paint::color`; an absent color array uses the paint
+color. The shape fragment interpolates straight RGBA and then premultiplies it.
+Every untextured `SrcOver` mesh uses alpha blending: clip coverage can make even
+opaque vertex or paint colors translucent. Explicit fixed-function and advanced
+blend modes retain their existing routing. Parent opacity remains a group
+composite rather than mesh color baking.
+`painter_vertices_use_effective_colors_for_compositing` reads back direct painter
+and Canvas-recorded draws with uniform, mixed and zero alpha, opaque colors under
+a contradictory paint, paint fallback, `Src`, `Clear`, `Plus`, `Multiply`, parent
+opacity and ignored invalid input followed by a visible sibling. Its fractional
+clip rows separately cover supplied opaque colors and opaque paint fallback,
+requiring half-covered red over blue to preserve the destination's opaque alpha.
+The optimized FXC row below exercises this same producer with analytic and mask
+clips; its expected coverage depends on this blending contract.
+
 ### Shared clip helpers compile with optimized FXC
 
 Shared clip coverage and rounded-superellipse distance helpers initialize their
