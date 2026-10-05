@@ -59,3 +59,25 @@ fn prelude_authored_tree_mounts_through_the_headless_pipeline() {
         "a prelude-authored tree must commit a frame through the headless pipeline"
     );
 }
+
+#[test]
+fn a_fixed_oval_clip_is_configured_through_the_facade() {
+    use flui::geometry::{RRect, Rect};
+    use flui::widgets::{ClipOval, Oval};
+    use flui_testing::widgets::{lay_out, tight};
+
+    let bounds = Rect::from_ltrb(20.0, 30.0, 80.0, 70.0);
+    let tree = lay_out(
+        ClipOval::new()
+            .clipper(Oval::from_rect(bounds))
+            .child(ColoredBox::new(Color::rgb(20, 40, 60))),
+        tight(100.0, 100.0),
+    );
+
+    // The fixed ellipse is offset from and smaller than the allocated box, so
+    // neither a bounds-derived oval nor a rectangular clip produces this layer.
+    assert_eq!(
+        tree.clip_rrect_layers(),
+        vec![RRect::from_rect_elliptical(bounds, 30.0, 20.0)],
+    );
+}
