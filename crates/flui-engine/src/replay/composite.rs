@@ -37,7 +37,7 @@ impl GpuReplay {
         scissor: crate::command_ir::ScissorRect,
     ) -> EngineResult<()> {
         let (bounds, uv) = if let Some((x, y, w, h)) = scissor {
-            let cut = Rect::from_xywh(f64::from(x), f64::from(y), f64::from(w), f64::from(h));
+            let cut = Rect::from_xywh(x as f64, y as f64, f64::from(w), f64::from(h));
             let Some(cropped) = bounds.intersect(&cut).filter(|rect| !rect.is_empty()) else {
                 return Ok(());
             };
@@ -104,6 +104,7 @@ impl GpuReplay {
                     .filter(|_| chain.is_unclipped())
                     .map(|clip| clip.legacy),
             };
+            self.admit_filter_composite(viewport_size, surface_format, resources)?;
             flush_advanced_layer(
                 op,
                 destination,
@@ -115,6 +116,7 @@ impl GpuReplay {
                 device,
                 encoder,
                 Some(&self.viewport_bind_group),
+                self.attachment_origin,
             );
             return Ok(());
         }

@@ -327,19 +327,22 @@ impl GpuReplay {
         // side must be ≤ max_tex_dim/2.  Use saturating_div to avoid u32 overflow.
         let max_tile_half = max_tex_dim.saturating_div(2).max(1);
 
-        let tile_x = op.device_bounds.left().floor().max(0.0) as u32;
-        let tile_y = op.device_bounds.top().floor().max(0.0) as u32;
-        let tile_right_edge =
-            (op.device_bounds.right().ceil() + 1.0).clamp(0.0, f64::from(vp_w)) as u32;
-        let tile_bottom_edge =
-            (op.device_bounds.bottom().ceil() + 1.0).clamp(0.0, f64::from(vp_h)) as u32;
+        let parent_origin = self.attachment_origin;
+        let left = parent_origin.0 as f64;
+        let top = parent_origin.1 as f64;
+        let right = left + f64::from(vp_w);
+        let bottom = top + f64::from(vp_h);
+        let tile_x = op.device_bounds.left().floor().clamp(left, right) as i64;
+        let tile_y = op.device_bounds.top().floor().clamp(top, bottom) as i64;
+        let tile_right_edge = (op.device_bounds.right().ceil() + 1.0).clamp(left, right) as i64;
+        let tile_bottom_edge = (op.device_bounds.bottom().ceil() + 1.0).clamp(top, bottom) as i64;
 
         // An invisible path is a no-op, before allocating or reading a backdrop.
         if tile_x >= tile_right_edge || tile_y >= tile_bottom_edge {
             return Ok(());
         }
-        let tile_w = tile_right_edge - tile_x;
-        let tile_h = tile_bottom_edge - tile_y;
+        let tile_w = (tile_right_edge - tile_x) as u32;
+        let tile_h = (tile_bottom_edge - tile_y) as u32;
 
         // No silent truncation: a path whose 2× tile would exceed the device's
         // max texture dimension is rendered DIRECTLY onto the target (aliased but
@@ -386,6 +389,26 @@ impl GpuReplay {
         let bucket_w = round_up_to_alignment(supersample_w, SSAA_BUCKET_ALIGNMENT).min(max_tex_dim);
         let bucket_h = round_up_to_alignment(supersample_h, SSAA_BUCKET_ALIGNMENT).min(max_tex_dim);
 
+        if self.filter_attachment_depth != 0 {
+            resources.admit_foreground_target((bucket_w, bucket_h), surface_format, 1)?;
+            resources.admit_foreground_target((tile_w, tile_h), surface_format, 1)?;
+            let downsample_count = if op.blend == flui_painting::BlendMode::Plus {
+                2
+            } else {
+                1
+            };
+            let work = (tile_w as usize)
+                .checked_mul(tile_h as usize)
+                .and_then(|pixels| pixels.checked_mul(4 * downsample_count))
+                .ok_or(crate::error::EngineError::PreparedResourceOverflow)?;
+            op.segment.budget.admit_effect_work(work)?;
+            resources.reserve_prepared(crate::device_domain::PreparedCost {
+                gpu_bytes: 80 * downsample_count,
+                cpu_bytes: 80 * downsample_count,
+                objects: 6 * downsample_count,
+            })?;
+        }
+
         let coverage_backdrop = if op.blend == flui_painting::BlendMode::Plus {
             if surface_texture.is_none() {
                 return Err(crate::error::EngineError::CompositeBackdropUnavailable);
@@ -413,7 +436,10 @@ impl GpuReplay {
                     view: target_view,
                     texture: surface_texture,
                 },
-                (tile_x, tile_y),
+                (
+                    (tile_x - parent_origin.0) as u32,
+                    (tile_y - parent_origin.1) as u32,
+                ),
                 (tile_w, tile_h),
                 surface_format,
                 encoder,
@@ -521,12 +547,12 @@ impl GpuReplay {
         for batch in &mut remapped_segment.tess_batches {
             if let Some((sx, sy, sw, sh)) = batch.scissor {
                 // Tile rect in full-frame device pixels.
-                let tile_right = tile_x + tile_w;
-                let tile_bottom = tile_y + tile_h;
+                let tile_right = tile_x + i64::from(tile_w);
+                let tile_bottom = tile_y + i64::from(tile_h);
 
                 // Full-frame scissor right/bottom edges.
-                let scis_right = sx + sw;
-                let scis_bottom = sy + sh;
+                let scis_right = sx.saturating_add(i64::from(sw));
+                let scis_bottom = sy.saturating_add(i64::from(sh));
 
                 // Intersect: [max(left), max(top), min(right), min(bottom)].
                 let inter_x = sx.max(tile_x);
@@ -539,14 +565,15 @@ impl GpuReplay {
                     // should be drawn.  Use a 1×1 off-target rect as a sentinel
                     // (wgpu requires non-zero extent; clamping to attachment dims
                     // means it will simply not intersect any drawn pixels).
-                    batch.scissor = Some((supersample_w, supersample_h, 1, 1));
+                    batch.scissor =
+                        Some((i64::from(supersample_w), i64::from(supersample_h), 1, 1));
                 } else {
                     // Translate to tile-local coordinates and scale to 2× space.
                     let local_x = (inter_x - tile_x) * 2;
                     let local_y = (inter_y - tile_y) * 2;
                     let local_w = (inter_right - inter_x) * 2;
                     let local_h = (inter_bottom - inter_y) * 2;
-                    batch.scissor = Some((local_x, local_y, local_w, local_h));
+                    batch.scissor = Some((local_x, local_y, local_w as u32, local_h as u32));
                 }
             }
         }
@@ -556,7 +583,8 @@ impl GpuReplay {
         // the full 2× render target.  The shape shader's static viewport uniform
         // `(vp_w, vp_h)` combined with the pre-scaled positions produces NDC that
         // fills the tile, rendering it into the 2× texture → supersampled.
-        self.flush_segment(
+        self.attachment_origin = (0, 0);
+        let tile_result = self.flush_segment(
             &remapped_segment,
             (supersample_w, supersample_h),
             device,
@@ -565,7 +593,9 @@ impl GpuReplay {
             resources,
             encoder,
             crate::render_target::RenderTarget::sampleable(super_view, super_tex.texture()),
-        )?;
+        );
+        self.attachment_origin = parent_origin;
+        tile_result?;
 
         // ── Step 4: box-downsample 2× → 1× premultiplied tile ────────────────
         //
@@ -610,7 +640,8 @@ impl GpuReplay {
                     ..Default::default()
                 });
             }
-            self.flush_segment(
+            self.attachment_origin = (0, 0);
+            let membership_result = self.flush_segment(
                 &membership,
                 (supersample_w, supersample_h),
                 device,
@@ -622,7 +653,9 @@ impl GpuReplay {
                     supersampled.view(),
                     supersampled.texture(),
                 ),
-            )?;
+            );
+            self.attachment_origin = parent_origin;
+            membership_result?;
             Some(self.downsample_ssaa_tile(
                 &supersampled,
                 supersample_w,
@@ -684,6 +717,7 @@ impl GpuReplay {
                     clip: None,
                 };
                 self.prepare_viewport_binding(device, pipelines, resources)?;
+                self.admit_filter_composite(viewport_size, surface_format, resources)?;
                 flush_advanced_layer(
                     blend_op,
                     surf_tex,
@@ -695,6 +729,7 @@ impl GpuReplay {
                     device,
                     encoder,
                     Some(&self.viewport_bind_group),
+                    self.attachment_origin,
                 );
                 tracing::trace!(
                     mode = ?op.blend,

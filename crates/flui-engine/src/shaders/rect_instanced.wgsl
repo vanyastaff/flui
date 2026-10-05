@@ -69,7 +69,7 @@ struct VertexOutput {
 // Viewport uniform (for screen-space to clip-space conversion)
 struct Viewport {
     size: vec2<f32>,      // Viewport size in pixels
-    _padding: vec2<f32>,
+    root_origin: vec2<f32>,
 }
 
 @group(0) @binding(0)
@@ -134,8 +134,8 @@ fn vs_main(
     let device_pos = m * local_pos + instance.transform_translate.xy;
 
     // Convert device pixels to clip space [-1, 1].
-    let clip_x = (device_pos.x / viewport.size.x) * 2.0 - 1.0;
-    let clip_y = 1.0 - (device_pos.y / viewport.size.y) * 2.0; // flip Y
+    let clip_x = ((device_pos.x - viewport.root_origin.x) / viewport.size.x) * 2.0 - 1.0;
+    let clip_y = 1.0 - ((device_pos.y - viewport.root_origin.y) / viewport.size.y) * 2.0; // flip Y
 
     out.position = vec4<f32>(clip_x, clip_y, 0.0, 1.0);
     out.color = instance.color;

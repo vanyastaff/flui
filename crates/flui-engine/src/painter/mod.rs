@@ -11,7 +11,7 @@
 use std::sync::Arc;
 
 use crate::{
-    command_ir::{DrawItem, DrawSegment, ImageFilterPass},
+    command_ir::{DrawItem, DrawSegment},
     glyph_atlas::{GlyphAtlas, TextAtlas},
     layer_compositor::LayerCompositor,
     pipeline_set::PipelineSet,
@@ -136,6 +136,7 @@ impl WgpuPainter {
         self.state.reset();
         self.compositor.reset();
         self.suppressed_layer_depth = 0;
+        self.replay.update_viewport(self.size.0, self.size.1);
         self.frame_scope = None;
     }
     /// Create a new GPU painter
@@ -309,6 +310,9 @@ impl WgpuPainter {
         self.state.reset();
         self.compositor.reset();
         self.suppressed_layer_depth = 0;
+
+        // A contained replay panic can bypass a nested attachment restore.
+        self.replay.update_viewport(self.size.0, self.size.1);
 
         tracing::trace!("WgpuPainter::reset_frame_state: per-frame state cleared");
     }
@@ -646,41 +650,6 @@ mod submission;
 mod transform_clip;
 
 // ─── Shared growth helper ─────────────────────────────────────────────────────
-
-/// Compute the total grown-bounds expansion in pixels for a pass chain.
-///
-/// Each growing pass expands the filter halo by its radius; bounds-preserving
-/// passes contribute 0.  Summing the per-pass contributions is the correct
-/// conservative bound: each growing pass enlarges the halo of the result of all
-/// prior passes, so radii compose additively (inner→outer bounds
-/// chaining).
-///
-/// ## Exhaustiveness
-///
-/// The `match` has **no `_` catch-all** — the compiler forces a new arm here
-/// whenever a new [`ImageFilterPass`] variant is added (same discipline as
-/// `apply_image_filter_passes` in `opacity_layer.rs`).
-///
-/// ## Formulas
-///
-/// - [`ImageFilterPass::Blur`] → `kernel_radius(max(sigma_x, sigma_y)) as f32`
-///   (the conservative per-axis pad used by the standalone Blur arm, PINNED #2).
-/// - [`ImageFilterPass::Morph`] → `radius.ceil()` (pixel expansion per `restore_layer`).
-/// - [`ImageFilterPass::ColorMatrix`] → `0.0` (full-viewport REPLACE, no growth).
-/// - [`ImageFilterPass::Identity`] → `0.0` (passthrough, no growth).
-pub(super) fn cumulative_growth(passes: &[ImageFilterPass]) -> f32 {
-    passes
-        .iter()
-        .map(|pass| match pass {
-            ImageFilterPass::Blur { sigma_x, sigma_y } => {
-                crate::effects::kernel_radius(sigma_x.max(*sigma_y)) as f32
-            }
-            ImageFilterPass::Morph { radius, .. } => radius.ceil(),
-            // Both are bounds-PRESERVING: neither grows the filter extent.
-            ImageFilterPass::ColorMatrix(_) | ImageFilterPass::Identity => 0.0,
-        })
-        .sum()
-}
 
 #[cfg(all(test, feature = "testing"))]
 mod tests;

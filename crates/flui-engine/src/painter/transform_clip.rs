@@ -186,13 +186,12 @@ impl WgpuPainter {
     /// subject to it, so nothing the offscreen holds can fall outside.
     pub(crate) fn clip_bounds(&self) -> Rect<f64> {
         self.state.current_scissor().map_or_else(
-            || {
-                Rect::from_xywh(
-                    0.0,
-                    0.0,
-                    f64::from(self.size.0 as f32),
-                    f64::from(self.size.1 as f32),
-                )
+            || match self.filter_desired_output() {
+                Ok(bounds) => bounds,
+                Err(error) => {
+                    self.current_segment.budget.record_error(error);
+                    Rect::ZERO
+                }
             },
             |(x, y, width, height)| {
                 Rect::from_xywh(

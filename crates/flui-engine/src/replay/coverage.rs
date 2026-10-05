@@ -85,6 +85,7 @@ fn crop(
     uniform: (u32, u32),
     viewport: (u32, u32),
     scissor: ScissorRect,
+    origin: (i64, i64),
 ) -> Option<CoverageCrop> {
     let mut bounds = [
         f64::INFINITY,
@@ -93,15 +94,19 @@ fn crop(
         f64::NEG_INFINITY,
     ];
     for point in points {
-        let x = f64::from(point[0]) * f64::from(viewport.0) / f64::from(uniform.0);
-        let y = f64::from(point[1]) * f64::from(viewport.1) / f64::from(uniform.1);
+        let x =
+            (f64::from(point[0]) - origin.0 as f64) * f64::from(viewport.0) / f64::from(uniform.0);
+        let y =
+            (f64::from(point[1]) - origin.1 as f64) * f64::from(viewport.1) / f64::from(uniform.1);
         bounds[0] = bounds[0].min(x);
         bounds[1] = bounds[1].min(y);
         bounds[2] = bounds[2].max(x);
         bounds[3] = bounds[3].max(y);
     }
     let cut = match scissor {
-        Some((x, y, w, h)) => clamp_scissor_to_attachment(x, y, w, h, viewport.0, viewport.1)?,
+        Some((x, y, w, h)) => {
+            clamp_scissor_to_attachment(x, y, w, h, viewport.0, viewport.1, origin)?
+        }
         None => (0, 0, viewport.0, viewport.1),
     };
     let left = (bounds[0].floor() - 1.0).max(f64::from(cut.0));
@@ -225,6 +230,7 @@ impl GpuReplay {
                     self.uniform_size,
                     viewport,
                     *scissor,
+                    self.attachment_origin,
                 ) else {
                     continue;
                 };
@@ -313,7 +319,13 @@ impl GpuReplay {
                     [batch.index_start as usize..(batch.index_start + batch.index_count) as usize]
                     .iter()
                     .map(|index| segment.vertices[*index as usize].position);
-                let Some(crop) = crop(points, self.uniform_size, viewport, batch.scissor) else {
+                let Some(crop) = crop(
+                    points,
+                    self.uniform_size,
+                    viewport,
+                    batch.scissor,
+                    self.attachment_origin,
+                ) else {
                     continue;
                 };
                 let region = crop.region;
@@ -410,7 +422,13 @@ impl GpuReplay {
                     wgpu::IndexFormat::Uint16,
                 );
                 pass.set_viewport(0.0, 0.0, viewport.0 as f32, viewport.1 as f32, 0.0, 1.0);
-                if set_clamped_scissor(&mut pass, run.scissor, viewport.0, viewport.1) {
+                if set_clamped_scissor(
+                    &mut pass,
+                    run.scissor,
+                    viewport.0,
+                    viewport.1,
+                    self.attachment_origin,
+                ) {
                     pass.draw_indexed(0..6, 0, start as u32..end as u32);
                 }
                 continue;
@@ -432,6 +450,7 @@ impl GpuReplay {
                     self.uniform_size,
                     viewport,
                     run.scissor,
+                    self.attachment_origin,
                 ) else {
                     continue;
                 };

@@ -29,8 +29,8 @@ impl GpuReplay {
         let viewport = [
             self.uniform_size.0 as f32,
             self.uniform_size.1 as f32,
-            0.0,
-            0.0,
+            self.attachment_origin.0 as f32,
+            self.attachment_origin.1 as f32,
         ];
         let viewport_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Immutable clip viewport"),
@@ -84,7 +84,10 @@ impl GpuReplay {
                 false,
             );
         }
-        let m = segment.attachment_to_root;
+        let mut m = segment.attachment_to_root;
+        let (x, y) = self.attachment_origin;
+        m[4] += m[0] * x as f64 + m[2] * y as f64;
+        m[5] += m[1] * x as f64 + m[3] * y as f64;
         if m.iter().any(|v| !v.is_finite()) {
             return Err(GeometryError::NonFinite {
                 context: "clip attachment mapping",
