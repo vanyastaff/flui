@@ -581,6 +581,10 @@ fn drag_callback_ownership_and_retirement() {
             "stop sweep reentry failure",
             stop_tracking_preserves_reentrant_contact_after_sweep_failure,
         ),
+        (
+            "stop sweep accepts drag",
+            stop_tracking_pointer_sweep_starts_the_unresolved_drag,
+        ),
     ];
     if let Ok(selected) = std::env::var(SELECTED) {
         cases
@@ -1143,6 +1147,53 @@ fn drag_completion_commits_tracking_before_stop_diagnostics() {
     fresh_drag_completes_after_retirement();
 }
 
+fn stop_tracking_pointer_sweep_starts_the_unresolved_drag() {
+    use flui_interaction::arena::GestureArena;
+    use flui_interaction::recognizers::OneSequenceGestureRecognizer;
+    use flui_interaction::sealed::CustomGestureRecognizer;
+    use flui_interaction::{DragAxis, DragGestureRecognizer, GestureRecognizer, Offset, PointerId};
+    use std::cell::Cell;
+    use std::rc::Rc;
+    use std::sync::Arc;
+
+    struct Rival(Rc<Cell<usize>>);
+    impl CustomGestureRecognizer for Rival {
+        fn on_arena_accept(&self, _: PointerId) {
+            panic!("the sweep accepts the front member");
+        }
+        fn on_arena_reject(&self, _: PointerId) {
+            self.0.set(self.0.get() + 1);
+        }
+    }
+
+    let arena = GestureArena::new();
+    let starts = Rc::new(Cell::new(0));
+    let observed = starts.clone();
+    let recognizer = DragGestureRecognizer::new(arena.clone(), DragAxis::Horizontal)
+        .with_on_start(move |_| observed.set(observed.get() + 1));
+    recognizer.add_pointer(PointerId::PRIMARY, Offset::ZERO, Offset::ZERO);
+    let rejections = Rc::new(Cell::new(0));
+    #[expect(
+        clippy::arc_with_non_send_sync,
+        reason = "the owner-local arena takes its members through Arc identity"
+    )]
+    let rival = Arc::new(Rival(rejections.clone()));
+    arena.add(PointerId::PRIMARY, rival);
+    arena.close(PointerId::PRIMARY);
+    assert_eq!(starts.get(), 0, "the competition is still open");
+
+    recognizer.stop_tracking_pointer(PointerId::PRIMARY);
+    assert_eq!(
+        (starts.get(), rejections.get()),
+        (1, 1),
+        "the sweep accepts the retiring drag and starts it"
+    );
+    assert!(recognizer.primary_pointer().is_none());
+    assert!(arena.is_empty());
+    recognizer.dispose();
+    fresh_drag_completes_after_retirement();
+}
+
 fn stop_tracking_preserves_reentrant_contact_after_sweep() {
     assert_stop_tracking_preserves_reentrant_contact(false);
 }
@@ -1187,13 +1238,10 @@ fn assert_stop_tracking_preserves_reentrant_contact(fail_after_admission: bool) 
             reason = "reentrant admission uses the owner-local arena API's required Arc member identity"
         )]
         fn on_arena_accept(&self, pointer: PointerId) {
-            assert!(
-                self.base.primary_pointer().is_none(),
-                "old contact withdrawn before sweep callback"
-            );
-            assert!(
-                self.base.tracked_entry().is_none(),
-                "old entry withdrawn before sweep callback"
+            assert_eq!(
+                self.base.primary_pointer(),
+                Some(pointer),
+                "the retiring contact stays visible to its sweep resolution"
             );
             let next = Arc::new(NextContact(self.next_accepts.clone()));
             // Reuse the platform pointer ID while the old exact-generation
