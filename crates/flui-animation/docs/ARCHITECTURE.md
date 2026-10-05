@@ -258,7 +258,8 @@ is accepted, so a constructor that fails later still detaches it. After the
 first destructor failure in a retirement, or while the thread is already
 panicking, the remaining owned values are retained rather than dropped
 ([ADR-0127](../../../docs/adr/ADR-0127-exceptional-path-retention.md)); the
-first failure propagates. A clone that is not the last owner drops normally.
+first failure propagates. Callbacks are thread-shared `Arc`s, so a snapshot
+clone cannot be proven non-last and is retained too.
 Tested by `controller_sources_allow_reentry_and_preserve_run_ownership`.
 
 `Split` keeps both curves in private fields, behind checked construction and
