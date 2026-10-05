@@ -10,13 +10,11 @@ decisions` entries below; a full crate architecture writeup is deferred.
 
 ### Ticker cancellation precedes terminal callback retirement
 
-Final ticker destruction withdraws its callback and publishes pending scheduler
-cancellation before retiring opaque ownership. An incoming unwind retains the
-callback instead of running its destructor; an ordinary failure preserves the
-first panic without leaving its pending registration live. Healthy final-owner
-retirement remains destructive. The public animation family
-`controller_sources_allow_reentry_and_preserve_run_ownership` drives a real ticker,
-its pending scheduler entry, competing callback destruction and the next owner.
+Disposing, stopping or resetting a ticker withdraws its callback and cancels
+its pending scheduler registration before dropping the callback, so a failing
+callback destructor never leaves the registration live. While the thread is already
+panicking the callback is retained instead of dropped
+([ADR-0127](../../docs/adr/ADR-0127-exceptional-path-retention.md)).
 
 ### Post-frame panic preserves uninvoked work in its original queue
 

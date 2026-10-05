@@ -248,30 +248,24 @@ fn tick(&self, delta: Duration) {
 
 ## Mapping decisions
 
-### Terminal owners retire independently and secure incoming construction
+### Terminal owners retire outside their guards
 
-The actual shared controller, proxy-status and switch owners withdraw separately
-owned callbacks, simulations, curves and subscriptions before retirement. User
-parent removal and queries run outside internal guards, with owning envelopes
-held outside containment. Accepted registrations enter custody immediately so a
-later constructor failure can detach them. The first failure remains authoritative;
-incoming unwind and a failed retirement retain untouched owners. Healthy ordinary
-destruction still runs, and independent aliases keep their physical shared owners.
+Controllers, proxies, curved animations and switches withdraw their callbacks,
+simulations, curves and subscriptions from shared state before dropping them, so
+no destructor runs under an internal lock. User parent removal and queries also
+run outside those locks. A registration is owned by the animation as soon as it
+is accepted, so a constructor that fails later still detaches it. After the
+first destructor failure in a retirement, or while the thread is already
+panicking, the remaining owned values are retained rather than dropped
+([ADR-0127](../../../docs/adr/ADR-0127-exceptional-path-retention.md)); the
+first failure propagates. A clone that is not the last owner drops normally.
+Tested by `controller_sources_allow_reentry_and_preserve_run_ownership`.
 
-`Split` privately guards both curves, including constructor arguments, partial
-clones and partial deserialization. It keeps checked construction and its serde
-field names, supplies borrowed accessors, and retains conditional `Clone`; its
-former public fields and conditional `Copy` are deliberately removed. Migrate
-field literals or mutation to `with_curves` and accessors, and copies to explicit
-clones. Pending decoded curves are committed only after complete valid decoding,
-so a hostile partial value cannot replace the decoding or range error.
-
-The public `controller_sources_allow_reentry_and_preserve_run_ownership` family
-tests these actual producers with bounded subprocess failure competition,
-partial construction, surviving aliases and subsequent healthy operations.
-Its serde rows require that feature. A single opaque user aggregate can still
-double-panic internally before containment regains control; these guarantees
-cover separately owned framework obligations, not arbitrary user destruction.
+`Split` keeps both curves in private fields, behind checked construction and
+the borrowed accessors `split()`, `begin_curve()` and `end_curve()`. It is
+`Clone` but no longer `Copy`, and keeps its serde field names. Deserialization
+commits decoded curves only once the whole value is valid, so a failing partial
+value cannot replace the decoding or range error.
 
 ### `AnimationController` owns the one future each run resolves
 

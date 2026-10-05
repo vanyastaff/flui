@@ -1,6 +1,6 @@
 ### Fixed
 
-- Animation controllers, proxies, curved animations, switches and tickers withdraw owned callbacks, curves and subscriptions before terminal retirement. Independent remaining captures are retained after the first destructor failure or during an existing unwind; healthy destruction and shared aliases retain their normal behavior.
+- Animation controllers, proxies, curved animations, switches and tickers withdraw owned callbacks, curves and subscriptions before dropping them. After the first destructor failure, or while the thread is already panicking, the remaining values are retained and never dropped (ADR-0127); healthy destruction is unchanged.
 
 ### Changed
 

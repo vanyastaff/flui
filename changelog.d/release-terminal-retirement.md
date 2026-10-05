@@ -1,2 +1,2 @@
 ### Fixed
-- Navigator, router and overlay owners preserve the first terminal destructor failure, retain competing outgoing ownership during unwind, and retire healthy values normally. Installed routes no longer retain themselves through navigator registry bindings; surviving local handles retain their own state.
+- Navigator, router and overlay owners drop route, entry and result values outside their locks and propagate the first destructor failure. After that failure, or while the thread is already panicking, the remaining values are retained and never dropped (ADR-0127); healthy destruction is unchanged. Installed routes no longer keep themselves alive through navigator registry bindings, and a handle that outlives its navigator keeps only its own state.
