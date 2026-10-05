@@ -274,7 +274,7 @@ impl ViewState<AnimatedBoxDemo> for AnimatedBoxDemoState {
 
     fn dispose(&mut self) {
         if let Some((vsync, registration)) = self.registration.take() {
-            vsync.unregister(registration);
+            vsync.unregister(&registration);
         }
     }
 

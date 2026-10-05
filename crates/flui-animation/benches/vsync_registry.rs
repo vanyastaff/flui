@@ -137,7 +137,7 @@ fn unregister_all(criterion: &mut Criterion) {
                 },
                 |(vsync, registrations, retained)| {
                     for registration in registrations {
-                        vsync.unregister(black_box(registration));
+                        vsync.unregister(black_box(&registration));
                     }
                     // Moved out, not dropped here: see the doc comment above.
                     (vsync, retained)

@@ -27,19 +27,48 @@
 //! second run's own start instead of snapping to its target on the first frame.
 
 use std::collections::BTreeMap;
-use std::sync::Arc;
+use std::hash::{Hash, Hasher};
+use std::sync::{Arc, Weak};
 
 use parking_lot::Mutex;
 
 use crate::AnimationController;
+use crate::animation::Terminal;
 
 /// Opaque handle identifying one controller registered with a [`Vsync`].
 ///
 /// Returned by [`Vsync::register`]; pass it to [`Vsync::unregister`] when the
 /// owner (typically an implicitly-animated widget's state in `dispose`) is torn
 /// down, so the registry does not pin the controller alive past its widget.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct VsyncRegistration(u64);
+#[derive(Debug, Clone)]
+pub struct VsyncRegistration {
+    owner: Weak<Mutex<VsyncInner>>,
+    slot: u64,
+}
+
+impl PartialEq for VsyncRegistration {
+    fn eq(&self, other: &Self) -> bool {
+        self.slot == other.slot && Weak::ptr_eq(&self.owner, &other.owner)
+    }
+}
+
+impl Eq for VsyncRegistration {}
+
+impl Hash for VsyncRegistration {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.owner.as_ptr().hash(state);
+        self.slot.hash(state);
+    }
+}
+
+/// A controller could not be admitted to a virtual frame registry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
+pub enum VsyncRegistrationError {
+    /// The registry permanently consumed its available registration identities.
+    #[error("Vsync registration capacity exhausted")]
+    Exhausted,
+}
 
 /// Seconds from `start` to `now`, both readings of a nanosecond clock, taken on
 /// that clock's integer grid.
@@ -74,7 +103,7 @@ struct RegisteredController {
 /// A nested registry: a `TickerMode`'s subtree registry, ticked through its
 /// parent unless the parent is muted.
 struct RegisteredChild {
-    id: VsyncRegistration,
+    slot: u64,
     child: Vsync,
 }
 
@@ -94,6 +123,13 @@ struct VsyncInner {
     children: Vec<RegisteredChild>,
     next_id: u64,
     muted: bool,
+}
+
+impl VsyncInner {
+    fn reserve_slot(&mut self) -> Option<u64> {
+        let next = self.next_id.checked_add(1)?;
+        Some(std::mem::replace(&mut self.next_id, next))
+    }
 }
 
 /// A shared, restart-aware controller registry driven once per frame.
@@ -122,26 +158,60 @@ impl Vsync {
     /// `run_generation`), so this needs no clock reading and the common
     /// register-then-`forward` order anchors `t = 0` cleanly on the first frame
     /// the new run is observed.
+    ///
+    /// # Panics
+    ///
+    /// Panics permanently after all available registration identities have been
+    /// consumed. Use [`try_register`](Self::try_register) for typed refusal.
     pub fn register(&self, controller: AnimationController) -> VsyncRegistration {
-        let mut inner = self.inner.lock();
-        let id = inner.next_id;
-        inner.next_id += 1;
+        let controller = Terminal::new(controller);
+        match self.try_register(controller.get()) {
+            Ok(registration) => registration,
+            Err(VsyncRegistrationError::Exhausted) => {
+                panic!("Vsync registration capacity exhausted");
+            }
+        }
+    }
+
+    /// Register a borrowed controller, reporting permanent identity exhaustion.
+    ///
+    /// A refusal leaves the controller and every admitted registration intact.
+    pub fn try_register(
+        &self,
+        controller: &AnimationController,
+    ) -> Result<VsyncRegistration, VsyncRegistrationError> {
         let last_gen = controller.run_generation();
+        let mut inner = self.inner.lock();
+        let id = inner
+            .reserve_slot()
+            .ok_or(VsyncRegistrationError::Exhausted)?;
         inner.controllers.insert(
             id,
             RegisteredController {
-                controller,
+                controller: controller.clone(),
                 run_start_secs: None,
                 last_gen,
             },
         );
-        VsyncRegistration(id)
+        Ok(VsyncRegistration {
+            owner: Arc::downgrade(&self.inner),
+            slot: id,
+        })
     }
 
     /// Remove the controller previously registered under `id`. Idempotent: an
     /// unknown or already-removed id is a no-op.
-    pub fn unregister(&self, id: VsyncRegistration) {
-        self.inner.lock().controllers.remove(&id.0);
+    pub fn unregister(&self, id: &VsyncRegistration) {
+        if !Weak::ptr_eq(&id.owner, &Arc::downgrade(&self.inner)) {
+            return;
+        }
+        let removed = {
+            let mut inner = self.inner.lock();
+            inner.controllers.remove(&id.slot)
+        };
+        // The last controller owner can retire user captures that reenter this
+        // registry. Its registration is absent and the guard is released first.
+        drop(removed);
     }
 
     /// Nest `child` under this registry: [`tick_all`](Self::tick_all) forwards
@@ -150,6 +220,7 @@ impl Vsync {
     /// A cycle would hang the tick walk; nesting a registry under itself (or
     /// under one of its own descendants) is a caller bug, so it is refused and
     /// logged rather than linked.
+    /// A registry whose identities are exhausted also refuses attachment.
     pub fn attach_child(&self, child: &Vsync) -> Option<VsyncRegistration> {
         if child.contains(self) {
             tracing::error!(
@@ -159,18 +230,33 @@ impl Vsync {
             return None;
         }
         let mut inner = self.inner.lock();
-        let id = VsyncRegistration(inner.next_id);
-        inner.next_id += 1;
+        let slot = inner.reserve_slot()?;
         inner.children.push(RegisteredChild {
-            id,
+            slot,
             child: child.clone(),
         });
-        Some(id)
+        Some(VsyncRegistration {
+            owner: Arc::downgrade(&self.inner),
+            slot,
+        })
     }
 
     /// Detach the child registry previously attached under `id`. Idempotent.
-    pub fn detach_child(&self, id: VsyncRegistration) {
-        self.inner.lock().children.retain(|c| c.id != id);
+    pub fn detach_child(&self, id: &VsyncRegistration) {
+        if !Weak::ptr_eq(&id.owner, &Arc::downgrade(&self.inner)) {
+            return;
+        }
+        let removed = {
+            let mut inner = self.inner.lock();
+            inner
+                .children
+                .iter()
+                .position(|child| child.slot == id.slot)
+                .map(|index| inner.children.remove(index))
+        };
+        // Removing one child preserves the remaining registration order. Its
+        // last controller captures must retire after releasing the parent guard.
+        drop(removed);
     }
 
     /// Whether both handles name the **same** registry (`Arc` identity) — how a
@@ -541,7 +627,7 @@ mod tests {
             if status == AnimationStatus::Completed
                 && let Some(registration) = slot_for_listener.lock().take()
             {
-                vsync_for_listener.unregister(registration);
+                vsync_for_listener.unregister(&registration);
             }
         }));
 
@@ -555,9 +641,142 @@ mod tests {
         controller.dispose();
     }
 
+    fn registration_exhaustion_preserves_admitted_work() {
+        for (remaining, child_last) in [(1, false), (1, true), (2, false), (2, true)] {
+            let registry = Vsync::new();
+            // Only the counter boundary requires private setup. Every admission,
+            // refusal, removal and tick below uses the production public API.
+            registry.inner.lock().next_id = u64::MAX - remaining;
+            let preceding = AnimationController::without_ticker(Duration::from_secs(1));
+            let preceding_child = Vsync::new();
+            let preceding_id = if remaining == 2 {
+                let id = if child_last {
+                    registry.register(preceding.clone())
+                } else {
+                    preceding_child.register(preceding.clone());
+                    registry
+                        .attach_child(&preceding_child)
+                        .expect("penultimate child identity admitted")
+                };
+                preceding
+                    .forward()
+                    .expect("penultimate admitted run starts");
+                Some(id)
+            } else {
+                None
+            };
+            let child = Vsync::new();
+            let animation = AnimationController::without_ticker(Duration::from_secs(1));
+            let last = if child_last {
+                child.register(animation.clone());
+                registry
+                    .attach_child(&child)
+                    .expect("last child identity admitted")
+            } else {
+                registry
+                    .try_register(&animation)
+                    .expect("last controller identity admitted")
+            };
+            animation.forward().expect("last admitted run starts");
+            let refused = AnimationController::without_ticker(Duration::from_secs(1));
+            for handle in [&registry, &registry.clone()] {
+                assert_eq!(
+                    handle.try_register(&refused),
+                    Err(VsyncRegistrationError::Exhausted)
+                );
+                assert!(handle.attach_child(&Vsync::new()).is_none());
+            }
+            registry.tick_all(0.0);
+            registry.tick_all(0.5);
+            assert_eq!(
+                animation.value(),
+                0.5,
+                "final slot remains in the exclusive fence"
+            );
+            if preceding_id.is_some() {
+                assert_eq!(
+                    preceding.value(),
+                    0.5,
+                    "mixed preceding admission remains deliverable"
+                );
+            }
+            registry.tick_all(1.0);
+            assert_eq!(
+                animation.value(),
+                1.0,
+                "last admitted run makes progress after refusal"
+            );
+            assert!(!registry.has_running());
+            if let Some(preceding_id) = preceding_id {
+                assert_eq!(preceding.value(), 1.0, "both mixed admissions complete");
+                registry.unregister(&preceding_id);
+                registry.detach_child(&preceding_id);
+            }
+            registry.unregister(&last);
+            registry.detach_child(&last);
+            assert_eq!(
+                registry.try_register(&refused),
+                Err(VsyncRegistrationError::Exhausted)
+            );
+            assert!(
+                registry.attach_child(&child).is_none(),
+                "removal cannot reset exhaustion"
+            );
+
+            struct RejectedCapture(Arc<std::sync::atomic::AtomicUsize>);
+            impl Drop for RejectedCapture {
+                fn drop(&mut self) {
+                    self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    panic!("rejected controller capture");
+                }
+            }
+            let drops = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let rejected = AnimationController::without_ticker(Duration::from_secs(1));
+            let probe = RejectedCapture(drops.clone());
+            rejected.add_status_listener(Arc::new(move |_| {
+                let _capture = &probe;
+            }));
+            let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                registry.register(rejected)
+            }))
+            .expect_err("owned wrapper preserves intentional exhaustion panic");
+            assert_eq!(
+                flui_foundation::panic::payload_text(failure.as_ref()),
+                Some("Vsync registration capacity exhausted")
+            );
+            flui_foundation::panic::retain_opaque_payload(failure);
+            assert_eq!(
+                drops.load(std::sync::atomic::Ordering::SeqCst),
+                0,
+                "rejected opaque owner retained during exhaustion unwind"
+            );
+            assert_eq!(
+                registry.try_register(&refused),
+                Err(VsyncRegistrationError::Exhausted)
+            );
+            let fresh = Vsync::new();
+            let fresh_id = fresh
+                .try_register(&refused)
+                .expect("independent registry still admits");
+            refused.forward().expect("fresh run");
+            fresh.tick_all(0.0);
+            fresh.tick_all(1.0);
+            assert_eq!(
+                refused.value(),
+                1.0,
+                "fresh registry advances after contained failure"
+            );
+            fresh.unregister(&fresh_id);
+        }
+    }
+
     #[test]
     fn vsync_nesting_and_reentrancy() {
         crate::test_cases::run_cases(&[
+            (
+                "registration exhaustion preserves admitted work",
+                registration_exhaustion_preserves_admitted_work,
+            ),
             (
                 "a muted ancestor starves an unmuted descendant",
                 a_muted_ancestor_starves_an_unmuted_descendant,

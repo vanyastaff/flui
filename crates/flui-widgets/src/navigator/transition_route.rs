@@ -769,7 +769,7 @@ impl<T: Send + Clone + 'static> Route for TransitionRoute<T> {
         if let Some((vsync, registration)) = vsync_registration {
             // `VsyncRegistration` has no `Drop`; a missed unregister keeps a
             // disposed route's controller ticking forever.
-            vsync.unregister(registration);
+            vsync.unregister(&registration);
         }
 
         if let Some(controller) = self.inner.controller.lock().take()

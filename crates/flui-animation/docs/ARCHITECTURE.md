@@ -49,6 +49,23 @@ src/
 
 ## Core Abstractions
 
+### Registry removal releases ownership outside the mutex
+
+Removing a controller or child registry first withdraws its owned value under
+the registry mutex, then retires that value after unlocking. A last-owner
+destructor may reenter the same registry, remove the same identity, or register
+fresh work. Child removal preserves the tick order of surviving children.
+
+The existing `controller_sources_allow_reentry_and_preserve_run_ownership`
+family covers ordinary and panicking last-owner retirement through public
+registry handles, including fresh work and surviving virtual-clock ticks.
+ADR-0125 binds registration tokens to weak backend identity and one monotonic
+controller/child namespace. Foreign and stale tokens cannot remove accepted work;
+capacity refusal is permanent. The public controller-source family covers token
+authority, and `vsync_nesting_and_reentrancy` covers the terminal counter through
+actual admission and ticks. Whole-registry aggregate destruction is a separate
+boundary.
+
 ### Animation<T> Trait
 
 The central abstraction:

@@ -261,7 +261,7 @@ impl InkWellState {
     fn cancel_pending_deactivation(pending: &Rc<RefCell<Option<PendingDeactivation>>>) {
         let taken = pending.borrow_mut().take();
         if let Some(previous) = taken {
-            previous.vsync.unregister(previous.registration);
+            previous.vsync.unregister(&previous.registration);
             previous.controller.dispose();
         }
     }
@@ -542,7 +542,7 @@ fn begin_press_deactivation(
 
     if let Err(error) = controller.forward_from(Some(0.0)) {
         tracing::debug!(?error, "InkWell press-deactivation timer failed to start");
-        vsync.unregister(registration);
+        vsync.unregister(&registration);
         states.update(WidgetState::Pressed, false);
         return;
     }

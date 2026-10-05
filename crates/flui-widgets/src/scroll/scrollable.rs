@@ -818,7 +818,7 @@ impl ViewState<Scrollable> for ScrollableState {
         if let (Some(vsync), Some(registration)) =
             (self.vsync.take(), self.vsync_registration.take())
         {
-            vsync.unregister(registration);
+            vsync.unregister(&registration);
         }
         // Detach the ADR-0037 stop hook and drop any not-yet-serviced
         // pending command — without this, the user-held `ScrollController`

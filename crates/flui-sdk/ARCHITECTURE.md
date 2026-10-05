@@ -130,3 +130,7 @@ ADR-0124 adds controlled `Slider` and `Disclosure`, their state types,
 `ExpansionState`, and checked `NumericRange` configuration through the existing
 whole-widget-module export. `surface` names these items as representative
 package-author surface; no new framework dependency is required by a package.
+
+ADR-0125 exposes `animation::VsyncRegistrationError` through the existing whole
+animation-module export. The surface list pins this typed admission refusal;
+package lifecycle owners borrow registration tokens when removing work.
