@@ -459,13 +459,15 @@ fn run_platform_ownership_child(kind: &str) {
     let bridge_drops = Arc::new(AtomicUsize::new(0));
     let external_window = Arc::new(parking_lot::Mutex::new(None));
     let external_bridge = Arc::new(parking_lot::Mutex::new(None));
+    // The window and the bridge are framework-owned (ADR-0127): close
+    // releases them even after a failure, so their captures must drop.
     let bundle = |counts: &Arc<AtomicUsize>| DropCompetition {
         first: CursorCapture {
-            fail: !healthy,
+            fail: false,
             drops: Arc::clone(counts),
         },
         second: CursorCapture {
-            fail: !healthy,
+            fail: false,
             drops: Arc::clone(counts),
         },
     };
@@ -533,11 +535,13 @@ fn run_platform_ownership_child(kind: &str) {
     }
     assert_eq!(
         window_drops.load(Ordering::Relaxed),
-        if healthy { 2 } else { 0 }
+        2,
+        "close releases the platform window"
     );
     assert_eq!(
         bridge_drops.load(Ordering::Relaxed),
-        if healthy { 2 } else { 0 }
+        2,
+        "close releases the accessibility bridge"
     );
     assert!(external_window.lock().is_none());
     assert!(external_bridge.lock().is_none());

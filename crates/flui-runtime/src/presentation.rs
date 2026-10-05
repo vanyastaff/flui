@@ -1488,7 +1488,7 @@ impl PresentationState {
         lane: Option<&flui_interaction::InteractionLane>,
     ) {
         use flui_interaction::__runtime::{
-            CloseMode, close_focus, close_gestures, close_mouse_tracker, close_text_input,
+            close_focus, close_gestures, close_mouse_tracker, close_text_input,
         };
         let mut failure = PresentationCloseRecovery::new(mode, &self.close_mode);
 
@@ -1497,19 +1497,7 @@ impl PresentationState {
             PresentationLifecycle::Closing | PresentationLifecycle::Closed
         ) {
             if failure.preserving() {
-                failure.invoke(|| self.widgets.withdraw_root_owner(true));
-                failure.invoke(|| close_gestures(&self.gestures, CloseMode::PreservingFailure));
-                failure.invoke(|| {
-                    close_mouse_tracker(
-                        self.gestures.mouse_tracker(),
-                        CloseMode::PreservingFailure,
-                    );
-                });
-                failure.invoke(|| close_focus(&self.focus, CloseMode::PreservingFailure));
-                failure.invoke(|| close_text_input(&self.text_input, CloseMode::PreservingFailure));
-                failure.invoke(|| {
-                    self.close_interaction_with_mode(lane, CloseMode::PreservingFailure);
-                });
+                self.withdraw_retained_ownership(&mut failure, lane);
             }
             failure.finish();
             return;
@@ -1566,26 +1554,45 @@ impl PresentationState {
             });
         }
 
-        let preserving = failure.preserving();
-        failure.invoke(|| self.widgets.withdraw_root_owner(preserving));
-        failure.run(|| self.widgets.detach_root_widget());
-        failure.retire(bridge);
-        failure.retire(window);
-        if failure.preserving() {
-            // A partial healthy disposal may itself fail; remaining element
-            // ownership then belongs to the retained terminal envelope too.
-            failure.invoke(|| self.widgets.withdraw_root_owner(true));
-            failure.invoke(|| close_gestures(&self.gestures, CloseMode::PreservingFailure));
-            failure.invoke(|| {
-                close_mouse_tracker(self.gestures.mouse_tracker(), CloseMode::PreservingFailure);
-            });
-            failure.invoke(|| close_focus(&self.focus, CloseMode::PreservingFailure));
-            failure.invoke(|| close_text_input(&self.text_input, CloseMode::PreservingFailure));
-            failure.invoke(|| self.close_interaction_with_mode(lane, CloseMode::PreservingFailure));
+        if !failure.preserving() {
+            failure.invoke(|| self.widgets.withdraw_root_owner(false));
+            failure.run(|| self.widgets.detach_root_widget());
         }
+        // Reached in preserving mode, or when the healthy disposal above
+        // failed part way: what the tree still owns is retained.
+        if failure.preserving() {
+            self.withdraw_retained_ownership(&mut failure, lane);
+        }
+        // The window and the accessibility bridge are framework-owned: they
+        // are released even after a failure (ADR-0127).
+        failure.release(bridge);
+        failure.release(window);
 
         self.lifecycle.set(PresentationLifecycle::Closed);
         failure.finish();
+    }
+}
+
+impl PresentationState {
+    /// Withdraws the root owner and closes every input owner in preserving
+    /// mode, so the values they still hold are retained rather than dropped
+    /// (ADR-0123, ADR-0127).
+    fn withdraw_retained_ownership(
+        &self,
+        failure: &mut PresentationCloseRecovery<'_>,
+        lane: Option<&flui_interaction::InteractionLane>,
+    ) {
+        use flui_interaction::__runtime::{
+            CloseMode, close_focus, close_gestures, close_mouse_tracker, close_text_input,
+        };
+        failure.invoke(|| self.widgets.withdraw_root_owner(true));
+        failure.invoke(|| close_gestures(&self.gestures, CloseMode::PreservingFailure));
+        failure.invoke(|| {
+            close_mouse_tracker(self.gestures.mouse_tracker(), CloseMode::PreservingFailure);
+        });
+        failure.invoke(|| close_focus(&self.focus, CloseMode::PreservingFailure));
+        failure.invoke(|| close_text_input(&self.text_input, CloseMode::PreservingFailure));
+        failure.invoke(|| self.close_interaction_with_mode(lane, CloseMode::PreservingFailure));
     }
 }
 
@@ -1635,8 +1642,18 @@ impl<'a> PresentationCloseRecovery<'a> {
             self.invoke(callback);
         }
     }
+    /// Drops a user-owned value, or retains it once the close is preserving.
     fn retire<T>(&mut self, value: T) {
         if self.preserving() {
+            std::mem::forget(value);
+        } else {
+            self.invoke(|| drop(value));
+        }
+    }
+    /// Drops a framework-owned handle even after a failure; only an unwind
+    /// already in progress retains it.
+    fn release<T>(&mut self, value: T) {
+        if std::thread::panicking() {
             std::mem::forget(value);
         } else {
             self.invoke(|| drop(value));
