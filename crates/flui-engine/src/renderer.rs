@@ -2905,6 +2905,8 @@ mod tests {
     /// DPR, followers across repaint boundaries, and the shader-mask layer root.
     #[test]
     fn renderer_surface_selection_and_layer_compositing_read_back_as_specified() {
+        #[cfg(target_os = "windows")]
+        optimized_fxc_tessellated_clip_readback();
         shader_mask_external_texture_registrations_follow_parent();
         #[cfg(not(target_arch = "wasm32"))]
         quarantined_domain_reaches_the_backend_recovery_predicate();
@@ -2914,6 +2916,197 @@ mod tests {
         shader_mask_layer_root_gpu_pixel_readback_reflects_mask();
         #[cfg(feature = "gpu-profiler")]
         crate::profiler::tests::failed_frames_do_not_pollute_the_next_profile();
+    }
+
+    #[cfg(target_os = "windows")]
+    fn optimized_fxc_tessellated_clip_readback() {
+        use flui_foundation::geometry::{Point, RSuperellipse, Radius, Rect};
+        use flui_layer::{PictureLayer, Scene, SceneBuilder};
+        use flui_painting::paint::{BlendMode, Clip, ClipOp};
+        use flui_painting::{Canvas, Paint, styling::Color};
+
+        // Shader optimization is independent of the Rust build profile. In
+        // particular, DEBUG would add D3DCOMPILE_SKIP_OPTIMIZATION and hide
+        // release-only FXC failures even when the readback itself succeeds.
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+            backends: wgpu::Backends::DX12,
+            flags: wgpu::InstanceFlags::VALIDATION | wgpu::InstanceFlags::VALIDATION_INDIRECT_CALL,
+            backend_options: wgpu::BackendOptions {
+                dx12: wgpu::Dx12BackendOptions {
+                    shader_compiler: wgpu::Dx12Compiler::Fxc,
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            ..wgpu::InstanceDescriptor::new_without_display_handle()
+        });
+        let adapter = pollster::block_on(instance.request_adapter(
+            &crate::adapter::trusted_adapter_options(wgpu::PowerPreference::HighPerformance, None),
+        ))
+        .expect("optimized FXC contract requires an actual DX12 adapter");
+        assert_eq!(adapter.get_info().backend, wgpu::Backend::Dx12);
+        let capabilities = GpuCapabilities::detect(&adapter);
+        let (device, queue) = pollster::block_on(crate::adapter::request_flui_device(
+            &adapter,
+            &capabilities,
+            "optimized FXC clip contract",
+        ))
+        .expect("optimized FXC contract requires an actual device");
+        let (device, queue) = (Arc::new(device), Arc::new(queue));
+        let size = 64;
+        let vertices = vec![
+            Point::new(4.0, 4.0),
+            Point::new(60.0, 4.0),
+            Point::new(4.0, 60.0),
+        ];
+        let blue = [0, 0, 255, 255];
+        let red = [255, 0, 0, 255];
+        for (name, clip_case, mode, reflected, inside, edge) in [
+            ("unclipped", 0, BlendMode::SrcOver, false, red, red),
+            ("hard squircle", 1, BlendMode::SrcOver, false, red, red),
+            (
+                "AA squircle",
+                2,
+                BlendMode::SrcOver,
+                false,
+                red,
+                [128, 0, 127, 255],
+            ),
+            (
+                "nested mask",
+                3,
+                BlendMode::SrcOver,
+                false,
+                red,
+                [128, 0, 127, 255],
+            ),
+            (
+                "Src mask",
+                3,
+                BlendMode::Src,
+                false,
+                [128, 0, 0, 128],
+                [64, 0, 127, 191],
+            ),
+            (
+                "Clear mask",
+                3,
+                BlendMode::Clear,
+                false,
+                [0, 0, 0, 0],
+                [0, 0, 127, 127],
+            ),
+            ("reflected", 0, BlendMode::SrcOver, true, red, blue),
+            (
+                "unclipped after masks",
+                0,
+                BlendMode::SrcOver,
+                false,
+                red,
+                red,
+            ),
+        ] {
+            let validation = device.push_error_scope(wgpu::ErrorFilter::Validation);
+            let internal = device.push_error_scope(wgpu::ErrorFilter::Internal);
+            let mut painter = crate::painter::WgpuPainter::with_shared_device(
+                Arc::clone(&device),
+                Arc::clone(&queue),
+                wgpu::TextureFormat::Rgba8Unorm,
+                (size, size),
+            );
+            let (target, view) = crate::test_support::create_sampleable_target(
+                &device,
+                "optimized FXC tessellated clip",
+                size,
+                size,
+                wgpu::TextureFormat::Rgba8Unorm,
+            );
+            crate::test_support::clear_target(&device, &queue, &view, wgpu::Color::BLUE);
+            let mut canvas = Canvas::new();
+            if clip_case != 0 {
+                let left = if clip_case == 1 { 16.0 } else { 16.5 };
+                canvas.clip_rsuperellipse_ext(
+                    RSuperellipse::from_rect_and_radius(
+                        Rect::from_xywh(left, 8.0, 32.0, 48.0),
+                        Radius::circular(8.0),
+                    ),
+                    ClipOp::Intersect,
+                    if clip_case == 1 {
+                        Clip::HardEdge
+                    } else {
+                        Clip::AntiAlias
+                    },
+                );
+                if clip_case == 3 {
+                    canvas.clip_rect_ext(
+                        Rect::from_xywh(8.0, 0.0, 48.0, 64.0),
+                        ClipOp::Intersect,
+                        Clip::AntiAlias,
+                    );
+                }
+            }
+            if reflected {
+                canvas.translate(64.0, 0.0);
+                canvas.scale(-1.0, 1.0);
+            }
+            let color = if mode == BlendMode::Src {
+                Color::rgba(255, 0, 0, 128)
+            } else {
+                Color::RED
+            };
+            // A mesh reaches the failing Specialized Shape Pipeline directly;
+            // a large filled Path instead detours through supersampled replay.
+            canvas.draw_vertices(
+                vertices.clone(),
+                None,
+                None,
+                vec![0, 1, 2],
+                &Paint::fill(color).with_blend_mode(mode),
+            );
+            let mut builder = SceneBuilder::new();
+            builder.add(PictureLayer::new(canvas.finish()));
+            let scene = Scene::new(builder.build());
+            painter.begin_frame().expect("optimized FXC frame opens");
+            Renderer::record_frame_content(&mut painter, &scene, None)
+                .expect("optimized FXC scene records through the window frame path");
+            let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("optimized FXC clip encoder"),
+            });
+            painter
+                .render_to_texture(&target, &mut encoder)
+                .expect("optimized FXC scene encodes");
+            painter
+                .submit_encoder(encoder)
+                .expect("optimized FXC scene submits");
+            painter.finish_frame();
+            let internal_error = pollster::block_on(internal.pop());
+            let validation_error = pollster::block_on(validation.pop());
+            assert!(internal_error.is_none(), "{name}: {internal_error:?}");
+            assert!(validation_error.is_none(), "{name}: {validation_error:?}");
+            let bytes = crate::test_support::readback_bytes(&device, &queue, &target, size, size);
+            let outside_clip = if clip_case == 0 && !reflected {
+                red
+            } else {
+                blue
+            };
+            let inside_x = if reflected { 40 } else { 24 };
+            for (x, y, expected) in [
+                (inside_x, 24, inside),
+                (16, 24, edge),
+                (15, 24, outside_clip),
+                (60, 60, blue),
+            ] {
+                let offset = ((y * size + x) * 4) as usize;
+                let actual = &bytes[offset..offset + 4];
+                assert!(
+                    actual
+                        .iter()
+                        .zip(expected)
+                        .all(|(&a, b)| a.abs_diff(b) <= 1),
+                    "{name} pixel ({x}, {y}): {actual:?}, expected {expected:?}"
+                );
+            }
+        }
     }
 
     fn shader_mask_external_texture_registrations_follow_parent() {
