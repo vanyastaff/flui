@@ -291,12 +291,17 @@ fn semantics_listener_retirement_child(mode: &str) {
     drop(next);
 }
 
+/// Selects the one case a re-executed child runs.
+const SEMANTICS_CHILD_CASE: &str = "FLUI_SEMANTICS_LISTENER_RETIREMENT_CASE";
+/// Exit status only a child that completed its case reports. libtest exits 0
+/// when its filter matches nothing and 101 when a test fails.
+const SEMANTICS_CHILD_COMPLETED: i32 = 73;
+
 /// Final-owner and removed-snapshot capture competition must stay catchable.
 pub(crate) fn semantics_listener_retirement_preserves_independent_envelopes() {
-    const CHILD: &str = "FLUI_SEMANTICS_LISTENER_RETIREMENT_CHILD";
-    if let Ok(mode) = std::env::var(CHILD) {
+    if let Ok(mode) = std::env::var(SEMANTICS_CHILD_CASE) {
         semantics_listener_retirement_child(&mode);
-        return;
+        std::process::exit(SEMANTICS_CHILD_COMPLETED);
     }
     let mut failures = Vec::new();
     for mode in [
@@ -318,8 +323,13 @@ pub(crate) fn semantics_listener_retirement_preserves_independent_envelopes() {
         use std::io::Read;
         let mut child =
             std::process::Command::new(std::env::current_exe().expect("test executable"))
-                .args(["--exact", "containment_and_isolation_matrix", "--nocapture"])
-                .env(CHILD, mode)
+                .args([
+                    "--exact",
+                    "semantics_listener_retirement_preserves_independent_envelopes",
+                    "--nocapture",
+                    "--test-threads=1",
+                ])
+                .env(SEMANTICS_CHILD_CASE, mode)
                 .env("RUST_BACKTRACE", "0")
                 .env("RUST_LIB_BACKTRACE", "0")
                 .stdout(std::process::Stdio::piped())
@@ -352,12 +362,7 @@ pub(crate) fn semantics_listener_retirement_preserves_independent_envelopes() {
         let stdout = stdout.join().expect("stdout reader");
         let stderr = stderr.join().expect("stderr reader");
         let output = String::from_utf8_lossy(&stdout);
-        if timed_out
-            || !status.success()
-            || !output.contains("running 1 test")
-            || output.contains("running 0 tests")
-            || !output.contains("1 passed; 0 failed")
-        {
+        if timed_out || status.code() != Some(SEMANTICS_CHILD_COMPLETED) {
             failures.push(format!(
                 "{mode}: {status}, timeout={timed_out}\n{output}\n{}",
                 String::from_utf8_lossy(&stderr)
