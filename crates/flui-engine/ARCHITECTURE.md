@@ -250,6 +250,42 @@ loom backend or the mailbox moves to `std::sync`.
 
 ## Mapping decisions
 
+### Vertex colors and clip coverage own the source alpha
+
+Supplied mesh colors replace `Paint::color`; an absent color array uses the paint
+color. The shape fragment interpolates straight RGBA and then premultiplies it.
+Every untextured `SrcOver` mesh uses alpha blending: clip coverage can make even
+opaque vertex or paint colors translucent. Explicit fixed-function and advanced
+blend modes retain their existing routing. Parent opacity remains a group
+composite rather than mesh color baking.
+`painter_vertices_use_effective_colors_for_compositing` reads back direct painter
+and Canvas-recorded draws with uniform, mixed and zero alpha, opaque colors under
+a contradictory paint, paint fallback, `Src`, `Clear`, `Plus`, `Multiply`, parent
+opacity and ignored invalid input followed by a visible sibling. Its fractional
+clip rows separately cover supplied opaque colors and opaque paint fallback,
+requiring half-covered red over blue to preserve the destination's opaque alpha.
+The optimized FXC row below exercises this same producer with analytic and mask
+clips; its expected coverage depends on this blending contract.
+
+### Shared clip helpers compile with optimized FXC
+
+Shared clip coverage and rounded-superellipse distance helpers initialize their
+results and use one return path. Fragment derivatives are evaluated before the
+terminal discard. This preserves analytic membership and fractional coverage
+while avoiding an optimized FXC fragment translation failure in the specialized
+shape pipeline. The DEBUG instance flag skips FXC optimization and would hide
+the failure, so the contract test runs without it.
+
+`optimized_fxc_tessellated_clip_readback` runs inside
+`renderer_surface_selection_and_layer_compositing_read_back_as_specified` on
+Windows with an actual DX12 adapter, explicitly selected FXC and no DEBUG flag.
+It records direct vertex meshes through the production scene and painter, checks
+validation and internal error scopes, and reads pixels for unclipped, hard and
+antialiased superellipse clips, nested masks, Src, Clear and reflection. The
+helpers with early returns fail to compile under this configuration. Each case
+creates its own painter, so the row does not cover painter state carried across
+frames.
+
 ### Command transforms do not own clips
 
 The dispatcher caches a command matrix separately from its ambient layer CTM.

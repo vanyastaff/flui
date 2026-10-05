@@ -6,15 +6,16 @@ struct ClipMaskConsumer {
 @group(0) @binding(2) var<uniform> final_clip_consumer: ClipMaskConsumer;
 
 fn finalClipCoverage(attachment_pos: vec2<f32>) -> f32 {
-    if final_clip_consumer.origin_enabled.z == 0 {
-        return 1.0;
+    var coverage = 1.0;
+    if final_clip_consumer.origin_enabled.z != 0 {
+        let texel = vec2<i32>(floor(attachment_pos)) - final_clip_consumer.origin_enabled.xy;
+        let extent = vec2<i32>(textureDimensions(final_clip_mask));
+        coverage = 0.0;
+        if all(texel >= vec2<i32>(0)) && all(texel < extent) {
+            coverage = textureLoad(final_clip_mask, texel, 0).r;
+        }
     }
-    let texel = vec2<i32>(floor(attachment_pos)) - final_clip_consumer.origin_enabled.xy;
-    let extent = vec2<i32>(textureDimensions(final_clip_mask));
-    if any(texel < vec2<i32>(0)) || any(texel >= extent) {
-        return 0.0;
-    }
-    return textureLoad(final_clip_mask, texel, 0).r;
+    return coverage;
 }
 
 // Shared SDF helpers for the per-instance clip.
@@ -75,20 +76,20 @@ fn sdRoundedSuperellipse(p: vec2<f32>, b: vec2<f32>, r: vec4<f32>) -> f32 {
 
     let q = abs(p) - b + vec2<f32>(r3);
 
+    // Keep one initialized result and one return across the corner cases,
+    // avoiding nested helper exits in the optimized FXC input.
+    var distance = min(max(q.x, q.y), 0.0) + length(max(q, vec2<f32>(0.0)));
     // Inner rect: both components negative — the curve choice does not apply.
     if (q.x < 0.0 && q.y < 0.0) {
-        return max(q.x, q.y) - r3;
+        distance = max(q.x, q.y) - r3;
+    } else if (r3 > 0.0) {
+        // Do not evaluate the corner division for a degenerate radius.
+        let ax = max(q.x, 0.0) / r3;
+        let ay = max(q.y, 0.0) / r3;
+        let n_norm = sqrt(sqrt(ax * ax * ax * ax + ay * ay * ay * ay));
+        distance = (n_norm - 1.0) * r3;
     }
-
-    // Degenerate corner: fall back to the sharp-rect SDF.
-    if (r3 <= 0.0) {
-        return min(max(q.x, q.y), 0.0) + length(max(q, vec2<f32>(0.0)));
-    }
-
-    let ax = max(q.x, 0.0) / r3;
-    let ay = max(q.y, 0.0) / r3;
-    let n_norm = sqrt(sqrt(ax * ax * ax * ax + ay * ay * ay * ay));
-    return (n_norm - 1.0) * r3;
+    return distance;
 }
 
 /// Convert an SDF distance to coverage with adaptive antialiasing.
@@ -181,14 +182,13 @@ fn clipAlpha(
     let hard_alpha = select(0.0, 1.0, clip_dist <= 0.0);
     let soft_alpha = sdfToAlpha(clip_dist);
     let alpha = select(1.0, select(soft_alpha, hard_alpha, clip_hard), clip_active);
+    var coverage = alpha;
+    var clipped_out = clip_active && alpha <= 0.0;
 
     // Resolve derivatives before any mask-dependent discard or early return.
     if final_clip_consumer.origin_enabled.z != 0 {
-        let coverage = finalClipCoverage(attachment_pos);
-        if coverage <= 0.0 {
-            discard;
-        }
-        return coverage;
+        coverage = finalClipCoverage(attachment_pos);
+        clipped_out = coverage <= 0.0;
     }
 
     // Fully clipped-out fragments are DISCARDED, not merely made
@@ -208,8 +208,8 @@ fn clipAlpha(
     // the fragment must still reach the blender: `sdfToAlpha` feathers the
     // edge, and discarding a fringe fragment because its coverage is
     // merely low would harden every anti-aliased clip.
-    if (clip_active && alpha <= 0.0) {
+    if clipped_out {
         discard;
     }
-    return alpha;
+    return coverage;
 }

@@ -512,6 +512,14 @@ impl DrawBatcher {
         // Convert indices to u32
         let gpu_indices: Vec<u32> = indices.iter().map(|&i| u32::from(i)).collect();
 
+        // Clip coverage can make an opaque vertex translucent. SrcOver must
+        // composite that covered fragment over the existing destination.
+        let pipeline_key = if paint.blend_mode == BlendMode::SrcOver {
+            PipelineKey::alpha_blend()
+        } else {
+            pipeline::pipeline_key_from_paint(paint)
+        };
+
         // Add to tessellated geometry (bypassing tessellator since we already have
         // triangles).  Bake current_transform into vertex positions: shape.wgsl has
         // no model-matrix uniform.
@@ -521,7 +529,7 @@ impl DrawBatcher {
             state,
             gpu_vertices,
             &gpu_indices,
-            pipeline::pipeline_key_from_paint(paint),
+            pipeline_key,
         );
     }
 }

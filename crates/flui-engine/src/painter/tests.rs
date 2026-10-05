@@ -6,6 +6,7 @@ use flui_painting::BlendMode;
 use super::WgpuPainter;
 
 mod image_boundary;
+mod vertex_alpha;
 
 /// Headless GPU device + queue for painter tests.
 fn test_device_and_queue() -> (Arc<wgpu::Device>, Arc<wgpu::Queue>) {
@@ -3164,5 +3165,56 @@ fn repeat_advanced_nonfinite() {
         flui_painting::paint::ImageRepeat::RepeatX,
         BlendMode::Multiply,
         RepeatInput::Nonfinite,
+    );
+}
+
+#[test]
+fn painter_vertices_use_effective_colors_for_compositing() {
+    let cases: [(&str, fn()); 23] = [
+        ("uniform translucent", vertex_alpha::uniform_translucent),
+        (
+            "Canvas uniform translucent",
+            vertex_alpha::canvas_uniform_translucent,
+        ),
+        ("mixed alpha", vertex_alpha::mixed_alpha),
+        ("Canvas mixed alpha", vertex_alpha::canvas_mixed_alpha),
+        ("zero alpha", vertex_alpha::zero_alpha),
+        ("Canvas zero alpha", vertex_alpha::canvas_zero_alpha),
+        ("all opaque", vertex_alpha::all_opaque),
+        ("Canvas all opaque", vertex_alpha::canvas_all_opaque),
+        (
+            "opaque vertex colors under fractional clip",
+            vertex_alpha::opaque_vertex_colors_under_fractional_clip,
+        ),
+        (
+            "opaque paint under fractional clip",
+            vertex_alpha::opaque_paint_under_fractional_clip,
+        ),
+        ("paint fallback", vertex_alpha::paint_fallback),
+        ("Canvas paint fallback", vertex_alpha::canvas_paint_fallback),
+        ("Src", vertex_alpha::src),
+        ("Canvas Src", vertex_alpha::canvas_src),
+        ("Clear", vertex_alpha::clear),
+        ("Canvas Clear", vertex_alpha::canvas_clear),
+        ("Plus", vertex_alpha::plus),
+        ("Canvas Plus", vertex_alpha::canvas_plus),
+        ("Multiply", vertex_alpha::multiply),
+        ("Canvas Multiply", vertex_alpha::canvas_multiply),
+        ("parent opacity", vertex_alpha::parent_opacity),
+        ("Canvas parent opacity", vertex_alpha::canvas_parent_opacity),
+        (
+            "invalid input keeps sibling",
+            vertex_alpha::invalid_input_keeps_sibling,
+        ),
+    ];
+    let mut failures = Vec::new();
+    for (name, case) in cases {
+        if std::panic::catch_unwind(case).is_err() {
+            failures.push(name);
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "vertex color rows failed: {failures:?}"
     );
 }
