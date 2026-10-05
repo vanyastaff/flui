@@ -63,6 +63,10 @@
 // focused owner-local handle migration can replace these with `Rc` later.
 #![expect(clippy::arc_with_non_send_sync)]
 
+#[cfg(test)]
+#[path = "../tests/common/cases.rs"]
+mod contract_cases;
+
 // `#[derive(Routable)]` names this crate by its absolute path, which also
 // resolves inside the crate and its doctests through this alias.
 #[allow(

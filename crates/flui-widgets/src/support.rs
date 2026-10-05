@@ -7,6 +7,8 @@ use std::rc::Rc;
 
 use flui_view::{EventCx, EventOutcome};
 
+pub(crate) mod retirement;
+
 /// Generate the `View` impl for a multi-child render-object widget generic over
 /// a single [`ViewSeq`](flui_view::seq::ViewSeq) type parameter `C`.
 ///

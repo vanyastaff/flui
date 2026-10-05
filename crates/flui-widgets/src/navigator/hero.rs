@@ -59,6 +59,7 @@
 //! for framework invariants. FLUI logs and keeps the **first** — "last wins" would
 //! make the surviving hero depend on mount order.
 
+use super::lifecycle::Terminal;
 use std::collections::HashMap;
 use std::fmt;
 use std::hash::{Hash, Hasher};
@@ -150,14 +151,31 @@ impl fmt::Debug for HeroTag {
 /// private and never escapes — every accessor copies or clones out.
 ///
 /// [`ModalHandle`]: super::modal_route::ModalHandle
-#[derive(Clone, Default)]
+#[derive(Default)]
 pub struct HeroRegistry {
-    heroes: Arc<Mutex<HashMap<HeroTag, HeroHandle>>>,
+    heroes: Terminal<Arc<super::lifecycle::TerminalMap<HeroTag, HeroHandle>>>,
     /// Nested `Navigator`s that publish a cross-flight visibility hook here.
     /// There is no element walk to reach one, so each nested `Navigator`
     /// registers itself with the nearest enclosing route instead.
     /// Empty for the common case of no nested navigator inside this route.
-    nested: Arc<Mutex<Vec<NestedHeroSource>>>,
+    nested: Terminal<Arc<super::lifecycle::TerminalVec<NestedHeroSource>>>,
+}
+
+impl Clone for HeroRegistry {
+    fn clone(&self) -> Self {
+        Self {
+            heroes: Terminal::new(Arc::clone(&self.heroes)),
+            nested: Terminal::new(Arc::clone(&self.nested)),
+        }
+    }
+}
+
+impl Drop for HeroRegistry {
+    fn drop(&mut self) {
+        let heroes = self.heroes.withdraw();
+        let nested = self.nested.withdraw();
+        drop((heroes, nested));
+    }
 }
 
 impl HeroRegistry {
@@ -342,18 +360,34 @@ impl fmt::Debug for NestedHeroSource {
 /// This replaces both an element walk and a "which navigator owns this hero"
 /// check: a hero registers with the route it is lexically inside, and can reach
 /// no other.
-#[derive(Clone)]
 pub struct HeroScope {
-    registry: HeroRegistry,
-    child: BoxedView,
+    registry: Terminal<HeroRegistry>,
+    child: Terminal<BoxedView>,
+}
+
+impl Clone for HeroScope {
+    fn clone(&self) -> Self {
+        Self {
+            registry: Terminal::new(self.registry.clone()),
+            child: Terminal::new(self.child.clone()),
+        }
+    }
+}
+
+impl Drop for HeroScope {
+    fn drop(&mut self) {
+        let registry = self.registry.withdraw();
+        let child = self.child.withdraw();
+        drop((registry, child));
+    }
 }
 
 impl HeroScope {
     /// Publish `registry` to the heroes in `child`'s subtree.
     pub fn new(registry: HeroRegistry, child: impl IntoView) -> Self {
         Self {
-            registry,
-            child: BoxedView(Box::new(child.into_view())),
+            registry: Terminal::new(registry),
+            child: Terminal::new(BoxedView(Box::new(child.into_view()))),
         }
     }
 
@@ -381,7 +415,7 @@ impl InheritedView for HeroScope {
     }
 
     fn child(&self) -> &dyn View {
-        &self.child
+        &*self.child
     }
 
     fn update_should_notify(&self, _old: &Self) -> bool {
@@ -398,7 +432,7 @@ impl_inherited_view!(HeroScope);
 /// The mutable half of a mounted [`Hero`], shared with whoever holds a
 /// [`HeroHandle`].
 struct HeroInner {
-    tag: HeroTag,
+    tag: Terminal<HeroTag>,
     /// The hero's own render node, published on `attach` and cleared on `detach` —
     /// the same mechanism `RenderSubtreeAnchor` uses. This is how a hero finds its
     /// own render object — `BuildContext::find_render_object` walks strict
@@ -418,7 +452,7 @@ struct HeroInner {
     /// The default shuttle is the *destination* hero's child, built anew in the
     /// overlay. Nothing is reparented, so this is a `BoxedView` clone,
     /// kept current through `did_update_view`.
-    shuttle_child: Mutex<BoxedView>,
+    shuttle_child: Terminal<Mutex<BoxedView>>,
     /// The `create_rect_tween` factory, or `None` for the linear default.
     /// Read by the controller when it builds a flight.
     rect_factory: Mutex<Option<RectTweenFactory>>,
@@ -426,7 +460,7 @@ struct HeroInner {
     /// shuttle. Read by the controller when it builds a flight.
     shuttle_builder: Mutex<Option<ShuttleBuilder>>,
     /// The flight's forward easing. The default is `Curves::FastOutSlowIn`.
-    curve: Mutex<ArcCurve>,
+    curve: Terminal<Mutex<ArcCurve>>,
     /// The reverse easing, or `None` for [`curve`](Self::curve) flipped.
     reverse_curve: Mutex<Option<ArcCurve>>,
     /// Whether the ambient [`HeroMode`] allows this hero to fly — the AND of the `enabled` flags
@@ -436,6 +470,20 @@ struct HeroInner {
     /// Defaults to `false`; a pair flies during a gesture-driven transition only
     /// when **both** ends opt in.
     transition_on_user_gestures: AtomicBool,
+}
+
+impl Drop for HeroInner {
+    fn drop(&mut self) {
+        let tag = self.tag.withdraw();
+        let owner = Terminal::new(self.owner.get_mut().take());
+        let rebuild = Terminal::new(self.rebuild.get_mut().take());
+        let child = self.shuttle_child.withdraw();
+        let factory = Terminal::new(self.rect_factory.get_mut().take());
+        let builder = Terminal::new(self.shuttle_builder.get_mut().take());
+        let curve = self.curve.withdraw();
+        let reverse = Terminal::new(self.reverse_curve.get_mut().take());
+        drop((tag, owner, rebuild, child, factory, builder, curve, reverse));
+    }
 }
 
 /// An owned, `'static` capability to drive one mounted [`Hero`].
@@ -448,21 +496,26 @@ pub struct HeroHandle {
 }
 
 impl HeroHandle {
+    #[cfg(test)]
+    pub(super) fn test_handle(view: &Hero) -> Self {
+        Self::new(view)
+    }
+
     /// A handle over `view`'s current configuration; [`ViewState::did_update_view`]
     /// keeps the view-derived halves current afterwards.
     fn new(view: &Hero) -> Self {
         Self {
             inner: Arc::new(HeroInner {
-                tag: view.tag.clone(),
+                tag: Terminal::new(view.tag.clone()),
                 anchor: SubtreeAnchor::new(),
                 placeholder: Mutex::new(None),
                 include_child: AtomicBool::new(true),
                 owner: Mutex::new(None),
                 rebuild: Mutex::new(None),
-                shuttle_child: Mutex::new(view.child.clone()),
+                shuttle_child: Terminal::new(Mutex::new(view.child.clone())),
                 rect_factory: Mutex::new(view.rect_factory.clone()),
                 shuttle_builder: Mutex::new(view.shuttle_builder.clone()),
-                curve: Mutex::new(view.curve.clone()),
+                curve: Terminal::new(Mutex::new(view.curve.clone())),
                 reverse_curve: Mutex::new(view.reverse_curve.clone()),
                 hero_mode_enabled: AtomicBool::new(true),
                 transition_on_user_gestures: AtomicBool::new(view.transition_on_user_gestures),
@@ -645,16 +698,43 @@ impl fmt::Debug for HeroHandle {
 /// `Navigator`'s current `PageRoute` matches an outer route's hero of the same tag.
 /// [`transition_on_user_gestures`](Self::transition_on_user_gestures) opts a hero
 /// into a gesture-driven (edge swipe-back) flight; `false` by default.
-#[derive(Clone)]
 pub struct Hero {
-    tag: HeroTag,
-    child: BoxedView,
+    tag: Terminal<HeroTag>,
+    child: Terminal<BoxedView>,
     rect_factory: Option<RectTweenFactory>,
     shuttle_builder: Option<ShuttleBuilder>,
     placeholder: Option<PlaceholderBuilder>,
-    curve: ArcCurve,
+    curve: Terminal<ArcCurve>,
     reverse_curve: Option<ArcCurve>,
     transition_on_user_gestures: bool,
+}
+
+impl Clone for Hero {
+    fn clone(&self) -> Self {
+        Self {
+            tag: Terminal::new(self.tag.clone()),
+            child: Terminal::new(self.child.clone()),
+            rect_factory: self.rect_factory.clone(),
+            shuttle_builder: self.shuttle_builder.clone(),
+            placeholder: self.placeholder.clone(),
+            curve: Terminal::new(self.curve.clone()),
+            reverse_curve: self.reverse_curve.clone(),
+            transition_on_user_gestures: self.transition_on_user_gestures,
+        }
+    }
+}
+
+impl Drop for Hero {
+    fn drop(&mut self) {
+        let tag = self.tag.withdraw();
+        let child = self.child.withdraw();
+        let factory = Terminal::new(self.rect_factory.take());
+        let builder = Terminal::new(self.shuttle_builder.take());
+        let placeholder = Terminal::new(self.placeholder.take());
+        let curve = self.curve.withdraw();
+        let reverse = Terminal::new(self.reverse_curve.take());
+        drop((tag, child, factory, builder, placeholder, curve, reverse));
+    }
 }
 
 impl Hero {
@@ -662,12 +742,12 @@ impl Hero {
     /// a domain newtype — and two heroes fly together iff their tags compare equal.
     pub fn new(tag: impl ViewKey, child: impl IntoView) -> Self {
         Self {
-            tag: HeroTag::new(tag),
-            child: BoxedView(Box::new(child.into_view())),
+            tag: Terminal::new(HeroTag::new(tag)),
+            child: Terminal::new(BoxedView(Box::new(child.into_view()))),
             rect_factory: None,
             shuttle_builder: None,
             placeholder: None,
-            curve: ArcCurve::new(Curves::FastOutSlowIn),
+            curve: Terminal::new(ArcCurve::new(Curves::FastOutSlowIn)),
             reverse_curve: None,
             transition_on_user_gestures: false,
         }
@@ -678,7 +758,7 @@ impl Hero {
     /// hero's curve, a pop on the **source** hero's.
     #[must_use]
     pub fn curve(mut self, curve: impl Curve + Send + Sync + 'static) -> Self {
-        self.curve = ArcCurve::new(curve);
+        *self.curve = ArcCurve::new(curve);
         self
     }
 
@@ -776,7 +856,7 @@ impl StatefulView for Hero {
 
     fn create_state(&self) -> Self::State {
         HeroState {
-            handle: HeroHandle::new(self),
+            handle: Terminal::new(HeroHandle::new(self)),
             registry: None,
         }
     }
@@ -786,10 +866,18 @@ impl StatefulView for Hero {
 /// it (as `NavigatorState` is); **not** re-exported, so it is reachable only as
 /// `<Hero as StatefulView>::State` and carries no public API of its own.
 pub struct HeroState {
-    handle: HeroHandle,
+    handle: Terminal<HeroHandle>,
     /// The route's registry, resolved once from the ambient [`HeroScope`]. `None` for
     /// a `Hero` mounted outside any route, which is inert rather than an error.
     registry: Option<HeroRegistry>,
+}
+
+impl Drop for HeroState {
+    fn drop(&mut self) {
+        let handle = self.handle.withdraw();
+        let registry = Terminal::new(self.registry.take());
+        drop((handle, registry));
+    }
 }
 
 impl std::fmt::Debug for HeroState {

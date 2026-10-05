@@ -8,6 +8,16 @@ decisions` entries below; a full crate architecture writeup is deferred.
 
 ## Mapping decisions
 
+### Ticker cancellation precedes terminal callback retirement
+
+Final ticker destruction withdraws its callback and publishes pending scheduler
+cancellation before retiring opaque ownership. An incoming unwind retains the
+callback instead of running its destructor; an ordinary failure preserves the
+first panic without leaving its pending registration live. Healthy final-owner
+retirement remains destructive. The public animation family
+`controller_sources_allow_reentry_and_preserve_run_ownership` drives a real ticker,
+its pending scheduler entry, competing callback destruction and the next owner.
+
 ### Post-frame panic preserves uninvoked work in its original queue
 
 A post-frame callback panic stops the drain and propagates after frame completion

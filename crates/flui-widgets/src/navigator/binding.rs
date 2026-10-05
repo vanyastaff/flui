@@ -61,10 +61,11 @@
 //! [`NavigatorRoute::binding_slot`]: super::overlay_route::NavigatorRoute::binding_slot
 
 use std::cell::{Cell, RefCell};
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
 use std::fmt;
 use std::rc::Rc;
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Weak};
 use std::time::Duration;
 
 use flui_animation::{Animation, Curve, Vsync};
@@ -101,17 +102,44 @@ pub(crate) enum RouteCommand {
 ///
 /// `pub` only so `crate::__test_access` can re-export it (ADR-0083 §4); the
 /// module is private, so nothing else names it.
-#[derive(Clone)]
 pub struct TransitionPeer {
     /// The route's **primary** animation, controller-backed.
-    pub animation: Arc<dyn Animation<f64>>,
+    pub(super) animation: Option<Arc<dyn Animation<f64>>>,
     /// Whether the route *above* can transition from this one.
     pub can_transition_from: bool,
     /// Which family of routes this one coordinates transitions with.
     pub group: TransitionGroup,
     /// Fires when the route is disposed, so the route below can release its
     /// reference to a gone route's animation.
-    pub(crate) completed: Arc<CompletedSignal>,
+    pub(crate) completed: super::lifecycle::Terminal<Arc<CompletedSignal>>,
+}
+
+impl TransitionPeer {
+    /// Returns the route's primary transition animation.
+    pub fn animation(&self) -> &Arc<dyn Animation<f64>> {
+        self.animation
+            .as_ref()
+            .expect("BUG: transition peer accessed after retirement")
+    }
+}
+
+impl Clone for TransitionPeer {
+    fn clone(&self) -> Self {
+        Self {
+            animation: self.animation.clone(),
+            can_transition_from: self.can_transition_from,
+            group: self.group,
+            completed: super::lifecycle::Terminal::new(Arc::clone(&self.completed)),
+        }
+    }
+}
+
+impl Drop for TransitionPeer {
+    fn drop(&mut self) {
+        let animation = super::lifecycle::Terminal::new(self.animation.take());
+        let completed = self.completed.withdraw();
+        drop((animation, completed));
+    }
 }
 
 impl std::fmt::Debug for TransitionPeer {
@@ -156,6 +184,13 @@ pub(crate) struct CompletedSignal {
     listeners: RefCell<Vec<Rc<dyn Fn()>>>,
 }
 
+impl Drop for CompletedSignal {
+    fn drop(&mut self) {
+        self.done.set(true);
+        super::lifecycle::retire_values(std::mem::take(self.listeners.get_mut()));
+    }
+}
+
 impl CompletedSignal {
     /// Run `callback` when the route completes, or **now** if it already has.
     pub(crate) fn on_completed(&self, callback: Rc<dyn Fn()>) {
@@ -172,10 +207,12 @@ impl CompletedSignal {
             return;
         }
         // Snapshot then fire: a callback may re-enter the route.
-        let callbacks = std::mem::take(&mut *self.listeners.borrow_mut());
-        for callback in callbacks {
+        let mut callbacks =
+            super::lifecycle::Terminal::new(std::mem::take(&mut *self.listeners.borrow_mut()));
+        for callback in &*callbacks {
             callback();
         }
+        super::lifecycle::retire_values(callbacks.take_value());
     }
 }
 
@@ -188,7 +225,7 @@ impl fmt::Debug for CompletedSignal {
 }
 
 /// `RouteId -> TransitionPeer`, shared by every binding a navigator mints.
-pub(crate) type TransitionRegistry = Arc<Mutex<HashMap<RouteId, TransitionPeer>>>;
+pub(crate) type TransitionRegistry = Arc<super::lifecycle::TerminalMap<RouteId, TransitionPeer>>;
 
 /// The clock a route's `AnimationController` registers with.
 ///
@@ -208,18 +245,18 @@ pub(crate) type RouteVsync = Arc<Mutex<Option<Vsync>>>;
 /// `RouteId -> OverlayEntry`, the navigator's map. A route reaches **its own**
 /// entry through it; the entries live on the navigator, not the route
 /// (`overlay_route.rs`).
-pub(crate) type RouteEntries = Arc<Mutex<HashMap<RouteId, OverlayEntry>>>;
+pub(crate) type RouteEntries = Arc<super::lifecycle::TerminalMap<RouteId, OverlayEntry>>;
 
 /// `RouteId -> RouteSubtreeCell`, the navigator's way to reach a route's page
 /// subtree. FLUI's routes live behind `Box<dyn ErasedRoute>` inside the
 /// history's mutex, so the route publishes its cell into a registry the navigator
 /// owns.
-pub(crate) type RouteSubtrees = Arc<Mutex<HashMap<RouteId, RouteSubtreeCell>>>;
+pub(crate) type RouteSubtrees = Arc<super::lifecycle::TerminalMap<RouteId, RouteSubtreeCell>>;
 
 /// `RouteId -> ModalHandle`, how the navigator (and the hero controller) set a
 /// route's `offstage`. FLUI's routes are unreachable, so a `ModalRoute`
 /// publishes its handle here at `install()`.
-pub(crate) type RouteModals = Arc<Mutex<HashMap<RouteId, ModalHandle>>>;
+pub(crate) type RouteModals = Arc<super::lifecycle::TerminalMap<RouteId, ModalHandle>>;
 
 /// How a route's exit transition should run, overriding its own default
 /// reverse pacing for exactly one pop.
@@ -249,7 +286,7 @@ pub(crate) struct PopPacing {
 /// current). Never a field on the route: a stored field would go stale on a
 /// veto or apply to the wrong pop if a *different* route reached `did_pop`
 /// first (see `navigator.rs`'s `pop_paced`).
-pub(crate) type PopPacingRegistry = Arc<Mutex<HashMap<RouteId, PopPacing>>>;
+pub(crate) type PopPacingRegistry = Arc<super::lifecycle::TerminalMap<RouteId, PopPacing>>;
 
 /// The queue a [`RouteBinding`] writes to and a `RouteHistory` drains.
 ///
@@ -263,19 +300,57 @@ pub(crate) type RouteCommandQueue = Arc<Mutex<VecDeque<RouteCommand>>>;
 /// `NavigatorHandle::new`, cloned together into every binding, and each is a
 /// `RouteId -> _` map standing in for state a route object would otherwise
 /// own directly.
-#[derive(Clone)]
 pub(crate) struct RouteRegistries {
+    closed: AtomicBool,
     /// `RouteId -> TransitionPeer`. A **different** mutex from the history's, so a
     /// route may consult it from inside a flush.
-    pub(crate) peers: TransitionRegistry,
+    pub(crate) peers: super::lifecycle::Terminal<TransitionRegistry>,
     /// `RouteId -> OverlayEntry`.
-    pub(crate) entries: RouteEntries,
+    pub(crate) entries: super::lifecycle::Terminal<RouteEntries>,
     /// `RouteId -> RouteSubtreeCell`.
-    pub(crate) subtrees: RouteSubtrees,
+    pub(crate) subtrees: super::lifecycle::Terminal<RouteSubtrees>,
     /// `RouteId -> ModalHandle`.
-    pub(crate) modals: RouteModals,
+    pub(crate) modals: super::lifecycle::Terminal<RouteModals>,
     /// `RouteId -> PopPacing`, a one-shot override for the next `did_pop`.
-    pub(crate) pop_pacing: PopPacingRegistry,
+    pub(crate) pop_pacing: super::lifecycle::Terminal<PopPacingRegistry>,
+}
+
+impl RouteRegistries {
+    pub(crate) fn new() -> Self {
+        Self {
+            closed: AtomicBool::new(false),
+            peers: super::lifecycle::Terminal::new(Arc::new(
+                super::lifecycle::TerminalMap::default(),
+            )),
+            entries: super::lifecycle::Terminal::new(Arc::new(
+                super::lifecycle::TerminalMap::default(),
+            )),
+            subtrees: super::lifecycle::Terminal::new(Arc::new(
+                super::lifecycle::TerminalMap::default(),
+            )),
+            modals: super::lifecycle::Terminal::new(Arc::new(
+                super::lifecycle::TerminalMap::default(),
+            )),
+            pop_pacing: super::lifecycle::Terminal::new(Arc::new(
+                super::lifecycle::TerminalMap::default(),
+            )),
+        }
+    }
+
+    pub(crate) fn close(&self) {
+        self.closed.store(true, Ordering::Release);
+    }
+}
+
+impl Drop for RouteRegistries {
+    fn drop(&mut self) {
+        let peers = self.peers.withdraw();
+        let entries = self.entries.withdraw();
+        let subtrees = self.subtrees.withdraw();
+        let modals = self.modals.withdraw();
+        let pop_pacing = self.pop_pacing.withdraw();
+        drop((peers, entries, subtrees, modals, pop_pacing));
+    }
 }
 
 /// An owned, `'static` capability, pre-bound to one [`RouteId`].
@@ -286,19 +361,36 @@ pub(crate) struct RouteRegistries {
 ///
 /// Inert once the navigator is gone: the `wake` closure holds a `Weak`, and a
 /// queued command for a route that no longer exists is dropped on drain.
-#[derive(Clone)]
 pub(crate) struct RouteBinding {
     route: RouteId,
-    queue: RouteCommandQueue,
+    queue: Weak<Mutex<VecDeque<RouteCommand>>>,
     /// Applies the queue if the history is not currently locked. See *Correction 1*.
-    wake: Rc<dyn Fn()>,
+    wake: super::lifecycle::Terminal<Rc<dyn Fn()>>,
     /// The navigator's clock. `Mutex` because `NavigatorState::init_state`
     /// resolves it after the handle (and therefore any seeded binding) exists.
-    vsync: RouteVsync,
+    vsync: Weak<Mutex<Option<Vsync>>>,
     /// The navigator's `RouteId`-keyed maps, each behind its own mutex — a
     /// different one from the history's, so a route may consult them from inside a
     /// flush.
-    registries: RouteRegistries,
+    registries: Weak<RouteRegistries>,
+}
+
+impl Clone for RouteBinding {
+    fn clone(&self) -> Self {
+        Self {
+            route: self.route,
+            queue: self.queue.clone(),
+            wake: super::lifecycle::Terminal::new(Rc::clone(&self.wake)),
+            vsync: self.vsync.clone(),
+            registries: self.registries.clone(),
+        }
+    }
+}
+
+impl Drop for RouteBinding {
+    fn drop(&mut self) {
+        drop(self.wake.withdraw());
+    }
 }
 
 impl RouteBinding {
@@ -307,15 +399,21 @@ impl RouteBinding {
         queue: RouteCommandQueue,
         wake: Rc<dyn Fn()>,
         vsync: RouteVsync,
-        registries: RouteRegistries,
+        registries: Arc<RouteRegistries>,
     ) -> Self {
         Self {
             route,
-            queue,
-            wake,
-            vsync,
-            registries,
+            queue: Arc::downgrade(&queue),
+            wake: super::lifecycle::Terminal::new(wake),
+            vsync: Arc::downgrade(&vsync),
+            registries: Arc::downgrade(&registries),
         }
+    }
+
+    fn active_registries(&self) -> Option<Arc<RouteRegistries>> {
+        self.registries
+            .upgrade()
+            .filter(|owner| !owner.closed.load(Ordering::Acquire))
     }
 
     /// This route's overlay entry, or `None` before it is installed.
@@ -323,7 +421,8 @@ impl RouteBinding {
     /// Cloned **out** of the map, so the caller never holds the `entries` lock
     /// while touching the overlay.
     fn entry(&self) -> Option<OverlayEntry> {
-        self.registries.entries.lock().get(&self.route).cloned()
+        let registries = self.active_registries()?;
+        registries.entries.lock().get(&self.route).cloned()
     }
 
     /// Set whether this route's overlay entry is opaque.
@@ -355,19 +454,27 @@ impl RouteBinding {
 
     /// The navigator's clock, if it has one.
     pub(crate) fn vsync(&self) -> Option<Vsync> {
-        self.vsync.lock().clone()
+        let _authority = self.active_registries()?;
+        self.vsync.upgrade()?.lock().clone()
     }
 
     /// Publish this route's primary animation so the route below can drive its
     /// `secondary_animation` from it.
     pub(crate) fn publish_peer(&self, peer: TransitionPeer) {
-        let _prev = self.registries.peers.lock().insert(self.route, peer);
+        let Some(registries) = self.active_registries() else {
+            drop(super::lifecycle::Terminal::new(peer));
+            return;
+        };
+        let _prev = registries.peers.lock().insert(self.route, peer);
     }
 
     /// Withdraw it. Called from `dispose`; a peer that outlives its controller
     /// would hand out a disposed animation.
     pub(crate) fn withdraw_peer(&self) {
-        let _prev = self.registries.peers.lock().remove(&self.route);
+        let Some(registries) = self.active_registries() else {
+            return;
+        };
+        let _prev = registries.peers.lock().remove(&self.route);
     }
 
     /// Publish where this route's page subtree *will* live.
@@ -375,31 +482,46 @@ impl RouteBinding {
     /// The cell is registered at `install()`, before the page has ever been built,
     /// and resolves to `None` until it mounts. See `subtree.rs`.
     pub(crate) fn publish_subtree(&self, subtree: RouteSubtreeCell) {
-        let _prev = self.registries.subtrees.lock().insert(self.route, subtree);
+        let Some(registries) = self.active_registries() else {
+            drop(super::lifecycle::Terminal::new(subtree));
+            return;
+        };
+        let _prev = registries.subtrees.lock().insert(self.route, subtree);
     }
 
     /// Withdraw it. Called from `dispose`; a registry entry that outlives its route
     /// would let `HeroController` resolve a disposed route's subtree.
     pub(crate) fn withdraw_subtree(&self) {
-        let _prev = self.registries.subtrees.lock().remove(&self.route);
+        let Some(registries) = self.active_registries() else {
+            return;
+        };
+        let _prev = registries.subtrees.lock().remove(&self.route);
     }
 
     /// Publish this route's `offstage` control, the handle `HeroController`
     /// uses.
     pub(crate) fn publish_modal(&self, modal: ModalHandle) {
-        let _prev = self.registries.modals.lock().insert(self.route, modal);
+        let Some(registries) = self.active_registries() else {
+            drop(super::lifecycle::Terminal::new(modal));
+            return;
+        };
+        let _prev = registries.modals.lock().insert(self.route, modal);
     }
 
     /// Withdraw it. A disposed route must not be forced offstage.
     pub(crate) fn withdraw_modal(&self) {
-        let _prev = self.registries.modals.lock().remove(&self.route);
+        let Some(registries) = self.active_registries() else {
+            return;
+        };
+        let _prev = registries.modals.lock().remove(&self.route);
     }
 
     /// Consume this route's one-shot [`PopPacing`] override, if the navigator
     /// set one immediately before this pop — see `navigator.rs`'s `pop_paced`.
     /// `None` means "pop normally": the route's own default reverse pacing.
     pub(crate) fn take_pop_pacing(&self) -> Option<PopPacing> {
-        self.registries.pop_pacing.lock().remove(&self.route)
+        let registries = self.active_registries()?;
+        registries.pop_pacing.lock().remove(&self.route)
     }
 
     /// The route this binding drives. Every other capability on this type is
@@ -412,7 +534,8 @@ impl RouteBinding {
 
     /// The peer for `route`, or `None` when it is not a transition route.
     pub(crate) fn peer(&self, route: RouteId) -> Option<TransitionPeer> {
-        self.registries.peers.lock().get(&route).cloned()
+        let registries = self.active_registries()?;
+        registries.peers.lock().get(&route).cloned()
     }
 
     /// The route is finished; dispose it.
@@ -421,7 +544,13 @@ impl RouteBinding {
     }
 
     fn raise(&self, command: RouteCommand) {
-        self.queue.lock().push_back(command);
+        let Some(_authority) = self.active_registries() else {
+            return;
+        };
+        let Some(queue) = self.queue.upgrade() else {
+            return;
+        };
+        queue.lock().push_back(command);
         // Outside a flush this applies and flushes now; inside one it is a no-op
         // and the running flush drains the queue before returning.
         (self.wake)();
@@ -432,7 +561,10 @@ impl fmt::Debug for RouteBinding {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("RouteBinding")
             .field("route", &self.route.get())
-            .field("pending", &self.queue.lock().len())
+            .field(
+                "pending",
+                &self.queue.upgrade().map(|queue| queue.lock().len()),
+            )
             .finish_non_exhaustive()
     }
 }

@@ -1,6 +1,6 @@
 //! `AnimationSwitch` - switches between animations when values cross.
 
-use crate::animation::{Animation, StatusCallback};
+use crate::animation::{Animation, Retirement, StatusCallback, Terminal};
 use crate::status::AnimationStatus;
 use flui_foundation::{ChangeNotifier, Listenable, ListenerCallback, ListenerId};
 use parking_lot::Mutex;
@@ -67,13 +67,13 @@ pub struct AnimationSwitch {
 
 struct AnimationSwitchInner {
     /// The currently active animation.
-    current: Arc<dyn Animation<f64>>,
+    current: Terminal<Arc<dyn Animation<f64>>>,
     /// The next animation to potentially switch to.
-    next: Option<Arc<dyn Animation<f64>>>,
+    next: Option<Terminal<Arc<dyn Animation<f64>>>>,
     /// The mode for determining when to switch.
     mode: Option<SwitchMode>,
     /// Callback when switched.
-    on_switched: Option<Arc<dyn Fn() + Send + Sync>>,
+    on_switched: Option<Terminal<Arc<dyn Fn() + Send + Sync>>>,
     /// Last reported value (for change detection).
     #[expect(dead_code)]
     last_value: Option<f64>,
@@ -92,6 +92,59 @@ struct AnimationSwitchInner {
     status_listeners: Vec<(ListenerId, StatusCallback)>,
     /// Next id for `status_listeners` (starts at 1 so 0 never collides).
     next_status_listener_id: usize,
+    disposed: bool,
+}
+
+fn detach_parents(
+    current: &Arc<dyn Animation<f64>>,
+    next: Option<&Terminal<Arc<dyn Animation<f64>>>>,
+    value_id: Option<ListenerId>,
+    status_id: Option<ListenerId>,
+    next_id: Option<ListenerId>,
+    retirement: &mut Retirement,
+) {
+    if let Some(id) = value_id {
+        retirement.run(|| current.remove_listener(id));
+    }
+    if let Some(id) = status_id {
+        retirement.run(|| current.remove_status_listener(id));
+    }
+    if let (Some(id), Some(next)) = (next_id, next) {
+        retirement.run(|| next.remove_listener(id));
+    }
+}
+
+impl Drop for AnimationSwitchInner {
+    fn drop(&mut self) {
+        self.disposed = true;
+        self.mode = None;
+        let current = self.current.withdraw();
+        let next = self.next.take();
+        let callback = self.on_switched.take();
+        let value_id = self.current_listener_id.take();
+        let status_id = self.current_status_listener_id.take();
+        let next_id = self.next_listener_id.take();
+        let listeners: Vec<_> = std::mem::take(&mut self.status_listeners)
+            .into_iter()
+            .map(|(_, callback)| Terminal::new(callback))
+            .collect();
+        let mut retirement = Retirement::new();
+        detach_parents(
+            &current,
+            next.as_ref(),
+            value_id,
+            status_id,
+            next_id,
+            &mut retirement,
+        );
+        retirement.retire(callback);
+        for listener in listeners {
+            retirement.retire(listener);
+        }
+        retirement.retire(current);
+        retirement.retire(next);
+        retirement.finish();
+    }
 }
 
 impl AnimationSwitch {
@@ -107,6 +160,8 @@ impl AnimationSwitch {
     /// * `next` - The animation to switch to when values cross (optional)
     #[must_use]
     pub fn new(current: Arc<dyn Animation<f64>>, next: Option<Arc<dyn Animation<f64>>>) -> Self {
+        let current = Terminal::new(current);
+        let next = next.map(Terminal::new);
         let notifier = Arc::new(ChangeNotifier::new());
 
         let mode = if let Some(ref next_anim) = next {
@@ -131,7 +186,7 @@ impl AnimationSwitch {
             let next_value = next_anim.value();
 
             if (current_value - next_value).abs() < 1e-6 {
-                (next_anim.clone(), None)
+                (Terminal::new(next_anim.get().clone()), None)
             } else {
                 (current, next)
             }
@@ -151,6 +206,7 @@ impl AnimationSwitch {
             current_status_listener_id: None,
             status_listeners: Vec::new(),
             next_status_listener_id: 1,
+            disposed: false,
         };
 
         let this = Self {
@@ -172,17 +228,18 @@ impl AnimationSwitch {
     where
         F: Fn() + Send + Sync + 'static,
     {
-        {
+        let old = {
             let mut inner = self.inner.lock();
-            inner.on_switched = Some(Arc::new(callback));
-        }
+            inner.on_switched.replace(Terminal::new(Arc::new(callback)))
+        };
+        drop(old);
         self
     }
 
     /// Returns the currently active animation.
     #[must_use]
     pub fn current(&self) -> Arc<dyn Animation<f64>> {
-        self.inner.lock().current.clone()
+        self.inner.lock().current.get().clone()
     }
 
     /// Builds the status forwarder that re-emits the current animation's
@@ -196,14 +253,17 @@ impl AnimationSwitch {
         Arc::new(move |status| {
             if let Some(inner_arc) = inner_weak.upgrade() {
                 let mut inner = inner_arc.lock();
+                if inner.disposed {
+                    return;
+                }
                 if inner.last_status != Some(status) {
                     inner.last_status = Some(status);
                     // Snapshot-then-fire: user callbacks run without the
                     // inner lock held (they may re-enter the switch).
-                    let callbacks: Vec<StatusCallback> = inner
+                    let callbacks: Vec<Terminal<StatusCallback>> = inner
                         .status_listeners
                         .iter()
-                        .map(|(_, cb)| Arc::clone(cb))
+                        .map(|(_, cb)| Terminal::new(Arc::clone(cb)))
                         .collect();
                     drop(inner);
                     notifier.notify_listeners();
@@ -225,6 +285,9 @@ impl AnimationSwitch {
         let value_handler = move || {
             if let Some(inner_arc) = inner_weak.upgrade() {
                 let mut inner = inner_arc.lock();
+                if inner.disposed {
+                    return;
+                }
 
                 // Check if we should switch
                 let should_switch = if let (Some(mode), Some(next)) = (inner.mode, &inner.next) {
@@ -248,7 +311,8 @@ impl AnimationSwitch {
                 let mut callback = None;
                 let mut rebind = None;
                 if should_switch && let Some(next) = inner.next.take() {
-                    let old_current = std::mem::replace(&mut inner.current, Arc::clone(&next));
+                    let old_current =
+                        std::mem::replace(&mut inner.current, Terminal::new(Arc::clone(&next)));
                     inner.mode = None;
                     let old_value_id = inner.current_listener_id.take();
                     let old_status_id = inner.current_status_listener_id.take();
@@ -280,36 +344,89 @@ impl AnimationSwitch {
             }
         };
 
-        let mut inner = self.inner.lock();
-
-        // Add listener to current animation
-        let callback: ListenerCallback = Arc::new(value_handler.clone());
-        inner.current_listener_id = Some(inner.current.add_listener(callback));
-
-        // Add listener to next animation if present
-        if let Some(ref next) = inner.next {
-            let callback: ListenerCallback = Arc::new(value_handler);
-            inner.next_listener_id = Some(next.add_listener(callback));
+        let (current, next) = {
+            let inner = self.inner.lock();
+            (
+                Terminal::new(inner.current.get().clone()),
+                inner.next.clone(),
+            )
+        };
+        let current_id = current.add_listener(Arc::new(value_handler.clone()));
+        self.admit_value_subscription(&current, current_id);
+        if let Some(next) = next.as_ref() {
+            let next_id = next.add_listener(Arc::new(value_handler));
+            self.admit_value_subscription(next, next_id);
         }
+        let status_parent = Terminal::new(self.current());
+        let status_id = status_parent.add_status_listener(status_callback);
+        let admitted = {
+            let mut inner = self.inner.lock();
+            if !inner.disposed && Arc::ptr_eq(inner.current.get(), &status_parent) {
+                Some(inner.current_status_listener_id.replace(status_id))
+            } else {
+                None
+            }
+        };
+        match admitted {
+            Some(Some(old)) => status_parent.remove_status_listener(old),
+            Some(None) => {}
+            None => status_parent.remove_status_listener(status_id),
+        }
+    }
 
-        // Add status listener to current
-        inner.current_status_listener_id = Some(inner.current.add_status_listener(status_callback));
+    fn admit_value_subscription(&self, parent: &Arc<dyn Animation<f64>>, id: ListenerId) {
+        let admitted = {
+            let mut inner = self.inner.lock();
+            if inner.disposed {
+                None
+            } else if Arc::ptr_eq(inner.current.get(), parent) {
+                Some(inner.current_listener_id.replace(id))
+            } else if inner
+                .next
+                .as_ref()
+                .is_some_and(|next| Arc::ptr_eq(next.get(), parent))
+            {
+                Some(inner.next_listener_id.replace(id))
+            } else {
+                None
+            }
+        };
+        match admitted {
+            Some(Some(old)) => parent.remove_listener(old),
+            Some(None) => {}
+            None => parent.remove_listener(id),
+        }
     }
 
     /// Disposes of this animation switch, cleaning up listeners.
     pub fn dispose(&self) {
-        let mut inner = self.inner.lock();
-
-        // Remove listeners
-        if let Some(id) = inner.current_listener_id.take() {
-            inner.current.remove_listener(id);
-        }
-        if let Some(id) = inner.current_status_listener_id.take() {
-            inner.current.remove_status_listener(id);
-        }
-        if let (Some(id), Some(next)) = (inner.next_listener_id.take(), &inner.next) {
-            next.remove_listener(id);
-        }
+        let (current, next, value_id, status_id, next_id) = {
+            let mut inner = self.inner.lock();
+            if inner.disposed {
+                return;
+            }
+            inner.disposed = true;
+            inner.mode = None;
+            (
+                Terminal::new(inner.current.get().clone()),
+                inner.next.clone(),
+                inner.current_listener_id.take(),
+                inner.current_status_listener_id.take(),
+                inner.next_listener_id.take(),
+            )
+        };
+        let mut retirement = Retirement::new();
+        detach_parents(
+            &current,
+            next.as_ref(),
+            value_id,
+            status_id,
+            next_id,
+            &mut retirement,
+        );
+        retirement.retire(current);
+        retirement.retire(next);
+        retirement.finish();
     }
 }
 
@@ -346,10 +463,15 @@ impl Animation<f64> for AnimationSwitch {
     }
 
     fn remove_status_listener(&self, id: ListenerId) {
-        self.inner
-            .lock()
-            .status_listeners
-            .retain(|(listener_id, _)| *listener_id != id);
+        let removed = {
+            let mut inner = self.inner.lock();
+            inner
+                .status_listeners
+                .iter()
+                .position(|(candidate, _)| *candidate == id)
+                .map(|index| inner.status_listeners.remove(index).1)
+        };
+        drop(Terminal::new(removed));
     }
 }
 

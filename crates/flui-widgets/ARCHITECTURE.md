@@ -1,5 +1,28 @@
 # flui-widgets architecture
 
+## Terminal navigation ownership
+
+Navigation bindings borrow one coherent registry authority weakly. The navigator
+closes that authority before retiring history, so installed modal/entry closures
+cannot form a strong ownership cycle or enqueue orphan work. Expired lookups
+return no value and mutations do nothing. Independent modal, transition and hero
+aliases keep their own state; a transition alias does not prolong a modal page.
+
+The actual shared route, router, overlay, modal and hero owners withdraw every
+separately owned leaf before retirement. Private guards in `support::retirement`
+retain unretired tails during incoming unwind or after the first failure, while
+healthy destruction proceeds normally. Parser inputs and partial router clones
+enter custody before arbitrary user calls. Route-result and waker ownership are
+separate obligations. A single opaque user aggregate keeps its own double-panic
+limit; lower notifier, animation and input ownership require their own contracts.
+
+`delivered_route_results_remain_completed` runs bounded public navigator/router
+terminal cases. `terminal_binding_authority_is_closed_before_route_retirement`
+needs a private retained-registry seam and tests the genuine route callback.
+The private `hero_controller_terminal_retirement` and
+`hero_flight_terminal_retirement` matrices need actual physical owners and shared
+storage aliases; they separately cover retirement competition and recovery.
+
 ## Event callback phase boundary
 
 `InteractiveViewer`, `RefreshIndicator`, `PopScope`, `AnimatedSize`,

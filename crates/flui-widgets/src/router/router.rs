@@ -13,6 +13,8 @@ use flui_view::element::ElementKind;
 use flui_view::prelude::*;
 use flui_view::{BoxedView, BuildContextExt};
 
+use crate::navigator::lifecycle::{RetiredValues, Terminal};
+
 use super::handle::{RouterError, RouterHandle};
 use super::path::{RouteParseError, RoutePath};
 use super::routable::Routable;
@@ -69,20 +71,37 @@ type PageBuilder<R> = Rc<dyn Fn(&R, &dyn BuildContext) -> BoxedView>;
 pub struct Router<R: Routable> {
     /// The stack the router opens with, bottom to top; never empty.
     initial: Vec<R>,
-    page: PageBuilder<R>,
+    page: Terminal<PageBuilder<R>>,
     transitions: Option<RouteTransitionsBuilder>,
     transition_duration: Option<Duration>,
+}
+
+impl<R: Routable> Drop for Router<R> {
+    fn drop(&mut self) {
+        let initial = RetiredValues(std::mem::take(&mut self.initial));
+        let page = self.page.withdraw();
+        let transitions = Terminal::new(self.transitions.take());
+        drop((initial, page, transitions));
+    }
 }
 
 impl<R: Routable> Clone for Router<R> {
     fn clone(&self) -> Self {
         Self {
-            initial: self.initial.clone(),
-            page: Rc::clone(&self.page),
+            initial: clone_routes(&self.initial),
+            page: Terminal::new(Rc::clone(&self.page)),
             transitions: self.transitions.clone(),
             transition_duration: self.transition_duration,
         }
     }
+}
+
+fn clone_routes<R: Clone>(routes: &[R]) -> Vec<R> {
+    let mut cloned = RetiredValues(Vec::with_capacity(routes.len()));
+    for route in routes {
+        cloned.0.push(route.clone());
+    }
+    std::mem::take(&mut cloned.0)
 }
 
 impl<R: Routable> fmt::Debug for Router<R> {
@@ -103,7 +122,7 @@ impl<R: Routable> Router<R> {
     pub fn new(initial: R, page: impl Fn(&R, &dyn BuildContext) -> BoxedView + 'static) -> Self {
         Self {
             initial: vec![initial],
-            page: Rc::new(page),
+            page: Terminal::new(Rc::new(page)),
             transitions: None,
             transition_duration: None,
         }
@@ -120,10 +139,11 @@ impl<R: Routable> Router<R> {
         location: &str,
         page: impl Fn(&R, &dyn BuildContext) -> BoxedView + 'static,
     ) -> Result<Self, RouteParseError> {
+        let page: Terminal<PageBuilder<R>> = Terminal::new(Rc::new(page));
         let initial = R::back_stack(&RoutePath::parse(location)?)?;
         Ok(Self {
             initial,
-            page: Rc::new(page),
+            page,
             transitions: None,
             transition_duration: None,
         })
@@ -196,10 +216,10 @@ impl<R: Routable> StatefulView for Router<R> {
 
     fn create_state(&self) -> Self::State {
         let shared = Rc::new(RouterShared {
-            navigator: NavigatorHandle::addressed(type_name::<R>()),
+            navigator: Terminal::new(NavigatorHandle::addressed(type_name::<R>())),
             stack: RefCell::new(Vec::new()),
-            page: Rc::new(RefCell::new(Rc::clone(&self.page))),
-            transitions: Rc::new(RefCell::new(self.transitions.clone())),
+            page: Terminal::new(Rc::new(RefCell::new(Rc::clone(&self.page)))),
+            transitions: Terminal::new(Rc::new(RefCell::new(self.transitions.clone()))),
             transition_duration: Cell::new(self.transition_duration),
             mounted: Cell::new(false),
         });
@@ -207,9 +227,9 @@ impl<R: Routable> StatefulView for Router<R> {
             shared: Rc::downgrade(&shared),
         });
         RouterState {
-            shared,
-            observer,
-            initial: self.initial.clone(),
+            shared: Terminal::new(shared),
+            observer: Terminal::new(observer),
+            initial: clone_routes(&self.initial),
         }
     }
 }
@@ -217,8 +237,8 @@ impl<R: Routable> StatefulView for Router<R> {
 /// Persistent state for [`Router`]. Opaque: it is public only because
 /// [`StatefulView::State`] names it.
 pub struct RouterState<R: Routable> {
-    shared: Rc<RouterShared<R>>,
-    observer: Arc<dyn NavigatorObserver>,
+    shared: Terminal<Rc<RouterShared<R>>>,
+    observer: Terminal<Arc<dyn NavigatorObserver>>,
     /// Seeded in `init_state`, which receives no view.
     initial: Vec<R>,
 }
@@ -228,6 +248,15 @@ impl<R: Routable> fmt::Debug for RouterState<R> {
         f.debug_struct("RouterState")
             .field("location", &self.shared.location().map(|p| p.to_string()))
             .finish_non_exhaustive()
+    }
+}
+
+impl<R: Routable> Drop for RouterState<R> {
+    fn drop(&mut self) {
+        let shared = self.shared.withdraw();
+        let observer = self.observer.withdraw();
+        let initial = RetiredValues(std::mem::take(&mut self.initial));
+        drop((shared, observer, initial));
     }
 }
 
@@ -315,27 +344,38 @@ impl<T> Drop for RouterRetiredValues<T> {
 pub(super) struct RouterShared<R: Routable> {
     /// The navigator the pages live on, addressed so its facade refuses pages
     /// that are not `R`.
-    pub(super) navigator: NavigatorHandle,
+    pub(super) navigator: Terminal<NavigatorHandle>,
     /// One entry per page on `navigator`, bottom to top; never empty while
     /// mounted. Popups are not here.
     pub(super) stack: RefCell<Vec<RouterEntry<R>>>,
     /// Shared with every page's builder, so a new builder reaches pages
     /// already on the stack.
-    page: Rc<RefCell<PageBuilder<R>>>,
+    page: Terminal<Rc<RefCell<PageBuilder<R>>>>,
     /// Shared with every page's transitions, as `page` is.
-    transitions: Rc<RefCell<Option<RouteTransitionsBuilder>>>,
+    transitions: Terminal<Rc<RefCell<Option<RouteTransitionsBuilder>>>>,
     /// Read when a page is placed; a page keeps the duration it was placed
     /// with.
     transition_duration: Cell<Option<Duration>>,
     pub(super) mounted: Cell<bool>,
 }
 
+impl<R: Routable> Drop for RouterShared<R> {
+    fn drop(&mut self) {
+        self.mounted.set(false);
+        let navigator = self.navigator.withdraw();
+        let stack = RetiredValues(std::mem::take(self.stack.get_mut()));
+        let page = self.page.withdraw();
+        let transitions = self.transitions.withdraw();
+        drop((navigator, stack, page, transitions));
+    }
+}
+
 impl<R: Routable> RouterShared<R> {
     /// The page route for `route`: a [`PageRoute`] named with its path, whose
     /// page scopes a semantics route (and names it, when `route` has a label).
     pub(super) fn page_route(&self, route: &R) -> PageRoute<()> {
-        let builder = Rc::clone(&self.page);
-        let value = route.clone();
+        let builder = Terminal::new(Rc::clone(&self.page));
+        let value = Terminal::new(route.clone());
         let label = route.semantics_label();
         let mut page = PageRoute::<()>::new(move |cx, _animation, _secondary| {
             let page = builder.borrow().clone();
@@ -350,7 +390,7 @@ impl<R: Routable> RouterShared<R> {
         .named(route.to_path().as_str());
         // Read at each build, so new transitions reach this page; with none,
         // the page's own default, a jump cut.
-        let transitions = Rc::clone(&self.transitions);
+        let transitions = Terminal::new(Rc::clone(&self.transitions));
         page = page.transitions(move |cx, animation, secondary, child| {
             let current = transitions.borrow().clone();
             match current {

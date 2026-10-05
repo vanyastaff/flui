@@ -241,8 +241,9 @@ impl<R: NavigatorRoute> ErasedPush for R {
         (id, Box::new(result))
     }
 
-    fn dispose_unpushed(mut self: Box<Self>) {
-        Route::dispose(&mut *self);
+    fn dispose_unpushed(self: Box<Self>) {
+        let mut owner = super::lifecycle::Terminal::new(self);
+        Route::dispose(&mut **owner);
     }
 
     fn is_pageless_popup(&self) -> bool {
@@ -299,7 +300,11 @@ pub struct GeneratedRoute {
 impl Drop for GeneratedRoute {
     fn drop(&mut self) {
         if let Some(unpushed) = self.push.take() {
-            unpushed.dispose_unpushed();
+            if std::thread::panicking() {
+                std::mem::forget(unpushed);
+            } else {
+                unpushed.dispose_unpushed();
+            }
         }
     }
 }
@@ -741,6 +746,17 @@ struct RegisteredRoute {
     output_name: &'static str,
 }
 
+impl Drop for Registrations {
+    fn drop(&mut self) {
+        let table = super::lifecycle::RetiredMap(std::mem::take(&mut self.table));
+        let generate = super::lifecycle::Terminal::new(self.generate.take());
+        let unknown = super::lifecycle::Terminal::new(self.unknown.take());
+        drop(table);
+        drop(generate);
+        drop(unknown);
+    }
+}
+
 impl RouteRegistry {
     /// Bind `name` to `factory`, replacing any previous binding.
     ///
@@ -837,7 +853,11 @@ impl RouteRegistry {
                 registrations.unknown.take(),
             )
         };
-        drop(dropped);
+        let (table, generate, unknown) = dropped;
+        let table = super::lifecycle::RetiredMap(table);
+        let generate = super::lifecycle::Terminal::new(generate);
+        let unknown = super::lifecycle::Terminal::new(unknown);
+        drop((table, generate, unknown));
     }
 
     /// Install the catch-all generator.

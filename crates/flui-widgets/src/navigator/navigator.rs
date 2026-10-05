@@ -121,27 +121,27 @@ fn register_command_target(shared: &Arc<NavigatorShared>) -> NavigatorCommandTar
 /// The route stack lives behind a private `Mutex` because `ViewState::build` takes
 /// `&self` and nothing can obtain `&mut NavigatorState`.
 struct NavigatorShared {
-    history: Mutex<RouteHistory>,
+    history: super::lifecycle::Terminal<Mutex<RouteHistory>>,
 
     /// The overlay this navigator presents its routes in, held as a capability
     /// directly rather than looked up through a `GlobalKey`.
-    overlay: OverlayHandle,
+    overlay: super::lifecycle::Terminal<OverlayHandle>,
 
     /// The `RouteId`-keyed maps every binding shares: overlay entries, transition
     /// peers, page subtrees and modal (`offstage`) controls. FLUI's routes live
     /// behind `Box<dyn ErasedRoute>` inside the history's mutex, so they publish
     /// here instead of being read off the route object (ADR-0019).
-    registries: RouteRegistries,
+    registries: super::lifecycle::Terminal<Arc<RouteRegistries>>,
 
     /// This navigator's name → route table and its two generator hooks, folded
     /// into a single resolution path. Owned per navigator, so two navigators
     /// resolve the same name independently.
-    named_routes: RouteRegistry,
+    named_routes: super::lifecycle::Terminal<RouteRegistry>,
 
     /// The clock this navigator's route transitions register with.
     /// Resolved from an ambient `VsyncScope` in `init_state`; `None` when there is
     /// none, in which case each controller falls back to its own wall-clock ticker.
-    vsync: RouteVsync,
+    vsync: super::lifecycle::Terminal<RouteVsync>,
 
     /// The binding's post-frame capability and render tree, both read **once** from
     /// `NavigatorState::init_state` — a lifecycle hook, since only `LifecycleContext`
@@ -203,7 +203,7 @@ struct NavigatorShared {
     /// animation callback back to owner-local code. `HeroFlight` subscribes
     /// once, for its whole life, to replay a terminal status update parked
     /// mid-gesture.
-    user_gesture_in_progress_notifier: ChangeNotifier,
+    user_gesture_in_progress_notifier: super::lifecycle::Terminal<ChangeNotifier>,
 
     /// What a push's
     /// [`PushCompletion::Animating`](super::route::PushCompletion::Animating)
@@ -219,11 +219,128 @@ struct NavigatorShared {
     /// `push_with_id` flushes before the Navigator ever mounts (`history.rs`),
     /// so a route pushed pre-mount registers its continuation while this slot
     /// is still `None`, and only a later mount fills it.
-    settle_wake: Arc<Mutex<Option<RebuildHandle>>>,
+    settle_wake: super::lifecycle::Terminal<Arc<Mutex<Option<RebuildHandle>>>>,
 
     /// `Some` when a `Router` drives this navigator; fixed at construction.
     /// See `addressing.rs` for what it refuses.
     addressing: Option<Addressing>,
+}
+
+impl Drop for NavigatorShared {
+    fn drop(&mut self) {
+        self.registries.close();
+        let history = self.history.withdraw();
+        let overlay = self.overlay.withdraw();
+        let registries = self.registries.withdraw();
+        let named = self.named_routes.withdraw();
+        let vsync = self.vsync.withdraw();
+        let post_frame = super::lifecycle::Terminal::new(self.post_frame.get_mut().take());
+        let render_tree = super::lifecycle::Terminal::new(self.render_tree.get_mut().take());
+        self.observers_attached.store(false, Ordering::Release);
+        let observers = super::lifecycle::RetiredValues(std::mem::take(self.observers.get_mut()));
+        let auto = super::lifecycle::Terminal::new(self.auto_hero_observer.get_mut().take());
+        let nested = self.nested_hero_registration.get_mut().take();
+        let (nested_registry, nested_source) = match nested {
+            Some((registry, source)) => (Some(registry), Some(source)),
+            None => (None, None),
+        };
+        let nested_registry = super::lifecycle::Terminal::new(nested_registry);
+        let nested_source = super::lifecycle::Terminal::new(nested_source);
+        let notifier = self.user_gesture_in_progress_notifier.withdraw();
+        let settle = self.settle_wake.withdraw();
+        drop((
+            history,
+            overlay,
+            registries,
+            named,
+            vsync,
+            post_frame,
+            render_tree,
+            observers,
+            auto,
+            nested_registry,
+            nested_source,
+            notifier,
+            settle,
+        ));
+    }
+}
+
+#[cfg(test)]
+pub(super) fn terminal_binding_authority_is_closed_before_route_retirement() {
+    use super::binding::RouteBindingSlot;
+    use std::cell::Cell;
+
+    struct ClosingRoute {
+        settings: RouteSettings,
+        slot: RouteBindingSlot,
+        on_drop: Rc<dyn Fn()>,
+    }
+    impl Route for ClosingRoute {
+        type Output = ();
+        fn settings(&self) -> &RouteSettings {
+            &self.settings
+        }
+    }
+    impl NavigatorRoute for ClosingRoute {
+        fn content_builder(&self) -> super::overlay_route::RouteContentBuilder {
+            Rc::new(|_| crate::Text::new("closing route").boxed())
+        }
+        fn binding_slot(&self) -> Option<&RouteBindingSlot> {
+            Some(&self.slot)
+        }
+    }
+    impl Drop for ClosingRoute {
+        fn drop(&mut self) {
+            (self.on_drop)();
+        }
+    }
+
+    let navigator = NavigatorHandle::new();
+    let entries = navigator.shared.registries.entries.clone();
+    let queue = navigator.shared.history.lock().command_queue();
+    let slot = RouteBindingSlot::new();
+    let observed = Rc::new(Cell::new(false));
+    let callback_slot = slot.clone();
+    let callback_entries = Arc::clone(&entries);
+    let callback_queue = Arc::clone(&queue);
+    let callback_observed = Rc::clone(&observed);
+    navigator.seed_initial(ClosingRoute {
+        settings: RouteSettings::default(),
+        slot: slot.clone(),
+        on_drop: Rc::new(move || {
+            let binding = callback_slot.get().expect("installed route has a binding");
+            binding.set_entry_opaque(true);
+            binding.finalize();
+            assert!(
+                !callback_entries
+                    .lock()
+                    .values()
+                    .next()
+                    .expect("physical alias retains entry")
+                    .opaque()
+            );
+            assert!(callback_queue.lock().is_empty());
+            callback_observed.set(true);
+        }),
+    });
+    drop(navigator);
+    assert!(observed.get(), "the actual route owner must retire");
+    let binding = slot.get().expect("a genuine slot alias remains usable");
+    binding.set_entry_opaque(true);
+    binding.finalize();
+    assert!(
+        !entries
+            .lock()
+            .values()
+            .next()
+            .expect("physical alias retains entry")
+            .opaque()
+    );
+    assert!(
+        queue.lock().is_empty(),
+        "closed authority cannot enqueue orphan commands"
+    );
 }
 
 impl NavigatorShared {
@@ -867,17 +984,11 @@ impl NavigatorHandle {
 
     fn with_addressing(addressing: Option<Addressing>) -> Self {
         let shared = Arc::new(NavigatorShared {
-            history: Mutex::new(RouteHistory::new()),
-            overlay: OverlayHandle::new(),
-            vsync: Arc::new(Mutex::new(None)),
-            registries: RouteRegistries {
-                peers: Arc::new(Mutex::new(HashMap::new())),
-                entries: Arc::new(Mutex::new(HashMap::new())),
-                subtrees: Arc::new(Mutex::new(HashMap::new())),
-                modals: Arc::new(Mutex::new(HashMap::new())),
-                pop_pacing: Arc::new(Mutex::new(HashMap::new())),
-            },
-            named_routes: RouteRegistry::default(),
+            history: super::lifecycle::Terminal::new(Mutex::new(RouteHistory::new())),
+            overlay: super::lifecycle::Terminal::new(OverlayHandle::new()),
+            vsync: super::lifecycle::Terminal::new(Arc::new(Mutex::new(None))),
+            registries: super::lifecycle::Terminal::new(Arc::new(RouteRegistries::new())),
+            named_routes: super::lifecycle::Terminal::new(RouteRegistry::default()),
             post_frame: Mutex::new(None),
             render_tree: Mutex::new(None),
             observers: Mutex::new(Vec::new()),
@@ -885,8 +996,10 @@ impl NavigatorHandle {
             observers_attached: AtomicBool::new(false),
             nested_hero_registration: Mutex::new(None),
             user_gestures_in_progress: Arc::new(AtomicU32::new(0)),
-            user_gesture_in_progress_notifier: ChangeNotifier::new(),
-            settle_wake: Arc::new(Mutex::new(None)),
+            user_gesture_in_progress_notifier: super::lifecycle::Terminal::new(
+                ChangeNotifier::new(),
+            ),
+            settle_wake: super::lifecycle::Terminal::new(Arc::new(Mutex::new(None))),
             addressing,
         });
         let command_target = register_command_target(&shared);

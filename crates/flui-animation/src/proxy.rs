@@ -1,6 +1,8 @@
 //! `ProxyAnimation` - wraps another animation, allowing hot-swapping.
 
-use crate::animation::{Animation, ParentSubscription, StatusCallback, link_parent};
+use crate::animation::{
+    Animation, ParentSubscription, Retirement, StatusCallback, Terminal, link_parent,
+};
 use crate::status::AnimationStatus;
 use flui_foundation::{ChangeNotifier, Listenable, ListenerCallback, ListenerId};
 use parking_lot::{Mutex, RwLock};
@@ -32,11 +34,11 @@ impl StatusListeners {
 /// Snapshot-then-fire so user callbacks run without the registry lock held
 /// (a callback may re-enter add/remove_status_listener).
 fn fan_out_status(listeners: &Mutex<StatusListeners>, status: AnimationStatus) {
-    let snapshot: Vec<StatusCallback> = listeners
+    let snapshot: Vec<Terminal<StatusCallback>> = listeners
         .lock()
         .listeners
         .iter()
-        .map(|(_, cb)| Arc::clone(cb))
+        .map(|(_, cb)| Terminal::new(Arc::clone(cb)))
         .collect();
     for cb in snapshot {
         cb(status);
@@ -77,16 +79,55 @@ pub struct ProxyAnimation<T>
 where
     T: Clone + Send + Sync + 'static,
 {
-    parent: Arc<RwLock<Arc<dyn Animation<T>>>>,
-    notifier: Arc<ChangeNotifier>,
-    /// Re-emits the current parent's value changes; swapped (old removed) on
-    /// `set_parent`, removed entirely on the last clone's drop.
-    parent_sub: Arc<RwLock<Arc<ParentSubscription>>>,
-    /// Proxy-owned status listeners; fed by a per-parent forwarder.
-    status_listeners: Arc<Mutex<StatusListeners>>,
-    /// Removes the status forwarder from the current parent; swapped on
-    /// `set_parent`, removed entirely on the last clone's drop.
-    status_sub: Arc<RwLock<Arc<ParentSubscription>>>,
+    inner: Arc<ProxyOwner<T>>,
+}
+
+struct ProxyOwner<T: Clone + Send + Sync + 'static> {
+    parent: RwLock<Terminal<Arc<dyn Animation<T>>>>,
+    notifier: Terminal<Arc<ChangeNotifier>>,
+    parent_sub: RwLock<Terminal<Arc<ParentSubscription>>>,
+    status_listeners: Terminal<Arc<Mutex<StatusListeners>>>,
+    status_sub: RwLock<Terminal<Arc<ParentSubscription>>>,
+}
+
+impl<T: Clone + Send + Sync + 'static> Drop for ProxyOwner<T> {
+    fn drop(&mut self) {
+        let parent = self.parent.get_mut().withdraw();
+        let notifier = self.notifier.withdraw();
+        let value_sub = self.parent_sub.get_mut().withdraw();
+        let status_sub = self.status_sub.get_mut().withdraw();
+        let listeners = self.status_listeners.withdraw();
+        let callbacks: Vec<_> = std::mem::take(&mut listeners.lock().listeners)
+            .into_iter()
+            .map(|(_, callback)| Terminal::new(callback))
+            .collect();
+        let mut retirement = Retirement::new();
+        value_sub.detach(&mut retirement);
+        status_sub.detach(&mut retirement);
+        retirement.retire(value_sub);
+        retirement.retire(status_sub);
+        retirement.retire(parent);
+        for callback in callbacks {
+            retirement.retire(callback);
+        }
+        retirement.retire(listeners);
+        retirement.retire(notifier);
+        retirement.finish();
+    }
+}
+
+impl Drop for StatusListeners {
+    fn drop(&mut self) {
+        let callbacks: Vec<_> = std::mem::take(&mut self.listeners)
+            .into_iter()
+            .map(|(_, callback)| Terminal::new(callback))
+            .collect();
+        let mut retirement = Retirement::new();
+        for callback in callbacks {
+            retirement.retire(callback);
+        }
+        retirement.finish();
+    }
 }
 
 /// Subscribe a status forwarder on `parent` that fans out to `listeners`.
@@ -121,16 +162,19 @@ where
     /// * `parent` - The initial parent animation
     #[must_use]
     pub fn new(parent: Arc<dyn Animation<T>>) -> Self {
+        let parent = Terminal::new(parent);
         let notifier = Arc::new(ChangeNotifier::new());
         let parent_sub = link_parent(&parent, &notifier);
         let status_listeners = Arc::new(Mutex::new(StatusListeners::new()));
         let status_sub = link_parent_status(&parent, &status_listeners);
         Self {
-            parent: Arc::new(RwLock::new(parent)),
-            notifier,
-            parent_sub: Arc::new(RwLock::new(parent_sub)),
-            status_listeners,
-            status_sub: Arc::new(RwLock::new(status_sub)),
+            inner: Arc::new(ProxyOwner {
+                parent: RwLock::new(parent),
+                notifier: Terminal::new(notifier),
+                parent_sub: RwLock::new(Terminal::new(parent_sub)),
+                status_listeners: Terminal::new(status_listeners),
+                status_sub: RwLock::new(Terminal::new(status_sub)),
+            }),
         }
     }
 
@@ -138,7 +182,7 @@ where
     #[inline]
     #[must_use]
     pub fn parent(&self) -> Arc<dyn Animation<T>> {
-        self.parent.read().clone()
+        self.inner.parent.read().get().clone()
     }
 
     /// Set a new parent animation.
@@ -147,26 +191,37 @@ where
     /// bound, so the proxy cannot compare old vs. new). Status listeners are
     /// notified only when the status actually differs across the swap.
     pub fn set_parent(&self, new_parent: Arc<dyn Animation<T>>) {
-        let old_status = self.parent().status();
+        let new_parent = Terminal::new(new_parent);
+        let previous_parent = Terminal::new(self.parent());
+        let old_status = previous_parent.status();
         // Subscribe to the new parent first, then swap; replacing the stored
         // subscriptions drops the old ones, which removes the value listener
         // and status forwarder from the previous parent.
-        let new_sub = link_parent(&new_parent, &self.notifier);
-        let new_status_sub = link_parent_status(&new_parent, &self.status_listeners);
+        let new_sub = link_parent(&new_parent, &self.inner.notifier);
+        let new_status_sub = link_parent_status(&new_parent, &self.inner.status_listeners);
         let new_status = new_parent.status();
-        let old_parent = std::mem::replace(&mut *self.parent.write(), new_parent);
-        let old_parent_sub = std::mem::replace(&mut *self.parent_sub.write(), new_sub);
-        let old_status_sub = std::mem::replace(&mut *self.status_sub.write(), new_status_sub);
+        let old_parent = std::mem::replace(&mut *self.inner.parent.write(), new_parent);
+        let old_parent_sub =
+            std::mem::replace(&mut *self.inner.parent_sub.write(), Terminal::new(new_sub));
+        let old_status_sub = std::mem::replace(
+            &mut *self.inner.status_sub.write(),
+            Terminal::new(new_status_sub),
+        );
         // Drop the displaced subscriptions after the write guards release: a
         // `ParentSubscription` drop removes a listener from the (old) parent,
         // which takes the parent's own lock, so dropping it under a guard here
         // would invert the lock order.
-        drop(old_parent);
-        drop(old_parent_sub);
-        drop(old_status_sub);
-        self.notifier.notify_listeners();
+        let mut retirement = Retirement::new();
+        old_parent_sub.detach(&mut retirement);
+        old_status_sub.detach(&mut retirement);
+        retirement.retire(old_parent_sub);
+        retirement.retire(old_status_sub);
+        retirement.retire(old_parent);
+        retirement.retire(previous_parent);
+        retirement.finish();
+        self.inner.notifier.notify_listeners();
         if new_status != old_status {
-            fan_out_status(&self.status_listeners, new_status);
+            fan_out_status(&self.inner.status_listeners, new_status);
         }
     }
 }
@@ -186,7 +241,7 @@ where
     }
 
     fn add_status_listener(&self, callback: StatusCallback) -> ListenerId {
-        let mut reg = self.status_listeners.lock();
+        let mut reg = self.inner.status_listeners.lock();
         let id = ListenerId::new(reg.next_id);
         reg.next_id += 1;
         reg.listeners.push((id, callback));
@@ -194,10 +249,15 @@ where
     }
 
     fn remove_status_listener(&self, id: ListenerId) {
-        self.status_listeners
-            .lock()
-            .listeners
-            .retain(|(listener_id, _)| *listener_id != id);
+        let removed = {
+            let mut listeners = self.inner.status_listeners.lock();
+            listeners
+                .listeners
+                .iter()
+                .position(|(candidate, _)| *candidate == id)
+                .map(|index| listeners.listeners.remove(index).1)
+        };
+        drop(Terminal::new(removed));
     }
 }
 
@@ -206,15 +266,15 @@ where
     T: Clone + Send + Sync + 'static,
 {
     fn add_listener(&self, callback: ListenerCallback) -> ListenerId {
-        self.notifier.add_listener(callback)
+        self.inner.notifier.add_listener(callback)
     }
 
     fn remove_listener(&self, id: ListenerId) {
-        self.notifier.remove_listener(id);
+        self.inner.notifier.remove_listener(id);
     }
 
     fn remove_all_listeners(&self) {
-        self.notifier.remove_all_listeners();
+        self.inner.notifier.remove_all_listeners();
     }
 }
 

@@ -18,6 +18,7 @@ fn navigator_failure_containment_and_reentrancy() {
             ("navigator_public::a_factory_that_pushes_re_entrantly_does_not_deadlock", crate::navigator_public::a_factory_that_pushes_re_entrantly_does_not_deadlock),
             ("navigator_public::a_mismatched_pop_result_is_reported_and_dropped_outside_the_history_lock", crate::navigator_public::a_mismatched_pop_result_is_reported_and_dropped_outside_the_history_lock),
             ("navigator_public::every_operation_that_cannot_deliver_a_result_reports_it", crate::navigator_public::every_operation_that_cannot_deliver_a_result_reports_it),
+            ("navigator_public::delivered_route_results_remain_completed", crate::navigator_public::delivered_route_results_remain_completed),
             ("navigator_public::push_named_typed_with_the_wrong_result_type_errors_disposes_the_route_and_changes_nothing", crate::navigator_public::push_named_typed_with_the_wrong_result_type_errors_disposes_the_route_and_changes_nothing),
             ("navigator_public::a_route_key_carries_its_result_type_from_registration_to_delivery", crate::navigator_public::a_route_key_carries_its_result_type_from_registration_to_delivery),
             ("hero_controller::a_hero_controller_does_not_deadlock_the_observer_callback", crate::hero_controller::a_hero_controller_does_not_deadlock_the_observer_callback),

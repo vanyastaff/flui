@@ -20,6 +20,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::common::{lay_out, loose};
+use flui_widgets::RouteParseError;
 use parking_lot::Mutex;
 
 // Exercise the public prelude import path.
@@ -28,6 +29,189 @@ use flui_widgets::{
     NamedRouteError, NavigatorCommand, NavigatorCommandTarget, NavigatorObserver, NavigatorRoute,
     Route, RouteContentBuilder, RouteId, RouteKey, RouteRequest, RouteSettings,
 };
+
+/// A restored raw route owner can abort during parser unwind, so each row runs
+/// in a bounded child process while still calling the public default producer.
+#[test]
+fn default_back_stack_parser_retirement_competition() {
+    use std::io::Read;
+    use std::process::{Command, Stdio};
+    use std::sync::atomic::AtomicBool;
+    use std::time::{Duration, Instant};
+
+    const CHILD: &str = "FLUI_BACK_STACK_RETIREMENT_CHILD";
+    if let Ok(case) = std::env::var(CHILD) {
+        static PARSER_FAILS: AtomicBool = AtomicBool::new(true);
+        static FULL_FAILS: AtomicBool = AtomicBool::new(false);
+        static PREFIX_FAILS: AtomicBool = AtomicBool::new(false);
+        static FULL_DROPS: AtomicUsize = AtomicUsize::new(0);
+        static PREFIX_DROPS: AtomicUsize = AtomicUsize::new(0);
+
+        #[derive(Clone, PartialEq)]
+        struct ParsedRoute(&'static str);
+        impl Drop for ParsedRoute {
+            fn drop(&mut self) {
+                let (drops, fails) = if self.0 == "/a/b" {
+                    (&FULL_DROPS, &FULL_FAILS)
+                } else {
+                    (&PREFIX_DROPS, &PREFIX_FAILS)
+                };
+                drops.fetch_add(1, Ordering::Relaxed);
+                assert!(
+                    !fails.load(Ordering::Relaxed),
+                    "competing parsed route retirement"
+                );
+            }
+        }
+        impl Routable for ParsedRoute {
+            fn to_path(&self) -> RoutePath {
+                RoutePath::parse(self.0).expect("fixture route path")
+            }
+            fn from_path(path: &RoutePath) -> Result<Self, RouteParseError> {
+                match path.as_str() {
+                    "/a/b" => Ok(Self("/a/b")),
+                    "/" => Ok(Self("/")),
+                    "/a" => {
+                        assert!(
+                            !PARSER_FAILS.load(Ordering::Relaxed),
+                            "first prefix parser failure"
+                        );
+                        Ok(Self("/a"))
+                    }
+                    _ => Err(RouteParseError::NoMatch { path: path.clone() }),
+                }
+            }
+        }
+
+        assert!(matches!(
+            case.as_str(),
+            "parser" | "full" | "prefix" | "both"
+        ));
+        FULL_FAILS.store(matches!(case.as_str(), "full" | "both"), Ordering::Relaxed);
+        PREFIX_FAILS.store(
+            matches!(case.as_str(), "prefix" | "both"),
+            Ordering::Relaxed,
+        );
+        let path = RoutePath::parse("/a/b").expect("fixture path");
+        let failure = std::panic::catch_unwind(|| {
+            let _ = ParsedRoute::back_stack(&path);
+        })
+        .expect_err("later prefix parser failure propagates");
+        assert_eq!(
+            flui_foundation::panic::payload_text(failure.as_ref()),
+            Some("first prefix parser failure")
+        );
+        assert_eq!(
+            FULL_DROPS.load(Ordering::Relaxed),
+            0,
+            "accepted full route retained during parser unwind"
+        );
+        assert_eq!(
+            PREFIX_DROPS.load(Ordering::Relaxed),
+            0,
+            "accepted prefix tail retained during parser unwind"
+        );
+
+        PARSER_FAILS.store(false, Ordering::Relaxed);
+        FULL_FAILS.store(false, Ordering::Relaxed);
+        PREFIX_FAILS.store(false, Ordering::Relaxed);
+        let stack = ParsedRoute::back_stack(&path).expect("next healthy default parse");
+        assert_eq!(
+            stack.iter().map(|route| route.0).collect::<Vec<_>>(),
+            ["/", "/a", "/a/b"]
+        );
+        drop(stack);
+        assert_eq!(
+            FULL_DROPS.load(Ordering::Relaxed),
+            1,
+            "healthy full route retires normally"
+        );
+        assert_eq!(
+            PREFIX_DROPS.load(Ordering::Relaxed),
+            2,
+            "healthy prefix routes retire normally"
+        );
+        return;
+    }
+
+    let mut failures = Vec::new();
+    for case in ["parser", "full", "prefix", "both"] {
+        let mut child = Command::new(std::env::current_exe().expect("test executable"))
+            .args([
+                "--exact",
+                "navigator_public::default_back_stack_parser_retirement_competition",
+                "--nocapture",
+            ])
+            .env(CHILD, case)
+            .env("RUST_BACKTRACE", "0")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("back-stack retirement child");
+        let mut stdout = child.stdout.take().expect("stdout");
+        let mut stderr = child.stderr.take().expect("stderr");
+        let stdout_reader = std::thread::spawn(move || {
+            let mut text = String::new();
+            stdout.read_to_string(&mut text).expect("child stdout");
+            text
+        });
+        let stderr_reader = std::thread::spawn(move || {
+            let mut text = String::new();
+            stderr.read_to_string(&mut text).expect("child stderr");
+            text
+        });
+        let started = Instant::now();
+        while child.try_wait().expect("child status").is_none() {
+            if started.elapsed() > Duration::from_secs(10) {
+                child.kill().expect("kill deadlocked child");
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let status = child.wait().expect("child exit");
+        let stdout = stdout_reader.join().expect("stdout reader");
+        let stderr = stderr_reader.join().expect("stderr reader");
+        if !status.success() || !stdout.contains("1 passed; 0 failed") {
+            failures.push(format!("{case}: {status}\n{stdout}\n{stderr}"));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+pub(crate) fn delivered_route_results_remain_completed() {
+    use std::future::Future as _;
+    use std::pin::Pin;
+    use std::task::{Context, Poll, Waker};
+
+    for (asynchronous, expected) in [
+        (false, Some(42)),
+        (true, Some(42)),
+        (false, None),
+        (true, None),
+    ] {
+        let navigator = NavigatorHandle::new();
+        let built = Built::default();
+        navigator.push(page(&built, "root"));
+        let mut result = navigator.push(page(&built, "details"));
+        assert!(!result.is_completed());
+        assert!(expected.map_or_else(|| navigator.pop(), |value| navigator.pop_with(value)));
+        assert!(result.is_completed());
+        if asynchronous {
+            let mut context = Context::from_waker(Waker::noop());
+            assert_eq!(
+                Pin::new(&mut result).poll(&mut context),
+                Poll::Ready(expected)
+            );
+        } else {
+            assert_eq!(result.try_take(), Some(expected));
+        }
+        assert!(result.is_completed(), "delivery must preserve completion");
+        assert_eq!(result.try_take(), None, "a value is delivered once");
+        let next = navigator.push(page(&built, "next"));
+        assert!(navigator.pop_with(43));
+        assert_eq!(next.try_take(), Some(Some(43)));
+    }
+}
 
 // ============================================================================
 // PROBES

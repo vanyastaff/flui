@@ -76,7 +76,7 @@ impl OverlayEntryId {
 struct EntryInner {
     id: OverlayEntryId,
 
-    builder: OverlayBuilder,
+    builder: crate::support::retirement::Terminal<OverlayBuilder>,
 
     /// Published by the entry's `ViewState` in `init_state`, cleared in
     /// `dispose`. `None` before mount and after unmount, which makes
@@ -103,6 +103,16 @@ struct EntryInner {
     overlay: Mutex<Option<Weak<OverlayShared>>>,
 }
 
+impl Drop for EntryInner {
+    fn drop(&mut self) {
+        let builder = self.builder.withdraw();
+        let rebuild = crate::support::retirement::Terminal::new(self.rebuild.get_mut().take());
+        self.overlay.get_mut().take();
+        drop(builder);
+        drop(rebuild);
+    }
+}
+
 /// A cheap, cloneable handle to one overlay layer.
 ///
 /// Cloning an `OverlayEntry` clones the handle, not the layer: every clone names
@@ -124,7 +134,7 @@ impl OverlayEntry {
         Self {
             inner: Arc::new(EntryInner {
                 id: OverlayEntryId::next(),
-                builder: Rc::new(builder),
+                builder: crate::support::retirement::Terminal::new(Rc::new(builder)),
                 rebuild: Mutex::new(None),
                 opaque: AtomicBool::new(false),
                 maintain_state: AtomicBool::new(false),

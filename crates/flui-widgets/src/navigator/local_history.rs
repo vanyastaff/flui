@@ -133,6 +133,16 @@ struct RegistryInner {
     closed: AtomicBool,
 }
 
+impl Drop for RegistryInner {
+    fn drop(&mut self) {
+        self.closed.store(true, Ordering::Release);
+        let entries = super::lifecycle::RetiredValues(std::mem::take(self.entries.get_mut()));
+        let owed = super::lifecycle::RetiredValues(std::mem::take(self.owed.get_mut()));
+        drop(entries);
+        drop(owed);
+    }
+}
+
 impl LocalHistoryRegistry {
     pub(crate) fn new() -> Self {
         Self::default()
@@ -353,17 +363,35 @@ impl std::fmt::Debug for LocalHistoryEntryHandle {
 /// Provides the enclosing route's [`LocalHistoryHandle`] to the page subtree —
 /// the `PopEntryScope`/`HeroScope` pattern. Never notifies: the handle is
 /// fixed for the route's lifetime.
-#[derive(Clone)]
 pub(crate) struct LocalHistoryScope {
-    handle: LocalHistoryHandle,
-    child: BoxedView,
+    handle: crate::navigator::lifecycle::Terminal<LocalHistoryHandle>,
+    child: crate::navigator::lifecycle::Terminal<BoxedView>,
+}
+
+impl Clone for LocalHistoryScope {
+    fn clone(&self) -> Self {
+        Self {
+            handle: crate::navigator::lifecycle::Terminal::new(self.handle.clone()),
+            child: crate::navigator::lifecycle::Terminal::new(self.child.clone()),
+        }
+    }
+}
+
+impl Drop for LocalHistoryScope {
+    fn drop(&mut self) {
+        let handle = self.handle.withdraw();
+        let child = self.child.withdraw();
+        drop((handle, child));
+    }
 }
 
 impl LocalHistoryScope {
     pub(crate) fn new(handle: LocalHistoryHandle, child: impl IntoView) -> Self {
         Self {
-            handle,
-            child: BoxedView(Box::new(child.into_view())),
+            handle: crate::navigator::lifecycle::Terminal::new(handle),
+            child: crate::navigator::lifecycle::Terminal::new(BoxedView(Box::new(
+                child.into_view(),
+            ))),
         }
     }
 }
@@ -384,7 +412,7 @@ impl InheritedView for LocalHistoryScope {
     }
 
     fn child(&self) -> &dyn View {
-        &self.child
+        &*self.child
     }
 
     fn update_should_notify(&self, _old: &Self) -> bool {

@@ -492,9 +492,18 @@ pub(crate) trait ErasedRoute {
 /// A typed [`Route`] plus the framework-owned state: id, pop completer, installed flag.
 pub(crate) struct RouteRecord<R: Route> {
     id: RouteId,
-    route: R,
-    completer: Completer<R::Output>,
+    route: super::lifecycle::Terminal<R>,
+    completer: super::lifecycle::Terminal<Completer<R::Output>>,
     installed: bool,
+}
+
+impl<R: Route> Drop for RouteRecord<R> {
+    fn drop(&mut self) {
+        let route = self.route.withdraw();
+        let completer = self.completer.withdraw();
+        drop(route);
+        drop(completer);
+    }
 }
 
 impl<R: Route> RouteRecord<R> {
@@ -518,8 +527,8 @@ impl<R: Route> RouteRecord<R> {
         let (completer, result) = Completer::new();
         let record = Self {
             id,
-            route,
-            completer,
+            route: super::lifecycle::Terminal::new(route),
+            completer: super::lifecycle::Terminal::new(completer),
             installed: false,
         };
         (Box::new(record), result)

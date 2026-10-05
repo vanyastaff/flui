@@ -121,11 +121,11 @@ struct ModalInner {
     barrier_color: Mutex<Option<Color>>,
 
     /// Builds the page.
-    page: RoutePageBuilder,
+    page: super::lifecycle::Terminal<RoutePageBuilder>,
     /// Builds the transitions, defaulting to a jump cut. A cell because the
     /// content closure captures `inner` at construction, before a
     /// `.transitions(…)` builder can run.
-    transitions: Mutex<RouteTransitionsBuilder>,
+    transitions: super::lifecycle::Terminal<Mutex<RouteTransitionsBuilder>>,
     /// Set once, immediately after the `TransitionRoute` is constructed. The
     /// content builder is `Arc`-captured *before* that route exists, so the two
     /// cannot be wired the other way round.
@@ -140,7 +140,7 @@ struct ModalInner {
     /// has the property `AnimatedView` needs: the same
     /// object every time `listenable()` is called, even though the `ModalScope`
     /// view is rebuilt on every overlay-entry build.
-    relay: Arc<ChangeNotifier>,
+    relay: super::lifecycle::Terminal<Arc<ChangeNotifier>>,
     /// The relay's subscriptions to the two animations, opened in `install` and
     /// closed in `dispose`. `Listenable` has no `Drop`-based unsubscribe.
     relay_subscriptions: Mutex<Vec<(RouteAnimation, ListenerId)>>,
@@ -153,13 +153,13 @@ struct ModalInner {
     /// That swap is the entire reason an offstage route lays out at its
     /// *final* geometry rather than wherever its entrance transition happens to be:
     /// `HeroController` measures the destination one frame before the flight.
-    primary: Arc<ProxyAnimation<f64>>,
+    primary: super::lifecycle::Terminal<Arc<ProxyAnimation<f64>>>,
     /// The secondary animation proxy.
     ///
     /// Parent is the `TransitionRoute` secondary train, or an always-dismissed
     /// animation while offstage — an offstage route must not be pushed aside by
     /// whatever sits above it either.
-    secondary: Arc<ProxyAnimation<f64>>,
+    secondary: super::lifecycle::Terminal<Arc<ProxyAnimation<f64>>>,
 
     /// The route's page subtree, owned from construction and filled while the
     /// page is mounted. ADR-0021, seam 4.
@@ -168,20 +168,50 @@ struct ModalInner {
     /// Every `Hero` mounted in this route's page, by tag. FLUI's heroes register
     /// themselves into this one, so no element walk and no downcast is ever
     /// needed. ADR-0021
-    heroes: HeroRegistry,
+    heroes: super::lifecycle::Terminal<HeroRegistry>,
 
     /// Every `PopScope` mounted in this route's page. Consulted by
     /// [`Route::vetoes_pop`] and notified from [`Route::on_pop_invoked`].
-    pop_entries: PopEntryRegistry,
+    pop_entries: super::lifecycle::Terminal<PopEntryRegistry>,
 
     /// This route's local-history stack. While non-empty, a pop removes the most recent
     /// entry instead of the route (ADR-0025).
-    local_history: LocalHistoryRegistry,
+    local_history: super::lifecycle::Terminal<LocalHistoryRegistry>,
 
     /// The per-route focus scope. The page is wrapped in a `FocusScope::with_external_node`
     /// over this, and the route lifecycle promotes it through native
     /// first-focus history while the route is current.
-    focus_scope: Rc<FocusScopeNode>,
+    focus_scope: super::lifecycle::Terminal<Rc<FocusScopeNode>>,
+}
+
+impl Drop for ModalInner {
+    fn drop(&mut self) {
+        let page = self.page.withdraw();
+        let transitions = self.transitions.withdraw();
+        let transition = super::lifecycle::Terminal::new(self.transition.take());
+        let relay = self.relay.withdraw();
+        let subscriptions =
+            super::lifecycle::RetiredValues(std::mem::take(self.relay_subscriptions.get_mut()));
+        let primary = self.primary.withdraw();
+        let secondary = self.secondary.withdraw();
+        let heroes = self.heroes.withdraw();
+        let pop_entries = self.pop_entries.withdraw();
+        let local_history = self.local_history.withdraw();
+        let focus_scope = self.focus_scope.withdraw();
+        drop((
+            page,
+            transitions,
+            transition,
+            relay,
+            subscriptions,
+            primary,
+            secondary,
+            heroes,
+            pop_entries,
+            local_history,
+            focus_scope,
+        ));
+    }
 }
 
 impl ModalInner {
@@ -235,16 +265,16 @@ impl ModalInner {
     fn build_scope(self: &Arc<Self>) -> BoxedView {
         let scope = match self.transition.get() {
             Some(transition) => ModalScope {
-                page: Rc::clone(&self.page),
-                transitions: Rc::clone(&self.transitions.lock()),
-                transition: transition.clone(),
-                primary: Arc::clone(&self.primary),
-                secondary: Arc::clone(&self.secondary),
-                relay: Arc::clone(&self.relay),
+                page: super::lifecycle::Terminal::new(Rc::clone(&self.page)),
+                transitions: super::lifecycle::Terminal::new(Rc::clone(&self.transitions.lock())),
+                transition: super::lifecycle::Terminal::new(transition.clone()),
+                primary: super::lifecycle::Terminal::new(Arc::clone(&self.primary)),
+                secondary: super::lifecycle::Terminal::new(Arc::clone(&self.secondary)),
+                relay: super::lifecycle::Terminal::new(Arc::clone(&self.relay)),
                 subtree: self.subtree.clone(),
-                heroes: self.heroes.clone(),
-                pop_entries: self.pop_entries.clone(),
-                local_history: self.local_history_handle(),
+                heroes: super::lifecycle::Terminal::new(self.heroes.clone()),
+                pop_entries: super::lifecycle::Terminal::new(self.pop_entries.clone()),
+                local_history: super::lifecycle::Terminal::new(self.local_history_handle()),
                 back_gesture_enabled: self.back_gesture_enabled.load(Ordering::Relaxed),
             }
             .boxed(),
@@ -351,28 +381,70 @@ impl ModalInner {
 /// [`listenable`](AnimatedView::listenable) on mount and unsubscribes on unmount.
 /// `AnimatedBuilder` could not be used: its builder takes no `BuildContext`, and
 /// the page builder needs one.
-#[derive(Clone)]
 struct ModalScope {
-    page: RoutePageBuilder,
-    transitions: RouteTransitionsBuilder,
-    transition: TransitionHandle,
+    page: super::lifecycle::Terminal<RoutePageBuilder>,
+    transitions: super::lifecycle::Terminal<RouteTransitionsBuilder>,
+    transition: super::lifecycle::Terminal<TransitionHandle>,
     /// The route's animation — the **proxy**, so an offstage route's builders see
     /// an always-complete animation.
-    primary: Arc<ProxyAnimation<f64>>,
+    primary: super::lifecycle::Terminal<Arc<ProxyAnimation<f64>>>,
     /// The route's secondary animation proxy.
-    secondary: Arc<ProxyAnimation<f64>>,
-    relay: Arc<ChangeNotifier>,
+    secondary: super::lifecycle::Terminal<Arc<ProxyAnimation<f64>>>,
+    relay: super::lifecycle::Terminal<Arc<ChangeNotifier>>,
     subtree: RouteSubtreeCell,
-    heroes: HeroRegistry,
+    heroes: super::lifecycle::Terminal<HeroRegistry>,
     /// The route's `PopScope` registry, provided to the page as an ambient.
-    pop_entries: PopEntryRegistry,
+    pop_entries: super::lifecycle::Terminal<PopEntryRegistry>,
     /// The route's local-history handle, provided to the page as an ambient
     /// (ADR-0025).
-    local_history: LocalHistoryHandle,
+    local_history: super::lifecycle::Terminal<LocalHistoryHandle>,
     /// Whether this route opted into `back_gesture.rs`'s edge-swipe-back
     /// detector — a per-route, construction-time flag (`ModalRoute::back_gesture`),
     /// never toggled mid-life.
     back_gesture_enabled: bool,
+}
+
+impl Clone for ModalScope {
+    fn clone(&self) -> Self {
+        Self {
+            page: super::lifecycle::Terminal::new(self.page.clone()),
+            transitions: super::lifecycle::Terminal::new(self.transitions.clone()),
+            transition: super::lifecycle::Terminal::new(self.transition.clone()),
+            primary: super::lifecycle::Terminal::new(self.primary.clone()),
+            secondary: super::lifecycle::Terminal::new(self.secondary.clone()),
+            relay: super::lifecycle::Terminal::new(self.relay.clone()),
+            heroes: super::lifecycle::Terminal::new(self.heroes.clone()),
+            pop_entries: super::lifecycle::Terminal::new(self.pop_entries.clone()),
+            local_history: super::lifecycle::Terminal::new(self.local_history.clone()),
+            subtree: self.subtree.clone(),
+            back_gesture_enabled: self.back_gesture_enabled,
+        }
+    }
+}
+
+impl Drop for ModalScope {
+    fn drop(&mut self) {
+        let page = self.page.withdraw();
+        let transitions = self.transitions.withdraw();
+        let transition = self.transition.withdraw();
+        let primary = self.primary.withdraw();
+        let secondary = self.secondary.withdraw();
+        let relay = self.relay.withdraw();
+        let heroes = self.heroes.withdraw();
+        let pop_entries = self.pop_entries.withdraw();
+        let local_history = self.local_history.withdraw();
+        drop((
+            page,
+            transitions,
+            transition,
+            primary,
+            secondary,
+            relay,
+            heroes,
+            pop_entries,
+            local_history,
+        ));
+    }
 }
 
 impl_animated_view!(ModalScope);
@@ -458,8 +530,16 @@ impl ViewState<ModalScope> for ModalScopeState {
 ///
 /// Private: not exported until its parity + sign-off gate.
 pub struct ModalRoute<T> {
-    transition: TransitionRoute<T>,
-    inner: Arc<ModalInner>,
+    transition: super::lifecycle::Terminal<TransitionRoute<T>>,
+    inner: super::lifecycle::Terminal<Arc<ModalInner>>,
+}
+
+impl<T> Drop for ModalRoute<T> {
+    fn drop(&mut self) {
+        let transition = self.transition.withdraw();
+        let inner = self.inner.withdraw();
+        drop((transition, inner));
+    }
 }
 
 impl<T: Send + Clone + 'static> ModalRoute<T> {
@@ -475,20 +555,26 @@ impl<T: Send + Clone + 'static> ModalRoute<T> {
             barrier_dismissible: AtomicBool::new(false),
             back_gesture_enabled: AtomicBool::new(false),
             barrier_color: Mutex::new(None),
-            page,
-            transitions: Mutex::new(default_transitions_builder()),
+            page: super::lifecycle::Terminal::new(page),
+            transitions: super::lifecycle::Terminal::new(Mutex::new(default_transitions_builder())),
             transition: OnceLock::new(),
-            relay: Arc::new(ChangeNotifier::new()),
+            relay: super::lifecycle::Terminal::new(Arc::new(ChangeNotifier::new())),
             relay_subscriptions: Mutex::new(Vec::new()),
             // Both rest at an always-dismissed animation until `install()` points
             // them at the controller — an unpushed route has no animation to proxy.
-            primary: Arc::new(ProxyAnimation::new(always_dismissed())),
-            secondary: Arc::new(ProxyAnimation::new(always_dismissed())),
+            primary: super::lifecycle::Terminal::new(Arc::new(ProxyAnimation::new(
+                always_dismissed(),
+            ))),
+            secondary: super::lifecycle::Terminal::new(Arc::new(ProxyAnimation::new(
+                always_dismissed(),
+            ))),
             subtree: RouteSubtreeCell::new(),
-            heroes: HeroRegistry::new(),
-            pop_entries: PopEntryRegistry::new(),
-            local_history: LocalHistoryRegistry::new(),
-            focus_scope: FocusScopeNode::with_debug_label("ModalRoute Focus Scope"),
+            heroes: super::lifecycle::Terminal::new(HeroRegistry::new()),
+            pop_entries: super::lifecycle::Terminal::new(PopEntryRegistry::new()),
+            local_history: super::lifecycle::Terminal::new(LocalHistoryRegistry::new()),
+            focus_scope: super::lifecycle::Terminal::new(FocusScopeNode::with_debug_label(
+                "ModalRoute Focus Scope",
+            )),
         });
 
         let content = {
@@ -508,20 +594,24 @@ impl<T: Send + Clone + 'static> ModalRoute<T> {
         // the type rather than a comment.
         let _ = inner.transition.set(transition.handle());
 
-        Self { transition, inner }
+        Self {
+            transition: super::lifecycle::Terminal::new(transition),
+            inner: super::lifecycle::Terminal::new(inner),
+        }
     }
 
     /// The builders below mutate `inner` *before* the route is pushed, so no
     /// `changed_internal_state` is needed — the entry does not exist yet.
     pub(crate) fn named(mut self, name: impl Into<String>) -> Self {
-        self.transition = self.transition.named(name);
+        self.transition = super::lifecycle::Terminal::new(self.transition.take_value().named(name));
         self
     }
 
     /// Whether the route is opaque. `PageRoute` sets this; `PopupRoute` does not.
     #[must_use]
     pub fn opaque(mut self, opaque: bool) -> Self {
-        self.transition = self.transition.opaque(opaque);
+        self.transition =
+            super::lifecycle::Terminal::new(self.transition.take_value().opaque(opaque));
         self
     }
 
@@ -533,25 +623,31 @@ impl<T: Send + Clone + 'static> ModalRoute<T> {
 
     /// The forward transition duration.
     pub(crate) fn duration(mut self, duration: Duration) -> Self {
-        self.transition = self.transition.duration(duration);
+        self.transition =
+            super::lifecycle::Terminal::new(self.transition.take_value().duration(duration));
         self
     }
 
     /// The reverse transition duration.
     pub(crate) fn reverse_duration(mut self, duration: Duration) -> Self {
-        self.transition = self.transition.reverse_duration(duration);
+        self.transition = super::lifecycle::Terminal::new(
+            self.transition.take_value().reverse_duration(duration),
+        );
         self
     }
 
     /// The transition family — see [`TransitionGroup`].
     pub(crate) fn group(mut self, group: TransitionGroup) -> Self {
-        self.transition = self.transition.group(group);
+        self.transition =
+            super::lifecycle::Terminal::new(self.transition.take_value().group(group));
         self
     }
 
     /// The result a pop with no explicit result delivers.
     pub(crate) fn with_current_result(mut self, result: T) -> Self {
-        self.transition = self.transition.with_current_result(result);
+        self.transition = super::lifecycle::Terminal::new(
+            self.transition.take_value().with_current_result(result),
+        );
         self
     }
 

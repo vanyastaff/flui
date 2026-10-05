@@ -248,6 +248,31 @@ fn tick(&self, delta: Duration) {
 
 ## Mapping decisions
 
+### Terminal owners retire independently and secure incoming construction
+
+The actual shared controller, proxy-status and switch owners withdraw separately
+owned callbacks, simulations, curves and subscriptions before retirement. User
+parent removal and queries run outside internal guards, with owning envelopes
+held outside containment. Accepted registrations enter custody immediately so a
+later constructor failure can detach them. The first failure remains authoritative;
+incoming unwind and a failed retirement retain untouched owners. Healthy ordinary
+destruction still runs, and independent aliases keep their physical shared owners.
+
+`Split` privately guards both curves, including constructor arguments, partial
+clones and partial deserialization. It keeps checked construction and its serde
+field names, supplies borrowed accessors, and retains conditional `Clone`; its
+former public fields and conditional `Copy` are deliberately removed. Migrate
+field literals or mutation to `with_curves` and accessors, and copies to explicit
+clones. Pending decoded curves are committed only after complete valid decoding,
+so a hostile partial value cannot replace the decoding or range error.
+
+The public `controller_sources_allow_reentry_and_preserve_run_ownership` family
+tests these actual producers with bounded subprocess failure competition,
+partial construction, surviving aliases and subsequent healthy operations.
+Its serde rows require that feature. A single opaque user aggregate can still
+double-panic internally before containment regains control; these guarantees
+cover separately owned framework obligations, not arbitrary user destruction.
+
 ### `AnimationController` owns the one future each run resolves
 
 **Rule:** every run-starting method (`forward`, `forward_from`, `reverse`,

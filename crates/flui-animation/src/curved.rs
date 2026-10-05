@@ -1,6 +1,8 @@
 //! `CurvedAnimation` - applies easing curves to animations.
 
-use crate::animation::{Animation, ParentSubscription, StatusCallback, link_parent};
+use crate::animation::{
+    Animation, ParentSubscription, Retirement, StatusCallback, Terminal, link_parent,
+};
 use crate::curve::Curve;
 use crate::status::AnimationStatus;
 use flui_foundation::{ChangeNotifier, Listenable, ListenerCallback, ListenerId};
@@ -52,21 +54,49 @@ fn update_curve_direction(direction: &Mutex<Option<AnimationStatus>>, status: An
 /// ```
 #[derive(Clone)]
 pub struct CurvedAnimation<C: Curve + Clone + Send + Sync> {
-    parent: Arc<dyn Animation<f64>>,
-    curve: C,
-    reverse_curve: Option<C>,
-    notifier: Arc<ChangeNotifier>,
-    /// The running direction captured at run start; `None` at rest.
-    ///
-    /// The active curve is locked to the direction the run *entered* with, so flipping direction
-    /// mid-run does not swap curves underneath the value and cause a visual
-    /// discontinuity.
+    curve: Terminal<C>,
+    reverse_curve: Option<Terminal<C>>,
+    links: Terminal<Arc<CurvedLinks>>,
+}
+
+struct CurvedLinks {
+    parent: Terminal<Arc<dyn Animation<f64>>>,
+    notifier: Terminal<Arc<ChangeNotifier>>,
     curve_direction: Arc<Mutex<Option<AnimationStatus>>>,
-    /// Re-emits parent value changes to our listeners; removed on last drop.
-    _parent_sub: Arc<ParentSubscription>,
-    /// Keeps `curve_direction` in sync with the parent's status transitions;
-    /// removed on last drop.
-    _status_sub: Arc<ParentSubscription>,
+    parent_sub: Terminal<Arc<ParentSubscription>>,
+    status_sub: Terminal<Arc<ParentSubscription>>,
+}
+
+impl Drop for CurvedLinks {
+    fn drop(&mut self) {
+        let parent = self.parent.withdraw();
+        let notifier = self.notifier.withdraw();
+        let value_sub = self.parent_sub.withdraw();
+        let status_sub = self.status_sub.withdraw();
+        let mut retirement = Retirement::new();
+        value_sub.detach(&mut retirement);
+        status_sub.detach(&mut retirement);
+        retirement.retire(value_sub);
+        retirement.retire(status_sub);
+        retirement.retire(parent);
+        retirement.retire(notifier);
+        retirement.finish();
+    }
+}
+
+impl<C: Curve + Clone + Send + Sync> Drop for CurvedAnimation<C> {
+    fn drop(&mut self) {
+        let links = self.links.withdraw();
+        let curve = self.curve.withdraw();
+        let reverse = self.reverse_curve.take();
+        // Curves belong to each value clone; parent subscriptions belong to the
+        // shared links allocation and remain installed until its final drop.
+        let mut retirement = Retirement::new();
+        retirement.run(|| drop(links.into_inner()));
+        retirement.retire(curve);
+        retirement.retire(reverse);
+        retirement.finish();
+    }
 }
 
 impl<C: Curve + Clone + Send + Sync> CurvedAnimation<C> {
@@ -78,6 +108,8 @@ impl<C: Curve + Clone + Send + Sync> CurvedAnimation<C> {
     /// * `curve` - The curve to apply
     #[must_use]
     pub fn new(parent: Arc<dyn Animation<f64>>, curve: C) -> Self {
+        let parent = Terminal::new(parent);
+        let curve = Terminal::new(curve);
         let notifier = Arc::new(ChangeNotifier::new());
         let parent_sub = link_parent(&parent, &notifier);
 
@@ -104,20 +136,23 @@ impl<C: Curve + Clone + Send + Sync> CurvedAnimation<C> {
         });
 
         Self {
-            parent,
             curve,
             reverse_curve: None,
-            notifier,
-            curve_direction,
-            _parent_sub: parent_sub,
-            _status_sub: status_sub,
+            links: Terminal::new(Arc::new(CurvedLinks {
+                parent,
+                notifier: Terminal::new(notifier),
+                curve_direction,
+                parent_sub: Terminal::new(parent_sub),
+                status_sub: Terminal::new(status_sub),
+            })),
         }
     }
 
     /// Set a different curve for reverse animation.
     #[must_use]
     pub fn with_reverse_curve(mut self, reverse_curve: C) -> Self {
-        self.reverse_curve = Some(reverse_curve);
+        let old = self.reverse_curve.replace(Terminal::new(reverse_curve));
+        drop(old);
         self
     }
 
@@ -128,10 +163,13 @@ impl<C: Curve + Clone + Send + Sync> CurvedAnimation<C> {
     /// instantaneous status at rest.
     #[inline]
     fn current_curve(&self) -> &C {
-        let captured: Option<AnimationStatus> = *self.curve_direction.lock();
-        let effective = captured.unwrap_or_else(|| self.parent.status());
+        let captured: Option<AnimationStatus> = *self.links.curve_direction.lock();
+        let effective = captured.unwrap_or_else(|| self.links.parent.status());
         match effective {
-            AnimationStatus::Reverse => self.reverse_curve.as_ref().unwrap_or(&self.curve),
+            AnimationStatus::Reverse => self
+                .reverse_curve
+                .as_ref()
+                .map_or(self.curve.get(), Terminal::get),
             _ => &self.curve,
         }
     }
@@ -140,36 +178,36 @@ impl<C: Curve + Clone + Send + Sync> CurvedAnimation<C> {
 impl<C: Curve + Clone + Send + Sync + fmt::Debug + 'static> Animation<f64> for CurvedAnimation<C> {
     #[inline]
     fn value(&self) -> f64 {
-        let t = self.parent.value();
+        let t = self.links.parent.value();
         let curve = self.current_curve();
         curve.transform(t)
     }
 
     #[inline]
     fn status(&self) -> AnimationStatus {
-        self.parent.status()
+        self.links.parent.status()
     }
 
     fn add_status_listener(&self, callback: StatusCallback) -> ListenerId {
-        self.parent.add_status_listener(callback)
+        self.links.parent.add_status_listener(callback)
     }
 
     fn remove_status_listener(&self, id: ListenerId) {
-        self.parent.remove_status_listener(id);
+        self.links.parent.remove_status_listener(id);
     }
 }
 
 impl<C: Curve + Clone + Send + Sync> Listenable for CurvedAnimation<C> {
     fn add_listener(&self, callback: ListenerCallback) -> ListenerId {
-        self.notifier.add_listener(callback)
+        self.links.notifier.add_listener(callback)
     }
 
     fn remove_listener(&self, id: ListenerId) {
-        self.notifier.remove_listener(id);
+        self.links.notifier.remove_listener(id);
     }
 
     fn remove_all_listeners(&self) {
-        self.notifier.remove_all_listeners();
+        self.links.notifier.remove_all_listeners();
     }
 }
 

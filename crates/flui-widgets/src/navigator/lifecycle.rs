@@ -21,6 +21,10 @@
 //!   a later turn of the event loop. FLUI's unmount is synchronous, so `Dispose`
 //!   is terminal and `disposing` is never observed inside the flush.
 
+pub(crate) use crate::support::retirement::{
+    RetiredMap, RetiredValues, Terminal, TerminalMap, TerminalVec, retire_values,
+};
+
 /// Where a route sits in its lifecycle.
 ///
 /// Declaration order matters, minus `staging` and `disposing` — see the module

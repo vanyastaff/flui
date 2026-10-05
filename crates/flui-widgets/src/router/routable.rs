@@ -1,6 +1,7 @@
 //! [`Routable`] — a typed set of locations.
 
 use super::path::{RouteParseError, RoutePath};
+use crate::support::retirement::{RetiredValues, Terminal};
 
 /// A typed set of locations: the route type a [`Router`](super::Router) keeps
 /// a stack of.
@@ -78,14 +79,15 @@ pub trait Routable: Clone + PartialEq + 'static {
     /// Whatever [`from_path`](Self::from_path) reports for the full path; the
     /// prefixes' errors are gaps, not failures.
     fn back_stack(path: &RoutePath) -> Result<Vec<Self>, RouteParseError> {
-        let full = Self::from_path(path)?;
-        let mut stack: Vec<Self> = path
-            .prefixes()
-            .filter(|prefix| prefix != path)
-            .filter_map(|prefix| Self::from_path(&prefix).ok())
-            .collect();
-        stack.push(full);
-        Ok(stack)
+        let mut full = Terminal::new(Self::from_path(path)?);
+        let mut stack = RetiredValues(Vec::new());
+        for prefix in path.prefixes().filter(|prefix| prefix != path) {
+            if let Ok(route) = Self::from_path(&prefix) {
+                stack.0.push(route);
+            }
+        }
+        stack.0.push(full.take_value());
+        Ok(std::mem::take(&mut stack.0))
     }
 
     /// The label assistive technology announces for this value's page. `None`
