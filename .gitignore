@@ -44,6 +44,8 @@ __pycache__/
 /.gpui/
 # The checklist of a long agent run, kept at the worktree root.
 /TASKS.md
+# Task worktrees, created and pruned by `cargo xtask worktree`.
+/.worktrees/
 # Claude Code, the runtime CLAUDE.md is written for, keeps per-user settings
 # and whole worktree checkouts under .claude/.
 .claude/

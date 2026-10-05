@@ -21,6 +21,7 @@ use std::process::ExitCode;
 use exec::{Cmd, Host, NO_ARGS, Runner, Step, host_binary, installed, parsed, target_dir};
 
 use crate::doc_strict;
+use crate::util::{human_size, tree_size};
 
 const WINDOWS_TARGET: &str = "x86_64-pc-windows-msvc";
 const MACOS_TARGET: &str = "aarch64-apple-darwin";
@@ -640,35 +641,6 @@ const NESTED_CACHES: [&[&str]; 3] = [
     &["facade-consumer-check"],
     &["tests", "trybuild"],
 ];
-
-/// `bytes` the way `du -sh` prints a size: one decimal below 10 of a unit.
-fn human_size(bytes: u64) -> String {
-    const UNITS: [&str; 5] = ["B", "K", "M", "G", "T"];
-    let mut value = bytes as f64;
-    let mut unit = 0;
-    while value >= 1024.0 && unit + 1 < UNITS.len() {
-        value /= 1024.0;
-        unit += 1;
-    }
-    if unit == 0 {
-        format!("{bytes}B")
-    } else if value < 10.0 {
-        format!("{value:.1}{}", UNITS[unit])
-    } else {
-        format!("{value:.0}{}", UNITS[unit])
-    }
-}
-
-/// The total size of the files under `dir`.
-fn tree_size(dir: &Path) -> u64 {
-    walkdir::WalkDir::new(dir)
-        .into_iter()
-        .filter_map(Result::ok)
-        .filter_map(|entry| entry.metadata().ok())
-        .filter(std::fs::Metadata::is_file)
-        .map(|metadata| metadata.len())
-        .sum()
-}
 
 // Stages: a task's body, an error at the first failure, shared by the
 // composite tasks.

@@ -138,8 +138,10 @@ crate you're changing before changing it.
 ## Working here
 
 - **Isolate each task in its own worktree**; the shared checkout stays on `main`:
-  `git worktree add -b <area>/<slug> ../flui-wt-<slug> origin/main`. Review someone else's PR
-  from your own directory (`gh pr diff`/`checkout`), not inside their worktree.
+  `cargo xtask worktree new <area>/<slug>` creates `.worktrees/<slug>` inside the checkout
+  (git-ignored; the gates skip it). Each worktree grows its own multi-GB `target/`: run
+  `cargo xtask worktree prune` after a merge. Review someone else's PR from your own directory
+  (`gh pr diff`/`checkout`), not inside their worktree.
 - **Commits** `area: what changed`, one logical change each. **PRs** are one task each, with
   `cargo xtask check-changed` green first; CI is the proof. Before asking for review, review the
   branch against `main` yourself and list only what would block the merge: file and line, why it
@@ -185,6 +187,7 @@ The maintainer usually hands over a whole task and comes back later.
 | Need | Run |
 |------|-----|
 | Every task | `cargo xtask --help` (crate `tools/xtask`; the alias is in `.cargo/config.toml`). Anything else is a plain `cargo` command |
+| Worktrees | `cargo xtask worktree new <area>/<slug>`; `worktree list` (branch state, dirty, `target/` size); `worktree prune [--dry-run]` removes clean ones origin/main contains |
 | Before a PR | `cargo xtask check-changed` — fmt + clippy + nextest over changed crates and their dependents (the classification CI's `plan` uses) |
 | Full local gate | `cargo xtask ci` = `cargo xtask gate` (`checks`: fmt, typos, taplo, docs-links, docs-paths, workspace, reach, toolchain, wgsl, …; `lint`; `doc-strict`) + `cargo xtask test` + doctests |
 | CI heavy jobs locally | `cargo xtask ci-full`; `cargo xtask doctor full` names any missing tool; job table in `docs/testing.md` |

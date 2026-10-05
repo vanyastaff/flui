@@ -48,7 +48,7 @@ pub(crate) fn built_from_this_checkout() -> anyhow::Result<()> {
 }
 
 /// Whether `a` and `b` name the same directory, however each is spelled.
-fn same_dir(a: &Path, b: &Path) -> bool {
+pub(crate) fn same_dir(a: &Path, b: &Path) -> bool {
     match (a.canonicalize(), b.canonicalize()) {
         (Ok(a), Ok(b)) => a == b,
         _ => a == b,
@@ -109,6 +109,35 @@ pub(crate) fn adr_exists(files: &[String], number: &str) -> bool {
     files
         .iter()
         .any(|file| file.starts_with(&prefix) || *file == exact)
+}
+
+/// `bytes` the way `du -sh` prints a size: one decimal below 10 of a unit.
+pub(crate) fn human_size(bytes: u64) -> String {
+    const UNITS: [&str; 5] = ["B", "K", "M", "G", "T"];
+    let mut value = bytes as f64;
+    let mut unit = 0;
+    while value >= 1024.0 && unit + 1 < UNITS.len() {
+        value /= 1024.0;
+        unit += 1;
+    }
+    if unit == 0 {
+        format!("{bytes}B")
+    } else if value < 10.0 {
+        format!("{value:.1}{}", UNITS[unit])
+    } else {
+        format!("{value:.0}{}", UNITS[unit])
+    }
+}
+
+/// The total size of the files under `dir`.
+pub(crate) fn tree_size(dir: &Path) -> u64 {
+    walkdir::WalkDir::new(dir)
+        .into_iter()
+        .filter_map(Result::ok)
+        .filter_map(|entry| entry.metadata().ok())
+        .filter(std::fs::Metadata::is_file)
+        .map(|metadata| metadata.len())
+        .sum()
 }
 
 /// An exclusively created temporary directory, removed on drop.

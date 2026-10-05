@@ -30,6 +30,7 @@ mod toolchain;
 mod wasm;
 mod wgsl;
 mod workspace;
+mod worktree;
 
 use std::process::ExitCode;
 
@@ -136,6 +137,8 @@ enum Command {
     BenchCollect(bench::BenchCollectArgs),
     /// Run the counted perf scenarios and compare them with the baseline.
     Perf(perf::PerfArgs),
+    /// Create, list and prune task worktrees under `.worktrees/`.
+    Worktree(worktree::WorktreeArgs),
 }
 
 fn main() -> ExitCode {
@@ -191,6 +194,7 @@ fn main() -> ExitCode {
         Command::Doctor(args) => doctor::doctor(&args),
         Command::BenchCollect(args) => bench::bench_collect(&args),
         Command::Perf(args) => perf::perf(&args),
+        Command::Worktree(args) => worktree::worktree(&args),
     };
     match result {
         Ok(code) => code,
