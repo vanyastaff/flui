@@ -798,6 +798,7 @@ where
             return;
         }
         if let Err(payload) = std::panic::catch_unwind(AssertUnwindSafe(|| self.state.dispose())) {
+            let payload = std::mem::ManuallyDrop::new(payload);
             owner.record_hook_panic(
                 core.self_id(),
                 None,
@@ -806,6 +807,9 @@ where
                 payload.as_ref(),
                 "disposing StatefulElement",
             );
+            flui_foundation::panic::retain_opaque_payload(std::mem::ManuallyDrop::into_inner(
+                payload,
+            ));
         }
     }
 
@@ -868,6 +872,7 @@ where
         }
         if let Err(payload) = std::panic::catch_unwind(AssertUnwindSafe(|| self.state.deactivate()))
         {
+            let payload = std::mem::ManuallyDrop::new(payload);
             owner.record_hook_panic(
                 core.self_id(),
                 None,
@@ -876,6 +881,9 @@ where
                 payload.as_ref(),
                 "deactivating StatefulElement",
             );
+            flui_foundation::panic::retain_opaque_payload(std::mem::ManuallyDrop::into_inner(
+                payload,
+            ));
         }
     }
 
@@ -1159,6 +1167,7 @@ where
             });
         }
         if let Some(payload) = recovered {
+            let payload = std::mem::ManuallyDrop::new(payload);
             owner.record_hook_panic(
                 core.self_id(),
                 None,
@@ -1167,6 +1176,9 @@ where
                 payload.as_ref(),
                 "unmounting the render object of RenderElement",
             );
+            flui_foundation::panic::retain_opaque_payload(std::mem::ManuallyDrop::into_inner(
+                payload,
+            ));
         }
         super::behavior_commons::remove_render_object_from_tree(
             core,

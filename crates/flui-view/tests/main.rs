@@ -15,8 +15,12 @@
 mod ancestor_finders;
 #[path = "support/async_snapshot_recovery.rs"]
 mod async_snapshot_recovery;
+#[path = "public_support/binding_observer_retirement.rs"]
+mod binding_observer_retirement;
 #[path = "build_owner_tests.rs"]
 mod build_owner_tests;
+#[path = "support/child_payload_recovery.rs"]
+mod child_payload_recovery;
 #[path = "dense_reconcile_containment.rs"]
 mod dense_reconcile_containment;
 #[path = "dense_update_containment.rs"]
@@ -29,6 +33,8 @@ mod global_key_duplication;
 mod global_key_reparent;
 #[path = "inherited_dependency.rs"]
 mod inherited_dependency;
+#[path = "support/lifecycle_hook_payload_retirement.rs"]
+mod lifecycle_hook_payload_retirement;
 #[path = "lifecycle_panic_containment.rs"]
 mod lifecycle_panic_containment;
 #[path = "support/lifecycle_recovery.rs"]
@@ -39,6 +45,10 @@ mod lifecycle_tests;
 mod notifications;
 #[path = "orphaned_render_mount.rs"]
 mod orphaned_render_mount;
+#[path = "support/owner_key_lookup_reentry.rs"]
+mod owner_key_lookup_reentry;
+#[path = "support/owner_key_retirement.rs"]
+mod owner_key_retirement;
 #[path = "production_reconcile_emits.rs"]
 mod production_reconcile_emits;
 #[path = "reconcile_capture.rs"]
@@ -51,6 +61,8 @@ mod runtime_seam;
 mod signal_reads;
 #[path = "stateless_stateful_tests.rs"]
 mod stateless_stateful_tests;
+#[path = "support/static_children_retirement.rs"]
+mod static_children_retirement;
 #[path = "trybuild_ui.rs"]
 mod trybuild_ui;
 #[path = "writer_source.rs"]
@@ -101,6 +113,30 @@ fn global_key_contract_matrix() {
 
 #[test]
 fn lifecycle_panic_containment_matrix() {
+    if let Ok(kind) = std::env::var("FLUI_OWNER_KEY_LOOKUP_REENTRY_CHILD") {
+        owner_key_lookup_reentry::dispatch_child(&kind);
+        return;
+    }
+    if let Ok(kind) = std::env::var("FLUI_OWNER_KEY_RETIREMENT_CHILD") {
+        owner_key_retirement::dispatch_child(&kind);
+        return;
+    }
+    if let Ok(kind) = std::env::var("FLUI_BINDING_OBSERVER_RETIREMENT_CHILD") {
+        binding_observer_retirement::dispatch_child(&kind);
+        return;
+    }
+    if let Ok(kind) = std::env::var("FLUI_STATIC_CHILDREN_RETIREMENT_CHILD") {
+        static_children_retirement::dispatch_child(&kind);
+        return;
+    }
+    if let Ok(kind) = std::env::var("FLUI_CHILD_PAYLOAD_RECOVERY_CHILD") {
+        child_payload_recovery::dispatch_child(&kind);
+        return;
+    }
+    if let Ok(kind) = std::env::var("FLUI_REMOVAL_HOOK_PAYLOAD_CHILD") {
+        lifecycle_hook_payload_retirement::dispatch_child(&kind);
+        return;
+    }
     if let Ok(kind) = std::env::var("FLUI_ASYNC_SNAPSHOT_CHILD") {
         async_snapshot_recovery::dispatch_child(&kind);
         return;
@@ -120,6 +156,85 @@ fn lifecycle_panic_containment_matrix() {
     run_table(
         "lifecycle_panic_containment_matrix",
         &[
+            ("static_children_retirement::healthy_static_children_release_in_order", static_children_retirement::healthy_static_children_release_in_order as fn()),
+            ("binding_observer_retirement::binding_observer_ownership_and_notifications", binding_observer_retirement::binding_observer_ownership_and_notifications as fn()),
+            ("owner_key_lookup_reentry::key_hash_can_read_its_released_scope", owner_key_lookup_reentry::key_hash_can_read_its_released_scope as fn()),
+            ("owner_key_lookup_reentry::scoped_key_equality_can_read_claim_count", owner_key_lookup_reentry::scoped_key_equality_can_read_claim_count as fn()),
+            ("owner_key_lookup_reentry::key_equality_owner_release_revalidates_once", owner_key_lookup_reentry::key_equality_owner_release_revalidates_once as fn()),
+            ("owner_key_lookup_reentry::repeated_key_comparison_mutation_refuses_admission", owner_key_lookup_reentry::repeated_key_comparison_mutation_refuses_admission as fn()),
+            ("owner_key_lookup_reentry::unrelated_key_bucket_mutation_does_not_refuse_admission", owner_key_lookup_reentry::unrelated_key_bucket_mutation_does_not_refuse_admission as fn()),
+            ("owner_key_lookup_reentry::inserted_equivalent_claim_invalidates_surviving_snapshot", owner_key_lookup_reentry::inserted_equivalent_claim_invalidates_surviving_snapshot as fn()),
+            ("owner_key_lookup_reentry::replaced_owner_claim_invalidates_snapshot_identity", owner_key_lookup_reentry::replaced_owner_claim_invalidates_snapshot_identity as fn()),
+            ("owner_key_lookup_reentry::equal_length_replacement_invalidates_surviving_snapshot_marker", owner_key_lookup_reentry::equal_length_replacement_invalidates_surviving_snapshot_marker as fn()),
+            ("owner_key_lookup_reentry::equality_failure_retains_two_retired_snapshot_keys", owner_key_lookup_reentry::equality_failure_retains_two_retired_snapshot_keys as fn()),
+            ("owner_key_lookup_reentry::caught_snapshot_retirement_retains_later_aggregate", owner_key_lookup_reentry::caught_snapshot_retirement_retains_later_aggregate as fn()),
+            ("owner_key_lookup_reentry::first_snapshot_retirement_failure_retains_independent_tail", owner_key_lookup_reentry::first_snapshot_retirement_failure_retains_independent_tail as fn()),
+            ("owner_key_lookup_reentry::second_snapshot_retirement_failure_preserves_completed_first", owner_key_lookup_reentry::second_snapshot_retirement_failure_preserves_completed_first as fn()),
+            ("owner_key_lookup_reentry::snapshot_retirement_preserves_healthy_key_order", owner_key_lookup_reentry::snapshot_retirement_preserves_healthy_key_order as fn()),
+            ("owner_key_lookup_reentry::key_hash_failure_leaves_existing_claim_authoritative", owner_key_lookup_reentry::key_hash_failure_leaves_existing_claim_authoritative as fn()),
+            ("owner_key_lookup_reentry::key_equality_failure_leaves_existing_claim_authoritative", owner_key_lookup_reentry::key_equality_failure_leaves_existing_claim_authoritative as fn()),
+            ("owner_key_lookup_reentry::passive_claim_identity_preserves_retake_and_stale_release", owner_key_lookup_reentry::passive_claim_identity_preserves_retake_and_stale_release as fn()),
+            ("owner_key_lookup_reentry::lookup_admission_rollback_invokes_no_key_callbacks", owner_key_lookup_reentry::lookup_admission_rollback_invokes_no_key_callbacks as fn()),
+            ("owner_key_lookup_reentry::admitted_claim_release_invokes_no_scoped_key_callbacks", owner_key_lookup_reentry::admitted_claim_release_invokes_no_scoped_key_callbacks as fn()),
+            ("owner_key_lookup_reentry::missing_local_release_revalidates_scope_callback_mutation", owner_key_lookup_reentry::missing_local_release_revalidates_scope_callback_mutation as fn()),
+            ("owner_key_lookup_reentry::losing_clone_retirement_preserves_competing_claim_authority", owner_key_lookup_reentry::losing_clone_retirement_preserves_competing_claim_authority as fn()),
+            ("owner_key_lookup_reentry::incoming_release_withdraws_authority_before_retaining_key_owners", owner_key_lookup_reentry::incoming_release_withdraws_authority_before_retaining_key_owners as fn()),
+            ("owner_key_lookup_reentry::mounted_colliding_keys_support_scope_callback_reentry", owner_key_lookup_reentry::mounted_colliding_keys_support_scope_callback_reentry as fn()),
+            ("owner_key_retirement::physical_healthy_order", owner_key_retirement::physical_healthy_order as fn()),
+            ("owner_key_retirement::physical_graph_failure", owner_key_retirement::physical_graph_failure as fn()),
+            ("owner_key_retirement::physical_observer_failure", owner_key_retirement::physical_observer_failure as fn()),
+            ("owner_key_retirement::physical_callback_failure", owner_key_retirement::physical_callback_failure as fn()),
+            ("owner_key_retirement::physical_observer_callback_competition", owner_key_retirement::physical_observer_callback_competition as fn()),
+            ("owner_key_retirement::physical_graph_observer_callback_competition", owner_key_retirement::physical_graph_observer_callback_competition as fn()),
+            ("owner_key_retirement::physical_incoming_failure", owner_key_retirement::physical_incoming_failure as fn()),
+            ("owner_key_retirement::physical_key_observer_competition", owner_key_retirement::physical_key_observer_competition as fn()),
+            ("owner_key_retirement::physical_registry_key_competition", owner_key_retirement::physical_registry_key_competition as fn()),
+            ("owner_key_retirement::key_release_healthy_order", owner_key_retirement::key_release_healthy_order as fn()),
+            ("owner_key_retirement::key_release_local_failure", owner_key_retirement::key_release_local_failure as fn()),
+            ("owner_key_retirement::key_release_scope_failure", owner_key_retirement::key_release_scope_failure as fn()),
+            ("owner_key_retirement::key_release_competition", owner_key_retirement::key_release_competition as fn()),
+            ("owner_key_retirement::key_release_incoming_failure", owner_key_retirement::key_release_incoming_failure as fn()),
+            ("owner_key_retirement::key_release_reentry", owner_key_retirement::key_release_reentry as fn()),
+            ("owner_key_retirement::local_clone_failure", owner_key_retirement::local_clone_failure as fn()),
+            ("owner_key_retirement::scope_clone_failure", owner_key_retirement::scope_clone_failure as fn()),
+            ("owner_key_retirement::scope_clone_read_reentry", owner_key_retirement::scope_clone_read_reentry as fn()),
+            ("owner_key_retirement::scope_clone_competing_owner_reentry", owner_key_retirement::scope_clone_competing_owner_reentry as fn()),
+            ("owner_key_retirement::rollback_invokes_no_key_callbacks", owner_key_retirement::rollback_invokes_no_key_callbacks as fn()),
+            ("owner_key_retirement::key_collision_same_owner_and_stale_release", owner_key_retirement::key_collision_same_owner_and_stale_release as fn()),
+            ("owner_key_retirement::reservation_verification_healthy_order", owner_key_retirement::reservation_verification_healthy_order as fn()),
+            ("owner_key_retirement::reservation_storage_failure", owner_key_retirement::reservation_storage_failure as fn()),
+            ("owner_key_retirement::verification_key_failure", owner_key_retirement::verification_key_failure as fn()),
+            ("owner_key_retirement::reservation_verification_competition", owner_key_retirement::reservation_verification_competition as fn()),
+            ("owner_key_retirement::reservation_verification_incoming_failure", owner_key_retirement::reservation_verification_incoming_failure as fn()),
+            ("owner_key_retirement::owner_scope_failure_retains_reservations", owner_key_retirement::owner_scope_failure_retains_reservations as fn()),
+            ("owner_key_retirement::displacement_key_competition", owner_key_retirement::displacement_key_competition as fn()),
+            ("owner_key_retirement::displacement_verification_competition", owner_key_retirement::displacement_verification_competition as fn()),
+            ("owner_key_retirement::displacement_verification_healthy_order", owner_key_retirement::displacement_verification_healthy_order as fn()),
+            ("owner_key_retirement::local_clone_competing_owner_reentry", owner_key_retirement::local_clone_competing_owner_reentry as fn()),
+            ("owner_key_retirement::competing_owner_and_rejected_key_retirement", owner_key_retirement::competing_owner_and_rejected_key_retirement as fn()),
+            ("static_children_retirement::first_static_child_failure_retains_successors", static_children_retirement::first_static_child_failure_retains_successors as fn()),
+            ("static_children_retirement::later_static_child_failure_retains_mapper", static_children_retirement::later_static_child_failure_retains_mapper as fn()),
+            ("static_children_retirement::static_mapper_failure_keeps_ordinary_child_retirement", static_children_retirement::static_mapper_failure_keeps_ordinary_child_retirement as fn()),
+            ("static_children_retirement::competing_static_children_and_mapper_keep_first_failure", static_children_retirement::competing_static_children_and_mapper_keep_first_failure as fn()),
+            ("static_children_retirement::incoming_unwind_retains_static_children_and_mapper", static_children_retirement::incoming_unwind_retains_static_children_and_mapper as fn()),
+            ("child_payload_recovery::create_payload_is_retained_before_child_recovery", child_payload_recovery::create_payload_is_retained_before_child_recovery as fn()),
+            ("child_payload_recovery::mounted_payload_is_retained_before_child_cleanup", child_payload_recovery::mounted_payload_is_retained_before_child_cleanup as fn()),
+            ("child_payload_recovery::update_payload_is_retained_before_child_cleanup", child_payload_recovery::update_payload_is_retained_before_child_cleanup as fn()),
+            ("child_payload_recovery::create_payload_cannot_compete_with_factory_failure", child_payload_recovery::create_payload_cannot_compete_with_factory_failure as fn()),
+            ("child_payload_recovery::mounted_payload_cannot_compete_with_factory_failure", child_payload_recovery::mounted_payload_cannot_compete_with_factory_failure as fn()),
+            ("child_payload_recovery::update_payload_cannot_compete_with_factory_failure", child_payload_recovery::update_payload_cannot_compete_with_factory_failure as fn()),
+            ("child_payload_recovery::create_and_reporting_payloads_are_retained_independently", child_payload_recovery::create_and_reporting_payloads_are_retained_independently as fn()),
+            ("child_payload_recovery::mounted_and_reporting_payloads_are_retained_independently", child_payload_recovery::mounted_and_reporting_payloads_are_retained_independently as fn()),
+            ("child_payload_recovery::update_and_reporting_payloads_are_retained_independently", child_payload_recovery::update_and_reporting_payloads_are_retained_independently as fn()),
+            ("lifecycle_hook_payload_retirement::dispose_payload_is_retained_after_containment", lifecycle_hook_payload_retirement::dispose_payload_is_retained_after_containment as fn()),
+            ("lifecycle_hook_payload_retirement::deactivate_payload_is_retained_after_containment", lifecycle_hook_payload_retirement::deactivate_payload_is_retained_after_containment as fn()),
+            ("lifecycle_hook_payload_retirement::render_unmount_payload_is_retained_after_containment", lifecycle_hook_payload_retirement::render_unmount_payload_is_retained_after_containment as fn()),
+            ("lifecycle_hook_payload_retirement::dispose_and_reporting_payloads_cannot_compete", lifecycle_hook_payload_retirement::dispose_and_reporting_payloads_cannot_compete as fn()),
+            ("lifecycle_hook_payload_retirement::deactivate_and_reporting_payloads_cannot_compete", lifecycle_hook_payload_retirement::deactivate_and_reporting_payloads_cannot_compete as fn()),
+            ("lifecycle_hook_payload_retirement::render_unmount_and_reporting_payloads_cannot_compete", lifecycle_hook_payload_retirement::render_unmount_and_reporting_payloads_cannot_compete as fn()),
+            ("lifecycle_hook_payload_retirement::dispose_payload_cannot_replace_incoming_unwind", lifecycle_hook_payload_retirement::dispose_payload_cannot_replace_incoming_unwind as fn()),
+            ("lifecycle_hook_payload_retirement::deactivate_payload_cannot_replace_incoming_unwind", lifecycle_hook_payload_retirement::deactivate_payload_cannot_replace_incoming_unwind as fn()),
+            ("lifecycle_hook_payload_retirement::render_unmount_payload_cannot_replace_incoming_unwind", lifecycle_hook_payload_retirement::render_unmount_payload_cannot_replace_incoming_unwind as fn()),
             ("lifecycle_panic_containment::child_init_state_panic_is_replaced_in_place_and_the_build_scope_continues", lifecycle_panic_containment::child_init_state_panic_is_replaced_in_place_and_the_build_scope_continues as fn()),
             ("lifecycle_panic_containment::a_dispose_panic_during_finalize_is_contained_and_the_slot_is_freed", lifecycle_panic_containment::a_dispose_panic_during_finalize_is_contained_and_the_slot_is_freed as fn()),
             ("lifecycle_panic_containment::a_dispose_panic_on_a_global_keyed_element_still_clears_the_registry", lifecycle_panic_containment::a_dispose_panic_on_a_global_keyed_element_still_clears_the_registry as fn()),

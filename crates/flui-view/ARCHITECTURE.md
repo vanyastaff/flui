@@ -10,6 +10,70 @@ behaviour taxonomy and remains a sibling appendix.
 
 ## Mapping decisions
 
+### Owner and key envelopes retire after authority is withdrawn
+
+The build owner's reactive graph, tree observer and scheduled-build callback
+have independent private ownership envelopes. Registry, scope, reservation,
+displacement and verification keys likewise guard their own boxed values.
+Healthy destruction keeps the existing field and container order. An incoming
+unwind or the first propagating destructor failure retains the remaining
+independent envelopes; it does not rescue competing destructors inside one
+opaque graph or user value.
+
+Registration prepares the local key before claiming realm authority. Scope key
+hashing, equality and cloning run outside its borrow. Comparisons pin and
+revalidate the complete hash bucket's owner tags and allocation markers, with
+one fresh retry before refusing repeated mutation (ADR-0126). A failed local
+insertion rolls back by cached hash,
+owner identity and an allocation marker, without invoking key hashing or
+equality. Local registrations carry passive claim identity, so matching release
+removes both local and scoped authority before either key is
+retired, so a destructor can inspect the released scope or claim the key again.
+
+The `owner_key_retirement` rows in `lifecycle_panic_containment_matrix` exercise
+healthy and competing physical owner destruction, incoming unwind, independent
+key retirement and release reentry. `rollback_invokes_no_key_callbacks`,
+`scope_clone_read_reentry`, `scope_clone_competing_owner_reentry`,
+`local_clone_competing_owner_reentry` and
+`key_collision_same_owner_and_stale_release` cover admission, rollback and
+identity. Reservation, verification and displacement rows use scheduled
+reconciliation and finalization, including cross-parent grafting, and verify
+the next build or independent claim after containment. The public
+`owner_key_lookup_reentry` rows cover scope comparison reentry, bounded mutation
+refusal, complete bucket validation, passive release, snapshot retirement and
+scheduled keyed mounting. Scope snapshots may defer physical key destruction
+until their pins retire, after logical authority has been withdrawn. Local
+registry callbacks and other raw build-owner fields are outside this boundary.
+
+
+### Binding observers and returned futures retire independently
+
+Physical observer registries and each notification snapshot own separate guarded
+observer envelopes. Healthy destruction preserves the existing container order.
+An incoming unwind or the first propagating destructor failure retains remaining
+independent envelopes. Snapshot callbacks run after releasing the binding guard.
+Registry changes affect the next notification; ordinary dispatch keeps its
+original snapshot, and a callback panic still stops that legacy notification.
+Legacy lifecycle failure still precedes the scoped lifecycle drain,
+with the first payload preserved explicitly.
+
+Suspended pop, push and application-exit notifications separately guard the
+returned response future, current observer and remaining iterator. Cancellation
+can therefore retire a healthy future normally while preventing a later
+independent destructor from competing with an existing failure. Bool and exit
+responses keep their distinct output types. Pop and push still stop at the first
+handled response; exit still consults every observer.
+
+`binding_observer_ownership_and_notifications` in
+`lifecycle_panic_containment_matrix` covers physical destruction, aliases,
+replacement and destructor reentry, lifecycle failure competition, and pending
+response cancellation through all three public async producers. It also checks
+healthy completed-future order and the next notification after containment.
+This boundary does not contain competing destructors inside one opaque observer
+or future aggregate, or certify whole-binding destruction. Predictive-back
+list clearing and replacement still retire entries under the write guard; that
+separate reentry gap and native Android acceptance remain open.
+
 ### Same-drain absorption of a mid-drain external schedule (issue #1180)
 
 **Rule:** `BuildOwner::drain_build_scope`'s heap loop absorbs the
@@ -660,3 +724,19 @@ first failure; in preserving mode the host skips the optional rounds after it
 while the required terminal commits still happen. The value or closure a closed
 graph rejects is dropped normally unless the thread is already panicking
 ([ADR-0127](../../docs/adr/ADR-0127-exceptional-path-retention.md)).
+
+### Independent child and contained payload retirement
+
+StaticChildren withdraws independently owned views and its arbitrary mapper
+before retiring any of them. The first failure propagates while untouched tails
+are retained; healthy destruction remains ordinary and aliases keep their real
+owners. The `lifecycle_panic_containment_matrix` static_children_retirement rows
+pin healthy order, either child failure, mapper failure, competing failures and
+incoming unwind through the public delegate.
+
+Child create/mount/update containment and swallowed dispose/deactivate/render
+unmount failures establish opaque payload custody before diagnostics or recovery.
+Their payloads remain retained through competing factory/reporting failures;
+healthy siblings and the next operation progress. The same public family mounts
+child_payload_recovery and lifecycle_hook_payload_retirement rows. This does not
+rescue a first user aggregate whose own destructors already double-panic.

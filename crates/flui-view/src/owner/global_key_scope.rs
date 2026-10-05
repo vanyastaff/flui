@@ -39,7 +39,7 @@
 //! `unregister_global_key` removes from it (unmount/finalize) — tag-checked,
 //! so a stale release from an owner that no longer holds the claim is a
 //! traced no-op rather than a corruption of whoever holds it now (see
-//! [`GlobalKeyScope::release`]). An **inactive** element (soft-removed,
+//! [`GlobalKeyScope::take_claim`]). An **inactive** element (soft-removed,
 //! pending finalize) keeps its claim: nothing in this file runs at
 //! soft-remove time, only at the `register_global_key`/`unregister_global_key`
 //! call sites the finalize/mount paths already drive.
@@ -61,7 +61,7 @@ use std::{
 
 use flui_foundation::{ElementId, ViewKey};
 
-use super::GlobalKeyRegistry;
+use super::{GlobalKeyRegistry, global_key_registry::OwnedGlobalKey};
 
 /// Identifies one [`BuildOwner`](super::BuildOwner) for `GlobalKeyScope`
 /// claim tagging.
@@ -90,11 +90,88 @@ impl fmt::Display for OwnerTag {
 
 /// One live claim: which owner currently holds a given `GlobalKey`.
 ///
-/// The key is stored by value so the claim can be identity-compared later.
+/// The owned key can be pinned across a comparison without calling user cloning.
 /// Its hash only picks the bucket — see [`ScopeState::claims`].
 struct Claim {
-    key: Box<dyn ViewKey>,
+    key: ScopedKeyOwner,
     owner: OwnerTag,
+    marker: Rc<()>,
+}
+
+/// Passive admission identity: copying it neither invokes a key nor releases it.
+#[derive(Clone, Debug)]
+pub(super) struct ClaimIdentity {
+    hash: u64,
+    owner: OwnerTag,
+    marker: Rc<()>,
+}
+
+/// One scope or comparison owner of one independently guarded key envelope.
+pub(crate) struct ScopedKeyOwner(Option<Rc<OwnedGlobalKey>>);
+
+impl ScopedKeyOwner {
+    fn new(key: Box<dyn ViewKey>) -> Self {
+        Self(Some(Rc::new(OwnedGlobalKey::new(key))))
+    }
+
+    fn as_ref(&self) -> &dyn ViewKey {
+        self.0
+            .as_ref()
+            .expect("BUG: live scoped key is occupied")
+            .as_ref()
+            .as_ref()
+    }
+
+    fn retain(mut self) {
+        std::mem::forget(self.0.take());
+    }
+}
+
+impl Clone for ScopedKeyOwner {
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
+    }
+}
+
+impl Drop for ScopedKeyOwner {
+    fn drop(&mut self) {
+        let key = self.0.take();
+        if std::thread::panicking() {
+            std::mem::forget(key);
+        } else {
+            drop(key);
+        }
+    }
+}
+
+struct SnapshotClaim {
+    key: ScopedKeyOwner,
+    identity: ClaimIdentity,
+}
+
+struct UnstableComparison;
+
+impl UnstableComparison {
+    fn raise(self) -> ! {
+        panic!("GlobalKey comparison changed scope repeatedly")
+    }
+}
+
+fn retire_snapshot(snapshot: Vec<SnapshotClaim>) {
+    let mut first = None;
+    for claim in snapshot {
+        if first.is_some() || std::thread::panicking() {
+            claim.key.retain();
+        } else {
+            crate::lifecycle::preserve(
+                &mut first,
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(claim.key))).err(),
+            );
+        }
+    }
+    if let Some(payload) = first {
+        std::panic::resume_unwind(payload);
+    }
 }
 
 #[derive(Default)]
@@ -110,14 +187,15 @@ struct ScopeState {
 }
 
 impl ScopeState {
-    fn position_of(&self, key: &dyn ViewKey) -> Option<(u64, usize)> {
-        let hash = key.key_hash();
-        let index = self
-            .claims
-            .get(&hash)?
-            .iter()
-            .position(|claim| claim.key.key_eq(key))?;
-        Some((hash, index))
+    fn matches_snapshot(&self, hash: u64, snapshot: &[SnapshotClaim]) -> bool {
+        let Some(bucket) = self.claims.get(&hash) else {
+            return snapshot.is_empty();
+        };
+        bucket.len() == snapshot.len()
+            && bucket.iter().zip(snapshot).all(|(claim, saved)| {
+                claim.owner == saved.identity.owner
+                    && Rc::ptr_eq(&claim.marker, &saved.identity.marker)
+            })
     }
 }
 
@@ -212,6 +290,23 @@ impl GlobalKeyScope {
             .sum::<usize>()
     }
 
+    fn snapshot(&self, hash: u64) -> Vec<SnapshotClaim> {
+        let state = self.state.borrow();
+        state.claims.get(&hash).map_or_else(Vec::new, |bucket| {
+            bucket
+                .iter()
+                .map(|claim| SnapshotClaim {
+                    key: claim.key.clone(),
+                    identity: ClaimIdentity {
+                        hash,
+                        owner: claim.owner,
+                        marker: Rc::clone(&claim.marker),
+                    },
+                })
+                .collect()
+        })
+    }
+
     /// Attempt to claim `key` for `owner`.
     ///
     /// Returns an RAII [`ClaimGuard`] on success — the claim is live the
@@ -231,68 +326,120 @@ impl GlobalKeyScope {
         key: &dyn ViewKey,
         owner: OwnerTag,
     ) -> Result<ClaimGuard<'_>, ClaimConflict> {
-        let mut state = self.state.borrow_mut();
-        if let Some((hash, index)) = state.position_of(key) {
-            let existing = &state.claims[&hash][index];
-            if existing.owner != owner {
-                return Err(ClaimConflict {
-                    holder: existing.owner,
-                });
+        let hash = key.key_hash();
+        let mut prepared = None;
+        for round in 0..2 {
+            let snapshot = self.snapshot(hash);
+            let matching = snapshot.iter().find(|claim| claim.key.as_ref().key_eq(key));
+            let identity = matching.map(|claim| claim.identity.clone());
+            if identity.is_none() && prepared.is_none() {
+                prepared = Some(ScopedKeyOwner::new(key.clone_key()));
             }
-            // Same owner reclaiming its own key: nothing new was taken, so
-            // the guard has nothing to roll back — pre-committed.
-            drop(state);
-            return Ok(ClaimGuard {
-                scope: self,
-                key: key.clone_key(),
+            let mut state = self.state.borrow_mut();
+            if !state.matches_snapshot(hash, &snapshot) {
+                drop(state);
+                if round == 1 {
+                    UnstableComparison.raise();
+                }
+                retire_snapshot(snapshot);
+                continue;
+            }
+            if let Some(identity) = identity {
+                drop(state);
+                if identity.owner != owner {
+                    retire_snapshot(snapshot);
+                    drop(prepared);
+                    return Err(ClaimConflict {
+                        holder: identity.owner,
+                    });
+                }
+                let guard = ClaimGuard {
+                    scope: self,
+                    owner,
+                    claim: None,
+                    identity,
+                };
+                retire_snapshot(snapshot);
+                drop(prepared);
+                return Ok(guard);
+            }
+            let identity = ClaimIdentity {
+                hash,
                 owner,
-                committed: true,
+                marker: Rc::new(()),
+            };
+            state.claims.entry(hash).or_default().push(Claim {
+                key: prepared
+                    .take()
+                    .expect("BUG: absent claim has prepared ownership"),
+                owner,
+                marker: Rc::clone(&identity.marker),
             });
+            drop(state);
+            // Rollback exists before retiring any snapshot or losing owner.
+            let guard = ClaimGuard {
+                scope: self,
+                owner,
+                claim: Some((hash, Rc::clone(&identity.marker))),
+                identity,
+            };
+            retire_snapshot(snapshot);
+            return Ok(guard);
         }
-        state.claims.entry(key.key_hash()).or_default().push(Claim {
-            key: key.clone_key(),
-            owner,
-        });
-        drop(state);
-        Ok(ClaimGuard {
-            scope: self,
-            key: key.clone_key(),
-            owner,
-            committed: false,
-        })
+        unreachable!("BUG: bounded comparison either returns or refuses")
     }
 
-    /// Tag-checked release: removes the claim on `key` only if `owner` is
-    /// still its current holder.
-    ///
-    /// A release from an owner that no longer holds the claim (its own
-    /// finalize ran late, after another owner already claimed the same
-    /// key — the adversarial interleaving ADR-0043 names) is a
-    /// traced no-op, never a mutation of whoever holds the claim now. No-op,
-    /// untraced, if `key` has no live claim at all.
-    pub(crate) fn release(&self, key: &dyn ViewKey, owner: OwnerTag) {
-        let mut state = self.state.borrow_mut();
-        let Some((hash, index)) = state.position_of(key) else {
-            return;
-        };
-        let bucket = state
-            .claims
-            .get_mut(&hash)
-            .expect("BUG: position_of resolved a bucket that is no longer present");
-        if bucket[index].owner != owner {
-            tracing::debug!(
-                hash,
-                releasing_owner = %owner,
-                current_holder = %bucket[index].owner,
-                "GlobalKeyScope::release: tag mismatch, ignoring — the claim was \
-                 already reassigned to a different owner since this owner's release"
-            );
-            return;
+    /// Resolve a missing local registration without holding a scope borrow
+    /// during user hashing or equality. Matching local identities bypass this.
+    pub(super) fn take_claim(&self, key: &dyn ViewKey, owner: OwnerTag) -> Option<ScopedKeyOwner> {
+        let hash = key.key_hash();
+        for round in 0..2 {
+            let snapshot = self.snapshot(hash);
+            let identity = snapshot
+                .iter()
+                .find(|claim| claim.key.as_ref().key_eq(key))
+                .map(|claim| claim.identity.clone());
+            let state = self.state.borrow();
+            if !state.matches_snapshot(hash, &snapshot) {
+                drop(state);
+                if round == 1 {
+                    UnstableComparison.raise();
+                }
+                retire_snapshot(snapshot);
+                continue;
+            }
+            drop(state);
+            let removed = identity
+                .filter(|identity| identity.owner == owner)
+                .and_then(|identity| self.take_identity(&identity));
+            retire_snapshot(snapshot);
+            return removed;
         }
-        bucket.swap_remove(index);
+        unreachable!("BUG: bounded comparison either returns or refuses")
+    }
+
+    fn take_identity(&self, identity: &ClaimIdentity) -> Option<ScopedKeyOwner> {
+        self.take_claim_by_marker(identity.hash, identity.owner, &identity.marker)
+    }
+
+    /// Mandatory rollback uses only framework identity, never key callbacks.
+    fn take_claim_by_marker(
+        &self,
+        hash: u64,
+        owner: OwnerTag,
+        marker: &Rc<()>,
+    ) -> Option<ScopedKeyOwner> {
+        let mut state = self.state.borrow_mut();
+        let bucket = state.claims.get_mut(&hash)?;
+        let index = bucket
+            .iter()
+            .position(|claim| claim.owner == owner && Rc::ptr_eq(&claim.marker, marker))?;
+        let removed = bucket.swap_remove(index);
         if bucket.is_empty() {
             state.claims.remove(&hash);
         }
+        drop(state);
+        Some(removed.key)
     }
 
     /// Extract every claim tagged to `owner` without retiring arbitrary keys.
@@ -303,7 +450,7 @@ impl GlobalKeyScope {
     /// an owner dropped with zero live claims (the common case — every key
     /// was already unregistered through the normal unmount path) reclaims
     /// silently. The caller retires keys after releasing its binding guard.
-    pub(crate) fn take_owner_claims(&self, owner: OwnerTag) -> Vec<Box<dyn ViewKey>> {
+    pub(crate) fn take_owner_claims(&self, owner: OwnerTag) -> Vec<ScopedKeyOwner> {
         let mut state = self.state.borrow_mut();
         let mut removed = Vec::new();
         for bucket in state.claims.values_mut() {
@@ -367,7 +514,7 @@ pub(crate) struct ClaimConflict {
 ///
 /// Releases the claim on drop unless [`Self::commit`] ran first. The sole
 /// production caller ([`claim_and_register`]) commits immediately after its
-/// own local-map insert — an infallible `HashMap::insert` — but the guard
+/// own local-map publication. Its identity comparisons can panic, so the guard
 /// exists so that invariant is enforced by construction rather than by
 /// caller discipline: anything landing between a future claim and its
 /// commit that unwinds (a build error, a panic) still leaves the scope
@@ -375,23 +522,22 @@ pub(crate) struct ClaimConflict {
 #[derive(Debug)]
 pub(crate) struct ClaimGuard<'a> {
     scope: &'a GlobalKeyScope,
-    key: Box<dyn ViewKey>,
     owner: OwnerTag,
-    committed: bool,
+    claim: Option<(u64, Rc<()>)>,
+    identity: ClaimIdentity,
 }
-
 impl ClaimGuard<'_> {
-    /// Confirm the claim — the owner-map insert this guard was protecting
-    /// completed. After this call, dropping the guard does nothing.
+    /// The local registration is now published; rollback is disarmed.
     pub(crate) fn commit(mut self) {
-        self.committed = true;
+        self.claim = None;
     }
 }
-
 impl Drop for ClaimGuard<'_> {
     fn drop(&mut self) {
-        if !self.committed {
-            self.scope.release(self.key.as_ref(), self.owner);
+        if let Some((hash, marker)) = self.claim.take() {
+            let removed = self.scope.take_claim_by_marker(hash, self.owner, &marker);
+            // Borrow released: the key slot preserves the incoming unwind.
+            drop(removed);
         }
     }
 }
@@ -422,9 +568,10 @@ pub(crate) fn claim_and_register(
     local: &mut GlobalKeyRegistry,
 ) {
     let scope_ref = scope.get_or_insert_with(GlobalKeyScope::new);
+    let prepared = local.prepare(key);
     match scope_ref.try_claim(key, owner) {
         Ok(guard) => {
-            local.insert(key, element);
+            local.insert_prepared(key, element, prepared, guard.identity.clone());
             guard.commit();
         }
         Err(conflict) => {
@@ -461,8 +608,18 @@ pub(crate) fn release_and_unregister(
     key: &dyn ViewKey,
     local: &mut GlobalKeyRegistry,
 ) {
-    local.remove(key);
-    if let Some(scope) = scope {
-        scope.release(key, owner);
-    }
+    let local_key = local.take_registration(key);
+    let scope_key = scope.and_then(|scope| {
+        if let Some((_, _, identity)) = &local_key {
+            (identity.owner == owner)
+                .then(|| scope.take_identity(identity))
+                .flatten()
+        } else {
+            scope.take_claim(key, owner)
+        }
+    });
+    // Both authorities committed, with no scope borrow held during retirement.
+    // Preserve ordinary local-before-scoped-key destruction order.
+    drop(local_key);
+    drop(scope_key);
 }
