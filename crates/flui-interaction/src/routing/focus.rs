@@ -1115,12 +1115,79 @@ mod tests {
                 reentrant_request_during_notification_is_applied_after_and_published_in_order,
             ),
         ];
+        if let Ok(case) = std::env::var(HOSTILE_CHILD) {
+            let (_, run) = HOSTILE_CASES
+                .iter()
+                .find(|(name, _)| *name == case)
+                .expect("a known hostile case");
+            run();
+            std::process::exit(CHILD_COMPLETED);
+        }
         for &(name, case) in cases {
             if let Err(payload) = std::panic::catch_unwind(case) {
                 eprintln!("matrix case `{name}` failed");
                 std::panic::resume_unwind(payload);
             }
         }
+    }
+
+    /// Names the single hostile case a child process of
+    /// `focus_failure_and_reentrancy_matrix` runs instead of the matrix.
+    const HOSTILE_CHILD: &str = "FLUI_FOCUS_HOSTILE_CHILD";
+    /// A child that ran its case to completion exits with this status, so a
+    /// filter that matched no test (status 0) does not pass for one.
+    const CHILD_COMPLETED: i32 = 86;
+    const HOSTILE_CASES: &[(&str, fn())] = &[
+        (
+            "close_during_active_unwind_child",
+            close_during_active_unwind_child,
+        ),
+        ("closed_rejections_child", closed_rejections_child),
+    ];
+
+    /// Run one hostile case in a child process: what it guards against is an
+    /// abort, which would otherwise take the whole test binary down.
+    fn run_hostile_case_in_child(case: &str) {
+        let mut child = std::process::Command::new(std::env::current_exe().expect("test binary"))
+            .args([
+                "--exact",
+                "routing::focus::tests::focus_failure_and_reentrancy_matrix",
+                "--nocapture",
+            ])
+            .env(HOSTILE_CHILD, case)
+            .env("RUST_BACKTRACE", "0")
+            .env("RUST_LIB_BACKTRACE", "0")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("spawn hostile case");
+        let mut stderr = child.stderr.take().expect("child stderr");
+        let stderr_reader = std::thread::spawn(move || {
+            let mut output = Vec::new();
+            std::io::Read::read_to_end(&mut stderr, &mut output).expect("read child stderr");
+            output
+        });
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+        let status = loop {
+            if let Some(status) = child.try_wait().expect("poll hostile case") {
+                break status;
+            }
+            if std::time::Instant::now() >= deadline {
+                child.kill().expect("stop timed-out hostile case");
+                child.wait().expect("reap hostile case");
+                stderr_reader.join().expect("child stderr reader");
+                panic!("hostile case `{case}` timed out");
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        };
+        let stderr = stderr_reader.join().expect("child stderr reader");
+        assert_eq!(
+            status.code(),
+            Some(CHILD_COMPLETED),
+            "hostile case `{case}` failed: {status}
+{}",
+            String::from_utf8_lossy(&stderr)
+        );
     }
 
     struct CloseCapture {
@@ -1495,64 +1562,11 @@ mod tests {
     }
 
     fn close_during_active_unwind_preserves_outer_failure() {
-        use std::io::Read;
-        use std::panic::{AssertUnwindSafe, catch_unwind};
+        run_hostile_case_in_child("close_during_active_unwind_child");
+    }
 
-        const CHILD: &str = "FLUI_FOCUS_CLOSE_UNWIND_CHILD";
-        if std::env::var_os(CHILD).is_none() {
-            let mut child =
-                std::process::Command::new(std::env::current_exe().expect("test binary"))
-                    .args([
-                        "--exact",
-                        "routing::focus::tests::focus_failure_and_reentrancy_matrix",
-                        "--nocapture",
-                    ])
-                    .env(CHILD, "1")
-                    .env("RUST_BACKTRACE", "0")
-                    .env("RUST_LIB_BACKTRACE", "0")
-                    .stdout(std::process::Stdio::piped())
-                    .stderr(std::process::Stdio::piped())
-                    .spawn()
-                    .expect("spawn bounded unwind test");
-            let mut stdout = child.stdout.take().expect("child stdout");
-            let mut stderr = child.stderr.take().expect("child stderr");
-            let stdout_reader = std::thread::spawn(move || {
-                let mut output = Vec::new();
-                stdout.read_to_end(&mut output).expect("read child stdout");
-                output
-            });
-            let stderr_reader = std::thread::spawn(move || {
-                let mut output = Vec::new();
-                stderr.read_to_end(&mut output).expect("read child stderr");
-                output
-            });
-            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
-            loop {
-                if let Some(status) = child.try_wait().expect("poll unwind test") {
-                    let stdout = stdout_reader.join().expect("child stdout reader");
-                    let stderr = stderr_reader.join().expect("child stderr reader");
-                    assert!(
-                        status.success(),
-                        "active-unwind subprocess failed: {status}\n{}",
-                        String::from_utf8_lossy(&stderr)
-                    );
-                    assert!(
-                        String::from_utf8_lossy(&stdout)
-                            .contains("focus close hostile child completed"),
-                        "the child must execute the hostile cases, not merely match zero tests"
-                    );
-                    return;
-                }
-                if std::time::Instant::now() >= deadline {
-                    child.kill().expect("stop timed-out unwind test");
-                    child.wait().expect("reap unwind test");
-                    stdout_reader.join().expect("child stdout reader");
-                    stderr_reader.join().expect("child stderr reader");
-                    panic!("active-unwind subprocess timed out");
-                }
-                std::thread::sleep(std::time::Duration::from_millis(10));
-            }
-        }
+    fn close_during_active_unwind_child() {
+        use std::panic::{AssertUnwindSafe, catch_unwind};
 
         close_preserves_first_failure_against_hostile_context();
         close_from_key_callback_preserves_first_failure_against_hostile_capture();
@@ -1593,7 +1607,6 @@ mod tests {
             node.request_focus(),
             crate::routing::FocusRequestOutcome::OwnerClosed
         ));
-        println!("focus close hostile child completed");
     }
 
     struct RejectedPolicy<T>(T);
@@ -1676,64 +1689,11 @@ mod tests {
     }
 
     fn closed_rejections_preserve_outer_failure_and_healthy_retirement() {
-        use std::io::Read;
-        use std::panic::{AssertUnwindSafe, catch_unwind};
+        run_hostile_case_in_child("closed_rejections_child");
+    }
 
-        const CHILD: &str = "FLUI_FOCUS_REJECTION_UNWIND_CHILD";
-        if std::env::var_os(CHILD).is_none() {
-            let mut child =
-                std::process::Command::new(std::env::current_exe().expect("test binary"))
-                    .args([
-                        "--exact",
-                        "routing::focus::tests::focus_failure_and_reentrancy_matrix",
-                        "--nocapture",
-                    ])
-                    .env(CHILD, "1")
-                    .env("RUST_BACKTRACE", "0")
-                    .env("RUST_LIB_BACKTRACE", "0")
-                    .stdout(std::process::Stdio::piped())
-                    .stderr(std::process::Stdio::piped())
-                    .spawn()
-                    .expect("spawn bounded unwind test");
-            let mut stdout = child.stdout.take().expect("child stdout");
-            let mut stderr = child.stderr.take().expect("child stderr");
-            let stdout_reader = std::thread::spawn(move || {
-                let mut output = Vec::new();
-                stdout.read_to_end(&mut output).expect("read child stdout");
-                output
-            });
-            let stderr_reader = std::thread::spawn(move || {
-                let mut output = Vec::new();
-                stderr.read_to_end(&mut output).expect("read child stderr");
-                output
-            });
-            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
-            loop {
-                if let Some(status) = child.try_wait().expect("poll unwind test") {
-                    let stdout = stdout_reader.join().expect("child stdout reader");
-                    let stderr = stderr_reader.join().expect("child stderr reader");
-                    assert!(
-                        status.success(),
-                        "active-unwind subprocess failed: {status}\n{}",
-                        String::from_utf8_lossy(&stderr)
-                    );
-                    assert!(
-                        String::from_utf8_lossy(&stdout)
-                            .contains("focus rejected owner child completed"),
-                        "the child must execute the hostile cases, not merely match zero tests"
-                    );
-                    return;
-                }
-                if std::time::Instant::now() >= deadline {
-                    child.kill().expect("stop timed-out unwind test");
-                    child.wait().expect("reap unwind test");
-                    stdout_reader.join().expect("child stdout reader");
-                    stderr_reader.join().expect("child stderr reader");
-                    panic!("active-unwind subprocess timed out");
-                }
-                std::thread::sleep(std::time::Duration::from_millis(10));
-            }
-        }
+    fn closed_rejections_child() {
+        use std::panic::{AssertUnwindSafe, catch_unwind};
 
         struct RejectOnDrop {
             manager: Rc<FocusManager>,
@@ -1841,7 +1801,6 @@ mod tests {
             assert!(healthy.dispatch_key_event(&key_event()));
             assert_eq!(calls.get(), 1);
         }
-        println!("focus rejected owner child completed");
     }
 
     /// The issue #1040 reproducer: A is focused, B is requested, and B's

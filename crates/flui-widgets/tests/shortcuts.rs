@@ -237,65 +237,69 @@ pub(crate) mod tab_tests {
         }
     }
 
-    pub(crate) fn tab_traversal_preserves_failure_before_policy_and_candidate_retirement() {
-        use std::io::Read;
-        use std::panic::{AssertUnwindSafe, catch_unwind};
+    /// Selects the policy-retirement case in a child process of
+    /// `contracts::focus_actions_and_shortcuts`, which then runs only it.
+    const POLICY_CHILD: &str = "FLUI_TAB_POLICY_UNWIND_CHILD";
+    /// A child that ran the case to completion exits with this status, so a
+    /// filter that matched no test (status 0) does not pass for one.
+    const CHILD_COMPLETED: i32 = 86;
 
-        const CHILD: &str = "FLUI_TAB_POLICY_UNWIND_CHILD";
-        if std::env::var_os(CHILD).is_none() {
-            let mut child =
-                std::process::Command::new(std::env::current_exe().expect("test binary"))
-                    .args([
-                        "--exact",
-                        "contracts::focus_actions_and_shortcuts",
-                        "--nocapture",
-                    ])
-                    .env(CHILD, "1")
-                    .env("RUST_BACKTRACE", "0")
-                    .env("RUST_LIB_BACKTRACE", "0")
-                    .stdout(std::process::Stdio::piped())
-                    .stderr(std::process::Stdio::piped())
-                    .spawn()
-                    .expect("spawn bounded policy retirement test");
-            let mut stdout = child.stdout.take().expect("child stdout");
-            let mut stderr = child.stderr.take().expect("child stderr");
-            let stdout_reader = std::thread::spawn(move || {
-                let mut bytes = Vec::new();
-                stdout.read_to_end(&mut bytes).expect("read child stdout");
-                bytes
-            });
-            let stderr_reader = std::thread::spawn(move || {
-                let mut bytes = Vec::new();
-                stderr.read_to_end(&mut bytes).expect("read child stderr");
-                bytes
-            });
-            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
-            loop {
-                if let Some(status) = child.try_wait().expect("poll policy retirement test") {
-                    let stdout = stdout_reader.join().expect("child stdout reader");
-                    let stderr = stderr_reader.join().expect("child stderr reader");
-                    assert!(
-                        status.success(),
-                        "policy retirement subprocess failed: {status}\n{}",
-                        String::from_utf8_lossy(&stderr)
-                    );
-                    assert!(
-                        String::from_utf8_lossy(&stdout)
-                            .contains("Tab policy retirement child completed"),
-                        "the child must execute the policy cases, not match zero tests"
-                    );
-                    return;
-                }
-                if std::time::Instant::now() >= deadline {
-                    child.kill().expect("stop timed-out policy retirement test");
-                    child.wait().expect("reap policy retirement test");
-                    stdout_reader.join().expect("child stdout reader");
-                    stderr_reader.join().expect("child stderr reader");
-                    panic!("policy retirement subprocess timed out");
-                }
-                std::thread::sleep(std::time::Duration::from_millis(10));
-            }
+    /// In the child process, run the policy-retirement case alone and exit.
+    pub(crate) fn run_policy_child_if_requested() {
+        if std::env::var_os(POLICY_CHILD).is_some() {
+            policy_and_candidate_retirement_child();
+            std::process::exit(CHILD_COMPLETED);
         }
+    }
+
+    /// What this case guards against is an abort, so it runs in a child process.
+    pub(crate) fn tab_traversal_preserves_failure_before_policy_and_candidate_retirement() {
+        let mut child = std::process::Command::new(std::env::current_exe().expect("test binary"))
+            .args([
+                "--exact",
+                "contracts::focus_actions_and_shortcuts",
+                "--nocapture",
+            ])
+            .env(POLICY_CHILD, "1")
+            .env("RUST_BACKTRACE", "0")
+            .env("RUST_LIB_BACKTRACE", "0")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("spawn policy retirement child");
+        let mut stderr = child.stderr.take().expect("child stderr");
+        let stderr_reader = std::thread::spawn(move || {
+            let mut bytes = Vec::new();
+            std::io::Read::read_to_end(&mut stderr, &mut bytes).expect("read child stderr");
+            bytes
+        });
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+        let status = loop {
+            if let Some(status) = child.try_wait().expect("poll policy retirement child") {
+                break status;
+            }
+            if std::time::Instant::now() >= deadline {
+                child
+                    .kill()
+                    .expect("stop timed-out policy retirement child");
+                child.wait().expect("reap policy retirement child");
+                stderr_reader.join().expect("child stderr reader");
+                panic!("policy retirement child timed out");
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        };
+        let stderr = stderr_reader.join().expect("child stderr reader");
+        assert_eq!(
+            status.code(),
+            Some(CHILD_COMPLETED),
+            "policy retirement child failed: {status}
+{}",
+            String::from_utf8_lossy(&stderr)
+        );
+    }
+
+    fn policy_and_candidate_retirement_child() {
+        use std::panic::{AssertUnwindSafe, catch_unwind};
 
         for (panic_sort, panic_capture, expected, expected_policy_drops) in [
             (true, true, "first traversal sort failure", 0),
@@ -373,7 +377,6 @@ pub(crate) mod tab_tests {
             assert!(manager.dispatch_key_event(&tab(true)));
             assert!(left.has_primary_focus());
         }
-        println!("Tab policy retirement child completed");
     }
 }
 

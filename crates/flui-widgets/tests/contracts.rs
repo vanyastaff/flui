@@ -155,6 +155,7 @@ fn pointer_and_gesture_recognition() {
 /// Focus attachment and traversal, the actions chain and keyboard shortcuts.
 #[test]
 fn focus_actions_and_shortcuts() {
+    crate::shortcuts::tab_tests::run_policy_child_if_requested();
     run_cases(
         "focus_actions_and_shortcuts",
         &[
