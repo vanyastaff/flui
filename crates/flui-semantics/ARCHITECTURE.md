@@ -244,51 +244,44 @@ text's name through `accesskit_consumer` the way the adapters do; `cargo xtask d
 windows-a11y` is the live check that found the defect. For the joined label and value:
 **Unasserted:** no test pins this.
 
-### 5. The ADR-0080 tools reach FLUI through AccessKit's Windows adapter: `set_value` is `SetText`, `expand`/`collapse` are `Tap`
+### 5. The ADR-0080 tools reach FLUI through AccessKit's Windows adapter: `expand`/`collapse` are discrete, with a tap fallback
 
 **Rule.** `semantics_action_for` names every `accesskit::Action`. The tools an agent calls
 (ADR-0080, `flui_protocol::ActionName`) arrive through accesskit_windows 0.35.0 as:
-`invoke`, `toggle` and `select` → `Click` → `Tap`; `set_value` → `SetValue` → `SetText`;
-`focus` → `Focus`; `scroll_into_view` → `ScrollIntoView` → `ShowOnScreen`; `expand` and
-`collapse` → `Expand`/`Collapse` → `Tap`. A node with `HasExpandedState` and a tap handler
-advertises `Expand` while collapsed and `Collapse` while expanded, never both.
+`invoke`, `toggle` and `select` → `Click` → `Tap`; `set_value` → `SetValue` → `SetText`, or
+`SetNumericValue` with its number when the request carries `ActionData::NumericValue` (a
+slider through UI Automation's `RangeValue`; `semantics_action_request_for`) or, on the wire,
+when the node publishes a numeric value; `focus` → `Focus`; `scroll_into_view` →
+`ScrollIntoView` → `ShowOnScreen`; `expand` and `collapse` → `Expand`/`Collapse` →
+`SemanticsAction::Expand`/`Collapse` (ADR-0124).
+
+A node with `HasExpandedState` advertises `Expand` while collapsed and `Collapse` while
+expanded, never both. It advertises the transition when it registers the matching discrete
+action; when it registers neither discrete action but has a tap handler (the shape
+`Semantics::new().expanded(false).on_tap(..)` builds), it advertises the transition too, and
+`SemanticsOwner::resolve_action` routes that request to the tap handler as `Tap`, only in the
+direction the node's current state allows. `tap_disclosure_transition` in `src/action.rs` is
+the one predicate both directions use.
 
 **Why.** AccessKit does not count a node with an expanded state as invocable
 (`accesskit_consumer` 0.39, `Node::is_invocable`), so the Windows adapter offers only the
-`ExpandCollapse` pattern for it. With `Expand` and `Collapse` unrouted, an expandable FLUI node
-could be neither invoked nor expanded by an agent or a screen reader. FLUI toggles an
-expandable node through its tap handler, and the adapter refuses a transition to the state
-the node already has (accesskit_windows 0.35.0 `node.rs`, the `ExpandCollapse` provider), so
-routing both to `Tap` toggles in the requested direction while the adapter's copy of the tree
-is current. No other shipped adapter (`accesskit_macos` 0.27, `accesskit_atspi_common` 0.20)
-emits them.
+`ExpandCollapse` pattern for it: without the fallback a tap-only expandable node could be
+neither invoked nor expanded by an agent or a screen reader. A discrete handler receives the
+requested direction and sets that state, so repeated requests are idempotent. No other shipped
+adapter (`accesskit_macos` 0.27, `accesskit_atspi_common` 0.20) emits `Expand`/`Collapse`.
 
-**Known gap.** The adapter checks the expanded state in its own copy of the tree, which
-changes only when FLUI publishes the next tree update, and the request is queued to the realm
-without waiting for a frame. Two `Expand` requests before the next frame, or an `Expand`
-right after a pointer tap that has not been published yet, each pass that check and each run
-the tap handler, so the node can end collapsed after an expand. The request reaching the realm
-is a plain `Tap`. The in-process agent path checks the direction against the owner's committed
-tree (mapping decision 7), which has the same lag: that tree also changes only at the next
-frame, and a `GestureDetector` runs a semantics tap only in the frame after the request, so two
-`expand`s sent before the effect is published both pass there too. The discrete actions below
-would close this, because the handler would receive the requested direction instead of a
-toggle.
-
-**Discrete actions.** FLUI has no discrete expand and collapse actions and keeps bits 24 and
-25 reserved (`flui_protocol::SemanticsAction::RESERVED_BITS`); adding the two actions there
-is the follow-up that would remove the `Tap` route. A numeric `set_value` (a slider through
-UI Automation's `RangeValue`) arrives as `SetValue` with `ActionData::NumericValue`, which has
-no FLUI argument shape: the handler receives `SetText` with no arguments. Nothing sends
-`Increase`/`Decrease` for it.
+**Limit.** The tap fallback carries no direction to the handler. The adapter checks the
+expanded state in its own copy of the tree and the owner checks the committed tree, and both
+change only when the next frame publishes. Two `Expand` requests before then, or an `Expand`
+right after an unpublished pointer tap, each run the tap handler, so a tap-only node can end
+collapsed after an expand. A node that needs the direction registers `on_expand`/`on_collapse`.
 
 **Test.** `every_wire_action_routes_to_a_semantics_action` (one row per `ActionName::ALL`) in
-`src/agent/tests.rs`, and `every_inbound_routable_action_is_advertised_outbound_again` in
-`accesskit_translation.rs`, which advertises `Expand` on a collapsed node and `Collapse` on an
-expanded one. For the numeric `set_value` losing its number, a node advertising both
-transitions, and a platform expand reaching a mounted node's tap handler end to end:
-**Unasserted:** no test pins this. `flui_testing::widgets::LaidOut::invoke_semantics_action` has no
-state guard: sending it the transition the node does not advertise toggles it anyway.
+`src/agent/tests.rs`; `every_inbound_routable_action_is_advertised_outbound_again` in
+`accesskit_translation.rs`; `disclosure_requests_follow_the_expanded_state` in
+`src/agent/tests.rs`, whose rows drive explicit and tap-only nodes in both states through the
+wire and platform paths to the handler that runs; `set_value_reaches_set_text_with_its_text`
+for text and numeric `set_value`.
 
 ### 6. Every explicit role maps to an AccessKit role; `DragHandle` and `HotKey` stay generic
 
@@ -325,8 +318,9 @@ an expanded node is `action_unsupported`.
 through UI Automation, so a second cascade over FLUI's flags would drift from what the OS
 reports. The fold targets UIA rather than AccessKit's full role set because the wire
 vocabulary is the desktop server's, and ADR-0095 §4 compares the two backends after
-normalization. The direction check does not close mapping decision 5's double-toggle race: it
-reads the last committed tree, which lags the request as the adapter's copy does.
+normalization. The direction check reads the last committed tree, which lags the request as
+the adapter's copy does; that lag matters only for a tap-only expandable node (mapping
+decision 5, Limit).
 
 **Geometry and dialog roles.** The rectangles are
 surface-relative physical pixels, reported as `surface_rect` with no screen `rect`: the realm
@@ -342,7 +336,7 @@ adapter and desktop sources, and checked to cover every role FLUI publishes),
 `the_role_fold_was_transcribed_from_the_locked_windows_adapter` (fails when `Cargo.lock` moves
 `accesskit_windows` off the release the fold was transcribed from),
 `generic_containers_are_lifted_and_hidden_subtrees_dropped`,
-`advertised_actions_follow_the_uia_patterns`, `expand_on_an_expanded_node_is_action_unsupported`,
+`advertised_actions_follow_the_uia_patterns`, `disclosure_requests_follow_the_expanded_state`,
 `set_value_reaches_set_text_with_its_text`, `a_disabled_node_refuses_with_disabled`,
 `read_honours_max_depth_and_max_nodes_and_says_truncated` and
 `a_read_tree_round_trips_through_json`. `every_wire_action_routes_to_a_semantics_action` pins
@@ -364,7 +358,7 @@ filter and `SemanticsOwner`.
 ## Numeric and directional input
 
 ADR-0124 distinguishes expand/collapse from activation and numeric setters from
-text edits. `NumericRange` admits only finite inclusive
+text edits (mapping decision 5). `NumericRange` admits only finite inclusive
 values and positive finite steps, and `set_numeric_range` marks the node as a
 slider. Whole-request platform translation preserves numeric payloads, and
 `SemanticsOwner::resolve_action` refuses a numeric setter whose value is

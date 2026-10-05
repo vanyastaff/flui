@@ -460,8 +460,11 @@ impl SemanticsOwner {
     /// `blocks_user_actions` applies identically to snapshot export and input
     /// dispatch.
     ///
-    /// A numeric setter is refused unless its value lies in the node's current
-    /// range.
+    /// An `Expand` or `Collapse` request to an expandable node that registers
+    /// neither discrete action but has a tap handler resolves to that handler
+    /// with [`SemanticsAction::Tap`], and only for the transition the node's
+    /// current state allows. A numeric setter is refused unless its value lies
+    /// in the node's current range.
     ///
     /// The returned invocation owns an `Arc` clone of the handler and may be
     /// invoked after any outer owner lock has been released.
@@ -507,8 +510,17 @@ impl SemanticsOwner {
             node_id: request.node_id,
         })?;
         let config = node.config();
-        let routed = request.action;
-        let Some(handler) = (config.effective_actions_as_bits() & routed.value() != 0)
+        let actions = config.effective_actions_as_bits();
+        // A tap-only expandable node receives the transition its current
+        // state allows through its tap handler.
+        let routed = if crate::action::tap_disclosure_transition(actions, config.flags().bits())
+            == Some(request.action)
+        {
+            SemanticsAction::Tap
+        } else {
+            request.action
+        };
+        let Some(handler) = (actions & routed.value() != 0)
             .then(|| config.action_handler(routed))
             .flatten()
             .map(Arc::clone)
