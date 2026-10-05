@@ -408,7 +408,7 @@ fn quit_owner_loop(signal: &OwnerSignal, turn: &OwnerTurnSlot) {
 /// held, because it re-enters the embedder, which may install a new hook,
 /// open a window or quit; it goes back only if the slot is still empty, so
 /// a hook installed meanwhile wins. A window opened while it ran vetoes the
-/// exit regardless of its answer.
+/// exit regardless of its answer, and so does a hook that panics.
 fn exit_policy_allows_exit(
     signal: &OwnerSignal,
     handlers: &RefCell<PlatformHandlers>,
@@ -419,7 +419,11 @@ fn exit_policy_allows_exit(
         return false;
     }
     let hook = handlers.borrow_mut().exit_policy.take();
-    let allowed = hook.as_ref().is_none_or(|hook| hook());
+    // The hook is embedder code running inside this window procedure, where
+    // an unwind cannot cross the FFI boundary. A panic is contained and
+    // counts as a veto; the hook stays installed.
+    let mut allowed = false;
+    contain_owner_callback(|| allowed = hook.as_ref().is_none_or(|hook| hook()));
     if let Some(hook) = hook {
         let superseded = {
             let mut handlers = handlers.borrow_mut();
@@ -430,7 +434,7 @@ fn exit_policy_allows_exit(
                 Some(hook)
             }
         };
-        drop(superseded);
+        contain_owner_callback(|| drop(superseded));
     }
     allowed && signal.accepting() && no_windows()
 }

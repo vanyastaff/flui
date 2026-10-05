@@ -228,6 +228,10 @@ mod native_windows {
             "window_opened_by_the_exit_policy_keeps_the_loop",
             window_opened_by_the_exit_policy_keeps_the_loop,
         ),
+        (
+            "panicking_exit_policy_vetoes_and_stays_installed",
+            panicking_exit_policy_vetoes_and_stays_installed,
+        ),
     ];
 
     pub(super) fn run_requested_child() -> bool {
@@ -676,6 +680,57 @@ mod native_windows {
             *answers.lock().expect("hook answers"),
             [false, true],
             "the loop ended on a veto, or without the reevaluation"
+        );
+    }
+
+    fn panicking_exit_policy_vetoes_and_stays_installed() {
+        let platform = WindowsPlatform::new().expect("native Windows platform");
+        let calls = Arc::new(AtomicUsize::new(0));
+        let releaser = Arc::new(Mutex::new(None));
+        run_loop(platform, {
+            let calls = Arc::clone(&calls);
+            let releaser = Arc::clone(&releaser);
+            move |owner| {
+                let shared = owner.shared();
+                shared.set_exit_policy_hook(Box::new({
+                    let calls = Arc::clone(&calls);
+                    move || {
+                        // The first answer is a panic inside the owner
+                        // procedure; the second allows exit.
+                        assert!(
+                            calls.fetch_add(1, Ordering::SeqCst) > 0,
+                            "first exit-policy answer panics"
+                        );
+                        true
+                    }
+                }));
+                post_close(&open_owned(&owner));
+                let worker = std::thread::spawn(move || {
+                    let start = Instant::now();
+                    while calls.load(Ordering::SeqCst) == 0 {
+                        assert!(
+                            start.elapsed() < Duration::from_secs(10),
+                            "hook never consulted"
+                        );
+                        std::thread::sleep(Duration::from_millis(5));
+                    }
+                    std::thread::sleep(Duration::from_millis(200));
+                    shared.request_exit_policy_reevaluation();
+                });
+                *releaser.lock().expect("releaser") = Some(worker);
+            }
+        });
+        releaser
+            .lock()
+            .expect("releaser")
+            .take()
+            .expect("worker spawned")
+            .join()
+            .expect("worker");
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            2,
+            "a panicking hook must veto without aborting and stay installed"
         );
     }
 
