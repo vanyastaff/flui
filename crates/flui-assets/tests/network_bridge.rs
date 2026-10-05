@@ -109,7 +109,9 @@ fn configured_loader() {
             .with_network_client(client)
             .expect("configured HTTP client initializes")
             .with_default_capacity()
-            .with_capacity(1024 * 1024)
+            .with_capacity(flui_assets::CacheCapacity::Entries(
+                std::num::NonZeroU64::new(102).expect("nonzero test capacity"),
+            ))
             .build()
     };
     // Configuration does not bind a connection driver to this undriven runtime.

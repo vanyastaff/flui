@@ -5,9 +5,9 @@
 //!
 //! # Features
 //!
-//! - 🚀 **High Performance** - Lock-free caching with TinyLFU eviction algorithm
+//! - 🚀 **High Performance** - Concurrent caching with TinyLFU admission and LRU eviction
 //! - 🔒 **Thread-Safe** - Built on tokio, parking_lot, and moka for concurrent access
-//! - 💾 **Smart Caching** - Automatic memory management with configurable capacity
+//! - 💾 **Smart Caching** - Explicit entry retention and expiration
 //! - 🎯 **Type-Safe** - Generic `Asset<T>` trait for compile-time guarantees
 //! - ⚡ **Async I/O** - Non-blocking loading with tokio runtime
 //! - 🔑 **Efficient Keys** - 4-byte interned keys for fast hashing and comparison
@@ -54,7 +54,7 @@
 //!
 //! // ✅ This compiles
 //! let registry = AssetRegistryBuilder::new()
-//!     .with_capacity(10 * 1024 * 1024)
+//!     .with_capacity(flui_assets::CacheCapacity::Entries(std::num::NonZeroU64::new(1_024).expect("nonzero capacity")))
 //!     .build();
 //!
 //! // ❌ This doesn't compile - cannot build without capacity
@@ -82,7 +82,7 @@
 //! println!("Total refs: {}", handle.total_ref_count());
 //!
 //! // Cache extensions
-//! let cache: AssetCache<FontAsset> = AssetCache::new(1024 * 1024);
+//! let cache: AssetCache<FontAsset> = AssetCache::new(flui_assets::CacheCapacity::default());
 //! println!("Hit rate: {:.1}%", cache.hit_rate() * 100.0);
 //! # Ok(())
 //! # }
@@ -192,7 +192,10 @@ pub mod registry;
 // pub mod hot_reload;
 
 // Re-exports for convenience
-pub use crate::cache::{AssetCache, AssetCacheCore, AssetCacheExt};
+pub use crate::cache::{
+    AssetCache, AssetCacheConfig, AssetCacheCore, AssetCacheExt, CacheCapacity, CacheExpiration,
+    ExpirationTooLong,
+};
 pub use crate::core::{Asset, AssetMetadata};
 pub use crate::error::{AssetError, Result};
 pub use crate::registry::{AssetRegistry, AssetRegistryBuilder, HasCapacity, NoCapacity};

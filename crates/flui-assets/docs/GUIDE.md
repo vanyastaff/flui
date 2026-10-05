@@ -1,701 +1,260 @@
 # User Guide
 
-Complete guide to using `flui_assets` in your application.
-
-## Table of Contents
-
-1. [Quick Start](#quick-start)
-2. [Basic Usage](#basic-usage)
-3. [Asset Types](#asset-types)
-4. [Advanced Features](#advanced-features)
-5. [Best Practices](#best-practices)
-6. [Troubleshooting](#troubleshooting)
-
 ## Quick Start
 
-### Installation
-
-Add to your `Cargo.toml`:
+Add the asset crate and a Tokio runtime to your application:
 
 ```toml
 [dependencies]
 flui-assets = { git = "https://github.com/vanyastaff/flui" }
-tokio = { version = "1.0", features = ["macros", "rt-multi-thread"] }
-
-# Optional features: replace the line above with
-# flui-assets = { git = "https://github.com/vanyastaff/flui", features = ["images"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
-
-### Your First Asset
 
 ```rust
 use flui_assets::{AssetRegistryBuilder, FontAsset};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Create a registry
     let registry = AssetRegistryBuilder::new().with_default_capacity().build();
-
-    // Load a font
-    let font = FontAsset::file("assets/Roboto-Regular.ttf");
-    let handle = registry.load(font).await?;
-
-    // Use the font
-    println!("Font loaded: {} bytes", handle.bytes.len());
-
+    let font = registry.load(FontAsset::file("assets/font.ttf")).await?;
+    println!("Font loaded: {} bytes", font.bytes.len());
     Ok(())
 }
 ```
 
+Build one registry for a shared asset domain and pass a reference or `Arc` to
+consumers. Different registries own independent typed caches and loading policy.
+
 ## Basic Usage
 
-### Loading Assets
+### Capacity and expiration
 
-#### Method 1: One Registry Built at Startup (Recommended)
+The default retains up to 10,240 completed entries per asset type after pending
+maintenance settles. Capacity counts entries, not bytes:
+
+```rust
+use flui_assets::{AssetRegistryBuilder, CacheCapacity};
+use std::num::NonZeroU64;
+
+let registry = AssetRegistryBuilder::new()
+    .with_capacity(CacheCapacity::Entries(NonZeroU64::new(256).expect("nonzero entry limit")))
+    .build();
+```
+
+Use `CacheCapacity::Disabled` to retain no completed entries. Concurrent cold
+custom requests run independently; font requests share pending work. Later
+requests reload. Full configuration independently selects lifetime and idle expiration:
+
+```rust
+use flui_assets::{AssetCacheConfig, AssetRegistryBuilder, CacheCapacity, CacheExpiration};
+use std::time::Duration;
+
+let config = AssetCacheConfig {
+    capacity: CacheCapacity::default(),
+    time_to_live: CacheExpiration::NEVER,
+    time_to_idle: CacheExpiration::after(Duration::from_mins(2))?,
+};
+let registry = AssetRegistryBuilder::new().with_cache_config(config).build();
+```
+
+`CacheExpiration::after` rejects unsupported durations before cache construction.
+Defaults are five-minute lifetime and one-minute idle expiration. Neither capacity
+nor expiration limits memory retained by consumer handles.
+
+### Loaded data and identity
 
 ```rust
 use flui_assets::{AssetRegistryBuilder, FontAsset};
 
 let registry = AssetRegistryBuilder::new().with_default_capacity().build();
-let font = registry.load(FontAsset::file("font.ttf")).await?;
+let first = registry.load(FontAsset::file("font.ttf")).await?;
+let second = registry.load(FontAsset::file("font.ttf")).await?;
+assert!(first.ptr_eq(&second));
+println!("Loaded bytes: {}", first.bytes.len());
 ```
 
-Build one registry when the application starts and share it — by reference, or in an `Arc` —
-with every part of the app that loads assets. Each registry has its own cache: building one per
-component duplicates loads and memory.
+A cache hit shares the loaded allocation. Equal typed keys identify equivalent
+requests; callers must use different keys when the requested data differ.
+Cloned handles share data without requiring `Data: Clone`.
 
-#### Method 2: Creating Custom Registry
-
-```rust
-use flui_assets::AssetRegistryBuilder;
-
-// Create with specific capacity
-let registry = AssetRegistryBuilder::new()
-    .with_capacity(100 * 1024 * 1024)  // 100 MB cache
-    .build();
-
-let font = registry.load(FontAsset::file("font.ttf")).await?;
-```
-
-**Pros**:
-- Control over cache size
-- Multiple registries for different use cases
-- Better for testing (isolated state)
-
-**Cons**:
-- Must pass registry explicitly
-- Slightly more verbose
-
-### Accessing Asset Data
+### Cache management
 
 ```rust
-// Method 1: Direct access (immutable reference)
-let font = registry.load(FontAsset::file("font.ttf")).await?;
-let bytes = &font.bytes;
-println!("Font size: {} bytes", bytes.len());
-
-// Method 2: Using AssetHandleExt methods
-use flui_assets::AssetHandleExt;
-
-let size = font.map(|f| f.bytes.len());
-println!("Font size: {} bytes", size);
-
-// Method 3: Deref to inner type
-let font_data = &*font;  // Deref to &FontData
-println!("Font: {:?}", font_data);
-```
-
-### Caching Behavior
-
-Assets are automatically cached:
-
-```rust
-// First load: reads from disk
-let font1 = registry.load(FontAsset::file("font.ttf")).await?;
-
-// Second load: returns cached data (instant)
-let font2 = registry.load(FontAsset::file("font.ttf")).await?;
-
-// Both point to same data
-assert!(Arc::ptr_eq(&font1.data, &font2.data));
-```
-
-### Cache Management
-
-```rust
-use flui_assets::AssetRegistryBuilder;
+use flui_assets::{AssetKey, AssetRegistryBuilder, FontAsset};
 
 let registry = AssetRegistryBuilder::new().with_default_capacity().build();
-
-// Invalidate specific asset
-registry.invalidate::<FontAsset>(&AssetKey::new("old_font.ttf")).await;
-
-// Clear all assets of type
+let key = AssetKey::new("font.ttf");
+registry.invalidate::<FontAsset>(&key).await;
 registry.clear::<FontAsset>().await;
-
-// Check if asset is cached
-if let Some(cached) = registry.get::<FontAsset>(&key).await {
-    println!("Asset in cache!");
-}
+registry.clear_all().await;
 ```
+
+Invalidation excludes completed cached values from subsequent lookups. It does
+not cancel an in-flight initializer, which may insert afterward. Previously
+returned handles remain valid. `clear_all` detaches the registry's cache map
+before retiring data so generic destructors can reenter the committed registry.
 
 ## Asset Types
 
-### Built-in: Fonts
+### Fonts
 
-Fonts are always available (no feature flag required):
+Fonts are available without optional features. Embedded sources take a cache
+identifier and an owned byte vector:
 
 ```rust
 use flui_assets::FontAsset;
 
-// Load from file
-let font = FontAsset::file("assets/Roboto-Regular.ttf");
-let handle = registry.load(font).await?;
-
-// Load from bytes (e.g., embedded fonts)
-let bytes = include_bytes!("../assets/font.ttf");
-let font = FontAsset::from_bytes(bytes.to_vec());
-let handle = registry.load(font).await?;
-
-// Access font data
-println!("Font bytes: {:?}", &handle.bytes[..10]);
+let bytes = std::fs::read("font.ttf")?;
+let asset = FontAsset::from_bytes("embedded-font", bytes);
+let font = registry.load(asset).await?;
 ```
 
-### Optional: Images
+### Images
 
-Requires `images` feature flag:
+Enable `images` to use `ImageAsset`; `full` additionally enables `network`:
 
 ```toml
-[dependencies]
 flui-assets = { git = "https://github.com/vanyastaff/flui", features = ["images"] }
 ```
 
 ```rust
 use flui_assets::ImageAsset;
 
-// Load from file
-let image = ImageAsset::file("assets/logo.png");
-let handle = registry.load(image).await?;
-
-// Access image data
-println!("Image: {}x{}", handle.width(), handle.height());
-println!("Format: {:?}", handle.format());
-
-// Load from bytes
+let image = registry.load(ImageAsset::file("logo.png")).await?;
+println!("Image: {}x{}", image.width(), image.height());
 let bytes = std::fs::read("logo.png")?;
-let image = ImageAsset::from_bytes(bytes);
-let handle = registry.load(image).await?;
+let embedded = registry.load(ImageAsset::from_bytes("embedded-logo", bytes)).await?;
 ```
 
-### Custom Asset Types
+Ordinary registry loading caches the decoded result. Widget image bridges bypass
+this cache and deliver results to the widget layer's synchronous LRU.
 
-Create your own asset types by implementing the `Asset` trait:
+### Custom assets
+
+Implement `Asset` with typed data, key and error. `Data` is shared and need not be
+Clone. `validate` runs before every registry cache lookup, including hits; direct
+callers of `Asset::load` are responsible for validation themselves.
 
 ```rust
-use flui_assets::{Asset, AssetKey, AssetError, AssetMetadata};
+use flui_assets::{Asset, AssetError};
 
-// 1. Define your asset source
-pub struct ConfigAsset {
-    path: String,
-}
+struct TextAsset { path: String }
 
-impl ConfigAsset {
-    pub fn file(path: impl Into<String>) -> Self {
-        Self { path: path.into() }
-    }
-}
-
-// 2. Define your asset data
-#[derive(Debug, Clone)]
-pub struct ConfigData {
-    pub content: String,
-}
-
-// 3. Implement Asset trait
-impl Asset for ConfigAsset {
-    type Data = ConfigData;
-    type Key = AssetKey;
+impl Asset for TextAsset {
+    type Data = String;
+    type Key = String;
     type Error = AssetError;
 
-    fn key(&self) -> AssetKey {
-        AssetKey::new(&self.path)
-    }
+    fn key(&self) -> String { self.path.clone() }
 
-    async fn load(&self) -> Result<ConfigData, AssetError> {
-        let content = tokio::fs::read_to_string(&self.path)
-            .await
-            .map_err(AssetError::from)?;
-
-        Ok(ConfigData { content })
-    }
-
-    fn metadata(&self) -> Option<AssetMetadata> {
-        Some(AssetMetadata {
-            format: Some("JSON".to_string()),
-            ..Default::default()
-        })
+    async fn load(&self) -> Result<String, AssetError> {
+        Ok(tokio::fs::read_to_string(&self.path).await?)
     }
 }
-
-// 4. Use it!
-let config = ConfigAsset::file("config.json");
-let handle = registry.load(config).await?;
-println!("Config: {}", handle.content);
 ```
 
 ## Advanced Features
 
-### Extension Traits
+### Typed cache operations
 
-Get convenience methods automatically:
+A separately owned `AssetCache` exposes counters and maintenance. Registry cache
+lookup is private; there is no aggregated registry statistics API.
 
 ```rust
-use flui_assets::{AssetHandle, AssetHandleExt};
+use flui_assets::{Asset, AssetCache, AssetCacheExt, CacheCapacity, FontAsset};
 
-let font = registry.load(FontAsset::file("font.ttf")).await?;
-
-// Check if this is the only reference
-if font.is_unique() {
-    println!("Exclusive ownership");
-}
-
-// Count total references
-println!("References: {}", font.total_ref_count());
-
-// Transform data without cloning
-let size = font.map(|f| f.bytes.len());
+let cache = AssetCache::<FontAsset>::new(CacheCapacity::default());
+let font = FontAsset::file("font.ttf");
+let key = font.key();
+let loaded = cache.get_or_insert_with(key, || font.load()).await?;
+assert!(cache.contains(loaded.key()));
+cache.sync().await;
+println!("Estimated entries: {}, utilization: {}", cache.len(), cache.utilization());
+println!("Invalidation requests: {}", cache.stats().invalidations);
 ```
 
-### Weak References
+`contains` is synchronous and does not count a request or refresh idle expiration.
+Generic `get_or_insert_with` gets completed data or runs its own initializer,
+then inserts each successful result. Cold calls, including direct or awaited
+spawned reentry, do not wait on pending same-key work. Late completion may replace
+an earlier entry; existing handles keep their data. Errors remain owned and are
+not cached. Cancellation affects only that call; independent work survives and
+later requests can retry. No exactly-once side effects are guaranteed.
 
-Avoid keeping assets alive unnecessarily:
+Registry loading validates every descriptor. Only closed built-in FontAsset producers share pending work through Moka.
+ImageAsset keeps registered image decoder hooks and uses the independent helper,
+as custom assets do. Font failures are shared but not cached; cancellation or
+panic allows a waiter to restart subject to Moka's finite retry policy. No public
+custom coalescing opt-in or mandatory spawn API is introduced.
+
+Counters are shared across clones. Hit/miss counts for initialization describe
+an initial presence probe; concurrent changes can race it. Insertions count
+every generic publication and fresh returned built-in results, not guaranteed
+resident entries. `invalidations` includes requests for absent keys and excludes
+automatic eviction. `len` and utilization are estimates, not memory measurements.
+
+### Weak ownership
 
 ```rust
-use flui_assets::WeakAssetHandle;
-
-// Create weak reference
 let font = registry.load(FontAsset::file("font.ttf")).await?;
-let weak: WeakAssetHandle<_, _> = font.downgrade();
-
-// Drop strong reference
+let weak = font.downgrade();
 drop(font);
-
-// Asset can now be evicted from cache
-
-// Later, try to upgrade
-match weak.upgrade() {
-    Some(strong) => {
-        // Asset still cached
-        use_font(&strong);
-    }
-    None => {
-        // Asset evicted, need to reload
-        let strong = registry.load(FontAsset::file("font.ttf")).await?;
-        use_font(&strong);
-    }
+if let Some(still_loaded) = weak.upgrade() {
+    println!("Retained bytes: {}", still_loaded.bytes.len());
 }
 ```
 
-**Use case**: Store weak references in UI elements, upgrade when rendering.
+Weak handles do not retain data. Their upgrade can succeed because the cache or
+another consumer still owns it, including a consumer holding an evicted value.
+Eviction itself does not depend on dropping consumer handles.
 
-### Cache Statistics
-
-Monitor cache performance:
-
-```rust
-use flui_assets::{AssetCache, AssetCacheExt, FontAsset};
-
-// Get cache for specific asset type
-let cache: AssetCache<FontAsset> = registry.get_cache().unwrap();
-
-// Get statistics
-println!("Hit rate: {:.1}%", cache.hit_rate() * 100.0);
-println!("Miss rate: {:.1}%", cache.miss_rate() * 100.0);
-
-// Check efficiency
-if cache.is_efficient() {
-    println!("Cache performing well (>70% hit rate)");
-} else {
-    println!("Consider increasing cache size");
-}
-
-// Get detailed stats
-let stats = cache.stats();
-println!("Hits: {}, Misses: {}", stats.hits, stats.misses);
-println!("Entries: {}", cache.len());
-```
-
-### Loaders
-
-Use loaders for different data sources:
-
-#### File Loader
+### Byte sources
 
 ```rust
 use flui_assets::BytesFileLoader;
 
 let loader = BytesFileLoader::new("assets");
-
-// Load raw bytes
-let bytes = loader.load_bytes("texture.png").await?;
-
-// Load as string
+let bytes = loader.load_bytes("logo.png").await?;
 let text = loader.load_string("config.json").await?;
 ```
 
-### Embedded bytes
-
-Construct `FontAsset::from_bytes` or, with `images`, `ImageAsset::from_bytes`.
-The asset owns the source bytes and decodes through the same `Asset::load` contract
-as a file-backed asset; the registry caches its decoded result.
-
-### Parallel Loading
-
-Load multiple assets concurrently:
-
-```rust
-use futures::future::join_all;
-
-let registry = AssetRegistryBuilder::new().with_default_capacity().build();
-
-// Load fonts in parallel; every future borrows the one registry
-let handles = (0..10)
-    .map(|i| {
-        let registry = &registry;
-        async move {
-            registry.load(FontAsset::file(&format!("font{}.ttf", i))).await
-        }
-    })
-    .collect::<Vec<_>>();
-
-// Wait for all
-let results = join_all(handles).await;
-
-// Process results
-for result in results {
-    match result {
-        Ok(handle) => println!("Loaded: {:?}", handle.key()),
-        Err(e) => eprintln!("Failed: {}", e),
-    }
-}
-```
-
-### Error Handling
-
-```rust
-use flui_assets::AssetError;
-
-match registry.load(font).await {
-    Ok(handle) => {
-        println!("Loaded successfully");
-    }
-    Err(AssetError::Io(e)) => {
-        eprintln!("I/O error: {}", e);
-    }
-    Err(AssetError::InvalidData { path, reason }) => {
-        eprintln!("Invalid data in {}: {}", path, reason);
-    }
-    Err(AssetError::NotFound { path }) => {
-        eprintln!("Not found: {}", path);
-    }
-    Err(e) => {
-        eprintln!("Other error: {}", e);
-    }
-}
-```
+With `network`, `NetworkLoader` fetches HTTP bytes and is constructed fallibly.
+Asset implementations own source selection and decoding; loaders do not infer
+arbitrary decoded types from keys.
 
 ## Best Practices
 
-### 1. Build One Registry at Startup and Share It
+Share a registry within one asset domain, preload only needed assets, and measure
+real decoded sizes and access patterns before selecting entry counts. Keep IO and
+decoding outside synchronous UI build/layout/paint. Handle loading failures as
+results rather than assuming sources exist. Preload different asset types through
+separate typed calls:
 
 ```rust
-// ✅ Good: one registry, one cache, passed to whatever loads assets
-let registry = AssetRegistryBuilder::new().with_default_capacity().build();
-let font = registry.load(FontAsset::file("font.ttf")).await?;
-```
-
-### 2. Preload Critical Assets
-
-```rust
-// Preload at startup
-async fn preload_assets(registry: &AssetRegistry) -> Result<()> {
-    let critical = vec![
-        FontAsset::file("ui_font.ttf"),
-        ImageAsset::file("logo.png"),
-    ];
-
-    for asset in critical {
-        registry.preload(asset).await?;
-    }
-
-    Ok(())
-}
-```
-
-### 3. Use Weak References in UI
-
-```rust
-struct Button {
-    font: WeakAssetHandle<FontData, AssetKey>,
-}
-
-impl Button {
-    fn render(&self, registry: &AssetRegistry) {
-        if let Some(font) = self.font.upgrade() {
-            // Render with cached font
-            draw_text(&font);
-        } else {
-            // Reload if evicted
-            let font = registry.load(FontAsset::file("button_font.ttf")).await;
-            draw_text(&font);
-        }
-    }
-}
-```
-
-### 4. Monitor Cache Performance
-
-```rust
-// In development/testing
-#[cfg(debug_assertions)]
-fn check_cache_performance(registry: &AssetRegistry) {
-    let cache: AssetCache<ImageAsset> = registry.get_cache().unwrap();
-
-    if cache.hit_rate() < 0.7 {
-        eprintln!("Warning: Low cache hit rate: {:.1}%", cache.hit_rate() * 100.0);
-        eprintln!("Consider increasing cache size");
-    }
-}
-```
-
-### 5. Handle Errors Gracefully
-
-```rust
-// Provide fallback for missing assets
-async fn load_font_with_fallback(
-    registry: &AssetRegistry,
-    path: &str,
-) -> AssetHandle<FontData, AssetKey> {
-    match registry.load(FontAsset::file(path)).await {
-        Ok(handle) => handle,
-        Err(_) => {
-            // Load default font
-            registry.load(FontAsset::file("default.ttf"))
-                .await
-                .expect("Default font must exist")
-        }
-    }
-}
-```
-
-### 6. Use Type Aliases
-
-```rust
-// Define convenient type aliases
-type FontHandle = AssetHandle<FontData, AssetKey>;
-type ImageHandle = AssetHandle<Image, AssetKey>; // `flui_assets::Image`
-
-fn process_font(font: FontHandle) {
-    // ...
-}
+registry.preload(FontAsset::file("font.ttf")).await?;
+// With the images feature:
+registry.preload(flui_assets::ImageAsset::file("logo.png")).await?;
 ```
 
 ## Troubleshooting
 
-### Issue: Asset Not Found
-
-**Error**: `AssetError::NotFound { path: "font.ttf" }`
-
-**Solutions**:
-1. Check file path is correct
-2. Verify file exists: `ls assets/font.ttf`
-3. Check working directory: `println!("{:?}", std::env::current_dir())`
-4. Use absolute path for testing
-
-### Issue: High Memory Usage
-
-**Symptoms**: Application using too much memory
-
-**Solutions**:
-1. Reduce cache size in registry builder
-2. Use weak references in long-lived structures
-3. Clear unused asset types periodically
-4. Profile memory usage with `cargo flamegraph`
-
-### Issue: Low Cache Hit Rate
-
-**Symptoms**: `cache.hit_rate() < 0.7`
-
-**Solutions**:
-1. Increase cache capacity
-2. Preload frequently-used assets
-3. Check if assets are being loaded with different keys
-4. Profile access patterns
-
-### Issue: Slow Startup
-
-**Symptoms**: Long initial load time
-
-**Solutions**:
-1. Use lazy loading (load on demand)
-2. Show loading screen with progress
-3. Preload in background task
-4. Profile with `cargo flamegraph`
-
-### Issue: Type Mismatch
-
-**Error**: Type mismatch when downcasting
-
-**Solutions**:
-1. Ensure using correct asset type for cache
-2. Check TypeId matches
-3. Verify Asset::Data type is correct
+For missing files, check the application's working directory and the path supplied
+to the descriptor. For unexpected cache misses, inspect keys, capacity and
+expiration. For memory pressure, inspect retained consumer handles and decoded
+asset sizes as well as cache counts. Increasing entry capacity does not address
+failures, source changes hidden behind equal keys or data retained outside caches.
 
 ## Feature Flags
 
-### Available Features
-
-| Feature | Description | Dependencies |
-|---------|-------------|--------------|
-| `images` | Enable image loading | `image` |
-| `network` | Enable HTTP/HTTPS loading | `reqwest` |
-| `full` | Enable all stable features | All above |
-
-### Enabling Features
-
-```toml
-# Single feature
-flui-assets = { git = "https://github.com/vanyastaff/flui", features = ["images"] }
-
-# Multiple features
-flui-assets = { git = "https://github.com/vanyastaff/flui", features = ["images", "network"] }
-
-# All features
-flui-assets = { git = "https://github.com/vanyastaff/flui", features = ["full"] }
-```
-
-## Examples
-
-### Example 1: Loading Multiple Font Families
-
-```rust
-use flui_assets::{AssetRegistry, FontAsset};
-use std::collections::HashMap;
-
-async fn load_font_families(
-    registry: &AssetRegistry
-) -> Result<HashMap<String, AssetHandle<FontData, AssetKey>>> {
-    let fonts = vec![
-        ("regular", "Roboto-Regular.ttf"),
-        ("bold", "Roboto-Bold.ttf"),
-        ("italic", "Roboto-Italic.ttf"),
-    ];
-
-    let mut handles = HashMap::new();
-
-    for (name, path) in fonts {
-        let font = FontAsset::file(path);
-        let handle = registry.load(font).await?;
-        handles.insert(name.to_string(), handle);
-    }
-
-    Ok(handles)
-}
-```
-
-### Example 2: Asset Loading Progress
-
-```rust
-use flui_assets::{AssetRegistry, FontAsset};
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
-
-async fn load_with_progress(
-    registry: &AssetRegistry,
-    paths: Vec<String>,
-) -> Result<Vec<AssetHandle<FontData, AssetKey>>> {
-    let total = paths.len();
-    let loaded = Arc::new(AtomicUsize::new(0));
-
-    let handles = futures::future::join_all(
-        paths.into_iter().map(|path| {
-            let registry = registry.clone();
-            let loaded = loaded.clone();
-            async move {
-                let font = FontAsset::file(&path);
-                let result = registry.load(font).await;
-
-                let count = loaded.fetch_add(1, Ordering::Relaxed) + 1;
-                println!("Progress: {}/{}", count, total);
-
-                result
-            }
-        })
-    ).await;
-
-    handles.into_iter().collect()
-}
-```
-
-### Example 3: Custom Asset with Validation
-
-```rust
-use flui_assets::{Asset, AssetKey, AssetError, AssetMetadata};
-use serde::Deserialize;
-
-#[derive(Debug, Deserialize)]
-pub struct GameConfig {
-    pub title: String,
-    pub version: String,
-}
-
-pub struct GameConfigAsset {
-    path: String,
-}
-
-impl Asset for GameConfigAsset {
-    type Data = GameConfig;
-    type Key = AssetKey;
-    type Error = AssetError;
-
-    fn key(&self) -> AssetKey {
-        AssetKey::new(&self.path)
-    }
-
-    async fn load(&self) -> Result<GameConfig, AssetError> {
-        let content = tokio::fs::read_to_string(&self.path)
-            .await
-            .map_err(AssetError::from)?;
-
-        let config: GameConfig = serde_json::from_str(&content)
-            .map_err(|e| AssetError::InvalidData {
-                path: self.path.clone(),
-                reason: e.to_string(),
-            })?;
-
-        // Validate
-        if config.title.is_empty() {
-            return Err(AssetError::InvalidData {
-                path: self.path.clone(),
-                reason: "title cannot be empty".into(),
-            });
-        }
-
-        Ok(config)
-    }
-
-    fn metadata(&self) -> Option<AssetMetadata> {
-        Some(AssetMetadata {
-            format: Some("JSON".to_string()),
-            ..Default::default()
-        })
-    }
-}
-```
+| Feature | Description |
+|---------|-------------|
+| `images` | Image asset decoding |
+| `network` | HTTP/HTTPS byte loading |
+| `full` | Both stable optional features |
 
 ## Next Steps
 
-- Read [ARCHITECTURE.md](ARCHITECTURE.md) for system internals
-- Read [PATTERNS.md](PATTERNS.md) for design patterns
-- Read [PERFORMANCE.md](PERFORMANCE.md) for optimization tips
-- Run `cargo doc -p flui-assets --open` for the complete API reference
+- [Architecture](ARCHITECTURE.md)
+- [Design patterns](PATTERNS.md)
+- [Cache behavior and performance](PERFORMANCE.md)
+- `cargo doc -p flui-assets --open`

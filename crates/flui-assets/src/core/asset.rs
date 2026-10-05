@@ -67,8 +67,12 @@ pub trait Asset: Send + Sync + 'static {
     /// Loads and decodes the asset asynchronously.
     ///
     /// This method performs I/O and decoding. The asset registry caches successful
-    /// results and coalesces concurrent cold requests for the same typed key.
-    /// Calling this method directly bypasses registry caching.
+    /// results. Custom assets load independently on concurrent cold misses; each
+    /// successful call publishes and a later completion may replace earlier data.
+    /// Built-in fonts share pending loads. Images retain registered decoder hooks
+    /// and load independently, like custom assets. Loading may
+    /// reenter the registry, including through spawned work. Exactly-once side
+    /// effects are not guaranteed. Direct calls bypass registry caching.
     ///
     /// # Errors
     ///

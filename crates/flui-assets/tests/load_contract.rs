@@ -21,6 +21,122 @@ struct OwnedAsset {
     drops: Arc<AtomicUsize>,
 }
 
+struct ReentrantValue {
+    registry: std::sync::Weak<flui_assets::AssetRegistry>,
+    observed: Arc<AtomicUsize>,
+}
+
+impl Drop for ReentrantValue {
+    fn drop(&mut self) {
+        use std::future::Future;
+        use std::task::{Context, Poll, Waker};
+
+        let observation = if let Some(registry) = self.registry.upgrade() {
+            let key = "reentrant".to_owned();
+            let mut lookup = std::pin::pin!(registry.get::<ReentrantAsset>(&key));
+            match lookup
+                .as_mut()
+                .poll(&mut Context::from_waker(Waker::noop()))
+            {
+                Poll::Ready(None) => 1,
+                Poll::Ready(Some(_)) | Poll::Pending => 3,
+            }
+        } else {
+            2
+        };
+        self.observed.store(observation, Ordering::Relaxed);
+    }
+}
+
+struct ReentrantAsset {
+    registry: std::sync::Weak<flui_assets::AssetRegistry>,
+    observed: Arc<AtomicUsize>,
+}
+
+impl Asset for ReentrantAsset {
+    type Data = ReentrantValue;
+    type Key = String;
+    type Error = AssetError;
+
+    fn key(&self) -> String {
+        "reentrant".into()
+    }
+
+    async fn load(&self) -> Result<ReentrantValue, AssetError> {
+        Ok(ReentrantValue {
+            registry: self.registry.clone(),
+            observed: Arc::clone(&self.observed),
+        })
+    }
+}
+
+fn retirement_commits_before_reentry(release_owner: bool) {
+    let (sender, receiver) = std::sync::mpsc::channel();
+    let worker = std::thread::spawn(move || {
+        let observation = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("retirement runtime starts")
+            .block_on(async {
+                let registry =
+                    Arc::new(AssetRegistryBuilder::new().with_default_capacity().build());
+                let observed = Arc::new(AtomicUsize::new(0));
+                let data = registry
+                    .load(ReentrantAsset {
+                        registry: Arc::downgrade(&registry),
+                        observed: Arc::clone(&observed),
+                    })
+                    .await
+                    .expect("reentrant data loads");
+                drop(data);
+                if release_owner {
+                    drop(registry);
+                } else {
+                    registry.clear_all().await;
+                    let fresh = registry
+                        .load(CheckedAsset {
+                            accepted: true,
+                            loads: Arc::new(AtomicUsize::new(0)),
+                        })
+                        .await
+                        .expect("fresh cache works after retirement");
+                    assert_eq!(*fresh, 42);
+                }
+                observed.load(Ordering::Relaxed)
+            });
+        sender
+            .send(observation)
+            .expect("retirement result is delivered");
+    });
+    let observed = receiver
+        .recv_timeout(std::time::Duration::from_secs(3))
+        .expect("cache retirement permits destructor reentry before the deadline");
+    worker.join().expect("retirement worker completes");
+    assert_eq!(observed, if release_owner { 2 } else { 1 });
+}
+
+fn clearing_detaches_the_map_before_destructor_reentry() {
+    retirement_commits_before_reentry(false);
+}
+
+fn releasing_the_last_owner_has_an_absent_owner_fallback() {
+    retirement_commits_before_reentry(true);
+}
+
+#[test]
+fn registry_cache_retirement_commits_ownership_before_data_drop() {
+    crate::cases::run_cases(&[
+        (
+            "clear permits reentry",
+            clearing_detaches_the_map_before_destructor_reentry,
+        ),
+        (
+            "last owner is absent",
+            releasing_the_last_owner_has_an_absent_owner_fallback,
+        ),
+    ]);
+}
+
 impl Asset for OwnedAsset {
     type Data = OwnedValue;
     type Key = String;
@@ -318,7 +434,7 @@ async fn poll_waiter<F: std::future::Future>(mut future: std::pin::Pin<&mut F>) 
     .await;
 }
 
-fn concurrent_cold_success_shares_the_loaded_allocation() {
+fn concurrent_cold_success_preserves_elected_publication() {
     run_cold_load_case(async {
         let registry = AssetRegistryBuilder::new().with_default_capacity().build();
         let loads = Arc::new(AtomicUsize::new(0));
@@ -334,23 +450,25 @@ fn concurrent_cold_success_shares_the_loaded_allocation() {
         poll_waiter(second.as_mut()).await;
         assert_eq!(
             loads.load(Ordering::Relaxed),
-            1,
-            "cold callers share loader work"
+            2,
+            "overlapping cold callers run independently"
         );
         gate.add_permits(2);
-        let first = first.await.expect("first load succeeds");
-        let second = second.await.expect("waiting load succeeds");
+        let second = second.await.expect("overlapping load succeeds first");
+        let first = first.await.expect("earlier request completes later");
+        assert_eq!(*first, 1);
+        assert_eq!(*second, 2);
         assert!(
-            first.ptr_eq(&second),
-            "both callers retain one decoded allocation"
+            !first.ptr_eq(&second),
+            "independent callers retain separate loaded data"
         );
         let cached = registry.load(asset()).await.expect("cached load succeeds");
         assert!(first.ptr_eq(&cached));
-        assert_eq!(loads.load(Ordering::Relaxed), 1);
+        assert_eq!(loads.load(Ordering::Relaxed), 2);
     });
 }
 
-fn concurrent_cold_error_is_shared_and_a_later_request_retries() {
+fn concurrent_cold_errors_are_independent_and_retryable() {
     run_cold_load_case(async {
         let registry = AssetRegistryBuilder::new().with_default_capacity().build();
         let loads = Arc::new(AtomicUsize::new(0));
@@ -367,21 +485,21 @@ fn concurrent_cold_error_is_shared_and_a_later_request_retries() {
         gate.add_permits(3);
         let first = first.await.expect_err("first load fails");
         let second = second.await.expect_err("waiting load fails");
-        assert_eq!(
+        assert_ne!(
             first.to_string(),
             second.to_string(),
-            "waiters observe one failure"
+            "each caller observes its own failure"
         );
-        assert_eq!(loads.load(Ordering::Relaxed), 1);
+        assert_eq!(loads.load(Ordering::Relaxed), 2);
         let next = registry
             .load(asset(false))
             .await
             .expect("error is not cached");
-        assert_eq!(*next, 2, "the next accepted descriptor retries loading");
+        assert_eq!(*next, 3, "the next accepted descriptor retries loading");
     });
 }
 
-fn canceling_the_initializer_restarts_a_waiting_load() {
+fn canceling_the_initializer_preserves_overlapping_work() {
     run_cold_load_case(async {
         let registry = AssetRegistryBuilder::new().with_default_capacity().build();
         let loads = Arc::new(AtomicUsize::new(0));
@@ -395,37 +513,376 @@ fn canceling_the_initializer_restarts_a_waiting_load() {
         let mut second = Box::pin(registry.load(asset()));
         poll_until_loading(first.as_mut(), &loads, 1).await;
         poll_waiter(second.as_mut()).await;
-        assert_eq!(loads.load(Ordering::Relaxed), 1);
+        assert_eq!(loads.load(Ordering::Relaxed), 2);
         drop(first);
         poll_until_loading(second.as_mut(), &loads, 2).await;
         gate.add_permits(1);
         let second = second.await.expect("waiter initializes after cancellation");
         assert_eq!(*second, 2);
+        gate.add_permits(1);
         let cached = registry
             .load(asset())
             .await
             .expect("completed retry is cached");
         assert!(second.ptr_eq(&cached));
+        assert_eq!(*cached, 2);
         assert_eq!(loads.load(Ordering::Relaxed), 2);
     });
 }
 
 #[test]
-fn cold_registry_loads_share_work_and_recover() {
+fn cold_registry_loads_preserve_publication_and_recover() {
     crate::cases::run_cases(&[
         (
-            "concurrent cold success shares the loaded allocation",
-            concurrent_cold_success_shares_the_loaded_allocation,
+            "custom registry direct reentry makes progress",
+            custom_registry_direct_reentry_makes_progress,
         ),
         (
-            "concurrent cold error is shared and a later request retries",
-            concurrent_cold_error_is_shared_and_a_later_request_retries,
+            "custom registry spawned reentry makes progress",
+            custom_registry_spawned_reentry_makes_progress,
         ),
         (
-            "canceling the initializer restarts a waiting load",
-            canceling_the_initializer_restarts_a_waiting_load,
+            "built-in font cold loads share pending work",
+            builtin_font_cold_loads_share_pending_work,
+        ),
+        #[cfg(feature = "images")]
+        (
+            "image cold loads run independently",
+            image_cold_loads_run_independently,
+        ),
+        (
+            "spawned same-key child failure is retryable",
+            spawned_same_key_child_failure_is_retryable,
+        ),
+        (
+            "canceling parent preserves spawned child work",
+            canceling_parent_preserves_spawned_child_work,
+        ),
+        (
+            "spawned same-key child makes progress",
+            spawned_same_key_child_makes_progress,
+        ),
+        (
+            "concurrent cold success preserves elected publication",
+            concurrent_cold_success_preserves_elected_publication,
+        ),
+        (
+            "concurrent cold errors are independent and retryable",
+            concurrent_cold_errors_are_independent_and_retryable,
+        ),
+        (
+            "canceling the initializer preserves overlapping work",
+            canceling_the_initializer_preserves_overlapping_work,
+        ),
+        (
+            "overlapping loads return independent data and non-Clone errors",
+            public_cache_overlapping_loads_return_independent_data_and_errors,
+        ),
+        (
+            "public initializer reentry preserves outer publication",
+            public_cache_initializer_reentry_preserves_publication_and_recovers,
+        ),
+        (
+            "public initializer reentry recovers after errors",
+            public_cache_initializer_reentry_recovers_after_errors,
+        ),
+        (
+            "completed initializer retirement permits same-key reentry",
+            completed_initializer_retirement_permits_same_key_reentry,
+        ),
+        (
+            "canceled initializer retirement permits same-key reentry",
+            canceled_initializer_retirement_permits_same_key_reentry,
+        ),
+        (
+            "overlapping initializer retirement permits same-key reentry",
+            overlapping_initializer_retirement_permits_same_key_reentry,
+        ),
+        (
+            "public cache waiters recover after cancellation or panic",
+            public_cache_waiters_recover_after_cancellation_or_panic,
         ),
     ]);
+}
+
+struct RecursiveRegistryAsset {
+    registry: Arc<flui_assets::AssetRegistry>,
+    spawned: bool,
+    child: bool,
+}
+
+impl Asset for RecursiveRegistryAsset {
+    type Data = usize;
+    type Key = String;
+    type Error = AssetError;
+
+    fn key(&self) -> String {
+        "recursive-registry".into()
+    }
+
+    fn load(&self) -> impl std::future::Future<Output = Result<usize, AssetError>> + Send {
+        let registry = Arc::clone(&self.registry);
+        let spawned = self.spawned;
+        let child = self.child;
+        let future: std::pin::Pin<
+            Box<dyn std::future::Future<Output = Result<usize, AssetError>> + Send>,
+        > = Box::pin(async move {
+            if child {
+                return Ok(7);
+            }
+            let nested = RecursiveRegistryAsset {
+                registry: Arc::clone(&registry),
+                spawned,
+                child: true,
+            };
+            let loaded = if spawned {
+                tokio::spawn(async move { registry.load(nested).await })
+                    .await
+                    .expect("spawned registry load finishes")?
+            } else {
+                registry.load(nested).await?
+            };
+            Ok(*loaded + 1)
+        });
+        future
+    }
+}
+
+fn custom_registry_direct_reentry_makes_progress() {
+    custom_registry_reentry_case(false);
+}
+fn custom_registry_spawned_reentry_makes_progress() {
+    custom_registry_reentry_case(true);
+}
+
+fn custom_registry_reentry_case(spawned: bool) {
+    tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .expect("two-thread runtime starts")
+        .block_on(async {
+            tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                let registry =
+                    Arc::new(AssetRegistryBuilder::new().with_default_capacity().build());
+                let outer = registry
+                    .load(RecursiveRegistryAsset {
+                        registry: Arc::clone(&registry),
+                        spawned,
+                        child: false,
+                    })
+                    .await
+                    .expect("recursive custom asset finishes");
+                assert_eq!(*outer, 8);
+                let cached = registry
+                    .get::<RecursiveRegistryAsset>(&"recursive-registry".into())
+                    .await
+                    .expect("outer completion replaces child publication");
+                assert!(outer.ptr_eq(&cached));
+            })
+            .await
+            .expect("recursive registry load must finish within five seconds");
+        });
+}
+
+fn builtin_font_cold_loads_share_pending_work() {
+    builtin_cold_loads_case(true, || {
+        FontAsset::file(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../flui-painting/assets/fonts/probe-sans-400.ttf"
+        ))
+    });
+}
+
+#[cfg(feature = "images")]
+fn image_cold_loads_run_independently() {
+    builtin_cold_loads_case(false, || {
+        flui_assets::ImageAsset::file(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/tiny.png"
+        ))
+    });
+}
+
+fn builtin_cold_loads_case<T: Asset<Error = AssetError>>(
+    singleflight: bool,
+    asset: impl Fn() -> T,
+) {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .max_blocking_threads(1)
+        .enable_all()
+        .build()
+        .expect("producer runtime starts");
+    runtime.block_on(async {
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            // Occupy this runtime's sole IO worker so both public requests are
+            // demonstrably cold and pending before either file read can finish.
+            let (release_tx, release_rx) = std::sync::mpsc::channel();
+            let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+            let blocker = tokio::task::spawn_blocking(move || {
+                started_tx.send(()).expect("observer remains alive");
+                let _ = release_rx.recv();
+            });
+            started_rx.await.expect("IO worker is occupied");
+            let registry = AssetRegistryBuilder::new().with_default_capacity().build();
+            let key = asset().key();
+            let mut first = Box::pin(registry.load(asset()));
+            let mut second = Box::pin(registry.load(asset()));
+            poll_waiter(first.as_mut()).await;
+            poll_waiter(second.as_mut()).await;
+            assert!(registry.get::<T>(&key).await.is_none());
+            release_tx.send(()).expect("IO worker is alive");
+            blocker.await.expect("IO worker releases");
+            let first = first.await.expect("first producer loads");
+            let second = second.await.expect("second producer loads");
+            assert_eq!(
+                first.ptr_eq(&second),
+                singleflight,
+                "cold producer allocation sharing follows its callback boundary"
+            );
+            let cached = registry
+                .load(asset())
+                .await
+                .expect("completed producer is cached");
+            assert!(cached.ptr_eq(if singleflight { &first } else { &second }));
+        })
+        .await
+        .expect("cold producer requests finish within five seconds");
+    });
+}
+
+fn spawned_same_key_child_makes_progress() {
+    spawned_same_key_child_case(false);
+}
+
+fn spawned_same_key_child_failure_is_retryable() {
+    spawned_same_key_child_case(true);
+}
+
+fn spawned_same_key_child_case(fail: bool) {
+    tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .expect("two-thread runtime starts")
+        .block_on(async {
+            tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                let cache = flui_assets::AssetCache::<PublicCacheAsset>::new(
+                    flui_assets::CacheCapacity::default(),
+                );
+                let child_cache = cache.clone();
+                let outer = cache
+                    .get_or_insert_with("spawned".into(), || async move {
+                        let child = tokio::spawn(async move {
+                            tokio::task::yield_now().await;
+                            let result = child_cache
+                                .get_or_insert_with("spawned".into(), || async {
+                                    if fail {
+                                        Err(NonCloneLoadError(7))
+                                    } else {
+                                        Ok(7)
+                                    }
+                                })
+                                .await;
+                            assert_eq!(child_cache.contains(&"spawned".to_owned()), !fail);
+                            result
+                        })
+                        .await
+                        .expect("child task completes");
+                        child
+                            .map(|value| *value + 1)
+                            .map_err(|error| NonCloneLoadError(error.0))
+                    })
+                    .await;
+                if fail {
+                    assert_eq!(outer.expect_err("child failure reaches parent").0, 7);
+                    assert!(!cache.contains(&"spawned".to_owned()));
+                    let retry = cache
+                        .get_or_insert_with("spawned".into(), || async { Ok(9) })
+                        .await
+                        .expect("retry after child failure publishes");
+                    assert_eq!(*retry, 9);
+                    return;
+                }
+                let outer = outer.expect("outer initializer completes");
+                assert_eq!(*outer, 8);
+                let cached = cache
+                    .get(&"spawned".to_owned())
+                    .await
+                    .expect("outer publishes");
+                assert!(cached.ptr_eq(&outer));
+                assert_eq!(cache.stats().insertions, 2);
+            })
+            .await
+            .expect("spawned same-key dependency must finish within five seconds");
+        });
+}
+
+fn canceling_parent_preserves_spawned_child_work() {
+    tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .expect("two-thread runtime starts")
+        .block_on(async {
+            tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                let cache = flui_assets::AssetCache::<PublicCacheAsset>::new(
+                    flui_assets::CacheCapacity::default(),
+                );
+                let child_cache = cache.clone();
+                let started = Arc::new(tokio::sync::Semaphore::new(0));
+                let child_started = Arc::clone(&started);
+                let gate = Arc::new(tokio::sync::Semaphore::new(0));
+                let child_gate = Arc::clone(&gate);
+                let (result_tx, result_rx) = tokio::sync::oneshot::channel();
+                let mut parent = Box::pin(cache.get_or_insert_with(
+                    "cancel-child".into(),
+                    || async move {
+                        tokio::spawn(async move {
+                            let result = child_cache
+                                .get_or_insert_with("cancel-child".into(), || async {
+                                    child_started.add_permits(1);
+                                    child_gate
+                                        .acquire()
+                                        .await
+                                        .expect("gate remains open")
+                                        .forget();
+                                    Ok(7)
+                                })
+                                .await;
+                            result_tx.send(result).expect("observer remains alive");
+                        })
+                        .await
+                        .expect("child finishes");
+                        Ok(8)
+                    },
+                ));
+                poll_waiter(parent.as_mut()).await;
+                started
+                    .acquire()
+                    .await
+                    .expect("child initializer starts")
+                    .forget();
+                drop(parent);
+                gate.add_permits(1);
+                let child = result_rx
+                    .await
+                    .expect("detached child reports completion")
+                    .expect("child work survives parent cancellation");
+                assert_eq!(*child, 7);
+                assert!(cache.contains(&"cancel-child".to_owned()));
+                cache.invalidate(&"cancel-child".to_owned()).await;
+                let retry = cache
+                    .get_or_insert_with("cancel-child".into(), || async { Ok(9) })
+                    .await
+                    .expect("next request can publish");
+                assert_eq!(*retry, 9);
+                assert!(!child.ptr_eq(&retry));
+                assert_eq!(cache.stats().insertions, 2);
+            })
+            .await
+            .expect("spawned child cancellation recovery finishes within five seconds");
+        });
 }
 
 /// Cache clones account for operations on the same entries, including reset.
@@ -433,7 +890,14 @@ fn cold_registry_loads_share_work_and_recover() {
 async fn cache_clones_report_shared_operations_and_reset() {
     use flui_assets::AssetCache;
 
-    let cache = AssetCache::<GatedAsset>::with_config(100, std::time::Duration::from_mins(1));
+    let cache = AssetCache::<GatedAsset>::with_config(flui_assets::AssetCacheConfig {
+        capacity: flui_assets::CacheCapacity::Entries(
+            std::num::NonZeroU64::new(100).expect("nonzero test capacity"),
+        ),
+        time_to_live: flui_assets::CacheExpiration::after(std::time::Duration::from_mins(1))
+            .expect("supported test expiration"),
+        ..flui_assets::AssetCacheConfig::default()
+    });
     let key = "shared".to_owned();
     cache.insert(key.clone(), 7).await;
     let observer = cache.clone();
@@ -446,10 +910,22 @@ async fn cache_clones_report_shared_operations_and_reset() {
     );
     assert!(cache.get(&"missing".to_owned()).await.is_none());
     let counts = |stats: flui_assets::cache::CacheStats| {
-        (stats.hits, stats.misses, stats.insertions, stats.evictions)
+        (
+            stats.hits,
+            stats.misses,
+            stats.insertions,
+            stats.invalidations,
+        )
     };
     assert_eq!(counts(cache.stats()), (1, 1, 1, 0));
     assert_eq!(counts(observer.stats()), (1, 1, 1, 0));
+    assert!(cache.contains(&key));
+    assert!(!observer.contains(&"absent".to_owned()));
+    assert_eq!(
+        counts(cache.stats()),
+        (1, 1, 1, 0),
+        "presence is observational"
+    );
 
     observer.invalidate(&key).await;
     assert!(
@@ -458,6 +934,12 @@ async fn cache_clones_report_shared_operations_and_reset() {
     );
     assert_eq!(counts(cache.stats()), (1, 2, 1, 1));
     assert_eq!(counts(observer.stats()), (1, 2, 1, 1));
+    observer.invalidate(&"absent".to_owned()).await;
+    assert_eq!(
+        counts(cache.stats()),
+        (1, 2, 1, 2),
+        "invalidation counts requests"
+    );
     cache.insert(key.clone(), 9).await;
     observer.clear().await;
     assert_eq!(
@@ -471,4 +953,490 @@ async fn cache_clones_report_shared_operations_and_reset() {
     );
     observer.reset_stats();
     assert_eq!(counts(cache.stats()), (0, 0, 0, 0));
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("attempt {0}")]
+struct NonCloneLoadError(usize);
+
+struct PublicCacheAsset;
+
+impl Asset for PublicCacheAsset {
+    type Data = usize;
+    type Key = String;
+    type Error = NonCloneLoadError;
+
+    fn key(&self) -> String {
+        "public".to_owned()
+    }
+
+    async fn load(&self) -> Result<usize, NonCloneLoadError> {
+        Ok(1)
+    }
+}
+
+fn public_cache_overlapping_loads_return_independent_data_and_errors() {
+    run_cold_load_case(async {
+        for fail in [false, true] {
+            let cache = flui_assets::AssetCache::<PublicCacheAsset>::new(
+                flui_assets::CacheCapacity::default(),
+            );
+            let observer = cache.clone();
+            let key = "shared".to_owned();
+            let loads = Arc::new(AtomicUsize::new(0));
+            let gate = Arc::new(tokio::sync::Semaphore::new(0));
+            let initialize = || async {
+                let attempt = loads.fetch_add(1, Ordering::Relaxed) + 1;
+                gate.acquire().await.expect("gate remains open").forget();
+                if fail {
+                    Err(NonCloneLoadError(attempt))
+                } else {
+                    Ok(attempt)
+                }
+            };
+            let mut first = Box::pin(cache.get_or_insert_with(key.clone(), initialize));
+            let mut second = Box::pin(observer.get_or_insert_with(key.clone(), initialize));
+            poll_until_loading(first.as_mut(), &loads, 1).await;
+            poll_waiter(second.as_mut()).await;
+            assert_eq!(
+                loads.load(Ordering::Relaxed),
+                2,
+                "public helper does not join active user work"
+            );
+            gate.add_permits(2);
+            let second = second.await;
+            let first = first.await;
+            if fail {
+                let first: NonCloneLoadError = first.expect_err("initializer fails");
+                let second: NonCloneLoadError = second.expect_err("overlapping initializer fails");
+                assert_eq!((first.0, second.0), (1, 2), "each caller owns its failure");
+                let recovered = cache
+                    .get_or_insert_with(key.clone(), || async {
+                        Ok(loads.fetch_add(1, Ordering::Relaxed) + 1)
+                    })
+                    .await
+                    .expect("failed initialization is retryable");
+                assert_eq!(*recovered, 3);
+            } else {
+                let first = first.expect("initializer succeeds");
+                let second = second.expect("waiter succeeds");
+                assert!(
+                    !first.ptr_eq(&second),
+                    "independent cold calls retain separate data"
+                );
+                let cached = cache
+                    .get_or_insert_with(key, || async { Ok(99) })
+                    .await
+                    .expect("completed value is reused");
+                assert!(first.ptr_eq(&cached));
+                assert_eq!(loads.load(Ordering::Relaxed), 2);
+            }
+            assert_eq!(
+                cache.stats().insertions,
+                if fail { 1 } else { 2 },
+                "every successful independent call publishes"
+            );
+        }
+    });
+}
+
+fn public_cache_initializer_reentry_preserves_publication_and_recovers() {
+    public_cache_initializer_reentry_case(false);
+}
+
+fn public_cache_initializer_reentry_recovers_after_errors() {
+    public_cache_initializer_reentry_case(true);
+}
+
+fn public_cache_initializer_reentry_case(fail: bool) {
+    run_cold_load_case(async {
+        let cache =
+            flui_assets::AssetCache::<PublicCacheAsset>::new(flui_assets::CacheCapacity::default());
+        let nested = cache.clone();
+        let separate =
+            flui_assets::AssetCache::<PublicCacheAsset>::new(flui_assets::CacheCapacity::default());
+        let key = "recursive".to_owned();
+        let result = cache
+            .get_or_insert_with(key.clone(), || async {
+                // Reentry after suspension must also remain independent.
+                tokio::task::yield_now().await;
+                let independent = separate
+                    .get_or_insert_with(key.clone(), || async { Ok(3) })
+                    .await
+                    .expect("another cache owns an independent initializer");
+                assert_eq!(*independent, 3);
+                assert!(separate.contains(&key));
+                let other = nested
+                    .get_or_insert_with("other".to_owned(), || async { Ok(4) })
+                    .await
+                    .expect("another key initializes normally");
+                assert_eq!(*other, 4);
+                assert!(nested.contains(&"other".to_owned()));
+                let inner = nested
+                    .get_or_insert_with(key.clone(), || async {
+                        tokio::task::yield_now().await;
+                        if fail {
+                            Err(NonCloneLoadError(7))
+                        } else {
+                            Ok(7)
+                        }
+                    })
+                    .await;
+                assert_eq!(
+                    nested.contains(&key),
+                    !fail,
+                    "every successful nested initializer publishes"
+                );
+                if fail {
+                    assert_eq!(
+                        inner.expect_err("nested error returns without waiting").0,
+                        7
+                    );
+                    Err(NonCloneLoadError(8))
+                } else {
+                    Ok(*inner.expect("same-key clone reentry makes progress") + 1)
+                }
+            })
+            .await;
+        if fail {
+            assert_eq!(result.expect_err("outer failure is shared normally").0, 8);
+            assert!(!cache.contains(&key));
+            let recovered = cache
+                .get_or_insert_with(key.clone(), || async { Ok(9) })
+                .await
+                .expect("next request recovers after nested and outer errors");
+            assert_eq!(*recovered, 9);
+        } else {
+            let outer = result.expect("outer initializer completes after reentry");
+            assert_eq!(*outer, 8);
+            let completed = cache.get(&key).await.expect("outer result is published");
+            assert!(outer.ptr_eq(&completed));
+        }
+    });
+}
+
+struct ReenteringInitializer {
+    cache: flui_assets::AssetCache<PublicCacheAsset>,
+    retired: Arc<AtomicUsize>,
+    pending: bool,
+}
+
+impl std::future::Future for ReenteringInitializer {
+    type Output = Result<usize, NonCloneLoadError>;
+
+    fn poll(
+        self: std::pin::Pin<&mut Self>,
+        _: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Self::Output> {
+        if self.pending {
+            std::task::Poll::Pending
+        } else {
+            std::task::Poll::Ready(Ok(1))
+        }
+    }
+}
+
+impl Drop for ReenteringInitializer {
+    fn drop(&mut self) {
+        use std::future::Future;
+        let mut nested = std::pin::pin!(
+            self.cache
+                .get_or_insert_with("retirement".to_owned(), || async { Ok(7) })
+        );
+        let result = nested
+            .as_mut()
+            .poll(&mut std::task::Context::from_waker(std::task::Waker::noop()));
+        let std::task::Poll::Ready(Ok(handle)) = result else {
+            panic!("initializer retirement must not wait on its own pending entry");
+        };
+        self.retired.store(*handle, Ordering::Relaxed);
+    }
+}
+
+fn completed_initializer_retirement_permits_same_key_reentry() {
+    public_cache_initializer_retirement_case(0);
+}
+
+fn canceled_initializer_retirement_permits_same_key_reentry() {
+    public_cache_initializer_retirement_case(1);
+}
+
+fn overlapping_initializer_retirement_permits_same_key_reentry() {
+    public_cache_initializer_retirement_case(2);
+}
+
+fn public_cache_initializer_retirement_case(mode: u8) {
+    run_cold_load_case(async {
+        let cache =
+            flui_assets::AssetCache::<PublicCacheAsset>::new(flui_assets::CacheCapacity::default());
+        let retired = Arc::new(AtomicUsize::new(0));
+        let initializer = ReenteringInitializer {
+            cache: cache.clone(),
+            retired: Arc::clone(&retired),
+            pending: mode != 0,
+        };
+        let mut first = Box::pin(cache.get_or_insert_with("retirement".to_owned(), || initializer));
+        if mode == 0 {
+            assert_eq!(*first.await.expect("ready initializer completes"), 1);
+        } else {
+            poll_waiter(first.as_mut()).await;
+            if mode == 2 {
+                let waiter_retired = Arc::new(AtomicUsize::new(0));
+                let unused = ReenteringInitializer {
+                    cache: cache.clone(),
+                    retired: Arc::clone(&waiter_retired),
+                    pending: true,
+                };
+                let mut waiter =
+                    Box::pin(cache.get_or_insert_with("retirement".to_owned(), || unused));
+                poll_waiter(waiter.as_mut()).await;
+                drop(waiter);
+                assert_eq!(waiter_retired.load(Ordering::Relaxed), 7);
+            }
+            drop(first);
+            assert_eq!(
+                *cache
+                    .get(&"retirement".to_owned())
+                    .await
+                    .expect("retirement reentry publishes independently"),
+                7
+            );
+        }
+        assert_eq!(retired.load(Ordering::Relaxed), 7);
+        cache.invalidate(&"retirement".to_owned()).await;
+        assert_eq!(
+            *cache
+                .get_or_insert_with("retirement".to_owned(), || async { Ok(9) })
+                .await
+                .expect("request after retirement recovers"),
+            9,
+        );
+    });
+}
+
+fn public_cache_waiters_recover_after_cancellation_or_panic() {
+    run_cold_load_case(async {
+        for panic_first in [false, true] {
+            let cache = flui_assets::AssetCache::<PublicCacheAsset>::new(
+                flui_assets::CacheCapacity::default(),
+            );
+            let key = "recover".to_owned();
+            let loads = Arc::new(AtomicUsize::new(0));
+            let gate = Arc::new(tokio::sync::Semaphore::new(0));
+            let mut first = Box::pin(cache.get_or_insert_with(key.clone(), || async {
+                let attempt = loads.fetch_add(1, Ordering::Relaxed) + 1;
+                gate.acquire().await.expect("gate remains open").forget();
+                assert!(!panic_first, "initializer panic");
+                Ok(attempt)
+            }));
+            let mut second = Box::pin(cache.get_or_insert_with(key.clone(), || async {
+                let attempt = loads.fetch_add(1, Ordering::Relaxed) + 1;
+                gate.acquire().await.expect("gate remains open").forget();
+                if panic_first {
+                    Err(NonCloneLoadError(attempt))
+                } else {
+                    Ok(attempt)
+                }
+            }));
+            poll_until_loading(first.as_mut(), &loads, 1).await;
+            poll_waiter(second.as_mut()).await;
+            assert_eq!(loads.load(Ordering::Relaxed), 2);
+            if panic_first {
+                gate.add_permits(1);
+                std::future::poll_fn(|cx| {
+                    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        first.as_mut().poll(cx)
+                    }));
+                    match outcome {
+                        Err(payload) => {
+                            assert_eq!(payload.downcast_ref::<&str>(), Some(&"initializer panic"));
+                            std::task::Poll::Ready(())
+                        }
+                        Ok(std::task::Poll::Pending) => std::task::Poll::Pending,
+                        Ok(std::task::Poll::Ready(_)) => panic!("initializer must panic"),
+                    }
+                })
+                .await;
+            }
+            drop(first);
+            poll_until_loading(second.as_mut(), &loads, 2).await;
+            gate.add_permits(1);
+            let second = second.await;
+            if panic_first {
+                assert_eq!(
+                    second
+                        .expect_err("restarted waiter can fail independently")
+                        .0,
+                    2
+                );
+                let next = cache
+                    .get_or_insert_with(key, || async { Ok(3) })
+                    .await
+                    .expect("next request recovers after both failures");
+                assert_eq!(*next, 3);
+            } else {
+                assert_eq!(*second.expect("overlapping work survives cancellation"), 2);
+                assert_eq!(
+                    *cache.get(&key).await.expect("independent work publishes"),
+                    2
+                );
+                cache.invalidate(&key).await;
+                let next = cache
+                    .get_or_insert_with(key, || async { Ok(3) })
+                    .await
+                    .expect("a later request publishes after cancellation");
+                assert_eq!(*next, 3);
+            }
+        }
+    });
+}
+
+fn count_capacity_bounds_entries_and_preserves_consumer_handles() {
+    run_cold_load_case(async {
+        use flui_assets::{AssetCache, CacheCapacity};
+        let cache = AssetCache::<PublicCacheAsset>::new(CacheCapacity::Entries(
+            std::num::NonZeroU64::new(2).expect("nonzero test capacity"),
+        ));
+        let retained = cache.insert("a".into(), 1).await;
+        cache.insert("b".into(), 2).await;
+        cache.insert("c".into(), 3).await;
+        cache.sync().await;
+        assert!(
+            cache.len() <= 2,
+            "configured count bound applies after maintenance"
+        );
+        assert_eq!(*retained, 1, "retirement does not invalidate consumer data");
+    });
+}
+
+fn disabled_retention_loads_independently_then_reloads() {
+    run_cold_load_case(async {
+        use flui_assets::{AssetCache, CacheCapacity};
+        let cache = AssetCache::<PublicCacheAsset>::new(CacheCapacity::Disabled);
+        let key = "disabled".to_owned();
+        let loads = Arc::new(AtomicUsize::new(0));
+        let gate = Arc::new(tokio::sync::Semaphore::new(0));
+        let initialize = || async {
+            let attempt = loads.fetch_add(1, Ordering::Relaxed) + 1;
+            gate.acquire().await.expect("gate remains open").forget();
+            Ok(attempt)
+        };
+        let mut first = Box::pin(cache.get_or_insert_with(key.clone(), initialize));
+        let mut second = Box::pin(cache.get_or_insert_with(key.clone(), initialize));
+        poll_until_loading(first.as_mut(), &loads, 1).await;
+        poll_waiter(second.as_mut()).await;
+        gate.add_permits(2);
+        let first = first.await.expect("initializer succeeds without retention");
+        let second = second.await.expect("waiter shares accepted work");
+        assert!(!first.ptr_eq(&second));
+        assert!(!cache.contains(&key));
+        let next = cache
+            .get_or_insert_with(key, || async {
+                Ok(loads.fetch_add(1, Ordering::Relaxed) + 1)
+            })
+            .await
+            .expect("later request reloads");
+        assert_eq!(*next, 3);
+        assert!(!first.ptr_eq(&next));
+        cache.sync().await;
+        assert_eq!(cache.len(), 0);
+    });
+}
+
+fn utilization_reports_the_configured_capacity_and_rates_remain_finite() {
+    run_cold_load_case(async {
+        use flui_assets::{AssetCache, AssetCacheExt, CacheCapacity};
+        let cache = AssetCache::<PublicCacheAsset>::new(CacheCapacity::Entries(
+            std::num::NonZeroU64::new(4).expect("nonzero test capacity"),
+        ));
+        cache.insert("a".into(), 1).await;
+        cache.insert("b".into(), 2).await;
+        cache.sync().await;
+        assert_eq!(
+            cache.utilization(),
+            0.5,
+            "two entries occupy half of four slots"
+        );
+        for _ in 0..8 {
+            cache
+                .get(&"a".to_owned())
+                .await
+                .expect("retrieving a hot entry");
+        }
+        assert_eq!(
+            cache.utilization(),
+            0.5,
+            "historical requests are not capacity"
+        );
+        let disabled = AssetCache::<PublicCacheAsset>::new(CacheCapacity::Disabled);
+        disabled.insert("a".into(), 1).await;
+        assert_eq!(disabled.utilization(), 0.0);
+
+        let large = flui_assets::cache::CacheStats {
+            hits: usize::MAX,
+            misses: usize::MAX,
+            ..Default::default()
+        };
+        assert_eq!(large.hit_rate(), 0.5);
+        assert_eq!(large.miss_rate(), 0.5);
+        assert_eq!(large.total_requests(), usize::MAX);
+        assert_eq!(flui_assets::cache::CacheStats::default().miss_rate(), 0.0);
+    });
+}
+
+fn expiration_is_checked_before_cache_construction() {
+    run_cold_load_case(async {
+        use flui_assets::{AssetCache, AssetCacheConfig, CacheExpiration};
+        assert!(CacheExpiration::after(std::time::Duration::MAX).is_err());
+        let max = CacheExpiration::after(std::time::Duration::from_hours(1_000 * 365 * 24))
+            .expect("maximum supported expiration is admitted");
+        for expiration in [CacheExpiration::NEVER, max] {
+            let cache = AssetCache::<PublicCacheAsset>::with_config(AssetCacheConfig {
+                time_to_live: expiration,
+                time_to_idle: expiration,
+                ..Default::default()
+            });
+            cache.insert("a".into(), 7).await;
+            assert_eq!(
+                *cache
+                    .get(&"a".to_owned())
+                    .await
+                    .expect("supported config loads"),
+                7
+            );
+        }
+        let immediate = AssetCache::<PublicCacheAsset>::with_config(AssetCacheConfig {
+            time_to_idle: CacheExpiration::after(std::time::Duration::ZERO)
+                .expect("immediate expiration is supported"),
+            ..Default::default()
+        });
+        let held = immediate.insert("a".into(), 9).await;
+        assert!(
+            !immediate.contains(&"a".to_owned()),
+            "configured idle expiration applies"
+        );
+        assert_eq!(*held, 9, "expiration preserves consumer ownership");
+    });
+}
+
+#[test]
+fn asset_cache_retention_and_observation_contracts() {
+    crate::cases::run_cases(&[
+        (
+            "count bound preserves consumer handles",
+            count_capacity_bounds_entries_and_preserves_consumer_handles,
+        ),
+        (
+            "disabled retention loads independently then reloads",
+            disabled_retention_loads_independently_then_reloads,
+        ),
+        (
+            "utilization and finite counter arithmetic",
+            utilization_reports_the_configured_capacity_and_rates_remain_finite,
+        ),
+        (
+            "supported expiration construction",
+            expiration_is_checked_before_cache_construction,
+        ),
+    ]);
 }
