@@ -11,7 +11,7 @@ Crate-level design notes for `flui_interaction`: subsystems, ownership, mapping 
 | `processing` | Per-pointer derived data: `VelocityTracker` (LSQ fit on 20-sample circular buffer, 100 ms horizon, 40 ms stationary gate), `PointerEventResampler` (frame-rate adaptation with 100-event cap and 1 ms minimum sample interval), `InputPredictor` (velocity extrapolation with optional acceleration and prediction smoothing), `RawInputHandler` (low-level stream adapter), and the shared `lsq_solver` + `sampling_clock` helpers. |
 | `routing` | Event dispatch infrastructure: `EventRouter`, `PointerRouter`, owner-thread TLS `FocusManager`, `FocusScopeNode` / reading-order Tab traversal, `MouseTracker` (enter/exit/hover), hit testing, and the `TransformGuard` stack-RAII for the transform stack. Off the per-pointer hot path. |
 | `binding` | `GestureBinding` — owner-local glue that hosts the arena, resolves and retains the Down hit route, coalesces/resamples Moves, and runs route → arena lifecycle ordering. Contact generations prevent frame-delayed samples from crossing a reused platform pointer ID. |
-| `observability` | Observability substrate. `GestureEvent` is a typed `Display` enum of recogniser / arena event names; `SPAN_RECOGNIZER` and `SPAN_ARENA` are span-name constants; `pointer_event_kind` summarises a `PointerEvent` to a short string for span fields. `#[tracing::instrument]` is applied on `RecognizerBase` start_tracking / stop_tracking and on every public `GestureArena` method. |
+| `observability` | Observability substrate. `GestureEvent` is a typed `Display` enum of recogniser / arena event names; `SPAN_RECOGNIZER` and `SPAN_ARENA` are span-name constants; `pointer_event_kind` summarises a `PointerEvent` to a short string for span fields. `RecognizerBase::start_tracking` and public arena methods carry spans. Rejection and terminal tracking commit local withdrawal before emitting diagnostics, because subscribers can reenter or panic. |
 
 ## Ownership and synchronization
 
@@ -59,7 +59,7 @@ Local design choices and why. Each entry names the conflict, the choice, and the
   - **Masonry/Xilem** (`masonry_core/src/passes/update.rs`, `run_update_focus_pass`): `request_focus` writes a pending `next_focused_widget` slot; the update pass commits it and delivers `FocusChanged` to the old and new widget — last-wins, applied in a pass after event handling, the same family of solutions as Flutter's.
   - **Qt** (widgets): fully synchronous nested dispatch — `setFocus` called from inside `focusInEvent` simply recurses, and `QApplication::focusChanged` fires per change with no engine-side reentrancy bound at all; the escape hatch it gives a handler is `QFocusEvent::reason()`, so code can recognize and decline to react to a focus change it caused itself. Real infinite-focus-loop reports exist in the wild for exactly this shape.
 
-  FLUI's `request_focus`/`unfocus` are synchronous and must return a decision immediately (an existing, unrelated contract), so "defer to a microtask that doesn't exist yet at this point in a synchronous call stack" isn't available. `FocusManager` instead queues a reentrant request (`pending_focus_transitions: RefCell<VecDeque<Option<Rc<FocusNode>>>>`, `None` = unfocus) and applies every queued request FIFO once the in-flight notification (`notification_depth: Cell<u32>`, held by a `NotificationDepthGuard` that decrements — and, on unwind, also discards the queue — even if a listener panics) returns to zero — each re-validated for eligibility (attached, focusable, still owned by this manager) immediately before it applies, since a listener earlier in the same chain can detach a queued target or revoke its focusability before its turn comes. Each application gets its own commit, node-listener pass, and manager-listener publication, in request order. This gives a chronological guarantee ("a reentrant request becomes the next transition, never an earlier one republished late") without the up-to-one-frame lag, and without Compose's revert-plus-cancellation-event surface (a synchronous manager has no torn-down transaction to revert — every accepted request either commits or is still queued, never both, so there is nothing a cancellation event would need to announce) and without the browsers' unbounded, uncontrolled recursion. `finish_node_replacement` publishes its own outer edge under the same guard, firing only when primary identity actually changed across the replacement — a replacement that only changes a focused node's ancestry publishes no manager-level edge, since the affected ancestors' node-level listeners already cover it. `close` keeps a related but distinct contract instead of taking the guard itself: its own node-level notification always runs, nested inside whatever notification is already in flight, while its manager-level publication is skipped — rather than interleaved out of order — whenever one is already in flight. A reentrant chain with no natural end (two listeners that keep re-requesting each other) has no analogue among the six references above that FLUI can lean on as-is, so the drain is bounded at `FocusManager::REENTRANT_FOCUS_DRAIN_BUDGET` (32) applications per outermost call and drops the remainder with one latched `tracing::warn!` naming the last-requested node id and the count of dropped requests (`ping_pong_listeners_are_bounded_and_warned`). Listener dispatch is also removal-safe: both `FocusManager::notify_listeners` and `FocusNode::notify_listeners_after_tree_change` re-check that a listener is still registered immediately before calling it, so one listener removing another (or itself) mid-dispatch is never called again in that same dispatch. **Unasserted:** no test pins this.
+  FLUI's `request_focus`/`unfocus` are synchronous and must return a decision immediately (an existing, unrelated contract), so "defer to a microtask that doesn't exist yet at this point in a synchronous call stack" isn't available. `FocusManager` instead queues a reentrant request (`pending_focus_transitions: RefCell<VecDeque<Option<Rc<FocusNode>>>>`, `None` = unfocus) and applies every queued request FIFO once the in-flight notification (`notification_depth: Cell<u32>`, held by a `NotificationDepthGuard` that decrements — and, on unwind, also discards the queue — even if a listener panics) returns to zero — each re-validated for eligibility (attached, focusable, still owned by this manager) immediately before it applies, since a listener earlier in the same chain can detach a queued target or revoke its focusability before its turn comes. Each application gets its own commit, node-listener pass, and manager-listener publication, in request order. This gives a chronological guarantee ("a reentrant request becomes the next transition, never an earlier one republished late") without the up-to-one-frame lag, and without Compose's revert-plus-cancellation-event surface (a synchronous manager has no torn-down transaction to revert — every accepted request either commits or is still queued, never both, so there is nothing a cancellation event would need to announce) and without the browsers' unbounded, uncontrolled recursion. `finish_node_replacement` publishes its own outer edge under the same guard, firing only when primary identity actually changed across the replacement — a replacement that only changes a focused node's ancestry publishes no manager-level edge, since the affected ancestors' node-level listeners already cover it. `close` first commits terminal manager and node state, then delivers final node notifications only while no cleanup failure or outer unwind has occurred. Its manager-level publication remains skipped when a notification is already in flight. Removed captures and node properties retire independently outside borrows; after the first failure or during outer unwind their opaque ownership is retained. A reentrant chain with no natural end (two listeners that keep re-requesting each other) has no analogue among the six references above that FLUI can lean on as-is, so the drain is bounded at `FocusManager::REENTRANT_FOCUS_DRAIN_BUDGET` (32) applications per outermost call and drops the remainder with one latched `tracing::warn!` naming the last-requested node id and the count of dropped requests (`ping_pong_listeners_are_bounded_and_warned`). Listener dispatch is also removal-safe: both `FocusManager::notify_listeners` and `FocusNode::notify_listeners_after_tree_change` re-check that a listener is still registered immediately before calling it, so one listener removing another (or itself) mid-dispatch is never called again in that same dispatch. **Unasserted:** no test pins this.
 
 - **Scoped hit-test transforms survive caught panics.** `with_paint_offset` and `with_paint_transform` restore their entry transform depth through `TransformGuard`, whether the callback returns or unwinds. Pending transform parts may have become globalized while entries were added, so rollback restores the combined depth rather than blindly popping one part. The rendering consumer `hit_test_matrix` catches a transformed descendant failure and checks the healthy sibling's emitted local coordinates. Raw pushes still require balanced pops; scopes do not authorize removing their ancestors' transforms.
 
@@ -143,3 +143,101 @@ callback capture whose ordinary destructor panics: refusal does not invoke the
 callback, the retirement failure propagates, and a healthy sibling still uses
 the parent coordinate space. It does not promise containment of multiple
 panicking destructors within one opaque capture.
+
+## Pointer route capture retirement
+
+`PointerRouter::remove_all_routes`, `clear_global_handlers` and `clear` detach
+the removed callbacks and release their registry borrows before any capture is
+destroyed. A capture destructor
+may query or remove the same pointer and register its next route; that new route
+survives the outer removal. An ordinary destructor panic propagates after the
+registry transaction commits. Framework-owned callback collections retire each
+callback independently. After the first failure, the remaining opaque callback
+handles are retained; during an active unwind all removed callback handles are
+retained. This exceptional-path retention prevents a later destructor from
+competing with the first failure. It does not contain multiple panicking
+destructors inside a single opaque callback capture. `remove_route` and
+`remove_global_handler` retain the caller's callback handle.
+Final owner destruction detaches both registries through exclusive `get_mut`
+access before applying the same retirement fence across pointer and global
+callbacks. No diagnostics run between detachment and retirement. A weak handle
+cannot upgrade during last-owner destruction; callback cleanup must accept that
+absent-owner fallback instead of trying to resurrect the retired owner.
+The public binding test
+`pointer_route_retirement_reenters_and_preserves_the_next_contact` covers normal
+capture reentry and a panic after reentry, then delivers the next contact through
+`GestureBinding` to the replacement route.
+`pointer_router_competing_retirement_preserves_first_failure_and_recovery`
+uses bounded child processes for each collection-removal operation, with one or
+two separately stored hostile captures and removal during an active unwind. It
+checks the original failure, retained tail and actual next-contact delivery.
+The same bounded family covers last-owner destruction with one hostile capture,
+pointer/global capture competition and an active unwind, including weak-owner
+refusal during retirement.
+
+## Focus traversal policy snapshots
+
+Traversal snapshots the current `Rc` policy and releases the policy cell before
+calling user sorting code. A policy may replace itself during sorting; the
+replacement applies to the next traversal, while the in-flight key uses its
+original policy's order. Outgoing policy destruction also runs without a
+policy-cell borrow. The public Tab path and policy/destructor reentry are pinned
+by `tab_and_shift_tab_move_the_focus_through_the_actions_chain`.
+
+Sorting borrows policy and candidate ownership held outside its containment
+boundary. Retirement preserves the first sorting or destructor failure and
+retains later opaque owners. Traversal during an existing unwind returns no
+order without invoking user sorting code. The public Tab and Shift-Tab row
+`tab_traversal_preserves_failure_before_policy_and_candidate_retirement` covers
+policy replacement, last-owner retirement competition and subsequent traversal.
+
+## Terminal focus ownership
+
+Focus closure detaches the complete node tree and withdraws node properties
+before callbacks can inspect or reenter it. The first callback or retirement
+failure remains authoritative; later opaque owners are retained. Ordinary
+notifications retain their established delivery contract, while terminal
+notifications stop after failure or during an outer unwind. Key dispatch uses
+registry identities and weak snapshots, so removing a still-owned handler
+prevents its invocation in the current turn. The protected current callback is
+retired separately after invocation. The existing
+`focus_failure_and_reentrancy_matrix` covers committed terminal state, independent
+capture retirement, active unwind, reentrant close during key delivery, removed
+live handlers and subsequent healthy delivery. Its hostile competition cases run
+in bounded child processes. An aggregate user capture whose own destructors
+double-panic before returning to the containment boundary remains outside this
+guarantee.
+
+Closed-manager rejection uses the same ownership fence for incoming callbacks,
+contexts, rectangle providers and traversal policies. Healthy rejected values
+retire outside borrows; an existing unwind retains opaque incoming ownership.
+Rejection cannot reinstate a terminal owner. The row
+`closed_rejections_preserve_outer_failure_and_healthy_retirement` covers all
+seven rejection paths, healthy destructor reentry, ordinary retirement failure
+and subsequent independent-owner key delivery.
+
+## Text-input retirement and deferred delivery
+
+Text-input ownership, session admission and IME enablement commit before outgoing
+store or callback ownership retires, without a session borrow. Deferred grants
+keep accepted delivery debt separate from hook availability; a prior accepted
+tail precedes newer work, and each grant rechecks the current commit gate and
+lifecycle. Closure cancels its remaining tail. Recovery preserves the first
+failure and retains later opaque values instead of starting another destructor.
+The public `text_input_retirement_allows_reentry_and_preserves_recovery` table
+pins replacement, owner release, custom store destructor competition, grant
+ordering, gate changes and the next operation. These owner-lane tests do not
+certify a native IME backend.
+
+## Terminal drag ownership
+
+The physical shared drag callback owner guards independently owned callbacks
+and the start strategy. Replacement commits the incoming callback before retiring
+the old one outside all borrows. Disposal closes callback admission before
+resetting contact state and retiring outgoing callbacks. Callback invocation
+keeps its separate owner guarded across self-disposal and incoming unwind.
+Rejection withdraws the exact arena entry and local contact before diagnostic
+subscribers run. Terminal tracking withdraws local state before arena sweep; a
+reentrant same-pointer contact belongs to its new generation and is not cleared
+by the old operation's tail. `drag_callback_ownership_and_retirement` exercises
+these boundaries, first-failure competition and the next public drag.

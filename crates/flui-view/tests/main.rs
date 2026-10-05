@@ -189,6 +189,18 @@ fn signal_read_and_write_matrix() {
         "signal_read_and_write_matrix",
         &[
             (
+                "signal_reads::explicit_release_allows_destructor_reentry_and_slot_reuse",
+                signal_reads::explicit_release_allows_destructor_reentry_and_slot_reuse as fn(),
+            ),
+            (
+                "signal_reads::owner_release_commits_the_batch_before_the_first_destructor_failure",
+                signal_reads::owner_release_commits_the_batch_before_the_first_destructor_failure,
+            ),
+            (
+                "signal_reads::release_during_unwind_preserves_the_primary_failure",
+                signal_reads::release_during_unwind_preserves_the_primary_failure,
+            ),
+            (
                 "signal_reads::released_update_reports_ordinary_retirement_failure",
                 signal_reads::released_update_reports_ordinary_retirement_failure as fn(),
             ),

@@ -51,6 +51,8 @@ use flui_platform_api::ImeEvent;
 use flui_platform_api::PlatformTextInput;
 use flui_platform_api::text_store::{CommitGate, TextStore, project_ime_event};
 
+use crate::routing::RoutePanic;
+
 /// Identity returned by [`TextInputHandle::attach`].
 ///
 /// Only the currently active token can detach a connection. This prevents a
@@ -132,6 +134,37 @@ struct AttachedClient {
     client: TextInputClient,
 }
 
+/// Retire the independent client owners separately, preserving the first failure.
+/// A callback's own aggregate destructor still has Rust's double-panic limits.
+fn retire_client(client: Option<AttachedClient>, first: &mut Option<RoutePanic>) {
+    if let Some(client) = client {
+        let TextInputClient {
+            store,
+            on_session_start,
+        } = client.client;
+        RoutePanic::preserve_first(
+            first,
+            RoutePanic::capture(|| drop(on_session_start)),
+            "text-input session callback retirement",
+        );
+        RoutePanic::preserve_first(
+            first,
+            RoutePanic::capture(|| drop(store)),
+            "text-input store retirement",
+        );
+    }
+}
+
+fn retire_stores(stores: Vec<Rc<dyn TextStore>>, first: &mut Option<RoutePanic>) {
+    for store in stores {
+        RoutePanic::preserve_first(
+            first,
+            RoutePanic::capture(|| drop(store)),
+            "text-input store retirement",
+        );
+    }
+}
+
 struct OwnerState {
     lifecycle: OwnerLifecycle,
     active: Option<AttachedClient>,
@@ -145,9 +178,9 @@ struct OwnerState {
 impl OwnerState {
     /// `client` stops being the active one; keep its store for the anchor
     /// if it may still hold grants queued behind the frame.
-    fn retire(&mut self, client: AttachedClient, transaction_open: bool) {
+    fn retire(&mut self, client: &AttachedClient, transaction_open: bool) {
         if transaction_open {
-            self.retired.push(client.client.store);
+            self.retired.push(Rc::clone(&client.client.store));
         }
     }
 }
@@ -220,19 +253,29 @@ impl TextInputOwner {
         // Before the client is reachable through `dispatch`, so no lock is
         // ever requested on a store that does not yet follow the frame.
         client.store.set_commit_gate(self.gate.clone());
+        // A user-defined store may close the owner while installing its gate.
+        self.ensure_open()?;
         let transaction_open = self.is_transaction_open();
-        let enable_platform = {
+        let (enable_platform, replaced) = {
             let mut state = self.state.borrow_mut();
             let replaced = state.active.replace(AttachedClient { token, client });
             let enable_platform = replaced.is_none();
-            if let Some(replaced) = replaced {
+            if let Some(replaced) = &replaced {
                 state.retire(replaced, transaction_open);
             }
-            enable_platform
+            (enable_platform, replaced)
         };
 
-        if enable_platform {
-            platform.set_ime_allowed(true);
+        let mut failure = RoutePanic::capture(|| {
+            if enable_platform {
+                platform.set_ime_allowed(true);
+            }
+        });
+        // Callback captures and custom stores may reenter through this owner.
+        // Both owner state and platform enablement are committed first.
+        retire_client(replaced, &mut failure);
+        if let Some(failure) = failure {
+            failure.resume();
         }
         tracing::trace!(token = token.0.get(), "IME client attached");
         Ok(token)
@@ -246,16 +289,18 @@ impl TextInputOwner {
         let detached = {
             let mut state = self.state.borrow_mut();
             let active = state.active.take_if(|client| client.token == token);
-            if let Some(active) = active {
+            if let Some(active) = &active {
                 state.retire(active, transaction_open);
-                true
-            } else {
-                false
             }
+            active
         };
 
-        if detached {
-            platform.set_ime_allowed(false);
+        if let Some(detached) = detached {
+            let mut failure = RoutePanic::capture(|| platform.set_ime_allowed(false));
+            retire_client(Some(detached), &mut failure);
+            if let Some(failure) = failure {
+                failure.resume();
+            }
             tracing::trace!(token = token.0.get(), "IME client detached");
             Ok(DetachOutcome::Detached)
         } else {
@@ -336,11 +381,55 @@ impl TextInputOwner {
                 .map(|active| Rc::clone(&active.client.store));
             (std::mem::take(&mut state.retired), active)
         };
-        retired
-            .iter()
-            .chain(active.as_ref())
-            .map(|store| store.run_deferred_grants())
-            .sum()
+        let mut stores: Vec<_> = retired.into_iter().chain(active).collect();
+        let mut ran = 0;
+        for index in 0..stores.len() {
+            if self.is_transaction_open() || self.ensure_open().is_err() {
+                self.retain_pending_stores(&mut stores, index);
+                let mut failure = None;
+                retire_stores(stores, &mut failure);
+                if let Some(failure) = failure {
+                    failure.resume();
+                }
+                return ran;
+            }
+            match RoutePanic::try_run(|| stores[index].run_deferred_grants()) {
+                Ok(count) => {
+                    ran += count;
+                    if self.is_transaction_open() || self.ensure_open().is_err() {
+                        // This store may also have a tail behind the newly shut gate.
+                        self.retain_pending_stores(&mut stores, index);
+                        break;
+                    }
+                }
+                Err(failure) => {
+                    // The failed store may still owe grants, as do later stores.
+                    // Restore ownership before propagating the first failure.
+                    self.retain_pending_stores(&mut stores, index);
+                    let mut failure = Some(failure);
+                    retire_stores(stores, &mut failure);
+                    failure
+                        .expect("BUG: the failed grant retains its panic")
+                        .resume();
+                }
+            }
+        }
+        let mut failure = None;
+        retire_stores(stores, &mut failure);
+        if let Some(failure) = failure {
+            failure.resume();
+        }
+        ran
+    }
+
+    fn retain_pending_stores(&self, stores: &mut Vec<Rc<dyn TextStore>>, from: usize) {
+        let mut state = self.state.borrow_mut();
+        if state.lifecycle == OwnerLifecycle::Open {
+            let mut pending: Vec<_> = stores.drain(from..).collect();
+            pending.append(&mut state.retired);
+            state.retired = pending;
+        }
+        // Closing explicitly cancels the tail; its owners retire outside this borrow.
     }
 
     /// The active client's store: what a pull-model platform backend reads
@@ -367,17 +456,25 @@ impl TextInputOwner {
     /// owned by this presentation is disabled once. Existing weak handles
     /// subsequently return [`TextInputError::Closed`].
     pub fn close(&self) {
-        let disable_platform = {
+        let (retired, active) = {
             let mut state = self.state.borrow_mut();
             if state.lifecycle == OwnerLifecycle::Closed {
                 return;
             }
             state.lifecycle = OwnerLifecycle::Closed;
-            state.retired.clear();
-            state.active.take().is_some()
+            (std::mem::take(&mut state.retired), state.active.take())
         };
-        if disable_platform && let Some(platform) = &self.platform {
-            platform.set_ime_allowed(false);
+        let mut failure = RoutePanic::capture(|| {
+            if active.is_some()
+                && let Some(platform) = &self.platform
+            {
+                platform.set_ime_allowed(false);
+            }
+        });
+        retire_client(active, &mut failure);
+        retire_stores(retired, &mut failure);
+        if let Some(failure) = failure {
+            failure.resume();
         }
     }
 
@@ -411,28 +508,43 @@ impl std::fmt::Debug for TextInputOwner {
                 &state.active.as_ref().map(|client| client.token),
             )
             .field("platform_supported", &self.platform.is_some())
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
 impl Drop for TextInputOwner {
     fn drop(&mut self) {
         let state = self.state.get_mut();
-        if state.lifecycle == OwnerLifecycle::Open
-            && state.active.take().is_some()
-            && let Some(platform) = &self.platform
-        {
-            // Explicit `PresentationState::close` is the correctness path.
-            // Drop is only a non-panicking best-effort guard for abnormal
-            // teardown.
-            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                platform.set_ime_allowed(false);
-            }));
-            if result.is_err() {
-                tracing::error!("platform text-input teardown panicked during owner drop");
-            }
-        }
+        let disable = state.lifecycle == OwnerLifecycle::Open && state.active.is_some();
         state.lifecycle = OwnerLifecycle::Closed;
+        let active = state.active.take();
+        let retired = std::mem::take(&mut state.retired);
+        // Explicit close propagates the first failure. Drop is best effort:
+        // retain arbitrary panic payloads instead of retiring them during unwind.
+        let contain = |run: &mut dyn FnMut()| {
+            if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(run)) {
+                flui_foundation::panic::retain_opaque_payload(payload);
+            }
+        };
+        contain(&mut || {
+            if disable && let Some(platform) = &self.platform {
+                platform.set_ime_allowed(false);
+            }
+        });
+        if let Some(active) = active {
+            let TextInputClient {
+                store,
+                on_session_start,
+            } = active.client;
+            let mut callback = Some(on_session_start);
+            contain(&mut || drop(callback.take()));
+            let mut store = Some(store);
+            contain(&mut || drop(store.take()));
+        }
+        for store in retired {
+            let mut store = Some(store);
+            contain(&mut || drop(store.take()));
+        }
     }
 }
 
@@ -478,7 +590,7 @@ impl std::fmt::Debug for TextInputHandle {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("TextInputHandle")
             .field("owner_alive", &self.owner.strong_count().gt(&0))
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
