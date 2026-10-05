@@ -337,3 +337,79 @@ fn circle_line_intersection_requires_a_computed_direction() {
         ),
     ]);
 }
+
+fn circle_containment_keeps_finite_large_and_small_radii() {
+    for radius in [
+        1.0,
+        2.0_f64.powi(600),
+        2.0_f64.powi(-600),
+        f64::MIN_POSITIVE,
+        f64::MAX,
+    ] {
+        let circle = Circle::from_radius(radius);
+        let center = Point::new(0.0, 0.0);
+        let inside = Point::new(radius * 0.5, radius * 0.5);
+        let outside = Point::new(radius * 0.75, radius * 0.75);
+        let boundary = Point::new(radius, 0.0);
+        assert!(circle.contains(center), "center at radius {radius}");
+        assert!(
+            circle.contains_strict(center),
+            "strict center at radius {radius}"
+        );
+        assert!(circle.contains(inside), "inside at radius {radius}");
+        assert!(
+            circle.contains_strict(inside),
+            "strict inside at radius {radius}"
+        );
+        assert!(!circle.contains(outside), "outside at radius {radius}");
+        assert!(
+            !circle.contains_strict(outside),
+            "strict outside at radius {radius}"
+        );
+        assert!(circle.contains(boundary), "boundary at radius {radius}");
+        assert!(
+            !circle.contains_strict(boundary),
+            "strict boundary at radius {radius}"
+        );
+    }
+}
+
+fn circle_containment_keeps_zero_and_subnormal_radii() {
+    let tiny = f64::from_bits(1);
+    let zero = Circle::from_radius(0.0);
+    assert!(zero.contains(Point::new(0.0, 0.0)));
+    assert!(!zero.contains_strict(Point::new(0.0, 0.0)));
+    assert!(!zero.contains(Point::new(tiny, 0.0)));
+    let circle = Circle::from_radius(tiny);
+    assert!(circle.contains_strict(Point::new(0.0, 0.0)));
+    assert!(circle.contains(Point::new(tiny, 0.0)));
+    assert!(!circle.contains_strict(Point::new(tiny, 0.0)));
+    assert!(!circle.contains(Point::new(tiny * 2.0, 0.0)));
+}
+
+fn circle_containment_rejects_opposite_finite_extremes() {
+    let circle = Circle::new(Point::new(f64::MAX, 0.0), f64::MAX);
+    assert!(circle.contains_strict(circle.center));
+    assert!(circle.contains(Point::new(0.0, 0.0)));
+    assert!(!circle.contains_strict(Point::new(0.0, 0.0)));
+    assert!(!circle.contains(Point::new(-f64::MAX, 0.0)));
+    assert!(!circle.contains_strict(Point::new(-f64::MAX, 0.0)));
+}
+
+#[test]
+fn circle_containment_preserves_finite_distance_ranges() {
+    crate::run_table(&[
+        (
+            "finite radii",
+            circle_containment_keeps_finite_large_and_small_radii,
+        ),
+        (
+            "zero and subnormal radii",
+            circle_containment_keeps_zero_and_subnormal_radii,
+        ),
+        (
+            "opposite finite extremes",
+            circle_containment_rejects_opposite_finite_extremes,
+        ),
+    ]);
+}

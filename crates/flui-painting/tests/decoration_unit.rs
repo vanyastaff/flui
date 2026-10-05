@@ -159,6 +159,33 @@ fn square_rect() -> Rect<f64> {
     Rect::from_ltrb(0.0, 0.0, 100.0, 100.0)
 }
 
+pub(crate) fn circular_hit_testing_preserves_finite_distance_ranges() {
+    let decoration = BoxDecoration::new().set_shape(BoxShape::Circle);
+    for radius in [
+        1.0,
+        2.0_f64.powi(600),
+        2.0_f64.powi(-600),
+        f64::MIN_POSITIVE,
+    ] {
+        let rect = Rect::from_ltrb(-radius, -radius, radius, radius);
+        // These relative positions have fixed geometric meanings at every scale:
+        // the center and half-radius diagonal are inside; the three-quarter
+        // diagonal is outside the inscribed circle but inside the paint rect.
+        for (position, expected) in [
+            (Offset::new(0.0, 0.0), true),
+            (Offset::new(radius * 0.5, radius * 0.5), true),
+            (Offset::new(radius, 0.0), true),
+            (Offset::new(radius * 0.75, radius * 0.75), false),
+        ] {
+            assert_eq!(
+                box_decoration_hit_test(rect, &decoration, position),
+                expected,
+                "radius {radius}, position {position:?}"
+            );
+        }
+    }
+}
+
 pub(crate) fn circle_uniform_border_is_a_stroked_circle_not_a_drrect() {
     let rect = square_rect(); // r = 50
     let decoration = BoxDecoration::with_color(Color::WHITE)

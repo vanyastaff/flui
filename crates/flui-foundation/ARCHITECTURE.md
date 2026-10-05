@@ -29,6 +29,13 @@ and squared results can still exceed their representable range. The public famil
 `single_precision_geometry_distances_use_double_precision_range` checks point
 distances and their line-length delegates against exact power-of-two results.
 
+`Circle::contains` and `Circle::contains_strict` compare the `hypot` distance
+`Point::distance` with the radius rather than squaring both sides, which
+overflows or underflows at the ends of the finite range; a distance past
+`f64::MAX` is outside every valid circle. The inclusive predicate accepts the
+boundary, and a zero-radius circle contains its center but has no strict
+interior. `circle_containment_preserves_finite_distance_ranges` pins this.
+
 Vector normalization refuses non-finite components and preserves its existing
 `f64::EPSILON` near-zero threshold. When finite components have an overflowing
 magnitude, scaling before `hypot` preserves their unit direction instead of

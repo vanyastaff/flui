@@ -86,7 +86,7 @@ nested-cargo = { max-threads = "num-cpus" }
 trybuild = { max-threads = "num-cpus" }
 
 [[profile.default.overrides]]
-filter = 'binary_id(flui::composited_layer_update_readback) | (binary_id(flui-engine::raster_backpressure_allocation) & test(=warm_path_recording_has_no_per_draw_vertex_allocation)) | (binary_id(flui-engine) & (test(/_readback_tests::/) | test(/blur_filter_tests::foreground::/) | test(=renderer::tests::renderer_surface_selection_and_layer_compositing_read_back_as_specified) | test(=painter::tests::painter_images_and_offscreen_results_read_back_as_specified) | test(=painter::tests::painter_vertices_use_effective_colors_for_compositing) | test(=device_domain::tests::prepared_quota_failure_and_retirement) | test(=blur_filter_tests::gpu_tests::kawase_calls_keep_parameters_and_recover_after_admission_failure)))'
+filter = 'binary_id(flui::composited_layer_update_readback) | (binary_id(flui-engine::raster_backpressure_allocation) & test(=warm_path_recording_has_no_per_draw_vertex_allocation)) | (binary_id(flui-engine) & (test(/_readback_tests::/) | test(/blur_filter_tests::foreground::/) | test(=renderer::tests::renderer_surface_selection_and_layer_compositing_read_back_as_specified) | test(=painter::tests::painter_images_and_offscreen_results_read_back_as_specified) | test(=painter::tests::painter_vertices_use_effective_colors_for_compositing) | test(=painter::tests::painter_solid_shaders_use_effective_colors_for_compositing) | test(=device_domain::tests::prepared_quota_failure_and_retirement) | test(=blur_filter_tests::gpu_tests::kawase_calls_keep_parameters_and_recover_after_admission_failure)))'
 test-group = 'gpu-readback'
 
 # flui-platform's clipboard tests write the one system clipboard and read it
