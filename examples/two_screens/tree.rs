@@ -202,7 +202,12 @@ impl ViewState<Screen> for ScreenState {
             header.push(
                 TextButton::new(Text::new("Settings"))
                     .on_pressed(move |_cx| {
-                        settings.push(Route::Settings).expect("BUG: mounted Router");
+                        // The outgoing page stays actionable during the
+                        // entrance, so a second activation can arrive after
+                        // Settings is already the current route.
+                        if settings.current() != Route::Settings {
+                            settings.push(Route::Settings).expect("BUG: mounted Router");
+                        }
                     })
                     .boxed(),
             );

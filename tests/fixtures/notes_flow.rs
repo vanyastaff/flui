@@ -501,6 +501,24 @@ mod notes_flow {
         assert_eq!(field_text(&laid), "Entrance draft");
     }
 
+    fn settings_activated_again_during_entrance_stacks_one_page() {
+        let mut laid = ready();
+        let published = published_tree(&mut laid);
+        queued_click(&laid, &published, "Settings");
+        entrance_label(&mut laid, &published, "Compact rows: false");
+        // Home is still onstage during the entrance and still publishes its
+        // Settings action, so an assistive client can activate it again.
+        queued_click(&laid, &published, "Settings");
+        frames(&mut laid);
+        tap_text(&mut laid, "Back");
+        frames(&mut laid);
+        assert!(
+            active_text(&laid, "Compact rows: false").is_empty(),
+            "one Back leaves the only Settings page"
+        );
+        rendered_text(&laid, "Note 0");
+    }
+
     fn back_is_offered_only_where_it_leaves_a_page() {
         let mut laid = ready();
         assert!(
@@ -676,7 +694,7 @@ mod notes_flow {
 
     #[test]
     fn notes_public_input_flow_matrix() {
-        let cases: [(&str, fn()); 7] = [
+        let cases: [(&str, fn()); 8] = [
             (
                 "loading_retry_replacement_and_unmount_retire_old_service_work",
                 loading_retry_replacement_and_unmount_retire_old_service_work,
@@ -700,6 +718,10 @@ mod notes_flow {
             (
                 "back_is_offered_only_where_it_leaves_a_page",
                 back_is_offered_only_where_it_leaves_a_page,
+            ),
+            (
+                "settings_activated_again_during_entrance_stacks_one_page",
+                settings_activated_again_during_entrance_stacks_one_page,
             ),
             (
                 "pointer_drag_changes_lazy_band_and_route_roundtrip_preserves_position",
