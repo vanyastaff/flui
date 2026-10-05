@@ -140,7 +140,11 @@ impl StatelessView for Scrollbar {
             // Only render the thumb when layout dimensions are known and the
             // content is actually larger than the viewport.
             let show_thumb = viewport_dim > 0.0 && fraction < 1.0;
-            let thumb_height = (viewport_dim * fraction).max(MIN_THUMB_PX);
+            // A minimum touch target cannot extend beyond a shorter viewport.
+            // When it fills the track, thumb dragging has no travel to map.
+            let thumb_height = (viewport_dim * fraction)
+                .max(MIN_THUMB_PX)
+                .min(viewport_dim);
             let available_track = (viewport_dim - thumb_height).max(0.0);
             // Clamp thumb top so the thumb never overflows the track: `pixels`
             // can sit outside `[min_scroll_extent, max_scroll_extent]` whenever
@@ -176,10 +180,9 @@ impl StatelessView for Scrollbar {
                             let content_delta =
                                 (delta_track_px / available_track) * ctrl_drag.scroll_extent();
                             let proposed = ctrl_drag.pixels() + content_delta;
-                            ctrl_drag.set_pixels(proposed.clamp(
-                                ctrl_drag.min_scroll_extent(),
-                                ctrl_drag.max_scroll_extent(),
-                            ));
+                            // Taking the thumb takes ownership from any running
+                            // fling or programmatic animation before changing pixels.
+                            ctrl_drag.jump_to(proposed);
                         }
                     })
                     .child(ColoredBox::new(thumb_color));

@@ -88,3 +88,138 @@ pub(crate) fn copy_and_cut_on_an_obscured_field_leave_the_clipboard_untouched_an
     assert_eq!(harness.clipboard().read_text(), None);
     assert_eq!(controller.text(), "secret", "cut deleted nothing");
 }
+
+pub(crate) fn select_all_replaces_the_complete_unicode_document_without_reporting_selection_as_an_edit()
+ {
+    crate::common::cases::run_cases(
+        "select all",
+        &[
+            ("plain field", select_all_plain as fn()),
+            ("obscured field", select_all_obscured),
+        ],
+    );
+}
+
+fn select_all_plain() {
+    select_all_replacement(false);
+}
+
+fn select_all_obscured() {
+    select_all_replacement(true);
+}
+
+fn select_all_replacement(obscured: bool) {
+    use std::cell::Cell;
+    let controller = TextEditingController::new();
+    let changes = Rc::new(Cell::new(0));
+    let counted = Rc::clone(&changes);
+    let (harness, _node) = mount_field(&controller, move |field| {
+        field
+            .obscure_text(obscured)
+            .on_changed(move |_cx, _text| counted.set(counted.get() + 1))
+    });
+    let text = "A😀e\u{301}東京";
+    for scalar in text.chars() {
+        assert!(
+            harness
+                .focus_manager()
+                .dispatch_key_event(&chord(&scalar.to_string(), Modifiers::empty()))
+        );
+    }
+    let edits = changes.get();
+    let other_command = if command() == Modifiers::META {
+        Modifiers::CONTROL
+    } else {
+        Modifiers::META
+    };
+    assert!(
+        !harness
+            .focus_manager()
+            .dispatch_key_event(&chord("a", other_command))
+    );
+    assert!(
+        !controller.has_selection(),
+        "the other platform's command chord does not select text"
+    );
+    assert!(
+        harness
+            .focus_manager()
+            .dispatch_key_event(&chord("A", command())),
+        "Caps Lock does not defeat select all"
+    );
+    assert_eq!(
+        controller.selection(),
+        0..text.len(),
+        "the whole UTF-8 document is selected"
+    );
+    assert_eq!(controller.selected_text(), text);
+    assert_eq!(controller.text(), text, "selecting never changes text");
+    assert_eq!(changes.get(), edits, "selection does not call on_changed");
+    assert!(
+        harness
+            .focus_manager()
+            .dispatch_key_event(&chord("文", Modifiers::empty()))
+    );
+    assert_eq!(
+        controller.text(),
+        "文",
+        "a real typed scalar replaces every selected grapheme"
+    );
+    assert_eq!(controller.caret_byte_offset(), "文".len());
+    assert!(!controller.has_selection());
+    assert_eq!(changes.get(), edits + 1, "replacement is one user edit");
+    assert_eq!(
+        harness.clipboard().read_text(),
+        None,
+        "selection requires no clipboard operation"
+    );
+}
+
+pub(crate) fn select_all_without_a_focused_text_field_leaves_the_key_unconsumed() {
+    let controller = TextEditingController::with_text("retained");
+    let (harness, node) = mount_field(&controller, |field| field);
+    node.set_can_request_focus(false);
+    assert!(!node.has_primary_focus());
+    assert!(
+        !harness
+            .focus_manager()
+            .dispatch_key_event(&chord("a", command()))
+    );
+    assert!(!controller.has_selection());
+    assert_eq!(controller.text(), "retained");
+}
+
+pub(crate) fn select_all_defers_to_an_active_composition_and_recovers_after_commit() {
+    let controller = TextEditingController::new();
+    let node = FocusNode::new();
+    let harness = crate::common::harness::mount_with_ime(EditableText::new(
+        controller.clone(),
+        Rc::clone(&node),
+    ));
+    node.request_focus();
+    harness.dispatch_ime(&flui_platform_api::ImeEvent::Preedit {
+        text: "東京".to_owned(),
+        cursor: Some(("東京".len(), "東京".len())),
+    });
+    let before = controller.selection();
+    assert!(controller.is_composing());
+    assert!(
+        !harness
+            .focus_manager()
+            .dispatch_key_event(&chord("a", command()))
+    );
+    assert_eq!(controller.selection(), before, "IME retains its selection");
+    assert_eq!(controller.text(), "東京");
+    harness.dispatch_ime(&flui_platform_api::ImeEvent::Commit("東京".to_owned()));
+    assert!(!controller.is_composing());
+    assert!(
+        harness
+            .focus_manager()
+            .dispatch_key_event(&chord("a", command()))
+    );
+    assert_eq!(
+        controller.selection(),
+        0.."東京".len(),
+        "select all resumes after commit"
+    );
+}

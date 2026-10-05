@@ -35,7 +35,7 @@ use flui_view::{BoxedView, RenderView, impl_render_view};
 use crate::AnimatedBuilder;
 use crate::interaction::actions::{
     Action, ActionChain, ActionChainProvider, ActionOutcome, CopySelectionTextIntent,
-    PasteTextIntent, as_node_context, erased_action, layered_chain,
+    PasteTextIntent, SelectAllTextIntent, as_node_context, erased_action, layered_chain,
 };
 use crate::semantics::Semantics;
 use crate::support::ref_callback;
@@ -301,6 +301,14 @@ pub(super) fn source_offset_for_masked_offset(
 /// last-sent cache each attach, rather than shared across the field's
 /// lifetime) and ADR-0030 for the composing-rect-over-caret-rect fallback
 /// order this loop now applies.
+///
+/// # Select all
+///
+/// Ctrl+A (Cmd+A on Apple platforms) selects the entire document through
+/// [`SelectAllTextIntent`], including in an obscured field. It needs no
+/// clipboard and does not call `on_changed`: selecting leaves the text
+/// unchanged. An active IME composition keeps its own selection, so the
+/// action is disabled until composition ends.
 ///
 /// # Clipboard
 ///
@@ -1062,6 +1070,10 @@ impl EditableTextState {
             &[
                 erased_action::<CopySelectionTextIntent>(action.clone()),
                 erased_action::<PasteTextIntent>(action),
+                erased_action::<SelectAllTextIntent>(SelectAllTextAction {
+                    controller: Rc::clone(&self.controller),
+                    focus_node: Rc::clone(&self.observed_focus_node),
+                }),
             ],
         );
         // Register the new record before the old token drops: the old one is
@@ -1070,6 +1082,25 @@ impl EditableTextState {
             Some(self.focus_node.register_context(as_node_context(&chain)));
         self.action_chain = Some(chain);
         self.enclosing_action_chain = enclosing;
+    }
+}
+
+/// Selection does not need a clipboard and never reports a text edit.
+#[derive(Clone)]
+struct SelectAllTextAction {
+    controller: Rc<RefCell<TextEditingController>>,
+    focus_node: Rc<RefCell<Rc<FocusNode>>>,
+}
+
+impl Action<SelectAllTextIntent> for SelectAllTextAction {
+    fn is_enabled(&self, _intent: &SelectAllTextIntent) -> bool {
+        self.focus_node.borrow().can_request_focus() && !self.controller.borrow().is_composing()
+    }
+
+    fn invoke(&self, _cx: &mut EventCx<'_>, _intent: &SelectAllTextIntent) -> ActionOutcome {
+        let controller = self.controller.borrow().clone();
+        controller.set_selection(0, controller.text().len());
+        ActionOutcome::Performed
     }
 }
 

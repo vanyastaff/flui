@@ -512,6 +512,259 @@ pub(crate) mod text_store {
         assert!(handled);
         assert_eq!(controller.text(), "Ab");
     }
+
+    /// Text entered through the focus manager remains editable in a narrow
+    /// viewport: geometry, candidate placement and pointer insertion agree.
+    pub(crate) fn long_input_reveals_the_caret_and_maps_visible_pointer_positions() {
+        crate::common::cases::run_cases(
+            "long input viewport",
+            &[
+                ("latin input", long_latin_input as fn()),
+                ("rtl input", long_rtl_input),
+                ("obscured input", long_obscured_input),
+            ],
+        );
+    }
+
+    fn long_latin_input() {
+        long_input("abcdefghijklmnopqrstuvwxyz", false);
+    }
+
+    fn long_rtl_input() {
+        long_input("אבגדהוזחטיכלמנסעפצקרשת", false);
+    }
+
+    fn long_obscured_input() {
+        long_input("abcdefghijklmnopqrstuvwxyz", true);
+    }
+
+    fn long_input(text: &'static str, obscured: bool) {
+        use flui_foundation::geometry::Point;
+        use flui_interaction::events::{Code, Key, KeyState, Modifiers, NamedKey};
+        use flui_interaction::testing::input::KeyEventBuilder;
+        use flui_platform_api::text_store::{PointMode, TextStoreError, Utf16Range};
+        use flui_widgets::SizedBox;
+
+        let controller = TextEditingController::new();
+        let focus = FocusNode::new();
+        let mut harness = crate::common::harness::mount_with_ime(SizedBox::new(60.0, 30.0).child(
+            EditableText::new(controller.clone(), Rc::clone(&focus)).obscure_text(obscured),
+        ));
+        focus.request_focus();
+        for ch in text.chars() {
+            assert!(
+                harness
+                    .focus_manager()
+                    .dispatch_key_event(&super::character_key_event(ch))
+            );
+            harness.tick();
+        }
+        assert_eq!(controller.text(), text);
+        let field = store(&harness);
+        let assert_visible = |harness: &Harness| {
+            let caret = controller.caret_byte_offset();
+            let units =
+                flui_platform_api::text_store::utf16::utf16_offset(&controller.text(), caret)
+                    .expect("controller caret is a scalar boundary");
+            let rect = read(&field, move |session| {
+                session
+                    .rect_for_range(Utf16Range::collapsed(units))
+                    .expect("laid-out caret")
+                    .bounds
+            });
+            assert!(
+                rect.origin.x >= -0.001 && rect.origin.x + rect.size.width <= 60.001,
+                "active caret must stay inside the field for {text:?}: {rect:?}"
+            );
+            read(&field, move |session| {
+                let mut hidden = 0;
+                for scalar in 0..session.document_len().get() {
+                    let from = session
+                        .rect_for_range(Utf16Range::collapsed(at(scalar)))
+                        .expect("scalar geometry")
+                        .bounds;
+                    let to = session
+                        .rect_for_range(Utf16Range::collapsed(at(scalar + 1)))
+                        .expect("next scalar geometry")
+                        .bounds;
+                    let x = from.origin.x.midpoint(to.origin.x);
+                    if !(0.0..60.0).contains(&x) {
+                        hidden += 1;
+                        let point = Point::new(x, from.origin.y + from.size.height / 2.0);
+                        assert_eq!(
+                            session.index_at_point(point, PointMode::Exact),
+                            Err(TextStoreError::PointOutside),
+                            "an offscreen glyph must not answer an exact viewport query"
+                        );
+                    }
+                }
+                assert!(hidden > 0, "long input has offscreen glyphs");
+            });
+            let candidate = harness
+                .cursor_area_calls()
+                .last()
+                .copied()
+                .expect("candidate area reported");
+            assert!(
+                candidate.origin.x >= -0.001 && candidate.origin.x + candidate.size.width <= 60.001,
+                "IME candidate tracks the visible caret: {candidate:?}"
+            );
+            rect
+        };
+        assert_visible(&harness);
+        let units = flui_platform_api::text_store::utf16::utf16_len(text);
+        let full = read(&field, move |session| {
+            session
+                .rect_for_range(Utf16Range::new(at(0), units).expect("ordered document range"))
+                .expect("laid-out document")
+        });
+        assert!(full.clipped, "long document exceeds the visible field");
+        for key in [NamedKey::Home, NamedKey::End, NamedKey::Home, NamedKey::End] {
+            let event = KeyEventBuilder::new(Code::Home)
+                .with_key(Key::Named(key))
+                .with_state(KeyState::Down)
+                .with_modifiers(Modifiers::empty())
+                .build();
+            assert!(harness.focus_manager().dispatch_key_event(&event));
+            harness.tick();
+            assert_visible(&harness);
+        }
+
+        let select = KeyEventBuilder::new(Code::ArrowLeft)
+            .with_key(Key::Named(NamedKey::ArrowLeft))
+            .with_state(KeyState::Down)
+            .with_modifiers(Modifiers::SHIFT)
+            .build();
+        assert!(harness.focus_manager().dispatch_key_event(&select));
+        harness.tick();
+        let selected = read(&field, |session| {
+            session
+                .rect_for_range(session.selection().range())
+                .expect("selected geometry")
+        });
+        assert!(
+            !selected.clipped,
+            "the selected adjacent grapheme uses viewport coordinates"
+        );
+        let end = KeyEventBuilder::new(Code::End)
+            .with_key(Key::Named(NamedKey::End))
+            .with_state(KeyState::Down)
+            .build();
+        assert!(harness.focus_manager().dispatch_key_event(&end));
+        harness.tick();
+
+        // A visible suffix boundary is not the same x as its full-content
+        // position. Tapping the caret must retain the byte insertion point.
+        let rect = assert_visible(&harness);
+        let before = controller.caret_byte_offset();
+        harness.dispatch_pointer_down(rect.origin.x, rect.origin.y + rect.size.height / 2.0);
+        harness.dispatch_pointer_up(rect.origin.x, rect.origin.y + rect.size.height / 2.0);
+        assert_eq!(
+            controller.caret_byte_offset(),
+            before,
+            "pointer inverse must include horizontal reveal"
+        );
+        assert!(
+            harness
+                .focus_manager()
+                .dispatch_key_event(&super::character_key_event('!'))
+        );
+        assert_eq!(
+            controller.text(),
+            format!("{text}!"),
+            "typing follows the tapped visible boundary"
+        );
+        harness.tick();
+        assert_visible(&harness);
+
+        harness.swap_root(SizedBox::new(30.0, 30.0).child(
+            EditableText::new(controller.clone(), Rc::clone(&focus)).obscure_text(obscured),
+        ));
+        let units = flui_platform_api::text_store::utf16::utf16_len(&controller.text());
+        let rect = read(&field, move |session| {
+            session
+                .rect_for_range(Utf16Range::collapsed(units))
+                .expect("resized caret")
+                .bounds
+        });
+        assert!(
+            rect.origin.x >= -0.001 && rect.origin.x + rect.size.width <= 30.001,
+            "resize reveals the same active caret: {rect:?}"
+        );
+        harness.dispatch_ime(&flui_platform_api::ImeEvent::Preedit {
+            text: "xy".to_owned(),
+            cursor: Some((0, 2)),
+        });
+        harness.tick();
+        let composition = read(&field, |session| {
+            session
+                .rect_for_range(
+                    session
+                        .composition()
+                        .expect("preedit established composition")
+                        .range,
+                )
+                .expect("composition geometry")
+        });
+        assert!(
+            !composition.clipped,
+            "short preedit is revealed in the resized viewport"
+        );
+        assert!(
+            composition.bounds.origin.x >= -0.001
+                && composition.bounds.origin.x + composition.bounds.size.width <= 30.001,
+            "composition geometry shares the text displacement: {composition:?}"
+        );
+    }
+
+    pub(crate) fn editable_paint_places_long_text_under_the_viewport_clip() {
+        use flui_painting::DrawOp;
+        use flui_painting::paint::Clip;
+        use flui_rendering::layer::Layer;
+        use flui_widgets::SizedBox;
+        let controller = TextEditingController::new();
+        let focus = FocusNode::new();
+        let mut laid = crate::common::lay_out(
+            SizedBox::new(60.0, 30.0).child(EditableText::new(controller, Rc::clone(&focus))),
+            crate::common::tight(60.0, 30.0),
+        );
+        focus.request_focus();
+        for ch in "abcdefghijklmnopqrstuvwxyz".chars() {
+            laid.focus_manager()
+                .dispatch_key_event(&super::character_key_event(ch));
+        }
+        laid.tick();
+        let tree = laid.layer_tree().expect("typing painted a frame");
+        let mut text_pictures = 0;
+        for (id, node) in tree.iter() {
+            let Layer::Picture(picture) = node.layer() else {
+                continue;
+            };
+            if !picture
+                .picture()
+                .commands()
+                .iter()
+                .any(|command| matches!(command.op, DrawOp::Paragraph { .. }))
+            {
+                continue;
+            }
+            text_pictures += 1;
+            let mut parent = tree.parent(id);
+            let mut clipped = false;
+            while let Some(id) = parent {
+                if let Some(Layer::ClipRect(clip)) = tree.get_layer(id) {
+                    clipped |=
+                        clip.clip_behavior() == Clip::HardEdge && clip.clip_rect().width() == 60.0;
+                }
+                parent = tree.parent(id);
+            }
+            assert!(
+                clipped,
+                "the text's actual picture must descend from its viewport clip"
+            );
+        }
+        assert!(text_pictures > 0, "input produced painted text");
+    }
 }
 
 /// Event context (ADR-0086): `on_changed` and `on_submitted` run inside a

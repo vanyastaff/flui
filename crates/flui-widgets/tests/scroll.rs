@@ -19,7 +19,7 @@ use flui_rendering::view::ScrollDirection;
 use flui_view::{IntoView, ViewExt};
 use flui_widgets::{
     BouncingScrollPhysics, ClampingScrollPhysics, RefreshController, RefreshIndicator,
-    ScrollController, Scrollable, SharedScrollPhysics, SizedBox, VsyncScope,
+    ScrollController, Scrollable, Scrollbar, SharedScrollPhysics, SizedBox, VsyncScope,
 };
 
 // ============================================================================
@@ -260,6 +260,131 @@ pub(crate) fn scrollable_jump_to_during_animate_to_cancels_it_synchronously() {
 // ============================================================================
 // Scrollbar — thumb drag
 // ============================================================================
+
+pub(crate) fn scrollbar_thumb_stays_inside_short_tracks_and_drag_remains_bounded() {
+    fn short_track() {
+        assert_scrollbar_track(10.0);
+    }
+    fn minimum_track() {
+        assert_scrollbar_track(18.0);
+    }
+    fn ordinary_track() {
+        assert_scrollbar_track(100.0);
+    }
+    crate::common::cases::run_cases(
+        "scrollbar track containment",
+        &[
+            ("short track", short_track as fn()),
+            ("minimum track", minimum_track as fn()),
+            ("ordinary track", ordinary_track as fn()),
+        ],
+    );
+}
+
+fn assert_scrollbar_track(height: f64) {
+    let controller = ScrollController::new();
+    controller.update_dimensions(height, 0.0, 900.0);
+    let mut laid = lay_out(
+        Scrollbar::new()
+            .controller(controller.clone())
+            .child(SizedBox::new(100.0, height)),
+        tight(100.0, height),
+    );
+    // Scrollbar's ColoredBox paints through RenderDecoratedBox; the SizedBox
+    // content has no decoration, so this identifies exactly the real thumb.
+    let thumbs = laid.find_all_by_render_type("RenderDecoratedBox");
+    assert_eq!(thumbs.len(), 1);
+    let thumb = thumbs[0];
+    assert!(
+        laid.size(thumb).height <= height,
+        "thumb exceeds {height}px track"
+    );
+    controller.jump_to(900.0);
+    laid.tick();
+    let bottom = laid.absolute_offset(thumb).dy + laid.size(thumb).height;
+    assert!(
+        (bottom - height).abs() < 1e-8,
+        "thumb must end at track boundary"
+    );
+
+    controller.jump_to(0.0);
+    laid.tick();
+    laid.dispatch_pointer_down(97.0, 5.0);
+    laid.dispatch_pointer_move(97.0, 25.0);
+    laid.dispatch_pointer_move(97.0, 205.0);
+    laid.dispatch_pointer_up(97.0, 205.0);
+    if height <= 18.0 {
+        assert_eq!(controller.pixels(), 0.0, "a full-track thumb has no travel");
+    } else {
+        assert_eq!(
+            controller.pixels(),
+            900.0,
+            "thumb drag clamps to content end"
+        );
+    }
+    controller.jump_to(0.0);
+    laid.tick();
+    assert_eq!(
+        controller.pixels(),
+        0.0,
+        "next jump still works after dragging"
+    );
+}
+
+pub(crate) fn dragging_a_scrollbar_thumb_interrupts_animation_before_the_next_tick() {
+    let scroll = ScrollController::new();
+    let vsync = Vsync::new();
+    let mut laid = crate::common::lay_out_animated(
+        VsyncScope::new(
+            vsync.clone(),
+            Scrollbar::new().controller(scroll.clone()).child(
+                Scrollable::new()
+                    .controller(scroll.clone())
+                    .child(SizedBox::new(300.0, 5000.0)),
+            ),
+        ),
+        tight(300.0, 300.0),
+        vsync,
+    );
+    scroll.animate_to(1000.0, Duration::from_millis(300), Arc::new(Curves::Linear));
+    advance_scroll_run(&mut laid);
+    assert!(scroll.pixels() > 0.0 && scroll.pixels() < 1000.0);
+    assert!(scroll.position().is_scrolling());
+    let thumbs = laid.find_all_by_render_type("RenderDecoratedBox");
+    assert_eq!(thumbs.len(), 1);
+    let top = laid.absolute_offset(thumbs[0]).dy;
+    let before = scroll.pixels();
+    laid.dispatch_pointer_down(297.0, top + 5.0);
+    laid.dispatch_pointer_move(297.0, top + 25.0);
+    laid.dispatch_pointer_move(297.0, top + 45.0);
+    let dragged = scroll.pixels();
+    assert!(
+        dragged > before,
+        "pointer drag must advance the actual position"
+    );
+    laid.dispatch_pointer_up(297.0, top + 45.0);
+    laid.pump_for(Duration::from_millis(16));
+    assert_eq!(
+        scroll.pixels(),
+        dragged,
+        "old animation must not overwrite the drag"
+    );
+    for _ in 0..24 {
+        laid.pump_for(Duration::from_millis(16));
+    }
+    assert_eq!(
+        scroll.pixels(),
+        dragged,
+        "retired animation must stay stopped"
+    );
+    assert!(!scroll.position().is_scrolling());
+    scroll.animate_to(4000.0, Duration::from_millis(300), Arc::new(Curves::Linear));
+    advance_scroll_run(&mut laid);
+    assert!(
+        scroll.pixels() > dragged,
+        "a later animation still makes progress"
+    );
+}
 
 // ============================================================================
 // RefreshIndicator — pull-to-refresh

@@ -16,8 +16,8 @@
 //!
 //! Deferred: a hidden caret while composing rendered as a *separate*
 //! render-object state (the owning widget instead suppresses this object's
-//! ordinary `show_caret` — see `flui_widgets::EditableText`'s doc), scroll
-//! offset, multiline viewport behavior, and obscured text. The *gesture*
+//! ordinary `show_caret` — see `flui_widgets::EditableText`'s doc), multiline
+//! viewport behavior, and obscured text. The *gesture*
 //! policy that produces a selection — tap, shift-click, drag — lives above
 //! this object and is not here either; this object is told a range, it does
 //! not decide one.
@@ -38,6 +38,7 @@ use std::ops::Range;
 use flui_foundation::Diagnosticable;
 use flui_foundation::Leaf;
 use flui_foundation::geometry::{Offset, Point, Rect, Size};
+use flui_painting::paint::Clip;
 use flui_painting::{Invalidation, Paint, TextBaseline as PainterBaseline, TextPainter};
 use flui_painting::{
     styling::Color,
@@ -83,6 +84,9 @@ pub struct RenderEditable {
     caret_color: Color,
     force_line: bool,
     caret_offset: Offset,
+    /// Horizontal content displacement, shared by paint, range geometry and
+    /// inverse pointer queries. Layout minimally reveals the active caret.
+    scroll_x: f64,
     /// The in-progress IME composition's byte range into [`Self::plain_text`],
     /// if any — paints an underline (ADR-0030), never a selection highlight.
     /// Always char-boundary-clamped against the current text, mirroring
@@ -127,6 +131,7 @@ impl RenderEditable {
             caret_color: Color::BLACK,
             force_line: true,
             caret_offset: Offset::ZERO,
+            scroll_x: 0.0,
             composing_range: None,
             selection: None,
             selection_color: Color::TRANSPARENT,
@@ -322,7 +327,7 @@ impl RenderEditable {
         }
         self.caret_width = width;
         self.caret_height = height;
-        flui_rendering::RenderUpdateImpact::PAINT
+        flui_rendering::RenderUpdateImpact::LAYOUT
     }
 
     /// Updates the caret fill color.
@@ -373,14 +378,18 @@ impl RenderEditable {
                 .painter
                 .get_offset_for_caret(TextPosition::new(range.start, TextAffinity::Downstream));
             return Some(Rect::from_origin_size(
-                Point::new(caret.dx, caret.dy),
+                Point::new(caret.dx - self.scroll_x, caret.dy),
                 Size::new(self.caret_width, self.caret_height),
             ));
         }
         self.painter
             .get_boxes_for_selection(range.start, range.end)
             .into_iter()
-            .map(|text_box| text_box.rect)
+            .map(|text_box| {
+                text_box
+                    .rect
+                    .translate_offset(Offset::new(-self.scroll_x, 0.0))
+            })
             .reduce(|acc, rect| acc.union(&rect))
     }
 
@@ -427,9 +436,7 @@ impl RenderEditable {
     /// this same rect.
     ///
     /// Local painted coordinates: relative to this render object's own
-    /// origin, pre-transform. When internal scrolling lands (see the module
-    /// doc's "Deferred" list), this accessor stays viewport-relative — it is
-    /// not a full-text-content-space caret position.
+    /// origin, pre-transform and viewport-relative after horizontal scrolling.
     #[must_use]
     pub fn caret_local_rect(&self) -> Rect {
         Rect::from_origin_size(
@@ -460,7 +467,8 @@ impl RenderEditable {
         if !self.painter.has_layout() {
             return None;
         }
-        Some(self.safe_caret_offset(self.painter.get_position_for_offset(point).offset))
+        let content_point = Offset::new(point.dx + self.scroll_x, point.dy);
+        Some(self.safe_caret_offset(self.painter.get_position_for_offset(content_point).offset))
     }
 
     /// The word surrounding the byte offset a point falls on, as a byte range.
@@ -509,8 +517,8 @@ impl RenderEditable {
             available_min_width
         };
 
-        // This first slice is single-line: the text itself lays out with
-        // unbounded max width and may overflow the box until scrolling lands.
+        // Shape the entire single line. The allocated width is a viewport,
+        // not a wrapping limit; paint clips it and layout reveals the caret.
         (min_width, f64::INFINITY)
     }
 
@@ -645,6 +653,18 @@ impl RenderBox for RenderEditable {
         let caret_position =
             TextPosition::downstream(self.safe_caret_offset(self.caret_byte_offset));
         self.caret_offset = self.painter.get_offset_for_caret(caret_position);
+        let content_width = self
+            .painter
+            .width()
+            .max(self.caret_offset.dx + self.caret_width);
+        let max_scroll = (content_width - size.width).max(0.0);
+        self.scroll_x = self.scroll_x.clamp(0.0, max_scroll);
+        if self.caret_offset.dx < self.scroll_x {
+            self.scroll_x = self.caret_offset.dx.max(0.0);
+        } else if self.caret_offset.dx + self.caret_width > self.scroll_x + size.width {
+            self.scroll_x = (self.caret_offset.dx + self.caret_width - size.width).max(0.0);
+        }
+        self.caret_offset.dx -= self.scroll_x;
         size
     }
 
@@ -713,9 +733,19 @@ impl RenderBox for RenderEditable {
             return;
         }
 
+        let bounds = Rect::from_origin_size(Point::ZERO, ctx.size());
+        ctx.with_clip_rect(bounds, Clip::HardEdge, |ctx| {
+            self.paint_visible_content(ctx);
+        });
+    }
+}
+
+impl RenderEditable {
+    fn paint_visible_content(&self, ctx: &mut PaintCx<'_, Leaf>) {
         self.paint_selection(ctx);
 
-        self.painter.paint(ctx.canvas(), Offset::ZERO);
+        self.painter
+            .paint(ctx.canvas(), Offset::new(-self.scroll_x, 0.0));
 
         if let Some(range) = self.composing_range.clone()
             && !range.is_empty()
@@ -724,8 +754,11 @@ impl RenderBox for RenderEditable {
             if !boxes.is_empty() {
                 let underline_paint = Paint::fill(self.resolved_glyph_color());
                 for text_box in &boxes {
-                    ctx.canvas()
-                        .draw_rect(self.underline_rect_for_box(text_box.rect), &underline_paint);
+                    ctx.canvas().draw_rect(
+                        self.underline_rect_for_box(text_box.rect)
+                            .translate_offset(Offset::new(-self.scroll_x, 0.0)),
+                        &underline_paint,
+                    );
                 }
             }
         }
@@ -758,11 +791,8 @@ impl RenderEditable {
     /// been dead code with a green test that could not fail. It comes back
     /// with the box-style parameters, if they ever land.
     ///
-    /// This does **not** clip the highlight to the render object's box, and
-    /// the highlight overflows a narrow box exactly as far as the text does —
-    /// single-line layout takes unbounded max width by design, so a 250 px
-    /// text paints 250 px wide in a 60 px box today. That deferral belongs to
-    /// the text and the highlight equally; see `text_width_constraints`.
+    /// The viewport clip in `paint` applies equally to text, highlights,
+    /// composing underlines and the caret.
     ///
     /// # What the early returns are for
     ///
@@ -792,7 +822,12 @@ impl RenderEditable {
                 continue;
             }
             drawn.push(text_box.rect);
-            ctx.canvas().draw_rect(text_box.rect, &paint);
+            ctx.canvas().draw_rect(
+                text_box
+                    .rect
+                    .translate_offset(Offset::new(-self.scroll_x, 0.0)),
+                &paint,
+            );
         }
     }
 }

@@ -26,7 +26,7 @@ pub use absorb_pointer::AbsorbPointer;
 pub use actions::{
     Action, ActionOutcome, Actions, ActivateIntent, ButtonActivateIntent, CallbackAction,
     CopySelectionTextIntent, Intent, NextFocusAction, NextFocusIntent, PasteTextIntent,
-    PreviousFocusAction, PreviousFocusIntent,
+    PreviousFocusAction, PreviousFocusIntent, SelectAllTextIntent,
 };
 pub use dismissible::{
     DismissDirection, DismissDirectionCallback, DismissUpdateCallback, DismissUpdateDetails,
