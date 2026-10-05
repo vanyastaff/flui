@@ -501,6 +501,21 @@ mod notes_flow {
         assert_eq!(field_text(&laid), "Entrance draft");
     }
 
+    fn back_is_offered_only_where_it_leaves_a_page() {
+        let mut laid = ready();
+        assert!(
+            active_text(&laid, "Back").is_empty(),
+            "Home is the root page; Back is not offered there"
+        );
+        tap_text(&mut laid, "Settings");
+        tap_text(&mut laid, "Back");
+        rendered_text(&laid, "Note 0");
+        assert!(
+            active_text(&laid, "Back").is_empty(),
+            "Back is gone again on Home"
+        );
+    }
+
     fn settings_pressed_twice_leaves_with_one_back() {
         let mut laid = ready();
         tap_text(&mut laid, "Settings");
@@ -661,7 +676,7 @@ mod notes_flow {
 
     #[test]
     fn notes_public_input_flow_matrix() {
-        let cases: [(&str, fn()); 6] = [
+        let cases: [(&str, fn()); 7] = [
             (
                 "loading_retry_replacement_and_unmount_retire_old_service_work",
                 loading_retry_replacement_and_unmount_retire_old_service_work,
@@ -681,6 +696,10 @@ mod notes_flow {
             (
                 "settings_pressed_twice_leaves_with_one_back",
                 settings_pressed_twice_leaves_with_one_back,
+            ),
+            (
+                "back_is_offered_only_where_it_leaves_a_page",
+                back_is_offered_only_where_it_leaves_a_page,
             ),
             (
                 "pointer_drag_changes_lazy_band_and_route_roundtrip_preserves_position",

@@ -207,13 +207,16 @@ impl ViewState<Screen> for ScreenState {
                     .boxed(),
             );
         }
-        header.push(
-            TextButton::new(Text::new("Back"))
-                .on_pressed(move |_cx| {
-                    router.pop().expect("BUG: mounted Router");
-                })
-                .boxed(),
-        );
+        // Home is the router's root page, where there is nothing to go back to.
+        if view.route != Route::Home {
+            header.push(
+                TextButton::new(Text::new("Back"))
+                    .on_pressed(move |_cx| {
+                        router.pop().expect("BUG: mounted Router");
+                    })
+                    .boxed(),
+            );
+        }
         header.push(
             TextButton::new(Text::new("Reload notes"))
                 .on_pressed(move |_cx| {
