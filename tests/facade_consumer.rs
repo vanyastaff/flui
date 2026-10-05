@@ -176,8 +176,7 @@ fn external_consumers_extend_and_test_through_the_facade() {
                 toml::Value::Array(vec!["testing".into()]),
             );
         dev_dependencies.insert(alias.into(), framework);
-        let source =
-            include_str!("fixtures/facade_extensions.rs").replace("flui::", &format!("{alias}::"));
+        let source = rename_facade(include_str!("fixtures/facade_extensions.rs"), alias);
         let output = run_consumer(dependencies, Some(dev_dependencies), &source, "test");
         assert!(
             output.status.success(),
@@ -234,8 +233,10 @@ fn external_notes_showcase_runs_through_the_facade() {
         dev_dependencies.insert(alias.into(), framework);
         let tree = include_str!("../examples/two_screens/tree.rs");
         let flow = include_str!("fixtures/notes_flow.rs");
-        let source = format!("mod tree {{\n{tree}\n}}\n#[cfg(test)] mod flow {{\n{flow}\n}}")
-            .replace("flui::", &format!("{alias}::"));
+        let source = rename_facade(
+            &format!("mod tree {{\n{tree}\n}}\n#[cfg(test)] mod flow {{\n{flow}\n}}"),
+            alias,
+        );
         let output = run_consumer(dependencies, Some(dev_dependencies), &source, "test");
         assert!(
             output.status.success(),
@@ -249,6 +250,31 @@ fn external_notes_showcase_runs_through_the_facade() {
             "{alias}: Notes acceptance did not run:\n{report}"
         );
     }
+}
+
+/// `source` as a consumer that names the facade `alias` writes it.
+///
+/// Rewrites each `flui::` that starts a path: one not preceded by an
+/// identifier character or `:`, so `my_flui::x` and `a::flui::x` are left
+/// alone. A comment or string literal naming `flui::` would be rewritten
+/// too; the fixtures name the facade only in code.
+fn rename_facade(source: &str, alias: &str) -> String {
+    let mut renamed = String::with_capacity(source.len());
+    let mut copied = 0;
+    for (at, _) in source.match_indices("flui::") {
+        let starts_path = !source[..at]
+            .chars()
+            .next_back()
+            .is_some_and(|before| before.is_alphanumeric() || before == '_' || before == ':');
+        if starts_path {
+            renamed.push_str(&source[copied..at]);
+            renamed.push_str(alias);
+            renamed.push_str("::");
+            copied = at + "flui::".len();
+        }
+    }
+    renamed.push_str(&source[copied..]);
+    renamed
 }
 
 /// `None` when there is no checkout to depend on — see [`checkout_root`].
