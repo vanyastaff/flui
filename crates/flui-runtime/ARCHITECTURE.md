@@ -487,12 +487,13 @@ presentation inbox admission, preserving numeric values and explicit
 expand/collapse requests. Payload admission remains with the current semantics
 owner at delivery.
 
-The renderer's semantics-listener collection and each actual dispatch snapshot
-secure independently owned callback envelopes during physical retirement. Healthy
-retirement follows registration order; incoming unwind and the first propagated
-capture failure retain the untouched tail. Callback failures still stop that
-snapshot and propagate, with committed semantics state intact. The public
-`semantics_listener_retirement_preserves_independent_envelopes` row in the testing
-crate covers final ownership, removal during dispatch, nested state changes,
-competing failures and the next operation. This does not protect the binding's
-other fields or competing destructors inside one opaque closure aggregate.
+`RenderingBinding` keeps its semantics-enabled listeners in their own storage,
+and `set_semantics_enabled` calls an owned snapshot of them after releasing the
+lock, so a callback may add or remove listeners or toggle the state again. Both
+the storage (when the binding drops) and each snapshot retire their envelopes
+in registration order. A panic from a callback or a capture destructor
+propagates with the committed semantics state intact; while it unwinds, an
+envelope whose last owner is the retiring container is retained, and every
+other clone is released, so a capture still registered frees when the binding
+drops (ADR-0127). Competing destructors inside one callback's capture, and the
+binding's other fields, are outside this contract.

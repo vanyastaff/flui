@@ -49,22 +49,23 @@ src/
 
 ## Core Abstractions
 
-### Registry removal releases ownership outside the mutex
+### Registration tokens and removal
 
-Removing a controller or child registry first withdraws its owned value under
-the registry mutex, then retires that value after unlocking. A last-owner
-destructor may reenter the same registry, remove the same identity, or register
-fresh work. Child removal preserves the tick order of surviving children.
+A `VsyncRegistration` names the registry that issued it (a weak identity) and
+one slot from a monotonic namespace that controllers and children share
+(ADR-0125). Removal borrows the token: a token from another registry, or one
+whose registration is already gone, removes nothing. A registry never reuses or
+wraps a slot; once the namespace is exhausted, `try_register` and
+`attach_child` refuse every new registration (`VsyncRegistrationError`), so a
+stale token can never name later work.
 
-The existing `controller_sources_allow_reentry_and_preserve_run_ownership`
-family covers ordinary and panicking last-owner retirement through public
-registry handles, including fresh work and surviving virtual-clock ticks.
-ADR-0125 binds registration tokens to weak backend identity and one monotonic
-controller/child namespace. Foreign and stale tokens cannot remove accepted work;
-capacity refusal is permanent. The public controller-source family covers token
-authority, and `vsync_nesting_and_reentrancy` covers the terminal counter through
-actual admission and ticks. Whole-registry aggregate destruction is a separate
-boundary.
+`unregister` and `detach_child` withdraw the registered value under the
+registry mutex and drop it after unlocking. The destructor of a last owner may
+therefore reenter the same registry, remove the same token again or register
+fresh work, and removing a child keeps the tick order of the remaining
+children. A panic from that destructor propagates to the caller after the
+registration is already absent (ADR-0127). Destruction of a whole registry is
+not covered by this contract.
 
 ### Animation<T> Trait
 
