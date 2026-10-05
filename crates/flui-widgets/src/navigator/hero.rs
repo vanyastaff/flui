@@ -501,6 +501,26 @@ impl HeroHandle {
         Self::new(view)
     }
 
+    /// A handle whose hero is laid out at 10×10 in its own render tree, so
+    /// [`start_flight`](Self::start_flight) can freeze it. The cell keeps the
+    /// tree alive.
+    #[cfg(test)]
+    pub(super) fn test_laid_out(view: &Hero) -> (Self, PipelineCell) {
+        use flui_rendering::pipeline::PipelineOwner;
+        use flui_rendering::prelude::BoxConstraints;
+        let handle = Self::new(view);
+        let mut owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
+        owner.set_root_render_object(Box::new(flui_objects::RenderSubtreeAnchor::new(
+            handle.inner.anchor.clone(),
+        )));
+        owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(10.0, 10.0))));
+        let mut owner = owner.into_layout();
+        owner.run_layout().expect("a lone anchor lays out");
+        let cell = PipelineCell::new(owner.into_idle());
+        *handle.inner.owner.lock() = Some(cell.clone());
+        (handle, cell)
+    }
+
     /// A handle over `view`'s current configuration; [`ViewState::did_update_view`]
     /// keeps the view-derived halves current afterwards.
     fn new(view: &Hero) -> Self {
