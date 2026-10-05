@@ -30,6 +30,219 @@ use flui_rendering::{
     testing::{Probe, RenderTester, box_node},
 };
 
+/// Callback capture retirement can deadlock against the retained node sender,
+/// so every setter/failure row runs in a bounded public consumer process.
+#[test]
+fn pipeline_callback_replacement_reentry() {
+    use flui_rendering::pipeline::{PipelineOwner, RenderInvalidationHandle};
+    use std::io::Read;
+    use std::process::{Command, Stdio};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::{Duration, Instant};
+
+    const CHILD: &str = "FLUI_PIPELINE_REPLACEMENT_CHILD";
+    if let Ok(case) = std::env::var(CHILD) {
+        struct RetiredWake {
+            case: String,
+            handle: RenderInvalidationHandle,
+            drops: Arc<AtomicUsize>,
+            fail: bool,
+        }
+        impl Drop for RetiredWake {
+            fn drop(&mut self) {
+                self.drops.fetch_add(1, Ordering::Relaxed);
+                println!("pipeline replacement retirement entered: {}", self.case);
+                self.handle
+                    .mark_needs_paint()
+                    .expect("retiring capture can enqueue and wake");
+                assert!(!self.fail, "first displaced callback retirement");
+            }
+        }
+        fn install(
+            owner: &mut PipelineOwner,
+            event: &str,
+            callback: impl Fn() + Send + Sync + 'static,
+        ) {
+            match event {
+                "visual" => owner.set_on_need_visual_update(callback),
+                "created" => owner.set_on_semantics_owner_created(callback),
+                "disposed" => owner.set_on_semantics_owner_disposed(callback),
+                _ => panic!("unknown callback event"),
+            }
+        }
+        let (event, failure) = case.split_once('-').expect("event/failure case");
+        assert!(matches!(failure, "healthy" | "drop"));
+        let mut owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
+        let id = owner.set_root_render_object(Box::new(RenderColoredBox::red(10.0, 10.0)));
+        let handle = owner
+            .render_invalidation_handle(id)
+            .expect("attached public node sender");
+        let wake_count = Arc::new(AtomicUsize::new(0));
+        let wake_capture = Arc::clone(&wake_count);
+        owner.set_on_need_visual_update(move || {
+            wake_capture.fetch_add(1, Ordering::Relaxed);
+        });
+        if event == "disposed" {
+            owner.set_semantics_enabled(true);
+        }
+        let drops = Arc::new(AtomicUsize::new(0));
+        let retired = RetiredWake {
+            case: case.clone(),
+            handle: handle.clone(),
+            drops: Arc::clone(&drops),
+            fail: failure == "drop",
+        };
+        install(&mut owner, event, move || {
+            let _ = &retired;
+        });
+        wake_count.store(0, Ordering::Relaxed);
+        let latest = Arc::new(AtomicUsize::new(0));
+        let latest_capture = Arc::clone(&latest);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            install(&mut owner, event, move || {
+                latest_capture.fetch_add(1, Ordering::Relaxed);
+            });
+        }));
+        if failure == "drop" {
+            let payload = result.expect_err("displaced capture failure propagates");
+            assert_eq!(
+                flui_foundation::panic::payload_text(payload.as_ref()),
+                Some("first displaced callback retirement")
+            );
+        } else {
+            result.expect("healthy displaced capture retires");
+        }
+        assert_eq!(drops.load(Ordering::Relaxed), 1);
+        if event == "visual" {
+            assert_eq!(
+                latest.load(Ordering::Relaxed),
+                1,
+                "reentrant wake observes committed replacement"
+            );
+        } else {
+            assert_eq!(
+                wake_count.load(Ordering::Relaxed),
+                1,
+                "retirement wake remains deliverable"
+            );
+        }
+        handle
+            .mark_needs_paint()
+            .expect("next independent handle wake");
+        match event {
+            "visual" => assert_eq!(latest.load(Ordering::Relaxed), 2),
+            "created" => {
+                owner.set_semantics_enabled(true);
+                assert_eq!(latest.load(Ordering::Relaxed), 1);
+            }
+            "disposed" => {
+                owner.set_semantics_enabled(false);
+                assert_eq!(latest.load(Ordering::Relaxed), 1);
+            }
+            _ => unreachable!(),
+        }
+        let final_count = Arc::new(AtomicUsize::new(0));
+        let final_capture = Arc::clone(&final_count);
+        install(&mut owner, event, move || {
+            final_capture.fetch_add(1, Ordering::Relaxed);
+        });
+        match event {
+            "visual" => owner.request_visual_update(),
+            "created" => {
+                owner.set_semantics_enabled(false);
+                owner.set_semantics_enabled(true);
+            }
+            "disposed" => {
+                owner.set_semantics_enabled(true);
+                owner.set_semantics_enabled(false);
+            }
+            _ => unreachable!(),
+        }
+        assert_eq!(
+            final_count.load(Ordering::Relaxed),
+            1,
+            "subsequent replacement stays authoritative"
+        );
+        println!("pipeline replacement completed: {case}");
+        return;
+    }
+    let mut failures = Vec::new();
+    let selected = std::env::var("FLUI_PIPELINE_REPLACEMENT_CONTROL").ok();
+    if let Some(selected) = &selected {
+        assert!(
+            matches!(
+                selected.as_str(),
+                "visual-healthy"
+                    | "visual-drop"
+                    | "created-healthy"
+                    | "created-drop"
+                    | "disposed-healthy"
+                    | "disposed-drop"
+            ),
+            "unknown replacement control row"
+        );
+    }
+    for case in [
+        "visual-healthy",
+        "visual-drop",
+        "created-healthy",
+        "created-drop",
+        "disposed-healthy",
+        "disposed-drop",
+    ] {
+        if selected.as_deref().is_some_and(|selected| selected != case) {
+            continue;
+        }
+        let mut child = Command::new(std::env::current_exe().expect("test executable"))
+            .args([
+                "--exact",
+                "pipeline_scenarios::pipeline_callback_replacement_reentry",
+                "--nocapture",
+            ])
+            .env(CHILD, case)
+            .env("RUST_BACKTRACE", "0")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("pipeline replacement child");
+        let mut stdout = child.stdout.take().expect("stdout");
+        let mut stderr = child.stderr.take().expect("stderr");
+        let stdout_reader = std::thread::spawn(move || {
+            let mut text = String::new();
+            stdout.read_to_string(&mut text).expect("stdout read");
+            text
+        });
+        let stderr_reader = std::thread::spawn(move || {
+            let mut text = String::new();
+            stderr.read_to_string(&mut text).expect("stderr read");
+            text
+        });
+        let started = Instant::now();
+        let mut timed_out = false;
+        while child.try_wait().expect("child status").is_none() {
+            if started.elapsed() > Duration::from_secs(10) {
+                timed_out = true;
+                child.kill().expect("kill stalled child");
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let status = child.wait().expect("child exit");
+        let stdout = stdout_reader.join().expect("stdout reader");
+        let stderr = stderr_reader.join().expect("stderr reader");
+        if !status.success()
+            || !stdout.contains("1 passed; 0 failed")
+            || !stdout.contains(&format!("pipeline replacement completed: {case}"))
+        {
+            failures.push(format!(
+                "{case}: timed_out={timed_out}, {status}\n{stdout}\n{stderr}"
+            ));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
 /// Loose `0..=hi x 0..=hi` constraints (children settle at natural size).
 fn loose(width: f64, height: f64) -> BoxConstraints {
     BoxConstraints::new(0.0, width, 0.0, height)
