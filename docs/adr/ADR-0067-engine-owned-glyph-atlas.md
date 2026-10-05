@@ -7,6 +7,8 @@ wire are gone.*
 ---
 
 - **Status:** Accepted (landed 2026-09-18)
+- **Superseded-by:** [ADR-0122](ADR-0122-validated-glyph-image.md), only the
+  producer/atlas byte-layout validation boundary; other decisions remain in force.
 - **Amended by:** [ADR-0092](ADR-0092-per-realm-text-over-parley.md) (`GlyphKey` names a font
   blob and face, and the atlas rasterizes through `SwashRasterizer` behind `GlyphRasterizer`)
 - **Date:** 2026-09-18
@@ -80,6 +82,12 @@ holds the faces the runs carry. `TextLayout::placed_glyphs`,
 `SharedFontSystem::rasterize` and the cosmic-text `GlyphKey` are gone, and
 rasterization takes no font lock. The atlas, its pages and the upload guard
 below are unchanged.
+
+**Superseded in part by ADR-0122.** `GlyphImage` now establishes its byte-layout
+invariant through a fallible constructor and exposes read-only accessors. The
+engine consumes that invariant rather than repeating data-length validation.
+Atlas placement, replay dimension/content checks and allocation lifetime remain
+the engine's responsibility.
 
 Rasterisation sits in painting rather than the engine because it is an
 operation on the font database that the font lock already guards, and

@@ -143,15 +143,15 @@ pub(crate) fn paragraph_extent_covers_every_rasterized_glyph() {
                 let Some(image) = rasterizer.rasterize(glyph.key) else {
                     continue;
                 };
-                if image.width == 0 || image.height == 0 {
+                if image.width() == 0 || image.height() == 0 {
                     continue;
                 }
                 glyphs += 1;
                 let ink = Rect::from_xywh(
-                    f64::from(glyph.x + image.left),
-                    f64::from(glyph.y - image.top),
-                    f64::from(image.width),
-                    f64::from(image.height),
+                    f64::from(glyph.x + image.left()),
+                    f64::from(glyph.y - image.top()),
+                    f64::from(image.width()),
+                    f64::from(image.height()),
                 );
                 past_box |= !layout_box.contains_rect(&ink);
                 assert!(

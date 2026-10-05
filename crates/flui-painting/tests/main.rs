@@ -61,6 +61,10 @@ fn parley_oracle_contract() {
         "parley_oracle",
         &[
             (
+                "glyph_images_admit_only_complete_mask_and_color_buffers",
+                parley_oracle::glyph_images_admit_only_complete_mask_and_color_buffers,
+            ),
+            (
                 "swash_matches_the_recorded_reference",
                 parley_oracle::swash_matches_the_recorded_reference,
             ),

@@ -15,7 +15,7 @@ use std::sync::Arc;
 use flui_painting::glyphs::{
     FaceKey, FontRegistry, GlyphKey, SubpixelBin, SwashRasterizer, Synthesis,
 };
-use flui_painting::{GlyphContent, GlyphImage, GlyphRasterizer};
+use flui_painting::{GlyphContent, GlyphImage, GlyphImageError, GlyphRasterizer};
 use parley::fontique::{Blob, Collection, CollectionOptions, SourceCache};
 use parley::layout::PositionedLayoutItem;
 use parley::style::{FontFamily, FontFamilyName, StyleProperty};
@@ -28,6 +28,175 @@ const ROBOTO: &[u8] = include_bytes!("../assets/fonts/Roboto-Regular.ttf");
 const MATERIAL_ICONS: &[u8] = include_bytes!("../assets/fonts/MaterialIcons-Regular.ttf");
 const LATIN: &str = "The quick brown fox jumps over the lazy dog 0123456789";
 const SIZES: [f32; 3] = [13.0, 18.0, 32.0];
+
+/// A custom rasterizer cannot admit incomplete buffers or an overflowing byte
+/// layout; every named input runs even after another row fails.
+pub(crate) fn glyph_images_admit_only_complete_mask_and_color_buffers() {
+    use glyph_image_admission as rows;
+    super::cases::run_cases(
+        "glyph_image_admission",
+        &[
+            ("complete_mask", rows::complete_mask),
+            ("complete_color", rows::complete_color),
+            ("zero_mask_width", rows::zero_mask_width),
+            ("zero_mask_height", rows::zero_mask_height),
+            ("zero_color_width", rows::zero_color_width),
+            ("zero_color_height", rows::zero_color_height),
+            ("both_color_axes_zero", rows::both_color_axes_zero),
+            ("truncated_mask", rows::truncated_mask),
+            ("excess_mask", rows::excess_mask),
+            ("truncated_color", rows::truncated_color),
+            ("excess_color", rows::excess_color),
+            ("mask_bytes_as_color", rows::mask_bytes_as_color),
+            ("color_bytes_as_mask", rows::color_bytes_as_mask),
+            ("bytes_on_zero_color_width", rows::bytes_on_zero_color_width),
+            ("bytes_on_zero_mask_height", rows::bytes_on_zero_mask_height),
+            ("color_size_wraps_to_zero", rows::color_size_wraps_to_zero),
+            ("maximum_color_size", rows::maximum_color_size),
+            ("maximum_mask_size", rows::maximum_mask_size),
+            (
+                "healthy_image_after_refusals",
+                rows::healthy_image_after_refusals,
+            ),
+        ],
+    );
+}
+
+mod glyph_image_admission {
+    use super::{GlyphContent, GlyphImage, GlyphImageError};
+
+    fn admit(width: u32, height: u32, content: GlyphContent, data: Vec<u8>) {
+        let image = GlyphImage::try_new(i32::MIN, i32::MAX, width, height, content, data.clone())
+            .expect("complete row-major bytes are admitted");
+        assert_eq!(
+            (image.left(), image.top(), image.width(), image.height()),
+            (i32::MIN, i32::MAX, width, height),
+            "bearings and empty-axis dimensions must be preserved"
+        );
+        assert_eq!(image.content(), content);
+        assert_eq!(image.data(), data);
+    }
+
+    fn reject_length(
+        width: u32,
+        height: u32,
+        content: GlyphContent,
+        bytes: usize,
+        expected: usize,
+    ) {
+        assert_eq!(
+            GlyphImage::try_new(0, 0, width, height, content, vec![255; bytes]),
+            Err(GlyphImageError::InvalidDataLength {
+                expected,
+                actual: bytes
+            }),
+            "{width}x{height} {content:?} with {bytes} bytes"
+        );
+    }
+
+    pub(super) fn complete_mask() {
+        admit(2, 2, GlyphContent::Mask, vec![0, 64, 128, 255]);
+    }
+
+    pub(super) fn complete_color() {
+        admit(
+            2,
+            1,
+            GlyphContent::Color,
+            vec![10, 20, 30, 40, 50, 60, 70, 80],
+        );
+    }
+
+    pub(super) fn zero_mask_width() {
+        admit(0, u32::MAX, GlyphContent::Mask, Vec::new());
+    }
+
+    pub(super) fn zero_mask_height() {
+        admit(u32::MAX, 0, GlyphContent::Mask, Vec::new());
+    }
+
+    pub(super) fn zero_color_width() {
+        admit(0, u32::MAX, GlyphContent::Color, Vec::new());
+    }
+
+    pub(super) fn zero_color_height() {
+        admit(u32::MAX, 0, GlyphContent::Color, Vec::new());
+    }
+
+    pub(super) fn both_color_axes_zero() {
+        admit(0, 0, GlyphContent::Color, Vec::new());
+    }
+
+    pub(super) fn truncated_mask() {
+        reject_length(2, 2, GlyphContent::Mask, 3, 4);
+    }
+
+    pub(super) fn excess_mask() {
+        reject_length(2, 2, GlyphContent::Mask, 5, 4);
+    }
+
+    pub(super) fn truncated_color() {
+        reject_length(2, 1, GlyphContent::Color, 7, 8);
+    }
+
+    pub(super) fn excess_color() {
+        reject_length(2, 1, GlyphContent::Color, 9, 8);
+    }
+
+    pub(super) fn mask_bytes_as_color() {
+        reject_length(2, 1, GlyphContent::Color, 2, 8);
+    }
+
+    pub(super) fn color_bytes_as_mask() {
+        reject_length(2, 1, GlyphContent::Mask, 8, 2);
+    }
+
+    pub(super) fn bytes_on_zero_color_width() {
+        reject_length(0, u32::MAX, GlyphContent::Color, 1, 0);
+    }
+
+    pub(super) fn bytes_on_zero_mask_height() {
+        reject_length(u32::MAX, 0, GlyphContent::Mask, 1, 0);
+    }
+
+    pub(super) fn color_size_wraps_to_zero() {
+        assert_eq!(
+            GlyphImage::try_new(0, 0, 1 << 31, 1 << 31, GlyphContent::Color, Vec::new()),
+            Err(GlyphImageError::SizeOverflow),
+            "overflow must not wrap the expected byte count to an empty buffer"
+        );
+    }
+
+    pub(super) fn maximum_color_size() {
+        assert_eq!(
+            GlyphImage::try_new(0, 0, u32::MAX, u32::MAX, GlyphContent::Color, Vec::new()),
+            Err(GlyphImageError::SizeOverflow),
+            "RGBA byte count overflows on both 32-bit and 64-bit targets"
+        );
+    }
+
+    pub(super) fn maximum_mask_size() {
+        #[cfg(target_pointer_width = "32")]
+        assert_eq!(
+            GlyphImage::try_new(0, 0, u32::MAX, u32::MAX, GlyphContent::Mask, Vec::new()),
+            Err(GlyphImageError::SizeOverflow),
+            "mask texel count itself overflows a 32-bit target"
+        );
+        #[cfg(target_pointer_width = "64")]
+        assert_eq!(
+            GlyphImage::try_new(0, 0, u32::MAX, u32::MAX, GlyphContent::Mask, Vec::new()),
+            Err(GlyphImageError::InvalidDataLength {
+                expected: 18_446_744_065_119_617_025,
+                actual: 0,
+            }),
+            "the mask byte count is representable on a 64-bit target"
+        );
+    }
+
+    pub(super) fn healthy_image_after_refusals() {
+        admit(1, 1, GlyphContent::Mask, vec![255]);
+    }
+}
 const ORIGINS: [f32; 4] = [0.0, 0.25, 0.5, 0.75];
 
 /// A script the oracle compares, on the vendored face that covers it.
@@ -236,12 +405,12 @@ pub(crate) fn swash_matches_the_recorded_reference() {
                     };
                     let image = rasterizer.rasterize(key).expect("swash rasterizes");
                     let got = (
-                        image.width,
-                        image.height,
-                        image.left,
-                        image.top,
-                        image.content == GlyphContent::Color,
-                        fnv1a(&image.data),
+                        image.width(),
+                        image.height(),
+                        image.left(),
+                        image.top(),
+                        image.content() == GlyphContent::Color,
+                        fnv1a(image.data()),
                     );
                     if got != (row.4, row.5, row.6, row.7, row.8, row.9) {
                         failures.push(format!(
@@ -326,7 +495,7 @@ pub(crate) fn registered_fonts_release_the_source_and_keep_rasterizing() {
         .expect("the reference face registers");
     let expected = reference.rasterize(key).expect("the reference glyph draws");
     assert!(
-        expected.width > 0 && expected.height > 0,
+        expected.width() > 0 && expected.height() > 0,
         "the sample has ink"
     );
 
