@@ -753,7 +753,7 @@ struct NumericControl {
     owner: SemanticsOwner,
     id: flui_foundation::SemanticsId,
     target: flui_semantics::AccessibilityNodeId,
-    received: Arc<Mutex<Vec<Option<f64>>>>,
+    received: Arc<Mutex<Vec<f64>>>,
 }
 
 impl NumericControl {
@@ -764,7 +764,6 @@ impl NumericControl {
         let target = control.accessibility_id().expect("render-backed identity");
         let received = Arc::new(Mutex::new(Vec::new()));
         let numeric = Arc::clone(&received);
-        let tap = Arc::clone(&received);
         control
             .config_mut()
             .set_numeric_range(NumericRange::new(0.0, 0.0, 10.0, 1.0).expect("finite fixture"));
@@ -774,12 +773,8 @@ impl NumericControl {
                 let Some(ActionArgs::SetNumericValue { value }) = args else {
                     panic!("numeric callback lost its payload");
                 };
-                numeric.lock().push(Some(value));
+                numeric.lock().push(value);
             }),
-        );
-        control.config_mut().add_action(
-            SemanticsAction::Tap,
-            Arc::new(move |_, _| tap.lock().push(None)),
         );
         let id = owner.insert(control);
         owner.set_root(Some(id));
@@ -792,15 +787,25 @@ impl NumericControl {
         }
     }
 
-    fn resolve(&self, value: f64) -> flui_semantics::SemanticsActionInvocation {
-        use flui_semantics::{ActionArgs, SemanticsAction, SemanticsActionRequest};
-        self.owner
-            .resolve_action(SemanticsActionRequest::with_arguments(
-                self.target,
-                SemanticsAction::SetNumericValue,
-                ActionArgs::SetNumericValue { value },
-            ))
-            .expect("current range admits the requested value")
+    fn resolve(
+        &self,
+        arguments: Option<flui_semantics::ActionArgs>,
+    ) -> Result<flui_semantics::SemanticsActionInvocation, flui_semantics::SemanticsActionError>
+    {
+        use flui_semantics::{SemanticsAction, SemanticsActionRequest};
+        self.owner.resolve_action(SemanticsActionRequest {
+            node_id: self.target,
+            action: SemanticsAction::SetNumericValue,
+            arguments,
+        })
+    }
+
+    fn set(
+        &self,
+        value: f64,
+    ) -> Result<flui_semantics::SemanticsActionInvocation, flui_semantics::SemanticsActionError>
+    {
+        self.resolve(Some(flui_semantics::ActionArgs::SetNumericValue { value }))
     }
 
     fn narrow_and_publish(&mut self) {
@@ -821,104 +826,68 @@ impl NumericControl {
     }
 }
 
-fn cached_numeric_invocation_is_refused_after_narrower_publication() {
+fn an_exact_value_inside_the_current_range_reaches_the_handler() {
+    let mut control = NumericControl::new();
+    control.narrow_and_publish();
+    control
+        .set(4.375)
+        .expect("the current range admits an exact value off the step")
+        .invoke();
+    assert_eq!(*control.received.lock(), [4.375]);
+}
+
+fn a_value_outside_the_current_range_is_refused() {
     use flui_semantics::SemanticsActionError;
     let mut control = NumericControl::new();
-    let old = control.resolve(9.0);
+    control
+        .set(9.0)
+        .expect("the published range admits 9")
+        .invoke();
     control.narrow_and_publish();
     assert_eq!(
-        old.try_invoke(),
-        Err(SemanticsActionError::NumericAuthorityExpired {
+        control.set(9.0).err(),
+        Some(SemanticsActionError::InvalidNumericValue {
             node_id: control.target
         })
     );
-    assert!(
-        control.received.lock().is_empty(),
-        "the old handler must not receive 9"
+    assert_eq!(*control.received.lock(), [9.0]);
+}
+
+fn non_finite_or_missing_values_are_refused() {
+    use flui_semantics::{ActionArgs, SemanticsActionError};
+    let control = NumericControl::new();
+    let refused = Some(SemanticsActionError::InvalidNumericValue {
+        node_id: control.target,
+    });
+    for value in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, -1.0, 10.5] {
+        assert_eq!(control.set(value).err(), refused, "{value} was admitted");
+    }
+    assert_eq!(control.resolve(None).err(), refused);
+    assert_eq!(
+        control
+            .resolve(Some(ActionArgs::SetText { text: "5".into() }))
+            .err(),
+        refused
     );
-    control
-        .resolve(4.375)
-        .try_invoke()
-        .expect("the new range admits an exact valid value");
-    assert_eq!(*control.received.lock(), [Some(4.375)]);
+    assert!(control.received.lock().is_empty());
 }
 
-fn numeric_authority_is_per_owner_and_tap_keeps_accepted_ownership() {
-    use flui_semantics::{SemanticsAction, SemanticsActionRequest};
-    let independent = NumericControl::new();
-    let accepted = independent.resolve(9.0);
-    let mut changed = NumericControl::new();
-    let tap = changed
-        .owner
-        .resolve_action(SemanticsActionRequest::new(
-            changed.target,
-            SemanticsAction::Tap,
-        ))
-        .expect("tap is exposed");
-    changed.narrow_and_publish();
-    accepted
-        .try_invoke()
-        .expect("another owner cannot revoke this control");
-    tap.try_invoke()
-        .expect("ordinary tap retains its accepted handler");
-    assert_eq!(*independent.received.lock(), [Some(9.0)]);
-    assert_eq!(*changed.received.lock(), [None]);
-}
-
-fn disabled_numeric_authority_recovers_on_reenable() {
-    let mut control = NumericControl::new();
-    let old = control.resolve(9.0);
-    control.owner.disable();
-    assert!(old.try_invoke().is_err());
-    control.owner.enable();
-    control
-        .resolve(2.0)
-        .try_invoke()
-        .expect("reenabling mints current authority");
-    assert_eq!(*control.received.lock(), [Some(2.0)]);
-}
-
-fn removed_disposed_and_dropped_owners_refuse_cached_numeric_invocations() {
-    let mut removed = NumericControl::new();
-    let old = removed.resolve(9.0);
-    removed.owner.remove(removed.id);
-    assert!(old.try_invoke().is_err());
-    assert!(removed.received.lock().is_empty());
-
-    let mut disposed = NumericControl::new();
-    let old = disposed.resolve(9.0);
-    disposed.owner.dispose();
-    assert!(old.try_invoke().is_err());
-    assert!(disposed.received.lock().is_empty());
-
-    let dropped = NumericControl::new();
-    let old = dropped.resolve(9.0);
-    let received = Arc::clone(&dropped.received);
-    drop(dropped);
-    assert!(old.try_invoke().is_err());
-    assert!(received.lock().is_empty());
-}
-
-/// Cached numeric requests follow their owner-tree generation, independently
-/// of other owners; retirement refuses stale requests before user callbacks.
+/// A numeric setter is admitted only with a finite value inside the node's
+/// current range; a refused value never reaches the handler.
 #[test]
-fn numeric_invocations_follow_current_owner_authority() {
+fn numeric_setters_are_checked_against_the_current_range() {
     let cases: &[(&str, fn())] = &[
         (
-            "narrower_publication",
-            cached_numeric_invocation_is_refused_after_narrower_publication,
+            "exact_value_in_range",
+            an_exact_value_inside_the_current_range_reaches_the_handler,
         ),
         (
-            "owner_independence_and_tap",
-            numeric_authority_is_per_owner_and_tap_keeps_accepted_ownership,
+            "value_outside_narrowed_range",
+            a_value_outside_the_current_range_is_refused,
         ),
         (
-            "disable_and_reenable",
-            disabled_numeric_authority_recovers_on_reenable,
-        ),
-        (
-            "remove_dispose_drop",
-            removed_disposed_and_dropped_owners_refuse_cached_numeric_invocations,
+            "non_finite_or_missing",
+            non_finite_or_missing_values_are_refused,
         ),
     ];
     let mut failures = Vec::new();
@@ -930,6 +899,6 @@ fn numeric_invocations_follow_current_owner_authority() {
     }
     assert!(
         failures.is_empty(),
-        "numeric invocation authority rows failed: {failures:?}"
+        "numeric range admission rows failed: {failures:?}"
     );
 }

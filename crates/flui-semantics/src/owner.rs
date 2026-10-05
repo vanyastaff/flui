@@ -3,11 +3,7 @@
 //! The SemanticsOwner coordinates updates to the semantics tree and
 //! sends updates to the platform accessibility services.
 
-use std::num::NonZeroU64;
-use std::sync::{
-    Arc,
-    atomic::{AtomicU64, Ordering},
-};
+use std::sync::Arc;
 
 use flui_foundation::SemanticsId;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -92,61 +88,10 @@ pub enum SemanticsActionError {
         node_id: AccessibilityNodeId,
     },
 
-    /// A numeric invocation's owning tree was changed, disabled, or retired.
-    #[error("accessibility node {node_id} lost its numeric invocation authority")]
-    NumericAuthorityExpired {
-        /// Stable platform-facing node identity.
-        node_id: AccessibilityNodeId,
-    },
-
     /// The owning presentation has begun or completed teardown; actions are
     /// refused regardless of whether the node itself still resolves.
     #[error("presentation is closing or closed; accessibility action refused")]
     PresentationClosed,
-}
-
-/// One numeric invocation's authority at its owner-tree generation.
-#[derive(Clone, Copy, PartialEq, Eq)]
-struct NumericGeneration(NonZeroU64);
-
-/// Owner-local revocation shared with cached numeric invocations. No callback
-/// runs while a guard is held. The terminal value is never minted as authority.
-struct NumericInvocationAuthority {
-    generation: AtomicU64,
-}
-
-impl NumericInvocationAuthority {
-    fn new() -> Self {
-        Self {
-            generation: AtomicU64::new(1),
-        }
-    }
-
-    fn current(&self) -> Option<NumericGeneration> {
-        let value = self.generation.load(Ordering::Acquire);
-        if value == u64::MAX {
-            return None;
-        }
-        NonZeroU64::new(value).map(NumericGeneration)
-    }
-
-    fn invalidate(&self) {
-        // MAX is a permanent tombstone. Exhaustion never wraps or reissues an
-        // old generation, and all previously accepted invocations become stale.
-        let _ = self
-            .generation
-            .try_update(Ordering::AcqRel, Ordering::Acquire, |current| {
-                current.checked_add(1)
-            });
-    }
-
-    fn retire(&self) {
-        self.generation.store(u64::MAX, Ordering::Release);
-    }
-
-    fn permits(&self, generation: NumericGeneration) -> bool {
-        self.current() == Some(generation)
-    }
 }
 
 /// A resolved action whose handler has been cloned out of the semantics tree.
@@ -161,7 +106,6 @@ pub struct SemanticsActionInvocation {
     action: SemanticsAction,
     arguments: Option<ActionArgs>,
     handler: SemanticsActionHandler,
-    numeric_authority: Option<(Arc<NumericInvocationAuthority>, NumericGeneration)>,
 }
 
 impl std::fmt::Debug for SemanticsActionInvocation {
@@ -172,7 +116,7 @@ impl std::fmt::Debug for SemanticsActionInvocation {
             .field("action", &self.action)
             .field("arguments", &self.arguments)
             .field("handler", &"<callback>")
-            .finish_non_exhaustive()
+            .finish()
     }
 }
 
@@ -191,34 +135,11 @@ impl SemanticsActionInvocation {
         self.action
     }
 
-    /// Invoke the cloned handler, dropping an expired numeric invocation.
+    /// Invoke the cloned handler.
     ///
-    /// No semantics-tree borrow is held while user code runs. Ordinary actions
-    /// keep their accepted-handler ownership. Numeric actions additionally
-    /// require the owner-tree generation accepted at resolution to remain live.
+    /// No semantics-tree borrow is held while user code runs.
     pub fn invoke(self) {
-        let _ = self.try_invoke();
-    }
-
-    /// Invoke the handler only while its numeric authority remains current.
-    ///
-    /// # Errors
-    /// Returns [`SemanticsActionError::NumericAuthorityExpired`] for a numeric
-    /// invocation cached across tree mutation, disablement, disposal, or owner
-    /// destruction. The handler is not called. An unrelated owner has its own
-    /// authority and cannot revoke this invocation.
-    pub fn try_invoke(self) -> Result<(), SemanticsActionError> {
-        if self
-            .numeric_authority
-            .as_ref()
-            .is_some_and(|(authority, generation)| !authority.permits(*generation))
-        {
-            return Err(SemanticsActionError::NumericAuthorityExpired {
-                node_id: self.node_id,
-            });
-        }
         (self.handler)(self.action, self.arguments);
-        Ok(())
     }
 }
 
@@ -270,9 +191,6 @@ impl SemanticsActionInvocation {
 pub struct SemanticsOwner {
     /// The semantics tree.
     tree: SemanticsTree,
-
-    /// Mutable tree access conservatively revokes cached numeric invocations.
-    numeric_authority: Arc<NumericInvocationAuthority>,
 
     /// Platform callback for sending updates.
     callback: Option<SemanticsUpdateCallback>,
@@ -373,12 +291,6 @@ impl PublishedState {
     }
 }
 
-impl Drop for SemanticsOwner {
-    fn drop(&mut self) {
-        self.numeric_authority.retire();
-    }
-}
-
 impl std::fmt::Debug for SemanticsOwner {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SemanticsOwner")
@@ -400,7 +312,6 @@ impl SemanticsOwner {
     pub fn new(callback: SemanticsUpdateCallback) -> Self {
         Self {
             tree: SemanticsTree::new(),
-            numeric_authority: Arc::new(NumericInvocationAuthority::new()),
             callback: Some(callback),
             enabled: true,
             published: None,
@@ -421,7 +332,6 @@ impl SemanticsOwner {
     pub fn new_without_callback() -> Self {
         Self {
             tree: SemanticsTree::new(),
-            numeric_authority: Arc::new(NumericInvocationAuthority::new()),
             callback: None,
             enabled: true,
             published: None,
@@ -436,7 +346,6 @@ impl SemanticsOwner {
     pub fn with_capacity(capacity: usize, callback: SemanticsUpdateCallback) -> Self {
         Self {
             tree: SemanticsTree::with_capacity(capacity),
-            numeric_authority: Arc::new(NumericInvocationAuthority::new()),
             callback: Some(callback),
             enabled: true,
             published: None,
@@ -496,7 +405,6 @@ impl SemanticsOwner {
     ///
     /// When disabled, no updates are sent to the platform.
     pub fn disable(&mut self) {
-        self.numeric_authority.invalidate();
         self.enabled = false;
     }
 
@@ -531,7 +439,6 @@ impl SemanticsOwner {
     /// Returns a mutable reference to the semantics tree.
     #[inline]
     pub fn tree_mut(&mut self) -> &mut SemanticsTree {
-        self.numeric_authority.invalidate();
         &mut self.tree
     }
 
@@ -552,6 +459,9 @@ impl SemanticsOwner {
     /// [`SemanticsId`]. Only effective actions are routable, so
     /// `blocks_user_actions` applies identically to snapshot export and input
     /// dispatch.
+    ///
+    /// A numeric setter is refused unless its value lies in the node's current
+    /// range.
     ///
     /// The returned invocation owns an `Arc` clone of the handler and may be
     /// invoked after any outer owner lock has been released.
@@ -596,10 +506,10 @@ impl SemanticsOwner {
         let node = resolved.ok_or(SemanticsActionError::NodeNotFound {
             node_id: request.node_id,
         })?;
-        let action_is_effective =
-            node.config().effective_actions_as_bits() & request.action.value() != 0;
-        let Some(handler) = action_is_effective
-            .then(|| node.config().action_handler(request.action))
+        let config = node.config();
+        let routed = request.action;
+        let Some(handler) = (config.effective_actions_as_bits() & routed.value() != 0)
+            .then(|| config.action_handler(routed))
             .flatten()
             .map(Arc::clone)
         else {
@@ -609,15 +519,8 @@ impl SemanticsOwner {
             });
         };
 
-        let numeric_authority = if request.action == SemanticsAction::SetNumericValue {
-            let generation = self
-                .numeric_authority
-                .current()
-                .filter(|_| self.enabled)
-                .ok_or(SemanticsActionError::NumericAuthorityExpired {
-                    node_id: request.node_id,
-                })?;
-            let admitted = match (&request.arguments, node.config().numeric_range()) {
+        if routed == SemanticsAction::SetNumericValue {
+            let admitted = match (&request.arguments, config.numeric_range()) {
                 (Some(ActionArgs::SetNumericValue { value }), Some(range)) => {
                     range.contains(*value)
                 }
@@ -628,17 +531,13 @@ impl SemanticsOwner {
                     node_id: request.node_id,
                 });
             }
-            Some((Arc::clone(&self.numeric_authority), generation))
-        } else {
-            None
-        };
+        }
 
         Ok(SemanticsActionInvocation {
             node_id: request.node_id,
-            action: request.action,
+            action: routed,
             arguments: request.arguments,
             handler,
-            numeric_authority,
         })
     }
 
@@ -653,7 +552,6 @@ impl SemanticsOwner {
     /// Set the root SemanticsNode ID.
     #[inline]
     pub fn set_root(&mut self, root: Option<SemanticsId>) {
-        self.numeric_authority.invalidate();
         self.tree.set_root(root);
     }
 
@@ -661,7 +559,6 @@ impl SemanticsOwner {
 
     /// Inserts a SemanticsNode into the tree.
     pub fn insert(&mut self, node: SemanticsNode) -> SemanticsId {
-        self.numeric_authority.invalidate();
         self.tree.insert(node)
     }
 
@@ -674,7 +571,6 @@ impl SemanticsOwner {
     /// Returns a mutable reference to a SemanticsNode.
     #[inline]
     pub fn get_mut(&mut self, id: SemanticsId) -> Option<&mut SemanticsNode> {
-        self.numeric_authority.invalidate();
         self.tree.get_mut(id)
     }
 
@@ -685,13 +581,11 @@ impl SemanticsOwner {
     /// reach into [`SemanticsTree::remove_shallow`](crate::tree::SemanticsTree::remove_shallow) via
     /// [`Self::tree`] / [`Self::tree_mut`].
     pub fn remove(&mut self, id: SemanticsId) -> Option<SemanticsNode> {
-        self.numeric_authority.invalidate();
         self.tree.remove(id)
     }
 
     /// Clears all nodes from the tree.
     pub fn clear(&mut self) {
-        self.numeric_authority.invalidate();
         self.tree.clear();
     }
 
@@ -706,7 +600,6 @@ impl SemanticsOwner {
     /// - Removes all listeners
     /// - Releases resources
     pub fn dispose(&mut self) {
-        self.numeric_authority.retire();
         self.tree.clear();
         self.callback = None;
         self.enabled = false;
@@ -719,13 +612,11 @@ impl SemanticsOwner {
 
     /// Adds a child to a parent SemanticsNode.
     pub fn add_child(&mut self, parent_id: SemanticsId, child_id: SemanticsId) {
-        self.numeric_authority.invalidate();
         self.tree.add_child(parent_id, child_id);
     }
 
     /// Removes a child from a parent SemanticsNode.
     pub fn remove_child(&mut self, parent_id: SemanticsId, child_id: SemanticsId) {
-        self.numeric_authority.invalidate();
         self.tree.remove_child(parent_id, child_id);
     }
 
@@ -1121,54 +1012,5 @@ mod tests {
                 SemanticsActionError::NodeNotFound { node_id: target },
             );
         }
-    }
-
-    /// The only private seam is seeding the otherwise unreachable terminal
-    /// generation. Resolution and invocation still use the production owner.
-    #[test]
-    fn numeric_invocation_authority_exhaustion_refuses_permanently() {
-        use crate::{ActionArgs, NumericRange};
-        let mut owner = SemanticsOwner::new_without_callback();
-        let mut node = SemanticsNode::new().with_source_render_id(RenderId::new(1));
-        let target = node.accessibility_id().expect("render-backed identity");
-        node.config_mut()
-            .set_numeric_range(NumericRange::new(0.0, 0.0, 10.0, 1.0).expect("finite fixture"));
-        let called = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let observed = Arc::clone(&called);
-        node.config_mut().add_action(
-            SemanticsAction::SetNumericValue,
-            Arc::new(move |_, _| observed.store(true, Ordering::Release)),
-        );
-        let id = owner.insert(node);
-        owner.set_root(Some(id));
-        owner
-            .numeric_authority
-            .generation
-            .store(u64::MAX - 1, Ordering::Release);
-        let request = SemanticsActionRequest::with_arguments(
-            target,
-            SemanticsAction::SetNumericValue,
-            ActionArgs::SetNumericValue { value: 9.0 },
-        );
-        let last = owner
-            .resolve_action(request.clone())
-            .expect("last admissible generation");
-        owner
-            .get_mut(id)
-            .expect("mutable access reaches terminal generation");
-        assert_eq!(
-            last.try_invoke(),
-            Err(SemanticsActionError::NumericAuthorityExpired { node_id: target })
-        );
-        for _ in 0..2 {
-            assert!(matches!(
-                owner.resolve_action(request.clone()),
-                Err(SemanticsActionError::NumericAuthorityExpired { .. })
-            ));
-            owner
-                .get_mut(id)
-                .expect("further edits cannot wrap the generation");
-        }
-        assert!(!called.load(Ordering::Acquire));
     }
 }

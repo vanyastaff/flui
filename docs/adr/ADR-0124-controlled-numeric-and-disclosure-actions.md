@@ -15,11 +15,8 @@ and numeric setters use bits 27, 28 and 29, preserving reserved bits 23–25.
 `NumericRange` is an immutable checked value: finite value and bounds,
 inclusive membership, and a finite positive step. A zero span is valid.
 The step describes adjustment proposals and does not quantize numeric setters.
-The semantics owner validates incoming payloads against its current range.
-Resolved numeric invocations also carry owner-local generation authority:
-mutation, removal, disablement and owner retirement invalidate old authority.
-Generation exhaustion permanently refuses future authority rather than wrapping.
-Ordinary activation retains its existing accepted-request behavior.
+The semantics owner validates incoming payloads against its current range
+when it resolves the request, and the request is invoked as soon as it resolves.
 
 `Slider` and `Disclosure` are controlled widgets: events propose changes through
 `EventCx`; the parent commits them by supplying a new value or expansion state.
@@ -34,8 +31,8 @@ user aggregate retains its own double-panic limit.
 ## Verification
 
 `semantics_translation_and_routing` exercises queued platform requests through
-actual frame producers. `numeric_invocations_follow_current_owner_authority`
-checks resolved numeric requests across range changes and owner retirement.
+actual frame producers. `numeric_setters_are_checked_against_the_current_range`
+checks numeric admission against the current range.
 `focus_actions_and_shortcuts` includes real mounted platform focus.
 `controlled_slider_input_and_geometry` covers allocated geometry, RTL, finite
 extremes, controlled proposals and retired actions.
