@@ -1251,6 +1251,30 @@ pub(crate) fn run_presentation_close_child(kind: &str) {
                 Err(flui_view::EventContextError::Detached)
             );
         });
+        // A call on the closed graph is a new operation: the value or
+        // closure it rejects is dropped, even after an exceptional close
+        // (ADR-0127).
+        let probe = Rc::new(());
+        assert_eq!(
+            captured
+                .graph
+                .try_signal(Rc::clone(&probe))
+                .expect_err("closed graph"),
+            flui_view::SignalError::OwnerClosed
+        );
+        let held = Rc::clone(&probe);
+        assert_eq!(
+            flui_view::SignalWriteExt::update(captured.signal, &captured.graph, move |value| {
+                let _ = &held;
+                *value
+            }),
+            Err(flui_view::SignalError::OwnerClosed)
+        );
+        assert_eq!(
+            Rc::strong_count(&probe),
+            1,
+            "rejected signal value and updater are dropped"
+        );
         assert!(!captured.rebuild.is_active());
         captured
             .rebuild

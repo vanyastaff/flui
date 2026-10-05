@@ -227,9 +227,10 @@ impl Reactive {
     ) -> Result<SignalSlot, SignalError> {
         let mut inner = self.inner.borrow_mut();
         if inner.closed {
-            let preserving = inner.preserving_close;
             drop(inner);
-            if preserving || std::thread::panicking() {
+            // A rejected value is dropped like any other; only an unwind
+            // already in progress retains it (ADR-0127).
+            if std::thread::panicking() {
                 std::mem::forget(value);
             }
             return Err(SignalError::OwnerClosed);
@@ -675,7 +676,7 @@ impl Reactive {
         let loan = match self.loan(slot) {
             Ok(loan) => loan,
             Err(error) => {
-                if self.inner.borrow().preserving_close || std::thread::panicking() {
+                if std::thread::panicking() {
                     std::mem::forget(f);
                 }
                 return Err(error);
@@ -742,7 +743,7 @@ impl Reactive {
         let mut loan = match prepared {
             Ok(Ok(loan)) => loan,
             Ok(Err(error)) => {
-                if self.inner.borrow().preserving_close || std::thread::panicking() {
+                if std::thread::panicking() {
                     std::mem::forget(f);
                 }
                 return Err(error);
@@ -988,7 +989,7 @@ impl<T: 'static> SignalWriteExt<T> for Signal<T> {
         let mut loan = match prepared {
             Ok(Ok(loan)) => loan,
             Ok(Err(error)) => {
-                if graph.inner.borrow().preserving_close || std::thread::panicking() {
+                if std::thread::panicking() {
                     discard_secondary(pending.take());
                 }
                 return Err(error);
@@ -1070,7 +1071,7 @@ impl<T: 'static> SignalWriteExt<T> for Signal<T> {
         let equal = match compared {
             Ok(Ok(equal)) => equal,
             Ok(Err(error)) => {
-                if r.inner.borrow().preserving_close || std::thread::panicking() {
+                if std::thread::panicking() {
                     discard_secondary(pending.take());
                 }
                 return Err(error);
