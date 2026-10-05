@@ -137,23 +137,43 @@ impl CancellationSignal {
 /// intentionally not carried — the lifecycle layer reports *that* work
 /// panicked ([`TaskOutcome::Panicked`]); the panic message itself reaches
 /// the log through the panic hook at the panic site.
+/// Opaque payloads and a future that failed while polling are retained before
+/// reporting, because their destruction can execute arbitrary user code.
 ///
 /// `F: Unpin` keeps the pin projection safe-code-only; callers box the
 /// future first (they hand it to a boxed-future executor lane anyway).
 struct CatchUnwind<F> {
-    inner: F,
+    inner: Option<F>,
 }
 
 impl<F: Future + Unpin> Future for CatchUnwind<F> {
     type Output = Result<F::Output, ()>;
 
     fn poll(mut self: Pin<&mut Self>, context: &mut std::task::Context<'_>) -> Poll<Self::Output> {
-        let inner = Pin::new(&mut self.inner);
+        let inner = Pin::new(
+            self.inner
+                .as_mut()
+                .expect("BUG: completed future polled again"),
+        );
         match std::panic::catch_unwind(AssertUnwindSafe(|| inner.poll(context))) {
             Ok(Poll::Ready(value)) => Poll::Ready(Ok(value)),
             Ok(Poll::Pending) => Poll::Pending,
-            Err(_panic) => Poll::Ready(Err(())),
+            Err(payload) => {
+                flui_foundation::panic::retain_opaque_payload(payload);
+                // A failed future may own hostile captures. Do not run its
+                // destruction after containing its poll failure.
+                std::mem::forget(self.inner.take());
+                Poll::Ready(Err(()))
+            }
         }
+    }
+}
+
+// Diagnostics are user code too. A reporting failure cannot erase completion
+// evidence or strand a worker's accepted tail.
+fn contain_lifecycle_diagnostic(report: impl FnOnce()) {
+    if let Err(payload) = std::panic::catch_unwind(AssertUnwindSafe(report)) {
+        flui_foundation::panic::retain_opaque_payload(payload);
     }
 }
 
@@ -372,12 +392,15 @@ impl TaskSpawner {
                 Ok(value) => {
                     let _ = report.try_send(TaskOutcome::Completed(value));
                 }
-                Err(_panic) => {
-                    tracing::error!(
-                        task = name,
-                        "background compute task panicked; reporting Panicked to its owner"
-                    );
+                Err(payload) => {
+                    flui_foundation::panic::retain_opaque_payload(payload);
                     let _ = report.try_send(TaskOutcome::Panicked);
+                    contain_lifecycle_diagnostic(|| {
+                        tracing::error!(
+                            task = name,
+                            "background compute task panicked; reporting Panicked to its owner"
+                        );
+                    });
                 }
             }
         }))?;
@@ -421,15 +444,19 @@ impl TaskSpawner {
         services.spawn_io(Box::pin(async move {
             let raced = task_signal
                 .token
-                .run_until_cancelled(CatchUnwind { inner: future })
+                .run_until_cancelled(CatchUnwind {
+                    inner: Some(future),
+                })
                 .await;
             let outcome = match raced {
                 Some(Ok(value)) => TaskOutcome::Completed(value),
                 Some(Err(())) => {
-                    tracing::error!(
-                        task = name,
-                        "background IO task panicked; reporting Panicked to its owner"
-                    );
+                    contain_lifecycle_diagnostic(|| {
+                        tracing::error!(
+                            task = name,
+                            "background IO task panicked; reporting Panicked to its owner"
+                        );
+                    });
                     TaskOutcome::Panicked
                 }
                 None => TaskOutcome::Cancelled,
@@ -469,10 +496,16 @@ impl TaskSpawner {
             name,
             signal,
             shared: Arc::new(WorkerShared {
-                pending: parking_lot::Mutex::new(None),
+                inbox: parking_lot::Mutex::new(WorkerInbox {
+                    pending: None,
+                    pump_active: false,
+                }),
                 latest: parking_lot::Mutex::new(None),
-                pump_active: AtomicBool::new(false),
                 run: parking_lot::Mutex::new(Box::new(run)),
+                #[cfg(test)]
+                idle_probe: parking_lot::Mutex::new(None),
+                #[cfg(test)]
+                refusal_probe: parking_lot::Mutex::new(None),
             }),
             spawner: self.clone(),
             next_generation: 0,
@@ -502,18 +535,27 @@ impl WorkerGeneration {
 /// out, with the task context for cooperative cancellation checks.
 type WorkerJob<I, O> = Box<dyn FnMut(I, &TaskContext) -> O + Send>;
 
+struct WorkerInbox<I> {
+    pending: Option<(WorkerGeneration, I)>,
+    pump_active: bool,
+}
+
 struct WorkerShared<I, O> {
     /// The single-slot, latest-wins inbox: a submission REPLACES an
     /// unprocessed predecessor (inputs coalesce; submit never blocks and
     /// never queues without bound).
-    pending: parking_lot::Mutex<Option<(WorkerGeneration, I)>>,
+    inbox: parking_lot::Mutex<WorkerInbox<I>>,
     /// The single-slot, latest-wins outbox: a newer result replaces an
     /// uncollected older one (stale results drop structurally).
     latest: parking_lot::Mutex<Option<(WorkerGeneration, O)>>,
-    /// Whether a pump job is scheduled or running on the compute lane.
-    pump_active: AtomicBool,
     /// The worker's closure. Locked only by the single active pump.
     run: parking_lot::Mutex<WorkerJob<I, O>>,
+    /// Pauses a real pump after its idle ownership handoff, outside guards.
+    #[cfg(test)]
+    idle_probe: parking_lot::Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
+    /// Pauses refusal before its input and ownership reservation are withdrawn.
+    #[cfg(test)]
+    refusal_probe: parking_lot::Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
 }
 
 /// The owning handle of one recurring worker.
@@ -579,15 +621,52 @@ where
         }
         self.next_generation += 1;
         let generation = WorkerGeneration(self.next_generation);
-        let replaced = self.shared.pending.lock().replace((generation, input));
-        if let Some((stale, _)) = replaced {
-            tracing::trace!(
-                worker = self.name,
-                stale_generation = stale.get(),
-                "worker input coalesced by a newer submission (latest-wins)"
-            );
+        let (replaced, needs_pump) = {
+            let mut inbox = self.shared.inbox.lock();
+            let replaced = inbox.pending.replace((generation, input));
+            let needs_pump = !inbox.pump_active;
+            inbox.pump_active = true;
+            (replaced, needs_pump)
+        };
+        // Admission and scheduling precede outgoing user destruction and
+        // diagnostics. Either may re-enter submit or panic.
+        let admission = if needs_pump {
+            self.ensure_pump()
+        } else {
+            Ok(())
+        };
+        let refused = if admission.is_err() {
+            #[cfg(test)]
+            {
+                let probe = self.shared.refusal_probe.lock().clone();
+                if let Some(probe) = probe {
+                    probe();
+                }
+            }
+            let mut inbox = self.shared.inbox.lock();
+            let refused = inbox.pending.take();
+            inbox.pump_active = false;
+            refused
+        } else {
+            None
+        };
+        if let Some((stale, _)) = &replaced {
+            contain_lifecycle_diagnostic(|| {
+                tracing::trace!(
+                    worker = self.name,
+                    stale_generation = stale.get(),
+                    "worker input coalesced by a newer submission (latest-wins)"
+                );
+            });
         }
-        self.ensure_pump()?;
+        if let Err(payload) = std::panic::catch_unwind(AssertUnwindSafe(|| drop(replaced))) {
+            // Once retirement failed, do not destroy another incoming generic
+            // value in competition with that original failure.
+            std::mem::forget(refused);
+            std::panic::resume_unwind(payload);
+        }
+        drop(refused);
+        admission?;
         Ok(generation)
     }
 
@@ -605,29 +684,17 @@ where
         self.signal.cancel();
     }
 
-    /// Schedule a pump job if none is active. The pump drains the input
-    /// slot on the compute lane and exits when idle; the
-    /// `pump_active` flag plus the post-clear re-check below close the
-    /// race where a submission lands between "slot observed empty" and
-    /// "flag cleared".
+    /// Schedule the pump already reserved by submission under the inbox
+    /// mutex. Host execution is invoked outside that mutex. Refusal releases
+    /// the reservation together with its pending input in the caller.
     fn ensure_pump(&self) -> Result<(), SpawnError> {
-        if self.shared.pump_active.swap(true, Ordering::AcqRel) {
-            return Ok(());
-        }
-        let services = self
-            .spawner
-            .services()
-            .inspect_err(|_| self.shared.pump_active.store(false, Ordering::Release))?;
+        let services = self.spawner.services()?;
         let shared = Arc::clone(&self.shared);
         let signal = self.signal.clone();
         let name = self.name;
-        let spawned = services.spawn_compute(Box::new(move || {
+        services.spawn_compute(Box::new(move || {
             Self::pump(&shared, &signal, name);
-        }));
-        if spawned.is_err() {
-            self.shared.pump_active.store(false, Ordering::Release);
-        }
-        spawned
+        }))
     }
 
     fn pump(shared: &Arc<WorkerShared<I, O>>, signal: &CancellationSignal, name: &'static str) {
@@ -635,18 +702,24 @@ where
             // Between-items cancellation point: a cancelled worker stops
             // before touching the next input.
             if signal.is_cancelled() {
-                shared.pump_active.store(false, Ordering::Release);
+                shared.inbox.lock().pump_active = false;
                 return;
             }
-            let item = shared.pending.lock().take();
+            let item = {
+                let mut inbox = shared.inbox.lock();
+                let item = inbox.pending.take();
+                if item.is_none() {
+                    inbox.pump_active = false;
+                }
+                item
+            };
             let Some((generation, input)) = item else {
-                shared.pump_active.store(false, Ordering::Release);
-                // Re-check: a submit may have raced the clear above and
-                // seen `pump_active` still true (so it did not spawn).
-                if shared.pending.lock().is_some()
-                    && !shared.pump_active.swap(true, Ordering::AcqRel)
+                #[cfg(test)]
                 {
-                    continue;
+                    let probe = shared.idle_probe.lock().clone();
+                    if let Some(probe) = probe {
+                        probe();
+                    }
                 }
                 return;
             };
@@ -658,21 +731,38 @@ where
             match output {
                 Ok(output) => {
                     let replaced = shared.latest.lock().replace((generation, output));
-                    if let Some((stale, _)) = replaced {
-                        tracing::trace!(
-                            worker = name,
-                            stale_generation = stale.get(),
-                            "uncollected worker result replaced by a newer one (latest-wins)"
-                        );
+                    if let Some((stale, retired)) = replaced {
+                        let retirement =
+                            std::panic::catch_unwind(AssertUnwindSafe(|| drop(retired)));
+                        if let Err(payload) = retirement {
+                            flui_foundation::panic::retain_opaque_payload(payload);
+                            contain_lifecycle_diagnostic(|| {
+                                tracing::error!(
+                                    worker = name,
+                                    stale_generation = stale.get(),
+                                    "worker result retirement panicked; the committed result and pending input remain available"
+                                );
+                            });
+                        }
+                        contain_lifecycle_diagnostic(|| {
+                            tracing::trace!(
+                                worker = name,
+                                stale_generation = stale.get(),
+                                "uncollected worker result replaced by a newer one (latest-wins)"
+                            );
+                        });
                     }
                 }
-                Err(_panic) => {
-                    tracing::error!(
-                        worker = name,
-                        generation = generation.get(),
-                        "worker job panicked; that submission's input is dropped, the worker \
+                Err(payload) => {
+                    flui_foundation::panic::retain_opaque_payload(payload);
+                    contain_lifecycle_diagnostic(|| {
+                        tracing::error!(
+                            worker = name,
+                            generation = generation.get(),
+                            "worker job panicked; that submission's input is dropped, the worker \
                          stays usable"
-                    );
+                        );
+                    });
                 }
             }
         }
@@ -1190,12 +1280,15 @@ impl ServiceRegistry {
         let future = match std::panic::catch_unwind(AssertUnwindSafe(|| (definition.run)(context)))
         {
             Ok(future) => future,
-            Err(_panic) => {
-                tracing::error!(
-                    service = definition.name,
-                    "service factory panicked while constructing its future; \
+            Err(payload) => {
+                flui_foundation::panic::retain_opaque_payload(payload);
+                contain_lifecycle_diagnostic(|| {
+                    tracing::error!(
+                        service = definition.name,
+                        "service factory panicked while constructing its future; \
                          the service is not registered"
-                );
+                    );
+                });
                 return Err(ServiceStartError::FactoryPanicked);
             }
         };
@@ -1211,13 +1304,20 @@ impl ServiceRegistry {
         // cancel and the registry's deadline to flush. The hard stop is the
         // pools' own shutdown afterwards.
         services.spawn_io(Box::pin(async move {
-            let exit = if (CatchUnwind { inner: future }).await.is_ok() {
+            let exit = if (CatchUnwind {
+                inner: Some(future),
+            })
+            .await
+            .is_ok()
+            {
                 ServiceExit::Completed
             } else {
-                tracing::error!(
-                    service = name,
-                    "service future panicked; reporting Panicked to the registry"
-                );
+                contain_lifecycle_diagnostic(|| {
+                    tracing::error!(
+                        service = name,
+                        "service future panicked; reporting Panicked to the registry"
+                    );
+                });
                 ServiceExit::Panicked
             };
             match report.try_send(exit) {
@@ -1413,6 +1513,369 @@ mod tests {
         assert_eq!(worker.try_latest(), Some((generation, 7)));
     }
 
+    struct RetiredOutput {
+        value: u32,
+        retire: Option<Box<dyn FnOnce() + Send>>,
+    }
+
+    impl Drop for RetiredOutput {
+        fn drop(&mut self) {
+            if let Some(retire) = self.retire.take() {
+                retire();
+            }
+        }
+    }
+
+    fn worker_retirement_keeps_accepted_tail(reenter: bool, fail_diagnostics: bool) {
+        let (services, deterministic) = deterministic_services();
+        let spawner = TaskSpawner::new(&services);
+        let owner = Arc::new(parking_lot::Mutex::new(
+            None::<WorkerHandle<u32, RetiredOutput>>,
+        ));
+        let callback_owner = Arc::downgrade(&owner);
+        let retired = Arc::new(AtomicBool::new(false));
+        let callback_retired = Arc::clone(&retired);
+        let worker = spawner
+            .spawn_worker("retirement", move |value, _context| {
+                let retire = (value == 1).then(|| {
+                    let owner = Weak::clone(&callback_owner);
+                    let retired = Arc::clone(&callback_retired);
+                    Box::new(move || -> () {
+                        retired.store(true, Ordering::Release);
+                        if reenter {
+                            owner
+                                .upgrade()
+                                .expect("live owner")
+                                .lock()
+                                .as_mut()
+                                .expect("live worker")
+                                .submit(3)
+                                .expect("tail admitted");
+                        }
+                        panic!("old result retirement");
+                    }) as Box<dyn FnOnce() + Send>
+                });
+                RetiredOutput { value, retire }
+            })
+            .expect("worker");
+        *owner.lock() = Some(worker);
+        owner
+            .lock()
+            .as_mut()
+            .expect("worker")
+            .submit(1)
+            .expect("first");
+        deterministic.run_until_idle();
+        owner
+            .lock()
+            .as_mut()
+            .expect("worker")
+            .submit(2)
+            .expect("replacement");
+        let reported = Arc::new(AtomicBool::new(false));
+        let report_payload_retired = Arc::new(AtomicBool::new(false));
+        if fail_diagnostics {
+            tracing::subscriber::with_default(
+                FailingDiagnostics {
+                    reported: Arc::clone(&reported),
+                    retired: Arc::clone(&report_payload_retired),
+                },
+                || deterministic.run_until_idle(),
+            );
+            assert!(
+                reported.load(Ordering::Acquire),
+                "retirement failure reported"
+            );
+            assert!(
+                !report_payload_retired.load(Ordering::Acquire),
+                "competing reporting payload retained"
+            );
+        } else {
+            deterministic.run_until_idle();
+        }
+        assert!(retired.load(Ordering::Acquire));
+        let result = owner
+            .lock()
+            .as_ref()
+            .expect("worker")
+            .try_latest()
+            .expect("result");
+        assert_eq!(result.1.value, if reenter { 3 } else { 2 });
+        owner
+            .lock()
+            .as_mut()
+            .expect("worker")
+            .submit(4)
+            .expect("following operation");
+        deterministic.run_until_idle();
+        assert_eq!(
+            owner
+                .lock()
+                .as_ref()
+                .expect("worker")
+                .try_latest()
+                .expect("following result")
+                .1
+                .value,
+            4
+        );
+        drop(owner.lock().take());
+    }
+
+    fn worker_survives_result_retirement() {
+        worker_retirement_keeps_accepted_tail(false, false);
+    }
+
+    fn worker_retirement_reentry_delivers_accepted_tail() {
+        worker_retirement_keeps_accepted_tail(true, false);
+    }
+
+    fn worker_retirement_and_reporting_failure_keep_accepted_tail() {
+        worker_retirement_keeps_accepted_tail(true, true);
+    }
+
+    fn outgoing_worker_input_failure_preserves_accepted_replacement() {
+        let (services, deterministic) = deterministic_services();
+        let spawner = TaskSpawner::new(&services);
+        let mut worker = spawner
+            .spawn_worker("input retirement", |input: RetiredOutput, _context| {
+                input.value
+            })
+            .expect("worker");
+        worker
+            .submit(RetiredOutput {
+                value: 1,
+                retire: Some(Box::new(|| panic!("outgoing input retirement"))),
+            })
+            .expect("first input");
+        let failure = std::panic::catch_unwind(AssertUnwindSafe(|| {
+            worker
+                .submit(RetiredOutput {
+                    value: 2,
+                    retire: None,
+                })
+                .expect("replacement");
+        }))
+        .expect_err("outgoing retirement propagates");
+        assert_eq!(
+            failure.downcast_ref::<&str>(),
+            Some(&"outgoing input retirement")
+        );
+        deterministic.run_until_idle();
+        assert_eq!(worker.try_latest().map(|(_, value)| value), Some(2));
+        let generation = worker
+            .submit(RetiredOutput {
+                value: 3,
+                retire: None,
+            })
+            .expect("next submission");
+        deterministic.run_until_idle();
+        assert_eq!(worker.try_latest(), Some((generation, 3)));
+    }
+
+    struct RetirementProbe(Arc<AtomicBool>);
+
+    impl Drop for RetirementProbe {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::Release);
+        }
+    }
+
+    struct FailingDiagnostics {
+        reported: Arc<AtomicBool>,
+        retired: Arc<AtomicBool>,
+    }
+
+    impl tracing::Subscriber for FailingDiagnostics {
+        fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+            true
+        }
+        fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+            tracing::span::Id::from_u64(1)
+        }
+        fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+        fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+        fn event(&self, event: &tracing::Event<'_>) {
+            if *event.metadata().level() == tracing::Level::ERROR {
+                self.reported.store(true, Ordering::Release);
+                std::panic::panic_any(RetirementProbe(Arc::clone(&self.retired)));
+            }
+        }
+        fn enter(&self, _: &tracing::span::Id) {}
+        fn exit(&self, _: &tracing::span::Id) {}
+    }
+
+    fn failed_future_retains_opaque_payload_and_captures() {
+        let payload_retired = Arc::new(AtomicBool::new(false));
+        let future_retired = Arc::new(AtomicBool::new(false));
+        let capture = RetirementProbe(Arc::clone(&future_retired));
+        let payload = Arc::clone(&payload_retired);
+        let future = Box::pin(std::future::poll_fn(move |_cx| -> Poll<()> {
+            let _capture = &capture;
+            std::panic::panic_any(RetirementProbe(Arc::clone(&payload)));
+        }));
+        let mut future = CatchUnwind {
+            inner: Some(future),
+        };
+        let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+        assert!(matches!(
+            Pin::new(&mut future).poll(&mut context),
+            Poll::Ready(Err(()))
+        ));
+        drop(future);
+        assert!(
+            !payload_retired.load(Ordering::Acquire),
+            "opaque payload retained"
+        );
+        assert!(
+            !future_retired.load(Ordering::Acquire),
+            "failed future captures retained"
+        );
+
+        let healthy_retired = Arc::new(AtomicBool::new(false));
+        let capture = RetirementProbe(Arc::clone(&healthy_retired));
+        let future = Box::pin(std::future::poll_fn(move |_cx| {
+            let _capture = &capture;
+            Poll::Ready(7)
+        }));
+        let mut future = CatchUnwind {
+            inner: Some(future),
+        };
+        assert!(matches!(
+            Pin::new(&mut future).poll(&mut context),
+            Poll::Ready(Ok(7))
+        ));
+        drop(future);
+        assert!(
+            healthy_retired.load(Ordering::Acquire),
+            "healthy future retires normally"
+        );
+    }
+
+    fn task_reports_opaque_panic_before_retirement() {
+        let (services, deterministic) = deterministic_services();
+        let spawner = TaskSpawner::new(&services);
+        let retired = Arc::new(AtomicBool::new(false));
+        let payload = Arc::clone(&retired);
+        let task = spawner
+            .spawn_compute::<(), _>("opaque", move |_context| {
+                std::panic::panic_any(RetirementProbe(payload));
+            })
+            .expect("task");
+        deterministic.run_until_idle();
+        assert!(matches!(task.try_join(), Ok(TaskOutcome::Panicked)));
+        assert!(!retired.load(Ordering::Acquire), "opaque payload retained");
+        let next = spawner
+            .spawn_compute("following", |_context| 7)
+            .expect("following task");
+        deterministic.run_until_idle();
+        assert!(matches!(next.try_join(), Ok(TaskOutcome::Completed(7))));
+    }
+
+    fn refused_worker_input_retires_and_next_submission_runs() {
+        let (services, deterministic) = deterministic_services();
+        for _ in 0..8 {
+            services
+                .spawn_compute(Box::new(|| {}))
+                .expect("fill compute admission");
+        }
+        let spawner = TaskSpawner::new(&services);
+        let mut worker = spawner
+            .spawn_worker(
+                "refusal",
+                |(value, _probe): (u32, RetirementProbe), _context| value,
+            )
+            .expect("worker");
+        let refused_retired = Arc::new(AtomicBool::new(false));
+        assert!(matches!(
+            worker.submit((1, RetirementProbe(Arc::clone(&refused_retired)))),
+            Err(SpawnError::Saturated)
+        ));
+        assert!(
+            refused_retired.load(Ordering::Acquire),
+            "refused input destroyed before returning error"
+        );
+        deterministic.run_until_idle();
+        assert_eq!(worker.try_latest(), None);
+        let accepted_retired = Arc::new(AtomicBool::new(false));
+        let generation = worker
+            .submit((2, RetirementProbe(Arc::clone(&accepted_retired))))
+            .expect("capacity restored");
+        deterministic.run_until_idle();
+        assert_eq!(worker.try_latest(), Some((generation, 2)));
+        assert!(accepted_retired.load(Ordering::Acquire));
+    }
+
+    fn idle_worker_handoff_cannot_execute_refused_input() {
+        let (services, deterministic) = deterministic_services();
+        let spawner = TaskSpawner::new(&services);
+        let executed = Arc::new(parking_lot::Mutex::new(Vec::new()));
+        let record = Arc::clone(&executed);
+        let mut worker = spawner
+            .spawn_worker("handoff", move |value: u32, _context| {
+                record.lock().push(value);
+                value
+            })
+            .expect("worker");
+        let (idle, reached_idle) = mpsc::sync_channel(1);
+        let (release, resume) = mpsc::sync_channel(1);
+        let resume = parking_lot::Mutex::new(resume);
+        let first_idle = AtomicBool::new(true);
+        *worker.shared.idle_probe.lock() = Some(Arc::new(move || {
+            if first_idle.swap(false, Ordering::AcqRel) {
+                idle.send(()).expect("test driver waiting");
+                resume
+                    .lock()
+                    .recv_timeout(Duration::from_secs(5))
+                    .expect("handoff released");
+            }
+        }));
+        worker.submit(1).expect("first input");
+        let driver = deterministic.clone();
+        let (finished, observed_finish) = mpsc::sync_channel(1);
+        let driving = std::thread::spawn(move || {
+            driver.run_until_idle();
+            finished.send(()).expect("finish observed");
+        });
+        reached_idle
+            .recv_timeout(Duration::from_secs(5))
+            .expect("real pump became idle");
+        let observed_finish = parking_lot::Mutex::new(observed_finish);
+        *worker.shared.refusal_probe.lock() = Some(Arc::new(move || {
+            // Let the former pump finish while refused input is still in the
+            // inbox. It has handed ownership back and must not reclaim it.
+            release
+                .send(())
+                .expect("resume old pump before refusal cleanup");
+            observed_finish
+                .lock()
+                .recv_timeout(Duration::from_secs(5))
+                .expect("former pump completed");
+        }));
+        // The old pump still occupies one compute slot while its ownership
+        // has become idle. Exhaust the other seven before the new submission.
+        for _ in 0..7 {
+            services
+                .spawn_compute(Box::new(|| {}))
+                .expect("fill remaining admission");
+        }
+        assert!(matches!(worker.submit(2), Err(SpawnError::Saturated)));
+        driving.join().expect("driver finishes");
+        *worker.shared.idle_probe.lock() = None;
+        *worker.shared.refusal_probe.lock() = None;
+        assert_eq!(
+            *executed.lock(),
+            vec![1],
+            "a refused input must never execute"
+        );
+        let generation = worker
+            .submit(3)
+            .expect("next submission after capacity recovery");
+        deterministic.run_until_idle();
+        assert_eq!(*executed.lock(), vec![1, 3]);
+        assert_eq!(worker.try_latest(), Some((generation, 3)));
+    }
+
     // ── Service events: bounded, pull-only, inert after owner death ─────────
 
     fn service_events_ring_drops_oldest_and_never_blocks() {
@@ -1489,6 +1952,38 @@ mod tests {
                 (
                     "worker_survives_a_panicking_job",
                     worker_survives_a_panicking_job as fn(),
+                ),
+                (
+                    "worker_survives_result_retirement",
+                    worker_survives_result_retirement as fn(),
+                ),
+                (
+                    "worker_retirement_reentry_delivers_accepted_tail",
+                    worker_retirement_reentry_delivers_accepted_tail as fn(),
+                ),
+                (
+                    "worker_retirement_and_reporting_failure_keep_accepted_tail",
+                    worker_retirement_and_reporting_failure_keep_accepted_tail as fn(),
+                ),
+                (
+                    "outgoing_worker_input_failure_preserves_accepted_replacement",
+                    outgoing_worker_input_failure_preserves_accepted_replacement as fn(),
+                ),
+                (
+                    "failed_future_retains_opaque_payload_and_captures",
+                    failed_future_retains_opaque_payload_and_captures as fn(),
+                ),
+                (
+                    "task_reports_opaque_panic_before_retirement",
+                    task_reports_opaque_panic_before_retirement as fn(),
+                ),
+                (
+                    "refused_worker_input_retires_and_next_submission_runs",
+                    refused_worker_input_retires_and_next_submission_runs as fn(),
+                ),
+                (
+                    "idle_worker_handoff_cannot_execute_refused_input",
+                    idle_worker_handoff_cannot_execute_refused_input as fn(),
                 ),
                 (
                     "service_events_ring_drops_oldest_and_never_blocks",
