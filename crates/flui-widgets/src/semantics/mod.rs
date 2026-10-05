@@ -512,6 +512,11 @@ impl Semantics {
     }
 
     /// Publishes a validated numeric range for native range-value controls.
+    ///
+    /// This always marks the node as a slider, as [`Self::slider`]`(true)`
+    /// does, so it publishes the slider role unless [`Self::role`] or a more
+    /// specific role flag (a checked or toggled state, button, link or text
+    /// field) takes precedence.
     #[must_use]
     pub fn numeric_range(mut self, range: flui_rendering::semantics::NumericRange) -> Self {
         self.configuration.set_numeric_range(range);

@@ -672,6 +672,11 @@ impl SemanticsConfiguration {
     }
 
     /// Publishes a validated numeric range and identifies the node as a slider.
+    ///
+    /// This always sets the slider flag, as [`Self::set_slider`]`(true)` does.
+    /// The node publishes the slider role unless an explicit role or a more
+    /// specific role flag (a checked or toggled state, button, link or text
+    /// field) takes precedence.
     pub fn set_numeric_range(&mut self, range: crate::NumericRange) {
         self.numeric_range = Some(range);
         self.set_slider(true);
