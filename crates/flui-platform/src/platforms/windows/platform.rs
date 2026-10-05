@@ -106,13 +106,30 @@ impl DeadlineArm {
 pub(super) struct WindowIdentity(std::num::NonZeroU64);
 
 impl WindowIdentity {
+    /// The process-wide identity source.
+    pub(super) fn source() -> &'static std::sync::atomic::AtomicU64 {
+        // A monotonic id source, not shared state: nothing reads it back.
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        &NEXT
+    }
+
     /// Mint a fresh identity, panicking once the source is exhausted. Call
     /// it before acquiring any native resource the identity will own, so a
     /// refusal leaves nothing to release.
     pub(super) fn mint() -> Self {
-        // A monotonic id source, not shared state: nothing reads it back.
-        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
-        Self::mint_from(&NEXT)
+        Self::mint_from(Self::source())
+    }
+
+    /// The admission boundary `WindowsWindow::new` runs: reserve an
+    /// identity from `source`, then run `acquire` for the native window it
+    /// will own. Exhaustion refuses before `acquire` runs, so a refusal
+    /// leaves nothing to release.
+    pub(super) fn admit<R>(
+        source: &std::sync::atomic::AtomicU64,
+        acquire: impl FnOnce() -> R,
+    ) -> (Self, R) {
+        let identity = Self::mint_from(source);
+        (identity, acquire())
     }
 
     fn mint_from(next: &std::sync::atomic::AtomicU64) -> Self {
@@ -142,22 +159,20 @@ impl WindowsPlatform {
         for seed in [0, u64::MAX - 1] {
             let next = AtomicU64::new(seed);
             let acquisitions = Cell::new(0);
+            // The admission `WindowsWindow::new` runs, with an acquisition
+            // that records native creation instead of performing it.
+            let admit =
+                || WindowIdentity::admit(&next, || acquisitions.set(acquisitions.get() + 1)).0;
             if seed != 0 {
-                let penultimate = WindowIdentity::mint_from(&next);
-                acquisitions.set(acquisitions.get() + 1);
-                let final_identity = WindowIdentity::mint_from(&next);
-                acquisitions.set(acquisitions.get() + 1);
+                let penultimate = admit();
+                let final_identity = admit();
                 assert_eq!(penultimate.0.get(), u64::MAX - 1);
                 assert_eq!(final_identity.0.get(), u64::MAX);
                 assert_ne!(penultimate, final_identity);
             }
             for attempt in 0..3 {
                 assert!(
-                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        WindowIdentity::mint_from(&next);
-                        acquisitions.set(acquisitions.get() + 1);
-                    }))
-                    .is_err(),
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(admit)).is_err(),
                     "seed {seed}: exhausted allocation succeeded on retry {attempt}"
                 );
             }

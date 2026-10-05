@@ -166,36 +166,36 @@ impl WindowsWindow {
         handlers: Rc<RefCell<PlatformHandlers>>,
         config: crate::config::WindowConfiguration,
     ) -> Result<Arc<Self>, OpenWindowError> {
-        // Refuse identity exhaustion before creating an HWND whose ownership
-        // has not yet transferred to a context and wrapper.
-        let identity = super::platform::WindowIdentity::mint();
-        Self::new_admitted(options, windows_map, handlers, config, identity)
+        // Admission refuses identity exhaustion before creating an HWND
+        // whose ownership has not yet transferred to a context and wrapper.
+        let (identity, created) = super::platform::WindowIdentity::admit(
+            super::platform::WindowIdentity::source(),
+            || Self::create_native(&options),
+        );
+        let (hwnd, requested, scale_factor) = created?;
+        Ok(Self::install_native(
+            options,
+            windows_map,
+            handlers,
+            config,
+            identity,
+            hwnd,
+            requested,
+            scale_factor,
+        ))
     }
 
-    fn new_admitted(
-        options: WindowOptions,
-        windows_map: Arc<Mutex<HashMap<isize, Arc<WindowsWindow>>>>,
-        handlers: Rc<RefCell<PlatformHandlers>>,
-        config: crate::config::WindowConfiguration,
-        identity: super::platform::WindowIdentity,
-    ) -> Result<Arc<Self>, OpenWindowError> {
+    /// Create the native window: the resource an admitted identity owns.
+    /// Returns the HWND with the requested device size and the system scale
+    /// factor it was computed at.
+    fn create_native(options: &WindowOptions) -> Result<(HWND, Size<i32>, f64), OpenWindowError> {
         // SAFETY: `GetModuleHandleW(None)` queries the current process image
         // and takes no pointer arguments — always sound. `GetDpiForSystem`
         // reads global state, no preconditions. `CreateWindowExW` requires
         // `WINDOW_CLASS_NAME` to already be registered, which
         // `WindowsPlatform::with_config` guarantees before any `open_window`
         // call can reach here; `&title` is a live `HSTRING` owned by this
-        // frame. `hwnd.is_invalid()` is checked immediately after, so every
-        // Win32 call below it only runs against a handle the OS just
-        // returned as valid. `SetClassLongPtrW` and `apply_windows_features`
-        // operate on that same freshly created, still-valid `hwnd`.
-        // `Box::into_raw(context)` intentionally leaks the allocation into
-        // the `GWLP_USERDATA` slot — ownership transfers to the window and is
-        // reclaimed by `WindowsPlatform::window_proc`'s `WM_DESTROY` arm
-        // (`platform.rs`, `Box::from_raw`); a window destroyed by any path
-        // that skips `WM_DESTROY` (process-exit teardown) leaks the
-        // allocation rather than double-frees or dangles it. `ShowWindow`/
-        // `UpdateWindow` again only need a valid `hwnd`, which holds here.
+        // frame. `hwnd.is_invalid()` is checked before the handle is returned.
         unsafe {
             let hinstance = GetModuleHandleW(None).map_err(|e| OpenWindowError::Backend {
                 message: format!("Failed to get module handle: {e}"),
@@ -209,10 +209,6 @@ impl WindowsWindow {
             let width = logical_to_device(options.size.width, scale_factor);
             let height = logical_to_device(options.size.height, scale_factor);
 
-            // Default position (center on screen)
-            let x = CW_USEDEFAULT;
-            let y = CW_USEDEFAULT;
-
             // Determine window style
             let style = if options.decorated {
                 WS_OVERLAPPEDWINDOW
@@ -224,15 +220,15 @@ impl WindowsWindow {
 
             let ex_style = WS_EX_APPWINDOW;
 
-            // Create the window
+            // Create the window at the default position
             let title = HSTRING::from(&options.title);
             let hwnd = CreateWindowExW(
                 ex_style,
                 WINDOW_CLASS_NAME,
                 &title,
                 style,
-                x,
-                y,
+                CW_USEDEFAULT,
+                CW_USEDEFAULT,
                 width,
                 height,
                 None, // parent
@@ -249,7 +245,36 @@ impl WindowsWindow {
                     message: windows::core::Error::from_thread().to_string(),
                 });
             }
+            Ok((hwnd, Size::new(width, height), scale_factor))
+        }
+    }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the admitted identity and the native window it owns, handed over together"
+    )]
+    fn install_native(
+        options: WindowOptions,
+        windows_map: Arc<Mutex<HashMap<isize, Arc<WindowsWindow>>>>,
+        handlers: Rc<RefCell<PlatformHandlers>>,
+        config: crate::config::WindowConfiguration,
+        identity: super::platform::WindowIdentity,
+        hwnd: HWND,
+        requested: Size<i32>,
+        scale_factor: f64,
+    ) -> Arc<Self> {
+        let (width, height) = (requested.width, requested.height);
+        // SAFETY: `hwnd` is the valid handle `create_native` just returned
+        // on this thread. `SetClassLongPtrW` and `apply_windows_features`
+        // operate on that same freshly created, still-valid `hwnd`.
+        // `Box::into_raw(context)` intentionally leaks the allocation into
+        // the `GWLP_USERDATA` slot — ownership transfers to the window and is
+        // reclaimed by `WindowsPlatform::window_proc`'s `WM_DESTROY` arm
+        // (`platform.rs`, `Box::from_raw`); a window destroyed by any path
+        // that skips `WM_DESTROY` (process-exit teardown) leaks the
+        // allocation rather than double-frees or dangles it. `ShowWindow`/
+        // `UpdateWindow` again only need a valid `hwnd`, which holds here.
+        unsafe {
             // Remove background brush to allow Mica backdrop
             SetClassLongPtrW(hwnd, GCLP_HBRBACKGROUND, 0);
 
@@ -257,12 +282,10 @@ impl WindowsWindow {
             Self::apply_windows_features(hwnd);
 
             tracing::info!(
-                "Created window HWND {:?} - {}x{} at ({}, {}) - scale: {}",
+                "Created window HWND {:?} - {}x{} - scale: {}",
                 hwnd,
                 width,
                 height,
-                x,
-                y,
                 scale_factor
             );
 
@@ -367,7 +390,7 @@ impl WindowsWindow {
                 window.state.lock().visible = true;
             }
 
-            Ok(window)
+            window
         }
     }
 
