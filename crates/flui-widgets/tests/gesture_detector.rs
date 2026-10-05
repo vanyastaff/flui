@@ -235,17 +235,41 @@ pub(crate) mod event_cx {
         .expect("a click on a node advertising one resolves");
     }
 
-    pub(crate) fn repeated_assistive_actions_are_delivered_once_each_and_keep_making_progress() {
-        let probe = SignalProbe::new(|ProbeSignals { count, .. }| {
-            labelled(GestureDetector::new().on_tap(move |cx| count.update(cx, |n| *n += 1)))
+    pub(crate) fn repeated_assistive_taps_are_delivered_once_each_and_keep_making_progress() {
+        assert_repeated_actions_are_delivered_once_each(Action::Click);
+    }
+
+    pub(crate) fn repeated_assistive_long_presses_are_delivered_once_each_and_keep_making_progress()
+    {
+        assert_repeated_actions_are_delivered_once_each(Action::ShowContextMenu);
+    }
+
+    /// Two accepted `action`s of one kind run their handler twice on the next
+    /// frame, never again on a later one, and a third still arrives after the
+    /// batch drains. The detector advertises both kinds, so only the handler
+    /// `action` reaches counts.
+    fn assert_repeated_actions_are_delivered_once_each(action: Action) {
+        let long_press = matches!(action, Action::ShowContextMenu);
+        let probe = SignalProbe::new(move |ProbeSignals { count, .. }| {
+            let detector = GestureDetector::new();
+            let detector = if long_press {
+                detector
+                    .on_tap(|_cx| {})
+                    .on_long_press(move |cx| count.update(cx, |n| *n += 1))
+            } else {
+                detector
+                    .on_tap(move |cx| count.update(cx, |n| *n += 1))
+                    .on_long_press(|_cx| {})
+            };
+            labelled(detector)
         });
         let mut app = lay_out(probe.view(), tight(100.0, 100.0));
         app.enable_semantics();
         app.pump();
         let tree = app.a11y_tree().expect("semantics enabled before the frame");
 
-        invoke_labelled_action(&app, &tree, Action::Click);
-        invoke_labelled_action(&app, &tree, Action::Click);
+        invoke_labelled_action(&app, &tree, action);
+        invoke_labelled_action(&app, &tree, action);
         assert_eq!(probe.value(), Ok(0), "accepted actions are deferred");
 
         app.tick();
@@ -263,7 +287,7 @@ pub(crate) mod event_cx {
         );
 
         let tree = app.a11y_tree().expect("semantics remains available");
-        invoke_labelled_action(&app, &tree, Action::Click);
+        invoke_labelled_action(&app, &tree, action);
         assert_eq!(probe.value(), Ok(2), "the next activation is deferred too");
         app.tick();
         assert_eq!(
