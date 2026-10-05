@@ -3,8 +3,8 @@
 - **Status:** Accepted
 - **Date:** 2026-07-09
 - **Superseded in part by:** ADR-0064 (push completion: `did_push` returns a `TickerFuture`
-  the navigator awaits)
-- **Superseded-by:** ADR-0125 (registration token authority and borrowed removal only)
+  the navigator awaits); [ADR-0125](ADR-0125-vsync-registration-authority.md) (§1's
+  registration token identity and removal signatures)
 
 ## Context
 
