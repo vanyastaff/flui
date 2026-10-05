@@ -166,6 +166,20 @@ impl WindowsWindow {
         handlers: Rc<RefCell<PlatformHandlers>>,
         config: crate::config::WindowConfiguration,
     ) -> Result<Arc<Self>, OpenWindowError> {
+        // Refuse identity exhaustion before creating an HWND whose ownership
+        // has not yet transferred to a context and wrapper.
+        super::platform::WindowIdentity::admit(|identity| {
+            Self::new_admitted(options, windows_map, handlers, config, identity)
+        })
+    }
+
+    fn new_admitted(
+        options: WindowOptions,
+        windows_map: Arc<Mutex<HashMap<isize, Arc<WindowsWindow>>>>,
+        handlers: Rc<RefCell<PlatformHandlers>>,
+        config: crate::config::WindowConfiguration,
+        identity: super::platform::WindowIdentity,
+    ) -> Result<Arc<Self>, OpenWindowError> {
         // SAFETY: `GetModuleHandleW(None)` queries the current process image
         // and takes no pointer arguments — always sound. `GetDpiForSystem`
         // reads global state, no preconditions. `CreateWindowExW` requires
@@ -254,8 +268,6 @@ impl WindowsWindow {
             );
 
             // Seed observations from the native client, not requested outer bounds.
-            let identity = super::platform::WindowIdentity::mint();
-
             let native_dpi = GetDpiForWindow(hwnd);
             let scale_factor = if native_dpi == 0 {
                 scale_factor

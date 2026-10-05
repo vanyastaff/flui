@@ -193,11 +193,11 @@ pub trait Platform: Send + Sync + 'static {
 
     /// Install the hook this platform consults, once per idle iteration,
     /// for the earliest wall-clock instant something upstream needs the
-    /// loop to wake at — a wired-through
+    /// loop to wake at. The winit backend uses
     /// [`ControlFlow::WaitUntil`](https://docs.rs/winit/latest/winit/event_loop/enum.ControlFlow.html)
-    /// deadline instead of blocking forever on
-    /// `ControlFlow::Wait`. `None` (no upstream deadline pending) keeps the
-    /// unconditional-`Wait` behavior exactly as before this hook existed.
+    /// and native Win32 bounds its message wait and invalidates live windows
+    /// when an admitted deadline becomes due. `None` means no upstream
+    /// deadline is pending and permits the backend's ordinary idle wait.
     ///
     /// This is issue #556's wall-clock-wake seam: a gesture recognizer's
     /// armed hold/give-up deadline (long-press, double-tap) or a pending
@@ -211,9 +211,9 @@ pub trait Platform: Send + Sync + 'static {
     /// [`set_exit_policy_hook`](Self::set_exit_policy_hook) uses.
     ///
     /// Default no-op: a backend that never overrides this (every backend
-    /// except `winit` today — headless has no idle-blocking event loop to
-    /// wake, and Win32/AppKit/Android/Web/iOS remain cross-typecheck-only
-    /// for this mechanism, stated honestly rather than silently assumed)
+    /// except winit and native Win32 today — headless has no idle-blocking
+    /// event loop to wake, and AppKit/Android/Web/iOS do not implement this
+    /// mechanism)
     /// keeps its pre-existing behavior exactly as before; installing a hook
     /// there is inert.
     fn set_wake_deadline_hook(

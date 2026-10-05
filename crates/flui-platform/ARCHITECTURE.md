@@ -45,6 +45,40 @@ trait depends on `flui-platform-api` instead.
 
 ## Mapping decisions
 
+### Native Win32 delivers admitted idle deadlines through live window paints
+
+The owner loop keeps admitted deadline delivery separate from the next hook
+query. When due, it invalidates each still-current window before a new query can
+abandon a late deadline. A finite message wait rounds upwards, reserves the
+infinite timeout sentinel, and drains input and quit messages without parking
+again after readiness. Hook replacement is checked by allocation identity;
+observing no deadline permits later admission of the same absolute instant.
+Queries and outgoing capture retirement run outside handler borrows. Incoming
+unwind retains the queried hook before hostile captures can replace the first
+failure; healthy aggregate destruction retains its ordinary Rust limitations.
+
+The bounded native rows `deadline_rearms_independent_windows_without_input`,
+`deadline_hook_replacement_rearms_without_input`,
+`deadline_query_can_close_an_independent_window`,
+`deadline_none_allows_same_instant_readmission`, and
+`deadline_query_unwind_retains_replaced_hostile_captures` belong to
+`test_window_lifecycle_contract`. They exercise the native wait and paint
+producer, cancellation, replacement, independent windows and recovery. They do
+not establish GPU presentation, UIA timing or other platform backends.
+
+### Windows identity admission precedes native window acquisition
+
+Backend window identities admit the final nonzero value once, then latch zero
+as permanent exhaustion. Both normal windows and owner-control windows reserve
+identity before creating a native HWND, so a capacity failure cannot leak an
+already acquired window. Catching that failure cannot reissue an old identity.
+
+The Windows row `window_identity_exhaustion_permanently_refuses_retries` joins
+`the_owner_thread_machinery_honours_its_contracts`. Its private local-counter
+seam drives the actual allocator and admission gate, checks repeated refusal
+and verifies that refused admission never calls acquisition. This tests the
+allocation boundary, not recycled HWND behavior or native window execution.
+
 ### The Win32 clipboard opens with a message-only owner window on a dedicated pump thread
 
 `WindowsClipboard` has no single owning thread: any thread may read or
@@ -1126,6 +1160,23 @@ and public getters inside and after delivery, followed by an ordinary resize.
 The row requires the actual native dimension to reach the unsigned range; an OS
 limit reports an unavailable witness instead of allowing a false positive.
 Zero-size clamping and minimized-window handling retain their existing behavior.
+
+### Win32 keyboard delivery preserves permitted native defaults
+
+Keyboard down/up messages run the input callback first and reach `DefWindowProcW`
+unless its result prevents native default handling. This includes the conservative
+`DispatchEventResult::DEFERRED` returned during callback reentry. System-key defaults
+provide native actions such as Alt+F4, whose close command still passes through the
+existing close-veto hook. A callback may close its window; the outgoing context's
+guard pins its allocation while a userdata comparison refuses native defaults on
+a retired context or a recycled HWND.
+
+The bounded Windows subprocess rows `unhandled_system_key_closes_window`,
+`allowed_system_key_closes_window`, `prevented_system_key_preserves_window`,
+`system_key_close_honours_veto`, `system_key_callback_can_close_window`, and
+`deferred_system_key_preserves_window` send the system-key message through an actual
+owned HWND and dispatch the resulting native system command. These are native
+message-protocol checks, not physical keyboard input or rendered application checks.
 
 ### Winit primary display selection uses monitor identity
 

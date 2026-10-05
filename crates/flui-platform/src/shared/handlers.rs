@@ -1344,6 +1344,11 @@ mod tests {
     #[test]
     fn the_owner_thread_machinery_honours_its_contracts() {
         let cases: &[(&str, fn())] = &[
+            #[cfg(target_os = "windows")]
+            (
+                "window identity exhaustion",
+                crate::platforms::windows::WindowsPlatform::window_identity_exhaustion_permanently_refuses_retries,
+            ),
             (
                 "clear multiple panicking captures",
                 clear_multiple_panicking_captures_directly,

@@ -122,6 +122,16 @@ Gesture-arena deadlines are the other half of the gating story, and were already
 
 **The actuator.** A standalone winit 0.30.13 probe of this exact shape (armed deadline already past, no `new_events` override) spun `about_to_wait` at roughly 1.3–1.4 MHz. The fix: `WinitApp::new_events` calls `request_redraw()` on every window this platform currently tracks when `StartCause::ResumeTimeReached` fires — this queues a REAL `WindowEvent::RedrawRequested` for the next iteration, re-entering `dispatch_request_frame`/`on_request_frame`/`wake_action` exactly like any other wake in this backend, never a second, parallel produce path. With the actuator and a real 100 ms deadline, the same probe ran 6 iterations in 500 ms and resolved the deadline within tens of microseconds of its instant. The probe was a one-off measurement, not part of the automated suite.
 
+Native Win32 implements the same hook through a finite
+`MsgWaitForMultipleObjectsEx` wait and invalidation of current live windows.
+An admitted due wake is actuated before another hook query can abandon a late
+deadline. Hook allocation identity fences replacement; a delivered unchanged
+deadline does not spin, and observing `None` permits readmission. Input and quit
+messages retain their normal dispatch path. The native deadline rows in
+`test_window_lifecycle_contract` exercise idle delivery, independent windows,
+rearming, replacement, cancellation and queried-capture unwind custody. They
+establish native wait/paint delivery rather than GPU presentation cadence.
+
 **The deadline itself, and why a boolean was not enough.** The gesture arena's pre-existing `has_pending_deadline`/`has_pending_deadlines` answer only "is one armed", never "when". `GestureArenaMember` gains a parallel `next_deadline(&self) -> Option<web_time::Instant>` (default `None`, mirrors `has_pending_deadline`'s own default-false shape), implemented for `LongPressGestureRecognizer` (`down_time + long_press_timeout()`, guarded by the same `Possible`-phase check `has_pending_deadline` uses) and `DoubleTapGestureRecognizer` (`first_tap_time + double_tap_timeout()`, guarded by the same `WaitingForSecond`-phase check) — both computed from state the recognizer already held privately, not a new clock read. `GestureArena::next_deadline`/`GestureBinding::next_deadline` aggregate the min over live members, same snapshot discipline as `has_pending_deadlines`.
 
 **N realms on one loop thread.** `UiRealm::next_wake` is the min over that realm's own presentations' `GestureBinding::next_deadline`; `AppRuntime::next_wake` is the min over every hosted realm's `next_wake` — the loop-owning `AppRuntime` is the only component that can see every realm at once (a realm cannot see its siblings). The aggregate takes the earlier of any two realms' deadlines regardless of install order. A realm currently checked out for dispatch (`slot.realm` is `None`) contributes nothing — correct, since `next_wake` is only ever consulted from `about_to_wait`, after every dispatch for that iteration has already returned every realm to its slot.

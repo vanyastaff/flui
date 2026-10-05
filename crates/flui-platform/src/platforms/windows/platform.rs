@@ -1,13 +1,21 @@
 //! Windows platform implementation
 
-use std::{cell::RefCell, collections::HashMap, rc::Rc, sync::Arc};
+use std::{
+    cell::RefCell,
+    collections::HashMap,
+    rc::Rc,
+    sync::{Arc, Weak},
+};
 
 use cursor_icon::CursorIcon;
 use flui_foundation::geometry::{Bounds, Point, Size};
 use parking_lot::Mutex;
 use windows::{
     Win32::{
-        Foundation::{ERROR_CANCELLED, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM},
+        Foundation::{
+            ERROR_CANCELLED, HWND, LPARAM, LRESULT, POINT, RECT, WAIT_FAILED, WAIT_OBJECT_0,
+            WAIT_TIMEOUT, WPARAM,
+        },
         Graphics::Gdi::{BeginPaint, ClientToScreen, EndPaint, HBRUSH, PAINTSTRUCT},
         System::{
             LibraryLoader::{GetModuleFileNameW, GetModuleHandleW},
@@ -20,15 +28,16 @@ use windows::{
                 CS_HREDRAW, CS_OWNDC, CS_VREDRAW, CreateWindowExW, DefWindowProcW, DestroyWindow,
                 DispatchMessageW, GWLP_USERDATA, GetClassNameW, GetClientRect, GetForegroundWindow,
                 GetMessageW, GetWindowLongPtrW, GetWindowThreadProcessId, HICON, HTCLIENT,
-                HWND_MESSAGE, IDC_ARROW, MSG, PM_REMOVE, PeekMessageW, PostQuitMessage,
-                RegisterClassW, SW_SHOWNORMAL, SWP_NOACTIVATE, SWP_NOZORDER, SetForegroundWindow,
+                HWND_MESSAGE, IDC_ARROW, MSG, MWMO_INPUTAVAILABLE, MsgWaitForMultipleObjectsEx,
+                PM_REMOVE, PeekMessageW, PostQuitMessage, QS_ALLINPUT, RegisterClassW,
+                SW_SHOWNORMAL, SWP_NOACTIVATE, SWP_NOZORDER, SetForegroundWindow,
                 SetWindowLongPtrW, SetWindowPos, TranslateMessage, WINDOW_EX_STYLE, WINDOW_STYLE,
                 WM_CHAR, WM_CLOSE, WM_CREATE, WM_DESTROY, WM_DPICHANGED, WM_ERASEBKGND,
                 WM_INPUTLANGCHANGE, WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS, WM_LBUTTONDOWN,
                 WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEHWHEEL, WM_MOUSEMOVE,
-                WM_MOUSEWHEEL, WM_MOVE, WM_PAINT, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETCURSOR,
-                WM_SETFOCUS, WM_SETTINGCHANGE, WM_SHOWWINDOW, WM_SIZE, WM_SYSKEYDOWN, WM_SYSKEYUP,
-                WNDCLASSW,
+                WM_MOUSEWHEEL, WM_MOVE, WM_PAINT, WM_QUIT, WM_RBUTTONDOWN, WM_RBUTTONUP,
+                WM_SETCURSOR, WM_SETFOCUS, WM_SETTINGCHANGE, WM_SHOWWINDOW, WM_SIZE, WM_SYSKEYDOWN,
+                WM_SYSKEYUP, WNDCLASSW,
             },
         },
     },
@@ -60,6 +69,35 @@ use crate::{
 /// `static mut bool`).
 static REGISTER_WINDOW_CLASS: std::sync::Once = std::sync::Once::new();
 
+type WakeDeadlineHook = dyn Fn() -> Option<web_time::Instant> + Send + Sync;
+
+// The query may replace its own registration before panicking. Keep its
+// outgoing ownership in custody before invoking it, so captures cannot
+// double-panic during the incoming unwind. Healthy retirement remains normal;
+// this cannot rescue an aggregate that double-panics during healthy Drop.
+struct DeadlineQuery(Option<Arc<WakeDeadlineHook>>);
+
+impl Drop for DeadlineQuery {
+    fn drop(&mut self) {
+        if std::thread::panicking()
+            && let Some(hook) = self.0.take()
+        {
+            std::mem::forget(hook);
+        }
+    }
+}
+
+struct DeadlineArm {
+    deadline: web_time::Instant,
+    hook: Weak<WakeDeadlineHook>,
+}
+
+impl DeadlineArm {
+    fn matches(&self, deadline: web_time::Instant, hook: &Weak<WakeDeadlineHook>) -> bool {
+        self.deadline == deadline && Weak::ptr_eq(&self.hook, hook)
+    }
+}
+
 /// Identity of one native window's context, minted once per
 /// [`WindowsWindow::new`] and held by both the context and every wrapper
 /// clone. Unlike the context's address it is never reused, so a wrapper can
@@ -69,10 +107,82 @@ pub(super) struct WindowIdentity(std::num::NonZeroU64);
 
 impl WindowIdentity {
     pub(super) fn mint() -> Self {
+        Self::admit(|identity| identity)
+    }
+
+    pub(super) fn admit<R>(acquire: impl FnOnce(Self) -> R) -> R {
         // A monotonic id source, not shared state: nothing reads it back.
         static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
-        let raw = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        Self(std::num::NonZeroU64::new(raw).expect("BUG: the window identity counter wrapped"))
+        Self::admit_from(&NEXT, acquire)
+    }
+
+    fn admit_from<R>(next: &std::sync::atomic::AtomicU64, acquire: impl FnOnce(Self) -> R) -> R {
+        let identity = Self::mint_from(next);
+        acquire(identity)
+    }
+
+    fn mint_from(next: &std::sync::atomic::AtomicU64) -> Self {
+        use std::sync::atomic::Ordering;
+
+        // Mint the final nonzero identity once, then leave the source at zero.
+        // Refusal must not advance it: callers may catch a failed open and retry.
+        let raw = next
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |raw| {
+                (raw != 0).then(|| raw.checked_add(1).unwrap_or(0))
+            })
+            .expect("BUG: the window identity counter is exhausted");
+        Self(std::num::NonZeroU64::new(raw).expect("BUG: an admitted window identity is nonzero"))
+    }
+}
+
+#[cfg(test)]
+impl WindowsPlatform {
+    pub(crate) fn window_identity_exhaustion_permanently_refuses_retries() {
+        use std::{
+            cell::Cell,
+            sync::atomic::{AtomicU64, Ordering},
+        };
+
+        // Exercise the actual allocator with local sources; never exhaust the
+        // process-wide source used by other native window tests.
+        for seed in [0, u64::MAX - 1] {
+            let next = AtomicU64::new(seed);
+            let acquisitions = Cell::new(0);
+            if seed != 0 {
+                let penultimate = WindowIdentity::admit_from(&next, |identity| {
+                    acquisitions.set(acquisitions.get() + 1);
+                    identity
+                });
+                let final_identity = WindowIdentity::admit_from(&next, |identity| {
+                    acquisitions.set(acquisitions.get() + 1);
+                    identity
+                });
+                assert_eq!(penultimate.0.get(), u64::MAX - 1);
+                assert_eq!(final_identity.0.get(), u64::MAX);
+                assert_ne!(penultimate, final_identity);
+            }
+            for attempt in 0..3 {
+                assert!(
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        WindowIdentity::admit_from(&next, |_| {
+                            acquisitions.set(acquisitions.get() + 1);
+                        });
+                    }))
+                    .is_err(),
+                    "seed {seed}: exhausted allocation succeeded on retry {attempt}"
+                );
+            }
+            assert_eq!(
+                next.load(Ordering::Relaxed),
+                0,
+                "seed {seed}: refusal advanced the exhausted source"
+            );
+            assert_eq!(
+                acquisitions.get(),
+                if seed == 0 { 0 } else { 2 },
+                "seed {seed}: exhausted admission acquired native resources"
+            );
+        }
     }
 }
 
@@ -1432,10 +1542,19 @@ impl WindowsPlatform {
                         // Dispatch keyboard event via per-window callback
                         use super::events::key_down_event;
                         let event = key_down_event(wparam, lparam, translated);
-                        ctx.callbacks.dispatch_input(event);
+                        let result = ctx.callbacks.dispatch_input(event);
+                        // A callback can close this window and create another
+                        // with a recycled HWND. The entry guard pins the old
+                        // context, so matching userdata proves the native
+                        // default still targets this exact live window.
+                        if result.default_prevented
+                            || GetWindowLongPtrW(hwnd, GWLP_USERDATA) != ctx_ptr as isize
+                        {
+                            return LRESULT(0);
+                        }
                     }
 
-                    LRESULT(0)
+                    DefWindowProcW(hwnd, msg, wparam, lparam)
                 }
 
                 WM_KEYUP | WM_SYSKEYUP => {
@@ -1445,9 +1564,14 @@ impl WindowsPlatform {
 
                         use super::events::key_up_event;
                         let event = key_up_event(wparam, lparam);
-                        ctx.callbacks.dispatch_input(event);
+                        let result = ctx.callbacks.dispatch_input(event);
+                        if result.default_prevented
+                            || GetWindowLongPtrW(hwnd, GWLP_USERDATA) != ctx_ptr as isize
+                        {
+                            return LRESULT(0);
+                        }
                     }
-                    LRESULT(0)
+                    DefWindowProcW(hwnd, msg, wparam, lparam)
                 }
 
                 WM_CHAR => {
@@ -1544,8 +1668,11 @@ impl WindowsPlatform {
     }
 
     /// Run the Windows message loop (internal implementation)
-    fn run_message_loop() -> Result<(), PlatformError> {
+    fn run_message_loop(&self) -> Result<(), PlatformError> {
         tracing::info!("Starting Windows message loop");
+
+        let mut armed: Option<DeadlineArm> = None;
+        let mut delivered: Option<DeadlineArm> = None;
 
         // SAFETY: `msg` is a stack-local `MSG`; `&raw mut msg`/`&raw const
         // msg` give `GetMessageW`/`TranslateMessage`/`DispatchMessageW`
@@ -1557,6 +1684,106 @@ impl WindowsPlatform {
             let mut msg = MSG::default();
 
             loop {
+                // An admitted due wake is delivery debt. Actuate it before
+                // querying user code, which may abandon a late deadline.
+                if armed
+                    .as_ref()
+                    .is_some_and(|arm| arm.deadline <= web_time::Instant::now())
+                {
+                    let arm = armed.take().expect("BUG: a due deadline is armed");
+                    if self
+                        .deadline_hook()
+                        .is_some_and(|hook| Weak::ptr_eq(&arm.hook, &Arc::downgrade(&hook)))
+                    {
+                        self.redraw_deadline_windows();
+                        delivered = Some(arm);
+                    }
+                }
+
+                // Drain native input/paint/quit before another idle query.
+                // Peek also services sent messages, so never follow a timed
+                // wake with an unconditional GetMessage that might re-park.
+                if PeekMessageW(&raw mut msg, None, 0, 0, PM_REMOVE).as_bool() {
+                    if msg.message == WM_QUIT {
+                        break;
+                    }
+                    let _ = TranslateMessage(&raw const msg);
+                    DispatchMessageW(&raw const msg);
+                    continue;
+                }
+
+                let hook = self.deadline_hook();
+                let next = hook.map(|hook| {
+                    let custody = DeadlineQuery(Some(hook));
+                    let hook = custody
+                        .0
+                        .as_ref()
+                        .expect("BUG: a queried deadline hook is owned");
+                    let deadline = hook();
+                    let identity = Arc::downgrade(hook);
+                    // A replaced hook's final captures may themselves
+                    // replace registration or quit. Retire before validation.
+                    drop(custody);
+                    (deadline, identity)
+                });
+                armed = match next {
+                    Some((deadline, identity))
+                        if self.deadline_hook().is_some_and(|hook| {
+                            Weak::ptr_eq(&identity, &Arc::downgrade(&hook))
+                        }) =>
+                    {
+                        match deadline {
+                            Some(deadline)
+                                if !delivered
+                                    .as_ref()
+                                    .is_some_and(|arm| arm.matches(deadline, &identity)) =>
+                            {
+                                Some(DeadlineArm {
+                                    deadline,
+                                    hook: identity,
+                                })
+                            }
+                            Some(_) => None,
+                            None => {
+                                delivered = None;
+                                None
+                            }
+                        }
+                    }
+                    _ => {
+                        delivered = None;
+                        None
+                    }
+                };
+
+                if let Some(arm) = &armed {
+                    let remaining = arm
+                        .deadline
+                        .saturating_duration_since(web_time::Instant::now());
+                    // Round upwards so a submillisecond deadline cannot spin;
+                    // reserve Win32's INFINITE value for an actual idle wait.
+                    let milliseconds = remaining.as_nanos().saturating_add(999_999) / 1_000_000;
+                    let timeout = u32::try_from(milliseconds.min(u128::from(u32::MAX - 1)))
+                        .expect("BUG: a bounded native timeout fits u32");
+                    let outcome = MsgWaitForMultipleObjectsEx(
+                        None,
+                        timeout,
+                        QS_ALLINPUT,
+                        MWMO_INPUTAVAILABLE,
+                    );
+                    if outcome == WAIT_FAILED {
+                        return Err(PlatformError::EventLoop {
+                            message: windows::core::Error::from_thread().to_string(),
+                        });
+                    }
+                    if outcome != WAIT_TIMEOUT && outcome != WAIT_OBJECT_0 {
+                        return Err(PlatformError::EventLoop {
+                            message: format!("unexpected Win32 message wait result: {}", outcome.0),
+                        });
+                    }
+                    continue;
+                }
+
                 let result = GetMessageW(&raw mut msg, None, 0, 0).0;
                 if result == 0 {
                     break;
@@ -1573,6 +1800,51 @@ impl WindowsPlatform {
             tracing::info!("Message loop exited with code: {}", msg.wParam.0);
         }
         Ok(())
+    }
+
+    fn deadline_hook(&self) -> Option<Arc<WakeDeadlineHook>> {
+        if !self.owner_control.signal.accepting() {
+            return None;
+        }
+        let shares = self.owner_control.shares("query wake deadline").ok()?;
+        shares.handlers.borrow().wake_deadline.clone()
+    }
+
+    fn redraw_deadline_windows(&self) {
+        // Traverse a bounded identity snapshot without a per-frame Vec.
+        // InvalidateRect never invokes user callbacks; each owning Arc is
+        // cloned under the registry lock and used only after releasing it.
+        let limit = self
+            .windows
+            .lock()
+            .values()
+            .map(|window| window.identity.0.get())
+            .max()
+            .unwrap_or(0);
+        let mut after = 0;
+        loop {
+            let next = self
+                .windows
+                .lock()
+                .values()
+                .filter(|window| {
+                    let identity = window.identity.0.get();
+                    identity > after && identity <= limit
+                })
+                .min_by_key(|window| window.identity.0.get())
+                .cloned();
+            let Some(window) = next else {
+                break;
+            };
+            after = window.identity.0.get();
+            let live = with_window_context_checked(window.hwnd(), "deadline redraw", |context| {
+                context.identity == window.identity
+            })
+            .unwrap_or(false);
+            if live {
+                crate::traits::PlatformWindow::request_redraw(window.as_ref());
+            }
+        }
     }
 
     /// Installs a platform-level handler into the owner-thread handler set.
@@ -1661,7 +1933,7 @@ impl Platform for WindowsPlatform {
             .map_err(|error| PlatformError::EventLoop {
                 message: error.to_string(),
             })?;
-        Self::run_message_loop()
+        platform.run_message_loop()
     }
 
     fn quit(&self) {
@@ -1677,6 +1949,24 @@ impl Platform for WindowsPlatform {
         // wrong queue), not memory-unsafety.
         unsafe {
             PostQuitMessage(0);
+        }
+    }
+
+    fn set_wake_deadline_hook(&self, hook: Box<WakeDeadlineHook>) {
+        if !self.owner_control.signal.accepting() {
+            drop(hook);
+            return;
+        }
+        let hook: Arc<WakeDeadlineHook> = Arc::from(hook);
+        self.register_handler("set_wake_deadline_hook", hook, |handlers| {
+            &mut handlers.wake_deadline
+        });
+        // Re-query after replacement even when the old query re-entered this
+        // setter. The existing owner signal coalesces these notifications.
+        if self.owner_control.signal.accepting()
+            && let Err(error) = self.owner_control.signal.wake()
+        {
+            tracing::warn!(%error, "failed to wake Win32 after deadline hook registration");
         }
     }
 
