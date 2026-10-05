@@ -42,7 +42,7 @@ fn counting_entry(calls: &Calls) -> OverlayEntry {
 /// object then does with it.
 #[test]
 fn overlay_build_plan_skips_covered_maintained_entries() {
-    crate::contract_cases::run_cases(
+    crate::support::test_cases::run_cases(
         "overlay_build_plan_skips_covered_maintained_entries",
         &[
             (
