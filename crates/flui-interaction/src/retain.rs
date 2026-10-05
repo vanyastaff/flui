@@ -1,9 +1,11 @@
 //! Exceptional-path retention of user-owned values (ADR-0127).
 //!
 //! After a failure, a container keeps the values whose destruction would run
-//! user code. A reference-counted handle that is not the last owner runs no
-//! user code when dropped, so it is released normally: retaining a clone would
-//! leak the captures of an owner that is still alive and will be dropped later.
+//! user code. An [`Rc`] that is not the last owner runs no user code when
+//! dropped, so it is released normally: retaining that clone would leak the
+//! captures of an owner that is still alive and will be dropped later. An
+//! [`Arc`] cannot prove that, because another thread may drop its clone at any
+//! moment, so it is always retained.
 
 use std::{rc::Rc, sync::Arc};
 
@@ -22,13 +24,12 @@ impl<T: ?Sized> Retain for Rc<T> {
 }
 
 impl<T: ?Sized> Retain for Arc<T> {
-    /// The same last-owner rule as [`Rc`]. Another thread releasing its clone
-    /// between the count and this drop makes this drop the last one, so a
-    /// shared `Arc` stays retainable only while its owners are owner-thread.
+    /// Always retained. Another thread may release its clone between any
+    /// count check and this drop, which would make this drop the last one and
+    /// run the capture's destructor here, so a shared `Arc` is never assumed
+    /// to be a non-last owner.
     fn retain(self) {
-        if Arc::strong_count(&self) == 1 {
-            std::mem::forget(self);
-        }
+        std::mem::forget(self);
     }
 }
 
