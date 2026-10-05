@@ -89,9 +89,9 @@ fn collect_baseline(
 ) -> anyhow::Result<ExitCode> {
     anyhow::ensure!(
         !args.baseline.is_empty()
-            && !matches!(args.baseline.as_str(), "." | ".." | "new")
+            && !matches!(args.baseline.as_str(), "." | ".." | "new" | "change")
             && !args.baseline.contains(['/', '\\', ':']),
-        "baseline must be a single directory name other than 'new'"
+        "baseline must be a single directory name other than Criterion's 'new' and 'change'"
     );
     anyhow::ensure!(
         saved_directories(output, &args.baseline)?.is_empty(),
@@ -255,13 +255,25 @@ fn read_workloads(home: &Path, baseline: &str) -> anyhow::Result<Vec<Workload>> 
 
 fn publish_workload(home: &Path, output: &Path, directory: &Path) -> anyhow::Result<()> {
     let destination = output.join(directory.strip_prefix(home)?);
+    // An empty directory holds no measurement: a publication that failed
+    // before copying, or an interrupted run, must not block the next attempt.
+    let empty = destination.is_dir() && std::fs::read_dir(&destination)?.next().is_none();
     anyhow::ensure!(
-        !destination.exists(),
+        empty || !destination.exists(),
         "baseline destination already exists: {}",
         destination.display()
     );
     std::fs::create_dir_all(&destination)
         .with_context(|| format!("creating {}", destination.display()))?;
+    let copied = copy_artifacts(directory, &destination);
+    if copied.is_err() {
+        // Best effort: a partial copy must not look like a measurement.
+        let _ = std::fs::remove_dir_all(&destination);
+    }
+    copied
+}
+
+fn copy_artifacts(directory: &Path, destination: &Path) -> anyhow::Result<()> {
     for entry in std::fs::read_dir(directory)? {
         let entry = entry?;
         anyhow::ensure!(
@@ -380,6 +392,38 @@ mod tests {
                 .expect("old sample preserved"),
             VALID_SAMPLES
         );
+    }
+
+    fn empty_destination_left_by_a_failed_run_is_reused() {
+        let scratch = ScratchDir::new("bench-fixture").expect("fixture");
+        let output = scratch.path().join("criterion");
+        std::fs::create_dir_all(output.join("scene/fixture")).expect("empty destination");
+        let status = collect_baseline(&args(false), &[target("cpu")], &output, |_, home| {
+            artifacts(home, "scene", VALID_SAMPLES);
+            Ok(true)
+        })
+        .expect("an empty destination holds no measurement");
+        assert_eq!(status, ExitCode::SUCCESS);
+        assert_eq!(
+            std::fs::read_to_string(output.join("scene/fixture/sample.json"))
+                .expect("published sample"),
+            VALID_SAMPLES
+        );
+    }
+
+    fn criterion_reserved_names_are_refused() {
+        let scratch = ScratchDir::new("bench-fixture").expect("fixture");
+        let output = scratch.path().join("criterion");
+        for reserved in ["new", "change"] {
+            let collect = BenchCollectArgs {
+                baseline: reserved.to_owned(),
+                with_features: false,
+            };
+            let result = collect_baseline(&collect, &[target("cpu")], &output, |_, _| {
+                panic!("a reserved name must be refused before running {reserved}")
+            });
+            assert!(result.is_err(), "{reserved} is Criterion's own state");
+        }
     }
 
     fn optional_unavailable_target_does_not_erase_measured_work() {
@@ -512,6 +556,14 @@ mod tests {
                 (
                     "stale_baseline_cannot_stand_in_for_a_run",
                     stale_baseline_cannot_stand_in_for_a_run,
+                ),
+                (
+                    "empty_destination_left_by_a_failed_run_is_reused",
+                    empty_destination_left_by_a_failed_run_is_reused,
+                ),
+                (
+                    "criterion_reserved_names_are_refused",
+                    criterion_reserved_names_are_refused,
                 ),
                 (
                     "optional_unavailable_target_does_not_erase_measured_work",
