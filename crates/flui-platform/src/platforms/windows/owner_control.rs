@@ -6,7 +6,13 @@
 //! `WM_NCDESTROY` on that thread, so what it owns is never run or dropped
 //! anywhere else. A platform dropped off its owner thread keeps the native
 //! window, and so leaks the context instead.
-use super::platform::WindowIdentity;
+//!
+//! The owner window is also where the exit policy is decided: a request for
+//! it (the last tracked window's `WM_DESTROY`, or
+//! `Platform::request_exit_policy_reevaluation` from any thread) is posted
+//! here as one coalesced message, so the hook always runs on a fresh owner
+//! turn rather than nested inside whatever code destroyed the window.
+use super::platform::{WindowIdentity, WindowMap};
 use crate::{
     PlatformError, WakeRegistrationError,
     shared::{
@@ -24,7 +30,10 @@ use parking_lot::Mutex;
 use std::{
     cell::RefCell,
     rc::Rc,
-    sync::{Arc, OnceLock},
+    sync::{
+        Arc, OnceLock, Weak,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 use windows::{
     Win32::{
@@ -40,6 +49,8 @@ use windows::{
     core::{PCWSTR, w},
 };
 const WAKE: u32 = WM_APP + 19;
+/// Asks the owner to consult the exit policy; see [`ExitPolicyRequest`].
+const EXIT_POLICY: u32 = WM_APP + 20;
 const OWNER_CLASS: PCWSTR = w!("FLUIOwnerSignalWindow");
 static REGISTERED: OnceLock<Result<(), String>> = OnceLock::new();
 
@@ -53,6 +64,12 @@ pub(super) struct OwnerControlContext {
     signal: Arc<OwnerSignal>,
     handlers: Rc<RefCell<PlatformHandlers>>,
     turn: Rc<OwnerTurnSlot>,
+    /// The platform's tracked top-level windows, read by the exit-policy
+    /// check. Weak: the owner window does not keep the platform's state alive.
+    windows: Weak<WindowMap>,
+    /// Set while an [`EXIT_POLICY`] message is queued; see
+    /// [`ExitPolicyRequest`].
+    exit_policy_pending: Arc<AtomicBool>,
 }
 
 /// Owner-thread handles cloned out of the [`OwnerControlContext`]. Holding
@@ -64,6 +81,44 @@ pub(super) struct OwnerShares {
     pub(super) handlers: Rc<RefCell<PlatformHandlers>>,
     /// Where the owner-turn callback waits between turns.
     pub(super) turn: Rc<OwnerTurnSlot>,
+    /// Posts the owner's exit-policy check; handed to every window context
+    /// so the last window's `WM_DESTROY` can ask for it.
+    pub(super) exit_policy: ExitPolicyRequest,
+}
+
+/// A coalesced request, postable from any thread, that the owner consult the
+/// exit policy: if the platform tracks no top-level window, the
+/// `PlatformHandlers::exit_policy` hook (or, with none installed, the default
+/// "exit when the last window closes") decides whether the message loop
+/// quits. Requests made while one is already queued cost nothing; once the
+/// owner window is closed they are refused, like a wake.
+#[derive(Clone)]
+pub(super) struct ExitPolicyRequest {
+    address: Arc<Mutex<Option<isize>>>,
+    pending: Arc<AtomicBool>,
+}
+
+impl ExitPolicyRequest {
+    pub(super) fn post(&self) {
+        if self.pending.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        let address = self.address.lock();
+        let Some(raw) = *address else {
+            tracing::debug!("exit-policy request refused: the owner message window is closed");
+            return;
+        };
+        // SAFETY: the address is read under the lock `OwnerControl::close`
+        // takes it out under before destroying the window, so it names the
+        // live owner window; posting carries no pointer or closure and never
+        // runs the procedure synchronously.
+        let posted =
+            unsafe { PostMessageW(Some(HWND(raw as *mut _)), EXIT_POLICY, WPARAM(0), LPARAM(0)) };
+        if let Err(error) = posted {
+            self.pending.store(false, Ordering::Release);
+            tracing::warn!(%error, "exit-policy request could not be posted to the owner");
+        }
+    }
 }
 
 /// The owner window's address, and the owner-thread gate onto its context.
@@ -73,6 +128,7 @@ pub(super) struct OwnerShares {
 pub(super) struct OwnerGate {
     address: Arc<Mutex<Option<isize>>>,
     identity: WindowIdentity,
+    exit_policy_pending: Arc<AtomicBool>,
 }
 
 pub(super) struct OwnerControl {
@@ -80,7 +136,7 @@ pub(super) struct OwnerControl {
     gate: OwnerGate,
 }
 impl OwnerControl {
-    pub(super) fn new() -> Result<Self, PlatformError> {
+    pub(super) fn new(windows: Weak<WindowMap>) -> Result<Self, PlatformError> {
         let registration = REGISTERED.get_or_init(|| {
             // SAFETY: class name lives forever; this exact procedure implements its ABI.
             unsafe {
@@ -119,11 +175,14 @@ impl OwnerControl {
             )
         }));
         let identity = WindowIdentity::mint();
+        let exit_policy_pending = Arc::new(AtomicBool::new(false));
         let context = Box::new(OwnerControlContext {
             identity,
             signal: Arc::clone(&signal),
             handlers: Rc::new(RefCell::new(PlatformHandlers::default())),
             turn: Rc::new(OwnerTurnSlot::default()),
+            windows,
+            exit_policy_pending: Arc::clone(&exit_policy_pending),
         });
         // SAFETY: dedicated registered class, created on this (the owner) thread;
         // userdata is the boxed context, reclaimed exactly once by WM_NCDESTROY.
@@ -157,7 +216,11 @@ impl OwnerControl {
         }
         Ok(Self {
             signal,
-            gate: OwnerGate { address, identity },
+            gate: OwnerGate {
+                address,
+                identity,
+                exit_policy_pending,
+            },
         })
     }
 
@@ -169,6 +232,11 @@ impl OwnerControl {
     /// A gate the owner hooks can hold.
     pub(super) fn gate(&self) -> OwnerGate {
         self.gate.clone()
+    }
+
+    /// See [`ExitPolicyRequest`].
+    pub(super) fn exit_policy_request(&self) -> ExitPolicyRequest {
+        self.gate.exit_policy_request()
     }
 
     /// Stops owner turns. On the owner thread the registered turn callback
@@ -202,6 +270,13 @@ impl OwnerControl {
 }
 
 impl OwnerGate {
+    fn exit_policy_request(&self) -> ExitPolicyRequest {
+        ExitPolicyRequest {
+            address: Arc::clone(&self.address),
+            pending: Arc::clone(&self.exit_policy_pending),
+        }
+    }
+
     /// Clones the owner-thread handles out of the owner context, or says why
     /// this thread may not have them: [`UserDataRefusal::ForeignThread`] off
     /// the owner, [`UserDataRefusal::WindowGone`] or
@@ -243,6 +318,7 @@ impl OwnerGate {
                 Ok(OwnerShares {
                     handlers: Rc::clone(&context.handlers),
                     turn: Rc::clone(&context.turn),
+                    exit_policy: self.exit_policy_request(),
                 })
             }
             UserDataVerdict::Refuse(reason) => {
@@ -314,6 +390,51 @@ fn names_owner_class(hwnd: HWND) -> bool {
     crate::shared::hwnd_affinity::class_name_matches(&name, copied, expected)
 }
 
+/// Ends the owner's message loop, as `Platform::quit` does: admission and
+/// owner turns stop, then `WM_QUIT` is posted to this (the owner) thread.
+fn quit_owner_loop(signal: &OwnerSignal, turn: &OwnerTurnSlot) {
+    signal.close();
+    turn.clear();
+    // SAFETY: `PostQuitMessage` takes a plain exit code; this runs in the
+    // owner procedure, so it posts to the owner thread's queue.
+    unsafe { PostQuitMessage(0) };
+}
+
+/// The owner's exit decision: no tracked top-level window, the platform
+/// still accepting work (a quit already under way is not decided twice),
+/// and the exit-policy hook allowing it. No hook installed allows it.
+///
+/// The hook is leased out of its slot and run with no `RefCell` borrow
+/// held, because it re-enters the embedder, which may install a new hook,
+/// open a window or quit; it goes back only if the slot is still empty, so
+/// a hook installed meanwhile wins. A window opened while it ran vetoes the
+/// exit regardless of its answer.
+fn exit_policy_allows_exit(
+    signal: &OwnerSignal,
+    handlers: &RefCell<PlatformHandlers>,
+    windows: &Weak<WindowMap>,
+) -> bool {
+    let no_windows = || windows.upgrade().is_some_and(|map| map.lock().is_empty());
+    if !signal.accepting() || !no_windows() {
+        return false;
+    }
+    let hook = handlers.borrow_mut().exit_policy.take();
+    let allowed = hook.as_ref().is_none_or(|hook| hook());
+    if let Some(hook) = hook {
+        let superseded = {
+            let mut handlers = handlers.borrow_mut();
+            if handlers.exit_policy.is_none() {
+                handlers.exit_policy = Some(hook);
+                None
+            } else {
+                Some(hook)
+            }
+        };
+        drop(superseded);
+    }
+    allowed && signal.accepting() && no_windows()
+}
+
 // SAFETY: Win32 invokes this exact signature for the dedicated registered class.
 unsafe extern "system" fn procedure(
     hwnd: HWND,
@@ -337,9 +458,18 @@ unsafe extern "system" fn procedure(
                 let signal = Arc::clone(&(*pointer).signal);
                 let turn = Rc::clone(&(*pointer).turn);
                 if signal.drive_in(&*turn) {
-                    signal.close();
-                    turn.clear();
-                    PostQuitMessage(0);
+                    quit_owner_loop(&signal, &turn);
+                }
+                return;
+            } else if message == EXIT_POLICY && !pointer.is_null() {
+                let context = &*pointer;
+                context.exit_policy_pending.store(false, Ordering::Release);
+                let signal = Arc::clone(&context.signal);
+                let turn = Rc::clone(&context.turn);
+                let handlers = Rc::clone(&context.handlers);
+                let windows = context.windows.clone();
+                if exit_policy_allows_exit(&signal, &handlers, &windows) {
+                    quit_owner_loop(&signal, &turn);
                 }
                 return;
             }
