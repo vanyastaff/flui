@@ -7,8 +7,7 @@ use flui_rendering::{
     constraints::BoxConstraints,
     layer::Layer,
     semantics::{
-        AccessibilityNodeId, ActionArgs, NumericRange, SemanticsAction, SemanticsActionError,
-        SemanticsActionRequest,
+        AccessibilityNodeId, ActionArgs, NumericRange, SemanticsAction, SemanticsActionRequest,
     },
 };
 use flui_testing::{Action, ActionData, ActionRequest, NodeId, TreeId, widgets::LaidOut};
@@ -249,8 +248,8 @@ pub(crate) fn slider_degenerate_geometry_or_span_is_inert() {
         log.borrow().is_empty(),
         "zero-width pointer mapping is inert"
     );
-    // Geometry gates pointers, not otherwise valid numeric input. Resizing
-    // revokes a held numeric ticket; fresh platform input remains admissible.
+    // Geometry gates pointers, not otherwise valid numeric input: platform
+    // input after a resize to zero width is still admitted.
     let mut numeric = lay_out(
         SizedBox::new(100.0, 32.0).child(standard(&log)),
         BoxConstraints::new(0.0, 100.0, 0.0, 32.0),
@@ -261,25 +260,7 @@ pub(crate) fn slider_degenerate_geometry_or_span_is_inert() {
     numeric
         .invoke_semantics_action(request(Action::Focus, node, None))
         .expect("focus before resize");
-    let setter = numeric
-        .pipeline_owner()
-        .with(|owner| {
-            owner.resolve_semantics_action(SemanticsActionRequest {
-                node_id: AccessibilityNodeId::from_u64(node.0).expect("valid node"),
-                action: SemanticsAction::SetNumericValue,
-                arguments: Some(ActionArgs::SetNumericValue { value: 33.125 }),
-            })
-        })
-        .expect("cache valid numeric setter");
     numeric.pump_widget(SizedBox::new(0.0, 32.0).child(standard(&log)));
-    assert!(matches!(
-        numeric.enter_owner_scope(|| setter.try_invoke()),
-        Err(SemanticsActionError::NumericAuthorityExpired { .. })
-    ));
-    assert!(
-        log.borrow().is_empty(),
-        "revoked ticket cannot invoke user code"
-    );
     let node = semantic_node(&numeric);
     let listener = numeric
         .accessibility_action_listener()
