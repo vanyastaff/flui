@@ -171,9 +171,13 @@ impl GpuReplay {
         encoder: &mut wgpu::CommandEncoder,
         target: RenderTarget<'_>,
     ) -> EngineResult<()> {
+        let (root_x, root_y) = (
+            self.attachment_origin.0 as f64,
+            self.attachment_origin.1 as f64,
+        );
         let viewport = Rect::from_xywh(
-            0.0,
-            0.0,
+            root_x,
+            root_y,
             f64::from(viewport_size.0),
             f64::from(viewport_size.1),
         );
@@ -191,12 +195,7 @@ impl GpuReplay {
             output = cropped;
         }
         if let Some((x, y, width, height)) = op.scissor {
-            let writes = Rect::from_xywh(
-                f64::from(x),
-                f64::from(y),
-                f64::from(width),
-                f64::from(height),
-            );
+            let writes = Rect::from_xywh(x as f64, y as f64, f64::from(width), f64::from(height));
             let Some(cropped) = output.intersect(&writes).filter(|rect| !rect.is_empty()) else {
                 return Ok(());
             };
@@ -220,8 +219,8 @@ impl GpuReplay {
         // Copy and output use attachment texels; never stretch their correspondence
         // through the painter's newer viewport uniform.
         let readable = Rect::from_xywh(
-            0.0,
-            0.0,
+            root_x,
+            root_y,
             f64::from(viewport_size.0.min(attachment_size.0)),
             f64::from(viewport_size.1.min(attachment_size.1)),
         );
@@ -234,10 +233,10 @@ impl GpuReplay {
         let radius = op
             .sigma
             .map(|sigma| f64::from((sigma * 1.732_050_8).ceil()));
-        let left = (output.left() - radius[0]).floor().max(0.0) as u32;
-        let top = (output.top() - radius[1]).floor().max(0.0) as u32;
-        let right = (output.right() + radius[0]).ceil().min(readable.right()) as u32;
-        let bottom = (output.bottom() + radius[1]).ceil().min(readable.bottom()) as u32;
+        let left = ((output.left() - radius[0]).floor().max(readable.left()) - root_x) as u32;
+        let top = ((output.top() - radius[1]).floor().max(readable.top()) - root_y) as u32;
+        let right = ((output.right() + radius[0]).ceil().min(readable.right()) - root_x) as u32;
+        let bottom = ((output.bottom() + radius[1]).ceil().min(readable.bottom()) - root_y) as u32;
         let dimensions = (right - left, bottom - top);
         let pixels = (dimensions.0 as usize)
             .checked_mul(dimensions.1 as usize)
@@ -292,8 +291,8 @@ impl GpuReplay {
             },
         );
         let read_bounds = Rect::from_xywh(
-            f64::from(left),
-            f64::from(top),
+            f64::from(left) + root_x,
+            f64::from(top) + root_y,
             f64::from(dimensions.0),
             f64::from(dimensions.1),
         );
@@ -302,7 +301,10 @@ impl GpuReplay {
             op.sigma[1],
             &source,
             read_bounds,
-            (left, top),
+            (
+                i64::from(left) + self.attachment_origin.0,
+                i64::from(top) + self.attachment_origin.1,
+            ),
             dimensions,
             surface_format,
             &pipelines.blur,
@@ -311,10 +313,10 @@ impl GpuReplay {
             encoder,
         );
         let uv = [
-            ((output.left() - f64::from(left)) / f64::from(dimensions.0)) as f32,
-            ((output.top() - f64::from(top)) / f64::from(dimensions.1)) as f32,
-            ((output.right() - f64::from(left)) / f64::from(dimensions.0)) as f32,
-            ((output.bottom() - f64::from(top)) / f64::from(dimensions.1)) as f32,
+            ((output.left() - root_x - f64::from(left)) / f64::from(dimensions.0)) as f32,
+            ((output.top() - root_y - f64::from(top)) / f64::from(dimensions.1)) as f32,
+            ((output.right() - root_x - f64::from(left)) / f64::from(dimensions.0)) as f32,
+            ((output.bottom() - root_y - f64::from(top)) / f64::from(dimensions.1)) as f32,
         ];
         self.composite_group_texture(
             filtered,

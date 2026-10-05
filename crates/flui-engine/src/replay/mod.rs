@@ -74,7 +74,10 @@ pub(super) struct GpuReplay {
     /// Created against `PipelineSet::viewport_bind_group_layout` to satisfy
     /// the wgpu identity requirement: bind group and pipeline must share the
     /// exact same layout object.
-    uniform_size: (u32, u32),
+    pub(super) uniform_size: (u32, u32),
+    /// Signed root-space pixel corresponding to attachment pixel (0, 0).
+    pub(super) attachment_origin: (i64, i64),
+    pub(super) filter_attachment_depth: usize,
     pub(super) viewport_bind_group: wgpu::BindGroup,
     dummy_mask_view: wgpu::TextureView,
     clip_mask_pipeline: Option<crate::clip_mask::ClipMaskPipeline>,
@@ -239,6 +242,8 @@ impl GpuReplay {
             dummy_mask_view,
             clip_mask_pipeline: None,
             uniform_size: (initial_width, initial_height),
+            attachment_origin: (0, 0),
+            filter_attachment_depth: 0,
             unit_quad_buffer,
             unit_quad_index_buffer,
             default_sampler,
@@ -271,6 +276,27 @@ impl GpuReplay {
     /// Update CPU target state; previously encoded bindings remain immutable.
     pub(super) fn update_viewport(&mut self, width: u32, height: u32) {
         self.uniform_size = (width, height);
+        self.attachment_origin = (0, 0);
+        self.filter_attachment_depth = 0;
+    }
+
+    /// Extra destination-read storage inside a foreground attachment is admitted
+    /// with the same completion-owned permits as its source and filter passes.
+    pub(crate) fn admit_filter_composite(
+        &self,
+        size: (u32, u32),
+        format: wgpu::TextureFormat,
+        resources: &mut GpuResources,
+    ) -> EngineResult<()> {
+        if self.filter_attachment_depth == 0 {
+            return Ok(());
+        }
+        resources.admit_foreground_target(size, format, 1)?;
+        resources.reserve_prepared(crate::device_domain::PreparedCost {
+            gpu_bytes: 128,
+            cpu_bytes: 128,
+            objects: 6,
+        })
     }
 
     /// Freeze group zero before any kind of composite, including offscreen-only work.
@@ -426,16 +452,25 @@ impl GpuReplay {
                             opacity: 1.0,
                             tint: [1.0, 1.0, 1.0],
                             src_uv_min: [
-                                (op.device_bounds.left() / f64::from(viewport_width_f32)) as f32,
-                                (op.device_bounds.top() / f64::from(viewport_height_f32)) as f32,
+                                ((op.device_bounds.left() - self.attachment_origin.0 as f64)
+                                    / f64::from(viewport_width_f32))
+                                    as f32,
+                                ((op.device_bounds.top() - self.attachment_origin.1 as f64)
+                                    / f64::from(viewport_height_f32))
+                                    as f32,
                             ],
                             src_uv_max: [
-                                (op.device_bounds.right() / f64::from(viewport_width_f32)) as f32,
-                                (op.device_bounds.bottom() / f64::from(viewport_height_f32)) as f32,
+                                ((op.device_bounds.right() - self.attachment_origin.0 as f64)
+                                    / f64::from(viewport_width_f32))
+                                    as f32,
+                                ((op.device_bounds.bottom() - self.attachment_origin.1 as f64)
+                                    / f64::from(viewport_height_f32))
+                                    as f32,
                             ],
                             clip: None,
                         };
                         self.prepare_viewport_binding(device, pipelines, resources)?;
+                        self.admit_filter_composite(viewport_size, surface_format, resources)?;
                         flush_advanced_layer(
                             blend_op,
                             surface_texture,
@@ -447,6 +482,7 @@ impl GpuReplay {
                             device,
                             encoder,
                             Some(&self.viewport_bind_group),
+                            self.attachment_origin,
                         );
                         tracing::trace!(
                             mode = ?op.mode,
@@ -520,14 +556,13 @@ impl GpuReplay {
                 //
                 // Pool discipline: content_tex and filtered_tex are acquired at
                 // replay time, never held in the IR. Both drop at arm end, returning
-                // to the pool. The `apply_image_filter_passes` fold maintains ≤2
-                // live textures regardless of chain length.
+                // to the pool. A growing pass holds source/H/V concurrently;
+                // chain length does not increase that per-operation peak.
                 DrawItem::Filter(mut op) => {
                     // 1. Render the isolated input segment to a grown-bounds offscreen,
                     //    sized to fb_dim instead of the full viewport.
-                    //    Vertex positions are pre-transformed to fb-local NDC so that
-                    //    dividing by the unchanged viewport uniform yields correct NDC
-                    //    inside the smaller render target.
+                    //    Immutable bindings map root-space geometry into the signed
+                    //    attachment domain for flat and ordered nested content.
                     let content_tex = self.render_filter_input(
                         &mut op,
                         viewport_size,
@@ -546,7 +581,7 @@ impl GpuReplay {
                     let filtered_tex = apply_image_filter_passes(
                         &op.passes,
                         content_tex,
-                        op.content_bounds,
+                        op.input_support,
                         op.fb_origin,
                         op.fb_dim,
                         surface_format,
@@ -554,60 +589,43 @@ impl GpuReplay {
                         resources,
                         device,
                         encoder,
-                    );
-
-                    // 3. Integer-grid composite:
-                    //    dst_rect = Rect(fb_origin, fb_far); src_uv = [0, 0, 1, 1].
-                    //
-                    //    `filtered_tex` is fb_dim-sized with content at pixel (0,0).
-                    //    src_uv = [0, 0, 1, 1] maps the full fb texture onto dst_rect — a
-                    //    pixel-aligned 1:1 blit via the bilinear composite sampler.
-                    //
-                    //    Using fractional grown_bounds as dst_rect over an integer-
-                    //    origin texture would shift every pixel by frac(grown_left)
-                    //    (the composite-grid shift this integer-grid contract prevents).
-                    let (fb_origin_x, fb_origin_y) = op.fb_origin;
-                    let (fb_w, fb_h) = op.fb_dim;
-                    let dst_rect = flui_foundation::geometry::Rect::from_xywh(
-                        f64::from(fb_origin_x as f32),
-                        f64::from(fb_origin_y as f32),
-                        f64::from(fb_w as f32),
-                        f64::from(fb_h as f32),
-                    );
-                    let unclipped = crate::clip_chain::ClipChain::default();
-                    let prefix = op
-                        .composite_clip
-                        .as_ref()
-                        .map_or(&unclipped, |clip| &clip.chain);
-                    self.viewport_bind_group = self.prepare_clip_binding(
-                        &op.input,
-                        prefix,
-                        viewport_size,
-                        device,
-                        pipelines,
-                        resources,
-                        encoder,
                     )?;
-                    let instance = crate::instancing::TextureInstance::with_uv(
+
+                    // Restrict the final composite, independently of the wider
+                    // input/intermediate working frame. Integer texel-grid UVs
+                    // preserve a 1:1 sample at fractional source boundaries.
+                    let dst_rect = op.output_support;
+                    let uv = [
+                        ((dst_rect.left() - op.fb_origin.0 as f64) / f64::from(op.fb_dim.0)) as f32,
+                        ((dst_rect.top() - op.fb_origin.1 as f64) / f64::from(op.fb_dim.1)) as f32,
+                        ((dst_rect.right() - op.fb_origin.0 as f64) / f64::from(op.fb_dim.0))
+                            as f32,
+                        ((dst_rect.bottom() - op.fb_origin.1 as f64) / f64::from(op.fb_dim.1))
+                            as f32,
+                    ];
+                    self.composite_group_texture(
+                        filtered_tex,
                         dst_rect,
-                        [0.0, 0.0, 1.0, 1.0],
-                        flui_painting::styling::Color::WHITE,
-                    );
-                    let _ = self.texture_batch.add(instance);
-                    self.flush_texture_batch_premultiplied(
+                        uv,
+                        1.0,
+                        [1.0; 3],
+                        flui_painting::paint::BlendMode::SrcOver,
+                        op.composite_clip.as_ref(),
+                        &op.input,
+                        viewport_size,
+                        surface_format,
                         device,
                         queue,
                         pipelines,
                         resources,
-                        viewport_size,
                         encoder,
-                        target.view,
-                        filtered_tex.view(),
+                        target,
                         None,
-                    );
-                    // filtered_tex (and content_tex if distinct) dropped here → pool.
+                    )?;
                     tracing::trace!(
-                        content_bounds = ?op.content_bounds,
+                        source_support = ?op.source_support,
+                        input_support = ?op.input_support,
+                        required_input_bounds = ?op.required_input_bounds,
                         fb_origin = ?op.fb_origin,
                         fb_dim = ?op.fb_dim,
                         pass_count = op.passes.len(),

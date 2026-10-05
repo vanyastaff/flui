@@ -26,9 +26,9 @@ fn rasterized_ink_right(paragraph: &ShapedParagraph) -> f64 {
             .expect("a shaped face registers");
         for glyph in run.placed_glyphs(key, (0.0, 0.0), 1.0) {
             if let Some(image) = rasterizer.rasterize(glyph.key)
-                && image.width > 0
+                && image.width() > 0
             {
-                right = right.max(f64::from(glyph.x + image.left) + f64::from(image.width));
+                right = right.max(f64::from(glyph.x + image.left()) + f64::from(image.width()));
             }
         }
     }

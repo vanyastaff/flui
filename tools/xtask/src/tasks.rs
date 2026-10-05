@@ -551,11 +551,12 @@ fn gpu_test_plan() -> Vec<Step> {
     ]
 }
 
-/// CI's `miri` job: the workspace's densest unsafe and arena code under Miri.
-/// - flui-rendering `pipeline::owner`: the subtree arena's raw-pointer walks,
-///   the PipelineCell checkout, an owner-local frame and a reentrant layout.
-/// - flui-view `owner::global_key`: the GlobalKey plane (ADR-0050).
-/// - flui-engine `wgpu::surface_lease` and `cancelling_renderer_new`: the
+/// CI's `miri` job: selected ownership and containment contracts under Miri.
+/// - flui-rendering `pipeline::owner`: owner failure and semantics publishing
+///   families, including retirement of caught text panic payloads.
+/// - flui-view `view_it::global_key_contract_matrix`: public GlobalKey migration
+///   and duplicate-parent behavior (ADR-0050).
+/// - flui-engine `surface_lease` and `cancelling_renderer_new`: the
 ///   wgpu-free surface-lease protocol and `Renderer::new`'s cancellation,
 ///   GPU-free by construction.
 ///
@@ -564,18 +565,18 @@ fn gpu_test_plan() -> Vec<Step> {
 /// not lints.
 fn miri_plan() -> Vec<Step> {
     [
-        ("flui-rendering", "pipeline::owner"),
-        ("flui-view", "owner::global_key"),
-        ("flui-engine", "wgpu::surface_lease"),
-        ("flui-engine", "cancelling_renderer_new"),
+        ("flui-rendering", "--lib", "pipeline::owner"),
+        ("flui-view", "--test view_it", "global_key_contract_matrix"),
+        ("flui-engine", "--lib", "surface_lease"),
+        ("flui-engine", "--lib", "cancelling_renderer_new"),
     ]
     .into_iter()
-    .map(|(package, filter)| {
-        Cmd::cargo([
-            "+nightly", "miri", "test", "-p", package, "--lib", "--locked", filter,
-        ])
-        .env("CARGO_BUILD_WARNINGS", "warn")
-        .into()
+    .map(|(package, target, filter)| {
+        Cmd::cargo(["+nightly", "miri", "test", "-p", package])
+            .split(target)
+            .args(["--locked", filter])
+            .env("CARGO_BUILD_WARNINGS", "warn")
+            .into()
     })
     .collect()
 }

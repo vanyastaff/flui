@@ -491,3 +491,7 @@ mod gpu_tests {
 
     // ── B12: Clipped rect in sub-viewport filter layer — non-identity scissor rebase ──
 }
+
+#[cfg(all(test, feature = "testing"))]
+#[path = "blur_filter_tests/foreground.rs"]
+mod foreground;

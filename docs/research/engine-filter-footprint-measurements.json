@@ -1,0 +1,452 @@
+[
+  {
+    "name": "left",
+    "pad": 0,
+    "size": 32,
+    "passes": 5,
+    "pool_allocation_events": 3,
+    "pool_allocation_high_water_bytes": 12288,
+    "elapsed_ms": 9.554
+  },
+  {
+    "name": "left",
+    "pad": 32,
+    "size": 96,
+    "passes": 5,
+    "pool_allocation_events": 3,
+    "pool_allocation_high_water_bytes": 16176,
+    "elapsed_ms": 0.927
+  },
+  {
+    "name": "right",
+    "pad": 0,
+    "size": 32,
+    "passes": 5,
+    "pool_allocation_events": 2,
+    "pool_allocation_high_water_bytes": 16176,
+    "elapsed_ms": 0.733
+  },
+  {
+    "name": "right",
+    "pad": 32,
+    "size": 96,
+    "passes": 5,
+    "pool_allocation_events": 2,
+    "pool_allocation_high_water_bytes": 16176,
+    "elapsed_ms": 0.639
+  },
+  {
+    "name": "top",
+    "pad": 0,
+    "size": 32,
+    "passes": 5,
+    "pool_allocation_events": 2,
+    "pool_allocation_high_water_bytes": 16176,
+    "elapsed_ms": 0.707
+  },
+  {
+    "name": "top",
+    "pad": 32,
+    "size": 96,
+    "passes": 5,
+    "pool_allocation_events": 2,
+    "pool_allocation_high_water_bytes": 16176,
+    "elapsed_ms": 0.635
+  },
+  {
+    "name": "bottom",
+    "pad": 0,
+    "size": 32,
+    "passes": 5,
+    "pool_allocation_events": 2,
+    "pool_allocation_high_water_bytes": 16176,
+    "elapsed_ms": 0.634
+  },
+  {
+    "name": "bottom",
+    "pad": 32,
+    "size": 96,
+    "passes": 5,
+    "pool_allocation_events": 2,
+    "pool_allocation_high_water_bytes": 16176,
+    "elapsed_ms": 0.692
+  },
+  {
+    "name": "top_left",
+    "pad": 0,
+    "size": 32,
+    "passes": 5,
+    "pool_allocation_events": 3,
+    "pool_allocation_high_water_bytes": 8572,
+    "elapsed_ms": 0.665
+  },
+  {
+    "name": "top_left",
+    "pad": 32,
+    "size": 96,
+    "passes": 5,
+    "pool_allocation_events": 2,
+    "pool_allocation_high_water_bytes": 4476,
+    "elapsed_ms": 0.611
+  },
+  {
+    "name": "top_right",
+    "pad": 0,
+    "size": 32,
+    "passes": 5,
+    "pool_allocation_events": 2,
+    "pool_allocation_high_water_bytes": 4476,
+    "elapsed_ms": 1.154
+  },
+  {
+    "name": "top_right",
+    "pad": 32,
+    "size": 96,
+    "passes": 5,
+    "pool_allocation_events": 2,
+    "pool_allocation_high_water_bytes": 4476,
+    "elapsed_ms": 0.722
+  },
+  {
+    "name": "bottom_left",
+    "pad": 0,
+    "size": 32,
+    "passes": 5,
+    "pool_allocation_events": 2,
+    "pool_allocation_high_water_bytes": 4476,
+    "elapsed_ms": 0.555
+  },
+  {
+    "name": "bottom_left",
+    "pad": 32,
+    "size": 96,
+    "passes": 5,
+    "pool_allocation_events": 2,
+    "pool_allocation_high_water_bytes": 4476,
+    "elapsed_ms": 0.544
+  },
+  {
+    "name": "bottom_right",
+    "pad": 0,
+    "size": 32,
+    "passes": 5,
+    "pool_allocation_events": 2,
+    "pool_allocation_high_water_bytes": 4476,
+    "elapsed_ms": 0.765
+  },
+  {
+    "name": "bottom_right",
+    "pad": 32,
+    "size": 96,
+    "passes": 5,
+    "pool_allocation_events": 2,
+    "pool_allocation_high_water_bytes": 4476,
+    "elapsed_ms": 0.686
+  },
+  {
+    "name": "fractional",
+    "pad": 0,
+    "size": 32,
+    "passes": 5,
+    "pool_allocation_events": 3,
+    "pool_allocation_high_water_bytes": 16372,
+    "elapsed_ms": 0.767
+  },
+  {
+    "name": "fractional",
+    "pad": 32,
+    "size": 96,
+    "passes": 5,
+    "pool_allocation_events": 3,
+    "pool_allocation_high_water_bytes": 17916,
+    "elapsed_ms": 0.673
+  },
+  {
+    "name": "outside_radius",
+    "pad": 0,
+    "size": 32,
+    "passes": 5,
+    "pool_allocation_events": 2,
+    "pool_allocation_high_water_bytes": 16620,
+    "elapsed_ms": 0.752
+  },
+  {
+    "name": "outside_radius",
+    "pad": 32,
+    "size": 96,
+    "passes": 5,
+    "pool_allocation_events": 3,
+    "pool_allocation_high_water_bytes": 17620,
+    "elapsed_ms": 0.645
+  },
+  {
+    "name": "anisotropic",
+    "pad": 0,
+    "size": 32,
+    "passes": 5,
+    "pool_allocation_events": 2,
+    "pool_allocation_high_water_bytes": 16176,
+    "elapsed_ms": 0.603
+  },
+  {
+    "name": "anisotropic",
+    "pad": 32,
+    "size": 96,
+    "passes": 5,
+    "pool_allocation_events": 3,
+    "pool_allocation_high_water_bytes": 17916,
+    "elapsed_ms": 0.634
+  },
+  {
+    "name": "scaled",
+    "pad": 0,
+    "size": 32,
+    "passes": 5,
+    "pool_allocation_events": 2,
+    "pool_allocation_high_water_bytes": 16620,
+    "elapsed_ms": 0.578
+  },
+  {
+    "name": "scaled",
+    "pad": 32,
+    "size": 96,
+    "passes": 5,
+    "pool_allocation_events": 3,
+    "pool_allocation_high_water_bytes": 19528,
+    "elapsed_ms": 0.621
+  },
+  {
+    "name": "nested_clip_opacity",
+    "pad": 0,
+    "size": 32,
+    "passes": 8,
+    "pool_allocation_events": 2,
+    "pool_allocation_high_water_bytes": 18084,
+    "elapsed_ms": 47.909
+  },
+  {
+    "name": "nested_clip_opacity",
+    "pad": 32,
+    "size": 96,
+    "passes": 8,
+    "pool_allocation_events": 3,
+    "pool_allocation_high_water_bytes": 122880,
+    "elapsed_ms": 0.977
+  },
+  {
+    "name": "chain_edge",
+    "pad": 0,
+    "size": 32,
+    "passes": 7,
+    "pool_allocation_events": 2,
+    "pool_allocation_high_water_bytes": 122880,
+    "elapsed_ms": 0.804
+  },
+  {
+    "name": "chain_edge",
+    "pad": 32,
+    "size": 96,
+    "passes": 7,
+    "pool_allocation_events": 3,
+    "pool_allocation_high_water_bytes": 62220,
+    "elapsed_ms": 0.77
+  },
+  {
+    "name": "inner_clip",
+    "pad": 0,
+    "size": 32,
+    "passes": 6,
+    "pool_allocation_events": 2,
+    "pool_allocation_high_water_bytes": 25356,
+    "elapsed_ms": 0.649
+  },
+  {
+    "name": "inner_clip",
+    "pad": 32,
+    "size": 96,
+    "passes": 6,
+    "pool_allocation_events": 3,
+    "pool_allocation_high_water_bytes": 20976,
+    "elapsed_ms": 0.707
+  },
+  {
+    "name": "x_only",
+    "pad": 0,
+    "size": 32,
+    "passes": 5,
+    "pool_allocation_events": 2,
+    "pool_allocation_high_water_bytes": 16620,
+    "elapsed_ms": 0.746
+  },
+  {
+    "name": "x_only",
+    "pad": 32,
+    "size": 96,
+    "passes": 5,
+    "pool_allocation_events": 2,
+    "pool_allocation_high_water_bytes": 16620,
+    "elapsed_ms": 1.071
+  },
+  {
+    "name": "y_only",
+    "pad": 0,
+    "size": 32,
+    "passes": 5,
+    "pool_allocation_events": 2,
+    "pool_allocation_high_water_bytes": 16620,
+    "elapsed_ms": 0.667
+  },
+  {
+    "name": "y_only",
+    "pad": 32,
+    "size": 96,
+    "passes": 5,
+    "pool_allocation_events": 3,
+    "pool_allocation_high_water_bytes": 17620,
+    "elapsed_ms": 0.661
+  },
+  {
+    "name": "zero",
+    "pad": 0,
+    "size": 32,
+    "passes": 5,
+    "pool_allocation_events": 3,
+    "pool_allocation_high_water_bytes": 8176,
+    "elapsed_ms": 0.696
+  },
+  {
+    "name": "zero",
+    "pad": 32,
+    "size": 96,
+    "passes": 5,
+    "pool_allocation_events": 0,
+    "pool_allocation_high_water_bytes": null,
+    "elapsed_ms": 0.639
+  },
+  {
+    "name": "zero_reference",
+    "pad": 0,
+    "size": 32,
+    "passes": 1,
+    "pool_allocation_events": 0,
+    "pool_allocation_high_water_bytes": null,
+    "elapsed_ms": 0.316
+  },
+  {
+    "name": "perf_interior",
+    "pad": 0,
+    "size": 32,
+    "passes": 5,
+    "pool_allocation_events": 3,
+    "pool_allocation_high_water_bytes": 7296,
+    "elapsed_ms": 0.77
+  },
+  {
+    "name": "perf_interior",
+    "pad": 0,
+    "size": 32,
+    "passes": 5,
+    "pool_allocation_events": 0,
+    "pool_allocation_high_water_bytes": null,
+    "elapsed_ms": 0.604
+  },
+  {
+    "name": "perf_interior",
+    "pad": 0,
+    "size": 32,
+    "passes": 5,
+    "pool_allocation_events": 0,
+    "pool_allocation_high_water_bytes": null,
+    "elapsed_ms": 0.562
+  },
+  {
+    "name": "perf_interior",
+    "pad": 0,
+    "size": 32,
+    "passes": 5,
+    "pool_allocation_events": 0,
+    "pool_allocation_high_water_bytes": null,
+    "elapsed_ms": 0.548
+  },
+  {
+    "name": "perf_interior",
+    "pad": 0,
+    "size": 32,
+    "passes": 5,
+    "pool_allocation_events": 0,
+    "pool_allocation_high_water_bytes": null,
+    "elapsed_ms": 0.557
+  },
+  {
+    "name": "perf_interior",
+    "pad": 0,
+    "size": 32,
+    "passes": 5,
+    "pool_allocation_events": 0,
+    "pool_allocation_high_water_bytes": null,
+    "elapsed_ms": 0.635
+  },
+  {
+    "name": "perf_interior",
+    "pad": 0,
+    "size": 32,
+    "passes": 5,
+    "pool_allocation_events": 0,
+    "pool_allocation_high_water_bytes": null,
+    "elapsed_ms": 0.659
+  },
+  {
+    "name": "perf_interior",
+    "pad": 0,
+    "size": 32,
+    "passes": 5,
+    "pool_allocation_events": 0,
+    "pool_allocation_high_water_bytes": null,
+    "elapsed_ms": 0.672
+  },
+  {
+    "name": "perf_interior",
+    "pad": 0,
+    "size": 32,
+    "passes": 5,
+    "pool_allocation_events": 0,
+    "pool_allocation_high_water_bytes": null,
+    "elapsed_ms": 0.595
+  },
+  {
+    "name": "perf_interior",
+    "pad": 0,
+    "size": 32,
+    "passes": 5,
+    "pool_allocation_events": 0,
+    "pool_allocation_high_water_bytes": null,
+    "elapsed_ms": 0.606
+  },
+  {
+    "name": "perf_interior",
+    "pad": 0,
+    "size": 32,
+    "passes": 5,
+    "pool_allocation_events": 0,
+    "pool_allocation_high_water_bytes": null,
+    "elapsed_ms": 0.602
+  },
+  {
+    "name": "perf_interior",
+    "pad": 0,
+    "size": 32,
+    "passes": 5,
+    "pool_allocation_events": 0,
+    "pool_allocation_high_water_bytes": null,
+    "elapsed_ms": 0.793
+  },
+  {
+    "name": "perf_interior",
+    "pad": 0,
+    "size": 32,
+    "passes": 5,
+    "pool_allocation_events": 0,
+    "pool_allocation_high_water_bytes": null,
+    "elapsed_ms": 0.984
+  }
+]

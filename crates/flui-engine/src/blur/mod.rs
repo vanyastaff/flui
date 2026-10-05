@@ -68,7 +68,7 @@ use generated::blur;
 ///
 /// - `sigma_x` — Gaussian sigma for the horizontal pass.
 /// - `sigma_y` — Gaussian sigma for the vertical pass.
-/// - `source_tex` — premultiplied RGBA offscreen from `render_segment_to_grown_offscreen`.
+/// - `source_tex` — premultiplied RGBA offscreen from `render_filter_input`.
 /// - `content_bounds` — AABB of the content in **full-frame** physical pixels; rebased
 ///   to fb-local UV by subtracting `fb_origin` before dividing by `fb_dim`.
 /// - `fb_origin` — integer-aligned top-left of the offscreen frame in device pixels
@@ -98,7 +98,7 @@ pub(crate) fn apply_blur(
     sigma_y: f32,
     source_tex: &PooledTexture,
     content_bounds: Rect<f64>,
-    fb_origin: (u32, u32),
+    fb_origin: (i64, i64),
     fb_dim: (u32, u32),
     surface_format: wgpu::TextureFormat,
     pipeline: &BlurPipeline,
@@ -118,10 +118,10 @@ pub(crate) fn apply_blur(
     // every content UV would be shifted by fb_origin/viewport, landing outside [0,1]
     // for off-origin content and clipping the blur decal to the wrong region.
     let content_rect_uv_h = [
-        (content_bounds.left() - f64::from(fb_origin_x as f32)) / f64::from(fb_w as f32),
-        (content_bounds.top() - f64::from(fb_origin_y as f32)) / f64::from(fb_h as f32),
-        (content_bounds.right() - f64::from(fb_origin_x as f32)) / f64::from(fb_w as f32),
-        (content_bounds.bottom() - f64::from(fb_origin_y as f32)) / f64::from(fb_h as f32),
+        (content_bounds.left() - fb_origin_x as f64) / f64::from(fb_w as f32),
+        (content_bounds.top() - fb_origin_y as f64) / f64::from(fb_h as f32),
+        (content_bounds.right() - fb_origin_x as f64) / f64::from(fb_w as f32),
+        (content_bounds.bottom() - fb_origin_y as f64) / f64::from(fb_h as f32),
     ];
     // The V pass reads the H-pass output whose content extent has already grown
     // horizontally into the halo. Decaling the V pass at the original content

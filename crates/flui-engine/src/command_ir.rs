@@ -182,8 +182,7 @@ pub(crate) enum ImageFilterSpec {
     /// ## √3·sigma kernel extent
     ///
     /// Half-radius = `ceil(sigma × √3)` per [`crate::effects::kernel_radius`].
-    /// The `grown_bounds` expansion in `restore_layer` uses
-    /// `kernel_radius(max(sigma_x, sigma_y))` as a conservative per-axis pad.
+    /// The sampling support expands independently along each physical axis.
     Blur {
         /// Gaussian sigma for the horizontal sub-pass.
         sigma_x: f32,
@@ -195,8 +194,7 @@ pub(crate) enum ImageFilterSpec {
     ///
     /// The passes are already in execution order (index 0 = innermost = applied
     /// first), and `restore_layer` emits a single `DrawItem::Filter` carrying
-    /// the full chain.  The `cumulative_growth` helper in the `painter` module sums the
-    /// per-pass radius contributions to produce the expanded `grown_bounds`.
+    /// the full chain.  The painter sums per-axis sampling supports to bound required input.
     ///
     /// Inline capacity 4 covers realistic `Compose` depth; heap-spills beyond 4
     /// are correct.
@@ -206,8 +204,8 @@ pub(crate) enum ImageFilterSpec {
 /// A lowered, flattened image-filter pass.
 ///
 /// Passes are either bounds-GROWING (Morph, Blur) or bounds-PRESERVING
-/// (ColorMatrix, Identity).  The `cumulative_growth` helper in the `painter` module
-/// returns the correct growth for each variant; `ColorMatrix` and `Identity`
+/// (ColorMatrix, Identity).  The support calculation
+/// returns the per-axis extent for each variant; `ColorMatrix` and `Identity`
 /// contribute 0.
 ///
 /// Adding a new variant requires adding a match arm in
@@ -217,7 +215,7 @@ pub(crate) enum ImageFilterPass {
     /// Passthrough: render the input segment and copy it through unchanged.
     ///
     /// Exercises the `DrawItem::Filter` seam end-to-end with zero filter math
-    /// and grows `FilterOp::grown_bounds` by 0 pixels.
+    /// and grows `FilterOp::output_support` by 0 pixels.
     // No production producer until a public painter API is wired; only test
     // builds construct it.
     #[cfg_attr(not(test), allow(dead_code))]
@@ -226,7 +224,7 @@ pub(crate) enum ImageFilterPass {
     ///
     /// The H and V sub-passes are internal to `apply_morphology` — callers see a
     /// single `Morph` pass. `radius` is in physical pixels; `op` selects
-    /// dilate/erode. Grows `FilterOp::grown_bounds` by `ceil(radius)` pixels on
+    /// dilate/erode. Grows `FilterOp::output_support` by `ceil(radius)` pixels on
     /// each side before clipping to the viewport.
     Morph {
         /// Kernel half-radius in physical pixels.
@@ -247,8 +245,7 @@ pub(crate) enum ImageFilterPass {
     /// ## Kernel extent
     ///
     /// Half-radius = `ceil(sigma × √3)` per [`crate::effects::kernel_radius`].
-    /// Grows `FilterOp::grown_bounds` by `kernel_radius(max(sigma_x, sigma_y))`
-    /// pixels on each side (conservative per-axis pad).
+    /// Grows output independently by the horizontal and vertical sampling radii.
     Blur {
         /// Gaussian sigma for the horizontal sub-pass.
         sigma_x: f32,
@@ -257,7 +254,7 @@ pub(crate) enum ImageFilterPass {
     },
     /// 5×4 row-major color matrix applied per-pixel on un-premultiplied color.
     ///
-    /// Bounds-PRESERVING: grows `FilterOp::grown_bounds` by **0** pixels.
+    /// Bounds-PRESERVING: grows `FilterOp::output_support` by **0** pixels.
     ///
     /// Reuses `apply_color_matrix` in `opacity_layer.rs` — the same function
     /// the `LayerFilter::ColorMatrix` fold arm uses.  The matrix is applied
@@ -278,37 +275,18 @@ pub(crate) enum ImageFilterPass {
     ColorMatrix([f32; 20]),
 }
 
-/// A bounds-GROWING image-filter operation, isolated at record time.
+/// An isolated foreground filter, recorded without owned GPU textures.
 ///
-/// `Clone`: `input` is a `DrawSegment`, `passes` are POD, bounds are `Copy`. The repo
-/// represents an owned GPU texture as `PooledTexture`, which is `!Clone` (it
-/// reclaims its pool slot on `Drop`); adding such a field would break the
-/// `const _FILTER_OP_IS_CLONE` witness — enforcing "acquire textures at replay,
-/// never store them in the IR". (Raw `wgpu::Texture`/`TextureView` are `Clone`
-/// in wgpu 30, so `Clone` alone does not bar them — the discipline is to use
-/// `PooledTexture` for all owned GPU textures, which the witness then catches.)
+/// Bounds stay in root device pixels. Backwards required input limits the
+/// dependency domain; the framebuffer additionally intersects conservative
+/// forward support. Neither off-viewport input nor a distant source AABB can
+/// enlarge allocation beyond the visible demand plus accumulated kernel support.
+/// Nested items replay in the same signed root-to-attachment coordinate system.
 ///
-/// Textures are acquired at REPLAY time (never held in the IR), matching the
-/// discipline of `AdvancedShapeOp` and `SsaaPathOp`.
-///
-/// ## Integer-grid composite
-///
-/// The intermediate offscreen is sized to the integer-aligned bounding box of
-/// `grown_bounds` (floor origin, ceil far corner, clamped to viewport) rather
-/// than the full viewport. This reduces VRAM peak from `vp_area` to `grown_area`
-/// × nesting depth.
-///
-/// The integer alignment is REQUIRED because the texture-batch composite sampler
-/// is bilinear (`default_sampler` Linear in `replay`): compositing a
-/// full-viewport intermediate at a fractional `grown_bounds` is self-consistent
-/// (texel grid == device-pixel grid → aligned blit), but compositing an
-/// integer-origin `fb`-sized intermediate at a fractional dst_rect offsets the
-/// two grids by `frac(grown_left)`, shifting every pixel by a sub-texel.
-///
-/// `fb_origin` and `fb_dim` are computed at **record time** in `painter::layer`'s
-/// `restore_layer` and stored here so BOTH composite arms (top-level in
-/// `replay` + nested in `opacity_layer.rs`) re-read ONE source — eliminating
-/// drift between the two composite arms.
+/// The framebuffer has an integer origin and extent. The final composite uses
+/// cropped UVs from that same texel lattice, independently of its visible bounds
+/// and inherited composite membership. Textures and preparation permits are
+/// acquired during replay and retain the existing completion ownership.
 pub(crate) struct FilterOp {
     pub(crate) composite_clip: Option<GroupClip>,
     /// Foreground content the filter consumes, rendered to an offscreen
@@ -321,41 +299,117 @@ pub(crate) struct FilterOp {
     /// Inline capacity 4 covers realistic Compose depth
     /// (e.g. Blur∘Mode∘Morph∘Identity). Heap-spills beyond 4 are correct.
     pub(crate) passes: SmallVec<[ImageFilterPass; 4]>,
-    /// Pre-filter content AABB in physical pixels (record-time geometry bound).
-    pub(crate) content_bounds: Rect<f64>,
-    /// `content_bounds` expanded by the accumulated pass radius, clipped to
-    /// the layer bounds. For Identity this equals `content_bounds` because the
-    /// pass grows bounds by 0 pixels. Growing filters compute their pad via
-    /// `kernel_radius(sigma)`.
-    ///
-    /// The composite uses `fb_origin`/`fb_dim` (integer-aligned) rather than
-    /// `grown_bounds` directly. `grown_bounds` is
-    /// retained for diagnostics, tracing, and future tooling (e.g. damage-region
-    /// tracking or spec-verify audits that check halo extent in floating-point).
-    // Retained for diagnostics: the composite arms now use fb_origin/fb_dim but
-    // grown_bounds documents the fractional halo extent pre-quantisation and will
-    // be needed by damage-tracking or future floating-point halo assertions.
-    #[expect(dead_code)]
-    pub(crate) grown_bounds: Rect<f64>,
-    /// Integer-grid top-left of the offscreen intermediate in device pixels.
-    ///
-    /// Computed as `(floor(grown_bounds.left), floor(grown_bounds.top))`.
-    /// Integer-aligned so the bilinear composite produces an aligned texel blit
-    /// (no sub-pixel shift). Stored on the IR so both composite arms share one
-    /// authoritative value.
-    pub(crate) fb_origin: (u32, u32),
-    /// Integer-aligned dimensions of the offscreen intermediate in device pixels.
-    ///
-    /// Computed as `(ceil(far.x) - fb_origin.x, ceil(far.y) - fb_origin.y)`,
-    /// clamped so `fb_origin + fb_dim ≤ viewport`. This is the exact size passed
-    /// to `pool.acquire` and used as `texture_size` in all filter sub-passes.
+    /// Bounded device-space working domain obtained by expanding desired output
+    /// backwards through the actual per-axis sampling supports.
+    pub(crate) required_input_bounds: Rect<f64>,
+    /// Conservative source support before required-input clipping, including AA.
+    /// None means a primitive or ordered group has no reliable AABB.
+    pub(crate) source_support: Option<Rect<f64>>,
+    /// Source support admitted by backwards required input, before any pass.
+    pub(crate) input_support: Rect<f64>,
+    /// Conservative final output support intersected with visible composite demand.
+    /// Intermediate support evolves through the pass chain at replay time.
+    pub(crate) output_support: Rect<f64>,
+    /// Signed, integer root-space origin of attachment pixel (0, 0).
+    /// Even coordinates preserve root-space 2x2 derivative quads.
+    pub(crate) fb_origin: (i64, i64),
+    /// Exact attachment dimensions, bounded and admitted before texture acquisition.
     pub(crate) fb_dim: (u32, u32),
 }
 
 // ─── Primitive helpers ────────────────────────────────────────────────────────
 
+impl ImageFilterPass {
+    /// Actual per-axis integer sampling support, after validating shader arithmetic.
+    pub(crate) fn support_radius(&self) -> Result<(u32, u32), crate::error::GeometryError> {
+        use crate::error::GeometryError;
+        let validate = |value: f32, gaussian: bool| {
+            if !value.is_finite() {
+                return Err(GeometryError::NonFinite {
+                    context: "image filter radius",
+                });
+            }
+            if value < 0.0 {
+                return Err(GeometryError::InvalidRadius);
+            }
+            if gaussian && value > 0.0 && !(value * value).is_normal() {
+                return Err(GeometryError::Unrepresentable {
+                    context: "blur sigma squared",
+                });
+            }
+            let extent = if gaussian {
+                crate::effects::kernel_radius(value) as f32
+            } else {
+                value
+            };
+            // The signed WGSL loop increments once after its final positive tap.
+            if extent.ceil() >= i32::MAX as f32 {
+                return Err(GeometryError::Unrepresentable {
+                    context: "image filter sampling extent",
+                });
+            }
+            Ok(extent.ceil() as u32)
+        };
+        match self {
+            Self::Blur { sigma_x, sigma_y } => {
+                Ok((validate(*sigma_x, true)?, validate(*sigma_y, true)?))
+            }
+            Self::Morph { radius, .. } => {
+                let radius = validate(*radius, false)?;
+                Ok((radius, radius))
+            }
+            Self::ColorMatrix(matrix) => {
+                if matrix.iter().any(|v| !v.is_finite()) {
+                    return Err(GeometryError::NonFinite {
+                        context: "image filter color matrix",
+                    });
+                }
+                Ok((0, 0))
+            }
+            Self::Identity => Ok((0, 0)),
+        }
+    }
+}
+
+impl ImageFilterSpec {
+    /// Validate and sum sampling supports without copying an owned chain.
+    pub(crate) fn support_extent(&self) -> Result<(f64, f64), crate::error::GeometryError> {
+        let pass = match self {
+            Self::Chain(passes) => {
+                return passes.iter().try_fold((0.0, 0.0), |(x, y), pass| {
+                    let (rx, ry) = pass.support_radius()?;
+                    Ok((x + f64::from(rx), y + f64::from(ry)))
+                });
+            }
+            Self::Blur { sigma_x, sigma_y } => ImageFilterPass::Blur {
+                sigma_x: *sigma_x,
+                sigma_y: *sigma_y,
+            },
+            Self::Morph { radius, op } => ImageFilterPass::Morph {
+                radius: *radius,
+                op: *op,
+            },
+        };
+        let (x, y) = pass.support_radius()?;
+        Ok((f64::from(x), f64::from(y)))
+    }
+
+    /// Move the recorded chain into its replay operation without another allocation.
+    pub(crate) fn into_passes(self) -> SmallVec<[ImageFilterPass; 4]> {
+        match self {
+            Self::Blur { sigma_x, sigma_y } => {
+                smallvec::smallvec![ImageFilterPass::Blur { sigma_x, sigma_y }]
+            }
+            Self::Morph { radius, op } => {
+                smallvec::smallvec![ImageFilterPass::Morph { radius, op }]
+            }
+            Self::Chain(passes) => passes,
+        }
+    }
+}
+
 /// Scissor rect type (x, y, width, height) in physical pixels.
-pub(crate) type ScissorRect = Option<(u32, u32, u32, u32)>;
+pub(crate) type ScissorRect = Option<(i64, i64, u32, u32)>;
 
 /// Tracks a sub-range of instances that share the same scissor state.
 /// Used to split instanced draw calls when clipping changes.
@@ -1026,7 +1080,7 @@ pub(crate) enum DrawItem {
     ///
     /// The content segment is rendered to a full-viewport pooled offscreen at
     /// replay time, the pass chain is applied (ping-pong, ≤2 live textures),
-    /// and the filtered result is composited at `grown_bounds` via the existing
+    /// and the filtered result is composited at `output_support` via the existing
     /// premultiplied offscreen composite seam (`flush_texture_batch_premultiplied`).
     ///
     /// Z-order is the insertion position in `draw_order` (R1 arm order). This

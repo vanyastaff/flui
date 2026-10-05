@@ -15,6 +15,9 @@ use crate::command_ir::{
 };
 use crate::layer_compositor::RestoreOutcome;
 
+/// Signed root origin and admitted attachment dimensions.
+type FilterFramebuffer = ((i64, i64), (u32, u32));
+
 /// Whether `matrix` maps the plane projectively rather than affinely, so
 /// `Matrix4::transform_rect` does not bound the image of a rect. The same
 /// test `flui-painting`'s damage extents apply, which treat such a layer as
@@ -134,114 +137,170 @@ impl WgpuPainter {
         )
     }
 
-    /// Compute the integer-aligned offscreen frame rectangle for a filter intermediate.
-    ///
-    /// ## Integer-grid composite invariant
-    ///
-    /// The texture-batch composite sampler is **bilinear** (`default_sampler` Linear
-    /// in `replay.rs`).  Production `grown_bounds` may have fractional edges after
-    /// AABB-expansion and viewport intersection.  Compositing a fractional-origin
-    /// grown texture at its fractional dst_rect keeps the texel grid aligned with
-    /// the device-pixel grid — a valid 1:1 aligned blit.
-    ///
-    /// Shrinking to a smaller intermediate but compositing at the same fractional
-    /// `grown_bounds` would offset the two grids by `frac(grown_left)`, shifting
-    /// every pixel by a sub-texel.  To avoid this, BOTH the intermediate size and
-    /// the composite dst_rect MUST share one integer grid:
-    ///
-    /// ```text
-    /// fb_origin = (floor(grown.left), floor(grown.top))
-    /// fb_far    = (ceil(grown.right),  ceil(grown.bottom))   // clamped to viewport
-    /// fb_dim    = fb_far - fb_origin
-    /// composite: dst_rect = Rect(fb_origin, fb_far),  src_uv = [0, 0, 1, 1]
-    /// ```
-    ///
-    /// For the entire readback test suite (all integer-aligned margins) floor/ceil
-    /// are no-ops → fb rect == grown_bounds → bit-identical output → zero re-baseline.
-    ///
-    /// ## Return value
-    ///
-    /// `(fb_origin, fb_dim)` where both components are `(u32, u32)` integer pixel
-    /// coordinates.  `fb_dim` is clamped to `[1, viewport]` per axis so the pool
-    /// acquire is always valid.
-    fn filter_fb_rect(&self, grown_bounds: Rect<f64>) -> ((u32, u32), (u32, u32)) {
-        let (vp_w, vp_h) = self.size;
-
-        // Integer-grid origin: floor the fractional grown-bounds top-left.
-        let origin_x = grown_bounds.left().floor() as u32;
-        let origin_y = grown_bounds.top().floor() as u32;
-
-        // Integer-grid far corner: ceil the fractional grown-bounds bottom-right,
-        // then clamp to the viewport so we never allocate past the surface edge.
-        let far_x = (grown_bounds.right().ceil() as u32).min(vp_w);
-        let far_y = (grown_bounds.bottom().ceil() as u32).min(vp_h);
-
-        // Dimension: must be at least 1×1 (pool acquire contract).
-        let dim_x = far_x.saturating_sub(origin_x).max(1);
-        let dim_y = far_y.saturating_sub(origin_y).max(1);
-
-        ((origin_x, origin_y), (dim_x, dim_y))
+    /// Integer device-pixel frame, including required input outside the viewport.
+    fn filter_fb_rect(
+        &self,
+        bounds: Rect<f64>,
+    ) -> Result<FilterFramebuffer, crate::command_ir::RecordError> {
+        use crate::command_ir::RecordError;
+        use crate::error::GeometryError;
+        let edges = [
+            (bounds.left() / 2.0).floor() * 2.0,
+            (bounds.top() / 2.0).floor() * 2.0,
+            bounds.right().ceil(),
+            bounds.bottom().ceil(),
+        ];
+        // f32 positions and uniforms must retain the integer texel lattice exactly.
+        if edges
+            .iter()
+            .any(|edge| !edge.is_finite() || edge.abs() > 16_777_216.0)
+        {
+            return Err(RecordError::Geometry(GeometryError::Unrepresentable {
+                context: "filter framebuffer origin",
+            }));
+        }
+        let width = (edges[2] - edges[0]).max(1.0);
+        let height = (edges[3] - edges[1]).max(1.0);
+        let limit = self.device.limits().max_texture_dimension_2d;
+        if width > f64::from(limit) || height > f64::from(limit) {
+            return Err(RecordError::Limit {
+                resource: "filter texture dimension",
+                requested: width.max(height) as usize,
+                limit: limit as usize,
+            });
+        }
+        Ok((
+            (edges[0] as i64, edges[1] as i64),
+            (width as u32, height as u32),
+        ))
     }
 
-    /// Compute a conservative device-space content AABB from a `DrawSegment`.
-    ///
-    /// Returns the union of all geometry bounding boxes in the segment, in device
-    /// pixels.  Returns `None` when the segment is empty OR when any geometry kind
-    /// cannot be conservatively bounded (the caller falls back to the full viewport).
-    ///
-    /// ## Conservative-or-fallback contract (CRITICAL)
-    ///
-    /// This function MUST NEVER return an AABB smaller than the true device-space
-    /// content extent.  An under-estimate would clip drawn pixels — a visible
-    /// correctness regression worse than no win at all.  Over-estimation is always
-    /// safe (it merely reduces the VRAM benefit).
-    ///
-    /// When in doubt about a geometry kind, return `None` so the caller falls back
-    /// to the viewport.  The fallback is correct; it only forgoes the VRAM saving.
-    ///
-    /// ## Repositionable vs. fallback kinds
-    ///
-    /// Grown-bounds rendering (`render_segment_to_grown_offscreen`) currently
-    /// repositions only:
-    ///
-    /// - tessellated vertices (`segment.vertices`)
-    /// - `RectInstance`, `CircleInstance`, `ArcInstance` (instanced batches)
-    ///
-    /// Segments containing **shadows, gradients, or images** fall back to the
-    /// full-viewport path (correct, no VRAM win) because those kinds are not
-    /// repositioned by the grown-offscreen renderer.  Repositioning them is a
-    /// tracked follow-up.  Returning `None` here causes the caller's
-    /// `.unwrap_or(viewport)` to select `fb_dim == viewport`, which makes
-    /// `render_segment_to_grown_offscreen`'s remap an identity transform —
-    /// rendering is correct with zero VRAM saving.
-    ///
-    /// ## Geometry kinds covered when returning `Some`
-    ///
-    /// | Kind | Bound source |
-    /// |------|-------------|
-    /// | `vertices` | Exact min/max of `Vertex::position` (device px) |
-    /// | `RectInstance` baked (identity M, zero t) | `bounds [x,y,w,h]` in device px |
-    /// | `RectInstance` affine | 4 corners transformed by M+t, convex hull |
-    /// | `CircleInstance` / `ArcInstance` | center ± (‖col_x‖₁ + ‖col_y‖₁) (conservative) |
+    pub(crate) fn reject_image_filter_parameter(&mut self, error: crate::error::GeometryError) {
+        self.current_segment
+            .budget
+            .record_error(crate::command_ir::RecordError::Geometry(error));
+    }
+
+    /// Bound a nested effect's desired output by all enclosing filters' input debt.
+    pub(super) fn filter_desired_output(
+        &self,
+    ) -> Result<Rect<f64>, crate::command_ir::RecordError> {
+        let mut desired = self.viewport_bounds();
+        for filter in self.compositor.image_filters() {
+            let (x, y) = filter
+                .support_extent()
+                .map_err(crate::command_ir::RecordError::Geometry)?;
+            desired = desired.inflate(x, y);
+        }
+        Ok(desired)
+    }
+
+    fn queue_image_filter(
+        &mut self,
+        spec: ImageFilterSpec,
+        input: DrawSegment,
+        items: Vec<DrawItem>,
+        composite_clip: Option<crate::command_ir::GroupClip>,
+    ) {
+        use crate::command_ir::RecordError;
+        let planned = (|| {
+            let (x, y) = spec.support_extent().map_err(RecordError::Geometry)?;
+            let passes = spec.into_passes();
+            let mut desired = self.filter_desired_output()?;
+            if let Some(clip) = &composite_clip {
+                match clip.chain.root_bounds() {
+                    Ok(Some(bounds)) => {
+                        // Analytic antialias coverage can extend beyond the ideal shape.
+                        let bounds = if clip.chain.has_antialias() {
+                            bounds.expand(1.0)
+                        } else {
+                            bounds
+                        };
+                        desired = desired.intersect(&bounds).unwrap_or(Rect::ZERO);
+                    }
+                    Ok(None) => {}
+                    Err(crate::EngineError::InvalidGeometry(error)) => {
+                        return Err(RecordError::Geometry(error));
+                    }
+                    Err(_) => {
+                        return Err(RecordError::Geometry(
+                            crate::error::GeometryError::Unrepresentable {
+                                context: "filter output clip",
+                            },
+                        ));
+                    }
+                }
+            }
+            if desired.is_empty() {
+                return Ok(None);
+            }
+            let required = desired.inflate(x, y).expand_to_int();
+            // Nested items and kinds without a reliable bound use the finite input
+            // demand, never the whole scene nor an unbounded source union.
+            let source = if items.is_empty() {
+                Self::content_aabb(&input).map(|bounds| bounds.expand(3.0).expand_to_int())
+            } else {
+                None
+            };
+            let creates_alpha = passes.iter().any(
+                |pass| matches!(pass, ImageFilterPass::ColorMatrix(matrix) if matrix[19] > 0.0),
+            );
+            let input_support = if creates_alpha {
+                required
+            } else {
+                source.map_or(required, |bounds| {
+                    bounds.intersect(&required).unwrap_or(Rect::ZERO)
+                })
+            };
+            if input_support.is_empty() && !creates_alpha {
+                return Ok(None);
+            }
+            let output_support = input_support
+                .inflate(x, y)
+                .intersect(&desired)
+                .unwrap_or(Rect::ZERO);
+            if output_support.is_empty() {
+                return Ok(None);
+            }
+            // Every forward support is inside the cumulative expanded source;
+            // retain only its intersection with backwards input demand.
+            let frame = input_support
+                .inflate(x, y)
+                .intersect(&required)
+                .unwrap_or(Rect::ZERO);
+            let (fb_origin, fb_dim) = self.filter_fb_rect(frame)?;
+            Ok(Some(FilterOp {
+                composite_clip,
+                input: input.seal(),
+                items,
+                passes,
+                input_support,
+                source_support: source,
+                required_input_bounds: required,
+                output_support,
+                fb_origin,
+                fb_dim,
+            }))
+        })();
+        match planned {
+            Ok(Some(op)) => self.draw_order.push(DrawItem::Filter(op)),
+            Ok(None) => {}
+            Err(error) => self.current_segment.budget.record_error(error),
+        }
+    }
+
+    /// Bound known primitive geometry in root device pixels, before AA fringe.
+    /// Unknown kinds and ordered nested groups use bounded required input instead
+    /// of guessing a smaller source support. Replay supports these primitives;
+    /// the fallback merely forgoes an allocation-tightening optimization.
     fn content_aabb(segment: &DrawSegment) -> Option<Rect<f64>> {
-        // ── Fallback gate (P0 regression fix) ────────────────────────────────
-        //
-        // Shadows, gradients, and images cannot be repositioned by
-        // `render_segment_to_grown_offscreen`.  Returning `None` here forces the
-        // caller's `.unwrap_or(viewport)` to select `composite_bounds = viewport`
-        // → `fb_dim == viewport` → the remap in the grown renderer is the identity
-        // transform → those kinds render at the correct position.
-        //
-        // This is a conservative-or-fallback: the only cost is forgoing the VRAM
-        // optimisation for layers that contain these kinds.  Correctness is fully
-        // preserved.  Repositioning shadows/gradients/images in the grown
-        // intermediate is a tracked follow-up.
         if !segment.shadow_batch.is_empty()
             || !segment.linear_gradient_batch.is_empty()
             || !segment.radial_gradient_batch.is_empty()
             || !segment.sweep_gradient_batch.is_empty()
             || !segment.cached_images.is_empty()
             || !segment.external_images.is_empty()
+            || !segment.glyph_batch.is_empty()
         {
             return None;
         }
@@ -352,7 +411,7 @@ impl WgpuPainter {
             //     into transform columns. Multiplying by 1.0 is a safe no-op.
             // Without this factor the baked path produces half_x = sx (missing `* radius`),
             // which clips a circle of radius R at scale 1 to a ~2×2 box around its center.
-            let radius_factor = instance.center_radius[2];
+            let radius_factor = instance.center_radius[2].max(1e-6);
             let half_x = radius_factor * (a.abs() + c.abs());
             let half_y = radius_factor * (b.abs() + d.abs());
             union_pt!(center_x - half_x, center_y - half_y);
@@ -580,12 +639,16 @@ impl WgpuPainter {
                 return Ok(());
             }
             let inverse = crate::clip_geometry::ValidatedAffine::new(matrix.inverse())?;
-            let viewport = Rect::from_xywh(
-                -4.0,
-                -4.0,
-                f64::from(self.size.0) + 8.0,
-                f64::from(self.size.1) + 8.0,
-            );
+            let viewport = self.filter_desired_output().map_err(|error| match error {
+                crate::command_ir::RecordError::Geometry(error) => {
+                    crate::EngineError::InvalidGeometry(error)
+                }
+                _ => crate::EngineError::InvalidGeometry(
+                    crate::error::GeometryError::Unrepresentable {
+                        context: "shader mask working domain",
+                    },
+                ),
+            })?;
             let source_bounds = inverse.map_bounds(viewport)?.ok_or(
                 crate::error::GeometryError::Unrepresentable {
                     context: "mask source extent",
@@ -647,7 +710,7 @@ impl WgpuPainter {
     /// does NOT grow bounds), this method routes the layer's offscreen content
     /// through a `DrawItem::Filter` at `restore_layer` time instead of
     /// `DrawItem::OpacityLayer`.  The `FilterOp` carries the pass chain derived
-    /// from `spec` and a `grown_bounds` rect that expands beyond the content AABB,
+    /// from `spec` and a `output_support` rect that expands beyond the content AABB,
     /// allowing morphology/blur to composite at a larger area than the input.
     ///
     /// The layer is pushed with opacity=inherited (so any outer group opacity still
@@ -658,6 +721,11 @@ impl WgpuPainter {
     /// Used by `push_image_filter` in `backend.rs` for `Dilate`, `Erode`, `Blur`,
     /// and `Compose` (the latter via a pre-flattened `ImageFilterSpec::Chain`).
     pub(crate) fn save_layer_with_image_filter(&mut self, spec: ImageFilterSpec) {
+        if let Err(error) = spec.support_extent() {
+            self.current_segment
+                .budget
+                .record_error(crate::command_ir::RecordError::Geometry(error));
+        }
         // Inherit the current ancestor opacity (same as `save_layer_with_filter`).
         let layer_opacity = self.compositor.effective_layer_opacity(1.0);
         self.save_layer_impl(
@@ -723,7 +791,7 @@ impl WgpuPainter {
                 legacy: crate::state_stack::ResolvedClip::NONE,
                 chain: crate::clip_chain::ClipChain::default(),
             });
-            let rect = Rect::from_xywh(f64::from(x), f64::from(y), f64::from(w), f64::from(h));
+            let rect = Rect::from_xywh(x as f64, y as f64, f64::from(w), f64::from(h));
             let result = crate::clip_geometry::ValidatedClip::rect(rect)
                 .map_err(crate::command_ir::RecordError::Geometry)
                 .and_then(|shape| {
@@ -791,7 +859,7 @@ impl WgpuPainter {
     ///   the layer's region (`RestoreOutcome::Composite`), or nothing when the
     ///   region has no area.
     /// - **Image filter layer** (opened via `save_layer_with_image_filter`) →
-    ///   `DrawItem::Filter` with the computed `grown_bounds` and pass chain.
+    ///   `DrawItem::Filter` with the computed `output_support` and pass chain.
     ///
     /// Calling `restore_layer` without a matching open is a logic error; the
     /// compositor logs a warning and reinstates the pre-restore draw state
@@ -815,7 +883,13 @@ impl WgpuPainter {
         // resolve it here using the pattern from the original restore_layer.
         // We peek the bounds from the top of the layer_stack before delegating.
         let composite_bounds = self.compositor.peek_layer_bounds().map_or_else(
-            || self.viewport_bounds(),
+            || match self.filter_desired_output() {
+                Ok(bounds) => bounds,
+                Err(error) => {
+                    self.current_segment.budget.record_error(error);
+                    Rect::ZERO
+                }
+            },
             |b| {
                 Rect::from_ltrb(
                     f64::from(b[0]),
@@ -871,162 +945,14 @@ impl WgpuPainter {
                 // (Morph/Blur); fall through to DrawItem::OpacityLayer for
                 // plain opacity/tint/blend-mode layers.
                 match image_filter {
-                    Some(ImageFilterSpec::Morph { radius, op }) => {
-                        // `_ = layer_opacity` — morphology is applied as a DrawItem::Filter
-                        // that composites directly; the opacity field is inherited via
-                        // `effective_layer_opacity(1.0)` in `save_layer_with_image_filter`
-                        // and is already baked into the save-layer setup.  The composite
-                        // step (flush_texture_batch_premultiplied) uses REPLACE blend, so
-                        // the group opacity is effectively 1.0 at this stage.
+                    Some(spec) => {
                         let _ = (layer_opacity, tint_rgb, layer_blend, layer_filter);
-
-                        // Override composite_bounds for the image-filter path: use the
-                        // content AABB of the drawn segment (conservative device-space
-                        // union) rather than the full viewport.  This is the producer wiring
-                        // that makes grown-bounds VRAM reduction real: when bounds=None was
-                        // passed to save_layer_with_image_filter, composite_bounds was
-                        // previously always the full viewport (the inert façade this
-                        // producer wiring fixes). content_aabb falls back to the
-                        // viewport if the segment is empty or contains an un-boundable kind.
-                        let composite_bounds = {
-                            let vp = self.viewport_bounds();
-                            offscreen_items
-                                .is_empty()
-                                .then(|| Self::content_aabb(&offscreen_final_segment))
-                                .flatten()
-                                .and_then(|aabb| aabb.intersect(&vp))
-                                .unwrap_or(vp)
-                        };
-
-                        // Growth via the shared helper (one source of truth for Morph).
-                        let single_pass = ImageFilterPass::Morph { radius, op };
-                        let growth_px =
-                            super::cumulative_growth(std::slice::from_ref(&single_pass));
-                        let grown = composite_bounds.expand(f64::from(growth_px));
-                        let viewport_rect = self.viewport_bounds();
-                        let grown_bounds =
-                            grown.intersect(&viewport_rect).unwrap_or(composite_bounds);
-
-                        // Compute the integer-aligned offscreen frame rectangle so BOTH
-                        // composite arms (replay.rs + opacity_layer.rs nested Filter arm)
-                        // share one authoritative value and cannot drift.
-                        let (fb_origin, fb_dim) = self.filter_fb_rect(grown_bounds);
-
-                        tracing::trace!(
-                            radius,
-                            op = ?op,
-                            content_bounds = ?composite_bounds,
-                            grown_bounds = ?grown_bounds,
-                            fb_origin = ?fb_origin,
-                            fb_dim = ?fb_dim,
-                            "WgpuPainter::restore_layer: queued DrawItem::Filter (Morph)"
-                        );
-                        self.draw_order.push(DrawItem::Filter(FilterOp {
+                        self.queue_image_filter(
+                            spec,
+                            offscreen_final_segment,
+                            offscreen_items,
                             composite_clip,
-                            input: offscreen_final_segment.seal(),
-                            items: offscreen_items,
-                            passes: smallvec![single_pass],
-                            content_bounds: composite_bounds,
-                            grown_bounds,
-                            fb_origin,
-                            fb_dim,
-                        }));
-                    }
-                    Some(ImageFilterSpec::Blur { sigma_x, sigma_y }) => {
-                        // Gaussian blur via two H/V sub-passes (separable, anisotropic).
-                        // Identical seam to Morph: grow by kernel_radius(max(σx,σy))
-                        // on each side, clip to viewport, emit DrawItem::Filter.
-                        //
-                        // Growth via the shared `cumulative_growth` helper (one source
-                        // of truth for Blur; `kernel_radius` uses Impeller's √3·σ rule).
-                        let _ = (layer_opacity, tint_rgb, layer_blend, layer_filter);
-
-                        // Content-AABB override (same rationale as the Morph arm above).
-                        let composite_bounds = {
-                            let vp = self.viewport_bounds();
-                            offscreen_items
-                                .is_empty()
-                                .then(|| Self::content_aabb(&offscreen_final_segment))
-                                .flatten()
-                                .and_then(|aabb| aabb.intersect(&vp))
-                                .unwrap_or(vp)
-                        };
-
-                        let single_pass = ImageFilterPass::Blur { sigma_x, sigma_y };
-                        let halo_px = super::cumulative_growth(std::slice::from_ref(&single_pass));
-                        let grown = composite_bounds.expand(f64::from(halo_px));
-                        let viewport_rect = self.viewport_bounds();
-                        let grown_bounds =
-                            grown.intersect(&viewport_rect).unwrap_or(composite_bounds);
-
-                        // Integer-aligned fb rect — one home for both composite arms.
-                        let (fb_origin, fb_dim) = self.filter_fb_rect(grown_bounds);
-
-                        tracing::trace!(
-                            sigma_x,
-                            sigma_y,
-                            content_bounds = ?composite_bounds,
-                            grown_bounds = ?grown_bounds,
-                            fb_origin = ?fb_origin,
-                            fb_dim = ?fb_dim,
-                            "WgpuPainter::restore_layer: queued DrawItem::Filter (Blur)"
                         );
-                        self.draw_order.push(DrawItem::Filter(FilterOp {
-                            composite_clip,
-                            input: offscreen_final_segment.seal(),
-                            items: offscreen_items,
-                            passes: smallvec![single_pass],
-                            content_bounds: composite_bounds,
-                            grown_bounds,
-                            fb_origin,
-                            fb_dim,
-                        }));
-                    }
-                    Some(ImageFilterSpec::Chain(passes)) => {
-                        // Multi-pass Compose chain: the passes vec is already flattened
-                        // at record time by `flatten_compose` in `backend.rs`.
-                        //
-                        let _ = (layer_opacity, tint_rgb, layer_blend, layer_filter);
-
-                        // Content-AABB override (same rationale as the Morph/Blur arms above).
-                        let composite_bounds = {
-                            let vp = self.viewport_bounds();
-                            offscreen_items
-                                .is_empty()
-                                .then(|| Self::content_aabb(&offscreen_final_segment))
-                                .flatten()
-                                .and_then(|aabb| aabb.intersect(&vp))
-                                .unwrap_or(vp)
-                        };
-
-                        // Cumulative growth = Σ per-pass radii (ColorMatrix/Identity = 0).
-                        let growth_px = super::cumulative_growth(&passes);
-                        let grown = composite_bounds.expand(f64::from(growth_px));
-                        let viewport_rect = self.viewport_bounds();
-                        let grown_bounds =
-                            grown.intersect(&viewport_rect).unwrap_or(composite_bounds);
-
-                        // Integer-aligned fb rect — one home for both composite arms.
-                        let (fb_origin, fb_dim) = self.filter_fb_rect(grown_bounds);
-
-                        tracing::trace!(
-                            pass_count = passes.len(),
-                            content_bounds = ?composite_bounds,
-                            grown_bounds = ?grown_bounds,
-                            fb_origin = ?fb_origin,
-                            fb_dim = ?fb_dim,
-                            "WgpuPainter::restore_layer: queued DrawItem::Filter (Chain)"
-                        );
-                        self.draw_order.push(DrawItem::Filter(FilterOp {
-                            composite_clip,
-                            input: offscreen_final_segment.seal(),
-                            items: offscreen_items,
-                            passes,
-                            content_bounds: composite_bounds,
-                            grown_bounds,
-                            fb_origin,
-                            fb_dim,
-                        }));
                     }
                     None if composite_bounds.width() <= 0.0 || composite_bounds.height() <= 0.0 => {
                         // The region missed the clip: there is nothing the

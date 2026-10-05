@@ -1,6 +1,8 @@
 # ADR-0109: Notification channels without an unused registry wrapper
 
 - **Status:** Accepted.
+- **Superseded-by:** [ADR-0119](ADR-0119-inert-panic-payload-retirement.md),
+  only the known inert text-payload retirement policy in decisions 3–4.
 - **Date:** 2026-10-04
 - **Supersedes:** [ADR-0104](ADR-0104-borrowed-notification-and-opaque-panic-retention.md)
 
@@ -32,6 +34,10 @@ move or borrow its value.
    retirement panics, retain the remaining envelopes and propagate the first
    retirement failure. `panic::retain_opaque_payload` deliberately retains a
    discarded opaque payload; a propagated original failure uses `resume_unwind`.
+
+ADR-0119 refines discarded-payload retention: exact static-string and owned-string
+payloads are released; all opaque payloads and exceptional callback snapshots
+retain the policy above.
 
 ## Consequences and verification
 

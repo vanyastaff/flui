@@ -1,0 +1,16 @@
+[
+  {
+    "elapsed_ms": 1238.1525,
+    "process_id": 38468,
+    "dedicated_bytes": 357224448.0,
+    "shared_bytes": 245420032.0,
+    "total_committed_bytes": 602644480.0
+  },
+  {
+    "elapsed_ms": 2259.6146,
+    "process_id": 38468,
+    "dedicated_bytes": 0.0,
+    "shared_bytes": 0.0,
+    "total_committed_bytes": 0.0
+  }
+]

@@ -463,6 +463,12 @@ fixture `renderer_new_rejects_borrowed_window` pins that a borrow cannot be
 handed in; `surface_lease.rs`'s tests pin the drop order and that a released
 lease cannot present.
 
+`cancelling_renderer_new` exercises the production `probe_then_build` seam
+with a CPU-only handle source and a builder that remains pending. After the
+external owner is dropped, the target stays alive while construction is
+pending and its destructor runs when that future is cancelled. This pins
+construction ownership without initializing a GPU or requiring a window.
+
 ### 4. Clip coverage mixes the complete operator result with the destination
 
 Coverage is independent of source alpha. Destination-destructive operators
@@ -543,15 +549,40 @@ different operation.
 scissor, including inside image filters. Coverage applies once to the finished
 group. Rect AA also resolves geometric membership; a hard rectangular scissor remains a work bound.
 
-`FilterOp` retains every ordered draw item plus the final segment. Flat input
-uses a grown-bounds cropped intermediate. Input with nested compositing uses
-a full-viewport intermediate, so child effects keep their coordinate system
-without rebasing nested command IR. This costs a larger allocation for nested
-content but preserves siblings, group opacity, child filters and clip coverage.
-`image_filters_keep_nested_opacity_and_both_siblings` pins Blur, Dilate and
-Compose through the public scene/capture API;
-`a_clip_inside_an_image_filter_layer_keeps_its_content_and_its_siblings`
-pins the clip case.
+`FilterOp` retains every ordered draw item plus the final segment. Source support,
+backwards required input, evolving intermediate support and the final composite
+clip have separate roles. Each Blur axis uses the shader's
+`ceil(sigma * 1.7320508)` support; Morph uses `ceil(radius)`. The finite input
+working domain is bounded by desired output plus accumulated per-axis support,
+including enclosing filters' input demand. Distant scene geometry cannot enlarge
+it. Antialiased primitive bounds include the shader's fringe before pixel cover.
+
+Flat and nested input share a signed root-to-attachment mapping. Immutable
+viewport bindings carry the attachment origin; primitive geometry, gradient
+coordinates and analytic clips remain in root space. Scissors clamp only after
+mapping to their actual attachment, and membership masks compose the same origin
+into their attachment-to-root mapping. An integer texel grid keeps the final
+composite aligned while cropping it independently of the input working domain.
+Replay restores the previous attachment state on both success and refusal.
+The frame boundary resets it after a contained unwind.
+
+Dimensions, cumulative sampling work and prepared resource charges are admitted
+before foreground texture acquisition. Existing submission/completion ownership
+retains these charges; this is not a budget for every resident GPU allocation.
+Nonfinite/negative radii and sigma that cannot preserve valid shader arithmetic
+produce a typed geometry error. Zero sigma on either axis is identity on that
+axis and preserves the source's antialias coverage.
+
+`foreground_filter_viewport_crop_contract` compares direct replay and recorded
+scenes with the corresponding crop of a larger rendering. The independent
+`foreground_filter_chains_match_independent_nested_layers` compares Compose with
+separately nested filters, preventing both crop renders from sharing an
+intermediate-support defect. `image_filters_keep_nested_opacity_and_both_siblings`
+and `a_clip_inside_an_image_filter_layer_keeps_its_content_and_its_siblings`
+retain the earlier ordering and group-coverage witnesses.
+`foreground_filter_invalid_parameters_refuse_and_recover` and
+`foreground_filter_prepared_quota_refusal_keeps_next_frame_deliverable` pin
+parameter admission and the next healthy frame after resource refusal.
 
 ### 10. Group and backdrop composites preserve their recorded operator
 
@@ -693,28 +724,29 @@ promising extreme-coordinate GPU floating-point precision.
 
 `parley_runs_read_back` reads back what paint now
 draws: hard breaks, synthetic bold, host fallback faces, right alignment and
-the device baseline. Because a rasterizer is a seam,
-the atlas guards the upload rather than trusting it: an image whose data
-length is not `width × height × bytes_per_texel` is not placed (warned), and
-a grow re-uploads a re-rasterized glyph only if it has the size and content
-kind its slot was given. Either would otherwise fail wgpu's copy validation,
-which panics under the default error handler. A glyph that fails the grow
+the device baseline. `GlyphImage` validates CPU byte storage at construction
+(ADR-0122); the atlas does not repeat that invariant. A valid bitmap can still
+exceed the device's texture limit, so allocation refuses it before eviction or
+page growth and converts dimensions to the packer's signed representation with
+checked conversions. A grow re-uploads a re-rasterized glyph only if it has the
+size and content kind its slot was given. A glyph that fails the grow
 check is dropped from the cache, as after a `None`, so its next use asks
 again; its allocation is freed at the end of the frame if the frame already
 drew from it, so no other glyph is packed into a region a recorded draw
 samples. `swash_glyphs_land_and_equal_keys_share_a_slot` pins the placement
 path a real rasterizer takes.
 `failed_glyph_replay_retries_without_reusing_recorded_regions` models a missing
-bitmap, malformed bitmap and both failures on independent keys through the private
+bitmap, valid bitmaps with changed size or content, and competing failures on independent keys through the private
 rasterizer seam. Failed replay removes the cache entry even when the rasterizer
 returns `None`; the replacement texture contains no uploaded bitmap for that key.
 The next use retries, healthy keys remain cached, and retry allocations cannot
 reuse regions already referenced by the current frame. This checks recovery and
 allocation ownership, without claiming that a failed bitmap can still be drawn
 in the frame which first requested it.
-The same family rejects an overflowing color-bitmap byte count before upload and
-proves that a subsequent valid bitmap for the key can still be admitted. Expected
-byte length uses checked arithmetic even when a rasterizer violates its contract.
+The same family produces a valid CPU bitmap beyond a deliberately small device
+limit, proves refusal without replaying healthy glyphs or growing the page, and
+then admits a valid bitmap for the same key. Width and height are separate rows.
+CPU byte-count overflow and malformed storage are painting constructor tests.
 
 ### 17. One rounding rule per purpose: hard edges snap, bounds cover — [ADR-0098 §6](../../docs/adr/ADR-0098-owned-f64-geometry-values.md)
 
