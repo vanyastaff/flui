@@ -354,6 +354,10 @@ impl<P: Protocol> RenderState<P> {
         self.parent_data.as_deref_mut()
     }
 
+    pub(super) fn take_parent_data(&mut self) -> Option<Box<dyn crate::parent_data::ParentData>> {
+        self.parent_data.take()
+    }
+
     /// Sets (or replaces) the persistent parent data.
     ///
     /// Called by the parent during layout to store metadata about this

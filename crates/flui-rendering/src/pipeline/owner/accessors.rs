@@ -35,7 +35,8 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     where
         F: Fn() + Send + Sync + 'static,
     {
-        self.notifier.write().set_need_visual_update(callback);
+        let outgoing = { self.notifier.write().replace_need_visual_update(callback) };
+        drop(outgoing);
     }
 
     /// Sets the callback for when semantics owner is created.
@@ -43,7 +44,12 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     where
         F: Fn() + Send + Sync + 'static,
     {
-        self.notifier.write().set_semantics_owner_created(callback);
+        let outgoing = {
+            self.notifier
+                .write()
+                .replace_semantics_owner_created(callback)
+        };
+        drop(outgoing);
     }
 
     /// Sets the callback for when semantics owner is disposed.
@@ -51,7 +57,12 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     where
         F: Fn() + Send + Sync + 'static,
     {
-        self.notifier.write().set_semantics_owner_disposed(callback);
+        let outgoing = {
+            self.notifier
+                .write()
+                .replace_semantics_owner_disposed(callback)
+        };
+        drop(outgoing);
     }
 
     /// Requests a visual update.

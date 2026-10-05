@@ -32,6 +32,26 @@ deepest-first element unmount so view lifecycle hooks remain canonical.
 
 This section records design decisions and why they were taken. Each entry follows the "Accepted trade-offs" format established by [`docs/plans/2026-03-31-custom-render-callback-design.md`](https://github.com/vanyastaff/flui/blob/e30ab7194d50ac1c11ffe17c59230958d2fbeecd/docs/plans/2026-03-31-custom-render-callback-design.md): state the rule (or absence of rule), the choice, the alternatives considered, the trade-off accepted.
 
+### Render storage and pipeline callbacks retain user values on failure
+
+Dropping a render entry drops its render object, then its parent data; a
+render tree drops its entries in slot order, and a `VisualUpdateNotifier` its
+visual-update, created, then disposed callbacks. Once one of those destructors
+panics, or when the drop begins while the thread is already panicking, the
+remaining render objects, parent data and callback captures are retained, not
+dropped, and the first panic propagates (ADR-0127). Framework-owned entry
+state (geometry, links, layout cache) still drops normally. Semantic `dispose`
+is not invoked by physical destruction. Pinned by
+`render_tree_retirement_preserves_independent_envelopes`.
+
+### Callback replacement retires captures after unlocking
+
+Pipeline callback setters install the new callback under the notifier write
+guard and drop the displaced one after releasing it, so a displaced capture's
+destructor can mark a node dirty and wake the pipeline. A panic in that
+destructor propagates and leaves the new callback installed. Pinned by
+`pipeline_callback_replacement_reentry`.
+
 ### Caught hit-test panics do not change sibling coordinates
 
 A custom render object can catch a child's hit-test panic and continue querying

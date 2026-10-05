@@ -48,6 +48,7 @@ fn lifecycle_matrix() {
     let cases: &[(&str, fn())] = &[
         ("attach_detach_lifecycle::insert_fires_exactly_one_attach_with_a_handle_bound_to_the_new_id", crate::attach_detach_lifecycle::insert_fires_exactly_one_attach_with_a_handle_bound_to_the_new_id),
         ("dispose_eviction::removing_a_subtree_evicts_its_dirty_entries", crate::dispose_eviction::removing_a_subtree_evicts_its_dirty_entries),
+        ("dispose_eviction::render_tree_retirement_preserves_independent_envelopes", crate::dispose_eviction::render_tree_retirement_preserves_independent_envelopes),
         ("pipeline_scenarios::repeated_churn_cycles_stay_clean_and_generations_protect_every_round", crate::pipeline_scenarios::repeated_churn_cycles_stay_clean_and_generations_protect_every_round),
         ("structural_invalidation::pure_reorder_marks_layout_only", crate::structural_invalidation::pure_reorder_marks_layout_only),
     ];
