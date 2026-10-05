@@ -139,7 +139,9 @@ impl Disclosure {
         R: EventOutcome,
     {
         let callback = Terminal::new(callback);
-        self.on_changed = Terminal::new(Some(value_callback(move |cx, state| callback(cx, state))));
+        let incoming = Terminal::new(Some(value_callback(move |cx, state| callback(cx, state))));
+        let old = std::mem::replace(&mut self.on_changed, incoming);
+        drop(old);
         self
     }
 
