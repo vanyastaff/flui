@@ -235,6 +235,55 @@ pub(crate) mod event_cx {
         .expect("a click on a node advertising one resolves");
     }
 
+    pub(crate) fn repeated_assistive_actions_are_delivered_once_each_and_keep_making_progress() {
+        let probe = SignalProbe::new(|ProbeSignals { count, .. }| {
+            labelled(GestureDetector::new().on_tap(move |cx| count.update(cx, |n| *n += 1)))
+        });
+        let mut app = lay_out(probe.view(), tight(100.0, 100.0));
+        app.enable_semantics();
+        app.pump();
+        let tree = app.a11y_tree().expect("semantics enabled before the frame");
+
+        invoke_labelled_action(&app, &tree, Action::Click);
+        invoke_labelled_action(&app, &tree, Action::Click);
+        assert_eq!(probe.value(), Ok(0), "accepted actions are deferred");
+
+        app.tick();
+        assert_eq!(
+            probe.value(),
+            Ok(2),
+            "coalescing wake demand must not coalesce two accepted activations"
+        );
+        app.tick();
+        assert_eq!(probe.reads().last(), Some(&2), "the signal reader rebuilt");
+        assert_eq!(
+            probe.value(),
+            Ok(2),
+            "a later frame must not replay either action"
+        );
+
+        let tree = app.a11y_tree().expect("semantics remains available");
+        invoke_labelled_action(&app, &tree, Action::Click);
+        assert_eq!(probe.value(), Ok(2), "the next activation is deferred too");
+        app.tick();
+        assert_eq!(
+            probe.value(),
+            Ok(3),
+            "delivery remains live after draining a batch"
+        );
+        app.tick();
+        assert_eq!(
+            probe.reads().last(),
+            Some(&3),
+            "the later write also rebuilds"
+        );
+        assert_eq!(
+            probe.value(),
+            Ok(3),
+            "the later action is delivered only once"
+        );
+    }
+
     pub(crate) fn a_panicking_assistive_action_does_not_discard_the_fifo_tail() {
         let long_press_calls = Rc::new(Cell::new(0));
         let observed_long_press = Rc::clone(&long_press_calls);
