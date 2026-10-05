@@ -14,7 +14,6 @@ use flui_foundation::ListenerId;
 
 use crate::{
     events::KeyEvent,
-    retain::Retain,
     routing::focus_scope::{FocusNode, FocusScopeNode, KeyEventResult},
 };
 

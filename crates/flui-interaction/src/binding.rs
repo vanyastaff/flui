@@ -545,7 +545,7 @@ impl GestureBinding {
     {
         if self.closed.get() {
             let mut failure = crate::__runtime::ClosePanic::for_rejection(self.close_mode.mode());
-            failure.retire(hit_test_fn);
+            failure.retire(crate::retain::Owned(hit_test_fn));
             failure.finish();
             return;
         }
@@ -841,10 +841,10 @@ impl GestureBinding {
             {
                 let _ = handle.release_route_for_close(token, &mut failure);
             }
-            failure.retire(route);
+            failure.retire(crate::retain::Owned(route));
         }
         for event in moves {
-            failure.retire(event);
+            failure.retire(crate::retain::Owned(event));
         }
         if failure.preserving() {
             failure.invoke(|| {

@@ -9,7 +9,7 @@ use std::{
     },
 };
 
-use crate::{FocusManager, TextInputOwner};
+use crate::{FocusManager, TextInputOwner, retain::Retain};
 
 /// Whether terminal cleanup already owes an earlier failure to its caller.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -148,9 +148,13 @@ impl ClosePanic {
         }
     }
 
-    pub(crate) fn retire<T>(&mut self, value: T) {
+    /// Destroy `value` ordinarily, or, once a failure is owed, retain only what
+    /// its destruction would run as user code ([`Retain`]): a shared handle
+    /// that is not the last owner is released, so a still-live owner keeps
+    /// sole custody of its captures (ADR-0127).
+    pub(crate) fn retire<T: Retain>(&mut self, value: T) {
         if self.preserving() {
-            std::mem::forget(value);
+            value.retain();
         } else {
             self.run(|| drop(value));
         }
@@ -168,9 +172,9 @@ impl ClosePanic {
         }
     }
 
-    pub(crate) fn finish_with<T: Default>(self, value: T) -> T {
+    pub(crate) fn finish_with<T: Default + Retain>(self, value: T) -> T {
         if self.preserving() {
-            std::mem::forget(value);
+            value.retain();
             self.finish();
             T::default()
         } else {

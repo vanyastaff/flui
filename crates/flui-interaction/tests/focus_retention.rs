@@ -5,6 +5,7 @@
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::rc::{Rc, Weak};
 
+use flui_interaction::__runtime::{CloseMode, close_focus};
 use flui_interaction::events::{Key, KeyEvent, KeyState, Modifiers};
 use flui_interaction::routing::{FocusManager, FocusNode, FocusScopeNode, FocusTraversalPolicy};
 
@@ -77,6 +78,24 @@ fn node_key_handler_capture_dies_with_its_node() {
     assert!(probe.upgrade().is_none(), "the handler capture is released");
 }
 
+/// A close that already owes a failure retains only last owners: a handler
+/// its caller still holds, whether withdrawn by the close or rejected by the
+/// closed manager, is released with the caller.
+fn closing_manager_leaves_shared_callbacks_with_their_caller() {
+    let (capture, probe) = capture();
+    let handler: Rc<dyn Fn(&KeyEvent) -> bool> = Rc::new(move |_| {
+        let _ = &capture;
+        false
+    });
+    let manager = FocusManager::new();
+    manager.add_global_key_handler(Rc::clone(&handler));
+    close_focus(&manager, CloseMode::PreservingFailure);
+    manager.add_global_key_handler(Rc::clone(&handler));
+    drop(handler);
+    assert!(probe.upgrade().is_none(), "the handler capture is released");
+    drop(manager);
+}
+
 #[derive(Debug)]
 struct PanickingPolicy(#[expect(dead_code, reason = "held for its lifetime")] Rc<()>);
 
@@ -115,6 +134,10 @@ fn caught_callback_failures_leave_captures_with_their_owner() {
         (
             "node key handler",
             node_key_handler_capture_dies_with_its_node,
+        ),
+        (
+            "closing manager",
+            closing_manager_leaves_shared_callbacks_with_their_caller,
         ),
         (
             "traversal policy",

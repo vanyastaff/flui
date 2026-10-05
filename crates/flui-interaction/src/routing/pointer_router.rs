@@ -138,7 +138,7 @@ impl PointerRouter {
     pub fn add_route(&self, pointer: PointerId, handler: PointerRouteHandler) {
         if self.closed.get() {
             let mut failure = crate::__runtime::ClosePanic::for_rejection(self.close_mode.mode());
-            failure.retire(handler);
+            failure.retire(crate::retain::Owned(handler));
             failure.finish();
             return;
         }
@@ -202,7 +202,7 @@ impl PointerRouter {
     pub fn add_global_handler(&self, handler: GlobalPointerHandler) {
         if self.closed.get() {
             let mut failure = crate::__runtime::ClosePanic::for_rejection(self.close_mode.mode());
-            failure.retire(handler);
+            failure.retire(crate::retain::Owned(handler));
             failure.finish();
             return;
         }
@@ -216,7 +216,7 @@ impl PointerRouter {
         let routes = std::mem::take(&mut *self.routes.borrow_mut());
         let globals = std::mem::take(&mut *self.global_handlers.borrow_mut());
         for handler in routes.into_values().flatten().chain(globals) {
-            failure.retire(handler);
+            failure.retire(crate::retain::Owned(handler));
         }
         failure.finish();
     }

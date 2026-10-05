@@ -69,6 +69,13 @@ pub struct TextInputClient {
     on_session_start: Option<Rc<dyn Fn()>>,
 }
 
+impl Retain for TextInputClient {
+    fn retain(self) {
+        self.on_session_start.retain();
+        self.store.retain();
+    }
+}
+
 impl TextInputClient {
     /// A client editing `store`.
     #[must_use]

@@ -1090,7 +1090,7 @@ impl GestureArena {
                 member: Arc::downgrade(&member),
             };
             let mut failure = ClosePanic::for_rejection(self.close_mode.mode());
-            failure.retire(member);
+            failure.retire(crate::retain::Owned(member));
             failure.finish();
             return inert;
         }
@@ -1181,7 +1181,7 @@ impl GestureArena {
     ) {
         if self.owner_closed.load(Ordering::Acquire) {
             let mut failure = ClosePanic::for_rejection(self.close_mode.mode());
-            failure.retire(member);
+            failure.retire(crate::retain::Owned(member));
             failure.finish();
             return;
         }
@@ -1207,7 +1207,7 @@ impl GestureArena {
     pub fn accept(&self, pointer: PointerId, member: Arc<dyn GestureArenaMember>) {
         if self.owner_closed.load(Ordering::Acquire) {
             let mut failure = ClosePanic::for_rejection(self.close_mode.mode());
-            failure.retire(member);
+            failure.retire(crate::retain::Owned(member));
             failure.finish();
             return;
         }
@@ -1299,7 +1299,7 @@ impl GestureArena {
     pub fn resolve(&self, pointer: PointerId, winner: Option<Arc<dyn GestureArenaMember>>) {
         if self.owner_closed.load(Ordering::Acquire) {
             let mut failure = ClosePanic::for_rejection(self.close_mode.mode());
-            failure.retire(winner);
+            failure.retire(crate::retain::Owned(winner));
             failure.finish();
             return;
         }
@@ -1471,7 +1471,7 @@ impl GestureArena {
         for batch in batches {
             for slot in batch.slots {
                 if failure.preserving() {
-                    failure.retire(slot);
+                    failure.retire(crate::retain::Owned(slot));
                     continue;
                 }
                 let pending = slot.data.lock().resolve(None);
@@ -1480,9 +1480,9 @@ impl GestureArena {
                         GestureDisposition::Accepted => member.accept_gesture(batch.pointer),
                         GestureDisposition::Rejected => member.reject_gesture(batch.pointer),
                     });
-                    failure.retire(member);
+                    failure.retire(crate::retain::Owned(member));
                 }
-                failure.retire(slot);
+                failure.retire(crate::retain::Owned(slot));
             }
         }
         failure.finish();

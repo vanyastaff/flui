@@ -1000,7 +1000,7 @@ impl InteractionDispatchHandle {
             && owner.closed.load(std::sync::atomic::Ordering::Acquire)
         {
             let mut failure = crate::__runtime::ClosePanic::for_rejection(owner.mode.mode());
-            failure.retire(value);
+            failure.retire(crate::retain::Owned(value));
             failure.finish();
             return Err(InteractionDispatchError::OwnerGone);
         }
@@ -1109,32 +1109,32 @@ impl InteractionDispatchHandle {
             .filter_map(|id| lane.payload_targets.borrow_mut().remove(id))
             .collect();
         for cell in route_cells {
-            failure.retire(cell);
+            failure.retire(crate::retain::Owned(cell));
         }
         for cell in pointers {
-            failure.retire(cell);
+            failure.retire(crate::retain::Owned(cell));
         }
         for cell in mice {
             let callbacks = cell.replace(MouseRegionCallbacks::default());
-            failure.retire(callbacks.on_enter);
-            failure.retire(callbacks.on_exit);
-            failure.retire(callbacks.on_hover);
-            failure.retire(cell);
+            failure.retire(crate::retain::Owned(callbacks.on_enter));
+            failure.retire(crate::retain::Owned(callbacks.on_exit));
+            failure.retire(crate::retain::Owned(callbacks.on_hover));
+            failure.retire(crate::retain::Owned(cell));
         }
         for cell in scrolls {
-            failure.retire(cell);
+            failure.retire(crate::retain::Owned(cell));
         }
         for cell in pans {
-            failure.retire(cell);
+            failure.retire(crate::retain::Owned(cell));
         }
         for cell in clips {
-            failure.retire(cell);
+            failure.retire(crate::retain::Owned(cell));
         }
         for cell in masks {
-            failure.retire(cell);
+            failure.retire(crate::retain::Owned(cell));
         }
         for payload in payloads {
-            failure.retire(payload);
+            failure.retire(crate::retain::Owned(payload));
         }
         failure.finish();
     }
@@ -1891,15 +1891,15 @@ impl InteractionDispatchHandle {
             .remove(&token.route_id)
             .ok_or(InteractionDispatchError::StaleRoute)?;
         if failure.preserving() {
-            failure.retire(removed);
+            failure.retire(crate::retain::Owned(removed));
         } else {
             match Rc::try_unwrap(removed) {
                 Ok(route) => {
                     for entry in route.entries {
-                        failure.retire(entry.handler_cell);
+                        failure.retire(crate::retain::Owned(entry.handler_cell));
                     }
                 }
-                Err(shared) => failure.retire(shared),
+                Err(shared) => failure.retire(crate::retain::Owned(shared)),
             }
         }
         Ok(())

@@ -634,7 +634,7 @@ impl MouseTracker {
             (outgoing, mode)
         };
         let mut failure = crate::__runtime::ClosePanic::for_rejection(mode);
-        failure.retire(outgoing);
+        failure.retire(crate::retain::Owned(outgoing));
         failure.finish();
     }
 
@@ -645,7 +645,7 @@ impl MouseTracker {
             (inner.cursor_change_callback.take(), inner.close_mode.mode())
         };
         let mut failure = crate::__runtime::ClosePanic::for_rejection(mode);
-        failure.retire(outgoing);
+        failure.retire(crate::retain::Owned(outgoing));
         failure.finish();
     }
 
@@ -667,9 +667,9 @@ impl MouseTracker {
             )
         };
         let mut failure = crate::__runtime::ClosePanic::for_close(mode, terminal);
-        failure.retire(callback);
+        failure.retire(crate::retain::Owned(callback));
         for annotation in annotations.into_values() {
-            failure.retire(annotation);
+            failure.retire(crate::retain::Owned(annotation));
         }
         failure.finish();
     }

@@ -5,7 +5,7 @@
 //! user code when dropped, so it is released normally: retaining a clone would
 //! leak the captures of an owner that is still alive and will be dropped later.
 
-use std::rc::Rc;
+use std::{rc::Rc, sync::Arc};
 
 /// A value an exceptional path retains instead of destroying.
 pub(crate) trait Retain {
@@ -16,6 +16,17 @@ pub(crate) trait Retain {
 impl<T: ?Sized> Retain for Rc<T> {
     fn retain(self) {
         if Rc::strong_count(&self) == 1 {
+            std::mem::forget(self);
+        }
+    }
+}
+
+impl<T: ?Sized> Retain for Arc<T> {
+    /// The same last-owner rule as [`Rc`]. Another thread releasing its clone
+    /// between the count and this drop makes this drop the last one, so a
+    /// shared `Arc` stays retainable only while its owners are owner-thread.
+    fn retain(self) {
+        if Arc::strong_count(&self) == 1 {
             std::mem::forget(self);
         }
     }
@@ -40,5 +51,17 @@ impl<T: Retain> Retain for Vec<T> {
         for value in self {
             value.retain();
         }
+    }
+}
+
+/// A value retained whole: a uniquely owned opaque value such as a user
+/// closure, or a shared handle whose other owners are framework structures
+/// (a lane's target cell is also held by saved routes) that would otherwise
+/// destroy it later, outside the failure that retired it.
+pub(crate) struct Owned<T>(pub(crate) T);
+
+impl<T> Retain for Owned<T> {
+    fn retain(self) {
+        std::mem::forget(self);
     }
 }
