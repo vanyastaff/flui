@@ -158,7 +158,7 @@ pub use animated::{
     AnimatedSwitcher, AnimatedSwitcherLayoutBuilder, AnimatedSwitcherState,
     AnimatedSwitcherTransitionBuilder, TickerMode, TickerModeState, VsyncScope,
 };
-pub use clip::{ClipOval, ClipPath, ClipRRect, ClipRect};
+pub use clip::{ClipOval, ClipPath, ClipRRect, ClipRect, Oval};
 // `Image` widget over `RenderImage`; provider types live in the same module.
 // `ImageFit`/`ImageAlignment` are re-exported from `flui-objects` so consumers
 // need only import from `flui-widgets`, not from lower-level crates.
