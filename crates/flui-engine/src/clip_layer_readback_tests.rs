@@ -504,6 +504,7 @@ fn clip_layers_read_back_as_the_clip_contract_specifies() {
     nested_exact_clip_geometry_and_coverage();
     hard_clip_membership_scales_to_a_full_hd_frame();
     command_transform_changes_preserve_captured_clips();
+    inline_picture_replay_owns_its_root_clips();
     display_list_and_save_layer_scopes_own_their_clips();
     a_clip_rect_layer_clips_its_content_and_its_absence_does_not();
     the_squircle_sdf_agrees_with_the_cpu_path_across_the_whole_boundary();
@@ -511,6 +512,78 @@ fn clip_layers_read_back_as_the_clip_contract_specifies() {
     an_empty_clip_path_clips_everything();
     a_clip_inside_an_image_filter_layer_keeps_its_content_and_its_siblings();
     every_canvas_clip_shape_refuses_difference_rather_than_inverting();
+}
+
+fn inline_picture_replay_owns_its_root_clips() {
+    let Some(renderer) = crate::test_support::renderer_or_skip() else {
+        return;
+    };
+    for (name, translation, nested, empty, origin) in [
+        ("plain", 0.0, false, false, 0),
+        ("transformed", 10.0, false, false, 10),
+        ("nested", 10.0, true, false, 15),
+        ("empty", 0.0, false, true, 0),
+    ] {
+        let mut source = Canvas::new();
+        if !empty {
+            source.clip_rect(Rect::from_xywh(0.0, 0.0, 20.0, 20.0));
+            source.draw_rect(
+                Rect::from_xywh(0.0, 0.0, 32.0, 32.0),
+                &Paint::fill(Color::RED),
+            );
+        }
+        let mut picture = source.finish();
+        if nested {
+            let mut wrapper = Canvas::new();
+            wrapper.translate(5.0, 5.0);
+            wrapper.draw_picture(&picture);
+            picture = wrapper.finish();
+        }
+
+        let mut canvas = Canvas::new();
+        canvas.clip_rect(Rect::from_xywh(0.0, 0.0, 48.0, 48.0));
+        canvas.translate(translation, translation);
+        canvas.draw_picture(&picture);
+        // Undo only the CTM: an enclosing save/restore would hide a leaked clip.
+        canvas.translate(-translation, -translation);
+        canvas.draw_rect(
+            Rect::from_xywh(40.0, 40.0, 8.0, 8.0),
+            &Paint::fill(Color::GREEN),
+        );
+        canvas.draw_rect(
+            Rect::from_xywh(52.0, 52.0, 8.0, 8.0),
+            &Paint::fill(Color::BLUE),
+        );
+        let mut builder = SceneBuilder::new();
+        builder.add_picture(canvas.finish());
+        let pixels = renderer
+            .render_layer_tree(&builder.build(), (SIDE, SIDE))
+            .expect("inline picture clip capture");
+        assert_eq!(
+            sample(&pixels, 44, 44),
+            [0, 255, 0, 255],
+            "caller drawing survives the picture's root clip: {name}"
+        );
+        assert_eq!(
+            sample(&pixels, 56, 56),
+            [255, 255, 255, 255],
+            "replay preserves the caller's ambient clip: {name}"
+        );
+        assert_eq!(
+            sample(&pixels, origin + 10, origin + 10),
+            if empty {
+                [255, 255, 255, 255]
+            } else {
+                [255, 0, 0, 255]
+            },
+            "picture content follows composed transforms: {name}"
+        );
+        assert_eq!(
+            sample(&pixels, origin + 25, origin + 5),
+            [255, 255, 255, 255],
+            "the picture's own clip still constrains its content: {name}"
+        );
+    }
 }
 
 fn display_list_and_save_layer_scopes_own_their_clips() {
