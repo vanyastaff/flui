@@ -149,14 +149,10 @@ impl WindowsPlatform {
             let next = AtomicU64::new(seed);
             let acquisitions = Cell::new(0);
             if seed != 0 {
-                let penultimate = WindowIdentity::admit_from(&next, |identity| {
-                    acquisitions.set(acquisitions.get() + 1);
-                    identity
-                });
-                let final_identity = WindowIdentity::admit_from(&next, |identity| {
-                    acquisitions.set(acquisitions.get() + 1);
-                    identity
-                });
+                let penultimate = WindowIdentity::mint_from(&next);
+                acquisitions.set(acquisitions.get() + 1);
+                let final_identity = WindowIdentity::mint_from(&next);
+                acquisitions.set(acquisitions.get() + 1);
                 assert_eq!(penultimate.0.get(), u64::MAX - 1);
                 assert_eq!(final_identity.0.get(), u64::MAX);
                 assert_ne!(penultimate, final_identity);
@@ -164,9 +160,8 @@ impl WindowsPlatform {
             for attempt in 0..3 {
                 assert!(
                     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        WindowIdentity::admit_from(&next, |_| {
-                            acquisitions.set(acquisitions.get() + 1);
-                        });
+                        WindowIdentity::mint_from(&next);
+                        acquisitions.set(acquisitions.get() + 1);
                     }))
                     .is_err(),
                     "seed {seed}: exhausted allocation succeeded on retry {attempt}"
@@ -1688,12 +1683,22 @@ impl WindowsPlatform {
         let mut armed: Option<DeadlineArm> = None;
         let mut delivered: Option<DeadlineArm> = None;
 
-        // SAFETY: `msg` is a stack-local `MSG`; `&raw mut msg`/`&raw const
-        // msg` give `GetMessageW`/`TranslateMessage`/`DispatchMessageW`
-        // valid, correctly-sized pointers to it, and `GetMessageW` only
-        // returns `TRUE` after filling `msg` in, so it is never read
-        // uninitialized. `DispatchMessageW` is what invokes `window_proc`
-        // (registered per-class in `register_window_class`) on this thread.
+        // SAFETY: `msg` is a stack-local, default-initialized `MSG` that
+        // outlives every call here. `&raw mut msg` is the only pointer
+        // `PeekMessageW`/`GetMessageW` write through, and `TranslateMessage`/
+        // `DispatchMessageW` read `&raw const msg` only after one of them
+        // reported a filled message. No pointer into `msg` is held across a
+        // call, so the re-entrancy below cannot alias it.
+        // `MsgWaitForMultipleObjectsEx` is passed no handle array (`None`,
+        // zero handles), so it reads no caller memory and only waits on this
+        // thread's queue. The loop runs on the thread that created this
+        // platform's windows, so every peek, wait and dispatch addresses that
+        // thread's queue, and `DispatchMessageW` (like `PeekMessageW` and
+        // `GetMessageW`, which deliver sent messages) re-enters `window_proc`
+        // on it. The deadline hook is safe code, called with no borrow of
+        // `msg` and no platform lock held, so it may re-enter the platform
+        // (close windows, replace itself, request quit) without violating
+        // either invariant.
         unsafe {
             let mut msg = MSG::default();
 

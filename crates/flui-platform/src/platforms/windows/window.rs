@@ -168,9 +168,8 @@ impl WindowsWindow {
     ) -> Result<Arc<Self>, OpenWindowError> {
         // Refuse identity exhaustion before creating an HWND whose ownership
         // has not yet transferred to a context and wrapper.
-        super::platform::WindowIdentity::admit(|identity| {
-            Self::new_admitted(options, windows_map, handlers, config, identity)
-        })
+        let identity = super::platform::WindowIdentity::mint();
+        Self::new_admitted(options, windows_map, handlers, config, identity)
     }
 
     fn new_admitted(
