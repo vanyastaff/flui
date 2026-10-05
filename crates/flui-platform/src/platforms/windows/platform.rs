@@ -29,15 +29,15 @@ use windows::{
                 DispatchMessageW, GWLP_USERDATA, GetClassNameW, GetClientRect, GetForegroundWindow,
                 GetMessageW, GetWindowLongPtrW, GetWindowThreadProcessId, HICON, HTCLIENT,
                 HWND_MESSAGE, IDC_ARROW, MSG, MWMO_INPUTAVAILABLE, MsgWaitForMultipleObjectsEx,
-                PM_REMOVE, PeekMessageW, PostQuitMessage, QS_ALLINPUT, RegisterClassW,
+                PM_REMOVE, PeekMessageW, PostQuitMessage, QS_ALLINPUT, RegisterClassW, SC_KEYMENU,
                 SW_SHOWNORMAL, SWP_NOACTIVATE, SWP_NOZORDER, SetForegroundWindow,
                 SetWindowLongPtrW, SetWindowPos, TranslateMessage, WINDOW_EX_STYLE, WINDOW_STYLE,
                 WM_CHAR, WM_CLOSE, WM_CREATE, WM_DESTROY, WM_DPICHANGED, WM_ERASEBKGND,
                 WM_INPUTLANGCHANGE, WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS, WM_LBUTTONDOWN,
                 WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEHWHEEL, WM_MOUSEMOVE,
                 WM_MOUSEWHEEL, WM_MOVE, WM_PAINT, WM_QUIT, WM_RBUTTONDOWN, WM_RBUTTONUP,
-                WM_SETCURSOR, WM_SETFOCUS, WM_SETTINGCHANGE, WM_SHOWWINDOW, WM_SIZE, WM_SYSKEYDOWN,
-                WM_SYSKEYUP, WNDCLASSW,
+                WM_SETCURSOR, WM_SETFOCUS, WM_SETTINGCHANGE, WM_SHOWWINDOW, WM_SIZE, WM_SYSCOMMAND,
+                WM_SYSKEYDOWN, WM_SYSKEYUP, WNDCLASSW,
             },
         },
     },
@@ -1660,6 +1660,20 @@ impl WindowsPlatform {
                         ctx.dispatch_keyboard_layout_change();
                     }
                     DefWindowProcW(hwnd, msg, wparam, lparam)
+                }
+
+                // Unconsumed system keys reach `DefWindowProcW`, which turns
+                // an Alt tap, F10 or Alt+letter into `SC_KEYMENU`. FLUI
+                // windows have no menu bar, so the default would only park
+                // the window in modal menu mode and swallow the next
+                // keystroke. Alt+Space (`lparam` is the space character)
+                // still opens the window's system menu; every other
+                // system command (`SC_CLOSE` from Alt+F4 included) keeps its
+                // default.
+                WM_SYSCOMMAND
+                    if (wparam.0 & 0xFFF0) == SC_KEYMENU as usize && lparam.0 != b' ' as isize =>
+                {
+                    LRESULT(0)
                 }
 
                 _ => DefWindowProcW(hwnd, msg, wparam, lparam),

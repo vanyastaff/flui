@@ -181,15 +181,18 @@ mod native_windows {
         time::{Duration, Instant},
     };
     use windows::Win32::{
-        Foundation::{HWND, LPARAM, POINT, RECT, WPARAM},
+        Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM},
         Graphics::Gdi::ClientToScreen,
+        System::Threading::GetCurrentThreadId,
         UI::Input::KeyboardAndMouse::{
             GetKeyState, GetKeyboardState, SetKeyboardState, VK_LMENU, VK_MENU,
         },
         UI::WindowsAndMessaging::{
-            DispatchMessageW, GetClientRect, IsWindowVisible, MSG, PM_REMOVE, PeekMessageW,
-            SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SendMessageW, SetWindowPos,
-            WM_CLOSE, WM_SYSKEYDOWN,
+            CWPSTRUCT, CallNextHookEx, DispatchMessageW, GetClientRect, IsWindowVisible, MSG,
+            PM_REMOVE, PeekMessageW, PostMessageW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+            SWP_NOZORDER, SendMessageW, SetWindowPos, SetWindowsHookExW, UnhookWindowsHookEx,
+            WH_CALLWNDPROC, WM_CHAR, WM_CLOSE, WM_ENTERMENULOOP, WM_KEYDOWN, WM_SYSKEYDOWN,
+            WM_SYSKEYUP,
         },
     };
 
@@ -239,6 +242,8 @@ mod native_windows {
             "deferred_system_key_preserves_window",
             deferred_system_key_preserves_window,
         ),
+        ("alt_tap_keeps_next_character", alt_tap_keeps_next_character),
+        ("f10_keeps_next_character", f10_keeps_next_character),
         (
             "resize_callback_preserves_large_native_dimensions",
             resize_callback_preserves_large_native_dimensions,
@@ -339,6 +344,18 @@ mod native_windows {
                 ..Default::default()
             })
             .expect("create actual hidden Win32 window")
+    }
+
+    // DefWindowProc ignores Alt+F4 and leaves menu mode at once for a hidden
+    // window, so system-key defaults are exercised on a shown one.
+    fn open_shown(platform: &WindowsPlatform) -> Arc<dyn HostWindow> {
+        platform
+            .open_window(WindowOptions {
+                visible: true,
+                size: Size::new(160.0, 120.0),
+                ..Default::default()
+            })
+            .expect("create actual shown Win32 window")
     }
 
     fn deadline_rearms_independent_windows_without_input() {
@@ -663,7 +680,7 @@ mod native_windows {
     )]
     fn system_keyboard_close(mode: &'static str) {
         let platform = Arc::new(WindowsPlatform::new().expect("native Windows platform"));
-        let window = open(&platform, true);
+        let window = open_shown(&platform);
         let original_weak = Arc::downgrade(&window);
         let replacement = Arc::new(Mutex::new(None::<Arc<dyn HostWindow>>));
         let replacement_closes = Arc::new(AtomicUsize::new(0));
@@ -808,6 +825,154 @@ mod native_windows {
             next_weak.upgrade().is_none(),
             "{mode}: next close failed to retire native tracking"
         );
+    }
+
+    fn alt_tap_keeps_next_character() {
+        menu_key_keeps_next_character("alt");
+    }
+    fn f10_keeps_next_character() {
+        menu_key_keeps_next_character("f10");
+    }
+
+    // Counts WM_ENTERMENULOOP sent on this thread while the menu-key rows run.
+    // Each row runs in its own child process, so the count is per row.
+    static MENU_LOOPS: AtomicUsize = AtomicUsize::new(0);
+
+    #[expect(unsafe_code, reason = "WH_CALLWNDPROC hook procedure")]
+    unsafe extern "system" fn observe_menu_loop(
+        code: i32,
+        wparam: WPARAM,
+        lparam: LPARAM,
+    ) -> LRESULT {
+        // SAFETY: for a WH_CALLWNDPROC hook with a non-negative code, Win32
+        // passes a valid CWPSTRUCT pointer in lparam for this call's duration.
+        if code >= 0 && unsafe { (*(lparam.0 as *const CWPSTRUCT)).message } == WM_ENTERMENULOOP {
+            MENU_LOOPS.fetch_add(1, Ordering::SeqCst);
+        }
+        // SAFETY: forwards this hook's own arguments unchanged.
+        unsafe { CallNextHookEx(None, code, wparam, lparam) }
+    }
+
+    // A tapped Alt or F10 that no handler consumes reaches DefWindowProc,
+    // which raises SC_KEYMENU. A window without a menu bar must not enter
+    // modal menu mode, which swallows the next keystroke: no menu loop is
+    // entered, the next character reaches the input callback and the window
+    // stays open.
+    #[expect(
+        unsafe_code,
+        reason = "actual owned Win32 system-key dispatch and message pumping"
+    )]
+    fn menu_key_keeps_next_character(key: &'static str) {
+        let platform = WindowsPlatform::new().expect("native Windows platform");
+        let window = open_shown(&platform);
+        let hwnd = window
+            .as_any()
+            .downcast_ref::<WindowsWindow>()
+            .expect("Win32 backend")
+            .hwnd();
+        let closes = Arc::new(AtomicUsize::new(0));
+        let close_observations = Arc::clone(&closes);
+        window.on_close(Box::new(move || {
+            close_observations.fetch_add(1, Ordering::SeqCst);
+        }));
+        let typed = Arc::new(Mutex::new(Vec::<String>::new()));
+        let typed_observations = Arc::clone(&typed);
+        window.on_input(Box::new(move |event| {
+            if let Some(keyboard) = event.as_keyboard()
+                && keyboard.state == keyboard_types::KeyState::Down
+                && let keyboard_types::Key::Character(text) = &keyboard.key
+            {
+                typed_observations
+                    .lock()
+                    .expect("typed characters")
+                    .push(text.clone());
+            }
+            DispatchEventResult::resolved(true, false)
+        }));
+        // SAFETY: a thread-local hook on the current thread, whose procedure
+        // touches only an atomic; it is removed below before the row returns.
+        let hook = unsafe {
+            SetWindowsHookExW(
+                WH_CALLWNDPROC,
+                Some(observe_menu_loop),
+                None,
+                GetCurrentThreadId(),
+            )
+        }
+        .expect("install menu-loop observer");
+        let (vk, scan) = if key == "alt" {
+            (0x12_usize, 0x38_isize)
+        } else {
+            (0x79, 0x44)
+        };
+        {
+            let mut keyboard_state = (key == "alt").then(ThreadKeyboardState::with_alt_pressed);
+            let context = if key == "alt" { 1 << 29 } else { 0 };
+            // SAFETY: the platform owns this HWND on the current thread; the
+            // message carries only integer key codes and documented key data,
+            // and dispatch is synchronous on that thread.
+            unsafe {
+                SendMessageW(
+                    hwnd,
+                    WM_SYSKEYDOWN,
+                    Some(WPARAM(vk)),
+                    Some(LPARAM(1 | (scan << 16) | context)),
+                );
+            }
+            if let Some(state) = keyboard_state.as_mut() {
+                state.restore();
+            }
+        }
+        // Queue the character after the key-down (whose arm drains pending
+        // WM_CHARs) and before the key-up, so a menu loop entered by the
+        // key-up would see it first.
+        // SAFETY: as for the key-down: integer key data for this owned HWND.
+        unsafe {
+            PostMessageW(
+                Some(hwnd),
+                WM_KEYDOWN,
+                WPARAM(0x41),
+                LPARAM(1 | (0x1e << 16)),
+            )
+            .expect("queue character keydown");
+            PostMessageW(Some(hwnd), WM_CHAR, WPARAM(0x61), LPARAM(1 | (0x1e << 16)))
+                .expect("queue character");
+        }
+        // SAFETY: as above. Bits 30 and 31 mark the release of a held key.
+        unsafe {
+            SendMessageW(
+                hwnd,
+                WM_SYSKEYUP,
+                Some(WPARAM(vk)),
+                Some(LPARAM(1 | (scan << 16) | (1 << 30) | (1 << 31))),
+            );
+        }
+        let mut drained = false;
+        for _ in 0..64 {
+            let mut message = MSG::default();
+            // SAFETY: only the fixture's owner-thread HWND is selected.
+            if !unsafe { PeekMessageW(&raw mut message, Some(hwnd), 0, 0, PM_REMOVE) }.as_bool() {
+                drained = true;
+                break;
+            }
+            // SAFETY: dispatch the message returned by this thread's queue.
+            unsafe { DispatchMessageW(&raw const message) };
+        }
+        // SAFETY: the hook installed above, on this thread, removed once.
+        unsafe { UnhookWindowsHookEx(hook) }.expect("remove menu-loop observer");
+        assert!(drained, "{key}: owned message drain exceeded its bound");
+        assert_eq!(
+            MENU_LOOPS.load(Ordering::SeqCst),
+            0,
+            "{key}: the menu key entered modal menu mode"
+        );
+        assert_eq!(
+            *typed.lock().expect("typed characters"),
+            ["a"],
+            "{key}: the character after the menu key reaches input"
+        );
+        assert_eq!(closes.load(Ordering::SeqCst), 0, "{key}: window stays open");
+        window.close();
     }
 
     #[expect(
