@@ -96,7 +96,18 @@ struct NavigatorCommandTargetId(NonZeroU64);
 
 impl NavigatorCommandTargetId {
     fn next() -> Self {
-        let raw = NEXT_NAVIGATOR_COMMAND_TARGET_ID.fetch_add(1, Ordering::Relaxed);
+        Self::next_from(&NEXT_NAVIGATOR_COMMAND_TARGET_ID)
+    }
+
+    fn next_from(counter: &AtomicU64) -> Self {
+        // Reserve MAX as a permanent refusal state, never a reusable identity.
+        let raw = counter
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |next| {
+                if next == 0 { None } else { next.checked_add(1) }
+            })
+            .unwrap_or_else(|_| {
+                panic!("BUG: navigator command target identity capacity exhausted")
+            });
         let id =
             NonZeroU64::new(raw).expect("BUG: navigator command target id counter started at zero");
         Self(id)
@@ -104,8 +115,15 @@ impl NavigatorCommandTargetId {
 }
 
 fn register_command_target(shared: &Arc<NavigatorShared>) -> NavigatorCommandTarget {
+    register_command_target_with_id(shared, NavigatorCommandTargetId::next())
+}
+
+fn register_command_target_with_id(
+    shared: &Arc<NavigatorShared>,
+    id: NavigatorCommandTargetId,
+) -> NavigatorCommandTarget {
     let target = NavigatorCommandTarget {
-        id: NavigatorCommandTargetId::next(),
+        id,
         owner: thread::current().id(),
     };
     NAVIGATOR_COMMAND_TARGETS.with(|targets| {
@@ -977,6 +995,12 @@ pub struct NavigatorHandle {
 impl NavigatorHandle {
     /// A handle to an empty, unmounted navigator. Seed it, hand it to
     /// [`Navigator::new`], and keep a clone.
+    ///
+    /// # Panics
+    ///
+    /// Panics if navigator command-target identity capacity is exhausted.
+    /// Exhaustion permanently refuses further identities; existing targets
+    /// retain their authority.
     #[must_use]
     pub fn new() -> Self {
         Self::with_addressing(None)
@@ -1167,6 +1191,12 @@ impl NavigatorHandle {
     ///
     /// Seed before handing the handle to [`Navigator::new`]. A deep link's
     /// synthesized back-stack is several `seed_initial` calls.
+    ///
+    /// # Panics
+    ///
+    /// Panics if route identity capacity is exhausted. Exhaustion permanently
+    /// refuses further identities. The rejected route and its captures are
+    /// retained during unwind, before any binding or history admission.
     pub fn seed_initial<R: NavigatorRoute>(&self, route: R) -> RouteResult<R::Output> {
         if let Some(refusal) = self.placement_refusal(&route) {
             return self.refuse("seed_initial", refusal, route);
@@ -1177,10 +1207,14 @@ impl NavigatorHandle {
     /// [`seed_initial`](Self::seed_initial) past the admission check, handing
     /// back the id it minted.
     fn seed_reporting_id<R: NavigatorRoute>(&self, route: R) -> (RouteId, RouteResult<R::Output>) {
-        let id = self.prepare(&route);
+        let mut route = super::lifecycle::Terminal::new(route);
+        let id = self.prepare(&*route);
         (
             id,
-            self.shared.history.lock().seed_initial_with_id(id, route),
+            self.shared
+                .history
+                .lock()
+                .seed_initial_with_id(id, route.take_value()),
         )
     }
 
@@ -1189,6 +1223,10 @@ impl NavigatorHandle {
     /// `Router`, record it as a page when it is one.
     fn prepare<R: NavigatorRoute>(&self, route: &R) -> RouteId {
         let id = RouteId::next();
+        self.prepare_with_id(route, id)
+    }
+
+    fn prepare_with_id<R: NavigatorRoute>(&self, route: &R, id: RouteId) -> RouteId {
         self.record_page(id, route);
         self.bind(route, id);
         let builder = route.content_builder();
@@ -1245,6 +1283,13 @@ impl NavigatorHandle {
     /// `seed_initial`, `push_replacement[_with]` and `push_and_remove_until`
     /// refuse a popup too, the same way: what they replace, sweep or seed
     /// beneath belongs to the Router.
+    ///
+    /// # Panics
+    ///
+    /// Panics on a Router placement refusal in debug builds, or if route
+    /// identity capacity is exhausted. Exhaustion permanently refuses further
+    /// identities. The rejected route and its captures are retained during
+    /// unwind, before any binding or history admission.
     pub fn push<R: NavigatorRoute>(&self, route: R) -> RouteResult<R::Output> {
         if let Some(refusal) = self.push_refusal(&route) {
             return self.refuse("push", refusal, route);
@@ -1271,6 +1316,11 @@ impl NavigatorHandle {
     /// Push `route` and complete the current top **as replaced** — observers see
     /// `did_replace`, never `did_remove`, and the replaced route's future resolves
     /// with `None`.
+    ///
+    /// # Panics
+    ///
+    /// Has the placement and permanent identity-capacity panic behavior of
+    /// [`push`](Self::push), retaining the rejected route during capacity unwind.
     pub fn push_replacement<R: NavigatorRoute>(&self, route: R) -> RouteResult<R::Output> {
         if let Some(refusal) = self.placement_refusal(&route) {
             return self.refuse("push_replacement", refusal, route);
@@ -1282,6 +1332,12 @@ impl NavigatorHandle {
     /// whoever awaits the **replaced** route's [`RouteResult`]. Same delivery-time
     /// type contract as
     /// [`pop_with`](Self::pop_with).
+    ///
+    /// # Panics
+    ///
+    /// Has the placement and permanent identity-capacity panic behavior of
+    /// [`push`](Self::push). On capacity unwind, both the rejected route and
+    /// `result` are retained before any binding or history admission.
     pub fn push_replacement_with<R: NavigatorRoute, T: Send + 'static>(
         &self,
         route: R,
@@ -1343,6 +1399,12 @@ impl NavigatorHandle {
     /// against itself. The push and the removal-completion are two separate
     /// locked sections around that unlocked evaluation; `NavigatorHandle` is
     /// owner-thread-bound, so nothing else can interleave between them.
+    ///
+    /// # Panics
+    ///
+    /// Has the placement and permanent identity-capacity panic behavior of
+    /// [`push`](Self::push), retaining the rejected route before any binding
+    /// or history admission. User callbacks can also panic.
     pub fn push_and_remove_until<R: NavigatorRoute>(
         &self,
         route: R,
@@ -1392,11 +1454,24 @@ impl NavigatorHandle {
         route: R,
         commit: impl FnOnce(&mut RouteHistory, RouteId, R) -> O,
     ) -> (RouteId, O) {
-        let id = self.prepare(&route);
+        self.push_prepared_using(operation, route, commit, RouteId::next)
+    }
+
+    fn push_prepared_using<R: NavigatorRoute, O>(
+        &self,
+        operation: &'static str,
+        route: R,
+        commit: impl FnOnce(&mut RouteHistory, RouteId, R) -> O,
+        next_id: impl FnOnce() -> RouteId,
+    ) -> (RouteId, O) {
+        let mut route = super::lifecycle::Terminal::new(route);
+        let mut commit = super::lifecycle::Terminal::new(commit);
+        let mut next_id = super::lifecycle::Terminal::new(next_id);
+        let id = self.prepare_with_id(&*route, next_id.take_value()());
 
         let (result, outcome, undelivered) = {
             let mut history = self.shared.history.lock();
-            let result = commit(&mut history, id, route);
+            let result = commit.take_value()(&mut history, id, route.take_value());
             (result, history.take_outcome(), history.take_undelivered())
         };
 
@@ -2809,4 +2884,402 @@ impl ViewState<Navigator> for NavigatorState {
             registry.deregister_nested(&source);
         }
     }
+}
+
+#[cfg(test)]
+pub(super) fn navigator_command_identity_exhaustion_preserves_target_authority() {
+    use super::overlay_route::SimpleRoute;
+    let counter = AtomicU64::new(u64::MAX - 2);
+    let original = NavigatorHandle::new();
+    original.push(SimpleRoute::<()>::new(|_| {
+        crate::Text::new("original").boxed()
+    }));
+    let original_route = original.current().expect("original route");
+    let original_target = register_command_target_with_id(
+        &original.shared,
+        NavigatorCommandTargetId::next_from(&counter),
+    );
+    let replacement = NavigatorHandle::new();
+    replacement.push(SimpleRoute::<()>::new(|_| {
+        crate::Text::new("replacement").boxed()
+    }));
+    let replacement_route = replacement.current().expect("replacement route");
+    let replacement_target = register_command_target_with_id(
+        &replacement.shared,
+        NavigatorCommandTargetId::next_from(&counter),
+    );
+    assert_ne!(original_target.id, replacement_target.id);
+    for _ in 0..3 {
+        let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            register_command_target_with_id(
+                &replacement.shared,
+                NavigatorCommandTargetId::next_from(&counter),
+            )
+        }))
+        .expect_err("exhausted command identity cannot replace authority");
+        assert_eq!(
+            flui_foundation::panic::payload_text(failure.as_ref()),
+            Some("BUG: navigator command target identity capacity exhausted")
+        );
+    }
+    assert_eq!(
+        NavigatorCommand::remove_route(original_target, original_route).apply_on_owner(),
+        Ok(NavigatorCommandOutcome::Removed(true))
+    );
+    assert_eq!(original.current(), None);
+    assert_eq!(replacement.current(), Some(replacement_route));
+    drop(original);
+    assert_eq!(
+        NavigatorCommand::pop(original_target).apply_on_owner(),
+        Err(NavigatorCommandError::OwnerGone)
+    );
+    assert_eq!(
+        NavigatorCommand::remove_route(replacement_target, replacement_route).apply_on_owner(),
+        Ok(NavigatorCommandOutcome::Removed(true))
+    );
+    assert_eq!(replacement.current(), None);
+    let independent = NavigatorHandle::new();
+    independent.push(SimpleRoute::<()>::new(|_| {
+        crate::Text::new("independent").boxed()
+    }));
+    let route = independent.current().expect("independent route");
+    assert_eq!(
+        NavigatorCommand::remove_route(independent.command_target(), route).apply_on_owner(),
+        Ok(NavigatorCommandOutcome::Removed(true))
+    );
+    assert_eq!(independent.current(), None);
+}
+
+#[cfg(test)]
+#[test]
+fn navigator_identity_exhaustion_retains_admission_ownership() {
+    use std::io::Read;
+    use std::process::{Command, Stdio};
+    use std::time::Instant;
+    const SELECTED: &str = "FLUI_NAVIGATOR_IDENTITY_EXHAUSTION_CHILD";
+    const TEST: &str =
+        "navigator::navigator::navigator_identity_exhaustion_retains_admission_ownership";
+    let cases = [
+        "healthy",
+        "route",
+        "commit",
+        "both",
+        "tail-route",
+        "tail-commit",
+        "tail-both",
+    ];
+    if let Ok(case) = std::env::var(SELECTED) {
+        assert!(
+            cases.contains(&case.as_str()),
+            "known identity exhaustion child"
+        );
+        assert_identity_admission_custody(&case);
+        return;
+    }
+    let mut failures = Vec::new();
+    for case in cases {
+        let mut command = Command::new(std::env::current_exe().expect("test executable"));
+        command.args(["--exact", TEST, "--nocapture"]);
+        for (name, _) in std::env::vars_os() {
+            let upper = name.to_string_lossy().to_ascii_uppercase();
+            if [
+                "CASE", "CONTROL", "SELECTOR", "CHILD", "FORCE", "SNAPSHOT", "GOLDEN",
+            ]
+            .iter()
+            .any(|marker| upper.contains(marker))
+                || upper.starts_with("INSTA_")
+            {
+                command.env_remove(name);
+            }
+        }
+        let mut child = command
+            .env(SELECTED, case)
+            .env("RUST_BACKTRACE", "0")
+            .env("RUST_TEST_THREADS", "1")
+            .env("INSTA_UPDATE", "no")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("identity custody child");
+        let mut stdout = child.stdout.take().expect("child stdout");
+        let mut stderr = child.stderr.take().expect("child stderr");
+        let out = std::thread::spawn(move || {
+            let mut text = String::new();
+            stdout.read_to_string(&mut text).expect("child output");
+            text
+        });
+        let err = std::thread::spawn(move || {
+            let mut text = String::new();
+            stderr.read_to_string(&mut text).expect("child errors");
+            text
+        });
+        let started = Instant::now();
+        let mut timed_out = false;
+        while child.try_wait().expect("child status").is_none() {
+            if started.elapsed() > Duration::from_secs(10) {
+                timed_out = true;
+                child.kill().expect("kill owned timed-out child");
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let status = child.wait().expect("reap owned child");
+        let stdout = out.join().expect("stdout reader");
+        let stderr = err.join().expect("stderr reader");
+        if timed_out
+            || !status.success()
+            || !stdout.contains("running 1 test")
+            || !stdout.contains("1 passed; 0 failed")
+        {
+            failures.push(format!(
+                "{case}: {status}; timeout={timed_out}\n{stdout}\n{stderr}"
+            ));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[cfg(test)]
+fn assert_identity_admission_custody(case: &str) {
+    if case.starts_with("tail-") {
+        assert_identity_batch_admission_custody(case);
+        return;
+    }
+    use super::overlay_route::{RouteContentBuilder, SimpleRoute};
+    use std::cell::Cell;
+    struct Capture {
+        calls: Rc<Cell<usize>>,
+        panics: bool,
+        label: &'static str,
+    }
+    impl Drop for Capture {
+        fn drop(&mut self) {
+            self.calls.set(self.calls.get() + 1);
+            assert!(!self.panics, "{}", self.label);
+        }
+    }
+    struct RejectedRoute {
+        settings: RouteSettings,
+        capture: Capture,
+    }
+    impl Route for RejectedRoute {
+        type Output = ();
+        fn settings(&self) -> &RouteSettings {
+            &self.settings
+        }
+    }
+    impl NavigatorRoute for RejectedRoute {
+        fn content_builder(&self) -> RouteContentBuilder {
+            std::hint::black_box(&self.capture);
+            Rc::new(|_| crate::Text::new("boundary route").boxed())
+        }
+    }
+    let route_calls = Rc::new(Cell::new(0));
+    let commit_calls = Rc::new(Cell::new(0));
+    let route = RejectedRoute {
+        settings: RouteSettings::default(),
+        capture: Capture {
+            calls: Rc::clone(&route_calls),
+            panics: matches!(case, "route" | "both"),
+            label: "competing rejected route destruction",
+        },
+    };
+    let commit_capture = Capture {
+        calls: Rc::clone(&commit_calls),
+        panics: matches!(case, "commit" | "both"),
+        label: "competing rejected commit destruction",
+    };
+    let counter = AtomicU64::new(if case == "healthy" {
+        u64::MAX - 1
+    } else {
+        u64::MAX
+    });
+    let navigator = NavigatorHandle::new();
+    navigator.push(SimpleRoute::<()>::new(|_| crate::Text::new("base").boxed()));
+    let base = navigator.current().expect("base route");
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        navigator.push_prepared_using(
+            "push",
+            route,
+            move |history, id, route| {
+                let _keep = &commit_capture;
+                history.push_with_id(id, route).1
+            },
+            || RouteId::next_from(&counter),
+        )
+    }));
+    if case == "healthy" {
+        let (admitted, _) = result.expect("last valid identity admits real route");
+        assert_eq!(admitted.get(), u64::MAX - 1);
+        assert_eq!(navigator.current(), Some(admitted));
+        assert_eq!(
+            commit_calls.get(),
+            1,
+            "healthy commit captures retire normally"
+        );
+        assert_eq!(route_calls.get(), 0, "history owns the admitted route");
+        assert!(navigator.pop());
+        assert_eq!(
+            route_calls.get(),
+            1,
+            "healthy route retires through actual pop"
+        );
+    } else {
+        let failure = result.expect_err("capacity failure remains authoritative");
+        assert_eq!(
+            flui_foundation::panic::payload_text(failure.as_ref()),
+            Some("BUG: route identity capacity exhausted")
+        );
+        assert_eq!(
+            route_calls.get(),
+            0,
+            "incoming unwind retains rejected route ownership"
+        );
+        assert_eq!(
+            commit_calls.get(),
+            0,
+            "incoming unwind retains independent commit ownership"
+        );
+        assert_eq!(navigator.current(), Some(base));
+        for _ in 0..2 {
+            assert!(std::panic::catch_unwind(|| RouteId::next_from(&counter)).is_err());
+        }
+    }
+    assert_eq!(navigator.current(), Some(base));
+    navigator.push(SimpleRoute::<()>::new(|_| {
+        crate::Text::new("recovery").boxed()
+    }));
+    assert_ne!(navigator.current(), Some(base));
+    assert!(
+        navigator.pop(),
+        "same handle continues actual healthy navigation after containment"
+    );
+    assert_eq!(navigator.current(), Some(base));
+}
+
+#[cfg(test)]
+fn assert_identity_batch_admission_custody(case: &str) {
+    use super::binding::RouteBindingSlot;
+    use super::overlay_route::{RouteContentBuilder, SimpleRoute};
+    use std::cell::Cell;
+    struct TailRoute {
+        settings: RouteSettings,
+        slot: RouteBindingSlot,
+        drops: Rc<Cell<usize>>,
+        panics: bool,
+        builds: Rc<Cell<usize>>,
+    }
+    impl Route for TailRoute {
+        type Output = ();
+        fn settings(&self) -> &RouteSettings {
+            &self.settings
+        }
+    }
+    impl NavigatorRoute for TailRoute {
+        fn content_builder(&self) -> RouteContentBuilder {
+            self.builds.set(self.builds.get() + 1);
+            Rc::new(|_| crate::Text::new("tail route").boxed())
+        }
+        fn binding_slot(&self) -> Option<&RouteBindingSlot> {
+            Some(&self.slot)
+        }
+    }
+    impl Drop for TailRoute {
+        fn drop(&mut self) {
+            self.drops.set(self.drops.get() + 1);
+            assert!(!self.panics, "competing rejected batch route destruction");
+        }
+    }
+    struct CommitCapture {
+        calls: Rc<Cell<usize>>,
+        panics: bool,
+    }
+    impl Drop for CommitCapture {
+        fn drop(&mut self) {
+            self.calls.set(self.calls.get() + 1);
+            assert!(!self.panics, "competing rejected batch commit destruction");
+        }
+    }
+    let drops = Rc::new(Cell::new(0));
+    let builds = Rc::new(Cell::new(0));
+    let commit_calls = Rc::new(Cell::new(0));
+    let slots = [
+        RouteBindingSlot::new(),
+        RouteBindingSlot::new(),
+        RouteBindingSlot::new(),
+    ];
+    let route = |index: usize| TailRoute {
+        settings: RouteSettings::default(),
+        slot: slots[index].clone(),
+        drops: Rc::clone(&drops),
+        builds: Rc::clone(&builds),
+        panics: matches!(case, "tail-route" | "tail-both"),
+    };
+    let commit = CommitCapture {
+        calls: Rc::clone(&commit_calls),
+        panics: matches!(case, "tail-commit" | "tail-both"),
+    };
+    let navigator = NavigatorHandle::new();
+    navigator.push(SimpleRoute::<()>::new(|_| {
+        crate::Text::new("batch base").boxed()
+    }));
+    let base = navigator.current().expect("batch base");
+    let before_history = navigator.route_ids();
+    let counter = AtomicU64::new(u64::MAX - 1);
+    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        navigator.replace_tail_using(
+            Some(base),
+            vec![route(0), route(1)],
+            route(2),
+            move |ids| {
+                let _keep = &commit;
+                ids
+            },
+            || RouteId::next_from(&counter),
+        )
+    }))
+    .expect_err("second batch reservation refuses before publication");
+    assert_eq!(
+        flui_foundation::panic::payload_text(failure.as_ref()),
+        Some("BUG: route identity capacity exhausted")
+    );
+    assert_eq!(
+        drops.get(),
+        0,
+        "prepared, remaining and top rejected routes retain independent custody"
+    );
+    assert_eq!(commit_calls.get(), 0);
+    assert_eq!(
+        builds.get(),
+        0,
+        "capacity refusal precedes all builder callbacks"
+    );
+    assert!(
+        slots.iter().all(|slot| slot.get().is_none()),
+        "no rejected route was bound"
+    );
+    assert_eq!(
+        navigator.route_ids(),
+        before_history,
+        "no rejected history entry was admitted"
+    );
+    assert_eq!(navigator.current(), Some(base));
+    let admitted = navigator.replace_tail(
+        Some(base),
+        vec![SimpleRoute::<()>::new(|_| {
+            crate::Text::new("healthy below").boxed()
+        })],
+        SimpleRoute::<()>::new(|_| crate::Text::new("healthy top").boxed()),
+        |ids| ids,
+    );
+    assert_eq!(admitted.len(), 2);
+    assert_eq!(
+        navigator.current(),
+        admitted.last().copied(),
+        "same handle admits a subsequent healthy replacement"
+    );
+    for id in admitted.into_iter().rev() {
+        assert!(navigator.remove_route(id));
+    }
+    assert_eq!(navigator.current(), Some(base));
 }

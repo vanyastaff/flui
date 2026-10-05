@@ -226,11 +226,13 @@ impl NavigatorHandle {
         route: P,
         commit: impl FnOnce(RouteId) -> O,
     ) -> O {
-        let id = self.prepare(&route);
+        let mut route = super::super::lifecycle::Terminal::new(route);
+        let mut commit = super::super::lifecycle::Terminal::new(commit);
+        let id = self.prepare(&*route);
         self.commit_pages(
             "push",
-            |history| history.push_with_id(id, route).1,
-            || commit(id),
+            |history| history.push_with_id(id, route.take_value()).1,
+            || commit.take_value()(id),
         )
     }
 
@@ -242,15 +244,22 @@ impl NavigatorHandle {
         route: P,
         commit: impl FnOnce(RouteId) -> O,
     ) -> O {
-        let id = self.prepare(&route);
+        let mut route = super::super::lifecycle::Terminal::new(route);
+        let mut commit = super::super::lifecycle::Terminal::new(commit);
+        let id = self.prepare(&*route);
         self.commit_pages(
             "push_replacement",
             |history| {
                 history
-                    .push_replacement_with_id(id, Some(ReplaceTarget::Route(target)), route, None)
+                    .push_replacement_with_id(
+                        id,
+                        Some(ReplaceTarget::Route(target)),
+                        route.take_value(),
+                        None,
+                    )
                     .1
             },
-            || commit(id),
+            || commit.take_value()(id),
         )
     }
 
@@ -265,17 +274,43 @@ impl NavigatorHandle {
         top: P,
         commit: impl FnOnce(Vec<RouteId>) -> O,
     ) -> O {
-        let below: Vec<(RouteId, P)> = below
-            .into_iter()
-            .map(|route| (self.prepare(&route), route))
-            .collect();
-        let top_id = self.prepare(&top);
+        self.replace_tail_using(keep, below, top, commit, RouteId::next)
+    }
+
+    pub(super) fn replace_tail_using<P: NavigatorRoute, O>(
+        &self,
+        keep: Option<RouteId>,
+        below: Vec<P>,
+        top: P,
+        commit: impl FnOnce(Vec<RouteId>) -> O,
+        next_id: impl FnMut() -> RouteId,
+    ) -> O {
+        let mut remaining = super::super::lifecycle::Terminal::new(below.into_iter());
+        let mut below = super::super::lifecycle::Terminal::new(Vec::new());
+        let mut top = super::super::lifecycle::Terminal::new(top);
+        let mut commit = super::super::lifecycle::Terminal::new(commit);
+        let mut next_id = super::super::lifecycle::Terminal::new(next_id);
+        for route in &mut *remaining {
+            let mut route = super::super::lifecycle::Terminal::new(route);
+            let id = (*next_id)();
+            below.push((id, route.take_value()));
+        }
+        let top_id = (*next_id)();
+        // Capacity refusal precedes binding, builder or overlay publication.
+        // Successfully reserved ids can be spent by a rejected batch; they
+        // remain unique and are never rolled back or reissued.
+        for (id, route) in &*below {
+            self.prepare_with_id(route, *id);
+        }
+        self.prepare_with_id(&*top, top_id);
         let mut ids: Vec<RouteId> = below.iter().map(|(id, _)| *id).collect();
         ids.push(top_id);
         self.commit_pages(
             "replace_tail",
-            |history| history.replace_tail_with_ids(keep, below, (top_id, top)),
-            || commit(ids),
+            |history| {
+                history.replace_tail_with_ids(keep, below.take_value(), (top_id, top.take_value()));
+            },
+            || commit.take_value()(ids),
         )
     }
 

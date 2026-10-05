@@ -78,7 +78,22 @@ impl OwnerTag {
     /// Mint a fresh, process-unique tag.
     pub(crate) fn fresh() -> Self {
         static NEXT: AtomicU64 = AtomicU64::new(1);
-        Self(NEXT.fetch_add(1, Ordering::Relaxed))
+        Self::fresh_with_counter(&NEXT)
+    }
+
+    // Zero permanently records exhaustion after the last nonzero identity.
+    // The local counter seam lets boundary tests avoid mutating process state.
+    fn fresh_with_counter(counter: &AtomicU64) -> Self {
+        let tag = counter
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+                if current == 0 {
+                    None
+                } else {
+                    Some(current.checked_add(1).unwrap_or(0))
+                }
+            })
+            .expect("OwnerTag counter exhausted: all nonzero u64 identities issued");
+        Self(tag)
     }
 }
 
@@ -623,4 +638,80 @@ pub(crate) fn release_and_unregister(
     // Preserve ordinary local-before-scoped-key destruction order.
     drop(local_key);
     drop(scope_key);
+}
+
+#[cfg(test)]
+impl OwnerTag {
+    pub(crate) fn exhausted_owner_tag_counter_preserves_claim_authority() {
+        let counter = AtomicU64::new(u64::MAX - 1);
+        let previous = Self::fresh_with_counter(&counter);
+        let last = Self::fresh_with_counter(&counter);
+        let key = crate::GlobalKey::<()>::new();
+        let scope = GlobalKeyScope::new();
+        let mut shared = Some(scope.clone());
+        let mut previous_local = GlobalKeyRegistry::new();
+        let mut last_local = GlobalKeyRegistry::new();
+        claim_and_register(
+            &mut shared,
+            previous,
+            &key,
+            ElementId::new(1),
+            &mut previous_local,
+        );
+        release_and_unregister(Some(&scope), previous, &key, &mut previous_local);
+        claim_and_register(&mut shared, last, &key, ElementId::new(2), &mut last_local);
+
+        for _ in 0..8 {
+            let refusal = std::panic::catch_unwind(|| Self::fresh_with_counter(&counter))
+                .expect_err("exhaustion must refuse owner admission, never issue a stale tag");
+            let message = refusal
+                .downcast_ref::<String>()
+                .map(String::as_str)
+                .or_else(|| refusal.downcast_ref::<&str>().copied())
+                .expect("owner admission refusal carries an ordinary panic message");
+            assert!(message.starts_with("OwnerTag counter exhausted:"));
+            assert_eq!(counter.load(Ordering::Relaxed), 0);
+
+            // A retired owner cannot withdraw the replacement's authority,
+            // including after repeated caught admission failures.
+            release_and_unregister(Some(&scope), previous, &key, &mut previous_local);
+            let conflict = scope
+                .try_claim(&key, previous)
+                .expect_err("the final admitted owner must still hold the key");
+            assert_eq!(conflict.holder, last);
+            assert_eq!(last_local.get(&key), Some(ElementId::new(2)));
+        }
+        release_and_unregister(Some(&scope), last, &key, &mut last_local);
+
+        // A separate healthy allocator and scope still admit distinct owners
+        // and permit the next mount after matching release.
+        let healthy = AtomicU64::new(1);
+        let first = Self::fresh_with_counter(&healthy);
+        let second = Self::fresh_with_counter(&healthy);
+        let mut healthy_scope = Some(GlobalKeyScope::new());
+        let mut healthy_local = GlobalKeyRegistry::new();
+        claim_and_register(
+            &mut healthy_scope,
+            first,
+            &key,
+            ElementId::new(3),
+            &mut healthy_local,
+        );
+        let conflict = healthy_scope
+            .as_ref()
+            .expect("healthy mount installs its scope")
+            .try_claim(&key, second)
+            .expect_err("consecutive healthy owners must have distinct authority");
+        assert_eq!(conflict.holder, first);
+        release_and_unregister(healthy_scope.as_ref(), first, &key, &mut healthy_local);
+        claim_and_register(
+            &mut healthy_scope,
+            second,
+            &key,
+            ElementId::new(4),
+            &mut healthy_local,
+        );
+        assert_eq!(healthy_local.get(&key), Some(ElementId::new(4)));
+        release_and_unregister(healthy_scope.as_ref(), second, &key, &mut healthy_local);
+    }
 }

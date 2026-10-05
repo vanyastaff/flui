@@ -39,6 +39,15 @@ the executable gesture graph from accidentally becoming cross-thread.
 
 ## Mapping decisions
 
+Focus node identities admit the final nonzero integer once, then latch zero as
+permanent exhaustion. Catching the capacity panic cannot admit another node or
+reuse the authority of an attached node. The private local-counter constructor
+seam drives actual focus attachment, requests and listener delivery without
+exhausting the process-wide counter. The existing `focus_traversal_matrix`
+registers `focus_node_identity_exhaustion_preserves_notifications`, checking
+repeated refusal, intact existing-node notifications and healthy distinct-node
+progress.
+
 Local design choices and why. Each entry names the conflict, the choice, and the reference (a strategy clause, a design rule, or a precedent plan).
 
 - **Recogniser is a `Clone` struct; the lifecycle lives on `RecognizerBase`.** Multiple consumers can hold `Arc<Self>` cheaply. The trade-off: users get a stable struct API but cannot observe field changes without an explicit notifier (deferred; `flui-foundation::Notifier` is the candidate).
