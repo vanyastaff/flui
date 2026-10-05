@@ -129,9 +129,11 @@ pub enum WireActionError {
 
 /// The FLUI action a wire action reaches, as AccessKit's Windows adapter
 /// routes the UI Automation call behind it: `invoke`, `toggle` and `select`
-/// click, which is FLUI's tap; `expand` and `collapse` toggle an expandable
-/// node through its tap handler (mapping decision 5); `set_value` sets text
-/// (mapping decision 3); `scroll_into_view` is `ShowOnScreen`.
+/// click, which is FLUI's tap; `expand` and `collapse` are the discrete
+/// actions, which the owner routes to a tap-only node's tap handler (mapping
+/// decision 5); `set_value` sets text, or the number on a numeric node
+/// ([`SemanticsOwner::resolve_wire_action`]); `scroll_into_view` is
+/// `ShowOnScreen`.
 ///
 /// `None` for a wire action FLUI has no route for; `ActionName` is
 /// `#[non_exhaustive]`, so a tool added to the vocabulary lands here.
@@ -596,8 +598,12 @@ impl SemanticsOwner {
     /// and `collapse` are advertised only toward the state the element lacks,
     /// so `expand` on an element the tree shows expanded is refused.
     ///
-    /// The tree is the last committed one. Repeated requests resolved before
-    /// the next frame retain their explicit direction, rather than toggling.
+    /// The tree is the last committed one. A node registering the discrete
+    /// `Expand`/`Collapse` actions keeps each request's direction when several
+    /// precede the next frame. A tap-only expandable node toggles through its
+    /// tap handler instead, so two `expand`s before the frame that shows the
+    /// first one's effect both pass this check and the second collapses it
+    /// again (mapping decision 5).
     ///
     /// # Errors
     ///

@@ -510,36 +510,141 @@ fn advertised_actions_follow_the_uia_patterns() {
     assert_eq!(password.actions, [N::SetValue]);
 }
 
-/// An in-process expand reads the published expanded flag and refuses the
-/// already-published state. Pending requests retain explicit direction.
-#[test]
-fn expand_on_an_expanded_node_is_action_unsupported() {
+/// Which handlers a disclosure fixture registers.
+#[derive(Clone, Copy)]
+enum Disclosure {
+    /// Discrete `Expand` and `Collapse` handlers beside a tap handler.
+    Explicit,
+    /// Only a tap handler, as `Semantics::new().expanded(..).on_tap(..)`
+    /// builds; the transition its state allows reaches that handler.
+    TapOnly,
+}
+
+/// Drives one disclosure shape and state through the wire path
+/// (`resolve_wire_action`) and the platform path (`semantics_action_request_for`),
+/// both ending in `SemanticsOwner::resolve_action`. The node advertises and
+/// accepts only the transition its state allows, and the request reaches the
+/// discrete handler, or the tap handler for a tap-only node. The reverse
+/// direction is refused on the wire; the owner also refuses it for a tap-only
+/// node, whose tap handler has no direction of its own.
+fn disclosure_case(shape: Disclosure, expanded: bool) {
+    let received = Arc::new(Mutex::new(Vec::new()));
     let mut f = Fixture::new();
     let root = f.add(None, 1, |_| {});
-    f.add(Some(root), 2, |c| {
+    let log = Arc::clone(&received);
+    f.add(Some(root), 2, move |c| {
         c.set_button(true);
-        c.set_expanded(true);
-        c.add_action(SemanticsAction::Expand, noop());
-        c.add_action(SemanticsAction::Collapse, noop());
+        c.set_expanded(expanded);
+        let handler = || -> crate::SemanticsActionHandler {
+            let log = Arc::clone(&log);
+            Arc::new(move |action, _| log.lock().expect("log").push(action))
+        };
+        c.add_action(SemanticsAction::Tap, handler());
+        if matches!(shape, Disclosure::Explicit) {
+            c.add_action(SemanticsAction::Expand, handler());
+            c.add_action(SemanticsAction::Collapse, handler());
+        }
     });
+    let (allowed, refused, ak_allowed, ak_refused) = if expanded {
+        (
+            ActionName::Collapse,
+            ActionName::Expand,
+            accesskit::Action::Collapse,
+            accesskit::Action::Expand,
+        )
+    } else {
+        (
+            ActionName::Expand,
+            ActionName::Collapse,
+            accesskit::Action::Expand,
+            accesskit::Action::Collapse,
+        )
+    };
+    let discrete = if expanded {
+        SemanticsAction::Collapse
+    } else {
+        SemanticsAction::Expand
+    };
+    let reaches = match shape {
+        Disclosure::Explicit => discrete,
+        Disclosure::TapOnly => SemanticsAction::Tap,
+    };
 
-    let expand = f
-        .owner
-        .resolve_wire_action(&ActionRequest::new(e(2), ActionName::Expand));
+    assert_eq!(f.only(e(2)).actions, [allowed], "advertised transition");
     assert_eq!(
-        expand,
+        f.owner
+            .resolve_wire_action(&ActionRequest::new(e(2), refused)),
         Err(WireActionError::ActionUnsupported {
             element: e(2),
-            action: ActionName::Expand
+            action: refused
         })
     );
-
-    let collapse = f
+    let wire = f
         .owner
-        .resolve_wire_action(&ActionRequest::new(e(2), ActionName::Collapse))
-        .expect("collapse is the transition an expanded node allows");
-    assert_eq!(collapse.action, SemanticsAction::Collapse);
-    assert_eq!(collapse.arguments, None);
+        .resolve_wire_action(&ActionRequest::new(e(2), allowed))
+        .expect("the wire accepts the transition the state allows");
+    assert_eq!((wire.action, wire.arguments.clone()), (discrete, None));
+    f.owner
+        .resolve_action(wire)
+        .expect("the owner routes the wire request")
+        .invoke();
+
+    let platform = |action| accesskit::ActionRequest {
+        action,
+        target_tree: accesskit::TreeId::ROOT,
+        target_node: accesskit::NodeId(e(2).get()),
+        data: None,
+    };
+    let translated = crate::semantics_action_request_for(&platform(ak_allowed))
+        .expect("the platform transition is routable");
+    f.owner
+        .resolve_action(translated)
+        .expect("the owner routes the platform request")
+        .invoke();
+    assert_eq!(*received.lock().expect("log"), [reaches, reaches]);
+
+    if matches!(shape, Disclosure::TapOnly) {
+        let reverse = crate::semantics_action_request_for(&platform(ak_refused))
+            .expect("the reverse transition is routable");
+        assert!(matches!(
+            f.owner.resolve_action(reverse),
+            Err(crate::SemanticsActionError::UnsupportedAction { .. })
+        ));
+    }
+}
+
+fn explicit_collapsed() {
+    disclosure_case(Disclosure::Explicit, false);
+}
+
+fn explicit_expanded() {
+    disclosure_case(Disclosure::Explicit, true);
+}
+
+fn tap_only_collapsed() {
+    disclosure_case(Disclosure::TapOnly, false);
+}
+
+fn tap_only_expanded() {
+    disclosure_case(Disclosure::TapOnly, true);
+}
+
+/// Expand and collapse reach a node only toward the state it lacks, through
+/// its discrete handlers or, for a tap-only node, its tap handler.
+#[test]
+fn disclosure_requests_follow_the_expanded_state() {
+    let rows: &[(&str, fn())] = &[
+        ("explicit_collapsed", explicit_collapsed),
+        ("explicit_expanded", explicit_expanded),
+        ("tap_only_collapsed", tap_only_collapsed),
+        ("tap_only_expanded", tap_only_expanded),
+    ];
+    let failed: Vec<&str> = rows
+        .iter()
+        .filter(|(_, row)| std::panic::catch_unwind(row).is_err())
+        .map(|(name, _)| *name)
+        .collect();
+    assert!(failed.is_empty(), "disclosure rows failed: {failed:?}");
 }
 
 #[test]
