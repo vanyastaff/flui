@@ -159,8 +159,8 @@ impl ImplicitController {
 
     /// Unregister from the binding and dispose the controller.
     pub(crate) fn dispose(&mut self) {
-        if let (Some(vsync), Some(registration)) = (&self.vsync, self.vsync_registration) {
-            vsync.unregister(registration);
+        if let (Some(vsync), Some(registration)) = (&self.vsync, self.vsync_registration.take()) {
+            vsync.unregister(&registration);
         }
         self.controller.dispose();
     }

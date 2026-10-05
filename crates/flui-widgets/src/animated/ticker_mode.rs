@@ -147,7 +147,7 @@ impl TickerModeState {
 
     fn unnest(&mut self) {
         if let Some((parent, id)) = self.parent.take() {
-            parent.detach_child(id);
+            parent.detach_child(&id);
         }
     }
 }
