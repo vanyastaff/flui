@@ -30,9 +30,11 @@ have kept alive.
    whose callback failed. The first failure propagates; later failures are
    retained without replacing it.
 3. Retention applies only where dropping would run user code. Dropping a
-   reference-counted clone that is not the last owner, a framework-owned
+   single-threaded `Rc` clone that is not the last owner, a framework-owned
    handle (a platform window, an accessibility bridge, a GPU resource owned by
-   the engine) or a known inert payload (ADR-0119) is ordinary destruction.
+   the engine) or a known inert payload (ADR-0119) is ordinary destruction. A
+   thread-shared `Arc` clone is retained: another thread can release its own
+   clone after any count check, which would make this drop the last one.
 4. A retained value is a deliberate leak. The container does not report it
    separately; the failure that caused it is reported where it is caught.
 
