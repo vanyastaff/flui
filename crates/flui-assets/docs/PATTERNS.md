@@ -76,17 +76,18 @@ the core traits; it does not make every public API change backward compatible.
 
 ## Fallible shared initialization
 
-Ordinary concurrent requests coalesce. Same-key calls inside an initializer or
-its destructor cannot wait for that initializer: they reuse completed data when
-available, otherwise return independently initialized uncached handles. Only the
-outer elected initializer publishes its result. Ancestry is shared by cache
-clones and scoped to polling and retirement, including after suspension; it does
-not detect cycles through separately spawned tasks.
+Generic `get_or_insert_with` gets completed data or runs its own initializer,
+then inserts each successful result. Cold calls, including direct or awaited
+spawned reentry, do not wait on pending same-key work. Late completion may replace
+an earlier entry; existing handles keep their data. Errors remain owned and are
+not cached. Cancellation affects only that call; independent work survives and
+later requests can retry. No exactly-once side effects are guaranteed.
 
-Moka's `entry_by_ref(...).or_try_insert_with(...)` selects one cold initializer
-per typed key and shares its result with waiting callers. The public helper
-returns `Arc<Asset::Error>`, so custom errors do not need a `Clone` implementation.
-Only a fresh returned entry counts as a completed insertion.
+Registry loading validates every descriptor. Only closed built-in FontAsset producers share pending work through Moka.
+ImageAsset keeps registered image decoder hooks and uses the independent helper,
+as custom assets do. Font failures are shared but not cached; cancellation or
+panic allows a waiter to restart subject to Moka's finite retry policy. No public
+custom coalescing opt-in or mandatory spawn API is introduced.
 
 ```rust
 use flui_assets::{Asset, AssetCache, CacheCapacity, FontAsset};
@@ -96,11 +97,8 @@ let font = FontAsset::file("font.ttf");
 let handle = cache.get_or_insert_with(font.key(), || font.load()).await?;
 ```
 
-Registry loading first calls `validate`, then uses this same helper and maps
-shared `AssetError` into its owned error contract. Validation still runs for
-cache hits. Failed loads are not retained. Cancellation and an initializer panic
-allow another waiter to retry; repeated failures are bounded by Moka's retry
-policy. Invalidation affects completed entries, not pending initialization.
+Registry validation still runs for cache hits. Invalidation affects completed
+entries, not pending initialization; a successful load can publish afterward.
 
 ## Type-erased registry storage
 

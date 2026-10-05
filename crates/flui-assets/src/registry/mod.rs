@@ -253,10 +253,13 @@ impl AssetRegistry {
     /// descriptor returns its validation error even on a cache hit, without
     /// loading or changing previously cached data.
     /// If the asset is already cached, returns the cached version immediately.
-    /// Otherwise, concurrent requests for the same typed key share one load.
-    /// Loading errors are shared with current waiters but are not cached; a
-    /// later request may retry. Cancelling the initializing request lets a
-    /// remaining waiter initialize from its own accepted descriptor.
+    /// Built-in [`crate::FontAsset`] loads share same-key pending work.
+    /// Images and custom assets run independently on a cold miss, including reentry through
+    /// spawned tasks. Each success publishes; later completion may replace earlier
+    /// data without invalidating its handles. Exactly-once side effects are not
+    /// guaranteed. Errors are not cached. Cancelling one custom load does not
+    /// cancel another; later calls can retry. Built-in waiters may restart after
+    /// elected cancellation or panic, subject to Moka's finite retry policy.
     ///
     /// # Errors
     ///
@@ -281,10 +284,7 @@ impl AssetRegistry {
         let key = asset.key();
         let cache = self.get_or_create_cache::<T>();
 
-        cache
-            .get_or_insert_with(key, || asset.load())
-            .await
-            .map_err(|error| (*error).clone())
+        cache.load(key, &asset).await
     }
 
     /// Gets an asset from cache without loading.

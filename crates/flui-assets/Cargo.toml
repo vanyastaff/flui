@@ -90,6 +90,12 @@ workspace = true
 name = "assets_it"
 path = "tests/main.rs"
 
+# image's decoder registrations are process-global and cannot be removed.
+[[test]]
+name = "image_hook_reentry"
+path = "tests/image_hook_reentry.rs"
+required-features = ["images"]
+
 [package.metadata.flui]
 layer = 2
 tier = "S"

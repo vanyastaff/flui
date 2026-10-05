@@ -517,7 +517,7 @@ async fn poll_waiter<F: std::future::Future>(mut future: std::pin::Pin<&mut F>) 
     .await;
 }
 
-fn concurrent_cold_success_shares_the_loaded_allocation() {
+fn concurrent_cold_success_preserves_elected_publication() {
     run_cold_load_case(async {
         let registry = AssetRegistryBuilder::new().with_default_capacity().build();
         let loads = Arc::new(AtomicUsize::new(0));
@@ -533,23 +533,25 @@ fn concurrent_cold_success_shares_the_loaded_allocation() {
         poll_waiter(second.as_mut()).await;
         assert_eq!(
             loads.load(Ordering::Relaxed),
-            1,
-            "cold callers share loader work"
+            2,
+            "overlapping cold callers run independently"
         );
         gate.add_permits(2);
-        let first = first.await.expect("first load succeeds");
-        let second = second.await.expect("waiting load succeeds");
+        let second = second.await.expect("overlapping load succeeds first");
+        let first = first.await.expect("earlier request completes later");
+        assert_eq!(*first, 1);
+        assert_eq!(*second, 2);
         assert!(
-            first.ptr_eq(&second),
-            "both callers retain one decoded allocation"
+            !first.ptr_eq(&second),
+            "independent callers retain separate loaded data"
         );
         let cached = registry.load(asset()).await.expect("cached load succeeds");
         assert!(first.ptr_eq(&cached));
-        assert_eq!(loads.load(Ordering::Relaxed), 1);
+        assert_eq!(loads.load(Ordering::Relaxed), 2);
     });
 }
 
-fn concurrent_cold_error_is_shared_and_a_later_request_retries() {
+fn concurrent_cold_errors_are_independent_and_retryable() {
     run_cold_load_case(async {
         let registry = AssetRegistryBuilder::new().with_default_capacity().build();
         let loads = Arc::new(AtomicUsize::new(0));
@@ -566,21 +568,21 @@ fn concurrent_cold_error_is_shared_and_a_later_request_retries() {
         gate.add_permits(3);
         let first = first.await.expect_err("first load fails");
         let second = second.await.expect_err("waiting load fails");
-        assert_eq!(
+        assert_ne!(
             first.to_string(),
             second.to_string(),
-            "waiters observe one failure"
+            "each caller observes its own failure"
         );
-        assert_eq!(loads.load(Ordering::Relaxed), 1);
+        assert_eq!(loads.load(Ordering::Relaxed), 2);
         let next = registry
             .load(asset(false))
             .await
             .expect("error is not cached");
-        assert_eq!(*next, 2, "the next accepted descriptor retries loading");
+        assert_eq!(*next, 3, "the next accepted descriptor retries loading");
     });
 }
 
-fn canceling_the_initializer_restarts_a_waiting_load() {
+fn canceling_the_initializer_preserves_overlapping_work() {
     run_cold_load_case(async {
         let registry = AssetRegistryBuilder::new().with_default_capacity().build();
         let loads = Arc::new(AtomicUsize::new(0));
@@ -594,39 +596,70 @@ fn canceling_the_initializer_restarts_a_waiting_load() {
         let mut second = Box::pin(registry.load(asset()));
         poll_until_loading(first.as_mut(), &loads, 1).await;
         poll_waiter(second.as_mut()).await;
-        assert_eq!(loads.load(Ordering::Relaxed), 1);
+        assert_eq!(loads.load(Ordering::Relaxed), 2);
         drop(first);
         poll_until_loading(second.as_mut(), &loads, 2).await;
         gate.add_permits(1);
         let second = second.await.expect("waiter initializes after cancellation");
         assert_eq!(*second, 2);
+        gate.add_permits(1);
         let cached = registry
             .load(asset())
             .await
             .expect("completed retry is cached");
         assert!(second.ptr_eq(&cached));
+        assert_eq!(*cached, 2);
         assert_eq!(loads.load(Ordering::Relaxed), 2);
     });
 }
 
 #[test]
-fn cold_registry_loads_share_work_and_recover() {
+fn cold_registry_loads_preserve_publication_and_recover() {
     crate::cases::run_cases(&[
         (
-            "concurrent cold success shares the loaded allocation",
-            concurrent_cold_success_shares_the_loaded_allocation,
+            "custom registry direct reentry makes progress",
+            custom_registry_direct_reentry_makes_progress,
         ),
         (
-            "concurrent cold error is shared and a later request retries",
-            concurrent_cold_error_is_shared_and_a_later_request_retries,
+            "custom registry spawned reentry makes progress",
+            custom_registry_spawned_reentry_makes_progress,
         ),
         (
-            "canceling the initializer restarts a waiting load",
-            canceling_the_initializer_restarts_a_waiting_load,
+            "built-in font cold loads share pending work",
+            builtin_font_cold_loads_share_pending_work,
+        ),
+        #[cfg(feature = "images")]
+        (
+            "image cold loads run independently",
+            image_cold_loads_run_independently,
         ),
         (
-            "public cache waiters share data and non-Clone errors",
-            public_cache_waiters_share_data_and_non_clone_errors,
+            "spawned same-key child failure is retryable",
+            spawned_same_key_child_failure_is_retryable,
+        ),
+        (
+            "canceling parent preserves spawned child work",
+            canceling_parent_preserves_spawned_child_work,
+        ),
+        (
+            "spawned same-key child makes progress",
+            spawned_same_key_child_makes_progress,
+        ),
+        (
+            "concurrent cold success preserves elected publication",
+            concurrent_cold_success_preserves_elected_publication,
+        ),
+        (
+            "concurrent cold errors are independent and retryable",
+            concurrent_cold_errors_are_independent_and_retryable,
+        ),
+        (
+            "canceling the initializer preserves overlapping work",
+            canceling_the_initializer_preserves_overlapping_work,
+        ),
+        (
+            "overlapping loads return independent data and non-Clone errors",
+            public_cache_overlapping_loads_return_independent_data_and_errors,
         ),
         (
             "public initializer reentry preserves outer publication",
@@ -645,14 +678,294 @@ fn cold_registry_loads_share_work_and_recover() {
             canceled_initializer_retirement_permits_same_key_reentry,
         ),
         (
-            "unselected initializer retirement permits same-key reentry",
-            unselected_initializer_retirement_permits_same_key_reentry,
+            "overlapping initializer retirement permits same-key reentry",
+            overlapping_initializer_retirement_permits_same_key_reentry,
         ),
         (
             "public cache waiters recover after cancellation or panic",
             public_cache_waiters_recover_after_cancellation_or_panic,
         ),
     ]);
+}
+
+struct RecursiveRegistryAsset {
+    registry: Arc<flui_assets::AssetRegistry>,
+    spawned: bool,
+    child: bool,
+}
+
+impl Asset for RecursiveRegistryAsset {
+    type Data = usize;
+    type Key = String;
+    type Error = AssetError;
+
+    fn key(&self) -> String {
+        "recursive-registry".into()
+    }
+
+    fn load(&self) -> impl std::future::Future<Output = Result<usize, AssetError>> + Send {
+        let registry = Arc::clone(&self.registry);
+        let spawned = self.spawned;
+        let child = self.child;
+        let future: std::pin::Pin<
+            Box<dyn std::future::Future<Output = Result<usize, AssetError>> + Send>,
+        > = Box::pin(async move {
+            if child {
+                return Ok(7);
+            }
+            let nested = RecursiveRegistryAsset {
+                registry: Arc::clone(&registry),
+                spawned,
+                child: true,
+            };
+            let loaded = if spawned {
+                tokio::spawn(async move { registry.load(nested).await })
+                    .await
+                    .expect("spawned registry load finishes")?
+            } else {
+                registry.load(nested).await?
+            };
+            Ok(*loaded + 1)
+        });
+        future
+    }
+}
+
+fn custom_registry_direct_reentry_makes_progress() {
+    custom_registry_reentry_case(false);
+}
+fn custom_registry_spawned_reentry_makes_progress() {
+    custom_registry_reentry_case(true);
+}
+
+fn custom_registry_reentry_case(spawned: bool) {
+    tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .expect("two-thread runtime starts")
+        .block_on(async {
+            tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                let registry =
+                    Arc::new(AssetRegistryBuilder::new().with_default_capacity().build());
+                let outer = registry
+                    .load(RecursiveRegistryAsset {
+                        registry: Arc::clone(&registry),
+                        spawned,
+                        child: false,
+                    })
+                    .await
+                    .expect("recursive custom asset finishes");
+                assert_eq!(*outer, 8);
+                let cached = registry
+                    .get::<RecursiveRegistryAsset>(&"recursive-registry".into())
+                    .await
+                    .expect("outer completion replaces child publication");
+                assert!(outer.ptr_eq(&cached));
+            })
+            .await
+            .expect("recursive registry load must finish within five seconds");
+        });
+}
+
+fn builtin_font_cold_loads_share_pending_work() {
+    builtin_cold_loads_case(true, || {
+        FontAsset::file(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../flui-painting/assets/fonts/probe-sans-400.ttf"
+        ))
+    });
+}
+
+#[cfg(feature = "images")]
+fn image_cold_loads_run_independently() {
+    builtin_cold_loads_case(false, || {
+        flui_assets::ImageAsset::file(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/tiny.png"
+        ))
+    });
+}
+
+fn builtin_cold_loads_case<T: Asset<Error = AssetError>>(
+    singleflight: bool,
+    asset: impl Fn() -> T,
+) {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .max_blocking_threads(1)
+        .enable_all()
+        .build()
+        .expect("producer runtime starts");
+    runtime.block_on(async {
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            // Occupy this runtime's sole IO worker so both public requests are
+            // demonstrably cold and pending before either file read can finish.
+            let (release_tx, release_rx) = std::sync::mpsc::channel();
+            let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+            let blocker = tokio::task::spawn_blocking(move || {
+                started_tx.send(()).expect("observer remains alive");
+                let _ = release_rx.recv();
+            });
+            started_rx.await.expect("IO worker is occupied");
+            let registry = AssetRegistryBuilder::new().with_default_capacity().build();
+            let key = asset().key();
+            let mut first = Box::pin(registry.load(asset()));
+            let mut second = Box::pin(registry.load(asset()));
+            poll_waiter(first.as_mut()).await;
+            poll_waiter(second.as_mut()).await;
+            assert!(registry.get::<T>(&key).await.is_none());
+            release_tx.send(()).expect("IO worker is alive");
+            blocker.await.expect("IO worker releases");
+            let first = first.await.expect("first producer loads");
+            let second = second.await.expect("second producer loads");
+            assert_eq!(
+                first.ptr_eq(&second),
+                singleflight,
+                "cold producer allocation sharing follows its callback boundary"
+            );
+            let cached = registry
+                .load(asset())
+                .await
+                .expect("completed producer is cached");
+            assert!(cached.ptr_eq(if singleflight { &first } else { &second }));
+        })
+        .await
+        .expect("cold producer requests finish within five seconds");
+    });
+}
+
+fn spawned_same_key_child_makes_progress() {
+    spawned_same_key_child_case(false);
+}
+
+fn spawned_same_key_child_failure_is_retryable() {
+    spawned_same_key_child_case(true);
+}
+
+fn spawned_same_key_child_case(fail: bool) {
+    tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .expect("two-thread runtime starts")
+        .block_on(async {
+            tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                let cache = flui_assets::AssetCache::<PublicCacheAsset>::new(
+                    flui_assets::CacheCapacity::default(),
+                );
+                let child_cache = cache.clone();
+                let outer = cache
+                    .get_or_insert_with("spawned".into(), || async move {
+                        let child = tokio::spawn(async move {
+                            tokio::task::yield_now().await;
+                            let result = child_cache
+                                .get_or_insert_with("spawned".into(), || async {
+                                    if fail {
+                                        Err(NonCloneLoadError(7))
+                                    } else {
+                                        Ok(7)
+                                    }
+                                })
+                                .await;
+                            assert_eq!(child_cache.contains(&"spawned".to_owned()), !fail);
+                            result
+                        })
+                        .await
+                        .expect("child task completes");
+                        child
+                            .map(|value| *value + 1)
+                            .map_err(|error| NonCloneLoadError(error.0))
+                    })
+                    .await;
+                if fail {
+                    assert_eq!(outer.expect_err("child failure reaches parent").0, 7);
+                    assert!(!cache.contains(&"spawned".to_owned()));
+                    let retry = cache
+                        .get_or_insert_with("spawned".into(), || async { Ok(9) })
+                        .await
+                        .expect("retry after child failure publishes");
+                    assert_eq!(*retry, 9);
+                    return;
+                }
+                let outer = outer.expect("outer initializer completes");
+                assert_eq!(*outer, 8);
+                let cached = cache
+                    .get(&"spawned".to_owned())
+                    .await
+                    .expect("outer publishes");
+                assert!(cached.ptr_eq(&outer));
+                assert_eq!(cache.stats().insertions, 2);
+            })
+            .await
+            .expect("spawned same-key dependency must finish within five seconds");
+        });
+}
+
+fn canceling_parent_preserves_spawned_child_work() {
+    tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .expect("two-thread runtime starts")
+        .block_on(async {
+            tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                let cache = flui_assets::AssetCache::<PublicCacheAsset>::new(
+                    flui_assets::CacheCapacity::default(),
+                );
+                let child_cache = cache.clone();
+                let started = Arc::new(tokio::sync::Semaphore::new(0));
+                let child_started = Arc::clone(&started);
+                let gate = Arc::new(tokio::sync::Semaphore::new(0));
+                let child_gate = Arc::clone(&gate);
+                let (result_tx, result_rx) = tokio::sync::oneshot::channel();
+                let mut parent = Box::pin(cache.get_or_insert_with(
+                    "cancel-child".into(),
+                    || async move {
+                        tokio::spawn(async move {
+                            let result = child_cache
+                                .get_or_insert_with("cancel-child".into(), || async {
+                                    child_started.add_permits(1);
+                                    child_gate
+                                        .acquire()
+                                        .await
+                                        .expect("gate remains open")
+                                        .forget();
+                                    Ok(7)
+                                })
+                                .await;
+                            result_tx.send(result).expect("observer remains alive");
+                        })
+                        .await
+                        .expect("child finishes");
+                        Ok(8)
+                    },
+                ));
+                poll_waiter(parent.as_mut()).await;
+                started
+                    .acquire()
+                    .await
+                    .expect("child initializer starts")
+                    .forget();
+                drop(parent);
+                gate.add_permits(1);
+                let child = result_rx
+                    .await
+                    .expect("detached child reports completion")
+                    .expect("child work survives parent cancellation");
+                assert_eq!(*child, 7);
+                assert!(cache.contains(&"cancel-child".to_owned()));
+                cache.invalidate(&"cancel-child".to_owned()).await;
+                let retry = cache
+                    .get_or_insert_with("cancel-child".into(), || async { Ok(9) })
+                    .await
+                    .expect("next request can publish");
+                assert_eq!(*retry, 9);
+                assert!(!child.ptr_eq(&retry));
+                assert_eq!(cache.stats().insertions, 2);
+            })
+            .await
+            .expect("spawned child cancellation recovery finishes within five seconds");
+        });
 }
 
 /// Cache clones account for operations on the same entries, including reset.
@@ -745,7 +1058,7 @@ impl Asset for PublicCacheAsset {
     }
 }
 
-fn public_cache_waiters_share_data_and_non_clone_errors() {
+fn public_cache_overlapping_loads_return_independent_data_and_errors() {
     run_cold_load_case(async {
         for fail in [false, true] {
             let cache = flui_assets::AssetCache::<PublicCacheAsset>::new(
@@ -770,38 +1083,42 @@ fn public_cache_waiters_share_data_and_non_clone_errors() {
             poll_waiter(second.as_mut()).await;
             assert_eq!(
                 loads.load(Ordering::Relaxed),
-                1,
-                "public helper coalesces work"
+                2,
+                "public helper does not join active user work"
             );
             gate.add_permits(2);
-            let first = first.await;
             let second = second.await;
+            let first = first.await;
             if fail {
-                let first = first.expect_err("initializer fails");
-                let second = second.expect_err("waiter shares failure");
-                assert!(
-                    Arc::ptr_eq(&first, &second),
-                    "non-Clone errors share ownership"
-                );
+                let first: NonCloneLoadError = first.expect_err("initializer fails");
+                let second: NonCloneLoadError = second.expect_err("overlapping initializer fails");
+                assert_eq!((first.0, second.0), (1, 2), "each caller owns its failure");
                 let recovered = cache
                     .get_or_insert_with(key.clone(), || async {
                         Ok(loads.fetch_add(1, Ordering::Relaxed) + 1)
                     })
                     .await
                     .expect("failed initialization is retryable");
-                assert_eq!(*recovered, 2);
+                assert_eq!(*recovered, 3);
             } else {
                 let first = first.expect("initializer succeeds");
                 let second = second.expect("waiter succeeds");
-                assert!(first.ptr_eq(&second), "one loaded allocation is returned");
+                assert!(
+                    !first.ptr_eq(&second),
+                    "independent cold calls retain separate data"
+                );
                 let cached = cache
                     .get_or_insert_with(key, || async { Ok(99) })
                     .await
                     .expect("completed value is reused");
                 assert!(first.ptr_eq(&cached));
-                assert_eq!(loads.load(Ordering::Relaxed), 1);
+                assert_eq!(loads.load(Ordering::Relaxed), 2);
             }
-            assert_eq!(cache.stats().insertions, 1, "one completed fresh result");
+            assert_eq!(
+                cache.stats().insertions,
+                if fail { 1 } else { 2 },
+                "every successful independent call publishes"
+            );
         }
     });
 }
@@ -824,7 +1141,7 @@ fn public_cache_initializer_reentry_case(fail: bool) {
         let key = "recursive".to_owned();
         let result = cache
             .get_or_insert_with(key.clone(), || async {
-                // Reentry must still be detected on a later poll.
+                // Reentry after suspension must also remain independent.
                 tokio::task::yield_now().await;
                 let independent = separate
                     .get_or_insert_with(key.clone(), || async { Ok(3) })
@@ -848,9 +1165,10 @@ fn public_cache_initializer_reentry_case(fail: bool) {
                         }
                     })
                     .await;
-                assert!(
-                    !nested.contains(&key),
-                    "nested initialization leaves publication to its outer owner"
+                assert_eq!(
+                    nested.contains(&key),
+                    !fail,
+                    "every successful nested initializer publishes"
                 );
                 if fail {
                     assert_eq!(
@@ -926,7 +1244,7 @@ fn canceled_initializer_retirement_permits_same_key_reentry() {
     public_cache_initializer_retirement_case(1);
 }
 
-fn unselected_initializer_retirement_permits_same_key_reentry() {
+fn overlapping_initializer_retirement_permits_same_key_reentry() {
     public_cache_initializer_retirement_case(2);
 }
 
@@ -959,7 +1277,13 @@ fn public_cache_initializer_retirement_case(mode: u8) {
                 assert_eq!(waiter_retired.load(Ordering::Relaxed), 7);
             }
             drop(first);
-            assert!(!cache.contains(&"retirement".to_owned()));
+            assert_eq!(
+                *cache
+                    .get(&"retirement".to_owned())
+                    .await
+                    .expect("retirement reentry publishes independently"),
+                7
+            );
         }
         assert_eq!(retired.load(Ordering::Relaxed), 7);
         cache.invalidate(&"retirement".to_owned()).await;
@@ -999,7 +1323,7 @@ fn public_cache_waiters_recover_after_cancellation_or_panic() {
             }));
             poll_until_loading(first.as_mut(), &loads, 1).await;
             poll_waiter(second.as_mut()).await;
-            assert_eq!(loads.load(Ordering::Relaxed), 1);
+            assert_eq!(loads.load(Ordering::Relaxed), 2);
             if panic_first {
                 gate.add_permits(1);
                 std::future::poll_fn(|cx| {
@@ -1034,7 +1358,17 @@ fn public_cache_waiters_recover_after_cancellation_or_panic() {
                     .expect("next request recovers after both failures");
                 assert_eq!(*next, 3);
             } else {
-                assert_eq!(*second.expect("waiter restarts after cancellation"), 2);
+                assert_eq!(*second.expect("overlapping work survives cancellation"), 2);
+                assert_eq!(
+                    *cache.get(&key).await.expect("independent work publishes"),
+                    2
+                );
+                cache.invalidate(&key).await;
+                let next = cache
+                    .get_or_insert_with(key, || async { Ok(3) })
+                    .await
+                    .expect("a later request publishes after cancellation");
+                assert_eq!(*next, 3);
             }
         }
     });
@@ -1058,7 +1392,7 @@ fn count_capacity_bounds_entries_and_preserves_consumer_handles() {
     });
 }
 
-fn disabled_retention_coalesces_then_reloads() {
+fn disabled_retention_loads_independently_then_reloads() {
     run_cold_load_case(async {
         use flui_assets::{AssetCache, CacheCapacity};
         let cache = AssetCache::<PublicCacheAsset>::new(CacheCapacity::Disabled);
@@ -1077,7 +1411,7 @@ fn disabled_retention_coalesces_then_reloads() {
         gate.add_permits(2);
         let first = first.await.expect("initializer succeeds without retention");
         let second = second.await.expect("waiter shares accepted work");
-        assert!(first.ptr_eq(&second));
+        assert!(!first.ptr_eq(&second));
         assert!(!cache.contains(&key));
         let next = cache
             .get_or_insert_with(key, || async {
@@ -1085,7 +1419,7 @@ fn disabled_retention_coalesces_then_reloads() {
             })
             .await
             .expect("later request reloads");
-        assert_eq!(*next, 2);
+        assert_eq!(*next, 3);
         assert!(!first.ptr_eq(&next));
         cache.sync().await;
         assert_eq!(cache.len(), 0);
@@ -1176,8 +1510,8 @@ fn asset_cache_retention_and_observation_contracts() {
             count_capacity_bounds_entries_and_preserves_consumer_handles,
         ),
         (
-            "disabled retention coalesces then reloads",
-            disabled_retention_coalesces_then_reloads,
+            "disabled retention loads independently then reloads",
+            disabled_retention_loads_independently_then_reloads,
         ),
         (
             "utilization and finite counter arithmetic",

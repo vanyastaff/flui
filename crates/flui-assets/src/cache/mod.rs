@@ -10,8 +10,9 @@ use moka::future::Cache as MokaCache;
 use crate::core::Asset;
 use crate::types::AssetHandle;
 
+#[cfg(test)]
+mod builtin_load_tests;
 mod config;
-mod initialization;
 pub mod stats;
 
 pub use config::{AssetCacheConfig, CacheCapacity, CacheExpiration, ExpirationTooLong};
@@ -44,7 +45,6 @@ pub struct AssetCache<T: Asset> {
 
     /// Cache statistics.
     stats: Arc<parking_lot::RwLock<CacheStats>>,
-    initializers: Arc<initialization::Initializers<T::Key>>,
 }
 
 impl<T: Asset> std::fmt::Debug for AssetCache<T>
@@ -94,7 +94,6 @@ impl<T: Asset> AssetCache<T> {
         Self {
             cache,
             stats: Arc::new(parking_lot::RwLock::new(CacheStats::default())),
-            initializers: Arc::new(initialization::Initializers::new()),
         }
     }
 
@@ -163,33 +162,66 @@ impl<T: Asset> AssetCache<T> {
         AssetHandle::new(arc_data, key)
     }
 
-    /// Gets an asset, or coalesces concurrent cold initializers for its key.
+    /// Gets a completed asset, or initializes and inserts a missing value.
     ///
-    /// Waiters share one allocation or one `Arc` error, without requiring the
-    /// error to implement `Clone`. Errors are not cached. Moka allows a waiter
-    /// to restart after the elected initializer is cancelled or panics.
+    /// Cold calls run independently, including same-key reentry through clones
+    /// and spawned tasks. Every successful call inserts its own result; a later
+    /// completion can replace an earlier entry. Returned handles keep their data
+    /// alive independently of replacement. No exactly-once loading or side-effect
+    /// guarantee is made. Errors are owned and are not cached.
     ///
-    /// A same-key call polled inside this cache's initializer (including through
-    /// a clone, and after suspension) runs its own initializer independently.
-    /// It returns an uncached handle; the outer initializer remains responsible
-    /// for publication. This avoids waiting on its own in-flight entry. Other
-    /// keys and independent requests still use Moka. Dependency cycles through
-    /// separately spawned tasks are not detected by poll-scoped ancestry.
-    ///
-    /// Hit/miss counters describe the initial presence observation; concurrent
-    /// changes may race that probe. Fresh returned entries count as completed
-    /// insertions. Cancellation after backend publication can leave an entry
-    /// without a completed insertion count.
+    /// Cancellation drops this call's initializer without cancelling independent
+    /// work. A panic reaches this caller. Either leaves later requests free to
+    /// retry. Insertion counts include every completed publication; cancellation
+    /// after backend publication can leave an entry without a completed count.
     ///
     /// # Examples
     ///
     /// ```rust,ignore
     /// let handle = cache.get_or_insert_with(key, || async {
-    ///     // Load the asset
     ///     load_image("test.png").await
     /// }).await?;
     /// ```
     pub async fn get_or_insert_with<F, Fut>(
+        &self,
+        key: T::Key,
+        f: F,
+    ) -> Result<AssetHandle<T::Data, T::Key>, T::Error>
+    where
+        F: FnOnce() -> Fut,
+        Fut: std::future::Future<Output = Result<T::Data, T::Error>>,
+    {
+        if let Some(handle) = self.get(&key).await {
+            return Ok(handle);
+        }
+        let data = f().await?;
+        Ok(self.insert(key, data).await)
+    }
+
+    /// Registry-only producer boundary: arbitrary Asset implementations never
+    /// enter singleflight, since their load can await same-key spawned work.
+    pub(crate) async fn load(
+        &self,
+        key: T::Key,
+        asset: &T,
+    ) -> crate::error::Result<AssetHandle<T::Data, T::Key>>
+    where
+        T: Asset<Error = crate::AssetError>,
+    {
+        let asset_type = std::any::TypeId::of::<T>();
+        let builtin = asset_type == std::any::TypeId::of::<crate::FontAsset>();
+        if builtin {
+            self.initialize_builtin(key, || asset.load())
+                .await
+                .map_err(|error| (*error).clone())
+        } else {
+            self.get_or_insert_with(key, || asset.load()).await
+        }
+    }
+
+    // Called only after the exact built-in type check above. This closed
+    // producer performs IO and cannot call user initializers or registry.
+    async fn initialize_builtin<F, Fut>(
         &self,
         key: T::Key,
         f: F,
@@ -207,21 +239,10 @@ impl<T: Asset> AssetCache<T> {
                 stats.misses = stats.misses.saturating_add(1);
             }
         }
-        if self.initializers.is_reentrant(&key) {
-            if let Some(data) = self.cache.get(&key).await {
-                return Ok(AssetHandle::new(data, key));
-            }
-            let data = f().await.map(Arc::new).map_err(Arc::new)?;
-            return Ok(AssetHandle::new(data, key));
-        }
-        let initializer_key = Arc::new(key.clone());
         let entry = self
             .cache
             .entry_by_ref(&key)
-            .or_try_insert_with(
-                self.initializers
-                    .run(&initializer_key, async { f().await.map(Arc::new) }),
-            )
+            .or_try_insert_with(async { f().await.map(Arc::new) })
             .await?;
         if entry.is_fresh() {
             let mut stats = self.stats.write();
@@ -515,7 +536,6 @@ impl<T: Asset> Clone for AssetCache<T> {
     fn clone(&self) -> Self {
         Self {
             cache: self.cache.clone(),
-            initializers: Arc::clone(&self.initializers),
             stats: Arc::clone(&self.stats),
         }
     }
