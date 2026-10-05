@@ -250,6 +250,20 @@ loom backend or the mailbox moves to `std::sync`.
 
 ## Mapping decisions
 
+### Solid shader fills own the source RGBA
+
+A `Shader::Solid` fill on a rectangle, rounded rectangle or circle replaces the
+paint's complete RGBA. Two identical gradient stops and a constant linear
+parameter reuse the existing geometry, transform, captured clip and blend routes.
+Advanced modes render the constant source with `SrcOver` inside their isolation
+and apply the requested operator once at the destination composite. Save-layer
+opacity remains a group composite.
+`painter_solid_shaders_use_effective_colors_for_compositing` compares direct and
+Canvas-recorded Solid fills with a separately drawn plain paint of the shader's
+color. Named rows cover each served shape, opaque, translucent and transparent
+sources, contradictory paint alpha, affine shear, captured clips, parent opacity,
+`Src` and `Multiply`, with plain-paint and exterior controls.
+
 ### Vertex colors and clip coverage own the source alpha
 
 Supplied mesh colors replace `Paint::color`; an absent color array uses the paint
