@@ -502,10 +502,6 @@ impl TaskSpawner {
                 }),
                 latest: parking_lot::Mutex::new(None),
                 run: parking_lot::Mutex::new(Box::new(run)),
-                #[cfg(test)]
-                idle_probe: parking_lot::Mutex::new(None),
-                #[cfg(test)]
-                refusal_probe: parking_lot::Mutex::new(None),
             }),
             spawner: self.clone(),
             next_generation: 0,
@@ -550,12 +546,6 @@ struct WorkerShared<I, O> {
     latest: parking_lot::Mutex<Option<(WorkerGeneration, O)>>,
     /// The worker's closure. Locked only by the single active pump.
     run: parking_lot::Mutex<WorkerJob<I, O>>,
-    /// Pauses a real pump after its idle ownership handoff, outside guards.
-    #[cfg(test)]
-    idle_probe: parking_lot::Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
-    /// Pauses refusal before its input and ownership reservation are withdrawn.
-    #[cfg(test)]
-    refusal_probe: parking_lot::Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
 }
 
 /// The owning handle of one recurring worker.
@@ -636,13 +626,6 @@ where
             Ok(())
         };
         let refused = if admission.is_err() {
-            #[cfg(test)]
-            {
-                let probe = self.shared.refusal_probe.lock().clone();
-                if let Some(probe) = probe {
-                    probe();
-                }
-            }
             let mut inbox = self.shared.inbox.lock();
             let refused = inbox.pending.take();
             inbox.pump_active = false;
@@ -714,13 +697,10 @@ where
                 item
             };
             let Some((generation, input)) = item else {
+                // Neither the executor nor the job runs between releasing
+                // ownership and returning, so the handoff test pauses here.
                 #[cfg(test)]
-                {
-                    let probe = shared.idle_probe.lock().clone();
-                    if let Some(probe) = probe {
-                        probe();
-                    }
-                }
+                tests::after_idle_handoff();
                 return;
             };
             let context = TaskContext {
@@ -1448,8 +1428,17 @@ impl ServiceRegistry {
 mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
 
+    use std::cell::RefCell;
+
     use super::*;
-    use flui_runtime::execution::DeterministicExecutors;
+    use flui_runtime::execution::{
+        ComputeJob, DeterministicExecutors, HostComputePool, HostExecutors,
+    };
+
+    /// Compute jobs the fixture admits in flight.
+    const COMPUTE_ADMISSION: usize = 8;
+    /// IO futures the fixture admits in flight.
+    const IO_ADMISSION: usize = 8;
 
     /// Deterministic fixture: services routed to an injected
     /// [`DeterministicExecutors`], so spawned work runs only when the test
@@ -1458,10 +1447,24 @@ mod tests {
         let deterministic = DeterministicExecutors::new();
         let services = Arc::new(ExecutionServices::with_limits(
             Some(deterministic.host_executors()),
-            8,
-            8,
+            COMPUTE_ADMISSION,
+            IO_ADMISSION,
         ));
         (services, deterministic)
+    }
+
+    thread_local! {
+        static AFTER_IDLE_HANDOFF: RefCell<Option<Box<dyn FnMut()>>> = const { RefCell::new(None) };
+    }
+
+    /// Runs the calling thread's hook, if any, where a pump has released
+    /// inbox ownership and is about to return.
+    pub(super) fn after_idle_handoff() {
+        AFTER_IDLE_HANDOFF.with(|hook| {
+            if let Some(hook) = hook.borrow_mut().as_mut() {
+                hook();
+            }
+        });
     }
 
     // ── Task: completion, join evidence, deadlines ──────────────────────────
@@ -1774,7 +1777,7 @@ mod tests {
 
     fn refused_worker_input_retires_and_next_submission_runs() {
         let (services, deterministic) = deterministic_services();
-        for _ in 0..8 {
+        for _ in 0..COMPUTE_ADMISSION {
             services
                 .spawn_compute(Box::new(|| {}))
                 .expect("fill compute admission");
@@ -1806,8 +1809,40 @@ mod tests {
         assert!(accepted_retired.load(Ordering::Acquire));
     }
 
+    /// Queues jobs on a deterministic executor; once armed, runs the hook
+    /// and refuses the next job.
+    struct RefusingPool {
+        queue: DeterministicExecutors,
+        on_refuse: parking_lot::Mutex<Option<Box<dyn FnOnce() + Send>>>,
+    }
+
+    impl HostComputePool for RefusingPool {
+        fn spawn_job(&self, job: ComputeJob) -> Result<(), SpawnError> {
+            let on_refuse = self.on_refuse.lock().take();
+            match on_refuse {
+                Some(on_refuse) => {
+                    on_refuse();
+                    Err(SpawnError::Saturated)
+                }
+                None => self.queue.spawn_job(job),
+            }
+        }
+    }
+
     fn idle_worker_handoff_cannot_execute_refused_input() {
-        let (services, deterministic) = deterministic_services();
+        let deterministic = DeterministicExecutors::new();
+        let pool = Arc::new(RefusingPool {
+            queue: deterministic.clone(),
+            on_refuse: parking_lot::Mutex::new(None),
+        });
+        let services = Arc::new(ExecutionServices::with_limits(
+            Some(HostExecutors::new(
+                Arc::clone(&pool) as Arc<dyn HostComputePool>,
+                Arc::new(deterministic.clone()),
+            )),
+            COMPUTE_ADMISSION,
+            IO_ADMISSION,
+        ));
         let spawner = TaskSpawner::new(&services);
         let executed = Arc::new(parking_lot::Mutex::new(Vec::new()));
         let record = Arc::clone(&executed);
@@ -1819,50 +1854,39 @@ mod tests {
             .expect("worker");
         let (idle, reached_idle) = mpsc::sync_channel(1);
         let (release, resume) = mpsc::sync_channel(1);
-        let resume = parking_lot::Mutex::new(resume);
-        let first_idle = AtomicBool::new(true);
-        *worker.shared.idle_probe.lock() = Some(Arc::new(move || {
-            if first_idle.swap(false, Ordering::AcqRel) {
-                idle.send(()).expect("test driver waiting");
-                resume
-                    .lock()
-                    .recv_timeout(Duration::from_secs(5))
-                    .expect("handoff released");
-            }
-        }));
         worker.submit(1).expect("first input");
         let driver = deterministic.clone();
         let (finished, observed_finish) = mpsc::sync_channel(1);
         let driving = std::thread::spawn(move || {
+            let mut first = true;
+            AFTER_IDLE_HANDOFF.with(|hook| {
+                *hook.borrow_mut() = Some(Box::new(move || {
+                    if std::mem::take(&mut first) {
+                        idle.send(()).expect("test driver waiting");
+                        resume
+                            .recv_timeout(Duration::from_secs(5))
+                            .expect("handoff released");
+                    }
+                }));
+            });
             driver.run_until_idle();
             finished.send(()).expect("finish observed");
         });
         reached_idle
             .recv_timeout(Duration::from_secs(5))
             .expect("real pump became idle");
-        let observed_finish = parking_lot::Mutex::new(observed_finish);
-        *worker.shared.refusal_probe.lock() = Some(Arc::new(move || {
-            // Let the former pump finish while refused input is still in the
-            // inbox. It has handed ownership back and must not reclaim it.
+        *pool.on_refuse.lock() = Some(Box::new(move || {
+            // Let the former pump finish while the refused input is still in
+            // the inbox. It has handed ownership back and must not reclaim it.
             release
                 .send(())
                 .expect("resume old pump before refusal cleanup");
             observed_finish
-                .lock()
                 .recv_timeout(Duration::from_secs(5))
                 .expect("former pump completed");
         }));
-        // The old pump still occupies one compute slot while its ownership
-        // has become idle. Exhaust the other seven before the new submission.
-        for _ in 0..7 {
-            services
-                .spawn_compute(Box::new(|| {}))
-                .expect("fill remaining admission");
-        }
         assert!(matches!(worker.submit(2), Err(SpawnError::Saturated)));
         driving.join().expect("driver finishes");
-        *worker.shared.idle_probe.lock() = None;
-        *worker.shared.refusal_probe.lock() = None;
         assert_eq!(
             *executed.lock(),
             vec![1],
@@ -1870,7 +1894,7 @@ mod tests {
         );
         let generation = worker
             .submit(3)
-            .expect("next submission after capacity recovery");
+            .expect("next submission after the pool accepts again");
         deterministic.run_until_idle();
         assert_eq!(*executed.lock(), vec![1, 3]);
         assert_eq!(worker.try_latest(), Some((generation, 3)));

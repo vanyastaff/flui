@@ -200,36 +200,21 @@ ordinary or prior-image font IDs.
 
 ### Background worker retirement preserves progress
 
-A worker commits its latest result before retiring the replaced output outside
-its slot lock. A caught retirement failure and a separately contained diagnostic
-failure do not stop the pump: pending input, including input submitted reentrantly
-by the retired output, remains deliverable. Input submission schedules its pump
-before outgoing input retirement or diagnostics. A refused pump removes the
-incoming input, matching `WorkerHandle::submit`'s error contract. An outgoing
-input retirement failure propagates only after scheduling; an additional refused
-input is retained instead of destroyed in competition with that failure.
-The pending input and pump ownership live under one inbox mutex: installing work
-and reserving its pump are one transition, as are observing an empty inbox and
-releasing ownership. A former pump never reclaims input after handing ownership
-back. Host spawning and every generic destructor run outside this mutex.
+A worker commits its newest result, then drops the result it replaced outside
+the slot lock. A panic in that destructor, or in a lifecycle diagnostic, is
+contained and the pump keeps running: pending input, including input submitted
+by the retiring result, is still delivered. `submit` schedules the pump before
+it drops the input it replaced; if scheduling is refused, the new input is
+removed and dropped, as `WorkerHandle::submit` documents. A panic in the
+replaced input's destructor propagates after scheduling, and a refused input in
+the same call is retained rather than dropped (ADR-0127).
 
-Discarded lifecycle panic payloads use foundation's `retain_opaque_payload`
-(ADR-0119). A future whose poll failed is retained before completion reporting;
-healthy completion and cancellation retain ordinary future destruction. Compute
-panic completion is published before contained diagnostics. These boundaries
-cannot recover an abort inside user code or multiple panicking fields in the
-first ordinarily retired aggregate.
+Pending input and pump ownership share one inbox mutex, so installing work and
+reserving its pump is one transition, and so is finding the inbox empty and
+releasing ownership. A pump that released ownership returns without touching
+the inbox again. Host spawning and every user destructor run outside the mutex.
 
-`service_lifecycle_matrix` pins result retirement, reentrant accepted-tail
-progress, competing reporting failure, opaque compute payload retirement and
-failed-versus-healthy future capture retirement. The future test uses the private
-poll wrapper because a consumer cannot observe its capture-retention boundary
-independently from executor ownership.
-The idle-handoff row pauses a real pump after releasing inbox ownership, fills
-the remaining compute admission slots, refuses the next submission, then resumes
-the former pump. It asserts that the refused body never ran and that a following
-successful submission does run. The private pause is necessary to hold the
-otherwise brief handoff window without replacing the production producer.
-The outgoing-input row pins replacement survival and first-panic propagation;
-ordinary pending work already has a pump, so this row does not independently
-distinguish scheduling order.
+Discarded lifecycle panic payloads are retained (ADR-0119), as is a future
+whose poll panicked (ADR-0127); healthy completion and cancellation drop the future
+normally. A compute panic is reported as complete before its diagnostics run.
+Pinned by `service_lifecycle_matrix`.
