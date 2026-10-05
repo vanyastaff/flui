@@ -22,7 +22,7 @@
   back-links are written.
 - **Date:** 2026-09-25
 - **Superseded-by:** ADR-0114 for §10 step 4b's direction-only line alignment; other decisions remain in force.
-- **Superseded-by:** [ADR-0120](ADR-0120-validated-glyph-image.md) for §5's
+- **Superseded-by:** [ADR-0122](ADR-0122-validated-glyph-image.md) for §5's
   `GlyphImage` representation and admission only; the raster trait, font identity,
   registry ownership and shaping decisions remain in force.
 - **Revised:** 2026-09-26 (rasterization prototype; see Context); 2026-09-29 (§10 step 3
@@ -347,7 +347,7 @@ Settled by §10 step 4:
 
 ### 5. Glyph keys carry font identity; rasterization is a raster-side trait
 
-**Image representation superseded by ADR-0120.** The rasterizer now returns an
+**Image representation superseded by ADR-0122.** The rasterizer now returns an
 immutable `GlyphImage` admitted by checked construction; the atlas trusts its
 byte-layout invariant. The key, registry and `Option` rasterization contract
 below remain binding, including replay checks for a different valid bitmap.

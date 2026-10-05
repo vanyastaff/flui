@@ -137,7 +137,7 @@ so its vertical bin is always zero. A registry holds every blob a key names,
 so a key stays valid after fontique's source cache drops the file
 (`a_held_blob_keeps_its_keys_across_a_prune`, `src/text_layout/context.rs`).
 
-`GlyphImage` owns one validated, immutable bitmap (ADR-0120). Its constructor
+`GlyphImage` owns one validated, immutable bitmap (ADR-0122). Its constructor
 checks `width * height * bytes_per_texel` in the target's `usize`; an
 unrepresentable size or incomplete buffer cannot cross the rasterizer boundary.
 Either zero dimension requires zero bytes before any dimension conversion or

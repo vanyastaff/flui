@@ -725,7 +725,7 @@ promising extreme-coordinate GPU floating-point precision.
 `parley_runs_read_back` reads back what paint now
 draws: hard breaks, synthetic bold, host fallback faces, right alignment and
 the device baseline. `GlyphImage` validates CPU byte storage at construction
-(ADR-0120); the atlas does not repeat that invariant. A valid bitmap can still
+(ADR-0122); the atlas does not repeat that invariant. A valid bitmap can still
 exceed the device's texture limit, so allocation refuses it before eviction or
 page growth and converts dimensions to the packer's signed representation with
 checked conversions. A grow re-uploads a re-rasterized glyph only if it has the

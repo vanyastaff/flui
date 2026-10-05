@@ -9,9 +9,10 @@
 API или dependencies не считается новым внедрением.
 
 Текущее продолжение с валидируемым `GlyphImage` основано на слитом `origin/main`
-`2992d8c44`: эта база включает dependency API audit (#1419) и уже слитое
-исправление panic-payload retirement/Miri coverage (#1420). Bitmap change
-перенесён на эту базу отдельно от prerequisite repair. Первоначальные результаты
+`bac8a5720`: эта база включает dependency API audit (#1419), panic-payload
+retirement/Miri coverage (#1420) и foreground filter footprint (#1425).
+Bitmap change первоначально проверен на `2992d8c44`, затем интегрирован с
+foreground через обычный merge, сохранив опубликованную историю ветки. Результаты
 #1418 ниже сохранены как исторические; они не доказывают прохождение проверок
 нового bitmap API.
 
@@ -73,9 +74,9 @@ SwashRasterizer; публичный API ради внедрения mock не р
 
 ### GlyphImage: invariant задаётся при создании значения
 
-Продолжение на слитом `origin/main` `2992d8c44`, после первоначального внедрения на `1da74e162`,
+Продолжение на слитом `origin/main` `bac8a5720`, после первоначального внедрения на `1da74e162`,
 переносит проверку byte layout на границу construction.
-[ADR-0120](../adr/ADR-0120-validated-glyph-image.md) частично supersedes
+[ADR-0122](../adr/ADR-0122-validated-glyph-image.md) частично supersedes
 ADR-0067/ADR-0092: `GlyphImage` имеет шесть private fields, fallible `try_new`
 и read-only accessors. Constructor проверяет представимость ожидаемой длины
 и точное соответствие data; ошибки — `SizeOverflow` и
@@ -206,7 +207,7 @@ Maintainer разрешил breaking changes, улучшающие API и арх
 
 ## Проверки текущего GlyphImage
 
-Текущий source основан на слитом `origin/main` `2992d8c44`. Constructor,
+Первый bitmap source проверен на слитом `origin/main` `2992d8c44`. Constructor,
 producer wiring, engine admission/replay и consumer migration дополнительно
 прочитаны независимым агентом; блокирующих дефектов не найдено.
 
@@ -241,6 +242,34 @@ closure и facade hot-reload check прошли. Оба cargo-hack each-feature 
 Пять локальных ссылок текущего отчёта отдельно проверены через `Test-Path`.
 Native macOS/Linux/mobile/browser execution этим прогоном не устанавливается.
 Исторические числа из #1418 к этому продолжению не относятся.
+
+### Интеграция с foreground filter footprint
+
+На слитой базе `bac8a5720` сохранены и foreground working-domain/attachment
+контракт, и GlyphImage byte-layout/atlas контракт. Пересечение в engine
+ARCHITECTURE и painter tests слилось без конфликтов; diff bitmap относительно
+этой базы оставляет прежние glyph getter changes и не удаляет foreground tests.
+Номер GlyphImage ADR изменён на **0122**, чтобы не конфликтовать с отдельным
+asset-cache ADR-0120; supersession backlinks и consumer migration ссылки
+перенумерованы вместе.
+
+- `cargo xtask checks`: **exit 0**.
+- `cargo clippy -p flui-engine --all-targets --features testing --locked --
+  -D warnings`: **exit 0**.
+- Полный `cargo nextest run -p flui-engine --features testing --locked
+  --no-capture` с `FLUI_REQUIRE_GPU=1`: **66 passed, 0 skipped**, **174.218 s**.
+  Foreground crop, Compose, geometry/quota refusal и healthy recovery,
+  Glyph replay/retry и painter image/offscreen family выполнены на одном
+  интегрированном source. Это Windows execution; native non-Windows GPU не
+  заявляется. Логи: `target/glyph-joint-{checks,engine-clippy,engine-gpu}.log`.
+
+Joint `cargo xtask check-changed --base bac8a5720449a2144257285c1bb96bde909178b8`
+завершился с **exit 0**: **494 passed, 0 skipped**, **142.353 s**; strict
+rustdoc, **434 passed / 333 ignored** doctests, Windows CLI и wasm checks,
+оба each-feature прохода по **60** конфигураций прошли. Журнал:
+`target/glyph-joint-check-changed.log`. После итоговой правки отчёта source
+checks повторяются; исполнение и компиляция не доказывают native GPU behavior
+на других платформах.
 
 ## Исторические проверки #1418 и границы выполнения
 

@@ -1,4 +1,4 @@
-# ADR-0120: Glyph images establish an immutable byte-layout invariant at construction
+# ADR-0122: Glyph images establish an immutable byte-layout invariant at construction
 
 - **Status:** Accepted
 - **Date:** 2026-10-04
