@@ -42,6 +42,21 @@ outside this boundary.
 `local_clone_competing_owner_reentry` and
 `key_collision_same_owner_and_stale_release`.
 
+### Exhausted owner identities refuse admission permanently
+
+An owner tag is claim authority, so its allocator never wraps or reissues a
+retired identity. The final nonzero identity is admitted once; the counter then
+records permanent exhaustion and subsequent owner construction panics before
+issuing another tag. Existing scoped claims remain usable and stale releases
+cannot withdraw a replacement owner's claim.
+
+`exhausted_owner_tag_counter_preserves_claim_authority` in
+`build_owner_scheduling_matrix` drives the actual private allocator with a local
+boundary counter, avoiding changes to process state. It checks repeated refused
+admission, stale release, and subsequent healthy claim/release operations in an
+independent scope. The private seam is necessary because a consumer cannot
+exhaust the process counter in a bounded test.
+
 ### Binding observers and returned futures retire independently
 
 **Rule:** observer registries and each notification snapshot own separately

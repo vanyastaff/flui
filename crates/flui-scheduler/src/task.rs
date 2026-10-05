@@ -24,10 +24,20 @@ use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 
 /// Generate the next unique task ID using a global atomic counter.
-fn next_task_id() -> TaskId {
+fn next_task_id() -> Option<TaskId> {
     static COUNTER: AtomicUsize = AtomicUsize::new(1);
-    let value = COUNTER.fetch_add(1, AtomicOrdering::Relaxed);
-    TaskId::zip(value)
+    next_task_id_with_counter(&COUNTER)
+}
+
+fn next_task_id_with_counter(counter: &AtomicUsize) -> Option<TaskId> {
+    counter
+        .try_update(
+            AtomicOrdering::Relaxed,
+            AtomicOrdering::Relaxed,
+            |current| current.checked_add(1),
+        )
+        .ok()
+        .map(TaskId::zip)
 }
 
 /// Task priority levels (higher value = higher priority).
@@ -165,12 +175,36 @@ pub struct Task {
 
 impl Task {
     /// Create a new task
+    ///
+    /// # Panics
+    ///
+    /// Panics when the process-wide task counter exhausts identities
+    /// `1..usize::MAX`. `usize::MAX` is reserved for permanent exhaustion;
+    /// catching the panic never permits another admission through that counter.
+    /// On exhausted admission, the rejected callback is retained without running
+    /// its destructor, preserving the capacity failure. This policy applies only
+    /// to rejected admission; accepted callbacks retain their ordinary lifetime.
     pub fn new<F>(priority: Priority, callback: F) -> Self
     where
         F: FnOnce() + Send + 'static,
     {
+        Self::new_with_allocator(priority, callback, next_task_id)
+    }
+
+    fn new_with_allocator<F>(
+        priority: Priority,
+        callback: F,
+        allocate: impl FnOnce() -> Option<TaskId>,
+    ) -> Self
+    where
+        F: FnOnce() + Send + 'static,
+    {
+        let Some(id) = allocate() else {
+            std::mem::forget(callback);
+            panic!("Task identities exhausted; refusing identity reuse");
+        };
         Self {
-            id: next_task_id(),
+            id,
             priority,
             callback: Box::new(callback),
         }
@@ -545,8 +579,7 @@ mod tests {
     /// through the batch loses the rest silently. Popping one task at a
     /// time (issue #1057) means only the panicking task itself is ever
     /// removed before it runs.
-    #[test]
-    fn execute_until_leaves_later_same_priority_tasks_queued_when_one_panics() {
+    fn priority_task_panic_preserves_same_priority_tail() {
         let queue = TaskQueue::new();
         let ran: Arc<Mutex<Vec<u32>>> = Arc::new(Mutex::new(Vec::new()));
 
@@ -578,5 +611,74 @@ mod tests {
         assert_eq!(executed, 1);
         assert_eq!(*ran.lock(), vec![1, 3]);
         assert_eq!(queue.len(), queue_len_before - 3);
+    }
+
+    fn exhausted_task_ids_preserve_priority_fifo() {
+        struct RejectedCapture(Arc<AtomicUsize>);
+        impl Drop for RejectedCapture {
+            fn drop(&mut self) {
+                self.0.fetch_add(1, AtomicOrdering::Relaxed);
+            }
+        }
+
+        let counter = AtomicUsize::new(usize::MAX - 2);
+        let queue = TaskQueue::new();
+        let ran = Arc::new(Mutex::new(Vec::new()));
+        for value in [1, 2] {
+            let output = Arc::clone(&ran);
+            queue.add_task(Task::new_with_allocator(
+                Priority::Build,
+                move || output.lock().push(value),
+                || next_task_id_with_counter(&counter),
+            ));
+        }
+        let rejected_drops = Arc::new(AtomicUsize::new(0));
+        for _ in 0..8 {
+            let capture = RejectedCapture(Arc::clone(&rejected_drops));
+            let refusal = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                queue.add_task(Task::new_with_allocator(
+                    Priority::Build,
+                    move || drop(capture),
+                    || next_task_id_with_counter(&counter),
+                ));
+            }))
+            .expect_err("exhausted task identities must refuse priority admission");
+            assert_eq!(
+                refusal.downcast_ref::<&str>().copied(),
+                Some("Task identities exhausted; refusing identity reuse")
+            );
+            assert_eq!(queue.len(), 2);
+        }
+        assert_eq!(rejected_drops.load(AtomicOrdering::Relaxed), 0);
+        assert_eq!(queue.execute_until(Priority::Build), 2);
+        assert_eq!(*ran.lock(), vec![1, 2]);
+        assert!(queue.is_empty());
+        for _ in 0..4 {
+            assert!(next_task_id_with_counter(&counter).is_none());
+        }
+
+        let output = Arc::clone(&ran);
+        queue.add(Priority::Build, move || output.lock().push(3));
+        let output = Arc::clone(&ran);
+        queue.add(Priority::Build, move || output.lock().push(4));
+        assert_eq!(queue.execute_until(Priority::Build), 2);
+        assert_eq!(*ran.lock(), vec![1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn execute_until_leaves_later_same_priority_tasks_queued_when_one_panics() {
+        crate::table_test::run_table(
+            "task_queue_failure_and_ordering",
+            &[
+                (
+                    "priority_task_panic_preserves_same_priority_tail",
+                    priority_task_panic_preserves_same_priority_tail as fn(),
+                ),
+                (
+                    "exhausted_task_ids_preserve_priority_fifo",
+                    exhausted_task_ids_preserve_priority_fifo as fn(),
+                ),
+            ],
+        );
     }
 }

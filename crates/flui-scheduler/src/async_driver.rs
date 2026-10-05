@@ -186,6 +186,14 @@ struct Inner {
 }
 
 impl Inner {
+    fn next_task_id(&self) -> Option<TaskId> {
+        self.next_id
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+                current.checked_add(1)
+            })
+            .ok()
+    }
+
     /// Ask the binding for a frame, if a hook is installed.
     ///
     /// The lock is released before the hook runs: a hook that re-enters the
@@ -417,6 +425,10 @@ impl AsyncDriver {
     /// An empty driver with no frame-request hook.
     #[must_use]
     pub fn new() -> Self {
+        Self::new_with_counter(AtomicU64::new(1))
+    }
+
+    fn new_with_counter(next_id: AtomicU64) -> Self {
         Self {
             inner: Arc::new(Inner {
                 store: Mutex::new(TaskStore {
@@ -424,7 +436,7 @@ impl AsyncDriver {
                     ready: Vec::new(),
                     spare: Vec::new(),
                 }),
-                next_id: AtomicU64::new(1),
+                next_id,
                 request_frame: Mutex::new(None),
                 wake_delivery: crate::wake_delivery::WakeDelivery::default(),
             }),
@@ -456,9 +468,22 @@ impl AsyncDriver {
     /// wake.
     ///
     /// Dropping the returned [`TaskToken`] cancels the task.
+    ///
+    /// # Panics
+    ///
+    /// Panics when this driver's task counter exhausts identities `1..u64::MAX`.
+    /// `u64::MAX` is reserved for permanent exhaustion, shared by both spawn
+    /// methods and all driver clones. Catching the panic or removing tasks never
+    /// permits another admission. On exhausted admission, the rejected future is
+    /// retained without polling it or running its destructor, preserving the
+    /// capacity failure. Accepted futures retain their ordinary lifetime policy.
     #[must_use = "dropping the TaskToken immediately cancels the task"]
     pub fn spawn_local(&self, future: BoxedTask) -> TaskToken {
-        let id = self.inner.next_id.fetch_add(1, Ordering::Relaxed);
+        let Some(id) = self.inner.next_task_id() else {
+            // Capacity refusal is authoritative over rejected opaque destruction.
+            mem::forget(future);
+            panic!("AsyncDriver task identities exhausted; refusing identity reuse");
+        };
         let ready = Arc::new(ReadyFlag::new(true));
         let cancelled = Arc::new(AtomicBool::new(false));
         let waker = Waker::from(Arc::new(TaskWaker {
@@ -520,9 +545,21 @@ impl AsyncDriver {
     /// so does not trip that method's "never poll during persistent callbacks"
     /// guard: this is a single task polled at its own subscription point, not the
     /// frame's driver step.
+    ///
+    /// # Panics
+    ///
+    /// Panics when this driver's task counter exhausts identities `1..u64::MAX`.
+    /// `u64::MAX` is reserved for permanent exhaustion, shared by both spawn
+    /// methods and all driver clones. Catching the panic or removing tasks never
+    /// permits another admission. On exhausted admission, the rejected future is
+    /// retained without polling it or running its destructor, preserving the
+    /// capacity failure. Accepted futures retain their ordinary lifetime policy.
     #[must_use = "dropping the TaskToken immediately cancels the task"]
     pub fn spawn_local_eager(&self, mut future: BoxedTask) -> Option<TaskToken> {
-        let id = self.inner.next_id.fetch_add(1, Ordering::Relaxed);
+        let Some(id) = self.inner.next_task_id() else {
+            mem::forget(future);
+            panic!("AsyncDriver task identities exhausted; refusing identity reuse");
+        };
         // Starts NOT ready: we are about to poll it ourselves. A wake landing
         // during that poll flips this to `true` (and requests a frame), so the
         // task is correctly re-armed when we queue it below.
@@ -856,6 +893,120 @@ mod tests {
         )
     }
 
+    fn exhausted_task_ids_preserve_cancellation_and_progress() {
+        struct Rejected {
+            polls: Arc<AtomicUsize>,
+            drops: Arc<AtomicUsize>,
+        }
+        impl Future for Rejected {
+            type Output = ();
+            fn poll(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<()> {
+                self.polls.fetch_add(1, Ordering::Relaxed);
+                Poll::Ready(())
+            }
+        }
+        impl Drop for Rejected {
+            fn drop(&mut self) {
+                self.drops.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+
+        for eager_first in [false, true] {
+            let driver = AsyncDriver::new_with_counter(AtomicU64::new(u64::MAX - 2));
+            let alias = driver.clone();
+            let mut accepted = Vec::new();
+            for eager in [eager_first, !eager_first] {
+                let (future, polls, finish, waker) = controlled();
+                let token = if eager {
+                    let token = driver
+                        .spawn_local_eager(Box::pin(future))
+                        .expect("controlled eager future remains pending");
+                    waker
+                        .lock()
+                        .as_ref()
+                        .expect("inline poll stores waker")
+                        .wake_by_ref();
+                    token
+                } else {
+                    driver.spawn_local(Box::pin(future))
+                };
+                accepted.push((token, polls, finish, waker));
+            }
+            assert_eq!(driver.poll_ready(), 2);
+            assert_eq!(driver.pending_task_count(), 2);
+
+            let rejected_polls = Arc::new(AtomicUsize::new(0));
+            let rejected_drops = Arc::new(AtomicUsize::new(0));
+            for _ in 0..4 {
+                for eager in [false, true] {
+                    let future = Box::pin(Rejected {
+                        polls: Arc::clone(&rejected_polls),
+                        drops: Arc::clone(&rejected_drops),
+                    });
+                    let refusal = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        if eager {
+                            alias.spawn_local_eager(future)
+                        } else {
+                            Some(alias.spawn_local(future))
+                        }
+                    }))
+                    .expect_err("exhausted driver must refuse both task admission paths");
+                    assert_eq!(
+                        refusal.downcast_ref::<&str>().copied(),
+                        Some("AsyncDriver task identities exhausted; refusing identity reuse")
+                    );
+                    assert_eq!(driver.pending_task_count(), 2);
+                    assert_eq!(driver.poll_ready(), 0);
+                }
+            }
+            assert_eq!(rejected_polls.load(Ordering::Relaxed), 0);
+            assert_eq!(rejected_drops.load(Ordering::Relaxed), 0);
+
+            let (first, _, finish, waker) = &accepted[0];
+            finish.store(true, Ordering::Release);
+            waker
+                .lock()
+                .as_ref()
+                .expect("first pending task stores waker")
+                .wake_by_ref();
+            assert_eq!(driver.poll_ready(), 1);
+            first.cancel();
+            assert_eq!(driver.pending_task_count(), 1);
+            let (_, _, finish, waker) = &accepted[1];
+            finish.store(true, Ordering::Release);
+            waker
+                .lock()
+                .as_ref()
+                .expect("sibling stores waker")
+                .wake_by_ref();
+            assert_eq!(alias.poll_ready(), 1);
+            assert_eq!(driver.pending_task_count(), 0);
+            for eager in [false, true] {
+                let refusal = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    if eager {
+                        driver.spawn_local_eager(Box::pin(async {}))
+                    } else {
+                        Some(driver.spawn_local(Box::pin(async {})))
+                    }
+                }));
+                assert!(
+                    refusal.is_err(),
+                    "removal must not reset exhausted identities"
+                );
+            }
+        }
+
+        let fresh = AsyncDriver::new();
+        let completed = Arc::new(AtomicBool::new(false));
+        let output = Arc::clone(&completed);
+        let _token = fresh.spawn_local(Box::pin(async move {
+            output.store(true, Ordering::Release);
+        }));
+        assert_eq!(fresh.poll_ready(), 1);
+        assert!(completed.load(Ordering::Acquire));
+        assert_eq!(fresh.pending_task_count(), 0);
+    }
+
     // ── 1. ready future completes on the next poll ──────────────────────────
 
     /// A future that panics on its very first poll.
@@ -1131,6 +1282,10 @@ mod tests {
         crate::table_test::run_table(
             "async_driver_failure_and_ordering_matrix",
             &[
+                (
+                    "exhausted_task_ids_preserve_cancellation_and_progress",
+                    exhausted_task_ids_preserve_cancellation_and_progress as fn(),
+                ),
                 (
                     "async_driver_poll_panic_does_not_leave_a_zombie_slot",
                     async_driver_poll_panic_does_not_leave_a_zombie_slot as fn(),

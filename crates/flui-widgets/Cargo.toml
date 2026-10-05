@@ -218,6 +218,9 @@ order = 3
 reach-forbid = ["flui-testing"]
 # Process-global state, checked by `cargo xtask globals` (ADR-0097).
 globals = [
+    { item = "navigator::route::RouteId::next::COUNTER", grant = "ADR-0097", class = "counter", reason = "Route identities, advanced by try_update with permanent exhaustion refusal" },
+    { item = "navigator::navigator::NEXT_NAVIGATOR_COMMAND_TARGET_ID", grant = "ADR-0097", class = "counter", reason = "Navigator command identities, advanced by try_update with permanent exhaustion refusal" },
+    { item = "overlay::entry::OverlayEntryId::next::COUNTER", grant = "ADR-0097", class = "counter", reason = "Overlay entry identities, advanced by try_update with a permanent exhaustion sentinel" },
     { item = "animated::animated_switcher::DEFAULT_LAYOUT_BUILDER", grant = "ADR-0097", class = "immutable", reason = "the shared default layout builder, so an unchanged default compares equal across rebuilds" },
     { item = "animated::animated_switcher::DEFAULT_TRANSITION_BUILDER", grant = "ADR-0097", class = "immutable", reason = "the shared default transition builder, so an unchanged default compares equal across rebuilds" },
     { item = "animated::implicitly_animated::default_curve::DEFAULT", grant = "ADR-0097", class = "immutable", reason = "the shared default curve, built once" },

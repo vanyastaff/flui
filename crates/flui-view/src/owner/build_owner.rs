@@ -3827,6 +3827,7 @@ mod tests {
         crate::table_test::run_table(
             "build_owner_scheduling_matrix",
             &[
+                ("exhausted_owner_tag_counter_preserves_claim_authority", OwnerTag::exhausted_owner_tag_counter_preserves_claim_authority as fn()),
                 ("wake_debt_is_shared_and_only_a_hooked_scheduler_can_pay_it", wake_debt_is_shared_and_only_a_hooked_scheduler_can_pay_it as fn()),
                 ("same_id_schedule_racing_a_failed_wake_gets_a_compensating_wake", same_id_schedule_racing_a_failed_wake_gets_a_compensating_wake as fn()),
                 ("reentrant_retry_preserves_the_first_panic_when_the_retry_payload_drop_panics", reentrant_retry_preserves_the_first_panic_when_the_retry_payload_drop_panics as fn()),

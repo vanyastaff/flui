@@ -8,6 +8,23 @@ decisions` entries below; a full crate architecture writeup is deferred.
 
 ## Mapping decisions
 
+### Exhausted task identities permanently refuse admission
+
+The process-wide task allocator and each async driver's shared allocator admit
+identities from one up to, but excluding, their integer maximum. The maximum is
+a permanent exhaustion sentinel: catching a capacity panic, cancelling tasks,
+or using another driver clone cannot issue an old identity again. This preserves
+cancellation authority and priority/FIFO ordering for already accepted work.
+
+Admission checks capacity before polling a future or publishing a task. A rejected
+callback or future is retained before the capacity panic so its destructor cannot
+replace that failure. Accepted inputs keep their ordinary destruction policy.
+The private local-counter seam exercises the actual allocation and admission
+paths without exhausting a process-wide counter. Existing unit families register
+`exhausted_task_ids_preserve_cancellation_and_progress` and
+`exhausted_task_ids_preserve_priority_fifo`; the rows check cancellation, ordering,
+repeated refusal, rejected-input custody, and subsequent healthy independent work.
+
 ### Ticker cancellation precedes terminal callback retirement
 
 Disposing, stopping or resetting a ticker withdraws its callback and cancels

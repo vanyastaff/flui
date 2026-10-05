@@ -1,5 +1,20 @@
 # flui-widgets architecture
 
+## Overlay entry identity admission
+
+Overlay entry allocation admits the final nonzero identity once, then permanently
+refuses construction. The rejected builder enters ownership custody before
+allocation and is retained during capacity unwind; accepted builders keep their
+ordinary lifetime. This preserves entry removal authority and distinct consumer
+view keys after caught allocation failures.
+
+The private local-counter row
+`overlay_entry_identity_exhaustion_preserves_existing_entries` runs in the
+existing `overlay_build_plan_skips_covered_maintained_entries` family. It drives
+actual entry construction, handle insertion, reorder and removal, checks consumer
+view keys and rejected-builder custody, then exercises healthy independent work.
+This row does not establish mounted boundary reconciliation at exhaustion.
+
 ## Terminal navigation ownership
 
 Navigation bindings hold the navigator's registry weakly. The navigator closes
@@ -9,6 +24,24 @@ enqueue work for a navigator that is gone. A lookup through a closed registry
 returns nothing and a mutation does nothing. Modal, transition and hero handles
 that outlive the navigator keep only their own state; a transition handle does
 not keep a modal page alive.
+
+Route and navigator command identities admit values from one up to, but
+excluding, the integer maximum. The maximum permanently refuses allocation;
+caught capacity failures cannot reissue an identity held by history or a typed
+command target. Rejected routes and replacement results enter custody before
+allocation. Batch replacement reserves all route identities before binding,
+building or publishing any member; spent reservations are never rolled back.
+
+Private local-counter rows
+`route_identity_exhaustion_preserves_history_authority` and
+`navigator_command_identity_exhaustion_preserves_target_authority` join
+`history_reentrancy_and_completion_contracts`. The separate bounded-process test
+`navigator_identity_exhaustion_retains_admission_ownership` checks competing
+route/result destruction, batch builder and public binding/history admission,
+and subsequent healthy operations on the same handle. Its batch assertions
+establish no premature producer callbacks or binding/history admission; they
+do not establish physically mounted overlay reconciliation at exhaustion.
+
 
 Route, router, overlay, modal and hero owners withdraw each owned value from
 shared state before dropping it, so no destructor runs under an internal lock.
