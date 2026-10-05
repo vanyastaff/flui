@@ -77,6 +77,22 @@ A cache hit shares the loaded allocation. Equal typed keys identify equivalent
 requests; callers must use different keys when the requested data differ.
 Cloned handles share data without requiring `Data: Clone`.
 
+`AssetKey` owns a nonempty `Arc<str>`. Its clones share string storage; keys
+constructed independently compare and hash by their contents. There is no global
+interner keeping names alive after their owners disappear. `as_str()` borrows
+from the key and cannot outlive it; clone the key when transferring ownership.
+Keys no longer implement Copy or expose an interner integer.
+
+Built-in descriptors accept `&str`, owned `String` or `Arc<str>` names and share
+their allocation with returned keys. Adapt a borrowed `String` with `as_str()`:
+
+```rust
+use flui_assets::FontAsset;
+
+let path = String::from("font.ttf");
+let font = FontAsset::file(path.as_str());
+```
+
 ### Cache management
 
 ```rust
@@ -205,7 +221,10 @@ if let Some(still_loaded) = weak.upgrade() {
 
 Weak handles do not retain data. Their upgrade can succeed because the cache or
 another consumer still owns it, including a consumer holding an evicted value.
-Eviction itself does not depend on dropping consumer handles.
+Eviction itself does not depend on dropping consumer handles. A weak asset handle
+still owns its key strongly: releasing the loaded data does not release its name
+while that weak handle remains. Drop every descriptor, key and handle to release
+a particular shared name.
 
 ### Byte sources
 

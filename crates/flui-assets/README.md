@@ -9,8 +9,8 @@ High-performance asset management system for FLUI framework with smart caching, 
 - 💾 **Smart Caching** - Explicit entry capacity and configurable expiration
 - 🎯 **Type-Safe** - `Asset` trait with typed `Data`, `Key` and `Error`
 - ⚡ **Async I/O** - Non-blocking loading with tokio runtime
-- 🔑 **Efficient Keys** - 4-byte interned keys for fast hashing and comparison
-- 📦 **Arc-Based Handles** - Cheap cloning with automatic cleanup via weak references
+- 🔑 **Efficient Keys** - Owned nonempty names with shared string storage
+- 📦 **Arc-Based Handles** - Shared loaded data; weak data references do not extend its lifetime
 - 🎨 **Built-in Assets** - Images (optional), fonts, with extensible system
 
 ## Quick Start
@@ -195,8 +195,16 @@ as a file-backed asset; the registry caches its decoded result.
 ## Performance Characteristics
 
 ### Memory Efficiency
-- **AssetKey**: 4 bytes (vs 24+ for `String`)
+- **AssetKey**: owns an `Arc<str>`; clones share its string allocation
 - **AssetHandle**: stores a key and an `Arc` sharing the loaded data
+
+Asset keys compare and hash by string contents, so independently constructed
+keys with equal names identify the same asset. Keys are Clone rather than Copy;
+`as_str()` borrows from the owning key instead of returning a static string.
+`FontAsset` and `ImageAsset` keep shared names, and their `key()` methods clone
+that storage. Names are reclaimed after their final owner disappears, without
+a process-wide interner. A weak asset handle still owns its key strongly even
+though it does not retain the loaded data.
 
 ### Cache Behavior
 

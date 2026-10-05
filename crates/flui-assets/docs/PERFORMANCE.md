@@ -5,6 +5,22 @@ stores each result in an `Arc`, so a cache hit shares data instead of copying a
 decoded image or font. No project benchmark establishes a latency, throughput,
 memory-layout or hit-rate advantage over another cache.
 
+## Name ownership
+
+`AssetKey` owns a nonempty `Arc<str>` instead of an integer in a global interner.
+Cloned keys share storage, and built-in descriptors share their name allocation
+with their returned keys. Independently constructed equal names remain equal by
+contents; comparison and hashing are string operations, not a promised
+constant-time integer operation. This change trades global deduplication and
+Copy keys for reclamation of names when their final owner disappears. It makes
+no claim of a measured speed or fixed-size advantage.
+
+Consumer handles preserve their names after registry or cache ownership ends.
+Weak data handles also own their keys strongly; account for them when tracking
+name retention. `as_str()` borrows from a key and supplies no static-lifetime
+storage guarantee. Shared `Arc<str>` input can be transferred into a key without
+copying its string contents.
+
 ## Capacity
 
 Capacity counts completed entries separately for each asset type:

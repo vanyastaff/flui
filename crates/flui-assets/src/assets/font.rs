@@ -1,6 +1,7 @@
 //! Font asset implementation.
 
 use std::path::Path;
+use std::sync::Arc;
 
 use crate::loaders::BytesFileLoader;
 
@@ -27,7 +28,7 @@ use crate::types::AssetKey;
 #[derive(Debug, Clone)]
 pub struct FontAsset {
     /// Source path or identifier
-    path: String,
+    path: Arc<str>,
 
     /// Optional pre-loaded bytes (for embedded fonts)
     bytes: Option<Vec<u8>>,
@@ -41,7 +42,7 @@ impl FontAsset {
     /// ```rust,ignore
     /// let font = FontAsset::file("fonts/Roboto-Regular.ttf");
     /// ```
-    pub fn file(path: impl Into<String>) -> Self {
+    pub fn file(path: impl Into<Arc<str>>) -> Self {
         Self {
             path: path.into(),
             bytes: None,
@@ -56,7 +57,7 @@ impl FontAsset {
     /// let bytes = include_bytes!("Roboto-Regular.ttf");
     /// let font = FontAsset::from_bytes("Roboto-Regular.ttf", bytes.to_vec());
     /// ```
-    pub fn from_bytes(name: impl Into<String>, bytes: Vec<u8>) -> Self {
+    pub fn from_bytes(name: impl Into<Arc<str>>, bytes: Vec<u8>) -> Self {
         Self {
             path: name.into(),
             bytes: Some(bytes),
@@ -70,7 +71,7 @@ impl Asset for FontAsset {
     type Error = AssetError;
 
     fn key(&self) -> AssetKey {
-        AssetKey::new(&self.path)
+        AssetKey::from(Arc::clone(&self.path))
     }
 
     async fn load(&self) -> Result<Self::Data, Self::Error> {
@@ -79,13 +80,15 @@ impl Asset for FontAsset {
             bytes.clone()
         } else {
             // Load from file
-            BytesFileLoader::new("").load_bytes(&self.path).await?
+            BytesFileLoader::new("")
+                .load_bytes(self.path.as_ref())
+                .await?
         };
 
         // Validate it's a valid font by checking magic bytes
         if bytes.len() < 4 {
             return Err(AssetError::LoadFailed {
-                path: self.path.clone(),
+                path: self.path.to_string(),
                 reason: "File too small to be a valid font".to_string(),
             });
         }
@@ -102,7 +105,7 @@ impl Asset for FontAsset {
 
         if !is_valid {
             return Err(AssetError::LoadFailed {
-                path: self.path.clone(),
+                path: self.path.to_string(),
                 reason: "Invalid font format (not TTF/OTF)".to_string(),
             });
         }
@@ -112,7 +115,7 @@ impl Asset for FontAsset {
 
     fn metadata(&self) -> Option<AssetMetadata> {
         // Extract format from file extension
-        let format = Path::new(&self.path)
+        let format = Path::new(self.path.as_ref())
             .extension()
             .and_then(|ext| ext.to_str())
             .map(str::to_uppercase);

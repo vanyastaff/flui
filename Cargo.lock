@@ -1857,7 +1857,6 @@ version = "0.2.0-dev"
 dependencies = [
  "flui-painting",
  "image",
- "lasso",
  "moka",
  "parking_lot",
  "reqwest",
@@ -2857,10 +2856,6 @@ name = "hashbrown"
 version = "0.14.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e5274423e17b7c9fc20b6e7e208532f9b19825d82dfd615708b70edd83df41f1"
-dependencies = [
- "ahash",
- "allocator-api2",
-]
 
 [[package]]
 name = "hashbrown"
@@ -3452,16 +3447,6 @@ dependencies = [
  "euclid",
  "polycool",
  "smallvec",
-]
-
-[[package]]
-name = "lasso"
-version = "0.7.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6e14eda50a3494b3bf7b9ce51c52434a761e383d7238ce1dd5dcec2fbc13e9fb"
-dependencies = [
- "dashmap",
- "hashbrown 0.14.5",
 ]
 
 [[package]]

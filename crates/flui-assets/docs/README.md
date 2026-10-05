@@ -32,7 +32,11 @@ bounds, not decoded-byte budgets.
 Ordinary registry loading validates descriptors and shares concurrent cold
 initialization through Moka. Successful results include decoded images and fonts.
 Errors are not cached. Strong handles retain their data after eviction; weak
-handles do not retain data. Widget bridge methods bypass registry caching and
+handles do not retain data. Both strong and weak asset handles own their keys.
+`AssetKey` owns a nonempty shared string: clones share storage, independently
+constructed equal names compare by contents, and `as_str` borrows from the key.
+Its storage is released when the last owner disappears rather than retained by
+a global interner. Widget bridge methods bypass registry caching and
 feed a synchronous widget image LRU.
 
 A standalone typed `AssetCache` exposes shared operation counters, estimated

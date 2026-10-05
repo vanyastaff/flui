@@ -33,9 +33,6 @@ tokio = { workspace = true, features = ["fs", "io-util", "sync", "rt-multi-threa
 # High-performance cache
 moka = { workspace = true }
 
-# String interning for efficient asset keys
-lasso = { workspace = true }
-
 # Sync primitives
 parking_lot = { workspace = true }
 
@@ -100,7 +97,3 @@ tier-kind = "internal"
 order = 7
 # tokio's networking stack (mio) has no wasm32-unknown-unknown support.
 wasm = false
-# Process-global state, checked by `cargo xtask globals` (ADR-0097).
-globals = [
-    { item = "types::key::INTERNER", exit = "ADR-0097", reason = "the process-wide asset-key interner, which only grows" },
-]

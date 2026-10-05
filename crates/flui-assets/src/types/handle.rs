@@ -209,6 +209,8 @@ where
 ///     None => println!("Asset was evicted"),
 /// }
 /// ```
+/// The data reference is weak, but this handle owns its key. A shared
+/// string key remains alive until this handle and other name owners are dropped.
 pub struct WeakAssetHandle<T, K = AssetKey> {
     inner: std::sync::Weak<T>,
     key: K,
