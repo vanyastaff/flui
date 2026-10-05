@@ -346,9 +346,11 @@ impl Listenable for ChangeNotifier {
 /// Cloning the notifier requires `T: Clone`: it copies the value and shares
 /// the listener channel.
 ///
-/// Dropping the notifier drops the value, then the channel. Once one of them
-/// panics, or if the thread is already panicking, the rest is retained rather
-/// than dropped (ADR-0127); the same holds for the value when
+/// Dropping the notifier drops the value, then its handle on the shared
+/// channel. While the thread is panicking (already, or because the value's
+/// destructor panicked) the value and the last channel owner's listener
+/// captures are retained rather than dropped (ADR-0127), but the handle is
+/// still released so clones keep working. The value is likewise retained when
 /// [`into_value`](Self::into_value) fails to dispose the channel.
 ///
 /// Borrowed data inside `T` must outlive the notifier: declare the notifier
@@ -379,8 +381,10 @@ pub struct ValueNotifier<T> {
     notifier: Option<ChangeNotifier>,
 }
 
-/// The value and channel withdrawn from a `ValueNotifier`; retains whatever is
-/// left in it if dropped while the thread is panicking (ADR-0127).
+/// The value and channel withdrawn from a `ValueNotifier`. Dropped while the
+/// thread is panicking, it retains the value (ADR-0127) and drops the channel
+/// handle: a clone may still share the channel, and the last owner's listener
+/// storage retains its own captures during an unwind.
 struct RetiringValueNotifier<T> {
     value: Option<T>,
     notifier: Option<ChangeNotifier>,
@@ -390,7 +394,6 @@ impl<T> Drop for RetiringValueNotifier<T> {
     fn drop(&mut self) {
         if std::thread::panicking() {
             std::mem::forget(self.value.take());
-            std::mem::forget(self.notifier.take());
         }
     }
 }
@@ -399,8 +402,7 @@ impl<T> Drop for ValueNotifier<T> {
     fn drop(&mut self) {
         let mut retiring = self.extract_owned();
         if !std::thread::panicking() {
-            // Value, then channel. If the value's destructor panics, the guard
-            // retains the channel on unwind.
+            // Value, then channel.
             drop(retiring.value.take());
             drop(retiring.notifier.take());
         }

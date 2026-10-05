@@ -451,6 +451,53 @@ fn value_terminal_retirement_preserves_the_first_failure() {
     }
 }
 
+fn value_retirement_failure_releases_the_shared_channel() {
+    #[derive(Clone)]
+    struct Value {
+        fail: bool,
+    }
+    impl Drop for Value {
+        fn drop(&mut self) {
+            assert!(!self.fail, "value retirement failure");
+        }
+    }
+    let mut notifier = ValueNotifier::new(Value { fail: false });
+    let alias = notifier.clone();
+    *notifier.value_mut() = Value { fail: true };
+    let calls = Arc::new(AtomicUsize::new(0));
+    let listener_drops = Arc::new(AtomicUsize::new(0));
+    let capture = Counted(Arc::clone(&listener_drops));
+    let observed = Arc::clone(&calls);
+    notifier.add_listener(Arc::new(move || {
+        let _capture = &capture;
+        observed.fetch_add(1, Ordering::SeqCst);
+    }));
+    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || drop(notifier)))
+        .expect_err("the value's destructor failure propagates");
+    assert_eq!(
+        flui_foundation::panic::payload_text(&*failure),
+        Some("value retirement failure")
+    );
+    flui_foundation::panic::retain_opaque_payload(failure);
+    alias.notify();
+    assert_eq!(calls.load(Ordering::SeqCst), 1, "the clone still notifies");
+    assert_eq!(listener_drops.load(Ordering::SeqCst), 0);
+    drop(alias);
+    assert_eq!(
+        listener_drops.load(Ordering::SeqCst),
+        1,
+        "the surviving clone is the last channel owner"
+    );
+}
+
+struct Counted(Arc<AtomicUsize>);
+
+impl Drop for Counted {
+    fn drop(&mut self) {
+        self.0.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
 fn value_terminal_retirement_preserves_incoming_unwind() {
     let value_drops = Arc::new(AtomicUsize::new(0));
     let listener_drops = Arc::new(AtomicUsize::new(0));
@@ -582,6 +629,9 @@ fn notifier_ownership_and_recovery() {
             "value_terminal_retirement_preserves_the_first_failure" => {
                 value_terminal_retirement_preserves_the_first_failure();
             }
+            "value_retirement_failure_releases_the_shared_channel" => {
+                value_retirement_failure_releases_the_shared_channel();
+            }
             "value_terminal_retirement_preserves_incoming_unwind" => {
                 value_terminal_retirement_preserves_incoming_unwind();
             }
@@ -607,6 +657,7 @@ fn notifier_ownership_and_recovery() {
         "terminal_retirement_preserves_incoming_unwind",
         "healthy_terminal_retirement_waits_for_the_last_owner",
         "value_terminal_retirement_preserves_the_first_failure",
+        "value_retirement_failure_releases_the_shared_channel",
         "value_terminal_retirement_preserves_incoming_unwind",
         "healthy_value_extraction_preserves_reentry_and_shared_channel_disposal",
     ] {

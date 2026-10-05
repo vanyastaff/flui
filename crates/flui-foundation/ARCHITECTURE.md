@@ -280,7 +280,8 @@ notifier clones keep the map alive. `ValueNotifier` drops its value, then its
 channel; `into_value` disposes the channel before returning the value. After
 the first destructor panic in one of these operations, or when one starts while
 the thread is already panicking, the remaining captures and the value are
-retained (ADR-0127). A failure a caller caught earlier is not visible through
+retained (ADR-0127). A `ValueNotifier`'s channel handle is a shared clone, so
+it is released even then; the last owner's storage retains the captures. A failure a caller caught earlier is not visible through
 `thread::panicking()`, so that caller retains its own failed value. Pinned by
 `notifier_ownership_and_recovery`.
 
