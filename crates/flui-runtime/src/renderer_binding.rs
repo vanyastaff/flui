@@ -82,15 +82,11 @@ impl Drop for RetiringSemanticsListeners {
         if std::thread::panicking() {
             // Preserve the incoming or first propagated failure without
             // invoking independent, potentially hostile capture destructors
-            // (ADR-0127). Only a last owner would run a capture destructor;
-            // releasing a shared clone keeps the registration's owner able to
-            // free the capture once it is removed or the binding drops.
+            // (ADR-0127). The envelopes are thread-shared, so no clone can be
+            // proven non-last: another thread may release its own at any
+            // moment. Every clone is retained.
             for listener in std::mem::take(&mut self.0) {
-                if Arc::strong_count(&listener) == 1 {
-                    std::mem::forget(listener);
-                } else {
-                    drop(listener);
-                }
+                std::mem::forget(listener);
             }
         }
     }
@@ -521,9 +517,9 @@ impl RenderingBinding {
     /// `SemanticsHost::set_platform_semantics_enabled` from that listener.
     ///
     /// A callback panic propagates unchanged. During that unwind the owned
-    /// snapshot retains only the envelopes it is the last owner of (those a
-    /// callback removed from the binding) and releases its other clones, so
-    /// captures still registered free when the binding drops (ADR-0127).
+    /// snapshot retains its envelope clones instead of dropping them
+    /// (ADR-0127): a thread-shared clone cannot be proven non-last, so the
+    /// captures of the listeners in that snapshot are never freed.
     /// Healthy snapshot retirement follows registration order, with the same
     /// rule after the first capture-destructor panic. This cannot protect
     /// competing destructors inside one opaque callback's capture aggregate.
