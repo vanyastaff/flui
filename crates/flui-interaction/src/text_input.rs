@@ -189,8 +189,16 @@ impl OwnerState {
     /// if it may still hold grants queued behind the frame.
     fn retire(&mut self, client: &AttachedClient, transaction_open: bool) {
         if transaction_open {
-            self.retired.push(Rc::clone(&client.client.store));
+            push_unique(&mut self.retired, Rc::clone(&client.client.store));
         }
+    }
+}
+
+/// Queue `store` for the anchor unless it is already queued: a store runs its
+/// grants once per anchor, however many times it left the active slot.
+fn push_unique(stores: &mut Vec<Rc<dyn TextStore>>, store: Rc<dyn TextStore>) {
+    if !stores.iter().any(|queued| Rc::ptr_eq(queued, &store)) {
+        stores.push(store);
     }
 }
 
@@ -403,7 +411,10 @@ impl TextInputOwner {
                 .map(|active| Rc::clone(&active.client.store));
             (std::mem::take(&mut state.retired), active)
         };
-        let mut stores: Vec<_> = retired.into_iter().chain(active).collect();
+        let mut stores = retired;
+        if let Some(active) = active {
+            push_unique(&mut stores, active);
+        }
         let mut ran = 0;
         for index in 0..stores.len() {
             if self.is_transaction_open() || self.ensure_open().is_err() {
@@ -447,8 +458,26 @@ impl TextInputOwner {
     fn retain_pending_stores(&self, stores: &mut Vec<Rc<dyn TextStore>>, from: usize) {
         let mut state = self.state.borrow_mut();
         if state.lifecycle == OwnerLifecycle::Open {
-            let mut pending: Vec<_> = stores.drain(from..).collect();
-            pending.append(&mut state.retired);
+            // The active store is not requeued: the next anchor runs it as the
+            // active client, and listing it twice would run its grants twice.
+            // Each dropped handle is a clone the active slot or the queue
+            // still holds, so dropping it runs no user code.
+            let mut pending = Vec::with_capacity(stores.len() - from + state.retired.len());
+            let active = state
+                .active
+                .as_ref()
+                .map(|active| Rc::clone(&active.client.store));
+            for store in stores
+                .drain(from..)
+                .chain(std::mem::take(&mut state.retired))
+            {
+                if !active
+                    .as_ref()
+                    .is_some_and(|active| Rc::ptr_eq(active, &store))
+                {
+                    push_unique(&mut pending, store);
+                }
+            }
             state.retired = pending;
         }
         // Closing explicitly cancels the tail; its owners retire outside this borrow.
