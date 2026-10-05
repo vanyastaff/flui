@@ -197,3 +197,24 @@ true only for a successful rendering result. A failed rendering logs its error
 and leaves the hook's reset pending. Ordinary fallback rendering restores the
 renderer namespace separately; the next plugin frame therefore cannot alias
 ordinary or prior-image font IDs.
+
+### Background worker retirement preserves progress
+
+A worker commits its newest result, then drops the result it replaced outside
+the slot lock. A panic in that destructor, or in a lifecycle diagnostic, is
+contained and the pump keeps running: pending input, including input submitted
+by the retiring result, is still delivered. `submit` schedules the pump before
+it drops the input it replaced; if scheduling is refused, the new input is
+removed and dropped, as `WorkerHandle::submit` documents. A panic in the
+replaced input's destructor propagates after scheduling, and a refused input in
+the same call is retained rather than dropped (ADR-0127).
+
+Pending input and pump ownership share one inbox mutex, so installing work and
+reserving its pump is one transition, and so is finding the inbox empty and
+releasing ownership. A pump that released ownership returns without touching
+the inbox again. Host spawning and every user destructor run outside the mutex.
+
+Discarded lifecycle panic payloads are retained (ADR-0119), as is a future
+whose poll panicked (ADR-0127); healthy completion and cancellation drop the future
+normally. A compute panic is reported as complete before its diagnostics run.
+Pinned by `service_lifecycle_matrix`.
