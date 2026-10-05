@@ -683,6 +683,7 @@ fn terminal_owner_matrix(kind: TerminalOwner) {
         );
     }
 }
+
 #[derive(Clone, Copy)]
 enum VsyncRemoval {
     Controller,
@@ -701,10 +702,6 @@ struct VsyncRetirementProbe {
 impl Drop for VsyncRetirementProbe {
     fn drop(&mut self) {
         self.drops.fetch_add(1, Ordering::SeqCst);
-        match self.removal {
-            VsyncRemoval::Controller => eprintln!("vsync unregister DropStarted reentrantRegistry"),
-            VsyncRemoval::Child => eprintln!("vsync detach DropStarted reentrantRegistry"),
-        }
         assert_eq!(
             self.registry.len(),
             1,
