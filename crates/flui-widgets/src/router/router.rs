@@ -260,6 +260,28 @@ impl<R: Routable> Drop for RouterState<R> {
     }
 }
 
+impl<R: Routable> RouterState<R> {
+    /// Seed each initial value as a page, bottom to top.
+    ///
+    /// The taken values stay in terminal slots — the unseeded tail and the
+    /// value being seeded — until each one's page commits, so a failure while
+    /// seeding (a route-identity refusal, a panicking page builder) retains
+    /// them rather than dropping user values during unwind (ADR-0127). Pages
+    /// seeded before the failure stay committed.
+    fn seed_initial_pages(&mut self) {
+        let mut remaining = Terminal::new(std::mem::take(&mut self.initial).into_iter());
+        for route in &mut *remaining {
+            let mut route = Terminal::new(route);
+            let page = self.shared.page_route(&route);
+            let id = self.shared.navigator.seed_page(page);
+            self.shared.stack.borrow_mut().push(RouterEntry {
+                id,
+                route: route.take_value(),
+            });
+        }
+    }
+}
+
 impl<R: Routable> ViewState<Router<R>> for RouterState<R> {
     /// Observe the navigator before it mounts, so every pop it makes — from
     /// this router's handle, the facade, a back gesture or a barrier — reaches
@@ -270,14 +292,7 @@ impl<R: Routable> ViewState<Router<R>> for RouterState<R> {
         self.shared
             .navigator
             .add_observer(Arc::clone(&self.observer));
-        for route in std::mem::take(&mut self.initial) {
-            let page = self.shared.page_route(&route);
-            let id = self.shared.navigator.seed_page(page);
-            self.shared
-                .stack
-                .borrow_mut()
-                .push(RouterEntry { id, route });
-        }
+        self.seed_initial_pages();
     }
 
     fn build(&self, _view: &Router<R>, _cx: &dyn BuildContext) -> impl IntoView {
@@ -440,6 +455,82 @@ impl<R: Routable> NavigatorObserver for RouterObserver<R> {
     fn did_remove(&self, route: RouteId, _previous: Option<RouteId>) {
         if let Some(shared) = self.shared.upgrade() {
             shared.forget(route);
+        }
+    }
+}
+
+#[cfg(test)]
+mod seed_tests {
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+    use super::*;
+    use crate::navigator::RouteId;
+    use crate::support::child_process::child_test;
+
+    /// A route value whose destructor panics once armed, unless it is the
+    /// base page that seeds successfully.
+    #[derive(Clone)]
+    struct InitialValue {
+        index: usize,
+        armed: Arc<AtomicBool>,
+        drops: Arc<AtomicUsize>,
+    }
+
+    impl PartialEq for InitialValue {
+        fn eq(&self, other: &Self) -> bool {
+            self.index == other.index
+        }
+    }
+
+    impl Drop for InitialValue {
+        fn drop(&mut self) {
+            if self.armed.load(Ordering::SeqCst) && self.index > 0 {
+                self.drops.fetch_add(1, Ordering::SeqCst);
+                panic!("competing initial route destruction");
+            }
+        }
+    }
+
+    impl Routable for InitialValue {
+        fn to_path(&self) -> RoutePath {
+            RoutePath::root().join(self.index)
+        }
+
+        fn from_path(path: &RoutePath) -> Result<Self, RouteParseError> {
+            Err(RouteParseError::NoMatch { path: path.clone() })
+        }
+    }
+
+    child_test! {
+        /// Route-identity refusal while seeding the initial stack keeps the
+        /// pages already seeded, and retains the value being seeded and the
+        /// unseeded tail instead of dropping them during unwind.
+        fn seeding_refusal_retains_the_initial_tail() {
+            let armed = Arc::new(AtomicBool::new(false));
+            let drops = Arc::new(AtomicUsize::new(0));
+            let value = |index| InitialValue {
+                index,
+                armed: Arc::clone(&armed),
+                drops: Arc::clone(&drops),
+            };
+            let mut router = Router::new(value(0), |_, _| crate::Text::new("page").boxed());
+            router.initial.extend([value(1), value(2)]);
+            let mut state = router.create_state();
+            drop(router);
+            RouteId::leave_process_identities(1);
+            armed.store(true, Ordering::SeqCst);
+            let failure = catch_unwind(AssertUnwindSafe(|| state.seed_initial_pages()))
+                .expect_err("the second seed is refused");
+            assert_eq!(
+                flui_foundation::panic::payload_text(failure.as_ref()),
+                Some("BUG: route identity capacity exhausted"),
+                "the capacity failure stays authoritative"
+            );
+            assert_eq!(drops.load(Ordering::SeqCst), 0, "no initial value dropped during unwind");
+            armed.store(false, Ordering::SeqCst);
+            assert_eq!(state.shared.stack.borrow().len(), 1, "the seeded page stays committed");
+            assert_eq!(state.shared.navigator.route_ids().len(), 1);
+            drop(state);
         }
     }
 }
