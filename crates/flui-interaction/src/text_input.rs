@@ -51,7 +51,7 @@ use flui_platform_api::ImeEvent;
 use flui_platform_api::PlatformTextInput;
 use flui_platform_api::text_store::{CommitGate, TextStore, project_ime_event};
 
-use crate::routing::RoutePanic;
+use crate::{retain::Retain, routing::RoutePanic};
 
 /// Identity returned by [`TextInputHandle::attach`].
 ///
@@ -134,34 +134,35 @@ struct AttachedClient {
     client: TextInputClient,
 }
 
-/// Retire the independent client owners separately, preserving the first failure.
-/// A callback's own aggregate destructor still has Rust's double-panic limits.
+/// Retire the independent client owners separately, preserving the first
+/// failure. After it, and while the thread is already unwinding, the remaining
+/// owners are retained rather than destroyed (ADR-0127).
 fn retire_client(client: Option<AttachedClient>, first: &mut Option<RoutePanic>) {
     if let Some(client) = client {
         let TextInputClient {
             store,
             on_session_start,
         } = client.client;
-        RoutePanic::preserve_first(
+        retire_owner(
+            on_session_start,
             first,
-            RoutePanic::capture(|| drop(on_session_start)),
             "text-input session callback retirement",
         );
-        RoutePanic::preserve_first(
-            first,
-            RoutePanic::capture(|| drop(store)),
-            "text-input store retirement",
-        );
+        retire_owner(store, first, "text-input store retirement");
     }
 }
 
 fn retire_stores(stores: Vec<Rc<dyn TextStore>>, first: &mut Option<RoutePanic>) {
     for store in stores {
-        RoutePanic::preserve_first(
-            first,
-            RoutePanic::capture(|| drop(store)),
-            "text-input store retirement",
-        );
+        retire_owner(store, first, "text-input store retirement");
+    }
+}
+
+fn retire_owner<T: Retain>(owner: T, first: &mut Option<RoutePanic>, phase: &'static str) {
+    if first.is_some() || std::thread::panicking() {
+        owner.retain();
+    } else {
+        RoutePanic::preserve_first(first, RoutePanic::capture(|| drop(owner)), phase);
     }
 }
 
@@ -519,32 +520,17 @@ impl Drop for TextInputOwner {
         state.lifecycle = OwnerLifecycle::Closed;
         let active = state.active.take();
         let retired = std::mem::take(&mut state.retired);
-        // Explicit close propagates the first failure. Drop is best effort:
-        // retain arbitrary panic payloads instead of retiring them during unwind.
-        let contain = |run: &mut dyn FnMut()| {
-            if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(run)) {
-                flui_foundation::panic::retain_opaque_payload(payload);
-            }
-        };
-        contain(&mut || {
+        // Explicit close propagates the first failure. Drop is best effort: it
+        // follows close's retirement order, retains the owners left after a
+        // failure or during an unwind, and retains the failure's payload.
+        let mut failure = RoutePanic::capture(|| {
             if disable && let Some(platform) = &self.platform {
                 platform.set_ime_allowed(false);
             }
         });
-        if let Some(active) = active {
-            let TextInputClient {
-                store,
-                on_session_start,
-            } = active.client;
-            let mut callback = Some(on_session_start);
-            contain(&mut || drop(callback.take()));
-            let mut store = Some(store);
-            contain(&mut || drop(store.take()));
-        }
-        for store in retired {
-            let mut store = Some(store);
-            contain(&mut || drop(store.take()));
-        }
+        retire_client(active, &mut failure);
+        retire_stores(retired, &mut failure);
+        failure.retain();
     }
 }
 

@@ -227,12 +227,17 @@ Text-input ownership, session admission and IME enablement commit before outgoin
 store or callback ownership retires, without a session borrow. Deferred grants
 keep accepted delivery debt separate from hook availability; a prior accepted
 tail precedes newer work, and each grant rechecks the current commit gate and
-lifecycle. Closure cancels its remaining tail. Recovery preserves the first
-failure and retains later opaque values instead of starting another destructor.
-The public `text_input_retirement_allows_reentry_and_preserves_recovery` table
-pins replacement, owner release, custom store destructor competition, grant
-ordering, gate changes and the next operation. These owner-lane tests do not
-certify a native IME backend.
+lifecycle. Closure cancels its remaining tail. Detach, replacement, close,
+deferred grants and owner drop share one retirement path: it preserves the
+first failure, and after it, or while the thread is already unwinding, retains
+the remaining stores and callbacks instead of starting another destructor
+(ADR-0127). Owner drop follows the same order and retains the failure it
+cannot propagate. The public `text_input_retirement_allows_reentry_and_preserves_recovery`
+table pins replacement, owner release, custom store destructor competition,
+grant ordering, gate changes and the next operation;
+`text_input_owners_are_retained_after_a_failure_and_during_unwind` runs a
+store whose destructor panics twice after a failed callback and under an
+unwinding owner drop, each in its own process.
 
 ## Terminal drag ownership
 
