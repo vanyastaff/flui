@@ -437,7 +437,7 @@ mod tests {
 
     #[test]
     fn route_result_failure_matrix() {
-        crate::contract_cases::run_cases(
+        crate::support::test_cases::run_cases(
             "route_result_failure_matrix",
             &[
                 (
