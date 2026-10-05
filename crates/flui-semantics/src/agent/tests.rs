@@ -290,9 +290,8 @@ fn wire_role_matches_the_windows_adapter_for_every_role_flui_publishes() {
 /// (`semantics_action_for_wire`) must reach the same FLUI action, so an
 /// agent's `invoke` means one thing whichever backend carries it.
 ///
-/// `set_value` lands on `SetText` (mapping decision 3); `expand` and
-/// `collapse` land on the tap handler, which is how FLUI toggles an
-/// expandable node (mapping decision 5).
+/// Text `set_value` lands on `SetText`; numeric requests use their typed
+/// route, and expand/collapse retain their explicit direction.
 #[test]
 fn every_wire_action_routes_to_a_semantics_action() {
     use crate::accesskit_translation::semantics_action_for;
@@ -311,8 +310,12 @@ fn every_wire_action_routes_to_a_semantics_action() {
         (ActionName::Focus, Ak::Focus, SemanticsAction::Focus),
         // `ExpandCollapse` -> Expand / Collapse, only toward the state the
         // node lacks (node.rs:955-975).
-        (ActionName::Expand, Ak::Expand, SemanticsAction::Tap),
-        (ActionName::Collapse, Ak::Collapse, SemanticsAction::Tap),
+        (ActionName::Expand, Ak::Expand, SemanticsAction::Expand),
+        (
+            ActionName::Collapse,
+            Ak::Collapse,
+            SemanticsAction::Collapse,
+        ),
         // `ScrollItem` -> ScrollIntoView (node.rs:1374).
         (
             ActionName::ScrollIntoView,
@@ -450,6 +453,8 @@ fn advertised_actions_follow_the_uia_patterns() {
     f.add(Some(root), 7, |c| {
         c.set_button(true);
         c.set_expanded(false);
+        c.add_action(SemanticsAction::Expand, noop());
+        c.add_action(SemanticsAction::Collapse, noop());
         c.add_action(SemanticsAction::Tap, noop());
     });
     f.add(Some(root), 8, |c| {
@@ -505,9 +510,8 @@ fn advertised_actions_follow_the_uia_patterns() {
     assert_eq!(password.actions, [N::SetValue]);
 }
 
-/// Mapping decision 7: an in-process `expand` reads the live expanded flag,
-/// so the second of two `expand`s before a frame is refused rather than
-/// routed to the tap handler, which would collapse the node again.
+/// An in-process expand reads the published expanded flag and refuses the
+/// already-published state. Pending requests retain explicit direction.
 #[test]
 fn expand_on_an_expanded_node_is_action_unsupported() {
     let mut f = Fixture::new();
@@ -515,7 +519,8 @@ fn expand_on_an_expanded_node_is_action_unsupported() {
     f.add(Some(root), 2, |c| {
         c.set_button(true);
         c.set_expanded(true);
-        c.add_action(SemanticsAction::Tap, noop());
+        c.add_action(SemanticsAction::Expand, noop());
+        c.add_action(SemanticsAction::Collapse, noop());
     });
 
     let expand = f
@@ -533,7 +538,7 @@ fn expand_on_an_expanded_node_is_action_unsupported() {
         .owner
         .resolve_wire_action(&ActionRequest::new(e(2), ActionName::Collapse))
         .expect("collapse is the transition an expanded node allows");
-    assert_eq!(collapse.action, SemanticsAction::Tap);
+    assert_eq!(collapse.action, SemanticsAction::Collapse);
     assert_eq!(collapse.arguments, None);
 }
 
@@ -581,6 +586,36 @@ fn set_value_reaches_set_text_with_its_text() {
         matches!(without_value, Err(WireActionError::InvalidArgument { .. })),
         "{without_value:?}"
     );
+    let mut numeric = Fixture::new();
+    let root = numeric.add(None, 1, |_| {});
+    numeric.add(Some(root), 2, |c| {
+        c.set_numeric_range(crate::NumericRange::new(0.0, 0.0, 10.0, 1.0).expect("finite fixture"));
+        c.add_action(SemanticsAction::SetNumericValue, noop());
+    });
+    let request = numeric
+        .owner
+        .resolve_wire_action(&ActionRequest::set_value(e(2), "2.375"))
+        .expect("numeric range advertises set_value");
+    assert_eq!(request.action, SemanticsAction::SetNumericValue);
+    assert_eq!(
+        request.arguments,
+        Some(ActionArgs::SetNumericValue { value: 2.375 })
+    );
+    let _ = numeric
+        .owner
+        .resolve_action(request)
+        .expect("exact fraction admitted despite step");
+    for text in ["NaN", "inf", "not a number", "-1", "11"] {
+        assert!(
+            matches!(
+                numeric
+                    .owner
+                    .resolve_wire_action(&ActionRequest::set_value(e(2), text)),
+                Err(WireActionError::InvalidArgument { .. })
+            ),
+            "numeric wire input {text:?} was admitted"
+        );
+    }
 }
 
 #[test]

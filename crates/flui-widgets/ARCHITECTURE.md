@@ -1828,6 +1828,23 @@ apart. **Unasserted:** no test pins this.
 
 ### 32. `EditableText::on_changed` reports only the user's edits, and a text form field reads its controller
 
+Platform accessibility Focus and SetValue requests use the current field's
+lifecycle-acquired writer, controller and exact generation-checked focus
+attachment. SetValue reports a user edit through the same observer as keyboard
+input and drains accepted IME grants first. Delivery revalidates ownership after
+that drain because callbacks may adopt the node into a later attachment. An
+enabled but unfocusable document remains writable; Focus separately checks
+eligibility and is advertised only while eligible. Disposal withdraws authority
+before cleanup, so queued work cannot edit or detach a later owner.
+
+The `native_actions` rows in `tests/editable_text.rs`, registered in
+`text_editing`, exercise queued Focus and SetValue through the headless host,
+current controller replacement, Unicode and empty edits, disabled and retired
+targets, deferred grant ordering and same-parent attachment takeover before and
+during delivery. These are producer and realm-routing contracts; native UIA
+TextPattern, selection, password handling and screen-reader execution require
+separate verification.
+
 **Choice:** controller listeners are `Send + Sync` and cannot reach
 owner-thread form state, so a text form field takes the user's edits from
 `EditableText::on_changed` (typing, deletion, IME commit, cut, paste — not
@@ -2134,3 +2151,23 @@ uses a private local cache because production capacity is not a consumer
 contract. `decode_cache_coalescing_contracts` exercises unused capture reentry
 through the public asset provider on completed and pending hits.
 
+## Controlled catalog inputs
+
+`Slider` and `Disclosure` implement ADR-0124. Input proposes values through
+`EventCx`; only parent configuration commits them. The slider paints and maps
+pointers against allocated bounds, honors inherited or explicit direction, and
+keeps extreme interpolation finite. Disclosure unmounts its collapsed body and
+keeps a real focusable header. Both recheck mounted writer and focus authority
+after reentry, and guard independently owned callback and view retirement tails.
+`controlled_slider_input_and_geometry` and
+`controlled_disclosure_state_and_geometry` pin these mapping decisions through
+actual input, frame geometry, semantics and retirement producers.
+
+Captured gesture groups share their owning state's mounted admission. Disposal
+revokes admission before recognizer retirement, and delivery checks it between
+recognizers so an earlier callback can unmount the group safely. A retained
+Listener route still receives its terminal event; its disposed composite
+recognizers are no longer invoked. The controlled slider retirement row pins
+mid-contact disablement, stale Move/Up delivery and a fresh mounted contact.
+Disclosure explicitly merges its named Focus/action header semantics while its
+body remains a separate subtree; indicator direction uses the header allocation.

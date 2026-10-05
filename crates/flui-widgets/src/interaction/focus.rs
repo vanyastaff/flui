@@ -923,9 +923,8 @@ impl ViewState<Focus> for FocusState {
     ///
     /// The subtree publishes whether its node can take focus (`focusable`)
     /// and, while it holds the primary focus, `focused`. The node listener rebuilds this widget on
-    /// every focus edge, so the flag follows the focus. The semantics
-    /// focus action (focus requested by an assistive technology) is not
-    /// wired yet.
+    /// every focus edge, so the flag follows the focus. Assistive focus requests
+    /// use this same mounted node and its normal admission policy.
     fn build(&self, view: &Focus, _ctx: &dyn BuildContext) -> impl IntoView {
         // Only a node that can take focus is annotated. A node that cannot —
         // the one a `Shortcuts` hosts its key handler on — gets no render
@@ -933,9 +932,13 @@ impl ViewState<Focus> for FocusState {
         // nothing to hit testing or to the semantics tree; and an annotation
         // setting even a false flag would gather its subtree into one node.
         let child = if view.include_semantics && self.node.can_request_focus() {
+            let node = Rc::clone(&self.node);
             Semantics::new()
                 .focusable(true)
                 .focused(self.node.has_primary_focus())
+                .on_focus(move |_cx| {
+                    let _ = node.request_focus();
+                })
                 .child(view.child.clone())
                 .into_view()
                 .boxed()

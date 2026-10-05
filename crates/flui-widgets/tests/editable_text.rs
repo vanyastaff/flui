@@ -11,6 +11,660 @@ use flui_interaction::routing::FocusNode;
 use flui_objects::RenderEditable;
 use flui_widgets::{EditableText, TextEditingController};
 
+/// Platform requests travel through the real realm inbox and the mounted
+/// EditableText producer; no callback or controller setter stands in for them.
+pub(crate) mod native_actions {
+    use std::cell::{Cell, RefCell};
+    use std::rc::Rc;
+    use std::time::Duration;
+
+    use flui_interaction::routing::FocusNode;
+    use flui_rendering::pipeline::PipelineCell;
+    use flui_testing::a11y::Role;
+    use flui_testing::{
+        A11yTree, Action, ActionData, ActionRequest, HeadlessRealm, HeadlessWindow, NodeId, TreeId,
+    };
+    use flui_view::prelude::*;
+    use flui_widgets::{EditableText, SizedBox, TextEditingController};
+
+    use crate::common::SignalProbe;
+
+    // The host acquires only the published-tree inspection capability, at
+    // the same lifecycle boundary a consumer acquires frame capabilities.
+    #[derive(Clone, StatefulView)]
+    struct FieldHost {
+        pipeline: Rc<RefCell<Option<PipelineCell>>>,
+        child: BoxedView,
+    }
+
+    struct FieldHostState {
+        pipeline: Rc<RefCell<Option<PipelineCell>>>,
+    }
+
+    impl std::fmt::Debug for FieldHostState {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.debug_struct("FieldHostState").finish()
+        }
+    }
+
+    impl StatefulView for FieldHost {
+        type State = FieldHostState;
+
+        fn create_state(&self) -> Self::State {
+            FieldHostState {
+                pipeline: Rc::clone(&self.pipeline),
+            }
+        }
+    }
+
+    impl ViewState<FieldHost> for FieldHostState {
+        fn init_state(&mut self, ctx: &dyn LifecycleContext) {
+            *self.pipeline.borrow_mut() = ctx.pipeline_owner();
+        }
+
+        fn build(&self, view: &FieldHost, _ctx: &dyn BuildContext) -> impl IntoView {
+            view.child.clone()
+        }
+    }
+
+    struct Fixture {
+        realm: HeadlessRealm,
+        probe: SignalProbe,
+        controller: Rc<RefCell<TextEditingController>>,
+        node: Rc<RefCell<Rc<FocusNode>>>,
+        enabled: Rc<Cell<bool>>,
+        shown: Rc<Cell<bool>>,
+        changed: Rc<RefCell<Vec<String>>>,
+        pipeline: Rc<RefCell<Option<PipelineCell>>>,
+        revision: Rc<RefCell<Option<Signal<u32>>>>,
+    }
+
+    impl Fixture {
+        fn new() -> Self {
+            let controller = Rc::new(RefCell::new(TextEditingController::with_text("abc")));
+            let node = Rc::new(RefCell::new(FocusNode::with_debug_label("native field")));
+            let enabled = Rc::new(Cell::new(true));
+            let shown = Rc::new(Cell::new(true));
+            let changed = Rc::new(RefCell::new(Vec::new()));
+            let pipeline = Rc::new(RefCell::new(None));
+            let revision = Rc::new(RefCell::new(None));
+            let revision_sink = Rc::clone(&revision);
+            let (document, focus, active, visible, changes, capture) = (
+                Rc::clone(&controller),
+                Rc::clone(&node),
+                Rc::clone(&enabled),
+                Rc::clone(&shown),
+                Rc::clone(&changed),
+                Rc::clone(&pipeline),
+            );
+            let probe = SignalProbe::new(move |signals| {
+                *revision_sink.borrow_mut() = Some(signals.count);
+                let child = if visible.get() {
+                    let changes = Rc::clone(&changes);
+                    EditableText::new(document.borrow().clone(), Rc::clone(&focus.borrow()))
+                        .enabled(active.get())
+                        .on_changed(move |cx, text| {
+                            changes.borrow_mut().push(text.to_owned());
+                            signals.count.update(cx, |n| *n += 1)
+                        })
+                        .boxed()
+                } else {
+                    SizedBox::new(1.0, 1.0).boxed()
+                };
+                FieldHost {
+                    pipeline: Rc::clone(&capture),
+                    child,
+                }
+            });
+            let mut realm = HeadlessRealm::new(HeadlessWindow::new(400, 100).with_text_input());
+            realm.attach(&probe.view()).expect("fresh realm");
+            realm.enable_semantics();
+            let _ = realm.pump(Duration::ZERO);
+            Self {
+                realm,
+                probe,
+                controller,
+                node,
+                enabled,
+                shown,
+                changed,
+                pipeline,
+                revision,
+            }
+        }
+
+        fn pump(&mut self) {
+            let _ = self.realm.pump(Duration::ZERO);
+        }
+
+        fn rebuild(&mut self) {
+            self.probe
+                .write(|cx| {
+                    self.revision
+                        .borrow()
+                        .expect("mounted signal")
+                        .update(cx, |n| *n += 1)
+                })
+                .expect("live rebuild signal");
+            self.pump();
+        }
+
+        fn tree(&self) -> A11yTree {
+            let pipeline = self.pipeline.borrow().clone().expect("lifecycle pipeline");
+            A11yTree::new(pipeline.with(|owner| {
+                owner
+                    .semantics_owner()
+                    .and_then(|owner| owner.to_accesskit_tree_update(None))
+                    .expect("published semantics")
+            }))
+        }
+
+        fn id(&self) -> NodeId {
+            self.tree().find(Role::TextInput).expect("sole field").id()
+        }
+
+        fn request(&self, action: Action, id: NodeId, data: Option<ActionData>) {
+            self.realm
+                .accessibility_action_listener()
+                .expect("platform listener")(ActionRequest {
+                action,
+                target_tree: TreeId::ROOT,
+                target_node: id,
+                data,
+            });
+        }
+
+        fn set_text(&mut self, text: &str) {
+            self.request(
+                Action::SetValue,
+                self.id(),
+                Some(ActionData::Value(text.into())),
+            );
+            self.pump();
+        }
+    }
+
+    pub(crate) fn queued_focus_and_text_reach_the_current_field_and_event_context() {
+        let mut fixture = Fixture::new();
+        let tree = fixture.tree();
+        let field = tree.find(Role::TextInput).expect("sole field");
+        assert!(field.supports_action(Action::Focus));
+        assert!(field.supports_action(Action::SetValue));
+        assert!(!fixture.node.borrow().has_primary_focus());
+        fixture.set_text("unfocused");
+        assert_eq!(fixture.controller.borrow().text(), "unfocused");
+        assert!(
+            !fixture.node.borrow().has_primary_focus(),
+            "SetValue does not move focus"
+        );
+        fixture.request(Action::Focus, field.id(), None);
+        assert!(
+            !fixture.node.borrow().has_primary_focus(),
+            "platform request is queued"
+        );
+        fixture.pump();
+        assert!(fixture.node.borrow().has_primary_focus());
+        assert_eq!(
+            fixture
+                .realm
+                .window()
+                .ime_allowed_calls()
+                .and_then(|calls| calls.last().copied()),
+            Some(true)
+        );
+        assert_eq!(
+            fixture.tree().focus().map(|node| node.id()),
+            Some(fixture.id())
+        );
+        // A real IME commit reaches the session attached by semantic focus.
+        fixture
+            .realm
+            .dispatch(flui_platform_api::PlatformInput::Ime(
+                flui_platform_api::ImeEvent::Commit("😀".into()),
+            ));
+        assert_eq!(fixture.controller.borrow().text(), "unfocused😀");
+        fixture.pump();
+        fixture.changed.borrow_mut().clear();
+        let before = fixture.probe.value().expect("live callback signal");
+        for (index, text) in ["a😀e\u{301}", "", "next"].into_iter().enumerate() {
+            fixture.set_text(text);
+            assert_eq!(fixture.controller.borrow().text(), text);
+            assert_eq!(
+                fixture.tree().find(Role::TextInput).expect("field").value(),
+                Some(text)
+            );
+            assert_eq!(
+                fixture.probe.value(),
+                Ok(before + u32::try_from(index + 1).expect("small table"))
+            );
+        }
+        assert_eq!(*fixture.changed.borrow(), ["a😀e\u{301}", "", "next"]);
+        fixture.set_text("next");
+        assert_eq!(
+            fixture.changed.borrow().len(),
+            3,
+            "unchanged value reports no edit"
+        );
+    }
+
+    pub(crate) fn native_actions_follow_the_replacement_controller_and_focus_node() {
+        let mut fixture = Fixture::new();
+        let id = fixture.id();
+        let old = fixture.controller.borrow().clone();
+        let old_node = Rc::clone(&fixture.node.borrow());
+        let replacement = TextEditingController::with_text("replacement");
+        let replacement_node = FocusNode::with_debug_label("replacement native field");
+        *fixture.controller.borrow_mut() = replacement.clone();
+        *fixture.node.borrow_mut() = Rc::clone(&replacement_node);
+        fixture.rebuild();
+        assert_eq!(fixture.id(), id, "a live field retains semantic identity");
+        fixture.request(Action::Focus, id, None);
+        fixture.request(
+            Action::SetValue,
+            id,
+            Some(ActionData::Value("current😀".into())),
+        );
+        fixture.pump();
+        assert!(replacement_node.has_primary_focus());
+        assert!(!old_node.is_attached());
+        assert_eq!(
+            old.text(),
+            "abc",
+            "retired controller never receives the edit"
+        );
+        assert_eq!(replacement.text(), "current😀");
+        assert_eq!(*fixture.changed.borrow(), ["current😀"]);
+        assert_eq!(
+            fixture.tree().find(Role::TextInput).expect("field").value(),
+            Some("current😀")
+        );
+        let before = fixture.probe.value();
+        fixture.request(Action::SetValue, id, None);
+        fixture.pump();
+        assert_eq!(
+            replacement.text(),
+            "current😀",
+            "missing data does not erase the field"
+        );
+        assert_eq!(fixture.probe.value(), before);
+        fixture.set_text("healthy");
+        assert_eq!(replacement.text(), "healthy");
+    }
+
+    pub(crate) fn disabled_unmounted_and_closed_fields_refuse_native_actions() {
+        let mut fixture = Fixture::new();
+        let id = fixture.id();
+        let controller = fixture.controller.borrow().clone();
+        fixture.enabled.set(false);
+        fixture.rebuild();
+        let before = fixture.probe.value();
+        fixture.request(Action::Focus, id, None);
+        fixture.request(
+            Action::SetValue,
+            id,
+            Some(ActionData::Value("disabled".into())),
+        );
+        fixture.pump();
+        assert_eq!(controller.text(), "abc");
+        assert!(!fixture.node.borrow().has_primary_focus());
+        assert_eq!(fixture.probe.value(), before);
+
+        fixture.enabled.set(true);
+        fixture.rebuild();
+        fixture.request(Action::Focus, id, None);
+        fixture.set_text("enabled");
+        assert!(fixture.node.borrow().has_primary_focus());
+        assert_eq!(controller.text(), "enabled");
+
+        // The public node can become unfocusable independently of a rebuild.
+        fixture.node.borrow().set_can_request_focus(false);
+        let before = fixture.probe.value().expect("live edit signal");
+        fixture.request(Action::Focus, id, None);
+        fixture.set_text("unfocusable");
+        assert_eq!(
+            controller.text(),
+            "unfocusable",
+            "focus eligibility does not make an enabled document read-only"
+        );
+        assert_eq!(fixture.probe.value(), Ok(before + 1));
+        assert_eq!(
+            fixture.changed.borrow().last().map(String::as_str),
+            Some("unfocusable")
+        );
+        assert!(
+            !fixture.node.borrow().has_primary_focus(),
+            "SetValue does not override focus eligibility"
+        );
+        // The callback signal rebuilt the parent, whose enabled view restores
+        // its node's focus eligibility. Refresh only the field now: a public
+        // selection notification rebuilds AnimatedBuilder without changing
+        // text, reporting on_changed, or rebuilding the probe parent.
+        fixture.node.borrow().set_can_request_focus(false);
+        controller.set_caret_byte_offset(0);
+        fixture.pump();
+        assert_eq!(fixture.probe.value(), Ok(before + 1));
+        assert!(!fixture.node.borrow().can_request_focus());
+        let tree = fixture.tree();
+        let field = tree.find(Role::TextInput).expect("live editable field");
+        assert!(field.supports_action(Action::SetValue));
+        assert!(
+            !field.supports_action(Action::Focus),
+            "the rebuilt field does not advertise ineligible focus"
+        );
+        fixture.node.borrow().set_can_request_focus(true);
+        fixture.set_text("recovered");
+        assert_eq!(controller.text(), "recovered");
+        fixture.request(Action::Focus, fixture.id(), None);
+        fixture.pump();
+        assert!(fixture.node.borrow().has_primary_focus());
+
+        fixture.shown.set(false);
+        fixture.rebuild();
+        assert!(fixture.tree().find_all(Role::TextInput).is_empty());
+        fixture.request(Action::Focus, id, None);
+        fixture.request(
+            Action::SetValue,
+            id,
+            Some(ActionData::Value("unmounted".into())),
+        );
+        fixture.pump();
+        assert_eq!(controller.text(), "recovered");
+        fixture.shown.set(true);
+        fixture.rebuild();
+        let current = fixture.id();
+        assert_ne!(current, id, "remount mints a new generational identity");
+        fixture.request(
+            Action::SetValue,
+            id,
+            Some(ActionData::Value("stale".into())),
+        );
+        fixture.set_text("remounted");
+        assert_eq!(controller.text(), "remounted");
+        let listener = fixture
+            .realm
+            .accessibility_action_listener()
+            .expect("platform listener");
+        drop(fixture);
+        listener(ActionRequest {
+            action: Action::SetValue,
+            target_tree: TreeId::ROOT,
+            target_node: current,
+            data: Some(ActionData::Value("closed".into())),
+        });
+        let mut independent = Fixture::new();
+        independent.set_text("independent");
+        assert_eq!(
+            controller.text(),
+            "remounted",
+            "closed target never receives work"
+        );
+        assert_eq!(independent.controller.borrow().text(), "independent");
+    }
+
+    pub(crate) fn a_deferred_focus_change_preserves_the_semantic_edit_that_follows_it() {
+        use flui_platform_api::text_store::{LockOutcome, project_ime_event};
+        let controller = TextEditingController::new();
+        let node = FocusNode::with_debug_label("deferred semantic edit");
+        let make_unfocusable = Rc::clone(&node);
+        let changes = Rc::new(RefCell::new(Vec::new()));
+        let reported = Rc::clone(&changes);
+        let mut harness = crate::common::harness::mount_with_ime(
+            EditableText::new(controller.clone(), Rc::clone(&node)).on_changed(move |_cx, text| {
+                reported.borrow_mut().push(text.to_owned());
+                if text == "IME" {
+                    make_unfocusable.set_can_request_focus(false);
+                }
+            }),
+        );
+        harness.enable_semantics();
+        harness.tick();
+        let id = harness
+            .a11y_tree()
+            .expect("semantics")
+            .find(Role::TextInput)
+            .expect("field")
+            .id();
+        harness
+            .invoke_semantics_action(ActionRequest {
+                action: Action::Focus,
+                target_tree: TreeId::ROOT,
+                target_node: id,
+                data: None,
+            })
+            .expect("semantic focus");
+        assert_eq!(harness.active_ime_clients(), 1);
+        let store = harness.active_text_store().expect("focused store");
+        harness
+            .local_post_frame_handle()
+            .schedule_local(move |_| {
+                assert_eq!(
+                    project_ime_event(&*store, &flui_platform_api::ImeEvent::Commit("IME".into())),
+                    Ok(LockOutcome::Deferred)
+                );
+                panic!("leave the accepted grant queued before its commit anchor");
+            })
+            .expect("post-frame lane");
+        let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| harness.tick()));
+        assert!(failed.is_err());
+        assert_eq!(controller.text(), "");
+        harness
+            .invoke_semantics_action(ActionRequest {
+                action: Action::SetValue,
+                target_tree: TreeId::ROOT,
+                target_node: id,
+                data: Some(ActionData::Value("late".into())),
+            })
+            .expect("advertised setter");
+        assert_eq!(
+            controller.text(),
+            "late",
+            "the deferred callback changes focus eligibility, not document mutability"
+        );
+        assert!(!node.has_primary_focus());
+        assert_eq!(
+            *changes.borrow(),
+            ["IME", "late"],
+            "accepted grant is reported before the semantic edit"
+        );
+        node.set_can_request_focus(true);
+        harness
+            .invoke_semantics_action(ActionRequest {
+                action: Action::SetValue,
+                target_tree: TreeId::ROOT,
+                target_node: id,
+                data: Some(ActionData::Value("healthy".into())),
+            })
+            .expect("next setter");
+        assert_eq!(controller.text(), "healthy");
+        assert_eq!(*changes.borrow(), ["IME", "late", "healthy"]);
+    }
+
+    pub(crate) fn re_adoption_before_queued_delivery_retires_the_old_field_authority() {
+        let mut fixture = Fixture::new();
+        let id = fixture.id();
+        let old_controller = fixture.controller.borrow().clone();
+        let node = Rc::clone(&fixture.node.borrow());
+        let parent = node.parent().expect("field attached to its presentation");
+        fixture.request(Action::Focus, id, None);
+        fixture.request(
+            Action::SetValue,
+            id,
+            Some(ActionData::Value("stale owner".into())),
+        );
+        let adopted = parent
+            .adopt_node(&node)
+            .expect("same-parent public takeover");
+        assert!(node.is_attached() && node.can_request_focus());
+        assert!(adopted.is_attached(), "new owner has a current attachment");
+        fixture.pump();
+        assert!(
+            !node.has_primary_focus(),
+            "old field cannot focus a node it no longer owns"
+        );
+        assert_eq!(old_controller.text(), "abc");
+        assert!(
+            fixture.changed.borrow().is_empty(),
+            "refused edit has no callback"
+        );
+
+        fixture.shown.set(false);
+        fixture.rebuild();
+        assert!(
+            adopted.is_attached(),
+            "retired field does not detach the later owner"
+        );
+        let _ = adopted.detach();
+        assert!(!node.is_attached());
+        let current = TextEditingController::with_text("current");
+        *fixture.controller.borrow_mut() = current.clone();
+        *fixture.node.borrow_mut() = FocusNode::with_debug_label("current attachment owner");
+        fixture.shown.set(true);
+        fixture.rebuild();
+        fixture.request(Action::Focus, fixture.id(), None);
+        fixture.set_text("healthy current");
+        assert!(fixture.node.borrow().has_primary_focus());
+        assert_eq!(current.text(), "healthy current");
+        assert_eq!(old_controller.text(), "abc");
+        let mut independent = Fixture::new();
+        independent.set_text("independent");
+        assert_eq!(independent.controller.borrow().text(), "independent");
+    }
+
+    pub(crate) fn re_adoption_during_a_deferred_grant_refuses_the_resumed_semantic_edit() {
+        use flui_platform_api::text_store::{LockOutcome, project_ime_event};
+        let controller = TextEditingController::new();
+        let node = FocusNode::with_debug_label("grant takeover");
+        let takeover_node = Rc::clone(&node);
+        let authority = Rc::new(RefCell::new(None));
+        let issued = Rc::clone(&authority);
+        let changes = Rc::new(RefCell::new(Vec::new()));
+        let reported = Rc::clone(&changes);
+        let mut harness = crate::common::harness::mount_with_ime(
+            EditableText::new(controller.clone(), Rc::clone(&node)).on_changed(move |_cx, text| {
+                reported.borrow_mut().push(text.to_owned());
+                if text == "IME" {
+                    let parent = takeover_node.parent().expect("live parent during grant");
+                    let attachment = parent
+                        .adopt_node(&takeover_node)
+                        .expect("grant callback takeover");
+                    let previous = issued.replace(Some(attachment));
+                    drop(previous);
+                }
+            }),
+        );
+        harness.enable_semantics();
+        harness.tick();
+        let id = harness
+            .a11y_tree()
+            .expect("semantics")
+            .find(Role::TextInput)
+            .expect("field")
+            .id();
+        harness
+            .invoke_semantics_action(ActionRequest {
+                action: Action::Focus,
+                target_tree: TreeId::ROOT,
+                target_node: id,
+                data: None,
+            })
+            .expect("initial field authority");
+        let store = harness
+            .active_text_store()
+            .expect("semantic focus attached an IME session");
+        harness
+            .local_post_frame_handle()
+            .schedule_local(move |_| {
+                assert_eq!(
+                    project_ime_event(&*store, &flui_platform_api::ImeEvent::Commit("IME".into())),
+                    Ok(LockOutcome::Deferred)
+                );
+                panic!("leave an accepted grant queued before its commit anchor");
+            })
+            .expect("post-frame lane");
+        let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| harness.tick()));
+        assert!(failed.is_err());
+        assert_eq!(controller.text(), "");
+        harness
+            .invoke_semantics_action(ActionRequest {
+                action: Action::SetValue,
+                target_tree: TreeId::ROOT,
+                target_node: id,
+                data: Some(ActionData::Value("late".into())),
+            })
+            .expect("setter still advertised before delivery");
+        assert!(
+            node.is_attached() && node.can_request_focus(),
+            "takeover preserves node eligibility"
+        );
+        assert!(
+            authority
+                .borrow()
+                .as_ref()
+                .is_some_and(flui_interaction::FocusAttachment::is_attached)
+        );
+        assert_eq!(
+            controller.text(),
+            "IME",
+            "resumed setter cannot cross attachment takeover"
+        );
+        assert_eq!(*changes.borrow(), ["IME"]);
+        harness.focus_manager().unfocus();
+        harness
+            .invoke_semantics_action(ActionRequest {
+                action: Action::Focus,
+                target_tree: TreeId::ROOT,
+                target_node: id,
+                data: None,
+            })
+            .expect("old field still advertises focus");
+        assert!(
+            !node.has_primary_focus(),
+            "lost attachment refuses subsequent focus too"
+        );
+
+        harness.swap_root(SizedBox::new(1.0, 1.0));
+        let adopted = authority.borrow_mut().take().expect("later owner token");
+        assert!(
+            adopted.is_attached(),
+            "old field disposal preserves later owner"
+        );
+        let _ = adopted.detach();
+        let current = TextEditingController::new();
+        let current_node = FocusNode::with_debug_label("healthy after grant takeover");
+        harness.swap_root(EditableText::new(current.clone(), Rc::clone(&current_node)));
+        let current_id = harness
+            .a11y_tree()
+            .expect("semantics")
+            .find(Role::TextInput)
+            .expect("new field")
+            .id();
+        harness
+            .invoke_semantics_action(ActionRequest {
+                action: Action::Focus,
+                target_tree: TreeId::ROOT,
+                target_node: current_id,
+                data: None,
+            })
+            .expect("new field focus");
+        harness
+            .invoke_semantics_action(ActionRequest {
+                action: Action::SetValue,
+                target_tree: TreeId::ROOT,
+                target_node: current_id,
+                data: Some(ActionData::Value("healthy".into())),
+            })
+            .expect("new field setter");
+        assert!(current_node.has_primary_focus());
+        assert_eq!(harness.active_ime_clients(), 1);
+        assert_eq!(current.text(), "healthy");
+        assert_eq!(
+            controller.text(),
+            "IME",
+            "new field never edits the old document"
+        );
+    }
+}
+
 // ------------------------------------------------------------------
 // IME integration
 //

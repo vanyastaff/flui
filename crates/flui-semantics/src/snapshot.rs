@@ -182,6 +182,7 @@ pub struct SemanticsNodeSnapshot {
     actions: u64,
     label: Option<AttributedString>,
     value: Option<AttributedString>,
+    numeric_range: Option<crate::NumericRange>,
     increased_value: Option<AttributedString>,
     decreased_value: Option<AttributedString>,
     hint: Option<AttributedString>,
@@ -221,6 +222,7 @@ impl SemanticsNodeSnapshot {
             actions: config.effective_actions_as_bits(),
             label: config.label().cloned(),
             value: config.value().cloned(),
+            numeric_range: config.numeric_range(),
             increased_value: config.increased_value().cloned(),
             decreased_value: config.decreased_value().cloned(),
             hint: config.hint().cloned(),
@@ -301,6 +303,12 @@ impl SemanticsNodeSnapshot {
     #[must_use]
     pub fn value(&self) -> Option<&AttributedString> {
         self.value.as_ref()
+    }
+
+    /// Validated native numeric-range metadata.
+    #[must_use]
+    pub const fn numeric_range(&self) -> Option<crate::NumericRange> {
+        self.numeric_range
     }
 
     /// Returns the attributed value announced after increasing.

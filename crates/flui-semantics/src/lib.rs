@@ -74,6 +74,7 @@ pub mod event;
 pub mod flags;
 pub mod identity;
 pub mod node;
+mod numeric_range;
 pub mod owner;
 pub mod platform;
 pub mod properties;
@@ -94,7 +95,10 @@ pub use accessibility::AccessibilityFeatures;
 // ============================================================================
 // RE-EXPORTS - AccessKit Translation
 // ============================================================================
-pub use accesskit_translation::{semantics_action_args_for, semantics_action_for, tree_to_update};
+pub use accesskit_translation::{
+    semantics_action_args_for, semantics_action_for, semantics_action_request_for, tree_to_update,
+};
+pub use numeric_range::{NumericRange, NumericRangeError};
 // ============================================================================
 // RE-EXPORTS - Agent read and act (ADR-0095)
 // ============================================================================
@@ -179,8 +183,8 @@ pub mod prelude {
 
     pub use crate::{
         AccessibilityFeatures, AccessibilityFocusBlockType, AccessibilityNodeId, ActionArgs,
-        Assertiveness, AttributedString, DebugSemanticsDumpOrder, SemanticsAction,
-        SemanticsActionError, SemanticsActionHandler, SemanticsActionInvocation,
+        Assertiveness, AttributedString, DebugSemanticsDumpOrder, NumericRange, NumericRangeError,
+        SemanticsAction, SemanticsActionError, SemanticsActionHandler, SemanticsActionInvocation,
         SemanticsActionRequest, SemanticsConfiguration, SemanticsEvent, SemanticsEventType,
         SemanticsFlag, SemanticsFlags, SemanticsId, SemanticsNode, SemanticsNodeData,
         SemanticsNodeSnapshot, SemanticsOwner, SemanticsProperties, SemanticsRole,

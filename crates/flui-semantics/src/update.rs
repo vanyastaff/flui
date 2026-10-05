@@ -67,6 +67,9 @@ pub struct SemanticsNodeData {
     pub label: Option<SmolStr>,
     /// Value text.
     pub value: Option<SmolStr>,
+
+    /// Validated native range metadata.
+    pub numeric_range: Option<crate::NumericRange>,
     /// Increased value text.
     pub increased_value: Option<SmolStr>,
     /// Decreased value text.
@@ -136,6 +139,7 @@ impl Default for SemanticsNodeData {
             actions: 0,
             label: None,
             value: None,
+            numeric_range: None,
             increased_value: None,
             decreased_value: None,
             hint: None,
