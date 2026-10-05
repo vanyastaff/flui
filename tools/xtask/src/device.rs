@@ -33,6 +33,12 @@ mod windows_a11y;
     reason = "OS input is `SendInput` through the `windows` bindings"
 )]
 mod windows_input;
+#[cfg(windows)]
+#[expect(
+    unsafe_code,
+    reason = "native Notes uses the same Windows COM and input boundary"
+)]
+mod windows_notes;
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -326,12 +332,17 @@ enum DeviceCheck {
     /// an interactive desktop session; do not touch the mouse or keyboard
     /// while it runs.
     WindowsInput,
+    /// The existing Notes tree driven by real input and current UIA observations.
+    WindowsNotes,
 }
 
 impl DeviceCheck {
     /// Whether this host is the OS the check needs.
     fn runs_on_this_host(&self) -> bool {
-        let needs = if matches!(self, Self::WindowsA11y | Self::WindowsInput) {
+        let needs = if matches!(
+            self,
+            Self::WindowsA11y | Self::WindowsInput | Self::WindowsNotes
+        ) {
             "windows"
         } else {
             "macos"
@@ -382,6 +393,9 @@ impl DeviceCheck {
             Self::WindowsInput => {
                 "Skipping windows-input on this host: the check sends real pointer and keyboard input to a real window, so it needs Windows with an interactive desktop; on Windows run: cargo xtask device windows-input"
             }
+            Self::WindowsNotes => {
+                "Skipping windows-notes on this host: it needs Windows with an interactive desktop; on Windows run: cargo xtask device windows-notes"
+            }
             Self::MacosWorkload | Self::MacosHotReloadLoop { .. } => return None,
         })
     }
@@ -428,6 +442,27 @@ impl DeviceCheck {
                     announce: Announce {
                         cannot_verify: "windows-a11y CANNOT VERIFY: UI Automation could not be instantiated on this host — details above",
                         failed: "windows-a11y FAILED: the native tree, Invoke, disclosure transition or numeric range contract failed (tree dumps above)",
+                    },
+                },
+            ],
+            Self::WindowsNotes => vec![
+                cargo_build([
+                    "-p",
+                    "flui",
+                    "--locked",
+                    "--release",
+                    "--example",
+                    "two_screens",
+                    "--features",
+                    "material,a11y",
+                ]),
+                Step::Native {
+                    check: Native::WindowsNotes {
+                        probe: target.join("release/examples/two_screens.exe"),
+                    },
+                    announce: Announce {
+                        cannot_verify: "windows-notes CANNOT VERIFY: COM, DPI, foreground or native input was refused (details above)",
+                        failed: "windows-notes FAILED: a Notes workflow observation or graceful close failed (tree dump above)",
                     },
                 },
             ],
@@ -923,6 +958,7 @@ mod tests {
             (&["ios-sim"], DeviceCheck::IosSim),
             (&["windows-a11y"], DeviceCheck::WindowsA11y),
             (&["windows-input"], DeviceCheck::WindowsInput),
+            (&["windows-notes"], DeviceCheck::WindowsNotes),
             (
                 &["ios-input-check", "UDID-1"],
                 DeviceCheck::IosInputCheck {
@@ -999,6 +1035,7 @@ mod tests {
         for (check, name) in [
             (DeviceCheck::WindowsA11y, "windows-a11y"),
             (DeviceCheck::WindowsInput, "windows-input"),
+            (DeviceCheck::WindowsNotes, "windows-notes"),
         ] {
             let reason = check.skip_reason().expect("gated");
             assert!(
@@ -1020,6 +1057,16 @@ mod tests {
             &[
                 "cargo build -p flui --locked --release --example a11y_probe --features material,a11y",
                 "uia-client target/release/examples/a11y_probe.exe; if rc=2: echo 'windows-a11y CANNOT VERIFY: UI Automation could not be instantiated on this host — details above'; elif rc!=0: echo 'windows-a11y FAILED: the native tree, Invoke, disclosure transition or numeric range contract failed (tree dumps above)'; exit $rc",
+            ],
+        );
+    }
+
+    fn windows_notes_builds_the_shared_tree_and_drives_it() {
+        assert_plan(
+            &DeviceCheck::WindowsNotes,
+            &[
+                "cargo build -p flui --locked --release --example two_screens --features material,a11y",
+                "native-notes target/release/examples/two_screens.exe; if rc=2: echo 'windows-notes CANNOT VERIFY: COM, DPI, foreground or native input was refused (details above)'; elif rc!=0: echo 'windows-notes FAILED: a Notes workflow observation or graceful close failed (tree dump above)'; exit $rc",
             ],
         );
     }
@@ -1126,6 +1173,10 @@ mod tests {
                 (
                     "windows_a11y_builds_the_probe_and_drives_it_in_process",
                     windows_a11y_builds_the_probe_and_drives_it_in_process as fn(),
+                ),
+                (
+                    "windows_notes_builds_the_shared_tree_and_drives_it",
+                    windows_notes_builds_the_shared_tree_and_drives_it as fn(),
                 ),
                 (
                     "ios_sim_matches_its_recipe",

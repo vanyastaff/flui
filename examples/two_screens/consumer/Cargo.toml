@@ -1,0 +1,13 @@
+[package]
+name = "flui-notes-consumer"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+flui = { path = "../../..", features = ["material"] }
+
+[dev-dependencies]
+flui = { path = "../../..", features = ["material", "testing"] }

@@ -1,16 +1,24 @@
 # Cookbook
 
-Task-oriented pages, each pointing at a real, runnable example rather than a hand-written snippet
-that could drift from the actual API. A cookbook page only exists for a topic that has a working
-example in `examples/` today, so the cookbook never promises a recipe that doesn't run.
+Choose a recipe by the behavior you want to add. Each page links to an example in the
+repository and gives its command, including any required features. Run commands from the
+checkout root used in [Installation](../getting-started/installation.md).
 
-Not every topic you might expect has a page yet. Navigation has a runnable example but no page:
-`cargo run --example two_screens` (`examples/two_screens.rs`) roots an app in
+| Task | Recipe |
+|------|--------|
+| Validate editable text and show an error | [Forms](forms.md) |
+| Load data and display loading, error, and retry states | [Async](async.md) |
+| Share colors and styling through the view tree | [Themes](themes.md) |
+| Animate a value over time | [Animation](animation.md) |
+| Exercise a view without opening a window | [Testing](testing.md) |
+
+For typed navigation, run `cargo run --example two_screens`. The current example roots an app in
 `WidgetsApp::router` over a `#[derive(Routable)]` route enum, and its pages push and pop route
 values through a `RouterHandle` (ADR-0093; see the [mapping](../mapping.md) notes).
+Read its [source](https://github.com/vanyastaff/flui/blob/main/examples/two_screens.rs)
+for the current composition and callbacks.
 
-- [Forms](forms.md)
-- [Async](async.md)
-- [Themes](themes.md)
-- [Animation](animation.md)
-- [Testing](testing.md)
+The [Notes showcase chapter](../getting-started/showcase.md) follows a source draft that combines
+navigation, editing, validation, lazy rows, and retry. Its additions need integration and
+execution before the walkthrough can be followed; use the chapter's source and evidence notes
+to distinguish that candidate from the current two-screen example.

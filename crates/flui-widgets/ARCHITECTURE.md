@@ -1323,6 +1323,14 @@ as a right one.
 
 **Tests** (`tests/semantics.rs`), each with what it can fail on:
 
+- `a_covered_retained_form_stays_absent_after_a_late_controller_update`
+  observes both assembled semantics and actual owner-flush packets. Queries
+  follow the current root's child links, so disconnected historical payloads
+  cannot count as exposed controls. A focused retained form disappears under
+  an opaque entry, remains absent after a real controller notification without
+  forcing the root dirty, refuses its old action and returns with its draft and
+  action intact. This is a headless overlay contract; it does not establish
+  native adapter behavior or elapsed route-transition completion.
 - `a_tap_handler_round_trips_from_a_platform_click_to_the_callback` — the
   acceptance test, and it asserts both halves: the node *tells* the platform the
   action exists (`supports_action(Action::Click)`) and pressing it *runs* the

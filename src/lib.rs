@@ -27,6 +27,37 @@
 //! }
 //! ```
 //!
+//! The root passed to [`run_app`] implements [`view::StatelessView`]; compose
+//! stateful children beneath it when the screen owns changing state. Create
+//! signals in [`view::ViewState::init_state`] with a [`view::LifecycleContext`],
+//! read them during `build`, and write them from event callbacks. The
+//! [`view::BuildContext`] deliberately does not provide lifecycle capabilities.
+//!
+//! # Application entry points
+//!
+//! [`run_app`] uses the default [`AppConfig`]; [`run_app_with_config`] accepts
+//! window configuration and application services. Both return `()` rather than
+//! a startup error. On desktop they drive the native event loop until shutdown
+//! and panic if startup or the event loop fails. On iOS they enter UIKit; on
+//! the web they start the browser runner. On Android these two functions panic:
+//! call `flui::run_app_android` or `flui::run_app_android_with_config` from
+//! `android_main`, passing the system-provided `AndroidApp` available through
+//! `flui::android_activity`.
+//!
+#![cfg_attr(
+    all(
+        not(target_os = "android"),
+        not(target_os = "ios"),
+        not(target_arch = "wasm32")
+    ),
+    doc = "For fallible desktop startup, use [`Application::new`] with a root factory and
+call [`Application::run`], which returns `Result<(), AppRunError>`. The factory runs
+on the owner thread and creates a fresh tree whenever the main window is reopened.
+Use [`Application::on_ready`] to obtain an [`AppHandle`] for cross-thread show and
+quit requests. A successful show-command admission is not window completion:
+await its returned request or poll `try_result` to obtain the window result."
+)]
+//!
 //! # Choosing a catalog
 //!
 //! The base surface — [`widgets`], [`view`], [`animation`], [`run_app`], and
@@ -47,9 +78,17 @@
 //! **absent**, not empty — `flui::cupertino` without the `cupertino` feature is
 //! an unresolved-import error at the use site, which is the diagnostic you
 //! want.
-//! Web and iOS do not yet install reload drivers. The additive `hot-reload`
-//! feature remains compile-safe on those targets so workspace feature
-//! unification cannot break an otherwise supported cross-target build.
+//! Enabling `hot-reload` makes the tooling available; it does not install a
+//! driver. Desktop and iOS poll an installed development hook, Android drives
+//! its scene-frame hook, and the web runner drives no hook. The feature remains
+//! compile-safe on web and iOS so workspace feature unification does not break
+//! an otherwise supported cross-target build.
+//!
+//! Additional opt-in capabilities are `testing` (the `flui::testing` headless
+//! harness, normally enabled in a development dependency), `a11y` (native
+//! accessibility adapters on supported platforms), and `serde` (serialization
+//! for framework value types). Emitting widget semantics alone does not enable
+//! a native accessibility adapter; select `a11y` for that integration.
 //!
 //! # Using a design system
 //!
@@ -184,6 +223,12 @@ pub use flui_app::app::AppWindowError;
 #[cfg(not(target_os = "ios"))]
 pub use flui_app::app::WindowPolicy;
 /// Open an additional top-level window without widget content.
+///
+/// Desktop only. Call on the owner thread while its event loop is live.
+/// Success can mean creation was admitted for a later owner turn; this API
+/// does not provide a completion receiver or a renderer. Use [`open_window`]
+/// for widget content. See [`app::app::open_secondary_window`] for policy,
+/// deferred-failure, and ownership details.
 /// Re-exported from [`app`] (`flui-app`).
 #[cfg(all(
     not(target_os = "android"),
@@ -192,6 +237,12 @@ pub use flui_app::app::WindowPolicy;
 ))]
 pub use flui_app::app::open_secondary_window;
 /// Open an additional top-level window with mounted widget content.
+///
+/// Desktop only. Call on the owner thread while its event loop is live, with
+/// [`WindowPolicy::SeparateRealms`]. `SharedRealm` is refused with
+/// [`AppWindowError::UnsupportedPolicy`]. As with [`open_secondary_window`],
+/// success can mean admission for deferred creation rather than completed
+/// installation; see [`app::app::open_window`] for the error contract.
 /// Re-exported from [`app`] (`flui-app`).
 #[cfg(all(
     not(target_os = "android"),
@@ -211,14 +262,28 @@ pub use flui_app::app::open_window;
 pub use flui_app::app::{AppControlError, AppHandle, AppRunError, Application, StartupWindow};
 /// The application entry point — builds the tree, opens a window, and drives
 /// the frame loop. Re-exported from [`app`] (`flui-app`).
+///
+/// The root must implement [`view::StatelessView`]. On desktop this returns
+/// after shutdown and panics on startup or event-loop failure; use
+/// `flui::Application::run` for a fallible desktop entry point. On Android it
+/// panics: use `flui::run_app_android` with the system's `AndroidApp` instead.
 pub use flui_app::run_app;
 /// [`run_app`] with an explicit [`AppConfig`] (window title, size, services,
 /// failure policy). Re-exported from [`app`] (`flui-app`).
+///
+/// Has the same root, platform, and startup-panic contract as [`run_app`].
 pub use flui_app::run_app_with_config;
-/// Registers a font's faces with the app, for measurement, paint and carets
-/// alike;
-/// every realm lays its text out again on its next frame. Re-exported from
-/// [`app`] (`flui-app`).
+/// Registers a font's faces with the app, for measurement, paint and carets.
+/// Re-exported from [`app`] (`flui-app`).
+///
+/// Call on the app's owner thread, before startup or from an app callback.
+/// Registration on a worker thread does not update the running app: send the
+/// bytes to its owner thread first. Successful registration updates each
+/// realm's text layout on its next frame; faces are never removed.
+///
+/// Invalid font bytes, repeated bytes, and reentry while the runtime is borrowed
+/// return [`FontRegistrationError`] without adding a face. See
+/// [`app::register_font`] for the individual error variants.
 pub use flui_app::{FontRegistrationError, register_font};
 /// The Android entry points, called from the `cdylib`'s `android_main`
 /// (`flui create` writes one). Re-exported from `flui-app`.

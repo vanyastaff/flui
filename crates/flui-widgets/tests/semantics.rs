@@ -97,6 +97,189 @@ use flui_view::{SignalWriteExt as _, View};
 
 use crate::common::{ProbeSignals, SignalProbe};
 
+/// Retained overlay state remains live while its page is structurally absent
+/// from both assembled semantics and the actual delivered update stream.
+pub(crate) fn a_covered_retained_form_stays_absent_after_a_late_controller_update() {
+    use flui_interaction::FocusNode;
+    use flui_testing::A11yTree;
+    use flui_testing::a11y::Role;
+    use flui_view::ViewExt as _;
+    use flui_widgets::{
+        Column, Form, InsertPosition, Overlay, OverlayEntry, OverlayHandle, RawTextFormField, Text,
+        TextEditingController,
+    };
+    use std::sync::{Arc, Mutex};
+
+    let controller = TextEditingController::with_text("retained draft");
+    let focus = FocusNode::new();
+    let calls = Rc::new(Cell::new(0_u32));
+    let lower_controller = controller.clone();
+    let lower_focus = Rc::clone(&focus);
+    let lower_calls = Rc::clone(&calls);
+    let lower = OverlayEntry::new(move |_cx| {
+        let calls = Rc::clone(&lower_calls);
+        Form::new(Column::new((
+            Text::new("Retained page").boxed(),
+            RawTextFormField::new(lower_controller.clone())
+                .focus_node(Rc::clone(&lower_focus))
+                .boxed(),
+            Semantics::new()
+                .container(true)
+                .button(true)
+                .label("Back")
+                .on_tap(move |_cx| calls.set(calls.get() + 1))
+                .child(SizedBox::new(80.0, 40.0))
+                .boxed(),
+        )))
+        .boxed()
+    });
+    lower.set_maintain_state(true);
+    let upper = OverlayEntry::new(move |_cx| {
+        Column::new((
+            Semantics::new()
+                .container(true)
+                .label("Active page")
+                .child(SizedBox::new(80.0, 30.0))
+                .boxed(),
+            Semantics::new()
+                .container(true)
+                .button(true)
+                .label("Back")
+                .on_tap(|_cx| {})
+                .child(SizedBox::new(80.0, 40.0))
+                .boxed(),
+        ))
+        .boxed()
+    });
+    upper.set_opaque(true);
+    let overlay = OverlayHandle::new();
+    overlay.insert(&lower, &InsertPosition::Top);
+    let mut laid = lay_out(Overlay::new(overlay.clone()), loose(300.0));
+    laid.enable_semantics();
+    laid.tick();
+    let delivered = Arc::new(Mutex::new(
+        laid.a11y_tree().expect("semantics enabled").raw().clone(),
+    ));
+    let sink = Arc::clone(&delivered);
+    laid.pipeline_owner().with_mut(|owner| {
+        owner.set_semantics_update_callback(Arc::new(move |update| {
+            let ids: std::collections::HashSet<_> =
+                update.nodes.iter().map(|(id, _)| *id).collect();
+            assert_eq!(
+                ids.len(),
+                update.nodes.len(),
+                "published packet repeats an identity"
+            );
+            let mut current = sink.lock().expect("publication mirror lock");
+            if let Some(tree) = &update.tree {
+                current.tree = Some(tree.clone());
+            }
+            for (id, node) in &update.nodes {
+                if let Some((_, previous)) = current.nodes.iter_mut().find(|(key, _)| key == id) {
+                    previous.clone_from(node);
+                } else {
+                    current.nodes.push((*id, node.clone()));
+                }
+            }
+            current.focus = update.focus;
+            current.tree_id = update.tree_id;
+        }));
+    });
+    let published = || A11yTree::new(delivered.lock().expect("publication mirror lock").clone());
+    let before = published();
+    let field = before
+        .find(Role::TextInput)
+        .expect("premise: lower Edit published");
+    assert_eq!(field.value(), Some("retained draft"));
+    assert_eq!(
+        before.find_all(Role::Form).len(),
+        1,
+        "premise: lower Form published"
+    );
+    let lower_back = before
+        .find_by_label("Back")
+        .expect("premise: lower Back published")
+        .id();
+    laid.invoke_semantics_action(request(Action::Click, lower_back, None))
+        .expect("lower action initially works");
+    assert_eq!(calls.get(), 1);
+    let bounds = field.bounds().expect("lower editor laid out");
+    laid.dispatch_pointer_down(bounds.x0 + 2.0, f64::midpoint(bounds.y0, bounds.y1));
+    laid.dispatch_pointer_up(bounds.x0 + 2.0, f64::midpoint(bounds.y0, bounds.y1));
+    laid.tick();
+    assert!(
+        focus.has_primary_focus(),
+        "premise: retained editor really focused"
+    );
+
+    overlay.insert(&upper, &InsertPosition::Top);
+    laid.tick();
+    let covered = |laid: &LaidOut| {
+        for (source, tree) in [
+            ("assembled", laid.a11y_tree().expect("semantics enabled")),
+            ("delivered", published()),
+        ] {
+            assert!(
+                tree.find_by_label("Active page").is_ok(),
+                "{source}: active page published"
+            );
+            let back = tree
+                .find_by_label("Back")
+                .expect("one active Back, no covered duplicate");
+            assert_ne!(
+                back.id(),
+                lower_back,
+                "{source}: Back belongs to active page"
+            );
+            assert!(
+                tree.find_all(Role::Form).is_empty(),
+                "{source}: covered Form disconnected"
+            );
+            assert!(
+                tree.find_all(Role::TextInput).is_empty(),
+                "{source}: covered Edit disconnected"
+            );
+        }
+    };
+    covered(&laid);
+    assert!(
+        laid.invoke_semantics_action(request(Action::Click, lower_back, None))
+            .is_err(),
+        "covered lower action refused even though its element is retained"
+    );
+    // This is a real public controller notification to the retained producer,
+    // not input evidence or a forced root rebuild. Its old rect must not
+    // authorize republishing the covered Form's cached semantic anchor.
+    controller.set_text("late retained draft");
+    for _ in 0..3 {
+        laid.tick();
+    }
+    covered(&laid);
+    assert_eq!(calls.get(), 1, "refused action had no callback effect");
+    upper.remove();
+    laid.tick();
+    for tree in [laid.a11y_tree().expect("semantics enabled"), published()] {
+        assert!(
+            tree.find_all_by_label("Active page").is_empty(),
+            "removed upper page disconnected"
+        );
+        assert_eq!(
+            tree.find(Role::TextInput).expect("restored Edit").value(),
+            Some("late retained draft")
+        );
+        assert_eq!(tree.find_all(Role::Form).len(), 1);
+        assert_eq!(
+            tree.find_by_label("Back")
+                .expect("restored lower Back")
+                .id(),
+            lower_back
+        );
+    }
+    laid.invoke_semantics_action(request(Action::Click, lower_back, None))
+        .expect("restored lower action works");
+    assert_eq!(calls.get(), 2);
+}
+
 /// Mounts `root` with semantics enabled and returns the single node carrying
 /// `label`, together with a live view of the a11y tree.
 ///

@@ -100,6 +100,15 @@ movement. Separate normal dependency graphs
 with no feature and with a catalog must exclude testing and hot reload. Tests
 in the facade's own package alone cannot establish that property because its
 development dependencies expose implementation crates.
+
+`testing::rendering::collect_commands` and `DrawKind` expose the existing
+rendering test projection for assertions on a committed layer tree. A retained
+offstage element alone cannot satisfy a command assertion. The projection walks
+reachable picture commands, including nested display lists; it does not establish
+pixel visibility through clipping or opacity and does not replace GPU readback.
+This lets facade-only consumers distinguish a current page's painted text from
+retained page elements.
+
 ### Products and registry support have different roles
 
 The facade and CLI are the two products; implementation crates required by their

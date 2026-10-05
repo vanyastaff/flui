@@ -832,6 +832,7 @@ path = "examples/todo.rs"
 [[example]]
 name = "two_screens"
 path = "examples/two_screens.rs"
+required-features = ["material"]
 
 # `cargo xtask facade-combos` builds every isolated feature combination, and
 # `form.rs` uses `TextFormField`/`ElevatedButton`/`Theme` from the Material

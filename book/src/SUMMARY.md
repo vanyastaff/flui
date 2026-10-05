@@ -6,6 +6,7 @@
 
 - [Installation and first run](getting-started/installation.md)
 - [Tutorial: counter → todo](getting-started/tutorial-todo.md)
+- [Notes showcase: source draft](getting-started/showcase.md)
 - [Contributing to FLUI](getting-started/contributing.md)
 
 # Concepts
@@ -15,7 +16,7 @@
 - [Keys](concepts/keys.md)
 - [Lifecycle](concepts/lifecycle.md)
 - [Layout: constraints down, sizes up](concepts/layout.md)
-- [State: setState, InheritedView, ValueNotifier](concepts/state.md)
+- [State: signals, local state, and shared data](concepts/state.md)
 
 # Reference
 

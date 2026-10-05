@@ -4,12 +4,25 @@
 shape one step further — a list instead of a single number — by comparing
 [`examples/counter.rs`](https://github.com/vanyastaff/flui/blob/main/examples/counter.rs) against
 [`examples/todo.rs`](https://github.com/vanyastaff/flui/blob/main/examples/todo.rs) line by line.
-Both are real, compiling examples in the repository. The snippets below are excerpts from them,
+Both are runnable example targets in the repository. The snippets below are excerpts from them,
 trimmed to the lines that differ; `/* … */` marks what an excerpt leaves out.
 
 ```bash
 cargo run --example todo
 ```
+
+Run this from the FLUI checkout, rather than the generated application directory. Try the
+counter first with `cargo run --example counter`: press "Increment" and watch the count change.
+Then try Todo:
+
+1. Focus "New item", type a title, and press Enter. The title should appear and the field clear.
+2. Type another title and click "Add". This should take the same submission path.
+3. Click `[ ]` on one row; its mark should become `[x]`. Delete the other row and toggle the
+   remaining one again.
+4. Submit an empty field. No new row should appear. Close and reopen Todo; it starts empty
+   because the example stores its items only in memory.
+
+These are checks to perform on your platform, not a record of a native run of this tutorial.
 
 ## What stays the same
 
@@ -95,8 +108,11 @@ Two things worth calling out:
   logged rather than dropped.
 - Each item needs a stable `id` (not its position in the `Vec`) so the toggle/delete closures
   still target the right item after another item is deleted and the list reindexes. `todo.rs`
-  computes it as `list.last().map_or(0, |it| it.id + 1)` when pushing — simple, and enough for an
-  in-memory list that only ever grows a counter, never reuses an id.
+  computes it as `list.last().map_or(0, |it| it.id + 1)` when pushing. It can reuse an id after
+  deleting the highest-id item, or after emptying the list. This small example does not provide
+  persistent or globally unique identities. The id selects application data in these callbacks;
+  it is not an element key. See [Keys](../concepts/keys.md) when row-local state needs to follow
+  an item through tree reconciliation.
 
 ## Adding an item: one helper, two triggers
 
@@ -149,3 +165,10 @@ ready for the next one.
 [`examples/todo.rs`](https://github.com/vanyastaff/flui/blob/main/examples/todo.rs) is short
 enough to read end to end — every snippet above is copied from it, so reading the file directly
 is the fastest way to see how the pieces fit together as one `build`.
+
+## Next: an application with several screens
+
+Todo teaches event-driven writes and a bounded list. Continue with
+[Notes: from Todo to a showcase](showcase.md) to study shared state across routes, a lazy list,
+form validation and an asynchronous retry flow. That page identifies the source revision and
+the verification still needed before treating Notes as a working showcase.

@@ -209,6 +209,48 @@ fn external_consumers_extend_and_test_through_the_facade() {
     }
 }
 
+#[test]
+fn external_notes_showcase_runs_through_the_facade() {
+    let Some(root) = checkout_root() else { return };
+    for alias in ["flui", "ui"] {
+        let mut framework = dependency("flui", root, false);
+        framework
+            .as_table_mut()
+            .expect("framework dependency table")
+            .insert(
+                "features".into(),
+                toml::Value::Array(vec!["material".into()]),
+            );
+        let mut dependencies = toml::Table::new();
+        dependencies.insert(alias.into(), framework.clone());
+        framework
+            .as_table_mut()
+            .expect("framework dependency table")
+            .insert(
+                "features".into(),
+                toml::Value::Array(vec!["material".into(), "testing".into()]),
+            );
+        let mut dev_dependencies = toml::Table::new();
+        dev_dependencies.insert(alias.into(), framework);
+        let tree = include_str!("../examples/two_screens/tree.rs");
+        let flow = include_str!("fixtures/notes_flow.rs");
+        let source = format!("mod tree {{\n{tree}\n}}\n#[cfg(test)] mod flow {{\n{flow}\n}}")
+            .replace("flui::", &format!("{alias}::"));
+        let output = run_consumer(dependencies, Some(dev_dependencies), &source, "test");
+        assert!(
+            output.status.success(),
+            "Notes alias={alias}:\n{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let report = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            report.contains("notes_public_input_flow_matrix ... ok"),
+            "{alias}: Notes acceptance did not run:\n{report}"
+        );
+    }
+}
+
 /// `None` when there is no checkout to depend on — see [`checkout_root`].
 fn hot_reload_dependencies(include_layer: bool) -> Option<toml::Table> {
     let root = checkout_root()?;
