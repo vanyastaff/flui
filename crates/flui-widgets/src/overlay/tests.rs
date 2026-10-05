@@ -42,6 +42,22 @@ fn counting_entry(calls: &Calls) -> OverlayEntry {
 /// object then does with it.
 #[test]
 fn overlay_build_plan_skips_covered_maintained_entries() {
+    crate::contract_cases::run_cases(
+        "overlay_build_plan_skips_covered_maintained_entries",
+        &[
+            (
+                "covered_maintained_entry_build_plan",
+                covered_maintained_entry_build_plan as fn(),
+            ),
+            (
+                "overlay_entry_identity_exhaustion_preserves_existing_entries",
+                super::entry::overlay_entry_identity_exhaustion_preserves_existing_entries,
+            ),
+        ],
+    );
+}
+
+fn covered_maintained_entry_build_plan() {
     let plain = || OverlayEntry::new(|_ctx| SizedBox::new(10.0, 10.0).into_view().boxed());
     let opaque = || plain().with_opaque(true);
     let maintained = || plain().with_maintain_state(true);

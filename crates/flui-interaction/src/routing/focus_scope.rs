@@ -25,8 +25,15 @@ pub use crate::ids::FocusNodeId;
 
 static NEXT_FOCUS_NODE_ID: AtomicU64 = AtomicU64::new(1);
 
-fn allocate_focus_node_id() -> FocusNodeId {
-    FocusNodeId::new(NEXT_FOCUS_NODE_ID.fetch_add(1, AtomicOrdering::Relaxed))
+fn allocate_focus_node_id(counter: &AtomicU64) -> FocusNodeId {
+    let raw = counter
+        .try_update(
+            AtomicOrdering::Relaxed,
+            AtomicOrdering::Relaxed,
+            |current| (current != 0).then(|| current.checked_add(1).unwrap_or(0)),
+        )
+        .expect("BUG: focus node identity capacity exhausted");
+    FocusNodeId::new(raw)
 }
 
 /// Owner-local callback for handling key events.
@@ -452,8 +459,16 @@ impl FocusNode {
     }
 
     fn create(label: Option<String>, scope_owner: Option<Weak<FocusScopeNode>>) -> Rc<Self> {
+        Self::create_with_counter(label, scope_owner, &NEXT_FOCUS_NODE_ID)
+    }
+
+    fn create_with_counter(
+        label: Option<String>,
+        scope_owner: Option<Weak<FocusScopeNode>>,
+        counter: &AtomicU64,
+    ) -> Rc<Self> {
         Rc::new(Self {
-            id: allocate_focus_node_id(),
+            id: allocate_focus_node_id(counter),
             debug_label: label,
             parent: RefCell::new(None),
             children: RefCell::new(Vec::new()),
@@ -1356,6 +1371,77 @@ impl FocusNode {
     fn allows_descendant_focus(&self) -> bool {
         self.descendants_are_focusable() && (!self.is_scope() || self.own_can_request_focus())
     }
+}
+
+#[cfg(test)]
+pub(crate) fn focus_node_identity_exhaustion_preserves_notifications() {
+    let manager = FocusManager::new();
+    let start = manager
+        .root_scope()
+        .id()
+        .get()
+        .checked_add(1)
+        .expect("root identity");
+    let counter = AtomicU64::new(start);
+    let first = FocusNode::create_with_counter(None, None, &counter);
+    counter.store(u64::MAX, AtomicOrdering::Relaxed);
+    let last = FocusNode::create_with_counter(None, None, &counter);
+    manager
+        .root_scope()
+        .attach_node(&first)
+        .expect("first node attaches");
+    manager
+        .root_scope()
+        .attach_node(&last)
+        .expect("last node attaches");
+    let notifications = Rc::new(RefCell::new(Vec::new()));
+    for (name, node) in [("first", &first), ("last", &last)] {
+        let notifications = Rc::clone(&notifications);
+        let node = Rc::downgrade(node);
+        let target = node.upgrade().expect("live node");
+        target.add_listener(Rc::new(move || {
+            let node = node.upgrade().expect("attached node");
+            notifications
+                .borrow_mut()
+                .push((name, node.has_primary_focus()));
+        }));
+    }
+    first.request_focus();
+    last.request_focus();
+    for _ in 0..8 {
+        let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            FocusNode::create_with_counter(None, None, &counter)
+        }))
+        .expect_err("exhausted allocator must permanently refuse");
+        flui_foundation::panic::retain_opaque_payload(failure);
+    }
+    first.request_focus();
+    assert_eq!(
+        *notifications.borrow(),
+        vec![
+            ("first", true),
+            ("first", false),
+            ("last", true),
+            ("last", false),
+            ("first", true),
+        ],
+        "distinct live endpoints remain independently notified after refusal"
+    );
+    assert!(Rc::ptr_eq(
+        &manager.primary_focus().expect("focused node"),
+        &first
+    ));
+    let fresh_counter = AtomicU64::new(start.checked_add(1).expect("fresh identity"));
+    let fresh = FocusNode::create_with_counter(None, None, &fresh_counter);
+    manager
+        .root_scope()
+        .attach_node(&fresh)
+        .expect("fresh node attaches");
+    fresh.request_focus();
+    assert!(Rc::ptr_eq(
+        &manager.primary_focus().expect("fresh focus"),
+        &fresh
+    ));
 }
 
 impl std::fmt::Debug for FocusNode {
