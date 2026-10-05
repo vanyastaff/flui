@@ -364,8 +364,9 @@ impl PointerRouter {
         for handler in handlers {
             if first_panic.is_some() || std::thread::panicking() {
                 // This callback's opaque capture may contain several hostile
-                // destructors. After failure, do not start another retirement.
-                std::mem::forget(handler);
+                // destructors. After failure, do not start another retirement;
+                // a clone some other owner still holds is released normally.
+                crate::retain::Retain::retain(handler);
             } else {
                 let retirement = RoutePanic::capture(|| drop(handler));
                 RoutePanic::preserve_first(
