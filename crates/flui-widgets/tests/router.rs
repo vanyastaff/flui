@@ -445,9 +445,11 @@ pub(crate) fn router_go_preserves_its_commit_after_an_observer_panic() {
 /// Only the admitted value owns retirement; page-builder clones are views of
 /// it. This lets the test distinguish the Router's outgoing ownership from
 /// the navigator's independent page-builder lifetime.
+type DropHook = Rc<RefCell<Option<Rc<dyn Fn()>>>>;
+
 struct DropRoute {
     value: u32,
-    on_drop: Rc<RefCell<Option<Rc<dyn Fn()>>>>,
+    on_drop: DropHook,
     owns_retirement: bool,
 }
 

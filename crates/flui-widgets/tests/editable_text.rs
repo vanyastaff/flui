@@ -725,8 +725,7 @@ pub(crate) mod text_store {
         let controller = TextEditingController::new();
         let focus = FocusNode::new();
         let mut laid = crate::common::lay_out(
-            SizedBox::new(60.0, 30.0)
-                .child(EditableText::new(controller.clone(), Rc::clone(&focus))),
+            SizedBox::new(60.0, 30.0).child(EditableText::new(controller, Rc::clone(&focus))),
             crate::common::tight(60.0, 30.0),
         );
         focus.request_focus();
