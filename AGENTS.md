@@ -187,7 +187,7 @@ The maintainer usually hands over a whole task and comes back later.
 | Need | Run |
 |------|-----|
 | Every task | `cargo xtask --help` (crate `tools/xtask`; the alias is in `.cargo/config.toml`). Anything else is a plain `cargo` command |
-| Worktrees | `cargo xtask worktree new <area>/<slug>`; `worktree list` (branch state, dirty, `target/` size); `worktree prune [--dry-run]` removes clean ones origin/main contains |
+| Worktrees | `cargo xtask worktree new <area>/<slug>`; `worktree list` (branch state, dirty, `target/` size); `worktree prune [--dry-run]` removes clean ones whose branch a merge commit brought into origin/main (a fresh branch, at a main commit, is kept) |
 | Before a PR | `cargo xtask check-changed` — fmt + clippy + nextest over changed crates and their dependents (the classification CI's `plan` uses) |
 | Full local gate | `cargo xtask ci` = `cargo xtask gate` (`checks`: fmt, typos, taplo, docs-links, docs-paths, workspace, reach, toolchain, wgsl, …; `lint`; `doc-strict`) + `cargo xtask test` + doctests |
 | CI heavy jobs locally | `cargo xtask ci-full`; `cargo xtask doctor full` names any missing tool; job table in `docs/testing.md` |

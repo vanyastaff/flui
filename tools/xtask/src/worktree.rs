@@ -10,21 +10,35 @@
 //!
 //! The decisions are pure functions of git's answers ([`BranchName::parse`],
 //! [`parse_worktrees`], [`parse_upstreams`], [`Changes::from_status`],
-//! [`classify`]); the commands only ask git and act on the verdict. A worktree
-//! is removed only when its branch tip is an ancestor of origin/main and
-//! nothing in it is modified or untracked and unignored (a root `TASKS.md`
-//! aside). Its branch is then deleted with `git branch -d`, falling back to
-//! `-D` only because that ancestry was just proven: `-d` judges against the
-//! branch's upstream or the current `HEAD`, not origin/main. A squash-merged
-//! branch has commits origin/main does not contain, so it is kept.
+//! [`Tip::integration`], [`classify`]); the commands only ask git and act on
+//! the verdict.
+//!
+//! A worktree is removed only on a positive merge signal, and only when nothing
+//! in it is modified or untracked and unignored (a root `TASKS.md` aside).
+//! This repository merges pull requests with merge commits, so a merged
+//! branch's tip is an ancestor of origin/main that is *not* on origin/main's
+//! first-parent chain: it entered as a merge's second parent. A tip on that
+//! chain is one of main's own commits, which is where a branch `new` just
+//! created points; such a worktree is unstarted, not merged, and is kept (so
+//! is a branch fast-forwarded or rebase-merged onto main: the price of never
+//! deleting a fresh one). A squash-merged branch has commits origin/main does
+//! not contain, so it is kept too.
+//!
+//! The branch is then deleted with `git branch -d`, never `-D`: the merge
+//! verdict is older than the deletion, and a commit made on the branch in
+//! between must survive. `-d` judges against the branch's upstream or the
+//! current `HEAD`, not origin/main, so when it refuses, the branch is left and
+//! reported for deletion by hand.
 //!
 //! `list` reads the local origin/main and fetches nothing; `new` fetches main
 //! and `prune` fetches with `--prune`, so "gone on origin" is current there.
+//! `prune --dry-run` changes nothing, remote-tracking refs included: it skips
+//! the fetch and judges against the local, possibly stale, origin/main.
 
 #[cfg(test)]
 mod tests;
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
@@ -60,9 +74,16 @@ enum Action {
     },
     /// Every worktree: branch state, local changes and `target/` size.
     List,
-    /// Remove clean worktrees whose branch origin/main contains, with their branches.
+    /// Remove clean worktrees whose branch was merged into origin/main, with their branches.
+    ///
+    /// Merged means the branch tip is an ancestor of origin/main but not on its
+    /// first-parent chain: it came in through a merge commit. A branch whose tip
+    /// is one of main's own commits (just created, or fast-forward/rebase merged)
+    /// and a squash-merged branch are kept. A branch `git branch -d` refuses to
+    /// delete is left and reported.
     Prune {
-        /// Print what would be removed and change nothing.
+        /// Print what would be removed and change nothing: skips the fetch and
+        /// judges against the local, possibly stale, origin/main.
         #[arg(long)]
         dry_run: bool,
     },
@@ -246,11 +267,48 @@ impl Changes {
     }
 }
 
+/// What git says of a branch tip against origin/main.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Tip {
+    /// The tip is an ancestor of origin/main, or origin/main itself.
+    reachable: bool,
+    /// The tip is on origin/main's first-parent chain: one of main's own
+    /// commits rather than a merged branch's.
+    first_parent: bool,
+    /// Commits on the branch that origin/main lacks.
+    ahead: u64,
+    /// The branch had an upstream that no longer exists.
+    upstream_gone: bool,
+}
+
+impl Tip {
+    /// Merged only on a positive signal: reachable from origin/main through a
+    /// merge commit, not as one of main's own first-parent commits.
+    fn integration(self) -> Integration {
+        let upstream_gone = self.upstream_gone;
+        if !self.reachable {
+            Integration::Unmerged {
+                ahead: self.ahead,
+                upstream_gone,
+            }
+        } else if self.first_parent {
+            Integration::Unstarted { upstream_gone }
+        } else {
+            Integration::Merged { upstream_gone }
+        }
+    }
+}
+
 /// Where a worktree's commits stand against origin/main.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Integration {
-    /// The branch tip is an ancestor of origin/main.
+    /// The branch tip came into origin/main through a merge commit.
     Merged {
+        upstream_gone: bool,
+    },
+    /// The branch tip is one of origin/main's first-parent commits: nothing
+    /// committed yet, or fast-forward/rebase merged. Nothing proves a merge.
+    Unstarted {
         upstream_gone: bool,
     },
     /// `ahead` commits are not on origin/main.
@@ -259,6 +317,13 @@ enum Integration {
         upstream_gone: bool,
     },
     Detached,
+}
+
+impl Integration {
+    /// `tip` is `None` when detached.
+    fn of(tip: Option<Tip>) -> Self {
+        tip.map_or(Self::Detached, Tip::integration)
+    }
 }
 
 /// The worktree's place in the repository.
@@ -275,7 +340,8 @@ enum Role {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Facts {
     role: Role,
-    integration: Integration,
+    /// `None` when detached.
+    tip: Option<Tip>,
     changes: Changes,
     locked: bool,
     missing: bool,
@@ -301,6 +367,7 @@ enum Reason {
     Missing,
     Detached,
     Dirty,
+    Unstarted,
     Unmerged { ahead: u64, upstream_gone: bool },
 }
 
@@ -313,6 +380,10 @@ impl fmt::Display for Reason {
             Self::Missing => f.write_str("directory gone; `git worktree prune` drops the record"),
             Self::Detached => f.write_str("detached HEAD, no branch to judge"),
             Self::Dirty => f.write_str("uncommitted or untracked changes"),
+            Self::Unstarted => write!(
+                f,
+                "tip is one of {BASE}'s own commits: not started, or merged without a merge commit"
+            ),
             Self::Unmerged {
                 ahead,
                 upstream_gone: true,
@@ -329,16 +400,17 @@ impl fmt::Display for Reason {
 }
 
 /// Whether `prune` may remove a worktree: only an ordinary one whose branch
-/// origin/main contains and which holds no work.
+/// was merged into origin/main ([`Tip::integration`]) and which holds no work.
 fn classify(facts: &Facts) -> Decision {
     let reason = match facts.role {
         Role::Main => Reason::MainCheckout,
         Role::Current => Reason::Current,
         Role::Other if facts.locked => Reason::Locked,
         Role::Other if facts.missing => Reason::Missing,
-        Role::Other => match (facts.integration, facts.changes) {
+        Role::Other => match (Integration::of(facts.tip), facts.changes) {
             (_, Changes::Work) => Reason::Dirty,
             (Integration::Detached, _) => Reason::Detached,
+            (Integration::Unstarted { .. }, _) => Reason::Unstarted,
             (
                 Integration::Unmerged {
                     ahead,
@@ -381,13 +453,19 @@ impl fmt::Display for Worktree {
         }
         let branch = self.entry.branch.as_deref().unwrap_or("(detached)");
         write!(f, "\n    branch: {branch}")?;
-        let state = match self.facts.integration {
+        let state = match Integration::of(self.facts.tip) {
             Integration::Merged {
                 upstream_gone: false,
             } => format!("merged into {BASE}"),
             Integration::Merged {
                 upstream_gone: true,
             } => format!("merged into {BASE}, branch gone on origin"),
+            Integration::Unstarted {
+                upstream_gone: false,
+            } => format!("at a {BASE} commit, nothing merged"),
+            Integration::Unstarted {
+                upstream_gone: true,
+            } => format!("at a {BASE} commit, nothing merged, branch gone on origin"),
             Integration::Unmerged {
                 ahead,
                 upstream_gone: false,
@@ -460,6 +538,11 @@ fn survey(git: &Git) -> anyhow::Result<Vec<Worktree>> {
         "refs/heads",
         "refs/remotes",
     ])?);
+    let first_parent: HashSet<String> = git
+        .run(&["rev-list", "--first-parent", BASE])?
+        .lines()
+        .map(str::to_owned)
+        .collect();
     let mut worktrees = Vec::new();
     for (index, entry) in entries.into_iter().enumerate() {
         if entry.bare {
@@ -473,23 +556,21 @@ fn survey(git: &Git) -> anyhow::Result<Vec<Worktree>> {
             Role::Other
         };
         let missing = entry.prunable || !entry.path.is_dir();
-        let integration = match &entry.branch {
-            None => Integration::Detached,
+        let tip = match &entry.branch {
+            None => None,
             Some(branch) => {
-                let upstream_gone = upstreams.get(branch).copied().unwrap_or(false);
                 let tip = format!("refs/heads/{branch}");
-                if git.succeeds(&["merge-base", "--is-ancestor", &tip, BASE])? {
-                    Integration::Merged { upstream_gone }
-                } else {
-                    let ahead = git.run(&["rev-list", "--count", &format!("{BASE}..{tip}")])?;
-                    Integration::Unmerged {
-                        ahead: ahead
-                            .trim()
-                            .parse()
-                            .context("`git rev-list --count` output")?,
-                        upstream_gone,
-                    }
-                }
+                let sha = git.run(&["rev-parse", "--verify", &tip])?;
+                let ahead = git.run(&["rev-list", "--count", &format!("{BASE}..{tip}")])?;
+                Some(Tip {
+                    reachable: git.succeeds(&["merge-base", "--is-ancestor", &tip, BASE])?,
+                    first_parent: first_parent.contains(sha.trim()),
+                    ahead: ahead
+                        .trim()
+                        .parse()
+                        .context("`git rev-list --count` output")?,
+                    upstream_gone: upstreams.get(branch).copied().unwrap_or(false),
+                })
             }
         };
         let changes = if missing {
@@ -512,7 +593,7 @@ fn survey(git: &Git) -> anyhow::Result<Vec<Worktree>> {
         worktrees.push(Worktree {
             facts: Facts {
                 role,
-                integration,
+                tip,
                 changes,
                 locked: entry.locked,
                 missing,
@@ -533,10 +614,16 @@ struct PruneReport {
 }
 
 /// Fetches, drops stale records, then removes every worktree [`classify`]
-/// lets go; with `dry_run` only reports.
+/// lets go; with `dry_run` fetches nothing and only reports.
 fn prune(git: &Git, dry_run: bool) -> anyhow::Result<PruneReport> {
     let mut report = PruneReport::default();
-    git.run(&["fetch", "--prune", "origin"])?;
+    if dry_run {
+        report.lines.push(format!(
+            "dry run: not fetched; judged against the local {BASE}, which may be stale"
+        ));
+    } else {
+        git.run(&["fetch", "--prune", "origin"])?;
+    }
     let stale = if dry_run {
         git.run(&["worktree", "prune", "--dry-run", "--verbose"])?
     } else {
@@ -553,9 +640,15 @@ fn prune(git: &Git, dry_run: bool) -> anyhow::Result<PruneReport> {
                 report.lines.push(format!("would remove: {path}"));
             }
             Decision::Remove { force } => match remove(git, &worktree, force) {
-                Ok(freed) => report
-                    .lines
-                    .push(format!("removed: {path} (target/ {})", human_size(freed))),
+                Ok(removed) => {
+                    report.lines.push(format!(
+                        "removed: {path} (target/ {})",
+                        human_size(removed.freed)
+                    ));
+                    if let Some(refusal) = removed.branch_kept {
+                        report.lines.push(format!("  branch kept: {refusal}"));
+                    }
+                }
                 Err(error) => {
                     report.failed = true;
                     report.lines.push(format!("failed: {path}: {error:#}"));
@@ -566,9 +659,21 @@ fn prune(git: &Git, dry_run: bool) -> anyhow::Result<PruneReport> {
     Ok(report)
 }
 
+/// What [`remove`] did.
+#[derive(Debug)]
+struct Removed {
+    /// The bytes `target/` held.
+    freed: u64,
+    /// Why the branch was left: `git branch -d` refused it.
+    branch_kept: Option<String>,
+}
+
 /// Deletes the worktree's `target/`, the worktree, then its branch. Only for
-/// a worktree [`classify`] decided to remove. Returns the bytes `target/` held.
-fn remove(git: &Git, worktree: &Worktree, force: bool) -> anyhow::Result<u64> {
+/// a worktree [`classify`] decided to remove.
+///
+/// The branch goes only through `git branch -d`, never `-D`: the merge verdict
+/// predates this call, and a commit made on the branch since must not be lost.
+fn remove(git: &Git, worktree: &Worktree, force: bool) -> anyhow::Result<Removed> {
     let path = &worktree.entry.path;
     let target = path.join("target");
     if target.is_dir() {
@@ -581,14 +686,16 @@ fn remove(git: &Git, worktree: &Worktree, force: bool) -> anyhow::Result<u64> {
     }
     args.push(utf8(path)?);
     git.run(&args)?;
-    if let Some(branch) = &worktree.entry.branch
-        && git.run(&["branch", "-d", branch]).is_err()
-    {
-        // `-d` judges against the upstream or HEAD; classify proved the tip
-        // is an ancestor of origin/main, which is what makes `-D` safe here
-        git.run(&["branch", "-D", branch])?;
-    }
-    Ok(worktree.target_bytes.unwrap_or(0))
+    let branch_kept = match &worktree.entry.branch {
+        Some(branch) => git.run(&["branch", "-d", branch]).err().map(|error| {
+            format!("{branch}: {error:#}; check it, then `git branch -D` it yourself")
+        }),
+        None => None,
+    };
+    Ok(Removed {
+        freed: worktree.target_bytes.unwrap_or(0),
+        branch_kept,
+    })
 }
 
 fn utf8(path: &Path) -> anyhow::Result<&str> {
