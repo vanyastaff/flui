@@ -14,7 +14,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::common::{LaidOut, lay_out_animated, tight};
+use crate::common::{LaidOut, child_process, lay_out_animated, tight};
 use flui_animation::Vsync;
 use flui_painting::styling::Color;
 use flui_widgets::prelude::*;
@@ -686,12 +686,7 @@ fn a_go_observer_failure_retains_competing_temporary_route_values() {
 /// runs in its own bounded process rather than the ordinary contract table.
 #[test]
 fn router_observer_failure_and_retirement_competition() {
-    use std::io::Read;
-    use std::process::{Command, Stdio};
-    use std::time::Instant;
-
-    const CHILD: &str = "FLUI_ROUTER_RETIREMENT_CHILD";
-    if let Ok(case) = std::env::var(CHILD) {
+    if let Some(case) = child_process::selected_case() {
         match case.as_str() {
             "replace" => an_observer_failure_retains_competing_router_value_retirement(),
             "go" => a_go_observer_failure_retains_competing_temporary_route_values(),
@@ -714,72 +709,34 @@ fn router_observer_failure_and_retirement_competition() {
             }
             _ => panic!("unknown child case"),
         }
-        return;
+        child_process::pass();
     }
-    let mut failures = Vec::new();
-    for case in [
-        "replace",
-        "go",
-        "terminal-factories",
-        "terminal-observers",
-        "terminal-incoming",
-        "terminal-aliases",
-        "terminal-router",
-        "terminal-route",
-        "terminal-record-waker",
-        "terminal-overlay",
-        "terminal-modal-cycle",
-        "terminal-modal-alias",
-        "terminal-mounted-router",
-        "router-parser",
-        "router-clone",
-        "router-state-clone",
-        "page-healthy",
-        "page-result",
-        "page-factory",
-        "page-compete",
-        "page-incoming",
-    ] {
-        let mut child = Command::new(std::env::current_exe().expect("test executable"))
-            .args([
-                "--exact",
-                "router::router_observer_failure_and_retirement_competition",
-                "--nocapture",
-            ])
-            .env(CHILD, case)
-            .env("RUST_BACKTRACE", "0")
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .expect("router retirement child");
-        let mut stdout = child.stdout.take().expect("stdout");
-        let mut stderr = child.stderr.take().expect("stderr");
-        let stdout_reader = std::thread::spawn(move || {
-            let mut text = String::new();
-            stdout.read_to_string(&mut text).expect("child stdout");
-            text
-        });
-        let stderr_reader = std::thread::spawn(move || {
-            let mut text = String::new();
-            stderr.read_to_string(&mut text).expect("child stderr");
-            text
-        });
-        let started = Instant::now();
-        while child.try_wait().expect("child status").is_none() {
-            if started.elapsed() > Duration::from_secs(10) {
-                child.kill().expect("kill deadlocked child");
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(10));
-        }
-        let status = child.wait().expect("child exit");
-        let stdout = stdout_reader.join().expect("stdout reader");
-        let stderr = stderr_reader.join().expect("stderr reader");
-        if !status.success() || !stdout.contains("1 passed; 0 failed") {
-            failures.push(format!("{case}: {status}\n{stdout}\n{stderr}"));
-        }
-    }
-    assert!(failures.is_empty(), "{}", failures.join("\n"));
+    child_process::run_rows(
+        "router::router_observer_failure_and_retirement_competition",
+        &[
+            "replace",
+            "go",
+            "terminal-factories",
+            "terminal-observers",
+            "terminal-incoming",
+            "terminal-aliases",
+            "terminal-router",
+            "terminal-route",
+            "terminal-record-waker",
+            "terminal-overlay",
+            "terminal-modal-cycle",
+            "terminal-modal-alias",
+            "terminal-mounted-router",
+            "router-parser",
+            "router-clone",
+            "router-state-clone",
+            "page-healthy",
+            "page-result",
+            "page-factory",
+            "page-compete",
+            "page-incoming",
+        ],
+    );
 }
 
 // Each callback owns exactly one bomb. These are independent framework fields,

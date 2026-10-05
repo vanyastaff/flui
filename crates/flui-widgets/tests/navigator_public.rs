@@ -19,7 +19,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use crate::common::{lay_out, loose};
+use crate::common::{child_process, lay_out, loose};
 use flui_widgets::RouteParseError;
 use parking_lot::Mutex;
 
@@ -34,13 +34,9 @@ use flui_widgets::{
 /// in a bounded child process while still calling the public default producer.
 #[test]
 fn default_back_stack_parser_retirement_competition() {
-    use std::io::Read;
-    use std::process::{Command, Stdio};
     use std::sync::atomic::AtomicBool;
-    use std::time::{Duration, Instant};
 
-    const CHILD: &str = "FLUI_BACK_STACK_RETIREMENT_CHILD";
-    if let Ok(case) = std::env::var(CHILD) {
+    if let Some(case) = child_process::selected_case() {
         static PARSER_FAILS: AtomicBool = AtomicBool::new(true);
         static FULL_FAILS: AtomicBool = AtomicBool::new(false);
         static PREFIX_FAILS: AtomicBool = AtomicBool::new(false);
@@ -131,51 +127,13 @@ fn default_back_stack_parser_retirement_competition() {
             2,
             "healthy prefix routes retire normally"
         );
-        return;
+        child_process::pass();
     }
 
-    let mut failures = Vec::new();
-    for case in ["parser", "full", "prefix", "both"] {
-        let mut child = Command::new(std::env::current_exe().expect("test executable"))
-            .args([
-                "--exact",
-                "navigator_public::default_back_stack_parser_retirement_competition",
-                "--nocapture",
-            ])
-            .env(CHILD, case)
-            .env("RUST_BACKTRACE", "0")
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .expect("back-stack retirement child");
-        let mut stdout = child.stdout.take().expect("stdout");
-        let mut stderr = child.stderr.take().expect("stderr");
-        let stdout_reader = std::thread::spawn(move || {
-            let mut text = String::new();
-            stdout.read_to_string(&mut text).expect("child stdout");
-            text
-        });
-        let stderr_reader = std::thread::spawn(move || {
-            let mut text = String::new();
-            stderr.read_to_string(&mut text).expect("child stderr");
-            text
-        });
-        let started = Instant::now();
-        while child.try_wait().expect("child status").is_none() {
-            if started.elapsed() > Duration::from_secs(10) {
-                child.kill().expect("kill deadlocked child");
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(10));
-        }
-        let status = child.wait().expect("child exit");
-        let stdout = stdout_reader.join().expect("stdout reader");
-        let stderr = stderr_reader.join().expect("stderr reader");
-        if !status.success() || !stdout.contains("1 passed; 0 failed") {
-            failures.push(format!("{case}: {status}\n{stdout}\n{stderr}"));
-        }
-    }
-    assert!(failures.is_empty(), "{}", failures.join("\n"));
+    child_process::run_rows(
+        "navigator_public::default_back_stack_parser_retirement_competition",
+        &["parser", "full", "prefix", "both"],
+    );
 }
 
 pub(crate) fn delivered_route_results_remain_completed() {

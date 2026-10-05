@@ -9,6 +9,9 @@
 
 use flui_animation::{Animatable, TwoWayConverter};
 
+#[path = "support/child_process.rs"]
+mod child_process;
+
 #[path = "contracts/simulation.rs"]
 mod simulation;
 

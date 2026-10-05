@@ -9,3 +9,5 @@ pub use flui_testing::widgets::*;
 
 #[allow(dead_code)]
 pub mod cases;
+#[allow(dead_code)]
+pub mod child_process;

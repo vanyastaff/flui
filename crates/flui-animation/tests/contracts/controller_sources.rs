@@ -1,5 +1,6 @@
 //! Controller-owned user code runs without its state lock and cannot commit stale samples.
 
+use crate::child_process;
 use flui_animation::{
     Animation, AnimationController, AnimationStatus, AnimationSwitch, ConstantAnimation,
     CurvedAnimation, ProxyAnimation, StatusCallback,
@@ -10,14 +11,13 @@ use flui_foundation::{Listenable, ListenerCallback, ListenerId};
 use flui_scheduler::{Ticker, UpdateScheduler, ticker::TickerFuture};
 use std::{
     future::Future,
-    io::Read,
     pin::Pin,
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, AtomicUsize, Ordering},
     },
     task::{Context, Poll, Waker},
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 #[derive(Clone, Copy)]
@@ -804,7 +804,8 @@ struct TerminalParent {
     fail_value: bool,
     sample: f64,
     fail_status: AtomicBool,
-    _probe: Option<TerminalProbe>,
+    #[allow(dead_code, reason = "held only for its destructor")]
+    probe: Option<TerminalProbe>,
     reenter: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
 }
 impl std::fmt::Debug for TerminalParent {
@@ -898,7 +899,7 @@ fn terminal_parent(fail_removal: bool) -> Arc<TerminalParent> {
         fail_value: false,
         sample: 0.5,
         fail_status: AtomicBool::new(false),
-        _probe: None,
+        probe: None,
         reenter: Mutex::new(None),
     })
 }
@@ -1191,13 +1192,13 @@ fn constructors_preserve_incoming_sources_and_partial_subscriptions() {
     {
         let current = Arc::get_mut(&mut current).expect("unique current parent");
         current.fail_value = true;
-        current._probe = Some(TerminalProbe {
+        current.probe = Some(TerminalProbe {
             label: "current constructor owner",
             drops: drops.clone(),
             panics: true,
         });
     }
-    Arc::get_mut(&mut next).expect("unique next parent")._probe = Some(TerminalProbe {
+    Arc::get_mut(&mut next).expect("unique next parent").probe = Some(TerminalProbe {
         label: "next constructor owner",
         drops: drops.clone(),
         panics: true,
@@ -1219,13 +1220,13 @@ fn constructors_preserve_incoming_sources_and_partial_subscriptions() {
     let mut replacement = terminal_parent(false);
     Arc::get_mut(&mut replacement)
         .expect("unique replacement")
-        ._probe = Some(TerminalProbe {
+        .probe = Some(TerminalProbe {
         label: "replacement constructor owner",
         drops: drops.clone(),
         panics: true,
     });
     let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        proxy.set_parent(replacement)
+        proxy.set_parent(replacement);
     }))
     .expect_err("old parent status fails");
     assert_eq!(
@@ -1270,7 +1271,7 @@ enum SerdeInput {
     Failure,
 }
 #[cfg(feature = "serde")]
-impl<'de> serde::de::IntoDeserializer<'de, serde::de::value::Error> for SerdeInput {
+impl serde::de::IntoDeserializer<'_, serde::de::value::Error> for SerdeInput {
     type Deserializer = Self;
     fn into_deserializer(self) -> Self {
         self
@@ -1450,57 +1451,17 @@ fn controller_sources_allow_reentry_and_preserve_run_ownership() {
             sample_failure_retains_hostile_source,
         ),
     ];
-    const SELECTED: &str = "FLUI_CONTROLLER_SOURCE_CASE";
-    if let Ok(selected) = std::env::var(SELECTED) {
+    if let Some(selected) = child_process::selected_case() {
         cases
             .iter()
             .find(|(name, _)| *name == selected)
             .expect("known child case")
             .1();
-        return;
+        child_process::pass();
     }
-    let mut failures = Vec::new();
-    for (name, _) in cases {
-        let mut child = std::process::Command::new(
-            std::env::current_exe().expect("test executable"),
-        )
-        .args([
-            "--exact",
-            "controller_sources::controller_sources_allow_reentry_and_preserve_run_ownership",
-            "--nocapture",
-        ])
-        .env(SELECTED, name)
-        .env("RUST_BACKTRACE", "0")
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .expect("controller child");
-        let mut stdout = child.stdout.take().expect("stdout");
-        let mut stderr = child.stderr.take().expect("stderr");
-        let stdout_reader = std::thread::spawn(move || {
-            let mut output = String::new();
-            stdout.read_to_string(&mut output).expect("stdout read");
-            output
-        });
-        let stderr_reader = std::thread::spawn(move || {
-            let mut output = String::new();
-            stderr.read_to_string(&mut output).expect("stderr read");
-            output
-        });
-        let started = Instant::now();
-        while child.try_wait().expect("child status").is_none() {
-            if started.elapsed() > Duration::from_secs(10) {
-                child.kill().expect("kill stalled child");
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(10));
-        }
-        let status = child.wait().expect("child exit");
-        let stdout = stdout_reader.join().expect("stdout reader");
-        let stderr = stderr_reader.join().expect("stderr reader");
-        if !status.success() || !stdout.contains("1 passed; 0 failed") {
-            failures.push(format!("{name}: {status}\n{stdout}\n{stderr}"));
-        }
-    }
-    assert!(failures.is_empty(), "{}", failures.join("\n"));
+    let names: Vec<_> = cases.iter().map(|(name, _)| *name).collect();
+    child_process::run_rows(
+        "controller_sources::controller_sources_allow_reentry_and_preserve_run_ownership",
+        &names,
+    );
 }

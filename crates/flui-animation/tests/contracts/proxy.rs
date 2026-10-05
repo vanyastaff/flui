@@ -1,10 +1,9 @@
 //! Parent queries may reenter the proxy without holding its parent lock.
 
-use std::io::Read;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, Weak};
-use std::time::{Duration, Instant};
 
+use crate::child_process;
 use flui_animation::{
     Animation, AnimationStatus, ConstantAnimation, ProxyAnimation, StatusCallback,
 };
@@ -131,56 +130,17 @@ fn proxy_parent_queries_allow_reentrant_replacement() {
             old_parent_status_may_reenter_during_a_swap,
         ),
     ];
-    const SELECTED: &str = "FLUI_PROXY_PARENT_REENTRY_CASE";
-    if let Ok(selected) = std::env::var(SELECTED) {
+    if let Some(selected) = child_process::selected_case() {
         cases
             .iter()
             .find(|(name, _)| *name == selected)
             .expect("known child case")
             .1();
-        return;
+        child_process::pass();
     }
-    let mut failures = Vec::new();
-    for (name, _) in cases {
-        let mut child =
-            std::process::Command::new(std::env::current_exe().expect("test executable"))
-                .args([
-                    "--exact",
-                    "proxy::proxy_parent_queries_allow_reentrant_replacement",
-                    "--nocapture",
-                ])
-                .env(SELECTED, name)
-                .env("RUST_BACKTRACE", "0")
-                .stdout(std::process::Stdio::piped())
-                .stderr(std::process::Stdio::piped())
-                .spawn()
-                .expect("proxy reentry child");
-        let mut stdout = child.stdout.take().expect("stdout");
-        let mut stderr = child.stderr.take().expect("stderr");
-        let stdout_reader = std::thread::spawn(move || {
-            let mut text = String::new();
-            stdout.read_to_string(&mut text).expect("child stdout");
-            text
-        });
-        let stderr_reader = std::thread::spawn(move || {
-            let mut text = String::new();
-            stderr.read_to_string(&mut text).expect("child stderr");
-            text
-        });
-        let started = Instant::now();
-        while child.try_wait().expect("child status").is_none() {
-            if started.elapsed() > Duration::from_secs(10) {
-                child.kill().expect("kill deadlocked child");
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(10));
-        }
-        let status = child.wait().expect("child exit");
-        let stdout = stdout_reader.join().expect("stdout reader");
-        let stderr = stderr_reader.join().expect("stderr reader");
-        if !status.success() || !stdout.contains("1 passed; 0 failed") {
-            failures.push(format!("{name}: {status}\n{stdout}\n{stderr}"));
-        }
-    }
-    assert!(failures.is_empty(), "{}", failures.join("\n"));
+    let names: Vec<_> = cases.iter().map(|(name, _)| *name).collect();
+    child_process::run_rows(
+        "proxy::proxy_parent_queries_allow_reentrant_replacement",
+        &names,
+    );
 }
