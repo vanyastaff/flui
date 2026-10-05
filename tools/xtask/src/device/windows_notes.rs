@@ -153,7 +153,7 @@ impl Driver<'_> {
         self.click_button("Retry")?;
         self.wait_node(BUTTON, Some("Note 0"))?;
         self.spacing("Note 0", "Note 1", 48.0)?;
-        println!("NOTES_STAGE=error_retry_home");
+        println!("notes: error, Retry and Home rows ok");
 
         self.open("Note 0", 0, "Note 0")?;
         self.replace("")?;
@@ -167,14 +167,14 @@ impl Driver<'_> {
             self.node(BUTTON, Some(FIRST))?.is_none(),
             "invalid Save changed Home"
         );
-        println!("NOTES_STAGE=invalid_save_preserves_home");
+        println!("notes: invalid Save keeps the Home title ok");
 
         self.open("Note 0", 0, "")?;
         self.replace(FIRST)?;
         self.save_by_keyboard()?;
         self.invoke("Back")?;
         self.home_title(FIRST)?;
-        println!("NOTES_STAGE=keyboard_save_committed");
+        println!("notes: keyboard Save ok");
 
         self.open(FIRST, 0, FIRST)?;
         self.replace(DRAFT)?;
@@ -198,7 +198,7 @@ impl Driver<'_> {
             self.node(BUTTON, Some(FIRST))?.is_none(),
             "old saved row still visible"
         );
-        println!("NOTES_STAGE=retained_draft_compact_saved_home");
+        println!("notes: draft retained across Settings, compact rows, Save ok");
 
         self.scroll_and_retain()?;
         self.resize(720, 640)?;
@@ -216,7 +216,7 @@ impl Driver<'_> {
         self.invoke("Back")?;
         self.stable_band()?;
         self.open(&format!("Note {id}"), id, RESIZED_DRAFT)?;
-        println!("NOTES_STAGE=resize_routes_usable");
+        println!("notes: resize ok");
 
         self.chord(&[VK_MENU, VK_F4])?;
         let status = self
@@ -224,7 +224,7 @@ impl Driver<'_> {
             .wait_for_exit(Duration::from_secs(15))?
             .ok_or_else(|| anyhow::anyhow!("Alt+F4 did not produce graceful Notes process exit"))?;
         anyhow::ensure!(status.success(), "Notes exited unsuccessfully: {status}");
-        println!("NOTES_STAGE=graceful_close status={status}");
+        println!("notes: Alt+F4 closed the app ok");
         Ok(())
     }
 
@@ -276,7 +276,7 @@ impl Driver<'_> {
     fn resize(&self, width: i32, height: i32) -> anyhow::Result<()> {
         self.before_input()?;
         anyhow::ensure!(width > 0 && height > 0, "resize must remain positive");
-        let scale = self.dpi()?;
+        self.owned()?;
         // SAFETY: read-only DPI lookup; integer conversion preserves exact
         // rounded native dimensions without float-to-integer truncation.
         let dpi = unsafe { GetDpiForWindow(self.hwnd) };
@@ -316,7 +316,6 @@ impl Driver<'_> {
                 && (rect.bottom - rect.top - physical_height).abs() <= 1)
                 .then_some(()))
         })?;
-        println!("NOTES_RESIZE logical={width}x{height} scale={scale}");
         Ok(())
     }
 
@@ -505,7 +504,6 @@ impl Driver<'_> {
             self.character(unit)?;
         }
         self.value(text)?;
-        println!("NOTES_VALUE={text:?}");
         Ok(())
     }
 
@@ -594,7 +592,6 @@ impl Driver<'_> {
             let measured = f64::from(gap) / driver.dpi()?;
             Ok(((measured - logical).abs() <= 1.0 / driver.dpi()?).then_some(measured))
         })?;
-        println!("NOTES_ROW_SPACING={logical}");
         Ok(())
     }
 
@@ -751,7 +748,7 @@ impl Driver<'_> {
                 && (row.rect.top - target.rect.top).abs() <= 1,
             "navigation changed retained band/row position"
         );
-        println!("NOTES_STAGE=drag_wheel_retained_band first={}", target.id);
+        println!("notes: drag, wheel and retained scroll ok");
         // This measures native band residency/position, not eager construction
         // counts, a memory budget or a frame-time benchmark.
         Ok(())
@@ -762,7 +759,7 @@ impl Driver<'_> {
         uia::dump(&nodes);
         for node in nodes {
             if let Ok(rect) = uia::bounds(&node.element) {
-                println!("NOTES_NODE name={:?} bounds={rect:?}", node.name);
+                println!("  {:?} at {rect:?}", node.name);
             }
             if node.control == UIA_EditControlTypeId {
                 // SAFETY: best-effort read-only diagnostic after the first
@@ -772,7 +769,7 @@ impl Driver<'_> {
                         .GetCurrentPatternAs::<IUIAutomationValuePattern>(UIA_ValuePatternId)
                         .and_then(|pattern| pattern.CurrentValue())
                 } {
-                    println!("NOTES_EDITOR_VALUE={:?}", value.to_string());
+                    println!("  editor value {:?}", value.to_string());
                 }
             }
         }
