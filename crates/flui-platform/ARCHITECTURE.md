@@ -74,10 +74,11 @@ identity before creating a native HWND, so a capacity failure cannot leak an
 already acquired window. Catching that failure cannot reissue an old identity.
 
 The Windows row `window_identity_exhaustion_permanently_refuses_retries` joins
-`the_owner_thread_machinery_honours_its_contracts`. Its private local-counter
-seam drives the actual allocator and admission gate, checks repeated refusal
-and verifies that refused admission never calls acquisition. This tests the
-allocation boundary, not recycled HWND behavior or native window execution.
+`the_owner_thread_machinery_honours_its_contracts`. It drives
+`WindowIdentity::admit`, the admission `WindowsWindow::new` runs around
+`CreateWindowExW`, from a local counter with an acquisition that records
+native creation, checks repeated refusal and verifies that refused admission
+never acquires. This tests the admission boundary, not recycled HWND behavior.
 
 ### The Win32 clipboard opens with a message-only owner window on a dedicated pump thread
 

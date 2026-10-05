@@ -41,7 +41,8 @@ use super::host::{
 };
 use super::realm_dispatch::{
     PlatformToUi, RealmDispatcher, RealmTask, close_this_window, dispatch_platform_realm,
-    install_realm_alongside, install_surface_applier, teardown_platform_realm,
+    install_input_wiring, install_realm_alongside, install_surface_applier,
+    teardown_platform_realm,
 };
 use super::surface_lifecycle::{
     SurfaceLifecycleOutcome, SurfaceRecreationRetry, report_surface_settlement,
@@ -233,7 +234,6 @@ where
     use std::sync::Arc;
 
     use flui_engine::Renderer;
-    use flui_platform::traits::{DispatchEventResult, PlatformInput};
     use parking_lot::Mutex;
 
     fn owner_platform_installed<R>(f: impl FnOnce(&flui_platform::OwnerPlatform) -> R) -> R {
@@ -347,11 +347,7 @@ where
     }
 
     // 5. Input -> entered realm input dispatch.
-    window.on_input(Box::new(move |input: PlatformInput| {
-        let _ =
-            dispatch_platform_realm(realm_dispatch, RealmTask::Event(PlatformToUi::Input(input)));
-        DispatchEventResult::resolved(false, true)
-    }));
+    install_input_wiring(realm_dispatch, window.as_ref());
 
     // 6. Frame callback — the `CADisplayLink` tick lands here.
     let lane_frame = Arc::clone(&lane);

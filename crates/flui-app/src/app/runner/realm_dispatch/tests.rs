@@ -199,6 +199,50 @@ fn install_resolves_execution_services_and_teardown_shuts_them_down() {
     teardown_platform_realm();
 }
 
+/// The input wiring every runner installs answers the platform with the
+/// realm's own decision: an Alt+F4 nothing handled keeps the platform
+/// default (the native backend then closes the window), and one a shortcut
+/// consumed prevents it.
+fn system_key_default_follows_the_realms_decision() {
+    use flui_interaction::events::{Code, Modifiers};
+    use flui_interaction::testing::input::KeyEventBuilder;
+
+    let window = test_window();
+    let dispatcher = install_platform_realm(crate::app::ui_realm::UiRealm::for_test(), &window);
+    install_input_wiring(dispatcher, window.as_ref());
+    let native = window
+        .as_any()
+        .downcast_ref::<flui_platform::MockWindow>()
+        .expect("headless test window");
+    let alt_f4 = || {
+        PlatformInput::Keyboard(
+            KeyEventBuilder::new(Code::F4)
+                .with_modifiers(Modifiers::ALT)
+                .build(),
+        )
+    };
+
+    assert!(
+        !native.inject_event(alt_f4()).default_prevented,
+        "an unconsumed system key keeps the platform default"
+    );
+
+    dispatch_platform_realm(
+        dispatcher,
+        RealmTask::Frame(Box::new(|realm| {
+            realm.focus_manager().add_global_key_handler(Rc::new(
+                |event: &flui_interaction::events::KeyboardEvent| event.code == Code::F4,
+            ));
+        })),
+    )
+    .expect("install the shortcut");
+    assert!(
+        native.inject_event(alt_f4()).default_prevented,
+        "a consumed system key prevents the platform default"
+    );
+    teardown_platform_realm();
+}
+
 fn late_event_never_crosses_realm_incarnations() {
     let stale = install_test_realm();
     let removed = APP_RUNTIME.with(|slot| slot.borrow_mut().realms.remove(&stale.address.realm_id));
@@ -983,6 +1027,10 @@ fn realm_dispatch_matrix() {
             (
                 "install_resolves_execution_services_and_teardown_shuts_them_down",
                 install_resolves_execution_services_and_teardown_shuts_them_down as fn(),
+            ),
+            (
+                "system_key_default_follows_the_realms_decision",
+                system_key_default_follows_the_realms_decision as fn(),
             ),
             (
                 "late_event_never_crosses_realm_incarnations",
