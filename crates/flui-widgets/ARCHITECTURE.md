@@ -141,10 +141,17 @@ reenter navigation. Outgoing and temporary route values retire outside stack
 borrows; after a failure, remaining opaque owners are retained to preserve that
 failure. This implements ADR-0093's single navigation authority.
 `router_and_widgets_app` covers reentrant push/replace/go, popup-prefix changes,
-observer failure and next navigation. The separate bounded
-`router_observer_failure_and_retirement_competition` test contains competing
-observer and route-destructor failures. Terminal destruction of all router and
-navigator owner fields remains outside this operation-level containment.
+observer failure and next navigation; `router_observer_failure_and_retirement_competition`
+covers competing observer and route-destructor failures.
+
+### Route locations preserve segment identity
+
+`RoutePath` percent-encodes each segment with a context-specific ASCII set and
+decodes exactly once after splitting, so an escaped slash stays inside one route
+value. Malformed percent escapes and invalid decoded UTF-8 are rejected. Plus and
+dot segments are literal path data, not form decoding or relative-URL operations.
+`route_locations_preserve_encoded_segment_identity` pins canonical spellings and
+rejection through the public routing API.
 
 ### Scrollbar drag takes ownership of scroll activity
 
@@ -164,7 +171,7 @@ queries outside it return `PointOutside`. Glyphs, selection, composition and
 caret paint share the viewport clip. The `text_editing` rows
 `long_input_reveals_the_caret_and_maps_visible_pointer_positions` and
 `editable_paint_places_long_text_under_the_viewport_clip` pin the producer and
-paint commands, including RTL and obscured cases; they do not certify native IME.
+paint commands, including RTL and obscured cases.
 
 ### Network responses belong to their registry
 
@@ -2103,18 +2110,3 @@ uses a private local cache because production capacity is not a consumer
 contract. `decode_cache_coalescing_contracts` exercises unused capture reentry
 through the public asset provider on completed and pending hits.
 
-## Route-location encoding preserves segment identity
-
-`RoutePath` uses percent-encoding's UTF-8 encoder with a context-specific ASCII
-set and appends its string chunks directly to the owned route buffer. Its parser
-validates percent escapes before the library's deliberately permissive decoder
-and rejects invalid decoded UTF-8. It separates encoded segments before decoding
-exactly once, so an escaped slash stays part of one route value. Plus remains
-literal path data; this is not form query decoding. Dot segments remain literal
-route values rather than a relative-URL operation.
-
-The public `route_locations_preserve_encoded_segment_identity` family checks
-canonical spellings, derived route interpretation, encoded prefixes, readable
-punctuation, control/backslash encoding and malformed percent/UTF-8 rejection.
-It complements `derived_routable_round_trips`, whose generated inputs already have
-valid encodings and cannot establish rejection or exact canonical spelling.
