@@ -7,6 +7,8 @@ use std::rc::Rc;
 
 use flui_view::{EventCx, EventOutcome};
 
+#[cfg(test)]
+pub(crate) mod child_process;
 pub(crate) mod retirement;
 #[cfg(test)]
 pub(crate) mod test_cases;
