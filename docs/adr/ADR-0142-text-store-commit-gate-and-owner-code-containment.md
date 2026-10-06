@@ -93,7 +93,8 @@ framework does not control is contained.
    owner thread, an async task), the session's result is discarded, the application's edit
    stays, and the platform hears of it through the observer once the lock is released, so the
    text service re-reads the document. There is no merge: nothing gives a base for a three-way
-   comparison.
+   comparison. The count never wraps: a controller that exhausts it drops every later session,
+   so no session can find its count again after the application moved past it.
 4. **A field losing its input resolves its composition by committing it.** Pointer-down in the
    presentation (inside the composing field too), an accepted close request, the end of the
    session, blur, paste and undo, and unmount commit the visible composition before the event's
@@ -122,22 +123,31 @@ framework does not control is contained.
    through `text_store::OwnerCalls`, whose module doc lists them; a gate whose last clone goes
    with a failure no owner took retains it. What the code is owed (obligations with their values,
    the gate a failure belongs to) is read before it runs, never after, since it may reenter,
-   settle a nested session or move the store to another presentation. Each call is contained and
+   settle a nested session or move the store to another presentation; so the `on_changed` an edit
+   is owed to is the one installed when the edit is accepted (a session written back, a key or
+   semantic edit before it runs), though the edit's listeners rebuild the field and remove or
+   replace it before the owner hears of the change. Each call is contained and
    the first failure in time is authoritative: a settle parks its failure in the admitting gate
    the moment it is caught, ahead of any session the owner's later code opens; a failure a call
-   parked in a gate came before that call's own unwind, so it is taken first, while one the gate
+   parked in a gate before its own panic came first, so it is taken first, while one the gate
    already held waits for its owner's turn (a dispatch, an anchor, a completion, a close); a
-   later one is retained (ADR-0127). An operation completes its own state changes before it
-   raises a failure it caught: attach admits the client and returns its token, and a failure
-   after that point waits in the gate for the owner's next turn unless the owner closed
-   meanwhile; an update, a key edit, a semantic edit, the cursor-area loop and dispose each
-   finish their steps. Work stays deliverable: an asynchronous request behind a failing queued
-   grant is queued, and a synchronous one, or one refused because the flush before it failed, is
-   retained rather than destroyed during the unwind. A snapshot retires inside the scope:
-   dropped while the scope is healthy, retained once it has failed or while the thread unwinds.
-   Nested work runs in the caller's scope, so it sees the caller's failure. A session the field
-   was unmounted under is not written back. Presentation close keeps its own containment
-   (ADR-0123) under the same retention rule.
+   later one is retained (ADR-0127). The gate records whether the thread was unwinding when a
+   failure was parked: one parked while it was (a guard's `Drop` in the call's cleanup requested a
+   grant whose settle failed) came after the panic that started that unwind, and is kept behind
+   the call's own. When a panic began is not observable from outside it (the panic hook is
+   process-global and the application's), so a failure parked during an unwind the call caught
+   itself and then outlived is ordered behind the call's panic too; that is the conservative
+   order, and both are kept. An operation completes its own state changes before it raises a
+   failure it caught: attach admits the client and returns its token, and a failure after that
+   point waits in the gate for the owner's next turn unless the owner closed meanwhile; an
+   update, a key edit, a semantic edit, the cursor-area loop and dispose each finish their
+   steps. Work stays deliverable: an asynchronous request behind a failing queued grant is
+   queued, and a synchronous one, or one refused because the flush before it failed, is retained
+   rather than destroyed during the unwind. A snapshot retires inside the scope: dropped while
+   the scope is healthy, retained once it has failed or while the thread unwinds. Nested work
+   runs in the caller's scope, so it sees the caller's failure. A session the field was unmounted
+   under is not written back. Presentation close keeps its own containment (ADR-0123) under the
+   same retention rule.
 
 ## Alternatives considered
 

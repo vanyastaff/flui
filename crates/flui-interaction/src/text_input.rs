@@ -236,6 +236,32 @@ fn complete_through(host: &dyn TextStoreHost, store: &Rc<dyn TextStore>) {
     }
 }
 
+/// Run a pull host's call for a close, inside the close's `failure`. The
+/// host reaches application code whose grants park failures in `gate`, so
+/// the call is ordered against them as every host call is
+/// ([`OwnerCalls::run_parking`]): when it panics, a failure parked before its
+/// panic is raised ahead of it and one its unwind's cleanup parked is kept
+/// behind it. A call that returns leaves what it parked in `gate`, for the
+/// close to take at its end, ahead of its own failures.
+fn close_host_call<T>(
+    gate: &CommitGate,
+    failure: &mut ClosePanic,
+    call: impl FnOnce() -> T,
+) -> Option<T> {
+    let mut calls = OwnerCalls::new();
+    let value = calls.run_parking(gate, call);
+    if let Some(payload) = calls.into_failure() {
+        if value.is_some() {
+            // What the call parked, which `run_parking` just took: the gate
+            // is empty, so it is back where the close's end looks for it.
+            gate.defer_failure(payload);
+        } else {
+            failure.keep_caught(payload);
+        }
+    }
+    value
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum OwnerLifecycle {
     Open,
@@ -932,7 +958,10 @@ impl TextInputOwner {
             failure.retire(store);
         }
         // A failure a store parked for this presentation's next turn came
-        // before the close; this is that turn.
+        // before the close; this is that turn. One a host call of the close
+        // parked and then returned came before the close's later failures;
+        // one a host call's unwind parked was ordered behind that call's
+        // panic already ([`close_host_call`]).
         if let Some(parked) = self.gate.take_failure() {
             failure.keep_earlier(parked);
         }
@@ -964,18 +993,17 @@ impl TextInputOwner {
                     let names_store = store.is_some();
                     // An unwind leaves the host's focus unknown: the final
                     // `None` then clears it.
-                    focused = failure
-                        .invoke(|| host.focus_store(store))
+                    focused = close_host_call(&self.gate, failure, || host.focus_store(store))
                         .is_none_or(|()| names_store);
                 }
                 HostOp::Complete(store) => {
-                    failure.run(|| complete_through(host, &store));
+                    close_host_call(&self.gate, failure, || complete_through(host, &store));
                     failure.retire(store);
                 }
             }
         }
         if focused {
-            failure.invoke(|| host.focus_store(None));
+            close_host_call(&self.gate, failure, || host.focus_store(None));
         }
     }
 
@@ -1045,7 +1073,7 @@ impl Drop for TextInputOwner {
                 failure.invoke(|| platform.set_ime_allowed(false));
             }
             TextInputBackend::Pull(host) if host_focused => {
-                failure.invoke(|| host.focus_store(None));
+                close_host_call(&self.gate, &mut failure, || host.focus_store(None));
             }
             _ => {}
         }

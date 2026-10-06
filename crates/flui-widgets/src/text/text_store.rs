@@ -65,8 +65,8 @@ use flui_platform_api::text_store::{
 };
 use flui_rendering::pipeline::PipelineCell;
 
-use super::controller::{self, ComposingState, TextEditingController};
-use super::editable_text::{EditObserver, bounds_from_rect, obscure};
+use super::controller::{self, ComposingState, Generation, TextEditingController};
+use super::editable_text::{EditObserver, TextChanged, bounds_from_rect, obscure};
 
 /// The committed `RenderEditable` under `inner_anchor` and its transform to
 /// the render root, handed to `f`; `None` when the field is not mounted or
@@ -213,8 +213,9 @@ pub(super) struct EditableTextStore {
 }
 
 impl Drop for EditableTextStore {
-    /// The observer, `on_changed` and the controller (when the store
-    /// outlives its field, it may be their last owner) are other code:
+    /// The observer, `on_changed`, the controller and what a session not yet
+    /// settled owes (when the store outlives its field, it may be their last
+    /// owner) are other code:
     /// retired inside a scope, retained after a failure or during an unwind
     /// (ADR-0127). The arbiter retires its queued grants the same way.
     fn drop(&mut self) {
@@ -223,8 +224,10 @@ impl Drop for EditableTextStore {
             &mut self.controller,
             Rc::new(RefCell::new(TextEditingController::new())),
         );
+        let owed = std::mem::take(self.owed.get_mut());
         let mut calls = OwnerCalls::new();
         calls.retire(observer);
+        calls.retire(owed);
         self.edits.retire(&mut calls);
         calls.retire(controller);
         if !std::thread::panicking() {
@@ -375,7 +378,7 @@ impl EditableTextStore {
 
     /// The controller, its document and its generation, read in one
     /// critical section.
-    fn snapshot(&self) -> (TextEditingController, Doc, u64) {
+    fn snapshot(&self) -> (TextEditingController, Doc, Generation) {
         let controller = self.controller.borrow().clone();
         let (doc, generation) = controller.with_inner(|inner| {
             let doc = Doc {
@@ -448,14 +451,14 @@ impl EditableTextStore {
     /// unless the application changed the field since the session opened at
     /// `generation`: then its edit stays, the session is dropped, and the
     /// platform hears of the edit once the lock is released (ADR-0142
-    /// item 3).
+    /// item 3). A controller whose edit count ran out drops every session.
     ///
     /// The listeners and `on_changed` are owed, not called: they run in
     /// [`Self::settle`], after the lock is released.
     fn write_back(
         &self,
         controller: &TextEditingController,
-        generation: u64,
+        generation: Generation,
         doc: Doc,
         original: &Doc,
     ) {
@@ -471,7 +474,7 @@ impl EditableTextStore {
         let reported = (doc.text.clone(), doc.selection());
         let committed_after = doc.committed();
         let applied = controller.with_inner_silent(|inner| {
-            if inner.generation != generation {
+            if !inner.generation.admits(generation) {
                 return false;
             }
             inner.selection = controller::Selection {
@@ -491,18 +494,27 @@ impl EditableTextStore {
             return;
         }
         *self.reported.borrow_mut() = reported;
-        let committed = (committed_after != original.committed()).then_some(committed_after);
+        // The `on_changed` owed is the one installed now, when the session is
+        // accepted, as for a key edit: owner code that runs before settle
+        // (an earlier obligation's listeners) may rebuild the field.
+        let change = (committed_after != original.committed())
+            .then(|| {
+                self.edits
+                    .accept()
+                    .map(|on_changed| (committed_after, on_changed))
+            })
+            .flatten();
         self.owed.borrow_mut().push(Owed {
             controller: controller.clone(),
-            committed,
+            change,
         });
     }
 
     /// Deliver what a finished grant owes, now that its lock is released and
     /// before the next grant runs: for each session written back, in commit
-    /// order, `on_changed` with the committed text that session produced
-    /// (when it changed), then the controller's listeners; then the
-    /// observer's notifications.
+    /// order, the `on_changed` installed when it was written back, with the
+    /// committed text that session produced (when it changed), then the
+    /// controller's listeners; then the observer's notifications.
     ///
     /// Every obligation and its value is taken before any owner code runs,
     /// so a session that code opens owes, and settles, its own, after the
@@ -512,15 +524,13 @@ impl EditableTextStore {
     /// resumed for the arbiter to park.
     fn settle(&self, calls: &mut OwnerCalls) {
         let owed = std::mem::take(&mut *self.owed.borrow_mut());
-        for Owed {
-            controller,
-            committed,
-        } in owed
-        {
-            if let Some(committed) = committed
-                && self.alive.get()
-            {
-                self.edits.deliver(&committed, calls);
+        for Owed { controller, change } in owed {
+            if let Some((committed, on_changed)) = change {
+                if self.alive.get() {
+                    self.edits.deliver(on_changed, &committed, calls);
+                } else {
+                    calls.retire(on_changed);
+                }
             }
             calls.run(|| controller.notify_changed());
             calls.retire(controller);
@@ -603,11 +613,19 @@ impl EditableTextStore {
 }
 
 /// What one session written back owes, fixed when it was written: the
-/// controller whose listeners hear of it, and the committed text it produced
-/// when that changed, which `on_changed` receives.
+/// controller whose listeners hear of it, and, when the committed text
+/// changed, the text it produced with the `on_changed` installed then, which
+/// receives it.
 struct Owed {
     controller: TextEditingController,
-    committed: Option<String>,
+    change: Option<(String, TextChanged)>,
+}
+
+impl RetainOnFailure for Owed {
+    fn retain(self) {
+        self.controller.retain();
+        self.change.map(|(_, on_changed)| on_changed).retain();
+    }
 }
 
 /// The smallest change turning `old` into `new`, as `TS_TEXTCHANGE` in

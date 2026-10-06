@@ -21,7 +21,7 @@
 //! | the flush after a request's grants, behind what the last one's settle parked in the gate that admitted it ([`OwnerCalls::run_behind_parked`], [`OwnerCalls::parking_gate`]) | `request_lock`, `run_deferred_grants` of both stores |
 //! | a grant a detached field refuses | `EditableTextStore::request_lock` (`flui-widgets` `text/text_store.rs`) |
 //! | a grant's body reading or editing the in-memory store: no borrow is held across it, and an application edit wins | `InMemoryTextStore::open` (`in_memory.rs`) |
-//! | `on_changed`, and its snapshot | `EditObserver::deliver` (`flui-widgets` `text/editable_text.rs`), from `EditableTextStore::settle` and from a key edit's `EditObserver::around`, which contains the edit's listener notification so the owner still hears of the change |
+//! | `on_changed`, and its snapshot, taken when the edit is accepted (a session written back, a key or semantic edit before it runs), so a rebuild the edit causes cannot drop or redirect it | `EditObserver::accept`, `EditObserver::deliver` (`flui-widgets` `text/editable_text.rs`), from `EditableTextStore::settle` and from a key edit's `EditObserver::around`, which contains the edit's listener notification so the owner still hears of the change |
 //! | the controller's listeners, and the controller snapshot | `EditableTextStore::settle` (`flui-widgets` `text/text_store.rs`) |
 //! | a replaced or detached `EditableText` observer; the observer, `on_changed` and the controller when the store outlives its field | `EditableTextStore::set_observer`, `detach`, `Drop` (`flui-widgets` `text/text_store.rs`), `EditObserver::retire` |
 //! | a key edit, and a semantic text edit: the queued grants, the edit with `on_changed`, the platform's notification, each run though an earlier one failed | the key handler and `FieldSemanticsActions::set_text` (`flui-widgets` `text/editable_text.rs`) |
@@ -43,9 +43,10 @@
 //! Presentation close (`TextInputOwner::close_with_mode` and its `Drop`)
 //! keeps its close-mode containment (ADR-0123), which retires the same
 //! values under the same retention rule, the host calls a close makes
-//! included; it takes a failure parked for its next turn too, ahead of its
-//! own, raised by an ordinary close and retained by a preserving one or by
-//! `Drop`. The remaining diagnostics (the focus
+//! included (each ordered against what it parks by
+//! [`OwnerCalls::run_parking`]); it takes a failure parked for its next turn
+//! too, ahead of its own, raised by an ordinary close and retained by a
+//! preserving one or by `Drop`. The remaining diagnostics (the focus
 //! listener's attach warnings, a deferred projection's warning inside a
 //! grant body) run inside the containment of the code that calls them: the
 //! focus notifier, the grant.
@@ -66,11 +67,18 @@
 //!   Owner code after a failed call still runs (an observer still hears of
 //!   an edit the owner made before it panicked); a later failure is retained
 //!   (ADR-0127), never dropped and never reported in its place.
-//! - **A failure parked in a gate during a call came before the call's own
-//!   unwind**, which happened after it, so [`OwnerCalls::run_parking`] and
-//!   [`OwnerCalls::retire_parking`] take what the call parked before keeping
-//!   that unwind; a failure the gate already held stays for its owner's turn.
-//!   A scope that is that turn takes what was parked before it ran anything
+//! - **A failure parked in a gate before a call's own panic came first**, so
+//!   [`OwnerCalls::run_parking`] and [`OwnerCalls::retire_parking`] take
+//!   what the call parked before keeping that panic; a failure the gate
+//!   already held stays for its owner's turn. A failure parked while the
+//!   thread was unwinding (a guard's `Drop` in the call's cleanup requested
+//!   a grant whose settle failed) came from that unwind, after the panic
+//!   that started it, and is kept behind it. When a panic began cannot be
+//!   observed from outside it, so a failure parked during an unwind the call
+//!   caught itself and then outlived is ordered behind the call's panic too:
+//!   the conservative order, which keeps both. The gate records whether it
+//!   was parked while unwinding ([`CommitGate::defer_failure`]). A scope
+//!   that is the owner's turn takes what was parked before it ran anything
 //!   ([`OwnerCalls::take_parked`]).
 //! - **A settle's failure belongs to its gate at once**
 //!   ([`OwnerCalls::parking_in`]): it is parked the moment it is caught, so a
@@ -86,7 +94,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::rc::Rc;
 use std::sync::Arc;
 
-use super::lock::{CommitGate, LockGrant};
+use super::lock::{CommitGate, LockGrant, Parked};
 
 /// A value whose destruction may run owner code, which a failed
 /// [`OwnerCalls`] retains instead of destroying (ADR-0127).
@@ -238,20 +246,54 @@ impl OwnerCalls {
 
     /// [`Self::run`], for owner code that may request grants of stores
     /// behind `gate`: what their settles parked there during the call is
-    /// taken after it, ahead of the call's own panic. A failure the gate
+    /// taken after it, ahead of the call's own panic unless it was parked
+    /// during that panic's unwind (see the module doc). A failure the gate
     /// already held stays for its owner's turn.
     pub fn run_parking<R>(&mut self, gate: &CommitGate, call: impl FnOnce() -> R) -> Option<R> {
         let held = gate.holds_failure();
-        let outcome = catch_unwind(AssertUnwindSafe(call));
-        if !held {
-            self.take_parked(gate);
-        }
-        match outcome {
-            Ok(value) => Some(value),
+        let unwinding = std::thread::panicking();
+        match catch_unwind(AssertUnwindSafe(call)) {
+            Ok(value) => {
+                if !held {
+                    self.take_parked(gate);
+                }
+                Some(value)
+            }
             Err(payload) => {
-                self.keep(payload);
+                let parked = if held { None } else { gate.take_parked() };
+                self.keep_in_order(payload, parked, unwinding);
                 None
             }
+        }
+    }
+
+    /// Keep `payload`, the panic of a call that began while the thread was
+    /// `unwinding` (or not), and `parked`, what that call left in a gate, in
+    /// the order they happened. A failure parked before the call's panic
+    /// came first. One parked while the thread was unwinding, by a call that
+    /// began outside an unwind, is taken to come from the cleanup of the
+    /// call's own panic, and so after it: when a panic began is not
+    /// observable from outside it (the panic hook is the process's and the
+    /// application's), and the call's panic, which started that cleanup, is
+    /// the conservative first. A failure parked during an unwind the call
+    /// caught itself and then outlived is ordered the same way. Within an
+    /// outer unwind the mark tells nothing, and the parked failure is first.
+    fn keep_in_order(
+        &mut self,
+        payload: Box<dyn Any + Send>,
+        parked: Option<Parked>,
+        unwinding: bool,
+    ) {
+        match parked {
+            Some(parked) if parked.while_unwinding && !unwinding => {
+                self.keep(payload);
+                self.keep(parked.payload);
+            }
+            Some(parked) => {
+                self.keep(parked.payload);
+                self.keep(payload);
+            }
+            None => self.keep(payload),
         }
     }
 
@@ -259,20 +301,20 @@ impl OwnerCalls {
     /// settle may have parked a failure in `gate` (the gate that admitted
     /// the last of them, which an earlier one may have moved the store to):
     /// when the call panics, that parked failure came first, so it is
-    /// taken ahead of the call's own. When the call succeeds the parked
+    /// taken ahead of the call's own; one the call's unwind parked is kept
+    /// behind it (see the module doc). When the call succeeds the parked
     /// failure stays for the gate's owner to report at its turn.
     pub fn run_behind_parked<R>(
         &mut self,
         gate: Option<&CommitGate>,
         call: impl FnOnce() -> R,
     ) -> Option<R> {
+        let unwinding = std::thread::panicking();
         match catch_unwind(AssertUnwindSafe(call)) {
             Ok(value) => Some(value),
             Err(payload) => {
-                if let Some(gate) = gate {
-                    self.take_parked(gate);
-                }
-                self.keep(payload);
+                let parked = gate.and_then(CommitGate::take_parked);
+                self.keep_in_order(payload, parked, unwinding);
                 None
             }
         }
@@ -298,12 +340,17 @@ impl OwnerCalls {
             return;
         }
         let held = gate.holds_failure();
-        let outcome = catch_unwind(AssertUnwindSafe(move || drop(value)));
-        if !held {
-            self.take_parked(gate);
-        }
-        if let Err(payload) = outcome {
-            self.keep(payload);
+        match catch_unwind(AssertUnwindSafe(move || drop(value))) {
+            Ok(()) => {
+                if !held {
+                    self.take_parked(gate);
+                }
+            }
+            Err(payload) => {
+                let parked = if held { None } else { gate.take_parked() };
+                // Retiring begins outside an unwind (checked above).
+                self.keep_in_order(payload, parked, false);
+            }
         }
     }
 

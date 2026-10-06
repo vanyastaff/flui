@@ -71,7 +71,8 @@ composition must still end somewhere.
    code ([ADR-0142](ADR-0142-text-store-commit-gate-and-owner-code-containment.md) item 8): the
    operation, its store and the host clone are taken from the queue before the call, and the
    first failure in time is authoritative (a failure parked before the call, then one a grant
-   settled inside it parked, then the call's own panic). On the owner's turn (a completion, the
+   settled inside it parked, then the call's own panic, then one its unwind's cleanup parked;
+   a close orders its host calls the same way). On the owner's turn (a completion, the
    anchor) the presentation's gate is taken before the call and after it; an attach or a detach
    leaves a failure the gate already held for that turn, and an attach parks what its host call
    raised there too, behind it, and returns the token (ADR-0142 item 8). A host operation that
@@ -140,8 +141,9 @@ composition must still end somewhere.
   panicking at the anchor, a host call after a parked failure, an attach's host call that parks a
   failure and then panics (the token is returned, the next turn reports the parked failure
   first), one that detaches and then panics (its store's destruction panics), and one
-  that closes the owner and then panics (the host's own destruction panics), each followed by the
-  next operation (§4).
+  that closes the owner and then panics (the host's own destruction panics), a completion, at its
+  turn and at a close, whose unwind parks a failure (the host's panic is raised), each followed
+  by the next operation (§4).
 - `flui-runtime` `a_window_with_a_text_store_host_takes_input_through_it`, `flui-app`
   `runner_bootstrap_matrix`'s
   `presentation_window_hands_a_pull_window_s_host_to_its_presentation` and `flui-widgets`

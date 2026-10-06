@@ -1049,6 +1049,74 @@ fn host_closing_then_panicking_released_last() {
     );
 }
 
+/// A pull owner whose client follows its gate, and a host whose completion
+/// panics holding a guard that, during that panic's unwind, edits the client
+/// and so parks a failure in the owner's gate.
+fn host_completion_parking_while_it_unwinds() -> (Rc<TextInputOwner>, Rc<InMemoryTextStore>, Log) {
+    let host = Rc::new(Host::default());
+    let log = Rc::clone(&host.log);
+    let owner = pull_owner(Rc::clone(&host));
+    let store = InMemoryTextStore::new("");
+    let _token = owner
+        .handle()
+        .attach(TextInputClient::new(store.clone()))
+        .expect("attach");
+    let cleanup = Rc::clone(&store);
+    *host.inside_complete.borrow_mut() = Some(Box::new(move || {
+        let _cleanup = ParksWhenDropped(cleanup);
+        panic!("complete failure");
+    }));
+    (owner, store, log)
+}
+
+/// The failure the host call's unwind parked came after the call's own
+/// panic, which started that unwind: the completion raises the host's.
+fn host_completion_whose_unwind_parks_a_failure() {
+    let (owner, store, log) = host_completion_parking_while_it_unwinds();
+    assert_eq!(
+        raised(|| owner.complete_composition()).as_deref(),
+        Some("complete failure"),
+        "the host call's own panic came before what its unwind's cleanup parked"
+    );
+    assert_eq!(store.text(), "a", "the cleanup's grant stands");
+    the_pull_owner_keeps_working(&owner, &log);
+}
+
+/// A close runs the completion queued in a frame; its unwind's parked failure
+/// is ordered behind the host call's panic as at any other turn.
+fn host_close_completion_whose_unwind_parks_a_failure() {
+    let (owner, store, log) = host_completion_parking_while_it_unwinds();
+    owner.set_transaction_open(true);
+    owner.complete_composition();
+    owner.set_transaction_open(false);
+    assert_eq!(
+        raised(|| owner.close()).as_deref(),
+        Some("complete failure"),
+        "the close raises the host call's panic, not what its unwind parked"
+    );
+    assert_eq!(store.text(), "a", "the cleanup's grant stands");
+    assert_eq!(
+        *log.borrow(),
+        ["focus", "complete", "unfocus"],
+        "the close still takes the store away from the host"
+    );
+    assert_eq!(
+        owner
+            .handle()
+            .attach(TextInputClient::new(InMemoryTextStore::new("")))
+            .err(),
+        Some(flui_interaction::TextInputError::Closed),
+        "the close completed"
+    );
+    assert_eq!(
+        raised(|| {
+            let _ = owner.run_deferred_grants();
+        }),
+        None,
+        "nothing is reported twice"
+    );
+}
+
 // ----------------------------------------------------------------------------
 // The matrix
 // ----------------------------------------------------------------------------
@@ -1149,6 +1217,14 @@ const ROWS: &[(&str, fn())] = &[
         host_closing_then_panicking_released_last,
     ),
     (
+        "host: a completion whose unwind parks a failure",
+        host_completion_whose_unwind_parks_a_failure,
+    ),
+    (
+        "host: a close completion whose unwind parks a failure",
+        host_close_completion_whose_unwind_parks_a_failure,
+    ),
+    (
         "arbiter: a refused grant during an unwind",
         arbiter_refusing_a_grant_during_an_unwind,
     ),
@@ -1217,6 +1293,14 @@ const ROWS: &[(&str, fn())] = &[
         editable_semantic_set_text_whose_on_changed_panics,
     ),
     (
+        "editable: a key edit whose controller listener removes on_changed",
+        editable_key_edit_whose_listener_removes_on_changed,
+    ),
+    (
+        "editable: a key edit whose controller listener replaces on_changed",
+        editable_key_edit_whose_listener_replaces_on_changed,
+    ),
+    (
         "editable: a store outliving its field",
         editable_store_outliving_its_field,
     ),
@@ -1279,6 +1363,10 @@ const ROWS: &[(&str, fn())] = &[
     (
         "attach: a store parking a failure while taking the gate",
         attach_with_a_store_parking_while_taking_the_gate,
+    ),
+    (
+        "attach: a store whose failure's unwind parks a failure",
+        attach_with_a_store_parking_while_its_failure_unwinds,
     ),
     (
         "detach: a stale token whose diagnostic closes the owner and panics",
@@ -1851,6 +1939,71 @@ fn attach_with_a_store_parking_then_failing_to_take_the_gate() {
     the_owner_keeps_working(&owner);
 }
 
+/// Parks a failure through `0` when dropped.
+struct ParksWhenDropped(Rc<InMemoryTextStore>);
+
+impl Drop for ParksWhenDropped {
+    fn drop(&mut self) {
+        park_through(&self.0, "parked by the unwind's cleanup");
+    }
+}
+
+/// A store that panics when given a gate, holding a guard whose drop, during
+/// that panic's unwind, edits `other` and so parks a failure in the gate
+/// `other` follows.
+struct ParksWhileUnwinding {
+    inner: Rc<InMemoryTextStore>,
+    other: Rc<InMemoryTextStore>,
+}
+
+impl TextStore for ParksWhileUnwinding {
+    fn status(&self) -> TextStoreStatus {
+        self.inner.status()
+    }
+    fn request_lock(
+        &self,
+        grant: LockGrant,
+        timing: LockTiming,
+    ) -> Result<LockOutcome, TextStoreError> {
+        self.inner.request_lock(grant, timing)
+    }
+    fn run_deferred_grants(&self) -> usize {
+        self.inner.run_deferred_grants()
+    }
+    fn set_commit_gate(&self, _: CommitGate) {
+        let _cleanup = ParksWhenDropped(Rc::clone(&self.other));
+        panic!("store failure installing the gate");
+    }
+    fn set_observer(&self, observer: Option<Rc<dyn TextStoreObserver>>) {
+        self.inner.set_observer(observer);
+    }
+}
+
+/// The failure the unwind's cleanup parked came after the store's own panic,
+/// which started that unwind: attach raises the store's.
+fn attach_with_a_store_parking_while_its_failure_unwinds() {
+    let owner = owner();
+    let other = InMemoryTextStore::new("");
+    let _other = owner
+        .handle()
+        .attach(TextInputClient::new(other.clone()))
+        .expect("attach");
+    let client = TextInputClient::new(Rc::new(ParksWhileUnwinding {
+        inner: InMemoryTextStore::new(""),
+        other: other.clone(),
+    }));
+    assert_eq!(
+        raised(|| {
+            let _ = owner.handle().attach(client);
+        })
+        .as_deref(),
+        Some("store failure installing the gate"),
+        "the call's own panic came before what its unwind's cleanup parked"
+    );
+    assert_eq!(other.text(), "a", "the cleanup's grant stands");
+    the_owner_keeps_working(&owner);
+}
+
 /// A store that took the gate is admitted, though a grant it requested
 /// meanwhile parked a failure: that failure is the owner's next turn's.
 fn attach_with_a_store_parking_while_taking_the_gate() {
@@ -2122,6 +2275,117 @@ fn editable_semantic_set_text_whose_on_changed_panics() {
     );
     field.set_observer(None);
     the_field_keeps_working(&mut harness, &field);
+}
+
+thread_local! {
+    /// What a controller listener runs on the next change: a listener is
+    /// `Send + Sync`, and the harness it rebuilds is not.
+    static ON_NEXT_CHANGE: RefCell<Option<Box<dyn FnOnce()>>> = const { RefCell::new(None) };
+}
+
+/// An `on_changed` that logs what it hears under `name`.
+fn logs_as(
+    name: &'static str,
+    log: &Rc<RefCell<Vec<String>>>,
+) -> impl Fn(&mut flui_view::EventCx<'_>, &str) + 'static {
+    let log = Rc::clone(log);
+    move |_cx, text| log.borrow_mut().push(format!("{name}: {text}"))
+}
+
+/// A field whose controller listener, on the next change, synchronously
+/// rebuilds the mounted field as `rebuilt` (which drops or replaces its
+/// `on_changed`).
+fn field_rebuilt_by_its_listener(
+    controller: &TextEditingController,
+    node: &Rc<FocusNode>,
+    log: &Rc<RefCell<Vec<String>>>,
+    rebuilt: EditableText,
+) -> Rc<RefCell<Harness>> {
+    use flui_foundation::Listenable as _;
+
+    let harness = Rc::new(RefCell::new(focused(
+        EditableText::new(controller.clone(), Rc::clone(node))
+            .on_changed(logs_as("installed", log)),
+        node,
+    )));
+    let reach = Rc::downgrade(&harness);
+    ON_NEXT_CHANGE.with(|slot| {
+        *slot.borrow_mut() = Some(Box::new(move || {
+            if let Some(harness) = reach.upgrade() {
+                harness.borrow_mut().swap_root(rebuilt);
+            }
+        }));
+    });
+    let _listening = controller.add_listener(Arc::new(|| {
+        let rebuild = ON_NEXT_CHANGE.with(|slot| slot.borrow_mut().take());
+        if let Some(rebuild) = rebuild {
+            rebuild();
+        }
+    }));
+    harness
+}
+
+/// Types "a" into a field whose controller listener rebuilds it as
+/// `rebuilt`, then checks the field keeps working; returns what each
+/// `on_changed` heard.
+fn key_edit_whose_listener_rebuilds_the_field(
+    label: &'static str,
+    rebuilt: impl FnOnce(EditableText, &Rc<RefCell<Vec<String>>>) -> EditableText,
+) -> Vec<String> {
+    let controller = TextEditingController::new();
+    let node = FocusNode::with_debug_label(label);
+    let log = Rc::new(RefCell::new(Vec::new()));
+    let rebuilt = rebuilt(
+        EditableText::new(controller.clone(), Rc::clone(&node)),
+        &log,
+    );
+    let harness = field_rebuilt_by_its_listener(&controller, &node, &log, rebuilt);
+    let key = flui_interaction::testing::input::KeyEventBuilder::new(
+        flui_interaction::events::Code::KeyA,
+    )
+    .with_key(flui_interaction::events::Key::Character("a".to_owned()))
+    .with_state(flui_interaction::events::KeyState::Down)
+    .build();
+    let manager = harness.borrow().focus_manager();
+    assert_eq!(
+        raised(|| {
+            let _ = manager.dispatch_key_event(&key);
+        }),
+        None
+    );
+    assert_eq!(controller.text(), "a");
+    assert_eq!(
+        *log.borrow(),
+        ["installed: a"],
+        "the callback installed when the edit was accepted hears of it"
+    );
+    let field = field(&harness.borrow());
+    the_field_keeps_working(&mut harness.borrow_mut(), &field);
+    log.take()
+}
+
+fn editable_key_edit_whose_listener_removes_on_changed() {
+    let heard =
+        key_edit_whose_listener_rebuilds_the_field("key edit, on_changed removed", |field, _| {
+            field
+        });
+    assert_eq!(
+        heard,
+        ["installed: a"],
+        "a removed callback hears nothing more"
+    );
+}
+
+fn editable_key_edit_whose_listener_replaces_on_changed() {
+    let heard = key_edit_whose_listener_rebuilds_the_field(
+        "key edit, on_changed replaced",
+        |field, log| field.on_changed(logs_as("replacement", log)),
+    );
+    assert_eq!(
+        heard,
+        ["installed: a", "replacement: az"],
+        "the replacement hears only the edits accepted after it was installed"
+    );
 }
 
 // ----------------------------------------------------------------------------

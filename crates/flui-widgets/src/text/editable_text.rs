@@ -1190,21 +1190,35 @@ pub(super) struct EditObserver {
 
 impl EditObserver {
     fn around<R>(&self, edit: impl FnOnce() -> R) -> R {
-        if self.on_changed.borrow().is_none() {
+        // The callback this edit is owed to is the one installed when it is
+        // accepted: the edit notifies the controller's listeners, which may
+        // rebuild the field and remove or replace `on_changed` before the
+        // owner hears of the change.
+        let Some(on_changed) = self.accept() else {
             return edit();
-        }
+        };
         let before = self.controller.borrow().committed_text();
-        // The edit notifies the controller's listeners, whose retirement can
-        // fail after the text changed: the owner still hears of the change,
-        // and the first failure is resumed after it.
+        // The listeners' retirement can fail after the text changed: the
+        // owner still hears of the change, and the first failure is resumed
+        // after it.
         let mut calls = OwnerCalls::new();
         let result = calls.run(edit);
         let after = self.controller.borrow().committed_text();
-        if after != before {
-            self.deliver(&after, &mut calls);
+        if after == before {
+            calls.retire(on_changed);
+        } else {
+            self.deliver(on_changed, &after, &mut calls);
         }
         calls.resume();
         result.expect("BUG: an edit that failed resumed its failure above")
+    }
+
+    /// The `on_changed` an edit accepted now is owed to: a snapshot of the
+    /// installed callback, which [`Self::deliver`] calls though the field
+    /// removed or replaced it meanwhile. `None` when none is installed: the
+    /// edit then owes nothing.
+    pub(super) fn accept(&self) -> Option<TextChanged> {
+        self.on_changed.borrow().clone()
     }
 
     /// Retire this observer's handles to the controller and `on_changed`
@@ -1221,15 +1235,13 @@ impl EditObserver {
         calls.retire(controller);
     }
 
-    /// Call `on_changed` with `committed`, inside `calls`. The callback is a
-    /// snapshot: one that replaced itself (a rebuild it caused) left the
-    /// snapshot its last owner, which retires inside `calls`.
-    pub(super) fn deliver(&self, committed: &str, calls: &mut OwnerCalls) {
-        let callback = self.on_changed.borrow().clone();
-        if let Some(callback) = callback {
-            calls.run(|| self.writer.write(|cx| callback(cx, committed)));
-            calls.retire(callback);
-        }
+    /// Call `on_changed`, the snapshot [`Self::accept`] took when the edit
+    /// was accepted, with `committed`, inside `calls`. A field that replaced
+    /// or removed the callback since (a rebuild) left the snapshot its last
+    /// owner, which retires inside `calls`.
+    pub(super) fn deliver(&self, on_changed: TextChanged, committed: &str, calls: &mut OwnerCalls) {
+        calls.run(|| self.writer.write(|cx| on_changed(cx, committed)));
+        calls.retire(on_changed);
     }
 }
 

@@ -39,7 +39,9 @@
 - **`EditableText::on_changed`** receives the committed text and is called only when it
   changes, after the input method's lock is released: a session that only composes or cancels a
   composition no longer calls it, and a lock `on_changed` requests is granted. Controller
-  listeners also run after the lock is released.
+  listeners also run after the lock is released. An edit is reported to the `on_changed`
+  installed when it was accepted, though a controller listener rebuilds the field and removes or
+  replaces the callback first.
 - **A text form field** validates and saves the committed text (`RawTextFormField`,
   `flui_material::TextFormField`), and reporting it no longer writes it back over a composition.
 - **An application edit made while an input method holds the field's lock** wins: the input
@@ -55,4 +57,4 @@
   is active; a failure after that point waits in the presentation's commit gate for its next
   turn instead of being raised by the attach. A store whose `set_commit_gate` panics is
   rejected, and a failure its grants of other stores parked in the gate meanwhile is raised
-  ahead of its own.
+  ahead of its own; one parked during its panic's unwind is kept behind it.
