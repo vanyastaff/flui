@@ -30,8 +30,7 @@
 
 use std::{
     cell::Cell,
-    cmp::Reverse,
-    collections::{BinaryHeap, HashMap, HashSet},
+    collections::{HashMap, HashSet},
     rc::Rc,
     sync::Arc,
 };
@@ -45,9 +44,8 @@ use parking_lot::Mutex;
 use flui_objects::BuildDuringLayoutCell;
 
 use super::RebuildReason;
-use super::build_owner::{
-    DirtyElement, ExternalBuildInbox, ExternalBuildScheduler, InactiveElement,
-};
+use super::build_owner::{ExternalBuildInbox, ExternalBuildScheduler, InactiveElement};
+use super::dirty_queue::DirtyQueue;
 use super::global_key_registry::GlobalKeyRegistry;
 use super::global_key_reservations::GlobalKeyReservations;
 use super::global_key_scope::{self, GlobalKeyScope, OwnerTag};
@@ -127,10 +125,10 @@ pub struct ElementOwner<'a> {
     /// re-declares a keyed child funnels through.
     pub(crate) global_key_reservations: &'a mut GlobalKeyReservations,
 
-    /// Dirty heap, sorted by depth (shallowest first). Pushed by
+    /// Dirty heap, shallowest first, then in queue order. Pushed by
     /// `schedule_build_for`, drained by `BuildOwner::build_scope` at
     /// frame start.
-    pub(crate) dirty_elements: &'a mut BinaryHeap<Reverse<DirtyElement>>,
+    pub(crate) dirty_elements: &'a mut DirtyQueue,
 
     /// Dirty elements held in root/isolated build-scope buckets when this
     /// split-borrow was created. Lifecycle operations can add to the main heap
@@ -399,8 +397,7 @@ impl ElementOwner<'_> {
         let newly_queued = match self.dirty_reasons.entry(id) {
             std::collections::hash_map::Entry::Vacant(entry) => {
                 entry.insert(RebuildReasons::from_reason(reason));
-                self.dirty_elements
-                    .push(Reverse(DirtyElement::new(id, depth)));
+                self.dirty_elements.push(id, depth);
                 true
             }
             std::collections::hash_map::Entry::Occupied(mut entry) => {
