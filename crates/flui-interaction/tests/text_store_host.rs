@@ -375,67 +375,12 @@ fn expect_host_panic(expected: &str, run: impl FnOnce()) {
     flui_foundation::panic::retain_opaque_payload(payload);
 }
 
-fn a_panicking_focus_change_propagates_and_the_next_operation_runs() {
-    let (owner, host, log) = pull_owner();
-    let handle = owner.handle();
-    let (a, b) = (InMemoryTextStore::new("a"), InMemoryTextStore::new("b"));
-    host.panics.borrow_mut().push("focus");
-    expect_host_panic("focus", || {
-        let _ = handle.attach(client(&a));
-    });
-    let token = handle.attach(client(&b)).expect("the owner still attaches");
-    assert!(host.focuses(&b));
-    let _ = handle.detach(token).expect("detach");
-    assert_eq!(calls(&log), ["focus", "focus", "unfocus"]);
-    assert!(!host.nested.get());
-}
-
-fn a_panicking_completion_propagates_and_the_next_one_runs() {
-    let (owner, host, log) = pull_owner();
-    let store = composing_store();
-    owner.handle().attach(client(&store)).expect("attach");
-    host.panics.borrow_mut().push("complete");
-    expect_host_panic("complete", || owner.complete_composition());
-    assert!(
-        store.composition().is_some(),
-        "no answer came back, so the owner does not commit in its place"
-    );
-    owner.complete_composition();
-    assert_eq!(calls(&log), ["focus", "complete", "complete"]);
-    assert_eq!(host.completed(&store), 2);
-}
-
-/// Both queued host operations panic at the anchor: the first failure
-/// propagates, and neither the completion behind it nor the deferred grant
-/// is held back.
-fn two_panicking_host_operations_at_the_anchor_run_the_rest() {
-    let (owner, host, log) = pull_owner();
-    let handle = owner.handle();
-    let store = composing_store();
-    owner.set_transaction_open(true);
-    handle.attach(client(&store)).expect("attach in frame");
-    owner.complete_composition();
-    let granted = Rc::clone(&log);
-    let outcome = store
-        .request_lock(
-            LockGrant::read(move |_| granted.borrow_mut().push("grant")),
-            LockTiming::Async,
-        )
-        .expect("queued behind the frame");
-    assert_eq!(outcome, LockOutcome::Deferred);
-    host.panics.borrow_mut().extend(["focus", "complete"]);
-    owner.set_transaction_open(false);
-    expect_host_panic("focus", || {
-        owner.run_deferred_grants();
-    });
-    assert_eq!(calls(&log), ["focus", "complete", "grant"]);
-    owner.complete_composition();
-    assert_eq!(host.completed(&store), 2, "the next completion runs");
-}
-
 /// Both queued host operations would panic during a close: the first
 /// failure propagates, the completion behind it is retired rather than run,
-/// and the host is still told `None`.
+/// and the host is still told `None`. A close keeps its own containment
+/// (ADR-0123); the host calls the owner makes otherwise are rows of the
+/// owner-code matrix (`owner_code_is_contained_at_every_point`).
+#[test]
 fn two_panicking_host_operations_in_a_close_still_unfocus() {
     let (owner, host, log) = pull_owner();
     let handle = owner.handle();
@@ -454,29 +399,6 @@ fn two_panicking_host_operations_in_a_close_still_unfocus() {
         Err(TextInputError::Closed),
         "the next operation sees the close"
     );
-}
-
-#[test]
-fn a_panicking_text_store_host_is_contained() {
-    let cases: &[(&str, fn())] = &[
-        (
-            "focus change",
-            a_panicking_focus_change_propagates_and_the_next_operation_runs,
-        ),
-        (
-            "completion",
-            a_panicking_completion_propagates_and_the_next_one_runs,
-        ),
-        (
-            "two at the anchor",
-            two_panicking_host_operations_at_the_anchor_run_the_rest,
-        ),
-        (
-            "two in a close",
-            two_panicking_host_operations_in_a_close_still_unfocus,
-        ),
-    ];
-    run_rows(cases);
 }
 
 fn run_rows(cases: &[(&str, fn())]) {

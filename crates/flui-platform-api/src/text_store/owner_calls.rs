@@ -18,10 +18,13 @@
 //! | a replaced or detached `EditableText` observer | `EditableTextStore::set_observer`, `detach` (`flui-widgets` `text/text_store.rs`) |
 //! | `on_session_start`, the projection, and the dispatched client snapshot | `TextInputOwner::dispatch` (`flui-interaction` `text_input.rs`) |
 //! | clients replaced or detached, stores retired at an anchor | `TextInputOwner::attach`, `detach`, `run_deferred_grants` (`flui-interaction` `text_input.rs`) |
+//! | a pull host's `focus_store` and `complete_composition` from the owner's queue, the completed store, and the host clone | `TextInputOwner::apply_host_ops` (`flui-interaction` `text_input.rs`), drained by `attach`, `detach`, `complete_composition` and `run_deferred_grants` |
+//! | a push completion committed in place, and its store | `TextInputOwner::complete_composition` (`flui-interaction` `text_input.rs`) |
 //!
 //! Presentation close (`TextInputOwner::close_with_mode` and its `Drop`)
 //! keeps its close-mode containment (ADR-0123), which retires the same
-//! values under the same retention rule.
+//! values under the same retention rule; that includes the host calls a
+//! close makes.
 //!
 //! The rules it keeps, in order of the calls a scope makes:
 //!

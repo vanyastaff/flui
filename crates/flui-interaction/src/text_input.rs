@@ -549,6 +549,13 @@ impl TextInputOwner {
     /// Elsewhere the owner does that directly. Inside a frame, or under
     /// another call on the host, the request is queued with its store and
     /// runs at the anchor or when that call returns.
+    ///
+    /// # Panics
+    ///
+    /// Resumes the first failure once every queued host operation has run:
+    /// one parked in this presentation's gate before the call, then one a
+    /// grant settled inside a host call parked, then the host call's own
+    /// panic. Later ones are retained.
     pub fn complete_composition(&self) {
         let store = {
             let state = self.state.borrow();
@@ -574,8 +581,9 @@ impl TextInputOwner {
                 .push_back(HostOp::Complete(store));
             self.apply_host_ops(&mut calls);
         } else {
-            calls.run(|| commit_composition_in_place(&*store));
-            calls.retire(store);
+            // The commit settles a grant, which may park an owner failure.
+            calls.run_parking(&self.gate, || commit_composition_in_place(&*store));
+            calls.retire_parking(&self.gate, store);
         }
         calls.resume();
     }
@@ -584,8 +592,15 @@ impl TextInputOwner {
     /// wait while a host call is running (its return drains them) or the
     /// frame transaction is open (the anchor drains them).
     ///
-    /// A failing operation releases its values and the queue goes on, so a
-    /// panicking focus change does not strand the completion behind it.
+    /// The host is platform code that reaches application code (a text
+    /// service editing a store settles its grant), so each call goes
+    /// through `calls` like any owner code: the operation, its store and
+    /// the host clone are taken from the queue before the call; a failure
+    /// parked in this presentation's gate is taken before the call (it came
+    /// earlier) and after it (a grant the call ran parked it before the
+    /// call's own panic). A failing operation releases its values and the
+    /// queue goes on, so a panicking focus change does not strand the
+    /// completion behind it; the first failure stays authoritative.
     fn apply_host_ops(&self, calls: &mut OwnerCalls) {
         loop {
             if self.host_depth.get() > 0 || self.is_transaction_open() {
@@ -609,16 +624,22 @@ impl TextInputOwner {
             };
             {
                 let _call = HostCall::enter(&self.host_depth);
+                calls.take_parked(&self.gate);
                 match op {
                     HostOp::Focus(store) => {
-                        calls.run(|| host.focus_store(store));
+                        calls.run_parking(&self.gate, || host.focus_store(store));
                     }
                     HostOp::Complete(store) => {
-                        calls.run(|| complete_through(&*host, &store));
-                        calls.retire(store);
+                        calls.run_parking(&self.gate, || complete_through(&*host, &store));
+                        // A host call that detached the client left this
+                        // clone the store's last owner.
+                        calls.retire_parking(&self.gate, store);
                     }
                 }
             }
+            // A host call that closed the owner left this clone the host's
+            // last owner: framework-owned, it is released even after a
+            // failure, contained.
             release_platform(host, calls);
         }
     }
@@ -698,9 +719,11 @@ impl TextInputOwner {
     ///
     /// Resumes the first failure, after everything else has run: an owner
     /// panic a store parked in this presentation's gate while settling a
-    /// grant since the last anchor, a host operation that panicked, a grant
-    /// that panicked, or one parked while settling here. Later ones are
-    /// retained. A panicking host operation does not hold the grants back.
+    /// grant since the last anchor, then the host operations' failures (one
+    /// a grant settled inside a host call parked before that call's own),
+    /// then a grant that panicked, or one parked while settling here. Later
+    /// ones are retained. A panicking host operation does not hold the
+    /// grants back.
     pub fn run_deferred_grants(&self) -> usize {
         if self.is_transaction_open() {
             // Nothing could run, and the retired stores wait for the anchor
