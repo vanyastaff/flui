@@ -11,6 +11,10 @@
   that then panics is still run by the next anchor or the close. A `TextInputOwner` dropped
   without a close retires the stores and host operations it holds one at a time, so two panicking
   store destructors no longer abort the process.
+- The Win32 text services end TSF's composition before a protection change replaces the field's
+  document (committing it in place when TSF refuses), so the store no longer keeps a composing
+  range no context owns. Every diagnostic on a host operation's teardown path runs inside its
+  containment: a panicking subscriber no longer replaces an earlier failure or skips cleanup.
 - `TextInputOwner::close` ends a frame transaction still open, so a composition completion queued in
   that frame commits (through the host, or in place when the host abandons it) before the store is
   retired, instead of leaving the field with a stale composing range. On a push backend the close

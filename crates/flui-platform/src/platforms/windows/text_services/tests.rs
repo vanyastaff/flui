@@ -18,7 +18,7 @@ use flui_platform_api::text_store::{
 use windows::Win32::Foundation::{E_UNEXPECTED, HWND};
 use windows::Win32::UI::TextServices::{
     ITextStoreACP, ITextStoreACP_Impl, ITfComposition, ITfContext, ITfDocumentMgr, ITfEditSession,
-    TF_ES_READWRITE, TF_ES_SYNC, TS_LF_READ, TS_LF_SYNC, TS_SS_NOHIDDENTEXT,
+    TF_ES_READWRITE, TF_ES_SYNC, TF_POPF_ALL, TS_LF_READ, TS_LF_SYNC, TS_SS_NOHIDDENTEXT,
 };
 use windows_core::Interface as _;
 
@@ -438,6 +438,120 @@ fn a_protection_change_reaches_tsf_as_a_new_context(hwnd: HWND) {
     services.shutdown();
 }
 
+/// A protection change on a field TSF composes in: the composition is ended
+/// in the document that owns it before the document is replaced, so the
+/// store keeps no composing range that no context owns, and keeps its text.
+fn a_protection_change_ends_the_composition_first(hwnd: HWND) {
+    let services = TextServices::activate(hwnd).expect("TSF activates");
+    let store = composing_store();
+    services.focus_store(Some(erased(&store)));
+    let _composition = start_tsf_composition(&services, 2);
+    assert!(store.composition().is_some(), "the field composes");
+    store.set_protected(true);
+    assert_eq!(store.composition(), None, "the composition was ended");
+    assert_eq!(store.text(), "abかな", "keeping the text");
+    assert!(
+        !tsf_sees_no_hidden_text(&associated_context(&services)),
+        "the new document is protected"
+    );
+    services.shutdown();
+}
+
+/// The same when TSF refuses to end the composition (the store refuses its
+/// synchronous lock): the composition is committed in place instead.
+fn a_protection_change_whose_termination_is_refused_commits_in_place(hwnd: HWND) {
+    let services = TextServices::activate(hwnd).expect("TSF activates");
+    let store = FailingStore::new("ab");
+    assert_eq!(
+        project_ime_event(
+            &*store.inner,
+            &ImeEvent::Preedit {
+                text: "かな".to_owned(),
+                cursor: Some((0, 0)),
+            },
+        ),
+        Ok(LockOutcome::Granted),
+        "preedit applies"
+    );
+    services.focus_store(Some(store.clone()));
+    let _composition = start_tsf_composition(&services, 2);
+    store.refuse_sync.set(true);
+    store.inner.set_protected(true);
+    store.refuse_sync.set(false);
+    assert_eq!(store.inner.composition(), None, "committed in place");
+    assert_eq!(store.inner.text(), "abかな", "keeping the text");
+    assert!(
+        !tsf_sees_no_hidden_text(&associated_context(&services)),
+        "the new document is protected"
+    );
+    services.shutdown();
+}
+
+/// A `tracing` subscriber, application code, that panics on the one
+/// diagnostic whose message is `.0`.
+struct PanicsOnDiagnostic(&'static str);
+
+impl tracing::Subscriber for PanicsOnDiagnostic {
+    fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+        true
+    }
+    fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+        tracing::span::Id::from_u64(1)
+    }
+    fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+    fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+    fn event(&self, event: &tracing::Event<'_>) {
+        struct Message(Option<String>);
+        impl tracing::field::Visit for Message {
+            fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+                if field.name() == "message" {
+                    self.0 = Some(format!("{value:?}"));
+                }
+            }
+        }
+        let mut message = Message(None);
+        event.record(&mut message);
+        assert!(message.0.as_deref() != Some(self.0), "diagnostic failure");
+    }
+    fn enter(&self, _: &tracing::span::Id) {}
+    fn exit(&self, _: &tracing::span::Id) {}
+}
+
+/// A field losing focus whose observer retirement panics, and whose
+/// document's `Pop` then fails under a subscriber that panics on that
+/// diagnostic: the retirement came first, so the host operation raises it,
+/// and TSF is still back on the empty document.
+fn a_teardown_whose_pop_diagnostic_panics_raises_the_first_failure(hwnd: HWND) {
+    let services = TextServices::activate(hwnd).expect("TSF activates");
+    let store = FailingStore::new("ab");
+    services.focus_store(Some(store.clone()));
+    let manager = match &*services.serving.borrow() {
+        Serving::Field(document) => document.manager.clone(),
+        Serving::Nothing | Serving::Shutdown => panic!("no document is open"),
+    };
+    // SAFETY: a plain COM call on the window's owner thread. The stack is
+    // emptied here, so the teardown's own `Pop` fails.
+    unsafe { manager.Pop(TF_POPF_ALL) }.expect("the context pops");
+    store.fail_retirement.set(true);
+    let raised = catch_unwind(AssertUnwindSafe(|| {
+        tracing::subscriber::with_default(PanicsOnDiagnostic("Pop failed"), || {
+            services.focus_store(None);
+        });
+    }))
+    .err()
+    .map(|payload| panic_text(&*payload));
+    assert_eq!(
+        raised.as_deref(),
+        Some("observer retirement failure"),
+        "the teardown's first failure, not the diagnostic's"
+    );
+    assert!(
+        associates_the_empty_document(&services),
+        "TSF is associated with the empty document again"
+    );
+    services.shutdown();
+}
+
 fn panic_text(payload: &(dyn std::any::Any + Send)) -> String {
     crate::shared::panic_boundary::panic_payload_message(payload).to_owned()
 }
@@ -592,6 +706,18 @@ fn the_text_services_answer_a_completion_for_its_store() {
         (
             "protection change",
             a_protection_change_reaches_tsf_as_a_new_context,
+        ),
+        (
+            "protection change while composing",
+            a_protection_change_ends_the_composition_first,
+        ),
+        (
+            "protection change while composing, termination refused",
+            a_protection_change_whose_termination_is_refused_commits_in_place,
+        ),
+        (
+            "teardown with a panicking retirement and Pop diagnostic",
+            a_teardown_whose_pop_diagnostic_panics_raises_the_first_failure,
         ),
     ];
     let mut failed = Vec::new();

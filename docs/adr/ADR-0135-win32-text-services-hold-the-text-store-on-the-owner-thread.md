@@ -40,7 +40,8 @@ composition must still end somewhere.
    store, or `TextStoreHostError::Unavailable` once the window's text services are gone. On
    `Abandoned` and either error the caller commits in place:
    `text_store::commit_composition_in_place` clears the composing range under an asynchronous
-   lock and keeps the text, the one function every caller uses. The host is shared as
+   lock and keeps the text, the one function every caller uses; it returns the lock's outcome,
+   and a `Deferred` commit is accepted work its caller owes a later run. The host is shared as
    `Rc<dyn TextStoreHost>` and is not `Send`.
 2. **Only owner-thread proof reaches it.** `OwnerPlatform::text_store_host(&Arc<dyn HostWindow>)`
    reads the window's host through `HostWindow::text_store_host`, whose argument, an
@@ -153,8 +154,10 @@ composition must still end somewhere.
   commits its store in place after a shutdown or without a document, and a store the host does
   not serve, or any store after shutdown, is refused (§1, §3); a teardown whose observer
   retirement and diagnostic both panic stays inside the COM entry, a completion TSF refuses
-  reports its teardown's failure ahead of its in-place recovery's, and a protection change
-  reaches TSF as a new context (§4, §5).
+  reports its teardown's failure ahead of its in-place recovery's, a teardown whose `Pop`
+  diagnostic panics after its observer retirement did raises the retirement's failure, and a
+  protection change reaches TSF as a new context, ending a composition TSF holds in the old one
+  first (committing it in place when TSF refuses) (§4, §5).
 - The Win32 text services' opt-in probe,
   `cargo test -p flui-platform --lib text_services -- --ignored --nocapture`, run 2026-10-06 with
   Microsoft IME ja-JP at 100 %: activation, `toukyou` → 東京, `TS_S_ASYNC` behind a shut gate,
