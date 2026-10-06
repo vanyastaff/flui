@@ -265,8 +265,10 @@ layers = [
         "interaction",
     ],
     [
-        "text",
         "controls",
+    ],
+    [
+        "text",
         "scroll",
         "navigator",
     ],

@@ -46,12 +46,12 @@
 #![warn(clippy::print_stdout, clippy::print_stderr)]
 #![warn(missing_debug_implementations, rust_2018_idioms)]
 
-mod derive_two_way_converter;
 mod derive_diagnosticable;
 mod derive_inherited_data;
 mod derive_routable;
 mod derive_stateful;
 mod derive_stateless;
+mod derive_two_way_converter;
 mod runtime_path;
 
 use proc_macro::TokenStream;
