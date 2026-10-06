@@ -1,6 +1,6 @@
 //! The realm both widget harnesses mount into.
 //!
-//! [`WidgetHost`] attaches one root, [`HarnessRoot`], to a [`HeadlessRealm`]
+//! [`WidgetHost`] attaches one root, [`HarnessRoot`], to a [`HeadlessHost`]
 //! and never replaces it: the tree under test lives in a slot the root reads
 //! in `build`, so a root swap is a rebuild of that one element and the
 //! realm's own root scopes (`GestureArenaScope`, `VsyncScope`, `FocusRoot`,
@@ -23,7 +23,7 @@ use flui_view::prelude::*;
 use flui_view::{BoxedView, ElementTree};
 use parking_lot::Mutex;
 
-use crate::realm::{HeadlessRealm, HeadlessWindow};
+use crate::host::{HeadlessHost, HeadlessWindow};
 
 /// The one root a [`WidgetHost`] attaches: it builds whatever its slot holds.
 #[derive(Clone, StatelessView)]
@@ -37,9 +37,9 @@ impl StatelessView for HarnessRoot {
     }
 }
 
-/// A [`HeadlessRealm`] hosting one swappable widget tree.
+/// A [`HeadlessHost`] hosting one swappable widget tree.
 pub(super) struct WidgetHost {
-    realm: HeadlessRealm,
+    realm: HeadlessHost,
     slot: Rc<RefCell<BoxedView>>,
     pipeline: PipelineCell,
     /// A registry the caller built its own `VsyncScope` over, ticked at each
@@ -52,7 +52,7 @@ pub(super) struct WidgetHost {
 impl WidgetHost {
     /// Attach `tree` to a realm over `window` and run the first frame.
     pub(super) fn mount(tree: BoxedView, window: HeadlessWindow) -> Self {
-        let realm = HeadlessRealm::new(window);
+        let realm = HeadlessHost::new(window);
         let slot = Rc::new(RefCell::new(tree));
         realm
             .attach(&HarnessRoot {
@@ -156,7 +156,7 @@ impl WidgetHost {
         *self.adopted_vsync.lock() = Some(vsync);
     }
 
-    pub(super) fn realm(&self) -> &HeadlessRealm {
+    pub(super) fn realm(&self) -> &HeadlessHost {
         &self.realm
     }
 
@@ -176,7 +176,7 @@ impl WidgetHost {
 
 /// Tick `adopted` at every frame's time, relative to the realm's start, in
 /// the persistent phase the realm ticks its own registry in.
-fn tick_adopted_vsync(realm: &HeadlessRealm, adopted: &Arc<Mutex<Option<Vsync>>>) {
+fn tick_adopted_vsync(realm: &HeadlessHost, adopted: &Arc<Mutex<Option<Vsync>>>) {
     let clock = realm.clock().clone();
     let start = flui_foundation::MonotonicClock::now(&clock);
     let adopted = Arc::clone(adopted);

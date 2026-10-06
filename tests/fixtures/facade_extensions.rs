@@ -676,7 +676,7 @@ fn secondary_window_entry_point_requires_a_running_application() {
     assert!(
         flui::app::open_secondary_window(
             flui::app::AppConfig::default(),
-            flui::app::WindowPolicy::SeparateRealms,
+            flui::app::WindowPolicy::Isolated,
         )
         .is_err()
     );

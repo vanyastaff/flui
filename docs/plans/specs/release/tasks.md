@@ -39,6 +39,7 @@
 | `authoring-styles`: три стиля описания виджетов из одного определения | R18 | `send-flip` (сигнатуры callback'ов), `facade-surface` | нет ADR; документация `column!` обещает несуществующий struct-литерал | — |
 | `layout-diagnostics`: ошибки раскладки видны (переполнение, flex без ограничения, `Expanded` не под тем родителем) | R19 | — | `flex.rs:529-535`, `:658`; `effects.rs:719` без вызова | — |
 | `testing-dx`: finder'ы, tap/enter_text по виджету | R19 | — | сейчас только `dispatch_pointer_down(x, y)` | — |
+| `naming`: имена файлов, модулей и публичных items говорят, что это, а не «набор» (`_kit`, `util`, `helpers`, `common`, `support`); правила в AGENTS.md, гейт `cargo xtask names` | R3, R17 | до `facade-surface` и публикации | публичные переименования после 0.2.0 ломающие | — |
 | `docs-community`: tutorial, README-матрица, docs.rs, шаблоны issue, обновление BETA | R16, R17 | всё остальное | — | — |
 
 Первый полный поток showcase (цель октября): `persistence` + `router-restore` + `teardown` +
@@ -74,3 +75,26 @@
 | Документация `column!` показывает несуществующий struct-литерал и метку `FR-034`; гейт `markers` не ловит `FR-NNN` | `crates/flui-view/src/macros/mod.rs:1-30` | — |
 | Закрыть issue, исправленные в коде: #1092 полностью, #1187 с пометкой | ревью `teardown` и `focus-keyboard` | ждёт владельца |
 | `docs/FOUNDATIONS.md:103`, `crates/flui-widgets/src/lib.rs:32` описывают `bon`-builder'ы, которых нет | `authoring-styles/requirements.md` | — |
+
+## Реестр номеров ADR (владелец — оркестратор)
+
+Номера зарезервированы 2026-10-05. Файл ADR создаёт задача-владелец, указанная в `tasks.md`
+фичи. Неиспользованный номер не переиспользуется.
+
+| Номер | Фича | Название |
+|---|---|---|
+| ADR-0128 | realm-model (D4) | One owner thread; realms are isolation units |
+| ADR-0129 | teardown | Owner-turn panic boundary and terminal exit |
+| ADR-0130 | teardown | Close guard, close reasons and the flush registry |
+| ADR-0131 | teardown | Session end |
+| ADR-0132 | teardown | Owner drop ends observation |
+| ADR-0133 | persistence | Byte storage capability and versioned documents |
+| ADR-0134 | render-proof | Golden-image proof is a wgpu readback through the windowed frame path |
+| ADR-0135 | text-ime | Win32 text services hold the text store on the owner thread |
+| ADR-0136 | send-flip | UI surfaces are owner-local; one thread boundary |
+| ADR-0137 | focus-keyboard | Focus requests on retired nodes and nested node replacement |
+| ADR-0138 | focus-keyboard | Keyboard focus across routes, lazy lists and removal |
+| ADR-0139 | focus-keyboard | Pinned lazy children |
+| ADR-0140 | focus-keyboard | Key-press records, input modality and navigation keys |
+| ADR-0141 | authoring-styles | (резерв) |
+| Тяжёлые команды xtask (`check-changed`, `test`, `ci`, `gate`, `gpu-test`) берут общий для хоста файловый замок (`std::fs::File::lock`) и ждут в очереди с понятным сообщением; протокол запуска проверок в AGENTS.md | на хосте шли 5 параллельных `check-changed`, тест `worktree_contract` выглядел зависшим | в работе (`xtask/heavy-run-lock`) |

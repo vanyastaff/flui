@@ -3,13 +3,13 @@
 The workspace's test support, placed above the frame runtime and the widget
 catalog (tier K, `order = 6`) so its driver can run the product frame
 transaction ([ADR-0083](../../docs/adr/ADR-0083-one-frame-transaction-in-flui-runtime.md) §4).
-Two drivers live here while that move is in progress: `HeadlessRealm`, which
+Two drivers live here while that move is in progress: `HeadlessHost`, which
 pumps a `flui_runtime::ui_realm::UiRealm`, and `HeadlessBinding`, the
 substrate driver over raw owners, which the raw-owner suites still use.
 
 ## Invariants
 
-- **A harness frame is `UiRealm::pump`.** `realm::HeadlessRealm::pump` is the
+- **A harness frame is `UiRealm::pump`.** `host::HeadlessHost::pump` is the
   only way the widget harness (`widgets::lay_out`, `widgets::harness::mount`)
   draws a frame, the mount included: apply commands, begin frame, the
   pipeline, end frame and the text-store commit anchor all run inside the
@@ -21,11 +21,11 @@ substrate driver over raw owners, which the raw-owner suites still use.
   `ClockSource`, so the frame-time origin, the gesture arena's deadlines and
   each presentation's `FrameClock` read it, and the pump reads a clone of it
   as the frame's timestamp. Time moves only when a caller advances it:
-  `HeadlessRealm::pump(dt)` before the frame, or a pointer helper's sample
+  `HeadlessHost::pump(dt)` before the frame, or a pointer helper's sample
   interval.
 - **A contained failure is raised after the pump, and the first one wins.**
   The realm contains a segment panic or pipeline error as a dropped frame
-  (ADR-0048) and reports it to the handler `HeadlessRealm` installs, with
+  (ADR-0048) and reports it to the handler `HeadlessHost` installs, with
   text retained verbatim. `pump` raises the first report once the pump has
   returned; when a later panic unwinds out of the same pump, the report is
   raised and the later payload is leaked (its destructor could panic),
@@ -34,7 +34,7 @@ substrate driver over raw owners, which the raw-owner suites still use.
   between pumps is raised by the next pump before it frames, not erased.
   After any raise, including a pump that unwound past its commit anchor, the
   next pump frames and runs the grants the unwound one queued. Pinned by
-  `tests/headless_realm.rs`, `realm::tests` and the failure tests in
+  `tests/headless_host.rs`, `host::tests` and the failure tests in
   `tests/realm_driver.rs`.
 - **The realm root is attached once.** The widget harness attaches one
   harness root that builds whatever tree its slot holds; a root swap
@@ -60,8 +60,8 @@ substrate driver over raw owners, which the raw-owner suites still use.
   there is one copy), and its lookups of `MediaQuery`, `FocusRoot` or
   `VsyncScope` would then silently miss the scopes the realm installed from
   the other copy. Review keeps harness tests in `tests/`.
-- **The realm stays behind its host.** `HeadlessRealm::realm` and
-  `HeadlessRealm::enter` are crate-private, and `LaidOut` and `Harness` hand
+- **The realm stays behind its host.** `HeadlessHost::realm` and
+  `HeadlessHost::enter` are crate-private, and `LaidOut` and `Harness` hand
   out narrow accessors (the window's cursor, the accessibility action
   listener, the post-frame handle, the scheduler) rather than the realm:
   `flui-runtime` is not an embedder API, and `flui::testing` re-exports
@@ -90,7 +90,7 @@ query as proof that a screen reader can reach the subject.
 
 ### The harness pumps the realm
 
-The harness calls `HeadlessRealm::pump(dt)`, which
+The harness calls `HeadlessHost::pump(dt)`, which
 advances the manual clock and runs `UiRealm::pump`, the one frame
 transaction every runner drives. `lay_out`'s mount is a frame:
 post-frame callbacks registered in `init_state` run at its

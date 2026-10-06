@@ -122,7 +122,7 @@ host.
   only by `flui-app` and carries no promise. `execution_public_paths` in
   `flui-app` pins the re-exported paths.
 - **The test driver shares the transaction, not the production host.**
-  `flui-testing` sits above this crate: its `HeadlessRealm` drives
+  `flui-testing` sits above this crate: its `HeadlessHost` drives
   `UiRealm::pump` directly with its manual clock and headless sink, and its
   widget harness runs every frame through it. It neither constructs
   `OwnerHost` nor reproduces native event-loop routing; owner-turn behavior
@@ -149,7 +149,7 @@ host.
   `test-support`; the rest is `pub(crate)`. `flui-app` re-exports none of
   them, only `frame_failure`'s report types and `RenderingBinding`,
   at their old `flui_app` paths. `flui-testing` hosts a realm in its
-  `HeadlessRealm` and keeps it crate-private, so `flui::testing` does not
+  `HeadlessHost` and keeps it crate-private, so `flui::testing` does not
   reach it either.
 - **The frame sink is the host's, the verdict is the realm's.** A host
   implements `sink::FrameSink`; the realm reads its `SubmitVerdict` and
