@@ -58,6 +58,11 @@ serde = ["dep:serde", "smallvec/serde", "flui-painting/serde"]
 name = "animation_it"
 path = "tests/main.rs"
 
+# Own target: installs a counting `#[global_allocator]`, which is process-wide.
+[[test]]
+name = "tick_allocation"
+path = "tests/tick_allocation.rs"
+
 [[bench]]
 name = "animation_bench"
 harness = false
