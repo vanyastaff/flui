@@ -80,7 +80,10 @@ pub(super) struct OwnerControl {
     gate: OwnerGate,
 }
 impl OwnerControl {
-    pub(super) fn new() -> Result<Self, PlatformError> {
+    /// Build the owner control under `identity`, which the caller reserved
+    /// before any native acquisition of its own (see
+    /// `WindowsPlatform::with_config`).
+    pub(super) fn new(identity: WindowIdentity) -> Result<Self, PlatformError> {
         let registration = REGISTERED.get_or_init(|| {
             // SAFETY: class name lives forever; this exact procedure implements its ABI.
             unsafe {
@@ -118,7 +121,6 @@ impl OwnerControl {
                 },
             )
         }));
-        let identity = WindowIdentity::mint();
         let context = Box::new(OwnerControlContext {
             identity,
             signal: Arc::clone(&signal),

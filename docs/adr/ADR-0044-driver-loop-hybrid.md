@@ -126,8 +126,15 @@ Gesture-arena deadlines are the other half of the gating story, and were already
 a deadline, the loop waits in `MsgWaitForMultipleObjectsEx` for at most the time
 remaining (rounded up to whole milliseconds) instead of parking in
 `GetMessageW`; when the deadline passes it invalidates every live window, so
-the next `WM_PAINT` delivers the frame. A due deadline is delivered before the
-hook is queried again. A deadline is delivered once: the same instant from the
+the next `WM_PAINT` delivers the frame. A minimized or hidden window is the
+exception: Windows does not paint it, so an invalidation would strand the
+deadline until unrelated input. Its frame callback is instead dispatched
+directly and synchronously from the loop's deadline step, outside any
+`WM_PAINT`, before the loop dispatches another message or queries the hook
+again. No platform or window-registry lock is held across that call, so the
+callback may re-enter the platform (open or close windows, replace the hook,
+request quit); windows it opens during the step are not visited by it. A due
+deadline is delivered before the hook is queried again. A deadline is delivered once: the same instant from the
 same hook does not re-arm until the hook has returned `None`. Replacing the hook
 discards a deadline armed by the old one. Input, paint and quit messages are
 dispatched as usual while a deadline is armed.

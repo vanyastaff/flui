@@ -182,7 +182,7 @@ mod native_windows {
     };
     use windows::Win32::{
         Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM},
-        Graphics::Gdi::ClientToScreen,
+        Graphics::Gdi::{ClientToScreen, UpdateWindow},
         System::Threading::GetCurrentThreadId,
         UI::Input::KeyboardAndMouse::{
             GetKeyState, GetKeyboardState, SetKeyboardState, VK_LMENU, VK_MENU,
@@ -191,8 +191,8 @@ mod native_windows {
             CWPSTRUCT, CallNextHookEx, DispatchMessageW, GetClientRect, IsIconic, IsWindowVisible,
             MSG, PM_REMOVE, PeekMessageW, PostMessageW, SW_MINIMIZE, SWP_NOACTIVATE, SWP_NOMOVE,
             SWP_NOSIZE, SWP_NOZORDER, SendMessageW, SetWindowPos, SetWindowsHookExW, ShowWindow,
-            UnhookWindowsHookEx, WH_CALLWNDPROC, WM_CHAR, WM_CLOSE, WM_ENTERMENULOOP, WM_KEYDOWN,
-            WM_SYSKEYDOWN, WM_SYSKEYUP,
+            TranslateMessage, UnhookWindowsHookEx, WH_CALLWNDPROC, WM_CHAR, WM_CLOSE,
+            WM_ENTERMENULOOP, WM_KEYDOWN, WM_SYSCHAR, WM_SYSKEYDOWN, WM_SYSKEYUP,
         },
     };
 
@@ -223,6 +223,10 @@ mod native_windows {
             deadline_reaches_minimized_window,
         ),
         (
+            "deadline_reaches_hidden_window",
+            deadline_reaches_hidden_window,
+        ),
+        (
             "unhandled_system_key_closes_window",
             unhandled_system_key_closes_window,
         ),
@@ -248,6 +252,14 @@ mod native_windows {
         ),
         ("alt_tap_keeps_next_character", alt_tap_keeps_next_character),
         ("f10_keeps_next_character", f10_keeps_next_character),
+        (
+            "consumed_alt_space_withdraws_its_system_char",
+            consumed_alt_space_withdraws_its_system_char,
+        ),
+        (
+            "unconsumed_alt_space_keeps_its_system_char",
+            unconsumed_alt_space_keeps_its_system_char,
+        ),
         (
             "resize_callback_preserves_large_native_dimensions",
             resize_callback_preserves_large_native_dimensions,
@@ -489,26 +501,50 @@ mod native_windows {
         );
     }
 
+    fn deadline_reaches_minimized_window() {
+        deadline_reaches_unpainted_window(true);
+    }
+    fn deadline_reaches_hidden_window() {
+        deadline_reaches_unpainted_window(false);
+    }
+
+    // Whether the owned `hwnd` is in the state its row put it in: minimized,
+    // or never shown.
+    #[expect(unsafe_code, reason = "Win32 visibility queries of an owned HWND")]
+    fn unpainted(hwnd: HWND, minimized: bool) -> bool {
+        // SAFETY: queries of a live HWND the calling row owns, on its
+        // creating thread.
+        unsafe {
+            if minimized {
+                IsIconic(hwnd).as_bool()
+            } else {
+                !IsWindowVisible(hwnd).as_bool()
+            }
+        }
+    }
+
     #[expect(
         unsafe_code,
-        reason = "actual owned Win32 minimize and iconic query on its creating thread"
+        reason = "actual owned Win32 minimize on its creating thread"
     )]
-    fn deadline_reaches_minimized_window() {
+    fn deadline_reaches_unpainted_window(minimized: bool) {
         use flui_platform::WindowOpen;
 
-        // A minimized window paints nothing, so a due deadline must reach its
-        // frame callback by another route or stay stranded until input.
+        // A minimized or hidden window paints nothing, so a due deadline must
+        // reach its frame callback by another route or stay stranded until
+        // input. A watchdog quits a stranded loop so the row fails instead of
+        // hanging.
         let serviced = Arc::new(Mutex::new(None::<bool>));
         let result = Arc::clone(&serviced);
         Box::new(WindowsPlatform::new().expect("native Windows platform"))
             .run(Box::new(move |owner| {
                 let WindowOpen::Ready(window) = owner
                     .open_window(WindowOptions {
-                        visible: true,
+                        visible: minimized,
                         size: Size::new(160.0, 120.0),
                         ..Default::default()
                     })
-                    .expect("open minimizable window")
+                    .expect("open unpainted window")
                 else {
                     panic!("Win32 on-ready window was deferred");
                 };
@@ -517,11 +553,17 @@ mod native_windows {
                     .downcast_ref::<WindowsWindow>()
                     .expect("Win32 backend")
                     .hwnd();
-                // SAFETY: the live wrapper owns this HWND, minimized on its
-                // creating thread.
-                let _ = unsafe { ShowWindow(hwnd, SW_MINIMIZE) };
-                // SAFETY: as above; a query of the same owned HWND.
-                assert!(unsafe { IsIconic(hwnd) }.as_bool(), "window minimized");
+                if minimized {
+                    // SAFETY: the live wrapper owns this HWND, minimized on
+                    // its creating thread.
+                    let _ = unsafe { ShowWindow(hwnd, SW_MINIMIZE) };
+                }
+                assert!(unpainted(hwnd, minimized), "window minimized or hidden");
+                let watchdog = owner.proxy();
+                std::thread::spawn(move || {
+                    std::thread::sleep(Duration::from_secs(3));
+                    let _ = watchdog.request_quit();
+                });
                 let due = web_time::Instant::now() + Duration::from_millis(60);
                 let pending = Arc::new(Mutex::new(Some(due)));
                 let callback_pending = Arc::clone(&pending);
@@ -533,28 +575,39 @@ mod native_windows {
                         return;
                     }
                     *pending = None;
-                    // SAFETY: the frame callback runs on the window's
-                    // creating thread while its wrapper is alive.
-                    let iconic = unsafe { IsIconic(HWND(raw_hwnd as *mut _)) }.as_bool();
-                    *serviced.lock().expect("serviced state") = Some(iconic);
-                    proxy.request_quit().expect("quit after minimized deadline");
+                    // The frame callback runs on the window's creating
+                    // thread while its wrapper is alive.
+                    let still = unpainted(HWND(raw_hwnd as *mut _), minimized);
+                    *serviced.lock().expect("serviced state") = Some(still);
+                    proxy.request_quit().expect("quit after unpainted deadline");
                 }));
                 owner.shared().set_wake_deadline_hook(Box::new(move || {
                     *pending.lock().expect("deadline state")
                 }));
                 Ok(())
             }))
-            .expect("native minimized deadline loop returns normally");
+            .expect("native unpainted deadline loop returns normally");
         assert_eq!(
             *result.lock().expect("serviced state"),
             Some(true),
-            "a due deadline reaches a minimized window's frame callback"
+            "a due deadline reaches a minimized or hidden window's frame callback"
         );
     }
 
+    #[expect(
+        unsafe_code,
+        reason = "synchronous first paint of owned Win32 windows on their creating thread"
+    )]
     fn run_deadline_windows(mode: &'static str) {
         use flui_platform::WindowOpen;
 
+        // Every frame request before the first admitted deadline is a
+        // delivery nothing asked for (a stale answer of a replaced hook).
+        // Each window's first paint is forced before the hooks arm, so no
+        // ordinary paint lands in that span.
+        let early = Arc::new(AtomicUsize::new(0));
+        let armed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let returned_early = Arc::clone(&early);
         let counts = Arc::new([AtomicUsize::new(0), AtomicUsize::new(0)]);
         let pending = Arc::new(AtomicUsize::new(if mode == "close" { 1 } else { 2 }));
         let deadlines = Arc::new(Mutex::new([None::<web_time::Instant>; 2]));
@@ -567,6 +620,7 @@ mod native_windows {
                 let shared = owner.shared();
                 let proxy = owner.proxy();
                 let mut first = None;
+                let mut windows = Vec::new();
                 for index in 0..2 {
                     let WindowOpen::Ready(window) = owner
                         .open_window(WindowOptions {
@@ -578,6 +632,7 @@ mod native_windows {
                     else {
                         panic!("Win32 on-ready window was deferred");
                     };
+                    windows.push(Arc::clone(&window));
                     if index == 0 {
                         first = Some(Arc::downgrade(&window));
                         let closed = Arc::clone(&first_closed);
@@ -589,12 +644,20 @@ mod native_windows {
                     let callback_counts = Arc::clone(&counts);
                     let callback_pending = Arc::clone(&pending);
                     let callback_proxy = proxy.clone();
+                    let callback_early = Arc::clone(&early);
+                    let callback_armed = Arc::clone(&armed);
                     let weak = Arc::downgrade(&window);
                     window.on_request_frame(Box::new(move || {
                         let now = web_time::Instant::now();
                         let count = {
                             let mut deadlines = callback_deadlines.lock().expect("deadline state");
                             if deadlines[index].is_none_or(|due| now < due) {
+                                if callback_armed.load(Ordering::SeqCst)
+                                    && callback_counts[index].load(Ordering::SeqCst) == 0
+                                    && deadlines[index].is_some()
+                                {
+                                    callback_early.fetch_add(1, Ordering::SeqCst);
+                                }
                                 return;
                             }
                             let count = callback_counts[index].fetch_add(1, Ordering::SeqCst) + 1;
@@ -612,6 +675,18 @@ mod native_windows {
                     }));
                 }
                 let first = first.expect("first native window");
+                for window in &windows {
+                    let hwnd = window
+                        .as_any()
+                        .downcast_ref::<WindowsWindow>()
+                        .expect("Win32 backend")
+                        .hwnd();
+                    // SAFETY: the live wrapper owns this HWND on its creating
+                    // thread; the paint it sends runs synchronously here.
+                    let _ = unsafe { UpdateWindow(hwnd) };
+                }
+                drop(windows);
+                armed.store(true, Ordering::SeqCst);
                 let initial = web_time::Instant::now() + Duration::from_millis(80);
                 *deadlines.lock().expect("deadline state") = [Some(initial); 2];
                 let hook_deadlines = Arc::clone(&deadlines);
@@ -647,6 +722,11 @@ mod native_windows {
                 Ok(())
             }))
             .expect("native deadline loop returns normally");
+        assert_eq!(
+            returned_early.load(Ordering::SeqCst),
+            0,
+            "{mode}: frame requests before any admitted deadline"
+        );
         assert_eq!(
             returned_counts[0].load(Ordering::SeqCst),
             if mode == "close" { 0 } else { 2 },
@@ -1038,6 +1118,106 @@ mod native_windows {
             "{key}: the character after the menu key reaches input"
         );
         assert_eq!(closes.load(Ordering::SeqCst), 0, "{key}: window stays open");
+        window.close();
+    }
+
+    fn consumed_alt_space_withdraws_its_system_char() {
+        alt_space_system_char(true);
+    }
+    fn unconsumed_alt_space_keeps_its_system_char() {
+        alt_space_system_char(false);
+    }
+
+    // Alt+Space goes through the message loop's own path: the keydown is
+    // queued, `TranslateMessage` queues its WM_SYSCHAR, then the keydown is
+    // dispatched. That character is what `DefWindowProc` turns into the
+    // system menu, so a consumed keydown must withdraw it and an unconsumed
+    // one must leave it queued. The row never dispatches a WM_SYSCHAR itself:
+    // one left behind is counted, not allowed to open a modal menu.
+    #[expect(
+        unsafe_code,
+        reason = "actual owned Win32 key translation and message pumping"
+    )]
+    fn alt_space_system_char(consume: bool) {
+        let platform = WindowsPlatform::new().expect("native Windows platform");
+        let window = open_shown(&platform);
+        let hwnd = window
+            .as_any()
+            .downcast_ref::<WindowsWindow>()
+            .expect("Win32 backend")
+            .hwnd();
+        let keydowns = Arc::new(AtomicUsize::new(0));
+        let keydown_observations = Arc::clone(&keydowns);
+        window.on_input(Box::new(move |event| {
+            if event
+                .as_keyboard()
+                .is_some_and(|key| key.state == keyboard_types::KeyState::Down)
+            {
+                keydown_observations.fetch_add(1, Ordering::SeqCst);
+            }
+            DispatchEventResult::resolved(true, consume)
+        }));
+        let mut keyboard_state = ThreadKeyboardState::with_alt_pressed();
+        // SAFETY: integer VK_SPACE, scan-code and Alt-context data queued for
+        // the platform's own HWND on its creating thread.
+        unsafe {
+            PostMessageW(
+                Some(hwnd),
+                WM_SYSKEYDOWN,
+                WPARAM(0x20),
+                LPARAM(1 | (0x39 << 16) | (1 << 29)),
+            )
+            .expect("queue Alt+Space keydown");
+        }
+        let mut keydown = MSG::default();
+        // SAFETY: removes the message just queued for this owned HWND, then
+        // translates and dispatches it as the platform's message loop does,
+        // while the thread's logical Alt state is still held.
+        unsafe {
+            assert!(
+                PeekMessageW(
+                    &raw mut keydown,
+                    Some(hwnd),
+                    WM_SYSKEYDOWN,
+                    WM_SYSKEYDOWN,
+                    PM_REMOVE
+                )
+                .as_bool(),
+                "the queued keydown"
+            );
+            let _ = TranslateMessage(&raw const keydown);
+            DispatchMessageW(&raw const keydown);
+        }
+        keyboard_state.restore();
+        let mut system_chars = Vec::new();
+        let mut message = MSG::default();
+        // SAFETY: only this owned HWND's WM_SYSCHARs are removed, undispatched.
+        while unsafe {
+            PeekMessageW(
+                &raw mut message,
+                Some(hwnd),
+                WM_SYSCHAR,
+                WM_SYSCHAR,
+                PM_REMOVE,
+            )
+        }
+        .as_bool()
+        {
+            system_chars.push(message.wParam.0);
+        }
+        assert_eq!(keydowns.load(Ordering::SeqCst), 1, "keydown delivery");
+        if consume {
+            assert!(
+                system_chars.is_empty(),
+                "a consumed Alt+Space left {system_chars:?} for DefWindowProc"
+            );
+        } else {
+            assert_eq!(
+                system_chars,
+                [0x20],
+                "an unconsumed Alt+Space keeps its system character"
+            );
+        }
         window.close();
     }
 

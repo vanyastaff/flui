@@ -202,7 +202,8 @@ fn install_resolves_execution_services_and_teardown_shuts_them_down() {
 /// The input wiring every runner installs answers the platform with the
 /// realm's own decision: an Alt+F4 nothing handled keeps the platform
 /// default (the native backend then closes the window), and one a shortcut
-/// consumed prevents it.
+/// consumed prevents it. Pointer input no handler consumes is still reported
+/// handled, since Android redraws only for handled input.
 fn system_key_default_follows_the_realms_decision() {
     use flui_interaction::events::{Code, Modifiers};
     use flui_interaction::testing::input::KeyEventBuilder;
@@ -225,6 +226,52 @@ fn system_key_default_follows_the_realms_decision() {
     assert!(
         !native.inject_event(alt_f4()).default_prevented,
         "an unconsumed system key keeps the platform default"
+    );
+    assert!(
+        native.inject_event(down_input(4.0)).default_prevented,
+        "pointer input stays handled whether or not anything consumed it"
+    );
+
+    // A key arriving while an owner turn is in flight queues behind it, so
+    // its outcome is unknown when the platform asks: the default is
+    // prevented then, and the key is still delivered once the turn ends.
+    let delivered = Rc::new(std::cell::Cell::new(0_usize));
+    let in_turn = Rc::new(std::cell::Cell::new(None));
+    let (delivered_in_handler, delivered_in_turn, in_turn_result) = (
+        Rc::clone(&delivered),
+        Rc::clone(&delivered),
+        Rc::clone(&in_turn),
+    );
+    let turn_window = std::sync::Arc::clone(&window);
+    dispatch_platform_realm(
+        dispatcher,
+        RealmTask::Frame(Box::new(move |realm| {
+            realm.focus_manager().add_global_key_handler(Rc::new(
+                move |_: &flui_interaction::events::KeyboardEvent| {
+                    delivered_in_handler.set(delivered_in_handler.get() + 1);
+                    false
+                },
+            ));
+            let native = turn_window
+                .as_any()
+                .downcast_ref::<flui_platform::MockWindow>()
+                .expect("headless test window");
+            in_turn_result.set(Some((
+                native.inject_event(alt_f4()).default_prevented,
+                delivered_in_turn.get(),
+            )));
+        })),
+    )
+    .expect("the owner turn runs, then the queued key");
+    assert_eq!(
+        in_turn.get(),
+        Some((true, 0)),
+        "a key queued behind an owner turn prevents the default before delivery"
+    );
+    assert_eq!(
+        delivered.get(),
+        1,
+        "the queued key is delivered after the turn"
     );
 
     dispatch_platform_realm(

@@ -79,6 +79,10 @@ The Windows row `window_identity_exhaustion_permanently_refuses_retries` joins
 `CreateWindowExW`, from a local counter with an acquisition that records
 native creation, checks repeated refusal and verifies that refused admission
 never acquires. This tests the admission boundary, not recycled HWND behavior.
+The platform reserves its owner-control identity before it initializes COM or
+creates its message-only window; the row `platform_identity_exhaustion_acquires_nothing`
+retries an exhausted platform admission and checks that the thread's COM
+apartment and the message-only windows are unchanged.
 
 ### The Win32 clipboard opens with a message-only owner window on a dedicated pump thread
 

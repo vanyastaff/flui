@@ -28,16 +28,17 @@ use windows::{
                 CS_HREDRAW, CS_OWNDC, CS_VREDRAW, CreateWindowExW, DefWindowProcW, DestroyWindow,
                 DispatchMessageW, GWLP_USERDATA, GetClassNameW, GetClientRect, GetForegroundWindow,
                 GetMessageW, GetWindowLongPtrW, GetWindowThreadProcessId, HICON, HTCLIENT,
-                HWND_MESSAGE, IDC_ARROW, MSG, MWMO_INPUTAVAILABLE, MsgWaitForMultipleObjectsEx,
-                PM_REMOVE, PeekMessageW, PostQuitMessage, QS_ALLINPUT, RegisterClassW, SC_KEYMENU,
-                SW_SHOWNORMAL, SWP_NOACTIVATE, SWP_NOZORDER, SetForegroundWindow,
-                SetWindowLongPtrW, SetWindowPos, TranslateMessage, WINDOW_EX_STYLE, WINDOW_STYLE,
-                WM_CHAR, WM_CLOSE, WM_CREATE, WM_DESTROY, WM_DPICHANGED, WM_ERASEBKGND,
-                WM_INPUTLANGCHANGE, WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS, WM_LBUTTONDOWN,
-                WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEHWHEEL, WM_MOUSEMOVE,
-                WM_MOUSEWHEEL, WM_MOVE, WM_PAINT, WM_QUIT, WM_RBUTTONDOWN, WM_RBUTTONUP,
-                WM_SETCURSOR, WM_SETFOCUS, WM_SETTINGCHANGE, WM_SHOWWINDOW, WM_SIZE, WM_SYSCOMMAND,
-                WM_SYSKEYDOWN, WM_SYSKEYUP, WNDCLASSW,
+                HWND_MESSAGE, IDC_ARROW, IsWindowVisible, MSG, MWMO_INPUTAVAILABLE,
+                MsgWaitForMultipleObjectsEx, PM_REMOVE, PeekMessageW, PostQuitMessage, QS_ALLINPUT,
+                RegisterClassW, SC_KEYMENU, SW_SHOWNORMAL, SWP_NOACTIVATE, SWP_NOZORDER,
+                SetForegroundWindow, SetWindowLongPtrW, SetWindowPos, TranslateMessage,
+                WINDOW_EX_STYLE, WINDOW_STYLE, WM_CHAR, WM_CLOSE, WM_CREATE, WM_DESTROY,
+                WM_DPICHANGED, WM_ERASEBKGND, WM_INPUTLANGCHANGE, WM_KEYDOWN, WM_KEYUP,
+                WM_KILLFOCUS, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP,
+                WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_MOVE, WM_PAINT, WM_QUIT,
+                WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETCURSOR, WM_SETFOCUS, WM_SETTINGCHANGE,
+                WM_SHOWWINDOW, WM_SIZE, WM_SYSCHAR, WM_SYSCOMMAND, WM_SYSKEYDOWN, WM_SYSKEYUP,
+                WNDCLASSW,
             },
         },
     },
@@ -113,13 +114,6 @@ impl WindowIdentity {
         &NEXT
     }
 
-    /// Mint a fresh identity, panicking once the source is exhausted. Call
-    /// it before acquiring any native resource the identity will own, so a
-    /// refusal leaves nothing to release.
-    pub(super) fn mint() -> Self {
-        Self::mint_from(Self::source())
-    }
-
     /// The admission boundary `WindowsWindow::new` runs: reserve an
     /// identity from `source`, then run `acquire` for the native window it
     /// will own. Exhaustion refuses before `acquire` runs, so a refusal
@@ -187,6 +181,68 @@ impl WindowsPlatform {
                 "seed {seed}: exhausted admission acquired native resources"
             );
         }
+    }
+}
+
+#[cfg(test)]
+impl WindowsPlatform {
+    #[expect(unsafe_code, reason = "COM apartment and message-only window queries")]
+    pub(crate) fn platform_identity_exhaustion_acquires_nothing() {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        use windows::Win32::{
+            System::Com::{APTTYPE, APTTYPEQUALIFIER, CoGetApartmentType},
+            UI::WindowsAndMessaging::FindWindowExW,
+        };
+
+        // This thread's COM apartment, or the query's refusal when none.
+        let apartment = || {
+            let (mut kind, mut qualifier) = (APTTYPE::default(), APTTYPEQUALIFIER::default());
+            // SAFETY: both out-pointers are live, writable locals.
+            unsafe { CoGetApartmentType(&raw mut kind, &raw mut qualifier) }
+                .map(|()| (kind, qualifier))
+                .map_err(|error| error.code())
+        };
+        // The platform message-only windows that exist in this process.
+        let message_windows = || {
+            let mut count = 0;
+            let mut after = None;
+            // SAFETY: enumerates message-only windows by a static class name;
+            // every handle is only passed back as the next search start.
+            while let Ok(hwnd) = unsafe {
+                FindWindowExW(Some(HWND_MESSAGE), after, WINDOW_CLASS_NAME, PCWSTR::null())
+            } {
+                count += 1;
+                after = Some(hwnd);
+            }
+            count
+        };
+
+        let (apartment_before, windows_before) = (apartment(), message_windows());
+        let source = AtomicU64::new(0);
+        for attempt in 0..3 {
+            let refused = std::panic::catch_unwind(|| {
+                Self::admit_with_config(WindowConfiguration::default(), &source)
+            });
+            assert!(
+                refused.is_err(),
+                "exhausted platform admission succeeded on retry {attempt}"
+            );
+        }
+        assert_eq!(
+            source.load(Ordering::Relaxed),
+            0,
+            "refusal advanced the exhausted source"
+        );
+        assert_eq!(
+            apartment(),
+            apartment_before,
+            "refused admission initialized COM"
+        );
+        assert_eq!(
+            message_windows(),
+            windows_before,
+            "refused admission created a message window"
+        );
     }
 }
 
@@ -629,6 +685,19 @@ impl WindowsPlatform {
     /// let platform = WindowsPlatform::with_config(config)?;
     /// ```
     pub fn with_config(config: WindowConfiguration) -> Result<Self, PlatformError> {
+        Self::admit_with_config(config, WindowIdentity::source())
+    }
+
+    /// [`Self::with_config`] with the identity drawn from `source`. The
+    /// owner control's identity is reserved first: exhaustion refuses before
+    /// COM is initialized or any HWND exists, so a refusal (and every caught
+    /// retry) leaves nothing to release.
+    fn admit_with_config(
+        config: WindowConfiguration,
+        source: &std::sync::atomic::AtomicU64,
+    ) -> Result<Self, PlatformError> {
+        let owner_identity = WindowIdentity::mint_from(source);
+
         // SAFETY: `CoInitializeEx` takes no pointer arguments (`None` for
         // the reserved parameter) and its `HRESULT` is checked before
         // anything downstream assumes COM is initialized on this thread —
@@ -704,7 +773,7 @@ impl WindowsPlatform {
         tracing::info!("Windows platform initialized with Tokio executors");
 
         let platform = Self {
-            owner_control: super::owner_control::OwnerControl::new()?,
+            owner_control: super::owner_control::OwnerControl::new(owner_identity)?,
             message_window,
             windows: Arc::new(Mutex::new(HashMap::new())),
             background_executor,
@@ -1554,6 +1623,13 @@ impl WindowsPlatform {
                         if result.default_prevented
                             || GetWindowLongPtrW(hwnd, GWLP_USERDATA) != ctx_ptr as isize
                         {
+                            // The default this keydown skipped also lives in
+                            // the WM_SYSCHAR `TranslateMessage` queued for it:
+                            // `DefWindowProcW` turns Alt+Space's into the
+                            // system menu. Withdraw it with its keydown.
+                            if msg == WM_SYSKEYDOWN {
+                                discard_translated_sys_chars(hwnd);
+                            }
                             return LRESULT(0);
                         }
                     }
@@ -1870,13 +1946,16 @@ impl WindowsPlatform {
                 if context.identity != window.identity {
                     return;
                 }
-                if context.mode.get().is_minimized() {
-                    // WM_PAINT skips a minimized window's frame request, and
-                    // Windows rarely paints one at all, so an invalidation
-                    // would strand the delivered deadline until unrelated
-                    // input. Request the frame directly instead: the owner
-                    // already saw the window hidden (WM_SIZE), so its frame
-                    // services timers and gestures without presenting.
+                // SAFETY: a query of the live HWND this context belongs to,
+                // on its creating thread.
+                let shown = unsafe { IsWindowVisible(window.hwnd()) }.as_bool();
+                if context.mode.get().is_minimized() || !shown {
+                    // WM_PAINT skips a minimized window's frame request,
+                    // Windows rarely paints one at all, and never paints a
+                    // hidden one, so an invalidation would strand the
+                    // delivered deadline until unrelated input. Request the
+                    // frame directly instead: its frame services timers and
+                    // gestures for a window nothing can see.
                     context.callbacks.dispatch_request_frame();
                 } else {
                     crate::traits::PlatformWindow::request_redraw(window.as_ref());
@@ -2563,7 +2642,8 @@ fn current_modifiers() -> keyboard_types::Modifiers {
 /// before `DispatchMessageW`, so every `WM_CHAR` belonging to this keystroke
 /// (two of them for an astral-plane character) is already posted. Draining
 /// filters exactly `WM_CHAR` for this window: `WM_SYSCHAR` is deliberately
-/// left queued so Alt+mnemonic accelerators still flow to `DefWindowProcW`,
+/// left queued so Alt+mnemonic accelerators still flow to `DefWindowProcW`
+/// (unless the keydown's default is prevented: [`discard_translated_sys_chars`]),
 /// and `WM_DEADCHAR` is left to expire so dead-key state stays Windows'
 /// business. Returns `None` for keystrokes with no typeable translation
 /// (navigation keys, Ctrl chords — see `shared::keys::wm_char_text`).
@@ -2584,6 +2664,20 @@ fn drain_translated_chars(hwnd: HWND) -> Option<String> {
     }
 
     crate::shared::keys::wm_char_text(&units)
+}
+
+/// Remove the `WM_SYSCHAR` burst `TranslateMessage` queued for a system
+/// keydown whose default was prevented, so its character never reaches
+/// `DefWindowProcW` (which would raise `SC_KEYMENU` from it, and open the
+/// system menu for Alt+Space). The same queue-ordering argument as
+/// [`drain_translated_chars`] makes the burst complete here.
+fn discard_translated_sys_chars(hwnd: HWND) {
+    let mut msg = MSG::default();
+    // SAFETY: as in `drain_translated_chars`: a live writable local, and
+    // `PM_REMOVE` touches only this thread's own queue.
+    unsafe {
+        while PeekMessageW(&raw mut msg, Some(hwnd), WM_SYSCHAR, WM_SYSCHAR, PM_REMOVE).as_bool() {}
+    }
 }
 
 // Windows platform capabilities

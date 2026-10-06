@@ -83,7 +83,7 @@ impl OwnerTag {
 
     // Zero permanently records exhaustion after the last nonzero identity.
     // The local counter seam lets boundary tests avoid mutating process state.
-    fn fresh_with_counter(counter: &AtomicU64) -> Self {
+    pub(super) fn fresh_with_counter(counter: &AtomicU64) -> Self {
         let tag = counter
             .try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
                 if current == 0 {
