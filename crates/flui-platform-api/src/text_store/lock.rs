@@ -413,15 +413,17 @@ impl LockArbiter {
             open(grant);
         }
         // The grant ran and its lock is released: the store's owner runs now,
-        // before the next grant. A failure there cannot undo the grant.
+        // before the next grant. A failure there cannot undo the grant. It
+        // belongs to the presentation that admitted the grant, read before
+        // owner code can move the store to another one.
+        let admitting = self.owned_gate.get().then(|| self.gate.borrow().clone());
         let Err(payload) = catch_unwind(AssertUnwindSafe(settle)) else {
             return;
         };
-        if !self.owned_gate.get() {
-            resume_unwind(payload);
+        match admitting {
+            Some(gate) => gate.defer_failure(payload),
+            None => resume_unwind(payload),
         }
-        let gate = self.gate.borrow().clone();
-        gate.defer_failure(payload);
     }
 }
 

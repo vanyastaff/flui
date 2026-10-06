@@ -255,6 +255,43 @@ fn a_listener_that_removes_itself_and_panics_keeps_the_first_failure() {
     assert!(gate.take_failure().is_none(), "a failure is reported once");
 }
 
+/// Owner code that moves the store to another presentation (installs its
+/// gate) and then panics: the failure belongs to the presentation that
+/// admitted the grant, whose gate it waits in.
+fn a_failure_after_the_store_changes_gate_waits_at_the_admitting_gate() {
+    let store = InMemoryTextStore::new("");
+    let (admitting, next) = (CommitGate::new(), CommitGate::new());
+    store.set_commit_gate(admitting.clone());
+    let (weak, moved_to) = (Rc::downgrade(&store), next.clone());
+    store.set_owner_listener(Some(Rc::new(move || {
+        if let Some(store) = weak.upgrade() {
+            store.set_commit_gate(moved_to.clone());
+        }
+        panic!("owner failure after moving");
+    })));
+    let outcome = store.request_lock(
+        LockGrant::read_write(|session| {
+            session.insert_at_selection("a").expect("in range");
+        }),
+        LockTiming::Sync,
+    );
+    store.set_owner_listener(None);
+    assert_eq!(outcome, Ok(LockOutcome::Granted));
+    let parked = next.take_failure();
+    let misplaced = parked.is_some();
+    if let Some(payload) = parked {
+        flui_foundation::panic::retain_opaque_payload(payload);
+    }
+    let first = admitting.take_failure();
+    assert!(
+        !misplaced && first.is_some(),
+        "the failure waits at the admitting gate, not the one installed during settle"
+    );
+    if let Some(payload) = first {
+        flui_foundation::panic::retain_opaque_payload(payload);
+    }
+}
+
 #[test]
 fn settling_runs_owner_code_outside_the_lock() {
     let cases: &[(&str, fn())] = &[
@@ -273,6 +310,10 @@ fn settling_runs_owner_code_outside_the_lock() {
         (
             "a_listener_that_removes_itself_and_panics_keeps_the_first_failure",
             a_listener_that_removes_itself_and_panics_keeps_the_first_failure,
+        ),
+        (
+            "a_failure_after_the_store_changes_gate_waits_at_the_admitting_gate",
+            a_failure_after_the_store_changes_gate_waits_at_the_admitting_gate,
         ),
     ];
     let mut failures = Vec::new();
