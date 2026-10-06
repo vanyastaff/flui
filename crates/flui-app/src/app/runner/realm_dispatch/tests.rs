@@ -199,6 +199,97 @@ fn install_resolves_execution_services_and_teardown_shuts_them_down() {
     teardown_platform_realm();
 }
 
+/// The input wiring every runner installs answers the platform with the
+/// realm's own decision: an Alt+F4 nothing handled keeps the platform
+/// default (the native backend then closes the window), and one a shortcut
+/// consumed prevents it. Pointer input no handler consumes is still reported
+/// handled, since Android redraws only for handled input.
+fn system_key_default_follows_the_realms_decision() {
+    use flui_interaction::events::{Code, Modifiers};
+    use flui_interaction::testing::input::KeyEventBuilder;
+
+    let window = test_window();
+    let dispatcher = install_platform_realm(crate::app::ui_realm::UiRealm::for_test(), &window);
+    install_input_wiring(dispatcher, window.as_ref());
+    let native = window
+        .as_any()
+        .downcast_ref::<flui_platform::MockWindow>()
+        .expect("headless test window");
+    let alt_f4 = || {
+        PlatformInput::Keyboard(
+            KeyEventBuilder::new(Code::F4)
+                .with_modifiers(Modifiers::ALT)
+                .build(),
+        )
+    };
+
+    assert!(
+        !native.inject_event(alt_f4()).default_prevented,
+        "an unconsumed system key keeps the platform default"
+    );
+    assert!(
+        native.inject_event(down_input(4.0)).default_prevented,
+        "pointer input stays handled whether or not anything consumed it"
+    );
+
+    // A key arriving while an owner turn is in flight queues behind it, so
+    // its outcome is unknown when the platform asks: the default is
+    // prevented then, and the key is still delivered once the turn ends.
+    let delivered = Rc::new(std::cell::Cell::new(0_usize));
+    let in_turn = Rc::new(std::cell::Cell::new(None));
+    let (delivered_in_handler, delivered_in_turn, in_turn_result) = (
+        Rc::clone(&delivered),
+        Rc::clone(&delivered),
+        Rc::clone(&in_turn),
+    );
+    let turn_window = std::sync::Arc::clone(&window);
+    dispatch_platform_realm(
+        dispatcher,
+        RealmTask::Frame(Box::new(move |realm| {
+            realm.focus_manager().add_global_key_handler(Rc::new(
+                move |_: &flui_interaction::events::KeyboardEvent| {
+                    delivered_in_handler.set(delivered_in_handler.get() + 1);
+                    false
+                },
+            ));
+            let native = turn_window
+                .as_any()
+                .downcast_ref::<flui_platform::MockWindow>()
+                .expect("headless test window");
+            in_turn_result.set(Some((
+                native.inject_event(alt_f4()).default_prevented,
+                delivered_in_turn.get(),
+            )));
+        })),
+    )
+    .expect("the owner turn runs, then the queued key");
+    assert_eq!(
+        in_turn.get(),
+        Some((true, 0)),
+        "a key queued behind an owner turn prevents the default before delivery"
+    );
+    assert_eq!(
+        delivered.get(),
+        1,
+        "the queued key is delivered after the turn"
+    );
+
+    dispatch_platform_realm(
+        dispatcher,
+        RealmTask::Frame(Box::new(|realm| {
+            realm.focus_manager().add_global_key_handler(Rc::new(
+                |event: &flui_interaction::events::KeyboardEvent| event.code == Code::F4,
+            ));
+        })),
+    )
+    .expect("install the shortcut");
+    assert!(
+        native.inject_event(alt_f4()).default_prevented,
+        "a consumed system key prevents the platform default"
+    );
+    teardown_platform_realm();
+}
+
 fn late_event_never_crosses_realm_incarnations() {
     let stale = install_test_realm();
     let removed = APP_RUNTIME.with(|slot| slot.borrow_mut().realms.remove(&stale.address.realm_id));
@@ -983,6 +1074,10 @@ fn realm_dispatch_matrix() {
             (
                 "install_resolves_execution_services_and_teardown_shuts_them_down",
                 install_resolves_execution_services_and_teardown_shuts_them_down as fn(),
+            ),
+            (
+                "system_key_default_follows_the_realms_decision",
+                system_key_default_follows_the_realms_decision as fn(),
             ),
             (
                 "late_event_never_crosses_realm_incarnations",

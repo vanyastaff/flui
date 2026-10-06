@@ -206,7 +206,16 @@ impl UiRealm {
     /// Pointer events are coalesced by the target presentation's own
     /// `GestureBinding` — high-frequency move events are stored and flushed
     /// once per frame by the draw step of [`Self::pump`].
-    pub fn handle_input_addressed(&self, presentation_id: PresentationId, input: PlatformInput) {
+    ///
+    /// Returns whether a handler consumed the event: a key event a global
+    /// key handler (a shortcut) or a focused node handled. Every other kind,
+    /// and any event dropped above, returns `false`, so the host may keep
+    /// its own default for it (Alt+F4, the system menu).
+    pub fn handle_input_addressed(
+        &self,
+        presentation_id: PresentationId,
+        input: PlatformInput,
+    ) -> bool {
         let target_id = match &input {
             PlatformInput::Keyboard(_) => self.focus_coordinator.active(),
             PlatformInput::Pointer(_) | PlatformInput::Ime(_) | PlatformInput::DragDrop(_) => {
@@ -220,7 +229,7 @@ impl UiRealm {
                 input_kind = input_kind(&input),
                 "dropping input addressed to a presentation this realm no longer hosts"
             );
-            return;
+            return false;
         };
         if presentation.closing_requested.get()
             || self.host_lifecycle.get() == HostLifecycle::Observed(AppLifecycleState::Detached)
@@ -232,7 +241,7 @@ impl UiRealm {
                 input_kind = input_kind(&input),
                 "dropping input due to presentation lifecycle"
             );
-            return;
+            return false;
         }
         // Telemetry: stamp this event's arrival on the RESOLVED target's own
         // clock (never a wall-clock read) before dispatch, so a consumer can
@@ -254,6 +263,7 @@ impl UiRealm {
                     presentation.text_input().dispatch(&ime_event);
                 }));
                 self.finish_addressed_input_dispatch(presentation, dispatch);
+                false
             }
             PlatformInput::Pointer(pointer_event) => {
                 let should_hold_pointer = presentation.frame_commit_state()
@@ -267,20 +277,23 @@ impl UiRealm {
                         .held_pointer_input()
                         .borrow_mut()
                         .append_with_active_contact(pointer_event, has_active_contact_sequence);
-                    return;
+                    return false;
                 }
                 let dispatch = Self::dispatch_pointer_event_entered(presentation, &pointer_event);
                 self.finish_addressed_input_dispatch(presentation, dispatch);
+                false
             }
             PlatformInput::Keyboard(keyboard_event) => {
                 let clock = presentation.clock();
                 clock.stamp_input_epoch(clock.now());
+                let mut handled = false;
                 let dispatch = catch_unwind(AssertUnwindSafe(|| {
-                    presentation
+                    handled = presentation
                         .focus_manager()
                         .dispatch_key_event(&keyboard_event);
                 }));
                 self.finish_addressed_input_dispatch(presentation, dispatch);
+                handled
             }
             PlatformInput::DragDrop(drag_drop_event) => {
                 // Not stamped (see this method's own doc): this event is
@@ -290,6 +303,7 @@ impl UiRealm {
                     drag_drop_kind = drag_drop_kind(&drag_drop_event),
                     "drag-and-drop input received; realm routing not implemented yet, dropping"
                 );
+                false
             }
         }
     }

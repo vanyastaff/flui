@@ -122,6 +122,23 @@ Gesture-arena deadlines are the other half of the gating story, and were already
 
 **The actuator.** A standalone winit 0.30.13 probe of this exact shape (armed deadline already past, no `new_events` override) spun `about_to_wait` at roughly 1.3–1.4 MHz. The fix: `WinitApp::new_events` calls `request_redraw()` on every window this platform currently tracks when `StartCause::ResumeTimeReached` fires — this queues a REAL `WindowEvent::RedrawRequested` for the next iteration, re-entering `dispatch_request_frame`/`on_request_frame`/`wake_action` exactly like any other wake in this backend, never a second, parallel produce path. With the actuator and a real 100 ms deadline, the same probe ran 6 iterations in 500 ms and resolved the deadline within tens of microseconds of its instant. The probe was a one-off measurement, not part of the automated suite.
 
+**Native Win32.** The native loop honours the same hook. When the hook returns
+a deadline, the loop waits in `MsgWaitForMultipleObjectsEx` for at most the time
+remaining (rounded up to whole milliseconds) instead of parking in
+`GetMessageW`; when the deadline passes it invalidates every live window, so
+the next `WM_PAINT` delivers the frame. A minimized or hidden window is the
+exception: Windows does not paint it, so an invalidation would strand the
+deadline until unrelated input. Its frame callback is instead dispatched
+directly and synchronously from the loop's deadline step, outside any
+`WM_PAINT`, before the loop dispatches another message or queries the hook
+again. No platform or window-registry lock is held across that call, so the
+callback may re-enter the platform (open or close windows, replace the hook,
+request quit); windows it opens during the step are not visited by it. A due
+deadline is delivered before the hook is queried again. A deadline is delivered once: the same instant from the
+same hook does not re-arm until the hook has returned `None`. Replacing the hook
+discards a deadline armed by the old one. Input, paint and quit messages are
+dispatched as usual while a deadline is armed.
+
 **The deadline itself, and why a boolean was not enough.** The gesture arena's pre-existing `has_pending_deadline`/`has_pending_deadlines` answer only "is one armed", never "when". `GestureArenaMember` gains a parallel `next_deadline(&self) -> Option<web_time::Instant>` (default `None`, mirrors `has_pending_deadline`'s own default-false shape), implemented for `LongPressGestureRecognizer` (`down_time + long_press_timeout()`, guarded by the same `Possible`-phase check `has_pending_deadline` uses) and `DoubleTapGestureRecognizer` (`first_tap_time + double_tap_timeout()`, guarded by the same `WaitingForSecond`-phase check) — both computed from state the recognizer already held privately, not a new clock read. `GestureArena::next_deadline`/`GestureBinding::next_deadline` aggregate the min over live members, same snapshot discipline as `has_pending_deadlines`.
 
 **N realms on one loop thread.** `UiRealm::next_wake` is the min over that realm's own presentations' `GestureBinding::next_deadline`; `AppRuntime::next_wake` is the min over every hosted realm's `next_wake` — the loop-owning `AppRuntime` is the only component that can see every realm at once (a realm cannot see its siblings). The aggregate takes the earlier of any two realms' deadlines regardless of install order. A realm currently checked out for dispatch (`slot.realm` is `None`) contributes nothing — correct, since `next_wake` is only ever consulted from `about_to_wait`, after every dispatch for that iteration has already returned every realm to its slot.

@@ -6,7 +6,7 @@ use super::host::{
     APP_RUNTIME, install_owner_platform, runtime_wake_callback, with_owner_platform,
 };
 use super::realm_dispatch::{
-    PlatformToUi, RealmTask, dispatch_platform_realm, install_platform_realm,
+    PlatformToUi, RealmTask, dispatch_platform_realm, install_input_wiring, install_platform_realm,
     install_surface_applier,
 };
 use crate::app::AppConfig;
@@ -23,10 +23,7 @@ where
     use std::sync::Arc;
 
     use flui_engine::Renderer;
-    use flui_platform::{
-        WindowOptions,
-        traits::{DispatchEventResult, PlatformInput},
-    };
+    use flui_platform::WindowOptions;
     use parking_lot::Mutex;
 
     use flui_runtime::pump::SampledClock;
@@ -167,13 +164,7 @@ where
         }
 
         // 4. Register input callback
-        window.on_input(Box::new(move |input: PlatformInput| {
-            let _ = dispatch_platform_realm(
-                realm_dispatch,
-                RealmTask::Event(PlatformToUi::Input(input)),
-            );
-            DispatchEventResult::resolved(false, true)
-        }));
+        install_input_wiring(realm_dispatch, window.as_ref());
 
         // 5. Register frame callback
         let renderer_frame = Arc::clone(&renderer);

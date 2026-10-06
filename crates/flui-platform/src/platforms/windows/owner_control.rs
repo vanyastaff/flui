@@ -12,7 +12,7 @@
 //! `Platform::request_exit_policy_reevaluation` from any thread) is posted
 //! here as one coalesced message, so the hook always runs on a fresh owner
 //! turn rather than nested inside whatever code destroyed the window.
-use super::platform::{WindowIdentity, WindowMap};
+use super::platform::{FrameCount, WindowIdentity, WindowMap};
 use crate::{
     PlatformError, WakeRegistrationError,
     shared::{
@@ -64,6 +64,7 @@ pub(super) struct OwnerControlContext {
     signal: Arc<OwnerSignal>,
     handlers: Rc<RefCell<PlatformHandlers>>,
     turn: Rc<OwnerTurnSlot>,
+    frames: Rc<FrameCount>,
     /// The platform's tracked top-level windows, read by the exit-policy
     /// check. Weak: the owner window does not keep the platform's state alive.
     windows: Weak<WindowMap>,
@@ -81,6 +82,8 @@ pub(super) struct OwnerShares {
     pub(super) handlers: Rc<RefCell<PlatformHandlers>>,
     /// Where the owner-turn callback waits between turns.
     pub(super) turn: Rc<OwnerTurnSlot>,
+    /// Frame callbacks dispatched by every window this platform opens.
+    pub(super) frames: Rc<FrameCount>,
     /// Posts the owner's exit-policy check; handed to every window context
     /// so the last window's `WM_DESTROY` can ask for it.
     pub(super) exit_policy: ExitPolicyRequest,
@@ -136,7 +139,13 @@ pub(super) struct OwnerControl {
     gate: OwnerGate,
 }
 impl OwnerControl {
-    pub(super) fn new(windows: Weak<WindowMap>) -> Result<Self, PlatformError> {
+    /// Build the owner control under `identity`, which the caller reserved
+    /// before any native acquisition of its own (see
+    /// `WindowsPlatform::with_config`).
+    pub(super) fn new(
+        identity: WindowIdentity,
+        windows: Weak<WindowMap>,
+    ) -> Result<Self, PlatformError> {
         let registration = REGISTERED.get_or_init(|| {
             // SAFETY: class name lives forever; this exact procedure implements its ABI.
             unsafe {
@@ -174,13 +183,13 @@ impl OwnerControl {
                 },
             )
         }));
-        let identity = WindowIdentity::mint();
         let exit_policy_pending = Arc::new(AtomicBool::new(false));
         let context = Box::new(OwnerControlContext {
             identity,
             signal: Arc::clone(&signal),
             handlers: Rc::new(RefCell::new(PlatformHandlers::default())),
             turn: Rc::new(OwnerTurnSlot::default()),
+            frames: Rc::new(FrameCount::default()),
             windows,
             exit_policy_pending: Arc::clone(&exit_policy_pending),
         });
@@ -318,6 +327,7 @@ impl OwnerGate {
                 Ok(OwnerShares {
                     handlers: Rc::clone(&context.handlers),
                     turn: Rc::clone(&context.turn),
+                    frames: Rc::clone(&context.frames),
                     exit_policy: self.exit_policy_request(),
                 })
             }

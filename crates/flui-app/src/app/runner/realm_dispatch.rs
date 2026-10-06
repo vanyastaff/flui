@@ -122,7 +122,12 @@ const OWNER_TURN_BUDGET: usize = 32;
     )
 )]
 pub(in crate::app) enum PlatformToUi {
-    Input(flui_platform::traits::PlatformInput),
+    /// Platform input for the stamped presentation. `consumed` receives
+    /// whether a handler took it once it runs; see [`dispatch_platform_input`].
+    Input {
+        input: flui_platform::traits::PlatformInput,
+        consumed: std::sync::Arc<std::sync::OnceLock<bool>>,
+    },
     Resized {
         size: flui_foundation::geometry::Size<f64>,
         scale_factor: f64,
@@ -323,7 +328,9 @@ impl PlatformToUi {
         presentation_id: flui_foundation::PresentationId,
     ) {
         match self {
-            Self::Input(input) => realm.handle_input_addressed(presentation_id, input),
+            Self::Input { input, consumed } => {
+                let _ = consumed.set(realm.handle_input_addressed(presentation_id, input));
+            }
             Self::Resized { size, scale_factor } => {
                 // Take the applier out of THIS realm's slot, release the
                 // borrow, call it, then restore it — never call through a
@@ -955,6 +962,43 @@ pub(super) fn close_this_window(dispatcher: RealmDispatcher) {
     if let Err(error) = close_presentation(dispatcher, dispatcher.address.presentation_id) {
         tracing::warn!(?dispatcher, ?error, "close_this_window: dispatch refused");
     }
+}
+
+/// Route every input event of `window` to its realm: the one input wiring
+/// each runner installs.
+pub(super) fn install_input_wiring(
+    dispatcher: RealmDispatcher,
+    window: &(impl flui_platform::traits::PlatformWindow + ?Sized),
+) {
+    window.on_input(Box::new(move |input| {
+        dispatch_platform_input(dispatcher, input)
+    }));
+}
+
+/// Deliver a window's platform input to its realm and answer the platform
+/// with the realm's decision. A key no handler took keeps the platform's own
+/// default (Alt+F4 closes, Alt+Space opens the system menu); a consumed one
+/// prevents it. So does a key whose outcome is not known when the callback
+/// returns (queued behind the current owner turn, or refused), so a shortcut
+/// that will consume it later never races the default. Every other input
+/// (pointer, IME, drag and drop) is always reported handled: the realm owns
+/// it, and a backend that redraws only for handled input (Android) must keep
+/// doing so.
+fn dispatch_platform_input(
+    dispatcher: RealmDispatcher,
+    input: flui_platform::traits::PlatformInput,
+) -> flui_platform::DispatchEventResult {
+    let is_key = matches!(input, flui_platform::traits::PlatformInput::Keyboard(_));
+    let consumed = std::sync::Arc::new(std::sync::OnceLock::new());
+    let _ = dispatch_platform_realm(
+        dispatcher,
+        RealmTask::Event(PlatformToUi::Input {
+            input,
+            consumed: std::sync::Arc::clone(&consumed),
+        }),
+    );
+    let default_prevented = !is_key || consumed.get().copied().unwrap_or(true);
+    flui_platform::DispatchEventResult::resolved(false, default_prevented)
 }
 
 pub(super) fn dispatch_platform_realm(
