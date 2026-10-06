@@ -674,6 +674,49 @@ fn a_dry_run_fetches_nothing() {
     );
 }
 
+/// A fetch that fast-forwards origin/main onto an unmerged branch while the
+/// survey runs: the survey judges against the origin/main it started from,
+/// not the old first-parent chain paired with the new ancestry.
+fn a_fetch_during_the_survey_does_not_merge_a_branch() {
+    let fixture = Fixture::new();
+    let ahead = fixture.new_worktree("t/ahead");
+    commit(&ahead, "ahead.txt");
+    let main = fixture.main.clone();
+    let fetched = std::rc::Rc::new(std::cell::Cell::new(false));
+    let mut git = fixture.git();
+    git.after = Some(std::rc::Rc::new({
+        let fetched = std::rc::Rc::clone(&fetched);
+        move |args: &[String]| {
+            if !fetched.get() && args.starts_with(&["rev-list".into(), "--first-parent".into()]) {
+                fetched.set(true);
+                Git::new(main.clone())
+                    .run(&[
+                        "update-ref",
+                        "refs/remotes/origin/main",
+                        "refs/heads/t/ahead",
+                    ])
+                    .expect("fast-forward origin/main");
+            }
+        }
+    }));
+    let worktree = survey(&git)
+        .expect("survey")
+        .into_iter()
+        .find(|w| w.entry.branch.as_deref() == Some("t/ahead"))
+        .expect("the branch has a worktree");
+    assert!(
+        fetched.get(),
+        "the survey never read the first-parent chain"
+    );
+    assert_eq!(
+        classify(&worktree.facts),
+        Decision::Keep(Reason::Unmerged {
+            ahead: 1,
+            upstream_gone: false
+        })
+    );
+}
+
 /// `git worktree prune --verbose` names a stale record on stderr; both a dry
 /// run and a real prune report it, and only the real one drops it.
 fn a_stale_record_is_reported() {
@@ -823,6 +866,10 @@ fn worktree_contract() {
             ),
             ("a_dry_run_fetches_nothing", a_dry_run_fetches_nothing),
             ("a_stale_record_is_reported", a_stale_record_is_reported),
+            (
+                "a_fetch_during_the_survey_does_not_merge_a_branch",
+                a_fetch_during_the_survey_does_not_merge_a_branch,
+            ),
             (
                 "an_ignored_file_written_after_the_verdict_survives_removal",
                 an_ignored_file_written_after_the_verdict_survives_removal,

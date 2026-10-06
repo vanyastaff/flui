@@ -639,6 +639,11 @@ fn new(git: &Git, branch: &BranchName) -> anyhow::Result<PathBuf> {
 }
 
 /// Every worktree git records, with its facts.
+///
+/// origin/main, and each branch tip, is resolved to one commit first and every
+/// query asks about that commit: a fetch landing mid-survey must not pair the
+/// old first-parent chain with the new ancestry, which would read a branch
+/// fast-forwarded onto main as merged.
 fn survey(git: &Git) -> anyhow::Result<Vec<Worktree>> {
     let (main, entries) = git.worktrees()?;
     let root = main.join(ROOT_DIR);
@@ -648,8 +653,9 @@ fn survey(git: &Git) -> anyhow::Result<Vec<Worktree>> {
         "refs/heads",
         "refs/remotes",
     ])?);
+    let base = commit_id(git, BASE)?;
     let first_parent: HashSet<String> = git
-        .run(&["rev-list", "--first-parent", BASE])?
+        .run(&["rev-list", "--first-parent", &base])?
         .lines()
         .map(str::to_owned)
         .collect();
@@ -669,12 +675,11 @@ fn survey(git: &Git) -> anyhow::Result<Vec<Worktree>> {
         let tip = match &entry.branch {
             None => None,
             Some(branch) => {
-                let tip = format!("refs/heads/{branch}");
-                let sha = git.run(&["rev-parse", "--verify", &tip])?;
-                let ahead = git.run(&["rev-list", "--count", &format!("{BASE}..{tip}")])?;
+                let tip = commit_id(git, &format!("refs/heads/{branch}"))?;
+                let ahead = git.run(&["rev-list", "--count", &format!("{base}..{tip}")])?;
                 Some(Tip {
-                    reachable: git.succeeds(&["merge-base", "--is-ancestor", &tip, BASE])?,
-                    first_parent: first_parent.contains(sha.trim()),
+                    reachable: git.succeeds(&["merge-base", "--is-ancestor", &tip, &base])?,
+                    first_parent: first_parent.contains(&tip),
                     ahead: ahead
                         .trim()
                         .parse()
@@ -686,7 +691,7 @@ fn survey(git: &Git) -> anyhow::Result<Vec<Worktree>> {
         let changes = if missing {
             Changes::None
         } else {
-            Changes::from_status(&Git::new(entry.path.clone()).run_bytes(&[
+            Changes::from_status(&git.at(entry.path.clone()).run_bytes(&[
                 "status",
                 "--porcelain=v1",
                 "-z",
@@ -715,6 +720,19 @@ fn survey(git: &Git) -> anyhow::Result<Vec<Worktree>> {
         });
     }
     Ok(worktrees)
+}
+
+/// The commit `rev` names now, as a full object id.
+fn commit_id(git: &Git, rev: &str) -> anyhow::Result<String> {
+    Ok(git
+        .run(&[
+            "rev-parse",
+            "--verify",
+            "--end-of-options",
+            &format!("{rev}^{{commit}}"),
+        ])?
+        .trim()
+        .to_owned())
 }
 
 /// What `prune` did, one line per worktree.
@@ -796,7 +814,7 @@ fn remove(git: &Git, worktree: &Worktree, force: bool) -> anyhow::Result<Removed
     } else {
         Changes::None
     };
-    let now = Changes::from_status(&Git::new(path.clone()).run_bytes(&[
+    let now = Changes::from_status(&git.at(path.clone()).run_bytes(&[
         "status",
         "--porcelain=v1",
         "-z",
@@ -844,19 +862,54 @@ fn remove(git: &Git, worktree: &Worktree, force: bool) -> anyhow::Result<Removed
 /// `git`, run in one directory.
 struct Git {
     dir: PathBuf,
+    /// Called with the arguments of every command that completes, here or in a
+    /// [`Git::at`] made from this one: a test lands a concurrent change
+    /// between two git calls with it.
+    #[cfg(test)]
+    after: Option<AfterHook>,
 }
+
+/// [`Git`]'s test hook.
+#[cfg(test)]
+type AfterHook = std::rc::Rc<dyn Fn(&[String])>;
 
 impl Git {
     fn new(dir: PathBuf) -> Self {
-        Self { dir }
+        Self {
+            dir,
+            #[cfg(test)]
+            after: None,
+        }
+    }
+
+    /// The same `git`, run in `dir`.
+    #[cfg_attr(
+        not(test),
+        expect(clippy::unused_self, reason = "carries the test hook along")
+    )]
+    fn at(&self, dir: PathBuf) -> Self {
+        Self {
+            dir,
+            #[cfg(test)]
+            after: self.after.clone(),
+        }
     }
 
     fn output<S: AsRef<OsStr>>(&self, args: &[S]) -> anyhow::Result<std::process::Output> {
-        Command::new("git")
+        let out = Command::new("git")
             .args(args)
             .current_dir(&self.dir)
             .output()
-            .context("spawning `git`")
+            .context("spawning `git`")?;
+        #[cfg(test)]
+        if let Some(after) = &self.after {
+            let args: Vec<String> = args
+                .iter()
+                .map(|arg| arg.as_ref().to_string_lossy().into_owned())
+                .collect();
+            after(&args);
+        }
+        Ok(out)
     }
 
     /// The error for a command that failed.
