@@ -219,6 +219,20 @@ fn apply_state(node: &mut Node, flags: u64) {
     }
 }
 
+/// The FLUI action a platform value write reaches, by the precedence the
+/// Windows adapter applies (`accesskit_windows` 0.35): a node with a text
+/// value is written through the `Value` pattern as text, and a range without
+/// one through `RangeValue` as a number. A static label's value is its name
+/// (`Node::label_comes_from_value`), not a writable value.
+fn value_write_action(data: &SemanticsNodeData, role: Role) -> SemanticsAction {
+    let has_text_value = data.value.is_some() && role != Role::Label;
+    if data.numeric_range.is_some() && !has_text_value {
+        SemanticsAction::SetNumericValue
+    } else {
+        SemanticsAction::SetText
+    }
+}
+
 /// Translate the supported actions onto the AccessKit node.
 ///
 /// Several FLUI actions have no AccessKit counterpart and are intentionally not
@@ -476,6 +490,13 @@ pub(crate) fn to_node(data: &SemanticsNodeData) -> Node {
         node.set_min_numeric_value(range.min());
         node.set_max_numeric_value(range.max());
         node.set_numeric_value_step(range.step());
+        // UI Automation's `Value` and `RangeValue` patterns share one
+        // read-only property, and AccessKit reports a slider writable unless
+        // told otherwise: a write the precedence routes to a missing handler
+        // would report success and then be dropped by the owner.
+        if !has_action(data.actions, value_write_action(data, role)) {
+            node.set_read_only();
+        }
     }
     // FLUI's `hint` is supplementary prose about what a control does, which is
     // what AccessKit calls a description.
@@ -753,6 +774,44 @@ mod tests {
                  longer advertises {inbound:?} — the two tables have drifted",
             );
         }
+    }
+
+    /// A numeric range is writable on the platform exactly when the handler
+    /// a value write reaches exists: text first when the node also carries a
+    /// text value, the numeric handler otherwise. Any other range is read-only,
+    /// so a UIA `SetValue` is refused rather than reported and dropped.
+    #[test]
+    fn a_numeric_range_is_writable_only_through_the_handler_a_write_reaches() {
+        let range = crate::NumericRange::new(5.0, 0.0, 10.0, 1.0).expect("finite fixture");
+        let set_text = SemanticsAction::SetText.value();
+        let set_number = SemanticsAction::SetNumericValue.value();
+        // (row, text value, actions, read-only)
+        let rows: &[(&str, Option<&str>, u64, bool)] = &[
+            ("numeric_handler", None, set_number, false),
+            ("no_handler", None, 0, true),
+            ("text_handler_without_text", None, set_text, true),
+            ("increase_only", None, SemanticsAction::Increase.value(), true),
+            ("text_value_and_text_handler", Some("50%"), set_text, false),
+            ("text_value_and_numeric_handler", Some("50%"), set_number, true),
+        ];
+        let failures: Vec<_> = rows
+            .iter()
+            .filter(|&&(_, value, actions, read_only)| {
+                let data = SemanticsNodeData {
+                    actions,
+                    value: value.map(Into::into),
+                    numeric_range: Some(range),
+                    ..Default::default()
+                };
+                translate(&data).is_read_only() != read_only
+            })
+            .map(|&(name, ..)| name)
+            .collect();
+        assert!(failures.is_empty(), "range writability rows failed: {failures:?}");
+        assert!(
+            !translate(&SemanticsNodeData::default()).is_read_only(),
+            "a node without a range is not made read-only"
+        );
     }
 
     /// The role mapping's only pin. `SemanticsRole` is `#[non_exhaustive]` and
