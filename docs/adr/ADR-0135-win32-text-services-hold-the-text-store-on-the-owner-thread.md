@@ -151,7 +151,10 @@ composition must still end somewhere.
 - `flui-platform` `text_services::tests::the_text_services_answer_a_completion_for_its_store`,
   Windows only, against the real TSF in a hidden window: a completion queued behind a COM entry
   commits its store in place after a shutdown or without a document, and a store the host does
-  not serve, or any store after shutdown, is refused (§1, §3).
+  not serve, or any store after shutdown, is refused (§1, §3); a teardown whose observer
+  retirement and diagnostic both panic stays inside the COM entry, a completion TSF refuses
+  reports its teardown's failure ahead of its in-place recovery's, and a protection change
+  reaches TSF as a new context (§4, §5).
 - The Win32 text services' opt-in probe,
   `cargo test -p flui-platform --lib text_services -- --ignored --nocapture`, run 2026-10-06 with
   Microsoft IME ja-JP at 100 %: activation, `toukyou` → 東京, `TS_S_ASYNC` behind a shut gate,

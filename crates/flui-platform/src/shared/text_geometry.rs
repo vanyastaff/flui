@@ -95,18 +95,24 @@ pub fn range_rect_to_screen(
 /// `ratio`: the inverse of [`range_rect_to_screen`]'s offset and scale, for
 /// the point an input method asks about (TSF `GetACPFromPoint`).
 ///
-/// Every pair of `i32` coordinates has a finite answer: their difference
-/// is taken in `f64`, where it is exact, since it need not fit an `i32`.
+/// The difference of the two `i32` coordinates is taken in `f64`, where it
+/// is exact, since it need not fit an `i32`. Dividing it by the ratio can
+/// still overflow: a ratio below one grows it, and [`DevicePixelRatio`]
+/// admits any finite positive ratio. A point whose logical coordinates are
+/// not finite has no position in the document, nearest or exact, so the
+/// answer is `None`, which the caller reports as a point outside it (TSF
+/// `TS_E_INVALIDPOINT`).
 #[must_use]
 pub fn screen_point_to_client(
     screen: DevicePoint,
     client_origin: DevicePoint,
     ratio: DevicePixelRatio,
-) -> Point<f64> {
-    Point::new(
+) -> Option<Point<f64>> {
+    let point = Point::new(
         ratio.to_logical(f64::from(screen.x) - f64::from(client_origin.x)),
         ratio.to_logical(f64::from(screen.y) - f64::from(client_origin.y)),
-    )
+    );
+    (point.x.is_finite() && point.y.is_finite()).then_some(point)
 }
 
 /// `device` rounded outwards by `round`, unless it is within

@@ -23,7 +23,15 @@
 //! application's code; a panic there is caught, the operation's native
 //! cleanup (association, focus, `Pop`) still runs and the queue behind it
 //! still drains. The outermost host operation then raises the first such
-//! failure; under a COM entry, which never unwinds into TSF, it is logged.
+//! failure; under a COM entry, which never unwinds into TSF, it is logged,
+//! and the log (a user-installed subscriber) is contained too. A composition
+//! TSF did not end while such a failure was held is committed in place as
+//! the failure is raised, so the commit's own failures come after it.
+//!
+//! **A field's protection is static status for TSF** (`TS_SS_NOHIDDENTEXT`,
+//! read when a document is pushed; `OnStatusChange` carries dynamic status
+//! only), so a protection change replaces the field's document with a new
+//! one, as a host operation.
 //!
 //! Owner-thread only: nothing here is `Send` or `Sync`.
 
@@ -67,6 +75,30 @@ enum HostOp {
     CompleteComposition(Rc<dyn TextStore>),
     /// Replace a poisoned document with the empty one.
     DropPoisoned(Rc<DocumentState>),
+    /// Replace this document with a new one over the same store, so TSF
+    /// reads its static status again (a field's protection changed).
+    Reopen(Rc<DocumentState>),
+}
+
+/// Commits in place, when dropped, the compositions TSF did not end while a
+/// failure caught earlier in the host operation was held.
+///
+/// Raising that failure drops it during the failure's unwind, so a failure
+/// the commit's owner code parks in the store's gate is marked as parked
+/// while unwinding, and the owner's containment orders it behind the one
+/// raised (ADR-0142 item 8): the earlier failure stays authoritative.
+/// Outside an unwind (a COM entry, which only logs the failure) it commits
+/// as any completion does. A commit that panics is retained.
+struct Recovery(Vec<Rc<dyn TextStore>>);
+
+impl Drop for Recovery {
+    fn drop(&mut self) {
+        let mut calls = OwnerCalls::new();
+        for store in self.0.drain(..) {
+            calls.run(|| commit_composition_in_place(&*store));
+            calls.retire(store);
+        }
+    }
 }
 
 /// The focused field's TSF document.
@@ -105,6 +137,9 @@ pub(super) struct TextServices {
     /// host operation raises it once it is done; a COM entry, which must
     /// not unwind into TSF, logs it instead.
     failure: RefCell<Option<Box<dyn Any + Send>>>,
+    /// Stores whose composition TSF did not end while `failure` was held:
+    /// committed in place when it is raised or logged ([`Recovery`]).
+    recovery: RefCell<Vec<Rc<dyn TextStore>>>,
     me: Weak<TextServices>,
 }
 
@@ -190,6 +225,7 @@ impl TextServices {
             pending: RefCell::new(VecDeque::new()),
             poisonings: Cell::new(0),
             failure: RefCell::new(None),
+            recovery: RefCell::new(Vec::new()),
             me: me.clone(),
         }))
     }
@@ -232,7 +268,7 @@ impl TextServices {
     fn focused_store(&self) -> Option<Rc<dyn TextStore>> {
         let queued = self.pending.borrow().iter().rev().find_map(|op| match op {
             HostOp::Focus(store) => Some(store.clone()),
-            HostOp::CompleteComposition(_) | HostOp::DropPoisoned(_) => None,
+            HostOp::CompleteComposition(_) | HostOp::DropPoisoned(_) | HostOp::Reopen(_) => None,
         });
         queued.unwrap_or_else(|| self.focused_state().map(|state| Rc::clone(&state.store)))
     }
@@ -244,20 +280,28 @@ impl TextServices {
 
     /// A COM entry ended; the outermost one runs what was queued under it.
     /// A failure those operations caught cannot be handed back through TSF:
-    /// it is logged, not raised.
+    /// it is logged, not raised. The log runs a user-installed subscriber,
+    /// so it is contained too: nothing unwinds into TSF, and the failure's
+    /// payload is retained whatever the subscriber does.
     fn leave(&self) {
         self.entry_depth
             .set(self.entry_depth.get().saturating_sub(1));
         self.drain_pending();
         if self.entry_depth.get() == 0
-            && let Some(payload) = self.take_failure()
+            && let Some((payload, recovery)) = self.take_failure()
         {
-            tracing::error!(
-                target: "flui_platform::tsf",
-                panic = crate::shared::panic_boundary::panic_payload_message(&*payload),
-                "application code a TSF document's teardown reached panicked"
-            );
+            let mut calls = OwnerCalls::new();
+            calls.run(|| {
+                tracing::error!(
+                    target: "flui_platform::tsf",
+                    panic = crate::shared::panic_boundary::panic_payload_message(&*payload),
+                    "application code a TSF document's teardown reached panicked"
+                );
+            });
             retain_opaque_payload(payload);
+            drop(recovery);
+            // A failure the diagnostic raised is retained with the scope.
+            drop(calls);
         }
     }
 
@@ -273,16 +317,33 @@ impl TextServices {
         }
     }
 
-    fn take_failure(&self) -> Option<Box<dyn Any + Send>> {
-        self.failure.borrow_mut().take()
+    /// Commit `store`'s composition in place, which TSF did not end: now,
+    /// or, while a failure caught earlier in this host operation is held,
+    /// when that failure is raised ([`Recovery`]), so the recovery's own
+    /// failures are ordered after it.
+    fn commit_in_place(&self, store: Rc<dyn TextStore>) {
+        if self.failure.borrow().is_some() {
+            self.recovery.borrow_mut().push(store);
+        } else {
+            commit_composition_in_place(&*store);
+        }
+    }
+
+    /// The failure held for the outermost host operation, with the commits
+    /// held back behind it.
+    fn take_failure(&self) -> Option<(Box<dyn Any + Send>, Recovery)> {
+        let payload = self.failure.borrow_mut().take()?;
+        Some((payload, Recovery(self.recovery.take())))
     }
 
     /// Raise a failure the host operation that is returning caught, once no
-    /// other operation or COM entry is still running under it.
+    /// other operation or COM entry is still running under it; the commits
+    /// held back behind it run during its unwind.
     fn raise_failure(&self) {
         if self.entry_depth.get() == 0
-            && let Some(payload) = self.take_failure()
+            && let Some((payload, recovery)) = self.take_failure()
         {
+            let _recovery = recovery;
             resume_unwind(payload);
         }
     }
@@ -295,6 +356,21 @@ impl TextServices {
         self.pending
             .borrow_mut()
             .push_back(HostOp::DropPoisoned(Rc::clone(state)));
+    }
+
+    /// `state`'s store changed its protection. TSF reads a document's static
+    /// status (`TS_SS_NOHIDDENTEXT`) once, when it is pushed, and
+    /// `OnStatusChange` reports dynamic status only, so the document is
+    /// replaced by a new one over the same store. A host operation, queued
+    /// under a TSF call like any other.
+    ///
+    /// # Panics
+    ///
+    /// Resumes the first panic of application code the replacement reached
+    /// (the store's observer retirement), once TSF serves the new document.
+    fn reopen(&self, state: &Rc<DocumentState>) {
+        self.run_host_op(HostOp::Reopen(Rc::clone(state)));
+        self.raise_failure();
     }
 
     fn enter_host_op(&self) -> Depth<'_> {
@@ -337,7 +413,7 @@ impl TextServices {
             // A queued completion was answered `Deferred`: with TSF gone,
             // the composition is still committed, in place.
             if let HostOp::CompleteComposition(store) = op {
-                commit_composition_in_place(&*store);
+                self.commit_in_place(store);
             }
             return;
         }
@@ -348,7 +424,19 @@ impl TextServices {
                 // commit (no document for the store, or a refused lock) is
                 // committed in place here, keeping the text.
                 if self.terminate_composition(&store) != Some(CompositionEnd::Committed) {
-                    commit_composition_in_place(&*store);
+                    self.commit_in_place(store);
+                }
+            }
+            HostOp::Reopen(state) => {
+                let open = matches!(
+                    &*self.serving.borrow(),
+                    Serving::Field(document) if Rc::ptr_eq(&document.state, &state)
+                );
+                if open {
+                    self.close_document();
+                    if let Err(error) = self.open_document(Rc::clone(&state.store)) {
+                        tracing::warn!(target: "flui_platform::tsf", ?error, "could not reopen the TSF document");
+                    }
                 }
             }
             HostOp::DropPoisoned(state) => {
@@ -586,12 +674,9 @@ impl TextStoreHost for TextServices {
         self.drain_pending();
         if self.entry_depth.get() == 0 && self.failure.borrow().is_some() {
             // The answer does not reach the caller: what TSF did not commit
-            // is committed in place before the failure is raised.
-            if end != Some(CompositionEnd::Committed)
-                && let Err(payload) =
-                    catch_unwind(AssertUnwindSafe(|| commit_composition_in_place(&**store)))
-            {
-                self.keep_failure(payload);
+            // is committed in place as the failure is raised, behind it.
+            if end != Some(CompositionEnd::Committed) {
+                self.commit_in_place(Rc::clone(store));
             }
             self.raise_failure();
         }
@@ -604,10 +689,12 @@ impl TextStoreHost for TextServices {
 impl Drop for TextServices {
     fn drop(&mut self) {
         self.shutdown();
-        if let Some(payload) = self.take_failure() {
+        if let Some((payload, recovery)) = self.take_failure() {
             if std::thread::panicking() {
+                drop(recovery);
                 retain_opaque_payload(payload);
             } else {
+                let _recovery = recovery;
                 resume_unwind(payload);
             }
         }

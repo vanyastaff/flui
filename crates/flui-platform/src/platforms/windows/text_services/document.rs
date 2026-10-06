@@ -16,9 +16,9 @@ use std::rc::{Rc, Weak};
 
 use flui_foundation::geometry::{DevicePixelRatio, DevicePoint};
 use flui_platform_api::text_store::{
-    Composition, LockGrant, LockOutcome, LockTiming, PointMode, Selection, TextChange, TextStore,
-    TextStoreEdit, TextStoreError, TextStoreObserver, TextStoreRead, TextStoreStatus, Utf16Offset,
-    Utf16Range,
+    Composition, LockGrant, LockOutcome, LockTiming, OwnerCalls, PointMode, Selection, TextChange,
+    TextStore, TextStoreEdit, TextStoreError, TextStoreObserver, TextStoreRead, TextStoreStatus,
+    Utf16Offset, Utf16Range,
 };
 use windows::Win32::{
     Foundation::{
@@ -49,6 +49,9 @@ use crate::shared::text_geometry::{ScreenRect, range_rect_to_screen, screen_poin
 /// window's [`TextServices`].
 pub(super) struct DocumentState {
     pub(super) store: Rc<dyn TextStore>,
+    /// Whether the store was protected when the document opened: the
+    /// static status TSF read then, which no notification can change.
+    protected: bool,
     hwnd: HWND,
     services: Weak<TextServices>,
     sink: RefCell<Option<AdvisedSink>>,
@@ -75,6 +78,7 @@ impl DocumentState {
         services: Weak<TextServices>,
     ) -> Rc<Self> {
         Rc::new(Self {
+            protected: store.status().protected,
             store,
             hwnd,
             services,
@@ -279,12 +283,15 @@ fn store_error(error: TextStoreError) -> windows_core::Error {
     .into()
 }
 
-/// What `GetStatus` tells TSF about a store whose status is `status`, read
-/// again whenever the store reports a status change (`OnStatusChange`).
+/// What `GetStatus` tells TSF about a store whose status is `status`.
 ///
 /// A protected field's text cannot be read out, so it is not advertised as
 /// free of hidden text (`TS_SS_NOHIDDENTEXT`). It stays editable: no
-/// `TS_SD_READONLY`, which would refuse the input method's edits.
+/// `TS_SD_READONLY`, which would refuse the input method's edits. The flag
+/// is static: TSF reads it when the document is pushed and never again
+/// (`OnStatusChange` carries dynamic flags only), so a document answers
+/// with the protection it opened with, and a change replaces the document
+/// (`TextServices::reopen`).
 pub(super) fn ts_status(status: TextStoreStatus) -> TS_STATUS {
     TS_STATUS {
         dwDynamicFlags: 0,
@@ -386,13 +393,19 @@ impl TsfStore {
             Ok(result) => result,
             Err(payload) => {
                 state.poisoned.set(true);
-                let message = crate::shared::panic_boundary::panic_payload_message(&*payload);
-                tracing::error!(
-                    target: "flui_platform::tsf",
-                    method,
-                    panic = message,
-                    "a TSF call into the text store panicked; the document is poisoned"
-                );
+                // The log runs a user-installed subscriber: contained, so
+                // nothing it raises unwinds into TSF (a failure it raises
+                // is retained with the scope).
+                let mut diagnostics = OwnerCalls::new();
+                diagnostics.run(|| {
+                    tracing::error!(
+                        target: "flui_platform::tsf",
+                        method,
+                        panic = crate::shared::panic_boundary::panic_payload_message(&*payload),
+                        "a TSF call into the text store panicked; the document is poisoned"
+                    );
+                });
+                drop(diagnostics);
                 // A payload whose `Drop` panics must not unwind into TSF.
                 std::mem::forget(payload);
                 if let Some(services) = &services {
@@ -506,7 +519,11 @@ impl ITextStoreACP_Impl for TsfStore_Impl {
     }
 
     fn GetStatus(&self) -> windows_core::Result<TS_STATUS> {
-        self.com_entry("GetStatus", |state| Ok(ts_status(state.store.status())))
+        self.com_entry("GetStatus", |state| {
+            Ok(ts_status(
+                state.store.status().with_protected(state.protected),
+            ))
+        })
     }
 
     fn QueryInsert(
@@ -815,7 +832,8 @@ impl ITextStoreACP_Impl for TsfStore_Impl {
             let screen = unsafe { *ptscreen };
             let (scale, origin) = state.screen_frame();
             let logical =
-                screen_point_to_client(DevicePoint::new(screen.x, screen.y), origin, scale);
+                screen_point_to_client(DevicePoint::new(screen.x, screen.y), origin, scale)
+                    .ok_or_else(|| store_error(TextStoreError::PointOutside))?;
             let mode = if dwflags & GXFPF_ROUND_NEAREST == 0 {
                 PointMode::Exact
             } else {
@@ -1045,5 +1063,16 @@ impl TextStoreObserver for SinkObserver {
         self.notify(TS_AS_STATUS_CHANGE, "OnStatusChange", |sink| unsafe {
             sink.OnStatusChange(0)
         });
+        // A protection change is a static one, which TSF reads only from a
+        // new document.
+        let Some(state) = self.state.upgrade() else {
+            return;
+        };
+        if state.closed.get() || state.store.status().protected == state.protected {
+            return;
+        }
+        if let Some(services) = state.services.upgrade() {
+            services.reopen(&state);
+        }
     }
 }

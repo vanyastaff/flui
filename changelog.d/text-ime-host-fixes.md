@@ -7,6 +7,9 @@
   store's queued grants are still cancelled.
 - The Win32 text services contain a panic in a store's observer retirement: TSF is still moved back
   to the empty document, the panic is raised by the host operation afterwards and never unwinds
-  out of a TSF call.
-- The Win32 text services report a protected field's text as hidden to TSF (`GetStatus` follows
-  the store's status), and `GetACPFromPoint` no longer overflows for extreme screen coordinates.
+  out of a TSF call, even when the `tracing` subscriber logging it panics too. A composition
+  committed in place after such a panic reports its own failures behind it.
+- The Win32 text services report a protected field's text as hidden to TSF, and a change of the
+  field's protection opens a new TSF document so TSF reads the static status again.
+  `GetACPFromPoint` no longer overflows for extreme screen coordinates, and answers
+  `TS_E_INVALIDPOINT` for a point with no finite logical position.
