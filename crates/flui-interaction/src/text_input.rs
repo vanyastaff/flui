@@ -134,6 +134,9 @@ pub enum TextInputError {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum OwnerLifecycle {
     Open,
+    /// Refuses callers, but [`TextInputOwner::close_with_mode`] has not yet
+    /// disabled the platform or retired the clients.
+    Withdrawn,
     Closed,
 }
 
@@ -142,22 +145,27 @@ struct AttachedClient {
     client: TextInputClient,
 }
 
-/// Retire the independent client owners separately, preserving the first
-/// failure. After it, and while the thread is already unwinding, the remaining
-/// owners are retained rather than destroyed (ADR-0127).
+/// Retire the independent client owners separately, in the client's field
+/// order (store, then session callback), preserving the first failure. After
+/// it, and while the thread is already unwinding, the remaining owners are
+/// retained rather than destroyed (ADR-0127).
 fn retire_client(client: Option<AttachedClient>, first: &mut Option<RoutePanic>) {
     if let Some(client) = client {
-        let TextInputClient {
-            store,
-            on_session_start,
-        } = client.client;
-        retire_owner(
-            on_session_start,
-            first,
-            "text-input session callback retirement",
-        );
-        retire_owner(store, first, "text-input store retirement");
+        retire_client_owners(client.client, first);
     }
+}
+
+fn retire_client_owners(client: TextInputClient, first: &mut Option<RoutePanic>) {
+    let TextInputClient {
+        store,
+        on_session_start,
+    } = client;
+    retire_owner(store, first, "text-input store retirement");
+    retire_owner(
+        on_session_start,
+        first,
+        "text-input session callback retirement",
+    );
 }
 
 fn retire_stores(stores: Vec<Rc<dyn TextStore>>, first: &mut Option<RoutePanic>) {
@@ -262,10 +270,10 @@ impl TextInputOwner {
     }
 
     fn ensure_open(&self) -> Result<(), TextInputError> {
-        if self.state.borrow().lifecycle == OwnerLifecycle::Closed {
-            Err(TextInputError::Closed)
-        } else {
+        if self.state.borrow().lifecycle == OwnerLifecycle::Open {
             Ok(())
+        } else {
+            Err(TextInputError::Closed)
         }
     }
 
@@ -276,7 +284,13 @@ impl TextInputOwner {
             failure.finish();
             return Err(error);
         }
-        let platform = self.platform()?;
+        // No strong platform clone is held across the user store below: a
+        // store that closes this owner must leave the close as the
+        // capability's last owner, so a failing rejection of the client
+        // cannot destroy the backend during its unwind.
+        if self.platform.borrow().is_none() {
+            return Err(TextInputError::Unsupported);
+        }
 
         let current = self.next_token.get();
         let next = current
@@ -291,12 +305,21 @@ impl TextInputOwner {
         // ever requested on a store that does not yet follow the frame.
         client.store.set_commit_gate(self.gate.clone());
         // A user-defined store may close the owner while installing its gate.
+        // The rejected client was never admitted; its owners still retire
+        // one at a time, store first, behind the close-mode failure fence.
         if let Err(error) = self.ensure_open() {
             let mut failure = ClosePanic::for_rejection(self.close_mode.mode());
-            failure.retire(client);
+            let TextInputClient {
+                store,
+                on_session_start,
+            } = client;
+            failure.retire(store);
+            failure.retire(on_session_start);
             failure.finish();
             return Err(error);
         }
+        // Open, so close has not taken the capability.
+        let platform = self.platform()?;
         let transaction_open = self.is_transaction_open();
         let (enable_platform, replaced) = {
             let mut state = self.state.borrow_mut();
@@ -371,7 +394,7 @@ impl TextInputOwner {
     pub fn dispatch(&self, event: &ImeEvent) {
         let client = {
             let state = self.state.borrow();
-            if state.lifecycle == OwnerLifecycle::Closed {
+            if state.lifecycle != OwnerLifecycle::Open {
                 return;
             }
             state.active.as_ref().map(|active| active.client.clone())
@@ -551,13 +574,23 @@ impl TextInputOwner {
                 store,
                 on_session_start,
             } = active.client;
-            failure.retire(on_session_start);
             failure.retire(store);
+            failure.retire(on_session_start);
         }
         for store in retired {
             failure.retire(store);
         }
         failure.finish();
+    }
+
+    /// Refuse every later caller without running user code; a later
+    /// [`Self::close_with_mode`] still disables the platform and retires the
+    /// clients (ADR-0123).
+    pub(crate) fn withdraw(&self) {
+        let mut state = self.state.borrow_mut();
+        if state.lifecycle == OwnerLifecycle::Open {
+            state.lifecycle = OwnerLifecycle::Withdrawn;
+        }
     }
 
     /// Whether `token` currently names the active client.
@@ -598,7 +631,7 @@ impl Drop for TextInputOwner {
     fn drop(&mut self) {
         let mut failure = ClosePanic::for_close(CloseMode::Ordinary, self.close_mode.clone());
         let state = self.state.get_mut();
-        let disable = state.lifecycle == OwnerLifecycle::Open && state.active.is_some();
+        let disable = state.lifecycle != OwnerLifecycle::Closed && state.active.is_some();
         state.lifecycle = OwnerLifecycle::Closed;
         let active = state.active.take();
         let retired = std::mem::take(&mut state.retired);
@@ -615,8 +648,8 @@ impl Drop for TextInputOwner {
                 store,
                 on_session_start,
             } = active.client;
-            failure.retire(on_session_start);
             failure.retire(store);
+            failure.retire(on_session_start);
         }
         for store in retired {
             failure.retire(store);

@@ -812,6 +812,9 @@ impl DeviceWork {
                     "mouse callback panicked after an earlier mouse callback already \
                      panicked; only the first panic is resumed"
                 );
+                // A later payload's own Drop may panic: retained, it can
+                // neither replace the first failure nor abort (ADR-0104).
+                flui_foundation::panic::retain_opaque_payload(payload);
             }
         };
         for (callback, latch) in self.exit_callbacks {
@@ -877,6 +880,14 @@ mod tests {
         routing::{HitTestEntry, HitTestResult, InteractionLane, MouseRegionCallbacks},
     };
 
+    struct DropPanickingPayload;
+
+    impl Drop for DropPanickingPayload {
+        fn drop(&mut self) {
+            panic!("later payload drop");
+        }
+    }
+
     fn add_primary_mouse(tracker: &MouseTracker) {
         tracker.add_device(0, PointerType::Mouse, Offset::ZERO);
     }
@@ -900,6 +911,8 @@ mod tests {
                 .register_mouse_region(MouseRegionCallbacks {
                     on_exit: Some(Rc::new(move |_device, _position| {
                         later_counter.set(later_counter.get() + 1);
+                        // A second failure whose payload panics when dropped.
+                        panic::panic_any(DropPanickingPayload);
                     })),
                     ..MouseRegionCallbacks::default()
                 })
@@ -933,7 +946,12 @@ mod tests {
             });
         }));
 
-        assert!(panic.is_err(), "the first mouse callback panic must resume");
+        let payload = panic.expect_err("the first mouse callback panic must resume");
+        assert_eq!(
+            payload.downcast_ref::<&str>(),
+            Some(&"first exit panic"),
+            "a later payload cannot replace the first failure"
+        );
         assert_eq!(
             later_exit.get(),
             1,

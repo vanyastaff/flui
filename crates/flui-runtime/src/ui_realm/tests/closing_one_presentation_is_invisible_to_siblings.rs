@@ -362,7 +362,107 @@ impl flui_interaction::CustomGestureRecognizer for CloseArenaMember {
     fn on_arena_reject(&self, _: flui_interaction::PointerId) {
         let _ = (&self.captures.first, &self.captures.second);
         self.calls.set(self.calls.get() + 1);
+        CLOSE_REENTRY.with(|hook| {
+            if let Some(hook) = &*hook.borrow() {
+                hook();
+            }
+        });
     }
+}
+
+type SiblingHandles = (
+    Rc<FocusManager>,
+    TextInputHandle,
+    Rc<std::cell::RefCell<Option<flui_view::reactive::Reactive>>>,
+);
+
+/// Disposed while its realm drops: the sibling presentation it saved handles
+/// to must already refuse them.
+#[derive(Clone)]
+struct SiblingProbe {
+    graph: Rc<std::cell::RefCell<Option<flui_view::reactive::Reactive>>>,
+    sibling: Rc<std::cell::RefCell<Option<SiblingHandles>>>,
+    disposed: Rc<Cell<usize>>,
+}
+
+impl StatefulView for SiblingProbe {
+    type State = Self;
+
+    fn create_state(&self) -> Self::State {
+        self.clone()
+    }
+}
+
+impl ViewState<SiblingProbe> for SiblingProbe {
+    fn init_state(&mut self, ctx: &dyn flui_view::LifecycleContext) {
+        self.graph.borrow_mut().replace(ctx.reactive());
+    }
+    fn build(&self, _view: &SiblingProbe, _ctx: &dyn BuildContext) -> impl IntoView {
+        SizedBox::square(10.0)
+    }
+    fn dispose(&mut self) {
+        let sibling = self.sibling.borrow();
+        let (focus, input, graph) = sibling.as_ref().expect("sibling handles");
+        assert!(focus.is_closed(), "sibling focus is withdrawn");
+        assert_eq!(input.ensure_open(), Err(TextInputError::Closed));
+        assert_eq!(
+            graph
+                .borrow()
+                .as_ref()
+                .expect("sibling graph")
+                .try_signal(1_u32)
+                .expect_err("sibling graph is withdrawn"),
+            flui_view::SignalError::OwnerClosed
+        );
+        self.disposed.set(self.disposed.get() + 1);
+    }
+}
+
+impl View for SiblingProbe {
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateful(self)
+    }
+}
+
+/// Dropping a realm withdraws every presentation before any disposes: each
+/// presentation's dispose finds its sibling's saved handles refused.
+fn run_realm_sibling_child() {
+    let mut realm = UiRealm::for_test();
+    let a = realm.presentation_id();
+    let b = realm.install_second_presentation_for_test();
+    let disposed = Rc::new(Cell::new(0));
+    let graphs = [
+        Rc::new(std::cell::RefCell::new(None)),
+        Rc::new(std::cell::RefCell::new(None)),
+    ];
+    let siblings = [
+        Rc::new(std::cell::RefCell::new(None)),
+        Rc::new(std::cell::RefCell::new(None)),
+    ];
+    let probe = |index: usize| SiblingProbe {
+        graph: Rc::clone(&graphs[index]),
+        sibling: Rc::clone(&siblings[index]),
+        disposed: Rc::clone(&disposed),
+    };
+    realm.attach_root_widget(&probe(0)).expect("A mounts");
+    realm
+        .attach_root_widget_to_for_test(b, &probe(1))
+        .expect("B mounts");
+    let mut clock = flui_foundation::ManualClock::new();
+    let mut sink = ScriptedSink::new(|_, _| crate::sink::SubmitVerdict::Presented);
+    assert!(realm.pump(&mut clock, &mut sink).presented());
+    for (index, (own, other)) in [(a, b), (b, a)].into_iter().enumerate() {
+        let _ = own;
+        let presentation = realm.presentations.get(other).expect("sibling");
+        siblings[index].borrow_mut().replace((
+            presentation.focus_manager(),
+            presentation.text_input_handle(),
+            Rc::clone(&graphs[1 - index]),
+        ));
+    }
+    assert!(graphs.iter().all(|graph| graph.borrow().is_some()));
+    drop(realm);
+    assert_eq!(disposed.get(), 2, "both presentations disposed");
 }
 
 struct OwnershipWindow {
@@ -821,6 +921,10 @@ fn run_scoped_routes_child(fail_cursor: bool) {
     reason = "the arena requires Arc members; these hostile capture probes remain on the owner thread"
 )]
 pub(crate) fn run_presentation_close_child(kind: &str) {
+    if kind == "realm-sibling" {
+        run_realm_sibling_child();
+        return;
+    }
     if matches!(kind, "healthy-keys" | "competing-keys") {
         run_custom_key_child(kind == "competing-keys");
         return;
@@ -858,11 +962,13 @@ pub(crate) fn run_presentation_close_child(kind: &str) {
     let realm_drop = kind == "realm-prior";
     let outer_unwind = kind == "outer-unwind";
     let reentry = matches!(kind, "cursor-reentry" | "healthy-reentry");
+    let gesture_reentry = kind == "gesture-reentry";
     let focus_failure = matches!(kind, "focus" | "cursor-focus");
     let ime_failure = matches!(kind, "ime" | "cursor-ime");
     assert!(matches!(
         kind,
         "healthy"
+            | "gesture-reentry"
             | "cursor"
             | "focus"
             | "ime"
@@ -1079,6 +1185,47 @@ pub(crate) fn run_presentation_close_child(kind: &str) {
         });
     }
 
+    let rejected_member = if gesture_reentry {
+        // A recognizer rejected by the close reenters through saved handles:
+        // every presentation-wide capability is already withdrawn.
+        let target_focus = Rc::clone(&focus);
+        let target_input = input.clone();
+        let closed_key = observer.key.clone();
+        let captured = Rc::clone(&capabilities);
+        CLOSE_REENTRY.with(|hook| {
+            *hook.borrow_mut() = Some(Box::new(move || {
+                assert!(target_focus.is_closed(), "focus closes before rejection");
+                assert_eq!(target_input.ensure_open(), Err(TextInputError::Closed));
+                assert!(closed_key.with_current_state(|_| ()).is_none());
+                let captured = captured.borrow();
+                let captured = captured.as_ref().expect("mounted capabilities");
+                assert_eq!(
+                    captured.graph.try_signal(1_u32).expect_err("closed graph"),
+                    flui_view::SignalError::OwnerClosed
+                );
+                assert!(!captured.rebuild.is_active());
+            }));
+        });
+        let captures = DropCompetition {
+            first: CursorCapture {
+                fail: false,
+                drops: Arc::clone(&arena_drops),
+            },
+            second: CursorCapture {
+                fail: false,
+                drops: Arc::clone(&arena_drops),
+            },
+        };
+        Some(realm.gestures().arena().add(
+            flui_interaction::PointerId::PRIMARY,
+            Arc::new(CloseArenaMember {
+                calls: Rc::clone(&arena_calls),
+                captures,
+            }),
+        ))
+    } else {
+        None
+    };
     if between_rounds {
         // A pump renders content but does not adopt the initial window
         // lifecycle snapshot. Initialize it through the same host API as a
@@ -1207,6 +1354,11 @@ pub(crate) fn run_presentation_close_child(kind: &str) {
     } else {
         catch_unwind(AssertUnwindSafe(|| realm.close_presentation_entered(a)))
     };
+    if let Some(entry) = rejected_member {
+        CLOSE_REENTRY.with(|hook| hook.borrow_mut().take());
+        assert!(entry.member().is_none());
+        assert_eq!(arena_calls.get(), 1, "the close rejected the recognizer");
+    }
     if reentry {
         CLOSE_REENTRY.with(|hook| hook.borrow_mut().take());
         assert_eq!(
@@ -1401,6 +1553,8 @@ pub(crate) fn presentation_close_retirement_failures_preserve_focus_ime_and_sibl
         "realm-prior",
         "cursor-reentry",
         "healthy-reentry",
+        "gesture-reentry",
+        "realm-sibling",
         "healthy-platform",
         "window-owner",
         "bridge-owner",

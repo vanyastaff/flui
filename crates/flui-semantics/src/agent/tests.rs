@@ -467,6 +467,11 @@ fn advertised_actions_follow_the_uia_patterns() {
         c.set_value("hunter2");
         c.add_action(SemanticsAction::SetText, noop());
     });
+    f.add(Some(root), 10, |c| {
+        c.set_slider(true);
+        c.set_numeric_range(crate::NumericRange::new(2.5, 0.0, 10.0, 0.5).expect("finite range"));
+        c.add_action(SemanticsAction::SetNumericValue, noop());
+    });
 
     let button = f.only(e(2));
     assert_eq!(button.actions, [N::Invoke, N::Focus]);
@@ -508,6 +513,14 @@ fn advertised_actions_follow_the_uia_patterns() {
     assert_eq!(password.role, Role::PasswordInput);
     assert_eq!(password.value, None, "a password's value is never read");
     assert_eq!(password.actions, [N::SetValue]);
+
+    let slider = f.only(e(10));
+    assert_eq!(
+        slider.value.as_deref(),
+        Some("2.5"),
+        "a numeric node reads its number as the desktop RangeValue does"
+    );
+    assert_eq!(slider.actions, [N::SetValue]);
 }
 
 /// Which handlers a disclosure fixture registers.
