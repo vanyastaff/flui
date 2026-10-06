@@ -219,18 +219,40 @@ fn apply_state(node: &mut Node, flags: u64) {
     }
 }
 
-/// The FLUI action a platform value write reaches, by the precedence the
-/// Windows adapter applies (`accesskit_windows` 0.35): a node with a text
-/// value is written through the `Value` pattern as text, and a range without
-/// one through `RangeValue` as a number. A static label's value is its name
-/// (`Node::label_comes_from_value`), not a writable value.
-fn value_write_action(data: &SemanticsNodeData, role: Role) -> SemanticsAction {
+/// Whether some platform value write reaches a handler on this node, which is
+/// when it advertises `SetValue` and, for a range, when it is not read-only.
+///
+/// The handler follows the payload, not the node's shape:
+/// [`semantics_action_request_for`] sends a string (`ActionData::Value`) to
+/// `SetText` and a number (`ActionData::NumericValue`) to `SetNumericValue`.
+/// `accesskit_windows` 0.35 offers the `Value` pattern on a node with a text
+/// value and the `RangeValue` pattern on one with a numeric value,
+/// independently (`node.rs`, `is_value_pattern_supported` and
+/// `is_range_value_pattern_supported`), and their `SetValue` methods send a
+/// string and a number respectively. `accesskit_macos` 0.27 sends an
+/// `NSString` as a string and an `NSNumber` as a number from
+/// `setAccessibilityValue:`; `accesskit_atspi_common` 0.21 sends AT-SPI's
+/// `Value.CurrentValue` as a number. So a range is writable through its
+/// numeric handler whatever text it also shows, and through its text handler
+/// when it shows text. A node without a range is written as text only. A
+/// static label's value is its name (`Node::label_comes_from_value`), not a
+/// writable value.
+///
+/// AccessKit has one read-only flag, which `accesskit_windows` reports as
+/// both patterns' `IsReadOnly`, so a range showing text with only one of the
+/// two handlers is published writable through both. The owner offers a
+/// `Value` string to a range without a text handler as a number
+/// ([`SemanticsOwner::resolve_action`](crate::SemanticsOwner::resolve_action)),
+/// so only a string that is not a number is refused there; a range with
+/// only a text handler refuses every `RangeValue` write. Each refusal comes
+/// after the adapter reported the write accepted; marking the node read-only
+/// instead would hide the write that works.
+fn value_writable(data: &SemanticsNodeData, role: Role) -> bool {
     let has_text_value = data.value.is_some() && role != Role::Label;
-    if data.numeric_range.is_some() && !has_text_value {
-        SemanticsAction::SetNumericValue
-    } else {
-        SemanticsAction::SetText
-    }
+    let text_reaches = data.numeric_range.is_none() || has_text_value;
+    (text_reaches && has_action(data.actions, SemanticsAction::SetText))
+        || (data.numeric_range.is_some()
+            && has_action(data.actions, SemanticsAction::SetNumericValue))
 }
 
 /// Translate the supported actions onto the AccessKit node.
@@ -250,7 +272,7 @@ fn value_write_action(data: &SemanticsNodeData, role: Role) -> SemanticsAction {
 /// AccessKit does not count a node with an expanded state as invocable
 /// (`accesskit_consumer` 0.39, `Node::is_invocable`), so without this a
 /// tap-only expandable node could be neither invoked nor expanded.
-fn apply_actions(node: &mut Node, actions: u64, flags: u64, value_write: SemanticsAction) {
+fn apply_actions(node: &mut Node, actions: u64, flags: u64, value_writable: bool) {
     if has_action(actions, SemanticsAction::Tap) {
         node.add_action(accesskit::Action::Click);
     }
@@ -296,11 +318,10 @@ fn apply_actions(node: &mut Node, actions: u64, flags: u64, value_write: Semanti
     if has_action(actions, SemanticsAction::SetSelection) {
         node.add_action(accesskit::Action::SetTextSelection);
     }
-    // A value write reaches one handler, chosen by `value_write_action`'s
-    // precedence: a numeric handler only through a range with no text value
-    // (otherwise the write arrives as text, and the owner refuses a number it
-    // cannot check against a range), the text handler everywhere else.
-    if has_action(actions, value_write) {
+    // A string write reaches the text handler and a number the numeric one;
+    // `value_writable` decides whether any write the platform can send here
+    // has a handler (the owner refuses a number without a range to check it).
+    if value_writable {
         node.add_action(accesskit::Action::SetValue);
     }
     if has_action(actions, SemanticsAction::ScrollToOffset) {
@@ -489,11 +510,11 @@ pub(crate) fn to_node(data: &SemanticsNodeData) -> Node {
         node.set_min_numeric_value(range.min());
         node.set_max_numeric_value(range.max());
         node.set_numeric_value_step(range.step());
-        // UI Automation's `Value` and `RangeValue` patterns share one
-        // read-only property, and AccessKit reports a slider writable unless
-        // told otherwise: a write the precedence routes to a missing handler
-        // would report success and then be dropped by the owner.
-        if !has_action(data.actions, value_write_action(data, role)) {
+        // AccessKit reports a slider writable unless told otherwise
+        // (`accesskit_consumer` 0.39, `Node::is_read_only`): a range no write
+        // can reach is marked read-only, so a platform write is refused
+        // rather than reported and then dropped by the owner.
+        if !value_writable(data, role) {
             node.set_read_only();
         }
     }
@@ -555,7 +576,7 @@ pub(crate) fn to_node(data: &SemanticsNodeData) -> Node {
         &mut node,
         data.actions,
         data.flags,
-        value_write_action(data, role),
+        value_writable(data, role),
     );
 
     node.set_children(
@@ -776,10 +797,11 @@ mod tests {
     }
 
     /// A numeric range is writable on the platform, and advertises
-    /// `SetValue`, exactly when the handler a value write reaches exists: text
-    /// first when the node also carries a text value, the numeric handler
-    /// otherwise. Any other range is read-only, so a UIA `SetValue` is refused
-    /// rather than reported and dropped.
+    /// `SetValue`, exactly when a handler some platform write reaches exists:
+    /// the numeric handler for a number (UIA `RangeValue`), whatever text the
+    /// node shows, and the text handler for a string when the node shows text
+    /// (UIA `Value`). Any other range is read-only, so a UIA `SetValue` is
+    /// refused rather than reported and dropped.
     #[test]
     fn a_numeric_range_is_writable_only_through_the_handler_a_write_reaches() {
         let range = crate::NumericRange::new(5.0, 0.0, 10.0, 1.0).expect("finite fixture");
@@ -802,8 +824,15 @@ mod tests {
                 "text_value_and_numeric_handler",
                 Some("50%"),
                 set_number,
-                false,
+                true,
             ),
+            (
+                "text_value_and_both_handlers",
+                Some("50%"),
+                set_text | set_number,
+                true,
+            ),
+            ("text_value_and_no_handler", Some("50%"), 0, false),
         ];
         let failures: Vec<_> = rows
             .iter()

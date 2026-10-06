@@ -750,9 +750,15 @@ struct ValueShape {
 
 /// Publishes `shape`, then checks the wire value it reads, whether
 /// `set_value` is advertised, and which handler a wire `set_value` of `"7"`
-/// reaches. The desktop backend writes through the `Value` pattern ahead of
-/// `RangeValue`, so `expected` is the action it would invoke too.
+/// runs, with what. The desktop backend writes through the `Value` pattern
+/// ahead of `RangeValue`, so `expected` is the handler it would run too.
 fn value_case(shape: &ValueShape, value: Option<&str>, expected: Option<SemanticsAction>) {
+    let received = Arc::new(Mutex::new(Vec::new()));
+    let log = Arc::clone(&received);
+    let handler = move || -> crate::SemanticsActionHandler {
+        let log = Arc::clone(&log);
+        Arc::new(move |action, arguments| log.lock().expect("log").push((action, arguments)))
+    };
     let mut f = Fixture::new();
     let root = f.add(None, 1, |_| {});
     f.add(Some(root), 2, |c| {
@@ -771,10 +777,10 @@ fn value_case(shape: &ValueShape, value: Option<&str>, expected: Option<Semantic
             );
         }
         if shape.set_text {
-            c.add_action(SemanticsAction::SetText, noop());
+            c.add_action(SemanticsAction::SetText, handler());
         }
         if shape.set_number {
-            c.add_action(SemanticsAction::SetNumericValue, noop());
+            c.add_action(SemanticsAction::SetNumericValue, handler());
         }
     });
     let node = f.only(e(2));
@@ -795,16 +801,19 @@ fn value_case(shape: &ValueShape, value: Option<&str>, expected: Option<Semantic
         return;
     };
     let request = request.expect("an advertised set_value resolves");
-    assert_eq!(request.action, expected);
+    f.owner
+        .resolve_action(request)
+        .expect("the owner resolves an advertised set_value to a handler")
+        .invoke();
     let arguments = match expected {
         SemanticsAction::SetNumericValue => ActionArgs::SetNumericValue { value: 7.0 },
         _ => ActionArgs::SetText { text: "7".into() },
     };
-    assert_eq!(request.arguments, Some(arguments));
-    let _ = f
-        .owner
-        .resolve_action(request)
-        .expect("the owner invokes the handler the wire chose");
+    assert_eq!(
+        *received.lock().expect("log"),
+        [(expected, Some(arguments))],
+        "the handler that ran"
+    );
 }
 
 fn numeric_handler_without_range() {
@@ -854,12 +863,13 @@ fn text_and_numeric_with_only_a_numeric_handler() {
         set_text: false,
         set_number: true,
     };
-    value_case(&shape, Some("50%"), None);
+    value_case(&shape, Some("50%"), Some(SemanticsAction::SetNumericValue));
 }
 
-/// `set_value` is advertised only where a request can reach a handler, and a
-/// node with both a text value and a number takes text, as the desktop
-/// backend's `Value`-before-`RangeValue` precedence does.
+/// `set_value` is advertised only where a request can reach a handler. A
+/// node with both a text value and a number is written as text, as the
+/// desktop backend's `Value`-before-`RangeValue` precedence does, and that
+/// text reaches the numeric handler of a range without a text handler.
 #[test]
 fn set_value_follows_the_value_pattern_precedence() {
     let rows: &[(&str, fn())] = &[
