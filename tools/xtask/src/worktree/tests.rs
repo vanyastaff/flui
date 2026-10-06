@@ -481,6 +481,35 @@ fn a_commit_made_after_the_verdict_keeps_the_branch() {
     );
 }
 
+fn work_written_after_the_verdict_survives_removal() {
+    let fixture = Fixture::new();
+    let tasks = fixture.new_worktree("t/tasks");
+    commit(&tasks, "tasks.txt");
+    fixture.merge("t/tasks");
+    std::fs::write(
+        tasks.join("TASKS.md"),
+        "- [x] done
+",
+    )
+    .expect("write");
+    let worktree = fixture.survey_branch("t/tasks");
+    assert_eq!(classify(&worktree.facts), Decision::Remove { force: true });
+    // someone starts new work between the survey and the removal
+    std::fs::write(
+        tasks.join("late.txt"),
+        "unsaved
+",
+    )
+    .expect("write");
+    assert!(remove(&fixture.git(), &worktree, true).is_err());
+    assert_eq!(
+        std::fs::read_to_string(tasks.join("late.txt")).expect("late work survives"),
+        "unsaved
+"
+    );
+    assert!(tasks.join("TASKS.md").exists() && fixture.has_branch("t/tasks"));
+}
+
 /// A merged worktree with `target/` and, unless `secret` is `None`, an
 /// ignored file of that name; returns its path after a real prune.
 fn prune_merged_with_ignored(secret: Option<&str>) -> (Fixture, PathBuf, PruneReport) {
@@ -595,6 +624,10 @@ fn worktree_contract() {
             (
                 "a_commit_made_after_the_verdict_keeps_the_branch",
                 a_commit_made_after_the_verdict_keeps_the_branch,
+            ),
+            (
+                "work_written_after_the_verdict_survives_removal",
+                work_written_after_the_verdict_survives_removal,
             ),
             (
                 "an_ignored_file_keeps_a_merged_worktree",

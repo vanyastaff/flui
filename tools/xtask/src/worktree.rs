@@ -250,7 +250,7 @@ enum Changes {
     /// Nothing, or only disposable ignored entries.
     None,
     /// Only an untracked, unignored root `TASKS.md` (beside disposable ignored
-    /// entries), which `git worktree remove` needs `--force` to delete.
+    /// entries), which prune deletes itself after rechecking it is still alone.
     TasksOnly,
     /// Ignored entries that are not disposable, in `git status` order.
     Ignored(Vec<String>),
@@ -374,8 +374,9 @@ struct Facts {
 /// What `prune` does with a worktree.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Decision {
-    /// Remove the worktree (with `--force` when only `TASKS.md` stands in the
-    /// way) and delete its branch: origin/main contains it.
+    /// Remove the worktree and delete its branch: origin/main contains it.
+    /// `force` marks a lone untracked `TASKS.md`, which removal deletes after
+    /// rechecking that it is still the only change.
     Remove {
         force: bool,
     },
@@ -723,12 +724,26 @@ fn remove(git: &Git, worktree: &Worktree, force: bool) -> anyhow::Result<Removed
         std::fs::remove_dir_all(&target)
             .with_context(|| format!("removing {}", target.display()))?;
     }
-    let mut args = vec!["worktree", "remove"];
     if force {
-        args.push("--force");
+        // The survey's verdict may be stale: delete the lone `TASKS.md` only if
+        // it is still the only change, and never pass `--force`, so anything
+        // written since makes `git worktree remove` refuse instead of deleting it.
+        let status = git.run(&[
+            "-C",
+            utf8(path)?,
+            "status",
+            "--porcelain",
+            "--untracked-files=all",
+        ])?;
+        anyhow::ensure!(
+            status.trim() == "?? TASKS.md",
+            "{} changed since it was surveyed; keeping it",
+            path.display()
+        );
+        std::fs::remove_file(path.join("TASKS.md"))
+            .with_context(|| format!("removing {}", path.join("TASKS.md").display()))?;
     }
-    args.push(utf8(path)?);
-    git.run(&args)?;
+    git.run(&["worktree", "remove", utf8(path)?])?;
     let branch_kept = match &worktree.entry.branch {
         Some(branch) => git.run(&["branch", "-d", branch]).err().map(|error| {
             format!("{branch}: {error:#}; check it, then `git branch -D` it yourself")
