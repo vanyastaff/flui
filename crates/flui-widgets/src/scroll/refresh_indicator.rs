@@ -49,8 +49,8 @@ use flui_view::{
 };
 
 use crate::animated::VsyncScope;
-use crate::scroll::single_child_scroll_view::SingleChildScrollView;
 use crate::scroll::scrollable::presentation_device_pixel_ratio;
+use crate::scroll::single_child_scroll_view::SingleChildScrollView;
 use crate::scroll::{ClampingScrollPhysics, ScrollController, ScrollMetrics, SharedScrollPhysics};
 use crate::{AnimatedBuilder, ColoredBox, GestureDetector, Positioned, Stack};
 
@@ -553,9 +553,10 @@ impl ViewState<RefreshIndicator> for RefreshIndicatorState {
                         }
                         if details.reason == flui_interaction::GestureEndReason::Cancelled {
                             rc_end.set_pull_distance_px(0.0);
-                            let metrics = ScrollMetrics::from(&sc_end.position()).with_device_pixel_ratio(
-                                presentation_device_pixel_ratio(pipeline_end.as_ref()),
-                            );
+                            let metrics = ScrollMetrics::from(&sc_end.position())
+                                .with_device_pixel_ratio(presentation_device_pixel_ratio(
+                                    pipeline_end.as_ref(),
+                                ));
                             if let Some(sim) = ph_end.create_ballistic_simulation(&metrics, 0.0) {
                                 let _ = fc_fling.animate_with(sim);
                             }
@@ -580,9 +581,10 @@ impl ViewState<RefreshIndicator> for RefreshIndicatorState {
                                 // so spring-back still works without measurable velocity.
                                 if bounded.is_nan() { 0.0 } else { bounded }
                             };
-                            let metrics = ScrollMetrics::from(&sc_end.position()).with_device_pixel_ratio(
-                                presentation_device_pixel_ratio(pipeline_end.as_ref()),
-                            );
+                            let metrics = ScrollMetrics::from(&sc_end.position())
+                                .with_device_pixel_ratio(presentation_device_pixel_ratio(
+                                    pipeline_end.as_ref(),
+                                ));
                             if let Some(sim) =
                                 ph_end.create_ballistic_simulation(&metrics, fling_vel_px_per_sec)
                             {

@@ -20,7 +20,7 @@
 use std::sync::Arc;
 
 use flui_animation::simulation::{
-    BoundedFrictionSimulation, BouncingScrollSimulation, Simulation, SimulationBounds,
+    BouncingScrollSimulation, BoundedFrictionSimulation, Simulation, SimulationBounds,
     SpringDescription, SpringSimulation, Tolerance,
 };
 use flui_rendering::view::ScrollPosition;

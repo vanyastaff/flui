@@ -729,7 +729,10 @@ impl SpringSimulation {
                 // e^{−at}sinh(st)/s = e^{λs t}(1 − e^{−2st})/(2s).
                 let slow_decay = (slow * t).exp();
                 let gap = (-2.0 * s * t).exp_m1();
-                (0.5 * slow_decay * (2.0 + gap), slow_decay * -gap / (2.0 * s))
+                (
+                    0.5 * slow_decay * (2.0 + gap),
+                    slow_decay * -gap / (2.0 * s),
+                )
             }
         }
     }
@@ -1184,8 +1187,7 @@ impl BoundedFrictionSimulation {
         };
         let reach = if velocity == 0.0 {
             f64::INFINITY
-        } else if (velocity > 0.0 && position >= bound) || (velocity < 0.0 && position <= bound)
-        {
+        } else if (velocity > 0.0 && position >= bound) || (velocity < 0.0 && position <= bound) {
             0.0
         } else {
             friction.time_at_x(bound)
@@ -1319,7 +1321,11 @@ impl BouncingScrollSimulation {
                     bounds.min
                 };
                 let edge_secs = friction.time_at_x(edge);
-                let edge_secs = if edge_secs.is_finite() { edge_secs } else { 0.0 };
+                let edge_secs = if edge_secs.is_finite() {
+                    edge_secs
+                } else {
+                    0.0
+                };
                 let spring = edge_spring(edge, edge, friction.speed(edge_secs))?;
                 BouncingPhase::Handoff {
                     friction,

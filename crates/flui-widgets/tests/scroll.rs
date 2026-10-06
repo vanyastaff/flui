@@ -1068,7 +1068,9 @@ pub(crate) fn inverted_extents_do_not_fling() {
     ] {
         for physics in physics {
             assert!(
-                physics.create_ballistic_simulation(&metrics, 4000.0).is_none(),
+                physics
+                    .create_ballistic_simulation(&metrics, 4000.0)
+                    .is_none(),
                 "{physics:?} under {metrics:?}"
             );
         }
@@ -1093,7 +1095,10 @@ pub(crate) fn bouncing_fling_into_the_edge_overscrolls_and_returns() {
     scoped.dispatch_pointer_move(150.0, 180.0);
     scoped.dispatch_pointer_move(150.0, 150.0);
     scoped.dispatch_pointer_up(150.0, 150.0);
-    assert!(controller.pixels() < max_extent, "released inside the range");
+    assert!(
+        controller.pixels() < max_extent,
+        "released inside the range"
+    );
 
     let mut furthest = controller.pixels();
     for _ in 0..240 {

@@ -16,10 +16,10 @@ use crate::error::AnimationError;
 use crate::simulation::{
     Simulation, SimulationError, SpringDescription, SpringSimulation, Tolerance,
 };
-use std::time::Duration;
 use flui_foundation::geometry::{Offset, Size};
 use flui_painting::styling::Color;
 use smallvec::SmallVec;
+use std::time::Duration;
 
 /// A value that can be decomposed into, and rebuilt from, a fixed-width vector
 /// of scalar components, so each component can be animated by its own spring.
@@ -166,7 +166,13 @@ impl<T: TwoWayConverter> AnimatedValue<T> {
             .iter()
             .zip(goal.as_ref())
             .map(|(sim, &goal)| {
-                SpringSimulation::try_new(self.spring, sim.x(t), goal, sim.dx(t), Tolerance::DEFAULT)
+                SpringSimulation::try_new(
+                    self.spring,
+                    sim.x(t),
+                    goal,
+                    sim.dx(t),
+                    Tolerance::DEFAULT,
+                )
             })
             .collect::<Result<Components, _>>()
             .map_err(refused)?;

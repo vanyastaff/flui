@@ -84,10 +84,16 @@ fn assert_overflow<T: std::fmt::Debug>(result: Result<T, SimulationError>) {
 }
 
 fn mass_nan() {
-    assert_refused(SpringDescription::new(f64::NAN, 1.0, 1.0), SimulationParameter::Mass);
+    assert_refused(
+        SpringDescription::new(f64::NAN, 1.0, 1.0),
+        SimulationParameter::Mass,
+    );
 }
 fn mass_zero() {
-    assert_refused(SpringDescription::new(0.0, 1.0, 1.0), SimulationParameter::Mass);
+    assert_refused(
+        SpringDescription::new(0.0, 1.0, 1.0),
+        SimulationParameter::Mass,
+    );
 }
 fn stiffness_infinite() {
     assert_refused(
@@ -96,13 +102,22 @@ fn stiffness_infinite() {
     );
 }
 fn stiffness_negative() {
-    assert_refused(SpringDescription::new(1.0, -100.0, 1.0), SimulationParameter::Stiffness);
+    assert_refused(
+        SpringDescription::new(1.0, -100.0, 1.0),
+        SimulationParameter::Stiffness,
+    );
 }
 fn damping_zero_never_rests() {
-    assert_refused(SpringDescription::new(1.0, 100.0, 0.0), SimulationParameter::Damping);
+    assert_refused(
+        SpringDescription::new(1.0, 100.0, 0.0),
+        SimulationParameter::Damping,
+    );
 }
 fn damping_negative() {
-    assert_refused(SpringDescription::new(1.0, 100.0, -1.0), SimulationParameter::Damping);
+    assert_refused(
+        SpringDescription::new(1.0, 100.0, -1.0),
+        SimulationParameter::Damping,
+    );
 }
 fn frequency_overflows() {
     assert_overflow(SpringDescription::new(1e-300, 1e300, 1.0));
@@ -159,7 +174,10 @@ fn damping_fraction_zero() {
     );
 }
 fn response_overflows() {
-    assert_overflow(SpringDescription::with_response_and_damping(Duration::from_nanos(1), 1e300));
+    assert_overflow(SpringDescription::with_response_and_damping(
+        Duration::from_nanos(1),
+        1e300,
+    ));
 }
 fn damping_ratio_zero_panics() {
     let refused = std::panic::catch_unwind(|| SpringDescription::with_damping_ratio(1.0, 1.0, 0.0));
@@ -173,7 +191,13 @@ fn simulation_start_nan() {
 }
 fn simulation_end_infinite() {
     assert_refused(
-        SpringSimulation::try_new(spring(10.0, 1.0), 0.0, f64::INFINITY, 0.0, Tolerance::DEFAULT),
+        SpringSimulation::try_new(
+            spring(10.0, 1.0),
+            0.0,
+            f64::INFINITY,
+            0.0,
+            Tolerance::DEFAULT,
+        ),
         SimulationParameter::Position,
     );
 }
@@ -217,7 +241,10 @@ fn spring_constructors_refuse_outside_the_admitted_domain() {
         ("simulation start nan", simulation_start_nan),
         ("simulation end infinite", simulation_end_infinite),
         ("simulation velocity nan", simulation_velocity_nan),
-        ("simulation displacement overflows", simulation_displacement_overflows),
+        (
+            "simulation displacement overflows",
+            simulation_displacement_overflows,
+        ),
     ]);
 }
 
@@ -233,25 +260,113 @@ fn check_reference(zeta: f64, omega: f64, x0: f64, v0: f64, t: f64, x: f64, v: O
 }
 
 fn underdamped_half() {
-    check_reference(0.5, 10.0, 1.0, 0.0, 0.1, 0.659700153391702, Some(-5.33507195114693));
-    check_reference(0.5, 10.0, 1.0, 0.0, 0.25, -0.0233595799066923, Some(-2.74109898705702));
-    check_reference(0.5, 10.0, 1.0, 0.0, 1.0, -0.00217011673932620, Some(-0.0538548061605957));
+    check_reference(
+        0.5,
+        10.0,
+        1.0,
+        0.0,
+        0.1,
+        0.659700153391702,
+        Some(-5.33507195114693),
+    );
+    check_reference(
+        0.5,
+        10.0,
+        1.0,
+        0.0,
+        0.25,
+        -0.0233595799066923,
+        Some(-2.74109898705702),
+    );
+    check_reference(
+        0.5,
+        10.0,
+        1.0,
+        0.0,
+        1.0,
+        -0.00217011673932620,
+        Some(-0.0538548061605957),
+    );
 }
 fn critical() {
-    check_reference(1.0, 10.0, 1.0, 0.0, 0.1, 0.735758882342885, Some(-3.67879441171442));
-    check_reference(1.0, 10.0, 1.0, 0.0, 0.5, 0.0404276819945128, Some(-0.336897349954273));
-    check_reference(1.0, 10.0, -1.0, 5.0, 0.2, -0.270670566473225, Some(2.03002924854919));
+    check_reference(
+        1.0,
+        10.0,
+        1.0,
+        0.0,
+        0.1,
+        0.735758882342885,
+        Some(-3.67879441171442),
+    );
+    check_reference(
+        1.0,
+        10.0,
+        1.0,
+        0.0,
+        0.5,
+        0.0404276819945128,
+        Some(-0.336897349954273),
+    );
+    check_reference(
+        1.0,
+        10.0,
+        -1.0,
+        5.0,
+        0.2,
+        -0.270670566473225,
+        Some(2.03002924854919),
+    );
 }
 fn overdamped() {
-    check_reference(2.0, 10.0, 1.0, 0.0, 0.1, 0.822263423901810, Some(-2.13909130260279));
-    check_reference(2.0, 10.0, 1.0, 0.0, 0.5, 0.282171173975153, Some(-0.756075360853215));
-    check_reference(2.0, 10.0, 0.0, 10.0, 0.3, 0.129208025818252, Some(-0.346074592636829));
+    check_reference(
+        2.0,
+        10.0,
+        1.0,
+        0.0,
+        0.1,
+        0.822263423901810,
+        Some(-2.13909130260279),
+    );
+    check_reference(
+        2.0,
+        10.0,
+        1.0,
+        0.0,
+        0.5,
+        0.282171173975153,
+        Some(-0.756075360853215),
+    );
+    check_reference(
+        2.0,
+        10.0,
+        0.0,
+        10.0,
+        0.3,
+        0.129208025818252,
+        Some(-0.346074592636829),
+    );
 }
 fn lightly_damped_with_velocity() {
-    check_reference(0.2, TAU, -1.0, 5.0, 0.3, 0.588257945757625, Some(2.62367533686863));
+    check_reference(
+        0.2,
+        TAU,
+        -1.0,
+        5.0,
+        0.3,
+        0.588257945757625,
+        Some(2.62367533686863),
+    );
 }
 fn perceptual_half_second() {
-    check_reference(0.7, 4.0 * PI, -1.0, 0.0, 0.25, -0.0159125090286291, Some(1.52626471111652));
+    check_reference(
+        0.7,
+        4.0 * PI,
+        -1.0,
+        0.0,
+        0.25,
+        -0.0159125090286291,
+        Some(1.52626471111652),
+    );
 }
 fn critical_compose_default() {
     check_reference(
@@ -296,8 +411,14 @@ fn spring_matches_analytic_reference() {
         ("perceptual half second", perceptual_half_second),
         ("critical compose default", critical_compose_default),
         ("continuous through critical", continuous_through_critical),
-        ("overdamped large time stays finite", overdamped_large_time_stays_finite),
-        ("heavy damping keeps its slow root", heavy_damping_keeps_its_slow_root),
+        (
+            "overdamped large time stays finite",
+            overdamped_large_time_stays_finite,
+        ),
+        (
+            "heavy damping keeps its slow root",
+            heavy_damping_keeps_its_slow_root,
+        ),
     ]);
 }
 
@@ -371,11 +492,9 @@ fn more_bounce_overshoots_further() {
 }
 fn response_form_equals_duration_form() {
     for bounce in [0.0, 0.25, 0.9] {
-        let response = SpringDescription::with_response_and_damping(
-            Duration::from_millis(400),
-            1.0 - bounce,
-        )
-        .expect("admitted response spring");
+        let response =
+            SpringDescription::with_response_and_damping(Duration::from_millis(400), 1.0 - bounce)
+                .expect("admitted response spring");
         assert_eq!(response, perceptual(bounce), "bounce {bounce}");
     }
 }
@@ -383,10 +502,22 @@ fn response_form_equals_duration_form() {
 #[test]
 fn perceptual_branches_are_consistent() {
     crate::run_table(&[
-        ("bounce sign selects the regime", bounce_sign_selects_the_regime),
-        ("damping is continuous at zero bounce", damping_is_continuous_at_zero_bounce),
-        ("more bounce overshoots further", more_bounce_overshoots_further),
-        ("response form equals duration form", response_form_equals_duration_form),
+        (
+            "bounce sign selects the regime",
+            bounce_sign_selects_the_regime,
+        ),
+        (
+            "damping is continuous at zero bounce",
+            damping_is_continuous_at_zero_bounce,
+        ),
+        (
+            "more bounce overshoots further",
+            more_bounce_overshoots_further,
+        ),
+        (
+            "response form equals duration form",
+            response_form_equals_duration_form,
+        ),
     ]);
 }
 
@@ -417,8 +548,9 @@ fn assert_time_domain(sim: &dyn Simulation, start: f64, velocity: f64, end: f64)
 }
 fn spring_edges() {
     for zeta in [0.3, 1.0, 3.0] {
-        let sim = SpringSimulation::try_new(spring(20.0, zeta), 3.0, 10.0, -4.0, Tolerance::DEFAULT)
-            .expect("spring");
+        let sim =
+            SpringSimulation::try_new(spring(20.0, zeta), 3.0, 10.0, -4.0, Tolerance::DEFAULT)
+                .expect("spring");
         assert_time_domain(&sim, 3.0, -4.0, 10.0);
     }
 }
@@ -657,14 +789,24 @@ fn retarget_preserves_velocity() {
     let position = value.value();
     value.animate_to(0.0).expect("finite target");
     value.advance(Duration::from_millis(16));
-    assert!(value.value() > position, "{} should overshoot past {position}", value.value());
+    assert!(
+        value.value() > position,
+        "{} should overshoot past {position}",
+        value.value()
+    );
 }
 
 #[test]
 fn animated_value_never_latches_non_finite() {
     crate::run_table(&[
-        ("refuses non finite initial value", refuses_non_finite_initial_value),
-        ("refused target leaves the value unchanged", refused_target_leaves_the_value_unchanged),
+        (
+            "refuses non finite initial value",
+            refuses_non_finite_initial_value,
+        ),
+        (
+            "refused target leaves the value unchanged",
+            refused_target_leaves_the_value_unchanged,
+        ),
         (
             "retarget after rest starts still at the old target",
             retarget_after_rest_starts_still_at_the_old_target,

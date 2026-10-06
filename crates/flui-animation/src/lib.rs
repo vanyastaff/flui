@@ -127,7 +127,7 @@ pub use ext::{AnimatableExt, AnimationExt};
 pub use proxy::ProxyAnimation;
 pub use reverse::ReverseAnimation;
 pub use simulation::{
-    BoundedFrictionSimulation, BouncingScrollSimulation, FrictionSimulation, Simulation,
+    BouncingScrollSimulation, BoundedFrictionSimulation, FrictionSimulation, Simulation,
     SimulationBounds, SimulationError, SimulationParameter, SpringDescription, SpringSimulation,
     SpringType, Tolerance,
 };

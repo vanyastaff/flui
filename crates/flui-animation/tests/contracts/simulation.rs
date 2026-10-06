@@ -1,12 +1,13 @@
 //! Friction, bounds and the bouncing scroll fling.
 
 use flui_animation::simulation::{
-    BoundedFrictionSimulation, BouncingScrollSimulation, FrictionSimulation, Simulation,
+    BouncingScrollSimulation, BoundedFrictionSimulation, FrictionSimulation, Simulation,
     SimulationBounds, SimulationError, SimulationParameter, SpringDescription, Tolerance,
 };
 
 fn friction(drag: f64, position: f64, velocity: f64) -> FrictionSimulation {
-    FrictionSimulation::new(drag, position, velocity, Tolerance::DEFAULT).expect("admitted friction")
+    FrictionSimulation::new(drag, position, velocity, Tolerance::DEFAULT)
+        .expect("admitted friction")
 }
 
 fn weak_drag_preserves_frame_motion() {
@@ -32,7 +33,11 @@ fn weak_drag_preserves_arrival_time() {
 fn unreachable_and_stationary_queries() {
     let sim = friction(0.135, 0.0, 100.0);
     assert_eq!(sim.time_at_x(sim.final_x()), f64::INFINITY);
-    assert_eq!(sim.time_at_x(sim.final_x() * 2.0), f64::INFINITY, "past the rest");
+    assert_eq!(
+        sim.time_at_x(sim.final_x() * 2.0),
+        f64::INFINITY,
+        "past the rest"
+    );
     assert_eq!(sim.time_at_x(-1.0), f64::INFINITY, "behind the start");
     assert!(sim.time_at_x(f64::NAN).is_nan());
     let stationary = friction(0.135, 0.0, 0.0);
@@ -98,7 +103,10 @@ fn rests_when_the_remaining_glide_is_within_distance() {
     assert!(!sim.is_done(4.487_413_15));
     assert!(sim.is_done(4.487_413_16));
     let remaining = (sim.final_x() - sim.x(4.4874)).abs();
-    assert!(remaining > 0.5 && remaining < 0.5001, "remaining {remaining}");
+    assert!(
+        remaining > 0.5 && remaining < 0.5001,
+        "remaining {remaining}"
+    );
 }
 
 #[test]
@@ -113,7 +121,10 @@ fn friction_preserves_small_decay_and_position_time_roundtrips() {
             "unreachable and stationary queries",
             unreachable_and_stationary_queries,
         ),
-        ("drag outside the open unit interval", drag_outside_the_open_unit_interval),
+        (
+            "drag outside the open unit interval",
+            drag_outside_the_open_unit_interval,
+        ),
         (
             "rests when the remaining glide is within distance",
             rests_when_the_remaining_glide_is_within_distance,
@@ -130,7 +141,12 @@ fn unordered() {
     );
 }
 fn not_finite() {
-    for (min, max) in [(f64::NAN, 1.0), (0.0, f64::NAN), (f64::NEG_INFINITY, 0.0), (0.0, f64::INFINITY)] {
+    for (min, max) in [
+        (f64::NAN, 1.0),
+        (0.0, f64::NAN),
+        (f64::NEG_INFINITY, 0.0),
+        (0.0, f64::INFINITY),
+    ] {
         assert!(SimulationBounds::new(min, max).is_err(), "[{min}, {max}]");
     }
 }
@@ -190,7 +206,10 @@ fn hands_over_at(position: f64, velocity: f64, edge: f64) {
     let v_edge = velocity * drag.powf(t_edge);
     let h = 1e-9;
     let (before, after) = (sim.x(t_edge - h), sim.x(t_edge + h));
-    assert!((before - edge).abs() < 1e-5 && (after - edge).abs() < 1e-5, "{before} {after}");
+    assert!(
+        (before - edge).abs() < 1e-5 && (after - edge).abs() < 1e-5,
+        "{before} {after}"
+    );
     let (v_before, v_after) = (sim.dx(t_edge - h), sim.dx(t_edge + h));
     assert!(
         (v_after - v_before).abs() <= 1e-9 * v_edge.abs() + 1e-3,
@@ -199,7 +218,9 @@ fn hands_over_at(position: f64, velocity: f64, edge: f64) {
     assert!((v_before - v_edge).abs() <= 1e-9 * v_edge.abs() + 1e-3);
     // It overshoots the edge, then comes back to rest exactly on it.
     let outside = |x: f64| if edge > 50.0 { x > edge } else { x < edge };
-    let overshoot = (1..400).map(|i| sim.x(t_edge + f64::from(i) * 1e-3)).any(outside);
+    let overshoot = (1..400)
+        .map(|i| sim.x(t_edge + f64::from(i) * 1e-3))
+        .any(outside);
     assert!(overshoot, "a fling into the edge overscrolls");
     assert!(sim.is_done(t_edge + 10.0));
     assert_eq!(sim.x(t_edge + 10.0), edge);
@@ -215,8 +236,15 @@ fn from_the_edge_outward() {
 }
 fn friction_that_rests_inside_never_springs() {
     let bounds = SimulationBounds::new(0.0, 1000.0).expect("bounds");
-    let sim = BouncingScrollSimulation::new(edge_spring(), 0.135, 100.0, 200.0, bounds, Tolerance::DEFAULT)
-        .expect("bouncing");
+    let sim = BouncingScrollSimulation::new(
+        edge_spring(),
+        0.135,
+        100.0,
+        200.0,
+        bounds,
+        Tolerance::DEFAULT,
+    )
+    .expect("bouncing");
     let glide = friction(0.135, 100.0, 200.0);
     for t in [0.1, 0.5, 1.0] {
         assert_eq!(sim.x(t), glide.x(t));
@@ -226,8 +254,9 @@ fn friction_that_rests_inside_never_springs() {
 }
 fn outside_the_range_springs_back() {
     let bounds = SimulationBounds::new(0.0, 100.0).expect("bounds");
-    let sim = BouncingScrollSimulation::new(edge_spring(), 0.135, 120.0, 0.0, bounds, Tolerance::DEFAULT)
-        .expect("bouncing");
+    let sim =
+        BouncingScrollSimulation::new(edge_spring(), 0.135, 120.0, 0.0, bounds, Tolerance::DEFAULT)
+            .expect("bouncing");
     assert_eq!(sim.x(0.0), 120.0);
     assert!(sim.x(0.05) < 120.0);
     assert!(sim.is_done(10.0));
@@ -240,8 +269,14 @@ fn bouncing_simulation_hands_friction_to_spring_at_the_edge() {
         ("into the upper edge", into_the_upper_edge),
         ("into the lower edge", into_the_lower_edge),
         ("from the edge outward", from_the_edge_outward),
-        ("friction that rests inside never springs", friction_that_rests_inside_never_springs),
-        ("outside the range springs back", outside_the_range_springs_back),
+        (
+            "friction that rests inside never springs",
+            friction_that_rests_inside_never_springs,
+        ),
+        (
+            "outside the range springs back",
+            outside_the_range_springs_back,
+        ),
     ]);
 }
 
@@ -269,7 +304,10 @@ fn refused_tolerances() {
         (1.0, 0.0),
         (1.0, -1.0),
     ] {
-        assert!(Tolerance::new(distance, velocity).is_err(), "({distance}, {velocity})");
+        assert!(
+            Tolerance::new(distance, velocity).is_err(),
+            "({distance}, {velocity})"
+        );
     }
     for ratio in [f64::NAN, 0.0, -1.0, f64::INFINITY, 1e-310] {
         match Tolerance::for_device_pixel_ratio(ratio) {
@@ -301,6 +339,9 @@ fn tolerance_constructors_validate_and_scale_with_dpr() {
     crate::run_table(&[
         ("valid tolerances", valid_tolerances),
         ("refused tolerances", refused_tolerances),
-        ("device pixel ratio scales the rest", device_pixel_ratio_scales_the_rest),
+        (
+            "device pixel ratio scales the rest",
+            device_pixel_ratio_scales_the_rest,
+        ),
     ]);
 }
