@@ -8,6 +8,9 @@
 
 mod common;
 
+#[path = "activity_indicator.rs"]
+mod activity_indicator;
+
 #[path = "bottom_tab_bar.rs"]
 mod bottom_tab_bar;
 
@@ -34,6 +37,26 @@ mod tab_scaffold;
 
 #[path = "theme.rs"]
 mod theme;
+
+/// `CupertinoActivityIndicator`: tick alphas on virtual time, semantics and
+/// the controller's release.
+#[test]
+fn cupertino_activity_indicator_ticks_step() {
+    common::run_cases(&[
+        (
+            "activity_indicator::ticks step once per eighth of a second",
+            activity_indicator::ticks_step_once_per_eighth_of_a_second,
+        ),
+        (
+            "activity_indicator::announced as a loading spinner",
+            activity_indicator::announced_as_a_loading_spinner,
+        ),
+        (
+            "activity_indicator::unmount releases the controller",
+            activity_indicator::unmount_releases_the_controller,
+        ),
+    ]);
+}
 
 /// Component contracts, one row per widget: what mounts, how it announces, and its geometry.
 #[test]

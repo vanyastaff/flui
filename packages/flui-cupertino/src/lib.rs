@@ -83,6 +83,7 @@
 
 #![deny(missing_docs)]
 
+pub mod activity_indicator;
 pub mod app;
 pub mod bottom_tab_bar;
 pub mod button;
@@ -94,6 +95,7 @@ pub mod tab_scaffold;
 pub mod text_theme;
 pub mod theme;
 
+pub use activity_indicator::{CupertinoActivityIndicator, CupertinoActivityIndicatorState};
 pub use app::CupertinoApp;
 pub use bottom_tab_bar::{CupertinoTabBar, CupertinoTabBarItem};
 pub use button::{CupertinoButton, CupertinoButtonSize, CupertinoButtonState};

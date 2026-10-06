@@ -19,10 +19,11 @@
 mod measured {
     use flui_sdk::animation::ext::AnimatableExt as _;
     use flui_sdk::animation::{
-        Animation as _, AnimationController as _, AnimationStatus as _, ArcCurve as _,
-        ConstantAnimation as _, Curve as _, CurvedAnimation as _, Curves as _, FloatTween as _,
-        TickerFuture as _, Tween as _, UpdateScheduler as _, Vsync as _, VsyncRegistration as _,
-        VsyncRegistrationError as _, animate as _,
+        Animatable as _, Animation as _, AnimationController as _, AnimationStatus as _,
+        ArcCurve as _, ConstantAnimation as _, Cubic as _, Curve as _, CurvedAnimation as _,
+        Curves as _, FloatTween as _, JumpAt as _, Keyframes as _, Stagger as _,
+        StaggerOrigin as _, Steps as _, TickerFuture as _, Tween as _, UpdateScheduler as _,
+        Vsync as _, VsyncRegistration as _, VsyncRegistrationError as _, animate as _,
     };
     use flui_sdk::foundation::notifier::Listenable as _;
     use flui_sdk::foundation::observe::{
