@@ -467,3 +467,30 @@ changelog и combos (+0.5), crop и средние тона (+0.5), ревью P
    `#[non_exhaustive]`, а facade-тестам нужно задавать правило.
 4. **`HeadlessRenderer::adapter_info`** сохраняет имя: оно повторяет upstream-тип
    `wgpu::AdapterInfo` и точно его называет (правило именования не нарушено).
+
+## Изменения контракта после ревью T1 (2026-10-06, решение оркестратора)
+
+Основание — независимое ревью `render-proof/contract` @ `8c5a5ecc7` (блокеров нет). Вносится до
+старта T5: позже это ломающие изменения.
+
+1. `Reference::open` в режиме `Update` открывает отсутствующий файл как пустой эталон (первичная
+   запись); строка R14 на это.
+2. `conclude` в `Update` отказывает по Samples и калибровке, не по Size (Size сравнивается с эталоном,
+   который как раз обновляется). Строка без sample-точек отклоняется всегда. Тест эталонов вызывает
+   `conclude`.
+3. R7: тест частичного кадра доказывает, что пиксели вне damage не перерисованы (отравление
+   retained target через in-source seam), иначе он проходит при полной перерисовке.
+4. `ReferenceMode::for_row(row: &str, filter: Option<&str>) -> ReferenceMode` — чистая функция;
+   `from_env` — обёртка. Строка про glob-фильтр.
+5. `lay_out_with` выполняет `MountOptions::with_capabilities` или не принимает его.
+6. `AdapterSummary`: типизированный ключ — свои `#[non_exhaustive] enum Backend`, `DeviceType`,
+   `TestAdapter { Default, Fallback }`, `fn class(&self) -> AdapterClass`; строки только для отчёта.
+7. `ReferenceError::Missing { path }`, `Unreadable { path, reason }`. `Captured` —
+   `#[non_exhaustive]` с аксессорами.
+8. Качество: один table-runner в `tests/gpu_readback/main.rs`; политика пропуска GPU — модуль
+   `gpu_skip` под `cfg(any(test, feature = "testing"))`; shadowing вместо `cfg_attr(expect(unused_mut))`;
+   отрицательные размеры — ошибка (`PixelError::NegativeSize`), не молчаливый 0; `match` вместо
+   `expect` после повторной проверки; опечатка в `WGPU_BACKEND` (пустой набор) — отказ, не пропуск;
+   предусловие DPI-awareness у `capture_client_area` проверяется или документировано.
+9. Для T3/T5 (не в T1): `render_layer_tree` через кэшированный `FrameCapture` (один путь захвата);
+   `Comparison` с типизированными `Finding`.
