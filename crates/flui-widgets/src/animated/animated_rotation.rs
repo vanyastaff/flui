@@ -33,7 +33,7 @@ pub enum RotationPath {
 /// along `curve`, the way [`path`](Self::path) says. Rotation is paint-only: the child is
 /// laid out unrotated.
 ///
-/// Driven by a binding under a [`VsyncScope`](crate::VsyncScope).
+/// Driven by a binding under a [`VsyncScope`].
 ///
 /// # Examples
 ///
