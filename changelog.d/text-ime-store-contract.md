@@ -9,6 +9,9 @@
   first is kept, later ones are retained.
 - **`InMemoryTextStore::set_owner_listener`** (`flui-platform-api`): run code in the reference
   store's owner notification, as a field's `on_changed` runs.
+- **`text_store::EditGeneration`** (`flui-platform-api`): the count of application edits a
+  platform session is checked against before it writes back. It never wraps, and once
+  exhausted it admits no session; `TextEditingController` and `InMemoryTextStore` both use it.
 - **Text-store kit version 2** (`flui_testing::text_store_kit::KIT_VERSION` is 2):
   `composition_over_a_selection_replaces_the_selection`,
   `composition_only_sessions_do_not_notify_the_owner`,

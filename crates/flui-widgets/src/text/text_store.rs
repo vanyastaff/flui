@@ -58,14 +58,14 @@ use flui_interaction::TextInputHandle;
 use flui_objects::{RenderEditable, SubtreeAnchor};
 use flui_painting::text_boundaries::graphemes;
 use flui_platform_api::text_store::{
-    CommitGate, Composition, CompositionLedger, LockArbiter, LockGrant, LockOutcome, LockTiming,
-    OwnerCalls, PointMode, RangeRect, RetainOnFailure, Selection, TextChange, TextStore,
-    TextStoreEdit, TextStoreError, TextStoreObserver, TextStoreRead, TextStoreStatus, Utf16Offset,
-    Utf16Range, committed_text, utf16,
+    CommitGate, Composition, CompositionLedger, EditGeneration, LockArbiter, LockGrant,
+    LockOutcome, LockTiming, OwnerCalls, PointMode, RangeRect, RetainOnFailure, Selection,
+    TextChange, TextStore, TextStoreEdit, TextStoreError, TextStoreObserver, TextStoreRead,
+    TextStoreStatus, Utf16Offset, Utf16Range, committed_text, utf16,
 };
 use flui_rendering::pipeline::PipelineCell;
 
-use super::controller::{self, ComposingState, Generation, TextEditingController};
+use super::controller::{self, ComposingState, TextEditingController};
 use super::editable_text::{EditObserver, TextChanged, bounds_from_rect, obscure};
 
 /// The committed `RenderEditable` under `inner_anchor` and its transform to
@@ -378,7 +378,7 @@ impl EditableTextStore {
 
     /// The controller, its document and its generation, read in one
     /// critical section.
-    fn snapshot(&self) -> (TextEditingController, Doc, Generation) {
+    fn snapshot(&self) -> (TextEditingController, Doc, EditGeneration) {
         let controller = self.controller.borrow().clone();
         let (doc, generation) = controller.with_inner(|inner| {
             let doc = Doc {
@@ -458,7 +458,7 @@ impl EditableTextStore {
     fn write_back(
         &self,
         controller: &TextEditingController,
-        generation: Generation,
+        generation: EditGeneration,
         doc: Doc,
         original: &Doc,
     ) {

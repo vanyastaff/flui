@@ -1301,6 +1301,10 @@ const ROWS: &[(&str, fn())] = &[
         editable_key_edit_whose_listener_replaces_on_changed,
     ),
     (
+        "editable: a key edit whose controller listener replaces the controller",
+        editable_key_edit_whose_listener_replaces_the_controller,
+    ),
+    (
         "editable: a store outliving its field",
         editable_store_outliving_its_field,
     ),
@@ -1323,6 +1327,18 @@ const ROWS: &[(&str, fn())] = &[
     (
         "attach: a platform enable that panics",
         attach_whose_platform_enable_panics,
+    ),
+    (
+        "attach: replacing a client whose platform enable panicked",
+        attach_replacing_a_client_whose_platform_enable_panicked,
+    ),
+    (
+        "close: a platform disable whose unwind parks a failure",
+        close_whose_platform_disable_parks_while_unwinding,
+    ),
+    (
+        "close: retiring a client whose destruction's unwind parks a failure",
+        close_retiring_a_client_whose_destruction_parks_while_unwinding,
     ),
     (
         "attach and detach: diagnostics that panic",
@@ -1355,6 +1371,10 @@ const ROWS: &[(&str, fn())] = &[
     (
         "editable: an update to a node attached elsewhere",
         editable_update_to_a_node_attached_elsewhere,
+    ),
+    (
+        "editable: an obscuring update to a node attached elsewhere",
+        editable_update_obscuring_and_to_a_node_attached_elsewhere,
     ),
     (
         "attach: a store parking a failure while taking the gate, then panicking",
@@ -2330,15 +2350,16 @@ fn field_rebuilt_by_its_listener(
 /// `on_changed` heard.
 fn key_edit_whose_listener_rebuilds_the_field(
     label: &'static str,
-    rebuilt: impl FnOnce(EditableText, &Rc<RefCell<Vec<String>>>) -> EditableText,
+    rebuilt: impl FnOnce(
+        &TextEditingController,
+        &Rc<FocusNode>,
+        &Rc<RefCell<Vec<String>>>,
+    ) -> EditableText,
 ) -> Vec<String> {
     let controller = TextEditingController::new();
     let node = FocusNode::with_debug_label(label);
     let log = Rc::new(RefCell::new(Vec::new()));
-    let rebuilt = rebuilt(
-        EditableText::new(controller.clone(), Rc::clone(&node)),
-        &log,
-    );
+    let rebuilt = rebuilt(&controller, &node, &log);
     let harness = field_rebuilt_by_its_listener(&controller, &node, &log, rebuilt);
     let key = flui_interaction::testing::input::KeyEventBuilder::new(
         flui_interaction::events::Code::KeyA,
@@ -2365,10 +2386,10 @@ fn key_edit_whose_listener_rebuilds_the_field(
 }
 
 fn editable_key_edit_whose_listener_removes_on_changed() {
-    let heard =
-        key_edit_whose_listener_rebuilds_the_field("key edit, on_changed removed", |field, _| {
-            field
-        });
+    let heard = key_edit_whose_listener_rebuilds_the_field(
+        "key edit, on_changed removed",
+        |controller, node, _| EditableText::new(controller.clone(), Rc::clone(node)),
+    );
     assert_eq!(
         heard,
         ["installed: a"],
@@ -2379,12 +2400,44 @@ fn editable_key_edit_whose_listener_removes_on_changed() {
 fn editable_key_edit_whose_listener_replaces_on_changed() {
     let heard = key_edit_whose_listener_rebuilds_the_field(
         "key edit, on_changed replaced",
-        |field, log| field.on_changed(logs_as("replacement", log)),
+        |controller, node, log| {
+            EditableText::new(controller.clone(), Rc::clone(node))
+                .on_changed(logs_as("replacement", log))
+        },
     );
     assert_eq!(
         heard,
         ["installed: a", "replacement: az"],
         "the replacement hears only the edits accepted after it was installed"
+    );
+}
+
+/// The field rebuilt onto a replacement controller holding "y", with no
+/// `on_changed`: what the replacement holds is not the edit's result.
+fn moved_to_a_replacement_controller(
+    _controller: &TextEditingController,
+    node: &Rc<FocusNode>,
+    _log: &Rc<RefCell<Vec<String>>>,
+) -> EditableText {
+    EditableText::new(TextEditingController::with_text("y"), Rc::clone(node))
+}
+
+/// A key edit whose controller listener rebuilds the field onto another
+/// controller: the edit's `on_changed` hears the text of the controller the
+/// edit changed, and the rebuild does not trip over a borrow the key handler
+/// holds. A semantic edit reports through the same `EditObserver::around`,
+/// but no harness path rebuilds the field inside one: the action runs in the
+/// realm's owner scope, under a shared borrow of the realm that a frame,
+/// which needs it exclusively, cannot nest in.
+fn editable_key_edit_whose_listener_replaces_the_controller() {
+    let heard = key_edit_whose_listener_rebuilds_the_field(
+        "key edit, controller replaced",
+        moved_to_a_replacement_controller,
+    );
+    assert_eq!(
+        heard,
+        ["installed: a"],
+        "on_changed hears the edit's result"
     );
 }
 
@@ -2534,6 +2587,161 @@ fn attach_whose_platform_enable_panics() {
         "the token detaches the client"
     );
     the_owner_keeps_working(&owner);
+}
+
+/// Records the platform's `set_ime_allowed` calls that completed; the first
+/// call panics.
+#[derive(Default)]
+struct FailsToEnableOnce {
+    failed: std::sync::atomic::AtomicBool,
+    allowed: std::sync::Mutex<Vec<bool>>,
+}
+
+impl PlatformTextInput for FailsToEnableOnce {
+    fn set_ime_allowed(&self, allowed: bool) {
+        assert!(
+            self.failed.swap(true, std::sync::atomic::Ordering::SeqCst),
+            "platform failure enabling input"
+        );
+        self.allowed
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(allowed);
+    }
+    fn set_ime_cursor_area(&self, _: Bounds<f64>) {}
+}
+
+impl FailsToEnableOnce {
+    /// The completed calls so far, copied out so no guard is held while a
+    /// row asserts on them.
+    fn allowed(&self) -> Vec<bool> {
+        self.allowed
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+}
+
+/// The first attach's enable panics; a replacing attach enables the
+/// platform, which nothing else would until the client detached.
+fn attach_replacing_a_client_whose_platform_enable_panicked() {
+    let platform = Arc::new(FailsToEnableOnce::default());
+    let owner = TextInputOwner::new(TextInputBackend::Push(
+        Arc::clone(&platform) as Arc<dyn PlatformTextInput>
+    ));
+    let _first = owner
+        .handle()
+        .attach(TextInputClient::new(InMemoryTextStore::new("")))
+        .expect("the client is active, and the caller has its token");
+    let second = owner
+        .handle()
+        .attach(TextInputClient::new(InMemoryTextStore::new("")))
+        .expect("the replacing attach");
+    assert_eq!(
+        platform.allowed(),
+        [true],
+        "the replacing attach enabled the platform"
+    );
+    assert_eq!(
+        raised(|| {
+            let _ = owner.run_deferred_grants();
+        })
+        .as_deref(),
+        Some("platform failure enabling input"),
+        "the first attach's failure is reported at the owner's next turn"
+    );
+    assert_eq!(
+        owner.handle().detach(second),
+        Ok(flui_interaction::DetachOutcome::Detached)
+    );
+    the_owner_keeps_working(&owner);
+    assert_eq!(
+        platform.allowed(),
+        [true, false, true],
+        "enabled again once, by the next attach after the detach"
+    );
+}
+
+thread_local! {
+    /// The store a close's cleanup edits, following the closing owner's gate.
+    static CLEANUP_STORE: RefCell<Option<Rc<InMemoryTextStore>>> = const { RefCell::new(None) };
+}
+
+/// Parks a failure in the gate [`CLEANUP_STORE`] follows, when dropped.
+struct ParksThroughTheCleanupStore;
+
+impl Drop for ParksThroughTheCleanupStore {
+    fn drop(&mut self) {
+        let store = CLEANUP_STORE.with(|slot| slot.borrow().clone());
+        if let Some(store) = store {
+            park_through(&store, "parked by the unwind's cleanup");
+        }
+    }
+}
+
+/// A platform whose disable panics, holding a guard whose drop, during that
+/// panic's unwind, parks a failure in the owner's gate.
+struct FailsToDisable;
+
+impl PlatformTextInput for FailsToDisable {
+    fn set_ime_allowed(&self, allowed: bool) {
+        if !allowed {
+            let _cleanup = ParksThroughTheCleanupStore;
+            panic!("platform failure disabling input");
+        }
+    }
+    fn set_ime_cursor_area(&self, _: Bounds<f64>) {}
+}
+
+/// The close's first failure stays the one raised, ahead of what its unwind's
+/// cleanup parked in the gate: a close that came after the call is no
+/// earlier turn for it.
+fn close_raising(owner: &TextInputOwner, first: &str) {
+    assert_eq!(
+        raised(|| owner.close()).as_deref(),
+        Some(first),
+        "the call's own panic came before what its unwind's cleanup parked"
+    );
+    let store = CLEANUP_STORE
+        .with(|slot| slot.borrow_mut().take())
+        .expect("the cleanup store");
+    assert_eq!(store.text(), "a", "the cleanup's grant stands");
+}
+
+fn close_whose_platform_disable_parks_while_unwinding() {
+    let owner = TextInputOwner::new(TextInputBackend::Push(Arc::new(FailsToDisable)));
+    let store = InMemoryTextStore::new("");
+    let _client = owner
+        .handle()
+        .attach(TextInputClient::new(store.clone()))
+        .expect("attach");
+    CLEANUP_STORE.with(|slot| *slot.borrow_mut() = Some(store));
+    close_raising(&owner, "platform failure disabling input");
+    the_owner_keeps_working(&self::owner());
+}
+
+fn close_retiring_a_client_whose_destruction_parks_while_unwinding() {
+    let owner = owner();
+    // Attached first, so it follows the owner's gate, then replaced.
+    let other = InMemoryTextStore::new("");
+    let _other = owner
+        .handle()
+        .attach(TextInputClient::new(other.clone()))
+        .expect("attach");
+    CLEANUP_STORE.with(|slot| *slot.borrow_mut() = Some(other));
+    let store = DropHook {
+        inner: InMemoryTextStore::new(""),
+        on_drop: RefCell::new(Some(Box::new(|| {
+            let _cleanup = ParksThroughTheCleanupStore;
+            panic!("store destroyed");
+        }))),
+    };
+    let _client = owner
+        .handle()
+        .attach(TextInputClient::new(Rc::new(store)))
+        .expect("the replacing attach");
+    close_raising(&owner, "store destroyed");
+    the_owner_keeps_working(&self::owner());
 }
 
 fn attach_and_detach_whose_diagnostics_panic() {
@@ -2970,6 +3178,93 @@ fn editable_update_to_a_node_attached_elsewhere() {
             .parent()
             .is_some_and(|held| Rc::ptr_eq(&held, &parent)),
         "under its own parent"
+    );
+    assert_eq!(raised(|| harness.tick()), None, "the next frame");
+    harness.swap_root(flui_widgets::SizedBox::new(1.0, 1.0));
+    assert!(
+        !second.is_attached(),
+        "the second field's handle still owned its node, so its dispose detached it"
+    );
+}
+
+/// Records the message of every lifecycle-hook panic the element tree
+/// contains (`ElementOwner::push_recovered_panic`'s `panic_message` field).
+struct RecordsContainedPanics<'a>(&'a std::sync::Mutex<Vec<String>>);
+
+impl tracing::field::Visit for RecordsContainedPanics<'_> {
+    fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+        if field.name() == "panic_message" {
+            self.0
+                .lock()
+                .expect("the recorder is not poisoned")
+                .push(format!("{value:?}"));
+        }
+    }
+}
+
+/// [`RecordsContainedPanics`] as a subscriber.
+struct ContainedPanics(Arc<std::sync::Mutex<Vec<String>>>);
+
+impl tracing::Subscriber for ContainedPanics {
+    fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+        true
+    }
+    fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+        tracing::span::Id::from_u64(1)
+    }
+    fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+    fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+    fn event(&self, event: &tracing::Event<'_>) {
+        event.record(&mut RecordsContainedPanics(&self.0));
+    }
+    fn enter(&self, _: &tracing::span::Id) {}
+    fn exit(&self, _: &tracing::span::Id) {}
+}
+
+/// [`editable_update_to_a_node_attached_elsewhere`], in an update that
+/// first obscures the field, whose observer panics on the status change.
+/// The observer's failure came first and is the update's; the rejection is
+/// kept behind it, and the update completes rather than unwinding from the
+/// rejection.
+fn editable_update_obscuring_and_to_a_node_attached_elsewhere() {
+    let controllers = (TextEditingController::new(), TextEditingController::new());
+    let (first, second) = (
+        FocusNode::with_debug_label("first field"),
+        FocusNode::with_debug_label("second field"),
+    );
+    let mut harness = focused(two_fields(&controllers, &first, &second), &first);
+    let field = field(&harness);
+    field.set_commit_gate(CommitGate::new());
+    field.set_observer(Some(Rc::new(FailsOnStatus)));
+    let parent = second
+        .parent()
+        .expect("the second field's node is attached");
+    let contained = Arc::new(std::sync::Mutex::new(Vec::new()));
+    tracing::subscriber::with_default(ContainedPanics(Arc::clone(&contained)), || {
+        harness.swap_root(flui_widgets::Column::new(flui_widgets::column![
+            EditableText::new(controllers.0.clone(), Rc::clone(&second)).obscure_text(true),
+            EditableText::new(controllers.1.clone(), Rc::clone(&second)),
+        ]));
+    });
+    field.set_observer(None);
+    assert_eq!(
+        contained
+            .lock()
+            .expect("the recorder is not poisoned")
+            .first()
+            .map(String::as_str),
+        Some("observer failure on status"),
+        "the first failure is the update's, not the later rejection"
+    );
+    assert!(
+        !first.is_attached(),
+        "the update failed, and the frame retired the first field"
+    );
+    assert!(
+        second
+            .parent()
+            .is_some_and(|held| Rc::ptr_eq(&held, &parent)),
+        "the second field's node stays attached under its own parent"
     );
     assert_eq!(raised(|| harness.tick()), None, "the next frame");
     harness.swap_root(flui_widgets::SizedBox::new(1.0, 1.0));

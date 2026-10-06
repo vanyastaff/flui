@@ -21,6 +21,7 @@ use std::rc::Rc;
 use flui_foundation::geometry::{Bounds, Point, Size};
 
 use super::composition_ledger::{CompositionLedger, committed_text};
+use super::generation::EditGeneration;
 use super::lock::{CommitGate, LockArbiter, LockGrant, LockOutcome, LockTiming, TextStoreError};
 use super::owner_calls::{OwnerCalls, RetainOnFailure};
 use super::session::{
@@ -50,8 +51,8 @@ pub struct InMemoryTextStore {
     /// not delivered yet: it is, once the session's lock is released.
     owner_owed: Cell<bool>,
     /// Application edits made so far: a session the application edited
-    /// under is dropped.
-    generation: Cell<u64>,
+    /// under, or one opened once the count ran out, is dropped.
+    generation: Cell<EditGeneration>,
     owner_listener: RefCell<Option<Rc<dyn Fn()>>>,
 }
 
@@ -117,7 +118,7 @@ impl InMemoryTextStore {
             protected: Cell::new(false),
             owner_notifications: Cell::new(0),
             owner_owed: Cell::new(false),
-            generation: Cell::new(0),
+            generation: Cell::new(EditGeneration::FIRST),
             owner_listener: RefCell::new(None),
         })
     }
@@ -163,7 +164,11 @@ impl InMemoryTextStore {
             .borrow_mut()
             .replace(range, text)
             .expect("BUG: app_replace was given a range outside the text");
-        self.generation.set(self.generation.get() + 1);
+        // Never wraps, and never panics between the edit and its notice:
+        // the edit that exhausts the count is reported like any other.
+        let mut generation = self.generation.get();
+        generation.advance();
+        self.generation.set(generation);
         self.pending.borrow_mut().push(Notice::Text(change));
         self.report(Notice::Selection);
     }
@@ -265,7 +270,7 @@ impl InMemoryTextStore {
                 // it: a grant that panics part-way leaves the document as it
                 // was, never a composition without the origin its ledger
                 // would have given it, and an application edit wins.
-                let generation = self.generation.get();
+                let opened = self.generation.get();
                 let committed = snapshot.committed();
                 let mut work = snapshot;
                 let ledger = CompositionLedger::open(&work.text, work.composing());
@@ -276,7 +281,7 @@ impl InMemoryTextStore {
                 };
                 body(&mut session);
                 work.origin = session.ledger.origin(&work.text).unwrap_or_default();
-                if self.generation.get() != generation {
+                if !self.generation.get().admits(opened) {
                     return;
                 }
                 if work.committed() != committed {
@@ -668,5 +673,58 @@ mod tests {
         );
         assert_eq!(store.composition(), None);
         assert_eq!(store.text(), "xyzbc!def");
+    }
+
+    /// Counts the text changes the store reports.
+    struct CountsText(Rc<Cell<usize>>);
+
+    impl TextStoreObserver for CountsText {
+        fn text_changed(&self, _: TextChange) {
+            self.0.set(self.0.get() + 1);
+        }
+        fn selection_changed(&self) {}
+        fn layout_changed(&self) {}
+        fn status_changed(&self) {}
+    }
+
+    fn insert(text: &'static str) -> LockGrant {
+        LockGrant::read_write(move |session| {
+            session.insert_at_selection(text).expect("in range");
+        })
+    }
+
+    /// The application edit that exhausts the edit count, made inside a
+    /// platform session, lands and is reported, and the session is dropped;
+    /// every later session is dropped too, and the application keeps
+    /// editing (ADR-0142 item 3). The count starts at its last value, since
+    /// no test makes 2^64 edits.
+    #[test]
+    fn an_exhausted_edit_count_refuses_every_later_session() {
+        let store = InMemoryTextStore::new("");
+        let heard = Rc::new(Cell::new(0));
+        store.set_observer(Some(Rc::new(CountsText(Rc::clone(&heard)))));
+        store.generation.set(EditGeneration::LAST);
+        let reach = Rc::downgrade(&store);
+        let outcome = store.request_lock(
+            LockGrant::read_write(move |session| {
+                session.insert_at_selection("platform").expect("in range");
+                if let Some(store) = reach.upgrade() {
+                    store.app_replace(range(0, 0), "app");
+                }
+            }),
+            LockTiming::Sync,
+        );
+        assert_eq!(outcome, Ok(LockOutcome::Granted));
+        assert_eq!(store.text(), "app", "the application edit wins");
+        assert_eq!(heard.get(), 1, "and is reported");
+        assert_eq!(
+            store.request_lock(insert("late"), LockTiming::Sync),
+            Ok(LockOutcome::Granted)
+        );
+        assert_eq!(store.text(), "app", "a later session is dropped");
+        assert_eq!(store.owner_notifications(), 0);
+        store.app_replace(range(3, 3), "!");
+        assert_eq!(store.text(), "app!", "the application keeps editing");
+        assert_eq!(heard.get(), 2);
     }
 }
