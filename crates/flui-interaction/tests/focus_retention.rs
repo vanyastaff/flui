@@ -2,6 +2,7 @@
 //! failure path releases its own reference-counted clone, so dropping the owner
 //! later still destroys the captures (ADR-0127).
 
+use std::cell::RefCell;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::rc::{Rc, Weak};
 
@@ -129,4 +130,44 @@ fn caught_callback_failures_leave_captures_with_their_owner() {
         }
     }
     assert!(failed.is_empty(), "failed cases: {failed:?}");
+}
+
+/// Records its label into a shared log when the node's context is dropped.
+struct DropRecorder(&'static str, Rc<RefCell<Vec<&'static str>>>);
+
+impl Drop for DropRecorder {
+    fn drop(&mut self) {
+        self.1.borrow_mut().push(self.0);
+    }
+}
+
+#[test]
+fn healthy_close_retires_children_before_their_parent() {
+    let log = Rc::new(RefCell::new(Vec::new()));
+    let manager = FocusManager::new();
+    let parent = FocusNode::with_debug_label("parent");
+    let first = FocusNode::with_debug_label("first");
+    let nested = FocusNode::with_debug_label("nested");
+    let second = FocusNode::with_debug_label("second");
+    let attachments = [
+        manager
+            .root_scope()
+            .attach_node(&parent)
+            .expect("attach parent"),
+        parent.attach_node(&first).expect("attach first"),
+        first.attach_node(&nested).expect("attach nested"),
+        parent.attach_node(&second).expect("attach second"),
+    ];
+    for (node, label) in [
+        (&parent, "parent"),
+        (&first, "first"),
+        (&nested, "nested"),
+        (&second, "second"),
+    ] {
+        node.register_context(Rc::new(DropRecorder(label, Rc::clone(&log))))
+            .relinquish();
+    }
+    manager.close();
+    assert_eq!(*log.borrow(), ["nested", "first", "second", "parent"]);
+    drop(attachments);
 }
