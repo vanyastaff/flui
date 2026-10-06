@@ -1290,7 +1290,7 @@ mod tests {
     }
 
     fn scheduled(inbox: &ExternalBuildInbox) -> Vec<ElementId> {
-        let mut ids: Vec<_> = inbox.lock().keys().copied().collect();
+        let mut ids: Vec<_> = inbox.lock().ids().to_vec();
         ids.sort();
         ids
     }
@@ -1307,7 +1307,13 @@ mod tests {
         a.set(&r, 10).unwrap();
 
         assert_eq!(scheduled(&inbox), vec![e1]);
-        assert!(inbox.lock()[&e1].contains(RebuildReason::SignalChange));
+        assert!(
+            inbox
+                .lock()
+                .get(e1)
+                .expect("e1 is queued")
+                .contains(RebuildReason::SignalChange)
+        );
         assert_eq!(a.peek(&r, |v| *v).unwrap(), 10);
     }
 
