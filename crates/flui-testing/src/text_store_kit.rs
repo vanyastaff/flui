@@ -7,7 +7,9 @@
 //! wrote. It covers UTF-16 offsets across surrogate pairs and grapheme
 //! clusters, exact platform selection, composition, the lock rules
 //! (synchronous refusals, asynchronous grants after a session or a frame
-//! transaction, request order, panics), what reaches the observer, and — when
+//! transaction, request order, panics), what reaches the observer, what
+//! reaches the field's owner and when (only committed-text changes, after
+//! the session's lock is released), and — when
 //! the fixture has a layout — rect and point queries.
 //!
 //! A field supplies a [`TextStoreFixture`] and calls [`assert_conforms`]:

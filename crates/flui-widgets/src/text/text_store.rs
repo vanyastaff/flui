@@ -11,9 +11,20 @@
 //!
 //! A read session answers from a snapshot of the controller taken when the
 //! lock opens. A read-write session edits a working copy of that snapshot
-//! and writes it back to the controller once, when the session ends, with
-//! one listener notification and at most one `on_changed` call: the field
-//! sees a platform session as one change, whatever it did inside.
+//! and writes it back to the controller once, when the session ends: the
+//! field sees a platform session as one change, whatever it did inside.
+//! The write is dropped if the application changed the controller since the
+//! snapshot (its generation moved), so an application edit is never
+//! overwritten by a session that did not see it.
+//!
+//! # The owner
+//!
+//! The session's one listener notification and at most one `on_changed`
+//! call are owed, not made, inside the grant: they run in `settle`, which the
+//! arbiter calls once the lock is released and before the next grant, so
+//! owner code may request a lock or edit the field (ADR-0090 amendment).
+//! `on_changed` runs only when the committed text — the text without the
+//! composition — changed, and receives it.
 //!
 //! # What reaches the observer
 //!
@@ -95,6 +106,14 @@ struct Doc {
 }
 
 impl Doc {
+    /// The text without the composing range.
+    fn committed(&self) -> String {
+        controller::committed(
+            &self.text,
+            self.composing.as_ref().map(|(range, _)| range.clone()),
+        )
+    }
+
     fn units(&self, byte: usize) -> Utf16Offset {
         utf16::utf16_offset(&self.text, byte).unwrap_or_else(|_| utf16::utf16_len(&self.text))
     }
@@ -160,6 +179,12 @@ pub(super) struct EditableTextStore {
     /// it happened while the store could not notify.
     layout_dirty: Cell<bool>,
     status_dirty: Cell<bool>,
+    /// A session wrote the controller back and its listeners have not heard
+    /// of it yet: they do in [`Self::settle`], once the lock is released.
+    listeners_owed: Cell<bool>,
+    /// The committed text before a session changed it, while `on_changed`
+    /// has not run for that change: it does in [`Self::settle`].
+    owner_owed: RefCell<Option<String>>,
     /// The presentation's text input, whose closing detaches the store.
     /// Whether commits are allowed is the gate it installs on attach, which
     /// the arbiter reads; with no presentation IME the arbiter's own gate
@@ -193,6 +218,8 @@ impl EditableTextStore {
             alive: Cell::new(true),
             layout_dirty: Cell::new(false),
             status_dirty: Cell::new(false),
+            listeners_owed: Cell::new(false),
+            owner_owed: RefCell::new(None),
             handle: parts.handle,
             pipeline: parts.pipeline,
             inner_anchor: parts.inner_anchor,
@@ -290,15 +317,26 @@ impl EditableTextStore {
     }
 
     fn read_doc(&self) -> Doc {
-        self.controller.borrow().with_inner(|inner| Doc {
-            text: inner.text.clone(),
-            anchor: inner.selection.anchor,
-            caret: inner.selection.caret,
-            composing: inner
-                .composing
-                .as_ref()
-                .map(|state| (state.range.clone(), state.caret_hidden)),
-        })
+        self.snapshot().1
+    }
+
+    /// The controller, its document and its generation, read in one
+    /// critical section.
+    fn snapshot(&self) -> (TextEditingController, Doc, u64) {
+        let controller = self.controller.borrow().clone();
+        let (doc, generation) = controller.with_inner(|inner| {
+            let doc = Doc {
+                text: inner.text.clone(),
+                anchor: inner.selection.anchor,
+                caret: inner.selection.caret,
+                composing: inner
+                    .composing
+                    .as_ref()
+                    .map(|state| (state.range.clone(), state.caret_hidden)),
+            };
+            (doc, inner.generation)
+        });
+        (controller, doc, generation)
     }
 
     /// Diff the controller against what was last reported and tell the
@@ -328,25 +366,44 @@ impl EditableTextStore {
                 body(&Session { store: self, doc });
             }
             LockGrant::ReadWrite(body) => {
-                let original = self.read_doc();
+                let (controller, original, generation) = self.snapshot();
                 let mut session = Session {
                     store: self,
                     doc: original.clone(),
                 };
                 body(&mut session);
                 if session.doc != original {
-                    self.write_back(session.doc, &original.text);
+                    self.write_back(&controller, generation, session.doc, &original);
                 }
             }
         }
     }
 
-    /// Apply a platform session's result to the controller: one write, one
-    /// notification, one `on_changed` when the text changed.
-    fn write_back(&self, doc: Doc, before: &str) {
-        let controller = self.controller.borrow().clone();
-        *self.reported.borrow_mut() = (doc.text.clone(), doc.selection());
-        controller.with_inner_silent(|inner| {
+    /// Apply a platform session's result to the controller in one write,
+    /// unless the application changed the field since the session opened at
+    /// `generation`: then its edit stays, the session is dropped, and the
+    /// platform hears of the edit once the lock is released (ADR-0090
+    /// amendment item 3).
+    ///
+    /// The listeners and `on_changed` are owed, not called: they run in
+    /// [`Self::settle`], after the lock is released.
+    fn write_back(
+        &self,
+        controller: &TextEditingController,
+        generation: u64,
+        doc: Doc,
+        original: &Doc,
+    ) {
+        let current = self.controller.borrow().clone();
+        if !current.is_same_controller(controller) {
+            return;
+        }
+        let reported = (doc.text.clone(), doc.selection());
+        let committed_after = doc.committed();
+        let applied = controller.with_inner_silent(|inner| {
+            if inner.generation != generation {
+                return false;
+            }
             inner.selection = controller::Selection {
                 anchor: doc.anchor,
                 caret: doc.caret,
@@ -356,9 +413,39 @@ impl EditableTextStore {
                 caret_hidden,
             });
             inner.text = doc.text;
+            true
         });
-        controller.notify_changed();
-        self.edits.report_if_changed(before);
+        if !applied {
+            return;
+        }
+        *self.reported.borrow_mut() = reported;
+        self.listeners_owed.set(true);
+        let committed_before = original.committed();
+        if committed_after != committed_before {
+            let mut owed = self.owner_owed.borrow_mut();
+            if owed.is_none() {
+                *owed = Some(committed_before);
+            }
+        }
+    }
+
+    /// Deliver what a finished grant owes, now that its lock is released and
+    /// before the next grant runs: the controller's listeners, `on_changed`
+    /// when the committed text changed, then the observer's notifications.
+    /// Each is taken out before the user code it runs, so a nested lock or
+    /// a reentrant edit from that code finds nothing half-delivered.
+    fn settle(&self) {
+        if self.listeners_owed.replace(false) {
+            let controller = self.controller.borrow().clone();
+            controller.notify_changed();
+        }
+        let before = self.owner_owed.borrow_mut().take();
+        if let Some(before) = before
+            && self.alive.get()
+        {
+            self.edits.report_if_changed(&before);
+        }
+        self.flush_notifications();
     }
 
     /// The text the render object shows for `source`.
@@ -477,7 +564,9 @@ impl TextStore for EditableTextStore {
         self.flush_notifications();
         let outcome =
             self.arbiter
-                .request(grant, timing, &mut |grant| self.open(grant), &mut || {});
+                .request(grant, timing, &mut |grant| self.open(grant), &mut || {
+                    self.settle();
+                });
         self.flush_notifications();
         outcome
     }
@@ -492,7 +581,7 @@ impl TextStore for EditableTextStore {
         self.flush_notifications();
         let ran = self
             .arbiter
-            .run_deferred(&mut |grant| self.open(grant), &mut || {});
+            .run_deferred(&mut |grant| self.open(grant), &mut || self.settle());
         self.flush_notifications();
         ran
     }

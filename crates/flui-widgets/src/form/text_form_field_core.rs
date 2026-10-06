@@ -157,7 +157,7 @@ impl TextFormFieldCore {
             .unwrap_or_else(|| TextEditingController::with_text(config.initial_value.clone()));
         let handle = config.handle.clone().unwrap_or_default();
         Self {
-            initial_value: controller.text(),
+            initial_value: controller.committed_text(),
             controller,
             handle,
         }
@@ -210,9 +210,17 @@ impl TextFormFieldCore {
         .enabled(config.enabled)
         .autovalidate_mode(config.autovalidate_mode)
         .handle(self.handle.clone())
+        // The field's value is the committed text (ADR-0090): what an input
+        // method is still composing is neither validated nor saved, and a
+        // value the controller already holds is not written back over the
+        // composition.
         .value_binding(
-            Rc::new(move |value: &String| sink.set_text(value.clone())),
-            Rc::new(move || source.text()),
+            Rc::new(move |value: &String| {
+                if sink.committed_text() != *value {
+                    sink.set_text(value.clone());
+                }
+            }),
+            Rc::new(move || source.committed_text()),
         );
         field.validator.clone_from(&config.validator);
         field.on_saved.clone_from(&config.on_saved);

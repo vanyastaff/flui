@@ -262,8 +262,9 @@ pub(super) fn source_offset_for_masked_offset(
 /// IME client attached), and a disposed field refuses every lock.
 ///
 /// A platform session is one change to the field: its edits are written to
-/// the controller once when the lock is released, with one listener
-/// notification and at most one [`EditableText::on_changed`] call. A
+/// the controller once, and after the lock is released the listeners hear
+/// of it once and [`EditableText::on_changed`] runs at most once, only when
+/// the committed text (the text without the composition) changed. A
 /// platform selection is kept exactly, even inside a grapheme cluster; a tap
 /// or an arrow key still snaps to one (Mapping decisions #33 and #34 in
 /// `flui-widgets/ARCHITECTURE.md`). An obscured field reports itself
@@ -543,6 +544,12 @@ impl EditableText {
     /// with no borrow of the field held, inside a write the field opens: the
     /// callback receives that `&mut EventCx<'_>` first (ADR-0086). An IME
     /// commit reaches it once the frame that deferred the commit has ended.
+    ///
+    /// The text is the committed text
+    /// ([`TextEditingController::committed_text`]): an input method's
+    /// composition is left out, and a session that only composes or
+    /// cancels a composition does not call it. For an input-method edit it
+    /// runs after the method's lock is released, so it may edit the field.
     #[must_use]
     pub fn on_changed<F, R>(mut self, callback: F) -> Self
     where
@@ -1160,8 +1167,9 @@ impl Action<SelectAllTextIntent> for SelectAllTextAction {
 }
 
 /// Reports a user edit through [`EditableText::on_changed`]: compares the
-/// text before and after the edit, and calls the callback with no borrow
-/// held when they differ, inside a write `writer` opens.
+/// committed text (the text without the IME composition) before and after
+/// the edit, and calls the callback with the new committed text, with no
+/// borrow held, when they differ, inside a write `writer` opens.
 #[derive(Clone)]
 pub(super) struct EditObserver {
     controller: Rc<RefCell<TextEditingController>>,
@@ -1174,14 +1182,15 @@ impl EditObserver {
         if self.on_changed.borrow().is_none() {
             return edit();
         }
-        let before = self.controller.borrow().text();
+        let before = self.controller.borrow().committed_text();
         let result = edit();
         self.report_if_changed(&before);
         result
     }
 
+    /// Call `on_changed` if the committed text is no longer `before`.
     pub(super) fn report_if_changed(&self, before: &str) {
-        let after = self.controller.borrow().text();
+        let after = self.controller.borrow().committed_text();
         if after == before {
             return;
         }

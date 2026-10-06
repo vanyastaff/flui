@@ -1915,21 +1915,31 @@ state are not implemented yet. **Tests:** `tests/raw_button.rs`
 **Choice:** `EditableText` is a `flui_platform_api::TextStore` (ADR-0090). The
 input method reads the text, selection, composition and geometry in UTF-16
 offsets and edits under a lock; a push `ImeEvent` is projected onto the same
-store. A read-write session is written back to the controller once, when the
-lock is released: one listener notification and at most one `on_changed`,
+store. A read-write session is written back to the controller once, at the
+end of the grant: one listener notification and at most one `on_changed`,
 however many edits the session made (a TSF conversion replaces, re-marks and
-moves the caret in one session). A lock asked for inside the frame
+moves the caret in one session). Both run in the arbiter's `settle`, after the
+lock is released, so `on_changed` may request a lock. `on_changed` receives the
+committed text (`TextEditingController::committed_text`, the composition left
+out) and runs only when that changed, so a session that only composes is no
+owner change; a text form field reads its value the same way. The write-back
+compares the controller's generation, in the same critical section, with the
+one the session opened at: an application edit made meanwhile wins and the
+session is dropped (ADR-0090 amendment items 1–3). A lock asked for inside the frame
 transaction (the whole frame drive, post-frame callbacks included, in the
 harness's `tick` as in `flui-app`'s `UiRealm::drive_frame`) runs after the
 frame; a key press first runs those queued grants, so it lands after an IME
 commit. **Tests:** `tests/text_store_kit.rs`
-(`editable_text_conforms_to_kit_v1`,
-`obscured_editable_text_conforms_to_kit_v1`; among the kit's cases,
+(`editable_text_conforms_to_the_kit`,
+`obscured_editable_text_conforms_to_the_kit`; among the kit's cases,
 `tsf_style_conversion_script` counts one owner notification for a whole
 conversion session and `async_request_inside_a_transaction_waits_for_the_next_anchor`
 defers a lock asked for inside the frame transaction to the next frame),
 `tests/editable_text.rs`'s
-`text_store::typing_after_a_deferred_commit_lands_after_the_commit`. A lock
+`text_store::typing_after_a_deferred_commit_lands_after_the_commit`,
+`text_store::on_changed_runs_after_the_lock_is_released` and
+`text_store::an_app_edit_during_a_lock_is_not_overwritten`, and `tests/form.rs`'s
+`a_text_form_field_validates_and_saves_the_committed_text`. A lock
 requested from a post-frame callback specifically: **Unasserted:** no test pins
 this.
 
