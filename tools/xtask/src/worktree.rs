@@ -42,6 +42,7 @@
 mod tests;
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::ffi::OsStr;
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
@@ -204,16 +205,20 @@ struct Entry {
 /// separated by an empty one, the first record the main worktree.
 ///
 /// `-z` because the newline form C-quotes some paths (a newline or a quote in
-/// them, for one) and `-z` prints every path verbatim.
-fn parse_worktrees(porcelain: &str) -> anyhow::Result<Vec<Entry>> {
+/// them, for one) and `-z` prints every path verbatim. Read as bytes: a path is
+/// whatever the file system allows ([`os_path`]), not necessarily UTF-8.
+fn parse_worktrees(porcelain: &[u8]) -> anyhow::Result<Vec<Entry>> {
     let mut entries = Vec::new();
     let mut current: Option<Entry> = None;
-    for line in porcelain.split('\0') {
-        let (key, value) = line.split_once(' ').unwrap_or((line, ""));
-        if key == "worktree" {
+    for line in porcelain.split(|&byte| byte == 0) {
+        let (key, value) = match line.iter().position(|&byte| byte == b' ') {
+            Some(space) => (&line[..space], &line[space + 1..]),
+            None => (line, &[][..]),
+        };
+        if key == b"worktree" {
             entries.extend(current.take());
             current = Some(Entry {
-                path: PathBuf::from(value),
+                path: os_path(value)?,
                 ..Entry::default()
             });
             continue;
@@ -223,10 +228,20 @@ fn parse_worktrees(porcelain: &str) -> anyhow::Result<Vec<Entry>> {
             continue;
         }
         let Some(entry) = current.as_mut() else {
-            bail!("`git worktree list --porcelain -z` line before any `worktree`: {line}");
+            bail!(
+                "`git worktree list --porcelain -z` line before any `worktree`: {}",
+                String::from_utf8_lossy(line)
+            );
         };
         match key {
-            "branch" => {
+            b"branch" => {
+                let value = std::str::from_utf8(value).with_context(|| {
+                    format!(
+                        "{}: branch `{}` is not UTF-8",
+                        entry.path.display(),
+                        String::from_utf8_lossy(value)
+                    )
+                })?;
                 entry.branch = Some(
                     value
                         .strip_prefix("refs/heads/")
@@ -234,15 +249,42 @@ fn parse_worktrees(porcelain: &str) -> anyhow::Result<Vec<Entry>> {
                         .to_owned(),
                 );
             }
-            "bare" => entry.bare = true,
-            "locked" => entry.locked = true,
-            "prunable" => entry.prunable = true,
+            b"bare" => entry.bare = true,
+            b"locked" => entry.locked = true,
+            b"prunable" => entry.prunable = true,
             // `HEAD`, `detached` and anything a newer git adds decide nothing here
             _ => {}
         }
     }
     entries.extend(current);
     Ok(entries)
+}
+
+/// A path git printed: its bytes verbatim on Unix, where a path need not be
+/// UTF-8; UTF-8 elsewhere, which is what git for Windows prints.
+#[cfg_attr(
+    unix,
+    expect(
+        clippy::unnecessary_wraps,
+        reason = "fallible where git prints UTF-8 and a path is not raw bytes"
+    )
+)]
+fn os_path(bytes: &[u8]) -> anyhow::Result<PathBuf> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        Ok(PathBuf::from(std::ffi::OsStr::from_bytes(bytes)))
+    }
+    #[cfg(not(unix))]
+    {
+        let path = std::str::from_utf8(bytes).with_context(|| {
+            format!(
+                "git printed the non-UTF-8 path `{}`",
+                String::from_utf8_lossy(bytes)
+            )
+        })?;
+        Ok(PathBuf::from(path))
+    }
 }
 
 /// Which local branches have an upstream that no longer exists, from
@@ -280,16 +322,20 @@ enum Changes {
 
 impl Changes {
     /// Reads `git status --porcelain=v1 -z --untracked-files=normal
-    /// --ignored=matching`.
-    fn from_status(status: &str) -> Self {
+    /// --ignored=matching`, whose paths need not be UTF-8: an ignored entry is
+    /// judged on its bytes and named lossily.
+    fn from_status(status: &[u8]) -> Self {
         let mut tasks = false;
         let mut ignored = Vec::new();
-        for record in status.split('\0').filter(|record| !record.is_empty()) {
-            if let Some(path) = record.strip_prefix("!! ") {
+        for record in status
+            .split(|&byte| byte == 0)
+            .filter(|record| !record.is_empty())
+        {
+            if let Some(path) = record.strip_prefix(b"!! ") {
                 if !disposable(path) {
-                    ignored.push(path.to_owned());
+                    ignored.push(String::from_utf8_lossy(path).into_owned());
                 }
-            } else if record == format!("?? {TASKS_FILE}") {
+            } else if record.strip_prefix(b"?? ") == Some(TASKS_FILE.as_bytes()) {
                 tasks = true;
             } else {
                 return Self::Work;
@@ -307,8 +353,8 @@ impl Changes {
 
 /// An ignored entry `prune` may delete with its worktree: a `target/`
 /// directory at any depth, or the root `TASKS.md`.
-fn disposable(path: &str) -> bool {
-    path == TASKS_FILE || path == "target/" || path.ends_with("/target/")
+fn disposable(path: &[u8]) -> bool {
+    path == TASKS_FILE.as_bytes() || path == b"target/" || path.ends_with(b"/target/")
 }
 
 /// What git says of a branch tip against origin/main.
@@ -581,13 +627,13 @@ fn new(git: &Git, branch: &BranchName) -> anyhow::Result<PathBuf> {
     git.run(&["fetch", "origin", "main"])?;
     std::fs::create_dir_all(&root).with_context(|| format!("creating {}", root.display()))?;
     git.run(&[
-        "worktree",
-        "add",
-        "--no-track",
-        "-b",
-        &branch.to_string(),
-        utf8(&path)?,
-        BASE,
+        OsStr::new("worktree"),
+        OsStr::new("add"),
+        OsStr::new("--no-track"),
+        OsStr::new("-b"),
+        OsStr::new(&branch.to_string()),
+        path.as_os_str(),
+        OsStr::new(BASE),
     ])?;
     Ok(path)
 }
@@ -640,7 +686,7 @@ fn survey(git: &Git) -> anyhow::Result<Vec<Worktree>> {
         let changes = if missing {
             Changes::None
         } else {
-            Changes::from_status(&Git::new(entry.path.clone()).run(&[
+            Changes::from_status(&Git::new(entry.path.clone()).run_bytes(&[
                 "status",
                 "--porcelain=v1",
                 "-z",
@@ -749,7 +795,7 @@ fn remove(git: &Git, worktree: &Worktree, force: bool) -> anyhow::Result<Removed
     } else {
         Changes::None
     };
-    let now = Changes::from_status(&Git::new(path.clone()).run(&[
+    let now = Changes::from_status(&Git::new(path.clone()).run_bytes(&[
         "status",
         "--porcelain=v1",
         "-z",
@@ -777,7 +823,11 @@ fn remove(git: &Git, worktree: &Worktree, force: bool) -> anyhow::Result<Removed
         std::fs::remove_file(path.join(TASKS_FILE))
             .with_context(|| format!("removing {}", path.join(TASKS_FILE).display()))?;
     }
-    git.run(&["worktree", "remove", utf8(path)?])?;
+    git.run(&[
+        OsStr::new("worktree"),
+        OsStr::new("remove"),
+        path.as_os_str(),
+    ])?;
     let branch_kept = match &worktree.entry.branch {
         Some(branch) => git.run(&["branch", "-d", branch]).err().map(|error| {
             format!("{branch}: {error:#}; check it, then `git branch -D` it yourself")
@@ -790,11 +840,6 @@ fn remove(git: &Git, worktree: &Worktree, force: bool) -> anyhow::Result<Removed
     })
 }
 
-fn utf8(path: &Path) -> anyhow::Result<&str> {
-    path.to_str()
-        .with_context(|| format!("{} is not UTF-8", path.display()))
-}
-
 /// `git`, run in one directory.
 struct Git {
     dir: PathBuf,
@@ -805,7 +850,7 @@ impl Git {
         Self { dir }
     }
 
-    fn output(&self, args: &[&str]) -> anyhow::Result<std::process::Output> {
+    fn output<S: AsRef<OsStr>>(&self, args: &[S]) -> anyhow::Result<std::process::Output> {
         Command::new("git")
             .args(args)
             .current_dir(&self.dir)
@@ -813,34 +858,43 @@ impl Git {
             .context("spawning `git`")
     }
 
-    /// stdout of a command that must succeed.
-    fn run(&self, args: &[&str]) -> anyhow::Result<String> {
+    /// The error for a command that failed.
+    fn failure<S: AsRef<OsStr>>(&self, args: &[S], out: &std::process::Output) -> anyhow::Error {
+        let args: Vec<_> = args
+            .iter()
+            .map(|arg| arg.as_ref().to_string_lossy())
+            .collect();
+        anyhow::anyhow!(
+            "`git {}` in {} failed ({}): {}",
+            args.join(" "),
+            self.dir.display(),
+            out.status,
+            String::from_utf8_lossy(&out.stderr).trim()
+        )
+    }
+
+    /// stdout of a command that must succeed, as bytes: paths in it need not
+    /// be UTF-8.
+    fn run_bytes<S: AsRef<OsStr>>(&self, args: &[S]) -> anyhow::Result<Vec<u8>> {
         let out = self.output(args)?;
         if !out.status.success() {
-            bail!(
-                "`git {}` in {} failed ({}): {}",
-                args.join(" "),
-                self.dir.display(),
-                out.status,
-                String::from_utf8_lossy(&out.stderr).trim()
-            );
+            return Err(self.failure(args, &out));
         }
-        String::from_utf8(out.stdout).context("non-UTF-8 `git` output")
+        Ok(out.stdout)
+    }
+
+    /// stdout of a command that must succeed and prints only UTF-8.
+    fn run<S: AsRef<OsStr>>(&self, args: &[S]) -> anyhow::Result<String> {
+        String::from_utf8(self.run_bytes(args)?).context("non-UTF-8 `git` output")
     }
 
     /// Whether a yes/no command said yes (exit 0) or no (exit 1).
-    fn succeeds(&self, args: &[&str]) -> anyhow::Result<bool> {
+    fn succeeds<S: AsRef<OsStr>>(&self, args: &[S]) -> anyhow::Result<bool> {
         let out = self.output(args)?;
         match out.status.code() {
             Some(0) => Ok(true),
             Some(1) => Ok(false),
-            _ => bail!(
-                "`git {}` in {} failed ({}): {}",
-                args.join(" "),
-                self.dir.display(),
-                out.status,
-                String::from_utf8_lossy(&out.stderr).trim()
-            ),
+            _ => Err(self.failure(args, &out)),
         }
     }
 
@@ -848,7 +902,7 @@ impl Git {
     /// the main one first and at that path.
     fn worktrees(&self) -> anyhow::Result<(PathBuf, Vec<Entry>)> {
         let mut entries =
-            parse_worktrees(&self.run(&["worktree", "list", "--porcelain", "-z"])?)?;
+            parse_worktrees(&self.run_bytes(&["worktree", "list", "--porcelain", "-z"])?)?;
         let main = main_checkout(&entries, self.main_toplevel()?.as_deref())?;
         if let Some(first) = entries.first_mut() {
             first.path.clone_from(&main);
@@ -859,19 +913,26 @@ impl Git {
     /// `--show-toplevel` when this is the main checkout: its git dir is the
     /// common one.
     fn main_toplevel(&self) -> anyhow::Result<Option<PathBuf>> {
-        let out = self.run(&[
+        let out = self.run_bytes(&[
             "rev-parse",
             "--path-format=absolute",
             "--git-dir",
             "--git-common-dir",
             "--show-toplevel",
         ])?;
-        let mut lines = out.lines();
+        let mut lines = out
+            .strip_suffix(b"\n")
+            .unwrap_or(&out)
+            .split(|&byte| byte == b'\n');
         let (Some(git_dir), Some(common_dir), Some(toplevel)) =
             (lines.next(), lines.next(), lines.next())
         else {
-            bail!("`git rev-parse` printed {out:?}, not three paths");
+            bail!(
+                "`git rev-parse` printed {:?}, not three paths",
+                String::from_utf8_lossy(&out)
+            );
         };
-        Ok(same_dir(Path::new(git_dir), Path::new(common_dir)).then(|| PathBuf::from(toplevel)))
+        let toplevel = os_path(toplevel)?;
+        Ok(same_dir(&os_path(git_dir)?, &os_path(common_dir)?).then_some(toplevel))
     }
 }

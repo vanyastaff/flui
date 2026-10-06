@@ -83,7 +83,7 @@ fn porcelain_records_parse() {
     ]
     .map(|line| format!("{line}\0"))
     .concat();
-    let entries = parse_worktrees(&porcelain).expect("valid porcelain");
+    let entries = parse_worktrees(porcelain.as_bytes()).expect("valid porcelain");
     assert_eq!(
         entries,
         [
@@ -110,7 +110,40 @@ fn porcelain_records_parse() {
             },
         ]
     );
-    assert!(parse_worktrees("HEAD abc\0").is_err());
+    assert!(parse_worktrees(b"HEAD abc\0").is_err());
+}
+
+/// git prints a path's bytes verbatim; on Unix they need not be UTF-8, and
+/// `list` and `prune` must still read every record.
+fn a_non_utf8_path_is_read_as_the_platform_spells_it() {
+    let porcelain = b"worktree /w/dir\xff\0branch refs/heads/t/a\0\0";
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        let entries = parse_worktrees(porcelain).expect("a Unix path is any bytes");
+        assert_eq!(
+            entries,
+            [Entry {
+                path: PathBuf::from(OsStr::from_bytes(b"/w/dir\xff")),
+                branch: Some("t/a".to_owned()),
+                ..Entry::default()
+            }]
+        );
+    }
+    #[cfg(not(unix))]
+    {
+        let error = parse_worktrees(porcelain).expect_err("git for Windows prints UTF-8");
+        assert!(format!("{error:#}").contains("non-UTF-8 path"), "{error:#}");
+    }
+    // a non-UTF-8 ignored entry is judged on its bytes and named lossily
+    assert_eq!(
+        Changes::from_status(b"!! key\xff.env\0!! build/target/\0?? TASKS.md\0"),
+        Changes::Ignored(vec!["key\u{fffd}.env".to_owned()])
+    );
+    assert_eq!(
+        Changes::from_status(b"!! target/\0?? src\xff.rs\0"),
+        Changes::Work
+    );
 }
 
 fn an_upstream_is_gone_only_when_set_and_missing() {
@@ -135,15 +168,15 @@ refs/remotes/origin/pushed\0
 }
 
 fn status_reads_tasks_md_alone_as_no_work() {
-    assert_eq!(Changes::from_status(""), Changes::None);
-    assert_eq!(Changes::from_status("?? TASKS.md\0"), Changes::TasksOnly);
+    assert_eq!(Changes::from_status(b""), Changes::None);
+    assert_eq!(Changes::from_status(b"?? TASKS.md\0"), Changes::TasksOnly);
     assert_eq!(
-        Changes::from_status("?? TASKS.md\0?? notes.txt\0"),
+        Changes::from_status(b"?? TASKS.md\0?? notes.txt\0"),
         Changes::Work
     );
-    assert_eq!(Changes::from_status("?? docs/TASKS.md\0"), Changes::Work);
-    assert_eq!(Changes::from_status(" M src/lib.rs\0"), Changes::Work);
-    assert_eq!(Changes::from_status("R  new.rs\0old.rs\0"), Changes::Work);
+    assert_eq!(Changes::from_status(b"?? docs/TASKS.md\0"), Changes::Work);
+    assert_eq!(Changes::from_status(b" M src/lib.rs\0"), Changes::Work);
+    assert_eq!(Changes::from_status(b"R  new.rs\0old.rs\0"), Changes::Work);
 }
 
 fn status_keeps_ignored_entries_that_are_not_disposable() {
@@ -170,7 +203,11 @@ fn status_keeps_ignored_entries_that_are_not_disposable() {
         ("!! .env\0 M src/lib.rs\0", Changes::Work),
     ];
     for (status, expected) in cases {
-        assert_eq!(Changes::from_status(status), expected, "{status:?}");
+        assert_eq!(
+            Changes::from_status(status.as_bytes()),
+            expected,
+            "{status:?}"
+        );
     }
     let many = Reason::Ignored(["a", "b", "c", "d", "e"].map(str::to_owned).to_vec());
     assert_eq!(many.to_string(), "ignored files: a, b, c (+2 more)");
@@ -339,18 +376,11 @@ impl Fixture {
         let origin = scratch.path().join("origin.git");
         let main = scratch.path().join("main");
         let top = Git::new(scratch.path().to_path_buf());
-        top.run(&[
-            "init",
-            "-q",
-            "--bare",
-            "-b",
-            "main",
-            utf8(&origin).expect("utf8"),
-        ])
-        .expect("init origin");
+        top.run(&["init", "-q", "--bare", "-b", "main", utf8(&origin)])
+            .expect("init origin");
         let mut init = vec!["init", "-q", "-b", "main"];
         init.extend_from_slice(init_args);
-        init.push(utf8(&main).expect("utf8"));
+        init.push(utf8(&main));
         top.run(&init).expect("init main");
         let fixture = Self {
             _scratch: scratch,
@@ -368,7 +398,7 @@ impl Fixture {
         std::fs::write(fixture.main.join(".gitignore"), "/target/\n").expect("write");
         git.run(&["add", ".gitignore"]).expect("add");
         commit(&fixture.main, "base");
-        git.run(&["remote", "add", "origin", utf8(&origin).expect("utf8")])
+        git.run(&["remote", "add", "origin", utf8(&origin)])
             .expect("remote");
         git.run(&["push", "-q", "origin", "main"]).expect("push");
         fixture
@@ -409,6 +439,10 @@ impl Fixture {
             ])
             .expect("show-ref")
     }
+}
+
+fn utf8(path: &Path) -> &str {
+    path.to_str().expect("scratch paths are UTF-8")
 }
 
 /// Commits a new file `name` in the checkout at `dir`.
@@ -707,6 +741,10 @@ fn worktree_contract() {
                 the_main_checkout_is_its_own_top_level_or_a_first_record_holding_git,
             ),
             ("porcelain_records_parse", porcelain_records_parse),
+            (
+                "a_non_utf8_path_is_read_as_the_platform_spells_it",
+                a_non_utf8_path_is_read_as_the_platform_spells_it,
+            ),
             (
                 "an_upstream_is_gone_only_when_set_and_missing",
                 an_upstream_is_gone_only_when_set_and_missing,
