@@ -110,7 +110,17 @@ framework does not control is contained.
    does not clear it.
 6. **The commit gate is open only while the realm is in its slot and not driving a frame.** A
    platform entry while the realm is checked out (a frame, the end of a session) is refused a
-   synchronous lock and queues an asynchronous one; no user code runs.
+   synchronous lock and queues an asynchronous one; no user code runs. A presentation's close is
+   its last turn and opens the gate for good: no anchor follows it, so a completion queued in a
+   frame the close cuts short commits (item 4) before its store is retired. An accepted
+   composition commit is completed and the rest of the queued tail is cancelled: a pull host's
+   queued completion runs through the host (in place if it abandons it), and a store whose
+   in-place commit was queued as a grant (behind the shut gate, or behind a grant running on the
+   store when the completion was asked for from inside it, which may fail and leave it queued;
+   the owner records the debt from the request's outcome, not from the gate) runs its queued
+   grants, in request order, so the commit lands behind the grants accepted before it; every
+   other store's queued grants are dropped with the store. Each runs inside the close's
+   containment, and after a failure the rest are retired, not run.
 7. **ADR-0090 §3's platform mapping follows a pull host.** The Win32 backend receives the focused
    store from the presentation through an owner-thread host rather than reading
    `TextInputOwner::active_store`, which is removed.
