@@ -210,6 +210,7 @@ fn semantics_translation_and_routing() {
             ("semantics::numeric_range_admission_and_owner_payload_validation", crate::semantics::numeric_range_admission_and_owner_payload_validation as fn()),
             ("semantics::a_set_text_request_without_a_payload_is_dropped_rather_than_emptied", crate::semantics::a_set_text_request_without_a_payload_is_dropped_rather_than_emptied as fn()),
             ("semantics::a_tap_handler_round_trips_from_a_platform_click_to_the_callback", crate::semantics::a_tap_handler_round_trips_from_a_platform_click_to_the_callback),
+            ("semantics::assistive_scroll_actions_move_a_scrollable", crate::semantics::assistive_scroll_actions_move_a_scrollable),
             ("semantics::merge_semantics_collapses_its_descendants_in_the_a11y_tree", crate::semantics::merge_semantics_collapses_its_descendants_in_the_a11y_tree),
             ("semantics::a_covered_retained_form_stays_absent_after_a_late_controller_update", crate::semantics::a_covered_retained_form_stays_absent_after_a_late_controller_update),
             ("semantics::rebuilding_with_fresh_handlers_keeps_the_configuration_and_runs_the_new_one", crate::semantics::rebuilding_with_fresh_handlers_keeps_the_configuration_and_runs_the_new_one),
