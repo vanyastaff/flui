@@ -53,4 +53,6 @@
   presentation's next turn, after the close's own work.
 - **`TextInputHandle::attach`** (`flui-interaction`) returns the client's token once the client
   is active; a failure after that point waits in the presentation's commit gate for its next
-  turn instead of being raised by the attach.
+  turn instead of being raised by the attach. A store whose `set_commit_gate` panics is
+  rejected, and a failure its grants of other stores parked in the gate meanwhile is raised
+  ahead of its own.

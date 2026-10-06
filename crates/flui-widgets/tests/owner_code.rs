@@ -928,6 +928,14 @@ const ROWS: &[(&str, fn())] = &[
         editable_update_to_a_node_attached_elsewhere,
     ),
     (
+        "attach: a store parking a failure while taking the gate, then panicking",
+        attach_with_a_store_parking_then_failing_to_take_the_gate,
+    ),
+    (
+        "attach: a store parking a failure while taking the gate",
+        attach_with_a_store_parking_while_taking_the_gate,
+    ),
+    (
         "detach: a stale token whose diagnostic closes the owner and panics",
         stale_detach_whose_diagnostic_closes_the_owner_and_panics,
     ),
@@ -1426,6 +1434,95 @@ fn attach_with_a_store_failing_to_take_the_gate() {
         Some("store failure installing the gate"),
         "the rejected client is retained, not destroyed during the unwind"
     );
+    the_owner_keeps_working(&owner);
+}
+
+/// A store that, given a gate, edits `other` (whose owner listener panics,
+/// parking that failure in the gate `other` follows), then panics if it
+/// `refuses`, and otherwise takes the gate.
+struct ParksTakingTheGate {
+    inner: Rc<InMemoryTextStore>,
+    other: Rc<InMemoryTextStore>,
+    refuses: bool,
+}
+
+impl TextStore for ParksTakingTheGate {
+    fn status(&self) -> TextStoreStatus {
+        self.inner.status()
+    }
+    fn request_lock(
+        &self,
+        grant: LockGrant,
+        timing: LockTiming,
+    ) -> Result<LockOutcome, TextStoreError> {
+        self.inner.request_lock(grant, timing)
+    }
+    fn run_deferred_grants(&self) -> usize {
+        self.inner.run_deferred_grants()
+    }
+    fn set_commit_gate(&self, gate: CommitGate) {
+        park_through(&self.other, "parked while taking the gate");
+        assert!(!self.refuses, "store failure installing the gate");
+        self.inner.set_commit_gate(gate);
+    }
+    fn set_observer(&self, observer: Option<Rc<dyn TextStoreObserver>>) {
+        self.inner.set_observer(observer);
+    }
+}
+
+/// An owner with an attached in-memory store, and a client whose store edits
+/// that one while taking the owner's gate.
+fn owner_and_a_store_parking_through(
+    refuses: bool,
+) -> (Rc<TextInputOwner>, Rc<InMemoryTextStore>, TextInputClient) {
+    let owner = owner();
+    let other = InMemoryTextStore::new("");
+    let _other = owner
+        .handle()
+        .attach(TextInputClient::new(other.clone()))
+        .expect("attach");
+    let client = TextInputClient::new(Rc::new(ParksTakingTheGate {
+        inner: InMemoryTextStore::new(""),
+        other: other.clone(),
+        refuses,
+    }));
+    (owner, other, client)
+}
+
+/// The failure the store's grant parked in the presentation's gate came
+/// before the store's own panic, so attach raises it, and nothing is left
+/// for the owner's next turn.
+fn attach_with_a_store_parking_then_failing_to_take_the_gate() {
+    let (owner, other, client) = owner_and_a_store_parking_through(true);
+    assert_eq!(
+        raised(|| {
+            let _ = owner.handle().attach(client);
+        })
+        .as_deref(),
+        Some("parked while taking the gate"),
+        "the failure parked inside the store's call came before the call's own"
+    );
+    assert_eq!(other.text(), "a", "the store's grant stands");
+    the_owner_keeps_working(&owner);
+}
+
+/// A store that took the gate is admitted, though a grant it requested
+/// meanwhile parked a failure: that failure is the owner's next turn's.
+fn attach_with_a_store_parking_while_taking_the_gate() {
+    let (owner, other, client) = owner_and_a_store_parking_through(false);
+    let mut attached = None;
+    assert_eq!(
+        raised(|| attached = Some(owner.handle().attach(client))),
+        None,
+        "the store took the gate: attach returns its token"
+    );
+    assert!(matches!(attached, Some(Ok(_))), "the client is admitted");
+    assert_eq!(
+        raised(|| owner.dispatch(&ImeEvent::Commit("b".into()))).as_deref(),
+        Some("parked while taking the gate"),
+        "the owner's next turn reports it"
+    );
+    assert_eq!(other.text(), "a", "the store's grant stands");
     the_owner_keeps_working(&owner);
 }
 

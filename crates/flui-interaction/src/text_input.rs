@@ -328,14 +328,25 @@ impl TextInputOwner {
         // Before the client is reachable through `dispatch`, so no lock is
         // ever requested on a store that does not yet follow the frame. The
         // store is user code: a failure there rejects the client, which is
-        // retained rather than destroyed during the unwind (ADR-0127).
+        // retained rather than destroyed during the unwind (ADR-0127). The
+        // store may request grants of stores behind this owner's gate, whose
+        // settles park their failures there: one parked during a call that
+        // then panics came first, and is the one raised. When the store took
+        // the gate, what it parked stays for this owner's next turn, as any
+        // grant's parked failure does.
         let mut installing = OwnerCalls::new();
-        installing.run(|| {
-            client.store.set_commit_gate(self.gate.clone());
-        });
+        let installed = installing
+            .run_parking(&self.gate, || {
+                client.store.set_commit_gate(self.gate.clone());
+            })
+            .is_some();
         if let Some(payload) = installing.into_failure() {
-            RetainOnFailure::retain(client);
-            std::panic::resume_unwind(payload);
+            if installed {
+                self.gate.defer_failure(payload);
+            } else {
+                RetainOnFailure::retain(client);
+                std::panic::resume_unwind(payload);
+            }
         }
         // A user-defined store may close the owner while installing its gate.
         // The rejected client was never admitted; its owners still retire
