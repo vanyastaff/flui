@@ -88,7 +88,7 @@ pub trait NavigatorRoute: Route {
 /// There is no transition, so a pop finalizes synchronously.
 pub struct SimpleRoute<T> {
     settings: RouteSettings,
-    builder: RouteContentBuilder,
+    builder: super::lifecycle::Terminal<RouteContentBuilder>,
     /// The `??` fallback for a pop that carries no value.
     current_result: Option<T>,
     /// Set by tests / `LocalHistoryRoute`-shaped routes.
@@ -96,6 +96,15 @@ pub struct SimpleRoute<T> {
     /// When `false`, `did_pop` refuses, as a route with local history entries
     /// does while any remain.
     consents_to_pop: bool,
+}
+
+impl<T> Drop for SimpleRoute<T> {
+    fn drop(&mut self) {
+        let settings = super::lifecycle::Terminal::new(std::mem::take(&mut self.settings));
+        let builder = self.builder.withdraw();
+        let result = super::lifecycle::Terminal::new(self.current_result.take());
+        drop((settings, builder, result));
+    }
 }
 
 impl<T> fmt::Debug for SimpleRoute<T> {
@@ -111,7 +120,7 @@ impl<T> SimpleRoute<T> {
     pub fn new(builder: impl Fn(&dyn BuildContext) -> BoxedView + 'static) -> Self {
         Self {
             settings: RouteSettings::default(),
-            builder: Rc::new(builder),
+            builder: super::lifecycle::Terminal::new(Rc::new(builder)),
             current_result: None,
             handles_pop_internally: false,
             consents_to_pop: true,

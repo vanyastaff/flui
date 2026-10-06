@@ -179,6 +179,17 @@ impl CallbackSlot {
     }
 }
 
+/// Independently owned callback custody after the ticker has been fenced.
+struct RetiredTickerCallback(Option<TickerCallback>);
+
+impl Drop for RetiredTickerCallback {
+    fn drop(&mut self) {
+        if std::thread::panicking() {
+            std::mem::forget(self.0.take());
+        }
+    }
+}
+
 /// RAII checkout of a ticker's callback for one dispatch.
 ///
 /// Checks a [`CallbackSlot::Ready`] callback out to `CheckedOut` so the
@@ -255,7 +266,8 @@ impl Drop for TickerLease {
         // Both of these run only after the guard above has fallen, and for the
         // same reason: a `tracing` subscriber and a callback's own `Drop` are
         // both arbitrary user code that may re-enter this non-reentrant lock.
-        if discarded.is_some() {
+        let discarded = RetiredTickerCallback(discarded);
+        if discarded.0.is_some() && !std::thread::panicking() {
             tracing::trace!(
                 "TickerLease: discarding a superseded or stale callback outside the inner lock"
             );
@@ -511,7 +523,7 @@ impl Ticker {
         };
         // Dropped only after the lock above has released (issue #1059
         // hardening) — a callback's own `Drop` is user code.
-        drop(discarded);
+        let discarded = RetiredTickerCallback(discarded);
         // Cancel pending transient callback outside the inner lock to avoid
         // lock-during-callback hazard (scheduler may also take its own locks).
         if let (Some(id), Some(scheduler)) = (pending_id, self.scheduler.as_ref())
@@ -519,6 +531,7 @@ impl Ticker {
         {
             scheduler.cancel_frame_callback(id);
         }
+        drop(discarded);
     }
 
     /// Debug-assert that this ticker hasn't been disposed. Release builds
@@ -727,12 +740,13 @@ impl Ticker {
         // discarded here — the dispatching `TickerLease` resolves the
         // checked-out callback itself once it observes this now-`Stopped`
         // (not running) state.
-        drop(discarded);
+        let discarded = RetiredTickerCallback(discarded);
         if let (Some(id), Some(scheduler)) = (pending_id, self.scheduler.as_ref())
             && let Some(scheduler) = scheduler.upgrade()
         {
             scheduler.cancel_frame_callback(id);
         }
+        drop(discarded);
     }
 
     /// Mute the ticker.
@@ -912,12 +926,13 @@ impl Ticker {
         };
         // Dropped only after the lock above has released (issue #1059
         // hardening) — same reentrant-`CheckedOut` handling as `stop`/`dispose`.
-        drop(discarded);
+        let discarded = RetiredTickerCallback(discarded);
         if let (Some(id), Some(scheduler)) = (pending_id, self.scheduler.as_ref())
             && let Some(scheduler) = scheduler.upgrade()
         {
             scheduler.cancel_frame_callback(id);
         }
+        drop(discarded);
     }
 
     /// Register a transient frame callback if this ticker is auto-scheduling,

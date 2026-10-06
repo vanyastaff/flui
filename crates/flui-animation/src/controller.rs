@@ -1,6 +1,6 @@
 //! `AnimationController` - The primary animation driver.
 
-use crate::animation::{Animation, AnimationDirection, StatusCallback};
+use crate::animation::{Animation, AnimationDirection, Retirement, StatusCallback, Terminal};
 use crate::curve::Curve;
 use crate::error::AnimationError;
 use crate::simulation::{Simulation, SpringDescription, SpringSimulation, SpringType, Tolerance};
@@ -365,6 +365,38 @@ struct AnimationControllerInner {
     /// warning on every subsequent occurrence adds noise without adding
     /// information.
     non_finite_warned: bool,
+}
+
+impl Drop for AnimationControllerInner {
+    fn drop(&mut self) {
+        self.disposed = true;
+        self.repeat = None;
+        self.run_duration = None;
+        let mut ticker = self.ticker.take();
+        let run = self.active_run.take();
+        let simulation = Terminal::new(self.simulation.take());
+        let curve = Terminal::new(self.run_curve.take());
+        let callbacks: Vec<_> = std::mem::take(&mut self.status_listeners)
+            .into_iter()
+            .map(|(_, callback)| Terminal::new(callback))
+            .collect();
+        // All physical custody is withdrawn before cancellation or user Drop.
+        let mut retirement = Retirement::new();
+        let delivery = run.map(TickerCompleter::cancel);
+        if let Some(ticker) = ticker.as_mut() {
+            retirement.run(|| ticker.dispose());
+        }
+        if let Some(delivery) = delivery {
+            retirement.run(|| delivery.deliver());
+        }
+        retirement.retire(ticker);
+        retirement.retire(simulation);
+        retirement.retire(curve);
+        for callback in callbacks {
+            retirement.retire(callback);
+        }
+        retirement.finish();
+    }
 }
 
 impl AnimationController {

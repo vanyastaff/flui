@@ -1,5 +1,26 @@
 # flui-widgets architecture
 
+## Terminal navigation ownership
+
+Navigation bindings hold the navigator's registry weakly. The navigator closes
+the registry before retiring its history, so a closure installed by a modal
+route or overlay entry cannot keep its route alive through the registry or
+enqueue work for a navigator that is gone. A lookup through a closed registry
+returns nothing and a mutation does nothing. Modal, transition and hero handles
+that outlive the navigator keep only their own state; a transition handle does
+not keep a modal page alive.
+
+Route, router, overlay, modal and hero owners withdraw each owned value from
+shared state before dropping it, so no destructor runs under an internal lock.
+After the first destructor failure in a retirement, or while the thread is
+already panicking, the remaining values are retained rather than dropped
+([ADR-0127](../../docs/adr/ADR-0127-exceptional-path-retention.md)); the first
+failure propagates. Router parser inputs and partially built router clones are
+owned before any user code runs, so a failure there drops or retains them under
+the same rule. A route result and the waker waiting for it are retired
+separately. Tested by `delivered_route_results_remain_completed` and
+`terminal_binding_authority_is_closed_before_route_retirement`.
+
 ## Event callback phase boundary
 
 `InteractiveViewer`, `RefreshIndicator`, `PopScope`, `AnimatedSize`,

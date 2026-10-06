@@ -1,21 +1,23 @@
 //! Controller-owned user code runs without its state lock and cannot commit stale samples.
 
+use crate::child_process;
 use flui_animation::{
-    Animation, AnimationController,
-    curve::Curve,
+    Animation, AnimationController, AnimationStatus, AnimationSwitch, ConstantAnimation,
+    CurvedAnimation, ProxyAnimation, StatusCallback,
+    curve::{Curve, Split},
     simulation::{Simulation, Tolerance},
 };
-use flui_scheduler::ticker::TickerFuture;
+use flui_foundation::{Listenable, ListenerCallback, ListenerId};
+use flui_scheduler::{Ticker, UpdateScheduler, ticker::TickerFuture};
 use std::{
     future::Future,
-    io::Read,
     pin::Pin,
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, AtomicUsize, Ordering},
     },
     task::{Context, Poll, Waker},
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 #[derive(Clone, Copy)]
@@ -538,9 +540,874 @@ fn retirement_failure_retains_later_callback_envelope() {
     ));
 }
 
+#[derive(Clone, Debug)]
+struct TerminalProbe {
+    label: &'static str,
+    drops: Arc<Mutex<Vec<&'static str>>>,
+    panics: bool,
+}
+impl Drop for TerminalProbe {
+    fn drop(&mut self) {
+        self.drops
+            .lock()
+            .expect("terminal observations")
+            .push(self.label);
+        assert!(!self.panics, "{}", self.label);
+    }
+}
+#[derive(Clone, Debug)]
+struct TerminalCurve(
+    #[expect(
+        dead_code,
+        reason = "the curve owns this destructor probe without reading it"
+    )]
+    TerminalProbe,
+);
+impl Curve for TerminalCurve {
+    fn transform(&self, time: f64) -> f64 {
+        time
+    }
+}
+#[derive(Clone, Copy)]
+enum TerminalOwner {
+    Controller,
+    Proxy,
+    Curved,
+    Switch,
+}
+
+fn terminal_fixture(
+    kind: TerminalOwner,
+    first: TerminalProbe,
+    second: TerminalProbe,
+) -> Box<dyn std::any::Any + Send> {
+    match kind {
+        TerminalOwner::Controller => {
+            let controller = AnimationController::without_ticker(Duration::from_secs(1));
+            controller.add_status_listener(Arc::new(move |_| {
+                let _capture = &first;
+            }));
+            controller.add_status_listener(Arc::new(move |_| {
+                let _capture = &second;
+            }));
+            Box::new(controller)
+        }
+        TerminalOwner::Proxy => {
+            let proxy = ProxyAnimation::new(Arc::new(ConstantAnimation::completed(0.5)));
+            proxy.add_status_listener(Arc::new(move |_| {
+                let _capture = &first;
+            }));
+            proxy.add_status_listener(Arc::new(move |_| {
+                let _capture = &second;
+            }));
+            Box::new(proxy)
+        }
+        TerminalOwner::Curved => Box::new(
+            CurvedAnimation::new(
+                Arc::new(ConstantAnimation::completed(0.5)),
+                TerminalCurve(first),
+            )
+            .with_reverse_curve(TerminalCurve(second)),
+        ),
+        TerminalOwner::Switch => {
+            let switch = AnimationSwitch::new(
+                Arc::new(ConstantAnimation::completed(0.75)),
+                Some(Arc::new(ConstantAnimation::completed(0.25))),
+            );
+            switch.add_status_listener(Arc::new(move |_| {
+                let _capture = &first;
+            }));
+            switch.add_status_listener(Arc::new(move |_| {
+                let _capture = &second;
+            }));
+            Box::new(switch)
+        }
+    }
+}
+
+fn terminal_owner_matrix(kind: TerminalOwner) {
+    for (panics, incoming) in [(false, false), (true, false), (true, true)] {
+        let drops = Arc::new(Mutex::new(Vec::new()));
+        let probe = |label| TerminalProbe {
+            label,
+            drops: drops.clone(),
+            panics,
+        };
+        let owner = terminal_fixture(kind, probe("terminal first"), probe("terminal second"));
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+            if incoming {
+                let _owner = owner;
+                panic!("terminal incoming");
+            }
+            drop(owner);
+        }));
+        if panics {
+            let payload = outcome.expect_err("terminal failure propagates");
+            assert_eq!(
+                flui_foundation::panic::payload_text(payload.as_ref()),
+                Some(if incoming {
+                    "terminal incoming"
+                } else {
+                    "terminal first"
+                })
+            );
+            flui_foundation::panic::retain_opaque_payload(payload);
+        } else {
+            assert!(outcome.is_ok());
+        }
+        assert_eq!(
+            *drops.lock().expect("terminal observations"),
+            if incoming {
+                vec![]
+            } else if panics {
+                vec!["terminal first"]
+            } else {
+                vec!["terminal first", "terminal second"]
+            }
+        );
+        // A new independent owner still releases its healthy resources.
+        let next = Arc::new(Mutex::new(Vec::new()));
+        let probe = |label| TerminalProbe {
+            label,
+            drops: next.clone(),
+            panics: false,
+        };
+        drop(terminal_fixture(
+            kind,
+            probe("next first"),
+            probe("next second"),
+        ));
+        assert_eq!(
+            *next.lock().expect("next owner"),
+            vec!["next first", "next second"]
+        );
+    }
+}
+fn controller_terminal_owner() {
+    terminal_owner_matrix(TerminalOwner::Controller);
+}
+fn proxy_terminal_owner() {
+    terminal_owner_matrix(TerminalOwner::Proxy);
+}
+fn curved_terminal_owner() {
+    terminal_owner_matrix(TerminalOwner::Curved);
+}
+fn switch_terminal_owner() {
+    terminal_owner_matrix(TerminalOwner::Switch);
+}
+
+fn shared_terminal_owners_keep_independent_aliases_live() {
+    let drops = Arc::new(Mutex::new(Vec::new()));
+    let controller = AnimationController::without_ticker(Duration::from_secs(1));
+    let alias = controller.clone();
+    let probe = TerminalProbe {
+        label: "controller alias",
+        drops: drops.clone(),
+        panics: false,
+    };
+    controller.add_status_listener(Arc::new(move |_| {
+        let _capture = &probe;
+    }));
+    drop(controller);
+    assert!(drops.lock().expect("alias observations").is_empty());
+    alias.forward().expect("surviving controller");
+    alias.tick_at(1.0);
+    assert_eq!(alias.value(), 1.0);
+    drop(alias);
+    assert_eq!(
+        *drops.lock().expect("alias observations"),
+        vec!["controller alias"]
+    );
+
+    let parent = Arc::new(AnimationController::without_ticker(Duration::from_secs(1)));
+    let proxy = ProxyAnimation::new(parent.clone());
+    let alias = proxy.clone();
+    let observed = Arc::new(AtomicUsize::new(0));
+    let callback_observed = observed.clone();
+    alias.add_status_listener(Arc::new(move |_| {
+        callback_observed.fetch_add(1, Ordering::SeqCst);
+    }));
+    drop(proxy);
+    let _run = parent.forward().expect("parent run");
+    assert_eq!(observed.load(Ordering::SeqCst), 1);
+    drop(alias);
+    parent.tick_at(1.0);
+    assert_eq!(
+        observed.load(Ordering::SeqCst),
+        1,
+        "last proxy detaches its forwarder"
+    );
+}
+
+fn ticker_terminal_cancels_before_retiring_callback() {
+    let scheduler = UpdateScheduler::new();
+    let drops = Arc::new(Mutex::new(Vec::new()));
+    let probe = TerminalProbe {
+        label: "ticker first",
+        drops: drops.clone(),
+        panics: true,
+    };
+    let mut ticker = Ticker::new_with_scheduler(&scheduler);
+    ticker.start(move |_| {
+        let _capture = &probe;
+    });
+    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(ticker)))
+        .expect_err("ticker capture failure");
+    assert_eq!(
+        flui_foundation::panic::payload_text(failure.as_ref()),
+        Some("ticker first")
+    );
+    flui_foundation::panic::retain_opaque_payload(failure);
+    assert_eq!(
+        scheduler.transient_callback_count(),
+        0,
+        "cancellation precedes capture retirement"
+    );
+    assert_eq!(
+        *drops.lock().expect("ticker retirement"),
+        vec!["ticker first"]
+    );
+
+    let probe = TerminalProbe {
+        label: "ticker retained",
+        drops: drops.clone(),
+        panics: true,
+    };
+    let mut ticker = Ticker::new_with_scheduler(&scheduler);
+    ticker.start(move |_| {
+        let _capture = &probe;
+    });
+    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+        let _ticker = ticker;
+        panic!("ticker incoming");
+    }))
+    .expect_err("incoming ticker failure");
+    assert_eq!(
+        flui_foundation::panic::payload_text(failure.as_ref()),
+        Some("ticker incoming")
+    );
+    flui_foundation::panic::retain_opaque_payload(failure);
+    assert_eq!(scheduler.transient_callback_count(), 0);
+    assert_eq!(
+        *drops.lock().expect("ticker retirement"),
+        vec!["ticker first"]
+    );
+}
+
+struct TerminalParent {
+    values: Mutex<Vec<(ListenerId, ListenerCallback)>>,
+    statuses: Mutex<Vec<(ListenerId, StatusCallback)>>,
+    removed: Arc<Mutex<Vec<&'static str>>>,
+    fail_removal: bool,
+    registrations: AtomicUsize,
+    fail_registration_at: usize,
+    fail_value: bool,
+    sample: f64,
+    fail_status: AtomicBool,
+    #[allow(dead_code, reason = "held only for its destructor")]
+    probe: Option<TerminalProbe>,
+    reenter: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
+}
+impl std::fmt::Debug for TerminalParent {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TerminalParent").finish_non_exhaustive()
+    }
+}
+impl TerminalParent {
+    fn register(&self) {
+        let index = self.registrations.fetch_add(1, Ordering::SeqCst) + 1;
+        assert!(
+            index != self.fail_registration_at,
+            "parent registration failure"
+        );
+    }
+    fn removed(&self, kind: &'static str) {
+        self.removed
+            .lock()
+            .expect("subscription observations")
+            .push(kind);
+        let callback = self.reenter.lock().expect("removal hook").take();
+        if let Some(callback) = callback {
+            callback();
+        }
+        assert!(!self.fail_removal, "{}", kind);
+    }
+}
+impl Listenable for TerminalParent {
+    fn add_listener(&self, callback: ListenerCallback) -> ListenerId {
+        self.register();
+        let mut values = self.values.lock().expect("parent values");
+        let id = ListenerId::new(values.len() + 1);
+        values.push((id, callback));
+        id
+    }
+    fn remove_listener(&self, id: ListenerId) {
+        let removed = {
+            let mut values = self.values.lock().expect("parent values");
+            values
+                .iter()
+                .position(|(candidate, _)| *candidate == id)
+                .map(|i| values.remove(i))
+        };
+        drop(removed);
+        self.removed("value removal");
+    }
+    fn remove_all_listeners(&self) {
+        let removed = std::mem::take(&mut *self.values.lock().expect("parent values"));
+        drop(removed);
+    }
+}
+impl Animation<f64> for TerminalParent {
+    fn value(&self) -> f64 {
+        assert!(!self.fail_value, "parent value failure");
+        self.sample
+    }
+    fn status(&self) -> AnimationStatus {
+        assert!(
+            !self.fail_status.load(Ordering::SeqCst),
+            "parent status failure"
+        );
+        AnimationStatus::Completed
+    }
+    fn add_status_listener(&self, callback: StatusCallback) -> ListenerId {
+        self.register();
+        let mut statuses = self.statuses.lock().expect("parent statuses");
+        let id = ListenerId::new(statuses.len() + 1);
+        statuses.push((id, callback));
+        id
+    }
+    fn remove_status_listener(&self, id: ListenerId) {
+        let removed = {
+            let mut statuses = self.statuses.lock().expect("parent statuses");
+            statuses
+                .iter()
+                .position(|(candidate, _)| *candidate == id)
+                .map(|i| statuses.remove(i))
+        };
+        drop(removed);
+        self.removed("status removal");
+    }
+}
+fn terminal_parent(fail_removal: bool) -> Arc<TerminalParent> {
+    Arc::new(TerminalParent {
+        values: Mutex::new(Vec::new()),
+        statuses: Mutex::new(Vec::new()),
+        removed: Arc::new(Mutex::new(Vec::new())),
+        fail_removal,
+        registrations: AtomicUsize::new(0),
+        fail_registration_at: 0,
+        fail_value: false,
+        sample: 0.5,
+        fail_status: AtomicBool::new(false),
+        probe: None,
+        reenter: Mutex::new(None),
+    })
+}
+fn parent_subscriptions_detach_all_after_failure() {
+    for incoming in [false, true] {
+        let parent = terminal_parent(true);
+        let proxy = ProxyAnimation::new(parent.clone());
+        let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+            if incoming {
+                let _proxy = proxy;
+                panic!("subscription incoming");
+            }
+            drop(proxy);
+        }))
+        .expect_err("subscription failure");
+        assert_eq!(
+            flui_foundation::panic::payload_text(failure.as_ref()),
+            Some(if incoming {
+                "subscription incoming"
+            } else {
+                "value removal"
+            })
+        );
+        flui_foundation::panic::retain_opaque_payload(failure);
+        assert!(parent.values.lock().expect("parent values").is_empty());
+        assert!(parent.statuses.lock().expect("parent statuses").is_empty());
+        assert_eq!(
+            *parent.removed.lock().expect("subscription observations"),
+            vec!["value removal", "status removal"]
+        );
+    }
+    let parent = terminal_parent(false);
+    let curved = CurvedAnimation::new(parent.clone(), flui_animation::curve::Linear);
+    let alias = curved.clone();
+    drop(curved);
+    assert!(parent.removed.lock().expect("curved aliases").is_empty());
+    drop(alias);
+    assert_eq!(
+        *parent.removed.lock().expect("curved aliases"),
+        vec!["value removal", "status removal"]
+    );
+}
+fn switch_disposal_commits_before_reentrant_parent_removal() {
+    let parent = terminal_parent(false);
+    let switch = Arc::new(AnimationSwitch::new(parent.clone(), None));
+    let weak = Arc::downgrade(&switch);
+    *parent.reenter.lock().expect("removal hook") = Some(Arc::new(move || {
+        let switch = weak.upgrade().expect("independent switch alias");
+        switch.dispose();
+        assert_eq!(switch.value(), 0.5);
+    }));
+    switch.dispose();
+    assert_eq!(
+        *parent.removed.lock().expect("switch removal"),
+        vec!["value removal", "status removal"]
+    );
+    drop(switch);
+    assert_eq!(
+        *parent.removed.lock().expect("switch removal"),
+        vec!["value removal", "status removal"]
+    );
+}
+fn split_owned_curves_retire_independently() {
+    for (panics, incoming, invalid) in [
+        (false, false, false),
+        (true, false, false),
+        (true, true, false),
+        (true, false, true),
+    ] {
+        let drops = Arc::new(Mutex::new(Vec::new()));
+        let probe = |label| {
+            TerminalCurve(TerminalProbe {
+                label,
+                drops: drops.clone(),
+                panics,
+            })
+        };
+        let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let split = Split::with_curves(
+                if invalid { f64::NAN } else { 0.5 },
+                probe("split first"),
+                probe("split second"),
+            );
+            assert_eq!(split.split(), 0.5);
+            assert_eq!(split.begin_curve().transform(0.25), 0.25);
+            assert_eq!(split.end_curve().transform(0.75), 0.75);
+            assert_eq!(split.transform(0.75), 0.75);
+            if incoming {
+                let _split = split;
+                panic!("split incoming");
+            }
+            drop(split);
+        }));
+        if panics {
+            let payload = failure.expect_err("split failure");
+            assert_eq!(
+                flui_foundation::panic::payload_text(payload.as_ref()),
+                Some(if invalid {
+                    "split must be in range [0.0, 1.0]"
+                } else if incoming {
+                    "split incoming"
+                } else {
+                    "split first"
+                })
+            );
+            flui_foundation::panic::retain_opaque_payload(payload);
+        } else {
+            assert!(failure.is_ok());
+        }
+        assert_eq!(
+            *drops.lock().expect("split observations"),
+            if incoming || invalid {
+                vec![]
+            } else if panics {
+                vec!["split first"]
+            } else {
+                vec!["split first", "split second"]
+            }
+        );
+    }
+    let next = Arc::new(Mutex::new(Vec::new()));
+    let curve = |label| {
+        TerminalCurve(TerminalProbe {
+            label,
+            drops: next.clone(),
+            panics: false,
+        })
+    };
+    let split = Split::with_curves(
+        0.5,
+        curve("healthy next first"),
+        curve("healthy next second"),
+    );
+    assert_eq!(split.transform(0.25), 0.25);
+    drop(split);
+    assert_eq!(
+        *next.lock().expect("next split ownership"),
+        vec!["healthy next first", "healthy next second"]
+    );
+}
+
+#[derive(Debug)]
+struct PartialCloneCurve {
+    probe: TerminalProbe,
+    fail_clone: bool,
+}
+impl Clone for PartialCloneCurve {
+    fn clone(&self) -> Self {
+        assert!(!self.fail_clone, "split clone failure");
+        Self {
+            probe: self.probe.clone(),
+            fail_clone: false,
+        }
+    }
+}
+impl Curve for PartialCloneCurve {
+    fn transform(&self, time: f64) -> f64 {
+        time
+    }
+}
+fn split_partial_clone_retains_completed_field() {
+    let drops = Arc::new(Mutex::new(Vec::new()));
+    let curve = |label, fail_clone| PartialCloneCurve {
+        probe: TerminalProbe {
+            label,
+            drops: drops.clone(),
+            panics: true,
+        },
+        fail_clone,
+    };
+    let split = Split::with_curves(
+        0.5,
+        curve("cloned first", false),
+        curve("cloned second", true),
+    );
+    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| split.clone()))
+        .expect_err("second clone fails");
+    assert_eq!(
+        flui_foundation::panic::payload_text(failure.as_ref()),
+        Some("split clone failure")
+    );
+    flui_foundation::panic::retain_opaque_payload(failure);
+    assert!(
+        drops.lock().expect("clone observations").is_empty(),
+        "partially cloned first curve retained during second clone failure"
+    );
+    assert_eq!(split.transform(0.25), 0.25, "original remains usable");
+    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(split)))
+        .expect_err("original retirement failure");
+    assert_eq!(
+        flui_foundation::panic::payload_text(failure.as_ref()),
+        Some("cloned first")
+    );
+    flui_foundation::panic::retain_opaque_payload(failure);
+    assert_eq!(
+        *drops.lock().expect("clone observations"),
+        vec!["cloned first"]
+    );
+}
+
+fn constructors_preserve_incoming_sources_and_partial_subscriptions() {
+    let drops = Arc::new(Mutex::new(Vec::new()));
+    let mut parent = terminal_parent(false);
+    Arc::get_mut(&mut parent)
+        .expect("unique test parent")
+        .fail_registration_at = 2;
+    let curve = TerminalCurve(TerminalProbe {
+        label: "constructor curve",
+        drops: drops.clone(),
+        panics: true,
+    });
+    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        CurvedAnimation::new(parent.clone(), curve)
+    }))
+    .expect_err("second registration fails");
+    assert_eq!(
+        flui_foundation::panic::payload_text(failure.as_ref()),
+        Some("parent registration failure")
+    );
+    flui_foundation::panic::retain_opaque_payload(failure);
+    assert!(drops.lock().expect("constructor custody").is_empty());
+    assert!(
+        parent
+            .values
+            .lock()
+            .expect("partial subscription")
+            .is_empty()
+    );
+    assert_eq!(
+        *parent.removed.lock().expect("partial subscription"),
+        vec!["value removal"]
+    );
+
+    let mut parent = terminal_parent(false);
+    Arc::get_mut(&mut parent)
+        .expect("unique test parent")
+        .fail_registration_at = 2;
+    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        ProxyAnimation::new(parent.clone())
+    }))
+    .expect_err("proxy status registration fails");
+    assert_eq!(
+        flui_foundation::panic::payload_text(failure.as_ref()),
+        Some("parent registration failure")
+    );
+    flui_foundation::panic::retain_opaque_payload(failure);
+    assert!(
+        parent
+            .values
+            .lock()
+            .expect("proxy partial subscription")
+            .is_empty()
+    );
+
+    let mut current = terminal_parent(false);
+    Arc::get_mut(&mut current)
+        .expect("unique current parent")
+        .sample = 0.75;
+    let mut next = terminal_parent(false);
+    Arc::get_mut(&mut next)
+        .expect("unique next parent")
+        .fail_registration_at = 1;
+    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        AnimationSwitch::new(current.clone(), Some(next.clone()))
+    }))
+    .expect_err("next value registration fails");
+    assert_eq!(
+        flui_foundation::panic::payload_text(failure.as_ref()),
+        Some("parent registration failure")
+    );
+    flui_foundation::panic::retain_opaque_payload(failure);
+    assert!(
+        current
+            .values
+            .lock()
+            .expect("switch admitted subscription")
+            .is_empty(),
+        "accepted current registration must detach when later next registration fails"
+    );
+    assert_eq!(
+        *current
+            .removed
+            .lock()
+            .expect("switch admitted subscription"),
+        vec!["value removal"]
+    );
+
+    let mut current = terminal_parent(false);
+    let mut next = terminal_parent(false);
+    {
+        let current = Arc::get_mut(&mut current).expect("unique current parent");
+        current.fail_value = true;
+        current.probe = Some(TerminalProbe {
+            label: "current constructor owner",
+            drops: drops.clone(),
+            panics: true,
+        });
+    }
+    Arc::get_mut(&mut next).expect("unique next parent").probe = Some(TerminalProbe {
+        label: "next constructor owner",
+        drops: drops.clone(),
+        panics: true,
+    });
+    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+        AnimationSwitch::new(current, Some(next))
+    }))
+    .expect_err("initial parent sample fails");
+    assert_eq!(
+        flui_foundation::panic::payload_text(failure.as_ref()),
+        Some("parent value failure")
+    );
+    flui_foundation::panic::retain_opaque_payload(failure);
+    assert!(drops.lock().expect("constructor custody").is_empty());
+
+    let old = terminal_parent(false);
+    let proxy = ProxyAnimation::new(old.clone());
+    old.fail_status.store(true, Ordering::SeqCst);
+    let mut replacement = terminal_parent(false);
+    Arc::get_mut(&mut replacement)
+        .expect("unique replacement")
+        .probe = Some(TerminalProbe {
+        label: "replacement constructor owner",
+        drops: drops.clone(),
+        panics: true,
+    });
+    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        proxy.set_parent(replacement);
+    }))
+    .expect_err("old parent status fails");
+    assert_eq!(
+        flui_foundation::panic::payload_text(failure.as_ref()),
+        Some("parent status failure")
+    );
+    flui_foundation::panic::retain_opaque_payload(failure);
+    assert!(drops.lock().expect("constructor custody").is_empty());
+    old.fail_status.store(false, Ordering::SeqCst);
+    assert_eq!(proxy.value(), 0.5);
+    drop(proxy);
+}
+
+#[cfg(feature = "serde")]
+static SERDE_CURVE_DROPS: AtomicUsize = AtomicUsize::new(0);
+#[cfg(feature = "serde")]
+#[derive(Debug)]
+struct SerdeCurve(String);
+#[cfg(feature = "serde")]
+impl Curve for SerdeCurve {
+    fn transform(&self, time: f64) -> f64 {
+        time
+    }
+}
+#[cfg(feature = "serde")]
+impl Drop for SerdeCurve {
+    fn drop(&mut self) {
+        SERDE_CURVE_DROPS.fetch_add(1, Ordering::SeqCst);
+        assert!(!self.0.starts_with("bomb"), "serde curve retirement");
+    }
+}
+#[cfg(feature = "serde")]
+impl<'de> serde::Deserialize<'de> for SerdeCurve {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        <String as serde::Deserialize>::deserialize(deserializer).map(Self)
+    }
+}
+#[cfg(feature = "serde")]
+enum SerdeInput {
+    Number(f64),
+    Text(&'static str),
+    Failure,
+}
+#[cfg(feature = "serde")]
+impl serde::de::IntoDeserializer<'_, serde::de::value::Error> for SerdeInput {
+    type Deserializer = Self;
+    fn into_deserializer(self) -> Self {
+        self
+    }
+}
+#[cfg(feature = "serde")]
+impl<'de> serde::Deserializer<'de> for SerdeInput {
+    type Error = serde::de::value::Error;
+    fn deserialize_any<V: serde::de::Visitor<'de>>(
+        self,
+        visitor: V,
+    ) -> Result<V::Value, Self::Error> {
+        match self {
+            Self::Number(value) => visitor.visit_f64(value),
+            Self::Text(value) => visitor.visit_borrowed_str(value),
+            Self::Failure => Err(serde::de::Error::custom("second curve decode failure")),
+        }
+    }
+    serde::forward_to_deserialize_any! { bool i8 i16 i32 i64 u8 u16 u32 u64 f32 f64 char str string
+    bytes byte_buf option unit unit_struct newtype_struct seq tuple tuple_struct map struct enum
+    identifier ignored_any }
+}
+#[cfg(feature = "serde")]
+struct SerdeSplitMap(Vec<(&'static str, SerdeInput)>);
+#[cfg(feature = "serde")]
+impl<'de> serde::Deserializer<'de> for SerdeSplitMap {
+    type Error = serde::de::value::Error;
+    fn deserialize_any<V: serde::de::Visitor<'de>>(
+        self,
+        visitor: V,
+    ) -> Result<V::Value, Self::Error> {
+        visitor.visit_map(serde::de::value::MapDeserializer::new(self.0.into_iter()))
+    }
+    fn deserialize_struct<V: serde::de::Visitor<'de>>(
+        self,
+        name: &'static str,
+        _: &'static [&'static str],
+        visitor: V,
+    ) -> Result<V::Value, Self::Error> {
+        assert_eq!(name, "Split", "wire struct identity preserved");
+        self.deserialize_any(visitor)
+    }
+    serde::forward_to_deserialize_any! { bool i8 i16 i32 i64 u8 u16 u32 u64 f32 f64 char str string
+    bytes byte_buf option unit unit_struct newtype_struct seq tuple tuple_struct map enum
+    identifier ignored_any }
+}
+#[cfg(feature = "serde")]
+fn split_partial_deserialization_preserves_errors_and_wire_name() {
+    fn decode(
+        split: f64,
+        first: &'static str,
+        second: SerdeInput,
+    ) -> Result<Split<SerdeCurve, SerdeCurve>, serde::de::value::Error> {
+        <Split<SerdeCurve, SerdeCurve> as serde::Deserialize>::deserialize(SerdeSplitMap(vec![
+            ("split", SerdeInput::Number(split)),
+            ("begin_curve", SerdeInput::Text(first)),
+            ("end_curve", second),
+        ]))
+    }
+    SERDE_CURVE_DROPS.store(0, Ordering::SeqCst);
+    let failure = decode(0.5, "bomb first", SerdeInput::Failure).expect_err("partial decode error");
+    assert_eq!(failure.to_string(), "second curve decode failure");
+    assert_eq!(SERDE_CURVE_DROPS.load(Ordering::SeqCst), 0);
+    let failure = decode(f64::NAN, "bomb first", SerdeInput::Text("bomb second"))
+        .expect_err("invalid decoded range");
+    assert_eq!(failure.to_string(), "split must be in range [0.0, 1.0]");
+    assert_eq!(SERDE_CURVE_DROPS.load(Ordering::SeqCst), 0);
+    let split = decode(0.5, "bomb first", SerdeInput::Text("bomb second")).expect("valid split");
+    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(split)))
+        .expect_err("decoded ordinary retirement");
+    assert_eq!(
+        flui_foundation::panic::payload_text(failure.as_ref()),
+        Some("serde curve retirement")
+    );
+    flui_foundation::panic::retain_opaque_payload(failure);
+    assert_eq!(SERDE_CURVE_DROPS.load(Ordering::SeqCst), 1);
+    let split = decode(0.5, "bomb first", SerdeInput::Text("bomb second")).expect("incoming split");
+    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+        let _split = split;
+        panic!("serde incoming");
+    }))
+    .expect_err("incoming decoded failure");
+    assert_eq!(
+        flui_foundation::panic::payload_text(failure.as_ref()),
+        Some("serde incoming")
+    );
+    flui_foundation::panic::retain_opaque_payload(failure);
+    assert_eq!(SERDE_CURVE_DROPS.load(Ordering::SeqCst), 1);
+
+    let split =
+        decode(0.5, "healthy first", SerdeInput::Text("healthy second")).expect("next split");
+    assert_eq!(split.transform(0.75), 0.75);
+    drop(split);
+    assert_eq!(SERDE_CURVE_DROPS.load(Ordering::SeqCst), 3);
+}
+
 #[test]
 fn controller_sources_allow_reentry_and_preserve_run_ownership() {
     let cases: &[(&str, fn())] = &[
+        (
+            "constructor custody and partial subscriptions",
+            constructors_preserve_incoming_sources_and_partial_subscriptions,
+        ),
+        #[cfg(feature = "serde")]
+        (
+            "split partial serde custody",
+            split_partial_deserialization_preserves_errors_and_wire_name,
+        ),
+        (
+            "split partial clone ownership",
+            split_partial_clone_retains_completed_field,
+        ),
+        (
+            "parent subscription terminal failures",
+            parent_subscriptions_detach_all_after_failure,
+        ),
+        (
+            "switch parent removal reentry",
+            switch_disposal_commits_before_reentrant_parent_removal,
+        ),
+        (
+            "split independent curve retirement",
+            split_owned_curves_retire_independently,
+        ),
+        ("controller final owner", controller_terminal_owner),
+        ("proxy final owner", proxy_terminal_owner),
+        ("curved final owner", curved_terminal_owner),
+        ("switch final owner", switch_terminal_owner),
+        (
+            "independent final-owner aliases",
+            shared_terminal_owners_keep_independent_aliases_live,
+        ),
+        (
+            "ticker final owner",
+            ticker_terminal_cancels_before_retiring_callback,
+        ),
         ("curve retirement may reenter", curve_retirement_may_reenter),
         (
             "callback retirement may reenter",
@@ -584,57 +1451,17 @@ fn controller_sources_allow_reentry_and_preserve_run_ownership() {
             sample_failure_retains_hostile_source,
         ),
     ];
-    const SELECTED: &str = "FLUI_CONTROLLER_SOURCE_CASE";
-    if let Ok(selected) = std::env::var(SELECTED) {
+    if let Some(selected) = child_process::selected_case() {
         cases
             .iter()
             .find(|(name, _)| *name == selected)
             .expect("known child case")
             .1();
-        return;
+        child_process::pass();
     }
-    let mut failures = Vec::new();
-    for (name, _) in cases {
-        let mut child = std::process::Command::new(
-            std::env::current_exe().expect("test executable"),
-        )
-        .args([
-            "--exact",
-            "controller_sources::controller_sources_allow_reentry_and_preserve_run_ownership",
-            "--nocapture",
-        ])
-        .env(SELECTED, name)
-        .env("RUST_BACKTRACE", "0")
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .expect("controller child");
-        let mut stdout = child.stdout.take().expect("stdout");
-        let mut stderr = child.stderr.take().expect("stderr");
-        let stdout_reader = std::thread::spawn(move || {
-            let mut output = String::new();
-            stdout.read_to_string(&mut output).expect("stdout read");
-            output
-        });
-        let stderr_reader = std::thread::spawn(move || {
-            let mut output = String::new();
-            stderr.read_to_string(&mut output).expect("stderr read");
-            output
-        });
-        let started = Instant::now();
-        while child.try_wait().expect("child status").is_none() {
-            if started.elapsed() > Duration::from_secs(10) {
-                child.kill().expect("kill stalled child");
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(10));
-        }
-        let status = child.wait().expect("child exit");
-        let stdout = stdout_reader.join().expect("stdout reader");
-        let stderr = stderr_reader.join().expect("stderr reader");
-        if !status.success() || !stdout.contains("1 passed; 0 failed") {
-            failures.push(format!("{name}: {status}\n{stdout}\n{stderr}"));
-        }
-    }
-    assert!(failures.is_empty(), "{}", failures.join("\n"));
+    let names: Vec<_> = cases.iter().map(|(name, _)| *name).collect();
+    child_process::run_rows(
+        "controller_sources::controller_sources_allow_reentry_and_preserve_run_ownership",
+        &names,
+    );
 }

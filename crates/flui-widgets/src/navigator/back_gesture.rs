@@ -75,9 +75,17 @@ pub(crate) fn convert_to_logical(value: f64, direction: TextDirection) -> f64 {
 /// `pub` only so `crate::__test_access` can re-export it (ADR-0083 §4); the
 /// module is private, so nothing else names it.
 pub struct BackGestureController {
-    navigator: NavigatorHandle,
+    navigator: super::lifecycle::Terminal<NavigatorHandle>,
     route: RouteId,
-    controller: AnimationController,
+    controller: super::lifecycle::Terminal<AnimationController>,
+}
+
+impl Drop for BackGestureController {
+    fn drop(&mut self) {
+        let navigator = self.navigator.withdraw();
+        let controller = self.controller.withdraw();
+        drop((navigator, controller));
+    }
 }
 
 impl std::fmt::Debug for BackGestureController {
@@ -98,9 +106,9 @@ impl BackGestureController {
     ) -> Self {
         navigator.did_start_user_gesture();
         Self {
-            navigator,
+            navigator: super::lifecycle::Terminal::new(navigator),
             route,
-            controller,
+            controller: super::lifecycle::Terminal::new(controller),
         }
     }
 
@@ -198,11 +206,11 @@ impl BackGestureController {
 /// `pub` only so `crate::__test_access` can re-export it (ADR-0083 §4); the
 /// module is private, so nothing else names it.
 pub struct BackGestureRuntime {
-    navigator: NavigatorHandle,
+    navigator: super::lifecycle::Terminal<NavigatorHandle>,
     route: RouteId,
-    controller: AnimationController,
+    controller: super::lifecycle::Terminal<AnimationController>,
     /// Re-evaluated on **every** pointer-down, never baked at build time.
-    enabled: Rc<dyn Fn() -> bool>,
+    enabled: super::lifecycle::Terminal<Rc<dyn Fn() -> bool>>,
     /// Refreshed from the ambient `Directionality` on every `build` (see
     /// `BackGestureDetectorState::build`) — `create_state` has no
     /// `BuildContext`, so this starts at the LTR fallback and is corrected
@@ -217,6 +225,17 @@ pub struct BackGestureRuntime {
     /// Set when `drag_end`/`drag_cancel` left the release animation running;
     /// cleared by `poll_settle` once it reports `did_stop_user_gesture`.
     awaiting_settle: Cell<bool>,
+}
+
+impl Drop for BackGestureRuntime {
+    fn drop(&mut self) {
+        let navigator = self.navigator.withdraw();
+        let controller = self.controller.withdraw();
+        let enabled = self.enabled.withdraw();
+        self.awaiting_settle.set(false);
+        let gesture = super::lifecycle::Terminal::new(self.gesture.get_mut().take());
+        drop((navigator, controller, enabled, gesture));
+    }
 }
 
 impl std::fmt::Debug for BackGestureRuntime {
@@ -238,10 +257,10 @@ impl BackGestureRuntime {
         enabled: Rc<dyn Fn() -> bool>,
     ) -> Self {
         Self {
-            navigator,
+            navigator: super::lifecycle::Terminal::new(navigator),
             route,
-            controller,
-            enabled,
+            controller: super::lifecycle::Terminal::new(controller),
+            enabled: super::lifecycle::Terminal::new(enabled),
             // No `BuildContext` here — refreshed from the ambient
             // `Directionality` on every `build` instead (see the module
             // docs and `BackGestureDetectorState::build`).
@@ -439,13 +458,24 @@ impl BackGestureRuntime {
 /// [`BACK_GESTURE_WIDTH`] of the leading edge into a
 /// [`BackGestureController`]-driven pop. `pub(crate)`: no public detector API
 /// is exposed yet.
-#[derive(Clone)]
 pub(crate) struct BackGestureDetector {
-    navigator: NavigatorHandle,
+    navigator: super::lifecycle::Terminal<NavigatorHandle>,
     route: RouteId,
-    controller: AnimationController,
-    enabled: Rc<dyn Fn() -> bool>,
-    child: Child,
+    controller: super::lifecycle::Terminal<AnimationController>,
+    enabled: super::lifecycle::Terminal<Rc<dyn Fn() -> bool>>,
+    child: super::lifecycle::Terminal<Child>,
+}
+
+impl Clone for BackGestureDetector {
+    fn clone(&self) -> Self {
+        Self {
+            navigator: super::lifecycle::Terminal::new(self.navigator.clone()),
+            route: self.route,
+            controller: super::lifecycle::Terminal::new(self.controller.clone()),
+            enabled: super::lifecycle::Terminal::new(self.enabled.clone()),
+            child: super::lifecycle::Terminal::new(self.child.clone()),
+        }
+    }
 }
 
 impl BackGestureDetector {
@@ -462,12 +492,22 @@ impl BackGestureDetector {
         child: impl IntoView,
     ) -> Self {
         Self {
-            navigator,
+            navigator: super::lifecycle::Terminal::new(navigator),
             route,
-            controller,
-            enabled,
-            child: Child::some(child.into_view()),
+            controller: super::lifecycle::Terminal::new(controller),
+            enabled: super::lifecycle::Terminal::new(enabled),
+            child: super::lifecycle::Terminal::new(Child::some(child.into_view())),
         }
+    }
+}
+
+impl Drop for BackGestureDetector {
+    fn drop(&mut self) {
+        let navigator = self.navigator.withdraw();
+        let controller = self.controller.withdraw();
+        let enabled = self.enabled.withdraw();
+        let child = self.child.withdraw();
+        drop((navigator, controller, enabled, child));
     }
 }
 
@@ -496,25 +536,33 @@ impl StatefulView for BackGestureDetector {
 
     fn create_state(&self) -> Self::State {
         BackGestureDetectorState {
-            runtime: Rc::new(BackGestureRuntime::new(
+            runtime: super::lifecycle::Terminal::new(Rc::new(BackGestureRuntime::new(
                 self.navigator.clone(),
                 self.route,
                 self.controller.clone(),
                 Rc::clone(&self.enabled),
-            )),
+            ))),
             recognizer: None,
         }
     }
 }
 
 pub(crate) struct BackGestureDetectorState {
-    runtime: Rc<BackGestureRuntime>,
+    runtime: super::lifecycle::Terminal<Rc<BackGestureRuntime>>,
     /// Built exactly once in `init_state` against the presentation arena.
     recognizer: Option<Recognizer>,
 }
 
 struct Recognizer {
     drag: Arc<DragGestureRecognizer>,
+}
+
+impl Drop for BackGestureDetectorState {
+    fn drop(&mut self) {
+        let runtime = self.runtime.withdraw();
+        let recognizer = super::lifecycle::Terminal::new(self.recognizer.take());
+        drop((runtime, recognizer));
+    }
 }
 
 impl std::fmt::Debug for BackGestureDetectorState {
@@ -545,8 +593,8 @@ impl ViewState<BackGestureDetector> for BackGestureDetectorState {
             .as_ref()
             .expect("BUG: init_state must build the recognizer before the first build");
 
-        let down_runtime = Rc::clone(&self.runtime);
-        let down_drag = Arc::clone(&recognizer.drag);
+        let down_runtime = super::lifecycle::Terminal::new(Rc::clone(&self.runtime));
+        let down_drag = super::lifecycle::Terminal::new(Arc::clone(&recognizer.drag));
         let move_drag = Arc::clone(&recognizer.drag);
         let up_drag = Arc::clone(&recognizer.drag);
         let cancel_drag = Arc::clone(&recognizer.drag);

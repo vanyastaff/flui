@@ -8,6 +8,14 @@ decisions` entries below; a full crate architecture writeup is deferred.
 
 ## Mapping decisions
 
+### Ticker cancellation precedes terminal callback retirement
+
+Disposing, stopping or resetting a ticker withdraws its callback and cancels
+its pending scheduler registration before dropping the callback, so a failing
+callback destructor never leaves the registration live. While the thread is already
+panicking the callback is retained instead of dropped
+([ADR-0127](../../docs/adr/ADR-0127-exceptional-path-retention.md)).
+
 ### Post-frame panic preserves uninvoked work in its original queue
 
 A post-frame callback panic stops the drain and propagates after frame completion

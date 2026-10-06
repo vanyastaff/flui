@@ -14,7 +14,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::common::{LaidOut, lay_out_animated, tight};
+use crate::common::{LaidOut, child_process, lay_out_animated, tight};
 use flui_animation::Vsync;
 use flui_painting::styling::Color;
 use flui_widgets::prelude::*;
@@ -445,11 +445,11 @@ pub(crate) fn router_go_preserves_its_commit_after_an_observer_panic() {
 /// Only the admitted value owns retirement; page-builder clones are views of
 /// it. This lets the test distinguish the Router's outgoing ownership from
 /// the navigator's independent page-builder lifetime.
-type DropHook = Rc<RefCell<Option<Rc<dyn Fn()>>>>;
+type RouteDropHook = Rc<RefCell<Option<Rc<dyn Fn()>>>>;
 
 struct DropRoute {
     value: u32,
-    on_drop: DropHook,
+    on_drop: RouteDropHook,
     owns_retirement: bool,
 }
 
@@ -686,61 +686,683 @@ fn a_go_observer_failure_retains_competing_temporary_route_values() {
 /// runs in its own bounded process rather than the ordinary contract table.
 #[test]
 fn router_observer_failure_and_retirement_competition() {
-    use std::io::Read;
-    use std::process::{Command, Stdio};
-    use std::time::Instant;
-
-    const CHILD: &str = "FLUI_ROUTER_RETIREMENT_CHILD";
-    if let Ok(case) = std::env::var(CHILD) {
+    if let Some(case) = child_process::selected_case() {
         match case.as_str() {
             "replace" => an_observer_failure_retains_competing_router_value_retirement(),
             "go" => a_go_observer_failure_retains_competing_temporary_route_values(),
+            "terminal-factories" => terminal_named_factory_competition(),
+            "terminal-observers" => terminal_observer_competition(),
+            "terminal-incoming" => terminal_navigator_during_incoming_unwind(),
+            "terminal-aliases" => terminal_aliases_preserve_healthy_factories(),
+            "terminal-router" => terminal_router_config_retains_factory_after_route_failure(),
+            "terminal-route" => terminal_route_result_retains_later_observer(),
+            "terminal-record-waker" => terminal_route_record_retains_pending_waker(),
+            "terminal-overlay" => terminal_overlay_entries_compete(),
+            "terminal-modal-cycle" => terminal_seeded_modal_releases_its_factories(),
+            "terminal-modal-alias" => terminal_modal_aliases_remain_usable_until_last_release(),
+            "terminal-mounted-router" => terminal_mounted_router_retires_accepted_values(),
+            "router-parser" | "router-clone" | "router-state-clone" => {
+                terminal_router_construction_matrix(&case);
+            }
+            "page-healthy" | "page-result" | "page-factory" | "page-compete" | "page-incoming" => {
+                terminal_page_route_matrix(&case);
+            }
             _ => panic!("unknown child case"),
         }
-        return;
+        child_process::pass();
     }
-    let mut failures = Vec::new();
-    for case in ["replace", "go"] {
-        let mut child = Command::new(std::env::current_exe().expect("test executable"))
-            .args([
-                "--exact",
-                "router::router_observer_failure_and_retirement_competition",
-                "--nocapture",
-            ])
-            .env(CHILD, case)
-            .env("RUST_BACKTRACE", "0")
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .expect("router retirement child");
-        let mut stdout = child.stdout.take().expect("stdout");
-        let mut stderr = child.stderr.take().expect("stderr");
-        let stdout_reader = std::thread::spawn(move || {
-            let mut text = String::new();
-            stdout.read_to_string(&mut text).expect("child stdout");
-            text
-        });
-        let stderr_reader = std::thread::spawn(move || {
-            let mut text = String::new();
-            stderr.read_to_string(&mut text).expect("child stderr");
-            text
-        });
-        let started = Instant::now();
-        while child.try_wait().expect("child status").is_none() {
-            if started.elapsed() > Duration::from_secs(10) {
-                child.kill().expect("kill deadlocked child");
-                break;
+    child_process::run_rows(
+        "router::router_observer_failure_and_retirement_competition",
+        &[
+            "replace",
+            "go",
+            "terminal-factories",
+            "terminal-observers",
+            "terminal-incoming",
+            "terminal-aliases",
+            "terminal-router",
+            "terminal-route",
+            "terminal-record-waker",
+            "terminal-overlay",
+            "terminal-modal-cycle",
+            "terminal-modal-alias",
+            "terminal-mounted-router",
+            "router-parser",
+            "router-clone",
+            "router-state-clone",
+            "page-healthy",
+            "page-result",
+            "page-factory",
+            "page-compete",
+            "page-incoming",
+        ],
+    );
+}
+
+// Each callback owns exactly one bomb. These are independent framework fields,
+// not an opaque user aggregate with several internally panicking destructors.
+#[derive(Clone)]
+struct TerminalBomb {
+    name: &'static str,
+    calls: Rc<Cell<usize>>,
+    armed: Rc<Cell<bool>>,
+}
+
+impl TerminalBomb {
+    fn new(name: &'static str) -> Self {
+        Self {
+            name,
+            calls: Rc::default(),
+            armed: Rc::new(Cell::new(true)),
+        }
+    }
+}
+
+impl Drop for TerminalBomb {
+    fn drop(&mut self) {
+        self.calls.set(self.calls.get() + 1);
+        assert!(!self.armed.get(), "{}", self.name);
+    }
+}
+
+fn assert_terminal_failure(failure: Box<dyn std::any::Any + Send>, expected: &str) {
+    assert_eq!(
+        flui_foundation::panic::payload_text(failure.as_ref()),
+        Some(expected)
+    );
+    // A fresh owner must remain operational after terminal containment.
+    let next = NavigatorHandle::new();
+    let calls = Rc::new(Cell::new(0));
+    let during = Rc::clone(&calls);
+    next.on_generate_route(move |_| {
+        during.set(during.get() + 1);
+        None
+    });
+    assert!(next.push_named("/same").is_err());
+    assert!(next.push_named("/same").is_err());
+    assert_eq!(calls.get(), 2);
+    next.clear_routes();
+}
+
+fn terminal_named_factory_competition() {
+    let navigator = NavigatorHandle::new();
+    let first = TerminalBomb::new("first factory");
+    let first_calls = Rc::clone(&first.calls);
+    let second = TerminalBomb::new("second factory");
+    let second_calls = Rc::clone(&second.calls);
+    navigator.on_generate_route(move |_| {
+        let _ = &first;
+        None
+    });
+    navigator.on_unknown_route(move |_| {
+        let _ = &second;
+        None
+    });
+    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(navigator)))
+        .expect_err("the first terminal factory must fail");
+    assert_terminal_failure(failure, "first factory");
+    assert_eq!(first_calls.get(), 1);
+    assert_eq!(second_calls.get(), 0, "the competing factory is retained");
+}
+
+struct TerminalObserver(
+    #[expect(
+        dead_code,
+        reason = "the observer owns this destructor probe without reading it"
+    )]
+    TerminalBomb,
+);
+impl NavigatorObserver for TerminalObserver {}
+
+#[expect(
+    clippy::arc_with_non_send_sync,
+    reason = "the navigator requires Arc observers; the retirement probe remains on its UI thread"
+)]
+fn terminal_observer_competition() {
+    let navigator = NavigatorHandle::new();
+    let first = TerminalBomb::new("first observer");
+    let first_calls = Rc::clone(&first.calls);
+    let second = TerminalBomb::new("second observer");
+    let second_calls = Rc::clone(&second.calls);
+    navigator.add_observer(Arc::new(TerminalObserver(first)));
+    navigator.add_observer(Arc::new(TerminalObserver(second)));
+    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(navigator)))
+        .expect_err("the first terminal observer must fail");
+    assert_terminal_failure(failure, "first observer");
+    assert_eq!(first_calls.get(), 1);
+    assert_eq!(second_calls.get(), 0);
+}
+
+#[expect(
+    clippy::arc_with_non_send_sync,
+    reason = "the navigator requires Arc observers; the retirement probe remains on its UI thread"
+)]
+fn terminal_navigator_during_incoming_unwind() {
+    let navigator = NavigatorHandle::new();
+    let factory = TerminalBomb::new("factory must be retained");
+    let factory_calls = Rc::clone(&factory.calls);
+    let observer = TerminalBomb::new("observer must be retained");
+    let observer_calls = Rc::clone(&observer.calls);
+    navigator.on_generate_route(move |_| {
+        let _ = &factory;
+        None
+    });
+    navigator.add_observer(Arc::new(TerminalObserver(observer)));
+    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+        let _owner = navigator;
+        panic!("incoming failure");
+    }))
+    .expect_err("the incoming failure reaches the caller");
+    assert_terminal_failure(failure, "incoming failure");
+    assert_eq!(factory_calls.get(), 0);
+    assert_eq!(observer_calls.get(), 0);
+}
+
+fn terminal_aliases_preserve_healthy_factories() {
+    let navigator = NavigatorHandle::new();
+    let alias = navigator.clone();
+    let first = TerminalBomb::new("healthy factory");
+    first.armed.set(false);
+    let first_calls = Rc::clone(&first.calls);
+    let second = TerminalBomb::new("healthy fallback");
+    second.armed.set(false);
+    let second_calls = Rc::clone(&second.calls);
+    let deliveries = Rc::new(Cell::new(0));
+    let delivered = Rc::clone(&deliveries);
+    navigator.on_generate_route(move |_| {
+        let _ = &first;
+        delivered.set(delivered.get() + 1);
+        None
+    });
+    navigator.on_unknown_route(move |_| {
+        let _ = &second;
+        None
+    });
+    drop(navigator);
+    assert_eq!(first_calls.get(), 0);
+    assert_eq!(second_calls.get(), 0);
+    assert!(alias.push_named("/retained").is_err());
+    assert_eq!(
+        deliveries.get(),
+        1,
+        "a surviving owner can still invoke its factory"
+    );
+    drop(alias);
+    assert_eq!(
+        first_calls.get(),
+        1,
+        "healthy final retirement runs normally"
+    );
+    assert_eq!(second_calls.get(), 1);
+}
+
+fn terminal_router_config_retains_factory_after_route_failure() {
+    let route = DropRoute::new(0);
+    *route.on_drop.borrow_mut() = Some(Rc::new(|| panic!("initial route")));
+    let page = TerminalBomb::new("page factory");
+    let page_calls = Rc::clone(&page.calls);
+    let transitions = TerminalBomb::new("transition factory");
+    let transition_calls = Rc::clone(&transitions.calls);
+    let router = Router::new(route, move |_, _| {
+        let _ = &page;
+        Text::new("page").boxed()
+    })
+    .transitions(move |_, _, _, child| {
+        let _ = &transitions;
+        child
+    });
+    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(router)))
+        .expect_err("the initial route must fail retirement");
+    assert_terminal_failure(failure, "initial route");
+    assert_eq!(page_calls.get(), 0);
+    assert_eq!(transition_calls.get(), 0);
+}
+
+#[expect(
+    clippy::arc_with_non_send_sync,
+    reason = "the navigator requires Arc observers; the retirement probe remains on its UI thread"
+)]
+fn terminal_route_result_retains_later_observer() {
+    let navigator = NavigatorHandle::new();
+    let result = TerminalResult::new("route result", true);
+    let result_calls = Arc::clone(&result.calls);
+    navigator
+        .seed_initial(SimpleRoute::new(|_| Text::new("route").boxed()).with_current_result(result));
+    let observer = TerminalBomb::new("later observer");
+    let observer_calls = Rc::clone(&observer.calls);
+    navigator.add_observer(Arc::new(TerminalObserver(observer)));
+    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(navigator)))
+        .expect_err("the route's retained result must fail retirement");
+    assert_terminal_failure(failure, "route result");
+    assert_eq!(result_calls.load(std::sync::atomic::Ordering::Relaxed), 1);
+    assert_eq!(observer_calls.get(), 0);
+}
+
+#[derive(Clone)]
+struct TerminalResult {
+    name: &'static str,
+    calls: Arc<std::sync::atomic::AtomicUsize>,
+    fail: bool,
+}
+
+impl TerminalResult {
+    fn new(name: &'static str, fail: bool) -> Self {
+        Self {
+            name,
+            calls: Arc::default(),
+            fail,
+        }
+    }
+}
+
+impl Drop for TerminalResult {
+    fn drop(&mut self) {
+        self.calls
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        assert!(!self.fail, "{}", self.name);
+    }
+}
+
+struct TerminalWake(
+    #[expect(
+        dead_code,
+        reason = "the waker owns this destructor probe without reading it"
+    )]
+    TerminalResult,
+);
+#[expect(
+    clippy::manual_noop_waker,
+    reason = "this waker owns a hostile destructor probe that Waker::noop cannot carry"
+)]
+impl std::task::Wake for TerminalWake {
+    fn wake(self: Arc<Self>) {}
+}
+
+struct TerminalRoute {
+    settings: flui_widgets::RouteSettings,
+    _retirement: TerminalBomb,
+}
+impl flui_widgets::Route for TerminalRoute {
+    type Output = ();
+    fn settings(&self) -> &flui_widgets::RouteSettings {
+        &self.settings
+    }
+}
+impl flui_widgets::NavigatorRoute for TerminalRoute {
+    fn content_builder(&self) -> flui_widgets::RouteContentBuilder {
+        Rc::new(|_| Text::new("terminal route").boxed())
+    }
+}
+
+fn terminal_route_record_retains_pending_waker() {
+    use std::future::Future as _;
+    use std::pin::Pin;
+    use std::task::{Context, Poll, Waker};
+    let navigator = NavigatorHandle::new();
+    let route = TerminalBomb::new("route owner");
+    let route_calls = Rc::clone(&route.calls);
+    let mut result = navigator.seed_initial(TerminalRoute {
+        settings: flui_widgets::RouteSettings::default(),
+        _retirement: route,
+    });
+    let wake = TerminalResult::new("pending waker", true);
+    let wake_calls = Arc::clone(&wake.calls);
+    let waker = Waker::from(Arc::new(TerminalWake(wake)));
+    assert_eq!(
+        Pin::new(&mut result).poll(&mut Context::from_waker(&waker)),
+        Poll::Pending
+    );
+    drop(waker);
+    drop(result);
+    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(navigator)))
+        .expect_err("the route owner must fail before its pending waiter");
+    assert_terminal_failure(failure, "route owner");
+    assert_eq!(route_calls.get(), 1);
+    assert_eq!(wake_calls.load(std::sync::atomic::Ordering::Relaxed), 0);
+}
+
+fn terminal_overlay_entries_compete() {
+    use flui_widgets::{InsertPosition, OverlayEntry, OverlayHandle};
+    let overlay = OverlayHandle::new();
+    let first = TerminalBomb::new("first overlay builder");
+    let first_calls = Rc::clone(&first.calls);
+    let second = TerminalBomb::new("second overlay builder");
+    let second_calls = Rc::clone(&second.calls);
+    let first_entry = OverlayEntry::new(move |_| {
+        let _ = &first;
+        Text::new("first").boxed()
+    });
+    let second_entry = OverlayEntry::new(move |_| {
+        let _ = &second;
+        Text::new("second").boxed()
+    });
+    overlay.insert(&first_entry, &InsertPosition::Top);
+    overlay.insert(&second_entry, &InsertPosition::Top);
+    drop(first_entry);
+    drop(second_entry);
+    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(overlay)))
+        .expect_err("first overlay builder must fail terminal retirement");
+    assert_terminal_failure(failure, "first overlay builder");
+    assert_eq!(first_calls.get(), 1);
+    assert_eq!(second_calls.get(), 0);
+}
+
+fn terminal_page_route_matrix(case: &str) {
+    let page = TerminalBomb::new("page builder");
+    page.armed.set(matches!(
+        case,
+        "page-factory" | "page-compete" | "page-incoming"
+    ));
+    let page_calls = Rc::clone(&page.calls);
+    let result = TerminalResult::new(
+        "page result",
+        matches!(case, "page-result" | "page-compete" | "page-incoming"),
+    );
+    let result_calls = Arc::clone(&result.calls);
+    let route = PageRoute::new(move |_, _, _| {
+        let _ = &page;
+        Text::new("page").boxed()
+    })
+    .with_current_result(result);
+    let incoming = case == "page-incoming";
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+        let owner = route;
+        assert!(!incoming, "incoming route");
+        drop(owner);
+    }));
+    match case {
+        "page-healthy" => assert!(outcome.is_ok()),
+        "page-factory" => {
+            assert_terminal_failure(outcome.expect_err("page builder failure"), "page builder");
+        }
+        "page-incoming" => assert_terminal_failure(
+            outcome.expect_err("incoming route failure"),
+            "incoming route",
+        ),
+        _ => assert_terminal_failure(outcome.expect_err("page result failure"), "page result"),
+    }
+    assert_eq!(
+        result_calls.load(std::sync::atomic::Ordering::Relaxed),
+        usize::from(!incoming)
+    );
+    assert_eq!(
+        page_calls.get(),
+        usize::from(matches!(case, "page-healthy" | "page-factory"))
+    );
+}
+
+fn terminal_router_construction_matrix(case: &str) {
+    struct CloneRoute {
+        second: bool,
+        copied: bool,
+    }
+    impl Clone for CloneRoute {
+        fn clone(&self) -> Self {
+            assert!(!self.second, "first route clone failure");
+            Self {
+                second: false,
+                copied: true,
             }
-            std::thread::sleep(Duration::from_millis(10));
-        }
-        let status = child.wait().expect("child exit");
-        let stdout = stdout_reader.join().expect("stdout reader");
-        let stderr = stderr_reader.join().expect("stderr reader");
-        if !status.success() || !stdout.contains("1 passed; 0 failed") {
-            failures.push(format!("{case}: {status}\n{stdout}\n{stderr}"));
         }
     }
-    assert!(failures.is_empty(), "{}", failures.join("\n"));
+    impl PartialEq for CloneRoute {
+        fn eq(&self, other: &Self) -> bool {
+            self.second == other.second
+        }
+    }
+    impl Drop for CloneRoute {
+        fn drop(&mut self) {
+            assert!(!self.copied, "competing cloned route retirement");
+        }
+    }
+    impl Routable for CloneRoute {
+        fn to_path(&self) -> RoutePath {
+            RoutePath::root()
+        }
+        fn from_path(_: &RoutePath) -> Result<Self, RouteParseError> {
+            Ok(Self {
+                second: false,
+                copied: false,
+            })
+        }
+        fn back_stack(path: &RoutePath) -> Result<Vec<Self>, RouteParseError> {
+            assert!(path.as_str() != "/panic", "first route parser failure");
+            Ok(vec![
+                Self {
+                    second: false,
+                    copied: false,
+                },
+                Self {
+                    second: true,
+                    copied: false,
+                },
+            ])
+        }
+    }
+    if case == "router-parser" {
+        let page = TerminalBomb::new("competing parser page retirement");
+        let calls = Rc::clone(&page.calls);
+        let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = Router::<CloneRoute>::from_location("/panic", move |_, _| {
+                let _ = &page;
+                Text::new("page").boxed()
+            });
+        }))
+        .expect_err("custom back-stack panic propagates");
+        assert_eq!(
+            flui_foundation::panic::payload_text(failure.as_ref()),
+            Some("first route parser failure")
+        );
+        assert_eq!(
+            calls.get(),
+            0,
+            "incoming page ownership survives parser unwind"
+        );
+    } else {
+        let router =
+            Router::<CloneRoute>::from_location("/clone", |_, _| Text::new("page").boxed())
+                .expect("known path");
+        let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            if case == "router-clone" {
+                drop(router.clone());
+            } else {
+                drop(router.create_state());
+            }
+        }))
+        .expect_err("second route clone fails");
+        assert_eq!(
+            flui_foundation::panic::payload_text(failure.as_ref()),
+            Some("first route clone failure")
+        );
+        drop(router);
+    }
+    let healthy = Router::new(AppRoute::Home, |_, _| Text::new("recovery").boxed());
+    drop(healthy.clone());
+    drop(healthy.create_state());
+    drop(healthy);
+}
+
+fn terminal_seeded_modal_releases_its_factories() {
+    let navigator = NavigatorHandle::new();
+    let page = TerminalBomb::new("healthy seeded page");
+    page.armed.set(false);
+    let page_calls = Rc::clone(&page.calls);
+    navigator.seed_initial(PageRoute::<()>::new(move |_, _, _| {
+        let _ = &page;
+        Text::new("seeded page").boxed()
+    }));
+    drop(navigator);
+    assert_eq!(
+        page_calls.get(),
+        1,
+        "a binding cannot keep its own route in the registry alive"
+    );
+}
+
+fn terminal_modal_aliases_remain_usable_until_last_release() {
+    use flui_animation::Animation;
+    use flui_widgets::__test_access::{PageRouteProbe, RouteProbe};
+    for mounted in [false, true] {
+        let navigator = NavigatorHandle::new();
+        let page = TerminalBomb::new("healthy aliased page");
+        page.armed.set(false);
+        let page_calls = Rc::clone(&page.calls);
+        let page_builds = Rc::new(Cell::new(0));
+        let builds = Rc::clone(&page_builds);
+        let route = PageRoute::<()>::new(move |_, _, _| {
+            let _ = &page;
+            builds.set(builds.get() + 1);
+            Text::new("alias page").boxed()
+        });
+        let modal = route.modal_handle();
+        let transition = route.transition_handle();
+        assert!(
+            transition.controller().is_none(),
+            "construction does not install a route"
+        );
+        navigator.seed_initial(route);
+        assert!(
+            transition.controller().is_none(),
+            "seeding defers install until the mount flush"
+        );
+        let mut laid = if mounted {
+            let vsync = Vsync::new();
+            Some(lay_out_animated(
+                VsyncScope::new(vsync.clone(), Navigator::new(navigator.clone())),
+                tight(400.0, 400.0),
+                vsync,
+            ))
+        } else {
+            None
+        };
+        if let Some(laid) = &mut laid {
+            laid.pump_for(FRAME);
+            assert!(
+                page_builds.get() > 0,
+                "the installed route built its actual page"
+            );
+            assert!(
+                laid_out_text(laid, "alias page"),
+                "the installed page was laid out"
+            );
+            let controller = transition
+                .controller()
+                .expect("mount installs the controller before owner retirement");
+            controller.set_value(0.25);
+            assert_eq!(controller.value(), 0.25);
+        } else {
+            assert_eq!(
+                page_builds.get(),
+                0,
+                "the seeded-only page was never mounted"
+            );
+        }
+        drop(navigator);
+        if let Some(laid) = &mut laid {
+            // Removing the Navigator releases its last shared owner. This is
+            // physical terminal retirement, not a route pop/dispose command.
+            laid.pump_widget(SizedBox::shrink());
+        }
+        drop(laid);
+        assert_eq!(
+            page_calls.get(),
+            0,
+            "a genuine modal alias still owns its page (mounted={mounted})"
+        );
+        modal.set_offstage(true);
+        assert!(modal.offstage());
+        modal.set_offstage(false);
+        assert!(!modal.offstage());
+        transition.drain_pending_statuses();
+        if mounted {
+            let controller = transition.controller().expect("the installed transition alias retains its controller after last navigator release");
+            controller.set_value(0.5);
+            assert_eq!(controller.value(), 0.5);
+        } else {
+            assert!(
+                transition.controller().is_none(),
+                "terminal retirement does not install a seeded-only route"
+            );
+        }
+        drop(modal);
+        assert_eq!(
+            page_calls.get(),
+            1,
+            "last modal release retires its own factory (mounted={mounted})"
+        );
+        if mounted {
+            let controller = transition.controller().expect(
+                "the transition alias still owns its installed animation state after modal release",
+            );
+            controller.set_value(0.75);
+            assert_eq!(controller.value(), 0.75);
+        } else {
+            assert!(transition.controller().is_none());
+        }
+        drop(transition);
+        assert_eq!(page_calls.get(), 1);
+    }
+}
+
+fn terminal_mounted_router_retires_accepted_values() {
+    let probe = DropProbe::default();
+    let page_probe = probe.clone();
+    let page = TerminalBomb::new("router page");
+    page.armed.set(false);
+    let page_armed = Rc::clone(&page.armed);
+    let page_calls = Rc::clone(&page.calls);
+    let vsync = Vsync::new();
+    let mut laid = lay_out_animated(
+        VsyncScope::new(
+            vsync.clone(),
+            Router::new(DropRoute::new(0), move |route: &DropRoute, _| {
+                let _ = &page;
+                DropPage {
+                    probe: page_probe.clone(),
+                    value: route.value,
+                }
+                .boxed()
+            }),
+        ),
+        tight(400.0, 400.0),
+        vsync,
+    );
+    laid.pump_for(FRAME);
+    let router = probe.router.borrow_mut().take().expect("mounted router");
+    let navigator = probe
+        .navigator
+        .borrow_mut()
+        .take()
+        .expect("mounted navigator");
+    let route = DropRoute::new(1);
+    let retired = Rc::new(Cell::new(0));
+    let route_armed = Rc::new(Cell::new(false));
+    let during_retired = Rc::clone(&retired);
+    let during_armed = Rc::clone(&route_armed);
+    *route.on_drop.borrow_mut() = Some(Rc::new(move || {
+        during_retired.set(during_retired.get() + 1);
+        assert!(!during_armed.get(), "accepted router value");
+    }));
+    router.push(route).expect("mounted router");
+    laid.pump_for(FRAME);
+    // Pages may have refreshed the capture slots while mounting. Empty them
+    // before unmount so the test does not keep a cycle through its own probes.
+    probe.router.borrow_mut().take();
+    probe.navigator.borrow_mut().take();
+    laid.pump_widget(Text::new("replacement"));
+    drop(navigator);
+    assert_eq!(
+        retired.get(),
+        0,
+        "the retained router still owns its accepted stack"
+    );
+    route_armed.set(true);
+    page_armed.set(true);
+    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(router)))
+        .expect_err("the accepted typed value must fail first");
+    assert_terminal_failure(failure, "accepted router value");
+    assert_eq!(retired.get(), 1);
+    assert_eq!(page_calls.get(), 0, "competing page factory is retained");
 }
 
 /// Divergence (ARCHITECTURE.md mapping decision 23): a Router never pops its

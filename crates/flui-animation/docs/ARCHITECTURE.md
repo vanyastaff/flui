@@ -248,6 +248,26 @@ fn tick(&self, delta: Duration) {
 
 ## Mapping decisions
 
+### Terminal owners retire outside their guards
+
+Controllers, proxies, curved animations and switches withdraw their callbacks,
+simulations, curves and subscriptions from shared state before dropping them, so
+no destructor runs under an internal lock. User parent removal and queries also
+run outside those locks. A registration is owned by the animation as soon as it
+is accepted, so a constructor that fails later still detaches it. After the
+first destructor failure in a retirement, or while the thread is already
+panicking, the remaining owned values are retained rather than dropped
+([ADR-0127](../../../docs/adr/ADR-0127-exceptional-path-retention.md)); the
+first failure propagates. Callbacks are thread-shared `Arc`s, so a snapshot
+clone cannot be proven non-last and is retained too.
+Tested by `controller_sources_allow_reentry_and_preserve_run_ownership`.
+
+`Split` keeps both curves in private fields, behind checked construction and
+the borrowed accessors `split()`, `begin_curve()` and `end_curve()`. It is
+`Clone` but no longer `Copy`, and keeps its serde field names. Deserialization
+commits decoded curves only once the whole value is valid, so a failing partial
+value cannot replace the decoding or range error.
+
 ### `AnimationController` owns the one future each run resolves
 
 **Rule:** every run-starting method (`forward`, `forward_from`, `reverse`,

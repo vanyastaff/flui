@@ -108,7 +108,7 @@ impl SecondaryParent {
 /// route, so everything it touches lives here behind an `Arc`.
 struct TransitionInner {
     controller: Mutex<Option<AnimationController>>,
-    binding: RouteBindingSlot,
+    binding: super::lifecycle::Terminal<RouteBindingSlot>,
     /// Statuses reported by the `Send + Sync` animation listener, awaiting
     /// owner-local application.
     pending_statuses: Arc<Mutex<Vec<AnimationStatus>>>,
@@ -120,7 +120,7 @@ struct TransitionInner {
     /// The proxy handed to the route *below* this one is **this** route's
     /// secondary; the primary is the controller, unproxied. Only the secondary
     /// animation is a `ProxyAnimation`.
-    secondary: Arc<ProxyAnimation<f64>>,
+    secondary: super::lifecycle::Terminal<Arc<ProxyAnimation<f64>>>,
     secondary_parent: Mutex<SecondaryParent>,
 
     /// Set once the route is popped: a popped route is no longer active, which is
@@ -139,13 +139,44 @@ struct TransitionInner {
 
     /// Fired in `dispose`. The route **below** listens on it to release its
     /// secondary proxy.
-    completed: Arc<CompletedSignal>,
+    completed: super::lifecycle::Terminal<Arc<CompletedSignal>>,
 
     /// How many times the status listener raised `finalize()`. Test-facing: the
     /// `pop_finalized` guard is what keeps this at one, and nothing else observes
     /// it, since the `finalize` command is idempotent. Compiled into every build so the route has one
     /// layout whether or not the integration tests link it (ADR-0083 §4).
     finalize_calls: AtomicUsize,
+}
+
+impl Drop for TransitionInner {
+    fn drop(&mut self) {
+        let controller = super::lifecycle::Terminal::new(self.controller.get_mut().take());
+        let binding = self.binding.withdraw();
+        let wake = super::lifecycle::Terminal::new(self.status_wake.get_mut().take());
+        let secondary = self.secondary.withdraw();
+        let parent = super::lifecycle::Terminal::new(std::mem::replace(
+            self.secondary_parent.get_mut(),
+            SecondaryParent::Dismissed,
+        ));
+        let registration = self.vsync_registration.get_mut().take();
+        let (vsync, registration) = match registration {
+            Some((vsync, registration)) => (Some(vsync), Some(registration)),
+            None => (None, None),
+        };
+        let vsync = super::lifecycle::Terminal::new(vsync);
+        let registration = super::lifecycle::Terminal::new(registration);
+        let completed = self.completed.withdraw();
+        drop((
+            controller,
+            binding,
+            wake,
+            secondary,
+            parent,
+            vsync,
+            registration,
+            completed,
+        ));
+    }
 }
 
 impl TransitionInner {
@@ -201,7 +232,7 @@ impl TransitionInner {
 /// Private: `TransitionRoute` is not exported until its sign-off gate.
 pub struct TransitionRoute<T> {
     settings: RouteSettings,
-    builder: RouteContentBuilder,
+    builder: super::lifecycle::Terminal<RouteContentBuilder>,
     duration: Duration,
     reverse_duration: Option<Duration>,
     current_result: Option<T>,
@@ -215,8 +246,18 @@ pub struct TransitionRoute<T> {
     /// [`TransitionGroup::Page`]; everything else stays at the default.
     group: TransitionGroup,
 
-    inner: Arc<TransitionInner>,
+    inner: super::lifecycle::Terminal<Arc<TransitionInner>>,
     _output: PhantomData<fn() -> T>,
+}
+
+impl<T> Drop for TransitionRoute<T> {
+    fn drop(&mut self) {
+        let settings = super::lifecycle::Terminal::new(std::mem::take(&mut self.settings));
+        let builder = self.builder.withdraw();
+        let result = super::lifecycle::Terminal::new(self.current_result.take());
+        let inner = self.inner.withdraw();
+        drop((settings, builder, result, inner));
+    }
 }
 
 impl<T> TransitionRoute<T> {
@@ -229,28 +270,30 @@ impl<T> TransitionRoute<T> {
         binding.set_group(TransitionGroup::Default);
         Self {
             settings: RouteSettings::default(),
-            builder: Rc::new(builder),
+            builder: super::lifecycle::Terminal::new(Rc::new(builder)),
             duration,
             reverse_duration: None,
             current_result: None,
             can_transition_to: true,
             can_transition_from: true,
             group: TransitionGroup::Default,
-            inner: Arc::new(TransitionInner {
+            inner: super::lifecycle::Terminal::new(Arc::new(TransitionInner {
                 controller: Mutex::new(None),
-                binding,
+                binding: super::lifecycle::Terminal::new(binding),
                 pending_statuses: Arc::new(Mutex::new(Vec::new())),
                 status_wake: Mutex::new(None),
-                secondary: Arc::new(ProxyAnimation::new(always_dismissed())),
+                secondary: super::lifecycle::Terminal::new(Arc::new(ProxyAnimation::new(
+                    always_dismissed(),
+                ))),
                 secondary_parent: Mutex::new(SecondaryParent::Dismissed),
                 popped: AtomicBool::new(false),
                 pop_finalized: AtomicBool::new(false),
                 opaque: AtomicBool::new(false),
                 vsync_registration: Mutex::new(None),
                 will_dispose_controller: true,
-                completed: Arc::new(CompletedSignal::default()),
+                completed: super::lifecycle::Terminal::new(Arc::new(CompletedSignal::default())),
                 finalize_calls: AtomicUsize::new(0),
-            }),
+            })),
             _output: PhantomData,
         }
     }
@@ -367,7 +410,7 @@ impl<T> TransitionRoute<T> {
         }
 
         let current_train = parent.current_train(&self.inner.secondary);
-        let next_animation = Arc::clone(&peer.animation);
+        let next_animation = Arc::clone(peer.animation());
 
         // Jump when the two trains are at the same value or the next one is not moving.
         //
@@ -395,8 +438,8 @@ impl<T> TransitionRoute<T> {
             *parent = SecondaryParent::Direct(next_id);
         } else {
             let train = current_train.expect("jump == false implies a current train");
-            let proxy = Arc::clone(&self.inner.secondary);
-            let target_for_hop = Arc::clone(&next_animation);
+            let proxy = super::lifecycle::Terminal::new(Arc::clone(&self.inner.secondary));
+            let target_for_hop = super::lifecycle::Terminal::new(Arc::clone(&next_animation));
             let switch = AnimationSwitch::new(train, Some(Arc::clone(&next_animation)))
                 // On the switch: point the proxy **directly** at the target and
                 // drop the hopper.
@@ -624,10 +667,10 @@ impl<T: Send + Clone + 'static> Route for TransitionRoute<T> {
         // Publish the primary animation so the route below can coordinate.
         if let Some(binding) = self.inner.binding.get() {
             binding.publish_peer(TransitionPeer {
-                animation: Arc::new(controller.clone()) as Arc<dyn Animation<f64>>,
+                animation: Some(Arc::new(controller.clone()) as Arc<dyn Animation<f64>>),
                 can_transition_from: self.can_transition_from,
                 group: self.group,
-                completed: Arc::clone(&self.inner.completed),
+                completed: super::lifecycle::Terminal::new(Arc::clone(&self.inner.completed)),
             });
 
             // A controller that installs already completed never fires a status

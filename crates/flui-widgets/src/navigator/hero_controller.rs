@@ -107,6 +107,7 @@ use parking_lot::Mutex;
 
 use super::hero::{HeroHandle, HeroTag, RectTweenFactory};
 use super::hero_flight::{FlightManager, FlightPlan};
+use super::lifecycle::{RetiredMap, RetiredValues, Terminal, TerminalVec};
 use super::modal_route::ModalHandle;
 use super::navigator::NavigatorHandle;
 use super::observer::NavigatorObserver;
@@ -231,19 +232,40 @@ pub struct HeroFlightManifest {
 pub struct HeroController {
     /// The observed navigator. `None` before
     /// attach and after detach, which is what makes a stale controller inert.
-    navigator: Mutex<Option<NavigatorHandle>>,
+    navigator: Terminal<Mutex<Option<NavigatorHandle>>>,
     /// How many post-frame measurements have been *scheduled*. One per eligible
     /// push/pop, never one per observer callback.
-    scheduled: Arc<AtomicUsize>,
+    scheduled: Terminal<Arc<AtomicUsize>>,
     /// What those callbacks resolved, in order.
-    measurements: Arc<Mutex<Vec<Measurement>>>,
+    measurements: Terminal<Arc<Mutex<Vec<Measurement>>>>,
     /// One per tag that both routes share and that measured to a finite rect.
-    manifests: Arc<Mutex<Vec<HeroFlightManifest>>>,
+    manifests: Terminal<Arc<TerminalVec<HeroFlightManifest>>>,
     /// One flight per tag in the air.
-    flights: Arc<FlightManager>,
+    flights: Terminal<Arc<FlightManager>>,
     /// The fallback rect-tween factory for heroes that set none of their own.
     /// `None` = linear.
-    default_rect_factory: Option<RectTweenFactory>,
+    default_rect_factory: Terminal<Option<RectTweenFactory>>,
+}
+
+impl Drop for HeroController {
+    fn drop(&mut self) {
+        // Withdraw the complete controller before releasing any owner. Shared
+        // recordings and flights retire only at their own physical last owner.
+        let navigator = self.navigator.withdraw();
+        let scheduled = self.scheduled.withdraw();
+        let measurements = self.measurements.withdraw();
+        let manifests = self.manifests.withdraw();
+        let flights = self.flights.withdraw();
+        let factory = self.default_rect_factory.withdraw();
+        drop((
+            navigator,
+            scheduled,
+            measurements,
+            manifests,
+            flights,
+            factory,
+        ));
+    }
 }
 
 impl std::fmt::Debug for HeroController {
@@ -276,12 +298,11 @@ impl HeroController {
         F: Fn(Rect, Rect) -> A + 'static,
         A: Animatable<Rect> + Send + Sync + 'static,
     {
-        Arc::new(Self {
-            default_rect_factory: Some(Rc::new(move |begin, end| {
-                Box::new(factory(begin, end)) as Box<dyn Animatable<Rect> + Send + Sync>
-            })),
-            ..Self::default()
-        })
+        let mut controller = Self::default();
+        controller.default_rect_factory = Terminal::new(Some(Rc::new(move |begin, end| {
+            Box::new(factory(begin, end)) as Box<dyn Animatable<Rect> + Send + Sync>
+        })));
+        Arc::new(controller)
     }
 
     /// The navigator this controller observes, or `None` when detached.
@@ -404,11 +425,15 @@ impl HeroController {
             return;
         };
 
-        let measurements = Arc::clone(&self.measurements);
-        let manifests = Arc::clone(&self.manifests);
-        let flights = Arc::clone(&self.flights);
-        let default_rect_factory = self.default_rect_factory.clone();
-        let measured_destination = destination.clone();
+        // The queued closure is an owning framework envelope too: each
+        // independent capture must retain itself after another capture fails.
+        let measurements = Terminal::new(Arc::clone(&self.measurements));
+        let manifests = Terminal::new(Arc::clone(&self.manifests));
+        let flights = Terminal::new(Arc::clone(&self.flights));
+        let default_rect_factory = Terminal::new(self.default_rect_factory.clone());
+        let measured_destination = Terminal::new(destination.clone());
+        let navigator = Terminal::new(navigator);
+        let source = Terminal::new(source);
         let schedule_result = post_frame.schedule_local(move |_timing| {
             let pass = MeasurementPass {
                 navigator: &navigator,
@@ -466,6 +491,14 @@ struct MeasurementPass<'a> {
     /// The controller-level `create_rect_tween` fallback, used for a hero that set
     /// none of its own.
     default_rect_factory: &'a Option<RectTweenFactory>,
+}
+
+/// A matched pair owns three independent opaque leaves, not one tuple whose
+/// generated destruction could make their failures compete.
+struct MatchedHeroes {
+    manifest: Terminal<HeroFlightManifest>,
+    from: Terminal<HeroHandle>,
+    to: Terminal<HeroHandle>,
 }
 
 impl MeasurementPass<'_> {
@@ -531,11 +564,16 @@ impl MeasurementPass<'_> {
         self.flights
             .set_post_frame(self.navigator.local_post_frame_handle());
 
-        let started = self.collect_manifests();
-        for (manifest, from_hero, to_hero) in &started {
-            self.launch(manifest, from_hero, to_hero);
+        let mut started = RetiredValues(self.collect_manifests());
+        for matched in &started.0 {
+            self.launch(&matched.manifest, &matched.from, &matched.to);
         }
-        started.into_iter().map(|(manifest, ..)| manifest).collect()
+        let mut remaining = Terminal::new(std::mem::take(&mut started.0).into_iter());
+        let mut manifests = Terminal::new(Vec::new());
+        for mut matched in remaining.by_ref() {
+            manifests.push(matched.manifest.take_value());
+        }
+        manifests.take_value()
     }
 
     /// Start the flight for one manifest.
@@ -591,15 +629,15 @@ impl MeasurementPass<'_> {
             manifest,
             FlightPlan {
                 direction,
-                from_hero: from_hero.clone(),
-                to_hero: to_hero.clone(),
+                from_hero: Terminal::new(from_hero.clone()),
+                to_hero: Terminal::new(to_hero.clone()),
                 to_route_subtree: to_subtree.render_id,
-                overlay: self.navigator.overlay().clone(),
-                animation,
-                rect_factory,
-                shuttle_builder,
+                overlay: Terminal::new(self.navigator.overlay().clone()),
+                animation: Terminal::new(animation),
+                rect_factory: Terminal::new(rect_factory),
+                shuttle_builder: Terminal::new(shuttle_builder),
                 is_user_gesture_transition: self.is_user_gesture_transition,
-                gesture_signal: self.navigator.user_gesture_signal(),
+                gesture_signal: Terminal::new(self.navigator.user_gesture_signal()),
             },
         );
     }
@@ -619,17 +657,18 @@ impl MeasurementPass<'_> {
         if !self.is_user_gesture_transition {
             return heroes;
         }
-        heroes
-            .into_iter()
-            .filter_map(|(tag, hero)| {
-                if hero.transition_on_user_gestures() {
-                    Some((tag, hero))
-                } else {
-                    hero.end_flight(false);
-                    None
-                }
-            })
-            .collect()
+        let mut remaining = Terminal::new(heroes.into_iter());
+        let mut accepted = RetiredMap(HashMap::new());
+        for (tag, hero) in &mut *remaining {
+            let mut tag = Terminal::new(tag);
+            let mut hero = Terminal::new(hero);
+            if hero.transition_on_user_gestures() {
+                accepted.0.insert(tag.take_value(), hero.take_value());
+            } else {
+                hero.end_flight(false);
+            }
+        }
+        std::mem::take(&mut accepted.0)
     }
 
     /// The matching loop, reduced to what a measurement needs: every tag both
@@ -641,7 +680,7 @@ impl MeasurementPass<'_> {
     /// are gathered through [`ModalHandle::all_heroes`], so a tag registered inside
     /// a nested `Navigator`'s current `PageRoute` matches exactly as one registered
     /// directly on `from`/`to`.
-    fn collect_manifests(&self) -> Vec<(HeroFlightManifest, HeroHandle, HeroHandle)> {
+    fn collect_manifests(&self) -> Vec<MatchedHeroes> {
         let Some(from_subtree) = self.navigator.route_subtree(self.from) else {
             return Vec::new();
         };
@@ -649,12 +688,12 @@ impl MeasurementPass<'_> {
             return Vec::new();
         };
 
-        let from_heroes = self.filter_for_gesture(self.source.all_heroes());
-        let to_heroes = self.filter_for_gesture(self.destination.all_heroes());
+        let from_heroes = RetiredMap(self.filter_for_gesture(self.source.all_heroes()));
+        let to_heroes = RetiredMap(self.filter_for_gesture(self.destination.all_heroes()));
 
-        let mut manifests = Vec::new();
-        for (tag, from_hero) in &from_heroes {
-            let Some(to_hero) = to_heroes.get(tag) else {
+        let mut manifests = RetiredValues(Vec::new());
+        for (tag, from_hero) in &from_heroes.0 {
+            let Some(to_hero) = to_heroes.0.get(tag) else {
                 continue; // A tag on only one route is not a flight.
             };
 
@@ -680,8 +719,8 @@ impl MeasurementPass<'_> {
                 continue;
             }
 
-            manifests.push((
-                HeroFlightManifest {
+            manifests.0.push(MatchedHeroes {
+                manifest: Terminal::new(HeroFlightManifest {
                     tag: tag.clone(),
                     direction: self.direction,
                     from_route: self.from,
@@ -689,12 +728,12 @@ impl MeasurementPass<'_> {
                     from_rect,
                     to_rect,
                     is_user_gesture_transition: self.is_user_gesture_transition,
-                },
-                from_hero.clone(),
-                to_hero.clone(),
-            ));
+                }),
+                from: Terminal::new(from_hero.clone()),
+                to: Terminal::new(to_hero.clone()),
+            });
         }
-        manifests
+        std::mem::take(&mut manifests.0)
     }
 }
 
@@ -801,5 +840,174 @@ impl NavigatorObserver for HeroController {
             return;
         }
         self.flights.finish_stalled_gesture_pops();
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod terminal_tests {
+    use super::*;
+    use std::hash::{Hash, Hasher};
+    use std::io::Read;
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+    use std::process::{Command, Stdio};
+    use std::time::{Duration, Instant};
+
+    #[derive(Clone, Debug)]
+    pub(crate) struct Bomb {
+        pub(crate) drops: Arc<AtomicUsize>,
+        pub(crate) label: &'static str,
+        pub(crate) panics: bool,
+    }
+    impl PartialEq for Bomb {
+        fn eq(&self, other: &Self) -> bool {
+            self.label == other.label
+        }
+    }
+    impl Eq for Bomb {}
+    impl Hash for Bomb {
+        fn hash<H: Hasher>(&self, state: &mut H) {
+            self.label.hash(state);
+        }
+    }
+    impl Drop for Bomb {
+        fn drop(&mut self) {
+            self.drops.fetch_add(1, Ordering::SeqCst);
+            assert!(!self.panics, "{}", self.label);
+        }
+    }
+    pub(crate) fn bomb(label: &'static str, panics: bool) -> (Bomb, Arc<AtomicUsize>) {
+        let drops = Arc::new(AtomicUsize::new(0));
+        (
+            Bomb {
+                drops: drops.clone(),
+                label,
+                panics,
+            },
+            drops,
+        )
+    }
+    pub(crate) fn factory(bomb: Bomb) -> RectTweenFactory {
+        Rc::new(move |begin, end| {
+            let _keep_capture = &bomb;
+            Box::new(flui_animation::RectTween { begin, end })
+        })
+    }
+    pub(crate) fn assert_failure(payload: Box<dyn std::any::Any + Send>, label: &str) {
+        let actual = payload
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .or_else(|| payload.downcast_ref::<&str>().copied());
+        assert_eq!(actual, Some(label));
+    }
+    // Each child contains the real final-owner path. A restored double panic or
+    // lock-held destructor is reported without aborting or hanging the suite.
+    pub(crate) fn children(test: &str, selected: &str, cases: &[&str]) -> Option<String> {
+        if let Ok(case) = std::env::var(selected) {
+            return Some(case);
+        }
+        let mut failures = Vec::new();
+        for case in cases {
+            let mut child = Command::new(std::env::current_exe().expect("test executable"))
+                .args(["--exact", test, "--nocapture"])
+                .env(selected, case)
+                .env("RUST_BACKTRACE", "0")
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .expect("terminal ownership child");
+            let mut stdout = child.stdout.take().expect("child stdout");
+            let mut stderr = child.stderr.take().expect("child stderr");
+            let output = std::thread::spawn(move || {
+                let mut text = String::new();
+                stdout.read_to_string(&mut text).expect("child output");
+                text
+            });
+            let errors = std::thread::spawn(move || {
+                let mut text = String::new();
+                stderr.read_to_string(&mut text).expect("child errors");
+                text
+            });
+            let started = Instant::now();
+            while child.try_wait().expect("child status").is_none() {
+                if started.elapsed() > Duration::from_secs(10) {
+                    child.kill().expect("kill terminal ownership child");
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            let status = child.wait().expect("child exit");
+            let stdout = output.join().expect("output reader");
+            let stderr = errors.join().expect("error reader");
+            if !status.success() || !stdout.contains("1 passed; 0 failed") {
+                failures.push(format!("{case}: {status}\n{stdout}\n{stderr}"));
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+        None
+    }
+
+    #[test]
+    fn hero_controller_terminal_retirement() {
+        let Some(case) = children(
+            "navigator::hero_controller::terminal_tests::hero_controller_terminal_retirement",
+            "FLUI_HERO_CONTROLLER_TERMINAL_CASE",
+            &[
+                "healthy",
+                "manifest_failure",
+                "competing",
+                "incoming_unwind",
+                "shared_manifest",
+            ],
+        ) else {
+            return;
+        };
+        let incoming = case == "incoming_unwind";
+        let first_failure = matches!(case.as_str(), "manifest_failure" | "competing");
+        let (key, key_drops) = bomb("manifest retirement", first_failure || incoming);
+        let (capture, capture_drops) = bomb("factory retirement", case == "competing" || incoming);
+        let mut controller = HeroController::default();
+        controller.default_rect_factory = Terminal::new(Some(factory(capture)));
+        controller.manifests.lock().push(HeroFlightManifest {
+            tag: HeroTag::new(flui_foundation::ValueKey::new(key)),
+            direction: None,
+            from_route: RouteId::next(),
+            to_route: RouteId::next(),
+            from_rect: Rect::ZERO,
+            to_rect: Rect::ZERO,
+            is_user_gesture_transition: false,
+        });
+        if case == "shared_manifest" {
+            let alias = controller.manifests.clone();
+            drop(controller);
+            assert_eq!(key_drops.load(Ordering::SeqCst), 0);
+            assert_eq!(capture_drops.load(Ordering::SeqCst), 1);
+            assert_eq!(alias.lock().len(), 1);
+            drop(alias);
+            assert_eq!(key_drops.load(Ordering::SeqCst), 1);
+            return;
+        }
+        let result = catch_unwind(AssertUnwindSafe(move || {
+            let _controller = controller;
+            assert!(!incoming, "incoming failure");
+        }));
+        if incoming {
+            assert_failure(result.expect_err("incoming panic"), "incoming failure");
+            assert_eq!(key_drops.load(Ordering::SeqCst), 0);
+            assert_eq!(capture_drops.load(Ordering::SeqCst), 0);
+        } else if first_failure {
+            assert_failure(result.expect_err("manifest panic"), "manifest retirement");
+            assert_eq!(key_drops.load(Ordering::SeqCst), 1);
+            assert_eq!(capture_drops.load(Ordering::SeqCst), 0);
+        } else {
+            assert!(result.is_ok());
+            assert_eq!(key_drops.load(Ordering::SeqCst), 1);
+            assert_eq!(capture_drops.load(Ordering::SeqCst), 1);
+        }
+        // Independent healthy work still retires normally after containment.
+        let (capture, drops) = bomb("recovery", false);
+        let mut next = HeroController::default();
+        next.default_rect_factory = Terminal::new(Some(factory(capture)));
+        drop(next);
+        assert_eq!(drops.load(Ordering::SeqCst), 1);
     }
 }

@@ -292,20 +292,24 @@ fn inert_wake() -> Rc<dyn Fn()> {
     Rc::new(|| {})
 }
 
-fn binding_for(history: &RouteHistory, id: RouteId) -> RouteBinding {
-    RouteBinding::new(
+fn binding_for(
+    history: &RouteHistory,
+    id: RouteId,
+) -> (
+    RouteBinding,
+    Arc<super::binding::RouteRegistries>,
+    super::binding::RouteVsync,
+) {
+    let registries = Arc::new(super::binding::RouteRegistries::new());
+    let vsync = Arc::new(Mutex::new(None));
+    let binding = RouteBinding::new(
         id,
         history.command_queue(),
         inert_wake(),
-        Arc::new(Mutex::new(None)),
-        super::binding::RouteRegistries {
-            peers: Arc::new(Mutex::new(std::collections::HashMap::new())),
-            entries: Arc::new(Mutex::new(std::collections::HashMap::new())),
-            subtrees: Arc::new(Mutex::new(std::collections::HashMap::new())),
-            modals: Arc::new(Mutex::new(std::collections::HashMap::new())),
-            pop_pacing: Arc::new(Mutex::new(std::collections::HashMap::new())),
-        },
-    )
+        Arc::clone(&vsync),
+        Arc::clone(&registries),
+    );
+    (binding, registries, vsync)
 }
 
 /// A route raising `finalize()` from `did_pop` — i.e. **inside** the flush that
@@ -325,7 +329,8 @@ fn route_binding_finalize_during_flush_is_deferred_not_reentrant() {
 
     let id = RouteId::next();
     let mut route = SeamRoute::new().finalizing_on_pop();
-    route.binding = Some(binding_for(&history, id));
+    let (binding, _registries, _vsync) = binding_for(&history, id);
+    route.binding = Some(binding);
     let (top, result) = history.push_with_id(id, route);
     assert_eq!(history.len(), 2);
 
@@ -356,7 +361,11 @@ fn route_binding_finalize_during_flush_is_deferred_not_reentrant() {
 /// failing row is named.
 #[test]
 fn history_reentrancy_and_completion_contracts() {
-    let rows: [(&str, fn()); 4] = [
+    let rows: [(&str, fn()); 5] = [
+        (
+            "terminal_binding_authority_is_closed_before_route_retirement",
+            super::navigator::terminal_binding_authority_is_closed_before_route_retirement,
+        ),
         (
             "double_pop_or_double_remove_does_not_double_complete",
             double_pop_or_double_remove_does_not_double_complete,

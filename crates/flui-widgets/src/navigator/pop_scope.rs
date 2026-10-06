@@ -47,7 +47,7 @@ struct PopEntry {
 /// route's `vetoes_pop` / `on_pop_invoked` consult it.
 #[derive(Clone, Default)]
 pub(crate) struct PopEntryRegistry {
-    entries: Arc<Mutex<Vec<Arc<PopEntry>>>>,
+    entries: Arc<super::lifecycle::TerminalVec<Arc<PopEntry>>>,
 }
 
 impl PopEntryRegistry {
@@ -97,17 +97,35 @@ impl std::fmt::Debug for PopEntryRegistry {
 /// Provides the enclosing route's [`PopEntryRegistry`] to the page subtree —
 /// the `HeroScope` pattern. Never notifies: the registry handle is fixed for
 /// the route's lifetime.
-#[derive(Clone)]
 pub(crate) struct PopEntryScope {
-    registry: PopEntryRegistry,
-    child: BoxedView,
+    registry: crate::navigator::lifecycle::Terminal<PopEntryRegistry>,
+    child: crate::navigator::lifecycle::Terminal<BoxedView>,
+}
+
+impl Clone for PopEntryScope {
+    fn clone(&self) -> Self {
+        Self {
+            registry: crate::navigator::lifecycle::Terminal::new(self.registry.clone()),
+            child: crate::navigator::lifecycle::Terminal::new(self.child.clone()),
+        }
+    }
+}
+
+impl Drop for PopEntryScope {
+    fn drop(&mut self) {
+        let registry = self.registry.withdraw();
+        let child = self.child.withdraw();
+        drop((registry, child));
+    }
 }
 
 impl PopEntryScope {
     pub(crate) fn new(registry: PopEntryRegistry, child: impl IntoView) -> Self {
         Self {
-            registry,
-            child: BoxedView(Box::new(child.into_view())),
+            registry: crate::navigator::lifecycle::Terminal::new(registry),
+            child: crate::navigator::lifecycle::Terminal::new(BoxedView(Box::new(
+                child.into_view(),
+            ))),
         }
     }
 }
@@ -128,7 +146,7 @@ impl InheritedView for PopEntryScope {
     }
 
     fn child(&self) -> &dyn View {
-        &self.child
+        &*self.child
     }
 
     fn update_should_notify(&self, _old: &Self) -> bool {
@@ -164,11 +182,28 @@ impl_inherited_view!(PopEntryScope);
 ///         }
 ///     });
 /// ```
-#[derive(Clone)]
 pub struct PopScope {
-    child: BoxedView,
+    child: crate::navigator::lifecycle::Terminal<BoxedView>,
     can_pop: bool,
     on_pop_invoked: Option<PopInvokedCallback>,
+}
+
+impl Clone for PopScope {
+    fn clone(&self) -> Self {
+        Self {
+            child: crate::navigator::lifecycle::Terminal::new(self.child.clone()),
+            can_pop: self.can_pop,
+            on_pop_invoked: self.on_pop_invoked.clone(),
+        }
+    }
+}
+
+impl Drop for PopScope {
+    fn drop(&mut self) {
+        let child = self.child.withdraw();
+        let callback = crate::navigator::lifecycle::Terminal::new(self.on_pop_invoked.take());
+        drop((child, callback));
+    }
 }
 
 impl PopScope {
@@ -176,7 +211,9 @@ impl PopScope {
     /// `PopScope` only observes.
     pub fn new(child: impl IntoView) -> Self {
         Self {
-            child: BoxedView(Box::new(child.into_view())),
+            child: crate::navigator::lifecycle::Terminal::new(BoxedView(Box::new(
+                child.into_view(),
+            ))),
             can_pop: true,
             on_pop_invoked: None,
         }
@@ -220,10 +257,10 @@ impl StatefulView for PopScope {
 
     fn create_state(&self) -> Self::State {
         PopScopeState {
-            entry: Arc::new(PopEntry {
+            entry: crate::navigator::lifecycle::Terminal::new(Arc::new(PopEntry {
                 can_pop: AtomicBool::new(self.can_pop),
                 on_pop_invoked: Mutex::new(None),
-            }),
+            })),
             registry: None,
             callback: self.on_pop_invoked.clone(),
             writer: None,
@@ -236,8 +273,18 @@ impl StatefulView for PopScope {
 pub struct PopScopeState {
     callback: Option<PopInvokedCallback>,
     writer: Option<WriterSource>,
-    entry: Arc<PopEntry>,
+    entry: crate::navigator::lifecycle::Terminal<Arc<PopEntry>>,
     registry: Option<PopEntryRegistry>,
+}
+
+impl Drop for PopScopeState {
+    fn drop(&mut self) {
+        let callback = crate::navigator::lifecycle::Terminal::new(self.callback.take());
+        let writer = crate::navigator::lifecycle::Terminal::new(self.writer.take());
+        let entry = self.entry.withdraw();
+        let registry = crate::navigator::lifecycle::Terminal::new(self.registry.take());
+        drop((callback, writer, entry, registry));
+    }
 }
 
 impl std::fmt::Debug for PopScopeState {
@@ -288,6 +335,8 @@ impl PopScopeState {
             .clone()
             .expect("BUG: PopScope initialized before callback installation");
         let callback = self.callback.clone().map(|callback| {
+            let callback = crate::navigator::lifecycle::Terminal::new(callback);
+            let writer = crate::navigator::lifecycle::Terminal::new(writer);
             Rc::new(move |did_pop| writer.write(|cx| callback(cx, did_pop))) as Rc<dyn Fn(bool)>
         });
         let previous = std::mem::replace(&mut *self.entry.on_pop_invoked.lock(), callback);

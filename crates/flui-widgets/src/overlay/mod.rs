@@ -108,6 +108,16 @@ pub(crate) struct OverlayShared {
     rebuild: Mutex<Option<RebuildHandle>>,
 }
 
+impl Drop for OverlayShared {
+    fn drop(&mut self) {
+        let entries =
+            crate::support::retirement::RetiredValues(std::mem::take(self.entries.get_mut()));
+        let rebuild = crate::support::retirement::Terminal::new(self.rebuild.get_mut().take());
+        drop(entries);
+        drop(rebuild);
+    }
+}
+
 impl OverlayShared {
     /// Schedule the mounted overlay to rebuild. No-op when unmounted.
     pub(crate) fn schedule_rebuild(&self) {
@@ -546,7 +556,7 @@ impl StatefulView for Overlay {
 
     fn create_state(&self) -> Self::State {
         OverlayState {
-            shared: Arc::clone(&self.handle.shared),
+            shared: crate::support::retirement::Terminal::new(Arc::clone(&self.handle.shared)),
             rebuild: None,
             serving: false,
         }
@@ -563,7 +573,7 @@ impl StatefulView for Overlay {
 /// [`Overlay`] itself — its field stays private, and nothing outside this
 /// module constructs or names it.
 pub struct OverlayState {
-    shared: Arc<OverlayShared>,
+    shared: crate::support::retirement::Terminal<Arc<OverlayShared>>,
     /// This element's own rebuild capability, kept so the slot can move to a
     /// replacement handle (`did_update_view`) and be released only by its
     /// holder (`dispose`).
@@ -571,6 +581,14 @@ pub struct OverlayState {
     /// Whether this state holds `shared`'s rebuild slot. `false` for a second
     /// concurrent mount of one handle, which builds nothing.
     serving: bool,
+}
+
+impl Drop for OverlayState {
+    fn drop(&mut self) {
+        let shared = self.shared.withdraw();
+        let rebuild = crate::support::retirement::Terminal::new(self.rebuild.take());
+        drop((shared, rebuild));
+    }
 }
 
 impl fmt::Debug for OverlayState {
@@ -605,7 +623,7 @@ impl ViewState<Overlay> for OverlayState {
         if self.serving {
             self.shared.release_rebuild(element);
         }
-        self.shared = Arc::clone(&new.handle.shared);
+        *self.shared = Arc::clone(&new.handle.shared);
         self.serving = self
             .rebuild
             .as_ref()
@@ -662,22 +680,35 @@ impl ViewState<Overlay> for OverlayState {
 /// keyed reconciler recognises, preserving each layer's subtree state. A plain
 /// [`ValueKey`] is enough, because the moves are always among siblings of one
 /// parent.
-#[derive(Clone)]
 struct OverlayEntryView {
-    entry: OverlayEntry,
+    entry: crate::support::retirement::Terminal<OverlayEntry>,
     /// The enclosing [`Overlay`]'s handle, provided to this entry's built
     /// child through an [`OverlayScope`] marker so `Overlay::of`/`maybe_of`
     /// can resolve it.
-    overlay: OverlayHandle,
+    overlay: crate::support::retirement::Terminal<OverlayHandle>,
     key: ValueKey<u64>,
+}
+
+impl Clone for OverlayEntryView {
+    fn clone(&self) -> Self {
+        Self::new(self.entry.clone(), self.overlay.clone())
+    }
+}
+
+impl Drop for OverlayEntryView {
+    fn drop(&mut self) {
+        let entry = self.entry.withdraw();
+        let overlay = self.overlay.withdraw();
+        drop((entry, overlay));
+    }
 }
 
 impl OverlayEntryView {
     fn new(entry: OverlayEntry, overlay: OverlayHandle) -> Self {
         let key = ValueKey::new(entry.id().get());
         Self {
-            entry,
-            overlay,
+            entry: crate::support::retirement::Terminal::new(entry),
+            overlay: crate::support::retirement::Terminal::new(overlay),
             key,
         }
     }
@@ -768,10 +799,26 @@ impl ViewState<OverlayEntryView> for OverlayEntryViewState {
 ///
 /// `OverlayScope` stays `pub(crate)`: nothing outside `overlay` ever names it
 /// directly — [`Overlay::of`]/[`Overlay::maybe_of`] are the only door.
-#[derive(Clone)]
 pub(crate) struct OverlayScope {
-    handle: OverlayHandle,
-    child: BoxedView,
+    handle: crate::support::retirement::Terminal<OverlayHandle>,
+    child: crate::support::retirement::Terminal<BoxedView>,
+}
+
+impl Clone for OverlayScope {
+    fn clone(&self) -> Self {
+        Self {
+            handle: crate::support::retirement::Terminal::new(self.handle.clone()),
+            child: crate::support::retirement::Terminal::new(self.child.clone()),
+        }
+    }
+}
+
+impl Drop for OverlayScope {
+    fn drop(&mut self) {
+        let handle = self.handle.withdraw();
+        let child = self.child.withdraw();
+        drop((handle, child));
+    }
 }
 
 impl OverlayScope {
@@ -780,8 +827,10 @@ impl OverlayScope {
     /// subtree.
     fn new(handle: OverlayHandle, child: impl IntoView) -> Self {
         Self {
-            handle,
-            child: BoxedView(Box::new(child.into_view())),
+            handle: crate::support::retirement::Terminal::new(handle),
+            child: crate::support::retirement::Terminal::new(BoxedView(Box::new(
+                child.into_view(),
+            ))),
         }
     }
 }
@@ -800,7 +849,7 @@ impl InheritedView for OverlayScope {
     }
 
     fn child(&self) -> &dyn View {
-        &self.child
+        &*self.child
     }
 
     /// An `OverlayEntryView` element is reconciled in place across ordinary

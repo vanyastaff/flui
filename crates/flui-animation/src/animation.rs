@@ -144,13 +144,129 @@ impl fmt::Debug for ParentSubscription {
 
 impl Drop for ParentSubscription {
     fn drop(&mut self) {
-        // Extract the teardown closure out from under the lock guard before
-        // running it: the closure removes a listener from the parent, which
-        // takes the parent's own lock, so running it while the `teardown`
-        // guard is still held would invert the lock order.
+        let mut retirement = Retirement::new();
+        self.detach(&mut retirement);
+        retirement.finish();
+    }
+}
+
+impl ParentSubscription {
+    pub(crate) fn detach(&self, retirement: &mut Retirement) {
         let teardown = self.teardown.lock().take();
-        if let Some(mut teardown) = teardown {
-            teardown();
+        if let Some(teardown) = teardown {
+            let mut teardown = Terminal::new(teardown);
+            retirement.run(|| (teardown.get_mut())());
+            retirement.retire(teardown);
+        }
+    }
+}
+
+/// Private custody for independently owned animation resources. Owners withdraw
+/// every field before retirement; unwind retains the remaining opaque envelopes.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct Terminal<T>(Option<T>);
+
+impl<T> Terminal<T> {
+    pub(crate) fn new(value: T) -> Self {
+        Self(Some(value))
+    }
+
+    pub(crate) fn get(&self) -> &T {
+        self.0
+            .as_ref()
+            .expect("BUG: a live animation owns its field")
+    }
+
+    fn get_mut(&mut self) -> &mut T {
+        self.0
+            .as_mut()
+            .expect("BUG: a live animation owns its field")
+    }
+
+    pub(crate) fn into_inner(mut self) -> T {
+        self.0
+            .take()
+            .expect("BUG: a withdrawn owner owns its field")
+    }
+
+    pub(crate) fn withdraw(&mut self) -> Self {
+        Self(self.0.take())
+    }
+}
+
+impl<T> std::ops::Deref for Terminal<T> {
+    type Target = T;
+
+    fn deref(&self) -> &T {
+        self.get()
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<T: serde::Serialize> serde::Serialize for Terminal<T> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        self.get().serialize(serializer)
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<'de, T: serde::Deserialize<'de>> serde::Deserialize<'de> for Terminal<T> {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        T::deserialize(deserializer).map(Self::new)
+    }
+}
+
+impl<T> Drop for Terminal<T> {
+    fn drop(&mut self) {
+        if std::thread::panicking() {
+            std::mem::forget(self.0.take());
+        }
+    }
+}
+
+/// Keeps failure priority explicit while subscription detachments continue.
+pub(crate) struct Retirement {
+    incoming: bool,
+    first: Option<Box<dyn std::any::Any + Send>>,
+}
+
+impl Retirement {
+    pub(crate) fn new() -> Self {
+        Self {
+            incoming: std::thread::panicking(),
+            first: None,
+        }
+    }
+
+    pub(crate) fn run(&mut self, action: impl FnOnce()) {
+        if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(action)) {
+            if self.incoming || self.first.is_some() {
+                flui_foundation::panic::retain_opaque_payload(payload);
+            } else {
+                self.first = Some(payload);
+            }
+        }
+    }
+
+    pub(crate) fn retire<T>(&mut self, value: T) {
+        if self.incoming || self.first.is_some() {
+            std::mem::forget(value);
+        } else {
+            self.run(|| drop(value));
+        }
+    }
+
+    pub(crate) fn finish(mut self) {
+        if let Some(payload) = self.first.take() {
+            std::panic::resume_unwind(payload);
+        }
+    }
+}
+
+impl Drop for Retirement {
+    fn drop(&mut self) {
+        if let Some(payload) = self.first.take() {
+            flui_foundation::panic::retain_opaque_payload(payload);
         }
     }
 }

@@ -63,7 +63,7 @@ enum Announced {
 
 /// One route plus its bookkeeping.
 pub(crate) struct RouteEntry {
-    route: Box<dyn ErasedRoute>,
+    route: super::lifecycle::Terminal<Box<dyn ErasedRoute>>,
     state: RouteLifecycle,
 
     /// The value a queued `pop`/`complete` will deliver.
@@ -132,6 +132,15 @@ struct Armed {
     undelivered: Option<AnyResult>,
 }
 
+impl Drop for RouteEntry {
+    fn drop(&mut self) {
+        let route = self.route.withdraw();
+        let result = super::lifecycle::Terminal::new(self.pending_result.take());
+        drop(route);
+        drop(result);
+    }
+}
+
 impl RouteEntry {
     fn new(route: Box<dyn ErasedRoute>, initial_state: RouteLifecycle) -> Self {
         debug_assert!(
@@ -146,7 +155,7 @@ impl RouteEntry {
              (navigator.dart:3184-3191)"
         );
         Self {
-            route,
+            route: super::lifecycle::Terminal::new(route),
             state: initial_state,
             pending_result: None,
             report_removal_to_observer: true,
@@ -453,15 +462,24 @@ pub(crate) enum DeferredEffect {
     AwaitPush(RouteId, TickerFuture),
 }
 
+impl Drop for FlushOutcome {
+    fn drop(&mut self) {
+        let dying = super::lifecycle::RetiredValues(std::mem::take(&mut self.dying));
+        let deferred = super::lifecycle::RetiredValues(std::mem::take(&mut self.deferred));
+        drop(dying);
+        drop(deferred);
+    }
+}
+
 impl FlushOutcome {
     /// Fold a follow-up pass's outcome into this one, so the caller applies the
     /// union of everything a single `flush` did. Notifications keep pass order.
-    fn absorb(&mut self, later: Self) {
+    fn absorb(&mut self, mut later: Self) {
         self.rearrange_overlay |= later.rearrange_overlay;
-        self.notifications.extend(later.notifications);
-        self.deferred.extend(later.deferred);
-        self.disposed.extend(later.disposed);
-        self.dying.extend(later.dying);
+        self.notifications.append(&mut later.notifications);
+        self.deferred.append(&mut later.deferred);
+        self.disposed.append(&mut later.disposed);
+        self.dying.append(&mut later.dying);
     }
 
     /// `Route::dispose` for every route this flush killed.
@@ -509,6 +527,17 @@ pub(crate) struct RouteHistory {
     /// command must cost exactly one extra pass, not a loop.
     #[cfg(test)]
     last_flush_passes: usize,
+}
+
+impl Drop for RouteHistory {
+    fn drop(&mut self) {
+        let entries = super::lifecycle::RetiredValues(std::mem::take(&mut self.entries));
+        let outcome = super::lifecycle::Terminal::new(self.last_outcome.take());
+        let undelivered = super::lifecycle::RetiredValues(std::mem::take(&mut self.undelivered));
+        drop(entries);
+        drop(outcome);
+        drop(undelivered);
+    }
 }
 
 impl RouteHistory {
