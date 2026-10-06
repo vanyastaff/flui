@@ -415,40 +415,61 @@ impl TextInputOwner {
     /// # Panics
     ///
     /// Resumes a panic the owner's code raised after a grant (a field's
-    /// `on_changed`), which the store parked in this presentation's gate,
-    /// once the projection returned: the grant stands, and the failure reaches
-    /// the caller's report.
+    /// `on_changed`), which the store parked in this presentation's gate —
+    /// during this projection or before the dispatch, whatever path it then
+    /// takes — once the event is handled: the grant stands, and the failure
+    /// reaches the caller's report. The earliest failure wins: one parked
+    /// before the dispatch, then the session-start callback's or the
+    /// projection's; later ones are retained.
     pub fn dispatch(&self, event: &ImeEvent) {
+        // A failure parked by a grant before this dispatch (one the platform
+        // requested directly) is this turn's to report, on every path, and it
+        // came before anything this dispatch raises.
+        let mut first = self.take_settle_failure();
         let client = {
             let state = self.state.borrow();
-            if state.lifecycle != OwnerLifecycle::Open {
-                return;
-            }
-            state.active.as_ref().map(|active| active.client.clone())
+            (state.lifecycle == OwnerLifecycle::Open)
+                .then(|| state.active.as_ref().map(|active| active.client.clone()))
+                .flatten()
         };
-        let Some(client) = client else {
-            return;
-        };
+        if let Some(client) = client {
+            self.dispatch_to(&client, event, &mut first);
+            // A grant or callback that detached the client left this clone its
+            // last owner: it retires under the same first-failure policy.
+            retire_client_owners(client, &mut first);
+        }
+        if let Some(failure) = first {
+            failure.resume();
+        }
+    }
+
+    /// [`Self::dispatch`] to the active `client`, keeping `first` the
+    /// earliest failure.
+    fn dispatch_to(
+        &self,
+        client: &TextInputClient,
+        event: &ImeEvent,
+        first: &mut Option<RoutePanic>,
+    ) {
         if matches!(event, ImeEvent::Enabled) {
             if let Some(on_session_start) = &client.on_session_start {
-                on_session_start();
+                let started = RoutePanic::capture(|| on_session_start());
+                RoutePanic::preserve_first(first, started, "IME session start");
             }
             return;
         }
         let projected = RoutePanic::try_run(|| project_ime_event(&*client.store, event));
         // A failure the store parked while settling its grant happened before
         // anything that unwound out of the projection after it.
-        let mut first = self.take_settle_failure();
+        let settled = self.take_settle_failure();
+        RoutePanic::preserve_first(first, settled, "IME grant settle");
         match projected {
             Ok(Ok(_)) => {}
             Ok(Err(error)) => tracing::warn!(
                 ?error,
                 "an IME event could not be applied to the text store"
             ),
-            Err(failure) => RoutePanic::preserve_first(&mut first, Some(failure), "IME projection"),
-        }
-        if let Some(failure) = first {
-            failure.resume();
+            Err(failure) => RoutePanic::preserve_first(first, Some(failure), "IME projection"),
         }
     }
 

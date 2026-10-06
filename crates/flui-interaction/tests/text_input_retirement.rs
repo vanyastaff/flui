@@ -942,3 +942,111 @@ fn text_input_owners_are_retained_after_a_failure_and_during_unwind() {
         )
     );
 }
+
+/// A focused field's store whose owner listener failed after a grant the
+/// platform requested directly, outside any dispatch: the failure waits in
+/// the owner's gate. The client's session start runs `on_session_start`.
+fn client_with_a_parked_failure(
+    owner: &Rc<TextInputOwner>,
+    on_session_start: impl Fn() + 'static,
+) -> (Rc<InMemoryTextStore>, ClientToken) {
+    let store = InMemoryTextStore::new("");
+    store.set_owner_listener(Some(Rc::new(|| panic!("parked owner failure"))));
+    let token = owner
+        .handle()
+        .attach(TextInputClient::new(store.clone()).on_session_start(on_session_start))
+        .expect("attach");
+    let granted = store.request_lock(
+        LockGrant::read_write(|session| {
+            session.insert_at_selection("a").expect("in range");
+        }),
+        LockTiming::Sync,
+    );
+    assert_eq!(granted, Ok(LockOutcome::Granted), "the grant stands");
+    store.set_owner_listener(None);
+    (store, token)
+}
+
+/// The text of the panic `run` raised, if it raised one.
+fn raised(run: impl FnOnce()) -> Option<String> {
+    let payload = catch_unwind(AssertUnwindSafe(run)).err()?;
+    let text = flui_foundation::panic::payload_text(&*payload)
+        .unwrap_or("an opaque payload")
+        .to_owned();
+    flui_foundation::panic::retain_opaque_payload(payload);
+    Some(text)
+}
+
+fn a_session_start_dispatch_reports_a_parked_failure() {
+    let (owner, _) = owner();
+    let started = Rc::new(Cell::new(false));
+    let seen = Rc::clone(&started);
+    let _client = client_with_a_parked_failure(&owner, move || seen.set(true));
+    assert_eq!(
+        raised(|| owner.dispatch(&flui_platform_api::ImeEvent::Enabled)),
+        Some("parked owner failure".to_owned()),
+        "the dispatch reports the failure that waited for it"
+    );
+    assert!(started.get(), "the session started all the same");
+    assert_eq!(
+        raised(|| {
+            owner.run_deferred_grants();
+        }),
+        None,
+        "it is reported once"
+    );
+}
+
+fn a_parked_failure_comes_before_a_session_start_failure() {
+    let (owner, _) = owner();
+    let _client = client_with_a_parked_failure(&owner, || panic!("session start failure"));
+    assert_eq!(
+        raised(|| owner.dispatch(&flui_platform_api::ImeEvent::Enabled)),
+        Some("parked owner failure".to_owned()),
+        "the earlier failure stays authoritative"
+    );
+    assert_eq!(
+        raised(|| {
+            owner.run_deferred_grants();
+        }),
+        None,
+        "neither failure is reported again"
+    );
+}
+
+fn a_dispatch_with_no_client_reports_a_parked_failure() {
+    let (owner, _) = owner();
+    let (_store, token) = client_with_a_parked_failure(&owner, || {});
+    let _detached = owner.handle().detach(token).expect("detach");
+    assert_eq!(
+        raised(|| owner.dispatch(&flui_platform_api::ImeEvent::Commit("b".into()))),
+        Some("parked owner failure".to_owned()),
+        "a dispatch that finds no client still reports what waited for it"
+    );
+}
+
+#[test]
+fn ime_dispatch_reports_an_owner_failure_parked_before_it() {
+    let cases: &[(&str, fn())] = &[
+        (
+            "session start",
+            a_session_start_dispatch_reports_a_parked_failure,
+        ),
+        (
+            "session start fails too",
+            a_parked_failure_comes_before_a_session_start_failure,
+        ),
+        (
+            "no client",
+            a_dispatch_with_no_client_reports_a_parked_failure,
+        ),
+    ];
+    let mut failed = Vec::new();
+    for &(name, case) in cases {
+        if let Err(payload) = catch_unwind(AssertUnwindSafe(case)) {
+            failed.push(name);
+            flui_foundation::panic::retain_opaque_payload(payload);
+        }
+    }
+    assert!(failed.is_empty(), "failed cases: {failed:?}");
+}
