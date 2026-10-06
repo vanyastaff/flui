@@ -475,11 +475,15 @@ impl EditableTextStore {
     /// owner made; the first panic is then resumed for the arbiter to park.
     fn settle(&self) {
         let mut failure = None;
-        if self.listeners_owed.replace(false) {
+        // Both debts are this grant's, taken before any listener runs: a
+        // listener's own session settles inside this call and owes, and
+        // pays, its own.
+        let listeners_owed = self.listeners_owed.replace(false);
+        let before = self.owner_owed.borrow_mut().take();
+        if listeners_owed {
             let controller = self.controller.borrow().clone();
             failure = catch_unwind(AssertUnwindSafe(|| controller.notify_changed())).err();
         }
-        let before = self.owner_owed.borrow_mut().take();
         if let Some(before) = before
             && self.alive.get()
         {

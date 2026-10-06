@@ -13,6 +13,7 @@
 //! tall, starting at the origin, so a test can compute every rect and point
 //! by hand.
 
+use std::any::Any;
 use std::cell::{Cell, RefCell};
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::rc::Rc;
@@ -32,7 +33,9 @@ use super::utf16::{self, Utf16Offset, Utf16Range};
 ///
 /// Owner-thread only (`Rc`, not `Send`). Platform edits go through
 /// [`TextStore::request_lock`]; [`Self::app_replace`] is an edit the
-/// application makes, reported to the observer afterwards.
+/// application makes, reported to the observer afterwards. A read-write
+/// grant's edits are kept when it returns; one that panics changes nothing,
+/// as a field's store drops a session it never wrote back.
 pub struct InMemoryTextStore {
     doc: RefCell<Document>,
     arbiter: LockArbiter,
@@ -171,13 +174,16 @@ impl InMemoryTextStore {
             let listener = self.owner_listener.borrow().clone();
             if let Some(listener) = listener {
                 failure = catch_unwind(AssertUnwindSafe(|| listener())).err();
+                // A listener that removed or replaced itself left this clone
+                // its last owner: its captures are destroyed here, inside
+                // the same containment, after the listener's own failure.
+                if let Err(payload) = catch_unwind(AssertUnwindSafe(move || drop(listener))) {
+                    keep_first(&mut failure, payload);
+                }
             }
         }
         if let Err(payload) = catch_unwind(AssertUnwindSafe(|| self.flush_notifications())) {
-            match failure {
-                None => failure = Some(payload),
-                Some(_) => flui_foundation::panic::retain_opaque_payload(payload),
-            }
+            keep_first(&mut failure, payload);
         }
         if let Some(payload) = failure {
             resume_unwind(payload);
@@ -223,17 +229,23 @@ impl InMemoryTextStore {
                 });
             }
             LockGrant::ReadWrite(body) => {
+                // The session edits a working copy, kept only when the grant
+                // returns: a grant that panics part-way leaves the document
+                // as it was, never a composition without the origin its
+                // ledger would have given it.
                 let mut doc = self.doc.borrow_mut();
                 let committed = doc.committed();
-                let ledger = CompositionLedger::open(doc.composing());
+                let mut work = doc.clone();
+                let ledger = CompositionLedger::open(work.composing());
                 let mut session = EditSession {
-                    doc: &mut doc,
+                    doc: &mut work,
                     protected,
                     ledger,
                 };
                 body(&mut session);
                 let origin = session.ledger.origin().unwrap_or_default().to_owned();
-                doc.origin = origin;
+                work.origin = origin;
+                *doc = work;
                 if doc.committed() != committed {
                     self.owner_owed.set(true);
                 }
@@ -284,8 +296,18 @@ impl TextStore for InMemoryTextStore {
     }
 }
 
+/// Keep the first of several caught panics; a later one is retained, never
+/// dropped (ADR-0127).
+fn keep_first(first: &mut Option<Box<dyn Any + Send>>, payload: Box<dyn Any + Send>) {
+    if first.is_none() {
+        *first = Some(payload);
+    } else {
+        flui_foundation::panic::retain_opaque_payload(payload);
+    }
+}
+
 /// The document an [`InMemoryTextStore`] holds.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 struct Document {
     text: String,
     selection: Selection,

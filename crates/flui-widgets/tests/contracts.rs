@@ -110,6 +110,7 @@ fn text_editing() {
             ("editable_text::text_store::store_offsets_match_controller_bytes_across_surrogates_and_graphemes", crate::editable_text::text_store::store_offsets_match_controller_bytes_across_surrogates_and_graphemes),
             ("editable_text::text_store::typing_after_a_deferred_commit_lands_after_the_commit", crate::editable_text::text_store::typing_after_a_deferred_commit_lands_after_the_commit),
             ("editable_text::text_store::on_changed_runs_after_the_lock_is_released", crate::editable_text::text_store::on_changed_runs_after_the_lock_is_released),
+            ("editable_text::text_store::a_listener_session_inside_settle_is_its_own_on_changed", crate::editable_text::text_store::a_listener_session_inside_settle_is_its_own_on_changed),
             ("editable_text::text_store::an_app_edit_during_a_lock_is_not_overwritten", crate::editable_text::text_store::an_app_edit_during_a_lock_is_not_overwritten),
             ("editable_text::text_store::focus_gain_and_loss_reach_the_store_host", crate::editable_text::text_store::focus_gain_and_loss_reach_the_store_host),
             ("editable_text::text_store::swapping_the_controller_during_a_grant_drops_the_session", crate::editable_text::text_store::swapping_the_controller_during_a_grant_drops_the_session),

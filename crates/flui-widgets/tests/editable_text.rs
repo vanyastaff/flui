@@ -1263,6 +1263,73 @@ pub(crate) mod text_store {
         assert!(harness.active_text_store().is_none());
     }
 
+    thread_local! {
+        /// The field a controller listener reaches: a listener is
+        /// `Send + Sync` and the store is not.
+        static LISTENED_FIELD: RefCell<Option<Rc<dyn TextStore>>> = const { RefCell::new(None) };
+    }
+
+    /// A controller listener that answers the session it hears of with a
+    /// synchronous session of its own: each committed session is one
+    /// `on_changed`, the nested one's settled inside the outer's, and the
+    /// outer one's is not absorbed by it.
+    ///
+    /// Red-check: take the owed `on_changed` after the controller's
+    /// listeners run — the nested session's settle consumes the outer
+    /// session's debt, and the owner hears once.
+    pub(crate) fn a_listener_session_inside_settle_is_its_own_on_changed() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        use flui_foundation::Listenable as _;
+
+        let controller = TextEditingController::new();
+        let calls = Rc::new(RefCell::new(Vec::new()));
+        let sink = Rc::clone(&calls);
+        let focus_node = FocusNode::with_debug_label("listener session field");
+        let mut harness = mount_with_ime(
+            EditableText::new(controller.clone(), Rc::clone(&focus_node))
+                .on_changed(move |_cx, text| sink.borrow_mut().push(text.to_owned())),
+        );
+        focus_node.request_focus();
+        harness.tick();
+        let field = store(&harness);
+        LISTENED_FIELD.with(|slot| *slot.borrow_mut() = Some(Rc::clone(&field)));
+        let answered = Arc::new(AtomicBool::new(false));
+        let once = Arc::clone(&answered);
+        let listener = controller.add_listener(Arc::new(move || {
+            if once.swap(true, Ordering::SeqCst) {
+                return;
+            }
+            let field = LISTENED_FIELD.with(|slot| slot.borrow().clone());
+            if let Some(field) = field {
+                let outcome = field.request_lock(
+                    LockGrant::read_write(|session| {
+                        session.insert_at_selection("b").expect("in range");
+                    }),
+                    LockTiming::Sync,
+                );
+                assert_eq!(outcome, Ok(LockOutcome::Granted), "the listener's session");
+            }
+        }));
+        edit(&field, |session| {
+            session.insert_at_selection("a").expect("in range");
+        });
+        controller.remove_listener(listener);
+        LISTENED_FIELD.with(|slot| slot.borrow_mut().take());
+        assert!(
+            answered.load(Ordering::SeqCst),
+            "the listener heard the session"
+        );
+        assert_eq!(controller.text(), "ab");
+        assert_eq!(
+            calls.borrow().len(),
+            2,
+            "one on_changed per committed session, got {:?}",
+            calls.borrow()
+        );
+    }
+
     /// The application edits the field while the platform holds a lock (a
     /// nested modal loop, an async task): the platform's session is dropped,
     /// the application's edit stays, and the platform hears of it once the
