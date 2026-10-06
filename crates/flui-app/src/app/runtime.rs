@@ -1709,9 +1709,6 @@ impl AppRuntime {
         let _prev = self.platform_clipboard.lock().take();
     }
 
-    /// Access the installed platform clipboard, if any. Every runner reads it
-    /// through `runner::host::runtime_clipboard` to hand each realm it builds
-    /// the platform clipboard.
     /// Resolve the host's byte storage from the run's `config`, once, when
     /// the host starts: every realm the runners and secondary windows build
     /// afterwards takes this one (`runner::host::build_runtime_realm`).
@@ -1724,6 +1721,9 @@ impl AppRuntime {
         self.host_storage.clone()
     }
 
+    /// Access the installed platform clipboard, if any. Every runner reads it
+    /// through `runner::host::runtime_clipboard` to hand each realm it builds
+    /// the platform clipboard.
     pub(super) fn clipboard(&self) -> Option<Arc<dyn Clipboard>> {
         let clipboard = self.platform_clipboard.lock().clone();
         if clipboard.is_none() {

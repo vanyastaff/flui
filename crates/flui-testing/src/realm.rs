@@ -374,20 +374,23 @@ impl HeadlessRealm {
         // (`FontCollection::with_host_fonts`), so text measures the same on
         // every host a test runs on.
         let fonts = flui_painting::FontCollection::new();
+        let mut host = RealmHostServices::new(
+            Arc::new(|| {}),
+            Arc::new(AtomicBool::new(false)),
+            Arc::clone(&clipboard) as Arc<dyn flui_platform_api::Clipboard>,
+            &fonts,
+            ClockSource::Manual(clock.clone()),
+        );
+        if let Some(storage) = storage {
+            host = host.with_storage(storage);
+        }
         let realm = UiRealm::new(
             PresentationWindow::new(
                 Arc::clone(&window) as Arc<dyn PlatformWindow>,
                 Some(Arc::clone(&accessibility) as Arc<dyn PlatformAccessibility>),
             ),
             1.0,
-            RealmHostServices::new(
-                Arc::new(|| {}),
-                Arc::new(AtomicBool::new(false)),
-                Arc::clone(&clipboard) as Arc<dyn flui_platform_api::Clipboard>,
-                &fonts,
-                ClockSource::Manual(clock.clone()),
-            )
-            .with_storage(storage),
+            host,
         )
         .expect("BUG: interaction lane identity exhausted");
         let failures = Arc::new(Mutex::new(Vec::new()));

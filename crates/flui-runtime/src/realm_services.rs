@@ -74,11 +74,10 @@ impl<'a> RealmHostServices<'a> {
     }
 
     /// The byte storage every presentation of the realm hands its widgets
-    /// through `LifecycleContext::storage`. Without it, or with `None`, they
-    /// get none.
+    /// through `LifecycleContext::storage`. Without it they get none.
     #[must_use]
-    pub fn with_storage(mut self, storage: Option<Arc<dyn Storage>>) -> Self {
-        self.storage = storage;
+    pub fn with_storage(mut self, storage: Arc<dyn Storage>) -> Self {
+        self.storage = Some(storage);
         self
     }
 }

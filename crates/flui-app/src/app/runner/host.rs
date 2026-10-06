@@ -52,18 +52,17 @@ pub(super) fn build_runtime_realm(
     scale_factor: f64,
 ) -> Result<crate::app::ui_realm::UiRealm, crate::app::ui_realm::UiRealmError> {
     let fonts = runtime_font_collection();
-    crate::app::ui_realm::UiRealm::new(
-        window,
-        scale_factor,
-        crate::app::ui_realm::RealmHostServices::new(
-            Arc::clone(wake),
-            runtime_needs_redraw_handle(),
-            runtime_clipboard(),
-            &fonts,
-            flui_scheduler::ClockSource::Platform,
-        )
-        .with_storage(runtime_storage()),
-    )
+    let mut host = crate::app::ui_realm::RealmHostServices::new(
+        Arc::clone(wake),
+        runtime_needs_redraw_handle(),
+        runtime_clipboard(),
+        &fonts,
+        flui_scheduler::ClockSource::Platform,
+    );
+    if let Some(storage) = runtime_storage() {
+        host = host.with_storage(storage);
+    }
+    crate::app::ui_realm::UiRealm::new(window, scale_factor, host)
 }
 
 /// A clone of the loop-scoped `needs_redraw` flag, for [`crate::app::ui_realm::UiRealm::new`]'s

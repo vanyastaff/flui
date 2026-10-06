@@ -944,4 +944,57 @@ mod tests {
             "loop teardown detached the hook exactly once"
         );
     }
+
+    /// A storage directory in the main configuration reaches the realms the
+    /// host builds: the run resolves the host's storage once, at start, and
+    /// a realm built afterwards holds it in its build owner, which every
+    /// `LifecycleContext::storage` under it reads. Driven through
+    /// `run_with_platform` itself, so the host's storage comes from the
+    /// runner; the realm is a `SeparateRealms` window opened from `on_ready`,
+    /// which reaches `host::build_runtime_realm` as every runner site does,
+    /// without a GPU.
+    #[cfg(feature = "persist")]
+    #[test]
+    #[ignore = "contract: the host gives a configured storage directory to every realm it builds"]
+    fn a_configured_storage_dir_reaches_lifecycle_context() {
+        let reached = Rc::new(Cell::new(None));
+        let seen = Rc::clone(&reached);
+        let app = Application::new(|_| -> flui_widgets::Text {
+            panic!("no main window is opened");
+        })
+        .with_startup_window(StartupWindow::None)
+        .with_config(
+            AppConfig::new()
+                .with_exit_policy(ExitPolicy::ExplicitQuit)
+                .with_storage_dir(flui_platform_api::StorageName::from_static(
+                    "storage-host-test",
+                )),
+        )
+        .on_ready(move |_| {
+            super::super::secondary_window::open_secondary_window(
+                AppConfig::default(),
+                crate::app::runtime::WindowPolicy::SeparateRealms,
+            )
+            .expect("WindowPolicy::SeparateRealms installs a realm");
+            seen.set(APP_RUNTIME.with(|slot| {
+                let runtime = slot.borrow();
+                runtime
+                    .realms
+                    .iter()
+                    .find_map(|(_, slot)| slot.realm.as_ref())
+                    .map(|realm| {
+                        realm
+                            .widgets()
+                            .with_build_owner(|owner| owner.storage().is_some())
+                    })
+            }));
+        });
+        run_with_platform(app, Box::new(HeadlessPlatform::new())).expect("ordinary owner teardown");
+
+        assert_eq!(
+            reached.get(),
+            Some(true),
+            "a realm built after the host started with a storage directory holds storage"
+        );
+    }
 }
