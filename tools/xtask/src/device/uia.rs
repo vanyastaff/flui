@@ -10,8 +10,7 @@ use windows::Win32::System::Com::{
     CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx, CoUninitialize,
 };
 use windows::Win32::System::StationsAndDesktops::{
-    CloseDesktop, DESKTOP_CONTROL_FLAGS, DESKTOP_READOBJECTS, GetThreadDesktop,
-    GetUserObjectInformationW, HDESK, OpenInputDesktop, UOI_NAME,
+    GetThreadDesktop, GetUserObjectInformationW, UOI_IO,
 };
 use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::System::Variant::VARIANT;
@@ -19,6 +18,7 @@ use windows::Win32::UI::Accessibility::{
     CUIAutomation, IUIAutomation, IUIAutomationElement, IUIAutomationTreeWalker,
     TreeScope_Children, UIA_CONTROLTYPE_ID, UIA_ProcessIdPropertyId,
 };
+use windows::core::BOOL;
 
 pub(super) use windows::Win32::UI::Accessibility::{
     UIA_ButtonControlTypeId as BUTTON, UIA_TextControlTypeId as TEXT,
@@ -72,7 +72,7 @@ impl Session {
     /// A locked, disconnected or service desktop is `CannotVerify`, found
     /// before the probe launches: no window of it could ever be read.
     fn launch(probe: &Path, run_for: Option<Duration>) -> Result<Self, Start> {
-        input_reaches_own_desktop(desktops()).map_err(Start::CannotVerify)?;
+        input_reaches_own_desktop(thread_desktop_receives_input()).map_err(Start::CannotVerify)?;
         let com = Com::init().map_err(|error| {
             Start::CannotVerify(format!("COM could not be initialised: {error}"))
         })?;
@@ -311,66 +311,50 @@ impl Drop for Com {
     }
 }
 
-/// The input desktop's name and this thread's desktop name, in that order, or
-/// why they could not be read.
-type Desktops = Result<(String, String), String>;
+/// Whether this thread's desktop is the one receiving input, as Windows
+/// reports it, or why the question could not be asked.
+type ReceivesInput = Result<bool, String>;
 
-/// The name of this session's input desktop and of the desktop this thread
-/// runs on, the probe's by inheritance; or why the input desktop cannot be
-/// opened: a locked workstation's secure desktop refuses access, and a
-/// service or disconnected session has no interactive window station.
-///
-/// `OpenInputDesktop` succeeds only for a process whose window station
-/// receives input, and the input desktop belongs to that station, so after
-/// a successful open both desktops share one window station and their names
-/// identify them.
-fn desktops() -> Desktops {
-    // SAFETY: plain Win32 call; the handle it returns is closed below.
-    let input = unsafe { OpenInputDesktop(DESKTOP_CONTROL_FLAGS(0), false, DESKTOP_READOBJECTS) }
-        .map_err(|error| {
-        format!("the input desktop cannot be opened (locked or headless?): {error}")
-    })?;
-    let input_name = desktop_name(input);
-    // SAFETY: `input` was opened above and is not used after this.
-    let _ = unsafe { CloseDesktop(input) };
-    // SAFETY: plain Win32 calls; the returned handle belongs to the thread
-    // and is not closed.
+/// Asks Windows whether the desktop this thread runs on, the probe's by
+/// inheritance, is the desktop receiving user input (`UOI_IO` on the
+/// thread's own desktop handle). The answer is about that handle's object,
+/// so two desktops sharing a name cannot be confused: a locked
+/// workstation's secure desktop, a disconnected or service session and a
+/// switched-away desktop all answer `false`.
+fn thread_desktop_receives_input() -> ReceivesInput {
+    // SAFETY: plain Win32 calls; the returned handle belongs to the thread,
+    // stays valid while the thread runs and is not closed.
     let own = unsafe { GetThreadDesktop(GetCurrentThreadId()) }
         .map_err(|error| format!("this thread's desktop is unavailable: {error}"))?;
-    Ok((input_name?, desktop_name(own)?))
-}
-
-/// `UOI_NAME` of an open desktop.
-fn desktop_name(desktop: HDESK) -> Result<String, String> {
-    let mut name = [0_u16; 256];
+    let mut receives = BOOL(0);
     let mut needed = 0;
-    // SAFETY: `desktop` is an open handle the caller keeps alive; the buffer
-    // pointer and its byte length describe the same live array.
+    // SAFETY: `own` is the live thread desktop handle; the buffer pointer
+    // and its byte length describe the same local `BOOL`, which is what
+    // `UOI_IO` writes.
     unsafe {
         GetUserObjectInformationW(
-            HANDLE(desktop.0),
-            UOI_NAME,
-            Some(name.as_mut_ptr().cast()),
-            u32::try_from(std::mem::size_of_val(&name)).expect("BUG: 512 bytes fit in u32"),
+            HANDLE(own.0),
+            UOI_IO,
+            Some((&raw mut receives).cast()),
+            u32::try_from(std::mem::size_of::<BOOL>()).expect("BUG: a BOOL's size fits in u32"),
             Some(&raw mut needed),
         )
     }
-    .map_err(|error| format!("a desktop's name is unreadable: {error}"))?;
-    let len = name.iter().position(|&c| c == 0).unwrap_or(name.len());
-    Ok(String::from_utf16_lossy(&name[..len]))
+    .map_err(|error| format!("whether this desktop receives input is unreadable: {error}"))?;
+    Ok(receives.as_bool())
 }
 
-/// `Ok` when the input desktop could be opened and is the desktop this
-/// process runs on, so the probe's window and its UIA tree appear where
-/// input goes; otherwise why the check cannot take its measurement.
-fn input_reaches_own_desktop(desktops: Desktops) -> Result<(), String> {
-    let (input, own) = desktops?;
-    if input == own {
+/// `Ok` when Windows reports that this process's desktop receives input, so
+/// the probe's window and its UIA tree appear where input goes; otherwise
+/// why the check cannot take its measurement.
+fn input_reaches_own_desktop(receives: ReceivesInput) -> Result<(), String> {
+    if receives? {
         Ok(())
     } else {
-        Err(format!(
-            "input goes to desktop {input:?}, not to {own:?} where the probe would run (workstation locked?)"
-        ))
+        Err(
+            "this desktop, where the probe would run, is not receiving input (workstation locked, session disconnected, or another desktop switched in)"
+                .to_owned(),
+        )
     }
 }
 
@@ -389,30 +373,19 @@ impl Drop for Probe {
 mod tests {
     use super::*;
 
-    /// A measurement runs only on the desktop that receives input, whatever
-    /// its name; a refused open or another input desktop is CANNOT VERIFY.
+    /// A measurement runs only when Windows reports this desktop receives
+    /// input; a `false` answer or a failed query is CANNOT VERIFY.
     #[test]
     fn only_the_desktop_receiving_input_admits_a_measurement() {
-        let same = |name: &str| Ok((name.to_owned(), name.to_owned()));
-        let rows: [(&str, Desktops, bool); 5] = [
-            ("default_desktop", same("Default"), true),
-            ("custom_desktop", same("CI"), true),
-            ("open_refused", Err("access denied".to_owned()), false),
-            (
-                "locked_to_winlogon",
-                Ok(("Winlogon".to_owned(), "Default".to_owned())),
-                false,
-            ),
-            (
-                "input_elsewhere",
-                Ok(("Default".to_owned(), "CI".to_owned())),
-                false,
-            ),
+        let rows: [(&str, ReceivesInput, bool); 3] = [
+            ("receives_input", Ok(true), true),
+            ("not_receiving_input", Ok(false), false),
+            ("query_failed", Err("access denied".to_owned()), false),
         ];
         let failed: Vec<_> = rows
             .into_iter()
-            .filter(|(_, desktops, admitted)| {
-                input_reaches_own_desktop(desktops.clone()).is_ok() != *admitted
+            .filter(|(_, receives, admitted)| {
+                input_reaches_own_desktop(receives.clone()).is_ok() != *admitted
             })
             .map(|(name, ..)| name)
             .collect();
