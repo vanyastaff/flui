@@ -115,11 +115,25 @@ impl DeadlineDelivery {
     }
 }
 
-/// How many frame callbacks this platform's windows have dispatched. The
-/// message loop compares it across a deadline delivery to tell an answer
-/// repeated after a serviced frame from one nothing has serviced yet.
+/// How many frame callbacks this platform's windows have run. The message
+/// loop compares it across a deadline delivery to tell an answer repeated
+/// after a serviced frame from one nothing has serviced yet. Each window's
+/// [`WindowCallbacks`] counts into it when its frame callback runs, so a
+/// frame request no callback answered (a window with nothing registered,
+/// or one already cleared) leaves it unchanged.
 #[derive(Default)]
-pub(super) struct FrameCount(std::cell::Cell<u64>);
+pub(super) struct FrameCount(Arc<std::sync::atomic::AtomicU64>);
+
+impl FrameCount {
+    fn get(&self) -> u64 {
+        self.0.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// The counter a window's callbacks increment.
+    pub(super) fn counter(&self) -> Arc<std::sync::atomic::AtomicU64> {
+        Arc::clone(&self.0)
+    }
+}
 
 struct DeadlineArm {
     deadline: web_time::Instant,
@@ -303,9 +317,6 @@ pub(super) struct WindowContext {
     /// `Rc<RefCell<..>>`: every holder lives on the owner thread, and no
     /// borrow is held while a handler runs.
     pub handlers: Rc<RefCell<PlatformHandlers>>,
-    /// The platform's count of dispatched frame callbacks, shared with the
-    /// owner control context and every other window this platform opens.
-    pub frames: Rc<FrameCount>,
     /// Asks the owner to consult the exit policy once this window's
     /// `WM_DESTROY` leaves the platform tracking no window.
     pub exit_policy: super::owner_control::ExitPolicyRequest,
@@ -370,9 +381,9 @@ pub(super) struct WindowContext {
 }
 
 impl WindowContext {
-    /// Runs this window's frame callback and counts it on the platform.
+    /// Runs this window's frame callback; its callbacks count it on the
+    /// platform only if one is registered to run.
     pub(super) fn request_frame(&self) {
-        self.frames.0.set(self.frames.0.get().wrapping_add(1));
         self.callbacks.dispatch_request_frame();
     }
 
@@ -1847,7 +1858,7 @@ impl WindowsPlatform {
             .shares("run message loop")
             .ok()
             .map(|shares| shares.frames);
-        let frame_count = || frames.as_ref().map_or(0, |frames| frames.0.get());
+        let frame_count = || frames.as_ref().map_or(0, |frames| frames.get());
 
         // SAFETY: `msg` is a stack-local, default-initialized `MSG` that
         // outlives every call here. `&raw mut msg` is the only pointer

@@ -135,13 +135,14 @@ again. No platform or window-registry lock is held across that call, so the
 callback may re-enter the platform (open or close windows, replace the hook,
 request quit); windows it opens during the step are not visited by it. A due
 deadline is delivered before the hook is queried again. The hook answers an
-instant only, so the loop uses its frame count as the delivery generation: the
-same instant from the same hook re-arms whenever a frame callback has run since
-it was delivered — once per frame, so a hook with several obligations due at one
-instant gets one frame per obligation — and otherwise stays delivered until the
-hook answers a different instant or `None`. A delivery that reaches no frame
-callback (no live window) therefore never re-arms its own answer, and the loop
-parks instead of spinning. A hook that keeps answering an instant its frames do
+instant only, so the loop uses its count of frame callbacks that ran as the
+delivery generation: the same instant from the same hook re-arms whenever a
+frame callback has run since it was delivered — once per frame, so a hook with
+several obligations due at one instant gets one frame per obligation — and
+otherwise stays delivered until the hook answers a different instant or `None`.
+A frame request no callback answers is not counted, so a delivery that reaches
+no frame callback (no live window, or only windows with none registered)
+never re-arms its own answer, and the loop parks instead of spinning. A hook that keeps answering an instant its frames do
 not service gets a frame per iteration, as on winit: draining the source is the
 producer's half of this contract (the invariant at the end of this section).
 Replacing the hook discards a deadline armed by the old one. Input, paint and quit messages are
