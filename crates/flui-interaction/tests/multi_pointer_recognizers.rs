@@ -172,9 +172,7 @@ fn expect_panic(what: &str, op: impl FnOnce()) {
 
 /// A one-shot panic switch for a callback.
 fn trip(flag: &Cell<bool>, message: &str) {
-    if flag.replace(false) {
-        panic!("{message}");
-    }
+    assert!(!flag.replace(false), "{message}");
 }
 
 fn run_rows(family: &str, rows: &[(&str, fn())]) {
@@ -672,7 +670,7 @@ fn tap_drag_on(rig: &Rig) -> (Arc<TapAndDragGestureRecognizer>, Rc<TapDragLog>) 
             );
         })
         .with_on_drag_end(move |_| end())
-        .with_on_cancel(move || cancel());
+        .with_on_cancel(cancel);
     (recognizer, log)
 }
 
