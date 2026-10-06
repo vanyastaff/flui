@@ -1,6 +1,6 @@
 # ADR-0135: Win32 text services hold the text store on the owner thread
 
-- **Status:** Proposed (2026-10-06). §1, §2 and the owner's queue in §4 are implemented; the
+- **Status:** Accepted (2026-10-06). §1, §2 and the owner's queue in §4 are implemented; the
   Win32 window does not offer its host yet (§3), so `HostWindow::text_store_host` answers `None`
   on every production backend (a headless window offers one only when a test asks).
 - **Date:** 2026-10-06
