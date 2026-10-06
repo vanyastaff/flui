@@ -439,6 +439,7 @@ fn frame_pacing_and_pump_matrix() {
             ("frame_clock_segment_gate::surface_lost_retry_preserves_the_original_input_epoch_for_the_presented_frame", frame_clock_segment_gate::surface_lost_retry_preserves_the_original_input_epoch_for_the_presented_frame as fn()),
             ("frame_pipeline_and_vsync::attach_root_widget_bootstraps_shared_render_tree", frame_pipeline_and_vsync::attach_root_widget_bootstraps_shared_render_tree as fn()),
             ("frame_pipeline_and_vsync::the_production_frame_polls_the_realms_async_driver_once_before_the_pipeline", frame_pipeline_and_vsync::the_production_frame_polls_the_realms_async_driver_once_before_the_pipeline as fn()),
+            ("frame_pipeline_and_vsync::an_invalid_or_backwards_frame_time_holds_the_animation", frame_pipeline_and_vsync::an_invalid_or_backwards_frame_time_holds_the_animation as fn()),
             ("frame_pipeline_and_vsync::surface_lost_keeps_needs_redraw_armed_for_a_retry", frame_pipeline_and_vsync::surface_lost_keeps_needs_redraw_armed_for_a_retry as fn()),
             ("pump_transaction::pump_post_frame_callback_observes_this_frames_committed_layout", pump_transaction::pump_post_frame_callback_observes_this_frames_committed_layout as fn()),
             ("presentation_text_input::a_text_store_lock_requested_during_a_frame_is_granted_after_the_drive_returns", presentation_text_input::a_text_store_lock_requested_during_a_frame_is_granted_after_the_drive_returns as fn()),

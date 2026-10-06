@@ -7,6 +7,7 @@ use flui_animation::Vsync;
 use flui_platform_api::HapticFeedback;
 use flui_rendering::binding::RendererBinding as _;
 use std::sync::Arc;
+use std::time::Duration;
 use std::sync::atomic::Ordering;
 
 impl UiRealm {
@@ -70,43 +71,44 @@ impl UiRealm {
         self.presentations.primary().set_vsync(vsync);
     }
 
-    /// Current virtual seconds for the Vsync tick, relative to this realm's
-    /// `start`.
+    /// The raw frame time, relative to this realm's `start`, that every
+    /// presentation's [`MotionClock`](flui_animation::MotionClock) maps to
+    /// its animation tick.
     ///
     /// Checked in order:
     ///
     /// 1. the test override (`set_now_secs_for_test`, compiled only for
     ///    tests and `test-support`), for deterministic stepping through a
-    ///    bare `draw_frame`/`render_frame`;
+    ///    bare `draw_frame`/`render_frame`. An override that is not a valid
+    ///    duration (NaN, ±∞, negative) reads as raw time zero, which every
+    ///    clock past its first frame treats as stale and holds;
     /// 2. the timestamp of the frame [`Self::pump`] is running — the one
     ///    instant its [`FrameClockSource`](crate::pump::FrameClockSource)
     ///    returned, so `Vsync` controllers advance on the frame's clock, as
     ///    every ticker sees the frame's timestamp;
     /// 3. the realm's clock source now, for a frame driven outside a pump
     ///    (the wall clock for a host's `ClockSource::Platform`).
-    pub(super) fn now_secs(&self) -> f64 {
+    pub(super) fn raw_frame_time(&self) -> Duration {
         #[cfg(any(test, feature = "test-support"))]
         {
             let bits = self.now_secs_override.load(Ordering::Relaxed);
             if bits != 0 {
-                return f64::from_bits(bits);
+                return Duration::try_from_secs_f64(f64::from_bits(bits)).unwrap_or_default();
             }
         }
         match self.frame_time.get() {
-            Some(frame_time) => frame_time
-                .saturating_duration_since(self.start)
-                .as_secs_f64(),
-            None => flui_foundation::MonotonicClock::now(&self.clock)
-                .saturating_duration_since(self.start)
-                .as_secs_f64(),
+            Some(frame_time) => frame_time.saturating_duration_since(self.start),
+            None => {
+                flui_foundation::MonotonicClock::now(&self.clock).saturating_duration_since(self.start)
+            }
         }
     }
 
     /// Inject a deterministic virtual `now_secs` for test frames: overrides
-    /// the wall-clock read `now_secs` otherwise takes, so a test can drive
+    /// the wall-clock read `raw_frame_time` otherwise takes, so a test can drive
     /// the Vsync tick and frame accounting from values it controls instead
     /// of racing real elapsed time. `0.0` is stored as a sentinel-adjusted
-    /// nonzero bit pattern so `now_secs`'s `bits != 0` check (its "no
+    /// nonzero bit pattern so `raw_frame_time`'s `bits != 0` check (its "no
     /// override installed" test) cannot mistake an explicit zero override
     /// for an absent one.
     #[cfg(any(test, feature = "test-support"))]
