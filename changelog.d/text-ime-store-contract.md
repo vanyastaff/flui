@@ -24,6 +24,8 @@
 - **`text_store::OwnerCalls` and `RetainOnFailure`** (`flui-platform-api`): the one
   containment a store, its arbiter and its presentation run owner code in: each call contained,
   the first failure in time authoritative, snapshots retired or retained (ADR-0127).
+  `OwnerCalls::parking_gate` names the gate a settle scope parks in, so a store's flush after
+  its grants runs behind the gate the last grant settled under.
 - **`LockArbiter::owner_gate`** (`flui-platform-api`): the gate an owner installed, which a
   store reads before owner code runs.
 

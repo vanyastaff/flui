@@ -1248,6 +1248,30 @@ const ROWS: &[(&str, fn())] = &[
         "cursor area: a platform closing the owner and panicking",
         cursor_area_whose_platform_closes_the_owner_and_panics,
     ),
+    (
+        "in-memory: a request behind a queued grant that moves the store",
+        in_memory_request_behind_a_queued_gate_move,
+    ),
+    (
+        "in-memory: an anchor behind a queued grant that moves the store",
+        in_memory_anchor_behind_a_queued_gate_move,
+    ),
+    (
+        "editable: a request behind a queued grant that moves the store",
+        editable_request_behind_a_queued_gate_move,
+    ),
+    (
+        "editable: an anchor behind a queued grant that moves the store",
+        editable_anchor_behind_a_queued_gate_move,
+    ),
+    (
+        "editable: an update whose observer and focus listener panic",
+        editable_update_whose_observer_and_focus_listener_panic,
+    ),
+    (
+        "detach: a stale token whose diagnostic closes the owner and panics",
+        stale_detach_whose_diagnostic_closes_the_owner_and_panics,
+    ),
 ];
 
 #[test]
@@ -2296,4 +2320,320 @@ fn in_memory_grant_reading_and_editing_its_store() {
         "the next edit lands at the caret the application left"
     );
     assert_eq!(parked(&gate), None);
+}
+
+// ----------------------------------------------------------------------------
+// A queued grant that moves its store before a later grant settles
+// ----------------------------------------------------------------------------
+
+/// Queue, behind `queued_behind` shut, a grant that moves `store` to
+/// `moved_to`, then the grants in `then`; reopen the gate. They run in order
+/// at the next request or anchor, the later ones behind `moved_to`.
+fn queue_a_gate_move(
+    store: &Rc<dyn TextStore>,
+    queued_behind: &CommitGate,
+    moved_to: &CommitGate,
+    then: Vec<LockGrant>,
+) {
+    store.set_commit_gate(queued_behind.clone());
+    queued_behind.set_open(false);
+    let (weak, moved_to) = (Rc::downgrade(store), moved_to.clone());
+    let moving = LockGrant::read(move |_| {
+        if let Some(store) = weak.upgrade() {
+            store.set_commit_gate(moved_to);
+        }
+    });
+    for grant in std::iter::once(moving).chain(then) {
+        assert_eq!(
+            store.request_lock(grant, LockTiming::Async),
+            Ok(LockOutcome::Deferred)
+        );
+    }
+    queued_behind.set_open(true);
+}
+
+/// Run an edit inserting "a" behind a queued grant that moves `store` to
+/// `moved_to`: as a request after it, or with it at an anchor. What the run
+/// raised.
+fn edit_behind_a_queued_gate_move(
+    store: &Rc<dyn TextStore>,
+    moved_to: &CommitGate,
+    through_anchor: bool,
+) -> Option<String> {
+    let queued_behind = CommitGate::new();
+    let outcome = if through_anchor {
+        queue_a_gate_move(store, &queued_behind, moved_to, vec![insert("a")]);
+        raised(|| {
+            let _ = store.run_deferred_grants();
+        })
+    } else {
+        queue_a_gate_move(store, &queued_behind, moved_to, Vec::new());
+        raised(|| {
+            let _ = edit(&**store, "a");
+        })
+    };
+    assert_eq!(
+        parked(&queued_behind),
+        None,
+        "nothing waits at the gate the store left"
+    );
+    outcome
+}
+
+/// An application edit of `store` behind `gate` shut for its duration, so
+/// the observer hears of it only at the store's next flush.
+fn app_edit_held_back(store: &Weak<InMemoryTextStore>, gate: &CommitGate) {
+    if let Some(store) = store.upgrade() {
+        gate.set_open(false);
+        store.app_replace(
+            flui_platform_api::text_store::Utf16Range::new(
+                flui_platform_api::text_store::Utf16Offset::new(0),
+                flui_platform_api::text_store::Utf16Offset::new(0),
+            )
+            .expect("ordered"),
+            "app ",
+        );
+        gate.set_open(true);
+    }
+}
+
+/// On its first text change, makes an application edit held back to the
+/// store's next flush; panics on the next text change.
+struct AppEditsThenPanics {
+    store: Weak<InMemoryTextStore>,
+    gate: CommitGate,
+    heard: Cell<usize>,
+}
+
+impl TextStoreObserver for AppEditsThenPanics {
+    fn text_changed(&self, _: TextChange) {
+        self.heard.set(self.heard.get() + 1);
+        assert!(self.heard.get() == 1, "observer failure after the session");
+        app_edit_held_back(&self.store, &self.gate);
+    }
+    fn selection_changed(&self) {}
+    fn layout_changed(&self) {}
+    fn status_changed(&self) {}
+}
+
+/// The last grant settles behind the gate an earlier queued grant moved the
+/// store to: its listener edits and panics, parking its failure there; the
+/// observer hears that edit in the settle and edits again, and the flush
+/// after the grants hears the second edit and panics. The parked failure
+/// came first, so it is raised.
+fn in_memory_behind_a_queued_gate_move(through_anchor: bool) {
+    let moved_to = CommitGate::new();
+    let store = InMemoryTextStore::new("");
+    let (edited, behind) = (Rc::downgrade(&store), moved_to.clone());
+    store.set_owner_listener(Some(Rc::new(move || {
+        app_edit_held_back(&edited, &behind);
+        panic!("owner failure");
+    })));
+    store.set_observer(Some(Rc::new(AppEditsThenPanics {
+        store: Rc::downgrade(&store),
+        gate: moved_to.clone(),
+        heard: Cell::new(0),
+    })));
+    let moved: Rc<dyn TextStore> = store.clone();
+    assert_eq!(
+        edit_behind_a_queued_gate_move(&moved, &moved_to, through_anchor).as_deref(),
+        Some("owner failure"),
+        "the failure the last grant's settle parked came before the flush's"
+    );
+    store.set_observer(None);
+    store.set_owner_listener(None);
+    assert_eq!(parked(&moved_to), None, "raised, not left parked");
+    assert_eq!(
+        edit(&*store, "b"),
+        Ok(LockOutcome::Granted),
+        "the next edit"
+    );
+    assert_eq!(parked(&moved_to), None, "the next edit fails nothing");
+}
+
+fn in_memory_request_behind_a_queued_gate_move() {
+    in_memory_behind_a_queued_gate_move(false);
+}
+
+fn in_memory_anchor_behind_a_queued_gate_move() {
+    in_memory_behind_a_queued_gate_move(true);
+}
+
+/// [`in_memory_behind_a_queued_gate_move`] for `EditableText`: its
+/// `on_changed` edits and panics, and the observer's own edit reaches only
+/// the flush after the grants, which panics.
+fn editable_behind_a_queued_gate_move(through_anchor: bool) {
+    let controller = TextEditingController::new();
+    let node = FocusNode::with_debug_label("queued gate move");
+    let app = controller.clone();
+    let mut harness = focused(
+        EditableText::new(controller.clone(), Rc::clone(&node)).on_changed(move |_cx, text| {
+            if text == "a" {
+                app.set_text("on_changed edit");
+                panic!("on_changed failure");
+            }
+        }),
+        &node,
+    );
+    let field = field(&harness);
+    field.set_observer(Some(Rc::new(EditsThenPanics {
+        controller: controller.clone(),
+        heard: Cell::new(0),
+    })));
+    let moved_to = CommitGate::new();
+    assert_eq!(
+        edit_behind_a_queued_gate_move(&field, &moved_to, through_anchor).as_deref(),
+        Some("on_changed failure"),
+        "the failure the last grant's settle parked came before the flush's"
+    );
+    field.set_observer(None);
+    assert_eq!(parked(&moved_to), None, "raised, not left parked");
+    the_field_keeps_working(&mut harness, &field);
+    assert_eq!(controller.text(), "observer editz");
+}
+
+fn editable_request_behind_a_queued_gate_move() {
+    editable_behind_a_queued_gate_move(false);
+}
+
+fn editable_anchor_behind_a_queued_gate_move() {
+    editable_behind_a_queued_gate_move(true);
+}
+
+// ----------------------------------------------------------------------------
+// An update replacing a focused node
+// ----------------------------------------------------------------------------
+
+/// An observer whose status change panics.
+struct FailsOnStatus;
+
+impl TextStoreObserver for FailsOnStatus {
+    fn text_changed(&self, _: TextChange) {}
+    fn selection_changed(&self) {}
+    fn layout_changed(&self) {}
+    fn status_changed(&self) {
+        panic!("observer failure on status");
+    }
+}
+
+/// One rebuild obscures the field, whose observer panics on the status
+/// change, and replaces its focused node, whose listener panics on the
+/// focus loss and so cuts the focus notifications short. The update still
+/// moves the field onto the replacement node and ends the old node's IME
+/// session before it raises the observer's failure, the first. The frame
+/// recovers from the update's panic by retiring the field, which releases
+/// the replacement node it now holds; the harness does not raise a
+/// recovered panic, so the row checks what the update left behind.
+fn editable_update_whose_observer_and_focus_listener_panic() {
+    let controller = TextEditingController::new();
+    let (old, new) = (
+        FocusNode::with_debug_label("replaced node"),
+        FocusNode::with_debug_label("replacement node"),
+    );
+    let mut harness = focused(EditableText::new(controller.clone(), Rc::clone(&old)), &old);
+    let field = field(&harness);
+    // Behind a gate of its own, open during the frame, the store tells its
+    // observer of the update's status change at once.
+    field.set_commit_gate(CommitGate::new());
+    field.set_observer(Some(Rc::new(FailsOnStatus)));
+    let heard = Rc::new(Cell::new(false));
+    let listener = Rc::clone(&heard);
+    let _listening = old.add_listener(Rc::new(move || {
+        assert!(listener.replace(true), "focus listener failure");
+    }));
+    harness.swap_root(EditableText::new(controller.clone(), Rc::clone(&new)).obscure_text(true));
+    field.set_observer(None);
+    assert!(heard.get(), "the old node heard its focus loss");
+    assert!(!old.is_attached(), "the old node was replaced");
+    assert!(
+        !new.is_attached(),
+        "the field holds the replacement's attachment, so recovering from the \
+         update's failure releases it"
+    );
+    assert!(
+        harness.active_text_store().is_none(),
+        "the old node's IME session ended with its focus"
+    );
+    assert_eq!(raised(|| harness.tick()), None, "the next frame");
+    let next = FocusNode::with_debug_label("next field");
+    harness.swap_root(EditableText::new(controller, Rc::clone(&next)));
+    next.request_focus();
+    harness.tick();
+    let field = self::field(&harness);
+    the_field_keeps_working(&mut harness, &field);
+}
+
+// ----------------------------------------------------------------------------
+// A stale detach whose diagnostic closes the owner
+// ----------------------------------------------------------------------------
+
+/// A platform that panics when destroyed.
+struct PanicsWhenDestroyed;
+
+impl PlatformTextInput for PanicsWhenDestroyed {
+    fn set_ime_allowed(&self, _: bool) {}
+    fn set_ime_cursor_area(&self, _: Bounds<f64>) {}
+}
+
+impl Drop for PanicsWhenDestroyed {
+    fn drop(&mut self) {
+        panic!("platform destroyed");
+    }
+}
+
+/// A subscriber that, on an event, closes [`CLOSING_OWNER`] (containing
+/// what the close raises) and then panics.
+struct ClosesThenFails;
+
+impl tracing::Subscriber for ClosesThenFails {
+    fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+        true
+    }
+    fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+        tracing::span::Id::from_u64(1)
+    }
+    fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+    fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+    fn event(&self, _: &tracing::Event<'_>) {
+        let owner = CLOSING_OWNER.with(|slot| slot.borrow().as_ref().and_then(Weak::upgrade));
+        if let Some(owner) = owner {
+            let _ = raised(|| owner.close());
+        }
+        panic!("diagnostic failure");
+    }
+    fn enter(&self, _: &tracing::span::Id) {}
+    fn exit(&self, _: &tracing::span::Id) {}
+}
+
+fn stale_detach_whose_diagnostic_closes_the_owner_and_panics() {
+    let owner = TextInputOwner::new(TextInputBackend::Push(Arc::new(PanicsWhenDestroyed)));
+    let token = owner
+        .handle()
+        .attach(TextInputClient::new(InMemoryTextStore::new("")))
+        .expect("attach");
+    assert_eq!(
+        owner.handle().detach(token),
+        Ok(flui_interaction::DetachOutcome::Detached)
+    );
+    CLOSING_OWNER.with(|slot| *slot.borrow_mut() = Some(Rc::downgrade(&owner)));
+    assert_eq!(
+        raised(|| {
+            tracing::subscriber::with_default(ClosesThenFails, || {
+                let _ = owner.handle().detach(token);
+            });
+        })
+        .as_deref(),
+        Some("diagnostic failure"),
+        "the platform clone is released before the diagnostic, not during the unwind"
+    );
+    CLOSING_OWNER.with(|slot| slot.borrow_mut().take());
+    assert_eq!(
+        owner
+            .handle()
+            .attach(TextInputClient::new(InMemoryTextStore::new("")))
+            .err(),
+        Some(flui_interaction::TextInputError::Closed),
+        "the diagnostic's close completed"
+    );
+    the_owner_keeps_working(&self::owner());
 }
