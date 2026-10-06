@@ -134,6 +134,9 @@ struct Inner {
     /// it unwinds (a panicking build says nothing about what it reads).
     previous_reads: SmallVec<[u32; 4]>,
     scheduler: Option<ExternalBuildScheduler>,
+    /// Elements whose `release_element` is running: they admit no new owned
+    /// slot.
+    retiring: SmallVec<[ElementId; 1]>,
 }
 
 /// The reactive graph of one `BuildOwner` (one realm). Cheap to clone (an
@@ -220,20 +223,16 @@ impl Reactive {
 
     // ------------------------------------------------------------------ slots
 
+    /// Admit `value` into a fresh slot. A refusal hands the value back, so the
+    /// caller destroys it after the graph borrow ends.
     fn alloc<T: 'static>(
         &self,
         value: T,
         owner: Option<ElementId>,
-    ) -> Result<SignalSlot, SignalError> {
+    ) -> Result<SignalSlot, (SignalError, T)> {
         let mut inner = self.inner.borrow_mut();
         if inner.closed {
-            drop(inner);
-            // A rejected value is dropped like any other; only an unwind
-            // already in progress retains it (ADR-0127).
-            if std::thread::panicking() {
-                std::mem::forget(value);
-            }
-            return Err(SignalError::OwnerClosed);
+            return Err((SignalError::OwnerClosed, value));
         }
         if let Some(element) = inner.building {
             tracing::warn!(
@@ -242,31 +241,57 @@ impl Reactive {
                 owner = ?owner,
                 "refused: a signal was created during build (create it in init_state and hold the handle)"
             );
-            return Err(SignalError::CreatedDuringBuild { element });
+            return Err((SignalError::CreatedDuringBuild { element }, value));
         }
-        let value: Box<dyn Any> = Box::new(value);
-        let index = if let Some(index) = inner.free.pop() {
-            let node = &mut inner.nodes[index as usize];
-            node.generation = node.generation.wrapping_add(1);
-            node.live = true;
-            node.value = Some(value);
-            node.element_readers.clear();
-            index
-        } else {
-            inner.nodes.push(Node {
-                generation: 0,
-                live: true,
-                value: Some(value),
-                element_readers: SmallVec::new(),
-            });
-            (inner.nodes.len() - 1) as u32
-        };
+        if let Some(owner) = owner.filter(|owner| inner.retiring.contains(owner)) {
+            // The owner is releasing its slots: a slot admitted now would
+            // outlive it, and adding it to that release would let a destructor
+            // that recreates itself keep the release running forever. The
+            // refusal names a handle that is already released.
+            let index = Self::claim_index(&mut inner, None);
+            let generation = inner.nodes[index as usize].generation;
+            Self::release_index(&mut inner, index);
+            tracing::debug!(
+                target: "flui::signals",
+                ?owner,
+                "refused: a signal was created for an element that is releasing its signals"
+            );
+            return Err((SignalError::Released { index, generation }, value));
+        }
+        let index = Self::claim_index(&mut inner, Some(Box::new(value)));
         let slot = SignalSlot::new(self.id, index, inner.nodes[index as usize].generation);
         if let Some(owner) = owner {
             inner.owned_by_element.entry(owner).or_default().push(slot);
         }
         tracing::trace!(target: "flui::signals", slot = ?slot, owner = ?owner, "signal created");
         Ok(slot)
+    }
+
+    fn claim_index(inner: &mut Inner, value: Option<Box<dyn Any>>) -> u32 {
+        if let Some(index) = inner.free.pop() {
+            let node = &mut inner.nodes[index as usize];
+            node.generation = node.generation.wrapping_add(1);
+            node.live = true;
+            node.value = value;
+            node.element_readers.clear();
+            index
+        } else {
+            inner.nodes.push(Node {
+                generation: 0,
+                live: true,
+                value,
+                element_readers: SmallVec::new(),
+            });
+            (inner.nodes.len() - 1) as u32
+        }
+    }
+
+    /// Destroy a value [`Self::alloc`] refused, outside the graph borrow; during
+    /// an unwind it is retained instead (ADR-0127).
+    fn refuse<T>(refused: (SignalError, T)) -> SignalError {
+        let (error, value) = refused;
+        drop(RetainOnUnwind(Some(value)));
+        error
     }
 
     fn check(&self, inner: &Inner, slot: SignalSlot) -> Result<(), SignalError> {
@@ -302,7 +327,9 @@ impl Reactive {
     ///
     /// [`SignalError::CreatedDuringBuild`] while an element is building.
     pub fn try_signal<T: 'static>(&self, value: T) -> Result<Signal<T>, SignalError> {
-        self.alloc(value, None).map(Signal::from_slot)
+        self.alloc(value, None)
+            .map(Signal::from_slot)
+            .map_err(Self::refuse)
     }
 
     /// [`Reactive::try_signal`], panicking on refusal.
@@ -325,29 +352,44 @@ impl Reactive {
     /// widget-owned state (`BuildContextExt::signal` calls this with the
     /// building element).
     ///
+    /// A refused value is dropped after the graph borrow ends, or retained if
+    /// the thread is already unwinding.
+    ///
     /// # Errors
     ///
-    /// [`SignalError::CreatedDuringBuild`] while an element is building.
+    /// [`SignalError::CreatedDuringBuild`] while an element is building;
+    /// [`SignalError::Released`] while `owner` is releasing its signals (a
+    /// destructor of one of them creating another), since the slot would
+    /// outlive its owner.
     pub fn try_signal_owned_by<T: 'static>(
         &self,
         owner: ElementId,
         value: T,
     ) -> Result<Signal<T>, SignalError> {
-        self.alloc(value, Some(owner)).map(Signal::from_slot)
+        self.alloc(value, Some(owner))
+            .map(Signal::from_slot)
+            .map_err(Self::refuse)
     }
 
-    /// [`Reactive::try_signal_owned_by`], panicking on refusal.
+    /// [`Reactive::try_signal_owned_by`], panicking on refusal. The refused
+    /// value is still held when the panic starts, so the unwind retains it
+    /// rather than dropping it (ADR-0127): a destructor that recreates itself
+    /// cannot recurse through its own refusal.
     ///
     /// # Panics
     ///
-    /// If called while an element is building.
+    /// If called while an element is building, or while `owner` is releasing
+    /// its signals.
     #[must_use]
     pub fn signal_owned_by<T: 'static>(&self, owner: ElementId, value: T) -> Signal<T> {
-        match self.try_signal_owned_by(owner, value) {
-            Ok(signal) => signal,
-            Err(error) => panic!(
-                "Reactive::signal_owned_by: {error} (use try_signal_owned_by for a fallible creation)"
-            ),
+        match self.alloc(value, Some(owner)) {
+            Ok(slot) => Signal::from_slot(slot),
+            Err((error, value)) => {
+                let _refused = RetainOnUnwind(Some(value));
+                panic!(
+                    "Reactive::signal_owned_by: {error} (use try_signal_owned_by for a fallible creation)"
+                )
+            }
         }
     }
 
@@ -496,42 +538,43 @@ impl Reactive {
     /// released. A slot the element released earlier and that a later owner
     /// reused is recognised by its generation and left alone.
     ///
-    /// A released value's destructor may create another signal owned by this
-    /// element. The element is gone, so that slot is released here as well
-    /// rather than outliving it with no owner left to release it. After a
-    /// failure, those values are retained like the rest of the batch.
+    /// While the release runs the element admits no new owned slot: a released
+    /// value's destructor that creates one is refused (see
+    /// [`Reactive::try_signal_owned_by`]), so the release ends after one pass
+    /// and leaves no slot owned by the departed element.
     pub(crate) fn release_element(&self, element: ElementId) {
-        let mut released = Vec::new();
-        let mut first = None;
-        loop {
-            let retired = {
-                let mut inner = self.inner.borrow_mut();
-                if inner.preserving_close {
-                    break;
-                }
-                Self::forget_element_reads(&mut inner, element);
-                let mut retired = Vec::new();
-                if let Some(owned) = inner.owned_by_element.remove(&element) {
-                    for slot in owned {
-                        // A closed graph still releases this element's live
-                        // slots, so `check`'s closed refusal does not apply.
-                        if slot.graph() == self.id
-                            && inner.nodes.get(slot.index() as usize).is_some_and(|node| {
-                                node.live && node.generation == slot.generation()
-                            })
-                        {
-                            retired.push((slot, Self::release_index(&mut inner, slot.index())));
-                        }
+        let retired = {
+            let mut inner = self.inner.borrow_mut();
+            if inner.preserving_close {
+                return;
+            }
+            Self::forget_element_reads(&mut inner, element);
+            inner.retiring.push(element);
+            let mut retired = Vec::new();
+            if let Some(owned) = inner.owned_by_element.remove(&element) {
+                for slot in owned {
+                    // A closed graph still releases this element's live
+                    // slots, so `check`'s closed refusal does not apply.
+                    if slot.graph() == self.id
+                        && inner
+                            .nodes
+                            .get(slot.index() as usize)
+                            .is_some_and(|node| node.live && node.generation == slot.generation())
+                    {
+                        retired.push((slot, Self::release_index(&mut inner, slot.index())));
                     }
                 }
-                retired
-            };
-            if retired.is_empty() {
-                break;
             }
-            let (slots, values): (Vec<_>, Vec<_>) = retired.into_iter().unzip();
-            released.extend(slots);
-            Self::retire_released_into(values, &mut first);
+            retired
+        };
+        let (released, values): (Vec<_>, Vec<_>) = retired.into_iter().unzip();
+        let mut first = None;
+        Self::retire_released_into(values, &mut first);
+        {
+            let mut inner = self.inner.borrow_mut();
+            if let Some(at) = inner.retiring.iter().rposition(|id| *id == element) {
+                inner.retiring.swap_remove(at);
+            }
         }
         if let Some(payload) = first {
             std::panic::resume_unwind(payload);
@@ -886,6 +929,21 @@ fn discard_secondary<T>(value: T) {
     // field's destructor is already unwinding. No outer catch can contain
     // that generated drop glue, so exceptional-path retirement must leak it.
     std::mem::forget(value);
+}
+
+/// Holds a refused value: dropped normally, or retained when it is dropped by
+/// an unwind (ADR-0127).
+struct RetainOnUnwind<T>(Option<T>);
+
+impl<T> Drop for RetainOnUnwind<T> {
+    fn drop(&mut self) {
+        let value = self.0.take();
+        if std::thread::panicking() {
+            discard_secondary(value);
+        } else {
+            drop(value);
+        }
+    }
 }
 
 fn retain_first_panic(first: &mut Option<Box<dyn Any + Send>>, outcome: std::thread::Result<()>) {

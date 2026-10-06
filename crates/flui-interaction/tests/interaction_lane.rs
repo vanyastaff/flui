@@ -1512,3 +1512,133 @@ fn interleaved_hover_stops_after_owner_close() {
         "the closed owner's later region is skipped"
     );
 }
+
+/// Records whether a callback capture was destroyed, and whether by an unwind.
+struct CaptureProbe(std::rc::Rc<std::cell::Cell<Option<bool>>>);
+
+impl Drop for CaptureProbe {
+    fn drop(&mut self) {
+        self.0.set(Some(std::thread::panicking()));
+    }
+}
+
+/// A scroll, pan-zoom, path-clip or shader-mask callback that closes its
+/// presentation and then panics leaves its snapshot and target cell as the
+/// capture's last owners: they are retained, not destroyed by that unwind.
+#[test]
+fn non_pointer_invocation_retains_its_snapshot_across_a_reentrant_close() {
+    use flui_foundation::geometry::{Offset, Rect, Size};
+    use flui_interaction::__runtime::{CloseMode, close_dispatch, presentation_dispatch};
+    use flui_interaction::events::{Modifiers, ScrollEventData};
+    use flui_interaction::{PointerDeviceKind, PointerId, PointerPanZoomEvent};
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+    use std::rc::Rc;
+
+    for kind in ["scroll", "pan-zoom", "path clip", "shader mask"] {
+        let lane = InteractionLane::try_new().expect("lane");
+        let owner = presentation_dispatch(&lane.dispatch_handle());
+        let dropped = Rc::new(std::cell::Cell::new(None));
+        let probe = CaptureProbe(Rc::clone(&dropped));
+        let closing = owner.clone();
+        let close_then_fail = move || -> ! {
+            let _keep = &probe;
+            close_dispatch(&closing, CloseMode::Ordinary);
+            panic!("reentrant close callback");
+        };
+        let failure = lane.enter(|| {
+            catch_unwind(AssertUnwindSafe(|| match kind {
+                "scroll" => {
+                    let target = owner
+                        .register_scroll(move |_| close_then_fail())
+                        .expect("scroll target");
+                    let event =
+                        ScrollEventData::new(Offset::ZERO, Offset::ZERO, Modifiers::empty());
+                    let _ = owner.invoke_scroll_target(target, &event);
+                }
+                "pan-zoom" => {
+                    let target = owner
+                        .register_pan_zoom(move |_| close_then_fail())
+                        .expect("pan-zoom target");
+                    let event = PointerPanZoomEvent::Start {
+                        pointer_id: PointerId::new(1).expect("nonzero pointer id"),
+                        position: Offset::ZERO,
+                        timestamp_nanos: 0,
+                        device_kind: PointerDeviceKind::Trackpad,
+                    };
+                    let _ = owner.invoke_pan_zoom_target(target, &event);
+                }
+                "path clip" => {
+                    let target = owner
+                        .register_path_clipper(move |_| close_then_fail())
+                        .expect("path clip target");
+                    let _ = owner.invoke_path_clipper(target, Size::new(1.0, 1.0));
+                }
+                _ => {
+                    let target = owner
+                        .register_shader_mask(move |_| close_then_fail())
+                        .expect("shader mask target");
+                    let _ = owner.invoke_shader_mask(target, Rect::from_ltwh(0.0, 0.0, 1.0, 1.0));
+                }
+            }))
+            .expect_err("the callback's failure propagates")
+        });
+        assert_eq!(
+            flui_foundation::panic::payload_text(&*failure),
+            Some("reentrant close callback"),
+            "{kind}"
+        );
+        flui_foundation::panic::retain_opaque_payload(failure);
+        assert_eq!(
+            dropped.get(),
+            None,
+            "{kind}: the capture is retained, not destroyed by the unwind"
+        );
+        assert_eq!(
+            owner.check_realm(),
+            Err(InteractionDispatchError::OwnerGone),
+            "{kind}: the reentrant close took effect"
+        );
+    }
+}
+
+/// A presentation-scoped handle mutates only the targets its own owner
+/// registered; a sibling presentation sharing the realm is refused.
+#[test]
+fn scoped_handle_cannot_mutate_a_sibling_owners_targets() {
+    use flui_interaction::__runtime::presentation_dispatch;
+    use flui_interaction::routing::MouseRegionCallbacks;
+
+    let lane = InteractionLane::try_new().expect("lane");
+    let realm = lane.dispatch_handle();
+    let owner = presentation_dispatch(&realm);
+    let sibling = presentation_dispatch(&realm);
+    lane.enter(|| {
+        let pointer = owner.register_pointer(|_| {}).expect("pointer target");
+        let scroll = owner
+            .register_scroll(|_| flui_interaction::EventPropagation::Continue)
+            .expect("scroll target");
+        let region = owner
+            .register_mouse_region(MouseRegionCallbacks::default())
+            .expect("mouse region");
+        assert_eq!(
+            sibling.replace_pointer(pointer, |_| {}),
+            Err(InteractionDispatchError::TargetGone)
+        );
+        assert_eq!(
+            sibling.unregister_pointer(pointer),
+            Err(InteractionDispatchError::TargetGone)
+        );
+        assert_eq!(
+            sibling.unregister_scroll(scroll),
+            Err(InteractionDispatchError::TargetGone)
+        );
+        assert!(
+            sibling.detach_mouse_region(region).is_err(),
+            "a sibling cannot detach the region"
+        );
+        assert_eq!(owner.replace_pointer(pointer, |_| {}), Ok(()));
+        assert_eq!(owner.unregister_pointer(pointer), Ok(()));
+        assert_eq!(owner.unregister_scroll(scroll), Ok(()));
+        assert!(owner.detach_mouse_region(region).is_ok());
+    });
+}

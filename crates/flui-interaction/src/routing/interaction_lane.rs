@@ -1077,6 +1077,38 @@ impl OwnerLatch {
             drop(value);
         }
     }
+
+    /// Run one target's snapshotted callback, then release the snapshot and
+    /// the target cell inside the same containment. The callback can close
+    /// its presentation, leaving these as the capture's last owners: a
+    /// failing callback retains them rather than letting its unwind destroy
+    /// them, and a successful one releases them under this latch's policy, so
+    /// a panicking capture destructor resumes as an ordinary failure
+    /// (ADR-0127).
+    fn invoke<C: Retain, S: Retain, R>(
+        &self,
+        cell: C,
+        snapshot: S,
+        call: impl FnOnce(&S) -> R,
+    ) -> R {
+        match RoutePanic::try_run(|| call(&snapshot)) {
+            Ok(value) => {
+                if let Some(failure) = RoutePanic::capture(|| self.release(snapshot)) {
+                    cell.retain();
+                    failure.resume();
+                }
+                if let Some(failure) = RoutePanic::capture(|| self.release(cell)) {
+                    failure.resume();
+                }
+                value
+            }
+            Err(failure) => {
+                snapshot.retain();
+                cell.retain();
+                failure.resume()
+            }
+        }
+    }
 }
 
 /// What a presentation's dispatch owner held when its authority was withdrawn.
@@ -1356,6 +1388,29 @@ impl InteractionDispatchHandle {
         }
     }
 
+    /// Admit a mutation of `target`: it belongs to this realm and, through a
+    /// presentation-scoped handle, to the owner that registered it. Another
+    /// presentation sharing the realm cannot replace, remove or detach it.
+    fn validate_target(
+        &self,
+        lane: &LocalLaneInner,
+        lane_id: LaneId,
+        target_id: TargetId,
+    ) -> Result<(), InteractionDispatchError> {
+        self.validate_lane(lane_id)?;
+        if let Some(owner) = &self.owner {
+            let owned = lane
+                .target_owners
+                .borrow()
+                .get(&target_id)
+                .is_some_and(|held| std::sync::Arc::ptr_eq(held, owner));
+            if !owned {
+                return Err(InteractionDispatchError::TargetGone);
+            }
+        }
+        Ok(())
+    }
+
     /// Register an ordinary pointer handler in the active owner lane.
     pub fn register_pointer(
         &self,
@@ -1382,7 +1437,7 @@ impl InteractionDispatchHandle {
     ) -> Result<(), InteractionDispatchError> {
         let handler = self.admit(handler)?;
         let lane = self.active_lane()?;
-        self.validate_lane(target.lane_id)?;
+        self.validate_target(&lane, target.lane_id, target.target_id)?;
         let cell = lane
             .targets
             .borrow()
@@ -1400,7 +1455,7 @@ impl InteractionDispatchHandle {
         target: PointerTarget,
     ) -> Result<(), InteractionDispatchError> {
         let lane = self.active_lane()?;
-        self.validate_lane(target.lane_id)?;
+        self.validate_target(&lane, target.lane_id, target.target_id)?;
         let removed = lane
             .targets
             .borrow_mut()
@@ -1437,7 +1492,7 @@ impl InteractionDispatchHandle {
     ) -> Result<(), InteractionDispatchError> {
         let callbacks = self.admit_retained(callbacks)?;
         let lane = self.active_lane()?;
-        self.validate_lane(target.lane_id)?;
+        self.validate_target(&lane, target.lane_id, target.target_id)?;
         let cell = lane
             .mouse_targets
             .borrow()
@@ -1516,7 +1571,7 @@ impl InteractionDispatchHandle {
         target: MouseRegionTarget,
     ) -> Result<Rc<MouseRegionCell>, InteractionDispatchError> {
         let lane = self.active_lane()?;
-        self.validate_lane(target.lane_id)?;
+        self.validate_target(&lane, target.lane_id, target.target_id)?;
         lane.target_owners.borrow_mut().remove(&target.target_id);
         lane.mouse_targets
             .borrow_mut()
@@ -1565,7 +1620,7 @@ impl InteractionDispatchHandle {
     ) -> Result<(), InteractionDispatchError> {
         let handler = self.admit(handler)?;
         let lane = self.active_lane()?;
-        self.validate_lane(target.lane_id)?;
+        self.validate_target(&lane, target.lane_id, target.target_id)?;
         let cell = lane
             .scroll_targets
             .borrow()
@@ -1580,7 +1635,7 @@ impl InteractionDispatchHandle {
     /// Remove a scroll target from future dispatch.
     pub fn unregister_scroll(&self, target: ScrollTarget) -> Result<(), InteractionDispatchError> {
         let lane = self.active_lane()?;
-        self.validate_lane(target.lane_id)?;
+        self.validate_target(&lane, target.lane_id, target.target_id)?;
         let removed = lane
             .scroll_targets
             .borrow_mut()
@@ -1605,10 +1660,12 @@ impl InteractionDispatchHandle {
             .get(&target.target_id)
             .cloned()
             .ok_or(InteractionDispatchError::TargetGone)?;
+        let latch = lane.owner_latch(target.target_id);
+        if latch.is_closed() {
+            return Err(InteractionDispatchError::TargetGone);
+        }
         let handler = cell.snapshot();
-        let result = handler(event);
-        drop(handler);
-        Ok(result)
+        Ok(latch.invoke(cell, handler, |handler| handler(event)))
     }
 
     /// Register a trackpad pan-zoom claim handler in the active owner lane.
@@ -1647,7 +1704,7 @@ impl InteractionDispatchHandle {
     ) -> Result<(), InteractionDispatchError> {
         let handler = self.admit(handler)?;
         let lane = self.active_lane()?;
-        self.validate_lane(target.lane_id)?;
+        self.validate_target(&lane, target.lane_id, target.target_id)?;
         let cell = lane
             .pan_zoom_targets
             .borrow()
@@ -1670,7 +1727,7 @@ impl InteractionDispatchHandle {
         target: PanZoomTarget,
     ) -> Result<(), InteractionDispatchError> {
         let lane = self.active_lane()?;
-        self.validate_lane(target.lane_id)?;
+        self.validate_target(&lane, target.lane_id, target.target_id)?;
         let removed = lane
             .pan_zoom_targets
             .borrow_mut()
@@ -1700,10 +1757,12 @@ impl InteractionDispatchHandle {
             .get(&target.target_id)
             .cloned()
             .ok_or(InteractionDispatchError::TargetGone)?;
+        let latch = lane.owner_latch(target.target_id);
+        if latch.is_closed() {
+            return Err(InteractionDispatchError::TargetGone);
+        }
         let handler = cell.snapshot();
-        let result = handler(event);
-        drop(handler);
-        Ok(result)
+        Ok(latch.invoke(cell, handler, |handler| handler(event)))
     }
 
     /// Register a path clipper in the active owner lane.
@@ -1732,7 +1791,7 @@ impl InteractionDispatchHandle {
     ) -> Result<(), InteractionDispatchError> {
         let clipper = self.admit(clipper)?;
         let lane = self.active_lane()?;
-        self.validate_lane(target.lane_id)?;
+        self.validate_target(&lane, target.lane_id, target.target_id)?;
         let cell = lane
             .path_clip_targets
             .borrow()
@@ -1750,7 +1809,7 @@ impl InteractionDispatchHandle {
         target: PathClipTarget,
     ) -> Result<(), InteractionDispatchError> {
         let lane = self.active_lane()?;
-        self.validate_lane(target.lane_id)?;
+        self.validate_target(&lane, target.lane_id, target.target_id)?;
         let removed = lane
             .path_clip_targets
             .borrow_mut()
@@ -1775,10 +1834,12 @@ impl InteractionDispatchHandle {
             .get(&target.target_id)
             .cloned()
             .ok_or(InteractionDispatchError::TargetGone)?;
+        let latch = lane.owner_latch(target.target_id);
+        if latch.is_closed() {
+            return Err(InteractionDispatchError::TargetGone);
+        }
         let clipper = cell.snapshot();
-        let path = clipper(size);
-        drop(clipper);
-        Ok(path)
+        Ok(latch.invoke(cell, clipper, |clipper| clipper(size)))
     }
 
     /// Register a shader-mask factory in the active owner lane.
@@ -1807,7 +1868,7 @@ impl InteractionDispatchHandle {
     ) -> Result<(), InteractionDispatchError> {
         let factory = self.admit(factory)?;
         let lane = self.active_lane()?;
-        self.validate_lane(target.lane_id)?;
+        self.validate_target(&lane, target.lane_id, target.target_id)?;
         let cell = lane
             .shader_mask_targets
             .borrow()
@@ -1825,7 +1886,7 @@ impl InteractionDispatchHandle {
         target: ShaderMaskTarget,
     ) -> Result<(), InteractionDispatchError> {
         let lane = self.active_lane()?;
-        self.validate_lane(target.lane_id)?;
+        self.validate_target(&lane, target.lane_id, target.target_id)?;
         let removed = lane
             .shader_mask_targets
             .borrow_mut()
@@ -1850,10 +1911,12 @@ impl InteractionDispatchHandle {
             .get(&target.target_id)
             .cloned()
             .ok_or(InteractionDispatchError::TargetGone)?;
+        let latch = lane.owner_latch(target.target_id);
+        if latch.is_closed() {
+            return Err(InteractionDispatchError::TargetGone);
+        }
         let factory = cell.snapshot();
-        let shader = factory(bounds);
-        drop(factory);
-        Ok(shader)
+        Ok(latch.invoke(cell, factory, |factory| factory(bounds)))
     }
 
     /// Register an owner-local payload in the active owner lane.
@@ -1893,7 +1956,7 @@ impl InteractionDispatchHandle {
     ) -> Result<(), InteractionDispatchError> {
         let payload = self.admit_retained(payload)?;
         let lane = self.active_lane()?;
-        self.validate_lane(target.lane_id)?;
+        self.validate_target(&lane, target.lane_id, target.target_id)?;
         let previous = {
             let mut payloads = lane.payload_targets.borrow_mut();
             let slot = payloads
@@ -1919,7 +1982,7 @@ impl InteractionDispatchHandle {
         target: LocalPayloadTarget,
     ) -> Result<(), InteractionDispatchError> {
         let lane = self.active_lane()?;
-        self.validate_lane(target.lane_id)?;
+        self.validate_target(&lane, target.lane_id, target.target_id)?;
         let removed = lane
             .payload_targets
             .borrow_mut()

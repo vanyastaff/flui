@@ -42,6 +42,7 @@
 mod tests;
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::ffi::OsStr;
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
@@ -204,16 +205,20 @@ struct Entry {
 /// separated by an empty one, the first record the main worktree.
 ///
 /// `-z` because the newline form C-quotes some paths (a newline or a quote in
-/// them, for one) and `-z` prints every path verbatim.
-fn parse_worktrees(porcelain: &str) -> anyhow::Result<Vec<Entry>> {
+/// them, for one) and `-z` prints every path verbatim. Read as bytes: a path is
+/// whatever the file system allows ([`os_path`]), not necessarily UTF-8.
+fn parse_worktrees(porcelain: &[u8]) -> anyhow::Result<Vec<Entry>> {
     let mut entries = Vec::new();
     let mut current: Option<Entry> = None;
-    for line in porcelain.split('\0') {
-        let (key, value) = line.split_once(' ').unwrap_or((line, ""));
-        if key == "worktree" {
+    for line in porcelain.split(|&byte| byte == 0) {
+        let (key, value) = match line.iter().position(|&byte| byte == b' ') {
+            Some(space) => (&line[..space], &line[space + 1..]),
+            None => (line, &[][..]),
+        };
+        if key == b"worktree" {
             entries.extend(current.take());
             current = Some(Entry {
-                path: PathBuf::from(value),
+                path: os_path(value)?,
                 ..Entry::default()
             });
             continue;
@@ -223,10 +228,20 @@ fn parse_worktrees(porcelain: &str) -> anyhow::Result<Vec<Entry>> {
             continue;
         }
         let Some(entry) = current.as_mut() else {
-            bail!("`git worktree list --porcelain -z` line before any `worktree`: {line}");
+            bail!(
+                "`git worktree list --porcelain -z` line before any `worktree`: {}",
+                String::from_utf8_lossy(line)
+            );
         };
         match key {
-            "branch" => {
+            b"branch" => {
+                let value = std::str::from_utf8(value).with_context(|| {
+                    format!(
+                        "{}: branch `{}` is not UTF-8",
+                        entry.path.display(),
+                        String::from_utf8_lossy(value)
+                    )
+                })?;
                 entry.branch = Some(
                     value
                         .strip_prefix("refs/heads/")
@@ -234,15 +249,42 @@ fn parse_worktrees(porcelain: &str) -> anyhow::Result<Vec<Entry>> {
                         .to_owned(),
                 );
             }
-            "bare" => entry.bare = true,
-            "locked" => entry.locked = true,
-            "prunable" => entry.prunable = true,
+            b"bare" => entry.bare = true,
+            b"locked" => entry.locked = true,
+            b"prunable" => entry.prunable = true,
             // `HEAD`, `detached` and anything a newer git adds decide nothing here
             _ => {}
         }
     }
     entries.extend(current);
     Ok(entries)
+}
+
+/// A path git printed: its bytes verbatim on Unix, where a path need not be
+/// UTF-8; UTF-8 elsewhere, which is what git for Windows prints.
+#[cfg_attr(
+    unix,
+    expect(
+        clippy::unnecessary_wraps,
+        reason = "fallible where git prints UTF-8 and a path is not raw bytes"
+    )
+)]
+fn os_path(bytes: &[u8]) -> anyhow::Result<PathBuf> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        Ok(PathBuf::from(std::ffi::OsStr::from_bytes(bytes)))
+    }
+    #[cfg(not(unix))]
+    {
+        let path = std::str::from_utf8(bytes).with_context(|| {
+            format!(
+                "git printed the non-UTF-8 path `{}`",
+                String::from_utf8_lossy(bytes)
+            )
+        })?;
+        Ok(PathBuf::from(path))
+    }
 }
 
 /// Which local branches have an upstream that no longer exists, from
@@ -280,16 +322,20 @@ enum Changes {
 
 impl Changes {
     /// Reads `git status --porcelain=v1 -z --untracked-files=normal
-    /// --ignored=matching`.
-    fn from_status(status: &str) -> Self {
+    /// --ignored=matching`, whose paths need not be UTF-8: an ignored entry is
+    /// judged on its bytes and named lossily.
+    fn from_status(status: &[u8]) -> Self {
         let mut tasks = false;
         let mut ignored = Vec::new();
-        for record in status.split('\0').filter(|record| !record.is_empty()) {
-            if let Some(path) = record.strip_prefix("!! ") {
+        for record in status
+            .split(|&byte| byte == 0)
+            .filter(|record| !record.is_empty())
+        {
+            if let Some(path) = record.strip_prefix(b"!! ") {
                 if !disposable(path) {
-                    ignored.push(path.to_owned());
+                    ignored.push(String::from_utf8_lossy(path).into_owned());
                 }
-            } else if record == format!("?? {TASKS_FILE}") {
+            } else if record.strip_prefix(b"?? ") == Some(TASKS_FILE.as_bytes()) {
                 tasks = true;
             } else {
                 return Self::Work;
@@ -307,8 +353,8 @@ impl Changes {
 
 /// An ignored entry `prune` may delete with its worktree: a `target/`
 /// directory at any depth, or the root `TASKS.md`.
-fn disposable(path: &str) -> bool {
-    path == TASKS_FILE || path == "target/" || path.ends_with("/target/")
+fn disposable(path: &[u8]) -> bool {
+    path == TASKS_FILE.as_bytes() || path == b"target/" || path.ends_with(b"/target/")
 }
 
 /// What git says of a branch tip against origin/main.
@@ -581,18 +627,23 @@ fn new(git: &Git, branch: &BranchName) -> anyhow::Result<PathBuf> {
     git.run(&["fetch", "origin", "main"])?;
     std::fs::create_dir_all(&root).with_context(|| format!("creating {}", root.display()))?;
     git.run(&[
-        "worktree",
-        "add",
-        "--no-track",
-        "-b",
-        &branch.to_string(),
-        utf8(&path)?,
-        BASE,
+        OsStr::new("worktree"),
+        OsStr::new("add"),
+        OsStr::new("--no-track"),
+        OsStr::new("-b"),
+        OsStr::new(&branch.to_string()),
+        path.as_os_str(),
+        OsStr::new(BASE),
     ])?;
     Ok(path)
 }
 
 /// Every worktree git records, with its facts.
+///
+/// origin/main, and each branch tip, is resolved to one commit first and every
+/// query asks about that commit: a fetch landing mid-survey must not pair the
+/// old first-parent chain with the new ancestry, which would read a branch
+/// fast-forwarded onto main as merged.
 fn survey(git: &Git) -> anyhow::Result<Vec<Worktree>> {
     let (main, entries) = git.worktrees()?;
     let root = main.join(ROOT_DIR);
@@ -602,8 +653,9 @@ fn survey(git: &Git) -> anyhow::Result<Vec<Worktree>> {
         "refs/heads",
         "refs/remotes",
     ])?);
+    let base = commit_id(git, BASE)?;
     let first_parent: HashSet<String> = git
-        .run(&["rev-list", "--first-parent", BASE])?
+        .run(&["rev-list", "--first-parent", &base])?
         .lines()
         .map(str::to_owned)
         .collect();
@@ -623,12 +675,11 @@ fn survey(git: &Git) -> anyhow::Result<Vec<Worktree>> {
         let tip = match &entry.branch {
             None => None,
             Some(branch) => {
-                let tip = format!("refs/heads/{branch}");
-                let sha = git.run(&["rev-parse", "--verify", &tip])?;
-                let ahead = git.run(&["rev-list", "--count", &format!("{BASE}..{tip}")])?;
+                let tip = commit_id(git, &format!("refs/heads/{branch}"))?;
+                let ahead = git.run(&["rev-list", "--count", &format!("{base}..{tip}")])?;
                 Some(Tip {
-                    reachable: git.succeeds(&["merge-base", "--is-ancestor", &tip, BASE])?,
-                    first_parent: first_parent.contains(sha.trim()),
+                    reachable: git.succeeds(&["merge-base", "--is-ancestor", &tip, &base])?,
+                    first_parent: first_parent.contains(&tip),
                     ahead: ahead
                         .trim()
                         .parse()
@@ -640,7 +691,7 @@ fn survey(git: &Git) -> anyhow::Result<Vec<Worktree>> {
         let changes = if missing {
             Changes::None
         } else {
-            Changes::from_status(&Git::new(entry.path.clone()).run(&[
+            Changes::from_status(&git.at(entry.path.clone()).run_bytes(&[
                 "status",
                 "--porcelain=v1",
                 "-z",
@@ -671,6 +722,19 @@ fn survey(git: &Git) -> anyhow::Result<Vec<Worktree>> {
     Ok(worktrees)
 }
 
+/// The commit `rev` names now, as a full object id.
+fn commit_id(git: &Git, rev: &str) -> anyhow::Result<String> {
+    Ok(git
+        .run(&[
+            "rev-parse",
+            "--verify",
+            "--end-of-options",
+            &format!("{rev}^{{commit}}"),
+        ])?
+        .trim()
+        .to_owned())
+}
+
 /// What `prune` did, one line per worktree.
 #[derive(Debug, Default)]
 struct PruneReport {
@@ -689,10 +753,11 @@ fn prune(git: &Git, dry_run: bool) -> anyhow::Result<PruneReport> {
     } else {
         git.run(&["fetch", "--prune", "origin"])?;
     }
+    // `--verbose` names each stale record on stderr, not stdout
     let stale = if dry_run {
-        git.run(&["worktree", "prune", "--dry-run", "--verbose"])?
+        git.run_with_stderr(&["worktree", "prune", "--dry-run", "--verbose"])?
     } else {
-        git.run(&["worktree", "prune", "--verbose"])?
+        git.run_with_stderr(&["worktree", "prune", "--verbose"])?
     };
     report
         .lines
@@ -733,51 +798,53 @@ struct Removed {
     branch_kept: Option<String>,
 }
 
+/// Why `prune` locks a worktree while it removes it.
+const LOCK_REASON: &str = "cargo xtask worktree prune is removing it";
+
 /// Deletes the worktree's `target/`, the worktree, then its branch. Only for
 /// a worktree [`classify`] decided to remove.
+///
+/// The worktree is locked while it is inspected and cleared, so a concurrent
+/// prune or `git worktree remove`/`move` leaves it alone, and one somebody
+/// else locked after the survey is kept. A lock does not stop files being
+/// written, so the contents are checked again after `target/` (which can take
+/// minutes to delete) is gone. The lock is released just before
+/// `git worktree remove`, which refuses a locked worktree unless forced twice,
+/// and forcing would delete modified and untracked files too. What remains
+/// open: an ignored file written between that last check and
+/// `git worktree remove` deleting the directory, the span of two git processes,
+/// is deleted with it (`git worktree remove` refuses modified and untracked
+/// files itself, but not ignored ones).
 ///
 /// The branch goes only through `git branch -d`, never `-D`: the merge verdict
 /// predates this call, and a commit made on the branch since must not be lost.
 fn remove(git: &Git, worktree: &Worktree, force: bool) -> anyhow::Result<Removed> {
     let path = &worktree.entry.path;
-    // The survey's verdict may be stale. `git worktree remove` refuses
-    // untracked and modified files without `--force` (never passed), but deletes
-    // ignored ones silently, so recheck everything, ignored entries included, and
-    // remove only what the verdict allowed: nothing, or a lone `TASKS.md`.
-    let expected = if force {
-        Changes::TasksOnly
-    } else {
-        Changes::None
+    let worktree_cmd = |action: &'static str| -> Vec<&OsStr> {
+        let mut args = vec![OsStr::new("worktree"), OsStr::new(action)];
+        if action == "lock" {
+            args.extend([OsStr::new("--reason"), OsStr::new(LOCK_REASON)]);
+        }
+        args.push(path.as_os_str());
+        args
     };
-    let now = Changes::from_status(&Git::new(path.clone()).run(&[
-        "status",
-        "--porcelain=v1",
-        "-z",
-        "--untracked-files=all",
-        "--ignored=matching",
-    ])?);
-    if now != expected {
-        let reason = match now {
-            Changes::Ignored(paths) => Reason::Ignored(paths),
-            Changes::None | Changes::TasksOnly | Changes::Work => Reason::Dirty,
-        };
-        bail!(
-            "{} changed since it was surveyed ({reason}); keeping it",
+    git.run(&worktree_cmd("lock")).with_context(|| {
+        format!(
+            "{} is locked by someone else, or could not be locked; keeping it",
             path.display()
-        );
+        )
+    })?;
+    let cleared = clear(git, path, force);
+    let unlocked = git.run(&worktree_cmd("unlock"));
+    match (cleared, unlocked) {
+        (Ok(()), Ok(_)) => {}
+        (Err(error), Ok(_)) => return Err(error),
+        (Ok(()), Err(error)) => return Err(error.context("unlocking it before removal")),
+        (Err(error), Err(unlock)) => {
+            bail!("{error:#}; it stays locked, since unlocking failed too: {unlock:#}")
+        }
     }
-    // Only now, with the worktree confirmed unchanged, is its build cache
-    // disposable; a worktree kept above keeps its `target/`.
-    let target = path.join("target");
-    if target.is_dir() {
-        std::fs::remove_dir_all(&target)
-            .with_context(|| format!("removing {}", target.display()))?;
-    }
-    if force {
-        std::fs::remove_file(path.join(TASKS_FILE))
-            .with_context(|| format!("removing {}", path.join(TASKS_FILE).display()))?;
-    }
-    git.run(&["worktree", "remove", utf8(path)?])?;
+    git.run(&worktree_cmd("remove"))?;
     let branch_kept = match &worktree.entry.branch {
         Some(branch) => git.run(&["branch", "-d", branch]).err().map(|error| {
             format!("{branch}: {error:#}; check it, then `git branch -D` it yourself")
@@ -790,57 +857,161 @@ fn remove(git: &Git, worktree: &Worktree, force: bool) -> anyhow::Result<Removed
     })
 }
 
-fn utf8(path: &Path) -> anyhow::Result<&str> {
-    path.to_str()
-        .with_context(|| format!("{} is not UTF-8", path.display()))
+/// Empties a locked worktree of what the verdict allowed: confirms it holds
+/// nothing else, deletes `target/` and a lone `TASKS.md`, then confirms it
+/// holds nothing at all.
+fn clear(git: &Git, path: &Path, force: bool) -> anyhow::Result<()> {
+    // The survey's verdict may be stale. `git worktree remove` refuses
+    // untracked and modified files without `--force` (never passed), but deletes
+    // ignored ones silently, so recheck everything, ignored entries included.
+    unchanged(
+        git,
+        path,
+        &if force {
+            Changes::TasksOnly
+        } else {
+            Changes::None
+        },
+    )?;
+    // Only now, with the worktree confirmed unchanged, is its build cache
+    // disposable; a worktree kept above keeps its `target/`.
+    let target = path.join("target");
+    if target.is_dir() {
+        std::fs::remove_dir_all(&target)
+            .with_context(|| format!("removing {}", target.display()))?;
+    }
+    if force {
+        std::fs::remove_file(path.join(TASKS_FILE))
+            .with_context(|| format!("removing {}", path.join(TASKS_FILE).display()))?;
+    }
+    // whatever was written while `target/` went
+    unchanged(git, path, &Changes::None)
+}
+
+/// Fails unless `git status` of the worktree at `path` reads as `expected`.
+fn unchanged(git: &Git, path: &Path, expected: &Changes) -> anyhow::Result<()> {
+    let now = Changes::from_status(&git.at(path.to_path_buf()).run_bytes(&[
+        "status",
+        "--porcelain=v1",
+        "-z",
+        "--untracked-files=all",
+        "--ignored=matching",
+    ])?);
+    if now != *expected {
+        let reason = match now {
+            Changes::Ignored(paths) => Reason::Ignored(paths),
+            Changes::None | Changes::TasksOnly | Changes::Work => Reason::Dirty,
+        };
+        bail!(
+            "{} changed since it was surveyed ({reason}); keeping it",
+            path.display()
+        );
+    }
+    Ok(())
 }
 
 /// `git`, run in one directory.
 struct Git {
     dir: PathBuf,
+    /// Called with the arguments of every command that completes, here or in a
+    /// [`Git::at`] made from this one: a test lands a concurrent change
+    /// between two git calls with it.
+    #[cfg(test)]
+    after: Option<AfterHook>,
 }
+
+/// [`Git`]'s test hook.
+#[cfg(test)]
+type AfterHook = std::rc::Rc<dyn Fn(&[String])>;
 
 impl Git {
     fn new(dir: PathBuf) -> Self {
-        Self { dir }
+        Self {
+            dir,
+            #[cfg(test)]
+            after: None,
+        }
     }
 
-    fn output(&self, args: &[&str]) -> anyhow::Result<std::process::Output> {
-        Command::new("git")
+    /// The same `git`, run in `dir`.
+    #[cfg_attr(
+        not(test),
+        expect(clippy::unused_self, reason = "carries the test hook along")
+    )]
+    fn at(&self, dir: PathBuf) -> Self {
+        Self {
+            dir,
+            #[cfg(test)]
+            after: self.after.clone(),
+        }
+    }
+
+    fn output<S: AsRef<OsStr>>(&self, args: &[S]) -> anyhow::Result<std::process::Output> {
+        let out = Command::new("git")
             .args(args)
             .current_dir(&self.dir)
             .output()
-            .context("spawning `git`")
+            .context("spawning `git`")?;
+        #[cfg(test)]
+        if let Some(after) = &self.after {
+            let args: Vec<String> = args
+                .iter()
+                .map(|arg| arg.as_ref().to_string_lossy().into_owned())
+                .collect();
+            after(&args);
+        }
+        Ok(out)
     }
 
-    /// stdout of a command that must succeed.
-    fn run(&self, args: &[&str]) -> anyhow::Result<String> {
+    /// The error for a command that failed.
+    fn failure<S: AsRef<OsStr>>(&self, args: &[S], out: &std::process::Output) -> anyhow::Error {
+        let args: Vec<_> = args
+            .iter()
+            .map(|arg| arg.as_ref().to_string_lossy())
+            .collect();
+        anyhow::anyhow!(
+            "`git {}` in {} failed ({}): {}",
+            args.join(" "),
+            self.dir.display(),
+            out.status,
+            String::from_utf8_lossy(&out.stderr).trim()
+        )
+    }
+
+    /// stdout of a command that must succeed, as bytes: paths in it need not
+    /// be UTF-8.
+    fn run_bytes<S: AsRef<OsStr>>(&self, args: &[S]) -> anyhow::Result<Vec<u8>> {
         let out = self.output(args)?;
         if !out.status.success() {
-            bail!(
-                "`git {}` in {} failed ({}): {}",
-                args.join(" "),
-                self.dir.display(),
-                out.status,
-                String::from_utf8_lossy(&out.stderr).trim()
-            );
+            return Err(self.failure(args, &out));
         }
-        String::from_utf8(out.stdout).context("non-UTF-8 `git` output")
+        Ok(out.stdout)
+    }
+
+    /// stdout of a command that must succeed and prints only UTF-8.
+    fn run<S: AsRef<OsStr>>(&self, args: &[S]) -> anyhow::Result<String> {
+        String::from_utf8(self.run_bytes(args)?).context("non-UTF-8 `git` output")
+    }
+
+    /// stdout, then stderr, of a command that must succeed and reports on
+    /// stderr; read lossily, since the report is only shown.
+    fn run_with_stderr<S: AsRef<OsStr>>(&self, args: &[S]) -> anyhow::Result<String> {
+        let out = self.output(args)?;
+        if !out.status.success() {
+            return Err(self.failure(args, &out));
+        }
+        let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
+        text.push_str(&String::from_utf8_lossy(&out.stderr));
+        Ok(text)
     }
 
     /// Whether a yes/no command said yes (exit 0) or no (exit 1).
-    fn succeeds(&self, args: &[&str]) -> anyhow::Result<bool> {
+    fn succeeds<S: AsRef<OsStr>>(&self, args: &[S]) -> anyhow::Result<bool> {
         let out = self.output(args)?;
         match out.status.code() {
             Some(0) => Ok(true),
             Some(1) => Ok(false),
-            _ => bail!(
-                "`git {}` in {} failed ({}): {}",
-                args.join(" "),
-                self.dir.display(),
-                out.status,
-                String::from_utf8_lossy(&out.stderr).trim()
-            ),
+            _ => Err(self.failure(args, &out)),
         }
     }
 
@@ -848,7 +1019,7 @@ impl Git {
     /// the main one first and at that path.
     fn worktrees(&self) -> anyhow::Result<(PathBuf, Vec<Entry>)> {
         let mut entries =
-            parse_worktrees(&self.run(&["worktree", "list", "--porcelain", "-z"])?)?;
+            parse_worktrees(&self.run_bytes(&["worktree", "list", "--porcelain", "-z"])?)?;
         let main = main_checkout(&entries, self.main_toplevel()?.as_deref())?;
         if let Some(first) = entries.first_mut() {
             first.path.clone_from(&main);
@@ -859,19 +1030,26 @@ impl Git {
     /// `--show-toplevel` when this is the main checkout: its git dir is the
     /// common one.
     fn main_toplevel(&self) -> anyhow::Result<Option<PathBuf>> {
-        let out = self.run(&[
+        let out = self.run_bytes(&[
             "rev-parse",
             "--path-format=absolute",
             "--git-dir",
             "--git-common-dir",
             "--show-toplevel",
         ])?;
-        let mut lines = out.lines();
+        let mut lines = out
+            .strip_suffix(b"\n")
+            .unwrap_or(&out)
+            .split(|&byte| byte == b'\n');
         let (Some(git_dir), Some(common_dir), Some(toplevel)) =
             (lines.next(), lines.next(), lines.next())
         else {
-            bail!("`git rev-parse` printed {out:?}, not three paths");
+            bail!(
+                "`git rev-parse` printed {:?}, not three paths",
+                String::from_utf8_lossy(&out)
+            );
         };
-        Ok(same_dir(Path::new(git_dir), Path::new(common_dir)).then(|| PathBuf::from(toplevel)))
+        let toplevel = os_path(toplevel)?;
+        Ok(same_dir(&os_path(git_dir)?, &os_path(common_dir)?).then_some(toplevel))
     }
 }

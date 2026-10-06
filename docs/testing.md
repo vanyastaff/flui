@@ -898,8 +898,10 @@ action. Independent visible state labels and an intervening counter action
 observe the resulting frames. This does not establish native acceptance of the
 catalog's `Disclosure` or `Slider`, IME, or screen-reader announcements.
 `windows-input` separately sends pointer input followed by Tab and Enter.
-Both checks require an interactive Windows desktop; an unavailable desktop or
-UI Automation result is recorded as CANNOT VERIFY rather than a passing run.
+Both checks require an interactive Windows desktop. Before the probe launches,
+the shared UIA session opens the input desktop: a locked workstation, a
+disconnected or service session, or an unavailable UI Automation exits 2
+(CANNOT VERIFY) rather than reporting a FAIL or a passing run.
 
 ## CI Expectations
 

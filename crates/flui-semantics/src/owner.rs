@@ -460,10 +460,10 @@ impl SemanticsOwner {
     /// `blocks_user_actions` applies identically to snapshot export and input
     /// dispatch.
     ///
-    /// An `Expand` or `Collapse` request to an expandable node that registers
-    /// neither discrete action but has a tap handler resolves to that handler
-    /// with [`SemanticsAction::Tap`], and only for the transition the node's
-    /// current state allows. A numeric setter is refused unless its value lies
+    /// An `Expand` or `Collapse` request is admitted only for the transition
+    /// the node's current expanded state allows, whichever handler serves it.
+    /// To an expandable node that registers neither discrete action but has a
+    /// tap handler, it resolves to that handler with [`SemanticsAction::Tap`]. A numeric setter is refused unless its value lies
     /// in the node's current range.
     ///
     /// The returned invocation owns an `Arc` clone of the handler and may be
@@ -511,6 +511,19 @@ impl SemanticsOwner {
         })?;
         let config = node.config();
         let actions = config.effective_actions_as_bits();
+        // Expand and collapse are transitions, offered only from the state
+        // that allows them; a request for the state the node already
+        // publishes (or from a node without one) reaches no handler.
+        if matches!(
+            request.action,
+            SemanticsAction::Expand | SemanticsAction::Collapse
+        ) && crate::action::disclosure_transition(config.flags().bits()) != Some(request.action)
+        {
+            return Err(SemanticsActionError::UnsupportedAction {
+                node_id: request.node_id,
+                action: request.action,
+            });
+        }
         // A tap-only expandable node receives the transition its current
         // state allows through its tap handler.
         let routed = if crate::action::tap_disclosure_transition(actions, config.flags().bits())

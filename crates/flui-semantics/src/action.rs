@@ -23,12 +23,18 @@ use crate::identity::AccessibilityNodeId;
 /// node's flag bits.
 pub(crate) fn tap_disclosure_transition(actions: u64, flags: u64) -> Option<SemanticsAction> {
     let has = |action: SemanticsAction| actions & action.value() != 0;
-    let flagged = |flag: crate::SemanticsFlag| flags & (flag as u64) != 0;
-    if !flagged(crate::SemanticsFlag::HasExpandedState)
-        || !has(SemanticsAction::Tap)
-        || has(SemanticsAction::Expand)
-        || has(SemanticsAction::Collapse)
+    if !has(SemanticsAction::Tap) || has(SemanticsAction::Expand) || has(SemanticsAction::Collapse)
     {
+        return None;
+    }
+    disclosure_transition(flags)
+}
+
+/// The one transition a node's expanded state allows: `Expand` while
+/// collapsed, `Collapse` while expanded, and none without an expanded state.
+pub(crate) fn disclosure_transition(flags: u64) -> Option<SemanticsAction> {
+    let flagged = |flag: crate::SemanticsFlag| flags & (flag as u64) != 0;
+    if !flagged(crate::SemanticsFlag::HasExpandedState) {
         return None;
     }
     Some(if flagged(crate::SemanticsFlag::IsExpanded) {

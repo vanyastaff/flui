@@ -219,6 +219,20 @@ fn apply_state(node: &mut Node, flags: u64) {
     }
 }
 
+/// The FLUI action a platform value write reaches, by the precedence the
+/// Windows adapter applies (`accesskit_windows` 0.35): a node with a text
+/// value is written through the `Value` pattern as text, and a range without
+/// one through `RangeValue` as a number. A static label's value is its name
+/// (`Node::label_comes_from_value`), not a writable value.
+fn value_write_action(data: &SemanticsNodeData, role: Role) -> SemanticsAction {
+    let has_text_value = data.value.is_some() && role != Role::Label;
+    if data.numeric_range.is_some() && !has_text_value {
+        SemanticsAction::SetNumericValue
+    } else {
+        SemanticsAction::SetText
+    }
+}
+
 /// Translate the supported actions onto the AccessKit node.
 ///
 /// Several FLUI actions have no AccessKit counterpart and are intentionally not
@@ -236,7 +250,7 @@ fn apply_state(node: &mut Node, flags: u64) {
 /// AccessKit does not count a node with an expanded state as invocable
 /// (`accesskit_consumer` 0.39, `Node::is_invocable`), so without this a
 /// tap-only expandable node could be neither invoked nor expanded.
-fn apply_actions(node: &mut Node, actions: u64, flags: u64, has_numeric_range: bool) {
+fn apply_actions(node: &mut Node, actions: u64, flags: u64, value_write: SemanticsAction) {
     if has_action(actions, SemanticsAction::Tap) {
         node.add_action(accesskit::Action::Click);
     }
@@ -282,12 +296,11 @@ fn apply_actions(node: &mut Node, actions: u64, flags: u64, has_numeric_range: b
     if has_action(actions, SemanticsAction::SetSelection) {
         node.add_action(accesskit::Action::SetTextSelection);
     }
-    // A numeric handler is reachable only through a range: without one the
-    // platform has no `RangeValue` to write, a Windows `SetValue` arrives as
-    // text, and the owner refuses a number it cannot check against a range.
-    if has_action(actions, SemanticsAction::SetText)
-        || (has_numeric_range && has_action(actions, SemanticsAction::SetNumericValue))
-    {
+    // A value write reaches one handler, chosen by `value_write_action`'s
+    // precedence: a numeric handler only through a range with no text value
+    // (otherwise the write arrives as text, and the owner refuses a number it
+    // cannot check against a range), the text handler everywhere else.
+    if has_action(actions, value_write) {
         node.add_action(accesskit::Action::SetValue);
     }
     if has_action(actions, SemanticsAction::ScrollToOffset) {
@@ -476,6 +489,13 @@ pub(crate) fn to_node(data: &SemanticsNodeData) -> Node {
         node.set_min_numeric_value(range.min());
         node.set_max_numeric_value(range.max());
         node.set_numeric_value_step(range.step());
+        // UI Automation's `Value` and `RangeValue` patterns share one
+        // read-only property, and AccessKit reports a slider writable unless
+        // told otherwise: a write the precedence routes to a missing handler
+        // would report success and then be dropped by the owner.
+        if !has_action(data.actions, value_write_action(data, role)) {
+            node.set_read_only();
+        }
     }
     // FLUI's `hint` is supplementary prose about what a control does, which is
     // what AccessKit calls a description.
@@ -535,7 +555,7 @@ pub(crate) fn to_node(data: &SemanticsNodeData) -> Node {
         &mut node,
         data.actions,
         data.flags,
-        data.numeric_range.is_some(),
+        value_write_action(data, role),
     );
 
     node.set_children(
@@ -753,6 +773,60 @@ mod tests {
                  longer advertises {inbound:?} — the two tables have drifted",
             );
         }
+    }
+
+    /// A numeric range is writable on the platform, and advertises
+    /// `SetValue`, exactly when the handler a value write reaches exists: text
+    /// first when the node also carries a text value, the numeric handler
+    /// otherwise. Any other range is read-only, so a UIA `SetValue` is refused
+    /// rather than reported and dropped.
+    #[test]
+    fn a_numeric_range_is_writable_only_through_the_handler_a_write_reaches() {
+        let range = crate::NumericRange::new(5.0, 0.0, 10.0, 1.0).expect("finite fixture");
+        let set_text = SemanticsAction::SetText.value();
+        let set_number = SemanticsAction::SetNumericValue.value();
+        // (row, text value, actions, writable)
+        let rows: &[(&str, Option<&str>, u64, bool)] = &[
+            ("numeric_handler", None, set_number, true),
+            ("both_handlers", None, set_text | set_number, true),
+            ("no_handler", None, 0, false),
+            ("text_handler_without_text", None, set_text, false),
+            (
+                "increase_only",
+                None,
+                SemanticsAction::Increase.value(),
+                false,
+            ),
+            ("text_value_and_text_handler", Some("50%"), set_text, true),
+            (
+                "text_value_and_numeric_handler",
+                Some("50%"),
+                set_number,
+                false,
+            ),
+        ];
+        let failures: Vec<_> = rows
+            .iter()
+            .filter(|&&(_, value, actions, writable)| {
+                let node = translate(&SemanticsNodeData {
+                    actions,
+                    value: value.map(Into::into),
+                    numeric_range: Some(range),
+                    ..Default::default()
+                });
+                node.is_read_only() == writable
+                    || node.supports_action(accesskit::Action::SetValue) != writable
+            })
+            .map(|&(name, ..)| name)
+            .collect();
+        assert!(
+            failures.is_empty(),
+            "range writability rows failed: {failures:?}"
+        );
+        assert!(
+            !translate(&SemanticsNodeData::default()).is_read_only(),
+            "a node without a range is not made read-only"
+        );
     }
 
     /// The role mapping's only pin. `SemanticsRole` is `#[non_exhaustive]` and

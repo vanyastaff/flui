@@ -83,7 +83,7 @@ fn porcelain_records_parse() {
     ]
     .map(|line| format!("{line}\0"))
     .concat();
-    let entries = parse_worktrees(&porcelain).expect("valid porcelain");
+    let entries = parse_worktrees(porcelain.as_bytes()).expect("valid porcelain");
     assert_eq!(
         entries,
         [
@@ -110,7 +110,40 @@ fn porcelain_records_parse() {
             },
         ]
     );
-    assert!(parse_worktrees("HEAD abc\0").is_err());
+    assert!(parse_worktrees(b"HEAD abc\0").is_err());
+}
+
+/// git prints a path's bytes verbatim; on Unix they need not be UTF-8, and
+/// `list` and `prune` must still read every record.
+fn a_non_utf8_path_is_read_as_the_platform_spells_it() {
+    let porcelain = b"worktree /w/dir\xff\0branch refs/heads/t/a\0\0";
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        let entries = parse_worktrees(porcelain).expect("a Unix path is any bytes");
+        assert_eq!(
+            entries,
+            [Entry {
+                path: PathBuf::from(OsStr::from_bytes(b"/w/dir\xff")),
+                branch: Some("t/a".to_owned()),
+                ..Entry::default()
+            }]
+        );
+    }
+    #[cfg(not(unix))]
+    {
+        let error = parse_worktrees(porcelain).expect_err("git for Windows prints UTF-8");
+        assert!(format!("{error:#}").contains("non-UTF-8 path"), "{error:#}");
+    }
+    // a non-UTF-8 ignored entry is judged on its bytes and named lossily
+    assert_eq!(
+        Changes::from_status(b"!! key\xff.env\0!! build/target/\0?? TASKS.md\0"),
+        Changes::Ignored(vec!["key\u{fffd}.env".to_owned()])
+    );
+    assert_eq!(
+        Changes::from_status(b"!! target/\0?? src\xff.rs\0"),
+        Changes::Work
+    );
 }
 
 fn an_upstream_is_gone_only_when_set_and_missing() {
@@ -135,15 +168,15 @@ refs/remotes/origin/pushed\0
 }
 
 fn status_reads_tasks_md_alone_as_no_work() {
-    assert_eq!(Changes::from_status(""), Changes::None);
-    assert_eq!(Changes::from_status("?? TASKS.md\0"), Changes::TasksOnly);
+    assert_eq!(Changes::from_status(b""), Changes::None);
+    assert_eq!(Changes::from_status(b"?? TASKS.md\0"), Changes::TasksOnly);
     assert_eq!(
-        Changes::from_status("?? TASKS.md\0?? notes.txt\0"),
+        Changes::from_status(b"?? TASKS.md\0?? notes.txt\0"),
         Changes::Work
     );
-    assert_eq!(Changes::from_status("?? docs/TASKS.md\0"), Changes::Work);
-    assert_eq!(Changes::from_status(" M src/lib.rs\0"), Changes::Work);
-    assert_eq!(Changes::from_status("R  new.rs\0old.rs\0"), Changes::Work);
+    assert_eq!(Changes::from_status(b"?? docs/TASKS.md\0"), Changes::Work);
+    assert_eq!(Changes::from_status(b" M src/lib.rs\0"), Changes::Work);
+    assert_eq!(Changes::from_status(b"R  new.rs\0old.rs\0"), Changes::Work);
 }
 
 fn status_keeps_ignored_entries_that_are_not_disposable() {
@@ -170,7 +203,11 @@ fn status_keeps_ignored_entries_that_are_not_disposable() {
         ("!! .env\0 M src/lib.rs\0", Changes::Work),
     ];
     for (status, expected) in cases {
-        assert_eq!(Changes::from_status(status), expected, "{status:?}");
+        assert_eq!(
+            Changes::from_status(status.as_bytes()),
+            expected,
+            "{status:?}"
+        );
     }
     let many = Reason::Ignored(["a", "b", "c", "d", "e"].map(str::to_owned).to_vec());
     assert_eq!(many.to_string(), "ignored files: a, b, c (+2 more)");
@@ -339,18 +376,11 @@ impl Fixture {
         let origin = scratch.path().join("origin.git");
         let main = scratch.path().join("main");
         let top = Git::new(scratch.path().to_path_buf());
-        top.run(&[
-            "init",
-            "-q",
-            "--bare",
-            "-b",
-            "main",
-            utf8(&origin).expect("utf8"),
-        ])
-        .expect("init origin");
+        top.run(&["init", "-q", "--bare", "-b", "main", utf8(&origin)])
+            .expect("init origin");
         let mut init = vec!["init", "-q", "-b", "main"];
         init.extend_from_slice(init_args);
-        init.push(utf8(&main).expect("utf8"));
+        init.push(utf8(&main));
         top.run(&init).expect("init main");
         let fixture = Self {
             _scratch: scratch,
@@ -368,7 +398,7 @@ impl Fixture {
         std::fs::write(fixture.main.join(".gitignore"), "/target/\n").expect("write");
         git.run(&["add", ".gitignore"]).expect("add");
         commit(&fixture.main, "base");
-        git.run(&["remote", "add", "origin", utf8(&origin).expect("utf8")])
+        git.run(&["remote", "add", "origin", utf8(&origin)])
             .expect("remote");
         git.run(&["push", "-q", "origin", "main"]).expect("push");
         fixture
@@ -409,6 +439,10 @@ impl Fixture {
             ])
             .expect("show-ref")
     }
+}
+
+fn utf8(path: &Path) -> &str {
+    path.to_str().expect("scratch paths are UTF-8")
 }
 
 /// Commits a new file `name` in the checkout at `dir`.
@@ -640,6 +674,77 @@ fn a_dry_run_fetches_nothing() {
     );
 }
 
+/// A fetch that fast-forwards origin/main onto an unmerged branch while the
+/// survey runs: the survey judges against the origin/main it started from,
+/// not the old first-parent chain paired with the new ancestry.
+fn a_fetch_during_the_survey_does_not_merge_a_branch() {
+    let fixture = Fixture::new();
+    let ahead = fixture.new_worktree("t/ahead");
+    commit(&ahead, "ahead.txt");
+    let main = fixture.main.clone();
+    let fetched = std::rc::Rc::new(std::cell::Cell::new(false));
+    let mut git = fixture.git();
+    git.after = Some(std::rc::Rc::new({
+        let fetched = std::rc::Rc::clone(&fetched);
+        move |args: &[String]| {
+            if !fetched.get() && args.starts_with(&["rev-list".into(), "--first-parent".into()]) {
+                fetched.set(true);
+                Git::new(main.clone())
+                    .run(&[
+                        "update-ref",
+                        "refs/remotes/origin/main",
+                        "refs/heads/t/ahead",
+                    ])
+                    .expect("fast-forward origin/main");
+            }
+        }
+    }));
+    let worktree = survey(&git)
+        .expect("survey")
+        .into_iter()
+        .find(|w| w.entry.branch.as_deref() == Some("t/ahead"))
+        .expect("the branch has a worktree");
+    assert!(
+        fetched.get(),
+        "the survey never read the first-parent chain"
+    );
+    assert_eq!(
+        classify(&worktree.facts),
+        Decision::Keep(Reason::Unmerged {
+            ahead: 1,
+            upstream_gone: false
+        })
+    );
+}
+
+/// `git worktree prune --verbose` names a stale record on stderr; both a dry
+/// run and a real prune report it, and only the real one drops it.
+fn a_stale_record_is_reported() {
+    let fixture = Fixture::new();
+    let gone = fixture.new_worktree("t/gone");
+    std::fs::remove_dir_all(&gone).expect("rmdir");
+    let recorded = || {
+        fixture
+            .git()
+            .run(&["worktree", "list", "--porcelain"])
+            .expect("list")
+            .contains("/gone")
+    };
+    for dry_run in [true, false] {
+        let report = prune(&fixture.git(), dry_run).expect("prune");
+        assert!(!report.failed, "{:?}", report.lines);
+        assert!(
+            report
+                .lines
+                .iter()
+                .any(|l| l.starts_with("stale: ") && l.contains("gone")),
+            "dry run {dry_run}: {:?}",
+            report.lines
+        );
+        assert_eq!(recorded(), dry_run, "dry run {dry_run}");
+    }
+}
+
 /// Merges a worktree that holds nothing, or only a root `TASKS.md` when
 /// `tasks`, surveys it, then writes an ignored `.env` before [`remove`] runs.
 fn ignored_file_written_after_the_verdict(tasks: bool) {
@@ -676,6 +781,99 @@ fn an_ignored_file_written_beside_tasks_md_survives_removal() {
     ignored_file_written_after_the_verdict(true);
 }
 
+/// A merged worktree with a `target/`, surveyed and judged removable.
+fn merged_with_target(fixture: &Fixture) -> (PathBuf, Worktree) {
+    let merged = fixture.new_worktree("t/merged");
+    commit(&merged, "merged.txt");
+    fixture.merge("t/merged");
+    std::fs::create_dir(merged.join("target")).expect("mkdir");
+    std::fs::write(merged.join("target").join("blob"), [0_u8; 64]).expect("write");
+    let worktree = fixture.survey_branch("t/merged");
+    assert_eq!(classify(&worktree.facts), Decision::Remove { force: false });
+    (merged, worktree)
+}
+
+/// The `locked` line of the worktree at `path`, `None` when unlocked.
+fn lock_of(fixture: &Fixture, path: &Path) -> Option<String> {
+    let porcelain = fixture
+        .git()
+        .run(&["worktree", "list", "--porcelain"])
+        .expect("list");
+    let name = path.file_name().expect("a name").to_string_lossy();
+    porcelain
+        .split("\n\n")
+        .find(|record| record.lines().next().is_some_and(|l| l.ends_with(&*name)))
+        .expect("the worktree is recorded")
+        .lines()
+        .find_map(|line| {
+            line.strip_prefix("locked")
+                .map(str::trim)
+                .map(str::to_owned)
+        })
+}
+
+/// An ignored file written after the first recheck, while `target/` is being
+/// deleted, is seen by the check made after it and kept; the worktree is left
+/// unlocked.
+fn an_ignored_file_written_while_target_is_deleted_survives() {
+    let fixture = Fixture::new();
+    let (merged, worktree) = merged_with_target(&fixture);
+    let written = std::rc::Rc::new(std::cell::Cell::new(false));
+    let mut git = fixture.git();
+    git.after = Some(std::rc::Rc::new({
+        let (written, main, merged) = (
+            std::rc::Rc::clone(&written),
+            fixture.main.clone(),
+            merged.clone(),
+        );
+        move |args: &[String]| {
+            if !written.get() && args.first().is_some_and(|a| a == "status") {
+                written.set(true);
+                let exclude = main.join(".git").join("info").join("exclude");
+                std::fs::write(exclude, ".env\n").expect("write");
+                std::fs::write(merged.join(".env"), "KEY=1\n").expect("write");
+            }
+        }
+    }));
+    let error = remove(&git, &worktree, false).expect_err("removal is refused");
+    assert!(written.get(), "removal never checked the worktree");
+    assert!(
+        format!("{error:#}").contains("ignored files: .env"),
+        "{error:#}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(merged.join(".env")).expect("the ignored file survives"),
+        "KEY=1\n"
+    );
+    assert!(fixture.has_branch("t/merged"));
+    assert_eq!(lock_of(&fixture, &merged), None, "the lock was released");
+}
+
+/// A worktree somebody locks after the survey is not prune's to remove: its
+/// `target/` and their lock stay.
+fn a_worktree_locked_after_the_verdict_is_kept_whole() {
+    let fixture = Fixture::new();
+    let (merged, worktree) = merged_with_target(&fixture);
+    fixture
+        .git()
+        .run(&[
+            OsStr::new("worktree"),
+            OsStr::new("lock"),
+            OsStr::new("--reason"),
+            OsStr::new("mine"),
+            merged.as_os_str(),
+        ])
+        .expect("lock");
+    let error = remove(&fixture.git(), &worktree, false).expect_err("removal is refused");
+    assert!(format!("{error:#}").contains("locked"), "{error:#}");
+    assert!(
+        merged.join("target").join("blob").is_file(),
+        "a kept worktree keeps its build cache"
+    );
+    assert_eq!(lock_of(&fixture, &merged).as_deref(), Some("mine"));
+    assert!(fixture.has_branch("t/merged"));
+}
+
 fn a_separate_git_dir_checkout_roots_worktrees_in_the_checkout() {
     let fixture = Fixture::separate_git_dir();
     assert!(fixture.main.join(".git").is_file(), "`.git` is a gitfile");
@@ -707,6 +905,10 @@ fn worktree_contract() {
                 the_main_checkout_is_its_own_top_level_or_a_first_record_holding_git,
             ),
             ("porcelain_records_parse", porcelain_records_parse),
+            (
+                "a_non_utf8_path_is_read_as_the_platform_spells_it",
+                a_non_utf8_path_is_read_as_the_platform_spells_it,
+            ),
             (
                 "an_upstream_is_gone_only_when_set_and_missing",
                 an_upstream_is_gone_only_when_set_and_missing,
@@ -756,6 +958,11 @@ fn worktree_contract() {
                 a_merged_worktree_holding_only_target_is_removed,
             ),
             ("a_dry_run_fetches_nothing", a_dry_run_fetches_nothing),
+            ("a_stale_record_is_reported", a_stale_record_is_reported),
+            (
+                "a_fetch_during_the_survey_does_not_merge_a_branch",
+                a_fetch_during_the_survey_does_not_merge_a_branch,
+            ),
             (
                 "an_ignored_file_written_after_the_verdict_survives_removal",
                 an_ignored_file_written_after_the_verdict_survives_removal,
@@ -763,6 +970,14 @@ fn worktree_contract() {
             (
                 "an_ignored_file_written_beside_tasks_md_survives_removal",
                 an_ignored_file_written_beside_tasks_md_survives_removal,
+            ),
+            (
+                "an_ignored_file_written_while_target_is_deleted_survives",
+                an_ignored_file_written_while_target_is_deleted_survives,
+            ),
+            (
+                "a_worktree_locked_after_the_verdict_is_kept_whole",
+                a_worktree_locked_after_the_verdict_is_kept_whole,
             ),
             (
                 "a_separate_git_dir_checkout_roots_worktrees_in_the_checkout",

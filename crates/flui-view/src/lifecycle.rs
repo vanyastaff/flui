@@ -37,6 +37,17 @@ struct State {
     retirement_failed: bool,
     preserving_close: bool,
     finish_requested: bool,
+    // Open close windows: a terminal close or its recovery is in progress.
+    closing: usize,
+}
+impl State {
+    /// Whether a rejected or cancelled callback is retained rather than
+    /// dropped: after a caught drain failure, or while a preserving close is
+    /// still in progress. Once that close returns, stale handles retire their
+    /// callbacks normally again (ADR-0123).
+    fn retains_retired(&self) -> bool {
+        self.retirement_failed || (self.preserving_close && (self.closing > 0 || self.draining))
+    }
 }
 struct Inner(RefCell<State>);
 
@@ -101,7 +112,7 @@ impl LifecycleHandle {
         };
         let mut state = inner.0.borrow_mut();
         if state.phase != Phase::Open {
-            let prior_failure = state.retirement_failed || state.preserving_close;
+            let prior_failure = state.retains_retired();
             drop(state);
             retire_rejected_callback(callback, prior_failure);
             return Err(LifecycleClosed);
@@ -140,7 +151,7 @@ impl Drop for LifecycleSubscription {
         listener.active.set(false);
         let (removed, prior_failure) = self.source.upgrade().map_or((None, false), |source| {
             let mut state = source.0.borrow_mut();
-            let prior_failure = state.retirement_failed || state.preserving_close;
+            let prior_failure = state.retains_retired();
             let removed = state
                 .listeners
                 .iter()
@@ -228,6 +239,7 @@ impl LifecycleSource {
                 retirement_failed: false,
                 preserving_close: false,
                 finish_requested: false,
+                closing: 0,
             }))),
         }
     }
@@ -248,6 +260,17 @@ impl LifecycleSource {
     /// Returns [`LifecycleClosed`] after terminal close begins.
     pub fn commit(&self, state: AppLifecycleState) -> Result<(), LifecycleClosed> {
         self.commit_for_phase(state, Phase::Open)
+    }
+    /// Hold the in-progress window of a terminal close until the returned
+    /// guard drops. While it is held, a preserving close retains callbacks
+    /// rejected or cancelled through stale handles; afterwards they retire
+    /// normally. The host holds it across the whole presentation close.
+    #[must_use = "the close window ends when the guard drops"]
+    pub fn close_window(&self) -> LifecycleCloseWindow {
+        self.inner.0.borrow_mut().closing += 1;
+        LifecycleCloseWindow {
+            inner: Rc::clone(&self.inner),
+        }
     }
     /// Fence new subscriptions and ordinary commits before terminal callbacks.
     pub fn begin_close(&self) {
@@ -386,6 +409,24 @@ impl LifecycleSource {
                 self.inner.0.borrow_mut().preserving_close = true;
             }
         }
+    }
+}
+/// The in-progress window of one terminal close; see
+/// [`LifecycleSource::close_window`].
+#[doc(hidden)]
+pub struct LifecycleCloseWindow {
+    inner: Rc<Inner>,
+}
+impl std::fmt::Debug for LifecycleCloseWindow {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LifecycleCloseWindow")
+            .finish_non_exhaustive()
+    }
+}
+impl Drop for LifecycleCloseWindow {
+    fn drop(&mut self) {
+        let mut state = self.inner.0.borrow_mut();
+        state.closing = state.closing.saturating_sub(1);
     }
 }
 impl Drop for LifecycleSource {

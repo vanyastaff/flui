@@ -53,6 +53,9 @@ abandon a late deadline. A finite message wait rounds upwards, reserves the
 infinite timeout sentinel, and drains input and quit messages without parking
 again after readiness. Hook replacement is checked by allocation identity;
 observing no deadline permits later admission of the same absolute instant.
+The frame count at delivery is the delivery generation: the same instant from
+the same hook re-arms after every frame callback that ran since its delivery,
+and never when none did, so a delivery that reaches no frame cannot spin.
 Queries and outgoing capture retirement run outside handler borrows. Incoming
 unwind retains the queried hook before hostile captures can replace the first
 failure; healthy aggregate destruction retains its ordinary Rust limitations.
@@ -60,7 +63,9 @@ failure; healthy aggregate destruction retains its ordinary Rust limitations.
 The bounded native rows `deadline_rearms_independent_windows_without_input`,
 `deadline_hook_replacement_rearms_without_input`,
 `deadline_query_can_close_an_independent_window`,
-`deadline_none_allows_same_instant_readmission`, and
+`deadline_none_allows_same_instant_readmission`,
+`deadline_queued_three_times_at_one_instant_gets_three_frames`,
+`deadline_no_frame_can_service_does_not_spin`, and
 `deadline_query_unwind_retains_replaced_hostile_captures` belong to
 `test_window_lifecycle_contract`. They exercise the native wait and paint
 producer, cancellation, replacement, independent windows and recovery. They do
