@@ -16,8 +16,8 @@
 //! - Detach is token guarded: a stale token cannot close the replacement.
 //! - A client replaced or detached inside a frame transaction keeps its
 //!   store until that frame's commit anchor, where the grants it queued run.
-//! - The platform IME is enabled on the first attach and disabled on the active
-//!   detach or explicit owner close.
+//! - The platform IME is enabled on attach until an enable has completed, and
+//!   disabled on the active detach or explicit owner close.
 //! - Platform events are demultiplexed to the presentation before
 //!   [`TextInputOwner::dispatch`] is called.
 //!
@@ -200,6 +200,44 @@ fn release_platform(platform: Arc<dyn PlatformTextInput>, calls: &mut OwnerCalls
     }
 }
 
+/// Run a platform call for a close, inside the close's `failure`. The call
+/// reaches application code whose grants park failures in `gate`, so it is
+/// ordered against them as every owner call is ([`OwnerCalls::run_parking`]):
+/// when it panics, a failure parked before its panic is raised ahead of it
+/// and one its unwind's cleanup parked is kept behind it. A call that
+/// returns leaves what it parked in `gate`, for the close to take at its
+/// end, ahead of its own failures.
+fn close_host_call<T>(
+    gate: &CommitGate,
+    failure: &mut ClosePanic,
+    call: impl FnOnce() -> T,
+) -> Option<T> {
+    let mut calls = OwnerCalls::new();
+    let value = calls.run_parking(gate, call);
+    if let Some(payload) = calls.into_failure() {
+        if value.is_some() {
+            // What the call parked, which `run_parking` just took: the gate
+            // is empty, so it is back where the close's end looks for it.
+            gate.defer_failure(payload);
+        } else {
+            failure.keep_caught(payload);
+        }
+    }
+    value
+}
+
+/// Retire `value`, an owner a close withdrew, inside the close's `failure`:
+/// retained once a failure is owed, otherwise destroyed through
+/// [`close_host_call`], so a failure its destruction's unwind parks in
+/// `gate` is kept behind that destruction's own.
+fn close_retire<T: Retain>(gate: &CommitGate, failure: &mut ClosePanic, value: T) {
+    if failure.preserving() {
+        value.retain();
+    } else {
+        close_host_call(gate, failure, || drop(value));
+    }
+}
+
 fn retire_stores(stores: Vec<Rc<dyn TextStore>>, calls: &mut OwnerCalls, gate: &CommitGate) {
     for store in stores {
         calls.retire_parking(gate, store);
@@ -214,6 +252,11 @@ struct OwnerState {
     /// runs at the anchor that closes this frame, not whenever the field is
     /// next focused.
     retired: Vec<Rc<dyn TextStore>>,
+    /// Whether a `set_ime_allowed(true)` completed since the platform was
+    /// last disabled. An attach enables the platform while it has not, so
+    /// an enable that panicked is retried by the next attach, replacing or
+    /// not; the call is idempotent.
+    platform_enabled: bool,
 }
 
 impl OwnerState {
@@ -272,6 +315,7 @@ impl TextInputOwner {
                 lifecycle: OwnerLifecycle::Open,
                 active: None,
                 retired: Vec::new(),
+                platform_enabled: false,
             }),
         })
     }
@@ -368,7 +412,7 @@ impl TextInputOwner {
         let (enable_platform, replaced) = {
             let mut state = self.state.borrow_mut();
             let replaced = state.active.replace(AttachedClient { token, client });
-            let enable_platform = replaced.is_none();
+            let enable_platform = !state.platform_enabled;
             if let Some(replaced) = &replaced {
                 state.retire(replaced, transaction_open);
             }
@@ -376,11 +420,13 @@ impl TextInputOwner {
         };
 
         let mut calls = OwnerCalls::new();
-        calls.run(|| {
-            if enable_platform {
-                platform.set_ime_allowed(true);
-            }
-        });
+        if enable_platform && calls.run(|| platform.set_ime_allowed(true)).is_some() {
+            // Enabled, unless the platform's call detached the last client
+            // (which disabled it) or closed the owner.
+            let mut state = self.state.borrow_mut();
+            state.platform_enabled =
+                state.lifecycle == OwnerLifecycle::Open && state.active.is_some();
+        }
         // Callback captures and custom stores may reenter through this owner.
         // Both owner state and platform enablement are committed first, and
         // the local capability clone is released before them: a store that
@@ -417,6 +463,7 @@ impl TextInputOwner {
             let active = state.active.take_if(|client| client.token == token);
             if let Some(active) = &active {
                 state.retire(active, transaction_open);
+                state.platform_enabled = false;
             }
             active
         };
@@ -644,13 +691,11 @@ impl TextInputOwner {
             (std::mem::take(&mut state.retired), state.active.take())
         };
         let platform = self.platform.borrow_mut().take();
-        failure.invoke(|| {
-            if active.is_some()
-                && let Some(platform) = &platform
-            {
-                platform.set_ime_allowed(false);
-            }
-        });
+        if active.is_some()
+            && let Some(platform) = &platform
+        {
+            close_host_call(&self.gate, &mut failure, || platform.set_ime_allowed(false));
+        }
         // Framework-owned: released even when the clients below are retained.
         failure.release(platform);
         if let Some(active) = active {
@@ -658,14 +703,17 @@ impl TextInputOwner {
                 store,
                 on_session_start,
             } = active.client;
-            failure.retire(store);
-            failure.retire(on_session_start);
+            close_retire(&self.gate, &mut failure, store);
+            close_retire(&self.gate, &mut failure, on_session_start);
         }
         for store in retired {
-            failure.retire(store);
+            close_retire(&self.gate, &mut failure, store);
         }
         // A failure a store parked for this presentation's next turn came
-        // before the close; this is that turn.
+        // before the close; this is that turn. One a call of the close parked
+        // and then returned came before the close's later failures; one a
+        // call's unwind parked was ordered behind that call's panic already
+        // ([`close_host_call`]).
         if let Some(parked) = self.gate.take_failure() {
             failure.keep_earlier(parked);
         }
@@ -727,21 +775,19 @@ impl Drop for TextInputOwner {
         // Keep platform custody outside the invocation, including a callback
         // that releases its other last owner before it unwinds.
         let platform = self.platform.get_mut().take();
-        failure.invoke(|| {
-            if disable && let Some(platform) = &platform {
-                platform.set_ime_allowed(false);
-            }
-        });
+        if disable && let Some(platform) = &platform {
+            close_host_call(&self.gate, &mut failure, || platform.set_ime_allowed(false));
+        }
         if let Some(active) = active {
             let TextInputClient {
                 store,
                 on_session_start,
             } = active.client;
-            failure.retire(store);
-            failure.retire(on_session_start);
+            close_retire(&self.gate, &mut failure, store);
+            close_retire(&self.gate, &mut failure, on_session_start);
         }
         for store in retired {
-            failure.retire(store);
+            close_retire(&self.gate, &mut failure, store);
         }
         failure.release(platform);
         if let Some(parked) = self.gate.take_failure() {
