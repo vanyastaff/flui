@@ -844,6 +844,16 @@ fn text_and_numeric() {
     value_case(&shape, Some("50%"), Some(SemanticsAction::SetText));
 }
 
+fn text_and_numeric_with_only_a_numeric_handler() {
+    let shape = ValueShape {
+        text: Some("50%"),
+        range: true,
+        set_text: false,
+        set_number: true,
+    };
+    value_case(&shape, Some("50%"), None);
+}
+
 /// `set_value` is advertised only where a request can reach a handler, and a
 /// node with both a text value and a number takes text, as the desktop
 /// backend's `Value`-before-`RangeValue` precedence does.
@@ -857,6 +867,10 @@ fn set_value_follows_the_value_pattern_precedence() {
         ("numeric_handler_with_range", numeric_handler_with_range),
         ("text_only", text_only),
         ("text_and_numeric", text_and_numeric),
+        (
+            "text_and_numeric_with_only_a_numeric_handler",
+            text_and_numeric_with_only_a_numeric_handler,
+        ),
     ];
     let failed: Vec<&str> = rows
         .iter()
