@@ -2,9 +2,9 @@
 
 Practical guide to using `flui_animation`.
 
-Standalone `rust` blocks are compiled as doctests. Blocks marked
-`rust,ignore` are intentionally context-dependent continuations of the setup
-or controller created by an earlier section.
+Every `rust` block is compiled as a doctest against the current API. Lines
+starting with `#` are hidden setup (a scheduler, a controller, a
+`Result`-returning `main`) that the rendered page leaves out.
 
 ## Setup
 
@@ -60,7 +60,13 @@ let controller = AnimationController::builder(
 
 ### Driving
 
-```rust,ignore
+```rust
+# use std::time::Duration;
+# use flui_animation::{AnimationController, AnimationError};
+# use flui_scheduler::UpdateScheduler;
+# fn main() -> Result<(), AnimationError> {
+# let scheduler = UpdateScheduler::new();
+# let controller = AnimationController::new(Duration::from_millis(300), &scheduler);
 // Forward (toward upper_bound)
 controller.forward()?;
 
@@ -68,22 +74,31 @@ controller.forward()?;
 controller.reverse()?;
 
 // From specific value
-controller.forward_from(0.5)?;
-controller.reverse_from(0.8)?;
+controller.forward_from(Some(0.5))?;
+controller.reverse_from(Some(0.8))?;
 
 // Stop at current position
-controller.stop();
+controller.stop()?;
 
 // Jump to lower_bound, status = Dismissed
-controller.reset();
+controller.reset()?;
 
 // Set value directly (no animation)
 controller.set_value(0.5);
+# controller.dispose();
+# Ok(())
+# }
 ```
 
 ### Repeating
 
-```rust,ignore
+```rust
+# use std::time::Duration;
+# use flui_animation::{AnimationController, AnimationError};
+# use flui_scheduler::UpdateScheduler;
+# fn main() -> Result<(), AnimationError> {
+# let scheduler = UpdateScheduler::new();
+# let controller = AnimationController::new(Duration::from_millis(300), &scheduler);
 // Loop: 0→1, 0→1, 0→1, ...
 controller.repeat(false)?;
 
@@ -91,63 +106,100 @@ controller.repeat(false)?;
 controller.repeat(true)?;
 
 // Stop repeating
-controller.stop();
+controller.stop()?;
+# controller.dispose();
+# Ok(())
+# }
 ```
 
 ### Physics
 
-```rust,ignore
+```rust
+# use std::time::Duration;
+# use flui_animation::{AnimationController, AnimationError};
+# use flui_scheduler::UpdateScheduler;
 use flui_animation::{SpringDescription, SpringSimulation};
+# fn main() -> Result<(), AnimationError> {
+# let scheduler = UpdateScheduler::new();
+# let controller = AnimationController::new(Duration::from_millis(300), &scheduler);
 
 // Fling with velocity
 controller.fling(1.0)?;   // toward upper_bound
 controller.fling(-1.0)?;  // toward lower_bound
 
-// Custom spring
-let spring = SpringDescription::with_damping_ratio(1.0, 500.0, 0.7);
-controller.fling_with(1.0, spring)?;
+// Custom spring (fling refuses an oscillating spring)
+let spring = SpringDescription::with_damping_ratio(1.0, 500.0, 1.0);
+controller.fling_with(1.0, Some(spring))?;
 
 // Arbitrary simulation
 let sim = SpringSimulation::new(spring, 0.0, 1.0, 0.0);
 controller.animate_with(sim)?;
+# controller.dispose();
+# Ok(())
+# }
 ```
 
 ### Reading State
 
-```rust,ignore
-let value = controller.value();      // Current value
-let status = controller.status();    // AnimationStatus
+```rust
+# use std::time::Duration;
+# use flui_animation::AnimationController;
+# use flui_scheduler::UpdateScheduler;
+use flui_animation::Animation;
+# let scheduler = UpdateScheduler::new();
+# let controller = AnimationController::new(Duration::from_millis(300), &scheduler);
 
-controller.is_animating();  // Forward or Reverse
-controller.is_completed();  // At upper_bound
-controller.is_dismissed();  // At lower_bound
+let value = controller.value();   // Current value
+let status = controller.status(); // AnimationStatus
+
+controller.is_animating(); // Forward or Reverse
+controller.is_completed(); // At upper_bound
+controller.is_dismissed(); // At lower_bound
+# controller.dispose();
 ```
 
 ### Listening
 
-```rust,ignore
-// Value changes
-let id = controller.add_listener(|| {
-    println!("value: {}", controller.value());
-});
+```rust
+# use std::sync::Arc;
+# use std::time::Duration;
+# use flui_animation::AnimationController;
+# use flui_scheduler::UpdateScheduler;
+use flui_animation::{Animation, AnimationStatus};
+use flui_foundation::Listenable;
+# let scheduler = UpdateScheduler::new();
+# let controller = AnimationController::new(Duration::from_millis(300), &scheduler);
+
+// Value changes (the callback owns its own handle to the controller)
+let observed = controller.clone();
+let id = controller.add_listener(Arc::new(move || {
+    println!("value: {}", observed.value());
+}));
 controller.remove_listener(id);
 
 // Status changes
-let id = controller.add_status_listener(|status| {
+let id = controller.add_status_listener(Arc::new(|status| {
     match status {
         AnimationStatus::Completed => println!("done"),
         AnimationStatus::Dismissed => println!("reset"),
         _ => {}
     }
-});
+}));
 controller.remove_status_listener(id);
+# controller.dispose();
 ```
 
 ### Cleanup
 
-```rust,ignore
+```rust
+# use std::time::Duration;
+# use flui_animation::{AnimationController, AnimationError};
+# use flui_scheduler::UpdateScheduler;
+# let scheduler = UpdateScheduler::new();
+# let controller = AnimationController::new(Duration::from_millis(300), &scheduler);
 controller.dispose();
-// All operations now return Err(AlreadyDisposed)
+// Driving operations now return Err(AnimationError::Disposed)
+assert!(matches!(controller.forward(), Err(AnimationError::Disposed)));
 ```
 
 ---
@@ -156,8 +208,9 @@ controller.dispose();
 
 ### Using Predefined Curves
 
-```rust,ignore
-use flui_animation::Curves;
+```rust
+use flui_animation::{Curve, Curves};
+# let t = 0.25;
 
 let value = Curves::EaseIn.transform(0.5);
 let value = Curves::BounceOut.transform(t);
@@ -181,8 +234,8 @@ let value = Curves::ElasticOut.transform(t);
 
 ### Custom Curves
 
-```rust,ignore
-use flui_animation::{Cubic, ElasticOutCurve, Interval, Threshold};
+```rust
+use flui_animation::{Cubic, Curves, ElasticOutCurve, Interval, Threshold};
 
 // Cubic bezier (CSS-style control points)
 let curve = Cubic::new(0.25, 0.1, 0.25, 1.0);
@@ -199,7 +252,7 @@ let step = Threshold::new(0.5);
 
 ### Splines
 
-```rust,ignore
+```rust
 use flui_animation::CatmullRomCurve;
 
 let spline = CatmullRomCurve::with_points(vec![
@@ -212,8 +265,11 @@ let spline = CatmullRomCurve::with_points(vec![
 
 ### Modifiers
 
-```rust,ignore
-let flipped = curve.flipped();   // 1.0 - curve(t)
+```rust
+use flui_animation::{Cubic, Curve};
+# let curve = Cubic::new(0.42, 0.0, 1.0, 1.0);
+
+let flipped = curve.flipped();   // 180° rotation: 1.0 - curve(1.0 - t)
 let reversed = curve.reversed(); // curve(1.0 - t)
 ```
 
@@ -223,47 +279,53 @@ let reversed = curve.reversed(); // curve(1.0 - t)
 
 ### Basic Usage
 
-```rust,ignore
-use flui_animation::{FloatTween, Animatable};
+```rust
+use flui_animation::{Animatable, FloatTween};
 
 let tween = FloatTween::new(0.0, 100.0);
-let value = tween.transform(0.5);  // 50.0
+let value = tween.transform(0.5); // 50.0
+assert_eq!(value, 50.0);
 ```
 
 ### Available Tweens
 
-```rust,ignore
-use flui_animation::*;
-use flui_foundation::geometry::{EdgeInsets, Offset, Rect, Size};
+```rust
+use flui_animation::{
+    AlignmentTween, BorderRadiusTween, ColorTween, ConstantTween, EdgeInsetsTween,
+    FloatTween, IntTween, OffsetTween, RectTween, SizeTween, StepTween,
+};
+use flui_foundation::geometry::{Edges, Offset, Rect, Size};
 use flui_painting::Alignment;
 use flui_painting::styling::{BorderRadius, BorderRadiusExt, Color};
+# let rect1 = Rect::new(0.0, 0.0, 10.0, 10.0);
+# let rect2 = Rect::new(0.0, 0.0, 50.0, 50.0);
 
 // Numeric
-FloatTween::new(0.0, 100.0)
-IntTween::new(0, 255)
-StepTween::new(0, 10)  // floors
+let _ = FloatTween::new(0.0, 100.0);
+let _ = IntTween::new(0, 255);
+let _ = StepTween::new(0, 10); // floors
 
 // Color
-ColorTween::new(Color::RED, Color::BLUE)
+let _ = ColorTween::new(Color::RED, Color::BLUE);
 
 // Geometry
-SizeTween::new(Size::ZERO, Size::new(100.0, 100.0))
-OffsetTween::new(Offset::ZERO, Offset::new(50.0, 50.0))
-RectTween::new(rect1, rect2)
+let _ = SizeTween::new(Size::ZERO, Size::new(100.0, 100.0));
+let _ = OffsetTween::new(Offset::ZERO, Offset::new(50.0, 50.0));
+let _ = RectTween::new(rect1, rect2);
 
 // Layout
-AlignmentTween::new(Alignment::TOP_LEFT, Alignment::BOTTOM_RIGHT)
-EdgeInsetsTween::new(EdgeInsets::ZERO, EdgeInsets::all(16.0))
-BorderRadiusTween::new(BorderRadius::ZERO, BorderRadius::circular(8.0))
+let _ = AlignmentTween::new(Alignment::TOP_LEFT, Alignment::BOTTOM_RIGHT);
+let _ = EdgeInsetsTween::new(Edges::ZERO, Edges::all(16.0));
+let _ = BorderRadiusTween::new(BorderRadius::ZERO, BorderRadius::circular(8.0));
 
 // Constant
-ConstantTween::new(42.0)
+let _ = ConstantTween::new(42.0);
 ```
 
 ### Tween Sequences
 
-```rust,ignore
-use flui_animation::{TweenSequence, TweenSequenceItem, FloatTween};
+```rust
+use flui_animation::{Animatable, FloatTween, TweenSequence, TweenSequenceItem};
 
 let sequence = TweenSequence::new(vec![
     TweenSequenceItem::new(FloatTween::new(0.0, 100.0), 1.0),
@@ -275,17 +337,21 @@ let sequence = TweenSequence::new(vec![
 // t ∈ [0.00, 0.25] → first tween
 // t ∈ [0.25, 0.75] → second tween (hold at 100)
 // t ∈ [0.75, 1.00] → third tween
+assert!((sequence.transform(0.5) - 100.0).abs() < 1e-9);
 ```
 
 ### Chaining and Composition
 
-```rust,ignore
-use flui_animation::AnimatableExt;
+```rust
+use flui_animation::{AnimatableExt, Curves, FloatTween};
+# let tween = FloatTween::new(0.0, 100.0);
+# let tween1 = FloatTween::new(0.0, 1.0);
+# let tween2 = FloatTween::new(0.0, 100.0);
 
 // Apply curve
 let eased = tween.with_curve(Curves::EaseIn);
 
-// Chain tweens
+// Chain tweens: tween1's output is tween2's `t`
 let chained = tween1.chain(tween2);
 
 // Reverse
@@ -296,61 +362,92 @@ let reversed = tween.reversed();
 
 ## Composition
 
+Every composition type takes its parent as `Arc<dyn Animation<f64>>`;
+`AnimationController` is a cheap handle, so `Arc::new(controller.clone())`
+shares the same controller.
+
 ### CurvedAnimation
 
 Apply curve to animation output:
 
-```rust,ignore
+```rust
+# use std::sync::Arc;
+# use std::time::Duration;
+# use flui_animation::{AnimationController, AnimationExt, Curves};
+# use flui_scheduler::UpdateScheduler;
 use flui_animation::CurvedAnimation;
+# let scheduler = UpdateScheduler::new();
+# let controller = AnimationController::new(Duration::from_millis(300), &scheduler);
 
 let curved = CurvedAnimation::new(
-    controller.clone(),
+    Arc::new(controller.clone()),
     Curves::EaseInOut,
 );
 
 // Or with extension
-let curved = Arc::new(controller).curved(Curves::EaseInOut);
+let curved = Arc::new(controller.clone()).curved(Curves::EaseInOut);
+# controller.dispose();
 ```
 
 ### TweenAnimation
 
 Map 0–1 to any type:
 
-```rust,ignore
+```rust
+# use std::sync::Arc;
+# use std::time::Duration;
+# use flui_animation::{Animation, AnimationController, FloatTween};
+# use flui_scheduler::UpdateScheduler;
 use flui_animation::TweenAnimation;
+# let scheduler = UpdateScheduler::new();
+# let controller = AnimationController::new(Duration::from_millis(300), &scheduler);
 
 let animated = TweenAnimation::new(
-    controller.clone(),
     FloatTween::new(0.0, 300.0),
+    Arc::new(controller.clone()),
 );
 
-let pixels = animated.value();  // 0.0 to 300.0
+let pixels = animated.value(); // 0.0 to 300.0
+# controller.dispose();
 ```
 
 ### ReverseAnimation
 
-```rust,ignore
+```rust
+# use std::sync::Arc;
+# use std::time::Duration;
+# use flui_animation::{AnimationController, AnimationExt};
+# use flui_scheduler::UpdateScheduler;
 use flui_animation::ReverseAnimation;
+# let scheduler = UpdateScheduler::new();
+# let controller = AnimationController::new(Duration::from_millis(300), &scheduler);
 
-let reversed = ReverseAnimation::new(controller.clone());
+let reversed = ReverseAnimation::new(Arc::new(controller.clone()));
 // value = 1.0 - parent.value()
 // Forward ↔ Reverse, Completed ↔ Dismissed
 
 // Or with extension
-let reversed = Arc::new(controller).reversed();
+let reversed = Arc::new(controller.clone()).reversed();
+# controller.dispose();
 ```
 
 ### CompoundAnimation
 
-```rust,ignore
-use flui_animation::{CompoundAnimation, AnimationOperator};
+```rust
+# use std::sync::Arc;
+# use flui_animation::{Animation, AnimationExt, ConstantAnimation};
+use flui_animation::{AnimationOperator, CompoundAnimation};
+# let a = ConstantAnimation::new(0.25);
+# let b = ConstantAnimation::new(0.75);
+# let (a_dyn, b_dyn): (Arc<dyn Animation<f64>>, Arc<dyn Animation<f64>>) =
+#     (Arc::new(a.clone()), Arc::new(b.clone()));
 
-let sum = CompoundAnimation::new(a, b, AnimationOperator::Add);
-let min = CompoundAnimation::new(a, b, AnimationOperator::Min);
-let mean = CompoundAnimation::mean(a, b);
+let sum = CompoundAnimation::new(a_dyn.clone(), b_dyn.clone(), AnimationOperator::Add);
+let min = CompoundAnimation::new(a_dyn.clone(), b_dyn.clone(), AnimationOperator::Min);
+let mean = CompoundAnimation::mean(a_dyn, b_dyn);
 
 // With extensions
-let sum = Arc::new(a).add(Arc::new(b));
+let sum = Arc::new(a.clone()).add(Arc::new(b.clone()));
 let diff = Arc::new(a).subtract(Arc::new(b));
 ```
 
@@ -358,38 +455,57 @@ let diff = Arc::new(a).subtract(Arc::new(b));
 
 Hot-swap parent:
 
-```rust,ignore
+```rust
+# use std::sync::Arc;
+# use std::time::Duration;
+# use flui_animation::AnimationController;
+# use flui_scheduler::UpdateScheduler;
 use flui_animation::ProxyAnimation;
+# let scheduler = UpdateScheduler::new();
+# let controller1 = AnimationController::new(Duration::from_millis(300), &scheduler);
+# let controller2 = AnimationController::new(Duration::from_millis(300), &scheduler);
 
-let proxy = ProxyAnimation::new(controller1.clone());
+let proxy = ProxyAnimation::new(Arc::new(controller1.clone()));
 // Later...
-proxy.set_parent(controller2.clone());
+proxy.set_parent(Arc::new(controller2.clone()));
+# controller1.dispose();
+# controller2.dispose();
 ```
 
 ### ConstantAnimation
 
 Fixed value:
 
-```rust,ignore
-use flui_animation::{ConstantAnimation, ALWAYS_COMPLETE, ALWAYS_DISMISSED};
+```rust
+use flui_animation::{ALWAYS_COMPLETE, ALWAYS_DISMISSED, Animation, AnimationStatus, ConstantAnimation};
 
-let stopped = ConstantAnimation::new(0.5, AnimationStatus::Completed);
+let stopped = ConstantAnimation::with_status(0.5, AnimationStatus::Completed);
 let complete = ConstantAnimation::completed(1.0);
 
-// Global constants
-let _ = ALWAYS_COMPLETE.value();  // 1.0
-let _ = ALWAYS_DISMISSED.value(); // 0.0
+// Global statics
+assert_eq!(ALWAYS_COMPLETE.value(), 1.0);
+assert_eq!(ALWAYS_DISMISSED.value(), 0.0);
 ```
 
 ### AnimationSwitch
 
 Switch at crossover:
 
-```rust,ignore
+```rust
+# use std::sync::Arc;
+# use std::time::Duration;
+# use flui_animation::AnimationController;
+# use flui_scheduler::UpdateScheduler;
 use flui_animation::AnimationSwitch;
+# let scheduler = UpdateScheduler::new();
+# let anim1 = AnimationController::new(Duration::from_millis(300), &scheduler);
+# let anim2 = AnimationController::new(Duration::from_millis(300), &scheduler);
 
-let switch = AnimationSwitch::new(anim1, Some(anim2));
+let switch = AnimationSwitch::new(Arc::new(anim1.clone()), Some(Arc::new(anim2.clone())));
 // When values cross, switches from anim1 to anim2
+# switch.dispose();
+# anim1.dispose();
+# anim2.dispose();
 ```
 
 ---
@@ -398,7 +514,7 @@ let switch = AnimationSwitch::new(anim1, Some(anim2));
 
 ### SpringDescription
 
-```rust,ignore
+```rust
 use flui_animation::SpringDescription;
 
 // Explicit parameters
@@ -424,8 +540,10 @@ let spring = SpringDescription::with_duration_and_bounce(
 
 ### SpringSimulation
 
-```rust,ignore
-use flui_animation::SpringSimulation;
+```rust
+use flui_animation::{Simulation, SpringDescription, SpringSimulation};
+# let spring = SpringDescription::with_damping_ratio(1.0, 500.0, 1.0);
+# let (start, end, velocity) = (0.0, 1.0, 0.0);
 
 let sim = SpringSimulation::new(spring, start, end, velocity);
 
@@ -436,8 +554,9 @@ sim.is_done(0.1); // within tolerance?
 
 ### FrictionSimulation
 
-```rust,ignore
+```rust
 use flui_animation::FrictionSimulation;
+# let x = 10.0;
 
 let sim = FrictionSimulation::new(
     0.05,   // drag (0 < drag < 1, drag ≠ 1)
@@ -451,7 +570,7 @@ sim.time_at_x(x);  // time to reach x
 
 ### GravitySimulation
 
-```rust,ignore
+```rust
 use flui_animation::GravitySimulation;
 
 let sim = GravitySimulation::new(
@@ -466,24 +585,31 @@ let sim = GravitySimulation::new(
 
 ## Error Handling
 
-```rust,ignore
-use flui_animation::AnimationError;
+```rust
+# use std::time::Duration;
+# use flui_scheduler::UpdateScheduler;
+use flui_animation::{AnimationController, AnimationError};
+# let scheduler = UpdateScheduler::new();
+# let controller = AnimationController::new(Duration::from_millis(300), &scheduler);
 
 match controller.forward() {
-    Ok(()) => { /* started */ }
-    Err(AnimationError::AlreadyDisposed) => { /* disposed */ }
-    Err(AnimationError::InvalidBounds) => { /* bad bounds */ }
+    Ok(_future) => { /* started; the future resolves when the run ends */ }
+    Err(AnimationError::Disposed) => { /* disposed */ }
+    Err(AnimationError::NonFiniteTarget(why)) => { /* refused input */ }
     Err(e) => { /* other error */ }
 }
 
 // Propagation
-fn animate() -> Result<(), AnimationError> {
+fn animate(d: Duration, s: &UpdateScheduler) -> Result<(), AnimationError> {
     let controller = AnimationController::builder(d, s)
         .bounds(0.0, 100.0)?
         .build()?;
     controller.forward()?;
+    controller.dispose();
     Ok(())
 }
+# animate(Duration::from_millis(300), &scheduler).unwrap();
+# controller.dispose();
 ```
 
 ---
@@ -492,46 +618,84 @@ fn animate() -> Result<(), AnimationError> {
 
 ### Always Dispose
 
-```rust,ignore
+```rust
+# use std::time::Duration;
+# use flui_animation::AnimationController;
+# use flui_scheduler::UpdateScheduler;
+# let scheduler = UpdateScheduler::new();
+# let duration = Duration::from_millis(300);
 let controller = AnimationController::new(duration, &scheduler);
 // ... use controller ...
-controller.dispose();  // Required
+controller.dispose(); // Required
 ```
 
-### Use Arc for Sharing
+### Share One Controller
 
-```rust,ignore
-let controller = Arc::new(AnimationController::new(...));
-let curved1 = CurvedAnimation::new(controller.clone(), Curves::EaseIn);
-let curved2 = CurvedAnimation::new(controller.clone(), Curves::EaseOut);
+`AnimationController` is a handle over shared state: `clone()` shares the
+controller, it does not copy it.
+
+```rust
+# use std::sync::Arc;
+# use std::time::Duration;
+# use flui_animation::{AnimationController, CurvedAnimation, Curves};
+# use flui_scheduler::UpdateScheduler;
+# let scheduler = UpdateScheduler::new();
+let controller = AnimationController::new(Duration::from_millis(300), &scheduler);
+let curved1 = CurvedAnimation::new(Arc::new(controller.clone()), Curves::EaseIn);
+let curved2 = CurvedAnimation::new(Arc::new(controller.clone()), Curves::EaseOut);
+# controller.dispose();
 ```
 
 ### Prefer Extension Traits
 
-```rust,ignore
+```rust
+# use std::sync::Arc;
+# use std::time::Duration;
+# use flui_animation::{AnimationController, AnimationExt, CurvedAnimation, Curves};
+# use flui_scheduler::UpdateScheduler;
+# let scheduler = UpdateScheduler::new();
+# let controller = AnimationController::new(Duration::from_millis(300), &scheduler);
+# let curve = Curves::EaseIn;
 // Verbose
-let curved = CurvedAnimation::new(Arc::new(controller), curve);
+let curved = CurvedAnimation::new(Arc::new(controller.clone()), curve);
 
 // Fluent
-let curved = Arc::new(controller).curved(curve);
+let curved = Arc::new(controller.clone()).curved(curve);
+# controller.dispose();
 ```
 
 ### Reuse Controllers
 
-```rust,ignore
+```rust
+# use std::time::Duration;
+# use flui_animation::{AnimationController, AnimationError};
+# use flui_scheduler::UpdateScheduler;
+# fn main() -> Result<(), AnimationError> {
+# let scheduler = UpdateScheduler::new();
+# let controller = AnimationController::new(Duration::from_millis(300), &scheduler);
 // Don't create new controller each time
-controller.reset();
+controller.reset()?;
 controller.forward()?;
+# controller.dispose();
+# Ok(())
+# }
 ```
 
 ### Use Status Listeners (Not Polling)
 
-```rust,ignore
+```rust
+# use std::sync::Arc;
+# use std::time::Duration;
+# use flui_animation::{Animation, AnimationController, AnimationStatus};
+# use flui_scheduler::UpdateScheduler;
+# let scheduler = UpdateScheduler::new();
+# let controller = AnimationController::new(Duration::from_millis(300), &scheduler);
 // Bad: check every frame
-if controller.status() == AnimationStatus::Completed { ... }
+if controller.status() == AnimationStatus::Completed { /* ... */ }
 
 // Good: react to changes
-controller.add_status_listener(|status| {
-    if status == AnimationStatus::Completed { ... }
-});
+controller.add_status_listener(Arc::new(|status| {
+    if status == AnimationStatus::Completed { /* ... */ }
+}));
+# controller.dispose();
 ```

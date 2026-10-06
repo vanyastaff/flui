@@ -2,9 +2,9 @@
 
 Animation system for FLUI: values over time driven by a ticker, with controllers, curves, tweens and simulations.
 
-Standalone `rust` blocks in this document are compiled as doctests. Blocks
-marked `rust,ignore` are excerpts that depend on values introduced by the
-surrounding narrative rather than complete programs.
+Every `rust` block in this document is compiled as a doctest against the
+current API. Lines starting with `#` are hidden setup (a scheduler, a
+controller) that the rendered page leaves out.
 
 ## Core Concepts
 
@@ -26,13 +26,21 @@ The separation allows:
 
 ### Animation Status
 
-```rust,ignore
-pub enum AnimationStatus {
-    Dismissed,  // At the beginning (value = lower_bound)
-    Forward,    // Playing toward end
-    Reverse,    // Playing toward beginning  
-    Completed,  // At the end (value = upper_bound)
-}
+`AnimationStatus` has four variants:
+
+| Variant | Meaning |
+|---------|---------|
+| `Dismissed` | Stopped at the beginning (value = lower bound) |
+| `Forward` | Running toward the end |
+| `Reverse` | Running toward the beginning |
+| `Completed` | Stopped at the end (value = upper bound) |
+
+```rust
+use flui_animation::AnimationStatus;
+
+assert!(AnimationStatus::Forward.is_running());
+assert!(AnimationStatus::Completed.is_stopped());
+assert_eq!(AnimationStatus::Forward.flip(), AnimationStatus::Reverse);
 ```
 
 Status indicates direction, not position. A `Completed` animation at value 1.0 that starts reversing becomes `Reverse` immediately, even before the value changes.
@@ -68,93 +76,153 @@ let controller = AnimationController::builder(duration, &scheduler)
 
 ### Driving Animations
 
-```rust,ignore
-controller.forward()?;           // Animate to upper_bound
-controller.reverse()?;           // Animate to lower_bound
-controller.forward_from(0.5)?;   // Jump to 0.5, then animate forward
-controller.reverse_from(0.8)?;   // Jump to 0.8, then animate backward
-controller.stop();               // Stop at current value
-controller.reset();              // Jump to lower_bound, status = Dismissed
+Every driving method returns a `TickerFuture` that resolves when the run
+ends; dropping it does not cancel the run.
+
+```rust
+# use std::time::Duration;
+# use flui_animation::{AnimationController, AnimationError};
+# use flui_scheduler::UpdateScheduler;
+# fn main() -> Result<(), AnimationError> {
+# let scheduler = UpdateScheduler::new();
+# let controller = AnimationController::new(Duration::from_millis(300), &scheduler);
+controller.forward()?;                // Animate to upper_bound
+controller.reverse()?;                // Animate to lower_bound
+controller.forward_from(Some(0.5))?;  // Jump to 0.5, then animate forward
+controller.reverse_from(Some(0.8))?;  // Jump to 0.8, then animate backward
+controller.animate_to(0.6, None)?;    // Animate to a value over the forward duration
+controller.stop()?;                   // Stop at current value
+controller.reset()?;                  // Jump to lower_bound, status = Dismissed
+# controller.dispose();
+# Ok(())
+# }
 ```
 
 ### Repeating
 
-```rust,ignore
-controller.repeat(false)?;               // Loop: 0→1→0→1→...
-controller.repeat(true)?;                // Bounce: 0→1→0→1→...
+```rust
+# use std::time::Duration;
+# use flui_animation::{AnimationController, AnimationError};
+# use flui_scheduler::UpdateScheduler;
+# fn main() -> Result<(), AnimationError> {
+# let scheduler = UpdateScheduler::new();
+# let controller = AnimationController::new(Duration::from_millis(300), &scheduler);
+controller.repeat(false)?; // Loop:   0→1, 0→1, ...
+controller.repeat(true)?;  // Bounce: 0→1→0→1→...
+
+// Bounded: three bounces between 0.2 and 0.8, one period each
+controller.repeat_with(Some(0.2), Some(0.8), true, None, Some(3))?;
+# controller.dispose();
+# Ok(())
+# }
 ```
 
 ### Physics-Based Animation
 
-```rust,ignore
+```rust
+# use std::time::Duration;
+# use flui_animation::{AnimationController, AnimationError, SpringDescription, SpringSimulation};
+# use flui_scheduler::UpdateScheduler;
+# fn main() -> Result<(), AnimationError> {
+# let scheduler = UpdateScheduler::new();
+# let controller = AnimationController::new(Duration::from_millis(300), &scheduler);
 // Fling with velocity (uses spring physics)
 controller.fling(1.0)?;   // velocity toward upper_bound
 controller.fling(-1.0)?;  // velocity toward lower_bound
 
-// Custom spring
-let spring = SpringDescription::with_damping_ratio(1.0, 500.0, 0.7);
-controller.fling_with(1.0, spring)?;
+// Custom spring: fling needs a non-oscillating (ratio >= 1) spring
+let spring = SpringDescription::with_damping_ratio(1.0, 500.0, 1.0);
+controller.fling_with(1.0, Some(spring))?;
 
-// Arbitrary simulation
-let sim = SpringSimulation::new(spring, 0.0, 1.0, 2.0);
+// Arbitrary simulation, oscillating springs included
+let bouncy = SpringDescription::with_damping_ratio(1.0, 500.0, 0.7);
+let sim = SpringSimulation::new(bouncy, 0.0, 1.0, 2.0);
 controller.animate_with(sim)?;
+# controller.dispose();
+# Ok(())
+# }
 ```
 
 ### Listening
 
-```rust,ignore
+Value listeners come from `flui_foundation::Listenable`; status listeners
+from `Animation`. Both take an `Arc`'d callback and return a `ListenerId`.
+
+```rust
+# use std::sync::Arc;
+# use std::time::Duration;
+# use flui_animation::{Animation, AnimationController, AnimationStatus};
+# use flui_scheduler::UpdateScheduler;
+use flui_foundation::Listenable;
+# let scheduler = UpdateScheduler::new();
+# let controller = AnimationController::new(Duration::from_millis(300), &scheduler);
+
 // Value changes
-let id = controller.add_listener(|| println!("value changed"));
+let id = controller.add_listener(Arc::new(|| println!("value changed")));
 controller.remove_listener(id);
 
 // Status changes
-let id = controller.add_status_listener(|status| {
+let id = controller.add_status_listener(Arc::new(|status| {
     if status == AnimationStatus::Completed {
         println!("done");
     }
-});
+}));
+controller.remove_status_listener(id);
+# controller.dispose();
 ```
 
 ### Lifecycle
 
-```rust,ignore
-controller.dispose();  // Stop animation, release ticker
-// Controller is unusable after dispose
+```rust
+# use std::time::Duration;
+# use flui_animation::{AnimationController, AnimationError};
+# use flui_scheduler::UpdateScheduler;
+# let scheduler = UpdateScheduler::new();
+# let controller = AnimationController::new(Duration::from_millis(300), &scheduler);
+controller.dispose(); // Stop the run, release the ticker
+assert!(matches!(controller.forward(), Err(AnimationError::Disposed)));
 ```
 
 ---
 
 ## Curves
 
-A `Curve` maps `t ∈ [0, 1]` to an output in `[0, 1]`. Used for easing.
+A `Curve` maps `t ∈ [0, 1]` to an output, usually in `[0, 1]` (elastic and
+back curves overshoot). Used for easing.
 
 **Contract**: `transform(0.0) == 0.0` and `transform(1.0) == 1.0`.
 
 ### Predefined Curves
 
-```rust,ignore
-use flui_animation::Curves;
+`Curves` holds the catalog as associated constants:
 
-Curves::Linear        // Identity
-Curves::EaseIn        // Slow start
-Curves::EaseOut       // Slow end
-Curves::EaseInOut     // Slow start and end
-Curves::FastOutSlowIn // Material Design standard
+```rust
+use flui_animation::{Curve, Curves};
 
-Curves::BounceIn      // Bounce at start
-Curves::BounceOut     // Bounce at end
-Curves::BounceInOut   // Bounce both
-
-Curves::ElasticIn     // Overshoot at start
-Curves::ElasticOut    // Overshoot at end
-Curves::ElasticInOut  // Overshoot both
-
-Curves::Decelerate    // Fast start, gradual stop
+let curves: [&dyn Curve; 12] = [
+    &Curves::Linear,        // Identity
+    &Curves::EaseIn,        // Slow start
+    &Curves::EaseOut,       // Slow end
+    &Curves::EaseInOut,     // Slow start and end
+    &Curves::FastOutSlowIn, // Material Design standard
+    &Curves::BounceIn,      // Bounce at start
+    &Curves::BounceOut,     // Bounce at end
+    &Curves::BounceInOut,   // Bounce both
+    &Curves::ElasticIn,     // Overshoot at start
+    &Curves::ElasticOut,    // Overshoot at end
+    &Curves::ElasticInOut,  // Overshoot both
+    &Curves::Decelerate,    // Fast start, gradual stop
+];
+for curve in curves {
+    assert!((curve.transform(1.0) - 1.0).abs() < 1e-9);
+}
 ```
 
 ### Custom Curves
 
-```rust,ignore
+```rust
+use flui_animation::{CatmullRomCurve, Cubic, Curves, ElasticOutCurve, Interval, Threshold};
+
 // Cubic bezier (CSS-style)
 let curve = Cubic::new(0.25, 0.1, 0.25, 1.0);
 
@@ -178,9 +246,13 @@ let spline = CatmullRomCurve::with_points(vec![
 
 ### Curve Modifiers
 
-```rust,ignore
-let flipped = curve.flipped();   // Output: 1.0 - curve(t)
-let reversed = curve.reversed(); // Input: curve(1.0 - t)
+```rust
+use flui_animation::{Curve, Curves};
+
+let flipped = Curves::EaseIn.flipped();   // 180° rotation: 1.0 - curve(1.0 - t)
+let reversed = Curves::EaseIn.reversed(); // Input: curve(1.0 - t)
+assert!((flipped.transform(0.0) - 0.0).abs() < 1e-9);
+assert!((reversed.transform(0.0) - 1.0).abs() < 1e-9);
 ```
 
 ---
@@ -193,40 +265,58 @@ A `Tween<T>` is an `Animatable` with explicit `begin` and `end` values.
 
 ### Built-in Tweens
 
-```rust,ignore
+```rust
+use flui_animation::{
+    AlignmentTween, BorderRadiusTween, ColorTween, ConstantTween, EdgeInsetsTween,
+    FloatTween, IntTween, OffsetTween, RectTween, SizeTween, StepTween,
+};
+use flui_foundation::geometry::{Edges, Offset, Rect, Size};
+use flui_painting::Alignment;
+use flui_painting::styling::{BorderRadius, BorderRadiusExt, Color};
+
 // Numeric
-FloatTween::new(0.0, 100.0)
-IntTween::new(0, 255)      // Rounds to nearest
-StepTween::new(0, 10)      // Floors to integer
+let _ = FloatTween::new(0.0, 100.0);
+let _ = IntTween::new(0, 255);  // Rounds to nearest
+let _ = StepTween::new(0, 10);  // Floors to integer
 
 // Geometric
-ColorTween::new(Color::RED, Color::BLUE)
-SizeTween::new(Size::new(0.0, 0.0), Size::new(100.0, 100.0))
-OffsetTween::new(Offset::ZERO, Offset::new(50.0, 50.0))
-RectTween::new(rect1, rect2)
-AlignmentTween::new(Alignment::TOP_LEFT, Alignment::BOTTOM_RIGHT)
-EdgeInsetsTween::new(EdgeInsets::ZERO, EdgeInsets::all(16.0))
-BorderRadiusTween::new(BorderRadius::ZERO, BorderRadius::circular(8.0))
+let _ = ColorTween::new(Color::RED, Color::BLUE);
+let _ = SizeTween::new(Size::new(0.0, 0.0), Size::new(100.0, 100.0));
+let _ = OffsetTween::new(Offset::ZERO, Offset::new(50.0, 50.0));
+let _ = RectTween::new(Rect::new(0.0, 0.0, 10.0, 10.0), Rect::new(0.0, 0.0, 50.0, 50.0));
+let _ = AlignmentTween::new(Alignment::TOP_LEFT, Alignment::BOTTOM_RIGHT);
+let _ = EdgeInsetsTween::new(Edges::ZERO, Edges::all(16.0));
+let _ = BorderRadiusTween::new(BorderRadius::ZERO, BorderRadius::circular(8.0));
 
 // Constant (always returns same value)
-ConstantTween::new(42.0)
+let _ = ConstantTween::new(42.0);
 ```
 
 ### Using Tweens
 
-```rust,ignore
+```rust
+# use std::time::Duration;
+# use flui_animation::{Animation, AnimationController};
+# use flui_scheduler::UpdateScheduler;
+use flui_animation::{Animatable, FloatTween};
+# let scheduler = UpdateScheduler::new();
+# let controller = AnimationController::new(Duration::from_millis(300), &scheduler);
+
 let tween = FloatTween::new(0.0, 100.0);
-let value = tween.transform(0.5);  // 50.0
+assert_eq!(tween.transform(0.5), 50.0);
 
 // With animation
 let position = tween.transform(controller.value());
+# controller.dispose();
 ```
 
 ### Tween Sequences
 
 Chain tweens with weights:
 
-```rust,ignore
+```rust
+use flui_animation::{Animatable, FloatTween, TweenSequence, TweenSequenceItem};
+
 let sequence = TweenSequence::new(vec![
     TweenSequenceItem::new(FloatTween::new(0.0, 100.0), 1.0),   // 0.0–0.25
     TweenSequenceItem::new(FloatTween::new(100.0, 100.0), 2.0), // 0.25–0.75 (hold)
@@ -234,20 +324,21 @@ let sequence = TweenSequence::new(vec![
 ]);
 
 // Weights: 1 + 2 + 1 = 4
-// First segment: t ∈ [0, 0.25]
-// Second segment: t ∈ [0.25, 0.75]  
-// Third segment: t ∈ [0.75, 1.0]
+assert_eq!(sequence.total_weight(), 4.0);
+assert!((sequence.transform(0.5) - 100.0).abs() < 1e-9);
 ```
 
 ### Tween Composition
 
-```rust,ignore
-use flui_animation::AnimatableExt;
+```rust
+use flui_animation::{AnimatableExt, Curves, FloatTween};
 
-// Chain: first tween, then second
-let chained = tween1.chain(tween2);
+let tween = FloatTween::new(0.0, 100.0);
 
-// Apply curve to tween output
+// Chain: the first animatable's output is the second one's `t`
+let chained = FloatTween::new(0.0, 1.0).chain(tween);
+
+// Apply a curve to `t` before the tween
 let curved = tween.with_curve(Curves::EaseIn);
 
 // Reverse direction
@@ -258,66 +349,106 @@ let reversed = tween.reversed();
 
 Apply a curve as an Animatable:
 
-```rust,ignore
+```rust
+use flui_animation::{Animatable, CurveTween, Curves};
+
 let curve_tween = CurveTween::new(Curves::EaseIn);
-let eased = curve_tween.transform(0.5);  // EaseIn applied to 0.5
+let eased = curve_tween.transform(0.5); // EaseIn applied to 0.5
+assert!(eased < 0.5);
 ```
 
 ---
 
 ## Animation Composition
 
+Composition types take their parent as `Arc<dyn Animation<f64>>`.
+
 ### CurvedAnimation
 
 Apply a curve to an animation's output:
 
-```rust,ignore
-let curved = CurvedAnimation::new(controller.clone(), Curves::EaseInOut);
+```rust
+# use std::sync::Arc;
+# use std::time::Duration;
+# use flui_animation::{Animation, AnimationController, CurvedAnimation, Curves};
+# use flui_scheduler::UpdateScheduler;
+# let scheduler = UpdateScheduler::new();
+# let controller = AnimationController::new(Duration::from_millis(300), &scheduler);
+let curved = CurvedAnimation::new(Arc::new(controller.clone()), Curves::EaseInOut);
 
 // Value is: curve.transform(controller.value())
 let value = curved.value();
+# controller.dispose();
 ```
 
 ### TweenAnimation
 
 Map animation output through a tween:
 
-```rust,ignore
+```rust
+# use std::sync::Arc;
+# use std::time::Duration;
+# use flui_animation::{Animation, AnimationController, FloatTween, TweenAnimation};
+# use flui_scheduler::UpdateScheduler;
+# let scheduler = UpdateScheduler::new();
+# let controller = AnimationController::new(Duration::from_millis(300), &scheduler);
 let tween = FloatTween::new(0.0, 300.0);
-let animated = TweenAnimation::new(controller.clone(), tween);
+let animated = TweenAnimation::new(tween, Arc::new(controller.clone()));
 
 // Value is: tween.transform(controller.value())
-let pixels = animated.value();  // 0.0 to 300.0
+let pixels = animated.value(); // 0.0 to 300.0
+# controller.dispose();
 ```
 
 ### ReverseAnimation
 
 Invert an animation:
 
-```rust,ignore
-let reversed = ReverseAnimation::new(controller.clone());
+```rust
+# use std::sync::Arc;
+# use std::time::Duration;
+# use flui_animation::{Animation, AnimationController, ReverseAnimation};
+# use flui_scheduler::UpdateScheduler;
+# let scheduler = UpdateScheduler::new();
+# let controller = AnimationController::new(Duration::from_millis(300), &scheduler);
+let reversed = ReverseAnimation::new(Arc::new(controller.clone()));
 
 // value = 1.0 - parent.value()
 // Forward becomes Reverse, Completed becomes Dismissed
+assert_eq!(reversed.value(), 1.0);
+# controller.dispose();
 ```
 
 ### ProxyAnimation
 
 Hot-swap the parent animation:
 
-```rust,ignore
-let proxy = ProxyAnimation::new(controller1.clone());
+```rust
+# use std::sync::Arc;
+# use std::time::Duration;
+# use flui_animation::{AnimationController, ProxyAnimation};
+# use flui_scheduler::UpdateScheduler;
+# let scheduler = UpdateScheduler::new();
+# let controller1 = AnimationController::new(Duration::from_millis(300), &scheduler);
+# let controller2 = AnimationController::new(Duration::from_millis(300), &scheduler);
+let proxy = ProxyAnimation::new(Arc::new(controller1.clone()));
 
 // Later, switch to different animation
-proxy.set_parent(controller2.clone());
+proxy.set_parent(Arc::new(controller2.clone()));
+# controller1.dispose();
+# controller2.dispose();
 ```
 
 ### CompoundAnimation
 
 Combine two animations with an operator:
 
-```rust,ignore
-use flui_animation::AnimationOperator;
+```rust
+# use std::sync::Arc;
+# use flui_animation::{Animation, ConstantAnimation};
+use flui_animation::{AnimationOperator, CompoundAnimation};
+# let a: Arc<dyn Animation<f64>> = Arc::new(ConstantAnimation::new(0.25));
+# let b: Arc<dyn Animation<f64>> = Arc::new(ConstantAnimation::new(0.75));
 
 // Arithmetic
 let sum = CompoundAnimation::new(a.clone(), b.clone(), AnimationOperator::Add);
@@ -331,30 +462,45 @@ let maximum = CompoundAnimation::new(a.clone(), b.clone(), AnimationOperator::Ma
 
 // Average
 let mean = CompoundAnimation::mean(a.clone(), b.clone());
+assert_eq!(sum.value(), 1.0);
+assert_eq!(mean.value(), 0.5);
 ```
 
 ### ConstantAnimation
 
 Animation with a fixed value (never changes):
 
-```rust,ignore
-let stopped = ConstantAnimation::new(0.5, AnimationStatus::Completed);
+```rust
+use flui_animation::{ALWAYS_COMPLETE, ALWAYS_DISMISSED, Animation, AnimationStatus, ConstantAnimation};
+
+let stopped = ConstantAnimation::with_status(0.5, AnimationStatus::Completed);
 let complete = ConstantAnimation::completed(1.0);
 let dismissed = ConstantAnimation::dismissed(0.0);
 
-// Predefined constants
-use flui_animation::{ALWAYS_COMPLETE, ALWAYS_DISMISSED};
+// Predefined statics
+assert_eq!(ALWAYS_COMPLETE.value(), 1.0);
+assert_eq!(ALWAYS_DISMISSED.value(), 0.0);
 ```
 
 ### AnimationSwitch
 
 Switch between animations when they cross:
 
-```rust,ignore
-let switch = AnimationSwitch::new(anim1.clone(), Some(anim2.clone()));
+```rust
+# use std::sync::Arc;
+# use std::time::Duration;
+# use flui_animation::{AnimationController, AnimationSwitch};
+# use flui_scheduler::UpdateScheduler;
+# let scheduler = UpdateScheduler::new();
+# let anim1 = AnimationController::new(Duration::from_millis(300), &scheduler);
+# let anim2 = AnimationController::new(Duration::from_millis(300), &scheduler);
+let switch = AnimationSwitch::new(Arc::new(anim1.clone()), Some(Arc::new(anim2.clone())));
 
 // When anim1 and anim2 values cross, switches to anim2
 // Useful for "train hopping" between overlapping animations
+# switch.dispose();
+# anim1.dispose();
+# anim2.dispose();
 ```
 
 ---
@@ -363,10 +509,20 @@ let switch = AnimationSwitch::new(anim1.clone(), Some(anim2.clone()));
 
 ### AnimationExt
 
-```rust,ignore
-use flui_animation::AnimationExt;
+`AnimationExt` is implemented for every sized `Animation<f64>`; its methods
+take `self: Arc<Self>` and return the composed animation by value.
 
-let anim: Arc<dyn Animation<f32>> = Arc::new(controller);
+```rust
+# use std::sync::Arc;
+# use std::time::Duration;
+# use flui_animation::{Animation, AnimationController, ConstantAnimation};
+# use flui_scheduler::UpdateScheduler;
+use flui_animation::{AnimationExt, AnimationOperator, Curves};
+# let scheduler = UpdateScheduler::new();
+# let controller = AnimationController::new(Duration::from_millis(300), &scheduler);
+# let other: Arc<dyn Animation<f64>> = Arc::new(ConstantAnimation::new(0.5));
+
+let anim = Arc::new(controller.clone());
 
 // Apply curve
 let curved = anim.clone().curved(Curves::EaseIn);
@@ -375,45 +531,54 @@ let curved = anim.clone().curved(Curves::EaseIn);
 let reversed = anim.clone().reversed();
 
 // Combine with operator
-let combined = anim.clone().combine(other, AnimationOperator::Add);
+let combined = anim.clone().combine(other.clone(), AnimationOperator::Add);
 
 // Shorthand operators
-let sum = anim.clone().add(other);
-let diff = anim.clone().subtract(other);
-let prod = anim.clone().multiply(other);
+let sum = anim.clone().add(other.clone());
+let diff = anim.clone().subtract(other.clone());
+let prod = anim.clone().multiply(other.clone());
 let quot = anim.clone().divide(other);
+# controller.dispose();
 ```
 
 ### AnimatableExt (for tweens)
 
-```rust,ignore
-use flui_animation::AnimatableExt;
+```rust
+# use std::sync::Arc;
+# use std::time::Duration;
+# use flui_animation::AnimationController;
+# use flui_scheduler::UpdateScheduler;
+use flui_animation::{AnimatableExt, Curves, FloatTween};
+# let scheduler = UpdateScheduler::new();
+# let controller = AnimationController::new(Duration::from_millis(300), &scheduler);
 
 let tween = FloatTween::new(0.0, 100.0);
 
 // Animate with a controller
-let animated = tween.animate(controller.clone());
+let animated = tween.animate(Arc::new(controller.clone()));
 
-// Chain tweens
-let chained = tween.chain(other_tween);
+// Chain: feed a 0..1 animatable into the tween
+let chained = FloatTween::new(0.0, 1.0).chain(tween);
 
 // Apply curve
 let eased = tween.with_curve(Curves::EaseOut);
 
 // Reverse
 let reversed = tween.reversed();
+# controller.dispose();
 ```
 
 ### CurveExt
 
-```rust,ignore
-use flui_animation::CurveExt;
+```rust
+use flui_animation::{Animatable, CurveExt, Curves, FloatTween};
 
 // Convert curve to CurveTween
 let tween = Curves::EaseIn.into_tween();
 
-// Chain curves
-let combined = Curves::EaseIn.then(Curves::EaseOut);
+// Feed the curve's output into an animatable
+let eased_pixels = Curves::EaseIn.then(FloatTween::new(0.0, 100.0));
+assert!(eased_pixels.transform(0.5) < 50.0);
 ```
 
 ---
@@ -424,7 +589,9 @@ let combined = Curves::EaseIn.then(Curves::EaseOut);
 
 Defines spring physics parameters:
 
-```rust,ignore
+```rust
+use flui_animation::SpringDescription;
+
 // Explicit parameters
 let spring = SpringDescription::new(
     1.0,    // mass
@@ -446,23 +613,26 @@ let spring = SpringDescription::with_duration_and_bounce(
 );
 
 // Query properties
-spring.damping_ratio();  // 0.0–∞
-spring.bounce();         // Inverse of damping ratio
+let ratio = spring.damping_ratio(); // 0.0–∞
+let bounce = spring.bounce();
 ```
 
 ### SpringSimulation
 
-```rust,ignore
+```rust
+use flui_animation::{Simulation, SpringDescription, SpringSimulation};
+# let spring = SpringDescription::with_damping_ratio(1.0, 500.0, 1.0);
+
 let sim = SpringSimulation::new(
     spring,
     0.0,    // start position
-    1.0,    // end position  
+    1.0,    // end position
     0.0,    // initial velocity
 );
 
-sim.x(0.1);       // Position at t=0.1
-sim.dx(0.1);      // Velocity at t=0.1
-sim.is_done(0.1); // Within tolerance?
+let x = sim.x(0.1);         // Position at t=0.1
+let dx = sim.dx(0.1);       // Velocity at t=0.1
+let done = sim.is_done(0.1); // Within tolerance?
 ```
 
 ### FrictionSimulation
@@ -477,22 +647,26 @@ unreachable/non-finite queries.
 
 Deceleration with drag:
 
-```rust,ignore
+```rust
+use flui_animation::FrictionSimulation;
+
 let sim = FrictionSimulation::new(
     0.05,   // drag coefficient (0 < drag < 1, drag ≠ 1)
     0.0,    // initial position
     100.0,  // initial velocity
 );
 
-sim.final_x();     // Resting position
-sim.time_at_x(x);  // Time to reach position x
+let rest = sim.final_x();             // Resting position
+let t = sim.time_at_x(rest * 0.5);    // Time to reach half of it
 ```
 
 ### GravitySimulation
 
 Constant acceleration:
 
-```rust,ignore
+```rust
+use flui_animation::GravitySimulation;
+
 let sim = GravitySimulation::new(
     9.8,    // acceleration
     0.0,    // initial position
@@ -505,12 +679,15 @@ let sim = GravitySimulation::new(
 
 All simulations use tolerance for `is_done()`:
 
-```rust,ignore
-let tolerance = Tolerance {
-    distance: 0.01,   // Position tolerance
-    velocity: 0.01,   // Velocity tolerance  
-    time: 0.001,      // Time tolerance
-};
+```rust
+use flui_animation::{SpringDescription, SpringSimulation, Tolerance};
+# let spring = SpringDescription::with_damping_ratio(1.0, 500.0, 1.0);
+
+let tolerance = Tolerance::new(
+    0.01,   // distance: position tolerance
+    0.01,   // velocity: velocity tolerance
+    0.001,  // time: time tolerance
+);
 
 let sim = SpringSimulation::with_tolerance(spring, 0.0, 1.0, 0.0, tolerance);
 ```
@@ -519,27 +696,34 @@ let sim = SpringSimulation::with_tolerance(spring, 0.0, 1.0, 0.0, tolerance);
 
 ## Error Handling
 
-```rust,ignore
-pub enum AnimationError {
-    InvalidBounds,      // lower_bound >= upper_bound
-    InvalidValue,       // Value outside bounds
-    InvalidDuration,    // Duration is zero or negative
-    AlreadyDisposed,    // Operation on disposed controller
-    AlreadyAnimating,   // Conflicting animation command
-    TickerError,        // UpdateScheduler/ticker failure
-}
-```
+Fallible operations return `Result<_, AnimationError>`:
 
-All fallible operations return `Result<_, AnimationError>`.
+| Variant | When |
+|---------|------|
+| `Disposed` | Any operation on a disposed controller |
+| `InvalidBounds(String)` | `lower >= upper`, a non-finite bound or span, or a bad `repeat_with` range |
+| `TickerNotAvailable` | Declared for a missing ticker; no current operation returns it |
+| `InvalidSpring(String)` | An underdamped (oscillating) spring passed to `fling_with`; use `animate_with` for those |
+| `NonFiniteTarget(String)` | A non-finite target, `from`, fling velocity or simulation start |
+
+```rust
+# use std::time::Duration;
+# use flui_animation::{AnimationController, AnimationError};
+# use flui_scheduler::UpdateScheduler;
+# let scheduler = UpdateScheduler::new();
+let err = AnimationController::with_bounds(Duration::from_millis(300), &scheduler, 1.0, 0.0);
+assert!(matches!(err, Err(AnimationError::InvalidBounds(_))));
+```
 
 ---
 
 ## Thread Safety
 
 - `AnimationController` is `Send + Sync`
-- All animations are `Send + Sync`  
-- Listeners are invoked synchronously on the ticker thread
-- Internal state protected by `parking_lot::RwLock`
+- All animations are `Send + Sync`
+- Listeners are invoked synchronously by whoever drives the tick, after the
+  controller's lock is released
+- Internal state is protected by `parking_lot::Mutex`
 
 ---
 
@@ -549,12 +733,14 @@ Constructors validate parameters and panic on invalid input:
 
 | Constructor | Panics if |
 |-------------|-----------|
-| `SpringDescription::new` | mass ≤ 0, stiffness ≤ 0, damping < 0 |
-| `SpringDescription::with_damping_ratio` | mass ≤ 0, stiffness ≤ 0, ratio < 0 |
+| `SpringDescription::new` | mass ≤ 0, stiffness ≤ 0, damping < 0, or any non-finite |
+| `SpringDescription::with_damping_ratio` | mass ≤ 0, stiffness ≤ 0, ratio < 0, or any non-finite |
 | `FrictionSimulation::new` | drag ≤ 0, drag = 1.0 |
 | `TweenSequenceItem::new` | weight ≤ 0, weight is infinite |
 | `Interval::new` | begin/end outside [0,1], end < begin |
 | `Threshold::new` | threshold outside [0,1] |
+| `Split::with_curves` | split outside [0,1] |
+| `CatmullRomCurve::new`, `CatmullRomSpline::new` | fewer than two points |
 
 ---
 
