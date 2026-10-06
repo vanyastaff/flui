@@ -182,6 +182,25 @@ rather than serializing the suite. A docs-only change needs only `cargo xtask ch
 builds xtask and not the workspace. `rust-toolchain.toml` is the toolchain's source of truth;
 pre-1.0 the MSRV tracks latest stable.
 
+### Running checks without fighting other runs
+
+Several agents and checkouts often share one machine. Every redundant run slows down every other
+run, and an oversubscribed host makes slow tests look hung.
+
+- **While iterating, test only what you touched:** `cargo nextest run -p <crate> [<filter>]`.
+  Run `cargo xtask check-changed` once, as the last step before a PR. It already runs fmt, clippy
+  and nextest, so don't also run them by hand.
+- **Don't re-run a gate that passed** unless the code changed since. Quote the earlier result
+  instead.
+- **One heavy run at a time per host.** `check-changed`, `test`, `ci`, `gate` and `gpu-test` take a
+  host-wide lock and queue behind each other. Don't start a second one in the background to "save
+  time", and don't kill a queued run.
+- **Cap parallelism on a shared host:** `CARGO_BUILD_JOBS=6` and `NEXTEST_TEST_THREADS=4`. GPU
+  readback suites stay at one test thread. In nextest, `-j` sets test threads; use `--build-jobs`
+  for the build.
+- **A test past its `slow-timeout` on a loaded host is not a hang by default.** Before calling it
+  a bug, re-run that one test alone (`--test-threads 1`) and report how long it took.
+
 ## What the compiler and gates enforce
 
 The gates explain their own findings; this is what to design for up front.
