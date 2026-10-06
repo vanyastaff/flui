@@ -566,7 +566,7 @@ Each implemented from the canonical published source:
 |---|---|---|
 | Frame-rate-independent smoothing (half-life exponential decay) | Holmér, "lerp smoothing is broken" | `smoothing::exp_decay`, `Smoothed` |
 | Critically damped follower with max-speed clamp | Unity `SmoothDamp` / Game Programming Gems 4 ch. 1.10 | `smoothing::SmoothDamp` |
-| Perceptually uniform color interpolation | Ottosson, Oklab (2020) | `OklabColorTween`, `Color::lerp_oklab` |
+| Perceptually uniform color interpolation, premultiplied | Ottosson, Oklab (2020); CSS Color 4 | `ColorTween`, `Color::lerp` |
 | M3 emphasized easing + full Penner catalog | Material 3 / Penner | `Curves::EaseInOutCubicEmphasized`, `ThreePointCubic`, `Split` |
 | Interruptible springs with velocity-preserving retarget | analytic closed forms | `AnimatedValue`, `#[derive(Animatable)]` |
 

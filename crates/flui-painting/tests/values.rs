@@ -104,13 +104,15 @@ fn keeps_hard_gradient_transition(gradient: Gradient) {
     let mixed =
         Gradient::lerp(&gradient, &other, 0.5).expect("valid hard-edge gradients interpolate");
     assert_eq!(mixed.stops(), Some([0.0, 0.5, 0.5, 1.0].as_slice()));
+    // Half way to black in Oklab halves L, a and b, which scales linear light by
+    // 1/8: a full channel becomes 0.125 linear, sRGB-encoded as 99.
     assert_eq!(
         mixed.colors(),
         &[
-            Color::rgb(128, 0, 0),
-            Color::rgb(128, 0, 0),
-            Color::rgb(0, 0, 128),
-            Color::rgb(0, 0, 128),
+            Color::rgb(99, 0, 0),
+            Color::rgb(99, 0, 0),
+            Color::rgb(0, 0, 99),
+            Color::rgb(0, 0, 99),
         ],
         "both sides of the red-to-blue discontinuity survive interpolation"
     );

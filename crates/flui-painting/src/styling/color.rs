@@ -22,8 +22,8 @@ pub struct Color {
 
 /// A color in the Oklab perceptually uniform color space.
 ///
-/// Produced by [`Color::to_oklab`]; consumed by [`Color::from_oklab`] and
-/// [`Color::lerp_oklab`]. `L` is perceived lightness in roughly `[0, 1]`;
+/// Produced by [`Color::to_oklab`]; consumed by [`Color::from_oklab`].
+/// `L` is perceived lightness in roughly `[0, 1]`;
 /// `a`/`b` are the green–red and blue–yellow opponent axes (small values,
 /// typically within `[-0.4, 0.4]` for sRGB colors).
 ///
@@ -38,6 +38,25 @@ pub struct Oklab {
     pub a: f32,
     /// Blue–yellow opponent axis.
     pub b: f32,
+}
+
+/// An Oklab colour with alpha, its `L`, `a`, `b` multiplied by `alpha`.
+///
+/// The space colours interpolate in ([`Color::lerp`], ADR-0149): a weighted sum of these
+/// vectors is a premultiplied mix, so a component-wise animation of a colour (a spring,
+/// say) runs on [`Color::to_premultiplied_oklab`] and converts back with
+/// [`Color::from_premultiplied_oklab`]. `alpha` is in `[0, 1]` for a converted colour.
+#[derive(Copy, Clone, Debug, PartialEq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct PremultipliedOklab {
+    /// Perceived lightness times alpha.
+    pub l: f32,
+    /// Green–red opponent axis times alpha.
+    pub a: f32,
+    /// Blue–yellow opponent axis times alpha.
+    pub b: f32,
+    /// Opacity in `[0, 1]`.
+    pub alpha: f32,
 }
 
 impl Color {
@@ -221,69 +240,73 @@ impl Color {
 
     // ===== Operations =====
 
-    /// Linear interpolation between two colors.
+    /// Interpolates from `a` to `b` in Oklab with premultiplied alpha, `t` clamped to
+    /// `[0, 1]` (ADR-0149).
     ///
-    /// When `t` = 0.0, returns `self`. When `t` = 1.0, returns `other`.
-    /// Values are clamped to [0.0, 1.0].
+    /// Both colours are converted to Oklab, their `L`, `a`, `b` weighted by alpha
+    /// ([`Color::to_premultiplied_oklab`]), mixed, and divided by the mixed alpha
+    /// ([`Color::from_premultiplied_oklab`]). Oklab keeps perceived lightness even (black
+    /// to white is `rgb(99, 99, 99)` half way, where a gamma-sRGB mix gives 128), and
+    /// premultiplying keeps a fade to transparent on the opaque end's hue instead of
+    /// darkening toward the transparent end's black. Where the mixed alpha is zero the
+    /// colour components mix straight. Out-of-gamut channels clamp.
+    ///
+    /// `t <= 0` returns `a` and `t >= 1` returns `b` exactly; a NaN `t` returns `a`. The
+    /// [`Lerp`](flui_foundation::geometry::Lerp) impl is the same interpolation without the
+    /// clamp, for overshooting curves.
     ///
     /// # Examples
     ///
     /// ```
     /// use flui_painting::styling::Color;
     ///
-    /// let red = Color::rgb(255, 0, 0);
-    /// let blue = Color::rgb(0, 0, 255);
-    ///
-    /// let purple = Color::lerp(red, blue, 0.5);
-    /// assert!(purple.r > 0 && purple.b > 0);
+    /// assert_eq!(Color::lerp(Color::BLACK, Color::WHITE, 0.5), Color::rgb(99, 99, 99));
+    /// // A fade to transparent keeps the red.
+    /// let half = Color::lerp(Color::rgb(255, 0, 0), Color::TRANSPARENT, 0.5);
+    /// assert_eq!(half, Color::rgba(255, 0, 0, 128));
     /// ```
-    #[inline]
+    #[must_use]
     pub fn lerp(a: Color, b: Color, t: f64) -> Color {
-        // Colour channels interpolate in f32; the animation parameter arrives as f64.
-        let t = t as f32;
-        Self::lerp_scalar(a, b, t)
-    }
-
-    /// Premultiplied interpolation (ADR-0098 §7): each colour channel is
-    /// weighted by its endpoint's alpha, so a fade to transparent keeps its
-    /// hue instead of passing through dark grey (straight interpolation
-    /// does; CSS Color 4 premultiplies too).
-    #[inline]
-    fn lerp_scalar(a: Color, b: Color, t: f32) -> Color {
+        if t.is_nan() {
+            return a;
+        }
         Self::lerp_unclamped(a, b, t.clamp(0.0, 1.0))
     }
 
-    /// [`Self::lerp`]'s premultiplied interpolation without clamping `t`, for the `Lerp`
-    /// contract that lets an overshooting curve extrapolate. Channels and alpha still
-    /// saturate into `0..=255`.
-    #[inline]
-    pub(crate) fn lerp_unclamped(a: Color, b: Color, t: f32) -> Color {
-        // Round, not truncate: `x as u8` truncates toward zero, biasing every
-        // interpolated channel down by up to ~1 and producing a visibly darker
-        // mid-tween (the `as u8` cast still saturates to [0, 255]).
-        let mix = |a: f32, b: f32| a + (b - a) * t;
-        let (alpha_a, alpha_b) = (f32::from(a.a), f32::from(b.a));
-        let alpha = mix(alpha_a, alpha_b);
-        if alpha <= 0.0 {
-            // Both ends transparent at this `t`: no alpha to weight by, so the
-            // channels interpolate straight (which keeps the endpoints exact).
-            let straight = |a: u8, b: u8| mix(f32::from(a), f32::from(b)).round() as u8;
-            return Color::rgba(
-                straight(a.r, b.r),
-                straight(a.g, b.g),
-                straight(a.b, b.b),
-                0,
-            );
+    /// [`Self::lerp`] without the clamp: `t` outside `[0, 1]` extrapolates and the result
+    /// saturates. `t == 0` and `t == 1` return the endpoints exactly; a NaN `t` returns `a`.
+    pub(crate) fn lerp_unclamped(a: Color, b: Color, t: f64) -> Color {
+        if t == 0.0 || t.is_nan() {
+            return a;
         }
-        let channel = |a_c: u8, b_c: u8| {
-            (mix(f32::from(a_c) * alpha_a, f32::from(b_c) * alpha_b) / alpha).round() as u8
+        if t == 1.0 {
+            return b;
+        }
+        // The animation parameter narrows to the f32 colour math (ADR-0098 §2).
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "t is a finite interpolation weight; f32 is the colour math's precision"
+        )]
+        let t = t as f32;
+        let mix = |from: f32, to: f32| from + (to - from) * t;
+        let (pa, pb) = (a.to_premultiplied_oklab(), b.to_premultiplied_oklab());
+        let mixed = PremultipliedOklab {
+            l: mix(pa.l, pb.l),
+            a: mix(pa.a, pb.a),
+            b: mix(pa.b, pb.b),
+            alpha: mix(pa.alpha, pb.alpha),
         };
-        Color::rgba(
-            channel(a.r, b.r),
-            channel(a.g, b.g),
-            channel(a.b, b.b),
-            alpha.round() as u8,
-        )
+        if mixed.alpha > 0.0 {
+            return Color::from_premultiplied_oklab(mixed);
+        }
+        // No alpha to weight by at this `t`: mix the colour straight, fully transparent.
+        let (la, lb) = (a.to_oklab(), b.to_oklab());
+        let straight = Oklab {
+            l: mix(la.l, lb.l),
+            a: mix(la.a, lb.a),
+            b: mix(la.b, lb.b),
+        };
+        Color::from_oklab(straight, 0)
     }
 
     /// Converts to a 32-bit ARGB value in `0xAARRGGBB` format.
@@ -596,30 +619,63 @@ impl Color {
         Color::rgba(to_channel(r), to_channel(g), to_channel(b), alpha)
     }
 
-    /// Perceptually uniform interpolation through Oklab space.
+    /// Converts to Oklab with alpha in `[0, 1]`, the colour components multiplied by it —
+    /// the space [`Color::lerp`] mixes in. Any linear combination of these vectors is a
+    /// premultiplied mix; [`Color::from_premultiplied_oklab`] converts back.
     ///
-    /// Componentwise sRGB lerp (what [`Color::lerp`] computes)
-    /// averages gamma-encoded values, so midpoints go
-    /// dark and gray — blue→yellow passes through mud. Interpolating L/a/b
-    /// linearly keeps lightness and chroma perceptually steady. Costs two
-    /// conversions per call (`powf`/`cbrt`); use [`Color::lerp`] when the
-    /// endpoints are close or the budget is tight.
+    /// # Examples
     ///
-    /// Alpha interpolates linearly, matching [`Color::lerp`].
+    /// ```
+    /// use flui_painting::styling::Color;
+    ///
+    /// let clear = Color::rgba(255, 0, 0, 0).to_premultiplied_oklab();
+    /// assert_eq!((clear.l, clear.a, clear.b, clear.alpha), (0.0, 0.0, 0.0, 0.0));
+    /// ```
     #[must_use]
-    pub fn lerp_oklab(a: Color, b: Color, t: f64) -> Color {
-        let t = (t as f32).clamp(0.0, 1.0);
-        let la = a.to_oklab();
-        let lb = b.to_oklab();
-        let mixed = Oklab {
-            l: la.l + (lb.l - la.l) * t,
-            a: la.a + (lb.a - la.a) * t,
-            b: la.b + (lb.b - la.b) * t,
+    pub fn to_premultiplied_oklab(self) -> PremultipliedOklab {
+        let alpha = f32::from(self.a) / 255.0;
+        let lab = self.to_oklab();
+        PremultipliedOklab {
+            l: lab.l * alpha,
+            a: lab.a * alpha,
+            b: lab.b * alpha,
+            alpha,
+        }
+    }
+
+    /// Converts a premultiplied Oklab vector back to a colour: the components are divided
+    /// by `alpha`, which saturates into `0..=255`, and out-of-gamut channels clamp.
+    ///
+    /// A vector with no positive alpha (zero, negative or NaN) carries no colour and
+    /// returns [`Color::TRANSPARENT`]. Inverts [`Color::to_premultiplied_oklab`] up to the
+    /// 8-bit quantisation of the channels.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_painting::styling::Color;
+    ///
+    /// let red = Color::rgb(255, 0, 0);
+    /// assert_eq!(Color::from_premultiplied_oklab(red.to_premultiplied_oklab()), red);
+    /// ```
+    #[must_use]
+    pub fn from_premultiplied_oklab(premultiplied: PremultipliedOklab) -> Color {
+        let alpha = premultiplied.alpha;
+        if alpha.is_nan() || alpha <= 0.0 {
+            return Color::TRANSPARENT;
+        }
+        let lab = Oklab {
+            l: premultiplied.l / alpha,
+            a: premultiplied.a / alpha,
+            b: premultiplied.b / alpha,
         };
-        // Alpha is linear, same rounding contract as `lerp_scalar`.
-        #[expect(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // saturating by design
-        let alpha = (f32::from(a.a) + (f32::from(b.a) - f32::from(a.a)) * t).round() as u8;
-        Color::from_oklab(mixed, alpha)
+        #[expect(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            reason = "rounded and clamped into 0..=255 first"
+        )]
+        let alpha = (alpha * 255.0).round().clamp(0.0, 255.0) as u8;
+        Color::from_oklab(lab, alpha)
     }
 
     /// Samples a multi-stop color ramp at position `t` (clamped to
