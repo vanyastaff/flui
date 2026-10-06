@@ -34,11 +34,11 @@
 //!   an edit the owner made before it panicked); a later failure is retained
 //!   (ADR-0127), never dropped and never reported in its place.
 //! - **A failure parked in a gate during a call came before the call's own
-//!   unwind**, which happened after it, so [`Self::run_parking`] and
-//!   [`Self::retire_parking`] take the gate before keeping that unwind, and
+//!   unwind**, which happened after it, so [`OwnerCalls::run_parking`] and
+//!   [`OwnerCalls::retire_parking`] take the gate before keeping that unwind, and
 //!   a scope that reports to a gate takes what was parked there before it
-//!   ran anything ([`Self::take_parked`]).
-//! - **A snapshot retires inside the scope** ([`Self::retire`]): dropped,
+//!   ran anything ([`OwnerCalls::take_parked`]).
+//! - **A snapshot retires inside the scope** ([`OwnerCalls::retire`]): dropped,
 //!   contained, while the scope is healthy; retained once it has failed or
 //!   while the thread unwinds (ADR-0127), so a capture whose `Drop` panics
 //!   can neither replace the first failure nor panic during an unwind.
