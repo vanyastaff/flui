@@ -1237,13 +1237,6 @@ pub(crate) mod text_store {
         assert_eq!(controller.text(), "東京おおさか");
     }
 
-    /// The application edits the field while the platform holds a lock (a
-    /// nested modal loop, an async task): the platform's session is dropped,
-    /// the application's edit stays, and the platform hears of it once the
-    /// lock is released.
-    ///
-    /// Red-check: write the session back without comparing the controller's
-    /// generation — the text reads "ime" and the observer hears nothing.
     /// A field that gains focus is the store the window's input-method host
     /// serves; losing focus takes it away (ADR-0135). The pull window is the
     /// one Windows offers.
@@ -1270,6 +1263,13 @@ pub(crate) mod text_store {
         assert!(harness.active_text_store().is_none());
     }
 
+    /// The application edits the field while the platform holds a lock (a
+    /// nested modal loop, an async task): the platform's session is dropped,
+    /// the application's edit stays, and the platform hears of it once the
+    /// lock is released.
+    ///
+    /// Red-check: write the session back without comparing the controller's
+    /// generation — the text reads "ime" and the observer hears nothing.
     pub(crate) fn an_app_edit_during_a_lock_is_not_overwritten() {
         use flui_platform_api::text_store::{TextChange, TextStoreObserver};
         struct Changes(Rc<RefCell<Vec<TextChange>>>);

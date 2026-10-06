@@ -5,6 +5,7 @@
 
 use std::{
     path::PathBuf,
+    rc::Rc,
     sync::{
         Arc, Weak,
         atomic::{AtomicU64, Ordering},
@@ -17,6 +18,7 @@ use flui_foundation::geometry::{Bounds, Point, Size};
 use flui_foundation::{ClaimSlot, claim_slot};
 use flui_platform_api::HapticFeedback;
 use flui_platform_api::InMemoryClipboard;
+use flui_platform_api::text_store::TextStoreHost;
 use parking_lot::Mutex;
 
 use crate::{
@@ -38,6 +40,11 @@ use crate::{
 /// (`platforms/winit/control.rs`) so both backends complete a
 /// [`ClaimSlot`]/[`PendingWindow`] pair with an identical shape.
 type OpenWindowResult = Result<Arc<dyn HostWindow>, OpenWindowError>;
+
+/// Builds the text-store host a headless window offers
+/// ([`HeadlessPlatform::with_text_store_host`]). Shared with every window,
+/// so `Send + Sync`; what it builds is owner-thread state.
+type TextStoreHostFactory = Arc<dyn Fn() -> Rc<dyn TextStoreHost> + Send + Sync>;
 
 /// Process-wide identity source for mock windows.
 ///
@@ -101,6 +108,9 @@ struct HeadlessState {
     /// hook on the requesting thread instead would consult the WRONG
     /// thread-local runtime state.
     exit_reevaluation_requested: bool,
+    /// What every window opened from now on offers as its text-store host
+    /// ([`HeadlessPlatform::with_text_store_host`]); `None`: push-model.
+    text_store_host: Option<TextStoreHostFactory>,
 }
 
 impl HeadlessPlatform {
@@ -120,6 +130,7 @@ impl HeadlessPlatform {
             deferred_window_open: false,
             pending_opens: Vec::new(),
             exit_reevaluation_requested: false,
+            text_store_host: None,
         };
 
         let wake_failure = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -182,6 +193,21 @@ impl HeadlessPlatform {
         HeadlessDeferredWindowOpens {
             state: Arc::downgrade(&self.state),
         }
+    }
+
+    /// Make every window this platform opens pull-model: its
+    /// [`HostWindow::text_store_host`] answers a host that `factory` builds,
+    /// on the owner thread, each time it is read (the runner reads it once
+    /// per window). A test-support stand-in for the Win32 text services
+    /// (ADR-0135); without it a headless window is push-model and offers
+    /// [`PlatformWindow::text_input`] alone.
+    #[must_use]
+    pub fn with_text_store_host(
+        self,
+        factory: impl Fn() -> Rc<dyn TextStoreHost> + Send + Sync + 'static,
+    ) -> Self {
+        self.with_state(|state| state.text_store_host = Some(Arc::new(factory)));
+        self
     }
 
     fn with_state<F, R>(&self, f: F) -> R
@@ -408,7 +434,12 @@ fn create_mock_window(
     options: WindowOptions,
 ) -> Arc<dyn HostWindow> {
     let window_id = next_headless_window_id();
-    let window = MockWindow::new(window_id, options, platform_state);
+    let window = MockWindow::new(
+        window_id,
+        options,
+        platform_state,
+        state.text_store_host.clone(),
+    );
 
     state.windows.push(window.clone());
     state.active_window = Some(window_id);
@@ -725,6 +756,9 @@ pub struct MockWindow {
     text_input: Arc<FakeTextInput>,
     haptics: Arc<FakeHaptics>,
     accessibility: Arc<FakeAccessibility>,
+    /// Builds this window's text-store host, when the platform was made
+    /// pull-model.
+    text_store_host: Option<TextStoreHostFactory>,
     /// Back-reference to the platform this window was opened on, so
     /// closing it can remove its own entry from `HeadlessState::windows`
     /// and — only once every tracked window is gone — consult the
@@ -800,6 +834,7 @@ impl MockWindow {
         id: WindowId,
         options: WindowOptions,
         platform_state: Weak<Mutex<HeadlessState>>,
+        text_store_host: Option<TextStoreHostFactory>,
     ) -> Self {
         Self {
             id,
@@ -828,6 +863,7 @@ impl MockWindow {
             text_input: Arc::new(FakeTextInput::new()),
             haptics: Arc::new(FakeHaptics::new()),
             accessibility: Arc::new(FakeAccessibility::new()),
+            text_store_host,
             platform_state,
         }
     }
@@ -1329,6 +1365,13 @@ impl PlatformWindow for MockWindow {
 impl HostWindow for MockWindow {
     fn accessibility(&self) -> Option<Arc<dyn crate::traits::PlatformAccessibility>> {
         Some(Arc::clone(&self.accessibility) as Arc<dyn crate::traits::PlatformAccessibility>)
+    }
+
+    fn text_store_host(
+        &self,
+        _owner: crate::traits::OwnerThreadToken,
+    ) -> Option<Rc<dyn TextStoreHost>> {
+        self.text_store_host.as_ref().map(|factory| factory())
     }
 }
 

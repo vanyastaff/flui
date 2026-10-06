@@ -416,8 +416,8 @@ impl UiRealm {
 
     /// Weak text-input capability for this exact presentation.
     #[must_use]
-    #[cfg(test)]
-    pub(crate) fn text_input_handle(&self) -> flui_interaction::TextInputHandle {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn text_input_handle(&self) -> flui_interaction::TextInputHandle {
         self.presentations.primary().text_input_handle()
     }
 

@@ -946,7 +946,7 @@ impl PresentationState {
 
     #[must_use]
     #[cfg_attr(
-        not(test),
+        not(any(test, feature = "test-support")),
         expect(
             dead_code,
             reason = "Self::new wires set_text_input_handle from the local \

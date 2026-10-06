@@ -927,90 +927,51 @@ impl ProxyTransport for ClosedTransport {
 mod tests {
     use std::cell::Cell;
 
-    use cursor_icon::CursorIcon;
-    use flui_foundation::geometry::{EdgeInsets, Size};
-    use flui_platform_api::CursorError;
     use flui_platform_api::text_store::{CompositionEnd, TextStore, TextStoreHostError};
-    use raw_window_handle::{DisplayHandle, HandleError, WindowHandle};
 
     use super::*;
-    use crate::traits::PlatformWindow;
-    use crate::traits::host_window::OwnerThreadToken;
-
-    /// What a pull-model backend's window answers: a host of its own.
-    struct PullWindow;
+    use crate::platforms::HeadlessPlatform;
 
     struct Host;
 
     impl TextStoreHost for Host {
         fn focus_store(&self, _: Option<Rc<dyn TextStore>>) {}
 
-        fn complete_composition(&self) -> Result<CompositionEnd, TextStoreHostError> {
+        fn complete_composition(
+            &self,
+            _: &Rc<dyn TextStore>,
+        ) -> Result<CompositionEnd, TextStoreHostError> {
             Ok(CompositionEnd::Committed)
         }
     }
 
-    impl PlatformWindow for PullWindow {
-        fn id(&self) -> WindowId {
-            WindowId::new(1)
-        }
-        fn physical_size(&self) -> Size<i32> {
-            Size::new(1, 1)
-        }
-        fn logical_size(&self) -> Size<f64> {
-            Size::new(1.0, 1.0)
-        }
-        fn scale_factor(&self) -> f64 {
-            1.0
-        }
-        fn request_redraw(&self) {}
-        fn is_focused(&self) -> bool {
-            true
-        }
-        fn is_visible(&self) -> bool {
-            true
-        }
-        fn set_cursor(&self, _: CursorIcon) -> Result<(), CursorError> {
-            Ok(())
-        }
-        fn on_safe_area_change(&self, _: Box<dyn FnMut(EdgeInsets) + Send>) {}
-        fn window_handle(&self) -> Result<WindowHandle<'_>, HandleError> {
-            Err(HandleError::Unavailable)
-        }
-        fn display_handle(&self) -> Result<DisplayHandle<'_>, HandleError> {
-            Err(HandleError::Unavailable)
-        }
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
-        }
-    }
-
-    impl HostWindow for PullWindow {
-        fn text_store_host(&self, _: OwnerThreadToken) -> Option<Rc<dyn TextStoreHost>> {
-            Some(Rc::new(Host))
-        }
-    }
-
-    /// The owner-thread capability reaches the window's host; a window
-    /// without one (the headless backend is push-model) answers `None`.
-    #[test]
-    fn the_owner_platform_reads_a_window_s_text_store_host() {
-        let checked = Rc::new(Cell::new(false));
-        let observed = Rc::clone(&checked);
-        Box::new(crate::platforms::HeadlessPlatform::new())
+    /// Open one window on `platform` and report whether the owner-thread
+    /// capability reaches a text-store host on it.
+    fn offers_a_host(platform: HeadlessPlatform) -> bool {
+        let offered = Rc::new(Cell::new(None));
+        let observed = Rc::clone(&offered);
+        Box::new(platform)
             .run(Box::new(move |owner| {
-                let pull: Arc<dyn HostWindow> = Arc::new(PullWindow);
-                assert!(owner.text_store_host(&pull).is_some(), "pull window");
-                let push = owner
+                let window = owner
                     .open_window(WindowOptions::default())
                     .expect("headless window")
                     .try_ready()
                     .expect("ready inside on_ready");
-                assert!(owner.text_store_host(&push).is_none(), "push window");
-                observed.set(true);
+                observed.set(Some(owner.text_store_host(&window).is_some()));
                 Ok(())
             }))
             .expect("headless run");
-        assert!(checked.get());
+        offered.get().expect("on_ready ran")
+    }
+
+    /// The owner-thread capability reaches a pull-model window's host; a
+    /// push-model window (the headless default) answers `None`.
+    #[test]
+    fn the_owner_platform_reads_a_window_s_text_store_host() {
+        assert!(
+            offers_a_host(HeadlessPlatform::new().with_text_store_host(|| Rc::new(Host))),
+            "pull window"
+        );
+        assert!(!offers_a_host(HeadlessPlatform::new()), "push window");
     }
 }
