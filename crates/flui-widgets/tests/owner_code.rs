@@ -908,6 +908,18 @@ const ROWS: &[(&str, fn())] = &[
         attach_whose_platform_enable_panics,
     ),
     (
+        "attach: replacing a client whose platform enable panicked",
+        attach_replacing_a_client_whose_platform_enable_panicked,
+    ),
+    (
+        "close: a platform disable whose unwind parks a failure",
+        close_whose_platform_disable_parks_while_unwinding,
+    ),
+    (
+        "close: retiring a client whose destruction's unwind parks a failure",
+        close_retiring_a_client_whose_destruction_parks_while_unwinding,
+    ),
+    (
         "attach and detach: diagnostics that panic",
         attach_and_detach_whose_diagnostics_panic,
     ),
@@ -2154,6 +2166,159 @@ fn attach_whose_platform_enable_panics() {
         "the token detaches the client"
     );
     the_owner_keeps_working(&owner);
+}
+
+/// Records the platform's `set_ime_allowed` calls that completed; the first
+/// call panics.
+#[derive(Default)]
+struct FailsToEnableOnce {
+    failed: std::sync::atomic::AtomicBool,
+    allowed: std::sync::Mutex<Vec<bool>>,
+}
+
+impl PlatformTextInput for FailsToEnableOnce {
+    fn set_ime_allowed(&self, allowed: bool) {
+        assert!(
+            self.failed.swap(true, std::sync::atomic::Ordering::SeqCst),
+            "platform failure enabling input"
+        );
+        self.allowed
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(allowed);
+    }
+    fn set_ime_cursor_area(&self, _: Bounds<f64>) {}
+}
+
+impl FailsToEnableOnce {
+    /// The completed calls so far, copied out so no guard is held while a
+    /// row asserts on them.
+    fn allowed(&self) -> Vec<bool> {
+        self.allowed
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+}
+
+/// The first attach's enable panics; a replacing attach enables the
+/// platform, which nothing else would until the client detached.
+fn attach_replacing_a_client_whose_platform_enable_panicked() {
+    let platform = Arc::new(FailsToEnableOnce::default());
+    let owner = TextInputOwner::new(Some(Arc::clone(&platform) as Arc<dyn PlatformTextInput>));
+    let _first = owner
+        .handle()
+        .attach(TextInputClient::new(InMemoryTextStore::new("")))
+        .expect("the client is active, and the caller has its token");
+    let second = owner
+        .handle()
+        .attach(TextInputClient::new(InMemoryTextStore::new("")))
+        .expect("the replacing attach");
+    assert_eq!(
+        platform.allowed(),
+        [true],
+        "the replacing attach enabled the platform"
+    );
+    assert_eq!(
+        raised(|| {
+            let _ = owner.run_deferred_grants();
+        })
+        .as_deref(),
+        Some("platform failure enabling input"),
+        "the first attach's failure is reported at the owner's next turn"
+    );
+    assert_eq!(
+        owner.handle().detach(second),
+        Ok(flui_interaction::DetachOutcome::Detached)
+    );
+    the_owner_keeps_working(&owner);
+    assert_eq!(
+        platform.allowed(),
+        [true, false, true],
+        "enabled again once, by the next attach after the detach"
+    );
+}
+
+thread_local! {
+    /// The store a close's cleanup edits, following the closing owner's gate.
+    static CLEANUP_STORE: RefCell<Option<Rc<InMemoryTextStore>>> = const { RefCell::new(None) };
+}
+
+/// Parks a failure in the gate [`CLEANUP_STORE`] follows, when dropped.
+struct ParksThroughTheCleanupStore;
+
+impl Drop for ParksThroughTheCleanupStore {
+    fn drop(&mut self) {
+        let store = CLEANUP_STORE.with(|slot| slot.borrow().clone());
+        if let Some(store) = store {
+            park_through(&store, "parked by the unwind's cleanup");
+        }
+    }
+}
+
+/// A platform whose disable panics, holding a guard whose drop, during that
+/// panic's unwind, parks a failure in the owner's gate.
+struct FailsToDisable;
+
+impl PlatformTextInput for FailsToDisable {
+    fn set_ime_allowed(&self, allowed: bool) {
+        if !allowed {
+            let _cleanup = ParksThroughTheCleanupStore;
+            panic!("platform failure disabling input");
+        }
+    }
+    fn set_ime_cursor_area(&self, _: Bounds<f64>) {}
+}
+
+/// The close's first failure stays the one raised, ahead of what its unwind's
+/// cleanup parked in the gate: a close that came after the call is no
+/// earlier turn for it.
+fn close_raising(owner: &TextInputOwner, first: &str) {
+    assert_eq!(
+        raised(|| owner.close()).as_deref(),
+        Some(first),
+        "the call's own panic came before what its unwind's cleanup parked"
+    );
+    let store = CLEANUP_STORE
+        .with(|slot| slot.borrow_mut().take())
+        .expect("the cleanup store");
+    assert_eq!(store.text(), "a", "the cleanup's grant stands");
+}
+
+fn close_whose_platform_disable_parks_while_unwinding() {
+    let owner = TextInputOwner::new(Some(Arc::new(FailsToDisable)));
+    let store = InMemoryTextStore::new("");
+    let _client = owner
+        .handle()
+        .attach(TextInputClient::new(store.clone()))
+        .expect("attach");
+    CLEANUP_STORE.with(|slot| *slot.borrow_mut() = Some(store));
+    close_raising(&owner, "platform failure disabling input");
+    the_owner_keeps_working(&self::owner());
+}
+
+fn close_retiring_a_client_whose_destruction_parks_while_unwinding() {
+    let owner = owner();
+    // Attached first, so it follows the owner's gate, then replaced.
+    let other = InMemoryTextStore::new("");
+    let _other = owner
+        .handle()
+        .attach(TextInputClient::new(other.clone()))
+        .expect("attach");
+    CLEANUP_STORE.with(|slot| *slot.borrow_mut() = Some(other));
+    let store = DropHook {
+        inner: InMemoryTextStore::new(""),
+        on_drop: RefCell::new(Some(Box::new(|| {
+            let _cleanup = ParksThroughTheCleanupStore;
+            panic!("store destroyed");
+        }))),
+    };
+    let _client = owner
+        .handle()
+        .attach(TextInputClient::new(Rc::new(store)))
+        .expect("the replacing attach");
+    close_raising(&owner, "store destroyed");
+    the_owner_keeps_working(&self::owner());
 }
 
 fn attach_and_detach_whose_diagnostics_panic() {
