@@ -899,9 +899,10 @@ observe the resulting frames. This does not establish native acceptance of the
 catalog's `Disclosure` or `Slider`, IME, or screen-reader announcements.
 `windows-input` separately sends pointer input followed by Tab and Enter.
 Both checks require an interactive Windows desktop. Before the probe launches,
-the shared UIA session opens the input desktop: a locked workstation, a
-disconnected or service session, or an unavailable UI Automation exits 2
-(CANNOT VERIFY) rather than reporting a FAIL or a passing run.
+the shared UIA session asks Windows (`UOI_IO`) whether the desktop the check
+runs on, which the probe inherits, is the one receiving input: a locked
+workstation, a disconnected or service session, input going to another
+desktop, a failed query, or an unavailable UI Automation exits 2 (CANNOT VERIFY) rather than reporting a FAIL or a passing run.
 
 ## CI Expectations
 

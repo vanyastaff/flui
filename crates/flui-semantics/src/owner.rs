@@ -464,7 +464,9 @@ impl SemanticsOwner {
     /// the node's current expanded state allows, whichever handler serves it.
     /// To an expandable node that registers neither discrete action but has a
     /// tap handler, it resolves to that handler with [`SemanticsAction::Tap`]. A numeric setter is refused unless its value lies
-    /// in the node's current range.
+    /// in the node's current range. A `SetText` request to a range without a
+    /// text handler resolves to its numeric handler when the text parses as a
+    /// finite number.
     ///
     /// The returned invocation owns an `Arc` clone of the handler and may be
     /// invoked after any outer owner lock has been released.
@@ -533,6 +535,28 @@ impl SemanticsOwner {
         } else {
             request.action
         };
+        // A string written to a range with no text handler is offered to its
+        // numeric handler as a number. UI Automation writes through the
+        // `Value` pattern, as a string, whenever the range also shows text
+        // (`accesskit_windows` 0.35), and such a range is published writable
+        // when only its numeric handler exists.
+        let mut arguments = request.arguments;
+        let routed = match &arguments {
+            Some(ActionArgs::SetText { text })
+                if routed == SemanticsAction::SetText
+                    && actions & SemanticsAction::SetText.value() == 0
+                    && config.numeric_range().is_some() =>
+            {
+                match text.trim().parse::<f64>() {
+                    Ok(value) if value.is_finite() => {
+                        arguments = Some(ActionArgs::SetNumericValue { value });
+                        SemanticsAction::SetNumericValue
+                    }
+                    _ => routed,
+                }
+            }
+            _ => routed,
+        };
         let Some(handler) = (actions & routed.value() != 0)
             .then(|| config.action_handler(routed))
             .flatten()
@@ -545,7 +569,7 @@ impl SemanticsOwner {
         };
 
         if routed == SemanticsAction::SetNumericValue {
-            let admitted = match (&request.arguments, config.numeric_range()) {
+            let admitted = match (&arguments, config.numeric_range()) {
                 (Some(ActionArgs::SetNumericValue { value }), Some(range)) => {
                     range.contains(*value)
                 }
@@ -561,7 +585,7 @@ impl SemanticsOwner {
         Ok(SemanticsActionInvocation {
             node_id: request.node_id,
             action: routed,
-            arguments: request.arguments,
+            arguments,
             handler,
         })
     }

@@ -278,12 +278,41 @@ right after an unpublished pointer tap, each run the tap handler, so a tap-only 
 collapsed after an expand. A node that needs the direction registers its state and both handlers together with
 `Semantics::expandable`.
 
+**Value writes.** A value write's payload picks its handler: a string reaches `SetText`, a
+number `SetNumericValue`. A node advertises `SetValue`, and a numeric range is published
+writable, when some write a platform can send it has a handler (`value_writable` in
+`accesskit_translation.rs`): the numeric handler on a range, whatever text the range also
+shows, and the text handler on a node without a range or on a range that shows text. The
+adapters send both payloads independently: `accesskit_windows` 0.35 offers UIA's `Value`
+pattern on a node with a text value and `RangeValue` on one with a numeric value
+(its `node.rs`, `is_value_pattern_supported`, `is_range_value_pattern_supported`), and their
+`SetValue` methods send `ActionData::Value` and `ActionData::NumericValue`; `accesskit_macos`
+0.27 sends an `NSString` or an `NSNumber` from `setAccessibilityValue:`;
+`accesskit_atspi_common` 0.21 sends `Value.CurrentValue` as a number. A range none of whose
+writes has a handler is marked read-only, because AccessKit otherwise reports a slider writable
+(`accesskit_consumer` 0.39, `Node::is_read_only`).
+
+A string written to a range that has no text handler is offered to its numeric handler when
+it parses as a finite number (`SemanticsOwner::resolve_action`), so a `50%` slider with only a
+numeric setter takes a `Value`-pattern write of `40`, from a screen reader or from the desktop
+server, which writes through `Value` ahead of `RangeValue`.
+
+**Limit.** AccessKit has one read-only flag, which `accesskit_windows` reports as both
+patterns' `IsReadOnly`, so a range that shows text and registers only one of the two handlers
+is published writable through both. On a numeric-only range a `Value` string that is not a
+number is refused; on a text-only range every `RangeValue` number is. Either refusal comes
+after the adapter reported the write accepted. Marking the node read-only would hide the write
+that works, which is the worse failure.
+
 **Test.** `every_wire_action_routes_to_a_semantics_action` (one row per `ActionName::ALL`) in
 `src/agent/tests.rs`; `every_inbound_routable_action_is_advertised_outbound_again` in
 `accesskit_translation.rs`; `disclosure_requests_follow_the_expanded_state` in
 `src/agent/tests.rs`, whose rows drive explicit and tap-only nodes in both states through the
 wire and platform paths to the handler that runs; `set_value_reaches_set_text_with_its_text`
-for text and numeric `set_value`.
+for text and numeric `set_value`; `set_value_follows_the_value_pattern_precedence` in
+`src/agent/tests.rs` for the handler each value shape runs;
+`a_numeric_range_is_writable_only_through_the_handler_a_write_reaches`
+in `accesskit_translation.rs` for range writability.
 
 ### 6. Every explicit role maps to an AccessKit role; `DragHandle` and `HotKey` stay generic
 

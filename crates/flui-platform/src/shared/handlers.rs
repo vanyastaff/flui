@@ -9,7 +9,7 @@
 
 use std::collections::VecDeque;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use flui_foundation::geometry::Size;
 use parking_lot::Mutex;
@@ -288,6 +288,11 @@ pub struct WindowCallbacks {
         Mutex<Option<Box<dyn FnMut(flui_foundation::geometry::EdgeInsets) + Send>>>,
     on_execution_state_change: Mutex<Option<Box<dyn FnMut(WindowExecutionState) + Send>>>,
     event_dispatch: Mutex<DispatchState<WindowCallbackEvent>>,
+    /// Incremented each time a registered frame callback runs, nested
+    /// requests drained later included; a request with no callback to run
+    /// leaves it unchanged. Shareable so a backend can count frames across
+    /// every window it opens ([`Self::counting_frames`]).
+    frames_run: Arc<AtomicU64>,
     should_close_dispatching: Mutex<bool>,
 
     /// One-shot latch set by [`Self::clear`] before it takes any slot.
@@ -471,7 +476,17 @@ impl<T> Drop for CallbackLease<'_, T> {
 impl WindowCallbacks {
     /// Create a new empty callback set
     pub fn new() -> Self {
+        Self::counting_frames(Arc::default())
+    }
+
+    /// Create an empty callback set that increments `frames_run` each time
+    /// its frame callback runs. A frame request with no callback to run (none
+    /// registered yet, or the set already cleared) does not count, so a
+    /// backend sharing one counter across its windows can tell a request a
+    /// frame serviced from one that reached nothing.
+    pub fn counting_frames(frames_run: Arc<AtomicU64>) -> Self {
         Self {
+            frames_run,
             on_execution_state_change: Mutex::new(None),
             on_safe_area_change: Mutex::new(None),
             safe_area_dispatch: Mutex::new(DispatchState::new()),
@@ -630,6 +645,9 @@ impl WindowCallbacks {
                 WindowCallbackEvent::RequestFrame => {
                     let mut lease = CallbackLease::take(&self.on_request_frame, &self.cleared);
                     if let Some(callback) = lease.callback_mut() {
+                        // Counted before the call, so a frame that unwinds
+                        // still counts as one that ran.
+                        self.frames_run.fetch_add(1, Ordering::Relaxed);
                         callback();
                     }
                 }
