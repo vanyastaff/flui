@@ -73,8 +73,11 @@ requests never retain an obsolete user closure. The delivery-time recheck and
 cancellation are pinned by
 `queued_semantics_delivery_rechecks_the_callback_and_mount_lifetime`, and FIFO
 order across a tap and a long press by
-`a_panicking_assistive_action_does_not_discard_the_fifo_tail`. That two queued
-actions of the same kind stay distinct is **Unasserted:** no test pins this.
+`a_panicking_assistive_action_does_not_discard_the_fifo_tail`. Two accepted
+actions of the same kind run their handler twice on the next frame, are never
+replayed on a later one, and a further action still arrives after the batch
+drains: `repeated_assistive_taps_are_delivered_once_each_and_keep_making_progress`
+and `repeated_assistive_long_presses_are_delivered_once_each_and_keep_making_progress`.
 Post-frame entries hold only a weak reference to the detector-owned delivery
 target. Teardown therefore releases the live callbacks and presentation-bound
 writer even when an aborted or absent frame leaves the queue entry pending;

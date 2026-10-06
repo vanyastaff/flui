@@ -419,7 +419,9 @@ workflow for that:
   `cargo xtask bench-collect before` on the baseline commit, apply the change,
   then `cargo xtask bench-collect after` and `critcmp before after` (needs
   `critcmp`, e.g. `cargo binstall critcmp`). Criterion also prints its own
-  change estimate against the last run of the same bench.
+  change estimate against the last run of the same bench when run directly.
+  `bench-collect` uses fresh isolated output for each target, so compare its
+  published named baselines with `critcmp` instead.
 - **Weekly trend (advisory).** The `bench` job in `weekly.yml` executes the
   full suite and uploads `target/criterion` as a 90-day artifact. Shared
   runners are noisy, so this is drift-over-weeks data — it never gates a

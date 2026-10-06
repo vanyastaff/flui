@@ -1,0 +1,5 @@
+rules:
+  # The `$/` self-repository spelling this audit asks for is not understood by
+  # actionlint 1.7.12 (the `checks` job), so local actions keep `./`.
+  self-repository:
+    disable: true

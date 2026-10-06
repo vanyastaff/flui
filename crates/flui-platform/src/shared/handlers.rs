@@ -149,7 +149,9 @@ impl PlatformHandlers {
     /// directly: winit's own `CloseRequested` handling
     /// leases the hook out of the lock first (`WinitPlatform::
     /// lease_exit_policy_hook`) rather than calling this while the lock is
-    /// held. The headless backend does NOT use this method at all — its own
+    /// held, and AppKit and Win32 likewise take the hook out of their handler
+    /// set before running it, with the same "no hook allows the exit"
+    /// default. The headless backend does NOT use this method at all — its own
     /// pre-#555 default is the OPPOSITE ("no hook -> never quit", matching
     /// every headless test/consumer that predates this mechanism, none of
     /// which expects closing a mock window to spontaneously call `quit`) —
