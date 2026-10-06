@@ -378,7 +378,7 @@ order = 1
 allowed-dependents = ["flui-app"]
 # Process-global state, checked by `cargo xtask globals` (ADR-0097).
 globals = [
-    { item = "platforms::windows::platform::WindowIdentity::mint::NEXT", grant = "ADR-0097", class = "counter", reason = "Windows backend identities, advanced by try_update with permanent exhaustion refusal before native acquisition" },
+    { item = "platforms::windows::platform::WindowIdentity::source::NEXT", grant = "ADR-0097", class = "counter", reason = "Windows backend identities, advanced by try_update with permanent exhaustion refusal before native acquisition" },
     { item = "platforms::android::AndroidPlatform::process_input_events::FIRST_MOTION_SEEN", grant = "ADR-0097", class = "diagnostic", reason = "logs the first motion event at a higher level; no behavior reads it" },
     { item = "platforms::headless::platform::NEXT_HEADLESS_WINDOW_ID", grant = "ADR-0097", class = "counter", reason = "headless window IDs, advanced by `try_update` so exhaustion is an error" },
     { item = "platforms::ios::platform::DELEGATE_STATE", grant = "ADR-0097", class = "trampoline", reason = "UIKit delegate methods reach the platform through it; they carry no user-data pointer" },
