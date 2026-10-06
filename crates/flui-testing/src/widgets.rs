@@ -455,6 +455,30 @@ impl LaidOut {
         self.host.realm().enter(|_| callback())
     }
 
+    /// Close the tree's presentation for `reason`, as the host does once the
+    /// close is agreed: its lifecycle observers are told it is detached, its
+    /// held input is dropped, and later lifecycle updates are ignored. The
+    /// tree stays mounted until this `LaidOut` drops.
+    ///
+    /// Not yet the host's shared close delivery: `reason` is not consulted,
+    /// so a close guard's holds do not refuse it.
+    pub fn request_close(&self, reason: flui_view::CloseReason) {
+        let _ = reason;
+        self.host
+            .realm()
+            .enter(flui_runtime::ui_realm::UiRealm::stop_presentations);
+    }
+
+    /// End the session the tree runs in, as the operating system does at log
+    /// off or shut down: the presentation is closed for
+    /// [`CloseReason::SessionEnd`](flui_view::CloseReason::SessionEnd).
+    ///
+    /// Not yet the host's session end: nothing is flushed, and the close is
+    /// [`request_close`](Self::request_close)'s.
+    pub fn end_session(&self) {
+        self.request_close(flui_view::CloseReason::SessionEnd);
+    }
+
     /// Deliver an accessibility action to the node it addresses, as a platform
     /// adapter would, inside this tree's realm — where a widget's owner-local
     /// action handlers run.
