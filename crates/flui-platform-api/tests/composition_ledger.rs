@@ -12,7 +12,7 @@
 
 use std::ops::Range;
 
-use flui_platform_api::text_store::CompositionLedger;
+use flui_platform_api::text_store::{CompositionLedger, committed_text};
 use proptest::prelude::*;
 
 // ----------------------------------------------------------------------------
@@ -144,22 +144,6 @@ impl Reference {
             .map(char::len_utf8)
             .sum();
         start..start + len
-    }
-
-    fn committed(&self) -> String {
-        let mut out = String::new();
-        let mut written = false;
-        for token in &self.tokens {
-            if let Some(group) = token.group.filter(|&group| Some(group) == self.composition) {
-                if !written {
-                    out.push_str(&self.origins[group]);
-                    written = true;
-                }
-            } else if let Some(ch) = token.ch {
-                out.push(ch);
-            }
-        }
-        out
     }
 
     fn origin(&self) -> Option<String> {
@@ -392,6 +376,39 @@ impl Reference {
                 self.narrow(group, &range);
             }
         }
+        // A mark that stays with the composition sits where the composition
+        // does: those left before the range go to its start, those after it
+        // to its end. Rebuilt from the characters: every character in order,
+        // with the composition's marks placed among them by where they go.
+        let at = self.at();
+        let stays = |token: &Token| {
+            token.ch.is_none() && token.group.is_some_and(|group| touched.contains(&group))
+        };
+        let mut to_start = Vec::new();
+        let mut to_end = Vec::new();
+        let mut rest = Vec::new();
+        for (token, at) in self.tokens.drain(..).zip(at) {
+            if stays(&token) && at < range.start {
+                to_start.push(token);
+            } else if stays(&token) && at > range.end {
+                to_end.push(token);
+            } else {
+                rest.push((token, at));
+            }
+        }
+        let mut tokens = Vec::new();
+        for (token, at) in rest {
+            if at >= range.start && !to_start.is_empty() {
+                tokens.append(&mut to_start);
+            }
+            if (at > range.end || (at == range.end && token.ch.is_some())) && !to_end.is_empty() {
+                tokens.append(&mut to_end);
+            }
+            tokens.push(token);
+        }
+        tokens.append(&mut to_start);
+        tokens.append(&mut to_end);
+        self.tokens = tokens;
         let at = self.at();
         let inside = |index: usize, token: &Token| match token.ch {
             Some(_) => range.contains(&at[index]),
@@ -435,64 +452,98 @@ impl Reference {
 
     /// The part of `group` outside `range` commits as shown; the origin left
     /// is the group's origin with the leaving parts' share cut off its ends,
-    /// unless a replacement with removed text is split, when the group left
+    /// unless a replacement that removed text is split, when the group left
     /// stands for its own visible text.
+    ///
+    /// Which tokens leave is decided per replacement, from the replacement's
+    /// own characters: a replacement whose characters all lie outside the
+    /// range leaves whole, removal included, and one with characters on both
+    /// sides is split. Only a removal whose replacement has no characters (a
+    /// deletion), or a group's marker, is placed by where it sits: it stays
+    /// strictly inside the range. Which leaving tokens come before the range
+    /// and which after is read from their order around the staying tokens.
     fn narrow(&mut self, group: usize, range: &Range<usize>) {
         let at = self.at();
-        let side = |index: usize, token: &Token| -> Option<bool> {
-            // Some(true): leaves before the range, Some(false): after it.
-            match token.ch {
-                _ if at[index] < range.start => Some(true),
-                Some(_) if at[index] >= range.end => Some(false),
-                None if at[index] > range.end => Some(false),
-                _ => None,
-            }
-        };
-        let members: Vec<(usize, Token)> = self
-            .tokens
-            .iter()
-            .enumerate()
-            .filter(|(_, token)| token.group == Some(group))
-            .map(|(index, token)| (index, token.clone()))
+        let members: Vec<usize> = (0..self.tokens.len())
+            .filter(|&index| self.tokens[index].group == Some(group))
             .collect();
-        let mut split = false;
-        for (index, token) in &members {
-            let Some(replacement) = token.replacement else {
-                continue;
-            };
-            let root = self.root(replacement);
-            let class = |token: &Token| {
-                token
-                    .replacement
-                    .is_some_and(|other| self.root(other) == root)
-            };
-            let has_text = members.iter().any(|(_, other)| {
-                class(other) && other.removal.is_some_and(|r| !self.removed[r].is_empty())
-            });
-            let leaves = members
-                .iter()
-                .any(|(other_index, other)| class(other) && side(*other_index, other).is_some());
-            let stays = members
-                .iter()
-                .any(|(other_index, other)| class(other) && side(*other_index, other).is_none());
-            let _ = index;
-            split |= has_text && leaves && stays;
+        let char_inside = |index: usize| range.contains(&at[index]);
+        // Each replacement in the group, and where its characters are.
+        let mut replacements: Vec<(usize, Vec<usize>)> = Vec::new();
+        for &index in &members {
+            if let Some(replacement) = self.tokens[index].replacement {
+                let root = self.root(replacement);
+                match replacements.iter_mut().find(|(seen, _)| *seen == root) {
+                    Some((_, tokens)) => tokens.push(index),
+                    None => replacements.push((root, vec![index])),
+                }
+            }
         }
-        let origin = if split {
-            members
+        let characters = |tokens: &[usize]| -> (bool, bool) {
+            let shown: Vec<usize> = tokens
                 .iter()
-                .filter(|(index, token)| side(*index, token).is_none())
-                .filter_map(|(_, token)| token.ch)
+                .copied()
+                .filter(|&index| self.tokens[index].ch.is_some())
+                .collect();
+            (
+                shown.iter().any(|&index| char_inside(index)),
+                shown.iter().any(|&index| !char_inside(index)),
+            )
+        };
+        let mut leaves = vec![false; self.tokens.len()];
+        let mut split = false;
+        for (_, tokens) in &replacements {
+            let (inside, outside) = characters(tokens);
+            let removed_text = tokens.iter().any(|&index| {
+                self.tokens[index]
+                    .removal
+                    .is_some_and(|removal| !self.removed[removal].is_empty())
+            });
+            split |= inside && outside && removed_text;
+            for &index in tokens {
+                leaves[index] = if self.tokens[index].ch.is_some() {
+                    !char_inside(index)
+                } else if inside || outside {
+                    outside
+                } else {
+                    !(at[index] > range.start && at[index] < range.end)
+                };
+            }
+        }
+        for &index in &members {
+            let token = &self.tokens[index];
+            if token.replacement.is_none() {
+                leaves[index] = match token.ch {
+                    Some(_) => !char_inside(index),
+                    None => !(at[index] > range.start && at[index] < range.end),
+                };
+            }
+        }
+        let staying: Vec<usize> = members.iter().copied().filter(|&i| !leaves[i]).collect();
+        let origin = if split {
+            staying
+                .iter()
+                .filter_map(|&index| self.tokens[index].ch)
                 .collect()
         } else {
-            let share = |left: bool| -> String {
-                members
-                    .iter()
-                    .filter(|(index, token)| side(*index, token) == Some(left))
-                    .map(|(_, token)| self.share(token))
-                    .collect()
-            };
-            let (before, after) = (share(true), share(false));
+            let (first, last) = (staying.first().copied(), staying.last().copied());
+            let mut before = String::new();
+            let mut after = String::new();
+            for &index in members.iter().filter(|&&i| leaves[i]) {
+                let share = self.share(&self.tokens[index]);
+                // A leaving token that stands for nothing takes no share.
+                if share.is_empty() {
+                    continue;
+                }
+                match (first, last) {
+                    (Some(first), _) if index < first => before.push_str(&share),
+                    (_, Some(last)) if index > last => after.push_str(&share),
+                    (None, None) => before.push_str(&share),
+                    _ => panic!(
+                        "reference: a leaving token {index} lies between staying tokens of group {group}"
+                    ),
+                }
+            }
             let whole = &self.origins[group];
             let rest = whole
                 .strip_prefix(before.as_str())
@@ -510,20 +561,13 @@ impl Reference {
                 out.push(token.clone());
                 continue;
             }
-            let leaving = side(index, token).is_some();
-            match (token.ch, leaving, split) {
+            match (token.ch, leaves[index], split) {
                 (Some(ch), true, _) => out.push(Token::shown(ch, false)),
-                (None, true, _) => {}
+                // A split group stands for its visible text: its marks go.
+                (None, true, _) | (None, false, true) => {}
                 (Some(ch), false, true) => out.push(Token {
                     group: Some(group),
                     ..Token::shown(ch, false)
-                }),
-                (None, false, true) => out.push(Token {
-                    ch: None,
-                    fresh: false,
-                    group: Some(group),
-                    removal: None,
-                    replacement: None,
                 }),
                 (_, false, false) => out.push(token.clone()),
             }
@@ -575,7 +619,7 @@ fn check(text: &str, composition: Option<(Range<usize>, &str)>, ops: &[Op]) -> R
     for (step, op) in ops.iter().enumerate() {
         match op {
             Op::Replace(edit, inserted) => {
-                ledger.replace(edit.clone(), inserted);
+                ledger.replace(&text, edit.clone(), inserted);
                 reference.replace(edit.clone(), inserted);
                 composing = shifted(composing, edit, inserted.len());
                 text.replace_range(edit.clone(), inserted);
@@ -588,7 +632,7 @@ fn check(text: &str, composition: Option<(Range<usize>, &str)>, ops: &[Op]) -> R
             Op::Reopen => {
                 let ledger_composition = composing
                     .clone()
-                    .map(|range| (range, ledger.origin().unwrap_or_default()));
+                    .map(|range| (range, ledger.origin(&text).unwrap_or_default()));
                 let reference_composition = composing
                     .clone()
                     .map(|range| (range, reference.origin().unwrap_or_default()));
@@ -596,18 +640,21 @@ fn check(text: &str, composition: Option<(Range<usize>, &str)>, ops: &[Op]) -> R
                 reference = Reference::open(&text, reference_composition);
             }
         }
-        if ledger.text() != text || reference.text() != text {
+        if reference.text() != text {
             return Err(format!(
-                "after step {step} {op:?}: text {text:?}, ledger {:?}, reference {:?}",
-                ledger.text(),
+                "after step {step} {op:?}: text {text:?}, reference {:?}",
                 reference.text()
             ));
         }
-        let (got, want) = (ledger.committed(), reference.committed());
-        if got != want || ledger.origin() != reference.origin() {
+        // What the store's committed text is: its composing range replaced by the
+        // origin the reference computed.
+        let reference_origin = reference.origin();
+        let want = committed_text(&text, composing.clone().zip(reference_origin.as_deref()));
+        let got = ledger.committed(&text);
+        if got != want || ledger.origin(&text) != reference.origin() {
             return Err(format!(
                 "after step {step} {op:?}: committed {got:?} (origin {:?}), reference {want:?} (origin {:?})",
-                ledger.origin(),
+                ledger.origin(&text),
                 reference.origin()
             ));
         }
@@ -719,6 +766,20 @@ fn named_cases() -> Vec<(
             vec![Mark(Some(0..3))],
             "ABCDEF",
         ),
+        (
+            "a removal leaves with its replacement's text",
+            "abcd",
+            Some((0..3, "")),
+            vec![Replace(2..4, "B"), Mark(Some(0..2))],
+            "B",
+        ),
+        (
+            "a deletion at the end of the narrowed range commits",
+            "abcdefghi",
+            None,
+            vec![Mark(Some(0..9)), Replace(3..6, ""), Mark(Some(0..3))],
+            "abcghi",
+        ),
     ]
 }
 
@@ -731,17 +792,21 @@ pub(crate) fn the_named_cases_hold() {
                 .clone()
                 .map(|(range, origin)| (range, origin.to_owned())),
         );
+        let mut current = text.to_owned();
         for op in &ops {
             match op {
-                Op::Replace(edit, inserted) => ledger.replace(edit.clone(), inserted),
+                Op::Replace(edit, inserted) => {
+                    ledger.replace(&current, edit.clone(), inserted);
+                    current.replace_range(edit.clone(), inserted);
+                }
                 Op::Mark(range) => ledger.set_composition(range.clone()),
                 Op::Reopen => unreachable!("no named case reopens"),
             }
         }
-        if ledger.committed() != committed {
+        if ledger.committed(&current) != committed {
             failures.push(format!(
                 "{name}: committed {:?}, want {committed:?}",
-                ledger.committed()
+                ledger.committed(&current)
             ));
         }
         if let Err(difference) = check(text, composition, &ops) {
@@ -897,7 +962,12 @@ proptest! {
         let points = boundaries(&text);
         let composition = composition.map(|(a, b)| (range_of(&points, a, b), INSERTS[origin]));
         let ops = resolve(&text, composition.clone().map(|(range, _)| range), &steps);
-        let outcome = check(&text, composition.clone(), &ops);
+        // A reference that cannot follow a sequence panics; report it with the
+        // sequence like any other difference.
+        let outcome = std::panic::catch_unwind(|| check(&text, composition.clone(), &ops))
+            .unwrap_or_else(|payload| {
+                Err(format!("panicked: {:?}", payload.downcast_ref::<String>()))
+            });
         prop_assert!(outcome.is_ok(), "{:?} on {:?} with {:?}: {:?}", ops, text, composition, outcome);
     }
 }

@@ -429,7 +429,7 @@ impl EditableTextStore {
                     ledger: original.ledger(),
                 };
                 body(&mut session);
-                session.doc.origin = session.ledger.origin().unwrap_or_default();
+                session.doc.origin = session.ledger.origin(&session.doc.text).unwrap_or_default();
                 if session.doc != original {
                     self.write_back(&controller, generation, session.doc, &original);
                 }
@@ -872,7 +872,7 @@ fn rendered_offset_at(
 impl TextStoreEdit for Session<'_> {
     fn replace(&mut self, range: Utf16Range, text: &str) -> Result<TextChange, TextStoreError> {
         let bytes = utf16::byte_range(&self.doc.text, range)?;
-        self.ledger.replace(bytes, text);
+        self.ledger.replace(&self.doc.text, bytes, text);
         self.doc.replace(range, text)
     }
 

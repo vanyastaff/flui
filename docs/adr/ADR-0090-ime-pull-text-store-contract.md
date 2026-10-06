@@ -204,10 +204,16 @@ composing. The amendment fixes what the owner sees and when:
    empty, and otherwise as one replacement of the origin by the visible text. **Narrowing:**
    when a mark leaves part of a composition (or of a composition an edit cleared) outside the
    new range, that part commits as the user sees it: its characters stand for themselves and its
-   removals are dropped. The rest keeps what its own characters and removals stand for, unless a
-   replacement with non-empty removed text lies on both sides of the new range; its removed text
-   cannot be divided, so the rest of that region then stands for its own visible text, and the
-   committed text over it is what the user sees. A replacement's removed text is therefore never
+   removals are dropped. A removal travels with its own replacement's characters: when every
+   character a replacement inserted lies outside the new range, the replacement leaves whole,
+   its removal with it; when they lie both inside and outside it, its removal leaves (the
+   replacement is split). A removal whose replacement inserted no characters (a deletion) stays
+   only strictly inside the new range, so a deletion at its edge commits ("abcdefghi" marked whole,
+   "def" deleted, narrowed to "abc": the committed text is "abcghi"). A removal that stays sits at
+   the composition's edge nearest it. The rest keeps what its own characters and removals stand
+   for, unless a replacement with non-empty removed text is split; its removed text cannot be
+   divided, so the rest of that region then stands for its own visible text, and the committed
+   text over it is what the user sees. A replacement's removed text is therefore never
    counted beside any of its own inserted text (no "abcdefDEF" from narrowing a conversion of
    "abcdef" to "ABC"). Text that never stood for anything (new preedit) commits as shown beside
    the origin the rest keeps. `flui-platform-api`'s `the_ledger_follows_the_reference` checks the

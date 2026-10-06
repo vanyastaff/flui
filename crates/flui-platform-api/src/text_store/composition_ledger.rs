@@ -7,24 +7,29 @@
 //! store keeps that text, the composition's *origin*, beside its composing
 //! range, and records a session's edits here so the origin follows them.
 //! Offsets are byte offsets into the store's UTF-8 text, on `char`
-//! boundaries the store has already checked.
+//! boundaries the store has already checked; the ledger keeps lengths, and
+//! reads the text the store passes when it needs characters.
 //!
 //! # The model
 //!
-//! The ledger keeps the session's document as a sequence of pieces, each
-//! knowing what it stands for in the committed text:
+//! The ledger keeps the session's document as runs, each knowing what it
+//! stands for in the committed text:
 //!
-//! - a **committed** character stands for itself: text the document held
-//!   when the session opened outside any composition, or that a composition
+//! - **committed** text stands for itself: text the document held when the
+//!   session opened outside any composition, or that a composition
 //!   committed;
-//! - a **preedit** character stands for nothing: text the session inserted;
+//! - **preedit** stands for nothing: text the session inserted;
 //! - a **removal** shows nothing and stands for the committed text an edit
-//!   removed from a composition (or from a composition an edit cleared).
+//!   removed from a composition (or from a composition an edit cleared);
+//! - a **marker** shows and stands for nothing: it is where an empty
+//!   composition lies.
 //!
-//! The committed text is every character shown, except that the composition
-//! shows what its pieces stand for. A composition an edit cleared keeps its
-//! pieces as they are, so an input method that rewrites its composition and
-//! marks it again does not lose what it stood for.
+//! The committed text is the document with the composition replaced by what
+//! its runs stand for. A composition an edit cleared keeps its runs as they
+//! are, so an input method that rewrites its composition and marks it again
+//! does not lose what it stood for. Text outside every composition is one
+//! run per kind, whatever its length: a session over a long document costs
+//! what its compositions do.
 //!
 //! The text one edit inserted, with the removal it left, is one
 //! *replacement*: together they stand for the removed text, and no part of
@@ -34,14 +39,16 @@
 //! # Narrowing
 //!
 //! When a mark leaves part of a composition (or of a cleared one) outside the
-//! new composing range, that part commits as the user sees it: its
-//! characters stand for themselves and its removals go. What remains keeps
-//! what its pieces stand for. If a replacement with removed text lies on
-//! both sides of the new range, its removed text cannot be divided between
-//! them: the remaining part then stands for its own visible text, so the
-//! committed text over that region is exactly what the user sees. The
-//! removed text of one replacement is never counted beside any of its
-//! inserted text.
+//! new composing range, that part commits as the user sees it: its text
+//! stands for itself and its removals go. What remains keeps what its runs
+//! stand for. A removal goes with its own replacement's inserted text; a
+//! removal whose replacement inserted nothing (a deletion) stays only
+//! strictly inside the new range. A replacement whose inserted text lies
+//! both inside and outside the new range is split; if it removed text, that
+//! text cannot be divided between the two parts, and the region's remaining
+//! text then stands for itself, so the committed text over it is what the
+//! user sees. The removed text of one replacement is never counted beside
+//! any of its inserted text.
 //!
 //! The ledger follows the composition rules every store keeps (an edit
 //! before the composition shifts it, one after it leaves it, one that
@@ -50,55 +57,60 @@
 
 use std::ops::Range;
 
-/// What one piece of the session's document is.
+/// A composition, or a composition an edit cleared.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct RegionId(usize);
+
+/// One edit's inserted text and its removal (see the module doc).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ReplacementId(usize);
+
+/// What one run of the session's document is.
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Content {
-    /// A character that stands for itself.
-    Committed(char),
-    /// A character the session inserted, which stands for nothing.
-    Preedit(char),
+    /// This many bytes of text that stand for themselves.
+    Committed(usize),
+    /// This many bytes the session inserted, which stand for nothing.
+    Preedit(usize),
     /// Committed text an edit removed: shows nothing, stands for the text.
     Removed(String),
+    /// Where an empty region lies: shows and stands for nothing.
+    Marker,
 }
 
 impl Content {
-    fn shown(&self) -> Option<char> {
+    /// How many bytes of the document the run shows.
+    fn shown(&self) -> usize {
         match self {
-            Self::Committed(ch) | Self::Preedit(ch) => Some(*ch),
-            Self::Removed(_) => None,
-        }
-    }
-
-    fn shown_len(&self) -> usize {
-        self.shown().map_or(0, char::len_utf8)
-    }
-
-    /// What the piece stands for in the committed text.
-    fn stands_for(&self, into: &mut String) {
-        match self {
-            Self::Committed(ch) => into.push(*ch),
-            Self::Preedit(_) => {}
-            Self::Removed(text) => into.push_str(text),
+            Self::Committed(len) | Self::Preedit(len) => *len,
+            Self::Removed(_) | Self::Marker => 0,
         }
     }
 }
 
-/// One piece of the document, and what it belongs to.
+/// One run of the document, and what it belongs to.
 #[derive(Clone, Debug)]
-struct Piece {
+struct Run {
     content: Content,
-    /// The composition, or a composition an edit cleared, it lies in.
-    region: Option<usize>,
-    /// The replacement it is part of.
-    replacement: Option<usize>,
+    region: Option<RegionId>,
+    replacement: Option<ReplacementId>,
 }
 
-impl Piece {
-    fn new(content: Content) -> Self {
+impl Run {
+    fn plain(content: Content) -> Self {
         Self {
             content,
             region: None,
             replacement: None,
+        }
+    }
+
+    /// What the run stands for, read from `text` where it shows at `at`.
+    fn stands_for(&self, text: &str, at: usize, into: &mut String) {
+        match &self.content {
+            Content::Committed(len) => into.push_str(&text[at..at + len]),
+            Content::Removed(removed) => into.push_str(removed),
+            Content::Preedit(_) | Content::Marker => {}
         }
     }
 }
@@ -112,11 +124,11 @@ impl Piece {
 /// is the committed text at any point. See the module doc for the model.
 #[derive(Clone, Debug, Default)]
 pub struct CompositionLedger {
-    pieces: Vec<Piece>,
+    runs: Vec<Run>,
     /// Regions that keep what they stand for: the composition and those an
     /// edit cleared.
-    regions: Vec<usize>,
-    composition: Option<usize>,
+    regions: Vec<RegionId>,
+    composition: Option<RegionId>,
     next_region: usize,
     /// Each replacement's parent in the sets of replacements that rewrote
     /// each other's text.
@@ -134,64 +146,59 @@ impl CompositionLedger {
     pub fn open(text: &str, composition: Option<(Range<usize>, String)>) -> Self {
         let mut ledger = Self::default();
         let Some((range, origin)) = composition else {
-            ledger.pieces = text
-                .chars()
-                .map(|ch| Piece::new(Content::Committed(ch)))
-                .collect();
+            ledger.push_plain(Content::Committed(text.len()));
             return ledger;
         };
+        ledger.push_plain(Content::Committed(range.start));
         let region = ledger.new_region();
         let shown = &text[range.clone()];
-        let replacement = (!origin.is_empty() && origin != shown).then(|| ledger.new_replacement());
-        let member = |content| Piece {
+        let member = |content, replacement| Run {
             content,
             region: Some(region),
             replacement,
         };
-        ledger.pieces.extend(
-            text[..range.start]
-                .chars()
-                .map(|ch| Piece::new(Content::Committed(ch))),
-        );
-        if replacement.is_some() || shown.is_empty() {
-            let removed = if replacement.is_some() {
-                origin.clone()
+        if origin.is_empty() {
+            if shown.is_empty() {
+                ledger.runs.push(member(Content::Marker, None));
             } else {
-                String::new()
-            };
-            ledger.pieces.push(member(Content::Removed(removed)));
+                ledger
+                    .runs
+                    .push(member(Content::Preedit(shown.len()), None));
+            }
+        } else if origin == shown {
+            ledger
+                .runs
+                .push(member(Content::Committed(shown.len()), None));
+        } else {
+            let replacement = Some(ledger.new_replacement());
+            ledger
+                .runs
+                .push(member(Content::Removed(origin), replacement));
+            ledger
+                .runs
+                .push(member(Content::Preedit(shown.len()), replacement));
         }
-        let stands_for_itself = !origin.is_empty() && origin == shown;
-        ledger.pieces.extend(shown.chars().map(|ch| {
-            member(if stands_for_itself {
-                Content::Committed(ch)
-            } else {
-                Content::Preedit(ch)
-            })
-        }));
-        ledger.pieces.extend(
-            text[range.end..]
-                .chars()
-                .map(|ch| Piece::new(Content::Committed(ch))),
-        );
+        ledger.push_plain(Content::Committed(text.len() - range.end));
+        ledger.normalize();
         ledger.regions.push(region);
         ledger.composition = Some(region);
         ledger
     }
 
-    /// Record that `edit` (a byte range of the text before it) is about to
-    /// be replaced by `inserted`.
-    pub fn replace(&mut self, edit: Range<usize>, inserted: &str) {
+    /// Record that `edit`, a byte range of `text` (the text before the
+    /// edit), is about to be replaced by `inserted`.
+    pub fn replace(&mut self, text: &str, edit: Range<usize>, inserted: &str) {
+        self.cut(edit.start);
+        self.cut(edit.end);
         let at = self.positions();
-        let hit: Vec<usize> = self
+        let hit: Vec<RegionId> = self
             .regions
             .iter()
             .copied()
             .filter(|&region| clears(&edit, &self.extent(region, &at)))
             .collect();
-        let fresh = inserted.chars().map(Content::Preedit);
         if hit.is_empty() {
-            self.replace_committed(&edit, fresh.map(Piece::new).collect(), &at);
+            self.replace_outside(&edit, inserted.len(), &at);
             return;
         }
         let mut span = edit.clone();
@@ -200,84 +207,90 @@ impl CompositionLedger {
             span.start = span.start.min(extent.start);
             span.end = span.end.max(extent.end);
         }
-        let in_span = |index: usize, piece: &Piece| match piece.content.shown() {
-            Some(_) => span.contains(&at[index]),
-            None => {
-                piece.region.is_some_and(|region| hit.contains(&region))
+        let member = |index: usize, run: &Run| {
+            if run.content.shown() > 0 {
+                span.contains(&at[index])
+            } else {
+                run.region.is_some_and(|region| hit.contains(&region))
                     || (at[index] > span.start && at[index] < span.end)
             }
         };
-        let removed_by_edit = |index: usize, piece: &Piece| match piece.content.shown() {
-            Some(_) => edit.contains(&at[index]),
-            None => at[index] > edit.start && at[index] < edit.end,
+        let removed_by_edit = |index: usize, run: &Run| {
+            if run.content.shown() > 0 {
+                edit.contains(&at[index])
+            } else {
+                at[index] > edit.start && at[index] < edit.end
+            }
         };
+        // First pass: what the edit removes, the replacements it rewrites,
+        // and where its own replacement goes.
+        let mut removed = String::new();
+        let mut rewritten = Vec::new();
+        let mut kept_member = false;
+        let mut insert_at = None;
+        let mut after_members = 0;
+        for (index, run) in self.runs.iter().enumerate() {
+            if !member(index, run) {
+                continue;
+            }
+            after_members = index + 1;
+            if removed_by_edit(index, run) {
+                run.stands_for(text, at[index], &mut removed);
+                rewritten.extend(run.replacement);
+                continue;
+            }
+            kept_member |= run.content != Content::Marker;
+            let past_edit = if run.content.shown() > 0 {
+                at[index] >= edit.start
+            } else {
+                at[index] >= edit.end
+            };
+            if past_edit && insert_at.is_none() {
+                insert_at = Some(index);
+            }
+        }
+        let insert_at = insert_at.unwrap_or(after_members);
         let region = self.new_region();
         let replacement = self.new_replacement();
-        let mut removed = String::new();
-        let mut kept = Vec::with_capacity(self.pieces.len() + inserted.len());
-        let mut placed = false;
-        let mut first_in_span = None;
-        for (index, piece) in std::mem::take(&mut self.pieces).into_iter().enumerate() {
-            if !in_span(index, &piece) {
-                kept.push(piece);
-                continue;
-            }
-            first_in_span.get_or_insert(kept.len());
-            if removed_by_edit(index, &piece) {
-                piece.content.stands_for(&mut removed);
-                if let Some(other) = piece.replacement {
-                    self.join(replacement, other);
-                }
-                continue;
-            }
-            let after_edit = match piece.content.shown() {
-                Some(_) => at[index] >= edit.start,
-                None => at[index] >= edit.end,
-            };
-            if !placed && after_edit {
-                kept.push(Piece {
-                    content: Content::Removed(String::new()),
-                    region: Some(region),
-                    replacement: Some(replacement),
-                });
-                kept.extend(fresh.clone().map(|content| Piece {
-                    content,
-                    region: Some(region),
-                    replacement: Some(replacement),
-                }));
-                placed = true;
-            }
-            kept.push(Piece {
+        for other in rewritten {
+            self.join(replacement, other);
+        }
+        let part = |content| Run {
+            content,
+            region: Some(region),
+            replacement: Some(replacement),
+        };
+        let mut insertion = Vec::with_capacity(2);
+        if !removed.is_empty() {
+            insertion.push(part(Content::Removed(removed)));
+        }
+        if !inserted.is_empty() {
+            insertion.push(part(Content::Preedit(inserted.len())));
+        }
+        if insertion.is_empty() && !kept_member {
+            insertion.push(Run {
+                content: Content::Marker,
                 region: Some(region),
-                ..piece
+                replacement: None,
             });
         }
-        let first_in_span = first_in_span.unwrap_or(kept.len());
-        if !placed {
-            // After every piece of the span: find where the span ends.
-            let end = kept[first_in_span..]
-                .iter()
-                .position(|piece| piece.region != Some(region))
-                .map_or(kept.len(), |offset| first_in_span + offset);
-            let insertion: Vec<Piece> = std::iter::once(Content::Removed(String::new()))
-                .chain(fresh)
-                .map(|content| Piece {
-                    content,
+        let mut runs = Vec::with_capacity(self.runs.len() + insertion.len());
+        let mut insertion = Some(insertion);
+        for (index, run) in std::mem::take(&mut self.runs).into_iter().enumerate() {
+            if index == insert_at {
+                runs.extend(insertion.take().into_iter().flatten());
+            }
+            if !member(index, &run) {
+                runs.push(run);
+            } else if !removed_by_edit(index, &run) && run.content != Content::Marker {
+                runs.push(Run {
                     region: Some(region),
-                    replacement: Some(replacement),
-                })
-                .collect();
-            kept.splice(end..end, insertion);
+                    ..run
+                });
+            }
         }
-        // The removal carries what the edit removed.
-        if let Some(removal) = kept.iter_mut().find(|piece| {
-            piece.replacement == Some(replacement)
-                && piece.region == Some(region)
-                && matches!(piece.content, Content::Removed(ref text) if text.is_empty())
-        }) {
-            removal.content = Content::Removed(removed);
-        }
-        self.pieces = kept;
+        runs.extend(insertion.into_iter().flatten());
+        self.runs = runs;
         self.regions.retain(|live| !hit.contains(live));
         if self
             .composition
@@ -286,20 +299,22 @@ impl CompositionLedger {
             self.composition = None;
         }
         self.regions.push(region);
+        self.normalize();
     }
 
-    /// Record that the composing range is now `range` in the text, or that
-    /// there is no composition.
+    /// Record that the composing range is now `range`, or that there is no
+    /// composition.
     pub fn set_composition(&mut self, range: Option<Range<usize>>) {
         let Some(range) = range else {
             for region in std::mem::take(&mut self.regions) {
                 self.commit(region);
             }
             self.composition = None;
+            self.normalize();
             return;
         };
         let at = self.positions();
-        let touched: Vec<usize> = self
+        let touched: Vec<RegionId> = self
             .regions
             .iter()
             .copied()
@@ -311,33 +326,37 @@ impl CompositionLedger {
             self.commit(composition);
             self.regions.retain(|&live| live != composition);
         }
+        self.cut(range.start);
+        self.cut(range.end);
         for &region in &touched {
             let extent = self.extent(region, &self.positions());
             if extent.start < range.start || extent.end > range.end {
                 self.narrow(region, &range);
             }
         }
+        self.gather(&touched, &range);
         let at = self.positions();
         let composition = self.new_region();
         let mut inside = false;
-        for (index, piece) in self.pieces.iter_mut().enumerate() {
-            let joins = match piece.content.shown() {
-                Some(_) => range.contains(&at[index]),
-                None => piece.region.is_some_and(|region| touched.contains(&region)),
+        for (index, run) in self.runs.iter_mut().enumerate() {
+            let joins = if run.content.shown() > 0 {
+                range.contains(&at[index])
+            } else {
+                run.region.is_some_and(|region| touched.contains(&region))
             };
             if joins {
-                piece.region = Some(composition);
+                run.region = Some(composition);
                 inside = true;
             }
         }
         if !inside {
-            let index = (0..self.pieces.len())
+            let index = (0..self.runs.len())
                 .find(|&index| at[index] >= range.start)
-                .unwrap_or(self.pieces.len());
-            self.pieces.insert(
+                .unwrap_or(self.runs.len());
+            self.runs.insert(
                 index,
-                Piece {
-                    content: Content::Removed(String::new()),
+                Run {
+                    content: Content::Marker,
                     region: Some(composition),
                     replacement: None,
                 },
@@ -346,213 +365,322 @@ impl CompositionLedger {
         self.regions.retain(|live| !touched.contains(live));
         self.regions.push(composition);
         self.composition = Some(composition);
+        self.normalize();
     }
 
-    /// The origin of the current composition: what it stands for in the
-    /// committed text. `None` without a composition.
+    /// The origin of the current composition in `text`: what it stands for
+    /// in the committed text. `None` without a composition.
     #[must_use]
-    pub fn origin(&self) -> Option<String> {
+    pub fn origin(&self, text: &str) -> Option<String> {
         let composition = self.composition?;
         let mut origin = String::new();
-        for piece in &self.pieces {
-            if piece.region == Some(composition) {
-                piece.content.stands_for(&mut origin);
+        let mut at = 0;
+        for run in &self.runs {
+            if run.region == Some(composition) {
+                run.stands_for(text, at, &mut origin);
             }
+            at += run.content.shown();
         }
         Some(origin)
     }
 
-    /// The committed text: the text, with the composition replaced by what
-    /// it stands for.
+    /// The committed text of `text`: the text with the composition replaced
+    /// by what it stands for.
     #[must_use]
-    pub fn committed(&self) -> String {
-        let mut committed = String::new();
-        for piece in &self.pieces {
-            if piece.region.is_some() && piece.region == self.composition {
-                piece.content.stands_for(&mut committed);
-            } else if let Some(ch) = piece.content.shown() {
-                committed.push(ch);
-            }
-        }
-        committed
-    }
-
-    /// The text the ledger follows.
-    #[must_use]
-    pub fn text(&self) -> String {
-        self.pieces
-            .iter()
-            .filter_map(|piece| piece.content.shown())
-            .collect()
+    pub fn committed(&self, text: &str) -> String {
+        let composing = self.composition.map(|composition| {
+            (
+                self.extent(composition, &self.positions()),
+                self.origin(text).unwrap_or_default(),
+            )
+        });
+        committed_text(
+            text,
+            composing
+                .as_ref()
+                .map(|(range, origin)| (range.clone(), origin.as_str())),
+        )
     }
 
     /// An edit that touches no region: what it removes leaves the committed
     /// text, and what it inserts is preedit, placed so every region stays
     /// where a store keeps its composition.
-    fn replace_committed(&mut self, edit: &Range<usize>, fresh: Vec<Piece>, at: &[usize]) {
-        let starts: Vec<(usize, usize)> = self
+    fn replace_outside(&mut self, edit: &Range<usize>, inserted: usize, at: &[usize]) {
+        let starts: Vec<(RegionId, usize)> = self
             .regions
             .iter()
             .map(|&region| (region, self.extent(region, at).start))
             .collect();
-        let region_start = |region: Option<usize>| {
+        let region_start = |region: Option<RegionId>| {
             starts
                 .iter()
                 .find(|(live, _)| Some(*live) == region)
                 .map_or(0, |&(_, start)| start)
         };
-        let mut kept = Vec::with_capacity(self.pieces.len() + fresh.len());
-        let mut fresh = Some(fresh);
-        for (index, piece) in std::mem::take(&mut self.pieces).into_iter().enumerate() {
-            let before = match piece.content.shown() {
-                Some(_) => at[index] >= edit.start,
-                // The insertion goes before a removal only when the removal's
-                // region lies wholly at or after the edit, as a store shifts
-                // a composition the edit ends at.
-                None => at[index] >= edit.end && region_start(piece.region) >= edit.end,
+        let mut runs = Vec::with_capacity(self.runs.len() + 1);
+        let mut insertion = (inserted > 0).then(|| Run::plain(Content::Preedit(inserted)));
+        for (index, run) in std::mem::take(&mut self.runs).into_iter().enumerate() {
+            let shown = run.content.shown();
+            // The insertion goes before a zero-width run only when the run's
+            // region lies wholly at or after the edit, as a store shifts a
+            // composition the edit ends at.
+            let past_edit = if shown > 0 {
+                at[index] >= edit.start
+            } else {
+                at[index] >= edit.end && region_start(run.region) >= edit.end
             };
-            if before && let Some(fresh) = fresh.take() {
-                kept.extend(fresh);
+            if past_edit && let Some(insertion) = insertion.take() {
+                runs.push(insertion);
             }
-            if piece.content.shown().is_some() && edit.contains(&at[index]) {
+            if shown > 0 && edit.contains(&at[index]) {
                 continue;
             }
-            kept.push(piece);
+            runs.push(run);
         }
-        if let Some(fresh) = fresh {
-            kept.extend(fresh);
-        }
-        self.pieces = kept;
+        runs.extend(insertion);
+        self.runs = runs;
+        self.normalize();
     }
 
     /// A mark leaves the part of `region` outside `range`: it commits as
-    /// shown. A replacement with removed text on both sides commits the
-    /// whole region as shown (module doc, "Narrowing").
-    fn narrow(&mut self, region: usize, range: &Range<usize>) {
+    /// shown (module doc, "Narrowing"). `range`'s ends are run boundaries.
+    fn narrow(&mut self, region: RegionId, range: &Range<usize>) {
         let at = self.positions();
-        let leaves = |index: usize, piece: &Piece| match piece.content.shown() {
-            Some(_) => !range.contains(&at[index]),
-            None => at[index] < range.start || at[index] > range.end,
-        };
+        // Each replacement's shown text, inside and outside the range.
         let mut sides: Vec<(usize, bool, bool)> = Vec::new();
-        for (index, piece) in self.pieces.iter().enumerate() {
-            if piece.region != Some(region) {
+        for (index, run) in self.runs.iter().enumerate() {
+            if run.region != Some(region) || run.content.shown() == 0 {
                 continue;
             }
-            if let Some(replacement) = piece.replacement {
+            if let Some(replacement) = run.replacement {
                 let root = self.root(replacement);
-                let leaving = leaves(index, piece);
+                let inside = range.contains(&at[index]);
                 match sides.iter_mut().find(|(seen, ..)| *seen == root) {
-                    Some((_, left, stayed)) => {
-                        *left |= leaving;
-                        *stayed |= !leaving;
+                    Some((_, ins, outs)) => {
+                        *ins |= inside;
+                        *outs |= !inside;
                     }
-                    None => sides.push((root, leaving, !leaving)),
+                    None => sides.push((root, inside, !inside)),
                 }
             }
         }
-        let split = sides.iter().any(|&(root, left, stayed)| {
-            left && stayed
-                && self.pieces.iter().any(|piece| {
-                    piece.region == Some(region)
-                        && piece
-                            .replacement
-                            .is_some_and(|other| self.root(other) == root)
-                        && matches!(&piece.content, Content::Removed(text) if !text.is_empty())
-                })
+        let side_of = |replacement: Option<ReplacementId>| {
+            replacement.and_then(|replacement| {
+                let root = self.root(replacement);
+                sides
+                    .iter()
+                    .find(|(seen, ..)| *seen == root)
+                    .map(|&(_, ins, outs)| (ins, outs))
+            })
+        };
+        let split = self.runs.iter().any(|run| {
+            run.region == Some(region)
+                && matches!(&run.content, Content::Removed(text) if !text.is_empty())
+                && side_of(run.replacement).is_some_and(|(ins, outs)| ins && outs)
         });
-        let mut kept = Vec::with_capacity(self.pieces.len());
-        for (index, piece) in std::mem::take(&mut self.pieces).into_iter().enumerate() {
-            if piece.region != Some(region) {
-                kept.push(piece);
+        let leaves = |index: usize, run: &Run| {
+            if run.content.shown() > 0 {
+                return !range.contains(&at[index]);
+            }
+            match side_of(run.replacement) {
+                // A removal goes with its replacement's text.
+                Some((_, outs)) => outs,
+                // A deletion's removal, or a marker, stays only strictly
+                // inside the range.
+                None => !(at[index] > range.start && at[index] < range.end),
+            }
+        };
+        let leaving: Vec<bool> = self
+            .runs
+            .iter()
+            .enumerate()
+            .map(|(index, run)| leaves(index, run))
+            .collect();
+        let mut runs = Vec::with_capacity(self.runs.len());
+        for (run, leaving) in std::mem::take(&mut self.runs).into_iter().zip(leaving) {
+            if run.region != Some(region) {
+                runs.push(run);
                 continue;
             }
-            let leaving = leaves(index, &piece);
             if !split && !leaving {
-                kept.push(piece);
+                runs.push(run);
                 continue;
             }
-            if let Some(ch) = piece.content.shown() {
-                kept.push(Piece {
-                    content: Content::Committed(ch),
+            let shown = run.content.shown();
+            if shown > 0 {
+                runs.push(Run {
+                    content: Content::Committed(shown),
                     region: (!leaving).then_some(region),
                     replacement: None,
                 });
-            } else if !leaving {
-                // A removal that stays keeps the region's place.
-                kept.push(Piece {
-                    content: Content::Removed(String::new()),
-                    region: Some(region),
-                    replacement: None,
-                });
             }
         }
-        self.pieces = kept;
+        self.runs = runs;
     }
 
-    /// Commit `region`: its characters stand for themselves and its
-    /// removals go.
-    fn commit(&mut self, region: usize) {
-        self.pieces
-            .retain(|piece| piece.region != Some(region) || piece.content.shown().is_some());
-        for piece in &mut self.pieces {
-            if piece.region == Some(region) {
-                if let Some(ch) = piece.content.shown() {
-                    piece.content = Content::Committed(ch);
+    /// A removal that stays with the new composition lies where the
+    /// composition does: one left before `range` (its replacement's text was
+    /// narrowed to the range) moves to the range's start, one left after it
+    /// to its end, which keeps the order of what the composition stands for.
+    fn gather(&mut self, touched: &[RegionId], range: &Range<usize>) {
+        let at = self.positions();
+        let (mut before, mut after) = (Vec::new(), Vec::new());
+        let mut runs = Vec::with_capacity(self.runs.len());
+        for (index, run) in std::mem::take(&mut self.runs).into_iter().enumerate() {
+            let stays = run.content.shown() == 0
+                && run.region.is_some_and(|region| touched.contains(&region));
+            if stays && at[index] < range.start {
+                before.push(run);
+            } else if stays && at[index] > range.end {
+                after.push(run);
+            } else {
+                runs.push(run);
+            }
+        }
+        self.runs = runs;
+        if !before.is_empty() {
+            let at = self.positions();
+            let index = (0..self.runs.len())
+                .find(|&index| at[index] >= range.start)
+                .unwrap_or(self.runs.len());
+            self.runs.splice(index..index, before);
+        }
+        if !after.is_empty() {
+            let at = self.positions();
+            let index = (0..self.runs.len())
+                .find(|&index| {
+                    at[index] > range.end
+                        || (at[index] == range.end && self.runs[index].content.shown() > 0)
+                })
+                .unwrap_or(self.runs.len());
+            self.runs.splice(index..index, after);
+        }
+    }
+
+    /// Commit `region`: its text stands for itself and its removals go.
+    fn commit(&mut self, region: RegionId) {
+        self.runs
+            .retain(|run| run.region != Some(region) || run.content.shown() > 0);
+        for run in &mut self.runs {
+            if run.region == Some(region) {
+                run.content = Content::Committed(run.content.shown());
+                run.region = None;
+                run.replacement = None;
+            }
+        }
+    }
+
+    fn push_plain(&mut self, content: Content) {
+        self.runs.push(Run::plain(content));
+    }
+
+    /// Split the run that shows the byte at `at` and some before it, so a
+    /// run starts at `at`.
+    fn cut(&mut self, at: usize) {
+        let mut start = 0;
+        for index in 0..self.runs.len() {
+            let shown = self.runs[index].content.shown();
+            if at > start && at < start + shown {
+                let (head, tail) = (at - start, start + shown - at);
+                let run = &mut self.runs[index];
+                let tail_content = match run.content {
+                    Content::Committed(_) => {
+                        run.content = Content::Committed(head);
+                        Content::Committed(tail)
+                    }
+                    Content::Preedit(_) => {
+                        run.content = Content::Preedit(head);
+                        Content::Preedit(tail)
+                    }
+                    Content::Removed(_) | Content::Marker => {
+                        unreachable!("BUG: only a run that shows text is cut")
+                    }
+                };
+                let tail = Run {
+                    content: tail_content,
+                    ..run.clone()
+                };
+                self.runs.insert(index + 1, tail);
+                return;
+            }
+            start += shown;
+        }
+    }
+
+    /// Join neighbouring runs of one kind that belong to the same region
+    /// and replacement, and drop empty text runs.
+    fn normalize(&mut self) {
+        let mut runs: Vec<Run> = Vec::with_capacity(self.runs.len());
+        for run in std::mem::take(&mut self.runs) {
+            if matches!(run.content, Content::Committed(0) | Content::Preedit(0)) {
+                continue;
+            }
+            if let Some(last) = runs.last_mut()
+                && last.region == run.region
+                && last.replacement == run.replacement
+            {
+                match (&mut last.content, &run.content) {
+                    (Content::Committed(len), Content::Committed(more))
+                    | (Content::Preedit(len), Content::Preedit(more)) => {
+                        *len += more;
+                        continue;
+                    }
+                    _ => {}
                 }
-                piece.region = None;
-                piece.replacement = None;
             }
+            runs.push(run);
         }
+        self.runs = runs;
     }
 
-    /// The byte position of each piece: where it starts, or where it sits
-    /// for a removal.
+    /// The byte position of each run: where it starts, or where it sits
+    /// for one that shows nothing.
     fn positions(&self) -> Vec<usize> {
         let mut at = 0;
-        self.pieces
+        self.runs
             .iter()
-            .map(|piece| {
+            .map(|run| {
                 let start = at;
-                at += piece.content.shown_len();
+                at += run.content.shown();
                 start
             })
             .collect()
     }
 
     /// The byte range `region` shows.
-    fn extent(&self, region: usize, at: &[usize]) -> Range<usize> {
+    fn extent(&self, region: RegionId, at: &[usize]) -> Range<usize> {
         let mut extent: Option<Range<usize>> = None;
-        for (index, piece) in self.pieces.iter().enumerate() {
-            if piece.region == Some(region) {
-                let end = at[index] + piece.content.shown_len();
+        for (index, run) in self.runs.iter().enumerate() {
+            if run.region == Some(region) {
+                let end = at[index] + run.content.shown();
                 extent = Some(match extent {
                     Some(extent) => extent.start..end,
                     None => at[index]..end,
                 });
             }
         }
-        extent.expect("BUG: a live region keeps at least one piece")
+        extent.expect("BUG: a live region keeps at least one run")
     }
 
-    fn new_region(&mut self) -> usize {
+    fn new_region(&mut self) -> RegionId {
         self.next_region += 1;
-        self.next_region
+        RegionId(self.next_region)
     }
 
-    fn new_replacement(&mut self) -> usize {
+    fn new_replacement(&mut self) -> ReplacementId {
         self.replacements.push(self.replacements.len());
-        self.replacements.len() - 1
+        ReplacementId(self.replacements.len() - 1)
     }
 
-    fn root(&self, mut replacement: usize) -> usize {
-        while self.replacements[replacement] != replacement {
-            replacement = self.replacements[replacement];
+    fn root(&self, replacement: ReplacementId) -> usize {
+        let mut at = replacement.0;
+        while self.replacements[at] != at {
+            at = self.replacements[at];
         }
-        replacement
+        at
     }
 
-    fn join(&mut self, one: usize, other: usize) {
+    fn join(&mut self, one: ReplacementId, other: ReplacementId) {
         let (one, other) = (self.root(one), self.root(other));
         if one != other {
             self.replacements[other] = one;

@@ -49,6 +49,9 @@ pub struct InMemoryTextStore {
     /// A session changed the committed text and its owner notification is
     /// not delivered yet: it is, once the session's lock is released.
     owner_owed: Cell<bool>,
+    /// Application edits made so far: a session the application edited
+    /// under is dropped.
+    generation: Cell<u64>,
     owner_listener: RefCell<Option<Rc<dyn Fn()>>>,
 }
 
@@ -114,6 +117,7 @@ impl InMemoryTextStore {
             protected: Cell::new(false),
             owner_notifications: Cell::new(0),
             owner_owed: Cell::new(false),
+            generation: Cell::new(0),
             owner_listener: RefCell::new(None),
         })
     }
@@ -146,18 +150,20 @@ impl InMemoryTextStore {
     /// An edit the application makes: `range` becomes `text` under the same
     /// rules as [`TextStoreEdit::replace`], and the observer hears of it
     /// afterwards — at once, or, inside a frame transaction, once the gate
-    /// opens.
+    /// opens. Made from inside a read-write grant, it wins: that session is
+    /// dropped (ADR-0090 amendment item 3).
     ///
     /// # Panics
     ///
-    /// When `range` does not name a range of the text, or when called from
-    /// inside a grant: both are the calling test's bug.
+    /// When `range` does not name a range of the text: the calling test's
+    /// bug.
     pub fn app_replace(&self, range: Utf16Range, text: &str) {
         let change = self
             .doc
             .borrow_mut()
             .replace(range, text)
             .expect("BUG: app_replace was given a range outside the text");
+        self.generation.set(self.generation.get() + 1);
         self.pending.borrow_mut().push(Notice::Text(change));
         self.report(Notice::Selection);
     }
@@ -242,22 +248,26 @@ impl InMemoryTextStore {
 
     fn open(&self, grant: LockGrant) {
         let protected = self.protected.get();
+        // A session works on a snapshot, with no borrow of the store held
+        // while the grant's body runs: the body may read the store, or edit
+        // it as the application.
+        let snapshot = self.doc.borrow().clone();
         match grant {
             LockGrant::Read(body) => {
-                let doc = self.doc.borrow();
                 body(&ReadSession {
-                    doc: &doc,
+                    doc: &snapshot,
                     protected,
                 });
             }
             LockGrant::ReadWrite(body) => {
                 // The session edits a working copy, kept only when the grant
-                // returns: a grant that panics part-way leaves the document
-                // as it was, never a composition without the origin its
-                // ledger would have given it.
-                let mut doc = self.doc.borrow_mut();
-                let committed = doc.committed();
-                let mut work = doc.clone();
+                // returns and the application did not edit the store during
+                // it: a grant that panics part-way leaves the document as it
+                // was, never a composition without the origin its ledger
+                // would have given it, and an application edit wins.
+                let generation = self.generation.get();
+                let committed = snapshot.committed();
+                let mut work = snapshot;
                 let ledger = CompositionLedger::open(&work.text, work.composing());
                 let mut session = EditSession {
                     doc: &mut work,
@@ -265,12 +275,14 @@ impl InMemoryTextStore {
                     ledger,
                 };
                 body(&mut session);
-                let origin = session.ledger.origin().unwrap_or_default();
-                work.origin = origin;
-                *doc = work;
-                if doc.committed() != committed {
+                work.origin = session.ledger.origin(&work.text).unwrap_or_default();
+                if self.generation.get() != generation {
+                    return;
+                }
+                if work.committed() != committed {
                     self.owner_owed.set(true);
                 }
+                *self.doc.borrow_mut() = work;
             }
         }
     }
@@ -588,7 +600,7 @@ impl TextStoreRead for EditSession<'_> {
 impl TextStoreEdit for EditSession<'_> {
     fn replace(&mut self, range: Utf16Range, text: &str) -> Result<TextChange, TextStoreError> {
         let bytes = utf16::byte_range(&self.doc.text, range)?;
-        self.ledger.replace(bytes, text);
+        self.ledger.replace(&self.doc.text, bytes, text);
         self.doc.replace(range, text)
     }
 
