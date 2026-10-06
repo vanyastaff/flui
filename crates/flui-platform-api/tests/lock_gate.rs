@@ -5,8 +5,8 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use flui_platform_api::text_store::{
-    CommitGate, InMemoryTextStore, LockArbiter, LockGrant, LockOutcome, LockTiming, TextStore,
-    TextStoreError,
+    CommitGate, InMemoryTextStore, LockArbiter, LockGrant, LockOutcome, LockTiming, OwnerCalls,
+    TextStore, TextStoreError,
 };
 
 type Log = Rc<RefCell<Vec<&'static str>>>;
@@ -127,7 +127,7 @@ fn queued_behind_a_gate(grants: usize) -> (LockArbiter, CommitGate) {
                 LockGrant::read(|_| {}),
                 LockTiming::Async,
                 &mut |_| {},
-                &mut || {}
+                &mut |_: &mut OwnerCalls| {}
             ),
             Ok(LockOutcome::Deferred)
         );
@@ -141,13 +141,16 @@ fn settle_runs_after_each_grant_releases_its_lock() {
     let arbiter = Rc::new(arbiter);
     let log = Rc::new(RefCell::new(Vec::new()));
     let (opened, settled, probe) = (Rc::clone(&log), Rc::clone(&log), Rc::clone(&arbiter));
-    let ran = arbiter.run_deferred(&mut |_| opened.borrow_mut().push("grant"), &mut || {
-        settled.borrow_mut().push(if probe.is_locked() {
-            "settle under the lock"
-        } else {
-            "settle"
-        });
-    });
+    let ran = arbiter.run_deferred(
+        &mut |_| opened.borrow_mut().push("grant"),
+        &mut |_: &mut OwnerCalls| {
+            settled.borrow_mut().push(if probe.is_locked() {
+                "settle under the lock"
+            } else {
+                "settle"
+            });
+        },
+    );
     assert_eq!(ran, 2);
     assert_eq!(*log.borrow(), ["grant", "settle", "grant", "settle"]);
     log.borrow_mut().clear();
@@ -156,7 +159,7 @@ fn settle_runs_after_each_grant_releases_its_lock() {
             LockGrant::read(|_| {}),
             LockTiming::Sync,
             &mut |_| log.borrow_mut().push("grant"),
-            &mut || log.borrow_mut().push("settle"),
+            &mut |_: &mut OwnerCalls| log.borrow_mut().push("settle"),
         ),
         Ok(LockOutcome::Granted)
     );
@@ -167,7 +170,7 @@ fn a_panicking_settle_reaches_the_gate_and_the_queue_drains() {
     let (arbiter, gate) = queued_behind_a_gate(3);
     let settles = Rc::new(RefCell::new(0));
     let counted = Rc::clone(&settles);
-    let ran = arbiter.run_deferred(&mut |_| {}, &mut || {
+    let ran = arbiter.run_deferred(&mut |_| {}, &mut |_: &mut OwnerCalls| {
         *counted.borrow_mut() += 1;
         let settled = *counted.borrow();
         if settled < 3 {
@@ -196,7 +199,7 @@ fn a_panicking_settle_with_no_owner_gate_resumes_after_release() {
             LockGrant::read(|_| {}),
             LockTiming::Sync,
             &mut |_| {},
-            &mut || panic!("owner failure with no one to report to"),
+            &mut |_: &mut OwnerCalls| panic!("owner failure with no one to report to"),
         )
     }));
     let payload = unwound.expect_err("the failure is not swallowed");

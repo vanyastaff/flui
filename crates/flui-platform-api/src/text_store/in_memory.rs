@@ -15,13 +15,14 @@
 
 use std::cell::{Cell, RefCell};
 
+use std::panic::resume_unwind;
 use std::rc::Rc;
 
 use flui_foundation::geometry::{Bounds, Point, Size};
 
 use super::composition_ledger::{CompositionLedger, committed_text};
 use super::lock::{CommitGate, LockArbiter, LockGrant, LockOutcome, LockTiming, TextStoreError};
-use super::owner_calls::OwnerCalls;
+use super::owner_calls::{OwnerCalls, RetainOnFailure};
 use super::session::{
     Composition, PointMode, RangeRect, Selection, TextChange, TextStoreEdit, TextStoreRead,
     TextStoreStatus,
@@ -67,6 +68,23 @@ impl std::fmt::Debug for InMemoryTextStore {
             .field("pending", &self.pending)
             .field("protected", &self.protected.get())
             .finish_non_exhaustive()
+    }
+}
+
+impl Drop for InMemoryTextStore {
+    /// The observer and the owner listener are other code: retired inside a
+    /// scope, retained during an unwind (ADR-0127). The arbiter retires its
+    /// queued grants the same way, and a failure still parked in the gate is
+    /// retained with it.
+    fn drop(&mut self) {
+        let observer = self.observer.get_mut().take();
+        let listener = self.owner_listener.get_mut().take();
+        let mut calls = OwnerCalls::new();
+        calls.retire(observer);
+        calls.retire(listener);
+        if !std::thread::panicking() {
+            calls.resume();
+        }
     }
 }
 
@@ -166,10 +184,9 @@ impl InMemoryTextStore {
     }
 
     /// Deliver what a finished grant owes, now that its lock is released:
-    /// the owner notification, then the observer's. The observer is told
-    /// even when the listener panics; the first panic is resumed after it.
-    fn settle(&self) {
-        let mut calls = OwnerCalls::new();
+    /// the owner notification, then the observer's, inside the arbiter's
+    /// settle scope. The observer is told even when the listener panics.
+    fn settle(&self, calls: &mut OwnerCalls) {
         // Taken before the listener runs: a session it opens owes its own.
         if self.owner_owed.replace(false) {
             self.owner_notifications
@@ -182,21 +199,29 @@ impl InMemoryTextStore {
                 calls.retire(listener);
             }
         }
-        calls.run(|| self.flush_notifications());
-        calls.resume();
+        self.flush_notifications(calls);
     }
 
     /// Queue `notice` and send everything queued if the observer may hear
     /// it now.
     fn report(&self, notice: Notice) {
         self.pending.borrow_mut().push(notice);
-        self.flush_notifications();
+        self.flush_now();
     }
 
-    /// Send the queued notices, unless a lock is held or the gate is shut:
-    /// an observer that answers with a synchronous lock request (a TSF sink)
-    /// must be granted it.
-    fn flush_notifications(&self) {
+    /// [`Self::flush_notifications`] in a scope of its own, whose first
+    /// failure is resumed.
+    fn flush_now(&self) {
+        let mut calls = OwnerCalls::new();
+        self.flush_notifications(&mut calls);
+        calls.resume();
+    }
+
+    /// Send the queued notices inside `calls`, unless a lock is held or the
+    /// gate is shut: an observer that answers with a synchronous lock request
+    /// (a TSF sink) must be granted it. Each notice is delivered though an
+    /// earlier one panicked.
+    fn flush_notifications(&self, calls: &mut OwnerCalls) {
         if self.arbiter.is_locked() || !self.arbiter.may_commit() {
             return;
         }
@@ -205,9 +230,6 @@ impl InMemoryTextStore {
         let Some(observer) = observer else {
             return;
         };
-        // Each notice is delivered though an earlier one panicked; the
-        // first panic is resumed once all were.
-        let mut calls = OwnerCalls::new();
         for notice in notices {
             calls.run(|| match notice {
                 Notice::Text(change) => observer.text_changed(change),
@@ -216,7 +238,6 @@ impl InMemoryTextStore {
             });
         }
         calls.retire(observer);
-        calls.resume();
     }
 
     fn open(&self, grant: LockGrant) {
@@ -266,17 +287,24 @@ impl TextStore for InMemoryTextStore {
         timing: LockTiming,
     ) -> Result<LockOutcome, TextStoreError> {
         // An app edit still owed is reported before the platform's session
-        // can see it, and one made from inside the grant once it ends.
-        self.flush_notifications();
+        // can see it, and one made from inside the grant once it ends. A
+        // failure there refuses the request: the grant, not yet accepted, is
+        // retained unrun rather than destroyed during the unwind.
+        let mut before = OwnerCalls::new();
+        self.flush_notifications(&mut before);
+        if let Some(payload) = before.into_failure() {
+            RetainOnFailure::retain(grant);
+            resume_unwind(payload);
+        }
         // Read before any grant's owner code can move the store elsewhere.
         let admitting = self.arbiter.owner_gate();
         let outcome =
             self.arbiter
-                .request(grant, timing, &mut |grant| self.open(grant), &mut || {
-                    self.settle();
+                .request(grant, timing, &mut |grant| self.open(grant), &mut |calls| {
+                    self.settle(calls);
                 });
         let mut calls = OwnerCalls::new();
-        calls.run_behind_parked(admitting.as_ref(), || self.flush_notifications());
+        calls.run_behind_parked(admitting.as_ref(), || self.flush_now());
         calls.resume();
         outcome
     }
@@ -284,13 +312,15 @@ impl TextStore for InMemoryTextStore {
     /// Also where notifications held back by the frame transaction are
     /// sent, before and after the queued grants run.
     fn run_deferred_grants(&self) -> usize {
-        self.flush_notifications();
+        self.flush_now();
         let admitting = self.arbiter.owner_gate();
         let ran = self
             .arbiter
-            .run_deferred(&mut |grant| self.open(grant), &mut || self.settle());
+            .run_deferred(&mut |grant| self.open(grant), &mut |calls| {
+                self.settle(calls);
+            });
         let mut calls = OwnerCalls::new();
-        calls.run_behind_parked(admitting.as_ref(), || self.flush_notifications());
+        calls.run_behind_parked(admitting.as_ref(), || self.flush_now());
         calls.resume();
         ran
     }

@@ -7,23 +7,37 @@
 //!
 //! | Point | Where |
 //! |-------|-------|
-//! | a grant's session body | `LockArbiter::run_one` (`lock.rs`) |
-//! | a store's settle | `LockArbiter::run_one` (`lock.rs`) |
-//! | queued grants dropped unrun | `LockArbiter::clear` (`lock.rs`) |
-//! | the in-memory owner listener, and its snapshot | `InMemoryTextStore::settle` (`in_memory.rs`) |
-//! | a replaced in-memory owner listener or observer | `InMemoryTextStore::set_owner_listener`, `set_observer` (`in_memory.rs`) |
-//! | observer notifications, and the observer snapshot | `InMemoryTextStore::flush_notifications` (`in_memory.rs`), `EditableTextStore::notify` (`flui-widgets` `text/text_store.rs`) |
-//! | the observer flush after a request's grants, behind what their settle parked ([`OwnerCalls::run_behind_parked`]) | `request_lock`, `run_deferred_grants` of `InMemoryTextStore` (`in_memory.rs`) and `EditableTextStore` (`flui-widgets` `text/text_store.rs`) |
+//! | a grant's session body; the admitting gate, read before it | `LockArbiter::run_one` (`lock.rs`) |
+//! | a store's settle, in a scope that parks each failure in the admitting gate as it is caught | `LockArbiter::run_one` (`lock.rs`) |
+//! | a grant refused (synchronous, queue full) | `LockArbiter::defer_or_refuse` (`lock.rs`) |
+//! | the caller's grant when an earlier queued grant fails: queued if asynchronous, retained if synchronous | `LockArbiter::request` (`lock.rs`) |
+//! | queued grants dropped unrun, by a detach or with the store | `LockArbiter::clear`, `Drop for LockArbiter` (`lock.rs`) |
+//! | the gate a store follows, replaced outside the borrow | `LockArbiter::set_gate` (`lock.rs`) |
 //! | a parked failure no owner took when the gate's last clone goes | `CommitGate`'s failure cell (`lock.rs`), which retains it as a scope does |
-//! | `on_changed`, and its snapshot | `EditObserver::deliver` (`flui-widgets` `text/editable_text.rs`), from `EditableTextStore::settle` and a key edit |
+//! | the in-memory owner listener, and its snapshot | `InMemoryTextStore::settle` (`in_memory.rs`) |
+//! | a replaced in-memory owner listener or observer, and both when the store goes | `InMemoryTextStore::set_owner_listener`, `set_observer`, `Drop` (`in_memory.rs`) |
+//! | observer notifications and the observer snapshot, in the caller's scope (a settle's included) | `InMemoryTextStore::flush_notifications` (`in_memory.rs`), `EditableTextStore::flush_notifications`, `notify` (`flui-widgets` `text/text_store.rs`) |
+//! | the flush before a request: a failure there refuses it and retains the grant | `request_lock` of `InMemoryTextStore` (`in_memory.rs`) and `EditableTextStore` (`flui-widgets` `text/text_store.rs`) |
+//! | the flush after a request's grants, behind what their settle parked ([`OwnerCalls::run_behind_parked`]) | `request_lock`, `run_deferred_grants` of both stores |
+//! | a grant a detached field refuses | `EditableTextStore::request_lock` (`flui-widgets` `text/text_store.rs`) |
+//! | `on_changed`, and its snapshot | `EditObserver::deliver` (`flui-widgets` `text/editable_text.rs`), from `EditableTextStore::settle` and from a key edit's `EditObserver::around`, which contains the edit's listener notification so the owner still hears of the change |
 //! | the controller's listeners, and the controller snapshot | `EditableTextStore::settle` (`flui-widgets` `text/text_store.rs`) |
-//! | a replaced or detached `EditableText` observer | `EditableTextStore::set_observer`, `detach` (`flui-widgets` `text/text_store.rs`) |
+//! | a replaced or detached `EditableText` observer, and the observer when the store goes | `EditableTextStore::set_observer`, `detach`, `Drop` (`flui-widgets` `text/text_store.rs`) |
+//! | dispose: detaching the client and the store, the attachment, the controller listener, each run though an earlier one failed | `EditableTextState::dispose` (`flui-widgets` `text/editable_text.rs`) |
+//! | a store installing the presentation's gate | `TextInputOwner::attach` (`flui-interaction` `text_input.rs`) |
 //! | `on_session_start`, the projection, and the dispatched client snapshot | `TextInputOwner::dispatch` (`flui-interaction` `text_input.rs`) |
-//! | clients replaced or detached, stores retired at an anchor | `TextInputOwner::attach`, `detach`, `run_deferred_grants` (`flui-interaction` `text_input.rs`) |
+//! | clients replaced or detached, and what their destruction parks | `TextInputOwner::attach`, `detach` (`flui-interaction` `text_input.rs`) |
+//! | stores retired at an anchor | `TextInputOwner::run_deferred_grants` (`flui-interaction` `text_input.rs`) |
+//! | diagnostics (`tracing` runs a user-installed subscriber) | `TextInputOwner::attach`, `detach`, `dispatch`; `EditableTextState::dispose` |
 //!
 //! Presentation close (`TextInputOwner::close_with_mode` and its `Drop`)
 //! keeps its close-mode containment (ADR-0123), which retires the same
-//! values under the same retention rule.
+//! values under the same retention rule; it takes a failure parked for its
+//! next turn too, ahead of its own, raised by an ordinary close and retained
+//! by a preserving one or by `Drop`. Diagnostics outside these paths (a
+//! field's focus listener and cursor-area loop, a deferred projection's
+//! warning inside a grant body) run inside the containment of the code
+//! that calls them: the focus notifier, the post-frame callback, the grant.
 //!
 //! The rules it keeps, in order of the calls a scope makes:
 //!
@@ -37,9 +51,14 @@
 //!   (ADR-0127), never dropped and never reported in its place.
 //! - **A failure parked in a gate during a call came before the call's own
 //!   unwind**, which happened after it, so [`OwnerCalls::run_parking`] and
-//!   [`OwnerCalls::retire_parking`] take the gate before keeping that unwind, and
-//!   a scope that reports to a gate takes what was parked there before it
-//!   ran anything ([`OwnerCalls::take_parked`]).
+//!   [`OwnerCalls::retire_parking`] take what the call parked before keeping
+//!   that unwind; a failure the gate already held stays for its owner's turn.
+//!   A scope that is that turn takes what was parked before it ran anything
+//!   ([`OwnerCalls::take_parked`]).
+//! - **A settle's failure belongs to its gate at once**
+//!   ([`OwnerCalls::parking_in`]): it is parked the moment it is caught, so a
+//!   session the owner's later code opens, whose own settle parks there too,
+//!   cannot overtake it.
 //! - **A snapshot retires inside the scope** ([`OwnerCalls::retire`]): dropped,
 //!   contained, while the scope is healthy; retained once it has failed or
 //!   while the thread unwinds (ADR-0127), so a capture whose `Drop` panics
@@ -116,31 +135,55 @@ impl RetainOnFailure for LockGrant {
 #[must_use = "a scope holds the first failure until it is resumed or handed on"]
 pub struct OwnerCalls {
     first: Option<Box<dyn Any + Send>>,
+    failed: bool,
+    /// Where a failure goes the moment it is caught, for a scope whose
+    /// failures belong to a gate's owner (a store's settle).
+    parks_in: Option<CommitGate>,
 }
 
 impl std::fmt::Debug for OwnerCalls {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("OwnerCalls")
             .field("failed", &self.failed())
-            .finish()
+            .field("parks", &self.parks_in.is_some())
+            .finish_non_exhaustive()
     }
 }
 
 impl OwnerCalls {
     /// A scope that has caught nothing.
     pub const fn new() -> Self {
-        Self { first: None }
+        Self {
+            first: None,
+            failed: false,
+            parks_in: None,
+        }
+    }
+
+    /// A scope that parks each failure in `gate` the moment it is caught, so
+    /// it is in the gate before any later owner code (a session that code
+    /// opens, whose settle parks there too) can be; without a gate, an
+    /// ordinary scope.
+    pub fn parking_in(gate: Option<CommitGate>) -> Self {
+        Self {
+            first: None,
+            failed: false,
+            parks_in: gate,
+        }
     }
 
     /// Whether a failure has been caught or taken.
     #[must_use]
     pub fn failed(&self) -> bool {
-        self.first.is_some()
+        self.failed
     }
 
     /// Keep `payload`, a failure caught elsewhere, behind any earlier one.
     pub fn keep(&mut self, payload: Box<dyn Any + Send>) {
-        if self.first.is_none() {
+        self.failed = true;
+        if let Some(gate) = &self.parks_in {
+            gate.defer_failure(payload);
+        } else if self.first.is_none() {
             self.first = Some(payload);
         } else {
             flui_foundation::panic::retain_opaque_payload(payload);
@@ -167,11 +210,15 @@ impl OwnerCalls {
     }
 
     /// [`Self::run`], for owner code that may request grants of stores
-    /// behind `gate`: what their settles parked there is taken after the
-    /// call, ahead of the call's own panic.
+    /// behind `gate`: what their settles parked there during the call is
+    /// taken after it, ahead of the call's own panic. A failure the gate
+    /// already held stays for its owner's turn.
     pub fn run_parking<R>(&mut self, gate: &CommitGate, call: impl FnOnce() -> R) -> Option<R> {
+        let held = gate.holds_failure();
         let outcome = catch_unwind(AssertUnwindSafe(call));
-        self.take_parked(gate);
+        if !held {
+            self.take_parked(gate);
+        }
         match outcome {
             Ok(value) => Some(value),
             Err(payload) => {
@@ -215,14 +262,18 @@ impl OwnerCalls {
     }
 
     /// [`Self::retire`], for a value whose destruction may request grants of
-    /// stores behind `gate`.
+    /// stores behind `gate`: what they park there during it is taken, as
+    /// for [`Self::run_parking`].
     pub fn retire_parking<T: RetainOnFailure>(&mut self, gate: &CommitGate, value: T) {
         if self.failed() || std::thread::panicking() {
             value.retain();
             return;
         }
+        let held = gate.holds_failure();
         let outcome = catch_unwind(AssertUnwindSafe(move || drop(value)));
-        self.take_parked(gate);
+        if !held {
+            self.take_parked(gate);
+        }
         if let Err(payload) = outcome {
             self.keep(payload);
         }

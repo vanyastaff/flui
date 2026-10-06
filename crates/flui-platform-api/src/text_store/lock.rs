@@ -68,10 +68,10 @@ use std::any::Any;
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::marker::PhantomData;
-use std::panic::resume_unwind;
+use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::rc::Rc;
 
-use super::owner_calls::OwnerCalls;
+use super::owner_calls::{OwnerCalls, RetainOnFailure};
 use super::session::{TextStoreEdit, TextStoreRead};
 use super::utf16::OffsetError;
 
@@ -243,6 +243,11 @@ impl CommitGate {
         }
     }
 
+    /// Whether a failure waits here.
+    pub(crate) fn holds_failure(&self) -> bool {
+        self.failure.0.borrow().is_some()
+    }
+
     /// The failure held since the last call, if any; the owner reports it
     /// (resumes it inside its own containment).
     #[must_use]
@@ -314,8 +319,11 @@ impl LockArbiter {
 
     /// Follow `gate` from now on, replacing the one installed before.
     pub fn set_gate(&self, gate: CommitGate) {
-        *self.gate.borrow_mut() = gate;
+        // The replaced gate goes once the borrow is released; a failure still
+        // parked in it is retained with it (`ParkedFailure`).
+        let replaced = std::mem::replace(&mut *self.gate.borrow_mut(), gate);
         self.owned_gate.set(true);
+        drop(replaced);
     }
 
     /// The gate an owner installed ([`Self::set_gate`]), where a failure
@@ -347,13 +355,28 @@ impl LockArbiter {
         grant: LockGrant,
         timing: LockTiming,
         open: &mut dyn FnMut(LockGrant),
-        settle: &mut dyn FnMut(),
+        settle: &mut dyn FnMut(&mut OwnerCalls),
     ) -> Result<LockOutcome, TextStoreError> {
         if self.locked.get() || !self.may_commit() {
             return self.defer_or_refuse(grant, timing);
         }
-        // Earlier requests first, so this one cannot overtake them.
-        self.drain(open, settle);
+        // Earlier requests first, so this one cannot overtake them. When one
+        // of them fails, this request is still accepted work: an
+        // asynchronous one waits behind the failed grant's tail, and a
+        // synchronous one, which cannot wait, is retained unrun (ADR-0127);
+        // neither is destroyed during the unwind.
+        let mut earlier = OwnerCalls::new();
+        earlier.run(|| self.drain(open, settle));
+        if let Some(payload) = earlier.into_failure() {
+            let refused = match timing {
+                LockTiming::Async => self.enqueue(grant).err(),
+                LockTiming::Sync => Some(grant),
+            };
+            if let Some(grant) = refused {
+                RetainOnFailure::retain(grant);
+            }
+            resume_unwind(payload);
+        }
         // An earlier grant may have closed the presentation's transaction gate.
         if !self.may_commit() {
             return self.defer_or_refuse(grant, timing);
@@ -364,22 +387,35 @@ impl LockArbiter {
         Ok(LockOutcome::Granted)
     }
 
+    /// Queue `grant`, or hand it back when the queue is full.
+    fn enqueue(&self, grant: LockGrant) -> Result<(), LockGrant> {
+        let mut queue = self.queue.borrow_mut();
+        if queue.len() >= DEFERRED_LOCK_CAPACITY {
+            return Err(grant);
+        }
+        queue.push_back(grant);
+        Ok(())
+    }
+
+    /// Queue `grant` or refuse it. A refused grant is retired inside a
+    /// scope, after the queue's borrow is released: its captures are the
+    /// requester's code.
     fn defer_or_refuse(
         &self,
         grant: LockGrant,
         timing: LockTiming,
     ) -> Result<LockOutcome, TextStoreError> {
-        match timing {
-            LockTiming::Sync => Err(TextStoreError::SyncLockUnavailable),
-            LockTiming::Async => {
-                let mut queue = self.queue.borrow_mut();
-                if queue.len() >= DEFERRED_LOCK_CAPACITY {
-                    return Err(TextStoreError::DeferredQueueFull);
-                }
-                queue.push_back(grant);
-                Ok(LockOutcome::Deferred)
-            }
-        }
+        let (refused, outcome) = match timing {
+            LockTiming::Sync => (Some(grant), Err(TextStoreError::SyncLockUnavailable)),
+            LockTiming::Async => match self.enqueue(grant) {
+                Ok(()) => (None, Ok(LockOutcome::Deferred)),
+                Err(grant) => (Some(grant), Err(TextStoreError::DeferredQueueFull)),
+            },
+        };
+        let mut calls = OwnerCalls::new();
+        calls.retire(refused);
+        calls.resume();
+        outcome
     }
 
     /// Run every queued grant, in request order, when the store is unlocked
@@ -387,7 +423,11 @@ impl LockArbiter {
     ///
     /// A grant queued by one of these grants runs in the same call, and
     /// `settle` runs after each, as for [`Self::request`].
-    pub fn run_deferred(&self, open: &mut dyn FnMut(LockGrant), settle: &mut dyn FnMut()) -> usize {
+    pub fn run_deferred(
+        &self,
+        open: &mut dyn FnMut(LockGrant),
+        settle: &mut dyn FnMut(&mut OwnerCalls),
+    ) -> usize {
         if self.locked.get() || !self.may_commit() {
             return 0;
         }
@@ -425,7 +465,11 @@ impl LockArbiter {
         count
     }
 
-    fn drain(&self, open: &mut dyn FnMut(LockGrant), settle: &mut dyn FnMut()) -> usize {
+    fn drain(
+        &self,
+        open: &mut dyn FnMut(LockGrant),
+        settle: &mut dyn FnMut(&mut OwnerCalls),
+    ) -> usize {
         let mut ran = 0;
         loop {
             if !self.may_commit() {
@@ -440,7 +484,12 @@ impl LockArbiter {
         }
     }
 
-    fn run_one(&self, grant: LockGrant, open: &mut dyn FnMut(LockGrant), settle: &mut dyn FnMut()) {
+    fn run_one(
+        &self,
+        grant: LockGrant,
+        open: &mut dyn FnMut(LockGrant),
+        settle: &mut dyn FnMut(&mut OwnerCalls),
+    ) {
         // A failure in this grant's settle belongs to the presentation that
         // admitted the grant: read before any owner code, the grant's own
         // included, can move the store to another presentation.
@@ -457,12 +506,30 @@ impl LockArbiter {
             return;
         }
         // The grant ran and its lock is released: the store's owner runs now,
-        // before the next grant. A failure there cannot undo the grant.
-        calls.run(settle);
-        match (admitting, calls.into_failure()) {
-            (_, None) => {}
-            (Some(gate), Some(payload)) => gate.defer_failure(payload),
-            (None, Some(payload)) => resume_unwind(payload),
+        // before the next grant. A failure there cannot undo the grant; it
+        // goes to the admitting gate the moment it is caught, ahead of any
+        // session the owner's code opens after it, or, with no owner gate,
+        // resumes once the settle is done.
+        let mut settling = OwnerCalls::parking_in(admitting);
+        let settled = catch_unwind(AssertUnwindSafe(|| settle(&mut settling)));
+        if let Err(payload) = settled {
+            settling.keep(payload);
+        }
+        settling.resume();
+    }
+}
+
+impl Drop for LockArbiter {
+    /// Grants still queued when the store goes are its requesters' code:
+    /// retired inside a scope, retained during an unwind (ADR-0127).
+    fn drop(&mut self) {
+        let queued = std::mem::take(self.queue.get_mut());
+        let mut calls = OwnerCalls::new();
+        for grant in queued {
+            calls.retire(grant);
+        }
+        if !std::thread::panicking() {
+            calls.resume();
         }
     }
 }
@@ -547,11 +614,16 @@ mod tests {
                 grants.grant("nested"),
                 LockTiming::Sync,
                 &mut open,
-                &mut || {},
+                &mut |_: &mut OwnerCalls| {},
             )));
         });
         assert_eq!(
-            arbiter.request(outer, LockTiming::Sync, &mut open, &mut || {}),
+            arbiter.request(
+                outer,
+                LockTiming::Sync,
+                &mut open,
+                &mut |_: &mut OwnerCalls| {}
+            ),
             Ok(LockOutcome::Granted)
         );
         assert_eq!(seen.get(), Some(Err(TextStoreError::SyncLockUnavailable)));
@@ -574,7 +646,7 @@ mod tests {
                 grants.grant(label),
                 LockTiming::Async,
                 &mut open,
-                &mut || {},
+                &mut |_: &mut OwnerCalls| {},
             );
         }
         // A request made once the gate reopens, before the anchor, still
@@ -585,7 +657,7 @@ mod tests {
                 grants.grant("fourth"),
                 LockTiming::Async,
                 &mut open,
-                &mut || {}
+                &mut |_: &mut OwnerCalls| {}
             ),
             Ok(LockOutcome::Granted)
         );
@@ -597,7 +669,12 @@ mod tests {
         let (_, grants) = labelled();
         for _ in 0..DEFERRED_LOCK_CAPACITY {
             assert_eq!(
-                arbiter.request(grants.grant("q"), LockTiming::Async, &mut open, &mut || {}),
+                arbiter.request(
+                    grants.grant("q"),
+                    LockTiming::Async,
+                    &mut open,
+                    &mut |_: &mut OwnerCalls| {}
+                ),
                 Ok(LockOutcome::Deferred)
             );
         }
@@ -606,7 +683,7 @@ mod tests {
                 grants.grant("over"),
                 LockTiming::Async,
                 &mut open,
-                &mut || {}
+                &mut |_: &mut OwnerCalls| {}
             ),
             Err(TextStoreError::DeferredQueueFull)
         );
@@ -627,7 +704,12 @@ mod tests {
         let arbiter = LockArbiter::new();
         let panicking = LockGrant::read(|_| panic!("a grant that fails"));
         let unwound = catch_unwind(AssertUnwindSafe(|| {
-            let _ = arbiter.request(panicking, LockTiming::Sync, &mut open, &mut || {});
+            let _ = arbiter.request(
+                panicking,
+                LockTiming::Sync,
+                &mut open,
+                &mut |_: &mut OwnerCalls| {},
+            );
         }));
         assert!(unwound.is_err());
         assert!(!arbiter.is_locked());
@@ -637,7 +719,7 @@ mod tests {
                 grants.grant("after"),
                 LockTiming::Sync,
                 &mut open,
-                &mut || {}
+                &mut |_: &mut OwnerCalls| {}
             ),
             Ok(LockOutcome::Granted)
         );
