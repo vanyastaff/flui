@@ -1243,8 +1243,8 @@ after closing its presentations and before resuming any earlier failure.
 During an existing unwind the values are retained instead, the same limit
 `TaskToken`'s `Drop` states.
 
-**Tests:** `owner_local_task_matrix` in `flui-testing`'s
-`tests/async_driver.rs` (`owner_local_future_completes_after_a_worker_wake`,
+**Tests:** `owner_local_task_matrix` in
+`crates/flui-testing/tests/async_driver.rs` (`owner_local_future_completes_after_a_worker_wake`,
 `late_completion_after_realm_drop_drops_captures_on_the_owner`,
 `a_leaked_async_driver_holds_no_task_after_the_realm`);
 `retirement_drops_every_task_and_keeps_the_first_panic` and
