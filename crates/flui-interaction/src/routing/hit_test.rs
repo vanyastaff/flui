@@ -142,8 +142,13 @@ pub struct HitTestEntry {
     /// Data-plane identity of this target's owner-local pan-zoom handler.
     pub pan_zoom_target: Option<PanZoomTarget>,
 
-    /// Mouse cursor for this target.
-    pub cursor: CursorIcon,
+    /// Mouse cursor this target asks for, or `None` to defer to the entries
+    /// further out on the path.
+    ///
+    /// `Some(CursorIcon::Default)` is an explicit arrow: it wins over an
+    /// ancestor's cursor exactly like any other icon. See
+    /// [`HitTestResult::resolve_cursor`].
+    pub cursor: Option<CursorIcon>,
 
     /// Mouse-tracker annotation contributed by this target, if it wants
     /// enter/exit/hover tracking.
@@ -178,7 +183,7 @@ impl HitTestEntry {
             pointer_target: None,
             scroll_target: None,
             pan_zoom_target: None,
-            cursor: CursorIcon::Default,
+            cursor: None,
             mouse_annotation: None,
             metadata: None,
         }
@@ -197,9 +202,12 @@ impl HitTestEntry {
         self.metadata.as_ref()?.downcast_ref::<T>()
     }
 
-    /// Builder: set cursor.
+    /// Builder: ask for `cursor` while this target is the innermost entry
+    /// with a cursor. `CursorIcon::Default` is an explicit arrow, not a
+    /// deferral; an entry that never calls this defers.
+    #[must_use]
     pub fn cursor(mut self, cursor: CursorIcon) -> Self {
-        self.cursor = cursor;
+        self.cursor = Some(cursor);
         self
     }
 
@@ -413,22 +421,34 @@ impl HitTestResult {
     /// (`add`, `push_transform`, nested `with_paint_*`) freely
     /// inside the scope.
     ///
+    /// # Admission
+    ///
+    /// Returns `None` without invoking `f` or changing the transform stack
+    /// when `offset` is not finite: a NaN or infinite translation has no
+    /// finite inverse, so the subtree is refused exactly like a
+    /// [`with_paint_transform`](Self::with_paint_transform) whose inverse is
+    /// not admitted (ADR-0113), and callers map `None` to a subtree miss.
+    /// Otherwise returns `Some(f(...))`.
+    ///
     /// # Panic semantics
     ///
     /// The entry transform depth is restored both on return and on unwind.
     /// A caller may catch a descendant's panic and continue the same hit walk
     /// without giving the next entry the failed descendant's coordinate space.
-    pub fn with_paint_offset<F, R>(&mut self, offset: Offset<f64>, f: F) -> R
+    pub fn with_paint_offset<F, R>(&mut self, offset: Offset<f64>, f: F) -> Option<R>
     where
         F: FnOnce(&mut Self) -> R,
     {
+        if !offset.is_finite() {
+            return None;
+        }
         let depth = self.transforms.len() + self.local_transforms.len();
         self.push_offset(-offset);
         let guard = TransformGuard {
             result: self,
             depth,
         };
-        f(&mut *guard.result)
+        Some(f(&mut *guard.result))
     }
 
     /// Runs `f` with the INVERSE of `transform` pushed onto the transform
@@ -734,15 +754,17 @@ impl HitTestResult {
 
     /// Resolves the active mouse cursor.
     ///
-    /// Returns the first non-default cursor in the path, or
-    /// `CursorIcon::Default`.
+    /// Returns the cursor of the innermost entry (the path is leaf-first)
+    /// that asks for one, including an explicit `CursorIcon::Default`, so a
+    /// child can restore the arrow inside an ancestor's I-beam. Entries whose
+    /// cursor is `None` defer outward; with no request on the path the
+    /// result is `CursorIcon::Default`.
+    #[must_use]
     pub fn resolve_cursor(&self) -> CursorIcon {
-        for entry in &self.path {
-            if entry.cursor != CursorIcon::Default {
-                return entry.cursor;
-            }
-        }
-        CursorIcon::Default
+        self.path
+            .iter()
+            .find_map(|entry| entry.cursor)
+            .unwrap_or(CursorIcon::Default)
     }
 }
 
@@ -811,12 +833,27 @@ impl<T: crate::sealed::CustomHitTestable> HitTestable for T {
 // HELPER FUNCTIONS
 // ============================================================================
 
+/// Re-express a pointer event in an entry's local space.
+///
+/// Every position the event carries is mapped as a point: the current state
+/// and each coalesced and predicted sample, so a consumer of the
+/// high-frequency history sees the same space as the current position. A
+/// scroll delta is a vector anchored at the scroll position: it is localized
+/// by [`localize_delta`] (rotated and scaled, never translated). Line and
+/// page deltas are localized the same way, since this crate converts them to
+/// pixels with fixed factors ([`ScrollEventData::delta_to_offset`]).
 pub(crate) fn transform_pointer_event(event: &PointerEvent, transform: &Matrix4) -> PointerEvent {
+    use ui_events::ScrollDelta;
     use ui_events::pointer::{PointerButtonEvent, PointerScrollEvent, PointerUpdate};
 
     let transform_position = |pos: dpi::PhysicalPosition<f64>| -> dpi::PhysicalPosition<f64> {
         let (x, y) = transform.transform_point(pos.x, pos.y);
         dpi::PhysicalPosition::new(x, y)
+    };
+    let transform_state = |state: &ui_events::pointer::PointerState| {
+        let mut local = state.clone();
+        local.position = transform_position(state.position);
+        local
     };
 
     match event {
@@ -838,23 +875,35 @@ pub(crate) fn transform_pointer_event(event: &PointerEvent, transform: &Matrix4)
                 state: new_state,
             })
         }
-        PointerEvent::Move(e) => {
-            let mut new_current = e.current.clone();
-            new_current.position = transform_position(e.current.position);
-            PointerEvent::Move(PointerUpdate {
-                pointer: e.pointer,
-                current: new_current,
-                coalesced: e.coalesced.clone(),
-                predicted: e.predicted.clone(),
-            })
-        }
+        PointerEvent::Move(e) => PointerEvent::Move(PointerUpdate {
+            pointer: e.pointer,
+            current: transform_state(&e.current),
+            coalesced: e.coalesced.iter().map(transform_state).collect(),
+            predicted: e.predicted.iter().map(transform_state).collect(),
+        }),
         PointerEvent::Scroll(e) => {
-            let mut new_state = e.state.clone();
-            new_state.position = transform_position(e.state.position);
+            let anchor = Offset::new(e.state.position.x, e.state.position.y);
+            let localize =
+                |dx: f64, dy: f64| localize_delta(transform, anchor, Offset::new(dx, dy));
+            let to_f32 = |value: f64| value.clamp(f64::from(f32::MIN), f64::from(f32::MAX)) as f32;
+            let delta = match e.delta {
+                ScrollDelta::PixelDelta(pixels) => {
+                    let local = localize(pixels.x, pixels.y);
+                    ScrollDelta::PixelDelta(dpi::PhysicalPosition::new(local.dx, local.dy))
+                }
+                ScrollDelta::LineDelta(x, y) => {
+                    let local = localize(f64::from(x), f64::from(y));
+                    ScrollDelta::LineDelta(to_f32(local.dx), to_f32(local.dy))
+                }
+                ScrollDelta::PageDelta(x, y) => {
+                    let local = localize(f64::from(x), f64::from(y));
+                    ScrollDelta::PageDelta(to_f32(local.dx), to_f32(local.dy))
+                }
+            };
             PointerEvent::Scroll(PointerScrollEvent {
                 pointer: e.pointer,
-                state: new_state,
-                delta: e.delta,
+                state: transform_state(&e.state),
+                delta,
             })
         }
         PointerEvent::Gesture(e) => {
@@ -955,9 +1004,31 @@ fn transform_scroll_event(event: &ScrollEventData, transform: &Matrix4) -> Scrol
 
     ScrollEventData {
         position: Offset::new(x, y),
-        delta: event.delta,
+        delta: localize_delta(transform, event.position, event.delta),
         modifiers: event.modifiers,
     }
+}
+
+/// Localize a delta that ends at `anchor`: both of its end points are mapped
+/// as positions and subtracted, so the translation cancels and only the
+/// linear part (and, under perspective, the local Jacobian at `anchor`)
+/// applies — the same rule `pan_delta` follows.
+///
+/// An admitted transform can still overflow on extreme finite inputs; the
+/// result saturates to the finite range instead of publishing a NaN or
+/// infinite delta.
+fn localize_delta(transform: &Matrix4, anchor: Offset<f64>, delta: Offset<f64>) -> Offset<f64> {
+    let start = anchor - delta;
+    let (end_x, end_y) = transform.transform_point(anchor.dx, anchor.dy);
+    let (start_x, start_y) = transform.transform_point(start.dx, start.dy);
+    let saturate = |value: f64| {
+        if value.is_nan() {
+            0.0
+        } else {
+            value.clamp(f64::MIN, f64::MAX)
+        }
+    };
+    Offset::new(saturate(end_x - start_x), saturate(end_y - start_y))
 }
 
 // ============================================================================

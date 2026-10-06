@@ -22,3 +22,6 @@ mod focus_retention;
 
 #[path = "text_store_host.rs"]
 mod text_store_host;
+
+#[path = "mouse_tracking.rs"]
+mod mouse_tracking;

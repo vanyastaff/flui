@@ -52,7 +52,7 @@ pub struct MouseRegion {
     on_enter: Option<MouseCallback>,
     on_hover: Option<MouseCallback>,
     on_exit: Option<MouseCallback>,
-    cursor: CursorIcon,
+    cursor: Option<CursorIcon>,
     opaque: bool,
     behavior: HitTestBehavior,
     child: Child,
@@ -64,7 +64,7 @@ impl Default for MouseRegion {
             on_enter: None,
             on_hover: None,
             on_exit: None,
-            cursor: CursorIcon::Default,
+            cursor: None,
             opaque: true,
             behavior: HitTestBehavior::Opaque,
             child: Child::empty(),
@@ -86,7 +86,8 @@ impl std::fmt::Debug for MouseRegion {
 }
 
 impl MouseRegion {
-    /// Creates an opaque mouse region with no callbacks and the default cursor.
+    /// Creates an opaque mouse region with no callbacks that defers the
+    /// cursor to the regions around it.
     pub fn new() -> Self {
         Self::default()
     }
@@ -124,10 +125,15 @@ impl MouseRegion {
         self
     }
 
-    /// Sets the mouse cursor reported while this region is active.
+    /// Sets the mouse cursor reported while this region is the innermost
+    /// region with a cursor under the pointer.
+    ///
+    /// Without this call the region defers to the regions around it.
+    /// `CursorIcon::Default` is an explicit arrow: a button inside a text
+    /// area that sets it shows the arrow, not the area's I-beam.
     #[must_use]
     pub fn cursor(mut self, cursor: CursorIcon) -> Self {
-        self.cursor = cursor;
+        self.cursor = Some(cursor);
         self
     }
 
