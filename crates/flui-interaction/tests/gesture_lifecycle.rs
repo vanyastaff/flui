@@ -20,7 +20,8 @@ use std::{
 
 use flui_foundation::geometry::Offset;
 use flui_interaction::arena::{
-    GestureArena, GestureArenaEntry, GestureArenaTeam, GestureDisposition, run_pointer_lifecycle,
+    GestureArena, GestureArenaEntry, GestureArenaMember, GestureArenaTeam, GestureDisposition,
+    run_pointer_lifecycle,
 };
 use flui_interaction::events::{
     PointerButton, PointerEvent, PointerType, make_down_event_for_id_with_button,
@@ -145,8 +146,10 @@ fn counter() -> Rc<Cell<u32>> {
     Rc::new(Cell::new(0))
 }
 
+type TapLog = Rc<RefCell<Vec<Offset<f64>>>>;
+
 /// A tap and a double tap on one detector, recording where taps fired.
-fn tap_and_double_tap(lane: &mut Lane) -> (Rc<RefCell<Vec<Offset<f64>>>>, Rc<Cell<u32>>) {
+fn tap_and_double_tap(lane: &mut Lane) -> (TapLog, Rc<Cell<u32>>) {
     let taps = Rc::new(RefCell::new(Vec::new()));
     let doubles = counter();
     let tap_log = Rc::clone(&taps);
@@ -414,6 +417,62 @@ fn panicking_double_tap_callback_leaves_the_next_double_tap_working() {
     );
 }
 
+fn verdict_by_pointer_cannot_pick_a_tap_sequence() {
+    // A verdict that names only a pointer cannot say which click it decides:
+    // with a mouse, the held first click and the current one share the ID.
+    let mut lane = Lane::new();
+    let taps = counter();
+    let doubles = counter();
+    let t = Rc::clone(&taps);
+    let tap =
+        TapGestureRecognizer::new(lane.arena.clone()).with_on_tap(move |_| t.set(t.get() + 1));
+    let d = Rc::clone(&doubles);
+    let double_tap = DoubleTapGestureRecognizer::new(lane.arena.clone())
+        .with_on_double_tap(move |_| d.set(d.get() + 1));
+    lane.join(&tap);
+    lane.join(&double_tap);
+    let mouse = PointerType::Mouse;
+    click(&lane, PointerId::PRIMARY, at(10.0, 10.0), mouse);
+    lane.frames(50);
+    lane.send(&down(PointerId::PRIMARY, at(14.0, 10.0), mouse));
+    tap.accept_gesture(PointerId::PRIMARY);
+    lane.send(&up(PointerId::PRIMARY, at(14.0, 10.0), mouse));
+    lane.frames(400);
+    assert_eq!(doubles.get(), 1, "the arena's own verdicts stand");
+    assert_eq!(taps.get(), 0, "a pointer-keyed verdict fired a single tap");
+    assert!(lane.arena.is_empty());
+}
+
+fn panicking_first_callback_still_runs_the_rest() {
+    // Long press: `on_long_press` then `on_long_press_start` fire together.
+    let mut lane = Lane::new();
+    let starts = counter();
+    let s = Rc::clone(&starts);
+    let long_press = LongPressGestureRecognizer::new(lane.arena.clone())
+        .with_on_long_press(|| panic!("on_long_press panics"))
+        .with_on_long_press_start(move |_| s.set(s.get() + 1));
+    lane.join(&long_press);
+    lane.send(&down(id(2), at(10.0, 10.0), PointerType::Touch));
+    let pumped = catch_unwind(AssertUnwindSafe(|| lane.frames(600)));
+    assert!(pumped.is_err(), "the first panic resumes");
+    assert_eq!(starts.get(), 1, "on_long_press_start still fires");
+
+    // Tap: `on_tap_up` then `on_tap` fire together.
+    let mut lane = Lane::new();
+    let taps = counter();
+    let t = Rc::clone(&taps);
+    let tap = TapGestureRecognizer::new(lane.arena.clone())
+        .with_on_tap_up(|_| panic!("on_tap_up panics"))
+        .with_on_tap(move |_| t.set(t.get() + 1));
+    lane.join(&tap);
+    let released = catch_unwind(AssertUnwindSafe(|| {
+        click(&lane, id(2), at(10.0, 10.0), PointerType::Touch);
+    }));
+    assert!(released.is_err(), "the first panic resumes");
+    assert_eq!(taps.get(), 1, "on_tap still fires");
+    assert!(lane.arena.is_empty());
+}
+
 fn panicking_multi_tap_callback_leaves_the_next_pair_working() {
     let taps = counter();
     let t = Rc::clone(&taps);
@@ -481,7 +540,7 @@ fn panicking_team_winner_still_rejects_its_teammates() {
     let _winner_entry = team.add(pointer, winner.clone(), &arena);
     let _teammate_entry = team.add(pointer, teammate.clone(), &arena);
     let rival = Arc::new(Verdicts::default());
-    let rival_entry = arena.add(pointer, rival.clone());
+    let rival_entry = arena.add(pointer, rival);
     arena.close(pointer);
     rival_entry.resolve(GestureDisposition::Rejected);
     let drained = catch_unwind(AssertUnwindSafe(|| arena.drain_deferred_resolutions()));
@@ -740,6 +799,14 @@ fn gesture_lifecycle_matrix() {
         (
             "fling_velocity_follows_event_timestamps_not_dispatch_time",
             fling_velocity_follows_event_timestamps_not_dispatch_time,
+        ),
+        (
+            "verdict_by_pointer_cannot_pick_a_tap_sequence",
+            verdict_by_pointer_cannot_pick_a_tap_sequence,
+        ),
+        (
+            "panicking_first_callback_still_runs_the_rest",
+            panicking_first_callback_still_runs_the_rest,
         ),
     ];
     let mut failures = Vec::new();

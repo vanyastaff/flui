@@ -17,7 +17,7 @@ use flui_foundation::geometry::Offset;
 use parking_lot::Mutex;
 use tracing::instrument;
 
-use super::recognizer::{GestureRecognizer, RecognizerBase, is_primary_down};
+use super::recognizer::{CallbackSequence, GestureRecognizer, RecognizerBase, is_primary_down};
 use crate::{
     arena::{GestureArenaMember, GestureDeadlineRegistration},
     events::{PointerEvent, PointerType},
@@ -380,12 +380,10 @@ impl LongPressGestureRecognizer {
                         callbacks.on_long_press_end.clone(),
                     )
                 };
-                if let Some(callback) = up {
-                    callback(details.clone());
-                }
-                if let Some(callback) = end {
-                    callback(details);
-                }
+                let mut run = CallbackSequence::new();
+                run.call(up, |callback| callback(details.clone()));
+                run.call(end, |callback| callback(details));
+                run.finish();
             }
             LongPressPhase::Ready => {}
         }
@@ -482,17 +480,15 @@ impl LongPressGestureRecognizer {
                 callbacks.on_long_press_start.clone(),
             )
         };
-        if let Some(callback) = on_long_press {
-            callback();
-        }
-        if let Some(callback) = on_start {
-            let details = LongPressStartDetails {
-                global_position: fired_global,
-                local_position: fired_pos,
-                kind: kind.unwrap_or(PointerType::Touch),
-            };
-            callback(details);
-        }
+        let details = LongPressStartDetails {
+            global_position: fired_global,
+            local_position: fired_pos,
+            kind: kind.unwrap_or(PointerType::Touch),
+        };
+        let mut run = CallbackSequence::new();
+        run.call(on_long_press, |callback| callback());
+        run.call(on_start, |callback| callback(details));
+        run.finish();
         true
     }
 

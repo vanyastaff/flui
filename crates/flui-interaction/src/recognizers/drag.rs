@@ -15,8 +15,8 @@ use flui_foundation::geometry::Offset;
 use parking_lot::Mutex;
 
 use super::recognizer::{
-    EventTimeline, GestureRecognizer, RecognizerBase, event_time_nanos, invoke_callback,
-    is_primary_down, retire_callback,
+    EventTimeline, GestureRecognizer, RecognizerBase, event_time, invoke_callback, is_primary_down,
+    retire_callback,
 };
 use crate::retain::Retain;
 use crate::{
@@ -459,20 +459,20 @@ impl DragGestureRecognizer {
 
     /// Handle pointer down - start tracking
     ///
-    /// `event_nanos` is the Down's own timestamp (`0` when the contact was
-    /// admitted without its event).
+    /// `stamp` is the Down's own timestamp, if the contact was admitted
+    /// with its event and the event carried one.
     fn handle_down(
         &self,
         position: Offset<f64>,
         global_position: Offset<f64>,
         kind: PointerType,
-        event_nanos: u64,
+        stamp: Option<u64>,
     ) {
         // Anchor the sequence's event timestamps on the arena's clock, not the
         // OS clock directly: a headless frame driver binds it to a
         // `ManualClock`, the same mechanism the deadline recognizers use.
         let mut timeline = EventTimeline::default();
-        let now = timeline.instant(event_nanos, self.state.now());
+        let now = timeline.instant(stamp, self.state.now());
         let mut state = self.drag_state.lock();
         state.timeline = timeline;
         state.state = DragPhase::Possible;
@@ -510,10 +510,10 @@ impl DragGestureRecognizer {
         position: Offset<f64>,
         global_position: Offset<f64>,
         kind: PointerType,
-        event_nanos: u64,
+        stamp: Option<u64>,
     ) {
         let mut state = self.drag_state.lock();
-        let now = state.timeline.instant(event_nanos, self.state.now());
+        let now = state.timeline.instant(stamp, self.state.now());
 
         match state.state {
             DragPhase::Possible => {
@@ -801,7 +801,7 @@ impl DragGestureRecognizer {
         position: Offset<f64>,
         global_position: Offset<f64>,
         kind: PointerType,
-        event_nanos: u64,
+        stamp: Option<u64>,
     ) {
         if !self.state.assert_not_disposed("add_pointer") {
             return;
@@ -817,7 +817,7 @@ impl DragGestureRecognizer {
         }
         self.state
             .start_tracking(pointer, position, global_position, self);
-        self.handle_down(position, global_position, kind, event_nanos);
+        self.handle_down(position, global_position, kind, stamp);
     }
 }
 
@@ -829,7 +829,7 @@ impl GestureRecognizer for DragGestureRecognizer {
         global_position: Offset<f64>,
     ) {
         // No event, so neither kind nor time: the touch tier, dispatch time.
-        self.admit(pointer, position, global_position, PointerType::Touch, 0);
+        self.admit(pointer, position, global_position, PointerType::Touch, None);
     }
 
     fn add_pointer_down(self: &Arc<Self>, dispatch: PointerDispatch<'_>) {
@@ -843,7 +843,7 @@ impl GestureRecognizer for DragGestureRecognizer {
             position,
             dispatch.global.position(),
             kind,
-            event_time_nanos(event),
+            event_time(event),
         );
     }
 
@@ -868,12 +868,7 @@ impl GestureRecognizer for DragGestureRecognizer {
 
         match event {
             PointerEvent::Move(_) => {
-                self.handle_move(
-                    position,
-                    global_position,
-                    pointer_type,
-                    event_time_nanos(event),
-                );
+                self.handle_move(position, global_position, pointer_type, event_time(event));
             }
             PointerEvent::Up(_) => {
                 self.handle_up(position, global_position, pointer_type);

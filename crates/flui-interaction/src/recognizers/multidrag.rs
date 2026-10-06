@@ -62,7 +62,7 @@ use web_time::Instant;
 use flui_foundation::geometry::Offset;
 use parking_lot::Mutex;
 
-use super::recognizer::{EventTimeline, GestureRecognizer, RecognizerBase, event_time_nanos};
+use super::recognizer::{EventTimeline, GestureRecognizer, RecognizerBase, event_time};
 use crate::{
     arena::{GestureArenaEntry, GestureArenaMember, GestureDisposition},
     events::{PointerEvent, PointerType},
@@ -378,14 +378,14 @@ impl MultiDragGestureRecognizer {
         position: Offset<f64>,
         global_position: Offset<f64>,
         kind: PointerType,
-        event_nanos: u64,
+        stamp: Option<u64>,
     ) {
         let (client, update, arena_entry) = {
             let mut map = self.pointers.lock();
             let Some(state) = map.get_mut(&pointer) else {
                 return;
             };
-            let timestamp = state.timeline.instant(event_nanos, self.state.now());
+            let timestamp = state.timeline.instant(stamp, self.state.now());
             let delta = (position - state.last_position).to_delta();
             state.last_position = position;
             state.last_global_position = global_position;
@@ -632,13 +632,7 @@ impl GestureRecognizer for MultiDragGestureRecognizer {
         let global_position = dispatch.global.position();
         match event {
             PointerEvent::Move(_) => {
-                self.handle_move(
-                    pointer,
-                    position,
-                    global_position,
-                    kind,
-                    event_time_nanos(event),
-                );
+                self.handle_move(pointer, position, global_position, kind, event_time(event));
             }
             PointerEvent::Up(_) => self.handle_up(pointer, position, global_position, kind),
             _ => {}

@@ -32,7 +32,7 @@ use parking_lot::Mutex;
 use smallvec::SmallVec;
 use ui_events::pointer::PointerButton;
 
-use super::recognizer::{GestureRecognizer, RecognizerBase};
+use super::recognizer::{CallbackSequence, GestureRecognizer, RecognizerBase};
 use crate::{
     arena::{GestureArenaMember, GestureDisposition},
     events::{PointerEvent, PointerType},
@@ -134,7 +134,7 @@ pub struct TapGestureRecognizer {
     callbacks: Rc<RefCell<TapCallbacks>>,
 
     /// Every tap sequence that has not reached its arena verdict yet.
-    sequences: Arc<Mutex<TapSequences>>,
+    sequences: Rc<RefCell<TapSequences>>,
 
     /// Gesture settings (device-specific tolerances)
     settings: Arc<Mutex<GestureSettings>>,
@@ -144,7 +144,14 @@ impl std::fmt::Debug for TapGestureRecognizer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("TapGestureRecognizer")
             .field("state", &self.state)
-            .field("sequences", &*self.sequences.lock())
+            .field(
+                "live_sequences",
+                &self
+                    .sequences
+                    .try_borrow()
+                    .map(|sequences| sequences.live.len())
+                    .ok(),
+            )
             .finish_non_exhaustive()
     }
 }
@@ -269,16 +276,6 @@ impl TapSequences {
         let index = self.index_of(id)?;
         Some(self.live.remove(index))
     }
-
-    /// The live sequence an arena verdict for `pointer` addresses when it
-    /// arrives without a sequence identity: the newest one on that pointer.
-    fn newest_on(&self, pointer: PointerId) -> Option<u64> {
-        self.live
-            .iter()
-            .rev()
-            .find(|sequence| sequence.pointer == pointer)
-            .map(|sequence| sequence.id)
-    }
 }
 
 /// The arena member standing for one tap sequence.
@@ -322,7 +319,7 @@ impl TapGestureRecognizer {
         Arc::new(Self {
             state: RecognizerBase::new(arena),
             callbacks: Rc::new(RefCell::new(TapCallbacks::default())),
-            sequences: Arc::new(Mutex::new(TapSequences::default())),
+            sequences: Rc::new(RefCell::new(TapSequences::default())),
             settings: Arc::new(Mutex::new(settings)),
         })
     }
@@ -473,7 +470,7 @@ impl TapGestureRecognizer {
             return;
         }
         let stale = {
-            let mut sequences = self.sequences.lock();
+            let mut sequences = self.sequences.borrow_mut();
             match sequences.current_mut() {
                 Some(current) if current.pointer != pointer => return,
                 Some(current) => {
@@ -487,7 +484,7 @@ impl TapGestureRecognizer {
             self.state.reject();
         }
         let id = {
-            let mut sequences = self.sequences.lock();
+            let mut sequences = self.sequences.borrow_mut();
             let id = sequences
                 .last_id
                 .checked_add(1)
@@ -531,7 +528,7 @@ impl TapGestureRecognizer {
         kind: PointerType,
         button: TapButton,
     ) {
-        let mut sequences = self.sequences.lock();
+        let mut sequences = self.sequences.borrow_mut();
         if let Some(current) = sequences.current_mut()
             && current.pointer == pointer
             && current.down.is_some()
@@ -551,7 +548,7 @@ impl TapGestureRecognizer {
     /// its contact already lifted.
     fn accept_sequence(&self, id: u64) {
         {
-            let mut sequences = self.sequences.lock();
+            let mut sequences = self.sequences.borrow_mut();
             let Some(index) = sequences.index_of(id) else {
                 return;
             };
@@ -565,7 +562,7 @@ impl TapGestureRecognizer {
     /// ignored.
     fn reject_sequence(&self, id: u64) {
         let was_current = {
-            let mut sequences = self.sequences.lock();
+            let mut sequences = self.sequences.borrow_mut();
             let was_current = sequences.current == Some(id);
             sequences.remove(id);
             was_current
@@ -582,7 +579,7 @@ impl TapGestureRecognizer {
     /// recognizer or starts the next contact finds no half-delivered state.
     fn deliver_if_won(&self, id: u64) {
         let won = {
-            let mut sequences = self.sequences.lock();
+            let mut sequences = self.sequences.borrow_mut();
             match sequences.index_of(id) {
                 Some(index)
                     if sequences.live[index].accepted && sequences.live[index].up.is_some() =>
@@ -607,15 +604,14 @@ impl TapGestureRecognizer {
                 callbacks.tap(up.button).cloned(),
             )
         };
-        if let (Some(callback), Some(down)) = (down_callback, down) {
-            callback(down.details);
+        let mut run = CallbackSequence::new();
+        if let Some(down) = down {
+            run.call(down_callback, |callback| callback(down.details));
         }
-        if let Some(callback) = up_callback {
-            callback(up.details.clone());
-        }
-        if let Some(callback) = tap_callback {
-            callback(up.details);
-        }
+        let details = up.details;
+        run.call(up_callback, |callback| callback(details.clone()));
+        run.call(tap_callback, |callback| callback(details));
+        run.finish();
     }
 
     /// Handle tap up event.
@@ -635,7 +631,7 @@ impl TapGestureRecognizer {
             Untracked,
         }
         let release = {
-            let mut sequences = self.sequences.lock();
+            let mut sequences = self.sequences.borrow_mut();
             match sequences.current_mut() {
                 Some(current) if current.pointer == pointer => {
                     let id = current.id;
@@ -678,7 +674,7 @@ impl TapGestureRecognizer {
     /// Cancel the contact that is down (slop exceeded, or `PointerCancel`).
     fn cancel_current(&self, details: TapDetails) {
         let cancelled = {
-            let mut sequences = self.sequences.lock();
+            let mut sequences = self.sequences.borrow_mut();
             let Some(id) = sequences.current else {
                 return;
             };
@@ -701,7 +697,7 @@ impl TapGestureRecognizer {
 
     /// Fire `on_tap_move` for a contact still within its slop.
     fn handle_tap_move(&self, details: TapDetails) {
-        if self.sequences.lock().current.is_none() {
+        if self.sequences.borrow().current.is_none() {
             return;
         }
         // Primary-only: there is no secondary/tertiary move; a primary-button
@@ -719,14 +715,18 @@ impl TapGestureRecognizer {
         })
     }
 
-    /// The [`TapButton`] slot a `Down`/`Up` payload belongs to.
-    fn event_button(event: &PointerEvent) -> TapButton {
+    /// The [`TapButton`] family a `Down`/`Up` belongs to — the one mapping
+    /// every path uses.
+    ///
+    /// A transition without a button (touch and pen may not carry one) is
+    /// primary. A button outside the three families (X1, X2, pen eraser) is
+    /// no tap at all: `None`, and so is any other event.
+    fn tap_button(event: &PointerEvent) -> Option<TapButton> {
         match event {
             PointerEvent::Down(data) | PointerEvent::Up(data) => data
                 .button
-                .and_then(TapButton::from_pointer_button)
-                .unwrap_or(TapButton::Primary),
-            _ => TapButton::Primary,
+                .map_or(Some(TapButton::Primary), TapButton::from_pointer_button),
+            _ => None,
         }
     }
 }
@@ -761,10 +761,7 @@ impl GestureRecognizer for TapGestureRecognizer {
         };
         // Primary, secondary and tertiary presses each have their own tap
         // family; any other button is not a tap at all.
-        let Some(button) = data
-            .button
-            .map_or(Some(TapButton::Primary), TapButton::from_pointer_button)
-        else {
+        let Some(button) = Self::tap_button(dispatch.local) else {
             return;
         };
         let position = dispatch.local.position();
@@ -807,14 +804,17 @@ impl GestureRecognizer for TapGestureRecognizer {
 
         match event {
             PointerEvent::Down(data) => {
-                let pos = data.state.position;
-                self.refine_down(
-                    primary,
-                    Offset::new(pos.x, pos.y),
-                    global_position,
-                    data.pointer.pointer_type,
-                    Self::event_button(event),
-                );
+                // A press of a button outside the tap families refines nothing.
+                if let Some(button) = Self::tap_button(event) {
+                    let pos = data.state.position;
+                    self.refine_down(
+                        primary,
+                        Offset::new(pos.x, pos.y),
+                        global_position,
+                        data.pointer.pointer_type,
+                        button,
+                    );
+                }
             }
             PointerEvent::Move(data) => {
                 let pos = data.current.position;
@@ -827,12 +827,16 @@ impl GestureRecognizer for TapGestureRecognizer {
                 }
             }
             PointerEvent::Up(data) => {
-                let pos = data.state.position;
-                self.handle_tap_up(
-                    primary,
-                    details(Offset::new(pos.x, pos.y), data.pointer.pointer_type),
-                    Self::event_button(event),
-                );
+                // Releasing a button outside the tap families (X1 while the
+                // primary is held) neither ends nor cancels the tap.
+                if let Some(button) = Self::tap_button(event) {
+                    let pos = data.state.position;
+                    self.handle_tap_up(
+                        primary,
+                        details(Offset::new(pos.x, pos.y), data.pointer.pointer_type),
+                        button,
+                    );
+                }
             }
             PointerEvent::Cancel(info) => {
                 // A cancel carries no position at all, in EITHER space — the
@@ -858,7 +862,7 @@ impl GestureRecognizer for TapGestureRecognizer {
         // Forget every sequence, then withdraw from the arena, so a verdict
         // arriving during or after disposal finds nothing to deliver.
         let live = {
-            let mut sequences = self.sequences.lock();
+            let mut sequences = self.sequences.borrow_mut();
             sequences.current = None;
             std::mem::take(&mut sequences.live)
         };
@@ -890,10 +894,16 @@ impl crate::recognizers::OneSequenceGestureRecognizer for TapGestureRecognizer {
             .unwrap_or_default()
     }
 
+    /// Resolves the tracked contact's own arena entry; the verdict then
+    /// reaches that sequence through its member. A pointer this recognizer
+    /// does not track (including a lifted contact awaiting its verdict) is
+    /// left alone.
     fn resolve_pointer(&self, pointer: PointerId, disposition: GestureDisposition) {
-        match disposition {
-            GestureDisposition::Accepted => self.accept_gesture(pointer),
-            GestureDisposition::Rejected => self.reject_gesture(pointer),
+        if self.state.primary_pointer() != Some(pointer) {
+            return;
+        }
+        if let Some(entry) = self.state.tracked_entry() {
+            entry.resolve(disposition);
         }
     }
 
@@ -914,24 +924,15 @@ impl crate::recognizers::PrimaryPointerGestureRecognizer for TapGestureRecognize
     }
 }
 
-/// The recognizer itself is not what it registers in the arena (each
-/// sequence registers its own [`TapArenaMember`]). A verdict addressed to the
-/// recognizer directly carries only a pointer ID, so it decides the newest
-/// sequence on that pointer.
+/// The recognizer itself is never an arena member: each sequence registers
+/// its own `TapArenaMember`, and only that member's verdict decides the
+/// sequence. A verdict addressed to the recognizer carries nothing but a
+/// pointer ID, which cannot tell a mouse's held earlier click from the
+/// current one, so it decides nothing.
 impl GestureArenaMember for TapGestureRecognizer {
-    fn accept_gesture(&self, pointer: PointerId) {
-        let id = self.sequences.lock().newest_on(pointer);
-        if let Some(id) = id {
-            self.accept_sequence(id);
-        }
-    }
+    fn accept_gesture(&self, _pointer: PointerId) {}
 
-    fn reject_gesture(&self, pointer: PointerId) {
-        let id = self.sequences.lock().newest_on(pointer);
-        if let Some(id) = id {
-            self.reject_sequence(id);
-        }
-    }
+    fn reject_gesture(&self, _pointer: PointerId) {}
 }
 
 #[cfg(test)]

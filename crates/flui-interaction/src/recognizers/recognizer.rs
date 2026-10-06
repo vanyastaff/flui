@@ -34,15 +34,19 @@ pub(crate) fn is_primary_down(event: &PointerEvent) -> bool {
         if data.button.is_none_or(|button| button == PointerButton::Primary))
 }
 
-/// The event's own timestamp in nanoseconds, or `0` when it carries none.
-pub(crate) fn event_time_nanos(event: &PointerEvent) -> u64 {
-    match event {
+/// The event's own timestamp in nanoseconds, if it carries one.
+///
+/// The wire stamps `0` when it has no time (a synthetic event); that
+/// convention ends here.
+pub(crate) fn event_time(event: &PointerEvent) -> Option<u64> {
+    let nanos = match event {
         PointerEvent::Down(data) | PointerEvent::Up(data) => data.state.time,
         PointerEvent::Move(data) => data.current.time,
         PointerEvent::Scroll(data) => data.state.time,
         PointerEvent::Gesture(data) => data.state.time,
         PointerEvent::Cancel(_) | PointerEvent::Enter(_) | PointerEvent::Leave(_) => 0,
-    }
+    };
+    (nanos != 0).then_some(nanos)
 }
 
 /// Places a pointer sequence's event timestamps on the arena clock.
@@ -52,9 +56,9 @@ pub(crate) fn event_time_nanos(event: &PointerEvent) -> u64 {
 /// them: events that queued up behind one frame are dispatched back to back.
 /// The first stamped event of a sequence anchors its hardware time to the
 /// arena clock's reading at dispatch; every later event lands at the anchor
-/// plus its own hardware offset. An event without a timestamp (`0`) is
-/// stamped at dispatch, and one older than the anchor is clamped to it, so
-/// the returned instants never run backwards from the anchor.
+/// plus its own hardware offset. An event without a timestamp is stamped at
+/// dispatch, and one older than the anchor is clamped to it, so the returned
+/// instants never run backwards from the anchor.
 #[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct EventTimeline {
     anchor: Option<(u64, Instant)>,
@@ -63,10 +67,10 @@ pub(crate) struct EventTimeline {
 impl EventTimeline {
     /// The arena-clock instant at which an event stamped `event_nanos` happened,
     /// given the arena clock reads `now` at dispatch.
-    pub(crate) fn instant(&mut self, event_nanos: u64, now: Instant) -> Instant {
-        if event_nanos == 0 {
+    pub(crate) fn instant(&mut self, event_nanos: Option<u64>, now: Instant) -> Instant {
+        let Some(event_nanos) = event_nanos else {
             return now;
-        }
+        };
         let Some((anchor_nanos, anchor)) = self.anchor else {
             self.anchor = Some((event_nanos, now));
             return now;
@@ -90,6 +94,52 @@ pub(crate) fn retire_callback<T: ?Sized>(callback: Option<Rc<T>>, first: &mut Op
             RoutePanic::capture(|| drop(callback)),
             "recognizer callback retirement",
         );
+    }
+}
+
+/// Several user callbacks that one transition fires back to back.
+///
+/// Each callback runs even when an earlier one panicked: they report the same
+/// committed transition, and a consumer listening on a later one must not miss
+/// it because another listener failed. Each capture retires after its call;
+/// [`finish`](Self::finish) resumes the first failure. Entered while the
+/// thread is already unwinding, no callback runs and every capture is
+/// retained.
+pub(crate) struct CallbackSequence {
+    first: Option<RoutePanic>,
+    incoming_failure: bool,
+}
+
+impl CallbackSequence {
+    pub(crate) fn new() -> Self {
+        Self {
+            first: None,
+            incoming_failure: std::thread::panicking(),
+        }
+    }
+
+    /// Invoke `callback` (if any) and retire its capture.
+    pub(crate) fn call<T: ?Sized>(&mut self, callback: Option<Rc<T>>, invoke: impl FnOnce(&T)) {
+        if self.incoming_failure {
+            callback.retain();
+            return;
+        }
+        if let Some(callback) = callback.as_ref() {
+            let candidate = RoutePanic::capture(|| invoke(callback.as_ref()));
+            RoutePanic::preserve_first(&mut self.first, candidate, "recognizer callback");
+        }
+        retire_callback(callback, &mut self.first);
+    }
+
+    /// Resume the first failure, if any.
+    pub(crate) fn finish(self) {
+        if let Some(panic) = self.first {
+            if self.incoming_failure {
+                panic.retain();
+            } else {
+                panic.resume();
+            }
+        }
     }
 }
 
@@ -167,7 +217,10 @@ pub trait GestureRecognizer: GestureArenaMember {
     /// long press. A `Down` without button information (touch, pen) counts as
     /// the primary button. Events other than `Down` are ignored.
     ///
-    /// The default forwards the dispatch's position pair to `add_pointer`.
+    /// The default filters nothing: it admits every `Down`, whatever its
+    /// button, by forwarding the dispatch's position pair to `add_pointer`.
+    /// The button and kind rules above belong to the recognizers that
+    /// override it.
     fn add_pointer_down(self: &Arc<Self>, dispatch: PointerDispatch<'_>) {
         if let PointerEvent::Down(_) = dispatch.local {
             self.add_pointer(
