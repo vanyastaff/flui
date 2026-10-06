@@ -9,8 +9,8 @@
   lifecycle, системные настройки;
   [ADR-0152](../../../adr/ADR-0152-capability-seam-revised.md) — шов возможностей (вместо
   ADR-0084);
-  [ADR-0153](../../../adr/ADR-0153-stable-crates-do-not-ride-the-train.md) — Stable-крейты не
-  ходят поездом;
+  [ADR-0153](../../../adr/ADR-0153-release-train-and-capability-crates.md) — поезд релизов и
+  крейты возможностей: открытый вопрос к 0.3 с опытами;
   [ADR-0154](../../../adr/ADR-0154-capability-crates.md) — крейты возможностей
 
 Обозначения: **[R]** прочитано в коде, **[C]** собрано, **[X]** запущено, **[I]** вывод,
@@ -24,7 +24,7 @@
 | Контракт зависит от `flui-foundation = "=0.2.0-dev"`, а у foundation train guard `links = "flui_train"` | [R] `crates/flui-platform-api/Cargo.toml:27`; ADR-0088 |
 | В Stable-сигнатурах — типы `ui-events` 0.3 (`PlatformInput::Pointer(PointerEvent)`, `PlatformWindow::modifiers`), а через них `keyboard-types` и `dpi`. ADR-0089 (Proposed) это запрещает; манифест называет это «ADR-0089 debt» | [R] `flui-platform-api/src/input.rs:29-38,108-110`, `platform_window.rs:288` |
 | ~2 000 строк политики text store в контракте (`LockArbiter`, `OwnerCalls`, `CompositionLedger`, `EditGeneration`, `project_ime_event`); тестовые двойники `InMemoryClipboard`, `InMemoryTextStore` (730 строк, 637 без тестов); backend-слаб `OfferTable` | [R] `text_store/*`, `clipboard.rs:23`, `data_transfer.rs` |
-| Без потребителя выше бэкенда: `PlatformDisplay`, `WindowBounds`, `WindowMode`, `WindowEvent`, весь словарь data transfer, методы `display`, `window_bounds`, `set_background_appearance`, `mouse_position`, `is_hovered`. `PlatformHaptics` реализован только headless-фейком; `Storage` — только `MemoryStorage` в `flui-testing` | [R] |
+| Без потребителя выше бэкенда: `PlatformDisplay`, `WindowBounds`, `WindowMode`, `WindowEvent`, словарь data transfer, кроме `DragDropEvent` и `DataTransferId` (их видит runtime через `PlatformInput`), методы `display`, `window_bounds`, `set_background_appearance`, `mouse_position`, `is_hovered`. `PlatformHaptics` реализован только headless-фейком; `Storage` — только `MemoryStorage` в `flui-testing` | [R] |
 | `flui-platform`: H/1, layer 3, `allowed-dependents = [flui-app]`, 97 файлов / 40 717 строк src; в production его называет только `flui-app` (19 файлов src) | [R] |
 | В бэкенде: словарь без потребителя выше (`PlatformCapabilities`, `PathPromptOptions`, `SessionEndPhase/Answer`); `LinuxPlatform` — `unimplemented!()` во всех методах, кроме `name` и `data_transfer`; наследный `window.rs` с сырым `RawWindowHandle`; публичные OS-типы (`win32::HWND`, `NSApplication`, `AndroidApp`, `HtmlCanvasElement`, `tokio::runtime::Handle`, `accesskit::TreeUpdate`) | [R] |
 | `BackgroundExecutor` и `Task` живые: их используют Win32, macOS, winit; файловые диалоги Win32 возвращают `Task` (ADR-0039 §2) | [R] `windows/platform.rs:660,831,2444-2538`, `macos/platform.rs:49,135`, `winit/platform.rs:228,353` |
@@ -41,8 +41,10 @@
    `unsafe`, upstream-типов (ADR-0089 §1–§2, принят для контракта ADR-0151), тестовых двойников.
    Элемент без потребителя выше бэкенда в контракт не входит; он возвращается с первым
    потребителем.
-2. **Stable не ходит поездом** (ADR-0153): нормальные зависимости `stable`-крейта — только
-   `stable` и внешние по ADR-0089 §2.
+2. **Геометрия — значения `flui_foundation::geometry`** (ADR-0098); контракт зависит от
+   `flui-foundation`, как сейчас. Как крейт возможности со своей версией переживает релизы
+   FLUI — вопрос ADR-0153 к 0.3; разделение, если понадобится, — узкой поправкой к ADR-0098, не
+   отдельным крейтом типов.
 3. **OS-код фреймворка — в ядре-хосте, его список закрыт** (ADR-0151 §3). OS-код
    необязательного сервиса — в крейте возможности (ADR-0154).
 4. **Источник системной настройки — хост, представление — у потребителя.** Один производитель
@@ -61,10 +63,9 @@
 
 | Крейт | Класс / tier / kind | Layer | Содержит | Не содержит |
 |---|---|---|---|---|
-| **`flui-geometry`** (новый, ADR-0153) | values, V, `stable` | 1 | логические и device-значения ADR-0098 (`Size`, `Point`, `Offset`, `Rect`, `Bounds`, `EdgeInsets`, `Device*`) | ID, счётчики, машинерию |
-| **`flui-platform`** (сейчас `flui-platform-api`) | контракт, C/1, `stable` | 1 | `window`, `input` (свой словарь указателя/клавиатуры), `ime`, `text_store` (трейты и значения), `clipboard`, `storage`, `locale`, `target_platform`, `lifecycle`, `preferences`, `capability`; с 0.3 — мост к хосту и разрешения | OS-код, двойники, backend-таблицы, haptics, data transfer до потребителя, upstream-типы |
+| **`flui-platform`** (сейчас `flui-platform-api`) | контракт, C/1, `stable` | 1 | `window`, `input` (свой словарь указателя/клавиатуры), `ime`, `text_store` (трейты и значения), `clipboard`, `storage`, `locale`, `target_platform`, `lifecycle`, `preferences`, `capability`; с 0.3 — мост к хосту и разрешения | OS-код, двойники, backend-таблицы, haptics, data transfer (кроме `DragDropEvent`, `DataTransferId`), upstream-типы, `parking_lot`/`tracing` после ухода нуждающихся |
 | **`flui-native`** (сейчас `flui-platform`) | ядро-хост, H/1, `internal` | 3 | `Platform`, `OwnerPlatform`, `SharedPlatform`, `PlatformProxy`, `HostWindow`, бэкенды `windows`, `macos`, `ios`, `android`, `winit`, `web`, `headless`; файловое хранилище; AT-SPI-адаптер; правила маппинга по смыслу | сервисы вне закрытого списка; заглушки; публичные OS-типы |
-| **`flui-location`, `flui-sensors`, `flui-media`, `flui-notify`, `flui-vault`, `flui-device`, `flui-system`…** | возможности, pkg, `capability` (ADR-0154) | 7 | один набор разрешений ОС: тип возможности, handle, OS-бэкенды под `cfg`, симулирующий провайдер, conformance-таблица, декларации | зависимостей друг от друга; поезда |
+| **`flui-location`, `flui-sensors`, `flui-media`, `flui-notify`, `flui-vault`, `flui-device`, `flui-system`…** | возможности, pkg, `capability` (ADR-0154) | 7 | один набор разрешений ОС: тип возможности, handle, OS-бэкенды под `cfg`, симулирующий провайдер, conformance-таблица, декларации | зависимостей друг от друга |
 | `flui-semantics` | S/5 | 3 | без изменений, кроме удаления `AccessibilityFeatures` | — |
 | `flui-scheduler` | S/2 | 2 | реэкспорт `AppLifecycleState` из контракта; политика кадров (`should_render`, `should_animate`) — своим extension-трейтом | определение типа |
 | `flui-interaction` | S/4 | 2 | `GestureSettings` строится из `SystemPreferences`; `ClipboardCapability` + `ClipboardHandle` | константы как «системные» значения |
@@ -76,10 +77,11 @@
 | `flui-cli` | H/3 | 9 | с 0.3 — генерация манифестов ОС из деклараций крейтов возможностей | — |
 
 **Почему это не «проблема множества крейтов».** Ядро не дробится: платформа фреймворка остаётся
-двумя крейтами, геометрия — один слой значений. Крейты возможностей — листья: от них никто не
-зависит, друг о друге они не знают, пользователь компилирует только добавленные, а CI при
-изменении пересобирает один лист. Боль множества крейтов — это сцепка версий; ADR-0153 убирает её
-до первого крейта возможности. Гранулярность — один крейт на набор разрешений и темп релизов (к 1.0
+двумя крейтами, геометрия остаётся в `flui-foundation` (ADR-0098). Крейты возможностей —
+листья: от них никто не зависит, друг о друге они не знают, пользователь компилирует только
+добавленные, а CI при изменении пересобирает один лист. Боль множества крейтов — это сцепка
+версий: опыты ADR-0153 показывают, что крейт возможности ломает несовместимая смена версии
+контракта, а не геометрия; решение — до первого крейта возможности. Гранулярность — один крейт на набор разрешений и темп релизов (к 1.0
 около 8–10), не на API.
 
 ## 4. Таблица ответственности
@@ -111,7 +113,8 @@
 | `TextStore`, `TextStoreHost`, `TextStoreObserver`, значения | контракт | ядро | C | C | ADR-0090/0135/0142 |
 | Машинерия text store | реализация | ядро | C | после text-ime T6 (Q5): `flui-interaction` (заменяет часть ADR-0142) или C за `#[doc(hidden)]` | политика, не словарь |
 | `InMemoryTextStore` | двойник | — | C | `flui-testing` | двойник не Stable |
-| Drag-and-drop: словарь, `OfferTable`, `ClaimSlot` | словарь + backend | ядро | C | N; словарь — в C с первым DnD-виджетом | правило 1 |
+| Drag-and-drop: `DragDropEvent`, `DataTransferId` | словарь ввода | ядро | C | C | runtime получает их через `PlatformInput` |
+| Drag-and-drop: offers, форматы, запросы, `DataTransferSource`, `OfferTable`, `ClaimSlot` | словарь + backend | ядро | C | N; словарь — в C с первым DnD-виджетом | правило 1 |
 | Пиксельные хелперы, `offset_from_coords`, `delta_offset_from_coords` | хелперы | — | C | N или удалить | backend-код / мёртвые |
 
 ### 4.3 Состояние системы
@@ -220,8 +223,9 @@ pub enum InvalidPreference { TextScale, DurationScale, GestureArea, Distance, Sp
   — значения по умолчанию, пока нет источника (порталы XDG — позже). Где у ОС нет значения,
   поле жестов или колеса — `None`, и потребитель держит своё умолчание (контракт «системных
   умолчаний» не выдумывает); масштаб текста по умолчанию — 1, motion — `NoPreference`.
-  `Distance` и `Speed` — скалярные логические значения ADR-0098; с ADR-0153 они переезжают в
-  `flui-geometry` вместе с остальной геометрией.
+  `Distance` и `Speed` — проверенные значения настроек (f64 логических пикселей и пикселей в
+  секунду по ADR-0098, конечные), а не единицы измерения: геометрия остаётся f64-значениями
+  `flui_foundation::geometry`, без `px()`.
 - **Доставка:** `flui-app` кладёт текущее значение в каждый realm при создании (значение есть до
   первого окна) и рассылает изменение одной типизированной операцией хоста.
 - **Потребители** строят своё: `MediaQuery` (масштаб текста, контраст, bold, локали, motion для
@@ -333,7 +337,7 @@ conformance-таблицы, крейты возможностей вне пое�
 ## 10. Имена
 
 Требование владельца: `flui-<слово>`. Варианты (crates.io, 2026-10-06: свободны все, включая
-`flui-geometry`, `flui-location`, `flui-sensors`, `flui-media`, `flui-notify`, `flui-vault`,
+`flui-location`, `flui-sensors`, `flui-media`, `flui-notify`, `flui-vault`,
 `flui-device`, `flui-system`; `flui-cli` 0.1.0 уже опубликован владельцем):
 
 | Вариант | Контракт | Ядро-хост | Плюсы | Минусы |
@@ -402,5 +406,5 @@ Q2 решён (§6). Открыты; работа идёт по рекоменд
   — рекомендую; или в контракте за `#[doc(hidden)]`.
 - **Q6. Номера ADR 0151–0154** — записать резерв в реестр `release/tasks.md` на
   `plans/specs-next` (чужая активная ветка; нужно ваше «да»).
-- **Q7. `flui-geometry`** (ADR-0153) — новый Stable-крейт значений, — рекомендую; или
-  объявить Stable подмножество `flui-foundation`.
+- **Q7 решён (2026-10-06): нового крейта геометрии нет.** ADR-0153 — вопрос к 0.3 с опытами;
+  разделение, если понадобится, — узкой поправкой к ADR-0098.

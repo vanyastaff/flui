@@ -16,7 +16,8 @@
   [ADR-0088](ADR-0088-official-packages-sdk-and-facade.md),
   [ADR-0097](ADR-0097-no-process-global-state-gate.md),
   [ADR-0152](ADR-0152-capability-seam-revised.md) (capability seam),
-  [ADR-0153](ADR-0153-stable-crates-do-not-ride-the-train.md) (Stable crates off the train),
+  [ADR-0153](ADR-0153-release-train-and-capability-crates.md) (the train and capability crates,
+  open until 0.3),
   [ADR-0154](ADR-0154-capability-crates.md) (capability crates)
 
 ## Context
@@ -30,7 +31,8 @@ ADR-0082 made `flui-platform-api` the contract crate and kept every OS backend i
   `project_ime_event`), two test doubles (`InMemoryClipboard`, a 730-line `InMemoryTextStore`),
   a backend slab (`OfferTable`), Win32 pixel helpers, a Windows-only enum variant family
   (`WindowBackgroundAppearance::Mica*`), and items nothing above the backend uses
-  (`PlatformDisplay`, `WindowBounds`, `WindowMode`, `WindowEvent`, the data-transfer vocabulary).
+  (`PlatformDisplay`, `WindowBounds`, `WindowMode`, `WindowEvent`, and the data-transfer vocabulary
+  except `DragDropEvent` and `DataTransferId`, which reach the runtime through `PlatformInput`).
   `PlatformHaptics` is implemented only by the headless fake. Its signatures name `ui-events`
   types and, through them, `keyboard-types` and `dpi`.
 - **The backend crate** holds vocabulary with no consumer above it (`PlatformCapabilities`,
@@ -108,9 +110,16 @@ It holds no OS code, no `unsafe`, no test doubles and no backend tables, and no 
 names an upstream type beyond ADR-0089 §2's exceptions. Before the first publication:
 `PlatformHaptics`, `haptics()` and `HapticFeedback` leave it (there is no real backend; haptics
 returns as a capability crate under ADR-0154); `InMemoryClipboard` and `InMemoryTextStore` move
-to `flui-testing`; `OfferTable`, the data-transfer vocabulary, the pixel helpers, `WindowMode`,
-`WindowEvent`, `WindowBounds`, `PlatformDisplay` and `WindowBackgroundAppearance` move to the
-backend crate. Each comes back to the contract with its first consumer above the backend.
+to `flui-testing`; `OfferTable`, the claim-slot machinery, the data-transfer vocabulary other
+than `DragDropEvent` and `DataTransferId`, the pixel helpers, `WindowMode`, `WindowEvent`,
+`WindowBounds`, `PlatformDisplay` and `WindowBackgroundAppearance` move to the backend crate.
+Each comes back to the contract with its first consumer above the backend.
+
+The contract drops its `parking_lot` and `tracing` dependencies as soon as the items that need
+them have left (`InMemoryClipboard`; the text-store machinery, whose home is decided after the
+Win32 text-services work), and adds both to its `reach-forbid` then. It keeps depending on
+`flui-foundation` for its geometry values; whether that dependency must change for capability
+crates is the open question of ADR-0153, decided in 0.3.
 
 ### 3. What the core host holds
 

@@ -5,7 +5,7 @@
 - **Design:** [design.md](design.md); требования — [requirements.md](requirements.md)
 - **База:** `main` @ `d56188c14`
 - **Итог:** 0.2 — 13 задач (LY0–LY12), 4 из них `[P]`; 0.3 — 6 задач (LY13–LY18); оценки — в
-  колонке «Дни», сумма 0.2 ≈ 29,5 дня (P0 — 10,5), 0.3 ≈ 27 дней
+  колонке «Дни», сумма 0.2 ≈ 29,5 дня (P0 — 10,5), 0.3 ≈ 25 дней
 
 ## Правила исполнения
 
@@ -58,7 +58,8 @@ graph LR
   LY11 --> LY12
   PS["persistence"] --> LY13
   LY4 --> LY13
-  LY11 --> LY14 --> LY15 --> LY16 --> LY17
+  LY11 --> LY14 --> LY17
+  LY12 --> LY15 --> LY16 --> LY17
   LY12 --> LY18
 ```
 
@@ -66,7 +67,7 @@ graph LR
 
 | ID | Пр. | Задача | Окно | Крейты и файлы | Метаданные / гейты | Тесты | Где | Дни |
 |---|---|---|---|---|---|---|---|---|
-| **LY0** | P0 | Утверждение design и ADR-0151…0154; ответы Q1, Q3–Q7; резерв ADR-0151…0154 в `release/tasks.md` (`plans/specs-next`); при принятии — `Superseded-by` в ADR-0035, 0078, 0082, 0084; согласование текста design §11 с владельцами animation и interaction | — | `docs/adr/*`, спеки | `cargo xtask checks` | — | — | 1 |
+| **LY0** | P0 | Утверждение design и ADR-0151…0154; ответы Q1, Q3–Q6 (Q2 и Q7 решены); резерв ADR-0151…0154 в `release/tasks.md` (`plans/specs-next`); при принятии — `Superseded-by` в ADR-0035, 0078, 0082, 0084; согласование текста design §11 с владельцами animation и interaction | — | `docs/adr/*`, спеки | `cargo xtask checks` | — | — | 1 |
 | **LY1** [P] | P0 | Удалить мёртвое в бэкенде: `LinuxPlatform` (AT-SPI-адаптер остаётся, модуль переименован по смыслу), `window.rs`, `PlatformCapabilities` + `Desktop/Mobile/WebCapabilities` + `Platform::capabilities`. Строки в Win32/macOS `platform.rs` — с согласия владельцев teardown и text-ime | W0 | `flui-platform/src/{lib.rs, window.rs, traits/{platform,capabilities}.rs, platforms/linux/*}`, overrides `capabilities()` в бэкендах | `cargo xtask globals` (уходят записи `WINDOWS_CAPABILITIES`, `MACOS_CAPABILITIES`), `workspace` | существующие; Linux по-прежнему winit | L + T | 1,5 |
 | **LY2** [P] | P0 | Карта переименования для `cargo xtask rename` (инструмент — спека naming): целые токены, `--changed-since`, файлы по design §10, проверка «отставное имя»; самотест на временной копии; повторный прогон карты шага на выходе пуст | W0 (до 11-10) | `tools/xtask` (карта), с владельцем naming | `cargo xtask checks` | самотест: `flui-platform-api` не задет шагом 1; повтор пуст | L | 2 |
 | **LY3** [P] | P1 | Написать шов на ветке (не сливать отдельно): контракт `capability` (`Capability`, `ProviderContext`, `CapabilityProvider`, `Unsupported`, `UnsupportedReason`), `flui-runtime` `capability/` (`CapabilityRegistry`, `CapabilityRegistrar`, `Plugin`), headless-провайдер clipboard в `flui-testing`, `ClipboardCapability` в `flui-interaction` | W0 | новые файлы: `flui-platform-api/src/capability.rs`, `flui-runtime/src/capability/`, `flui-testing/src/capability.rs` | — | юнит-таблицы реестра (приоритет, конфликт, повтор `NAME`, `NotRegistered`); dyn-пин | L | 3 |
@@ -78,15 +79,15 @@ graph LR
 | **LY9** [P] | P1 | Потребитель жестов: `GestureSettings` из `SystemPreferences::gestures` через `GestureSettingsScope` (interaction X2 — с владельцем interaction); производители: winit/Linux (default), web (`matchMedia`), AppKit, iOS | W1, после LY8 | `flui-interaction/src/{settings,binding}.rs`, `flui-platform/src/platforms/{web,macos,ios,winit}/*` | `cross-typecheck` | смена `long_press` в headless меняет время распознавателя (падает без доставки); web — `wasm-check`; AppKit/iOS — T | L/T | 3 |
 | **LY10** | P0 | **Переименование, шаг 1:** `flui-platform` → `flui-native` по карте LY2, один коммит без ручных правок; включает проверку «отставное имя»; описание PR — инструкция для веток (ниже) | W2a | весь workspace | `workspace`, `reach`, `globals`, `checks`, `check-changed`, `cross-typecheck` | весь набор | L + T | 1 |
 | **LY11** | P0 | **Переименование, шаг 2:** `flui-platform-api` → `flui-platform`, снятие проверки «отставное имя» | W2b | весь workspace | то же | весь набор | L + T | 1 |
-| **LY12** | P0 | Диета Stable до публикации: `InMemoryClipboard`, `InMemoryTextStore` → `flui-testing` (runtime `test_clipboard` — своя замена под `test-support`); data transfer (`OfferTable`, `ClaimSlot`-обвязка, словарь), `WindowMode`, `WindowEvent`, `WindowBounds`, `WindowBackgroundAppearance`, `PlatformDisplay`, пиксельные хелперы → ядро-хост; `display`/`window_bounds`/`set_background_appearance`/`mouse_position`/`is_hovered` → `HostWindow`; удалить `offset_from_coords`, `delta_offset_from_coords`, `utf16_range`, `TransferImage` с вариантом `Image` | W3 | `flui-platform/src/*`, `flui-native/src/*`, `flui-testing`, `flui-runtime/src/presentation.rs` | `workspace`, `reach`, `deps`; changelog (Removed/Changed) | существующие + `text_store_kit::assert_conforms`; Win32 — W | L + W/T | 3 |
+| **LY12** | P0 | Диета Stable до публикации: `InMemoryClipboard`, `InMemoryTextStore` → `flui-testing` (runtime `test_clipboard` — своя замена под `test-support`); data transfer (`OfferTable`, `ClaimSlot`-обвязка, словарь, кроме `DragDropEvent` и `DataTransferId`), `WindowMode`, `WindowEvent`, `WindowBounds`, `WindowBackgroundAppearance`, `PlatformDisplay`, пиксельные хелперы → ядро-хост; `display`/`window_bounds`/`set_background_appearance`/`mouse_position`/`is_hovered` → `HostWindow`; удалить `offset_from_coords`, `delta_offset_from_coords`, `utf16_range`, `TransferImage` с вариантом `Image` | W3 | `flui-platform/src/*`, `flui-native/src/*`, `flui-testing`, `flui-runtime/src/presentation.rs` | `workspace`, `reach`, `deps`; changelog (Removed/Changed) | существующие + `text_store_kit::assert_conforms`; Win32 — W | L + W/T | 3 |
 
 ## Задачи 0.3 (до первого крейта возможности)
 
 | ID | Задача | Зависит от | Крейты | Гейты | Дни |
 |---|---|---|---|---|---|
 | **LY13** | `Storage` через шов: встроенный провайдер без окна (`FileStore`), headless `MemoryStorage`; `LifecycleContext::storage` удалён (заменяет пункт ADR-0133 о методе) | persistence, LY4 | `flui-view/src/persist/*`, `flui-app/src/app/storage_host.rs`, `flui-testing/src/storage.rs` | changelog | 3 |
-| **LY14** | `flui-geometry` (ADR-0153): значения ADR-0098 переезжают, `flui-foundation` реэкспортирует; kind-правило «`stable` не зависит от не-`stable`» с `--self-test` | LY11 | `crates/flui-geometry` (новый), `flui-foundation`, `tools/xtask/src/workspace/tiers.rs` | `workspace` (новый член, tier V), trybuild геометрии | 5 |
-| **LY15** | Контракт без `flui-foundation`, `parking_lot`, `tracing`; решение Q5 по машинерии text store | LY14, text-ime | `flui-platform`, `flui-interaction` или `flui-testing` | `workspace`, `deps`; новый ADR, если Q5 = A (заменяет часть ADR-0142) | 4 |
+| **LY14** | Решение вопроса ADR-0153: повторить опыты A/B на настоящих контракте и пилоте; `cargo-semver-checks` по `Point`, `Size`, `Bounds`, `EdgeInsets`, `DataTransferId` между поездами 0.2; выбрать вариант (своя версия контракта / узкая поправка к ADR-0098 / крейты едут поездом) ревизией ADR-0153; при варианте 1 — kind-правило версии контракта в `cargo xtask workspace` с `--self-test` | LY11, до LY17 | `tools/xtask/src/workspace/*`, ADR-0153 | `workspace` с самотестом | 3 |
+| **LY15** | Контракт без `parking_lot` и `tracing` (ADR-0151 §2), оба — в его `reach-forbid`; решение Q5 по машинерии text store | text-ime, LY12 | `flui-platform`, `flui-interaction` или `flui-testing` | `workspace`, `reach`, `deps`; новый ADR, если Q5 = A (заменяет часть ADR-0142) | 4 |
 | **LY16** | Мост к хосту (ADR) + класс `capability` в гейтах (ADR-0154: kind-правила, reach-таблица, `--self-test`) + схема деклараций и генерация манифестов в `flui-cli` (ADR) — всё вместе с пилотом LY17 | LY15 | `flui-platform`, `flui-native`, `tools/xtask`, `flui-cli` | `workspace`, `reach` с самотестом | 6 |
 | **LY17** | Пилот `flui-location`: Windows (WinRT `Geolocator`) и Android; `PermissionState`/`Denial`; подписка-RAII; симулирующий провайдер; conformance-таблица; декларации | LY16 | `packages/flui-location` | conformance на Windows — W, Android — эмулятор или T | 7 |
 | **LY18** | OS-типы ядра-хоста → `pub(crate)`, один модуль `__examples`; проверка по rustdoc JSON с `--document-hidden-items`. Переезд Win32-диалогов в `flui-system` и удаление `BackgroundExecutor`/`Task` — ADR, заменяющий ADR-0039 §2 | LY12 | `flui-native/src/platforms/*`, `examples/*` | проверка поверхности; Win32-диалог — W | 2 |

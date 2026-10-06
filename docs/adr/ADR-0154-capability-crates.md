@@ -7,8 +7,9 @@
   kind, `capability`) and §2 (its reach table);
   [ADR-0088](ADR-0088-official-packages-sdk-and-facade.md) (official packages keep their rules;
   capability crates are a second kind of package with different ones).
-- **Depends on:** [ADR-0153](ADR-0153-stable-crates-do-not-ride-the-train.md) (the contract is
-  off the train), [ADR-0152](ADR-0152-capability-seam-revised.md) (the seam).
+- **Depends on:** [ADR-0152](ADR-0152-capability-seam-revised.md) (the seam); the decision
+  [ADR-0153](ADR-0153-release-train-and-capability-crates.md) asks for (how a capability crate's
+  own version survives FLUI releases), taken with the first capability crate.
 - **Related:** [ADR-0151](ADR-0151-platform-layer-boundary-and-names.md) §3 (the core host's
   closed list)
 
@@ -31,8 +32,8 @@ replacement implementation is a provider override through the seam.
 ## Decision
 
 1. **A new kind, `tier-kind = "capability"`,** in tier `pkg`. A capability crate:
-   - depends normally only on the contract crate, `flui-geometry`, optionally `flui-sdk` (only
-     if it ships widgets), and external crates;
+   - depends normally only on the contract crate (and, through it, `flui-foundation` until
+     ADR-0153 is decided), optionally `flui-sdk` (only if it ships widgets), and external crates;
    - may reach OS crates: its reach table is the `pkg` table without the OS-crate globs, and it
      still forbids `winit`, `wgpu`, `tokio`, the core host, `flui-app` and `flui-engine`;
    - is a **leaf**: no FLUI crate and no other capability crate depends on it normally;
