@@ -129,15 +129,37 @@ mod notes_flow {
             node.supports_action(Action::Click),
             "{label:?} supports Click"
         );
+        click_node(laid, node.id());
+    }
+
+    fn click_node(laid: &LaidOut, target: flui::testing::a11y::NodeId) {
+        // Targets one published node by identity, for when two onstage pages
+        // publish the same label during a transition.
         let listener = laid
             .accessibility_action_listener()
             .expect("real platform action listener");
         listener(ActionRequest {
             action: Action::Click,
             target_tree: TreeId::ROOT,
-            target_node: node.id(),
+            target_node: target,
             data: None,
         });
+    }
+
+    fn tick_until(
+        laid: &mut LaidOut,
+        published: &impl Fn() -> A11yTree,
+        ready: impl Fn(&A11yTree) -> bool,
+        what: &str,
+    ) {
+        // Zero-time frames: the 300ms transition stays underway.
+        for _ in 0..8 {
+            laid.tick();
+            if ready(&published()) {
+                return;
+            }
+        }
+        panic!("{what} was not published during zero-time transition frames");
     }
 
     fn entrance_label(laid: &mut LaidOut, published: &impl Fn() -> A11yTree, label: &str) {
@@ -218,12 +240,12 @@ mod notes_flow {
 
     fn painted_text(laid: &LaidOut, text: &str) -> bool {
         let tree = laid.layer_tree().expect("a committed scene");
-        flui::testing::rendering::collect_commands(tree)
-            .iter()
-            .any(|command| {
-                command.kind == flui::testing::rendering::DrawKind::Text
-                    && command.line.contains(&format!(" {text:?} "))
-            })
+        let commands: Vec<flui::testing::rendering::DrawCommandSummary> =
+            flui::testing::rendering::collect_commands(tree);
+        commands.iter().any(|command| {
+            command.kind == flui::testing::rendering::DrawKind::Text
+                && command.line.contains(&format!(" {text:?} "))
+        })
     }
 
     fn tap_text(laid: &mut LaidOut, text: &str) {
@@ -548,6 +570,103 @@ mod notes_flow {
         rendered_text(&laid, "Note 0");
     }
 
+    fn departing_settings_back_pops_only_its_own_page() {
+        let mut laid = ready();
+        let published = published_tree(&mut laid);
+        tap_text(&mut laid, "Note 0");
+        rendered_text(&laid, "Editing note 0");
+        tap_text(&mut laid, "Settings");
+        rendered_text(&laid, "Compact rows: false");
+        let back = published()
+            .find_by_label("Back")
+            .expect("one settled Settings Back")
+            .id();
+        click_node(&laid, back);
+        // The exit is underway once the Note beneath publishes its field
+        // again while the departing Settings still publishes its Back.
+        tick_until(
+            &mut laid,
+            &published,
+            |tree| {
+                tree.find(Role::TextInput).is_ok()
+                    && tree.find_by_label("Compact rows: false").is_ok()
+                    && tree.nodes().any(|node| node.id() == back)
+            },
+            "the Settings exit over the Note",
+        );
+        click_node(&laid, back);
+        frames(&mut laid);
+        rendered_text(&laid, "Editing note 0");
+        assert!(
+            active_text(&laid, "Compact rows: false").is_empty(),
+            "Settings left"
+        );
+    }
+
+    fn departing_settings_toggle_keeps_the_preference() {
+        let mut laid = ready();
+        let published = published_tree(&mut laid);
+        tap_text(&mut laid, "Settings");
+        rendered_text(&laid, "Compact rows: false");
+        let toggle = published()
+            .find_by_label("Toggle compact rows")
+            .expect("published toggle")
+            .id();
+        queued_click(&laid, &published, "Back");
+        // The exit is underway once Home's rows publish again while the
+        // departing Settings still publishes its toggle.
+        tick_until(
+            &mut laid,
+            &published,
+            |tree| {
+                tree.find_by_label("Note 1").is_ok() && tree.nodes().any(|node| node.id() == toggle)
+            },
+            "the Settings exit over Home",
+        );
+        click_node(&laid, toggle);
+        frames(&mut laid);
+        let first = rendered_text(&laid, "Note 0");
+        let second = rendered_text(&laid, "Note 1");
+        assert_eq!(
+            laid.absolute_offset(second).dy - laid.absolute_offset(first).dy,
+            48.0,
+            "rows keep their regular density"
+        );
+    }
+
+    fn departing_editor_save_does_not_write_into_home() {
+        let mut laid = ready();
+        let published = published_tree(&mut laid);
+        tap_text(&mut laid, "Note 0");
+        replace_by_keyboard(&mut laid, "Abandoned draft");
+        let save = published()
+            .find_by_label("Save note")
+            .expect("published Save")
+            .id();
+        queued_click(&laid, &published, "Back");
+        // The exit is underway once Home's rows publish again while the
+        // departing editor still publishes its Save.
+        tick_until(
+            &mut laid,
+            &published,
+            |tree| {
+                tree.find_by_label("Note 1").is_ok() && tree.nodes().any(|node| node.id() == save)
+            },
+            "the Note exit over Home",
+        );
+        click_node(&laid, save);
+        frames(&mut laid);
+        rendered_text(&laid, "Note 0");
+        assert!(
+            active_text(&laid, "Saved note 0").is_empty(),
+            "the departing editor did not save"
+        );
+        assert!(
+            !painted_text(&laid, "Abandoned draft"),
+            "the abandoned draft is not a Home title"
+        );
+    }
+
     fn back_is_offered_only_where_it_leaves_a_page() {
         let mut laid = ready();
         assert!(
@@ -723,7 +842,19 @@ mod notes_flow {
 
     #[test]
     fn notes_public_input_flow_matrix() {
-        let cases: [(&str, fn()); 9] = [
+        let cases: [(&str, fn()); 12] = [
+            (
+                "departing_settings_toggle_keeps_the_preference",
+                departing_settings_toggle_keeps_the_preference,
+            ),
+            (
+                "departing_settings_back_pops_only_its_own_page",
+                departing_settings_back_pops_only_its_own_page,
+            ),
+            (
+                "departing_editor_save_does_not_write_into_home",
+                departing_editor_save_does_not_write_into_home,
+            ),
             (
                 "loading_retry_replacement_and_unmount_retire_old_service_work",
                 loading_retry_replacement_and_unmount_retire_old_service_work,

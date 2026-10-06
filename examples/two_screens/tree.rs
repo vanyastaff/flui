@@ -178,16 +178,27 @@ impl ViewState<Screen> for ScreenState {
         let shared = view.shared.clone();
         let content = match view.route {
             Route::Home => home(shared.clone(), router.clone()),
-            Route::Note { id } => editor(id, shared.clone(), self.form.clone(), self.focus.clone()),
+            Route::Note { id } => editor(
+                id,
+                shared.clone(),
+                router.clone(),
+                self.form.clone(),
+                self.focus.clone(),
+            ),
             Route::Settings => {
                 let preference = shared.compact.clone();
+                let settings = router.clone();
                 Column::new(column![
                     Text::new(format!(
                         "Compact rows: {}",
                         shared.compact.with(|value| *value)
                     )),
                     TextButton::new(Text::new("Toggle compact rows")).on_pressed(move |_cx| {
-                        preference.update(|value| *value = !*value);
+                        // The departing Settings page stays actionable during
+                        // its exit; only the current Settings may toggle.
+                        if settings.current() == Route::Settings {
+                            preference.update(|value| *value = !*value);
+                        }
                     }),
                 ])
                 .boxed()
@@ -214,10 +225,16 @@ impl ViewState<Screen> for ScreenState {
         }
         // Home is the router's root page, where there is nothing to go back to.
         if view.route != Route::Home {
+            let source = view.route.clone();
             header.push(
                 TextButton::new(Text::new("Back"))
                     .on_pressed(move |_cx| {
-                        router.pop().expect("BUG: mounted Router");
+                        // A departing page stays actionable during its exit;
+                        // only the page that is still current may pop, so a
+                        // second activation cannot also pop the page beneath.
+                        if router.current() == source {
+                            router.pop().expect("BUG: mounted Router");
+                        }
                     })
                     .boxed(),
             );
@@ -324,7 +341,13 @@ fn home(shared: Shared, router: RouterHandle<Route>) -> BoxedView {
     .boxed()
 }
 
-fn editor(id: usize, shared: Shared, form: FormHandle, focus: Rc<FocusNode>) -> BoxedView {
+fn editor(
+    id: usize,
+    shared: Shared,
+    router: RouterHandle<Route>,
+    form: FormHandle,
+    focus: Rc<FocusNode>,
+) -> BoxedView {
     let save = shared.clone();
     let validate = form.clone();
     Form::new(Column::new(column![
@@ -337,6 +360,11 @@ fn editor(id: usize, shared: Shared, form: FormHandle, focus: Rc<FocusNode>) -> 
             })
             .validator(|value| value.trim().is_empty().then(|| "Enter a title".to_owned())),
         TextButton::new(Text::new("Save note")).on_pressed(move |_cx| {
+            // A departing editor stays actionable during its exit; saving
+            // from it would write an abandoned draft into Home.
+            if router.current() != (Route::Note { id }) {
+                return;
+            }
             if validate.validate() {
                 let title = save.draft.text();
                 save.titles.update(|titles| {
