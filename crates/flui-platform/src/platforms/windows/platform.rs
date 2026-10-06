@@ -114,13 +114,6 @@ impl WindowIdentity {
         &NEXT
     }
 
-    /// Mint a fresh identity, panicking once the source is exhausted. Call
-    /// it before acquiring any native resource the identity will own, so a
-    /// refusal leaves nothing to release.
-    pub(super) fn mint() -> Self {
-        Self::mint_from(Self::source())
-    }
-
     /// The admission boundary `WindowsWindow::new` runs: reserve an
     /// identity from `source`, then run `acquire` for the native window it
     /// will own. Exhaustion refuses before `acquire` runs, so a refusal
@@ -188,6 +181,68 @@ impl WindowsPlatform {
                 "seed {seed}: exhausted admission acquired native resources"
             );
         }
+    }
+}
+
+#[cfg(test)]
+impl WindowsPlatform {
+    #[expect(unsafe_code, reason = "COM apartment and message-only window queries")]
+    pub(crate) fn platform_identity_exhaustion_acquires_nothing() {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        use windows::Win32::{
+            System::Com::{APTTYPE, APTTYPEQUALIFIER, CoGetApartmentType},
+            UI::WindowsAndMessaging::FindWindowExW,
+        };
+
+        // This thread's COM apartment, or the query's refusal when none.
+        let apartment = || {
+            let (mut kind, mut qualifier) = (APTTYPE::default(), APTTYPEQUALIFIER::default());
+            // SAFETY: both out-pointers are live, writable locals.
+            unsafe { CoGetApartmentType(&raw mut kind, &raw mut qualifier) }
+                .map(|()| (kind, qualifier))
+                .map_err(|error| error.code())
+        };
+        // The platform message-only windows that exist in this process.
+        let message_windows = || {
+            let mut count = 0;
+            let mut after = None;
+            // SAFETY: enumerates message-only windows by a static class name;
+            // every handle is only passed back as the next search start.
+            while let Ok(hwnd) = unsafe {
+                FindWindowExW(Some(HWND_MESSAGE), after, WINDOW_CLASS_NAME, PCWSTR::null())
+            } {
+                count += 1;
+                after = Some(hwnd);
+            }
+            count
+        };
+
+        let (apartment_before, windows_before) = (apartment(), message_windows());
+        let source = AtomicU64::new(0);
+        for attempt in 0..3 {
+            let refused = std::panic::catch_unwind(|| {
+                Self::admit_with_config(WindowConfiguration::default(), &source)
+            });
+            assert!(
+                refused.is_err(),
+                "exhausted platform admission succeeded on retry {attempt}"
+            );
+        }
+        assert_eq!(
+            source.load(Ordering::Relaxed),
+            0,
+            "refusal advanced the exhausted source"
+        );
+        assert_eq!(
+            apartment(),
+            apartment_before,
+            "refused admission initialized COM"
+        );
+        assert_eq!(
+            message_windows(),
+            windows_before,
+            "refused admission created a message window"
+        );
     }
 }
 
@@ -630,6 +685,19 @@ impl WindowsPlatform {
     /// let platform = WindowsPlatform::with_config(config)?;
     /// ```
     pub fn with_config(config: WindowConfiguration) -> Result<Self, PlatformError> {
+        Self::admit_with_config(config, WindowIdentity::source())
+    }
+
+    /// [`Self::with_config`] with the identity drawn from `source`. The
+    /// owner control's identity is reserved first: exhaustion refuses before
+    /// COM is initialized or any HWND exists, so a refusal (and every caught
+    /// retry) leaves nothing to release.
+    fn admit_with_config(
+        config: WindowConfiguration,
+        source: &std::sync::atomic::AtomicU64,
+    ) -> Result<Self, PlatformError> {
+        let owner_identity = WindowIdentity::mint_from(source);
+
         // SAFETY: `CoInitializeEx` takes no pointer arguments (`None` for
         // the reserved parameter) and its `HRESULT` is checked before
         // anything downstream assumes COM is initialized on this thread —
@@ -705,7 +773,7 @@ impl WindowsPlatform {
         tracing::info!("Windows platform initialized with Tokio executors");
 
         let platform = Self {
-            owner_control: super::owner_control::OwnerControl::new()?,
+            owner_control: super::owner_control::OwnerControl::new(owner_identity)?,
             message_window,
             windows: Arc::new(Mutex::new(HashMap::new())),
             background_executor,
