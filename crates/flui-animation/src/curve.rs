@@ -64,6 +64,12 @@ pub trait Curve {
         FlippedCurve { curve: self }
     }
 
+    /// The derivative `d transform / dt` at progress `t`.
+    fn slope(&self, t: f64) -> f64 {
+        let _ = t;
+        0.0
+    }
+
     /// The value of a curve this crate defines, which lets [`ArcCurve`]
     /// compare it by value instead of by identity.
     ///
