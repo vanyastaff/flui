@@ -1919,7 +1919,10 @@ store. A read-write session is written back to the controller once, at the
 end of the grant: one listener notification and at most one `on_changed`,
 however many edits the session made (a TSF conversion replaces, re-marks and
 moves the caret in one session). Both run in the arbiter's `settle`, after the
-lock is released, so `on_changed` may request a lock. `on_changed` receives the
+lock is released, so `on_changed` may request a lock; both debts are taken
+before the listeners run, so a session a listener opens there settles its own
+`on_changed` and never absorbs the outer one's
+(`a_listener_session_inside_settle_is_its_own_on_changed`). `on_changed` receives the
 committed text (`TextEditingController::committed_text`, the composition left
 out) and runs only when that changed, so a session that only composes is no
 owner change; a text form field reads its value the same way. The write-back
