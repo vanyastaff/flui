@@ -139,6 +139,10 @@ fn color_lerp_is_premultiplied_oklab() {
                 color_property::lerp_endpoints_are_exact,
             ),
             (
+                "lerp_matches_the_exact_oklab_evaluation",
+                color_property::lerp_matches_the_exact_oklab_evaluation,
+            ),
+            (
                 "lerp_outside_the_segment_saturates_and_nan_keeps_begin",
                 color_property::lerp_outside_the_segment_saturates_and_nan_keeps_begin,
             ),

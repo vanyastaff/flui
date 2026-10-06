@@ -15,6 +15,7 @@ pub mod gradient;
 pub mod hsl_hsv;
 pub mod physical_model;
 pub mod shadow;
+mod srgb_tables;
 pub mod table_border;
 
 // Re-exports for convenience

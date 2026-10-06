@@ -98,6 +98,81 @@ pub(crate) fn lerp_to_transparent_keeps_the_hue() {
     assert_eq!(tweened, Color::rgba(255, 0, 0, 128));
 }
 
+/// The sRGB decoding of one 8-bit channel, in `f64` (IEC 61966-2-1).
+fn decode(channel: u8) -> f64 {
+    let c = f64::from(channel) / 255.0;
+    if c <= 0.04045 {
+        c / 12.92
+    } else {
+        ((c + 0.055) / 1.055).powf(2.4)
+    }
+}
+
+/// The sRGB encoding of linear light, clamped to the gamut, on the `0..=255` scale
+/// before rounding.
+fn encode(linear: f64) -> f64 {
+    let c = linear.clamp(0.0, 1.0);
+    let encoded = if c <= 0.003_130_8 {
+        12.92 * c
+    } else {
+        1.055 * c.powf(1.0 / 2.4) - 0.055
+    };
+    encoded * 255.0
+}
+
+/// Ottosson's Oklab, in `f64`, from <https://bottosson.github.io/posts/oklab/>.
+fn oklab(color: Color) -> [f64; 3] {
+    let (r, g, b) = (decode(color.r), decode(color.g), decode(color.b));
+    let l = (0.412_221_470_8 * r + 0.536_332_536_3 * g + 0.051_445_992_9 * b).cbrt();
+    let m = (0.211_903_498_2 * r + 0.680_699_545_1 * g + 0.107_396_956_6 * b).cbrt();
+    let s = (0.088_302_461_9 * r + 0.281_718_837_6 * g + 0.629_978_700_5 * b).cbrt();
+    [
+        0.210_454_255_3 * l + 0.793_617_785_0 * m - 0.004_072_046_8 * s,
+        1.977_998_495_1 * l - 2.428_592_205_0 * m + 0.450_593_709_9 * s,
+        0.025_904_037_1 * l + 0.782_771_766_2 * m - 0.808_675_766_0 * s,
+    ]
+}
+
+/// Oklab back to unrounded sRGB channels on the `0..=255` scale.
+fn srgb(lab: [f64; 3]) -> [f64; 3] {
+    let l = (lab[0] + 0.396_337_777_4 * lab[1] + 0.215_803_757_3 * lab[2]).powi(3);
+    let m = (lab[0] - 0.105_561_345_8 * lab[1] - 0.063_854_172_8 * lab[2]).powi(3);
+    let s = (lab[0] - 0.089_484_177_5 * lab[1] - 1.291_485_548_0 * lab[2]).powi(3);
+    [
+        encode(4.076_741_662_1 * l - 3.307_711_591_3 * m + 0.230_969_929_2 * s),
+        encode(-1.268_438_004_6 * l + 2.609_757_401_1 * m - 0.341_319_396_5 * s),
+        encode(-0.004_196_086_3 * l - 0.703_418_614_7 * m + 1.707_614_701_0 * s),
+    ]
+}
+
+/// `Color::lerp` against an `f64` evaluation of premultiplied Oklab with the
+/// transfer function's own `powf` and `cbrt`: every channel of the 8-bit result lies
+/// within one step of the exact, unrounded value, that is, half a step of rounding
+/// plus at most half a step (0.5/255) of approximation. Colour channels are compared
+/// only where the result is visible (alpha above zero).
+pub(crate) fn lerp_matches_the_exact_oklab_evaluation() {
+    proptest!(|(a in arb_color(), b in arb_color(), t in 0.0f64..=1.0)| {
+        let got = Color::lerp(a, b, t);
+        let (alpha_a, alpha_b) = (f64::from(a.a) / 255.0, f64::from(b.a) / 255.0);
+        let alpha = alpha_a + (alpha_b - alpha_a) * t;
+        prop_assert!((f64::from(got.a) - alpha * 255.0).abs() <= 1.0, "alpha {:?}", got);
+        if got.a == 0 || alpha <= 0.0 {
+            return Ok(());
+        }
+        let (la, lb) = (oklab(a), oklab(b));
+        let mixed: [f64; 3] = std::array::from_fn(|i| {
+            (la[i] * alpha_a + (lb[i] * alpha_b - la[i] * alpha_a) * t) / alpha
+        });
+        let want = srgb(mixed);
+        for (channel, (got, want)) in [got.r, got.g, got.b].into_iter().zip(want).enumerate() {
+            prop_assert!(
+                (f64::from(got) - want).abs() <= 1.0,
+                "channel {} is {}, exact {}: {:?} -> {:?} at t = {}", channel, got, want, a, b, t
+            );
+        }
+    });
+}
+
 /// `t = 0` and `t = 1` return the endpoints exactly, through both the clamping
 /// `Color::lerp` and the extrapolating `Lerp` impl.
 pub(crate) fn lerp_endpoints_are_exact() {
