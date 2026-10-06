@@ -16,30 +16,26 @@ are cheap now and expensive once consumers exist, so fix a bad shape instead of 
 
 ## Design stance
 
-- **FLUI is not a Flutter port.** Flutter is one source of ideas among several, not a spec.
-  What we took from it: widgets composed as declarative Rust values (not markup or HTML-style
-  templates), the View/Element/RenderObject separation, constraints-down/sizes-up layout. Every
-  other decision is made fresh, by asking what the best design is here. Do not carry over Dart
-  class hierarchies, method names, file layout, private helpers or a quirk just because Flutter
-  has it; "Flutter does it this way" is never the reason on its own. Structure, API and style are
+- **FLUI is not a Flutter port.** What it took from Flutter: widgets composed as declarative
+  Rust values (not markup), the View/Element/RenderObject separation, constraints-down/sizes-up
+  layout. Everything else is decided by asking what the best design is here; "Flutter does it
+  this way" is never the reason on its own, and existing code that differs from Flutter is
+  usually a deliberate choice, not a bug to "fix" toward parity. Structure, API and style are
   idiomatic Rust (compile-time child arity, `NonZeroUsize` IDs, slab arenas,
-  `thiserror`/`Result`, builders and typed state instead of Dart's mutable-field setters).
-- **Flutter as a checklist, not a target.** Its tests and edge cases are useful for finding
-  what a behavior must cope with; each one is kept, changed or dropped on purpose. Diverge
-  whenever the result is better, and pin what you ship with a behavior test; a cross-crate
-  contract still gets an ADR. Multi-window ownership,
-  runtime/scheduling topology, concurrency and presentation architecture aren't bound by Flutter
-  at all (ADR-0027). Read references after you have a design, to check it, not to copy from.
-  There is no checked-in copy: read them on GitHub with `gh` (`gh search code --repo
-  flutter/flutter <term>`, `gh api repos/flutter/flutter/contents/<path> -H "Accept:
-  application/vnd.github.raw"`; GPUI is `crates/gpui` in `zed-industries/zed`, Xilem is
-  `linebender/xilem`, egui is `emilk/egui`). `.flutter/` and `.gpui/` are gitignored, so a
-  shallow clone there (`git clone --depth 1`) is fine when you need to grep a lot; never
-  assume it exists.
-- **Look around before settling.** Compose, SwiftUI and the Rust UI crates (egui, Iced,
-  Xilem/Masonry, Bevy UI, GPUI, Dioxus, Slint) often have the better shape; where Flutter has no
-  strong contract (animation curves, velocity prediction, color interpolation, input smoothing)
-  it isn't the baseline at all. Prefer a mature crate over a hand-rolled one.
+  `thiserror`/`Result`, builders and typed state, not Dart class chains or mutable-field
+  setters). Multi-window ownership, runtime/scheduling topology, concurrency and presentation
+  architecture aren't bound by Flutter at all (ADR-0027).
+- **Other frameworks are a checklist, not a target.** Flutter's tests and edge cases show what a
+  behavior must cope with; Compose, SwiftUI and the Rust UI crates (egui, Iced, Xilem/Masonry,
+  Bevy UI, GPUI, Dioxus, Slint) often have the better shape, and where Flutter has no strong
+  contract (animation curves, velocity prediction, color interpolation, input smoothing) it
+  isn't the baseline at all. Read them after you have a design, to check it. Pin the behavior
+  you ship with a test; a cross-crate contract also gets an ADR. Prefer a mature crate over a
+  hand-rolled one. No copy is checked in: use `gh` (`gh search code --repo flutter/flutter
+  <term>`, `gh api repos/flutter/flutter/contents/<path> -H "Accept: application/vnd.github.raw"`;
+  GPUI is `crates/gpui` in `zed-industries/zed`, Xilem is `linebender/xilem`, egui is
+  `emilk/egui`), or a shallow clone into the gitignored `.flutter/` or `.gpui/`, which may not
+  exist yet.
 - **Make rules types, not reviews.** If the compiler can reject a mistake, encode it (arity
   types, sealed traits, `LifecycleContext`); if clippy can, turn the lint on; a comment or a
   grep is the last resort.
@@ -52,10 +48,9 @@ are cheap now and expensive once consumers exist, so fix a bad shape instead of 
   layer is a module (`flui-widgets` stays one crate). Shared code moves down a layer, not
   sideways into a copy.
 
-## Preventing recurring defects
+## Recurring defects
 
-Apply these rules before implementing a change to the affected subsystem; use the
-failure-path review below to verify the result.
+Each of these has shipped more than once; design against them up front.
 
 - **Treat user code as reentrant.** Callbacks, wakers, observers, diagnostics and generic
   `Drop` implementations can access the same subsystem, replace a hook or release its last
@@ -85,18 +80,14 @@ failure-path review below to verify the result.
   wrapping limit from its allocated width, source-image crop from sampling bounds, and theme
   defaults from explicit widget configuration. Test loose and tight constraints, RTL,
   fractional boundaries and degenerate cases through the actual affected producer.
-- **Prove the regression test distinguishes the defect.** For a substantive behavior repair,
-  run the affected case with the production fix reverted or a narrowly documented defect
-  restored; it must fail for the intended reason. Use an isolated checkout, or save exact
-  original bytes and restore them in a `finally` path; never overlap source mutation with
-  another build. Pixel samples must distinguish the outputs. Explain changed snapshots and
-  then run with snapshot updates and forced success disabled.
-- **Modernize the complete declared scope.** For a workspace audit, keep a per-crate coverage
-  ledger including optional features, tests, examples, shaders and tooling; green defaults do
-  not establish that coverage. Prefer current stable standard-library APIs and mature crates
-  where they improve the design; adopt Clippy lints deliberately rather than enabling every
-  experimental lint. Report reading, compilation and actual execution separately, including
-  platform and feature paths the host could not execute.
+- **Regression tests that pass both ways.** For a behavior repair, run the case with the fix
+  reverted; it must fail for the intended reason. Revert in an isolated checkout, or restore the
+  exact original bytes afterwards, and never while another build reads the sources. Pixel
+  samples must distinguish the two outputs; a changed snapshot is explained, then re-run with
+  snapshot updates off.
+- **Green defaults are not coverage.** A workspace-wide change or audit covers optional
+  features, tests, examples, shaders and tooling too, and says which platform and feature paths
+  were only compiled, or not run at all, on this host.
 
 ## Codebase map
 
@@ -133,20 +124,26 @@ declares its tier and layer in `[package.metadata.flui]` (checked by `cargo xtas
   the facade.
 
 The non-obvious invariants live in the per-crate `ARCHITECTURE.md` files — read the one for the
-crate you're changing before changing it.
+crate you're changing before changing it (`flui-animation`, `flui-assets`, `flui-interaction`,
+`flui-log` and `flui-protocol` have none yet: their module docs and `docs/crates.md` stand in).
+The root `ARCHITECTURE.md` is the facade's. `docs/architecture.md` describes the code as it is;
+`design/` holds the target architecture, and
+`docs/plans/2026-09-25-architecture-migration-plan.md` orders the steps toward it.
 
 ## Working here
 
 - **Isolate each task in its own worktree**; the shared checkout stays on `main`:
   `cargo xtask worktree new <area>/<slug>` creates `.worktrees/<slug>` inside the checkout
-  (git-ignored; the gates skip it). Each worktree grows its own multi-GB `target/`: run
+  (git-ignored; the gates skip it). Each worktree builds into its own multi-GB `target/`; never
+  point several worktrees at one `CARGO_TARGET_DIR` (Cargo then links another worktree's
+  sources — `docs/testing.md`, "One target directory per checkout"). Run
   `cargo xtask worktree prune` after a merge. Review someone else's PR from your own directory
   (`gh pr diff`/`checkout`), not inside their worktree.
 - **Commits** `area: what changed`, one logical change each. **PRs** are one task each, with
-  `cargo xtask check-changed` green first; CI is the proof. Before asking for review, review the
-  branch against `main` yourself and list only what would block the merge: file and line, why it
-  is wrong, how to show it fails. CI is temporarily Linux-only; no label enables native or GPU CI jobs.
-  Use local platform/GPU commands when a change needs those checks. Use
+  `cargo xtask check-changed` green first; CI is the proof. Review your own branch against
+  `main` before asking for review. CI runs Linux (and wasm32) only; Windows, macOS, Android and
+  iOS code is type-checked by `cross-typecheck` and never executed there, and no label enables
+  native or GPU jobs, so run the platform or GPU commands locally when a change needs them. Use
   `Refs #N`; `Closes`/`Fixes #N` only when merging should close it (GitHub's linker ignores
   negation around it). A consumer-visible change adds `changelog.d/<branch-slug>.md` (a
   `### Added|Changed|Deprecated|Removed|Fixed|Security` header and bullets) instead of editing
@@ -165,22 +162,17 @@ crate you're changing before changing it.
   `include_str!` is source: keep it out of `DOCS_ONLY` in
   `tools/xtask/src/change_scope/classify.rs`.
 
-## Long runs
+## Autonomy
 
-The maintainer usually hands over a whole task and comes back later.
+The maintainer usually hands over a whole task and comes back later, so carry it through
+without check-ins. Ask first only before something irreversible or outward-facing: deleting
+data, force-pushing, merging, publishing, or changing anything outside your worktree.
+`TASKS.md` at the worktree root is git-ignored scratch for a long task's checklist.
 
-- If a step doesn't need the maintainer's decision, keep going; put the status in the same
-  message as the next action.
-- Stop and ask only when you can't proceed without them, or before something irreversible or
-  outward-facing: deleting data, force-pushing, merging, publishing, or changes outside your
-  worktree.
-- For a task of more than a few steps, keep a checklist in `TASKS.md` at the worktree root
-  (git-ignored): tick what's done, append what you find. It survives context compaction and
-  shows where the run is.
-- Split large sweeps (an audit, a migration across many crates) between subagents with
-  disjoint files; check each one's evidence before accepting it.
-- End every run with three sections: **Waiting on you**, **Changed**, **Found** — with the
-  command output behind each claim, and what you could not verify.
+The repository is public. Plans, reviews, audits and session notes stay out of it (keep them in
+`TASKS.md` or outside the checkout); a decision that should outlive the task goes into an ADR,
+`design/`, or the crate's `## Mapping decisions`. Never commit local absolute paths or links to
+private chat sessions.
 
 ## Commands
 
@@ -199,10 +191,11 @@ The maintainer usually hands over a whole task and comes back later.
 | Toolchain | `rust-toolchain.toml` is the source of truth; pre-1.0 the MSRV tracks latest stable. `cargo xtask toolchain` keeps every copy in sync |
 
 Gotchas: nextest doesn't run doctests (`cargo test --doc`). A flaky test that isn't yours usually
-mutates a genuinely process-global resource (`Registry::global`) — scope a lock
-to that test module rather than serializing the suite. The dev host is shared and
-memory-limited: one compiling worker, a shared `CARGO_TARGET_DIR`; a docs-only change needs only
-`cargo xtask checks`, which builds xtask and not the workspace.
+touches genuinely process-global state (the global `tracing` subscriber `flui-log` installs, a
+global ID counter such as `flui-foundation`'s key counters) — scope a lock to that test module
+rather than serializing the suite. No build-job count is checked in; cap one with
+`CARGO_BUILD_JOBS` on a smaller machine. A docs-only change needs only `cargo xtask checks`, which
+builds xtask and not the workspace.
 
 ## What the compiler and gates enforce
 
@@ -277,8 +270,7 @@ caps the count, so the review question is which existing table the new case join
   targets). Subdirectories are never auto-discovered as targets: a helper directory
   (`tests/common/`, `tests/support/`) is mounted from `main.rs` as a module, a trybuild fixture
   directory (`tests/ui/`) is not mounted at all, since its sources are meant not to compile. A
-  separate target is for process-global state (`Registry::global`, a global subscriber,
-  allocation counting) and for a feature the rest of the crate builds without.
+  separate target is for process-global state (a global subscriber, allocation counting) and for a feature the rest of the crate builds without.
 - **Do not fold what runs its own process.** Tests that spawn `cargo` or another program
   (trybuild suites, `cli_create::generated_*`, `flui::facade_consumer`) stay separate tests:
   `.config/nextest.toml` names them one by one (groups `trybuild` and `nested-cargo`) so nextest runs them in
@@ -293,7 +285,7 @@ caps the count, so the review question is which existing table the new case join
   `rg` the name before renaming, folding or deleting a test.
 
 What only CI sees: the host compiles one platform, so a test written on Windows can be red on
-Linux, macOS or wasm.
+Linux or wasm32 in CI (and on macOS, which CI only type-checks).
 
 - A helper kept alive by `cfg(any(target_os = "windows", test))` is dead once the test that used
   it goes: gate the item, and any import only a `cfg`'d test uses, with the same `cfg`.
@@ -317,6 +309,7 @@ A green gate proves the gates pass, not that the behavior exists. So a change is
 | Question | Read |
 |----------|------|
 | Is it planned? What changed recently? | `docs/ROADMAP.md`, `CHANGELOG.md` |
+| Where the architecture is heading, open questions | `design/README.md`, `docs/plans/2026-09-25-architecture-migration-plan.md` |
 | Dependencies, layering, a new crate | root `Cargo.toml` (`[workspace.metadata.flui] tiers` and `layers`, `[workspace.dependencies]`), `docs/crates.md` |
 | Writing a frame-driving test | `docs/testing.md` (use the shallowest tier that can fail), `crates/flui-rendering/docs/TESTING.md` |
 | Contracts, pipeline, panics | `docs/FOUNDATIONS.md`, `docs/architecture.md`, `docs/PANIC-POLICY.md` |
@@ -338,7 +331,7 @@ script gates already run in CI, so style and anything they catch is not worth a 
   through a harness helper that dirties the root itself, or narrowing an assertion to what a
   partial implementation handles. A regenerated `*.snap` is a claim the new output is correct —
   the PR must say what changed and why. A test that mutates genuinely process-global state
-  (`Registry::global`) needs a module-scoped lock, because nextest runs one
+  (the global subscriber, a global ID counter) needs a module-scoped lock, because nextest runs one
   process per test in parallel.
 - **Failure paths and recovery:** do not stop at the first reported error or panic. Inventory
   every owned value, guard, callback and deferred obligation still live at each failure boundary,
