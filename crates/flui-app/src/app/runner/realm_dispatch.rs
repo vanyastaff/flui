@@ -978,13 +978,17 @@ pub(super) fn install_input_wiring(
 /// Deliver a window's platform input to its realm and answer the platform
 /// with the realm's decision. A key no handler took keeps the platform's own
 /// default (Alt+F4 closes, Alt+Space opens the system menu); a consumed one
-/// prevents it. So does an event whose outcome is not known when the
-/// callback returns (queued behind the current owner turn, or refused), so a
-/// shortcut that will consume it later never races the default.
+/// prevents it. So does a key whose outcome is not known when the callback
+/// returns (queued behind the current owner turn, or refused), so a shortcut
+/// that will consume it later never races the default. Every other input
+/// (pointer, IME, drag and drop) is always reported handled: the realm owns
+/// it, and a backend that redraws only for handled input (Android) must keep
+/// doing so.
 fn dispatch_platform_input(
     dispatcher: RealmDispatcher,
     input: flui_platform::traits::PlatformInput,
 ) -> flui_platform::DispatchEventResult {
+    let is_key = matches!(input, flui_platform::traits::PlatformInput::Keyboard(_));
     let consumed = std::sync::Arc::new(std::sync::OnceLock::new());
     let _ = dispatch_platform_realm(
         dispatcher,
@@ -993,7 +997,8 @@ fn dispatch_platform_input(
             consumed: std::sync::Arc::clone(&consumed),
         }),
     );
-    flui_platform::DispatchEventResult::resolved(false, consumed.get().copied().unwrap_or(true))
+    let default_prevented = !is_key || consumed.get().copied().unwrap_or(true);
+    flui_platform::DispatchEventResult::resolved(false, default_prevented)
 }
 
 pub(super) fn dispatch_platform_realm(

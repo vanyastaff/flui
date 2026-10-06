@@ -202,7 +202,8 @@ fn install_resolves_execution_services_and_teardown_shuts_them_down() {
 /// The input wiring every runner installs answers the platform with the
 /// realm's own decision: an Alt+F4 nothing handled keeps the platform
 /// default (the native backend then closes the window), and one a shortcut
-/// consumed prevents it.
+/// consumed prevents it. Pointer input no handler consumes is still reported
+/// handled, since Android redraws only for handled input.
 fn system_key_default_follows_the_realms_decision() {
     use flui_interaction::events::{Code, Modifiers};
     use flui_interaction::testing::input::KeyEventBuilder;
@@ -225,6 +226,10 @@ fn system_key_default_follows_the_realms_decision() {
     assert!(
         !native.inject_event(alt_f4()).default_prevented,
         "an unconsumed system key keeps the platform default"
+    );
+    assert!(
+        native.inject_event(down_input(4.0)).default_prevented,
+        "pointer input stays handled whether or not anything consumed it"
     );
 
     dispatch_platform_realm(
