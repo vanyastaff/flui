@@ -65,8 +65,13 @@ impl Drop for RebuildHookRegistration {
         };
         // A captured closure may own arbitrary user state whose destructor
         // re-enters this registry. Never run that destructor under the slot
-        // mutex.
-        drop(detached);
+        // mutex, and never while unwinding: a second panic would abort, so the
+        // withdrawn hook is retained instead (ADR-0127).
+        if std::thread::panicking() {
+            std::mem::forget(detached);
+        } else {
+            drop(detached);
+        }
     }
 }
 
@@ -84,6 +89,9 @@ impl Drop for RebuildHookRegistration {
 /// The rejected hook is retained before this capacity panic so its captures'
 /// destructors cannot replace the failure; accepted hooks keep their ordinary
 /// lifetime policy.
+///
+/// Propagates a panic from the replaced hook's captured state. The new hook is
+/// then withdrawn and retained rather than left installed without a guard.
 pub fn register_request_rebuild(
     hook: impl Fn() + Send + Sync + 'static,
 ) -> RebuildHookRegistration {
@@ -102,10 +110,14 @@ fn register_request_rebuild_with_counter(
         slot.hook
             .replace(hook.0.take().expect("BUG: pending rebuild hook is owned"))
     };
+    // The installed hook is owned before the outgoing one is destroyed: if
+    // that destructor panics, unwinding drops this guard, which withdraws the
+    // new hook instead of leaving it installed with no owner.
+    let registration = RebuildHookRegistration { generation };
     // As in `Drop`, replacement must not destroy captured user state while
     // the registry lock is held.
     drop(replaced);
-    RebuildHookRegistration { generation }
+    registration
 }
 
 /// Ask the host to rebuild dirty elements on the next frame.
@@ -239,6 +251,63 @@ mod tests {
             "independent admission still delivers"
         );
         drop(fresh);
+    }
+
+    #[test]
+    fn replaced_hook_drop_panic_withdraws_final_registration() {
+        struct DropBomb;
+        impl Drop for DropBomb {
+            fn drop(&mut self) {
+                panic!("replaced capture destruction");
+            }
+        }
+        struct DropCount(Arc<AtomicUsize>);
+        impl Drop for DropCount {
+            fn drop(&mut self) {
+                self.0.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+        let _registry = REBUILD_HOOK_TEST_LOCK.lock();
+        let counter = AtomicU64::new(u64::MAX - 1);
+        let bomb = DropBomb;
+        let outgoing = register_request_rebuild_with_counter(
+            move || {
+                std::hint::black_box(&bomb);
+            },
+            &counter,
+        );
+        let calls = Arc::new(AtomicUsize::new(0));
+        let drops = Arc::new(AtomicUsize::new(0));
+        let hook_calls = Arc::clone(&calls);
+        let capture = DropCount(Arc::clone(&drops));
+        let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            register_request_rebuild_with_counter(
+                move || {
+                    std::hint::black_box(&capture);
+                    hook_calls.fetch_add(1, Ordering::Relaxed);
+                },
+                &counter,
+            )
+        }))
+        .expect_err("outgoing capture destructor panics");
+        assert_eq!(
+            flui_foundation::panic::payload_text(failure.as_ref()),
+            Some("replaced capture destruction"),
+            "the destructor failure propagates"
+        );
+        flui_foundation::panic::retain_opaque_payload(failure);
+        assert!(
+            REQUEST_REBUILD.lock().hook.is_none(),
+            "final-generation hook is withdrawn with its unwound guard"
+        );
+        request_rebuild();
+        assert_eq!(calls.load(Ordering::Relaxed), 0);
+        assert_eq!(
+            drops.load(Ordering::Relaxed),
+            0,
+            "withdrawn hook retained while unwinding"
+        );
+        drop(outgoing);
     }
 
     #[test]
