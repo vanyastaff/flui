@@ -191,8 +191,8 @@ mod native_windows {
             CWPSTRUCT, CallNextHookEx, DispatchMessageW, GetClientRect, IsIconic, IsWindowVisible,
             MSG, PM_REMOVE, PeekMessageW, PostMessageW, SW_MINIMIZE, SWP_NOACTIVATE, SWP_NOMOVE,
             SWP_NOSIZE, SWP_NOZORDER, SendMessageW, SetWindowPos, SetWindowsHookExW, ShowWindow,
-            UnhookWindowsHookEx, WH_CALLWNDPROC, WM_CHAR, WM_CLOSE, WM_ENTERMENULOOP, WM_KEYDOWN,
-            WM_SYSKEYDOWN, WM_SYSKEYUP,
+            TranslateMessage, UnhookWindowsHookEx, WH_CALLWNDPROC, WM_CHAR, WM_CLOSE,
+            WM_ENTERMENULOOP, WM_KEYDOWN, WM_SYSCHAR, WM_SYSKEYDOWN, WM_SYSKEYUP,
         },
     };
 
@@ -248,6 +248,14 @@ mod native_windows {
         ),
         ("alt_tap_keeps_next_character", alt_tap_keeps_next_character),
         ("f10_keeps_next_character", f10_keeps_next_character),
+        (
+            "consumed_alt_space_withdraws_its_system_char",
+            consumed_alt_space_withdraws_its_system_char,
+        ),
+        (
+            "unconsumed_alt_space_keeps_its_system_char",
+            unconsumed_alt_space_keeps_its_system_char,
+        ),
         (
             "resize_callback_preserves_large_native_dimensions",
             resize_callback_preserves_large_native_dimensions,
@@ -1038,6 +1046,106 @@ mod native_windows {
             "{key}: the character after the menu key reaches input"
         );
         assert_eq!(closes.load(Ordering::SeqCst), 0, "{key}: window stays open");
+        window.close();
+    }
+
+    fn consumed_alt_space_withdraws_its_system_char() {
+        alt_space_system_char(true);
+    }
+    fn unconsumed_alt_space_keeps_its_system_char() {
+        alt_space_system_char(false);
+    }
+
+    // Alt+Space goes through the message loop's own path: the keydown is
+    // queued, `TranslateMessage` queues its WM_SYSCHAR, then the keydown is
+    // dispatched. That character is what `DefWindowProc` turns into the
+    // system menu, so a consumed keydown must withdraw it and an unconsumed
+    // one must leave it queued. The row never dispatches a WM_SYSCHAR itself:
+    // one left behind is counted, not allowed to open a modal menu.
+    #[expect(
+        unsafe_code,
+        reason = "actual owned Win32 key translation and message pumping"
+    )]
+    fn alt_space_system_char(consume: bool) {
+        let platform = WindowsPlatform::new().expect("native Windows platform");
+        let window = open_shown(&platform);
+        let hwnd = window
+            .as_any()
+            .downcast_ref::<WindowsWindow>()
+            .expect("Win32 backend")
+            .hwnd();
+        let keydowns = Arc::new(AtomicUsize::new(0));
+        let keydown_observations = Arc::clone(&keydowns);
+        window.on_input(Box::new(move |event| {
+            if event
+                .as_keyboard()
+                .is_some_and(|key| key.state == keyboard_types::KeyState::Down)
+            {
+                keydown_observations.fetch_add(1, Ordering::SeqCst);
+            }
+            DispatchEventResult::resolved(true, consume)
+        }));
+        let mut keyboard_state = ThreadKeyboardState::with_alt_pressed();
+        // SAFETY: integer VK_SPACE, scan-code and Alt-context data queued for
+        // the platform's own HWND on its creating thread.
+        unsafe {
+            PostMessageW(
+                Some(hwnd),
+                WM_SYSKEYDOWN,
+                WPARAM(0x20),
+                LPARAM(1 | (0x39 << 16) | (1 << 29)),
+            )
+            .expect("queue Alt+Space keydown");
+        }
+        let mut keydown = MSG::default();
+        // SAFETY: removes the message just queued for this owned HWND, then
+        // translates and dispatches it as the platform's message loop does,
+        // while the thread's logical Alt state is still held.
+        unsafe {
+            assert!(
+                PeekMessageW(
+                    &raw mut keydown,
+                    Some(hwnd),
+                    WM_SYSKEYDOWN,
+                    WM_SYSKEYDOWN,
+                    PM_REMOVE
+                )
+                .as_bool(),
+                "the queued keydown"
+            );
+            let _ = TranslateMessage(&raw const keydown);
+            DispatchMessageW(&raw const keydown);
+        }
+        keyboard_state.restore();
+        let mut system_chars = Vec::new();
+        let mut message = MSG::default();
+        // SAFETY: only this owned HWND's WM_SYSCHARs are removed, undispatched.
+        while unsafe {
+            PeekMessageW(
+                &raw mut message,
+                Some(hwnd),
+                WM_SYSCHAR,
+                WM_SYSCHAR,
+                PM_REMOVE,
+            )
+        }
+        .as_bool()
+        {
+            system_chars.push(message.wParam.0);
+        }
+        assert_eq!(keydowns.load(Ordering::SeqCst), 1, "keydown delivery");
+        if consume {
+            assert!(
+                system_chars.is_empty(),
+                "a consumed Alt+Space left {system_chars:?} for DefWindowProc"
+            );
+        } else {
+            assert_eq!(
+                system_chars,
+                [0x20],
+                "an unconsumed Alt+Space keeps its system character"
+            );
+        }
         window.close();
     }
 

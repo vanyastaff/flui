@@ -36,8 +36,8 @@ use windows::{
                 WM_INPUTLANGCHANGE, WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS, WM_LBUTTONDOWN,
                 WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEHWHEEL, WM_MOUSEMOVE,
                 WM_MOUSEWHEEL, WM_MOVE, WM_PAINT, WM_QUIT, WM_RBUTTONDOWN, WM_RBUTTONUP,
-                WM_SETCURSOR, WM_SETFOCUS, WM_SETTINGCHANGE, WM_SHOWWINDOW, WM_SIZE, WM_SYSCOMMAND,
-                WM_SYSKEYDOWN, WM_SYSKEYUP, WNDCLASSW,
+                WM_SETCURSOR, WM_SETFOCUS, WM_SETTINGCHANGE, WM_SHOWWINDOW, WM_SIZE, WM_SYSCHAR,
+                WM_SYSCOMMAND, WM_SYSKEYDOWN, WM_SYSKEYUP, WNDCLASSW,
             },
         },
     },
@@ -1554,6 +1554,13 @@ impl WindowsPlatform {
                         if result.default_prevented
                             || GetWindowLongPtrW(hwnd, GWLP_USERDATA) != ctx_ptr as isize
                         {
+                            // The default this keydown skipped also lives in
+                            // the WM_SYSCHAR `TranslateMessage` queued for it:
+                            // `DefWindowProcW` turns Alt+Space's into the
+                            // system menu. Withdraw it with its keydown.
+                            if msg == WM_SYSKEYDOWN {
+                                discard_translated_sys_chars(hwnd);
+                            }
                             return LRESULT(0);
                         }
                     }
@@ -2563,7 +2570,8 @@ fn current_modifiers() -> keyboard_types::Modifiers {
 /// before `DispatchMessageW`, so every `WM_CHAR` belonging to this keystroke
 /// (two of them for an astral-plane character) is already posted. Draining
 /// filters exactly `WM_CHAR` for this window: `WM_SYSCHAR` is deliberately
-/// left queued so Alt+mnemonic accelerators still flow to `DefWindowProcW`,
+/// left queued so Alt+mnemonic accelerators still flow to `DefWindowProcW`
+/// (unless the keydown's default is prevented: [`discard_translated_sys_chars`]),
 /// and `WM_DEADCHAR` is left to expire so dead-key state stays Windows'
 /// business. Returns `None` for keystrokes with no typeable translation
 /// (navigation keys, Ctrl chords — see `shared::keys::wm_char_text`).
@@ -2584,6 +2592,20 @@ fn drain_translated_chars(hwnd: HWND) -> Option<String> {
     }
 
     crate::shared::keys::wm_char_text(&units)
+}
+
+/// Remove the `WM_SYSCHAR` burst `TranslateMessage` queued for a system
+/// keydown whose default was prevented, so its character never reaches
+/// `DefWindowProcW` (which would raise `SC_KEYMENU` from it, and open the
+/// system menu for Alt+Space). The same queue-ordering argument as
+/// [`drain_translated_chars`] makes the burst complete here.
+fn discard_translated_sys_chars(hwnd: HWND) {
+    let mut msg = MSG::default();
+    // SAFETY: as in `drain_translated_chars`: a live writable local, and
+    // `PM_REMOVE` touches only this thread's own queue.
+    unsafe {
+        while PeekMessageW(&raw mut msg, Some(hwnd), WM_SYSCHAR, WM_SYSCHAR, PM_REMOVE).as_bool() {}
+    }
 }
 
 // Windows platform capabilities
