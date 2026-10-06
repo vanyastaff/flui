@@ -117,9 +117,30 @@ fn color_contract() {
                 "channels_round_to_the_nearest_step",
                 color_property::channels_round_to_the_nearest_step,
             ),
+        ],
+    );
+}
+
+#[test]
+fn color_lerp_is_premultiplied_oklab() {
+    run_cases(
+        "color_lerp",
+        &[
+            (
+                "black_to_white_midpoint_is_oklab_mid_grey",
+                color_property::black_to_white_midpoint_is_oklab_mid_grey,
+            ),
             (
                 "lerp_to_transparent_keeps_the_hue",
                 color_property::lerp_to_transparent_keeps_the_hue,
+            ),
+            (
+                "lerp_endpoints_are_exact",
+                color_property::lerp_endpoints_are_exact,
+            ),
+            (
+                "lerp_outside_the_segment_saturates_and_nan_keeps_begin",
+                color_property::lerp_outside_the_segment_saturates_and_nan_keeps_begin,
             ),
         ],
     );

@@ -2021,6 +2021,7 @@ dependencies = [
  "criterion",
  "glam",
  "parking_lot",
+ "proptest",
  "serde",
  "serde_json",
  "smallvec",
