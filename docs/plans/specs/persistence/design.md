@@ -423,3 +423,16 @@ versioned documents».** Решение:
 3. **Windows-эксперимент.** `LockFileEx` и `MoveFileExW` на OneDrive-каталоге с файлами по
    запросу; укладывается ли удержание файла антивирусом в бюджет повтора (~1,5 с) и inline-сброс
    реестра — в 3 с завершения сеанса. Если нет — бюджеты пересматриваются до RC.
+
+## Изменения контракта после заморозки (2026-10-06, решение оркестратора)
+
+Основание — отчёт P1 (`persistence/contract` @ `b6c419ca7`). Зависимые задачи — P2 (`FileStore`) и P6
+(хостовое хранилище).
+
+1. **`StorageName::is_machine_local(&self) -> bool`** входит в контракт: без него реализация `Storage`
+   не может выбрать между roaming- и local-корнем. Добавляет P2.
+2. **`StoredVersion::of_bytes(&[u8]) -> StoredVersion`** принят: версии нужны реализациям вне
+   `flui-platform-api` (`MemoryStorage`, `FileStore`).
+3. **Тест «каталог хранения доходит до `LifecycleContext`»** живёт внутри `flui-app`
+   (`realm_dispatch/tests.rs`): публичного пути собрать realm runner'а без GPU нет. Тот же предел у
+   P6 `a_runner_write_lands_under_the_configured_roots` — он тоже in-crate.
