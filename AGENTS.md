@@ -158,7 +158,10 @@ data, force-pushing, merging, publishing, or changing anything outside your work
 The repository is public. Plans, reviews, audits and session notes stay out of it (keep them in
 `TASKS.md` or outside the checkout); a decision that should outlive the task goes into an ADR,
 `design/`, or the crate's `## Mapping decisions`. Never commit local absolute paths or links to
-private chat sessions.
+private chat sessions. The exception is `docs/plans/specs/<feature>/` (`requirements.md`,
+`design.md`, `tasks.md`): the owner-approved feature specs the release work runs on, with their
+status. Requirement and task IDs live only there; once a feature merges, its lasting decisions
+move into an ADR or the crate's `ARCHITECTURE.md`, and the spec stays as history.
 
 ## Commands
 
