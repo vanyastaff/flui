@@ -294,6 +294,10 @@ fn decoration_contract() {
         "decoration",
         &[
             (
+                "decoration_unit::circular_hit_testing_preserves_finite_distance_ranges",
+                decoration_unit::circular_hit_testing_preserves_finite_distance_ranges as fn(),
+            ),
+            (
                 "hidden_uniform_rectangle_borders_do_not_paint",
                 decoration_unit::hidden_uniform_rectangle_borders_do_not_paint,
             ),

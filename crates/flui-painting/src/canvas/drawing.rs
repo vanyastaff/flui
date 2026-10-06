@@ -361,9 +361,14 @@ impl Canvas {
     /// recorded at the origin lands wherever the canvas is currently
     /// translated, scaled, or rotated to. Paints are shared by `Arc`, so a
     /// replay allocates nothing per command beyond the command itself.
-    /// `Save`/`Restore` scopes and clips replay as recorded; the picture's
-    /// clips cannot leak into this canvas only if the picture was balanced.
+    /// The picture inherits this canvas's clip, and its own clips are isolated
+    /// from subsequent draws. The picture must have balanced save/restore
+    /// scopes. An empty picture records nothing.
     pub fn draw_picture(&mut self, picture: &DisplayList) {
+        if picture.is_empty() {
+            return;
+        }
+        self.save();
         let ctm = self.transform;
         for command in picture {
             self.display_list.push(DrawCommand {
@@ -371,5 +376,6 @@ impl Canvas {
                 op: command.op.clone(),
             });
         }
+        self.restore();
     }
 }

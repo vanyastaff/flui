@@ -111,8 +111,10 @@ flui-interaction = { path = "../flui-interaction", version = "=0.2.0-dev", featu
 # gestures. `flui-testing` depends on this crate, so this is a dev-only cycle
 # (ADR-0083 §4): the integration tests link one copy of the library; the
 # unit-test build compiles a second, and only `log_capture` crosses into it,
-# so no type of this crate meets its twin.
-flui-testing = { workspace = true }
+# so no type of this crate meets its twin. Keep the harness checkout-only:
+# Cargo omits this versionless dev edge from archives, breaking the publication
+# cycle while retaining the public, versioned testing-to-widgets dependency.
+flui-testing = { path = "../flui-testing" }
 # Shared Arc<RwLock<PipelineOwner>> in the headless layout harness.
 parking_lot = { workspace = true }
 # `#[tokio::test]` for the `image::decode_cache` coalescing unit tests

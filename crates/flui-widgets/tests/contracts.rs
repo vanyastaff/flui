@@ -67,6 +67,8 @@ fn reactivity_and_dependencies() {
             ("signals_legal_shapes::the_accepted_shapes_compile_and_run", crate::signals_legal_shapes::the_accepted_shapes_compile_and_run),
             ("editable_text::event_cx::typing_writes_through_on_changed_and_rebuilds_its_reader", crate::editable_text::event_cx::typing_writes_through_on_changed_and_rebuilds_its_reader),
             ("gesture_detector::event_cx::a_tap_writes_a_signal_and_rebuilds_its_reader", crate::gesture_detector::event_cx::a_tap_writes_a_signal_and_rebuilds_its_reader),
+            ("gesture_detector::event_cx::repeated_assistive_taps_are_delivered_once_each_and_keep_making_progress", crate::gesture_detector::event_cx::repeated_assistive_taps_are_delivered_once_each_and_keep_making_progress),
+            ("gesture_detector::event_cx::repeated_assistive_long_presses_are_delivered_once_each_and_keep_making_progress", crate::gesture_detector::event_cx::repeated_assistive_long_presses_are_delivered_once_each_and_keep_making_progress),
             ("draggable_events::a_drop_writes_through_the_targets_on_accept_before_the_draggable_completes", crate::draggable_events::a_drop_writes_through_the_targets_on_accept_before_the_draggable_completes),
             ("draggable_events::a_drag_leaving_a_target_writes_through_on_leave_and_on_move", crate::draggable_events::a_drag_leaving_a_target_writes_through_on_leave_and_on_move),
             ("semantics::an_action_handler_writes_a_signal_and_rebuilds_its_reader", crate::semantics::an_action_handler_writes_a_signal_and_rebuilds_its_reader),

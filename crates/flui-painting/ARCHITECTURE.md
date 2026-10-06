@@ -45,7 +45,10 @@ the crate can add, remove, or edit a command, so its cached `bounds()` is
 always the union the recorder computed (`op.local_bounds()` through the
 command's transform), and `Option<Rect>` because a list of only clips or
 `Paint`s has no extent (which is not an empty rect at the origin).
-`draw_picture` replays a list as `ctm * command.transform` per command.
+`draw_picture` replays a list as `ctm * command.transform` per command,
+inside a save/restore scope: the picture inherits the caller's clip, and its
+own root clips end with it. An empty picture records nothing. The engine's
+`inline_picture_replay_owns_its_root_clips` pins this through readback.
 The wire carries no serde ([ADR-0066](../../docs/adr/ADR-0066-display-list-command-representation.md)).
 
 `Paint` is interned per canvas: each `draw_*` scans a small `Vec<Arc<Paint>>`

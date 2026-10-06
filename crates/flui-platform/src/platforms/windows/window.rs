@@ -162,9 +162,10 @@ impl WindowsWindow {
     /// [`OpenWindowError::Backend`] when Win32 window creation fails.
     pub(super) fn new(
         options: WindowOptions,
-        windows_map: Arc<Mutex<HashMap<isize, Arc<WindowsWindow>>>>,
+        windows_map: Arc<super::platform::WindowMap>,
         handlers: Rc<RefCell<PlatformHandlers>>,
         frames: Rc<super::platform::FrameCount>,
+        exit_policy: super::owner_control::ExitPolicyRequest,
         config: crate::config::WindowConfiguration,
     ) -> Result<Arc<Self>, OpenWindowError> {
         // Admission refuses identity exhaustion before creating an HWND
@@ -179,6 +180,7 @@ impl WindowsWindow {
             windows_map,
             handlers,
             frames,
+            exit_policy,
             config,
             identity,
             hwnd,
@@ -260,6 +262,7 @@ impl WindowsWindow {
         windows_map: Arc<Mutex<HashMap<isize, Arc<WindowsWindow>>>>,
         handlers: Rc<RefCell<PlatformHandlers>>,
         frames: Rc<super::platform::FrameCount>,
+        exit_policy: super::owner_control::ExitPolicyRequest,
         config: crate::config::WindowConfiguration,
         identity: super::platform::WindowIdentity,
         hwnd: HWND,
@@ -348,6 +351,7 @@ impl WindowsWindow {
                 window_state: Arc::downgrade(&state),
                 handlers,
                 frames,
+                exit_policy,
                 callbacks: WindowCallbacks::new(),
                 scale_factor: std::cell::Cell::new(scale_factor),
                 mode: std::cell::Cell::new(WindowMode::Normal),

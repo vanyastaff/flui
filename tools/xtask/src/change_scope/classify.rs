@@ -68,6 +68,7 @@ pub(super) const HEAVY_TRIGGERS: &[&str] = &[
     "rust-toolchain.toml",
     "rust-toolchain", // the extensionless form; rustup prefers it over .toml
     ".github/workflows/**",
+    ".github/actions/**", // the local actions those workflows run
     // Shaders: clippy only embeds them as strings and no build script parses
     // them (`checks`' `wgsl` step is a syntactic uniformity check, in every
     // lane). The wide lane's live-smoke compiles the pipelines its demo draws
@@ -112,6 +113,7 @@ pub(super) const TOOLING: &[&str] = &[
     ".gitattributes",
     "llms.txt",
     ".github/dependabot.yml",
+    ".github/zizmor.yml",
 ];
 
 /// `fnmatch`-style match: `*` is any run of characters (including `/`), `?` is
@@ -840,6 +842,7 @@ pub(super) mod tests {
             "rust-toolchain.toml",
             "rust-toolchain",
             ".github/workflows/ci.yml",
+            ".github/actions/rust-toolchain/action.yml",
             "deny.toml",
         ] {
             let s = scope(&[path]);

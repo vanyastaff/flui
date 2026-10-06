@@ -151,10 +151,11 @@ pub trait Platform: Send + Sync + 'static {
     /// this backend's native window count decide alone.
     ///
     /// Default no-op: a backend that never overrides this (every backend
-    /// except `winit`, AppKit, and `headless` today — Win32/Android/Web/iOS
-    /// remain cross-typecheck-only for this specific mechanism, stated
-    /// honestly rather than silently assumed) keeps its pre-existing
-    /// native lifecycle behavior; installing a hook there is inert.
+    /// except `winit`, AppKit, Win32 and `headless` today; Android, Web and
+    /// iOS do not implement this mechanism) keeps its pre-existing native
+    /// lifecycle behavior; installing a hook there is inert. Win32 consults
+    /// the hook on an owner-window turn after the last tracked window's
+    /// `WM_DESTROY`, and with no hook installed ends its message loop there.
     fn set_exit_policy_hook(&self, hook: Box<dyn Fn() -> bool + Send>) {
         let _ = hook;
     }
@@ -180,9 +181,8 @@ pub trait Platform: Send + Sync + 'static {
     /// are still open, or while the hook still vetoes, is a no-op.
     ///
     /// Default no-op: a backend that never overrides this (every backend
-    /// except `winit`, AppKit, and `headless` today — Win32/Android/Web/iOS
-    /// remain cross-typecheck-only for this mechanism, stated honestly
-    /// rather than silently assumed) simply never re-evaluates: on those
+    /// except `winit`, AppKit, Win32 and `headless` today; Android, Web and
+    /// iOS do not implement this mechanism) simply never re-evaluates: on those
     /// backends a keep-alive holder's release does not end the process
     /// until an explicit [`quit`](Self::quit). The headless backend parks
     /// the request; its embedder drives the actual re-check on the owner

@@ -28,13 +28,66 @@ use crate::id::ListenerId;
 /// A listener callback that borrows its argument for the duration of the call.
 pub type ArgCallback<Arg> = Arc<dyn Fn(&Arg) + Send + Sync + 'static>;
 
+/// The physical shared owner, including retirement of the final listener set.
+struct ListenerStorage<Arg> {
+    entries: Mutex<HashMap<ListenerId, ArgCallback<Arg>>>,
+}
+
+impl<Arg> Drop for ListenerStorage<Arg> {
+    fn drop(&mut self) {
+        // Empty the field before any capture can unwind through its drop glue.
+        // Final Arc ownership gives exclusive access without holding a guard.
+        retire_listeners(std::mem::take(self.entries.get_mut()));
+    }
+}
+
+/// Separate callback envelopes must never become one aggregate drop boundary.
+struct RetiringListeners<Arg>(Vec<(ListenerId, ArgCallback<Arg>)>);
+
+impl<Arg> Drop for RetiringListeners<Arg> {
+    fn drop(&mut self) {
+        if std::thread::panicking() {
+            // A callback already failed. Its untouched successors must not
+            // introduce another destructor failure while that panic propagates.
+            std::mem::forget(std::mem::take(&mut self.0));
+        }
+    }
+}
+
+fn retire_listeners<Arg>(listeners: HashMap<ListenerId, ArgCallback<Arg>>) {
+    if std::thread::panicking() {
+        // Preserve an incoming unwind without running opaque captures at all.
+        std::mem::forget(listeners);
+        return;
+    }
+    let mut retiring = RetiringListeners(listeners.into_iter().collect());
+    retiring.0.sort_unstable_by_key(|(id, _)| *id);
+    retiring.0.reverse();
+    while let Some((_, callback)) = retiring.0.pop() {
+        drop(callback);
+    }
+}
+
+fn retire_listener<Arg>(listener: Option<ArgCallback<Arg>>) {
+    if std::thread::panicking() {
+        std::mem::forget(listener);
+    } else {
+        drop(listener);
+    }
+}
+
 /// A generic, typed, hardened notification channel. See module docs.
 ///
 /// Cloning shares the same underlying listener set, id counter, and disposed
 /// flag (`Arc`-backed), so a callback holding its own clone observes disposal
 /// performed elsewhere — matching `ChangeNotifier`'s semantics.
+///
+/// Removal, clearing, disposal and final-owner destruction drop callbacks
+/// outside the lock, in registration order. After the first destructor panic,
+/// or while the thread is already panicking, the remaining callbacks are
+/// retained rather than dropped (ADR-0127).
 pub struct Notifier<Arg> {
-    listeners: Arc<Mutex<HashMap<ListenerId, ArgCallback<Arg>>>>,
+    listeners: Arc<ListenerStorage<Arg>>,
     next_id: Arc<AtomicUsize>,
     is_disposed: Arc<AtomicBool>,
 }
@@ -58,7 +111,7 @@ impl<Arg> Default for Notifier<Arg> {
 impl<Arg> fmt::Debug for Notifier<Arg> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Notifier")
-            .field("listeners", &self.listeners.lock().len())
+            .field("listeners", &self.listeners.entries.lock().len())
             .field("is_disposed", &self.is_disposed())
             .finish_non_exhaustive()
     }
@@ -69,7 +122,9 @@ impl<Arg> Notifier<Arg> {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            listeners: Arc::new(Mutex::new(HashMap::new())),
+            listeners: Arc::new(ListenerStorage {
+                entries: Mutex::new(HashMap::new()),
+            }),
             next_id: Arc::new(AtomicUsize::new(1)),
             is_disposed: Arc::new(AtomicBool::new(false)),
         }
@@ -124,7 +179,7 @@ impl<Arg> Notifier<Arg> {
     /// call proceed.
     pub(crate) fn add_unchecked(&self, listener: ArgCallback<Arg>) -> ListenerId {
         let id = self.mint_id();
-        let evicted = self.listeners.lock().insert(id, listener);
+        let evicted = self.listeners.entries.lock().insert(id, listener);
         debug_assert!(
             evicted.is_none(),
             "listener ids are monotonic (see mint_id) — a fresh id can never \
@@ -149,7 +204,7 @@ impl<Arg> Notifier<Arg> {
         &self,
         mutate: impl FnOnce(&mut HashMap<ListenerId, ArgCallback<Arg>>) -> T,
     ) -> T {
-        mutate(&mut self.listeners.lock())
+        mutate(&mut self.listeners.entries.lock())
     }
 
     /// Remove a previously registered listener. No-op if absent.
@@ -162,7 +217,7 @@ impl<Arg> Notifier<Arg> {
         if self.check_disposed() {
             return;
         }
-        drop(self.extract_locked(|listeners| listeners.remove(&id)));
+        retire_listener(self.extract_locked(|listeners| listeners.remove(&id)));
     }
 
     /// [`Self::remove`] without the disposed gate: always a silent no-op on a
@@ -172,7 +227,7 @@ impl<Arg> Notifier<Arg> {
     /// teardown code can always detach without tripping a use-after-dispose
     /// check.
     pub fn remove_even_if_disposed(&self, id: ListenerId) {
-        drop(self.extract_locked(|listeners| listeners.remove(&id)));
+        retire_listener(self.extract_locked(|listeners| listeners.remove(&id)));
     }
 
     /// Remove all listeners.
@@ -187,21 +242,21 @@ impl<Arg> Notifier<Arg> {
     /// rationale as [`Self::add_unchecked`]; racing a `dispose` here is
     /// harmless (both clear the same map).
     pub(crate) fn remove_all_unchecked(&self) {
-        drop(self.extract_locked(std::mem::take));
+        retire_listeners(self.extract_locked(std::mem::take));
     }
 
     /// Number of registered listeners.
     #[must_use]
     #[inline]
     pub fn len(&self) -> usize {
-        self.listeners.lock().len()
+        self.listeners.entries.lock().len()
     }
 
     /// Whether there are no listeners.
     #[must_use]
     #[inline]
     pub fn is_empty(&self) -> bool {
-        self.listeners.lock().is_empty()
+        self.listeners.entries.lock().is_empty()
     }
 
     /// Discard listeners and mark disposed. Idempotent (second call is a no-op).
@@ -209,7 +264,7 @@ impl<Arg> Notifier<Arg> {
         if self.is_disposed.swap(true, Ordering::AcqRel) {
             return;
         }
-        drop(self.extract_locked(std::mem::take));
+        retire_listeners(self.extract_locked(std::mem::take));
     }
 }
 
@@ -251,6 +306,7 @@ impl<Arg> Notifier<Arg> {
         // implement `Default`, and `tinyvec` requires `T: Default`.
         let mut snapshot: smallvec::SmallVec<[(ListenerId, ArgCallback<Arg>); 4]> = self
             .listeners
+            .entries
             .lock()
             .iter()
             .map(|(&id, cb)| (id, Arc::clone(cb)))
@@ -263,7 +319,8 @@ impl<Arg> Notifier<Arg> {
             // Skip a listener individually removed mid-notify (by an earlier
             // callback). Once disposed mid-flight, the snapshot is honoured to
             // completion (the disposed-state check ran at entry).
-            if !self.is_disposed.load(Ordering::Acquire) && !self.listeners.lock().contains_key(id)
+            if !self.is_disposed.load(Ordering::Acquire)
+                && !self.listeners.entries.lock().contains_key(id)
             {
                 continue;
             }

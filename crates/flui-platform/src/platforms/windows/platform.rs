@@ -279,6 +279,10 @@ impl WindowsPlatform {
     }
 }
 
+/// The platform's tracked top-level windows, keyed by HWND. The owner
+/// message-only windows are never in it.
+pub(super) type WindowMap = Mutex<HashMap<isize, Arc<WindowsWindow>>>;
+
 /// Context data stored per window for event dispatch.
 ///
 /// Lives in the window's `GWLP_USERDATA` slot and is only ever reached on
@@ -293,7 +297,7 @@ pub(super) struct WindowContext {
     /// Which native window this context belongs to; see [`WindowIdentity`].
     pub identity: WindowIdentity,
     /// Tracking and cache access do not keep wrappers or their state alive.
-    pub windows: std::sync::Weak<Mutex<HashMap<isize, Arc<WindowsWindow>>>>,
+    pub windows: std::sync::Weak<WindowMap>,
     pub window_state: std::sync::Weak<Mutex<super::window::WindowState>>,
     /// The platform-level handlers, shared with the owner control context.
     /// `Rc<RefCell<..>>`: every holder lives on the owner thread, and no
@@ -302,6 +306,9 @@ pub(super) struct WindowContext {
     /// The platform's count of dispatched frame callbacks, shared with the
     /// owner control context and every other window this platform opens.
     pub frames: Rc<FrameCount>,
+    /// Asks the owner to consult the exit policy once this window's
+    /// `WM_DESTROY` leaves the platform tracking no window.
+    pub exit_policy: super::owner_control::ExitPolicyRequest,
     /// Per-window callbacks for event delivery, owned by this context and
     /// released by `WM_DESTROY` on the owner thread.
     pub callbacks: WindowCallbacks,
@@ -633,7 +640,7 @@ pub struct WindowsPlatform {
     message_window: HWND,
 
     /// All created windows (keyed by HWND)
-    windows: Arc<Mutex<HashMap<isize, Arc<WindowsWindow>>>>,
+    windows: Arc<WindowMap>,
 
     // The platform-level handlers (callbacks from platform to framework)
     // are not a field: they live in the owner control context, reachable
@@ -814,10 +821,14 @@ impl WindowsPlatform {
 
         tracing::info!("Windows platform initialized with Tokio executors");
 
+        let windows = Arc::new(Mutex::new(HashMap::new()));
         let platform = Self {
-            owner_control: super::owner_control::OwnerControl::new(owner_identity)?,
+            owner_control: super::owner_control::OwnerControl::new(
+                owner_identity,
+                Arc::downgrade(&windows),
+            )?,
             message_window,
-            windows: Arc::new(Mutex::new(HashMap::new())),
+            windows,
             background_executor,
             config,
             affinity: flui_foundation::OwnerAffinity::new(),
@@ -1085,12 +1096,23 @@ impl WindowsPlatform {
                                 .get(&(hwnd.0 as isize))
                                 .is_some_and(|window| window.identity == ctx.identity)
                             {
-                                windows.remove(&(hwnd.0 as isize))
+                                windows
+                                    .remove(&(hwnd.0 as isize))
+                                    .map(|window| (window, windows.is_empty()))
                             } else {
                                 None
                             }
                         });
+                        let last_window_closed = removed.as_ref().is_some_and(|(_, empty)| *empty);
                         drop(removed);
+                        // The last tracked window is gone: the owner decides,
+                        // on its own turn, whether the loop ends. Not here —
+                        // this `WM_DESTROY` may be nested inside embedder
+                        // code that closed the window, and the hook
+                        // re-enters the embedder.
+                        if last_window_closed {
+                            ctx.exit_policy.post();
+                        }
                     }
 
                     LRESULT(0)
@@ -2195,6 +2217,7 @@ impl Platform for WindowsPlatform {
             self.windows.clone(),
             shares.handlers,
             shares.frames,
+            shares.exit_policy,
             self.config.clone(),
         )?;
         let hwnd_value = window.hwnd().0 as isize;
@@ -2232,6 +2255,16 @@ impl Platform for WindowsPlatform {
 
     fn on_quit(&self, callback: Box<dyn FnMut() + Send>) {
         self.register_handler("on_quit", callback, |handlers| &mut handlers.quit);
+    }
+
+    fn set_exit_policy_hook(&self, hook: Box<dyn Fn() -> bool + Send>) {
+        self.register_handler("set_exit_policy_hook", hook, |handlers| {
+            &mut handlers.exit_policy
+        });
+    }
+
+    fn request_exit_policy_reevaluation(&self) {
+        self.owner_control.exit_policy_request().post();
     }
 
     fn on_window_event(&self, callback: Box<dyn FnMut(WindowEvent) + Send>) {

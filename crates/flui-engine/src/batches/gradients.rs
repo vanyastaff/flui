@@ -748,11 +748,16 @@ impl DrawBatcher {
                 .extend_from_slice(&stops[..stop_count]);
 
             match shader {
-                Shader::LinearGradient { from, to, .. } => {
+                Shader::Solid { .. } | Shader::LinearGradient { .. } => {
                     use crate::instancing::LinearGradientInstance;
-                    let parameter =
+                    // Solid's two identical stops use the same geometry, clip and
+                    // blend route as a linear gradient with a constant parameter.
+                    let parameter = if let Shader::LinearGradient { from, to, .. } = shader {
                         packed_linear_parameter([from.dx, from.dy], [to.dx, to.dy], bounds)
-                            .expect("BUG: linear parameter validated before recording");
+                            .expect("BUG: linear parameter validated before recording")
+                    } else {
+                        [0.0; 4]
+                    };
                     let instance = LinearGradientInstance::new(
                         [
                             (bounds.left() as f32),
@@ -882,7 +887,7 @@ impl DrawBatcher {
                         BlendMode::SrcOver,
                     );
                 }
-                Shader::Solid { .. } | _ => return false,
+                _ => return false,
             }
 
             // Step 3: wrap and push as AdvancedShape.
@@ -905,6 +910,17 @@ impl DrawBatcher {
         // gradient rendered as `SrcOver`.
 
         match shader {
+            Shader::Solid { .. } => {
+                Self::draw_gradient_rect(
+                    segment,
+                    state,
+                    bounds,
+                    [0.0; 4],
+                    &stops,
+                    corner_radii,
+                    paint.blend_mode,
+                );
+            }
             Shader::LinearGradient { from, to, .. } => {
                 let parameter = packed_linear_parameter([from.dx, from.dy], [to.dx, to.dy], bounds)
                     .expect("BUG: linear parameter validated before recording");
@@ -955,7 +971,7 @@ impl DrawBatcher {
                     paint.blend_mode,
                 );
             }
-            Shader::Solid { .. } | _ => return false,
+            _ => return false,
         }
 
         true

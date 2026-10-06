@@ -92,7 +92,7 @@ impl AttachmentState {
 /// ```
 pub struct RenderEntry<P: Protocol> {
     /// The render object. Owned by value; mutation via `&mut self`.
-    render_object: Box<dyn RenderObject<P>>,
+    render_object: Option<Box<dyn RenderObject<P>>>,
 
     /// Protocol-specific state (geometry, constraints, flags).
     state: RenderState<P>,
@@ -104,6 +104,41 @@ pub struct RenderEntry<P: Protocol> {
     /// Kept outside `RenderState`: attachment is storage lifecycle, not
     /// protocol geometry or per-frame state.
     attachment: AttachmentState,
+}
+
+/// Custody for the user-owned render object and parent data.
+///
+/// While the thread is panicking both are retained rather than dropped
+/// (ADR-0127); the entry's framework-owned state still drops normally. A
+/// `RenderTree` relies on this: its slab drops entries in slot order, and an
+/// entry dropped after an earlier one failed retains its user values.
+struct RetiringEntry<P: Protocol> {
+    object: Option<Box<dyn RenderObject<P>>>,
+    parent_data: Option<Box<dyn crate::parent_data::ParentData>>,
+}
+
+impl<P: Protocol> Drop for RetiringEntry<P> {
+    fn drop(&mut self) {
+        if std::thread::panicking() {
+            std::mem::forget(self.object.take());
+            std::mem::forget(self.parent_data.take());
+        }
+    }
+}
+
+impl<P: Protocol> Drop for RenderEntry<P> {
+    fn drop(&mut self) {
+        let mut retiring = RetiringEntry {
+            object: self.render_object.take(),
+            parent_data: self.state.take_parent_data(),
+        };
+        if !std::thread::panicking() {
+            // Object before parent data. If the object's destructor panics,
+            // the guard retains the parent data on unwind.
+            drop(retiring.object.take());
+            drop(retiring.parent_data.take());
+        }
+    }
 }
 
 impl<P: Protocol> Debug for RenderEntry<P>
@@ -133,7 +168,7 @@ impl<P: Protocol> RenderEntry<P> {
     /// - Depth 0
     pub fn new(render_object: Box<dyn RenderObject<P>>) -> Self {
         Self {
-            render_object,
+            render_object: Some(render_object),
             state: RenderState::new(),
             links: NodeLinks::new(),
             attachment: AttachmentState::Detached(None),
@@ -147,7 +182,7 @@ impl<P: Protocol> RenderEntry<P> {
         depth: u16,
     ) -> Self {
         Self {
-            render_object,
+            render_object: Some(render_object),
             state: RenderState::new(),
             links: NodeLinks::with_parent(parent, depth),
             attachment: AttachmentState::Detached(None),
@@ -198,7 +233,9 @@ impl<P: Protocol> RenderEntry<P> {
     /// concurrent `&mut` access exists.
     #[inline]
     pub fn render_object(&self) -> &dyn RenderObject<P> {
-        &*self.render_object
+        self.render_object
+            .as_deref()
+            .expect("BUG: a live render entry owns its render object")
     }
 
     /// Returns a mutable reference to the render object.
@@ -209,7 +246,9 @@ impl<P: Protocol> RenderEntry<P> {
     /// `RenderTree::get_two_mut`.
     #[inline]
     pub fn render_object_mut(&mut self) -> &mut dyn RenderObject<P> {
-        &mut *self.render_object
+        self.render_object
+            .as_deref_mut()
+            .expect("BUG: a live render entry owns its render object")
     }
 }
 
@@ -372,7 +411,7 @@ impl<P: Protocol> RenderEntry<P> {
         // borrow against `&*self.render_object` cannot coexist with the
         // &mut needed inside the unwind closure, so we read the name
         // upfront and let it outlive the closure.
-        let debug_name = self.render_object.debug_name();
+        let debug_name = self.render_object().debug_name();
 
         // SAFETY of AssertUnwindSafe: the render object's internal state
         // is opaque to us. If it panics, we treat the state as torn and
@@ -380,7 +419,10 @@ impl<P: Protocol> RenderEntry<P> {
         // or replace the node before reusing it. The pipeline-side state
         // (geometry / constraints / flags) on `self.state` is not touched
         // before the panic site, so the render tree stays consistent.
-        let render_object = &mut *self.render_object;
+        let render_object = self
+            .render_object
+            .as_deref_mut()
+            .expect("BUG: a live render entry owns its render object");
         let constraints_for_ctx = constraints.clone();
 
         // Wrap constraints in a leaf-mode erased ctx scoped to the inner
@@ -480,7 +522,7 @@ impl<P: Protocol> RenderEntry<P> {
         // used). Before this bootstrap runs, `PipelineOwner::mark_needs_layout`
         // treats every node as non-boundary and walks to root.
         let has_parent = self.links.parent().is_some();
-        let sized_by_parent = self.render_object.sized_by_parent();
+        let sized_by_parent = self.render_object().sized_by_parent();
         <P as crate::protocol::Protocol>::bootstrap_relayout_boundary(
             &self.state,
             sized_by_parent,

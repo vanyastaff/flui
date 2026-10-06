@@ -1,0 +1,45 @@
+name: Pinned Rust toolchain
+description: >-
+  Install exactly the rust-toolchain.toml release, with any extra components
+  and targets, into the job's isolated RUSTUP_HOME.
+inputs:
+  components:
+    description: Extra rustup components, comma-separated
+    default: ""
+  targets:
+    description: Extra rustup targets, comma-separated
+    default: ""
+runs:
+  using: composite
+  steps:
+    - name: Read the repository pin
+      id: pin
+      shell: bash
+      run: |
+        set -euo pipefail
+        # ci.yml points RUSTUP_HOME at an empty directory; without it the
+        # runner image's toolchains would enter rust-cache's key again.
+        : "${RUSTUP_HOME:?the workflow must set RUSTUP_HOME}"
+        channel=$(sed -n 's/^channel = "\([0-9]*\.[0-9]*\.[0-9]*\)"[[:space:]]*$/\1/p' rust-toolchain.toml)
+        [[ "$channel" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+        echo "channel=$channel" >> "$GITHUB_OUTPUT"
+
+    # Installing the pin itself, not `stable`, also installs the targets on the
+    # toolchain rust-toolchain.toml activates, so no `rustup target add` follows.
+    - name: Install the pinned release
+      uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+      with:
+        toolchain: ${{ steps.pin.outputs.channel }}
+        components: ${{ inputs.components }}
+        targets: ${{ inputs.targets }}
+
+    - name: Check that the pin is the only toolchain
+      shell: bash
+      env:
+        EXPECTED_CHANNEL: ${{ steps.pin.outputs.channel }}
+      run: |
+        set -euo pipefail
+        rustc -vV
+        rustup toolchain list
+        [[ $(rustup toolchain list --quiet | wc -l) -eq 1 ]]
+        [[ $(rustc --version | cut -d ' ' -f 2) == "$EXPECTED_CHANNEL" ]]

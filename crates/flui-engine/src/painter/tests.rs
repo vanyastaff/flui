@@ -6,6 +6,7 @@ use flui_painting::BlendMode;
 use super::WgpuPainter;
 
 mod image_boundary;
+mod solid_shader;
 mod vertex_alpha;
 
 /// Headless GPU device + queue for painter tests.
@@ -3216,5 +3217,19 @@ fn painter_vertices_use_effective_colors_for_compositing() {
     assert!(
         failures.is_empty(),
         "vertex color rows failed: {failures:?}"
+    );
+}
+
+#[test]
+fn painter_solid_shaders_use_effective_colors_for_compositing() {
+    let mut failures = Vec::new();
+    for &(name, case) in solid_shader::CASES {
+        if std::panic::catch_unwind(case).is_err() {
+            failures.push(name);
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "Solid shader rows failed: {failures:?}"
     );
 }

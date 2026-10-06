@@ -21,6 +21,19 @@
 /// Type alias for the boxed-closure callbacks the notifier holds.
 type Callback = Box<dyn Fn() + Send + Sync>;
 
+/// Independently retired event envelopes, after their physical owner is empty.
+struct RetiringCallbacks([Option<Callback>; 3]);
+
+impl Drop for RetiringCallbacks {
+    fn drop(&mut self) {
+        if std::thread::panicking() {
+            for callback in &mut self.0 {
+                std::mem::forget(callback.take());
+            }
+        }
+    }
+}
+
 /// Holds the three pipeline-event callbacks that `PipelineOwner` exposes
 /// to its embedding application.
 ///
@@ -28,11 +41,30 @@ type Callback = Box<dyn Fn() + Send + Sync>;
 /// When set, `fire_*` calls the closure synchronously. Callbacks are
 /// `Send + Sync` so the notifier itself is `Send + Sync`, matching the
 /// pipeline-owner trait bound.
+///
+/// Dropping the notifier drops the visual-update, created, then disposed
+/// captures; once one of them panics, or if the thread is already panicking,
+/// the rest are retained (ADR-0127).
 #[derive(Default)]
 pub struct VisualUpdateNotifier {
     need_visual_update: Option<Callback>,
     semantics_owner_created: Option<Callback>,
     semantics_owner_disposed: Option<Callback>,
+}
+
+impl Drop for VisualUpdateNotifier {
+    fn drop(&mut self) {
+        let mut retiring = RetiringCallbacks([
+            self.need_visual_update.take(),
+            self.semantics_owner_created.take(),
+            self.semantics_owner_disposed.take(),
+        ]);
+        if !std::thread::panicking() {
+            for callback in &mut retiring.0 {
+                drop(callback.take());
+            }
+        }
+    }
 }
 
 impl std::fmt::Debug for VisualUpdateNotifier {
@@ -65,7 +97,16 @@ impl VisualUpdateNotifier {
     where
         F: Fn() + Send + Sync + 'static,
     {
-        self.need_visual_update = Some(Box::new(callback));
+        drop(self.replace_need_visual_update(callback));
+    }
+
+    /// Commit a replacement and transfer outgoing custody to the caller so a
+    /// host can release its infrastructure guard before retiring captures.
+    pub(crate) fn replace_need_visual_update<F>(&mut self, callback: F) -> Option<Callback>
+    where
+        F: Fn() + Send + Sync + 'static,
+    {
+        self.need_visual_update.replace(Box::new(callback))
     }
 
     /// Fires the visual-update callback if one is set; otherwise no-op.
@@ -83,7 +124,14 @@ impl VisualUpdateNotifier {
     where
         F: Fn() + Send + Sync + 'static,
     {
-        self.semantics_owner_created = Some(Box::new(callback));
+        drop(self.replace_semantics_owner_created(callback));
+    }
+
+    pub(crate) fn replace_semantics_owner_created<F>(&mut self, callback: F) -> Option<Callback>
+    where
+        F: Fn() + Send + Sync + 'static,
+    {
+        self.semantics_owner_created.replace(Box::new(callback))
     }
 
     /// Fires the semantics-owner-created callback if one is set.
@@ -101,7 +149,14 @@ impl VisualUpdateNotifier {
     where
         F: Fn() + Send + Sync + 'static,
     {
-        self.semantics_owner_disposed = Some(Box::new(callback));
+        drop(self.replace_semantics_owner_disposed(callback));
+    }
+
+    pub(crate) fn replace_semantics_owner_disposed<F>(&mut self, callback: F) -> Option<Callback>
+    where
+        F: Fn() + Send + Sync + 'static,
+    {
+        self.semantics_owner_disposed.replace(Box::new(callback))
     }
 
     /// Fires the semantics-owner-disposed callback if one is set.

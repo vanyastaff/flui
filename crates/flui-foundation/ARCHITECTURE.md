@@ -29,6 +29,13 @@ and squared results can still exceed their representable range. The public famil
 `single_precision_geometry_distances_use_double_precision_range` checks point
 distances and their line-length delegates against exact power-of-two results.
 
+`Circle::contains` and `Circle::contains_strict` compare the `hypot` distance
+`Point::distance` with the radius rather than squaring both sides, which
+overflows or underflows at the ends of the finite range; a distance past
+`f64::MAX` is outside every valid circle. The inclusive predicate accepts the
+boundary, and a zero-radius circle contains its center but has no strict
+interior. `circle_containment_preserves_finite_distance_ranges` pins this.
+
 Vector normalization refuses non-finite components and preserves its existing
 `f64::EPSILON` near-zero threshold. When finite components have an overflowing
 magnitude, scaling before `hypot` preserves their unit direction instead of
@@ -237,6 +244,10 @@ cloneable values, copying the value while sharing the listener channel.
 The public `notifier_ownership_and_recovery` family includes a non-Clone owned
 value's mutation/extraction sequence and clone compatibility.
 
+`ValueNotifier<T>` implements `Drop` to order and retain its owned parts, so borrowed data inside `T` must
+outlive the notifier; this is a drop-check requirement, not a `T: 'static`
+bound.
+
 The separate `ListenerRegistry`/`ListenerSubscription` surface is removed.
 It had no production consumer; its lazy first/last hooks duplicated notification
 ownership and exposed a callback-under-lock transaction. Typed and zero-argument
@@ -269,6 +280,17 @@ owner/task failure competition on abandonment, and reclamation of an unclaimed
 reply after failure. Each scenario also checks the next request.
 
 ### Borrow arguments and retain exceptional notification obligations
+
+Clearing, disposal and final-owner destruction take the listener map out of
+its lock, then drop callbacks one at a time in registration order; surviving
+notifier clones keep the map alive. `ValueNotifier` drops its value, then its
+channel; `into_value` disposes the channel before returning the value. After
+the first destructor panic in one of these operations, or when one starts while
+the thread is already panicking, the remaining captures and the value are
+retained (ADR-0127). A `ValueNotifier`'s channel handle is a shared clone, so
+it is released even then; the last owner's storage retains the captures. A failure a caller caught earlier is not visible through
+`thread::panicking()`, so that caller retains its own failed value. Pinned by
+`notifier_ownership_and_recovery`.
 
 Typed notification callbacks borrow their argument and do not require Clone.
 The notifier's owned snapshot prevents a removed callback from disappearing

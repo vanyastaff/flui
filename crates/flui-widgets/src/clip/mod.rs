@@ -11,3 +11,4 @@ pub use clip_oval::ClipOval;
 pub use clip_path::ClipPath;
 pub use clip_rect::ClipRect;
 pub use clip_rrect::ClipRRect;
+pub use flui_objects::Oval;
