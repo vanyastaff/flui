@@ -64,6 +64,7 @@ fn reactivity_and_dependencies() {
         "reactivity_and_dependencies",
         &[
             ("signals::writing_a_signal_rebuilds_exactly_its_readers", crate::signals::writing_a_signal_rebuilds_exactly_its_readers as fn()),
+            ("signals::same_depth_readers_rebuild_in_child_order", crate::signals::same_depth_readers_rebuild_in_child_order),
             ("signals_legal_shapes::the_accepted_shapes_compile_and_run", crate::signals_legal_shapes::the_accepted_shapes_compile_and_run),
             ("editable_text::event_cx::typing_writes_through_on_changed_and_rebuilds_its_reader", crate::editable_text::event_cx::typing_writes_through_on_changed_and_rebuilds_its_reader),
             ("gesture_detector::event_cx::a_tap_writes_a_signal_and_rebuilds_its_reader", crate::gesture_detector::event_cx::a_tap_writes_a_signal_and_rebuilds_its_reader),

@@ -19,11 +19,82 @@ struct WakeState {
 
 type WakeToken = Arc<AtomicBool>;
 
+/// Rebuild requests waiting for a drain, kept in the order each id was first
+/// queued.
+///
+/// A drain pushes them onto the dirty heap in this order, which orders
+/// same-depth elements among themselves; a hash map's own order changes from
+/// map to map.
+#[derive(Debug, Default)]
+pub(crate) struct PendingBuilds {
+    order: Vec<ElementId>,
+    reasons: HashMap<ElementId, RebuildReasons>,
+}
+
+impl PendingBuilds {
+    /// Queue `reasons` for `id`, behind every id already queued; an id
+    /// already queued keeps its place and merges the causes. Returns whether
+    /// `id` was newly queued.
+    pub(crate) fn merge(&mut self, id: ElementId, reasons: RebuildReasons) -> bool {
+        match self.reasons.entry(id) {
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                entry.insert(reasons);
+                self.order.push(id);
+                true
+            }
+            std::collections::hash_map::Entry::Occupied(mut entry) => {
+                entry.get_mut().merge(reasons);
+                false
+            }
+        }
+    }
+
+    pub(crate) fn get(&self, id: ElementId) -> Option<RebuildReasons> {
+        self.reasons.get(&id).copied()
+    }
+
+    /// The queued ids, first queued first.
+    #[cfg(test)]
+    pub(crate) fn ids(&self) -> &[ElementId] {
+        &self.order
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.order.len()
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.order.is_empty()
+    }
+
+    pub(crate) fn clear(&mut self) {
+        self.order.clear();
+        self.reasons.clear();
+    }
+
+    /// Remove every request, first queued first.
+    pub(crate) fn take(&mut self) -> Vec<(ElementId, RebuildReasons)> {
+        let reasons = &mut self.reasons;
+        let taken = self
+            .order
+            .drain(..)
+            .map(|id| {
+                let queued = reasons
+                    .remove(&id)
+                    .expect("BUG: every queued id has its reasons");
+                (id, queued)
+            })
+            .collect();
+        debug_assert!(reasons.is_empty(), "BUG: every id with reasons is queued");
+        taken
+    }
+}
+
 /// Shared external work and wake-retry state for one build owner.
 #[derive(Default)]
 pub(crate) struct ExternalBuildInbox {
     closed: AtomicBool,
-    pending: Mutex<HashMap<ElementId, RebuildReasons>>,
+    pending: Mutex<PendingBuilds>,
     current_wake: Mutex<Option<WakeToken>>,
     wake_state: Mutex<WakeState>,
 }
@@ -43,7 +114,7 @@ impl ExternalBuildInbox {
             token.store(true, Ordering::Release);
         }
     }
-    pub(crate) fn lock(&self) -> parking_lot::MutexGuard<'_, HashMap<ElementId, RebuildReasons>> {
+    pub(crate) fn lock(&self) -> parking_lot::MutexGuard<'_, PendingBuilds> {
         self.pending.lock()
     }
 

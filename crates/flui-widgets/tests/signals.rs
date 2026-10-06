@@ -5,13 +5,14 @@
 //! Every test counts `build` calls per element, because the claim under test
 //! is *which elements rebuild*, not what they render.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use crate::common::{lay_out, loose, size};
-use flui_view::{Signal, SignalError};
+use flui_view::view::InheritedView;
+use flui_view::{BuildContextExt, Signal, SignalError, StatelessView};
 use flui_widgets::prelude::*;
 use flui_widgets::{Column, SizedBox};
 
@@ -168,6 +169,108 @@ pub(crate) fn writing_a_signal_rebuilds_exactly_its_readers() {
         before_a + 2,
         "set_if_changed on an equal value marks nobody"
     );
+}
+
+/// Logs its index each build after reading a signal and the [`Level`]
+/// provider.
+#[derive(Clone)]
+struct OrderedReader {
+    index: usize,
+    sig: Signal<u32>,
+    log: Rc<RefCell<Vec<usize>>>,
+}
+
+impl StatelessView for OrderedReader {
+    fn build(&self, cx: &dyn BuildContext) -> impl IntoView {
+        let _ = self.sig.get(cx);
+        let _ = cx.depend_on::<Level, _>(|level| level.value);
+        self.log.borrow_mut().push(self.index);
+        SizedBox::square(1.0)
+    }
+}
+
+impl View for OrderedReader {
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateless(self)
+    }
+}
+
+#[derive(Clone)]
+struct Level {
+    value: u32,
+    child: Column,
+}
+
+impl InheritedView for Level {
+    type Data = u32;
+    fn data(&self) -> &u32 {
+        &self.value
+    }
+    fn child(&self) -> &dyn View {
+        &self.child
+    }
+    fn update_should_notify(&self, old: &Self) -> bool {
+        self.value != old.value
+    }
+}
+
+impl View for Level {
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::inherited(self)
+    }
+}
+
+const ORDERED_READERS: usize = 8;
+
+/// The order eight sibling readers rebuild in after a signal write, then
+/// after a provider change, in a fresh mount.
+fn reader_rebuild_orders() -> (Vec<usize>, Vec<usize>) {
+    let mut laid = lay_out(SizedBox::square(1.0), loose(1000.0));
+    let r = laid.with_build_owner_mut(|owner| owner.reactive().clone());
+    let sig = r.signal(0u32);
+    let log = Rc::new(RefCell::new(Vec::new()));
+    let page = |value| Level {
+        value,
+        child: Column::new(
+            (0..ORDERED_READERS)
+                .map(|index| {
+                    OrderedReader {
+                        index,
+                        sig,
+                        log: Rc::clone(&log),
+                    }
+                    .boxed()
+                })
+                .collect::<Vec<_>>(),
+        ),
+    };
+    laid.pump_widget(page(0));
+    log.borrow_mut().clear();
+
+    sig.set(&r, 1).unwrap();
+    laid.tick();
+    let after_write = log.take();
+
+    laid.pump_widget(page(1));
+    (after_write, log.take())
+}
+
+/// Same-depth readers rebuild in child order whether a signal write or a
+/// provider change dirtied them, in every mount.
+///
+/// Both notify through hash maps (the external rebuild inbox, the provider's
+/// dependents) whose iteration order differs from map to map, and the drain
+/// builds same-depth elements in the order they were queued.
+pub(crate) fn same_depth_readers_rebuild_in_child_order() {
+    let child_order: Vec<usize> = (0..ORDERED_READERS).collect();
+    for mount in 0..3 {
+        let (after_write, after_provider_change) = reader_rebuild_orders();
+        assert_eq!(after_write, child_order, "signal write, mount {mount}");
+        assert_eq!(
+            after_provider_change, child_order,
+            "provider change, mount {mount}"
+        );
+    }
 }
 
 pub(crate) fn a_stale_handle_read_in_build_is_a_typed_error_through_try_get() {

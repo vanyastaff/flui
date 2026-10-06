@@ -40,6 +40,7 @@ use crate::{
 };
 
 pub(crate) use super::external_build_inbox::ExternalBuildInbox;
+use super::external_build_inbox::PendingBuilds;
 
 #[cfg(test)]
 thread_local! {
@@ -124,15 +125,7 @@ impl ExternalBuildScheduler {
             }
             let mut any_newly_queued = false;
             for id in ids {
-                match inbox.entry(id) {
-                    std::collections::hash_map::Entry::Vacant(entry) => {
-                        entry.insert(RebuildReasons::from_reason(reason));
-                        any_newly_queued = true;
-                    }
-                    std::collections::hash_map::Entry::Occupied(mut entry) => {
-                        entry.get_mut().insert(reason);
-                    }
-                }
+                any_newly_queued |= inbox.merge(id, RebuildReasons::from_reason(reason));
             }
             any_newly_queued
         };
@@ -225,14 +218,14 @@ pub(crate) struct BuildDrainResult {
 /// coexist with `&mut self` calls elsewhere in the loop.
 struct CappedLeftoverGuard {
     inbox: Arc<ExternalBuildInbox>,
-    leftover: HashMap<ElementId, RebuildReasons>,
+    leftover: PendingBuilds,
 }
 
 impl CappedLeftoverGuard {
     fn new(inbox: Arc<ExternalBuildInbox>) -> Self {
         Self {
             inbox,
-            leftover: HashMap::new(),
+            leftover: PendingBuilds::default(),
         }
     }
 }
@@ -243,15 +236,8 @@ impl Drop for CappedLeftoverGuard {
             return;
         }
         let mut inbox = self.inbox.lock();
-        for (id, reasons) in self.leftover.drain() {
-            match inbox.entry(id) {
-                std::collections::hash_map::Entry::Vacant(entry) => {
-                    entry.insert(reasons);
-                }
-                std::collections::hash_map::Entry::Occupied(mut entry) => {
-                    entry.get_mut().merge(reasons);
-                }
-            }
+        for (id, reasons) in self.leftover.take() {
+            inbox.merge(id, reasons);
         }
     }
 }
@@ -1391,7 +1377,7 @@ impl BuildOwner {
     #[must_use]
     pub fn pending_rebuild_reasons(&self, element: ElementId) -> Option<RebuildReasons> {
         let mut pending = self.dirty_reasons.get(&element).copied();
-        let external = self.external_inbox.lock().get(&element).copied();
+        let external = self.external_inbox.lock().get(element);
         if let Some(external) = external {
             match &mut pending {
                 Some(reasons) => reasons.merge(external),
@@ -2161,14 +2147,14 @@ impl BuildOwner {
     fn absorb_mid_drain_inbox(
         &mut self,
         tree: &mut ElementTree,
-        capped_leftover: &mut HashMap<ElementId, RebuildReasons>,
+        capped_leftover: &mut PendingBuilds,
     ) -> usize {
-        let landed: Vec<(ElementId, RebuildReasons)> = {
+        let landed = {
             let mut inbox = self.external_inbox.lock();
             if inbox.is_empty() {
                 return 0;
             }
-            inbox.drain().collect()
+            inbox.take()
         };
 
         let mut absorbed = 0usize;
@@ -2189,14 +2175,7 @@ impl BuildOwner {
             if self.built_this_frame.contains(&id) {
                 let Some(remaining) = self.mid_drain_absorbs_left.checked_sub(1) else {
                     newly_capped_ids.push(id);
-                    match capped_leftover.entry(id) {
-                        std::collections::hash_map::Entry::Vacant(entry) => {
-                            entry.insert(reasons);
-                        }
-                        std::collections::hash_map::Entry::Occupied(mut entry) => {
-                            entry.get_mut().merge(reasons);
-                        }
-                    }
+                    capped_leftover.merge(id, reasons);
                     continue;
                 };
                 self.mid_drain_absorbs_left = remaining;
@@ -3702,7 +3681,7 @@ mod tests {
         let victim = insert_child(&mut tree, &mut owner, root, 0);
         owner.built_this_frame.insert(victim);
         owner.mid_drain_absorbs_left = 0;
-        owner.external_inbox.lock().insert(
+        owner.external_inbox.lock().merge(
             victim,
             RebuildReasons::from_reason(RebuildReason::StateChange),
         );
