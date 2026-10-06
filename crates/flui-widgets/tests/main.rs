@@ -91,6 +91,8 @@ mod navigator_public;
 /// Issue #536: an `Opacity` rebuild reaches the composited layer.
 #[path = "overlay.rs"]
 mod overlay;
+#[path = "owner_code.rs"]
+mod owner_code;
 #[path = "page_route.rs"]
 mod page_route;
 #[path = "page_view_events.rs"]

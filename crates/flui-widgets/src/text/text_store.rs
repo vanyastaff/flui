@@ -47,10 +47,9 @@
 //! `TS_E_NOLAYOUT`. An obscured field answers through the mask: one mask
 //! character per source grapheme cluster.
 
-use std::any::Any;
 use std::cell::{Cell, RefCell};
 use std::ops::Range;
-use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
+
 use std::rc::Rc;
 
 use flui_foundation::geometry::{Bounds, Point};
@@ -60,9 +59,9 @@ use flui_objects::{RenderEditable, SubtreeAnchor};
 use flui_painting::text_boundaries::graphemes;
 use flui_platform_api::text_store::{
     CommitGate, Composition, CompositionLedger, LockArbiter, LockGrant, LockOutcome, LockTiming,
-    PointMode, RangeRect, Selection, TextChange, TextStore, TextStoreEdit, TextStoreError,
-    TextStoreObserver, TextStoreRead, TextStoreStatus, Utf16Offset, Utf16Range, committed_text,
-    utf16,
+    OwnerCalls, PointMode, RangeRect, Selection, TextChange, TextStore, TextStoreEdit,
+    TextStoreError, TextStoreObserver, TextStoreRead, TextStoreStatus, Utf16Offset, Utf16Range,
+    committed_text, utf16,
 };
 use flui_rendering::pipeline::PipelineCell;
 
@@ -196,12 +195,10 @@ pub(super) struct EditableTextStore {
     /// it happened while the store could not notify.
     layout_dirty: Cell<bool>,
     status_dirty: Cell<bool>,
-    /// A session wrote the controller back and its listeners have not heard
-    /// of it yet: they do in [`Self::settle`], once the lock is released.
-    listeners_owed: Cell<bool>,
-    /// The committed text before a session changed it, while `on_changed`
-    /// has not run for that change: it does in [`Self::settle`].
-    owner_owed: RefCell<Option<String>>,
+    /// What sessions that wrote the controller back owe its listeners and
+    /// `on_changed`, in commit order: delivered in [`Self::settle`], once
+    /// the lock is released.
+    owed: RefCell<Vec<Owed>>,
     /// The presentation's text input, whose closing detaches the store.
     /// Whether commits are allowed is the gate it installs on attach, which
     /// the arbiter reads; with no presentation IME the arbiter's own gate
@@ -235,8 +232,7 @@ impl EditableTextStore {
             alive: Cell::new(true),
             layout_dirty: Cell::new(false),
             status_dirty: Cell::new(false),
-            listeners_owed: Cell::new(false),
-            owner_owed: RefCell::new(None),
+            owed: RefCell::new(Vec::new()),
             handle: parts.handle,
             pipeline: parts.pipeline,
             inner_anchor: parts.inner_anchor,
@@ -260,7 +256,9 @@ impl EditableTextStore {
     /// those points.
     pub(super) fn controller_changed(&self) {
         if self.may_notify() {
-            self.report_app_changes();
+            let mut calls = OwnerCalls::new();
+            self.report_app_changes(&mut calls);
+            calls.resume();
         }
     }
 
@@ -289,13 +287,17 @@ impl EditableTextStore {
         if !self.may_notify() {
             return;
         }
-        self.report_app_changes();
+        // Every notification owed is sent though an earlier one panicked; the
+        // first panic is resumed once all were.
+        let mut calls = OwnerCalls::new();
+        self.report_app_changes(&mut calls);
         if self.status_dirty.replace(false) {
-            self.notify(|observer| observer.status_changed());
+            self.notify(&mut calls, |observer| observer.status_changed());
         }
         if self.layout_dirty.replace(false) {
-            self.notify(|observer| observer.layout_changed());
+            self.notify(&mut calls, |observer| observer.layout_changed());
         }
+        calls.resume();
     }
 
     /// The field is gone: refuse every later lock and drop queued ones
@@ -303,8 +305,11 @@ impl EditableTextStore {
     /// this field's.
     pub(super) fn detach(&self) {
         self.alive.set(false);
-        let _dropped = self.arbiter.clear();
-        *self.observer.borrow_mut() = None;
+        let observer = self.observer.borrow_mut().take();
+        let mut calls = OwnerCalls::new();
+        calls.run(|| self.arbiter.clear());
+        calls.retire(observer);
+        calls.resume();
     }
 
     /// Run queued grants before a key edit, so a key typed after an IME
@@ -326,10 +331,14 @@ impl EditableTextStore {
         Ok(self.arbiter.may_commit())
     }
 
-    fn notify(&self, call: impl FnOnce(&dyn TextStoreObserver)) {
+    /// Tell the observer, inside `calls`.
+    fn notify(&self, calls: &mut OwnerCalls, call: impl FnOnce(&dyn TextStoreObserver)) {
         let observer = self.observer.borrow().clone();
         if let Some(observer) = observer {
-            call(&*observer);
+            calls.run(|| call(&*observer));
+            // An observer that replaced or cleared itself left this clone
+            // its last owner.
+            calls.retire(observer);
         }
     }
 
@@ -363,7 +372,7 @@ impl EditableTextStore {
 
     /// Diff the controller against what was last reported and tell the
     /// observer.
-    fn report_app_changes(&self) {
+    fn report_app_changes(&self, calls: &mut OwnerCalls) {
         let doc = self.read_doc();
         let selection = doc.selection();
         let (change, moved) = {
@@ -374,10 +383,10 @@ impl EditableTextStore {
             (change, moved)
         };
         if let Some(change) = change {
-            self.notify(|observer| observer.text_changed(change));
+            self.notify(calls, |observer| observer.text_changed(change));
         }
         if moved {
-            self.notify(|observer| observer.selection_changed());
+            self.notify(calls, |observer| observer.selection_changed());
         }
     }
 
@@ -454,50 +463,43 @@ impl EditableTextStore {
             return;
         }
         *self.reported.borrow_mut() = reported;
-        self.listeners_owed.set(true);
-        let committed_before = original.committed();
-        if committed_after != committed_before {
-            let mut owed = self.owner_owed.borrow_mut();
-            if owed.is_none() {
-                *owed = Some(committed_before);
-            }
-        }
+        let committed = (committed_after != original.committed()).then_some(committed_after);
+        self.owed.borrow_mut().push(Owed {
+            controller: controller.clone(),
+            committed,
+        });
     }
 
     /// Deliver what a finished grant owes, now that its lock is released and
-    /// before the next grant runs: the controller's listeners, `on_changed`
-    /// when the committed text changed, then the observer's notifications.
-    /// Each is taken out before the user code it runs, so a nested lock or
-    /// a reentrant edit from that code finds nothing half-delivered.
+    /// before the next grant runs: for each session written back, in commit
+    /// order, `on_changed` with the committed text that session produced
+    /// (when it changed), then the controller's listeners; then the
+    /// observer's notifications.
     ///
-    /// The observer is told even when owner code panics, so a grant queued
-    /// behind this one never runs before the platform hears of an edit the
-    /// owner made; the first panic is then resumed for the arbiter to park.
+    /// Every obligation and its value is taken before any owner code runs,
+    /// so a session that code opens owes, and settles, its own, after the
+    /// owner heard of this one. The observer is told even when owner code
+    /// panics, so a grant queued behind this one never runs before the
+    /// platform hears of an edit the owner made; the first panic is then
+    /// resumed for the arbiter to park.
     fn settle(&self) {
-        let mut failure = None;
-        // Both debts are this grant's, taken before any listener runs: a
-        // listener's own session settles inside this call and owes, and
-        // pays, its own.
-        let listeners_owed = self.listeners_owed.replace(false);
-        let before = self.owner_owed.borrow_mut().take();
-        if listeners_owed {
-            let controller = self.controller.borrow().clone();
-            failure = catch_unwind(AssertUnwindSafe(|| controller.notify_changed())).err();
-        }
-        if let Some(before) = before
-            && self.alive.get()
+        let owed = std::mem::take(&mut *self.owed.borrow_mut());
+        let mut calls = OwnerCalls::new();
+        for Owed {
+            controller,
+            committed,
+        } in owed
         {
-            let owner = catch_unwind(AssertUnwindSafe(|| self.edits.report_if_changed(&before)));
-            if let Err(payload) = owner {
-                keep_first(&mut failure, payload);
+            if let Some(committed) = committed
+                && self.alive.get()
+            {
+                self.edits.deliver(&committed, &mut calls);
             }
+            calls.run(|| controller.notify_changed());
+            calls.retire(controller);
         }
-        if let Err(payload) = catch_unwind(AssertUnwindSafe(|| self.flush_notifications())) {
-            keep_first(&mut failure, payload);
-        }
-        if let Some(payload) = failure {
-            resume_unwind(payload);
-        }
+        calls.run(|| self.flush_notifications());
+        calls.resume();
     }
 
     /// The text the render object shows for `source`.
@@ -574,14 +576,12 @@ impl EditableTextStore {
     }
 }
 
-/// Keep the first of several caught panics; a later one is retained, never
-/// dropped (ADR-0127).
-fn keep_first(first: &mut Option<Box<dyn Any + Send>>, payload: Box<dyn Any + Send>) {
-    if first.is_none() {
-        *first = Some(payload);
-    } else {
-        flui_foundation::panic::retain_opaque_payload(payload);
-    }
+/// What one session written back owes, fixed when it was written: the
+/// controller whose listeners hear of it, and the committed text it produced
+/// when that changed, which `on_changed` receives.
+struct Owed {
+    controller: TextEditingController,
+    committed: Option<String>,
 }
 
 /// The smallest change turning `old` into `new`, as `TS_TEXTCHANGE` in
@@ -653,7 +653,11 @@ impl TextStore for EditableTextStore {
     }
 
     fn set_observer(&self, observer: Option<Rc<dyn TextStoreObserver>>) {
-        *self.observer.borrow_mut() = observer;
+        // The replaced observer retires after the borrow is released.
+        let previous = std::mem::replace(&mut *self.observer.borrow_mut(), observer);
+        let mut calls = OwnerCalls::new();
+        calls.retire(previous);
+        calls.resume();
     }
 }
 

@@ -26,6 +26,7 @@ use flui_painting::{
     typography::{TextDirection, TextSpan, TextStyle},
 };
 use flui_platform_api::TargetPlatform;
+use flui_platform_api::text_store::OwnerCalls;
 use flui_rendering::hit_testing::HitTestBehavior;
 use flui_rendering::pipeline::PipelineCell;
 use flui_rendering::protocol::BoxProtocol;
@@ -1189,14 +1190,24 @@ impl EditObserver {
     }
 
     /// Call `on_changed` if the committed text is no longer `before`.
-    pub(super) fn report_if_changed(&self, before: &str) {
+    fn report_if_changed(&self, before: &str) {
         let after = self.controller.borrow().committed_text();
         if after == before {
             return;
         }
+        let mut calls = OwnerCalls::new();
+        self.deliver(&after, &mut calls);
+        calls.resume();
+    }
+
+    /// Call `on_changed` with `committed`, inside `calls`. The callback is a
+    /// snapshot: one that replaced itself (a rebuild it caused) left the
+    /// snapshot its last owner, which retires inside `calls`.
+    pub(super) fn deliver(&self, committed: &str, calls: &mut OwnerCalls) {
         let callback = self.on_changed.borrow().clone();
         if let Some(callback) = callback {
-            self.writer.write(|cx| callback(cx, &after));
+            calls.run(|| self.writer.write(|cx| callback(cx, committed)));
+            calls.retire(callback);
         }
     }
 }
