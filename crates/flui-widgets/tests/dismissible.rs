@@ -140,7 +140,10 @@ fn release_speed(width: f64) -> f64 {
         laid.pump_for(step);
     }
     let samples = progress.borrow();
-    let moving: Vec<_> = samples.windows(2).filter(|pair| pair[1] != pair[0]).collect();
+    let moving: Vec<_> = samples
+        .windows(2)
+        .filter(|pair| pair[1] != pair[0])
+        .collect();
     let pair = moving.first().expect("the released card moves");
     (pair[1] - pair[0]) * width / step.as_secs_f64()
 }
