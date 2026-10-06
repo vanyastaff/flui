@@ -32,6 +32,8 @@ extend-ignore-identifiers-re = [
 # Project-specific spelling overrides + third-party identifiers typos
 # would otherwise flag.
 flui = "flui"
+# Shepperd's method (S. W. Shepperd 1978): quaternion from a rotation matrix.
+shepperd = "shepperd"
 arity = "arity"
 arities = "arities"
 ser = "ser"
