@@ -93,7 +93,8 @@ impl<V: Lerp> Animatable<V> for Tween<V> {
 pub type FloatTween = Tween<f64>;
 
 /// A tween that linearly interpolates between two integers, rounding to the
-/// nearest integer.
+/// nearest integer (half away from zero). `t` is clamped to `[0, 1]`; a NaN `t`
+/// returns `begin`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct IntTween {
@@ -112,15 +113,22 @@ impl IntTween {
 }
 
 impl Animatable<i32> for IntTween {
-    #[expect(clippy::cast_possible_truncation)] // rounded f64->i32, saturating cast
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "rounded f64 to i32; the cast saturates"
+    )]
     fn transform(&self, t: f64) -> i32 {
+        if t.is_nan() {
+            return self.begin;
+        }
         let t = t.clamp(0.0, 1.0);
         (f64::from(self.begin) + (f64::from(self.end) - f64::from(self.begin)) * t).round() as i32
     }
 }
 
 /// A tween that linearly interpolates between two integers, flooring to the
-/// nearest integer.
+/// integer below (toward negative infinity). `t` is clamped to `[0, 1]`; a NaN `t`
+/// returns `begin`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct StepTween {
@@ -139,8 +147,14 @@ impl StepTween {
 }
 
 impl Animatable<i32> for StepTween {
-    #[expect(clippy::cast_possible_truncation)] // floored f64->i32, saturating cast
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "floored f64 to i32; the cast saturates"
+    )]
     fn transform(&self, t: f64) -> i32 {
+        if t.is_nan() {
+            return self.begin;
+        }
         let t = t.clamp(0.0, 1.0);
         (f64::from(self.begin) + (f64::from(self.end) - f64::from(self.begin)) * t).floor() as i32
     }
