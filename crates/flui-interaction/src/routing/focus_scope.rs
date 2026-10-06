@@ -1306,9 +1306,19 @@ impl FocusNode {
         root: &Rc<FocusNode>,
         tombstone: CloseTombstone,
     ) -> Vec<ClosedFocusNode> {
-        let nodes: Vec<_> = std::iter::once(Rc::clone(root))
-            .chain(root.descendants())
-            .collect();
+        // Post-order, siblings in insertion order: a healthy close retires
+        // each child's ownership before its parent's (ADR-0127).
+        let mut nodes = Vec::new();
+        let mut stack = vec![(Rc::clone(root), false)];
+        while let Some((node, expanded)) = stack.pop() {
+            if expanded {
+                nodes.push(node);
+            } else {
+                let children = node.children();
+                stack.push((node, true));
+                stack.extend(children.into_iter().rev().map(|child| (child, false)));
+            }
+        }
         let mut retired = Vec::with_capacity(nodes.len());
         for node in nodes {
             node.attached.set(false);
