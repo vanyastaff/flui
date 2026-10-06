@@ -272,15 +272,24 @@ impl LifecycleSource {
             inner: Rc::clone(&self.inner),
         }
     }
-    /// Claim this presentation's close delivery: `true` for the call that
-    /// runs it, `false` once a delivery has run or is running, so a close
+    /// Claim this presentation's close delivery: the token for the call that
+    /// runs it, `None` once a delivery has run or is running, so a close
     /// requested again from inside a Detached observer, or repeated when the
-    /// realm drops, delivers nothing twice.
+    /// realm drops, delivers nothing twice. The token records how the
+    /// delivery ended; see [`Self::close_delivery_state`].
     ///
-    /// Not yet latched: every call answers `true`.
+    /// Not yet latched: every call gets a token.
+    #[must_use = "dropping the token without completing it records an interrupted delivery"]
+    pub fn claim_close_delivery(&self) -> Option<CloseDelivery> {
+        Some(CloseDelivery { _private: () })
+    }
+
+    /// How this presentation's close delivery stands.
+    ///
+    /// Not yet recorded: always [`CloseDeliveryState::NotStarted`].
     #[must_use]
-    pub fn claim_close_delivery(&self) -> bool {
-        true
+    pub fn close_delivery_state(&self) -> CloseDeliveryState {
+        CloseDeliveryState::NotStarted
     }
     /// Fence new subscriptions and ordinary commits before terminal callbacks.
     pub fn begin_close(&self) {
@@ -421,6 +430,37 @@ impl LifecycleSource {
         }
     }
 }
+/// How a presentation's close delivery stands; see
+/// [`LifecycleSource::claim_close_delivery`].
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum CloseDeliveryState {
+    /// No delivery was claimed.
+    NotStarted,
+    /// A delivery was claimed and its token is alive.
+    Running,
+    /// The delivery ran to its end.
+    Completed,
+    /// The delivery's token was dropped before it completed, as a panic in a
+    /// Detached observer does. It is not delivered again.
+    Interrupted,
+}
+
+/// The claim on one presentation's close delivery. [`Self::complete`]
+/// records that it ran to its end; dropping it without completing records
+/// an interrupted delivery.
+#[doc(hidden)]
+#[derive(Debug)]
+pub struct CloseDelivery {
+    _private: (),
+}
+
+impl CloseDelivery {
+    /// Record that the delivery ran to its end.
+    pub fn complete(self) {}
+}
+
 /// The in-progress window of one terminal close; see
 /// [`LifecycleSource::close_window`].
 #[doc(hidden)]
@@ -530,6 +570,43 @@ mod tests {
             [(1, Inactive), (2, Inactive), (1, Detached), (2, Detached)]
         );
         assert_eq!(handle.snapshot(), Err(LifecycleClosed));
+    }
+
+    /// One presentation's close delivery is claimed once; the token records
+    /// whether it completed or was interrupted, and neither is claimed again.
+    #[test]
+    #[ignore = "contract: close delivery is claimed once and records how it ended"]
+    fn close_delivery_is_claimed_once_and_records_how_it_ended() {
+        let completed = LifecycleSource::new();
+        let delivery = completed.claim_close_delivery();
+        let while_running = completed.claim_close_delivery().is_some();
+        let running = completed.close_delivery_state();
+        if let Some(delivery) = delivery {
+            delivery.complete();
+        }
+
+        let interrupted = LifecycleSource::new();
+        drop(interrupted.claim_close_delivery());
+
+        assert!(!while_running, "a running delivery is not claimed again");
+        assert_eq!(running, CloseDeliveryState::Running);
+        assert_eq!(
+            completed.close_delivery_state(),
+            CloseDeliveryState::Completed
+        );
+        assert!(
+            completed.claim_close_delivery().is_none(),
+            "a completed delivery is not claimed again"
+        );
+        assert_eq!(
+            interrupted.close_delivery_state(),
+            CloseDeliveryState::Interrupted,
+            "a token dropped before completing records an interrupted delivery"
+        );
+        assert!(
+            interrupted.claim_close_delivery().is_none(),
+            "an interrupted delivery is not delivered again"
+        );
     }
 
     #[test]

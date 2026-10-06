@@ -481,6 +481,11 @@ pub trait LifecycleContext: BuildContext {
     /// application that configured no storage, or a bare owner in a unit
     /// test. Acquire it in a lifecycle hook (`init_state` /
     /// `did_change_dependencies`), the same rule `clipboard_handle` follows.
+    ///
+    /// A value written here directly is not flushed when the application or
+    /// the session ends: a write still in flight then may be lost. Only what
+    /// a [`Persisted`](crate::persist::Persisted) document publishes goes
+    /// through the host's flush registry, which the host writes at teardown.
     fn storage(&self) -> Option<std::sync::Arc<dyn flui_platform_api::Storage>> {
         None
     }
@@ -492,18 +497,6 @@ pub trait LifecycleContext: BuildContext {
     /// guard. Acquire it in a lifecycle hook (`init_state` /
     /// `did_change_dependencies`), the same rule `clipboard_handle` follows.
     fn close_guard(&self) -> Option<crate::CloseGuard> {
-        None
-    }
-
-    /// The host's registry of published document bytes, which a
-    /// [`Persisted`](crate::persist::Persisted) document publishes into and
-    /// reads its saved state from. It lives outside the realm, so the host
-    /// writes what was published even when the realm cannot run.
-    ///
-    /// `None` when the host keeps no registry: no storage, or a bare owner in
-    /// a unit test. Acquire it in a lifecycle hook (`init_state` /
-    /// `did_change_dependencies`), the same rule `storage` follows.
-    fn flush_registry(&self) -> Option<crate::__runtime::FlushRegistry> {
         None
     }
 

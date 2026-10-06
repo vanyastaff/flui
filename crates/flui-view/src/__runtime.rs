@@ -5,7 +5,8 @@
 //! realm entry, stamping the frame phase at the build-to-finalize boundary,
 //! and running the presentation's terminal lifecycle ladder; the host's sides
 //! of a presentation's close guard ([`CloseGuardSource`]) and of the flush
-//! registry ([`FlushRegistryHost`]); and the
+//! registry ([`FlushHost`]), and the [`OwnerNotify`] channel both signal
+//! through; and the
 //! development agent's port ([`AgentPort`]), which only the runtime
 //! implements and through which it builds the [`AgentWindow`]s a
 //! [`DevAgentHook`](crate::dev_agent::DevAgentHook) is handed. Their intended
@@ -32,9 +33,13 @@ use crate::WidgetsBinding;
 pub use crate::close_guard::CloseGuardSource;
 use crate::dev_agent::{AgentAnswer, AgentFault, AgentWindow};
 pub use crate::flush_registry::{
-    FlushRegistry, FlushRegistryHost, FlushReport, FlushState, FlushWrite, FlushWriter,
+    FlushChanged, FlushHost, FlushPublisher, FlushRegistry, FlushReport, FlushState, FlushWrite,
+    FlushWriter,
 };
-pub use crate::lifecycle::{LifecycleCloseWindow, LifecycleSource};
+pub use crate::lifecycle::{
+    CloseDelivery, CloseDeliveryState, LifecycleCloseWindow, LifecycleSource,
+};
+pub use crate::owner_notify::{LifecycleEvent, OwnerNotify, Undeliverable};
 
 /// What an [`AgentWindow`] calls: one window's read and act, enqueued on its
 /// owner. The runtime's semantics agent is the implementation.

@@ -115,8 +115,11 @@ pub struct Revision(u64);
 
 impl Revision {
     /// The revision numbered `n`, as a stored file's header records it.
-    #[must_use]
-    pub const fn new(n: u64) -> Self {
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "read from stored headers once Persisted loads")
+    )]
+    pub(crate) const fn new(n: u64) -> Self {
         Self(n)
     }
 
