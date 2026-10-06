@@ -228,6 +228,22 @@ impl StoredVersion {
         let len = u64::try_from(bytes.len()).expect("BUG: a byte length fits in u64");
         Self(Some((len, hasher.finish())))
     }
+
+    /// The length in bytes of the value this version names; `None` for
+    /// [`ABSENT`](Self::ABSENT). A [`Storage`] compares it with a stored
+    /// value's length before reading the value to compare versions, so a
+    /// value of a different length is never read for the comparison.
+    ///
+    /// ```
+    /// use flui_platform_api::StoredVersion;
+    ///
+    /// assert_eq!(StoredVersion::of_bytes(b"notes").byte_len(), Some(5));
+    /// assert_eq!(StoredVersion::ABSENT.byte_len(), None);
+    /// ```
+    #[must_use]
+    pub fn byte_len(&self) -> Option<u64> {
+        self.0.map(|(len, _)| len)
+    }
 }
 
 /// What [`Storage::read`] found under a name.
