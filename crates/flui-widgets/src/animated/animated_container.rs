@@ -186,25 +186,28 @@ impl ViewState<AnimatedContainer> for AnimatedContainerState {
         let child = self.child.clone();
         let transform = view.transform;
         AnimatedBuilder::new(self.controller.listenable(), move || {
+            // An overshooting curve extrapolates the tweens past their targets; the
+            // insets and the size are clamped into their non-negative domain here,
+            // where they meet the property (ADR-0149).
             let t = curved.value();
             let mut container = Container::new();
             if let Some(value) = alignment.current(t) {
                 container = container.alignment(value);
             }
             if let Some(value) = padding.current(t) {
-                container = container.padding(value);
+                container = container.padding(value.clamp_non_negative());
             }
             if let Some(value) = color.current(t) {
                 container = container.color(value);
             }
             if let Some(value) = width.current(t) {
-                container = container.width(value);
+                container = container.width(value.max(0.0));
             }
             if let Some(value) = height.current(t) {
-                container = container.height(value);
+                container = container.height(value.max(0.0));
             }
             if let Some(value) = margin.current(t) {
-                container = container.margin(value);
+                container = container.margin(value.clamp_non_negative());
             }
             if let Some(value) = transform {
                 container = container.transform(value);
