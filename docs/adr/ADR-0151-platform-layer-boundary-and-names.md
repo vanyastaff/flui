@@ -128,7 +128,10 @@ that moves them supersedes ADR-0039 §2.
 ### 4. System preferences: one host source, each consumer its own representation
 
 `flui_platform::SystemPreferences` holds text scale, contrast, bold text, motion
-(`NoPreference`, `Reduce`, `Scaled(DurationScale)`), the preferred-locale list and gesture
+(`NoPreference`, `Reduce`, `Scaled(DurationScale)`, where a `DurationScale` is finite and
+strictly positive, so `Scaled(0)` cannot be written; `Motion::from_duration_scale` maps an OS
+scale of 0 to `Reduce`, exactly 1 to `NoPreference` and refuses negative or non-finite values),
+the preferred-locale list and gesture
 preferences (double-click interval, double-click area and drag area as logical `Size` per
 ADR-0098, long-press timeout). Fields are private; backends build values through a builder whose
 setters validate (non-finite or negative values are an `InvalidPreference` error).

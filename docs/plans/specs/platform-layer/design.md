@@ -186,6 +186,13 @@ impl SystemPreferences {
 }
 #[non_exhaustive]
 pub enum Motion { NoPreference, Reduce, Scaled(DurationScale) }
+impl Motion {
+    /// 0 (и -0.0) → Reduce, ровно 1 → NoPreference, иное конечное > 0 (субнормальные тоже) →
+    /// Scaled; отрицательное и неконечное → InvalidPreference::DurationScale.
+    pub fn from_duration_scale(v: f64) -> Result<Self, InvalidPreference>;
+}
+/// Конечное и строго положительное: `Scaled(0)` непредставимо.
+pub struct DurationScale(f64);
 #[non_exhaustive]
 pub struct GesturePreferences { /* double_click_interval, double_click_area: Size,
                                     drag_area: Size, long_press_timeout */ }
@@ -362,7 +369,10 @@ conformance-таблицы, крейты возможностей вне пое�
 > `PlatformWindow::system_motion`/`on_system_motion_changed` (animation reduce-motion P1): новых
 > производителей и методов окна для настроек не добавлять. Тип `DurationScale` и его проверка
 > (`InvalidPreference::DurationScale` для неконечного или отрицательного значения) берутся из
-> контракта. Порядок: тип и производитель — задача platform-layer LY8 (окно W1); потребители —
+> контракта; `DurationScale` — только конечное s > 0, так что `Scaled(0)` непредставимо;
+> производитель отображает масштаб ОС через `Motion::from_duration_scale`: 0 → `Reduce`, ровно
+> 1 → `NoPreference`, иное конечное > 0 → `Scaled(s)`, отрицательное и неконечное — ошибка.
+> Порядок: тип и производитель — задача platform-layer LY8 (окно W1); потребители —
 > задачи animation и interaction после неё.
 
 ## 12. Вопросы к владельцу
