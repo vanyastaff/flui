@@ -447,3 +447,20 @@ AGENTS.md (§6). `typos.toml` `[default.extend-words]`: `canceled` и `adaptor` 
   `LifecycleContext::focus_tree()`. Это дерево узлов фокуса со слушателями; затрагивает
   таблицу возможностей AGENTS.md и ADR-0078. `Focus` занят виджетом. Альтернатива:
   `FocusSystem`, или оставить с записью `keep` и причиной.
+
+## Решения по открытым вопросам (2026-10-06)
+
+- **О1 (владелец).** `Theme` — значение, `ThemeScope` — виджет-провайдер. Так же для всех ~35 пар:
+  `MediaQuery`/`MediaQueryScope`, `*ThemeData` → `*Theme`.
+- **О2 (владелец).** Виджеты `*Builder` → `*View`: `FutureView`, `StreamView`, `ConstraintsView` и т. д.
+  Слово «builder» остаётся только за builder-паттерном (D6).
+- **О3 (оркестратор).** Трейты `*Delegate` получают имена по роли, как предложено в таблице.
+- **О4 (владелец).** `Hero` → `SharedElement`, `InkWell` → `Ripple`, `ScaffoldMessenger` →
+  `SnackbarHost`; виджет `Material` сохраняет имя (`Surface` уже означает GPU-поверхность).
+  Flutter-имена — `#[doc(alias)]`.
+- **О5 (владелец).** `FocusManager` → `FocusTree`.
+
+Остальная таблица следует правилам N1/N2. Владелец может вычеркнуть любые строки до прохода
+(окно 11-10…11-14); без возражений таблица считается утверждённой. Новый ADR «Имена в публичном
+API» и правка идентификаторов в текстах существующих ADR идут в PR прохода и требуют согласия
+владельца на merge, как любой merge в `main`.
