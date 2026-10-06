@@ -24,6 +24,9 @@ mod curve;
 #[path = "contracts/tween.rs"]
 mod tween;
 
+#[path = "contracts/keyframes.rs"]
+mod keyframes;
+
 #[derive(Clone, Animatable)]
 struct Translation {
     x: f64,

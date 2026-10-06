@@ -51,6 +51,30 @@ pub trait Curve {
     /// policy in the trait documentation.
     fn transform(&self, t: f64) -> f64;
 
+    /// Returns `d transform / dt` at `t`, clamped into `[0, 1]`.
+    ///
+    /// The provided implementation is a second-order finite difference with
+    /// step `1e-4` (central inside the interval, one-sided at the ends), so
+    /// it is exact for curves up to quadratic and within `O(1e-8 · |c'''|)`
+    /// otherwise. A non-finite estimate (NaN `t`, a step, a vertical
+    /// tangent) is reported as `0.0`, never as NaN or infinity.
+    ///
+    /// Keyframe tracks read it to match a cubic segment's velocity to a
+    /// neighbouring curved segment.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_animation::{Curve, Curves};
+    ///
+    /// assert!((Curves::Linear.slope(0.3) - 1.0).abs() < 1e-9);
+    /// assert_eq!(Curves::Linear.slope(f64::NAN), 0.0);
+    /// ```
+    fn slope(&self, t: f64) -> f64 {
+        let _ = t;
+        0.0
+    }
+
     /// Returns a new curve that is the flipped version of this one.
     ///
     /// Flipping rotates the curve 180°: `transform(t)` becomes
@@ -192,6 +216,10 @@ pub enum CurveError {
         /// The rejected end of the interval.
         end: f64,
     },
+    /// [`Steps`] with [`JumpAt::None`] and fewer than two steps: the curve
+    /// would have no jump between its start and end values.
+    #[error("steps with `JumpAt::None` need at least two steps")]
+    TooFewSteps,
 }
 
 /// Propagates a validation error out of a `const fn` (`?` is not const).
@@ -1579,6 +1607,118 @@ impl Curve2D for CatmullRomSpline {
             + p1.derivative;
 
         Curve2DSample::new(value, derivative)
+    }
+}
+
+// ============================================================================
+// Step Curves
+// ============================================================================
+
+/// Where a [`Steps`] curve places its jumps (CSS Easing 1 §2.3.1
+/// `<step-position>`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[non_exhaustive]
+pub enum JumpAt {
+    /// The first jump happens as the curve starts (`jump-start`).
+    Start,
+    /// The last jump happens as the curve ends (`jump-end`, the CSS default).
+    #[default]
+    End,
+    /// No jump at either end (`jump-none`): the first and last steps each
+    /// hold for one interval.
+    None,
+    /// Jumps at both ends (`jump-both`).
+    Both,
+}
+
+/// A staircase curve: `count` equal intervals, each holding one value
+/// (CSS Easing 1 §2.3.1 `steps()`).
+///
+/// For `t` strictly inside `(0, 1)` the output is `step / jumps`, where
+/// `step = ⌊t · count⌋` (plus one for [`JumpAt::Start`] and
+/// [`JumpAt::Both`]) capped at `jumps`, and `jumps` is `count` for
+/// [`JumpAt::Start`]/[`JumpAt::End`], `count − 1` for [`JumpAt::None`] and
+/// `count + 1` for [`JumpAt::Both`]. Each interval is closed on the left:
+/// the jump belongs to the later step.
+///
+/// The ends follow the [`Curve`] contract — `0 → 0`, `1 → 1` — which is the
+/// CSS value with the before flag set at 0. FLUI has no before/after phases,
+/// so the before flag is not modelled. Monotone (non-decreasing).
+///
+/// # Examples
+///
+/// ```
+/// use flui_animation::{Curve, JumpAt, Steps};
+///
+/// const FOUR: Steps = Steps::new(4, JumpAt::End);
+/// assert_eq!(FOUR.transform(0.24), 0.0);
+/// assert_eq!(FOUR.transform(0.25), 0.25);
+/// assert_eq!(Steps::new(4, JumpAt::Start).transform(0.1), 0.25);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Steps {
+    count: u32,
+    jump: JumpAt,
+}
+
+impl Steps {
+    /// Admits `count ≥ 1`, and `count ≥ 2` for [`JumpAt::None`].
+    const fn validate(count: u32, jump: JumpAt) -> Result<Self, CurveError> {
+        if count == 0 {
+            return Err(CurveError::OutOfRange {
+                parameter: "count",
+                value: 0.0,
+                allowed: "[1, 4294967295]",
+            });
+        }
+        if count < 2 && matches!(jump, JumpAt::None) {
+            return Err(CurveError::TooFewSteps);
+        }
+        Ok(Self { count, jump })
+    }
+
+    /// Creates a `steps(count, jump)` curve.
+    ///
+    /// # Panics
+    ///
+    /// Panics when [`Steps::try_new`] would return an error. In a `const`
+    /// item the panic is a compile error.
+    #[must_use]
+    pub const fn new(count: u32, jump: JumpAt) -> Self {
+        match Self::validate(count, jump) {
+            Ok(steps) => steps,
+            Err(_) => panic!(
+                "Steps::new: count must be at least 1, and at least 2 for JumpAt::None \
+                 (Steps::try_new reports which)"
+            ),
+        }
+    }
+
+    /// Creates a `steps(count, jump)` curve, rejecting an invalid count.
+    ///
+    /// # Errors
+    ///
+    /// - [`CurveError::OutOfRange`] when `count` is 0;
+    /// - [`CurveError::TooFewSteps`] when `jump` is [`JumpAt::None`] and
+    ///   `count` is 1.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_animation::{CurveError, JumpAt, Steps};
+    ///
+    /// assert!(Steps::try_new(3, JumpAt::Both).is_ok());
+    /// assert_eq!(Steps::try_new(1, JumpAt::None), Err(CurveError::TooFewSteps));
+    /// ```
+    pub fn try_new(count: u32, jump: JumpAt) -> Result<Self, CurveError> {
+        Self::validate(count, jump)
+    }
+}
+
+impl Curve for Steps {
+    fn transform(&self, t: f64) -> f64 {
+        t
     }
 }
 

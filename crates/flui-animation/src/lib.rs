@@ -103,11 +103,13 @@ pub mod controller;
 pub mod curved;
 pub mod error;
 pub mod ext;
+pub mod keyframes;
 pub mod proxy;
 pub mod reverse;
 pub mod simulation;
 pub mod smoothing;
 pub mod spring;
+pub mod stagger;
 pub mod switch;
 pub mod tween;
 pub mod vsync;
@@ -126,6 +128,7 @@ pub use controller::AnimationController;
 pub use curved::CurvedAnimation;
 pub use error::AnimationError;
 pub use ext::{AnimatableExt, AnimationExt};
+pub use keyframes::{Keyframes, KeyframesBuilder, KeyframesError};
 pub use proxy::ProxyAnimation;
 pub use reverse::ReverseAnimation;
 pub use simulation::{
@@ -134,6 +137,7 @@ pub use simulation::{
 };
 pub use smoothing::{SmoothDamp, Smoothed, exp_decay, exp_decay_half_life};
 pub use spring::{AnimatedValue, TwoWayConverter};
+pub use stagger::{Stagger, StaggerOrigin};
 // `#[derive(Animatable)]` generates a `TwoWayConverter` impl. It shares the name
 // `Animatable` with the trait above but lives in the macro namespace (the serde
 // `Serialize` trait+derive pattern), so a single `use flui_animation::Animatable`
@@ -147,8 +151,8 @@ pub use vsync::{Vsync, VsyncRegistration, VsyncRegistrationError};
 pub use curve::{
     ArcCurve, BounceInCurve, BounceInOutCurve, BounceOutCurve, CatmullRomCurve, CatmullRomSpline,
     Cubic, Curve, Curve2D, Curve2DSample, CurveError, Curves, DecelerateCurve, ElasticInCurve,
-    ElasticInOutCurve, ElasticOutCurve, FlippedCurve, Interval, Linear, ParametricCurve, Split,
-    ThreePointCubic,
+    ElasticInOutCurve, ElasticOutCurve, FlippedCurve, Interval, JumpAt, Linear, ParametricCurve,
+    Split, Steps, ThreePointCubic,
 };
 pub use status::{AnimationBehavior, AnimationStatus};
 pub use tween_types::{

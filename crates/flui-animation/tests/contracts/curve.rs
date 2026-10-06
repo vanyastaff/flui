@@ -4,7 +4,7 @@
 
 use flui_animation::{
     ArcCurve, BounceInCurve, Cubic, Curve, CurveError, Curves, ElasticInCurve, ElasticInOutCurve,
-    ElasticOutCurve, Interval, Linear, Split, ThreePointCubic,
+    ElasticOutCurve, Interval, JumpAt, Linear, Split, Steps, ThreePointCubic,
 };
 use proptest::prelude::*;
 
@@ -865,5 +865,102 @@ fn curve_serde_round_trip_keeps_the_wire_format() {
         ("three-point cubic", three_point_wire),
         ("interval", interval_wire),
         ("elastic", elastic_wire),
+    ]);
+}
+
+// ---- steps ------------------------------------------------------------------
+
+/// CSS Easing 1 §2.3.1 `steps()` values, before flag unset, computed by hand.
+fn css_steps_values() {
+    let rows: [(Steps, f64, f64); 14] = [
+        (Steps::new(4, JumpAt::End), 0.24, 0.0),
+        (Steps::new(4, JumpAt::End), 0.25, 0.25),
+        (Steps::new(4, JumpAt::End), 0.99, 0.75),
+        (Steps::new(4, JumpAt::Start), 0.1, 0.25),
+        (Steps::new(4, JumpAt::Start), 0.75, 1.0),
+        (Steps::new(5, JumpAt::None), 0.1, 0.0),
+        (Steps::new(5, JumpAt::None), 0.2, 0.25),
+        (Steps::new(5, JumpAt::None), 0.85, 1.0),
+        (Steps::new(3, JumpAt::Both), 0.1, 0.25),
+        (Steps::new(3, JumpAt::Both), 0.4, 0.5),
+        (Steps::new(3, JumpAt::Both), 0.99, 0.75),
+        (Steps::new(1, JumpAt::Start), 0.001, 1.0),
+        (Steps::new(1, JumpAt::End), 0.999, 0.0),
+        (Steps::new(8, JumpAt::End), 0.375, 0.375),
+    ];
+    for (steps, t, expected) in rows {
+        assert_eq!(steps.transform(t), expected, "{steps:?} at {t}");
+    }
+}
+
+fn steps_keep_the_curve_contract() {
+    for jump in [JumpAt::Start, JumpAt::End, JumpAt::None, JumpAt::Both] {
+        let steps = Steps::new(3, jump);
+        assert_eq!(steps.transform(0.0), 0.0, "{jump:?} start");
+        assert_eq!(steps.transform(1.0), 1.0, "{jump:?} end");
+        assert_eq!(steps.transform(-1.0), 0.0, "{jump:?} below");
+        assert_eq!(steps.transform(2.0), 1.0, "{jump:?} above");
+        assert!(steps.transform(f64::NAN).is_nan(), "{jump:?} NaN");
+    }
+}
+
+fn steps_reject_invalid_counts() {
+    assert!(matches!(
+        Steps::try_new(0, JumpAt::End),
+        Err(CurveError::OutOfRange {
+            parameter: "count",
+            ..
+        })
+    ));
+    assert_eq!(
+        Steps::try_new(1, JumpAt::None),
+        Err(CurveError::TooFewSteps)
+    );
+    assert!(Steps::try_new(2, JumpAt::None).is_ok());
+}
+
+#[test]
+fn steps_follow_css_easing() {
+    crate::run_table(&[
+        ("CSS values", css_steps_values),
+        ("curve contract", steps_keep_the_curve_contract),
+        ("invalid counts", steps_reject_invalid_counts),
+    ]);
+}
+
+// ---- slope ------------------------------------------------------------------
+
+/// `t²`, whose derivative `2t` is the analytic reference.
+struct Square;
+
+impl Curve for Square {
+    fn transform(&self, t: f64) -> f64 {
+        t * t
+    }
+}
+
+fn slope_matches_the_derivative() {
+    for (t, expected) in [(0.0, 0.0), (0.25, 0.5), (0.5, 1.0), (1.0, 2.0)] {
+        assert!((Square.slope(t) - expected).abs() < 1e-9, "t² at {t}");
+    }
+    for t in [0.0, 0.3, 1.0] {
+        assert!(
+            (Curves::Linear.slope(t) - 1.0).abs() < 1e-9,
+            "linear at {t}"
+        );
+    }
+}
+
+fn slope_outside_and_nan() {
+    assert!((Square.slope(2.0) - 2.0).abs() < 1e-9, "clamped to the end");
+    assert_eq!(Square.slope(f64::NAN), 0.0);
+    assert_eq!(Steps::new(1, JumpAt::End).slope(f64::NAN), 0.0);
+}
+
+#[test]
+fn curve_slope_is_the_derivative() {
+    crate::run_table(&[
+        ("derivative", slope_matches_the_derivative),
+        ("outside and NaN", slope_outside_and_nan),
     ]);
 }
