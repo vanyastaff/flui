@@ -464,3 +464,11 @@ AGENTS.md (§6). `typos.toml` `[default.extend-words]`: `canceled` и `adaptor` 
 (окно 11-10…11-14); без возражений таблица считается утверждённой. Новый ADR «Имена в публичном
 API» и правка идентификаторов в текстах существующих ADR идут в PR прохода и требуют согласия
 владельца на merge, как любой merge в `main`.
+
+## Сделано раньше прохода (владелец, 2026-10-06)
+
+«Realm» — внутренний архитектурный термин (прецедент — realm в ECMAScript: изолированное окружение,
+несколько на одном потоке; совпадает с D4). Автор приложения его не встречает. Отдельным PR от `main`
+(ветка `naming/window-policy`): `WindowPolicy::SeparateRealms` → `Isolated`, `SharedRealm` → `Shared`,
+`flui_testing::HeadlessRealm` → `HeadlessHost`, модуль `testing::realm` → `testing::host`; старые
+имена — `#[doc(alias)]`. `UiRealm` и термин в ADR/ARCHITECTURE.md остаются.
