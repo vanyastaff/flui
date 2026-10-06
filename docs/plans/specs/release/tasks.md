@@ -39,6 +39,7 @@
 | `authoring-styles`: три стиля описания виджетов из одного определения | R18 | `send-flip` (сигнатуры callback'ов), `facade-surface` | нет ADR; документация `column!` обещает несуществующий struct-литерал | — |
 | `layout-diagnostics`: ошибки раскладки видны (переполнение, flex без ограничения, `Expanded` не под тем родителем) | R19 | — | `flex.rs:529-535`, `:658`; `effects.rs:719` без вызова | — |
 | `testing-dx`: finder'ы, tap/enter_text по виджету | R19 | — | сейчас только `dispatch_pointer_down(x, y)` | — |
+| `naming`: имена файлов, модулей и публичных items говорят, что это, а не «набор» (`_kit`, `util`, `helpers`, `common`, `support`); правила в AGENTS.md, гейт `cargo xtask names` | R3, R17 | до `facade-surface` и публикации | публичные переименования после 0.2.0 ломающие | — |
 | `docs-community`: tutorial, README-матрица, docs.rs, шаблоны issue, обновление BETA | R16, R17 | всё остальное | — | — |
 
 Первый полный поток showcase (цель октября): `persistence` + `router-restore` + `teardown` +
