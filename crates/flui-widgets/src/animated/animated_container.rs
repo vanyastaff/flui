@@ -16,16 +16,14 @@ use crate::animated::implicitly_animated::{
 use crate::animated::vsync_scope::VsyncScope;
 use crate::{AnimatedBuilder, Container};
 
-/// Animates [`Container`]'s alignment, padding, color, width, height, and margin
-/// whenever any of them changes.
+/// Animates [`Container`]'s alignment, padding, color, width, height, margin and
+/// transform whenever any of them changes.
 ///
-/// One
-/// controller drives every property in lockstep over `duration` along `curve`.
-/// A property animates only across a present→present change; a property that
-/// appears or disappears snaps (no value to interpolate from/to). The
-/// `decoration`, `constraints`, and `transform` of [`Container`] are not yet
-/// animated (they pass straight through when set) — those need dedicated tweens
-/// and are tracked as follow-up.
+/// One controller drives every property in lockstep over `duration` along
+/// `curve`. A property animates only across a present→present change; a property
+/// that appears or disappears snaps (no value to interpolate from/to). An
+/// overshooting curve may carry a value past its target; padding, margin, width
+/// and height are clamped at zero, the other properties extrapolate.
 ///
 /// Driven by a binding under a [`VsyncScope`].
 #[derive(Clone, StatefulView)]
@@ -148,6 +146,7 @@ pub struct AnimatedContainerState {
     width: OptTween<f64>,
     height: OptTween<f64>,
     margin: OptTween<EdgeInsets>,
+    transform: OptTween<Matrix4>,
     child: BoxedView,
 }
 
@@ -163,6 +162,7 @@ impl StatefulView for AnimatedContainer {
             width: OptTween::at_rest(self.width),
             height: OptTween::at_rest(self.height),
             margin: OptTween::at_rest(self.margin),
+            transform: OptTween::at_rest(self.transform),
             child: self.child.clone(),
         }
     }
@@ -175,7 +175,7 @@ impl ViewState<AnimatedContainer> for AnimatedContainerState {
         }
     }
 
-    fn build(&self, view: &AnimatedContainer, _ctx: &dyn BuildContext) -> impl IntoView {
+    fn build(&self, _view: &AnimatedContainer, _ctx: &dyn BuildContext) -> impl IntoView {
         let curved = self.controller.curved();
         let alignment = self.alignment.clone();
         let padding = self.padding.clone();
@@ -183,8 +183,8 @@ impl ViewState<AnimatedContainer> for AnimatedContainerState {
         let width = self.width.clone();
         let height = self.height.clone();
         let margin = self.margin.clone();
+        let transform = self.transform.clone();
         let child = self.child.clone();
-        let transform = view.transform;
         AnimatedBuilder::new(self.controller.listenable(), move || {
             // An overshooting curve extrapolates the tweens past their targets; the
             // insets and the size are clamped into their non-negative domain here,
@@ -209,7 +209,7 @@ impl ViewState<AnimatedContainer> for AnimatedContainerState {
             if let Some(value) = margin.current(t) {
                 container = container.margin(value.clamp_non_negative());
             }
-            if let Some(value) = transform {
+            if let Some(value) = transform.current(t) {
                 container = container.transform(value);
             }
             container.child(child.clone())
@@ -239,6 +239,7 @@ impl ViewState<AnimatedContainer> for AnimatedContainerState {
         any_target_changed |= self.width.retarget(new_view.width, t);
         any_target_changed |= self.height.retarget(new_view.height, t);
         any_target_changed |= self.margin.retarget(new_view.margin, t);
+        any_target_changed |= self.transform.retarget(new_view.transform, t);
         if any_target_changed {
             // Restart from zero, gated strictly on a target change — a
             // curve-only change never restarts.
