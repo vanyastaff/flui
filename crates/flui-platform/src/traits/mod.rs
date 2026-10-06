@@ -51,4 +51,7 @@ pub use owner::{
     OpenWindowError, OwnerPlatform, PendingWindow, PlatformProxy, ProxySendError, SharedPlatform,
     WaitError, WakeRegistrationError, WindowOpen,
 };
-pub use platform::{PathPromptOptions, Platform, PlatformExecutor, PlatformReadyCallback};
+pub use platform::{
+    PathPromptOptions, Platform, PlatformExecutor, PlatformReadyCallback, SessionEndAnswer,
+    SessionEndPhase,
+};

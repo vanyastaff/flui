@@ -234,9 +234,9 @@ pub use traits::{
     CursorError, DesktopCapabilities, DispatchEventResult, DisplayId, HostWindow,
     MobileCapabilities, PathPromptOptions, Platform, PlatformAccessibility, PlatformCapabilities,
     PlatformDisplay, PlatformExecutor, PlatformHaptics, PlatformReadyCallback, PlatformTextInput,
-    PlatformWindow, WebCapabilities, WindowAppearance, WindowBackgroundAppearance, WindowBounds,
-    WindowEvent, WindowExecutionState, WindowId, WindowMode, WindowOptions, WindowReveal,
-    WindowShowError,
+    PlatformWindow, SessionEndAnswer, SessionEndPhase, WebCapabilities, WindowAppearance,
+    WindowBackgroundAppearance, WindowBounds, WindowEvent, WindowExecutionState, WindowId,
+    WindowMode, WindowOptions, WindowReveal, WindowShowError,
 };
 // The owner-thread capability (ADR-0039 §1): minted only by a backend,
 // handed to `on_ready`, never re-exported with a public minting seam.

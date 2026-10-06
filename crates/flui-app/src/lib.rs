@@ -97,7 +97,8 @@ pub use app::{ExitPolicy, WindowPolicy};
 // down. Same iOS gate as the policy knobs above, and for the same reason.
 #[cfg(not(target_os = "ios"))]
 pub use app::{
-    CloseRequest, CloseRequestError, CloseRequestHandler, CloseResponse, request_presentation_close,
+    CloseReason, CloseRequest, CloseRequestError, CloseRequestHandler, CloseResponse,
+    request_presentation_close,
 };
 // `open_secondary_window` additionally needs the desktop GPU renderer path,
 // so it is narrower than the policy enums above: desktop only (matching

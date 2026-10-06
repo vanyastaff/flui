@@ -138,6 +138,7 @@ where
             text_input_handle: owner.text_input_handle.clone(),
             clipboard_handle: owner.clipboard_handle.clone(),
             storage: owner.storage.clone(),
+            flush_registry: owner.flush_registry.clone(),
             hit_test_handle: owner.hit_test_handle.clone(),
             pipeline_owner: core.pipeline_owner().cloned(),
             keep_alive: owner.keep_alive.clone(),

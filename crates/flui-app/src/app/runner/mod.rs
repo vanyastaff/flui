@@ -142,7 +142,7 @@ pub(crate) fn install_close_request_wiring(
 
     let consulting = std::sync::Arc::clone(&router);
     window.on_should_close(Box::new(move || {
-        let response = consulting.consult(address);
+        let response = consulting.consult(address, crate::app::close_request::CloseReason::User);
         tracing::debug!(?address, ?response, "window close requested");
         matches!(response, CloseResponse::Close)
     }));

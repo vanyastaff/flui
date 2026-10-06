@@ -294,6 +294,20 @@ pub enum FrameFailureKind {
         /// Classification computed from the raw payload at the recovery seam.
         internal_invariant: bool,
     },
+    /// An application callback run on the realm's owner turn panicked
+    /// outside any frame: an input or gesture handler, a post-frame
+    /// callback, a lifecycle observer, a command. The panic was contained at
+    /// that callback's own boundary; the realm keeps running and its next
+    /// frame builds.
+    #[non_exhaustive]
+    CallbackPanic {
+        /// The panic payload text allowed by the configured
+        /// [`FrameFailureDetail`] policy.
+        message: PanicText,
+        /// Whether the payload carries the `BUG:` prefix of
+        /// `docs/PANIC-POLICY.md`'s invariant convention.
+        internal_invariant: bool,
+    },
 }
 
 impl FrameFailureKind {
@@ -301,7 +315,9 @@ impl FrameFailureKind {
     pub(crate) fn disposition(&self) -> FailureDisposition {
         match self {
             Self::SegmentPanic { .. } | Self::Pipeline { .. } => FailureDisposition::FrameDropped,
-            Self::RecoveredPanic { .. } => FailureDisposition::Contained,
+            Self::RecoveredPanic { .. } | Self::CallbackPanic { .. } => {
+                FailureDisposition::Contained
+            }
         }
     }
 }
