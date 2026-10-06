@@ -88,3 +88,36 @@ pub(crate) fn two_presentations_at_independent_scripted_cadences_tick_and_advanc
     a_controller.dispose();
     b_controller.dispose();
 }
+
+/// The binding's motion clock sets the rate its `Vsync` runs at against the
+/// virtual clock: at double rate a 1 s run is half done after 250 ms, a
+/// rate change mid-run continues from the current value, and a step on a
+/// paused clock moves the run by exactly the step.
+pub(crate) fn the_motion_clock_rate_and_step_drive_the_binding_vsync() {
+    use flui_animation::PlaybackRate;
+
+    let mut binding = HeadlessBinding::new();
+    let controller = AnimationController::new(Duration::from_secs(1), &UpdateScheduler::new());
+    binding.vsync().register(controller.clone());
+    controller.forward().expect("fresh controller forwards");
+    binding.pump_frame(Duration::ZERO);
+
+    binding
+        .motion_clock_mut()
+        .set_rate(PlaybackRate::new(2.0).expect("2 is a valid rate"));
+    binding.pump_frame(Duration::from_millis(250));
+    assert!((controller.value() - 0.5).abs() < 1e-9, "double rate: {}", controller.value());
+
+    binding.motion_clock_mut().set_rate(PlaybackRate::PAUSED);
+    binding.pump_frame(Duration::from_secs(10));
+    assert!((controller.value() - 0.5).abs() < 1e-9, "paused: {}", controller.value());
+    assert!(controller.is_animating(), "a paused run is still running");
+
+    binding.motion_clock_mut().step(Duration::from_millis(100));
+    binding.pump_frame(Duration::ZERO);
+    assert!((controller.value() - 0.6).abs() < 1e-9, "stepped: {}", controller.value());
+
+    binding.motion_clock_mut().set_rate(PlaybackRate::NORMAL);
+    binding.pump_frame(Duration::from_millis(100));
+    assert!((controller.value() - 0.7).abs() < 1e-9, "resumed: {}", controller.value());
+}
