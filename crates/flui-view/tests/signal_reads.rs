@@ -331,32 +331,32 @@ pub(crate) fn owner_release_refuses_signals_its_destructors_reintroduce() {
     );
 }
 
-pub(crate) fn owner_release_bounds_a_destructor_that_always_recreates_itself() {
-    // Recreates itself from every destructor through the fallible
-    // constructor, with no limit of its own.
-    struct Recreate {
-        graph: flui_view::Reactive,
-        element: ElementId,
-        drops: Rc<Cell<usize>>,
+/// Recreates itself from every destructor through the fallible constructor,
+/// with no limit of its own.
+struct Recreate {
+    graph: flui_view::Reactive,
+    element: ElementId,
+    drops: Rc<Cell<usize>>,
+}
+impl Drop for Recreate {
+    fn drop(&mut self) {
+        self.drops.set(self.drops.get() + 1);
+        let next = self.graph.try_signal_owned_by(
+            self.element,
+            Recreate {
+                graph: self.graph.clone(),
+                element: self.element,
+                drops: Rc::clone(&self.drops),
+            },
+        );
+        assert!(
+            matches!(next, Err(flui_view::SignalError::Released { .. })),
+            "a departing element admits no new owned signal"
+        );
     }
-    impl Drop for Recreate {
-        fn drop(&mut self) {
-            self.drops.set(self.drops.get() + 1);
-            let next = self.graph.try_signal_owned_by(
-                self.element,
-                Recreate {
-                    graph: self.graph.clone(),
-                    element: self.element,
-                    drops: Rc::clone(&self.drops),
-                },
-            );
-            assert!(
-                matches!(next, Err(flui_view::SignalError::Released { .. })),
-                "a departing element admits no new owned signal"
-            );
-        }
-    }
+}
 
+pub(crate) fn owner_release_bounds_a_destructor_that_always_recreates_itself() {
     let mut owners = MountOwners::fresh();
     let graph = owners.build_owner.reactive().clone();
     let drops = Rc::new(Cell::new(0));
@@ -401,6 +401,79 @@ pub(crate) fn owner_release_bounds_a_destructor_that_always_recreates_itself() {
         .tree
         .remove(element, &mut owners.build_owner.element_owner_mut());
     assert_eq!(graph.live_slot_count(), 0);
+}
+
+pub(crate) fn a_panicking_refusal_diagnostic_cannot_unwind_into_a_retained_value() {
+    use tracing_subscriber::{Layer, layer::Context, prelude::*};
+
+    /// Whether an event's message reports a nested refusal.
+    struct NestedRefusal(bool);
+    impl tracing::field::Visit for NestedRefusal {
+        fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+            if field.name() == "message" {
+                self.0 |= format!("{value:?}").contains("caused another refusal");
+            }
+        }
+    }
+    /// Panics on the diagnostic a nested refusal reports.
+    struct HostileSignalsLayer;
+    impl<S: tracing::Subscriber> Layer<S> for HostileSignalsLayer {
+        fn on_event(&self, event: &tracing::Event<'_>, _: Context<'_, S>) {
+            let mut nested = NestedRefusal(false);
+            event.record(&mut nested);
+            if nested.0 {
+                std::panic::panic_any("hostile signals subscriber");
+            }
+        }
+    }
+
+    let mut owners = MountOwners::fresh();
+    let graph = owners.build_owner.reactive().clone();
+    let drops = Rc::new(Cell::new(0));
+    let element = owners.tree.mount_root_with_pipeline_owner(
+        &Leaf,
+        Some(owners.pipeline_owner.clone()),
+        &mut owners.build_owner.element_owner_mut(),
+    );
+    let _owned = graph.signal_owned_by(
+        element,
+        Recreate {
+            graph: graph.clone(),
+            element,
+            drops: Rc::clone(&drops),
+        },
+    );
+    let subscriber = tracing_subscriber::registry().with(HostileSignalsLayer);
+    let failure = tracing::subscriber::with_default(subscriber, || {
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            owners
+                .tree
+                .remove(element, &mut owners.build_owner.element_owner_mut());
+        }))
+    })
+    .expect_err("the subscriber's panic propagates from the release");
+    assert_eq!(
+        failure.downcast_ref::<&str>(),
+        Some(&"hostile signals subscriber"),
+        "the subscriber's panic is the reported failure, not a second refusal"
+    );
+    assert_eq!(
+        drops.get(),
+        2,
+        "the released value and its first refused recreation drop; the nested one is retained before the diagnostic"
+    );
+
+    let element = owners.tree.mount_root_with_pipeline_owner(
+        &Leaf,
+        Some(owners.pipeline_owner.clone()),
+        &mut owners.build_owner.element_owner_mut(),
+    );
+    let next = graph.signal_owned_by(element, 5u32);
+    assert_eq!(
+        next.peek(&graph, |value| *value),
+        Ok(5),
+        "the graph admits owned signals after the contained diagnostic panic"
+    );
 }
 
 pub(crate) fn a_read_in_build_subscribes_through_the_production_context() {

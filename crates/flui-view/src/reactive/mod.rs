@@ -308,12 +308,14 @@ impl Reactive {
         let (error, value) = refused;
         let nested = std::mem::replace(&mut self.inner.borrow_mut().destroying_refused, true);
         if nested {
+            // Retained before the diagnostic: a subscriber that panics must
+            // not unwind this value's destructor into another refusal.
+            discard_secondary(value);
             tracing::debug!(
                 target: "flui::signals",
                 %error,
                 "a refused value's destructor caused another refusal; that value is retained"
             );
-            discard_secondary(value);
             return error;
         }
         let _destroying = Destroying(&self.inner);
