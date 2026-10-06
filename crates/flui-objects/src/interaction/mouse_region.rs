@@ -27,7 +27,7 @@ pub struct RenderMouseRegion {
     /// Owner-local mouse target delivering enter/hover/exit callbacks; the
     /// render object stores only this data-plane identity.
     mouse_target: Option<MouseRegionTarget>,
-    cursor: Option<CursorIcon>,
+    cursor: CursorIcon,
     valid_for_mouse_tracker: bool,
     opaque: bool,
     behavior: HitTestBehavior,
@@ -38,7 +38,7 @@ impl Default for RenderMouseRegion {
     fn default() -> Self {
         Self {
             mouse_target: None,
-            cursor: None,
+            cursor: CursorIcon::Default,
             valid_for_mouse_tracker: true,
             opaque: true,
             behavior: HitTestBehavior::Opaque,
@@ -48,8 +48,7 @@ impl Default for RenderMouseRegion {
 }
 
 impl RenderMouseRegion {
-    /// Creates an opaque mouse region with no callbacks that defers the
-    /// cursor to the regions around it.
+    /// Creates an opaque mouse region with no callbacks and the default cursor.
     pub fn new() -> Self {
         Self::default()
     }
@@ -65,17 +64,14 @@ impl RenderMouseRegion {
         self.mouse_target = target;
     }
 
-    /// Returns the cursor this region asks for, or `None` when it defers to
-    /// the regions around it.
+    /// Returns the active cursor.
     #[must_use]
-    pub const fn cursor(&self) -> Option<CursorIcon> {
+    pub const fn cursor(&self) -> CursorIcon {
         self.cursor
     }
 
-    /// Updates the cursor this region asks for (`None` defers to the regions
-    /// around it; `Some(CursorIcon::Default)` forces the arrow); returns true
-    /// when hit-test state changed.
-    pub fn set_cursor(&mut self, cursor: Option<CursorIcon>) -> bool {
+    /// Updates the active cursor; returns true when hit-test state changed.
+    pub fn set_cursor(&mut self, cursor: CursorIcon) -> bool {
         if self.cursor == cursor {
             return false;
         }
@@ -144,9 +140,7 @@ impl std::fmt::Debug for RenderMouseRegion {
 
 impl flui_foundation::Diagnosticable for RenderMouseRegion {
     fn debug_fill_properties(&self, builder: &mut flui_foundation::DiagnosticsBuilder) {
-        if let Some(cursor) = self.cursor {
-            builder.add_enum("cursor", cursor);
-        }
+        builder.add_enum("cursor", self.cursor);
         builder.add_flag(
             "has_mouse_target",
             self.mouse_target.is_some(),
@@ -211,7 +205,7 @@ impl RenderBox for RenderMouseRegion {
         hit_target && self.opaque
     }
 
-    fn mouse_cursor(&self) -> Option<CursorIcon> {
+    fn mouse_cursor(&self) -> CursorIcon {
         self.cursor
     }
 

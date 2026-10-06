@@ -726,27 +726,22 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
                                 return false;
                             }
                             let child_offset = child_node.offset();
-                            result
-                                .with_paint_offset(child_offset, |result| {
-                                    let child_position =
-                                        Self::sliver_hit_position_from_paint_offset(
-                                            child_node,
-                                            position - child_offset,
-                                        );
-                                    self.hit_test_sliver_subtree(child_id, child_position, result)
-                                })
-                                .unwrap_or(false)
+                            result.with_paint_offset(child_offset, |result| {
+                                let child_position = Self::sliver_hit_position_from_paint_offset(
+                                    child_node,
+                                    position - child_offset,
+                                );
+                                self.hit_test_sliver_subtree(child_id, child_position, result)
+                            })
                         };
                     }
                     if let Some(child_position) = override_pos {
                         self.hit_test_subtree(child_id, child_position, result)
                     } else {
                         let child_offset = child_node.offset();
-                        result
-                            .with_paint_offset(child_offset, |result| {
-                                self.hit_test_subtree(child_id, position - child_offset, result)
-                            })
-                            .unwrap_or(false)
+                        result.with_paint_offset(child_offset, |result| {
+                            self.hit_test_subtree(child_id, position - child_offset, result)
+                        })
                     }
                 };
 
@@ -782,10 +777,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
                     Some(target) => entry.pan_zoom_target(target),
                     None => entry,
                 };
-                let entry = match render_object.mouse_cursor() {
-                    Some(cursor) => entry.cursor(cursor),
-                    None => entry,
-                };
+                let entry = entry.cursor(render_object.mouse_cursor());
                 let entry = match render_object.metadata() {
                     Some(payload) => entry.metadata(payload),
                     None => entry,
@@ -800,7 +792,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
             hit.blocks_below
         };
         let hit_follower = |result: &mut crate::hit_testing::HitTestResult| match follower_offset {
-            Some(offset) => result.with_paint_offset(offset, hit_node).unwrap_or(false),
+            Some(offset) => result.with_paint_offset(offset, hit_node),
             None => hit_node(result),
         };
         match hit_transform {
@@ -1056,11 +1048,9 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
                         position,
                         child_offset,
                     );
-                    result
-                        .with_paint_offset(child_offset, |result| {
-                            self.hit_test_sliver_subtree(child_id, child_position, result)
-                        })
-                        .unwrap_or(false)
+                    result.with_paint_offset(child_offset, |result| {
+                        self.hit_test_sliver_subtree(child_id, child_position, result)
+                    })
                 }
             } else if let Some(child_entry) = child_node.as_box() {
                 let Some(child_size) = child_entry.state().geometry() else {
@@ -1078,11 +1068,9 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
                     child_main_position,
                     child_offset,
                 );
-                result
-                    .with_paint_offset(child_offset, |result| {
-                        self.hit_test_subtree(child_id, child_position, result)
-                    })
-                    .unwrap_or(false)
+                result.with_paint_offset(child_offset, |result| {
+                    self.hit_test_subtree(child_id, child_position, result)
+                })
             } else {
                 false
             }
@@ -1090,11 +1078,8 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
 
         let hit = render_object.hit_test_raw(position, children.len(), own_size, &mut hit_child);
         if hit.add_self {
-            let entry = crate::hit_testing::HitTestEntry::new(id);
-            let entry = match render_object.mouse_cursor() {
-                Some(cursor) => entry.cursor(cursor),
-                None => entry,
-            };
+            let entry =
+                crate::hit_testing::HitTestEntry::new(id).cursor(render_object.mouse_cursor());
             let entry = match render_object.mouse_tracker_annotation(id) {
                 Some(annotation) => entry.mouse_annotation(annotation),
                 None => entry,

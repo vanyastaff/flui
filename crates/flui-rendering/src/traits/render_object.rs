@@ -637,13 +637,11 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + Downcast + 'static {
 
     /// The mouse cursor this render object contributes to its hit entry.
     ///
-    /// Default `None`, which defers to the ancestors on the hit path;
-    /// `RenderMouseRegion` overrides this so
+    /// Default `CursorIcon::Default`; `RenderMouseRegion` overrides this so
     /// [`MouseTracker`](flui_interaction::routing::MouseTracker) can resolve the active
-    /// platform cursor from the leaf-first hit-test path. `Some(CursorIcon::Default)`
-    /// is an explicit arrow that wins over an ancestor's cursor.
-    fn mouse_cursor(&self) -> Option<CursorIcon> {
-        None
+    /// platform cursor from the leaf-first hit-test path.
+    fn mouse_cursor(&self) -> CursorIcon {
+        CursorIcon::Default
     }
 
     /// An opaque payload this render object attaches to any hit that lands on

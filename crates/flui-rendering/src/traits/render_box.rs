@@ -474,10 +474,9 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::Diagnosticable
         None
     }
 
-    /// The mouse cursor this box contributes to its hit entry, or `None` to
-    /// defer to its ancestors — see [`RenderObject::mouse_cursor`].
-    fn mouse_cursor(&self) -> Option<CursorIcon> {
-        None
+    /// The mouse cursor this box contributes to its hit entry.
+    fn mouse_cursor(&self) -> CursorIcon {
+        CursorIcon::Default
     }
 
     /// Opaque payload this box attaches to any hit that lands on it — see
@@ -856,7 +855,7 @@ where
         <T as RenderBox>::pan_zoom_target(self)
     }
 
-    fn mouse_cursor(&self) -> Option<CursorIcon> {
+    fn mouse_cursor(&self) -> CursorIcon {
         <T as RenderBox>::mouse_cursor(self)
     }
 
