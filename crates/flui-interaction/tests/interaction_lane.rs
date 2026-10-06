@@ -234,6 +234,10 @@ fn pointer_router_competing_retirement_preserves_first_failure_and_recovery() {
         ("all_unwind", RouterCleanup::All, true, true),
     ];
     if let Ok(selected) = std::env::var(SELECTED) {
+        if selected == "saved_route_entries" {
+            assert_saved_route_entry_retirement();
+            return;
+        }
         if let Some((competing, active_unwind)) = match selected.as_str() {
             "owner_one" => Some((false, false)),
             "owner_two" => Some((true, false)),
@@ -256,7 +260,12 @@ fn pointer_router_competing_retirement_preserves_first_failure_and_recovery() {
         cases
             .iter()
             .map(|(name, _, _, _)| *name)
-            .chain(["owner_one", "owner_two", "owner_unwind"])
+            .chain([
+                "owner_one",
+                "owner_two",
+                "owner_unwind",
+                "saved_route_entries",
+            ])
     {
         let mut child = Command::new(std::env::current_exe().expect("test executable"))
             .args([
@@ -512,6 +521,84 @@ fn assert_router_owner_retirement(competing: bool, active_unwind: bool) {
         weak_owner.upgrade().is_none(),
         "retired owner cannot resurrect"
     );
+}
+
+/// A saved route that holds the last owner of two targets' captures: when the
+/// first capture's destructor fails, the second is retained rather than
+/// dropped during that unwind, and the lane serves the next route.
+fn assert_saved_route_entry_retirement() {
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use flui_interaction::events::{PointerType, make_down_event};
+    use flui_interaction::{HitTestResult, Offset};
+
+    struct FailingCapture {
+        drops: Arc<AtomicUsize>,
+        message: &'static str,
+    }
+    impl Drop for FailingCapture {
+        fn drop(&mut self) {
+            self.drops.fetch_add(1, Ordering::Relaxed);
+            std::panic::panic_any(self.message);
+        }
+    }
+
+    let lane = InteractionLane::try_new().expect("lane");
+    let handle = lane.dispatch_handle();
+    let drops = Arc::new(AtomicUsize::new(0));
+    lane.enter(|| {
+        let mut result = HitTestResult::new();
+        let mut targets = Vec::new();
+        for message in ["first route capture failure", "second route capture failure"] {
+            let capture = FailingCapture {
+                drops: Arc::clone(&drops),
+                message,
+            };
+            let target = handle
+                .register_pointer(move |_| {
+                    let _keep_capture_alive = &capture;
+                })
+                .expect("target");
+            result.add(hit_entry(target));
+            targets.push(target);
+        }
+        let token = handle
+            .resolve_pointer_route(result.path())
+            .expect("route")
+            .token();
+        for target in targets {
+            handle.unregister_pointer(target).expect("unregister");
+        }
+        let failure = catch_unwind(AssertUnwindSafe(|| handle.release_route(token)))
+            .expect_err("the first capture failure propagates");
+        assert_eq!(
+            failure.downcast_ref::<&str>(),
+            Some(&"first route capture failure")
+        );
+        assert_eq!(drops.load(Ordering::Relaxed), 1, "the second is retained");
+
+        let delivered = std::rc::Rc::new(std::cell::Cell::new(0));
+        let counter = std::rc::Rc::clone(&delivered);
+        let next = handle
+            .register_pointer(move |_| counter.set(counter.get() + 1))
+            .expect("next target");
+        let token = handle
+            .resolve_pointer_route(&[hit_entry(next)])
+            .expect("next route")
+            .token();
+        let event = make_down_event(Offset::ZERO, PointerType::Touch);
+        assert!(
+            handle
+                .invoke_pointer_route(token, &event)
+                .expect("dispatch")
+                .is_none()
+        );
+        assert_eq!(delivered.get(), 1, "the lane serves the next route");
+        handle.release_route(token).expect("release");
+        handle.unregister_pointer(next).expect("unregister next");
+    });
 }
 
 struct DragRetirementProbe(Box<dyn Fn()>);

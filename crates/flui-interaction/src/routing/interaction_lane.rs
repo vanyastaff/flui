@@ -557,7 +557,10 @@ impl Drop for ResolvedHitRoute {
     /// was preserving, it released its own clones of the cell, so the route
     /// may now hold the last one: the cell then follows that close's
     /// retention instead of running the capture's destructor here (ADR-0127).
-    /// Retained entries are settled before any other entry is destroyed.
+    /// Retained entries are settled before any other entry is destroyed. The
+    /// rest are destroyed one at a time: once one capture's destructor fails,
+    /// or during an unwind, the remaining entries are retained, so a second
+    /// failing capture can neither replace the first failure nor abort.
     fn drop(&mut self) {
         let mut released = Vec::new();
         for entry in std::mem::take(&mut self.entries) {
@@ -571,7 +574,19 @@ impl Drop for ResolvedHitRoute {
                 released.push(entry);
             }
         }
-        drop(released);
+        let mut first = None;
+        for entry in released {
+            if first.is_some() || std::thread::panicking() {
+                entry.handler_cell.retain();
+            } else if let Err(payload) =
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(entry)))
+            {
+                first = Some(payload);
+            }
+        }
+        if let Some(payload) = first {
+            std::panic::resume_unwind(payload);
+        }
     }
 }
 
