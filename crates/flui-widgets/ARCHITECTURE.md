@@ -1924,8 +1924,10 @@ committed text (`TextEditingController::committed_text`, the composition left
 out) and runs only when that changed, so a session that only composes is no
 owner change; a text form field reads its value the same way. The write-back
 compares the controller's generation, in the same critical section, with the
-one the session opened at: an application edit made meanwhile wins and the
-session is dropped (ADR-0090 amendment items 1–3). A lock asked for inside the frame
+one the session opened at, and the controller's identity: an application edit
+or a swapped controller wins and the session is dropped. A panicking
+`on_changed` is parked in the presentation's gate, after the observer heard of
+the session, and resumed by the owner's next dispatch or anchor (ADR-0090 amendment items 1–3). A lock asked for inside the frame
 transaction (the whole frame drive, post-frame callbacks included, in the
 harness's `tick` as in `flui-app`'s `UiRealm::drive_frame`) runs after the
 frame; a key press first runs those queued grants, so it lands after an IME
@@ -1938,7 +1940,9 @@ defers a lock asked for inside the frame transaction to the next frame),
 `tests/editable_text.rs`'s
 `text_store::typing_after_a_deferred_commit_lands_after_the_commit`,
 `text_store::on_changed_runs_after_the_lock_is_released` and
-`text_store::an_app_edit_during_a_lock_is_not_overwritten`, and `tests/form.rs`'s
+`text_store::an_app_edit_during_a_lock_is_not_overwritten`,
+`text_store::swapping_the_controller_during_a_grant_drops_the_session` and
+`text_store::a_panicking_on_changed_is_reported_once_and_the_field_keeps_working`, and `tests/form.rs`'s
 `a_text_form_field_validates_and_saves_the_committed_text`. A lock
 requested from a post-frame callback specifically: **Unasserted:** no test pins
 this.
