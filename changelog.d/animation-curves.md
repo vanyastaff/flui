@@ -14,6 +14,12 @@
   only the x residual before, and `Curves::EaseInOutExpo` was off by up to `9e-3` next to its
   vertical tangent. The elastic curves no longer jump by `2^-10` onto their end values.
 
+- **`flui-animation`**: `ArcCurve` compares the curves this crate defines by value (`Cubic`,
+  `ThreePointCubic`, elastic, bounce, `Linear`, `DecelerateCurve`, and `Interval`/`FlippedCurve` of
+  those); other curves still compare by identity. A parent rebuilding with an equal built-in
+  curve no longer counts as a curve change, so `AnimatedSize` no longer relayouts and implicit
+  animations no longer rebuild their curved animation on every such rebuild.
+
 ### Removed
 
 - **`flui-animation`**: `ReverseCurve` and `Curve::reversed` (they mapped 0 to 1, breaking the

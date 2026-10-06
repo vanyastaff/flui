@@ -63,6 +63,101 @@ pub trait Curve {
     {
         FlippedCurve { curve: self }
     }
+
+    /// The value of a curve this crate defines, which lets [`ArcCurve`]
+    /// compare it by value instead of by identity.
+    ///
+    /// Only this crate's curves and combinators override it; the type it
+    /// returns cannot be named or built elsewhere, so an implementation
+    /// outside the crate keeps the default `None`.
+    #[doc(hidden)]
+    fn builtin(&self) -> Option<builtin::BuiltinCurve> {
+        None
+    }
+}
+
+/// The closed set of curves [`ArcCurve`] compares by value.
+mod builtin {
+    use super::{
+        Cubic, Curve, ElasticInCurve, ElasticInOutCurve, ElasticOutCurve, ThreePointCubic,
+        interval_transform,
+    };
+    use std::sync::Arc;
+
+    /// A built-in curve's value, as returned by [`Curve::builtin`].
+    ///
+    /// Public only so the hidden trait method can name it; it is not
+    /// reachable from outside the crate.
+    #[derive(Debug, Clone, PartialEq)]
+    pub struct BuiltinCurve(Arc<Builtin>);
+
+    impl BuiltinCurve {
+        pub(super) fn new(curve: Builtin) -> Self {
+            Self(Arc::new(curve))
+        }
+
+        pub(super) fn transform(&self, t: f64) -> f64 {
+            match &*self.0 {
+                Builtin::Linear => super::Linear.transform(t),
+                Builtin::Decelerate => super::DecelerateCurve.transform(t),
+                Builtin::BounceIn => super::BounceInCurve.transform(t),
+                Builtin::BounceOut => super::BounceOutCurve.transform(t),
+                Builtin::BounceInOut => super::BounceInOutCurve.transform(t),
+                Builtin::Cubic(curve) => curve.transform(t),
+                Builtin::ThreePointCubic(curve) => curve.transform(t),
+                Builtin::ElasticIn(curve) => curve.transform(t),
+                Builtin::ElasticOut(curve) => curve.transform(t),
+                Builtin::ElasticInOut(curve) => curve.transform(t),
+                Builtin::Interval { begin, end, curve } => {
+                    interval_transform(*begin, *end, t, |local| curve.transform(local))
+                }
+                Builtin::Flipped(curve) => 1.0 - curve.transform(1.0 - t),
+            }
+        }
+    }
+
+    /// Every curve type the crate defines that has value equality; a
+    /// combinator is listed when its inner curve is.
+    #[derive(Debug, PartialEq)]
+    #[expect(
+        clippy::large_enum_variant,
+        reason = "only ever allocated once, behind the Arc in BuiltinCurve"
+    )]
+    pub(super) enum Builtin {
+        Linear,
+        Decelerate,
+        BounceIn,
+        BounceOut,
+        BounceInOut,
+        Cubic(Cubic),
+        ThreePointCubic(ThreePointCubic),
+        ElasticIn(ElasticInCurve),
+        ElasticOut(ElasticOutCurve),
+        ElasticInOut(ElasticInOutCurve),
+        Interval {
+            begin: f64,
+            end: f64,
+            curve: BuiltinCurve,
+        },
+        Flipped(BuiltinCurve),
+    }
+}
+
+use builtin::{Builtin, BuiltinCurve};
+
+/// Implements [`Curve::builtin`] for a curve with no parameters or a
+/// `Copy` value.
+macro_rules! builtin_value {
+    ($variant:ident) => {
+        fn builtin(&self) -> Option<BuiltinCurve> {
+            Some(BuiltinCurve::new(Builtin::$variant))
+        }
+    };
+    ($variant:ident(self)) => {
+        fn builtin(&self) -> Option<BuiltinCurve> {
+            Some(BuiltinCurve::new(Builtin::$variant(*self)))
+        }
+    };
 }
 
 /// Why a curve parameter was rejected.
@@ -207,6 +302,8 @@ impl Curve2DSample {
 pub struct Linear;
 
 impl Curve for Linear {
+    builtin_value!(Linear);
+
     #[inline]
     fn transform(&self, t: f64) -> f64 {
         t.clamp(0.0, 1.0)
@@ -316,19 +413,33 @@ impl Interval<Linear> {
 
 impl<C: Curve + Copy> Curve for Interval<C> {
     fn transform(&self, t: f64) -> f64 {
-        if let Some(settled) = settled(t) {
-            return settled;
-        }
-        if t < self.begin {
-            0.0
-        } else if t > self.end {
-            1.0
-        } else if self.end - self.begin < 1e-6 {
-            if t < self.end { 0.0 } else { 1.0 }
-        } else {
-            self.curve
-                .transform((t - self.begin) / (self.end - self.begin))
-        }
+        interval_transform(self.begin, self.end, t, |local| self.curve.transform(local))
+    }
+
+    fn builtin(&self) -> Option<BuiltinCurve> {
+        let curve = self.curve.builtin()?;
+        Some(BuiltinCurve::new(Builtin::Interval {
+            begin: self.begin,
+            end: self.end,
+            curve,
+        }))
+    }
+}
+
+/// [`Interval`]'s shape over validated bounds, with `inner` the curve
+/// evaluated on the local progress.
+fn interval_transform(begin: f64, end: f64, t: f64, inner: impl FnOnce(f64) -> f64) -> f64 {
+    if let Some(settled) = settled(t) {
+        return settled;
+    }
+    if t < begin {
+        0.0
+    } else if t > end {
+        1.0
+    } else if end - begin < 1e-6 {
+        if t < end { 0.0 } else { 1.0 }
+    } else {
+        inner((t - begin) / (end - begin))
     }
 }
 
@@ -608,6 +719,8 @@ impl Cubic {
 }
 
 impl Curve for Cubic {
+    builtin_value!(Cubic(self));
+
     fn transform(&self, t: f64) -> f64 {
         if let Some(settled) = settled(t) {
             return settled;
@@ -806,6 +919,8 @@ impl ThreePointCubic {
 }
 
 impl Curve for ThreePointCubic {
+    builtin_value!(ThreePointCubic(self));
+
     fn transform(&self, t: f64) -> f64 {
         if let Some(settled) = settled(t) {
             return settled;
@@ -1186,6 +1301,8 @@ elastic_curve!(
 );
 
 impl Curve for ElasticInCurve {
+    builtin_value!(ElasticIn(self));
+
     fn transform(&self, t: f64) -> f64 {
         if let Some(settled) = settled(t) {
             return settled;
@@ -1195,6 +1312,8 @@ impl Curve for ElasticInCurve {
 }
 
 impl Curve for ElasticOutCurve {
+    builtin_value!(ElasticOut(self));
+
     fn transform(&self, t: f64) -> f64 {
         if let Some(settled) = settled(t) {
             return settled;
@@ -1204,6 +1323,8 @@ impl Curve for ElasticOutCurve {
 }
 
 impl Curve for ElasticInOutCurve {
+    builtin_value!(ElasticInOut(self));
+
     fn transform(&self, t: f64) -> f64 {
         if let Some(settled) = settled(t) {
             return settled;
@@ -1227,6 +1348,8 @@ impl Curve for ElasticInOutCurve {
 pub struct BounceOutCurve;
 
 impl Curve for BounceOutCurve {
+    builtin_value!(BounceOut);
+
     fn transform(&self, t: f64) -> f64 {
         let t = t.clamp(0.0, 1.0);
         bounce_out(t)
@@ -1239,6 +1362,8 @@ impl Curve for BounceOutCurve {
 pub struct BounceInCurve;
 
 impl Curve for BounceInCurve {
+    builtin_value!(BounceIn);
+
     fn transform(&self, t: f64) -> f64 {
         let t = t.clamp(0.0, 1.0);
         1.0 - bounce_out(1.0 - t)
@@ -1251,6 +1376,8 @@ impl Curve for BounceInCurve {
 pub struct BounceInOutCurve;
 
 impl Curve for BounceInOutCurve {
+    builtin_value!(BounceInOut);
+
     fn transform(&self, t: f64) -> f64 {
         let t = t.clamp(0.0, 1.0);
         if t < 0.5 {
@@ -1291,6 +1418,8 @@ fn bounce_out(t: f64) -> f64 {
 pub struct DecelerateCurve;
 
 impl Curve for DecelerateCurve {
+    builtin_value!(Decelerate);
+
     #[inline]
     fn transform(&self, t: f64) -> f64 {
         let t = t.clamp(0.0, 1.0);
@@ -1485,6 +1614,10 @@ impl<C: Curve> Curve for FlippedCurve<C> {
     fn transform(&self, t: f64) -> f64 {
         1.0 - self.curve.transform(1.0 - t)
     }
+
+    fn builtin(&self) -> Option<BuiltinCurve> {
+        Some(BuiltinCurve::new(Builtin::Flipped(self.curve.builtin()?)))
+    }
 }
 
 // ============================================================================
@@ -1655,67 +1788,103 @@ impl Curves {
 
 /// A reference-counted, type-erased curve handle.
 ///
-/// Wraps any `impl Curve + Send + Sync + 'static` behind an `Arc` so that a
-/// single, stable concrete type can be stored in widgets and animation
-/// controllers, regardless of which specific curve is used.
+/// Wraps any `impl Curve + Send + Sync + 'static` so that a single, stable
+/// concrete type can be stored in widgets and animation controllers,
+/// regardless of which specific curve is used.
 ///
 /// `ArcCurve` implements `Curve + Clone + Send + Sync + Debug`, which satisfies
 /// the full bound that [`CurvedAnimation`] places on its `C` type parameter.
-/// The `Debug` output intentionally omits the inner curve's type name because
-/// `Curve` does not require `Debug`; use a concrete named type when the type
-/// name is load-bearing.
 ///
-/// `PartialEq`/`Eq` are reference equality (`Arc::ptr_eq`) — `Curve` carries
-/// no structural-equality bound, so this is the only comparison available for
-/// an erased `dyn Curve`. Identity comparison is what lets an
-/// implicit-animation staleness check compare a repeated curve handle as
-/// unchanged. Two `ArcCurve`s built from
-/// separate `ArcCurve::new(...)` calls compare unequal even when they wrap the
-/// same curve *value* — callers who want a stable comparison across rebuilds
-/// must reuse the same `ArcCurve` handle (clone it), not reconstruct it.
+/// # Equality
+///
+/// A curve this crate defines compares **by value**: two `ArcCurve`s wrapping
+/// equal [`Cubic`]s, [`ThreePointCubic`]s, elastic, bounce or linear curves,
+/// or an [`Interval`] or [`FlippedCurve`] of those, are equal however they
+/// were built. A parent that rebuilds every frame with
+/// `.curve(Curves::EaseInOut)` therefore hands an implicit animation an
+/// *unchanged* curve, and the animation keeps its run. Any other curve —
+/// yours, a [`Split`], or a combinator over one — compares by identity
+/// (`Arc::ptr_eq`), because [`Curve`] has no equality of its own: reuse the
+/// same handle (clone it) to keep it equal across rebuilds.
 ///
 /// # Examples
 ///
 /// ```
-/// use flui_animation::curve::{ArcCurve, Curve, ElasticOutCurve};
+/// use flui_animation::curve::{ArcCurve, Curve, Curves, ElasticOutCurve};
 ///
 /// let curve = ArcCurve::new(ElasticOutCurve::default());
 /// assert_eq!(curve.transform(0.0), 0.0);
-/// assert!((curve.transform(1.0) - 1.0).abs() < 1e-5);
+/// assert_eq!(curve.transform(1.0), 1.0);
+///
+/// // Built-in curves compare by value.
+/// assert_eq!(ArcCurve::new(Curves::EaseIn), ArcCurve::new(Curves::EaseIn));
+/// assert_ne!(ArcCurve::new(Curves::EaseIn), ArcCurve::new(Curves::EaseOut));
 /// ```
 ///
 /// [`CurvedAnimation`]: crate::CurvedAnimation
 #[derive(Clone)]
-pub struct ArcCurve(Arc<dyn Curve + Send + Sync>);
+pub struct ArcCurve(Erased);
+
+/// What an [`ArcCurve`] holds: a built-in curve's value, or an opaque curve.
+#[derive(Clone)]
+enum Erased {
+    Builtin(BuiltinCurve),
+    Custom(Arc<dyn Curve + Send + Sync>),
+}
 
 impl PartialEq for ArcCurve {
-    /// Reference equality (`Arc::ptr_eq`) — see the type doc's *why*.
+    /// Value equality for built-in curves, identity otherwise — see the type
+    /// doc.
     fn eq(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.0, &other.0)
+        match (&self.0, &other.0) {
+            (Erased::Builtin(a), Erased::Builtin(b)) => a == b,
+            (Erased::Custom(a), Erased::Custom(b)) => Arc::ptr_eq(a, b),
+            _ => false,
+        }
     }
 }
 
+// Built-in curve parameters are validated finite, so value equality is
+// reflexive.
 impl Eq for ArcCurve {}
 
 impl ArcCurve {
     /// Wrap `curve` in a reference-counted erased handle.
     ///
-    /// The `Arc` is cloned cheaply (reference-count bump), so `ArcCurve` can
-    /// be stored in `Clone`-derived structs without duplicating the curve data.
+    /// A built-in curve is stored by value (and compares by value); any
+    /// other curve is moved behind an `Arc`. Cloning is a reference-count
+    /// bump either way.
     pub fn new(curve: impl Curve + Send + Sync + 'static) -> Self {
-        Self(Arc::new(curve))
+        Self(match curve.builtin() {
+            Some(builtin) => Erased::Builtin(builtin),
+            None => Erased::Custom(Arc::new(curve)),
+        })
     }
 }
 
 impl Curve for ArcCurve {
     fn transform(&self, t: f64) -> f64 {
-        self.0.transform(t)
+        match &self.0 {
+            Erased::Builtin(curve) => curve.transform(t),
+            Erased::Custom(curve) => curve.transform(t),
+        }
+    }
+
+    fn builtin(&self) -> Option<BuiltinCurve> {
+        match &self.0 {
+            Erased::Builtin(curve) => Some(curve.clone()),
+            Erased::Custom(_) => None,
+        }
     }
 }
 
 impl fmt::Debug for ArcCurve {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("ArcCurve").finish_non_exhaustive()
+        match &self.0 {
+            Erased::Builtin(curve) => f.debug_tuple("ArcCurve").field(curve).finish(),
+            // `Curve` does not require `Debug`.
+            Erased::Custom(_) => f.debug_struct("ArcCurve").finish_non_exhaustive(),
+        }
     }
 }
 
@@ -1728,5 +1897,9 @@ impl fmt::Debug for ArcCurve {
 impl Curve for Arc<dyn Curve + Send + Sync> {
     fn transform(&self, t: f64) -> f64 {
         (**self).transform(t)
+    }
+
+    fn builtin(&self) -> Option<BuiltinCurve> {
+        (**self).builtin()
     }
 }
