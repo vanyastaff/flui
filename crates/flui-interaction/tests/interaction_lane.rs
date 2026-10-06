@@ -371,6 +371,19 @@ fn assert_router_retirement_recovery(cleanup: RouterCleanup, competing: bool, ac
         }
     }
 
+    // A handler the test still owns sits in the retired tail: dropping the
+    // router's clone runs no user code, so retirement must release it.
+    let shared: flui_interaction::PointerRouteHandler = Rc::new(|_| {});
+    if matches!(cleanup, RouterCleanup::Pointer) {
+        binding
+            .pointer_router()
+            .add_route(PointerId::PRIMARY, Rc::clone(&shared));
+    } else {
+        binding
+            .pointer_router()
+            .add_global_handler(Rc::clone(&shared));
+    }
+
     let removal = catch_unwind(AssertUnwindSafe(|| {
         if active_unwind {
             let _cleanup = UnwindCleanup {
@@ -392,6 +405,11 @@ fn assert_router_retirement_recovery(cleanup: RouterCleanup, competing: bool, ac
     );
     assert_eq!(first_drops.get(), usize::from(!active_unwind));
     assert_eq!(second_drops.get(), 0, "the opaque tail must be retained");
+    assert_eq!(
+        Rc::strong_count(&shared),
+        1,
+        "a clone another owner still holds is released, not leaked"
+    );
 
     if active_unwind {
         let deliveries = Rc::clone(&deliveries);
@@ -562,6 +580,10 @@ fn drag_callback_ownership_and_retirement() {
         (
             "stop sweep reentry failure",
             stop_tracking_preserves_reentrant_contact_after_sweep_failure,
+        ),
+        (
+            "stop sweep accepts drag",
+            stop_tracking_pointer_sweep_starts_the_unresolved_drag,
         ),
     ];
     if let Ok(selected) = std::env::var(SELECTED) {
@@ -1125,6 +1147,53 @@ fn drag_completion_commits_tracking_before_stop_diagnostics() {
     fresh_drag_completes_after_retirement();
 }
 
+fn stop_tracking_pointer_sweep_starts_the_unresolved_drag() {
+    use flui_interaction::arena::GestureArena;
+    use flui_interaction::recognizers::OneSequenceGestureRecognizer;
+    use flui_interaction::sealed::CustomGestureRecognizer;
+    use flui_interaction::{DragAxis, DragGestureRecognizer, GestureRecognizer, Offset, PointerId};
+    use std::cell::Cell;
+    use std::rc::Rc;
+    use std::sync::Arc;
+
+    struct Rival(Rc<Cell<usize>>);
+    impl CustomGestureRecognizer for Rival {
+        fn on_arena_accept(&self, _: PointerId) {
+            panic!("the sweep accepts the front member");
+        }
+        fn on_arena_reject(&self, _: PointerId) {
+            self.0.set(self.0.get() + 1);
+        }
+    }
+
+    let arena = GestureArena::new();
+    let starts = Rc::new(Cell::new(0));
+    let observed = starts.clone();
+    let recognizer = DragGestureRecognizer::new(arena.clone(), DragAxis::Horizontal)
+        .with_on_start(move |_| observed.set(observed.get() + 1));
+    recognizer.add_pointer(PointerId::PRIMARY, Offset::ZERO, Offset::ZERO);
+    let rejections = Rc::new(Cell::new(0));
+    #[expect(
+        clippy::arc_with_non_send_sync,
+        reason = "the owner-local arena takes its members through Arc identity"
+    )]
+    let rival = Arc::new(Rival(rejections.clone()));
+    arena.add(PointerId::PRIMARY, rival);
+    arena.close(PointerId::PRIMARY);
+    assert_eq!(starts.get(), 0, "the competition is still open");
+
+    recognizer.stop_tracking_pointer(PointerId::PRIMARY);
+    assert_eq!(
+        (starts.get(), rejections.get()),
+        (1, 1),
+        "the sweep accepts the retiring drag and starts it"
+    );
+    assert!(recognizer.primary_pointer().is_none());
+    assert!(arena.is_empty());
+    recognizer.dispose();
+    fresh_drag_completes_after_retirement();
+}
+
 fn stop_tracking_preserves_reentrant_contact_after_sweep() {
     assert_stop_tracking_preserves_reentrant_contact(false);
 }
@@ -1169,13 +1238,10 @@ fn assert_stop_tracking_preserves_reentrant_contact(fail_after_admission: bool) 
             reason = "reentrant admission uses the owner-local arena API's required Arc member identity"
         )]
         fn on_arena_accept(&self, pointer: PointerId) {
-            assert!(
-                self.base.primary_pointer().is_none(),
-                "old contact withdrawn before sweep callback"
-            );
-            assert!(
-                self.base.tracked_entry().is_none(),
-                "old entry withdrawn before sweep callback"
+            assert_eq!(
+                self.base.primary_pointer(),
+                Some(pointer),
+                "the retiring contact stays visible to its sweep resolution"
             );
             let next = Arc::new(NextContact(self.next_accepts.clone()));
             // Reuse the platform pointer ID while the old exact-generation
@@ -1222,4 +1288,142 @@ fn assert_stop_tracking_preserves_reentrant_contact(fail_after_admission: bool) 
     assert_eq!(next_accepts.get(), 1, "accepted tail remains deliverable");
     assert!(arena.is_empty());
     fresh_drag_completes_after_retirement();
+}
+
+/// A batch snapshots its callbacks before running any of them. When one of
+/// them closes its presentation, the rest of the batch from that presentation
+/// must not run.
+#[test]
+fn reentrant_presentation_close_stops_snapshotted_callbacks() {
+    let cases: &[(&str, fn())] = &[
+        (
+            "mouse tracker enter batch",
+            enter_batch_stops_after_owner_close,
+        ),
+        (
+            "mouse tracker hover batch",
+            hover_batch_stops_after_owner_close,
+        ),
+        (
+            "interleaved hover dispatch",
+            interleaved_hover_stops_after_owner_close,
+        ),
+    ];
+    let mut failed = Vec::new();
+    for &(name, case) in cases {
+        if let Err(payload) = std::panic::catch_unwind(case) {
+            failed.push(name);
+            flui_foundation::panic::retain_opaque_payload(payload);
+        }
+    }
+    assert!(failed.is_empty(), "failed cases: {failed:?}");
+}
+
+/// Two hover-sensitive regions of one presentation whose callbacks each count
+/// a call and close the presentation's dispatch owner.
+struct ClosingRegions {
+    lane: InteractionLane,
+    calls: std::rc::Rc<std::cell::Cell<usize>>,
+    result: flui_interaction::HitTestResult,
+}
+
+fn closing_regions(on_enter: bool) -> ClosingRegions {
+    use flui_interaction::__runtime::{CloseMode, close_dispatch, presentation_dispatch};
+    use flui_interaction::routing::{MouseRegionCallbacks, MouseTrackerAnnotation};
+    use std::rc::Rc;
+
+    let lane = InteractionLane::try_new().expect("lane");
+    let owner = presentation_dispatch(&lane.dispatch_handle());
+    let calls = Rc::new(std::cell::Cell::new(0));
+    let mut result = flui_interaction::HitTestResult::new();
+    lane.enter(|| {
+        for region in 1..=2_usize {
+            let counted = Rc::clone(&calls);
+            let closing = owner.clone();
+            let callback: flui_interaction::routing::MouseEnterCallback = Rc::new(move |_, _| {
+                counted.set(counted.get() + 1);
+                close_dispatch(&closing, CloseMode::Ordinary);
+            });
+            let callbacks = if on_enter {
+                MouseRegionCallbacks {
+                    on_enter: Some(callback),
+                    ..MouseRegionCallbacks::default()
+                }
+            } else {
+                MouseRegionCallbacks {
+                    on_hover: Some(callback),
+                    ..MouseRegionCallbacks::default()
+                }
+            };
+            let target = owner.register_mouse_region(callbacks).expect("region");
+            result.add(
+                HitTestEntry::new(RenderId::new(region))
+                    .mouse_annotation(MouseTrackerAnnotation::new(RenderId::new(region), target)),
+            );
+        }
+    });
+    ClosingRegions {
+        lane,
+        calls,
+        result,
+    }
+}
+
+/// A buttonless mouse move: the only shape that carries hover semantics.
+fn hover_move() -> flui_interaction::events::PointerEvent {
+    use flui_foundation::geometry::Offset;
+    use flui_interaction::events::{PointerButtons, PointerEvent, PointerType, make_move_event};
+
+    let mut event = make_move_event(Offset::ZERO, PointerType::Mouse);
+    if let PointerEvent::Move(update) = &mut event {
+        update.current.buttons = PointerButtons::new();
+    }
+    event
+}
+
+fn enter_batch_stops_after_owner_close() {
+    use flui_interaction::routing::{MouseTracker, PointerMotionKind};
+
+    let regions = closing_regions(true);
+    let tracker = MouseTracker::new();
+    regions.lane.enter(|| {
+        tracker.update_with_motion(&hover_move(), PointerMotionKind::Hover, &regions.result);
+    });
+    assert_eq!(
+        regions.calls.get(),
+        1,
+        "the closed owner's later region is skipped"
+    );
+}
+
+fn hover_batch_stops_after_owner_close() {
+    use flui_interaction::routing::MouseTracker;
+
+    let regions = closing_regions(false);
+    let tracker = MouseTracker::new();
+    regions.lane.enter(|| {
+        let panic = tracker.dispatch_hover(&hover_move(), &regions.result);
+        assert!(panic.is_none());
+    });
+    assert_eq!(
+        regions.calls.get(),
+        1,
+        "the closed owner's later region is skipped"
+    );
+}
+
+fn interleaved_hover_stops_after_owner_close() {
+    use flui_interaction::GestureBinding;
+
+    let regions = closing_regions(false);
+    let binding = GestureBinding::new();
+    regions.lane.enter(|| {
+        binding.handle_pointer_event(&hover_move(), |_| regions.result.clone());
+        binding.flush_pending_moves();
+    });
+    assert_eq!(
+        regions.calls.get(),
+        1,
+        "the closed owner's later region is skipped"
+    );
 }
