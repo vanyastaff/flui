@@ -714,10 +714,7 @@ impl ViewState<Scrollable> for ScrollableState {
                     // decline here: a chord-gated zoom consumer sits INSIDE
                     // the scrollable, and the leaf-first claim walk asks it
                     // first.
-                    let axis_delta = match scroll_direction {
-                        Axis::Vertical => data.delta.dy,
-                        Axis::Horizontal => data.delta.dx,
-                    };
+                    let axis_delta = wheel_axis_delta(scroll_direction, data);
                     // Platform deltas arrive already normalized —
                     // positive = content scrolls down (each backend converts its native axes
                     // and units at its own boundary). Only the reversed-axis
@@ -829,5 +826,23 @@ impl ViewState<Scrollable> for ScrollableState {
         // same controller is later re-attached to a new `Scrollable`.
         self.detach_stop_hook();
         self.fling_controller.dispose();
+    }
+}
+
+/// The part of a wheel tick that moves a scrollable along `axis`.
+///
+/// A plain mouse wheel only reports vertical ticks. With Shift held, a tick
+/// that carries no horizontal component scrolls horizontally instead, the
+/// desktop convention on Windows and Linux; a vertical scrollable then takes
+/// nothing from it, so an enclosing horizontal one can. A device that already
+/// reports horizontal motion (a trackpad, a tilt wheel, or macOS, which swaps
+/// the axes itself) is passed through unchanged.
+fn wheel_axis_delta(axis: Axis, data: &ScrollEventData) -> f64 {
+    let shifted = data.modifiers.shift() && data.delta.dx == 0.0;
+    match (axis, shifted) {
+        (Axis::Vertical, false) => data.delta.dy,
+        (Axis::Vertical, true) => 0.0,
+        (Axis::Horizontal, false) => data.delta.dx,
+        (Axis::Horizontal, true) => data.delta.dy,
     }
 }

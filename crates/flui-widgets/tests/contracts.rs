@@ -246,6 +246,10 @@ fn scroll_physics_and_activity() {
             ("scroll::a_refresh_controller_swap_retires_the_old_fling_and_drives_the_new_position", crate::scroll::a_refresh_controller_swap_retires_the_old_fling_and_drives_the_new_position as fn()),
             ("scroll::rebuilding_refresh_content_with_the_same_position_preserves_its_fling", crate::scroll::rebuilding_refresh_content_with_the_same_position_preserves_its_fling as fn()),
             (
+                "scroll::shift_wheel_scrolls_the_horizontal_axis",
+                crate::scroll::shift_wheel_scrolls_the_horizontal_axis as fn(),
+            ),
+            (
                 "scroll::a_wheel_tick_over_nested_scrollables_moves_only_the_inner",
                 crate::scroll::a_wheel_tick_over_nested_scrollables_moves_only_the_inner as fn(),
             ),
