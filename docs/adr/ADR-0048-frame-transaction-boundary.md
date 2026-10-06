@@ -245,10 +245,10 @@ boundary.
 This guarantee covers FLUI-owned app tracing, not arbitrary custom subscriber
 formatting and not lower-level `flui-view` recovery traces. It is not a global
 sanitizer. Desktop, web, and Android bootstrap apply both handler and detail
-policy to their initial realm. A `SeparateRealms` secondary carries its detail
+policy to their initial realm. A `WindowPolicy::Isolated` secondary carries its detail
 policy through both the Ready and Pending completion paths; its handler remains
 unset while secondary windows have no production content/render path. A
-`SharedRealm` secondary inherits the existing realm's detail policy and handler;
+`WindowPolicy::Shared` secondary inherits the existing realm's detail policy and handler;
 the supplied secondary config does not override either for existing siblings.
 
 ### Retry and last-good retention
@@ -393,10 +393,10 @@ benchmarks showed no statistically supported regression above 5%.
   constraints set, one sink, and only the last produced scene. Secondary
   windows remain contentless until #559 adds per-presentation constraints,
   sinks, and submit routing.
-- **Secondary handler wiring:** a new `SeparateRealms` realm receives the
+- **Secondary handler wiring:** a new `WindowPolicy::Isolated` realm receives the
   secondary config's detail policy through Ready and Pending completion but no
   failure handler. That handler decision is blocked on the same #559
-  production secondary rendering contract. `SharedRealm` already uses the
+  production secondary rendering contract. `WindowPolicy::Shared` already uses the
   existing realm's handler and intentionally refuses a per-window override.
 
 ## Consequences

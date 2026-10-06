@@ -440,17 +440,17 @@ fn install_realm_a_through_a_real_owner_platform() -> (RealmDispatcher, OwnerHos
     )
 }
 
-/// `WindowPolicy::SeparateRealms`, driven through the REAL embedder seam
+/// `WindowPolicy::Isolated`, driven through the REAL embedder seam
 /// (`open_secondary_window`) rather than a direct
 /// `install_realm_alongside` call — proves the POLICY-driven fork itself
 /// routes to the share-nothing path, not just the underlying primitive.
 /// The oracle: a pointer dispatched only to realm A must leave realm B's
 /// gesture arena completely untouched.
-fn two_realms_via_separate_windows_policy_share_nothing() {
+fn two_realms_via_isolated_policy_share_nothing() {
     let (dispatcher_a, _clear_guard) = install_realm_a_through_a_real_owner_platform();
 
-    open_secondary_window(AppConfig::default(), WindowPolicy::SeparateRealms)
-        .expect("WindowPolicy::SeparateRealms must install a second realm cleanly");
+    open_secondary_window(AppConfig::default(), WindowPolicy::Isolated)
+        .expect("WindowPolicy::Isolated must install a second realm cleanly");
 
     let dispatcher_b = APP_RUNTIME
         .with(|slot| {
@@ -464,11 +464,13 @@ fn two_realms_via_separate_windows_policy_share_nothing() {
                 address: slot_b.address,
             })
         })
-        .expect("open_secondary_window(SeparateRealms) must install a second, distinct realm");
+        .expect(
+            "open_secondary_window(WindowPolicy::Isolated) must install a second, distinct realm",
+        );
 
     assert_ne!(
         dispatcher_a.address.realm_id, dispatcher_b.address.realm_id,
-        "WindowPolicy::SeparateRealms must install a genuinely distinct realm, never \
+        "WindowPolicy::Isolated must install a genuinely distinct realm, never \
          displace or merge into realm A"
     );
 
@@ -497,7 +499,7 @@ fn two_realms_via_separate_windows_policy_share_nothing() {
                 realm.gestures().active_pointer_count(),
                 0,
                 "the policy-driven secondary realm must share no gesture-arena state with \
-                 realm A -- open_secondary_window(SeparateRealms) must route through \
+                 realm A -- open_secondary_window(WindowPolicy::Isolated) must route through \
                  install_realm_alongside, never a path that merges state with a sibling"
             );
         })),
@@ -508,7 +510,7 @@ fn two_realms_via_separate_windows_policy_share_nothing() {
 }
 
 /// Every realm a runner builds shapes over the app's one font collection
-/// (ADR-0092 §2): two `SeparateRealms` windows go through
+/// (ADR-0092 §2): two `WindowPolicy::Isolated` windows go through
 /// `host::build_runtime_realm`, the one call every runner site (desktop, web,
 /// Android, iOS, secondary windows) builds its realm with, and each realm's
 /// `TextContext` must be built over `runtime_font_collection()`. Realm A comes
@@ -517,12 +519,12 @@ fn two_realms_via_separate_windows_policy_share_nothing() {
 /// fed from the host again would be one), or if the runtime resolves a new one
 /// per call. `the_runtime_launches_one_host_feed_for_every_realm` pins that
 /// the runtime's collection is the one its host feed feeds.
-fn separate_realm_windows_shape_over_the_runtimes_font_collection() {
+fn isolated_windows_shape_over_the_runtimes_font_collection() {
     let (dispatcher_a, _clear_guard) = install_realm_a_through_a_real_owner_platform();
 
     for _ in 0..2 {
-        open_secondary_window(AppConfig::default(), WindowPolicy::SeparateRealms)
-            .expect("WindowPolicy::SeparateRealms must install a second realm cleanly");
+        open_secondary_window(AppConfig::default(), WindowPolicy::Isolated)
+            .expect("WindowPolicy::Isolated must install a second realm cleanly");
     }
 
     let secondaries: Vec<RealmDispatcher> = APP_RUNTIME.with(|slot| {
@@ -541,7 +543,7 @@ fn separate_realm_windows_shape_over_the_runtimes_font_collection() {
     assert_eq!(
         secondaries.len(),
         2,
-        "two SeparateRealms windows, two realms"
+        "two WindowPolicy::Isolated windows, two realms"
     );
 
     let app_fonts = super::super::host::runtime_font_collection();
@@ -564,7 +566,7 @@ fn separate_realm_windows_shape_over_the_runtimes_font_collection() {
     teardown_platform_realm();
 }
 
-/// `WindowPolicy::SharedRealm`, driven through the REAL embedder seam
+/// `WindowPolicy::Shared`, driven through the REAL embedder seam
 /// (`open_secondary_window`) — proves this really is forest-membership
 /// routing (a second PRESENTATION of the SAME realm), not a second realm
 /// in disguise: the hosted-realm count must stay at one, while the
@@ -586,9 +588,8 @@ fn one_realm_two_windows_policy_routes_by_presentation() {
     assert_eq!(realm_count_before, 1);
     assert_eq!(presentation_count_before, 1);
 
-    open_secondary_window(AppConfig::default(), WindowPolicy::SharedRealm).expect(
-        "WindowPolicy::SharedRealm must install a second presentation into realm A cleanly",
-    );
+    open_secondary_window(AppConfig::default(), WindowPolicy::Shared)
+        .expect("WindowPolicy::Shared must install a second presentation into realm A cleanly");
 
     let (realm_count_after, presentation_count_after) = APP_RUNTIME.with(|slot| {
         let state = slot.borrow();
@@ -597,18 +598,18 @@ fn one_realm_two_windows_policy_routes_by_presentation() {
             .realms
             .get(&dispatcher_a.address.realm_id)
             .and_then(|slot| slot.realm.as_ref())
-            .expect("realm A is still resident -- SharedRealm must not have replaced it")
+            .expect("realm A is still resident -- WindowPolicy::Shared must not have replaced it")
             .presentation_count();
         (realm_count, presentation_count)
     });
     assert_eq!(
         realm_count_after, realm_count_before,
-        "WindowPolicy::SharedRealm must NOT install a second realm -- it routes into the \
+        "WindowPolicy::Shared must NOT install a second realm -- it routes into the \
          existing one via a second presentation"
     );
     assert_eq!(
         presentation_count_after, 2,
-        "WindowPolicy::SharedRealm must install a genuine second presentation into realm \
+        "WindowPolicy::Shared must install a genuine second presentation into realm \
          A's forest -- real forest-membership routing, not a second realm in disguise"
     );
 
@@ -1092,8 +1093,8 @@ fn realm_dispatch_matrix() {
                 reentrant_owner_turns_preserve_global_fifo_across_realms as fn(),
             ),
             (
-                "two_realms_via_separate_windows_policy_share_nothing",
-                two_realms_via_separate_windows_policy_share_nothing as fn(),
+                "two_realms_via_isolated_policy_share_nothing",
+                two_realms_via_isolated_policy_share_nothing as fn(),
             ),
             (
                 "one_realm_two_windows_policy_routes_by_presentation",
@@ -1109,8 +1110,8 @@ fn realm_dispatch_matrix() {
                     as fn(),
             ),
             (
-                "separate_realm_windows_shape_over_the_runtimes_font_collection",
-                separate_realm_windows_shape_over_the_runtimes_font_collection as fn(),
+                "isolated_windows_shape_over_the_runtimes_font_collection",
+                isolated_windows_shape_over_the_runtimes_font_collection as fn(),
             ),
             (
                 "a_registration_notifies_every_realm_window",

@@ -139,7 +139,9 @@ Consumer-проверка — внешний крейт только на `flui`
   перечислять каждое вхождение `Send`/`Sync` в ней (supertrait, alias, bound параметра,
   поле публичного типа; по rustdoc JSON) и сверять его с таблицей классификации
   (flip/keep с причиной). Gate падает на вхождение, которого нет в таблице, и на возвращённый
-  flip. Allowlist keep только сокращается. Проверка: `cargo xtask` gate в `checks`.
+  flip. Allowlist keep только сокращается. Проверка: ledger внутри `cargo xtask doc-strict`
+  (уже шаг job `doc` в CI; новой правки workflow не нужно), его `--self-test` — в
+  `cargo test -p xtask`, то есть в `checks`; дешёвый скан `unsafe impl Send/Sync` — в `checks`.
   Новый контракт.
 - **R4.** КОГДА тип по замыслу пересекает поток (`SignalSender<T>`, `RebuildHandle`,
   `IoFuture`, wake-handle планировщика, platform hooks), СИСТЕМА ДОЛЖНА сохранять его

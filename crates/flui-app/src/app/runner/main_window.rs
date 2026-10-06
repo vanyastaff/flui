@@ -950,7 +950,7 @@ mod tests {
     /// a realm built afterwards holds it in its build owner, which every
     /// `LifecycleContext::storage` under it reads. Driven through
     /// `run_with_platform` itself, so the host's storage comes from the
-    /// runner; the realm is a `SeparateRealms` window opened from `on_ready`,
+    /// runner; the realm is an `Isolated` window opened from `on_ready`,
     /// which reaches `host::build_runtime_realm` as every runner site does,
     /// without a GPU.
     #[cfg(feature = "persist")]
@@ -973,9 +973,9 @@ mod tests {
         .on_ready(move |_| {
             super::super::secondary_window::open_secondary_window(
                 AppConfig::default(),
-                crate::app::runtime::WindowPolicy::SeparateRealms,
+                crate::app::runtime::WindowPolicy::Isolated,
             )
-            .expect("WindowPolicy::SeparateRealms installs a realm");
+            .expect("WindowPolicy::Isolated installs a realm");
             seen.set(APP_RUNTIME.with(|slot| {
                 let runtime = slot.borrow();
                 runtime

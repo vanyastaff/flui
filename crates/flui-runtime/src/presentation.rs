@@ -241,7 +241,7 @@ pub struct PresentationState {
     /// reliably says "closed". The pipeline's own allocation does not —
     /// `LifecycleContext::pipeline_owner()` hands out a strong `PipelineCell`, so
     /// a widget that stores one keeps the tree alive past the close — and
-    /// under `SharedRealm` the realm outlives any single presentation too.
+    /// under `WindowPolicy::Shared` the realm outlives any single presentation too.
     alive: RefCell<Option<Rc<()>>>,
     window: Weak<dyn PlatformWindow>,
     /// The window's accessibility bridge, if its backend has one. `Weak`

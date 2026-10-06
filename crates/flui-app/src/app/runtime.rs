@@ -391,40 +391,29 @@ pub enum ExitPolicy {
     ExplicitQuit,
 }
 
-/// Governs what a SECOND top-level window becomes, relative to the realm(s)
-/// already hosted on this thread — the embedder-facing knob issue #555 adds
-/// alongside `ExitPolicy`. Consulted only at
-/// [`super::runner::open_secondary_window`], the install-time seam: once a
-/// window is opened under one policy, nothing about its tree, its
-/// `BuildContext`, or any widget/state layer ever names this type again.
+/// What a second top-level window shares with the windows already open on
+/// this thread. Chosen when the window opens
+/// ([`super::runner::open_secondary_window`]); nothing in its widget tree or
+/// its `BuildContext` names the policy afterwards.
 ///
-/// This is not behavior-neutral — the choice flips whether a `GlobalKey`
-/// collision between the primary window's tree and the second window's tree
-/// is even POSSIBLE:
+/// FLUI calls the unit a window belongs to a *realm*: its own widget state,
+/// `GlobalKey` scope and frame scheduler.
 ///
-/// - [`WindowPolicy::SeparateRealms`] (the default): the new window gets its
-///   own `UiRealm`, its own `GlobalKeyScope`, its own
-///   `UpdateScheduler`. The same `GlobalKey` mounted in both windows' trees is
-///   fine — N×1, N independent uniqueness domains — because a `UiRealm`'s
-///   scope is exactly as leak-proof as any two independently-run
-///   applications: nothing links them but the injected
-///   `SharedEngineServices`.
-/// - [`WindowPolicy::SharedRealm`]: the new window becomes a second
-///   `PresentationState` inside the FIRST realm hosted on this thread —
-///   1×N, one `GlobalKeyScope`. The same `GlobalKey` mounted in both
-///   windows' trees is the realm's ordinary cross-tree duplicate: the
-///   second mount fails eagerly (ADR-0043's ruling — ADR-0043's
-///   `GlobalKeyScope` protocol section documents the claim-at-mount /
-///   release-at-unmount lifetime this collision is checked against). Both
-///   windows also then share one `UpdateScheduler` and one async driver, so a
-///   slow frame in either window can delay the other's next pump (ADR-0043
-///   risk 5) — this policy trades isolation for the cases that genuinely
-///   want a single logical session split across two presentations (e.g. a
-///   detached inspector panel).
+/// The choice decides whether the two windows can disturb each other:
 ///
-/// `#[non_exhaustive]`: the same `AttachError`/`ExitPolicy` precedent — a
-/// future variant (e.g. "join an explicitly-named existing realm" once
-/// `RealmId` grows a public handle) must not break an exhaustive match.
+/// - [`WindowPolicy::Isolated`] (the default): the new window gets its own
+///   state, keys and scheduler, as if it were a separate application that
+///   shares only the GPU and font services. The same `GlobalKey` can be
+///   mounted in both windows, and a slow frame in one never delays the other.
+/// - [`WindowPolicy::Shared`]: the new window is a second view of the same
+///   session — for example a detached inspector panel. Both windows share one
+///   `GlobalKey` scope, so mounting the same key in both fails at the second
+///   mount (ADR-0043), and one scheduler and async driver, so a slow frame in
+///   either window can delay the other's next frame.
+///
+/// `#[non_exhaustive]`: a future policy (joining a named session, say) must
+/// not break an exhaustive match.
+#[doc(alias = "realm")]
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 // iOS is the only target where this is genuinely dead: its public re-export
@@ -438,16 +427,17 @@ pub enum ExitPolicy {
     )
 )]
 pub enum WindowPolicy {
-    /// The new window becomes its own realm — independent `GlobalKeyScope`,
-    /// independent `UpdateScheduler`, sharing nothing but injected
-    /// `SharedEngineServices`. The default: a stalled/slow window can never
-    /// delay a sibling's frame pump.
+    /// The new window gets its own state, `GlobalKey` scope and scheduler,
+    /// sharing only the GPU and font services. The default: a slow window can
+    /// never delay another's frames.
+    #[doc(alias = "SeparateRealms")]
     #[default]
-    SeparateRealms,
-    /// The new window becomes a second presentation inside the first realm
-    /// already hosted on this thread — one `GlobalKeyScope`, one
-    /// `UpdateScheduler` shared between both windows.
-    SharedRealm,
+    Isolated,
+    /// The new window is a second window of the same session: it shares
+    /// widget state, the `GlobalKey` scope and the scheduler with the first
+    /// window opened on this thread.
+    #[doc(alias = "SharedRealm")]
+    Shared,
 }
 
 /// Cross-thread wake capability for the platform event loop.
@@ -1660,7 +1650,7 @@ impl AppRuntime {
     /// this slot was the one reference that survived `Platform::run` and
     /// forced the window's native teardown to run after the loop (and, on
     /// Wayland, after the connection state it marshals on) was gone. Called
-    /// from the window's own `on_close`, so a `SharedRealm` sibling closing
+    /// from the window's own `on_close`, so a `WindowPolicy::Shared` sibling closing
     /// some *other* window leaves the slot untouched. Returns the removed
     /// window for the caller to drop outside any TLS borrow.
     #[cfg(all(

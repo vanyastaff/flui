@@ -2,7 +2,7 @@
 //! (`UiRealm::pump`, ADR-0083 §1) on a manual clock, a window double and a
 //! sink that keeps what the frame composited.
 //!
-//! [`HeadlessRealm`] is to a realm what a runner is on screen: it owns the
+//! [`HeadlessHost`] is to a realm what a runner is on screen: it owns the
 //! window the realm presents into, the sink a frame is submitted through and
 //! the clock the frame reads, and it drives frames and input through the
 //! realm's own entry points. Nothing here re-implements a phase of the frame:
@@ -11,16 +11,16 @@
 //!
 //! One [`ManualClock`] drives the whole realm: the realm reads it as its
 //! [`ClockSource`] (frame-time origin, gesture-arena deadlines, the
-//! presentation's `FrameClock`), and [`HeadlessRealm::pump`] hands a clone to
+//! presentation's `FrameClock`), and [`HeadlessHost::pump`] hands a clone to
 //! the pump as the frame's timestamp. A test advances time only through
-//! [`HeadlessRealm::pump`] or [`HeadlessRealm::clock`].
+//! [`HeadlessHost::pump`] or [`HeadlessHost::clock`].
 //!
 //! # Failures
 //!
 //! A realm contains a panic that escapes a frame segment, and a pipeline
 //! error, as a dropped frame (ADR-0048) and reports it to its frame-failure
 //! handler; on screen the process survives. Under test that containment would
-//! hide the failure, so [`HeadlessRealm::pump`] raises the first dropped-frame
+//! hide the failure, so [`HeadlessHost::pump`] raises the first dropped-frame
 //! report of the pump as a panic once the pump has returned, carrying the
 //! report's text (the realm retains it verbatim here). A later panic that
 //! unwinds out of the same pump does not replace it: the first failure stays
@@ -56,7 +56,7 @@ use flui_semantics::platform::{
 use flui_view::dev_agent::DevAgentHook;
 use parking_lot::Mutex;
 
-/// The window a [`HeadlessRealm`] presents into: window 1 at scale factor 1,
+/// The window a [`HeadlessHost`] presents into: window 1 at scale factor 1,
 /// focused and visible, with the logical size the realm was built at.
 ///
 /// It records what the realm asks of a window that a test asserts on: the
@@ -190,7 +190,7 @@ impl PlatformTextInput for RecordingTextInput {
     }
 }
 
-/// The accessibility bridge of a [`HeadlessRealm`]'s window: assistive
+/// The accessibility bridge of a [`HeadlessHost`]'s window: assistive
 /// technology attaches when a test asks, published trees are dropped (the
 /// harness reads the assembled tree from the pipeline instead), and the
 /// action listener the realm registers is handed to a test that plays the
@@ -231,7 +231,7 @@ impl PlatformAccessibility for HeadlessAccessibility {
     }
 }
 
-/// The frame sink of a [`HeadlessRealm`]: a surface of fixed size that
+/// The frame sink of a [`HeadlessHost`]: a surface of fixed size that
 /// presents every scene and keeps the last one.
 #[derive(Debug)]
 pub struct HeadlessSink {
@@ -280,7 +280,7 @@ impl FrameSink for HeadlessSink {
 /// A development-agent hook attached the way a runner's event loop attaches
 /// it: once, when this value is built, and detached when it is dropped.
 ///
-/// Every [`HeadlessRealm`] built [`with`](HeadlessRealm::with_dev_agent) it
+/// Every [`HeadlessHost`] built [`with`](HeadlessHost::with_dev_agent) it
 /// hands the hook its window, as a runner hands it each window it opens, so
 /// one hook can serve several realms, and a realm dropped before the hook is
 /// a window that closed while the tool kept running. Containment is the
@@ -317,7 +317,8 @@ impl std::fmt::Debug for HeadlessDevAgent {
 
 /// A [`UiRealm`] hosted headlessly, driven frame by frame on a manual clock.
 /// See the [module docs](self).
-pub struct HeadlessRealm {
+#[doc(alias = "HeadlessRealm")]
+pub struct HeadlessHost {
     realm: UiRealm,
     clock: ManualClock,
     sink: HeadlessSink,
@@ -330,9 +331,9 @@ pub struct HeadlessRealm {
     failures: Arc<Mutex<Vec<String>>>,
 }
 
-impl std::fmt::Debug for HeadlessRealm {
+impl std::fmt::Debug for HeadlessHost {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("HeadlessRealm")
+        f.debug_struct("HeadlessHost")
             .field("realm", &self.realm)
             .field("window", &self.window)
             .field("sink", &self.sink)
@@ -340,7 +341,7 @@ impl std::fmt::Debug for HeadlessRealm {
     }
 }
 
-impl HeadlessRealm {
+impl HeadlessHost {
     /// A realm over `window`, whose surface has the window's size.
     ///
     /// # Panics
@@ -648,7 +649,7 @@ mod tests {
     use std::panic::{AssertUnwindSafe, catch_unwind};
     use std::time::Duration;
 
-    use super::{HeadlessRealm, HeadlessWindow};
+    use super::{HeadlessHost, HeadlessWindow};
 
     /// A dropped-frame report the realm made between pumps (from input
     /// delivery, say) is raised by the next pump, before it frames or moves
@@ -658,7 +659,7 @@ mod tests {
     /// report is erased unseen and the pump returns normally.
     #[test]
     fn a_report_made_between_pumps_is_raised_by_the_next_pump() {
-        let mut realm = HeadlessRealm::new(HeadlessWindow::new(40, 24));
+        let mut realm = HeadlessHost::new(HeadlessWindow::new(40, 24));
         realm
             .failures
             .lock()
