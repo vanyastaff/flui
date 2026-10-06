@@ -13,6 +13,7 @@
 //! tall, starting at the origin, so a test can compute every rect and point
 //! by hand.
 
+use std::any::Any;
 use std::cell::{Cell, RefCell};
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::rc::Rc;
@@ -171,13 +172,16 @@ impl InMemoryTextStore {
             let listener = self.owner_listener.borrow().clone();
             if let Some(listener) = listener {
                 failure = catch_unwind(AssertUnwindSafe(|| listener())).err();
+                // A listener that removed or replaced itself left this clone
+                // its last owner: its captures are destroyed here, inside
+                // the same containment, after the listener's own failure.
+                if let Err(payload) = catch_unwind(AssertUnwindSafe(move || drop(listener))) {
+                    keep_first(&mut failure, payload);
+                }
             }
         }
         if let Err(payload) = catch_unwind(AssertUnwindSafe(|| self.flush_notifications())) {
-            match failure {
-                None => failure = Some(payload),
-                Some(_) => flui_foundation::panic::retain_opaque_payload(payload),
-            }
+            keep_first(&mut failure, payload);
         }
         if let Some(payload) = failure {
             resume_unwind(payload);
@@ -281,6 +285,16 @@ impl TextStore for InMemoryTextStore {
 
     fn set_observer(&self, observer: Option<Rc<dyn TextStoreObserver>>) {
         *self.observer.borrow_mut() = observer;
+    }
+}
+
+/// Keep the first of several caught panics; a later one is retained, never
+/// dropped (ADR-0127).
+fn keep_first(first: &mut Option<Box<dyn Any + Send>>, payload: Box<dyn Any + Send>) {
+    if first.is_none() {
+        *first = Some(payload);
+    } else {
+        flui_foundation::panic::retain_opaque_payload(payload);
     }
 }
 
