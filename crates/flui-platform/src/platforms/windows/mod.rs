@@ -17,6 +17,17 @@ mod clipboard;
 mod display;
 mod events;
 mod platform;
+// Not yet attached to `WindowContext`: the window wiring and the host
+// contract it answers to land together once their ADR is accepted. Until
+// then only the opt-in probe drives it.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "the window wiring lands with the text-store host contract"
+    )
+)]
+mod text_services;
 mod util;
 mod window;
 mod window_ext;

@@ -108,7 +108,16 @@ windows = { workspace = true, features = [
     "Win32_System_Memory",
     "Win32_System_Ole",
     "Win32_System_Threading",
+    # TSF: the thread manager, document managers and the `ITextStoreACP`
+    # text store (ADR-0090 §3). `Win32_UI_Input_Ime` (IMM32) stays off: the
+    # text services are the only IME path. `Variant` is required by the
+    # `ITextStoreACP` bindings.
+    "Win32_UI_TextServices",
+    "Win32_System_Variant",
 ] }
+# `#[implement]` (the COM objects the text services hand TSF) expands to
+# `::windows_core` paths.
+windows-core = { workspace = true }
 
 # macOS platform
 [target.'cfg(target_os = "macos")'.dependencies]
