@@ -194,7 +194,7 @@ fn in_memory_listener_replaced_then_panicking() {
 // EditableText: on_changed, the controller's listeners and the observer
 // ----------------------------------------------------------------------------
 
-fn focused(view: EditableText, node: &Rc<FocusNode>) -> Harness {
+fn focused(view: impl flui_view::View, node: &Rc<FocusNode>) -> Harness {
     let mut harness = mount_with_ime(view);
     node.request_focus();
     harness.tick();
@@ -922,6 +922,10 @@ const ROWS: &[(&str, fn())] = &[
     (
         "editable: an update whose observer and focus listener panic",
         editable_update_whose_observer_and_focus_listener_panic,
+    ),
+    (
+        "editable: an update to a node attached elsewhere",
+        editable_update_to_a_node_attached_elsewhere,
     ),
     (
         "detach: a stale token whose diagnostic closes the owner and panics",
@@ -2216,6 +2220,57 @@ fn editable_update_whose_observer_and_focus_listener_panic() {
     harness.tick();
     let field = self::field(&harness);
     the_field_keeps_working(&mut harness, &field);
+}
+
+/// Two fields side by side, the first on `first`, the second on `second`.
+fn two_fields(
+    controllers: &(TextEditingController, TextEditingController),
+    first: &Rc<FocusNode>,
+    second: &Rc<FocusNode>,
+) -> impl flui_view::View {
+    flui_widgets::Column::new(flui_widgets::column![
+        EditableText::new(controllers.0.clone(), Rc::clone(first)),
+        EditableText::new(controllers.1.clone(), Rc::clone(second)),
+    ])
+}
+
+/// One rebuild hands the focused first field the second field's node,
+/// which `replace_node` rejects as already attached. The rejection is the
+/// update's failure, and the frame recovers by retiring the first field;
+/// the second field keeps its node where it was, attached through the
+/// handle it holds.
+fn editable_update_to_a_node_attached_elsewhere() {
+    let controllers = (TextEditingController::new(), TextEditingController::new());
+    let (first, second) = (
+        FocusNode::with_debug_label("first field"),
+        FocusNode::with_debug_label("second field"),
+    );
+    let mut harness = focused(two_fields(&controllers, &first, &second), &first);
+    let parent = second
+        .parent()
+        .expect("the second field's node is attached");
+    // The first field asks for the second field's node.
+    harness.swap_root(two_fields(&controllers, &second, &second));
+    assert!(
+        !first.is_attached(),
+        "the rejection was the update's failure: the first field was retired"
+    );
+    assert!(
+        second.is_attached(),
+        "the second field's node stays attached"
+    );
+    assert!(
+        second
+            .parent()
+            .is_some_and(|held| Rc::ptr_eq(&held, &parent)),
+        "under its own parent"
+    );
+    assert_eq!(raised(|| harness.tick()), None, "the next frame");
+    harness.swap_root(flui_widgets::SizedBox::new(1.0, 1.0));
+    assert!(
+        !second.is_attached(),
+        "the second field's handle still owned its node, so its dispose detached it"
+    );
 }
 
 // ----------------------------------------------------------------------------
