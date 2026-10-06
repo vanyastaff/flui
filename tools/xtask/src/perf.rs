@@ -50,7 +50,7 @@ pub(crate) struct PerfArgs {
     /// Compare planted fixtures in memory and fail if the comparison misses
     /// one; builds nothing.
     #[arg(long)]
-    self_test: bool,
+    pub(crate) self_test: bool,
 }
 
 /// How a run treats its findings.

@@ -91,6 +91,9 @@ pub(crate) struct RealmCapabilities<'a> {
     /// The realm's platform clipboard, handed to widgets through
     /// `LifecycleContext::clipboard_handle`.
     pub(crate) clipboard: Arc<dyn Clipboard>,
+    /// The realm's byte storage, if it has one, handed to widgets through
+    /// `LifecycleContext::storage`.
+    pub(crate) storage: Option<Arc<dyn flui_platform_api::Storage>>,
     /// Where the realm reads time: this presentation's gesture arena and
     /// [`FrameClock`] read the same source as the realm's frame clock.
     pub(crate) clock: &'a ClockSource,
@@ -625,6 +628,9 @@ impl PresentationState {
             owner.set_clipboard_handle(flui_interaction::ClipboardHandle::new(
                 capabilities.clipboard,
             ));
+            if let Some(storage) = capabilities.storage {
+                owner.set_storage(storage);
+            }
             // Paired here, the one place holding both halves: the realm's
             // dispatch ticket (identity) and THIS presentation's pipeline
             // (the tree). A realm may host several presentations, each with

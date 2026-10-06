@@ -21,7 +21,23 @@
 mod android_exit_path;
 #[path = "contract.rs"]
 mod contract;
+#[path = "file_store.rs"]
+mod file_store;
 #[path = "text_input_mapping.rs"]
 mod text_input_mapping;
 #[path = "window_callback_unwind.rs"]
 mod window_callback_unwind;
+
+/// Runs every case even after one fails, then panics listing the failing case names.
+#[cfg_attr(
+    not(feature = "storage"),
+    expect(dead_code, reason = "only the storage table uses it")
+)]
+fn run_table(table: &str, cases: &[(&str, fn())]) {
+    let failed: Vec<&str> = cases
+        .iter()
+        .filter(|(_, case)| std::panic::catch_unwind(*case).is_err())
+        .map(|(name, _)| *name)
+        .collect();
+    assert!(failed.is_empty(), "{table}: failing cases: {failed:?}");
+}

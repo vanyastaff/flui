@@ -90,6 +90,7 @@ impl Cmd {
             .args(&self.args)
             .envs(self.env.iter().map(|(key, value)| (key, value)))
             .current_dir(repo_root());
+        crate::host_lock::mark_child(&mut command);
         command
     }
 
@@ -511,6 +512,35 @@ mod tests {
                 .steps(&[Cmd::cargo(["--no-such-flag-xtask"]).into()])
                 .is_ok()
         );
+    }
+
+    /// A command spawned while this process holds the run lock names that
+    /// lock file to the child, so a heavy xtask child does not wait for it.
+    #[test]
+    fn a_command_spawned_under_the_run_lock_is_marked() {
+        use crate::host_lock::{HeavyRunLock, Holder, LockSettings, TEST_GUARDS};
+
+        let _serial = TEST_GUARDS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("heavy.lock");
+        let holder = Holder {
+            command: "cargo xtask ci".to_owned(),
+            checkout: dir.path().to_path_buf(),
+        };
+        let guard = HeavyRunLock::acquire(&LockSettings::at(&path), &holder, &mut Vec::new());
+        let command = Cmd::cargo(["--version"]).command();
+        let marker = command
+            .get_envs()
+            .find(|(key, _)| *key == "FLUI_XTASK_LOCK_HELD")
+            .and_then(|(_, value)| value);
+        assert_eq!(
+            marker,
+            Some(path.as_os_str()),
+            "the child names the held lock"
+        );
+        drop(guard);
     }
 
     #[test]

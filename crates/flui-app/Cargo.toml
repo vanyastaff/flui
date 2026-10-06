@@ -55,6 +55,13 @@ web = []
 # use (tests, `A11yTree`) but no screen reader can see it.
 a11y = ["flui-platform/a11y"]
 
+# === Persistence ===
+# `AppConfig::with_storage_dir`: the per-user data directories behind
+# `LifecycleContext::storage`, written through `flui-platform`'s file store.
+# Off by default, so an application that keeps nothing links neither `dirs`
+# nor `tempfile`.
+persist = ["flui-platform/storage"]
+
 # === Debug Features ===
 # Honest note (verified 2026-08-04): also no-op selectors — zero
 # `feature = "debug-overlay"` / `feature = "performance-overlay"` references

@@ -657,6 +657,7 @@ where
     let _owner_host_clear_guard = OwnerHostClearGuard::arm();
     let result = platform.run(Box::new(move |owner| {
         install_owner_platform(owner)?;
+        APP_RUNTIME.with(|slot| slot.borrow_mut().install_host_storage(&config));
         // `?` converts `bootstrap_android`'s `anyhow::Error` into the
         // callback's opaque `BootstrapError` (anyhow's own `From` impl),
         // exactly as `run_desktop`'s closure does.

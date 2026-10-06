@@ -137,6 +137,8 @@ where
             local_post_frame_handle: owner.local_post_frame_handle.clone(),
             text_input_handle: owner.text_input_handle.clone(),
             clipboard_handle: owner.clipboard_handle.clone(),
+            storage: owner.storage.clone(),
+            flush_registry: owner.flush_registry.clone(),
             hit_test_handle: owner.hit_test_handle.clone(),
             pipeline_owner: core.pipeline_owner().cloned(),
             keep_alive: owner.keep_alive.clone(),
@@ -1271,6 +1273,9 @@ pub struct DependentEntry {
     /// unmount, never reset by a rebuild (a state that acquires a value in a
     /// lifecycle hook and does not re-read it in `build` stays subscribed).
     pub(crate) lifecycle_mask: crate::view::FieldSet,
+    /// When this dependent first registered with its provider, relative to
+    /// the provider's other dependents.
+    pub(crate) registered: u64,
 }
 
 impl DependentEntry {
@@ -1317,6 +1322,8 @@ pub struct InheritedBehavior<V: InheritedView> {
     /// for `BuildOwner::schedule_build_for(id, depth, reason)` so the rebuild
     /// heap orders dependents correctly without a separate tree walk.
     pub dependents: HashMap<ElementId, DependentEntry>,
+    /// The registration stamp the next new dependent receives.
+    next_registration: u64,
     /// Marker for view type.
     _phantom: PhantomData<V>,
 }
@@ -1329,8 +1336,28 @@ impl<V: InheritedView> InheritedBehavior<V> {
             data: view.data().clone(),
             view_cache: view.clone(),
             dependents: HashMap::new(),
+            next_registration: 0,
             _phantom: PhantomData,
         }
+    }
+
+    /// The entry for `element`, registering it behind every existing
+    /// dependent if it is new.
+    fn dependent_entry(&mut self, element: ElementId, depth: usize) -> &mut DependentEntry {
+        let next_registration = &mut self.next_registration;
+        let entry = self.dependents.entry(element).or_insert_with(|| {
+            let registered = *next_registration;
+            // Saturating: past 2^64 registrations the element id orders the tie.
+            *next_registration = registered.saturating_add(1);
+            DependentEntry {
+                depth,
+                mask: crate::view::FieldSet::NONE,
+                lifecycle_mask: crate::view::FieldSet::NONE,
+                registered,
+            }
+        });
+        entry.depth = depth;
+        entry
     }
 
     /// Get the provided data.
@@ -1349,13 +1376,7 @@ impl<V: InheritedView> InheritedBehavior<V> {
         depth: usize,
         mask: crate::view::FieldSet,
     ) {
-        let entry = self.dependents.entry(element).or_insert(DependentEntry {
-            depth,
-            mask: crate::view::FieldSet::NONE,
-            lifecycle_mask: crate::view::FieldSet::NONE,
-        });
-        entry.depth = depth;
-        entry.mask |= mask;
+        self.dependent_entry(element, depth).mask |= mask;
     }
 
     /// Register a dependent read made in a lifecycle hook: unions into the
@@ -1366,13 +1387,7 @@ impl<V: InheritedView> InheritedBehavior<V> {
         depth: usize,
         mask: crate::view::FieldSet,
     ) {
-        let entry = self.dependents.entry(element).or_insert(DependentEntry {
-            depth,
-            mask: crate::view::FieldSet::NONE,
-            lifecycle_mask: crate::view::FieldSet::NONE,
-        });
-        entry.depth = depth;
-        entry.lifecycle_mask |= mask;
+        self.dependent_entry(element, depth).lifecycle_mask |= mask;
     }
 
     /// Remove a dependent element.
@@ -1502,11 +1517,18 @@ where
                 "InheritedBehavior::on_view_updated notifying dependents of {} candidates",
                 self.dependents.len()
             );
-            for (&dep_id, entry) in &self.dependents {
-                if !entry.fields().intersects(changed) {
-                    continue;
-                }
-                let dep_depth = entry.depth;
+            // The map iterates in its hash order, which changes from map to
+            // map. Scheduling in registration order (the dependents' first
+            // build order) lets the drain rebuild same-depth dependents in
+            // the same order every time.
+            let mut notified: Vec<(u64, ElementId, usize)> = self
+                .dependents
+                .iter()
+                .filter(|(_, entry)| entry.fields().intersects(changed))
+                .map(|(&dep_id, entry)| (entry.registered, dep_id, entry.depth))
+                .collect();
+            notified.sort_unstable();
+            for (_, dep_id, dep_depth) in notified {
                 // Notifying a dependent is split across two phases — the
                 // set-flag part (`note_dependency_change`) here, and the fire part
                 // (`ElementBase::notify_dependency_change`) inside

@@ -144,6 +144,21 @@ passes `--strict`, which makes a missing one a failure. The flui-platform step
 of `test` needs `xvfb-run` on Linux (`apt install xvfb`), runs without it on
 Windows, and is skipped with a message on macOS.
 
+The xtask commands that build or test the workspace (`check-changed`, `test`,
+`ci`, `gate`, `lint`, `gpu-test` and the rest; `Command::is_heavy` in
+`tools/xtask/src/main.rs` is the list) take one lock for the user on this
+machine: `%LOCALAPPDATA%\flui\xtask-heavy.lock` on Windows,
+`$HOME/.cache/flui/xtask-heavy.lock` elsewhere (`XDG_RUNTIME_DIR` is not
+consulted), a per-user directory in the temporary directory when that
+variable is unset or relative, or an absolute `FLUI_XTASK_LOCK_FILE` (a
+relative one is refused with a warning). `clean-nested` and `worktree prune`
+take it too, since they delete what a running build uses. Runs from different
+checkouts queue instead of oversubscribing the machine, and a
+waiting run names the one it waits for (best effort). The OS releases the lock
+when its holder exits, crashed or not. One composite command running another,
+in-process or as a child process, does not wait for itself.
+`FLUI_XTASK_NO_LOCK=1` skips the lock; `--dry-run` never takes it.
+
 **Adding a new gate** means two changes together, not one: a `cargo xtask`
 command (so a contributor can run it standalone) *and* a step in
 `.github/workflows/ci.yml`'s `checks` job (so CI actually runs it — `gate` and
@@ -155,7 +170,7 @@ only runs when someone remembers to run it by hand.
 
 One scope for the whole local suite:
 `--workspace --exclude flui-platform --lib --bins --tests
---features flui/material,flui/cupertino,flui-devtools/agent`, run as the two
+--features flui/material,flui/cupertino,flui/persist,flui-devtools/agent`, run as the two
 stages below. Text-size tests measure on Parley because the default build does
 (ADR-0092 §10 step 4a); no feature selects another measurement.
 Two choices in it differ from CI on purpose:

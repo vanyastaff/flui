@@ -19,10 +19,11 @@ use flui_interaction::routing::FocusScopeNode;
 use flui_painting::styling::Color;
 use flui_painting::typography::TextDirection;
 use flui_platform_api::Locale;
+use flui_widgets::interaction::Focus;
 use flui_widgets::prelude::*;
 use flui_widgets::{
     AppForm, ColoredBox, Directionality, FocusScope, Localizations, NavigatorHandle,
-    NavigatorObserver, RouterError, SizedBox, Text, VsyncScope, WidgetsApp,
+    NavigatorObserver, RouterError, Row, SizedBox, Text, VsyncScope, WidgetsApp,
 };
 
 use crate::common::{LaidOut, lay_out_animated, tight};
@@ -170,6 +171,83 @@ pub(crate) fn widgets_app_router_navigates_by_handle_and_the_url_follows() {
     assert!(!handle.can_pop());
     assert!(laid.find_text("v1 Note 1").is_none());
     assert_eq!(probe.inits.get(), 1, "Home kept its state under the Note");
+}
+
+/// The pushed page's controls, in reading order.
+const CONTROLS: [&str; 4] = ["Back", "Save", "Share", "Reload"];
+
+/// A page whose focusable controls sit in a row, each a few single-child
+/// levels below the route like a real button's `Focus`.
+fn controls_router(probe: &Probe) -> Router<AppRoute> {
+    let probe = probe.clone();
+    Router::from_location("/", move |route: &AppRoute, _cx| match route {
+        AppRoute::Home => Home {
+            probe: probe.clone(),
+        }
+        .boxed(),
+        AppRoute::Note { .. } => Row::new(
+            CONTROLS
+                .iter()
+                .map(|&label| {
+                    SizedBox::new(40.0, 40.0)
+                        .child(
+                            ColoredBox::new(Color::rgb(1, 2, 3))
+                                .child(Focus::new(SizedBox::new(30.0, 30.0)).debug_label(label)),
+                        )
+                        .into_view()
+                        .boxed()
+                })
+                .collect::<Vec<_>>(),
+        )
+        .into_view()
+        .boxed(),
+    })
+    .expect("a known location")
+}
+
+/// The control focused once `controls_router`'s page is pushed in a fresh
+/// mount.
+fn first_focus_of_pushed_page() -> Option<String> {
+    let probe = Probe::default();
+    let vsync = Vsync::new();
+    let mut laid = mount(WidgetsApp::router(controls_router(&probe)), &vsync);
+    settle(&mut laid);
+    tap(&mut laid);
+    assert_eq!(probe.handle().location().as_str(), "/note/1");
+    laid.focus_manager()
+        .primary_focus()
+        .and_then(|node| node.debug_label().map(str::to_owned))
+}
+
+/// A pushed route focuses its first control in reading order, the same one
+/// in every mount, whatever the process mounted before.
+///
+/// The route requests focus before its page builds, and the first control
+/// to attach takes it. The controls attach as their elements first build;
+/// the build drain ordered same-depth elements by depth alone, so which
+/// sibling subtree built first followed the heap's arrangement of
+/// everything else queued (hash-ordered inherited dependents among them) and
+/// changed between mounts and runs.
+pub(crate) fn a_pushed_route_focuses_its_first_control_in_every_mount() {
+    let first = first_focus_of_pushed_page();
+    // Process history: an unrelated app mounted, navigated and dropped
+    // advances the global focus-node counter and the hashers' seeds.
+    {
+        let probe = Probe::default();
+        let vsync = Vsync::new();
+        let mut laid = mount(WidgetsApp::router(router(&probe, 1, "/")), &vsync);
+        settle(&mut laid);
+        tap(&mut laid);
+        assert_eq!(probe.handle().pop(), Ok(true));
+        settle(&mut laid);
+    }
+    let second = first_focus_of_pushed_page();
+    assert_eq!(
+        first.as_deref(),
+        Some(CONTROLS[0]),
+        "the pushed page focuses its first control"
+    );
+    assert_eq!(second, first, "a later mount focuses the same control");
 }
 
 /// Counts attachments, the one observer callback this suite reads.

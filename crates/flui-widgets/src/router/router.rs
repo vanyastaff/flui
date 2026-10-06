@@ -149,6 +149,31 @@ impl<R: Routable> Router<R> {
         })
     }
 
+    /// A router opening on `stack`, bottom to top: the stack
+    /// [`RouterHandle::stack`] read when the application last ran, so Back
+    /// leads through the same pages it did then.
+    ///
+    /// Not yet the whole stack: the router opens on the top route alone.
+    ///
+    /// # Errors
+    ///
+    /// [`RouterError::EmptyStack`] for an empty `stack`; no router is built.
+    pub fn from_stack(
+        stack: Vec<R>,
+        page: impl Fn(&R, &dyn BuildContext) -> BoxedView + 'static,
+    ) -> Result<Self, RouterError> {
+        let page: Terminal<PageBuilder<R>> = Terminal::new(Rc::new(page));
+        let mut stack = RetiredValues(stack);
+        let top = stack.0.pop().ok_or(RouterError::EmptyStack)?;
+        drop(stack);
+        Ok(Self {
+            initial: vec![top],
+            page,
+            transitions: None,
+            transition_duration: None,
+        })
+    }
+
     /// Wrap each page in its entrance and exit transition — the
     /// [`PageRoute::transitions`] of every page on this router's stack. A
     /// parent rebuild with new transitions reaches the pages already there.

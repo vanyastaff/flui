@@ -5,13 +5,15 @@ use super::*;
 
 fn realm_over(fonts: &FontCollection) -> UiRealm {
     UiRealm::new(
-        Arc::new(|| {}),
         test_window(),
         1.0,
-        Arc::new(AtomicBool::new(false)),
-        crate::presentation::test_clipboard(),
-        fonts,
-        flui_scheduler::ClockSource::Platform,
+        crate::realm_services::RealmHostServices::new(
+            Arc::new(|| {}),
+            Arc::new(AtomicBool::new(false)),
+            crate::presentation::test_clipboard(),
+            fonts,
+            flui_scheduler::ClockSource::Platform,
+        ),
     )
     .expect("a realm over a headless window")
 }

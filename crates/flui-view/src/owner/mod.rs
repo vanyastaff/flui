@@ -12,6 +12,7 @@
 //!   (`BuildOwner::take_recovered_panics`) that collects them.
 
 mod build_owner;
+mod dirty_queue;
 mod element_owner;
 mod external_build_inbox;
 mod global_key_registry;

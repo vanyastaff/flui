@@ -6,6 +6,8 @@
 //! - the capability traits [`PlatformTextInput`], [`PlatformHaptics`],
 //!   [`PlatformDisplay`], [`Clipboard`] and the data-transfer transport
 //!   ([`data_transfer::DataTransferSource`], ADR-0038);
+//! - the byte-storage capability [`Storage`] and its vocabulary
+//!   ([`StorageName`], [`StoredVersion`], [`WriteMode`], [`StorageError`]);
 //! - the text store an input method pulls from ([`TextStore`] and the rest of
 //!   [`text_store`], ADR-0090);
 //! - the input vocabulary ([`PlatformInput`], [`DispatchEventResult`],
@@ -96,6 +98,7 @@ mod ime;
 mod input;
 mod locale;
 mod platform_window;
+mod storage;
 mod target_platform;
 mod text_input;
 pub mod text_store;
@@ -119,6 +122,9 @@ pub use input::{
 };
 pub use locale::Locale;
 pub use platform_window::PlatformWindow;
+pub use storage::{
+    Storage, StorageError, StorageFuture, StorageName, Stored, StoredVersion, WriteMode,
+};
 pub use target_platform::TargetPlatform;
 pub use text_input::PlatformTextInput;
 pub use text_store::{TextStore, TextStoreEdit, TextStoreHost, TextStoreObserver, TextStoreRead};

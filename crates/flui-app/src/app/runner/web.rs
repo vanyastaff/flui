@@ -415,6 +415,7 @@ where
     // whose lifetime encloses the RAF registration.
     let result = platform.run(Box::new(move |owner| {
         install_owner_platform(owner)?;
+        APP_RUNTIME.with(|slot| slot.borrow_mut().install_host_storage(&config));
         bootstrap_web(root, config)?;
         tracing::info!("Web platform ready");
         Ok(())

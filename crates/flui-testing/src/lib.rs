@@ -99,6 +99,7 @@ pub mod bootstrap;
 pub mod host;
 pub mod log_capture;
 pub mod replay;
+pub mod storage;
 pub mod text_store_host;
 pub mod text_store_kit;
 pub mod widgets;
