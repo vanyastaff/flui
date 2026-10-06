@@ -272,6 +272,16 @@ impl LifecycleSource {
             inner: Rc::clone(&self.inner),
         }
     }
+    /// Claim this presentation's close delivery: `true` for the call that
+    /// runs it, `false` once a delivery has run or is running, so a close
+    /// requested again from inside a Detached observer, or repeated when the
+    /// realm drops, delivers nothing twice.
+    ///
+    /// Not yet latched: every call answers `true`.
+    #[must_use]
+    pub fn claim_close_delivery(&self) -> bool {
+        true
+    }
     /// Fence new subscriptions and ordinary commits before terminal callbacks.
     pub fn begin_close(&self) {
         let mut state = self.inner.0.borrow_mut();

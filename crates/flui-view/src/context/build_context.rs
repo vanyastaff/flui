@@ -485,6 +485,28 @@ pub trait LifecycleContext: BuildContext {
         None
     }
 
+    /// The presentation's close guard: hold the window's close while work
+    /// that must not be lost finishes.
+    ///
+    /// `None` on a bare owner in a unit test, and until a host installs a
+    /// guard. Acquire it in a lifecycle hook (`init_state` /
+    /// `did_change_dependencies`), the same rule `clipboard_handle` follows.
+    fn close_guard(&self) -> Option<crate::CloseGuard> {
+        None
+    }
+
+    /// The host's registry of published document bytes, which a
+    /// [`Persisted`](crate::persist::Persisted) document publishes into and
+    /// reads its saved state from. It lives outside the realm, so the host
+    /// writes what was published even when the realm cannot run.
+    ///
+    /// `None` when the host keeps no registry: no storage, or a bare owner in
+    /// a unit test. Acquire it in a lifecycle hook (`init_state` /
+    /// `did_change_dependencies`), the same rule `storage` follows.
+    fn flush_registry(&self) -> Option<crate::__runtime::FlushRegistry> {
+        None
+    }
+
     /// The realm's fresh-hit-test capability, if a binding installed an
     /// interaction lane.
     ///

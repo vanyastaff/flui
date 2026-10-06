@@ -3,7 +3,9 @@
 //! These items let the crates that own a realm drive a [`WidgetsBinding`]
 //! from outside `flui-view`: activating its `GlobalKey` registry for one
 //! realm entry, stamping the frame phase at the build-to-finalize boundary,
-//! and running the presentation's terminal lifecycle ladder; and the
+//! and running the presentation's terminal lifecycle ladder; the host's sides
+//! of a presentation's close guard ([`CloseGuardSource`]) and of the flush
+//! registry ([`FlushRegistryHost`]); and the
 //! development agent's port ([`AgentPort`]), which only the runtime
 //! implements and through which it builds the [`AgentWindow`]s a
 //! [`DevAgentHook`](crate::dev_agent::DevAgentHook) is handed. Their intended
@@ -27,7 +29,11 @@ use flui_protocol::{ActionRequest, ReadQuery, Tree, WindowId};
 use flui_scheduler::AppLifecycleState;
 
 use crate::WidgetsBinding;
+pub use crate::close_guard::CloseGuardSource;
 use crate::dev_agent::{AgentAnswer, AgentFault, AgentWindow};
+pub use crate::flush_registry::{
+    FlushRegistry, FlushRegistryHost, FlushReport, FlushState, FlushWrite, FlushWriter,
+};
 pub use crate::lifecycle::{LifecycleCloseWindow, LifecycleSource};
 
 /// What an [`AgentWindow`] calls: one window's read and act, enqueued on its

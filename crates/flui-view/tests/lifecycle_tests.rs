@@ -10,6 +10,8 @@ use std::sync::{
 
 use flui_objects::RenderSizedBox;
 use flui_rendering::protocol::BoxProtocol;
+use flui_view::__runtime::CloseGuardSource;
+use flui_view::CloseReason;
 use flui_view::{
     BuildContext, BuildOwner, ElementTree, IntoView, RenderView, StatefulView, View, ViewExt,
     ViewState,
@@ -187,3 +189,85 @@ pub(crate) fn test_stateful_element_multiple_deactivate_activate_cycles() {
 // - After `unmount()` the element transitions to Defunct.
 // - A child mounted via `ElementTree::insert` is stored at the recorded
 //   parent + slot + (parent_depth + 1).
+
+// ============================================================================
+// Close guard
+// ============================================================================
+
+// The guard is handed to IO completions and its change future awaited off the
+// owner thread, so both cross threads whatever state they come to hold.
+static_assertions::assert_impl_all!(flui_view::CloseGuard: Send, Sync, Clone);
+static_assertions::assert_impl_all!(flui_view::CloseChanged: Send, std::future::Future<Output = ()>);
+
+/// A source for a desktop presentation, whose platform lets the application
+/// refuse every reason, counting the closes it queues on the owner.
+fn desktop_close_guard() -> (CloseGuardSource, Arc<AtomicUsize>) {
+    let queued = Arc::new(AtomicUsize::new(0));
+    let count = Arc::clone(&queued);
+    let source = CloseGuardSource::new(
+        &[
+            CloseReason::User,
+            CloseReason::Program,
+            CloseReason::SessionEnd,
+        ],
+        move || {
+            count.fetch_add(1, Ordering::SeqCst);
+        },
+    );
+    (source, queued)
+}
+
+/// A close refused by holds is carried out once, when the last hold goes,
+/// without asking again; a repeated request for the same reason adds nothing.
+#[test]
+#[ignore = "contract: a released hold carries out the recorded close once"]
+fn releasing_the_last_hold_queues_one_close() {
+    let (source, queued) = desktop_close_guard();
+    let guard = source.guard();
+    let saving = guard.hold();
+    let second = guard.hold();
+
+    let refused = source.refuses(CloseReason::User);
+    let refused_again = source.refuses(CloseReason::User);
+    drop(saving);
+    assert_eq!(
+        queued.load(Ordering::SeqCst),
+        0,
+        "a hold is still held, so nothing is queued"
+    );
+    drop(second);
+    assert_eq!(
+        queued.load(Ordering::SeqCst),
+        1,
+        "releasing the last hold queues exactly one close operation"
+    );
+    assert!(
+        refused && refused_again,
+        "a hold refuses the user's close, and a repeated request too"
+    );
+}
+
+/// A cancelled log-off withdraws its own recorded close and nothing else:
+/// the user's close, recorded earlier, still waits for a decision.
+#[test]
+#[ignore = "contract: a withdrawn session end leaves the user's close recorded"]
+fn a_cancelled_logoff_withdraws_only_the_session_entry() {
+    let (source, queued) = desktop_close_guard();
+    let guard = source.guard();
+    let _unsaved = guard.require_decision();
+
+    let user_refused = source.refuses(CloseReason::User);
+    let session_refused = source.refuses(CloseReason::SessionEnd);
+    source.withdraw(CloseReason::SessionEnd);
+
+    assert_eq!(
+        guard.pending().map(|pending| pending.reason()),
+        Some(CloseReason::User),
+        "the user's close stays recorded after the session end is withdrawn"
+    );
+    assert!(
+        user_refused && session_refused,
+        "a decision hold refuses every reason"
+    );
+    assert_eq!(queued.load(Ordering::SeqCst), 0, "nothing was carried out");
+}

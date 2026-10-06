@@ -168,6 +168,12 @@ pub mod __runtime;
 // Lifecycle notifications
 mod lifecycle;
 pub use lifecycle::{LifecycleClosed, LifecycleHandle, LifecycleSubscription};
+// Holding a presentation's close while work finishes
+mod close_guard;
+pub use close_guard::{CloseChanged, CloseGuard, CloseHold, CloseReason, PendingClose};
+// The host's registry of published document bytes; reached through
+// `__runtime` and `LifecycleContext::flush_registry`
+mod flush_registry;
 // Binding
 pub use binding::{
     AppExitResponse, AppLifecycleState, AttachError, PredictiveBackEvent, RouteInformation,
