@@ -10,6 +10,63 @@ behaviour taxonomy and remains a sibling appendix.
 
 ## Mapping decisions
 
+### Owner and key envelopes retire after authority is withdrawn
+
+**Rule:** the build owner's reactive graph, tree observer and scheduled-build
+callback are independent ownership envelopes, and so are the boxed keys held by
+the registry, scope, reservation, displacement and verification maps. Healthy
+destruction keeps field and container order. Once a destructor failure has
+propagated, or while the thread is already unwinding, the remaining independent
+envelopes are retained instead of dropped
+([ADR-0127](../../docs/adr/ADR-0127-exceptional-path-retention.md)).
+
+**Rule:** key authority is withdrawn before the key is retired. Registration
+prepares the local key before claiming scope authority; scope hashing, equality
+and cloning run outside the scope borrow. A comparison pins the complete hash
+bucket (owner tags and allocation markers) and revalidates it afterwards; one
+fresh retry is allowed, and a second mismatch is refused as an unstable
+comparison ([ADR-0126](../../docs/adr/ADR-0126-reentrant-scoped-key-comparisons.md)).
+A failed local insertion rolls back by cached hash, owner and allocation marker
+without calling key hashing or equality. Release removes local and scoped
+authority before either key is dropped, so a key destructor may inspect the
+scope or claim the key again. A scope snapshot may defer physical key
+destruction until its pins retire; logical authority is already gone by then.
+
+**Limits:** competing destructors inside one opaque graph or user value are not
+contained, and local registry callbacks and other raw build-owner fields are
+outside this boundary.
+
+**Pinned by:** the `owner_key_retirement` and `owner_key_lookup_reentry` rows of
+`lifecycle_panic_containment_matrix`, `rollback_invokes_no_key_callbacks`,
+`scope_clone_read_reentry`, `scope_clone_competing_owner_reentry`,
+`local_clone_competing_owner_reentry` and
+`key_collision_same_owner_and_stale_release`.
+
+### Binding observers and returned futures retire independently
+
+**Rule:** observer registries and each notification snapshot own separately
+guarded observer envelopes. Healthy destruction keeps container order; after
+the first propagating destructor failure, or during an incoming unwind, the
+remaining envelopes are retained (ADR-0127). Snapshot callbacks run after the
+binding guard is released. A registry change affects the next notification;
+a running dispatch keeps its snapshot, and a callback panic stops that
+notification. A legacy lifecycle failure precedes the scoped lifecycle drain,
+and its payload stays the first failure.
+
+**Rule:** suspended pop, push and application-exit notifications guard the
+returned response future, the current observer and the remaining iterator
+separately, so cancelling a healthy future retires it normally while a later
+independent destructor never competes with an existing failure. Pop and push
+stop at the first handled response; exit consults every observer.
+
+**Limits:** competing destructors inside one opaque observer or future
+aggregate are not contained, and whole-binding destruction is not covered.
+Predictive-back list clearing and replacement still retire entries under the
+write guard.
+
+**Pinned by:** the `binding_observer_ownership_and_notifications` rows of
+`lifecycle_panic_containment_matrix`.
+
 ### Same-drain absorption of a mid-drain external schedule (issue #1180)
 
 **Rule:** `BuildOwner::drain_build_scope`'s heap loop absorbs the
@@ -660,3 +717,23 @@ first failure; in preserving mode the host skips the optional rounds after it
 while the required terminal commits still happen. The value or closure a closed
 graph rejects is dropped normally unless the thread is already panicking
 ([ADR-0127](../../docs/adr/ADR-0127-exceptional-path-retention.md)).
+
+### Independent child and contained payload retirement
+
+**Rule:** `StaticChildren` withdraws its independently owned views and its
+mapper before retiring any of them. The first failure propagates and the
+untouched tail is retained (ADR-0127); healthy destruction is ordinary, and
+aliases keep their owners.
+
+**Rule:** a contained child create, mount or update failure, and a swallowed
+dispose, deactivate or render-unmount failure, take custody of the opaque
+payload before diagnostics or recovery run. The payload stays retained through
+competing factory or reporting failures, and healthy siblings and the next
+operation proceed.
+
+**Limits:** a user aggregate whose own destructors double-panic still aborts
+(ADR-0127, Consequences).
+
+**Pinned by:** the `static_children_retirement`, `child_payload_recovery` and
+`lifecycle_hook_payload_retirement` rows of
+`lifecycle_panic_containment_matrix`.

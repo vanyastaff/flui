@@ -72,6 +72,7 @@
 //! — dropping the child from every parent that is not its real parent —
 //! and only then records the report.
 
+use super::global_key_registry::OwnedGlobalKey;
 use std::collections::HashMap;
 
 use flui_foundation::{ElementId, ViewKey};
@@ -118,7 +119,7 @@ pub struct DuplicateGlobalKey {
 /// One parent's declaration of one keyed child.
 struct Reservation {
     child: ElementId,
-    key: Box<dyn ViewKey>,
+    key: OwnedGlobalKey,
 }
 
 /// A keyed child taken out of a live parent by another parent's graft,
@@ -133,7 +134,7 @@ struct Reservation {
 /// the losing parent never ran and therefore never reserved.
 struct Displacement {
     child: ElementId,
-    key: Box<dyn ViewKey>,
+    key: OwnedGlobalKey,
     taken_by: ElementId,
 }
 
@@ -174,12 +175,12 @@ impl GlobalKeyReservations {
             }
         };
         if let Some(existing) = entries.iter_mut().find(|entry| entry.child == child) {
-            existing.key = key.clone_key();
+            existing.key = OwnedGlobalKey::new(key.clone_key());
             return;
         }
         entries.push(Reservation {
             child,
-            key: key.clone_key(),
+            key: OwnedGlobalKey::new(key.clone_key()),
         });
     }
 
@@ -227,13 +228,13 @@ impl GlobalKeyReservations {
             }
         };
         if let Some(existing) = entries.iter_mut().find(|entry| entry.child == child) {
-            existing.key = key.clone_key();
+            existing.key = OwnedGlobalKey::new(key.clone_key());
             existing.taken_by = taken_by;
             return;
         }
         entries.push(Displacement {
             child,
-            key: key.clone_key(),
+            key: OwnedGlobalKey::new(key.clone_key()),
             taken_by,
         });
     }
@@ -284,7 +285,7 @@ struct SeenKeys {
 /// One key already claimed during this verification pass, and by whom for
 /// which child.
 struct SeenKey {
-    key: Box<dyn ViewKey>,
+    key: OwnedGlobalKey,
     parent: ElementId,
     child: ElementId,
 }
@@ -304,7 +305,7 @@ impl SeenKeys {
             .entry(key.key_hash())
             .or_default()
             .push(SeenKey {
-                key: key.clone_key(),
+                key: OwnedGlobalKey::new(key.clone_key()),
                 parent,
                 child,
             });

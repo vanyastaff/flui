@@ -387,6 +387,108 @@ pub struct WidgetsBinding {
     debug_building_dirty_elements: AtomicBool,
 }
 
+// Each physical registry member and notification snapshot owns its own envelope.
+// Ordinary destruction is unchanged; an existing unwind retains independent
+// observers instead of invoking another opaque user destructor.
+struct BindingObserverOwner(Option<Arc<dyn WidgetsBindingObserver>>);
+
+impl BindingObserverOwner {
+    fn new(observer: Arc<dyn WidgetsBindingObserver>) -> Self {
+        Self(Some(observer))
+    }
+
+    fn as_arc(&self) -> &Arc<dyn WidgetsBindingObserver> {
+        self.0
+            .as_ref()
+            .expect("BUG: observer ownership accessed after retirement")
+    }
+}
+
+impl Clone for BindingObserverOwner {
+    fn clone(&self) -> Self {
+        Self::new(Arc::clone(self.as_arc()))
+    }
+}
+
+impl std::ops::Deref for BindingObserverOwner {
+    type Target = dyn WidgetsBindingObserver;
+    fn deref(&self) -> &Self::Target {
+        self.as_arc().as_ref()
+    }
+}
+
+impl Drop for BindingObserverOwner {
+    fn drop(&mut self) {
+        if let Some(observer) = self.0.take() {
+            if std::thread::panicking() {
+                std::mem::forget(observer);
+            } else {
+                drop(observer);
+            }
+        }
+    }
+}
+
+type BindingRouteFuture<'a> = Pin<Box<dyn Future<Output = bool> + Send + 'a>>;
+type BindingExitFuture<'a> = Pin<Box<dyn Future<Output = AppExitResponse> + Send + 'a>>;
+
+// The current observer, remaining snapshot and returned response future are
+// separate owners in a suspended dispatch. Fence the response independently.
+struct BindingRouteResponse<'a>(Option<BindingRouteFuture<'a>>);
+
+impl Future for BindingRouteResponse<'_> {
+    type Output = bool;
+    fn poll(self: Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<bool> {
+        self.get_mut()
+            .0
+            .as_mut()
+            .expect("BUG: route response polled after retirement")
+            .as_mut()
+            .poll(cx)
+    }
+}
+
+impl Drop for BindingRouteResponse<'_> {
+    fn drop(&mut self) {
+        if let Some(future) = self.0.take() {
+            if std::thread::panicking() {
+                std::mem::forget(future);
+            } else {
+                drop(future);
+            }
+        }
+    }
+}
+
+struct BindingExitResponse<'a>(Option<BindingExitFuture<'a>>);
+
+impl Future for BindingExitResponse<'_> {
+    type Output = AppExitResponse;
+    fn poll(
+        self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<AppExitResponse> {
+        self.get_mut()
+            .0
+            .as_mut()
+            .expect("BUG: exit response polled after retirement")
+            .as_mut()
+            .poll(cx)
+    }
+}
+
+impl Drop for BindingExitResponse<'_> {
+    fn drop(&mut self) {
+        if let Some(future) = self.0.take() {
+            if std::thread::panicking() {
+                std::mem::forget(future);
+            } else {
+                drop(future);
+            }
+        }
+    }
+}
+
 /// Inner mutable state of WidgetsBinding
 struct WidgetsBindingInner {
     /// The build owner manages dirty elements and rebuild scheduling.
@@ -404,7 +506,7 @@ struct WidgetsBindingInner {
     pipeline_owner: Option<PipelineCell>,
 
     /// Lifecycle observers.
-    observers: Vec<Arc<dyn WidgetsBindingObserver>>,
+    observers: Vec<BindingObserverOwner>,
 
     /// Observers currently handling a predictive back gesture (Android).
     ///
@@ -417,7 +519,7 @@ struct WidgetsBindingInner {
     // the verified detail. By this date either delete this surface (no
     // consumer materialized) OR wire the platform side and drop this
     // marker.
-    back_gesture_observers: Vec<Arc<dyn WidgetsBindingObserver>>,
+    back_gesture_observers: Vec<BindingObserverOwner>,
 
     /// Whether a build has been scheduled.
     build_scheduled: bool,
@@ -835,7 +937,7 @@ impl WidgetsBinding {
 
     /// Withdraw graph, inbox and key authority, handing the withdrawn key
     /// owners to the caller instead of dropping them, so no user code runs.
-    pub(crate) fn withdraw_owner_authority(&self) -> Vec<Box<dyn flui_foundation::ViewKey>> {
+    pub(crate) fn withdraw_owner_authority(&self) -> Vec<crate::owner::ScopedKeyOwner> {
         self.inner.write().build_owner.withdraw_owner(false)
     }
 
@@ -1251,7 +1353,10 @@ impl WidgetsBinding {
 
     /// Add a lifecycle observer.
     pub fn add_observer(&self, observer: Arc<dyn WidgetsBindingObserver>) {
-        self.inner.write().observers.push(observer);
+        self.inner
+            .write()
+            .observers
+            .push(BindingObserverOwner::new(observer));
     }
 
     /// Remove a lifecycle observer.
@@ -1259,7 +1364,7 @@ impl WidgetsBinding {
         self.inner
             .write()
             .observers
-            .retain(|o| !Arc::ptr_eq(o, observer));
+            .retain(|o| !Arc::ptr_eq(o.as_arc(), observer));
     }
 
     /// Notify all observers of locale change.
@@ -1270,7 +1375,7 @@ impl WidgetsBinding {
     /// reads `observer_count`, or schedules a build) would deadlock if
     /// the iteration held the lock across the dispatch.
     pub fn handle_locale_changed(&self) {
-        let observers: Vec<Arc<dyn WidgetsBindingObserver>> = self.inner.read().observers.clone();
+        let observers: Vec<BindingObserverOwner> = self.inner.read().observers.clone();
         for observer in &observers {
             observer.did_change_locales();
         }
@@ -1281,7 +1386,7 @@ impl WidgetsBinding {
     /// See [`Self::handle_locale_changed`] for the snapshot-then-fire
     /// rationale.
     pub fn handle_metrics_changed(&self) {
-        let observers: Vec<Arc<dyn WidgetsBindingObserver>> = self.inner.read().observers.clone();
+        let observers: Vec<BindingObserverOwner> = self.inner.read().observers.clone();
         for observer in &observers {
             observer.did_change_metrics();
         }
@@ -1292,7 +1397,7 @@ impl WidgetsBinding {
     /// See [`Self::handle_locale_changed`] for the snapshot-then-fire
     /// rationale.
     pub fn handle_text_scale_factor_changed(&self) {
-        let observers: Vec<Arc<dyn WidgetsBindingObserver>> = self.inner.read().observers.clone();
+        let observers: Vec<BindingObserverOwner> = self.inner.read().observers.clone();
         for observer in &observers {
             observer.did_change_text_scale_factor();
         }
@@ -1303,7 +1408,7 @@ impl WidgetsBinding {
     /// See [`Self::handle_locale_changed`] for the snapshot-then-fire
     /// rationale.
     pub fn handle_platform_brightness_changed(&self) {
-        let observers: Vec<Arc<dyn WidgetsBindingObserver>> = self.inner.read().observers.clone();
+        let observers: Vec<BindingObserverOwner> = self.inner.read().observers.clone();
         for observer in &observers {
             observer.did_change_platform_brightness();
         }
@@ -1320,8 +1425,7 @@ impl WidgetsBinding {
 
     pub(crate) fn notify_lifecycle(&self, state: AppLifecycleState) {
         let mut first = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let observers: Vec<Arc<dyn WidgetsBindingObserver>> =
-                self.inner.read().observers.clone();
+            let observers: Vec<BindingObserverOwner> = self.inner.read().observers.clone();
             for observer in &observers {
                 observer.did_change_app_lifecycle_state(state);
             }
@@ -1341,7 +1445,7 @@ impl WidgetsBinding {
     /// See [`Self::handle_locale_changed`] for the snapshot-then-fire
     /// rationale.
     pub fn handle_memory_pressure(&self) {
-        let observers: Vec<Arc<dyn WidgetsBindingObserver>> = self.inner.read().observers.clone();
+        let observers: Vec<BindingObserverOwner> = self.inner.read().observers.clone();
         for observer in &observers {
             observer.did_have_memory_pressure();
         }
@@ -1352,7 +1456,7 @@ impl WidgetsBinding {
     /// See [`Self::handle_locale_changed`] for the snapshot-then-fire
     /// rationale.
     pub fn handle_accessibility_features_changed(&self) {
-        let observers: Vec<Arc<dyn WidgetsBindingObserver>> = self.inner.read().observers.clone();
+        let observers: Vec<BindingObserverOwner> = self.inner.read().observers.clone();
         for observer in &observers {
             observer.did_change_accessibility_features();
         }
@@ -1420,7 +1524,7 @@ impl WidgetsBinding {
     pub async fn handle_pop_route(&self) -> bool {
         let observers: Vec<_> = self.inner.read().observers.clone();
         for observer in observers {
-            if observer.did_pop_route().await {
+            if BindingRouteResponse(Some(observer.did_pop_route())).await {
                 return true;
             }
         }
@@ -1432,7 +1536,7 @@ impl WidgetsBinding {
     pub async fn handle_push_route(&self, route: &RouteInformation) -> bool {
         let observers: Vec<_> = self.inner.read().observers.clone();
         for observer in observers {
-            if observer.did_push_route_information(route).await {
+            if BindingRouteResponse(Some(observer.did_push_route_information(route))).await {
                 return true;
             }
         }
@@ -1515,7 +1619,7 @@ impl WidgetsBinding {
     /// lock before invoking callbacks. See
     /// [`Self::handle_locale_changed`] for the deadlock-safety rationale.
     pub fn handle_view_focus_changed(&self, event: ViewFocusEvent) {
-        let observers: Vec<Arc<dyn WidgetsBindingObserver>> = self.inner.read().observers.clone();
+        let observers: Vec<BindingObserverOwner> = self.inner.read().observers.clone();
         for observer in &observers {
             observer.did_change_view_focus(event);
         }
@@ -1533,7 +1637,9 @@ impl WidgetsBinding {
         let mut should_cancel = false;
 
         for observer in observers {
-            if observer.did_request_app_exit().await == AppExitResponse::Cancel {
+            if BindingExitResponse(Some(observer.did_request_app_exit())).await
+                == AppExitResponse::Cancel
+            {
                 should_cancel = true;
                 // Don't return early - all observers should be notified
             }

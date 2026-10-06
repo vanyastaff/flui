@@ -6,6 +6,10 @@
 //! - Managing GlobalKey registry
 //! - Coordinating InheritedElement lookups
 
+#[path = "retirement_slots.rs"]
+mod retirement_slots;
+use retirement_slots::{OwnerBuildScheduledSlot, OwnerReactive, OwnerTreeObserverSlot};
+
 use std::{
     any::Any,
     cell::Cell,
@@ -466,7 +470,7 @@ pub struct BuildOwner {
     /// ADR-0074: the realm's reactive graph. Constructed with the owner,
     /// re-pointed at the external inbox whenever the frame-request callback
     /// changes (`set_on_build_scheduled`).
-    reactive: crate::reactive::Reactive,
+    reactive: OwnerReactive,
 
     /// Keep-alive holds on lazy sliver children — which children band eviction
     /// must skip. Presentation-scoped like every other lifecycle capability,
@@ -476,7 +480,7 @@ pub struct BuildOwner {
     /// The realm's tree-observer slot (ADR-0040). `None` = observation off
     /// (one branch per emission site). `pub(crate)` for the
     /// [`ElementOwner`](super::ElementOwner) split-borrow.
-    pub(crate) tree_observer: Option<Arc<dyn flui_foundation::observe::TreeObserver>>,
+    pub(crate) tree_observer: OwnerTreeObserverSlot,
 
     /// Lifecycle-hook panics caught and contained by a per-child
     /// containment seam this frame, waiting to be drained by
@@ -504,7 +508,7 @@ pub struct BuildOwner {
     /// re-borrowing the owner. Stored as `Arc` (not `Box`) so an
     /// `ExternalBuildScheduler` captured by an animation listener can clone
     /// and fire it as a frame request from outside a frame.
-    pub(crate) on_build_scheduled: Option<Arc<dyn Fn() + Send + Sync>>,
+    pub(crate) on_build_scheduled: OwnerBuildScheduledSlot,
 
     /// Inbox of element ids and causes scheduled through an
     /// `ExternalBuildScheduler` handle — typically an animation/listenable
@@ -731,7 +735,7 @@ impl BuildOwner {
     pub(crate) fn withdraw_owner(
         &mut self,
         preserving: bool,
-    ) -> Vec<Box<dyn flui_foundation::ViewKey>> {
+    ) -> Vec<global_key_scope::ScopedKeyOwner> {
         self.external_inbox.close();
         self.reactive.withdraw_owner(preserving);
         self.global_key_scope
@@ -760,16 +764,16 @@ impl BuildOwner {
             inactive_elements: Vec::new(),
             pending_dependency_changes: std::collections::HashSet::new(),
             inherited_dependencies: InheritedDependencies::default(),
-            reactive: crate::reactive::Reactive::new(),
+            reactive: OwnerReactive(Some(crate::reactive::Reactive::new())),
             keep_alive: super::KeepAliveHolds::default(),
-            tree_observer: None,
+            tree_observer: OwnerTreeObserverSlot(None),
             recovered_panics: Vec::new(),
             lifecycle_panic_handoff: Cell::new(LifecyclePanicHandoff::Disarmed),
             #[cfg(debug_assertions)]
             building: false,
             #[cfg(debug_assertions)]
             scope_depth: 0,
-            on_build_scheduled: None,
+            on_build_scheduled: OwnerBuildScheduledSlot(None),
             external_inbox: Arc::new(ExternalBuildInbox::default()),
             mid_drain_absorbs_left: MAX_MID_DRAIN_ABSORBS,
             mid_drain_cap_streak: false,
@@ -1017,7 +1021,7 @@ impl BuildOwner {
     where
         F: Fn() + Send + Sync + 'static,
     {
-        self.on_build_scheduled = Some(Arc::new(callback));
+        *self.on_build_scheduled = Some(Arc::new(callback));
         self.reactive.set_scheduler(self.external_scheduler());
     }
 
