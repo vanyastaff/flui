@@ -419,7 +419,11 @@ impl TextInputOwner {
             calls.resume();
             Ok(DetachOutcome::Detached)
         } else {
+            // Released before the diagnostic, as on the active path: a
+            // subscriber that closes this owner and then panics must not
+            // leave this clone the backend's last owner during the unwind.
             let mut calls = OwnerCalls::new();
+            release_platform(platform, &mut calls);
             calls.run(|| tracing::trace!(token = token.0.get(), "stale IME detach ignored"));
             calls.resume();
             Ok(DetachOutcome::Stale)

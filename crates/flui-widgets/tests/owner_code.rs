@@ -923,6 +923,10 @@ const ROWS: &[(&str, fn())] = &[
         "editable: an update whose observer and focus listener panic",
         editable_update_whose_observer_and_focus_listener_panic,
     ),
+    (
+        "detach: a stale token whose diagnostic closes the owner and panics",
+        stale_detach_whose_diagnostic_closes_the_owner_and_panics,
+    ),
 ];
 
 #[test]
@@ -2212,4 +2216,79 @@ fn editable_update_whose_observer_and_focus_listener_panic() {
     harness.tick();
     let field = self::field(&harness);
     the_field_keeps_working(&mut harness, &field);
+}
+
+// ----------------------------------------------------------------------------
+// A stale detach whose diagnostic closes the owner
+// ----------------------------------------------------------------------------
+
+/// A platform that panics when destroyed.
+struct PanicsWhenDestroyed;
+
+impl PlatformTextInput for PanicsWhenDestroyed {
+    fn set_ime_allowed(&self, _: bool) {}
+    fn set_ime_cursor_area(&self, _: Bounds<f64>) {}
+}
+
+impl Drop for PanicsWhenDestroyed {
+    fn drop(&mut self) {
+        panic!("platform destroyed");
+    }
+}
+
+/// A subscriber that, on an event, closes [`CLOSING_OWNER`] (containing
+/// what the close raises) and then panics.
+struct ClosesThenFails;
+
+impl tracing::Subscriber for ClosesThenFails {
+    fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+        true
+    }
+    fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+        tracing::span::Id::from_u64(1)
+    }
+    fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+    fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+    fn event(&self, _: &tracing::Event<'_>) {
+        let owner = CLOSING_OWNER.with(|slot| slot.borrow().as_ref().and_then(Weak::upgrade));
+        if let Some(owner) = owner {
+            let _ = raised(|| owner.close());
+        }
+        panic!("diagnostic failure");
+    }
+    fn enter(&self, _: &tracing::span::Id) {}
+    fn exit(&self, _: &tracing::span::Id) {}
+}
+
+fn stale_detach_whose_diagnostic_closes_the_owner_and_panics() {
+    let owner = TextInputOwner::new(Some(Arc::new(PanicsWhenDestroyed)));
+    let token = owner
+        .handle()
+        .attach(TextInputClient::new(InMemoryTextStore::new("")))
+        .expect("attach");
+    assert_eq!(
+        owner.handle().detach(token),
+        Ok(flui_interaction::DetachOutcome::Detached)
+    );
+    CLOSING_OWNER.with(|slot| *slot.borrow_mut() = Some(Rc::downgrade(&owner)));
+    assert_eq!(
+        raised(|| {
+            tracing::subscriber::with_default(ClosesThenFails, || {
+                let _ = owner.handle().detach(token);
+            });
+        })
+        .as_deref(),
+        Some("diagnostic failure"),
+        "the platform clone is released before the diagnostic, not during the unwind"
+    );
+    CLOSING_OWNER.with(|slot| slot.borrow_mut().take());
+    assert_eq!(
+        owner
+            .handle()
+            .attach(TextInputClient::new(InMemoryTextStore::new("")))
+            .err(),
+        Some(flui_interaction::TextInputError::Closed),
+        "the diagnostic's close completed"
+    );
+    the_owner_keeps_working(&self::owner());
 }
