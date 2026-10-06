@@ -781,6 +781,99 @@ fn an_ignored_file_written_beside_tasks_md_survives_removal() {
     ignored_file_written_after_the_verdict(true);
 }
 
+/// A merged worktree with a `target/`, surveyed and judged removable.
+fn merged_with_target(fixture: &Fixture) -> (PathBuf, Worktree) {
+    let merged = fixture.new_worktree("t/merged");
+    commit(&merged, "merged.txt");
+    fixture.merge("t/merged");
+    std::fs::create_dir(merged.join("target")).expect("mkdir");
+    std::fs::write(merged.join("target").join("blob"), [0_u8; 64]).expect("write");
+    let worktree = fixture.survey_branch("t/merged");
+    assert_eq!(classify(&worktree.facts), Decision::Remove { force: false });
+    (merged, worktree)
+}
+
+/// The `locked` line of the worktree at `path`, `None` when unlocked.
+fn lock_of(fixture: &Fixture, path: &Path) -> Option<String> {
+    let porcelain = fixture
+        .git()
+        .run(&["worktree", "list", "--porcelain"])
+        .expect("list");
+    let name = path.file_name().expect("a name").to_string_lossy();
+    porcelain
+        .split("\n\n")
+        .find(|record| record.lines().next().is_some_and(|l| l.ends_with(&*name)))
+        .expect("the worktree is recorded")
+        .lines()
+        .find_map(|line| {
+            line.strip_prefix("locked")
+                .map(str::trim)
+                .map(str::to_owned)
+        })
+}
+
+/// An ignored file written after the first recheck, while `target/` is being
+/// deleted, is seen by the check made after it and kept; the worktree is left
+/// unlocked.
+fn an_ignored_file_written_while_target_is_deleted_survives() {
+    let fixture = Fixture::new();
+    let (merged, worktree) = merged_with_target(&fixture);
+    let written = std::rc::Rc::new(std::cell::Cell::new(false));
+    let mut git = fixture.git();
+    git.after = Some(std::rc::Rc::new({
+        let (written, main, merged) = (
+            std::rc::Rc::clone(&written),
+            fixture.main.clone(),
+            merged.clone(),
+        );
+        move |args: &[String]| {
+            if !written.get() && args.first().is_some_and(|a| a == "status") {
+                written.set(true);
+                let exclude = main.join(".git").join("info").join("exclude");
+                std::fs::write(exclude, ".env\n").expect("write");
+                std::fs::write(merged.join(".env"), "KEY=1\n").expect("write");
+            }
+        }
+    }));
+    let error = remove(&git, &worktree, false).expect_err("removal is refused");
+    assert!(written.get(), "removal never checked the worktree");
+    assert!(
+        format!("{error:#}").contains("ignored files: .env"),
+        "{error:#}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(merged.join(".env")).expect("the ignored file survives"),
+        "KEY=1\n"
+    );
+    assert!(fixture.has_branch("t/merged"));
+    assert_eq!(lock_of(&fixture, &merged), None, "the lock was released");
+}
+
+/// A worktree somebody locks after the survey is not prune's to remove: its
+/// `target/` and their lock stay.
+fn a_worktree_locked_after_the_verdict_is_kept_whole() {
+    let fixture = Fixture::new();
+    let (merged, worktree) = merged_with_target(&fixture);
+    fixture
+        .git()
+        .run(&[
+            OsStr::new("worktree"),
+            OsStr::new("lock"),
+            OsStr::new("--reason"),
+            OsStr::new("mine"),
+            merged.as_os_str(),
+        ])
+        .expect("lock");
+    let error = remove(&fixture.git(), &worktree, false).expect_err("removal is refused");
+    assert!(format!("{error:#}").contains("locked"), "{error:#}");
+    assert!(
+        merged.join("target").join("blob").is_file(),
+        "a kept worktree keeps its build cache"
+    );
+    assert_eq!(lock_of(&fixture, &merged).as_deref(), Some("mine"));
+    assert!(fixture.has_branch("t/merged"));
+}
+
 fn a_separate_git_dir_checkout_roots_worktrees_in_the_checkout() {
     let fixture = Fixture::separate_git_dir();
     assert!(fixture.main.join(".git").is_file(), "`.git` is a gitfile");
@@ -877,6 +970,14 @@ fn worktree_contract() {
             (
                 "an_ignored_file_written_beside_tasks_md_survives_removal",
                 an_ignored_file_written_beside_tasks_md_survives_removal,
+            ),
+            (
+                "an_ignored_file_written_while_target_is_deleted_survives",
+                an_ignored_file_written_while_target_is_deleted_survives,
+            ),
+            (
+                "a_worktree_locked_after_the_verdict_is_kept_whole",
+                a_worktree_locked_after_the_verdict_is_kept_whole,
             ),
             (
                 "a_separate_git_dir_checkout_roots_worktrees_in_the_checkout",

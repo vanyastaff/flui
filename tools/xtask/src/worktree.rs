@@ -798,39 +798,81 @@ struct Removed {
     branch_kept: Option<String>,
 }
 
+/// Why `prune` locks a worktree while it removes it.
+const LOCK_REASON: &str = "cargo xtask worktree prune is removing it";
+
 /// Deletes the worktree's `target/`, the worktree, then its branch. Only for
 /// a worktree [`classify`] decided to remove.
+///
+/// The worktree is locked while it is inspected and cleared, so a concurrent
+/// prune or `git worktree remove`/`move` leaves it alone, and one somebody
+/// else locked after the survey is kept. A lock does not stop files being
+/// written, so the contents are checked again after `target/` (which can take
+/// minutes to delete) is gone. The lock is released just before
+/// `git worktree remove`, which refuses a locked worktree unless forced twice,
+/// and forcing would delete modified and untracked files too. What remains
+/// open: an ignored file written between that last check and
+/// `git worktree remove` deleting the directory, the span of two git processes,
+/// is deleted with it (`git worktree remove` refuses modified and untracked
+/// files itself, but not ignored ones).
 ///
 /// The branch goes only through `git branch -d`, never `-D`: the merge verdict
 /// predates this call, and a commit made on the branch since must not be lost.
 fn remove(git: &Git, worktree: &Worktree, force: bool) -> anyhow::Result<Removed> {
     let path = &worktree.entry.path;
+    let worktree_cmd = |action: &'static str| -> Vec<&OsStr> {
+        let mut args = vec![OsStr::new("worktree"), OsStr::new(action)];
+        if action == "lock" {
+            args.extend([OsStr::new("--reason"), OsStr::new(LOCK_REASON)]);
+        }
+        args.push(path.as_os_str());
+        args
+    };
+    git.run(&worktree_cmd("lock")).with_context(|| {
+        format!(
+            "{} is locked by someone else, or could not be locked; keeping it",
+            path.display()
+        )
+    })?;
+    let cleared = clear(git, path, force);
+    let unlocked = git.run(&worktree_cmd("unlock"));
+    match (cleared, unlocked) {
+        (Ok(()), Ok(_)) => {}
+        (Err(error), Ok(_)) => return Err(error),
+        (Ok(()), Err(error)) => return Err(error.context("unlocking it before removal")),
+        (Err(error), Err(unlock)) => {
+            bail!("{error:#}; it stays locked, since unlocking failed too: {unlock:#}")
+        }
+    }
+    git.run(&worktree_cmd("remove"))?;
+    let branch_kept = match &worktree.entry.branch {
+        Some(branch) => git.run(&["branch", "-d", branch]).err().map(|error| {
+            format!("{branch}: {error:#}; check it, then `git branch -D` it yourself")
+        }),
+        None => None,
+    };
+    Ok(Removed {
+        freed: worktree.target_bytes.unwrap_or(0),
+        branch_kept,
+    })
+}
+
+/// Empties a locked worktree of what the verdict allowed: confirms it holds
+/// nothing else, deletes `target/` and a lone `TASKS.md`, then confirms it
+/// holds nothing at all.
+fn clear(git: &Git, path: &Path, force: bool) -> anyhow::Result<()> {
     // The survey's verdict may be stale. `git worktree remove` refuses
     // untracked and modified files without `--force` (never passed), but deletes
-    // ignored ones silently, so recheck everything, ignored entries included, and
-    // remove only what the verdict allowed: nothing, or a lone `TASKS.md`.
-    let expected = if force {
-        Changes::TasksOnly
-    } else {
-        Changes::None
-    };
-    let now = Changes::from_status(&git.at(path.clone()).run_bytes(&[
-        "status",
-        "--porcelain=v1",
-        "-z",
-        "--untracked-files=all",
-        "--ignored=matching",
-    ])?);
-    if now != expected {
-        let reason = match now {
-            Changes::Ignored(paths) => Reason::Ignored(paths),
-            Changes::None | Changes::TasksOnly | Changes::Work => Reason::Dirty,
-        };
-        bail!(
-            "{} changed since it was surveyed ({reason}); keeping it",
-            path.display()
-        );
-    }
+    // ignored ones silently, so recheck everything, ignored entries included.
+    unchanged(
+        git,
+        path,
+        &if force {
+            Changes::TasksOnly
+        } else {
+            Changes::None
+        },
+    )?;
     // Only now, with the worktree confirmed unchanged, is its build cache
     // disposable; a worktree kept above keeps its `target/`.
     let target = path.join("target");
@@ -842,21 +884,30 @@ fn remove(git: &Git, worktree: &Worktree, force: bool) -> anyhow::Result<Removed
         std::fs::remove_file(path.join(TASKS_FILE))
             .with_context(|| format!("removing {}", path.join(TASKS_FILE).display()))?;
     }
-    git.run(&[
-        OsStr::new("worktree"),
-        OsStr::new("remove"),
-        path.as_os_str(),
-    ])?;
-    let branch_kept = match &worktree.entry.branch {
-        Some(branch) => git.run(&["branch", "-d", branch]).err().map(|error| {
-            format!("{branch}: {error:#}; check it, then `git branch -D` it yourself")
-        }),
-        None => None,
-    };
-    Ok(Removed {
-        freed: worktree.target_bytes.unwrap_or(0),
-        branch_kept,
-    })
+    // whatever was written while `target/` went
+    unchanged(git, path, &Changes::None)
+}
+
+/// Fails unless `git status` of the worktree at `path` reads as `expected`.
+fn unchanged(git: &Git, path: &Path, expected: &Changes) -> anyhow::Result<()> {
+    let now = Changes::from_status(&git.at(path.to_path_buf()).run_bytes(&[
+        "status",
+        "--porcelain=v1",
+        "-z",
+        "--untracked-files=all",
+        "--ignored=matching",
+    ])?);
+    if now != *expected {
+        let reason = match now {
+            Changes::Ignored(paths) => Reason::Ignored(paths),
+            Changes::None | Changes::TasksOnly | Changes::Work => Reason::Dirty,
+        };
+        bail!(
+            "{} changed since it was surveyed ({reason}); keeping it",
+            path.display()
+        );
+    }
+    Ok(())
 }
 
 /// `git`, run in one directory.
