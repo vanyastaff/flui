@@ -215,6 +215,14 @@ mod native_windows {
             deadline_none_allows_same_instant_readmission,
         ),
         (
+            "deadline_reinstalled_by_its_frame_gets_another_frame",
+            deadline_reinstalled_by_its_frame_gets_another_frame,
+        ),
+        (
+            "deadline_left_unchanged_by_its_frames_does_not_spin",
+            deadline_left_unchanged_by_its_frames_does_not_spin,
+        ),
+        (
             "deadline_query_unwind_retains_replaced_hostile_captures",
             deadline_query_unwind_retains_replaced_hostile_captures,
         ),
@@ -452,6 +460,85 @@ mod native_windows {
             2,
             "None permits a fresh admission of the same instant"
         );
+    }
+
+    fn deadline_reinstalled_by_its_frame_gets_another_frame() {
+        assert_eq!(
+            same_instant_deadline_frames(true),
+            2,
+            "a frame that accepts new work at the instant it serviced gets a second frame"
+        );
+    }
+
+    fn deadline_left_unchanged_by_its_frames_does_not_spin() {
+        // The pair is re-armed once after a serviced frame (it may be new
+        // work) and then left delivered until the hook's answer changes.
+        assert_eq!(
+            same_instant_deadline_frames(false),
+            2,
+            "an answer no frame changes stops waking frames"
+        );
+    }
+
+    // Frame callbacks that run at or after one fixed instant the hook keeps
+    // answering. With `reinstall`, the first such frame services the
+    // deadline and accepts new work due at the same instant, and the second
+    // services that; without it, no frame ever services it. A watchdog ends
+    // the loop either way.
+    #[expect(
+        unsafe_code,
+        reason = "synchronous first paint of an owned Win32 window on its creating thread"
+    )]
+    fn same_instant_deadline_frames(reinstall: bool) -> usize {
+        use flui_platform::WindowOpen;
+
+        let frames = Arc::new(AtomicUsize::new(0));
+        let result = Arc::clone(&frames);
+        Box::new(WindowsPlatform::new().expect("native Windows platform"))
+            .run(Box::new(move |owner| {
+                let WindowOpen::Ready(window) = owner
+                    .open_window(WindowOptions {
+                        visible: true,
+                        size: Size::new(160.0, 120.0),
+                        ..Default::default()
+                    })
+                    .expect("open same-instant window")
+                else {
+                    panic!("Win32 on-ready window was deferred");
+                };
+                let hwnd = window
+                    .as_any()
+                    .downcast_ref::<WindowsWindow>()
+                    .expect("Win32 backend")
+                    .hwnd();
+                // SAFETY: the live wrapper owns this HWND on its creating
+                // thread; the paint it sends runs synchronously here.
+                let _ = unsafe { UpdateWindow(hwnd) };
+                let watchdog = owner.proxy();
+                std::thread::spawn(move || {
+                    std::thread::sleep(Duration::from_millis(600));
+                    let _ = watchdog.request_quit();
+                });
+                let due = web_time::Instant::now() + Duration::from_millis(60);
+                let pending = Arc::new(Mutex::new(Some(due)));
+                let callback_pending = Arc::clone(&pending);
+                window.on_request_frame(Box::new(move || {
+                    let mut pending = callback_pending.lock().expect("deadline state");
+                    if pending.is_none_or(|due| web_time::Instant::now() < due) {
+                        return;
+                    }
+                    let count = frames.fetch_add(1, Ordering::SeqCst) + 1;
+                    if reinstall {
+                        *pending = (count == 1).then_some(due);
+                    }
+                }));
+                owner.shared().set_wake_deadline_hook(Box::new(move || {
+                    *pending.lock().expect("deadline state")
+                }));
+                Ok(())
+            }))
+            .expect("native same-instant loop returns normally");
+        result.load(Ordering::SeqCst)
     }
 
     fn deadline_query_unwind_retains_replaced_hostile_captures() {

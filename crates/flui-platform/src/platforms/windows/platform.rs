@@ -88,6 +88,39 @@ impl Drop for DeadlineQuery {
     }
 }
 
+/// The last deadline the loop delivered. The hook answers with an instant
+/// only, so the same `(hook, instant)` pair is either work a frame has not
+/// serviced yet, which must not spin, or new work a frame accepted at the
+/// instant it just serviced, which must get its frame.
+struct DeadlineDelivery {
+    arm: DeadlineArm,
+    /// The platform's frame count when the delivery was made.
+    frames: u64,
+    /// Whether this delivery already re-armed the pair delivered before it.
+    repeat: bool,
+}
+
+impl DeadlineDelivery {
+    /// Whether `deadline` from `hook` may be armed after this delivery: a
+    /// different pair always, the same pair once if a frame callback ran
+    /// since. An answer no frame changed stays delivered, and one repeated
+    /// past its re-arm is not re-armed again, so neither spins.
+    fn admits(
+        &self,
+        deadline: web_time::Instant,
+        hook: &Weak<WakeDeadlineHook>,
+        frames: u64,
+    ) -> bool {
+        !self.arm.matches(deadline, hook) || (!self.repeat && frames != self.frames)
+    }
+}
+
+/// How many frame callbacks this platform's windows have dispatched. The
+/// message loop compares it across a deadline delivery to tell an answer
+/// repeated after a serviced frame from one nothing has serviced yet.
+#[derive(Default)]
+pub(super) struct FrameCount(std::cell::Cell<u64>);
+
 struct DeadlineArm {
     deadline: web_time::Instant,
     hook: Weak<WakeDeadlineHook>,
@@ -266,6 +299,9 @@ pub(super) struct WindowContext {
     /// `Rc<RefCell<..>>`: every holder lives on the owner thread, and no
     /// borrow is held while a handler runs.
     pub handlers: Rc<RefCell<PlatformHandlers>>,
+    /// The platform's count of dispatched frame callbacks, shared with the
+    /// owner control context and every other window this platform opens.
+    pub frames: Rc<FrameCount>,
     /// Per-window callbacks for event delivery, owned by this context and
     /// released by `WM_DESTROY` on the owner thread.
     pub callbacks: WindowCallbacks,
@@ -327,6 +363,12 @@ pub(super) struct WindowContext {
 }
 
 impl WindowContext {
+    /// Runs this window's frame callback and counts it on the platform.
+    pub(super) fn request_frame(&self) {
+        self.frames.0.set(self.frames.0.get().wrapping_add(1));
+        self.callbacks.dispatch_request_frame();
+    }
+
     /// Complete cache updates before callback-capable native/user code.
     fn update_window_state(&self, update: impl FnOnce(&mut super::window::WindowState)) {
         if let Some(state) = self.window_state.upgrade() {
@@ -1087,7 +1129,7 @@ impl WindowsPlatform {
                             // FillRect was overwritten by the present in the same frame).
                             if let Some(ctx) = ctx {
                                 // Fire per-window on_request_frame callback
-                                ctx.callbacks.dispatch_request_frame();
+                                ctx.request_frame();
 
                                 // Also dispatch RedrawRequested to global handlers
                                 ctx.dispatch_event(WindowEvent::RedrawRequested {
@@ -1274,7 +1316,7 @@ impl WindowsPlatform {
                             // (which Windows does not reliably post per drag step).
                             // `dispatch_resize` above already released the renderer lock, so
                             // this re-locks cleanly; a minimized window has nothing to present.
-                            ctx.callbacks.dispatch_request_frame();
+                            ctx.request_frame();
                         }
                     }
 
@@ -1766,7 +1808,15 @@ impl WindowsPlatform {
         tracing::info!("Starting Windows message loop");
 
         let mut armed: Option<DeadlineArm> = None;
-        let mut delivered: Option<DeadlineArm> = None;
+        let mut delivered: Option<DeadlineDelivery> = None;
+        // Shared with every window this platform opens; without an owner
+        // there are no windows, so the count never moves.
+        let frames = self
+            .owner_control
+            .shares("run message loop")
+            .ok()
+            .map(|shares| shares.frames);
+        let frame_count = || frames.as_ref().map_or(0, |frames| frames.0.get());
 
         // SAFETY: `msg` is a stack-local, default-initialized `MSG` that
         // outlives every call here. `&raw mut msg` is the only pointer
@@ -1799,8 +1849,16 @@ impl WindowsPlatform {
                         .deadline_hook()
                         .is_some_and(|hook| Weak::ptr_eq(&arm.hook, &Arc::downgrade(&hook)))
                     {
+                        let repeat = delivered
+                            .as_ref()
+                            .is_some_and(|last| last.arm.matches(arm.deadline, &arm.hook));
+                        let before = frame_count();
                         self.redraw_deadline_windows();
-                        delivered = Some(arm);
+                        delivered = Some(DeadlineDelivery {
+                            arm,
+                            frames: before,
+                            repeat,
+                        });
                     }
                 }
 
@@ -1838,9 +1896,9 @@ impl WindowsPlatform {
                     {
                         match deadline {
                             Some(deadline)
-                                if !delivered
-                                    .as_ref()
-                                    .is_some_and(|arm| arm.matches(deadline, &identity)) =>
+                                if delivered.as_ref().is_none_or(|last| {
+                                    last.admits(deadline, &identity, frame_count())
+                                }) =>
                             {
                                 Some(DeadlineArm {
                                     deadline,
@@ -1956,7 +2014,7 @@ impl WindowsPlatform {
                     // delivered deadline until unrelated input. Request the
                     // frame directly instead: its frame services timers and
                     // gestures for a window nothing can see.
-                    context.callbacks.dispatch_request_frame();
+                    context.request_frame();
                 } else {
                     crate::traits::PlatformWindow::request_redraw(window.as_ref());
                 }
@@ -2136,6 +2194,7 @@ impl Platform for WindowsPlatform {
             options,
             self.windows.clone(),
             shares.handlers,
+            shares.frames,
             self.config.clone(),
         )?;
         let hwnd_value = window.hwnd().0 as isize;
