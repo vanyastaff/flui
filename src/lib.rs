@@ -70,6 +70,7 @@ await its returned request or poll `try_result` to obtain the window result."
 //! | `material` | off | `flui::material` and the Material half of [`prelude`] |
 //! | `cupertino` | off | `flui::cupertino` |
 //! | `localizations` | off | nothing; deprecated, kept so existing feature lists resolve |
+//! | `persist` | off | `AppConfig::with_storage_dir`: storage under the per-user data directories for [`view::persist`] documents |
 //! | `hot-reload` | off | re-exports `flui-hot-reload` as `hot_reload`; install its hook with `AppConfig::with_dev_reload` |
 //!
 //! Nothing is on by default (ADR-0088 §6): an application names the catalog it
