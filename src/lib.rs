@@ -239,7 +239,7 @@ pub use flui_app::app::open_secondary_window;
 /// Open an additional top-level window with mounted widget content.
 ///
 /// Desktop only. Call on the owner thread while its event loop is live, with
-/// [`WindowPolicy::SeparateRealms`]. `SharedRealm` is refused with
+/// [`WindowPolicy::Isolated`]. `WindowPolicy::Shared` is refused with
 /// [`AppWindowError::UnsupportedPolicy`]. As with [`open_secondary_window`],
 /// success can mean admission for deferred creation rather than completed
 /// installation; see [`app::app::open_window`] for the error contract.

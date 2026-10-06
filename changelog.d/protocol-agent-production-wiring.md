@@ -14,4 +14,4 @@
   newline-delimited JSON, in debug builds only; `cargo run -p flui-devtools --example
   agent_counter --features agent` runs the counter behind it.
 - **`flui-testing`**: `HeadlessDevAgent` attaches a development agent hook the way a runner's
-  loop does, and `HeadlessRealm::with_dev_agent` hands it the realm's window.
+  loop does, and `HeadlessHost::with_dev_agent` hands it the realm's window.
