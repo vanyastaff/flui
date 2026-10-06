@@ -20,11 +20,6 @@ class = "wave"
 count = 1
 
 [[allow]]
-path = "crates/flui-animation/src/lib.rs"
-class = "wave"
-count = 1
-
-[[allow]]
 path = "crates/flui-app/src/lib.rs"
 class = "wave"
 count = 1
