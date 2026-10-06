@@ -191,10 +191,29 @@ composing. The amendment fixes what the owner sees and when:
    committed. The field's owner is told only when the committed text changed; a session that
    only composed, cancelled a composition, or only marked existing text as a composition tells
    it nothing. A store keeps that origin beside its composing range and accounts for a
-   session's edits with `text_store::CompositionLedger`: text the session inserted and then
-   marked is a new preedit, text it found and marked is a reconversion, and a composition an
-   edit cleared keeps its origin until it is marked again. A text form field validates and saves
-   the committed text (`TextEditingController::committed_text`). Kit version 2 pins it
+   session's edits with `text_store::CompositionLedger`, which knows what every character
+   stands for: a committed character stands for itself, a character the session inserted
+   stands for nothing, and committed text an edit removed from a composition (or from a
+   composition an edit cleared) is kept where it was removed. The committed text is every
+   visible character, with the composition replaced by what its characters and removals
+   stand for. So text the session inserted and then marked is a new preedit, text it found and
+   marked is a reconversion, and a composition an edit cleared keeps its origin until it is
+   marked again; the text one edit inserted, with what it removed, is one replacement, and
+   replacements that rewrote each other's text are one. A session opens with its composition
+   standing for itself when the origin is its visible text, as new preedit when the origin is
+   empty, and otherwise as one replacement of the origin by the visible text. **Narrowing:**
+   when a mark leaves part of a composition (or of a composition an edit cleared) outside the
+   new range, that part commits as the user sees it: its characters stand for themselves and its
+   removals are dropped. The rest keeps what its own characters and removals stand for, unless a
+   replacement with non-empty removed text lies on both sides of the new range; its removed text
+   cannot be divided, so the rest of that region then stands for its own visible text, and the
+   committed text over it is what the user sees. A replacement's removed text is therefore never
+   counted beside any of its own inserted text (no "abcdefDEF" from narrowing a conversion of
+   "abcdef" to "ABC"). Text that never stood for anything (new preedit) commits as shown beside
+   the origin the rest keeps. `flui-platform-api`'s `the_ledger_follows_the_reference` checks the
+   ledger against a reference model over random edit, mark and session sequences, with the
+   cases that model found (`composition_ledger_named_cases`). A text form field validates and
+   saves the committed text (`TextEditingController::committed_text`). Kit version 2 pins it
    (`composition_only_sessions_do_not_notify_the_owner`,
    `reconverting_committed_text_notifies_only_on_commit`).
 2. **The owner hears after the lock is released, before the next grant.** `LockArbiter::request`

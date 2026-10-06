@@ -237,14 +237,14 @@ impl InMemoryTextStore {
                 let mut doc = self.doc.borrow_mut();
                 let committed = doc.committed();
                 let mut work = doc.clone();
-                let ledger = CompositionLedger::open(work.composing());
+                let ledger = CompositionLedger::open(&work.text, work.composing());
                 let mut session = EditSession {
                     doc: &mut work,
                     protected,
                     ledger,
                 };
                 body(&mut session);
-                let origin = session.ledger.origin().unwrap_or_default().to_owned();
+                let origin = session.ledger.origin().unwrap_or_default();
                 work.origin = origin;
                 *doc = work;
                 if doc.committed() != committed {
@@ -558,7 +558,7 @@ impl TextStoreRead for EditSession<'_> {
 impl TextStoreEdit for EditSession<'_> {
     fn replace(&mut self, range: Utf16Range, text: &str) -> Result<TextChange, TextStoreError> {
         let bytes = utf16::byte_range(&self.doc.text, range)?;
-        self.ledger.replace(&self.doc.text, bytes, text.len());
+        self.ledger.replace(bytes, text);
         self.doc.replace(range, text)
     }
 
@@ -578,7 +578,7 @@ impl TextStoreEdit for EditSession<'_> {
         let bytes = composition
             .map(|composition| utf16::byte_range(&self.doc.text, composition.range))
             .transpose()?;
-        self.ledger.set_composition(&self.doc.text, bytes);
+        self.ledger.set_composition(bytes);
         self.doc.composition = composition;
         Ok(())
     }

@@ -124,6 +124,7 @@ impl Doc {
     /// A ledger for a session opening on this document.
     fn ledger(&self) -> CompositionLedger {
         CompositionLedger::open(
+            &self.text,
             self.composing
                 .as_ref()
                 .map(|(range, _)| (range.clone(), self.origin.clone())),
@@ -409,11 +410,7 @@ impl EditableTextStore {
                     ledger: original.ledger(),
                 };
                 body(&mut session);
-                session
-                    .ledger
-                    .origin()
-                    .unwrap_or_default()
-                    .clone_into(&mut session.doc.origin);
+                session.doc.origin = session.ledger.origin().unwrap_or_default();
                 if session.doc != original {
                     self.write_back(&controller, generation, session.doc, &original);
                 }
@@ -838,7 +835,7 @@ fn rendered_offset_at(
 impl TextStoreEdit for Session<'_> {
     fn replace(&mut self, range: Utf16Range, text: &str) -> Result<TextChange, TextStoreError> {
         let bytes = utf16::byte_range(&self.doc.text, range)?;
-        self.ledger.replace(&self.doc.text, bytes, text.len());
+        self.ledger.replace(bytes, text);
         self.doc.replace(range, text)
     }
 
@@ -864,7 +861,7 @@ impl TextStoreEdit for Session<'_> {
             None => None,
         };
         let range = self.doc.composing.as_ref().map(|(range, _)| range.clone());
-        self.ledger.set_composition(&self.doc.text, range);
+        self.ledger.set_composition(range);
         Ok(())
     }
 }
