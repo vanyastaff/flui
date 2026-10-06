@@ -42,6 +42,13 @@ outside this boundary.
 `local_clone_competing_owner_reentry` and
 `key_collision_same_owner_and_stale_release`.
 
+### Exhausted owner identities refuse admission permanently
+
+An owner tag is claim authority, so its allocator never wraps or reissues a
+retired tag. The final nonzero tag is admitted once; after that, owner
+construction panics permanently. Existing scoped claims stay usable, and a
+stale release cannot withdraw a later owner's claim.
+
 ### Binding observers and returned futures retire independently
 
 **Rule:** observer registries and each notification snapshot own separately

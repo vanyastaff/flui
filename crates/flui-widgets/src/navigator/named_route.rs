@@ -61,7 +61,7 @@ use parking_lot::Mutex;
 
 use super::binding::is_pageless_popup;
 use super::history::ReplaceTarget;
-use super::navigator::NavigatorHandle;
+use super::navigator::{NavigatorHandle, RouteReservation};
 use super::overlay_route::NavigatorRoute;
 use super::result::RouteResult;
 use super::route::{AnyResult, Route, RouteArguments, RouteId, RouteSettings};
@@ -203,12 +203,14 @@ pub(super) enum PushMode<'a> {
 /// value crossing the boundary is a `Box<dyn Any>` carrying one
 /// [`RouteResult`].
 trait ErasedPush {
-    /// Push `self` through `mode`, returning the new route's id and its boxed
-    /// `RouteResult<Self::Output>`.
+    /// Push `self` through `mode` under identities the operation reserved
+    /// before its first side effect, returning the new route's id and its
+    /// boxed `RouteResult<Self::Output>`.
     fn push_erased(
         self: Box<Self>,
         handle: &NavigatorHandle,
         mode: PushMode<'_>,
+        reservation: RouteReservation,
     ) -> (RouteId, Box<dyn Any>);
 
     /// Dispose a route that never reached a navigator.
@@ -228,14 +230,16 @@ impl<R: NavigatorRoute> ErasedPush for R {
         self: Box<Self>,
         handle: &NavigatorHandle,
         mode: PushMode<'_>,
+        reservation: RouteReservation,
     ) -> (RouteId, Box<dyn Any>) {
+        let reserved = move || reservation;
         let (id, result): (RouteId, RouteResult<R::Output>) = match mode {
-            PushMode::Push => handle.push_reporting_id(*self),
+            PushMode::Push => handle.push_reporting_id(*self, reserved),
             PushMode::Replace { target, result } => {
-                handle.push_replacement_erased_reporting_id(*self, target, result)
+                handle.push_replacement_erased_reporting_id(*self, target, result, reserved)
             }
             PushMode::RemoveUntil { keep } => {
-                handle.push_and_remove_until_reporting_id(*self, keep)
+                handle.push_and_remove_until_reporting_id(*self, keep, reserved)
             }
         };
         (id, Box::new(result))
@@ -332,8 +336,12 @@ impl GeneratedRoute {
         }
     }
 
-    /// Push the route through `mode`, reporting its new [`RouteId`] and its
-    /// still-erased result handle.
+    /// Push the route through `mode` under `reservation`, reporting its new
+    /// [`RouteId`] and its still-erased result handle.
+    ///
+    /// The caller reserves before anything it does is observable — before a
+    /// composed operation dismisses the route it replaces — so identity
+    /// exhaustion fails the whole operation, not its second half.
     ///
     /// The untyped entry points keep the id and drop the handle; dropping a
     /// [`RouteResult`] cancels nothing, exactly as an unawaited Dart `Future`
@@ -342,6 +350,7 @@ impl GeneratedRoute {
         mut self,
         handle: &NavigatorHandle,
         mode: PushMode<'_>,
+        reservation: RouteReservation,
     ) -> (RouteId, Box<dyn Any>) {
         self.push
             .take()
@@ -350,7 +359,7 @@ impl GeneratedRoute {
                  `checked` moves it into the TypedPush token, so an empty slot here means the \
                  carrier was reconstructed around an already-pushed route",
             )
-            .push_erased(handle, mode)
+            .push_erased(handle, mode, reservation)
     }
 
     /// Whether the carried route is a pageless popup (see `ErasedPush`).
@@ -413,13 +422,15 @@ pub(super) struct TypedPush<T> {
 }
 
 impl<T: Send + 'static> TypedPush<T> {
-    /// Push the route through `mode` and re-type its result handle.
+    /// Push the route through `mode` under `reservation` and re-type its
+    /// result handle.
     pub(super) fn push(
         self,
         handle: &NavigatorHandle,
         mode: PushMode<'_>,
+        reservation: RouteReservation,
     ) -> (RouteId, RouteResult<T>) {
-        let (id, erased) = self.route.push(handle, mode);
+        let (id, erased) = self.route.push(handle, mode, reservation);
         let typed = *erased
             .downcast::<RouteResult<T>>() // the named-route result-handle erasure (ADR-0024); `GeneratedRoute::checked` compared `TypeId::of::<T>()` against the route's own `Output` before this token could exist
             .expect(

@@ -60,9 +60,42 @@ pub(crate) type OverlayBuilder = Rc<dyn Fn(&dyn BuildContext) -> BoxedView>;
 pub struct OverlayEntryId(u64);
 
 impl OverlayEntryId {
-    fn next() -> Self {
+    /// Mint the next identity.
+    ///
+    /// `pub(crate)` so an operation that publishes something before it builds
+    /// its entry can reserve the identity first: capacity refusal then fails
+    /// the operation before any of its side effects.
+    pub(crate) fn next() -> Self {
+        Self::from_counter(Self::counter())
+    }
+
+    fn counter() -> &'static AtomicU64 {
         static COUNTER: AtomicU64 = AtomicU64::new(1);
-        Self(COUNTER.fetch_add(1, Ordering::Relaxed))
+        &COUNTER
+    }
+
+    /// Leave exactly `remaining` process entry identities. Only for a test
+    /// that runs alone in its own child process.
+    #[cfg(test)]
+    pub(crate) fn leave_process_identities(remaining: u64) {
+        // The last identity is MAX; the counter then parks at the zero sentinel.
+        let next = if remaining == 0 {
+            0
+        } else {
+            u64::MAX - (remaining - 1)
+        };
+        Self::counter().store(next, Ordering::Relaxed);
+    }
+
+    pub(crate) fn from_counter(counter: &AtomicU64) -> Self {
+        // Zero is a permanent exhausted sentinel, never an admitted identity.
+        // The final nonzero identity remains usable without wrapping to one.
+        let id = counter
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |next| {
+                (next != 0).then(|| next.checked_add(1).unwrap_or(0))
+            })
+            .expect("overlay entry identity space exhausted");
+        Self(id)
     }
 
     /// The raw value, used as the `ValueKey` payload of the entry's view.
@@ -129,12 +162,39 @@ impl OverlayEntry {
     /// `opaque` and `maintain_state` both default to `false`. The builder runs on each build of this entry's
     /// layer (its first build, [`mark_needs_build`](Self::mark_needs_build),
     /// and an ancestor rebuild that reaches it), never on insertion.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the process has exhausted all nonzero entry identities. Once
+    /// exhausted, further construction is permanently refused rather than
+    /// reusing an identity held by an existing entry or reconciliation key.
+    /// The rejected builder is retained before the capacity panic so its captures'
+    /// destructors cannot replace the failure. Accepted builders keep their
+    /// ordinary lifetime policy.
     #[must_use]
     pub fn new(builder: impl Fn(&dyn BuildContext) -> BoxedView + 'static) -> Self {
+        Self::new_allocated(builder, OverlayEntryId::next)
+    }
+
+    /// [`new`](Self::new) under an identity the caller already reserved with
+    /// [`OverlayEntryId::next`]. Cannot fail on capacity.
+    pub(crate) fn with_reserved_id(
+        id: OverlayEntryId,
+        builder: impl Fn(&dyn BuildContext) -> BoxedView + 'static,
+    ) -> Self {
+        Self::new_allocated(builder, move || id)
+    }
+
+    fn new_allocated(
+        builder: impl Fn(&dyn BuildContext) -> BoxedView + 'static,
+        allocate_id: impl FnOnce() -> OverlayEntryId,
+    ) -> Self {
+        let mut builder = crate::support::retirement::Terminal::new(builder);
+        let id = allocate_id();
         Self {
             inner: Arc::new(EntryInner {
-                id: OverlayEntryId::next(),
-                builder: crate::support::retirement::Terminal::new(Rc::new(builder)),
+                id,
+                builder: crate::support::retirement::Terminal::new(Rc::new(builder.take_value())),
                 rebuild: Mutex::new(None),
                 opaque: AtomicBool::new(false),
                 maintain_state: AtomicBool::new(false),
@@ -353,6 +413,121 @@ impl OverlayEntry {
     pub(crate) fn is_same(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.inner, &other.inner)
     }
+}
+
+/// The local counter drives the exact production allocator and entry admission
+/// path without mutating the process-global counter used by unrelated tests.
+#[cfg(test)]
+pub(super) fn overlay_entry_identity_exhaustion_preserves_existing_entries() {
+    use std::cell::Cell;
+
+    use flui_view::View;
+
+    use super::{InsertPosition, OverlayEntryView, OverlayHandle};
+
+    struct BuilderCapture(Rc<Cell<usize>>);
+    impl BuilderCapture {
+        fn observe(&self) {
+            std::hint::black_box(&self.0);
+        }
+    }
+    impl Drop for BuilderCapture {
+        fn drop(&mut self) {
+            self.0.set(self.0.get() + 1);
+        }
+    }
+
+    let counter = AtomicU64::new(u64::MAX - 1);
+    let entry = || {
+        OverlayEntry::new_allocated(
+            |_| BoxedView(Box::new(crate::SizedBox::new(10.0, 10.0))),
+            || OverlayEntryId::from_counter(&counter),
+        )
+    };
+    let first = entry();
+    let last = entry();
+    let overlay = OverlayHandle::new();
+    overlay.insert(&first, &InsertPosition::Top);
+    overlay.insert(&last, &InsertPosition::Top);
+    assert!(first.is_attached() && last.is_attached());
+    assert_eq!(overlay.ids_bottom_to_top(), vec![first.id(), last.id()]);
+
+    let first_view = OverlayEntryView::new(first.clone(), overlay.clone());
+    let last_view = OverlayEntryView::new(last.clone(), overlay.clone());
+    let first_key = first_view
+        .key()
+        .expect("entry publishes its actual reconciliation key");
+    let last_key = last_view
+        .key()
+        .expect("entry publishes its actual reconciliation key");
+    assert!(
+        !first_key.key_eq(last_key),
+        "last admitted entries cannot share a reconciliation key"
+    );
+    let rejected_drops = Rc::new(Cell::new(0));
+    for _ in 0..4 {
+        let capture = BuilderCapture(Rc::clone(&rejected_drops));
+        let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            OverlayEntry::new_allocated(
+                move |_| {
+                    capture.observe();
+                    BoxedView(Box::new(crate::SizedBox::new(10.0, 10.0)))
+                },
+                || OverlayEntryId::from_counter(&counter),
+            )
+        }))
+        .expect_err("exhausted counter must refuse every entry admission");
+        assert!(
+            flui_foundation::panic::payload_text(failure.as_ref())
+                .is_some_and(|message| message.contains("overlay entry identity space exhausted")),
+            "capacity refusal remains the original failure"
+        );
+        assert_eq!(
+            rejected_drops.get(),
+            0,
+            "rejected builder captures remain retained during capacity unwind"
+        );
+        assert_eq!(
+            overlay.ids_bottom_to_top(),
+            vec![first.id(), last.id()],
+            "refused admission cannot alias or replace existing entries"
+        );
+    }
+    overlay.rearrange(&[last.clone(), first.clone()]);
+    let moved_first = OverlayEntryView::new(first.clone(), overlay.clone());
+    assert!(first_key.key_eq(moved_first.key().expect("reordered entry keeps its key")));
+    first.remove();
+    assert!(!first.is_attached());
+    assert!(
+        last.is_attached(),
+        "removing one terminal entry cannot remove the other"
+    );
+    assert_eq!(overlay.ids_bottom_to_top(), vec![last.id()]);
+    overlay.insert(&first, &InsertPosition::Top);
+    last.remove();
+    assert_eq!(overlay.ids_bottom_to_top(), vec![first.id()]);
+    assert!(first.is_attached() && !last.is_attached());
+
+    let independent = OverlayHandle::new();
+    let healthy_drops = Rc::new(Cell::new(0));
+    let capture = BuilderCapture(Rc::clone(&healthy_drops));
+    let healthy = OverlayEntry::new(move |_| {
+        capture.observe();
+        BoxedView(Box::new(crate::SizedBox::new(1.0, 1.0)))
+    });
+    independent.insert(&healthy, &InsertPosition::Top);
+    assert!(healthy.is_attached());
+    healthy.remove();
+    drop(healthy);
+    assert_eq!(
+        healthy_drops.get(),
+        1,
+        "healthy builder ownership retires normally"
+    );
+    assert!(
+        independent.ids_bottom_to_top().is_empty(),
+        "an independent healthy overlay still progresses"
+    );
 }
 
 impl fmt::Debug for OverlayEntry {

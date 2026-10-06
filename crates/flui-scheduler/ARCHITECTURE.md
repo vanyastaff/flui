@@ -8,6 +8,17 @@ decisions` entries below; a full crate architecture writeup is deferred.
 
 ## Mapping decisions
 
+### Exhausted task identities permanently refuse admission
+
+Task identities (the process-wide `Task` allocator and each async driver's)
+never wrap: the integer maximum is a permanent exhaustion state, and once it is
+reached every admission panics, including after the panic is caught, tasks are
+cancelled or another driver clone is used. An accepted task therefore keeps its
+cancellation authority and its priority/FIFO position. Admission checks capacity
+before polling a future or publishing a task, and the rejected callback or
+future is retained rather than dropped (ADR-0127), so its destructor cannot
+replace the capacity failure.
+
 ### Ticker cancellation precedes terminal callback retirement
 
 Disposing, stopping or resetting a ticker withdraws its callback and cancels

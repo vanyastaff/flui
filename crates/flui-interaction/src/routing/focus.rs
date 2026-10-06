@@ -918,6 +918,10 @@ mod tests {
     fn focus_traversal_matrix() {
         let cases: &[(&str, fn())] = &[
             (
+                "focus_node_identity_exhaustion_preserves_notifications",
+                crate::routing::focus_scope::focus_node_identity_exhaustion_preserves_notifications,
+            ),
+            (
                 "key_dispatch_walks_leaf_to_root_and_honors_skip",
                 key_dispatch_walks_leaf_to_root_and_honors_skip,
             ),

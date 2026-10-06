@@ -7,6 +7,14 @@ representation of a scene.
 
 ## Mapping decisions
 
+### Rebuild hook generations never return after exhaustion
+
+The hook allocator admits its final nonzero generation once and then refuses
+every registration permanently. A refused registration leaves the current hook
+installed, so a stale registration guard cannot withdraw it, and the rejected
+hook is retained rather than dropped (ADR-0127). Healthy replacement still
+destroys the outgoing hook outside the slot lock.
+
 ### Typed scene factories and explicit ownership transfer
 
 The plugin macros export fixed C symbol families once per image. Factories return

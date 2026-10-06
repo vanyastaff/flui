@@ -1,5 +1,12 @@
 # flui-widgets architecture
 
+## Overlay entry identity admission
+
+Overlay entry allocation admits the final nonzero identity once and then refuses
+construction permanently, so an entry's removal authority and its consumer view
+key are never shared with a later entry. The rejected builder is retained
+rather than dropped (ADR-0127).
+
 ## Terminal navigation ownership
 
 Navigation bindings hold the navigator's registry weakly. The navigator closes
@@ -9,6 +16,21 @@ enqueue work for a navigator that is gone. A lookup through a closed registry
 returns nothing and a mutation does nothing. Modal, transition and hero handles
 that outlive the navigator keep only their own state; a transition handle does
 not keep a modal page alive.
+
+Route and navigator command identities never wrap: the integer maximum
+permanently refuses allocation, so a caught capacity failure cannot reissue an
+identity held by history or a command target. A rejected route and its
+replacement result are retained rather than dropped (ADR-0127).
+
+An admission reserves every identity it spends, route and overlay entry alike,
+before its first observable side effect: a recorded Router page, a filled
+binding slot, an inserted entry, a dismissed predecessor (`pop_and_push_named`
+reserves before it pops), a hero frozen as a placeholder. Batch replacement
+reserves for every member before preparing any. Exhaustion therefore fails the
+whole operation with nothing changed, and caller-owned values carried across
+the reservation (a named request's arguments, a result, a predicate, a
+Router's unseeded initial values) are retained on refusal. Spent reservations
+are not returned.
 
 Route, router, overlay, modal and hero owners withdraw each owned value from
 shared state before dropping it, so no destructor runs under an internal lock.

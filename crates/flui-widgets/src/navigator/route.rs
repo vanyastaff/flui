@@ -146,8 +146,30 @@ impl RouteId {
     /// id **before** the route is boxed, so it can hand the route a
     /// `RouteBinding` pre-bound to it.
     pub(crate) fn next() -> Self {
+        Self::next_from(Self::counter())
+    }
+
+    fn counter() -> &'static AtomicU64 {
         static COUNTER: AtomicU64 = AtomicU64::new(1);
-        Self(COUNTER.fetch_add(1, Ordering::Relaxed))
+        &COUNTER
+    }
+
+    /// Leave exactly `remaining` process route identities. Only for a test
+    /// that runs alone in its own child process.
+    #[cfg(test)]
+    pub(crate) fn leave_process_identities(remaining: u64) {
+        Self::counter().store(u64::MAX - remaining, Ordering::Relaxed);
+    }
+
+    pub(super) fn next_from(counter: &AtomicU64) -> Self {
+        // MAX is a permanent exhausted sentinel. Admitted identities are
+        // 1..MAX; refusal never advances the counter back into that range.
+        let raw = counter
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |next| {
+                if next == 0 { None } else { next.checked_add(1) }
+            })
+            .unwrap_or_else(|_| panic!("BUG: route identity capacity exhausted"));
+        Self(raw)
     }
 
     /// The raw identifier. Stable for the route's lifetime, never reused.
@@ -513,7 +535,9 @@ impl<R: Route> RouteRecord<R> {
     /// before the history flush.
     #[cfg(test)]
     pub(crate) fn erase(route: R) -> (Box<dyn ErasedRoute>, RouteResult<R::Output>) {
-        Self::erase_with_id(RouteId::next(), route)
+        let mut route = super::lifecycle::Terminal::new(route);
+        let id = RouteId::next();
+        Self::erase_with_id(id, route.take_value())
     }
 
     /// Box `route` under an id minted by the caller.
@@ -649,4 +673,53 @@ impl<R: Route> ErasedRoute for RouteRecord<R> {
     fn dispose(&mut self) {
         self.route.dispose();
     }
+}
+
+#[cfg(test)]
+pub(super) fn route_identity_exhaustion_preserves_history_authority() {
+    use super::history::RouteHistory;
+    use super::overlay_route::SimpleRoute;
+    use flui_view::ViewExt;
+    let counter = AtomicU64::new(1);
+    let older = RouteId::next_from(&counter);
+    counter.store(u64::MAX - 1, Ordering::Relaxed);
+    let last = RouteId::next_from(&counter);
+    assert_eq!(last.get(), u64::MAX - 1);
+    let mut history = RouteHistory::new();
+    let older_result = history.seed_initial_with_id(
+        older,
+        SimpleRoute::<()>::new(|_| crate::Text::new("older").boxed()),
+    );
+    let last_result = history.seed_initial_with_id(
+        last,
+        SimpleRoute::<()>::new(|_| crate::Text::new("last").boxed()),
+    );
+    for _ in 0..3 {
+        let failure = std::panic::catch_unwind(|| RouteId::next_from(&counter))
+            .expect_err("exhausted route identity remains refused");
+        assert_eq!(
+            flui_foundation::panic::payload_text(failure.as_ref()),
+            Some("BUG: route identity capacity exhausted")
+        );
+        assert_eq!(history.ids(), vec![older, last]);
+    }
+    assert!(history.remove_route(older, None));
+    assert_eq!(older_result.try_take(), Some(None));
+    assert_eq!(history.current(), Some(last));
+    assert_eq!(
+        last_result.try_take(),
+        None,
+        "removing the older identity cannot complete its sibling"
+    );
+    assert!(!history.remove_route(older, None));
+    assert_eq!(history.current(), Some(last));
+    let independent = AtomicU64::new(1);
+    let mut recovered = RouteHistory::new();
+    let id = RouteId::next_from(&independent);
+    recovered.seed_initial_with_id(
+        id,
+        SimpleRoute::<()>::new(|_| crate::Text::new("recovery").boxed()),
+    );
+    assert!(recovered.remove_route(id, None));
+    assert_eq!(recovered.current(), None);
 }

@@ -41,6 +41,7 @@ the executable gesture graph from accidentally becoming cross-thread.
 
 Local design choices and why. Each entry names the conflict, the choice, and the reference (a strategy clause, a design rule, or a precedent plan).
 
+- **Focus node identities are never reissued.** The allocator admits its final nonzero identity once and then refuses every new `FocusNode` with a panic, permanently, even after that panic is caught. Wrapping would hand a retired identity, and the focus authority it names, to a new node; refusing keeps every attached node's requests and listeners intact.
 - **Recogniser is a `Clone` struct; the lifecycle lives on `RecognizerBase`.** Multiple consumers can hold `Arc<Self>` cheaply. The trade-off: users get a stable struct API but cannot observe field changes without an explicit notifier (deferred; `flui-foundation::Notifier` is the candidate).
 - **Pointer event types are W3C `ui-events`, not a local re-implementation.** Pointer events are `ui_events::pointer::*` (W3C-compliant), with a `DeviceId = i32` shim at the `InputEvent` enum layer. This keeps the crate aligned with the platform layer's event types and follows the workspace preference for a mature crate over a hand-rolled one.
 - **`TapButton` is a typed enum, not integer button constants.** `TapButton` (`src/recognizers/tap.rs:51-59`) maps pointer buttons explicitly through `from_pointer_button`, so the type system enforces the choice. It is `#[non_exhaustive]` so a future fourth button slot can be added without breaking downstream.
