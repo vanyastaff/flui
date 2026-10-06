@@ -122,11 +122,12 @@ const OWNER_TURN_BUDGET: usize = 32;
     )
 )]
 pub(in crate::app) enum PlatformToUi {
-    /// Platform input for the stamped presentation. `consumed` receives
-    /// whether a handler took it once it runs; see [`dispatch_platform_input`].
+    /// Platform input for the stamped presentation. `consumed`, present only
+    /// for keyboard input, receives whether a handler took it once it runs;
+    /// see [`dispatch_platform_input`].
     Input {
         input: flui_platform::traits::PlatformInput,
-        consumed: std::sync::Arc<std::sync::OnceLock<bool>>,
+        consumed: Option<std::sync::Arc<std::sync::OnceLock<bool>>>,
     },
     Resized {
         size: flui_foundation::geometry::Size<f64>,
@@ -329,7 +330,10 @@ impl PlatformToUi {
     ) {
         match self {
             Self::Input { input, consumed } => {
-                let _ = consumed.set(realm.handle_input_addressed(presentation_id, input));
+                let handled = realm.handle_input_addressed(presentation_id, input);
+                if let Some(consumed) = consumed {
+                    let _ = consumed.set(handled);
+                }
             }
             Self::Resized { size, scale_factor } => {
                 // Take the applier out of THIS realm's slot, release the
@@ -988,16 +992,20 @@ fn dispatch_platform_input(
     dispatcher: RealmDispatcher,
     input: flui_platform::traits::PlatformInput,
 ) -> flui_platform::DispatchEventResult {
-    let is_key = matches!(input, flui_platform::traits::PlatformInput::Keyboard(_));
-    let consumed = std::sync::Arc::new(std::sync::OnceLock::new());
+    // Only a key's answer depends on the outcome, so only a key pays for a
+    // result channel: pointer move streams allocate nothing here.
+    let consumed = matches!(input, flui_platform::traits::PlatformInput::Keyboard(_))
+        .then(|| std::sync::Arc::new(std::sync::OnceLock::new()));
     let _ = dispatch_platform_realm(
         dispatcher,
         RealmTask::Event(PlatformToUi::Input {
             input,
-            consumed: std::sync::Arc::clone(&consumed),
+            consumed: consumed.clone(),
         }),
     );
-    let default_prevented = !is_key || consumed.get().copied().unwrap_or(true);
+    let default_prevented = consumed
+        .as_ref()
+        .is_none_or(|consumed| consumed.get().copied().unwrap_or(true));
     flui_platform::DispatchEventResult::resolved(false, default_prevented)
 }
 
