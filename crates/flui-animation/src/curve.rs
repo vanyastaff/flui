@@ -839,11 +839,7 @@ impl CatmullRomCurve {
 }
 
 impl Curve for CatmullRomCurve {
-    #[expect(
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss,
-        reason = "`t` is clamped to [0, 1] (NaN casts to 0), so `t_scaled.floor()` is a segment index in [0, segment_count]"
-    )]
+    // Cast policy: `t` is clamped to [0, 1] (NaN casts to 0), so `t_scaled.floor()` is a segment index in [0, segment_count].
     fn transform(&self, t: f64) -> f64 {
         let t = t.clamp(0.0, 1.0);
 
@@ -912,11 +908,7 @@ impl CatmullRomSpline {
 }
 
 impl Curve2D for CatmullRomSpline {
-    #[expect(
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss,
-        reason = "`t` is clamped to [0, 1] (NaN casts to 0), so `t_scaled.floor()` is a segment index in [0, segment_count]"
-    )]
+    // Cast policy: `t` is clamped to [0, 1] (NaN casts to 0), so `t_scaled.floor()` is a segment index in [0, segment_count].
     fn transform(&self, t: f64) -> Curve2DSample {
         let t = t.clamp(0.0, 1.0);
 

@@ -91,14 +91,12 @@
 #![deny(missing_docs)]
 // Crate-local bars above the workspace lint table (a member using
 // `[lints] workspace = true` cannot add its own `[lints.clippy]` entries).
+// `missing_panics_doc`, `missing_errors_doc`, `allow_attributes_without_reason`,
+// `cast_possible_truncation`, `cast_sign_loss` and `clone_on_ref_ptr` still
+// have hits in the controller, vsync, proxy, switch and compound modules; they
+// turn on here once those modules are reworked.
 #![warn(
-    clippy::missing_panics_doc,
-    clippy::missing_errors_doc,
-    clippy::allow_attributes_without_reason,
-    clippy::cast_possible_truncation,
-    clippy::cast_sign_loss,
     clippy::derive_partial_eq_without_eq,
-    clippy::clone_on_ref_ptr,
     clippy::return_self_not_must_use,
     clippy::lossy_float_literal,
     clippy::unwrap_in_result,

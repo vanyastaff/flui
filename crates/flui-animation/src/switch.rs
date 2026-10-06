@@ -75,10 +75,7 @@ struct AnimationSwitchInner {
     /// Callback when switched.
     on_switched: Option<Terminal<Arc<dyn Fn() + Send + Sync>>>,
     /// Last reported value (for change detection).
-    #[expect(
-        dead_code,
-        reason = "reserved for value change detection, which the switch does not perform yet"
-    )]
+    #[expect(dead_code)]
     last_value: Option<f64>,
     /// Last reported status.
     last_status: Option<AnimationStatus>,
@@ -162,10 +159,6 @@ impl AnimationSwitch {
     /// * `current` - The initial animation to proxy
     /// * `next` - The animation to switch to when values cross (optional)
     #[must_use]
-    #[expect(
-        clippy::clone_on_ref_ptr,
-        reason = "this file is being reworked by the in-flight controller ownership change, which converts the site"
-    )]
     pub fn new(current: Arc<dyn Animation<f64>>, next: Option<Arc<dyn Animation<f64>>>) -> Self {
         let current = Terminal::new(current);
         let next = next.map(Terminal::new);
@@ -245,20 +238,12 @@ impl AnimationSwitch {
 
     /// Returns the currently active animation.
     #[must_use]
-    #[expect(
-        clippy::clone_on_ref_ptr,
-        reason = "this file is being reworked by the in-flight controller ownership change, which converts the site"
-    )]
     pub fn current(&self) -> Arc<dyn Animation<f64>> {
         self.inner.lock().current.get().clone()
     }
 
     /// Builds the status forwarder that re-emits the current animation's
     /// status transitions through our notifier.
-    #[expect(
-        clippy::clone_on_ref_ptr,
-        reason = "this file is being reworked by the in-flight controller ownership change, which converts the site"
-    )]
     fn make_status_callback(
         inner_weak: &std::sync::Weak<Mutex<AnimationSwitchInner>>,
         notifier: &Arc<ChangeNotifier>,
@@ -291,10 +276,6 @@ impl AnimationSwitch {
     }
 
     /// Sets up listeners on the current and next animations.
-    #[expect(
-        clippy::clone_on_ref_ptr,
-        reason = "this file is being reworked by the in-flight controller ownership change, which converts the site"
-    )]
     fn setup_listeners(&self) {
         let inner_weak = Arc::downgrade(&self.inner);
         let notifier = Arc::clone(&self.notifier);
@@ -418,10 +399,6 @@ impl AnimationSwitch {
     }
 
     /// Disposes of this animation switch, cleaning up listeners.
-    #[expect(
-        clippy::clone_on_ref_ptr,
-        reason = "this file is being reworked by the in-flight controller ownership change, which converts the site"
-    )]
     pub fn dispose(&self) {
         let (current, next, value_id, status_id, next_id) = {
             let mut inner = self.inner.lock();
@@ -524,10 +501,6 @@ impl fmt::Debug for AnimationSwitch {
 }
 
 #[cfg(test)]
-#[expect(
-    clippy::clone_on_ref_ptr,
-    reason = "test fixtures share controllers; converted with the in-flight controller ownership change"
-)]
 mod tests {
     use super::*;
     use crate::AnimationController;

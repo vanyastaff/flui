@@ -176,10 +176,6 @@ impl Vsync {
     /// Register a borrowed controller, reporting permanent identity exhaustion.
     ///
     /// A refusal leaves the controller and every admitted registration intact.
-    #[expect(
-        clippy::missing_errors_doc,
-        reason = "this file is being reworked by the in-flight controller ownership change, which converts the site"
-    )]
     pub fn try_register(
         &self,
         controller: &AnimationController,
@@ -537,10 +533,6 @@ impl std::fmt::Debug for Vsync {
 }
 
 #[cfg(test)]
-#[expect(
-    clippy::clone_on_ref_ptr,
-    reason = "test fixtures share controllers; converted with the in-flight controller ownership change"
-)]
 mod tests {
     use std::time::Duration;
 
