@@ -6,6 +6,23 @@
 //! state table — composed from existing widgets rather than a dedicated
 //! decoration render object, and narrowed to the filled/underline variant.
 //!
+//! # Supporting line
+//!
+//! The decorator is a column of two parts. The **container** — fill, label,
+//! hint and content, wrapped in the hover `MouseRegion` — is the box whose
+//! bottom border is the active indicator. The **supporting line** (the error
+//! text, or the helper text when there is no error) sits below it, outside
+//! the container, as the M3 text-field spec places supporting text: 4dp
+//! below the indicator, inset at the sides by the container's content
+//! padding so it starts where the content starts. The container keeps its
+//! content height; it is not stretched to fill a tight parent.
+//!
+//! The supporting line is not a hit-test target: the field's tap and hover
+//! area is the container alone, so a tap on the error text does not focus
+//! the field (`TextField`'s tap detector defers to this subtree).
+//! Intrinsic sizes add the line's height below the container, and the
+//! baseline is the container's.
+//!
 //! # Named divergences / deferrals
 //!
 //! - **Baseline slot layout** — the oracle's `_RenderDecoration` positions
@@ -51,8 +68,8 @@ use flui_sdk::painting::{Border, BorderRadius, BorderSide, BorderStyle, BoxDecor
 use flui_sdk::platform::Brightness;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{
-    Column, CrossAxisAlignment, DecoratedBox, MouseRegion, Padding, Text, WidgetState,
-    WidgetStateProperty, WidgetStates, WidgetStatesController,
+    Column, CrossAxisAlignment, DecoratedBox, IgnorePointer, MainAxisSize, MouseRegion, Padding,
+    Text, WidgetState, WidgetStateProperty, WidgetStates, WidgetStatesController,
 };
 
 use crate::color_scheme::ColorScheme;
@@ -244,6 +261,23 @@ fn default_error_style(
 /// doc comment, `input_decorator.dart:3333-3334`, tag `3.44.0`).
 fn default_content_padding() -> EdgeInsets {
     EdgeInsets::new(8.0, 12.0, 8.0, 12.0)
+}
+
+/// The gap between the indicator and the supporting line — the M3 text-field
+/// spec's 4dp supporting-text top padding (Flutter's M3 `subtextGap`).
+const SUPPORTING_LINE_GAP: f64 = 4.0;
+
+/// Padding around the supporting line below the container: the
+/// [`SUPPORTING_LINE_GAP`] above it, and the container's resolved content
+/// padding at the sides, so the line starts where the content does — for any
+/// `content_padding`, not only the default.
+fn supporting_line_padding(content_padding: EdgeInsets) -> EdgeInsets {
+    EdgeInsets::new(
+        SUPPORTING_LINE_GAP,
+        content_padding.right,
+        0.0,
+        content_padding.left,
+    )
 }
 
 /// `ThemeData.hoverColor`'s default (`theme_data.dart:468`, tag `3.44.0`):
@@ -540,6 +574,25 @@ impl ViewState<InputDecorator> for InputDecoratorState {
         if let Some(child) = view.child.clone().into_inner() {
             rows.push(child);
         }
+
+        let content = Padding::new(content_padding)
+            .child(Column::new(rows).cross_axis_alignment(CrossAxisAlignment::Start));
+
+        let hover_on_enter = self.hover.clone();
+        let hover_on_exit = self.hover.clone();
+
+        let container = MouseRegion::new()
+            .on_enter(move |_cx, _device, _offset| {
+                hover_on_enter.update(WidgetState::Hovered, true);
+            })
+            .on_exit(move |_cx, _device, _offset| hover_on_exit.update(WidgetState::Hovered, false))
+            .child(DecoratedBox::new(box_decoration).child(content))
+            .boxed();
+
+        // The supporting line sits below the container, outside the box whose
+        // bottom border is the indicator — see "Supporting line" in the
+        // module docs.
+        let mut column = vec![container];
         if let Some((line_text, is_error)) = helper_or_error_line(decoration) {
             let base = text_theme.body_small.unwrap_or_default();
             let style = if is_error {
@@ -554,20 +607,18 @@ impl ViewState<InputDecorator> for InputDecoratorState {
                 )
             }
             .unwrap_or_default();
-            rows.push(Text::new(line_text.to_string()).style(style).boxed());
+            column.push(
+                IgnorePointer::new()
+                    .child(
+                        Padding::new(supporting_line_padding(content_padding))
+                            .child(Text::new(line_text.to_string()).style(style)),
+                    )
+                    .boxed(),
+            );
         }
 
-        let content = Padding::new(content_padding)
-            .child(Column::new(rows).cross_axis_alignment(CrossAxisAlignment::Start));
-
-        let hover_on_enter = self.hover.clone();
-        let hover_on_exit = self.hover.clone();
-
-        MouseRegion::new()
-            .on_enter(move |_cx, _device, _offset| {
-                hover_on_enter.update(WidgetState::Hovered, true);
-            })
-            .on_exit(move |_cx, _device, _offset| hover_on_exit.update(WidgetState::Hovered, false))
-            .child(DecoratedBox::new(box_decoration).child(content))
+        Column::new(column)
+            .main_axis_size(MainAxisSize::Min)
+            .cross_axis_alignment(CrossAxisAlignment::Stretch)
     }
 }
