@@ -1,378 +1,382 @@
 # Платформенный слой — дизайн
 
-- **Статус:** черновик на утверждение владельцу
+- **Статус:** черновик, редакция 2 (после ревью), на утверждение владельцу
 - **Дата:** 2026-10-06
 - **База:** `main` @ `d56188c14`
 - **Требования:** [requirements.md](requirements.md)
-- **ADR (Proposed, на утверждение):**
+- **ADR (Proposed):**
   [ADR-0151](../../../adr/ADR-0151-platform-layer-boundary-and-names.md) — граница, имена,
-  размещение lifecycle и системных настроек;
-  [ADR-0152](../../../adr/ADR-0152-capability-seam-revised.md) — шов возможностей
-  (заменяет ADR-0084 с изменениями)
+  lifecycle, системные настройки;
+  [ADR-0152](../../../adr/ADR-0152-capability-seam-revised.md) — шов возможностей (вместо
+  ADR-0084);
+  [ADR-0153](../../../adr/ADR-0153-stable-crates-do-not-ride-the-train.md) — Stable-крейты не
+  ходят поездом;
+  [ADR-0154](../../../adr/ADR-0154-capability-crates.md) — крейты возможностей
 
-Обозначения в фактах: **[R]** прочитано в коде, **[C]** скомпилировано, **[X]** запущено,
-**[I]** вывод, **[—]** недоступно на этом хосте.
+Обозначения: **[R]** прочитано в коде, **[C]** собрано, **[X]** запущено, **[I]** вывод,
+**[—]** недоступно на этом хосте.
 
-## 1. Что есть сейчас (сжато)
-
-Полная инвентаризация — §8. Главное:
+## 1. Что есть сейчас
 
 | Факт | Источник |
 |---|---|
-| `flui-platform-api`: C/1, layer 1, `stable`, `reach-forbid = [accesskit, tokio]`; фасад делает `pub use flui_platform_api as platform` — весь крейт Stable-поверхность `flui` | [R] `crates/flui-platform-api/Cargo.toml:69-74`, `src/lib.rs:183` |
-| В Stable-сигнатурах — `ui-events` 0.3, `keyboard-types` 0.8 (`Key`, `Modifiers`), `dpi::PhysicalPosition`; запрещено ADR-0089 | [R] `flui-platform-api/src/input.rs:29-38,96`, `platform_window.rs:288` |
-| ~2 000 строк политики и реализации в контракте: `LockArbiter`, `OwnerCalls`, `CompositionLedger`, `EditGeneration`, `project_ime_event`; тестовые двойники `InMemoryClipboard`, `InMemoryTextStore` (661 строка); backend-слаб `OfferTable` | [R] `text_store/*`, `clipboard.rs:23`, `data_transfer.rs` |
-| Unwired в контракте: `Storage` (единственный impl — `flui-testing::MemoryStorage`), `PlatformHaptics` (только `FakeHaptics`), `DataTransferSource` (только winit, без потребителя), `PlatformDisplay`, `WindowBounds`, `WindowMode`, `WindowEvent`, ~10 методов `PlatformWindow` | [R] |
-| `flui-platform`: H/1, layer 3, `allowed-dependents = [flui-app]`, 97 файлов / 40 717 строк src; в production его называет только `flui-app` (21 файл) | [R] |
-| В бэкенде живут контракты (`PlatformCapabilities`, `PathPromptOptions`, `SessionEndPhase/Answer`, `PlatformExecutor`), мёртвый код (`LinuxPlatform` — `unimplemented!()` во всех методах; `window.rs` с сырым `RawWindowHandle`; `BackgroundExecutor` на tokio) и публичные OS-типы (`win32::HWND`, `NSApplication`, `AndroidApp`, `web_sys::HtmlCanvasElement`, `tokio::runtime::Handle`, `accesskit::TreeUpdate`) | [R] |
-| «Unsupported» сообщается по-разному: `Option::None`, `CursorError::Unsupported`, `Ok(None)` у файлового диалога (читается как отмена), молчаливый no-op у `open_url`, выдуманные значения дисплея на Android, паника в `LinuxPlatform` | [R] |
-| `AppLifecycleState` — в `flui-scheduler` (ADR-0035), путь OS → runtime → scheduler проведён полностью; app-level сигнала ОС (фон/передний план, minimize, `visibilitychange`) нет | [R] `flui-scheduler/src/frame.rs:230`, `flui-runtime/src/lifecycle_state.rs` |
-| `AccessibilityFeatures` — никто не пишет и не читает (`#[expect(dead_code)]`); `text_scale_factor` всегда 1.0; локаль системы не доставляется; `GestureSettings` — константы, `for_platform`/`native()` никто не зовёт | [R] `flui-app/src/app/runtime.rs:92-97`, `flui-widgets/src/app/media_query.rs:60`, `flui-interaction/src/settings.rs` |
-| Возможность до виджета: `RealmHostServices` → `RealmServices` → `PresentationState` → `BuildOwner` → `BuildCapabilities` → `LifecycleContext` — ~7 файлов на новую возможность; пакет добавить не может (`LifecycleContext` sealed); ADR-0084 — 0 строк кода | [R] |
-| Только Linux/headless исполняются в CI; Win32, AppKit, iOS, Android — clippy cross-typecheck; Windows-job, упомянутый в `ci.yml:405`, не существует | [R] |
+| `flui-platform-api`: C/1, layer 1, `stable`, `reach-forbid = [accesskit, tokio]`; фасад делает `pub use flui_platform_api as platform` | [R] `crates/flui-platform-api/Cargo.toml:69-74`, корневой `src/lib.rs:183` |
+| Контракт зависит от `flui-foundation = "=0.2.0-dev"`, а у foundation train guard `links = "flui_train"` | [R] `crates/flui-platform-api/Cargo.toml:27`; ADR-0088 |
+| В Stable-сигнатурах — типы `ui-events` 0.3 (`PlatformInput::Pointer(PointerEvent)`, `PlatformWindow::modifiers`), а через них `keyboard-types` и `dpi`. ADR-0089 (Proposed) это запрещает; манифест называет это «ADR-0089 debt» | [R] `flui-platform-api/src/input.rs:29-38,108-110`, `platform_window.rs:288` |
+| ~2 000 строк политики text store в контракте (`LockArbiter`, `OwnerCalls`, `CompositionLedger`, `EditGeneration`, `project_ime_event`); тестовые двойники `InMemoryClipboard`, `InMemoryTextStore` (730 строк, 637 без тестов); backend-слаб `OfferTable` | [R] `text_store/*`, `clipboard.rs:23`, `data_transfer.rs` |
+| Без потребителя выше бэкенда: `PlatformDisplay`, `WindowBounds`, `WindowMode`, `WindowEvent`, весь словарь data transfer, методы `display`, `window_bounds`, `set_background_appearance`, `mouse_position`, `is_hovered`. `PlatformHaptics` реализован только headless-фейком; `Storage` — только `MemoryStorage` в `flui-testing` | [R] |
+| `flui-platform`: H/1, layer 3, `allowed-dependents = [flui-app]`, 97 файлов / 40 717 строк src; в production его называет только `flui-app` (19 файлов src) | [R] |
+| В бэкенде: словарь без потребителя выше (`PlatformCapabilities`, `PathPromptOptions`, `SessionEndPhase/Answer`); `LinuxPlatform` — `unimplemented!()` во всех методах, кроме `name` и `data_transfer`; наследный `window.rs` с сырым `RawWindowHandle`; публичные OS-типы (`win32::HWND`, `NSApplication`, `AndroidApp`, `HtmlCanvasElement`, `tokio::runtime::Handle`, `accesskit::TreeUpdate`) | [R] |
+| `BackgroundExecutor` и `Task` живые: их используют Win32, macOS, winit; файловые диалоги Win32 возвращают `Task` (ADR-0039 §2) | [R] `windows/platform.rs:660,831,2444-2538`, `macos/platform.rs:49,135`, `winit/platform.rs:228,353` |
+| «Нет возможности» сообщается по-разному: `Option::None`, `CursorError::Unsupported`, `Ok(None)` у диалога по умолчанию (читается как отмена), no-op у `open_url`, выдуманный дисплей на Android, паника `LinuxPlatform` | [R] |
+| `AppLifecycleState` — в `flui-scheduler` (ADR-0035); производитель — `flui-app`. Пробелы ADR-0035: видимость native-Windows, minimize Windows, web `visibilitychange`, транспорт pause/resume Android, `onExitRequested` | [R] `flui-scheduler/src/frame.rs:230`; ADR-0035:102-108 |
+| `AccessibilityFeatures` никто не пишет и не читает; `text_scale_factor` всегда 1.0; локаль системы не доставляется; `GestureSettings` — константы, `for_platform`/`native()` не вызываются | [R] `flui-app/src/app/runtime.rs:92-97`, `flui-widgets/src/app/media_query.rs:60`, `flui-interaction/src/settings.rs` |
+| Возможность до виджета: `RealmHostServices` → `RealmServices` → `PresentationState` → `BuildOwner` → `BuildCapabilities` → `LifecycleContext`, производитель в `flui-app`; у `LifecycleContext` 16 методов (15 публичных); пакет добавить возможность не может; ADR-0084 — 0 строк кода | [R] `build_context.rs:369-631` |
+| `ClipboardHandle` уже owner-local (`PhantomData<Rc<()>>`) и читает через колбэк (под асинхронный транспорт, ADR-0038 §6); единственный production-потребитель — `EditableText` | [R] `flui-interaction/src/clipboard.rs:1-24`, `editable_text.rs:1384` |
+| В CI исполняются только Linux/headless; Win32, AppKit, iOS, Android — clippy cross-typecheck; Windows-job из комментария `ci.yml:405` не существует | [R] |
 
 ## 2. Правила решения
 
-1. **Контрактный крейт — словарь и трейты, нужные ядру.** Без OS-кода, без `unsafe`, без
-   upstream-типов (ADR-0089), без `tokio`/`accesskit` (reach-forbid), без тестовых двойников.
-   Элемент без потребителя выше бэкенда в контракт не входит: Stable — это обещание.
-2. **OS-код — только в бэкенд-крейте**; от него зависит только `flui-app`. OS-типы в нём —
-   `pub(crate)`.
-3. **Источник системной настройки — бэкенд, потребитель — фреймворк.** Фреймворк не держит
-   «умолчание ОС» константой; запасное значение для бэкенда без ответа ОС лежит рядом с типом
-   в контракте и документировано по бэкендам.
-4. **Тип, который делят производитель и потребитель, — в самом нижнем нужном крейте.** Экземпляры
-   — выше (ADR-0083: «types stay low, instances move up»).
-5. **Необязательный сервис — пакет через шов**, не метод Stable-трейта.
-6. **Owner-local по send-flip:** handle, живущий на owner-потоке, — `!Send`; `Send` — только у
-   действительно межпоточного (колбэки окна до ADR-0082 §4 шаг 2, `Storage`, `Clipboard`).
+1. **Контракт — словарь и трейты, которыми пользуется кто-то выше бэкенда.** Без OS-кода,
+   `unsafe`, upstream-типов (ADR-0089 §1–§2, принят для контракта ADR-0151), тестовых двойников.
+   Элемент без потребителя выше бэкенда в контракт не входит; он возвращается с первым
+   потребителем.
+2. **Stable не ходит поездом** (ADR-0153): нормальные зависимости `stable`-крейта — только
+   `stable` и внешние по ADR-0089 §2.
+3. **OS-код фреймворка — в ядре-хосте, его список закрыт** (ADR-0151 §3). OS-код
+   необязательного сервиса — в крейте возможности (ADR-0154).
+4. **Источник системной настройки — хост, представление — у потребителя.** Один производитель
+   на хост; потребитель строит своё и не тащит снимок ОС в свою логику; политика приложения —
+   во фреймворке.
+5. **Общий тип — в самом нижнем нужном крейте**; экземпляры — выше (ADR-0083).
+6. **Owner-local по send-flip:** handle owner-потока — `!Send`; `Send` — только у
+   действительно межпоточного (колбэки `Platform` и окна до ADR-0082 §4 шаг 2, `Storage`,
+   backend-трейт `Clipboard`).
 7. **Отсутствие — значение.** `Unsupported { reason }`, не паника, не `None` без причины, не
-   `Ok(None)`.
+   `Ok(None)`, не выдуманные данные.
+8. **На `main` нет поверхности без потребителя.** Новая поверхность сливается вместе с первым
+   production-потребителем.
 
-## 3. Целевая карта крейтов
+## 3. Целевая карта крейтов (1.0)
 
-| Крейт | Tier / kind | Layer | Содержит | Не содержит |
+| Крейт | Класс / tier / kind | Layer | Содержит | Не содержит |
 |---|---|---|---|---|
-| **`flui-platform`** (сейчас `flui-platform-api`) | C/1, `stable` | 1 | `window` (PlatformWindow, WindowId, WindowOptions, WindowAppearance, WindowExecutionState, CursorError), `input` (свой словарь указателя/клавиатуры, ADR-0089 §4), `ime`, `text_store` (трейты и значения), `clipboard`, `data_transfer` (словарь), `storage`, `haptics`, `lifecycle` (AppLifecycleState), `preferences` (SystemPreferences), `locale`, `target_platform`, `capability` (шов) | OS-код, тестовые двойники, backend-таблицы, `ui-events`/`keyboard-types`/`dpi`, реализация lock/ledger-машинерии |
-| **`flui-native`** (сейчас `flui-platform`) | H/1, `internal` | 3 | `Platform`, `OwnerPlatform`/`SharedPlatform`/`PlatformProxy`, `HostWindow`, бэкенды `windows`, `macos`, `ios`, `android`, `winit` (Linux), `web`, `headless`; файловое хранилище; кросс-ОС правила маппинга (бывший `shared/`, разложенный по смыслу) | контракты, нужные выше; `LinuxPlatform`-заглушку; `window.rs`; `BackgroundExecutor`; публичные OS-типы |
-| `flui-semantics` | S/5 | 3 | без изменений, кроме удаления `AccessibilityFeatures`; `PlatformAccessibility` остаётся до своего словаря дерева (вне объёма) | — |
-| `flui-scheduler` | S/2 | 2 | реэкспорт `AppLifecycleState` из контракта (путь не меняется); новое ребро S→C | определение типа |
-| `flui-interaction` | S/4 | 2 | `GestureSettings` как конфиг распознавателей, строится из `SystemPreferences::gestures` | константы как «системные» значения |
-| `flui-runtime` | K/4 | 6 | `CapabilityRegistry`, `CapabilityRegistrar`, `Plugin`; доставка `SystemPreferences` в `MediaQuery` и в привязки жестов/анимаций | — |
-| `flui-view` | K/1 | 5 | `LifecycleContextExt::capability::<C>()` + скрытый `capability_erased` | `clipboard_handle` (удаляется), позже `storage` |
-| `flui-testing` | K/6 | 6 | headless-провайдеры встроенных возможностей, `MemoryStorage`, `InMemoryClipboard`, `InMemoryTextStore` (переезжают из контракта) | — |
-| `flui-app` | H/2 | 9 | единственный, кто называет `flui-native`; регистрирует встроенные провайдеры; `Application::plugin`/`capability` | — |
+| **`flui-geometry`** (новый, ADR-0153) | values, V, `stable` | 1 | логические и device-значения ADR-0098 (`Size`, `Point`, `Offset`, `Rect`, `Bounds`, `EdgeInsets`, `Device*`) | ID, счётчики, машинерию |
+| **`flui-platform`** (сейчас `flui-platform-api`) | контракт, C/1, `stable` | 1 | `window`, `input` (свой словарь указателя/клавиатуры), `ime`, `text_store` (трейты и значения), `clipboard`, `storage`, `locale`, `target_platform`, `lifecycle`, `preferences`, `capability`; с 0.3 — мост к хосту и разрешения | OS-код, двойники, backend-таблицы, haptics, data transfer до потребителя, upstream-типы |
+| **`flui-native`** (сейчас `flui-platform`) | ядро-хост, H/1, `internal` | 3 | `Platform`, `OwnerPlatform`, `SharedPlatform`, `PlatformProxy`, `HostWindow`, бэкенды `windows`, `macos`, `ios`, `android`, `winit`, `web`, `headless`; файловое хранилище; AT-SPI-адаптер; правила маппинга по смыслу | сервисы вне закрытого списка; заглушки; публичные OS-типы |
+| **`flui-location`, `flui-sensors`, `flui-media`, `flui-notify`, `flui-vault`, `flui-device`, `flui-system`…** | возможности, pkg, `capability` (ADR-0154) | 7 | один набор разрешений ОС: тип возможности, handle, OS-бэкенды под `cfg`, симулирующий провайдер, conformance-таблица, декларации | зависимостей друг от друга; поезда |
+| `flui-semantics` | S/5 | 3 | без изменений, кроме удаления `AccessibilityFeatures` | — |
+| `flui-scheduler` | S/2 | 2 | реэкспорт `AppLifecycleState` из контракта; политика кадров (`should_render`, `should_animate`) — своим extension-трейтом | определение типа |
+| `flui-interaction` | S/4 | 2 | `GestureSettings` строится из `SystemPreferences`; `ClipboardCapability` + `ClipboardHandle` | константы как «системные» значения |
+| `flui-animation` | S/6 | 3 | своя политика движения, построенная из `SystemPreferences::motion` и политики приложения | производитель системного сигнала |
+| `flui-runtime` | K/4 | 6 | `CapabilityRegistry`, `CapabilityRegistrar`, `Plugin`; доставка `SystemPreferences` в realm; политика приложения поверх ОС | — |
+| `flui-view` | K/1 | 5 | `LifecycleContextExt::capability::<C>()` + скрытый `capability_erased` | `clipboard_handle`, позже `storage` |
+| `flui-testing` | K/6 | 6 | headless-провайдеры встроенных возможностей, `MemoryStorage`, `InMemoryClipboard`, `InMemoryTextStore` | — |
+| `flui-app` | H/2 | 9 | единственный, кто называет `flui-native`; встроенные провайдеры; `Application::plugin`/`capability`; рассылка `SystemPreferences` в realm | — |
+| `flui-cli` | H/3 | 9 | с 0.3 — генерация манифестов ОС из деклараций крейтов возможностей | — |
 
-Третьего платформенного крейта нет: ни `-core`, ни крейта на ОС (ADR-0082 отверг per-backend
-крейты; рыночная норма — §7 — один контракт + бэкенды, а у winit разделение пришло только
-вместе с внешними бэкендами, которых у FLUI нет).
+**Почему это не «проблема множества крейтов».** Ядро не дробится: платформа фреймворка остаётся
+двумя крейтами, геометрия — один слой значений. Крейты возможностей — листья: от них никто не
+зависит, друг о друге они не знают, пользователь компилирует только добавленные, а CI при
+изменении пересобирает один лист. Боль множества крейтов — это сцепка версий; ADR-0153 убирает её
+до первого крейта возможности. Гранулярность — один крейт на набор разрешений и темп релизов (к 1.0
+около 8–10), не на API.
 
 ## 4. Таблица ответственности
 
-Колонки: понятие → категория → ядро или пакет → сейчас → цель → почему. «C» = контрактный крейт,
-«N» = бэкенд-крейт.
+«C» = контракт, «N» = ядро-хост, «K» = крейт возможности.
 
 ### 4.1 Окно и дисплей
 
 | Понятие | Категория | Ядро / пакет | Сейчас | Цель | Почему |
 |---|---|---|---|---|---|
-| `PlatformWindow` | контракт окна | ядро | C `platform_window.rs` | C, без изменений формы; `display()`, `window_bounds()`, `set_background_appearance()`, `mouse_position()`, `is_hovered()` → `HostWindow` (N) | методы без потребителя выше бэкенда не должны быть Stable-обещанием |
-| `HostWindow` | host-подтрейт | ядро (только host) | N `traits/host_window.rs` | N `host_window` | держит `accessibility()` (accesskit) и `text_store_host` — host-only |
-| Мониторы `PlatformDisplay`, `DisplayId` | словарь дисплея | ядро (host) | C, потребитель только N | N | нет потребителя выше бэкенда; вернётся в C с первым (полноэкранный выбор монитора в API приложения) |
-| DPR, размер | значение окна | ядро | C `scale_factor`/`on_resize`, проведено | C, без изменений | работает |
-| Refresh rate | значение окна | ядро | C `refresh_period`, проведено в pacing | C, без изменений | работает |
-| Safe area / insets | значение окна | ядро | C `safe_area_insets`, проведено только iOS | C; провести на Android/web; `view_insets` (клавиатура) — метод C, когда появится производитель | `MediaQueryData.padding/view_insets` есть, производителя нет |
-| Курсор | команда окна | ядро, framework-routed | C `set_cursor(CursorIcon)` | C, без изменений | ADR-0089 §2 разрешает `cursor-icon`; виджетам не возможность, а `MouseRegion` |
-| Системный chrome (заголовок, полноэкранный режим) | команда окна | ядро | C `set_title`, `toggle_fullscreen` | C | десктоп-база |
-| Системный chrome мобильный (status bar, Mica, vibrancy, liquid glass) | стиль ОС | пакет | N `window_ext`, C `WindowBackgroundAppearance::Mica*` | пакет через шов; `Mica*`/`Vibrant*` уходят из C | ОС-специфичные варианты не должны быть в Stable enum |
-| `WindowMode`, `WindowEvent`, `WindowBounds` | backend-состояние | — | C, потребитель только N | N | то же |
+| `PlatformWindow` | контракт окна | ядро | C | C; `display`, `window_bounds`, `set_background_appearance`, `mouse_position`, `is_hovered` → `HostWindow` (N) | нет потребителя выше бэкенда |
+| `HostWindow` | host-подтрейт | ядро | N | N | держит `accessibility()` (accesskit) и `text_store_host` |
+| Мониторы `PlatformDisplay`, `DisplayId` | словарь | ядро (host) | C, потребитель только N | N; в C — с первым потребителем | правило 1 |
+| DPR, размер, refresh rate | значение окна | ядро | C, проведено | C | работает |
+| Safe area / insets | значение окна | ядро | C, проведено только iOS | C; провести Android, web; `view_insets` — с производителем | `MediaQueryData.padding/view_insets` без производителя |
+| Курсор | команда окна | ядро | C `set_cursor(CursorIcon)` | C | ADR-0089 §2 разрешает `cursor-icon` |
+| Заголовок, полноэкранный режим | команда окна | ядро | C | C | десктоп-база |
+| `WindowAppearance` (тема окна, `Vibrant*`) | значение окна | ядро | C | C | окно может переопределять тему системы |
+| `WindowBackgroundAppearance` (`Mica*`), `WindowMode`, `WindowEvent`, `WindowBounds` | backend | — | C | N | только бэкенд; Windows-only варианты |
+| Мобильный chrome (status bar), liquid glass | стиль ОС | возможность | N `window_ext` | K | вне закрытого списка |
 
 ### 4.2 Ввод
 
 | Понятие | Категория | Ядро / пакет | Сейчас | Цель | Почему |
 |---|---|---|---|---|---|
-| Словарь указателя (`PointerEvent`, `PointerId`, `PointerKind`, `ScrollDelta`, фазы жестов) | словарь | ядро | C реэкспорт `ui-events` | C, свой тип (ADR-0089 §4) | ведёт interaction pointer-vocabulary P1; эта спека только фиксирует место |
-| Словарь клавиатуры (`KeyEvent`, `Key`, `NamedKey`, `Code`, `Modifiers`) | словарь | ядро | C реэкспорт `keyboard-types` | C, свой тип | то же ADR; focus-keyboard пока живёт на ui-events — переход после P1 |
-| Push-IME `ImeEvent`, `PlatformTextInput` | контракт | ядро | C | C, без изменений | ADR-0030/0090 |
-| Pull-store `TextStore`, `TextStoreHost`, значения | контракт | ядро | C `text_store` | C | ADR-0090/0135/0142 |
-| Машинерия store: `LockArbiter`, `OwnerCalls`, `CompositionLedger`, `EditGeneration`, `project_ime_event`, `commit_composition_in_place` | реализация | ядро | C (~2 000 строк, с `tracing`) | решается после text-ime T6 (см. Q5): вариант A — `flui-interaction` (S), Win32 зовёт через N→S; вариант B — остаётся в C за `#[doc(hidden)]`-модулем | это политика, а не словарь; но text-ime активно её меняет |
-| `InMemoryTextStore` | тестовый двойник | — | C | `flui-testing` | двойник не Stable |
-| Drag-and-drop: словарь `DataTransferOffer`, `TransferFormat`, … | словарь | ядро | C | C | нужен ядру для DnD-виджетов |
-| DnD: `OfferTable`, `OfferRecord` | backend-слаб | — | C | N | реализация winit |
-| `device_to_logical`, `logical_to_device`, `offset_from_coords` | хелперы | — | C (Win32-only / мёртвые) | N или удалить | backend-код |
+| Указатель (`PointerEvent`, `PointerId`, `PointerKind`, `ScrollDelta`, фазы) | словарь | ядро | C, реэкспорт `ui-events` | C, свой тип | ADR-0089 §4; владелец — interaction pointer-vocabulary |
+| Клавиатура (`KeyEvent`, `Key`, `NamedKey`, `Code`, `Modifiers`) | словарь | ядро | C, через `ui-events`/`keyboard-types` | C, свой тип | то же; focus-keyboard переходит после |
+| `ImeEvent`, `PlatformTextInput` | контракт | ядро | C | C | ADR-0030/0090 |
+| `TextStore`, `TextStoreHost`, `TextStoreObserver`, значения | контракт | ядро | C | C | ADR-0090/0135/0142 |
+| Машинерия text store | реализация | ядро | C | после text-ime T6 (Q5): `flui-interaction` (заменяет часть ADR-0142) или C за `#[doc(hidden)]` | политика, не словарь |
+| `InMemoryTextStore` | двойник | — | C | `flui-testing` | двойник не Stable |
+| Drag-and-drop: словарь, `OfferTable`, `ClaimSlot` | словарь + backend | ядро | C | N; словарь — в C с первым DnD-виджетом | правило 1 |
+| Пиксельные хелперы, `offset_from_coords`, `delta_offset_from_coords` | хелперы | — | C | N или удалить | backend-код / мёртвые |
 
 ### 4.3 Состояние системы
 
 | Понятие | Категория | Ядро / пакет | Сейчас | Цель | Почему |
 |---|---|---|---|---|---|
-| `AppLifecycleState` (тип) | словарь | ядро | `flui-scheduler/src/frame.rs:230` | C `lifecycle`; scheduler реэкспортирует | общий тип производителя (host, `PlatformToUi::Lifecycle`) и потребителя (scheduler); ADR-0082 §1 уже называет `WindowExecutionState` «машиной ADR-0035» — оба типа в одном модуле |
-| Lifecycle: источник событий | событие | ядро | N per-window (focus, visibility, execution) + host seed | N per-window + app-level сигнал ОС (фон/передний, minimize, `visibilitychange`) — новый колбэк в C, когда бэкенд его даёт | ADR-0035 «Not implemented» |
-| Lifecycle: агрегат | вычисление | ядро | `flui-runtime/src/lifecycle_state.rs` | без изменений | агрегат — решение фреймворка, не ОС |
-| Session end | событие | ядро | N `SessionEndPhase/Answer`, `on_session_end` | N (teardown владеет; тип internal к host по её решению) | teardown: «session-end types are internal» |
-| Memory pressure | событие | ядро | нет производителя; `WidgetsBinding::handle_memory_pressure` без вызова | C колбэк `Platform`-уровня, когда появится потребитель (кэш изображений) | после 0.2 |
-| Энергосбережение | настройка | ядро | нет | поле `SystemPreferences`, когда scheduler `LowPower` начнёт его читать | YAGNI до потребителя |
-| Тема (`Brightness`) | настройка | ядро | C + `appearance()`/`on_appearance_changed`, проведено | поле `SystemPreferences` | один источник |
-| Контраст | настройка | ядро | мёртвое поле в `AccessibilityFeatures` | поле `SystemPreferences` | material/cupertino ждут `high_contrast` |
-| Масштаб текста | настройка | ядро | `MediaQueryData.text_scale_factor` = 1.0 всегда | поле `SystemPreferences` → `MediaQuery` | нет производителя |
-| «Меньше движения», bold text, invert | настройка | ядро | мёртвые поля `AccessibilityFeatures` | поля `SystemPreferences`; `AccessibilityFeatures` удаляется | animation планирует `SystemMotion` (ADR-0146) — сводим, Q2 |
-| Локаль (список предпочтений) | настройка | ядро | тип `Locale` в C; списка нет | поле `SystemPreferences` | `WidgetsApp::resolve_locale` ждёт список |
-| Системные параметры жестов (double-click time, drag threshold, long press) | настройка | ядро | константы `flui-interaction/src/settings.rs` | поле `SystemPreferences::gestures` (`GestureTimings`), `GestureSettings` строится из него | interaction X1 планирует `GestureSettingsSource` — сводим, Q2 |
-| Доставка настроек виджету | транспорт | ядро | `MediaQuerySource` для DPR/brightness/padding | `MediaQuerySource` для всех полей + прямая подача в `GestureBinding` и в анимации | push-значения — inherited data, не capability (ADR-0084 их не покрывает) |
-| `PlatformAccessibility` | контракт a11y-моста | ядро | `flui-semantics/src/platform.rs:64` | без изменений (вне объёма) | называет `accesskit::TreeUpdate`, в C нельзя до своего словаря |
+| `AppLifecycleState` (тип) | словарь | ядро | `flui-scheduler` | C `lifecycle`, `#[non_exhaustive]`; scheduler реэкспортирует и держит политику своим трейтом | бэкенды будут производить недостающие сигналы ADR-0035 |
+| Lifecycle: факты окна и агрегат | событие / вычисление | ядро | N → `flui-app` → `flui-runtime` | без изменений | агрегат — решение фреймворка |
+| Session end | событие | ядро | N | N (teardown: internal к хосту) | спека teardown |
+| `SystemPreferences` | настройки ОС | ядро | нет | C тип; N производитель на хост; realm — доставка | §6 |
+| Тема (`Brightness`) | настройка | ядро | C + `appearance()` окна | `WindowAppearance` окна | окно переопределяет систему |
+| Контраст, bold text, масштаб текста, локали | настройки | ядро | мёртвые поля / нет | поля `SystemPreferences` | один источник |
+| Reduce motion, масштаб длительностей | настройка | ядро | мёртвые поля `AccessibilityFeatures` | `SystemPreferences::motion` (`NoPreference`, `Reduce`, `Scaled(DurationScale)`) | заменяет per-window `SystemMotion` |
+| Системные параметры жестов | настройка | ядро | константы | `SystemPreferences::gestures` | заменяет `GestureSettingsSource` |
+| Политика приложения поверх ОС | политика | ядро | нет | realm (`flui-runtime`), например motion «как в системе / всегда / никогда» | не дело контракта |
+| Memory pressure | событие | ядро | нет производителя | C колбэк хоста с первым потребителем (кэш изображений) | после 0.2 |
+| Энергосбережение, батарея | настройка / сервис | возможность | нет | K `flui-device` | вне закрытого списка |
+| `PlatformAccessibility` | a11y-мост | ядро | `flui-semantics` | без изменений (вне объёма) | называет `accesskit::TreeUpdate` |
 
 ### 4.4 Данные
 
 | Понятие | Категория | Ядро / пакет | Сейчас | Цель | Почему |
 |---|---|---|---|---|---|
-| Clipboard (трейт) | контракт | ядро, встроенная возможность | C `Clipboard`, `Send + Sync` | C | ADR-0039 |
-| Clipboard (доставка) | транспорт | ядро | named field: `RealmHostServices` → … → `LifecycleContext::clipboard_handle` | шов: `cx.capability::<dyn Clipboard>()`, встроенный провайдер в `flui-app`, headless в `flui-testing` | первый вертикальный срез |
-| `InMemoryClipboard` | двойник | — | C | `flui-testing` (headless-бэкенд N держит свой) | двойник не Stable |
-| Storage (трейт) | контракт | ядро | C `Storage` (ADR-0133, persistence) | C, форма не меняется | persistence объявила её стабильной |
-| Storage (доставка) | транспорт | ядро | `LifecycleContext::storage()`; `host_storage()` всегда `None` | после слияния persistence — встроенная возможность через шов; `LifecycleContext::storage` удаляется | один вход для платформенных возможностей |
-| `FileStore` | backend | ядро | N `storage/`, без `impl Storage` | N, `impl Storage` (persistence) | — |
-| URL наружу (`open_url`, `reveal_path`) | сервис | пакет | N `Platform::open_url` (Win32 real) | пакет `launcher` через шов | необязательно для ядра |
-| Deep links внутрь | событие | ядро | N `on_open_urls`, без потребителя | C колбэк, когда router начнёт принимать; не раньше | YAGNI |
+| Clipboard (backend-трейт) | контракт | ядро | C `Clipboard`, `Send + Sync` | C | ADR-0039 |
+| Clipboard (доставка) | транспорт | ядро | именованные поля → `clipboard_handle` | шов: `cx.capability::<ClipboardCapability>()` → `ClipboardHandle` | первый потребитель шва |
+| `InMemoryClipboard` | двойник | — | C (headless, runtime `test-support`) | `flui-testing`; runtime `test_clipboard` — своя замена под `test-support` | двойник не Stable |
+| Storage (трейт) | контракт | ядро | C (persistence) | C, форма не меняется | спека persistence |
+| Storage (доставка) | транспорт | ядро | `LifecycleContext::storage()`; `host_storage()` всегда `None` | после persistence — встроенная возможность без окна | один вход |
+| URL наружу, share, файловые диалоги, пути | сервисы | возможность | N `Platform::open_url`, `prompt_for_paths` (Win32 real) | K `flui-system`; Win32-диалог переезжает, executor/`Task` удаляются тем же ADR (заменяет ADR-0039 §2) | вне закрытого списка |
+| Deep links внутрь | событие | ядро | N `on_open_urls` без потребителя | C колбэк хоста с router-потребителем | правило 8 |
+| Защищённое хранилище, биометрия | сервисы | возможность | нет | K `flui-vault` | — |
 
-### 4.5 Шов и необязательные сервисы
+### 4.5 Необязательные сервисы (к 1.0)
 
-| Понятие | Ядро / пакет | Цель |
+| Крейт | Что | Разрешения / декларации |
 |---|---|---|
-| Шов (`Capability`, `CapabilityProvider`, `Unsupported`, `UnsupportedReason`) | ядро | C `capability` (ADR-0152) |
-| Реестр, `Plugin`, `CapabilityRegistrar` | ядро | `flui-runtime`, реэкспорт `flui-sdk` |
-| Разрешения (`PermissionState`, запрос, отзыв) | ядро-словарь, только с первым потребителем | C `permission` — вместе с первым пакетом, которому он нужен (R4.2) |
-| Haptics | пакет | `PlatformHaptics` уходит из `PlatformWindow` в пакет `haptics` через шов; мёртвые forwarders в runtime удаляются |
-| Файловые диалоги | пакет | N `prompt_for_paths` → пакет `dialogs`; `Task`/`BackgroundExecutor` на tokio удаляются, результат — свой future |
-| Геолокация, сенсоры, камера, биометрия, connectivity, батарея, уведомления, share, защищённое хранилище, трей/меню | пакеты | каждый — отдельный пакет `packages/<name>` (или вне репозитория) на `flui-sdk` + C; ни одного до 0.2 |
+| `flui-location` (пилот 0.3) | геолокация, геофенсинг | Android `ACCESS_*_LOCATION`, iOS `NSLocation*UsageDescription`, Windows `location`, фоновый режим |
+| `flui-sensors` | акселерометр, гироскоп, магнитометр, барометр | iOS `NSMotionUsageDescription`; Android — нет |
+| `flui-media` | камера, выбор изображений и видео | `CAMERA`, `NSCameraUsageDescription`, `webcam` |
+| `flui-notify` | локальные и push-уведомления, бейджи | `POST_NOTIFICATIONS`, push entitlements |
+| `flui-vault` | Keychain / DPAPI / Credential Manager / Keystore, биометрия | `NSFaceIDUsageDescription`, `USE_BIOMETRIC` |
+| `flui-device` | батарея, энергосбережение, connectivity, сведения об устройстве, haptics | `ACCESS_NETWORK_STATE`, `VIBRATE` |
+| `flui-system` | launcher/URL, share, файловые диалоги, пути, трей и меню | — |
 
-## 5. Шов возможностей (ADR-0152 вместо ADR-0084)
+## 5. Шов возможностей (ADR-0152)
 
-ADR-0084 остаётся основой; изменения:
+Изменения против ADR-0084: маркер-тип у владельца handle (`ClipboardCapability` в
+`flui-interaction`, `Handle = ClipboardHandle`, `!Send`, чтение через колбэк); провайдер
+получает `ProviderContext` с `Option` окна; без кэша — подписка заканчивается с последним клоном
+handle; `Unsupported` — `#[non_exhaustive]` с конструктором `of::<C>()` и написанным `Display`;
+разрешения — на handle, с `Denial`, чтобы ошибка не могла нести `Granted`; повтор `NAME` —
+конфликт до окна; `storage` → шов после persistence; `close_guard`, `lifecycle_handle`,
+`flush_registry_in_crate` остаются методами. Форма — в ADR-0152 §3.
 
-1. **Имена без заикания.** В крейте `flui-platform` — `flui_platform::Capability`, не
-   `PlatformCapability` (N7 спеки naming).
-2. **Handle owner-local.** `Capability::Handle: Clone + 'static`, без `Send`; реестр на `Rc`
-   (send-flip, ADR-0136). Если возможность сама межпоточная (clipboard), handle — `Arc<dyn _>`.
-3. **Push-значения вне шва.** Системные настройки — `SystemPreferences` через inherited data;
-   шов только для pull-handle'ов. ADR-0084 этого не различал.
-4. **Storage классифицирован**: встроенная возможность через шов после persistence.
-5. **Разрешения — забота handle'а, не шва.** Шов отвечает «есть ли возможность»; «разрешено ли» —
-   методы handle'а, которым нужно разрешение, возвращают
-   `Err(CapabilityError::Permission(PermissionState::Denied | DeniedPermanently | Restricted))`, а
-   handle даёт `request() -> impl Future<Output = PermissionState>` и событие отзыва. Тип —
-   с первым потребителем.
-6. **Устаревшие ссылки** ADR-0084 (`runtime.rs:162`, `platform.rs:423`, «eleven methods»)
-   исправлены в новом ADR.
-7. **Остаётся как в ADR-0084:** хранение в per-realm реестре, приоритет app > встроенный >
-   единственный плагин, конфликт — `AppRunError::CapabilityConflict` до окна, без
-   `inventory`/`linkme`, `capability_erased(TypeId, &'static str)` скрытый и object-safe,
-   blanket `LifecycleContextExt`, порядок причин `NotRegistered` → `NoWindow` → `NotOnThisPlatform`.
+**Правило посадки:** шов сливается вместе с clipboard (R4.10). Если окно W1 не откроется до
+11-24, шов целиком переходит в 0.3; `clipboard_handle` живёт до него.
+
+## 6. Системные настройки (решение Q2)
+
+Один источник, свои представления.
 
 ```rust
-// flui-platform (контракт)
-pub trait Capability: 'static {
-    type Handle: Clone + 'static;
-    const NAME: &'static str;
-}
-
-pub trait CapabilityProvider<C: Capability + ?Sized>: 'static {
-    /// # Errors
-    /// [`Unsupported`] when this window or platform cannot provide `C`.
-    fn provide(&self, window: &Arc<dyn PlatformWindow>) -> Result<C::Handle, Unsupported>;
-}
-
-#[derive(Debug, Clone, thiserror::Error)]
-#[error("{capability} is unsupported: {reason}")]
-pub struct Unsupported { pub capability: &'static str, pub reason: UnsupportedReason }
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+// flui-platform::preferences — собрано в scratch-крейте (rustc 1.99.0), вывод — в PR
 #[non_exhaustive]
-pub enum UnsupportedReason { NotRegistered, NoWindow, NotOnThisPlatform }
-
-impl Capability for dyn Clipboard {
-    type Handle = Arc<dyn Clipboard>;
-    const NAME: &'static str = "clipboard";
+pub struct SystemPreferences { /* приватные поля */ }
+impl SystemPreferences {
+    pub fn builder() -> SystemPreferencesBuilder;
+    pub fn text_scale(&self) -> TextScale;
+    pub const fn motion(&self) -> Motion;
+    pub const fn gestures(&self) -> &GesturePreferences;
+    // contrast(), bold_text(), locales() — так же
 }
+#[non_exhaustive]
+pub enum Motion { NoPreference, Reduce, Scaled(DurationScale) }
+#[non_exhaustive]
+pub struct GesturePreferences { /* double_click_interval, double_click_area: Size,
+                                    drag_area: Size, long_press_timeout */ }
+#[non_exhaustive]
+pub enum InvalidPreference { TextScale, DurationScale, GestureArea }
 ```
 
-Виджет: `let clipboard = cx.capability::<dyn Clipboard>()?;` в `init_state`. В `build` —
-E0599 (метод на `LifecycleContextExt`, а `BuildContext` его не реализует), закреплено trybuild.
+- **Производитель:** `Platform::preferences()` и одна подписка `on_preferences_changed` в ядре-
+  хосте (колбэк `Platform`, `+ Send`, как остальные хуки `Platform`; в храповике send-flip —
+  класс «platform hook»). Каждый бэкенд подписывается на ОС один раз: Win32 `WM_SETTINGCHANGE`
+  и `SystemParametersInfo`/`GetDoubleClickTime`/`SM_CXDOUBLECLK`/`SM_CXDRAG`; AppKit
+  `NSWorkspace`/`NSEvent.doubleClickInterval`; iOS `UIContentSizeCategory`/
+  `UIAccessibility`; Android `Settings.Global`/`ViewConfiguration`; web `matchMedia`; winit/Linux
+  — значения по умолчанию, пока нет источника (порталы XDG — позже). Бэкенд без ответа ОС
+  отдаёт `SystemPreferences::default()`; значения по умолчанию задокументированы у типа.
+- **Доставка:** `flui-app` кладёт текущее значение в каждый realm при создании (значение есть до
+  первого окна) и рассылает изменение одной типизированной операцией хоста.
+- **Потребители** строят своё: `MediaQuery` (масштаб текста, контраст, bold, локали, motion для
+  виджетов); `flui-interaction` — `GestureSettings` через `GestureSettingsScope` (interaction X2),
+  пересчитывая логические `Size` в пороги своего типа указателя; `flui-animation` — свою политику
+  движения из `motion` и политики приложения.
+- **Политика приложения** (motion «как в системе / всегда / никогда» и подобные) живёт в realm и
+  задаётся конфигурацией приложения; контракт её не знает.
+- **Почему не на окно:** настройки ОС общие на процесс; производитель на окно — N подписок и
+  отсутствие значения до первого окна; один общий колбэк, который второе окно затирает
+  (возражение спеки reduce-motion), не возникает, потому что подписчик один — `flui-app`.
+- Текст для спек animation и interaction — §11.
 
-## 6. Системные настройки (`SystemPreferences`)
+## 7. Готовность к необязательным возможностям (R6, без кода в 0.2.0)
 
-```rust
-// flui-platform::preferences
-#[derive(Debug, Clone, PartialEq)]
-#[non_exhaustive]
-pub struct SystemPreferences {
-    pub brightness: Brightness,
-    pub contrast: Contrast,          // Standard | High, #[non_exhaustive]
-    pub text_scale: TextScale,       // конечное f64 > 0, валидирующий конструктор
-    pub motion: Motion,              // Full | Reduced, #[non_exhaustive]
-    pub bold_text: bool,
-    pub locales: Arc<[Locale]>,      // в порядке предпочтения, может быть пуст
-    pub gestures: GestureTimings,    // double_tap, long_press: Duration; touch_slop, drag_threshold: f64 (logical px)
-}
-```
+- **Подписки:** handle держит подписку ОС и завершает её с последним клоном; виджет получает
+  значение, сведённое к кадру (signal), сырой поток — для не-UI потребителей; поведение в фоне —
+  политика возможности.
+- **Разрешения:** `PermissionState { Granted, NotDetermined, Denied(Denial) }`,
+  `Denial { ByUser, Permanently, Restricted }`, оба `#[non_exhaustive]`; отдельно «служба ОС
+  включена». «Запрещено навсегда» на Android видно только по результату запроса. Отзыв на
+  Android и iOS обычно убивает процесс — событие отзыва best-effort.
+- **Фон:** возможность объявляет, работает ли без realm; фоновая работа — сервисы ADR-0049, без
+  UI-движка (у Flutter это отдельный isolate и headless-движок).
+- **Декларации и манифесты:** крейт возможности объявляет разрешения, usage-строки,
+  entitlements, privacy manifest и фоновые режимы в своих метаданных; `flui-cli` собирает их по
+  графу зависимостей приложения и генерирует манифесты ОС. Схему ключей задаёт ADR манифестов
+  (0.3); список ключей `[package.metadata.flui]` строгий, поэтому ключ появляется вместе с ним.
+- **Мост к хосту:** activity Android и её результаты, события application delegate, хуки оконных
+  сообщений Win32 — непрозрачные handle без upstream-типов; ADR моста — с пилотом.
+- **Качество:** conformance-таблица и симулирующий провайдер на возможность; поддержка платформы
+  заявляется только по исполненной таблице.
 
-- **Производитель:** `PlatformWindow::preferences() -> SystemPreferences` и
-  `on_preferences_changed(Box<dyn FnMut(SystemPreferences) + Send>)` (Send — до ADR-0082 §4
-  шаг 2). `appearance()`/`on_appearance_changed` остаются для `WindowAppearance` (vibrancy и пр.),
-  `Brightness` берётся из настроек. Бэкенд без ответа ОС отдаёт `SystemPreferences::default()` —
-  значения задокументированы в контракте рядом с типом.
-- **Потребители:** `MediaQuerySource` (всё, что видит виджет), `GestureBinding` (строит
-  `GestureSettings` из `gestures` и `PointerType`), анимации (`motion`, длительность).
-- **Почему один снимок, а не три шва:** у каждого бэкенда один путь «прочитать настройки ОС и
-  подписаться на `WM_SETTINGCHANGE` / `NSWorkspace` / `UIContentSizeCategory` / `matchMedia`»;
-  три отдельных шва (animation `SystemMotion`, interaction `GestureSettingsSource`, этот) — три
-  подписки на одно событие ОС и три разных ответа на «нет значения». Поле добавляется в
-  `#[non_exhaustive]`-struct без поломки. Это развилка Q2.
-
-## 7. Рыночный эталон
-
-См. [§9](#9-рыночный-эталон-подробно). Норма, которую берём: один контрактный крейт +
-бэкенды; headless/test-бэкенд как полноправный бэкенд; unsupported — значение, и «нет на
-платформе» / «не зарегистрировано» / «запрещено пользователем» различимы; разрешения —
-состояние на handle, запрос асинхронный; версия плагина — свой minor при общем major SDK.
+Пилот — `flui-location` на Windows (WinRT `Geolocator`) и Android: у него есть разрешение, поток,
+фоновый режим и отдельное «служба выключена». Выдержит он — выдержат сенсоры и камера.
 
 ## 8. Инвентаризация (этап 1)
 
-Сырые отчёты по пунктам 1–5 остаются вне репозитория (рабочие заметки сессии). Здесь —
-выводы, которые двигают дизайн; каждая ссылка file:line проверена по `main` @ `d56188c14`.
+Сырые отчёты — вне репозитория. Ссылки проверены по `main` @ `d56188c14`.
 
 ### 8.1 `flui-platform-api`
 
-- Зависимые: flui-app, -interaction, -platform, -widgets, -view, -sdk, -runtime, -testing, фасад
-  (комментарий в `Cargo.toml:64-66` перечисляет 4 — устарел). [R]
-- Upstream в сигнатурах: `ui-events` (через `input.rs:29-38`, `PlatformInput`,
-  `PlatformWindow::on_input`), `keyboard-types` (`Key`, `Modifiers`, `PlatformWindow::modifiers`),
-  `dpi` (позиция указателя). Разрешённые: `raw-window-handle` 0.6 traits, `cursor-icon`, `serde`. [R]
-- Нулевые потребители: `offset_from_coords`, `delta_offset_from_coords`, `TransferImage`,
-  `LockKind`, `DEFERRED_LOCK_CAPACITY`, `utf16_range`. [R]
+- Зависимые: flui-app, -interaction, -platform, -widgets, -view, -sdk, -runtime, -testing и
+  фасад; комментарий `Cargo.toml:64-66` перечисляет четыре — устарел. [R]
+- Upstream: `ui-events` в `PlatformInput`, `PlatformWindow::on_input`, `PlatformWindow::modifiers`;
+  `keyboard-types` и `dpi` — транзитивно. Разрешённые ADR-0089 §2: `raw-window-handle` 0.6
+  traits, `serde`, `schemars`, `cursor-icon`. [R]
+- Нулевые потребители: `offset_from_coords`, `delta_offset_from_coords`, `LockKind`,
+  `DEFERRED_LOCK_CAPACITY`, `utf16_range`; `TransferImage` — только как полезная нагрузка
+  варианта `Image`. [R]
 - Один потребитель: `LockArbiter`, `CompositionLedger`, `EditGeneration` (widgets);
-  `project_ime_event` (interaction); `TextStoreHost` (Win32); `WindowMode` и пиксельные хелперы
-  (Win32); `PlatformHaptics` (fake); `Storage` (testing). [R]
-- Нет ADR: `Storage` (только спека persistence / ADR-0133 на ветке), `Locale`, `Brightness`,
-  `TargetPlatform`. [R]
-- Owner-local: `TextStore`, `TextStoreHost`, `TextStoreObserver`, `CommitGate`, `LockArbiter`,
-  `LockGrant`, `OwnerCalls`, `InMemoryTextStore` — `!Send`, закреплено `static_assertions`. [R]
+  `project_ime_event` (interaction). `TextStoreHost` — один production-реализатор (Win32), а
+  потребители — interaction, runtime, хост; второй реализатор — `flui-testing`. [R]
+- Без ADR: `Storage` (спека persistence), `Locale`, `Brightness`, `TargetPlatform`. [R]
+- `!Send` закреплено `static_assertions` у `LockArbiter`, `CommitGate`, `InMemoryTextStore`;
+  остальные owner-local по построению. [R]
 
 ### 8.2 `flui-platform`
 
-- Бэкенды: Win32 9 927 строк (real), AppKit 8 246 (real), winit 6 066 (real, Linux production и
+- Бэкенды: Win32 9 927 строк (real), AppKit 8 246 (real), winit 6 066 (real; Linux production и
   единственный реальный DnD), iOS 2 489 (real), Android 1 391 (MVP: mock clipboard, inline
-  executor, выдуманный дисплей), web 1 379 (partial), `linux/` 978 (`LinuxPlatform` —
-  `unimplemented!()`; AT-SPI-адаптер реален и используется winit), headless 1 752. [R]
-- Исполняются в CI: winit (Linux, Xvfb) и headless. Остальное — cross-typecheck. [R]
-- Матрица возможностей и способ отказа — §1 и ADR-0151. [R]
-- Упоминаний `flui-platform`/`flui_platform` (без `-api`): 243 файла; вне самого крейта 198
-  (rs 72, toml 9, md 111, прочее 6). [R] Команда:
-  `rg -l -P --hidden -g '!.git' 'flui[-_]platform(?![-_]api)'`.
+  executor, выдуманный дисплей), web 1 379 (частично), `linux/` 978 (`LinuxPlatform`-заглушка +
+  реальный AT-SPI-адаптер, который использует winit), headless 1 752. [R]
+- Исполняются в CI: winit (Linux, Xvfb) и headless; остальное — cross-typecheck. [R]
+- Упоминаний `flui-platform`/`flui_platform` без `-api` на базе: 243 файла, вне крейта 198 (rs 72,
+  toml 9, md 111, прочее 6); команда `rg -l -P --hidden -g '!.git' 'flui[-_]platform(?![-_]api)'`.
+  [R]
 
 ### 8.3 Понятия не на своём месте
 
-Сведено в §4. Отдельно: `ExecutionServices` (flui-runtime) — исполнитель фреймворка, не
-платформа; остаётся. `BackgroundExecutor` и `Task` в бэкенде — остаток ADR-0047, удаляются.
+Сведено в §4. `ExecutionServices` (flui-runtime) — исполнитель фреймворка, остаётся.
+`BackgroundExecutor`/`Task` в бэкенде — живые, уходят вместе с переездом диалогов в
+`flui-system`.
 
 ### 8.4 Путь возможности
 
-Сейчас — 7 именованных полей через flui-runtime и flui-view, `LifecycleContext` закрыт для
-пакетов. ADR-0084 предлагает один обобщённый вход и per-realm реестр; не реализован. В
-`LifecycleContext` 16 методов (ADR-0084 говорит 11): `storage`, `close_guard`, `lifecycle_handle`
-добавлены позже и не классифицированы — ADR-0152 их классифицирует: `storage` → шов,
-`close_guard`/`lifecycle_handle` — framework-возможности, остаются методами.
+Сейчас — именованные поля через flui-runtime, flui-view и flui-app; `LifecycleContext` закрыт для
+пакетов. ADR-0152 даёт один обобщённый вход и per-realm реестр.
 
-## 9. Рыночный эталон (подробно)
+## 9. Рыночный эталон
 
-Прочитано по первичным источникам (upstream main через `gh api`, официальные доки) 2026-10-06.
+Прочитано по первичным источникам (upstream через `gh api`, официальные доки) 2026-10-06.
 
 | Проект | Контракт | Бэкенды | Unsupported | Тестовый бэкенд | Возможности / плагины |
 |---|---|---|---|---|---|
-| winit 0.31 | `winit-core` (`#![warn(clippy::exhaustive_enums)]`, dyn-safe трейты) | `winit-<os>` + фасад `winit` с `winit::platform::*`, все на одной версии | `RequestError::NotSupported`, `None`; ОС-специфика — `Option<&mut dyn …ExtMacOS>` | нет | — |
-| raw-window-handle 0.6 | `no_std`, без зависимостей | — | `HandleError::{NotSupported, Unavailable}`, `#[non_exhaustive]` | — | interop-крейт почти не выпускается |
-| Bevy | `bevy_window` (без winit, `no_std`) | `bevy_winit`; a11y — `bevy_a11y`, не реэкспортирует `accesskit` | — | `ScheduleRunnerPlugin`, `primary_window: None` | `Plugin` с `build/ready/finish`; один поезд версий |
-| Masonry | `masonry_core` (без winit) | `masonry_winit` | ядро шлёт `RenderRootSignal`, «some platforms may ignore» | `TestHarness` | — |
-| GPUI | `gpui` (`Platform`, `PlatformWindow: HasWindowHandle`, `PlatformDispatcher`) | `gpui_<os>`, селектор `gpui_platform` (`application()`/`headless()`) | default-методы: `false`/`None`/`Err(anyhow)`/no-op | `TestPlatform` (детерминированный dispatcher; местами `unimplemented!()`) | — |
-| Slint | `Platform` (обязателен только `create_window_adapter`) | `i-slint-backend-*` + selector (feature или `SLINT_BACKEND`) | `PlatformError::{NoPlatform, Unsupported, …}`, `#[non_exhaustive]` | `TestingBackend { mock_time }` | upstream-типы только за `unstable-winit-030`-фичами |
-| Tauri v2 | `tauri-runtime` | `tauri-runtime-wry` | плагины объявляют `support level`; геолокация на десктопе отдаёт нулевую позицию — антипаттерн | `MockRuntime` | плагин = desktop.rs + mobile.rs; разрешения `plugin:allow-cmd`, capability-файлы на окна (build time); `PermissionState {Granted, Denied, Prompt, PromptWithRationale}` |
-| Flutter | `<x>_platform_interface` | `<x>_<os>`, `implements:`, `default_package` | `MissingPluginException`, `UnimplementedError` | mock через `MockPlatformInterfaceMixin` | интерфейс только растёт методами с default; `permission_handler`: `denied, granted, restricted, limited, permanentlyDenied, provisional` + отдельно `ServiceStatus` |
-| Compose MP | `expect` | `actual` на каждый target, проверка компилятором | — | — | сами Kotlin-доки советуют интерфейс + фабрику ради фейков |
-| SwiftUI | `EnvironmentValues` | система | — | подмена `openURL` и пр. в окружении | `accessibilityReduceMotion { get }`, `dynamicTypeSize`, `scenePhase` — система пишет, view читает |
+| winit 0.31 | `winit-core` (`#![warn(clippy::exhaustive_enums)]`, dyn-safe трейты) | `winit-<os>` + фасад, одна версия | `RequestError::NotSupported`, `None` | нет | — |
+| raw-window-handle 0.6 | `no_std`, без зависимостей | — | `HandleError::{NotSupported, Unavailable}` | — | interop-крейт почти не выпускается |
+| Bevy | `bevy_window` | `bevy_winit`; `bevy_a11y` | — | `ScheduleRunnerPlugin` | `Plugin`; один поезд — каждый релиз ломает плагины |
+| Masonry | `masonry_core` | `masonry_winit` | `RenderRootSignal`, «some platforms may ignore» | `TestHarness` | — |
+| GPUI | `gpui` (`Platform`, `PlatformWindow`, `PlatformDispatcher`) | `gpui_<os>`, селектор `gpui_platform` | default-методы, `anyhow` | `TestPlatform` (местами `unimplemented!()`) | — |
+| Slint | `Platform` | `i-slint-backend-*` + selector | `PlatformError::{NoPlatform, Unsupported, …}` | `TestingBackend { mock_time }` | upstream за `unstable-winit-030`-фичами |
+| Tauri v2 | `tauri-runtime` | `tauri-runtime-wry` | уровни поддержки; геолокация на десктопе отдаёт нули — антипаттерн | `MockRuntime` | плагин desktop.rs + mobile.rs; capability-файлы; `PermissionState {Granted, Denied, Prompt, PromptWithRationale}` |
+| Flutter | `<x>_platform_interface` | `<x>_<os>`, `default_package` | `MissingPluginException`, `UnimplementedError` | `MockPlatformInterfaceMixin` | интерфейс растёт методами с default; `permission_handler`: 6 состояний + `ServiceStatus`; манифесты руками |
+| Compose MP | `expect` | `actual` на каждый target | — | — | Kotlin советует интерфейс + фабрику ради фейков |
+| SwiftUI | `EnvironmentValues` | система | — | подмена `openURL` | система пишет, view читает |
 
-ОС: Android после двух отказов (API 30+) больше не показывает диалог; «только сейчас» —
-одноразово; отзыв в настройках **убивает процесс**; проверка статуса не отличает «не спрашивали»
-от «запрещено навсегда» — это видно только по запросу. iOS: `notDetermined/restricted/denied/
-authorizedWhenInUse/authorizedAlways`; смена Camera/Photos/Contacts в настройках — SIGKILL
-(Apple developer forums, thread 64740; в API-доках не описано) [не проверено запуском].
+ОС: Android после двух отказов (API 30+) больше не показывает диалог; отзыв в настройках
+убивает процесс; проверка статуса не отличает «не спрашивали» от «навсегда». iOS — смена
+Camera/Photos/Contacts в настройках завершает процесс (Apple developer forums, thread 64740; в
+API-доках нет) [не проверено запуском].
 
-**Что из этого норма и что берём:**
-
-- **Разрешения:** состояние на возможность, запрос асинхронный, глобального гранта нет. Ядро
-  состояний — Granted / Denied / NotDetermined (Prompt); сверху — Restricted (ОС/родительский
-  контроль), DeniedPermanently (известно только после запроса), частичные гранты (`Limited`).
-  «Сервис включён» — отдельная ось. Отзыв на мобильных обычно убивает процесс, поэтому событие
-  отзыва на handle — best-effort (десктоп, геолокация), а не гарантия. → R4 и §5 п.5;
-  `#[non_exhaustive]`.
-- **Unsupported — значение**, и три случая различимы: «нет на этой платформе», «не
-  зарегистрировано», «пользователь запретил». Фейковые данные, `unimplemented!()` и исключения —
-  антипаттерны (Tauri geolocation, GPUI `TestPlatform`, Flutter). → `UnsupportedReason` +
-  отдельный `PermissionState`.
-- **Тестовый бэкенд — полноправный**, с управляемым временем и скриптуемыми ответами (GPUI,
-  Slint, Masonry, Tauri). → headless-провайдеры в `flui-testing`.
-- **Версии:** ядро и бэкенды — один поезд; плагин — свой minor при общем major; интерфейс
-  растёт методами с default; upstream-churn — за фичами с номером версии. → совпадает с
-  ADR-0088 (SDK `0.N`, train guard) и ADR-0089 §5.
-- **Имена:** контракт чаще всего `-core` (winit, masonry, slint) или голое имя (`gpui`,
-  `bevy_window`); бэкенды — по ОС/технологии. `-api`, `-host`, `-shell`, `-native`, `-port`
-  для этого слоя не использует никто; `-sys` по конвенции Rust — сырой FFI. `core` запрещён N1
-  спеки naming, поэтому для FLUI ближайшее к норме — голое предметное имя контракта
-  (`flui-platform`, как `bevy_window`) и имя бэкендов по роли.
+Норма, которую берём: один контракт + бэкенды; полноправный тестовый бэкенд с управляемым временем
+и скриптом ответов; unsupported — значение, и «нет на платформе» / «не зарегистрировано» /
+«запрещено» различимы; разрешения — состояние на возможность, запрос асинхронный; интерфейс
+растёт методами с default; upstream-churn — за фичами с номером версии. Где обгоняем: прямые
+вызовы ОС из Rust вместо каналов, декларации → манифесты, подписка-RAII, фон без UI-движка,
+conformance-таблицы, крейты возможностей вне поезда.
 
 ## 10. Имена
 
-Требование владельца: `flui-<слово>`. `flui-platform-api` ему не отвечает, значит
-переименование контракта неизбежно. Варианты:
+Требование владельца: `flui-<слово>`. Варианты (crates.io, 2026-10-06: свободны все, включая
+`flui-geometry`, `flui-location`, `flui-sensors`, `flui-media`, `flui-notify`, `flui-vault`,
+`flui-device`, `flui-system`; `flui-cli` 0.1.0 уже опубликован владельцем):
 
-| Вариант | Контракт | Бэкенды | Код пользователя и пакета | Плюсы | Минусы |
-|---|---|---|---|---|---|
-| **A (рекомендую)** | `flui-platform` | `flui-native` | `flui::platform::Clipboard` (как сейчас в фасаде); пакет: `use flui_platform::{Capability, Clipboard};` | имя крейта = путь фасада `flui::platform`, который пользователь уже пишет; `flui_platform::Capability` без заикания; «native» говорит «код ОС»; только `flui-app` видит `flui_native` | имя `flui-platform` меняет смысл (бэкенд → контракт): открытые ветки и 198 файлов истории читаются иначе; web и headless — не совсем «native» |
-| B | `flui-platform` | `flui-os` | то же | короче | «os» для web/headless ещё хуже; `flui_os::platforms::windows` — шум; слово в два символа плохо ищется |
-| C | `flui-platform` | `flui-backend` | то же | точное слово для роли | «backend» в FLUI уже значит GPU-бэкенд wgpu и `TextInputBackend` — коллизия терминов |
-| D | `flui-port` / `flui-contract` | `flui-platform` | `flui::platform::…` ≠ `flui_port::…` | бэкенд не переименовывается, меньше churn | путь фасада и крейта расходятся; «port» читается как «портирование» |
-| E | `flui-platform` | `flui-shell` | то же | так называет это Flutter (embedder/shell) | «shell» в FLUI нигде не используется, а у читателя — командная оболочка |
+| Вариант | Контракт | Ядро-хост | Плюсы | Минусы |
+|---|---|---|---|---|
+| **A (рекомендую)** | `flui-platform` | `flui-native` | имя крейта = путь фасада `flui::platform`; `flui_platform::Capability` читается без повтора | имя `flui-platform` меняет смысл — переименование в два шага; web и headless — не совсем «native» |
+| B | `flui-platform` | `flui-os` | короче | «os» для web/headless хуже; плохо ищется |
+| C | `flui-platform` | `flui-backend` | точное слово роли | «backend» уже значит GPU-бэкенд и `TextInputBackend` |
+| D | `flui-port` / `flui-contract` | `flui-platform` | один шаг переименования | путь фасада и крейта расходятся; «port» читается как «портирование» |
+| E | `flui-platform` | `flui-shell` | так называет это Flutter | «shell» в FLUI нигде не используется |
 
-crates.io (проверено 2026-10-06, API `crates.io/api/v1/crates/<name>`): свободны `flui`,
-`flui-platform`, `flui-platform-api`, `flui-native`, `flui-os`, `flui-backend`, `flui-shell`,
-`flui-port`, `flui-host`, `flui-system` и остальные проверенные; `flui-cli` 0.1.0 уже
-опубликован владельцем (`vanyastaff`). Чужих `flui-*` нет. docs.rs: имя крейта = заголовок
-страницы и корень путей; у A путь в доках `flui_platform::Clipboard` совпадает с тем, что
-пользователь пишет через фасад. Совет: после утверждения занять оба имени публикацией
-placeholder `0.0.0` (ваше решение, outward-facing).
+`-core` (норма winit/masonry/slint) запрещён N1 спеки naming.
 
-Механика A (один PR, скрипт): сначала `flui_platform` → `flui_native` и `crates/flui-platform/` →
-`crates/flui-native/`, затем `flui_platform_api` → `flui_platform` и `crates/flui-platform-api/`
-→ `crates/flui-platform/`. Порядок важен: обратный склеит оба крейта. Плюс имена в xtask
-(`globals.rs` `PLATFORM`/`BACKENDS`, `tiers.rs` `SDK_SURFACE`), `allowed-dependents`,
-allowlists send-flip (thread-boundary, unsafe-impl ключуются именем крейта), `deny.toml`,
-`docs/crates.md`, пути в живых доках и ADR (только пути; решения старых ADR не правятся,
-карта имён — в ADR-0151). Архивные корни (`docs/research`, `docs/plans`) не переписываются.
-Окно — вместе с массовым переименованием спеки naming (11-10…11-14), до publish-конвейера
-(12-01). Инструкция для открытых веток — в tasks.md.
+**Механика A — два шага** (ADR-0151 §1):
 
-## 11. Вопросы к владельцу
+1. **Шаг 1** (окно naming 11-10…11-14): `flui-platform` → `flui-native`, каталог включительно;
+   проверка «отставное имя»: `flui-platform`/`flui_platform` вне архивных корней — ошибка.
+2. **Шаг 2** (11-24…11-28, после того как все открытые ветки влили шаг 1):
+   `flui-platform-api` → `flui-platform`; проверка снимается.
 
-По одному на развилку; работа идёт дальше по рекомендации.
+Скрипт (`cargo xtask rename` спеки naming с картой platform-layer): совпадение по целому токену
+(`flui-platform` не совпадает внутри `flui-platform-api`), `--changed-since <merge-base>` для
+веток; файлы: манифесты, корневые `reach.tier.*.forbid`, `reach-forbid`, `reach-exceptions`,
+`allowed-dependents`, имена в `tools/xtask` (`globals.rs` `PLATFORM`/`BACKENDS`, `tiers.rs`
+`SDK_SURFACE`) и его фикстуры (`globals/fixture.rs`, `globals/tests.rs`), allowlists по именам
+крейтов (thread-boundary, unsafe-impl send-flip; `docs-paths` со счётчиками), живые доки, ADR
+(имена — механически, решения не меняются, карта — ADR-0151). Архивные корни не трогаются.
+`deny.toml` имён крейтов не содержит.
 
-- **Q1. Имя.** A (`flui-platform` + `flui-native`) — рекомендую; или B/C/D/E.
-- **Q2. Системные настройки.** Один `SystemPreferences` в контракте, которым пользуются и
-  animation (вместо `SystemMotion`/ADR-0146), и interaction (вместо `GestureSettingsSource`) —
-  рекомендую; или три независимых шва.
-- **Q3. `AppLifecycleState`.** Перенести тип в контракт (scheduler реэкспортирует), окно — после
-  слияния ядра send-flip — рекомендую; или оставить в scheduler, а контракт отдаёт только
-  per-window факты.
-- **Q4. ADR-0084.** Заменить новым ADR-0152 (Supersedes) с изменениями §5 — рекомендую; или
-  принять ADR-0084 как есть и поправить его отдельным ADR позже.
-- **Q5. Машинерия text store** (`LockArbiter`, `OwnerCalls`, `CompositionLedger`, …) после
-  text-ime T6: вынести из Stable в `flui-interaction` — рекомендую; или оставить в контракте за
-  `#[doc(hidden)]`.
-- **Q6. Номера ADR.** 0151–0153 — записать резерв в реестр `docs/plans/specs/release/tasks.md`
-  на `plans/specs-next` (чужая активная ветка — нужно ваше «да»).
+## 11. Текст для спек animation и interaction (решение Q2)
+
+Владельцы вставляют в свои design.md без правок.
+
+> **Системные настройки: один источник, свои представления (решение владельца, 2026-10-06;
+> ADR-0151 §4, спека platform-layer §6).**
+> Системные настройки ОС приходят в FLUI из одного источника — `SystemPreferences` в контрактном
+> крейте (`flui-platform-api`, после переименования `flui-platform`). Производитель один на
+> хост: ядро-хост подписывается на ОС один раз, `flui-app` кладёт значение в каждый realm при
+> создании (оно есть до первого окна) и рассылает изменения. Поля приватные, значения строятся
+> builder'ом с проверкой; `Motion` — `NoPreference | Reduce | Scaled(DurationScale)`; жесты —
+> интервал и прямоугольник double-click, прямоугольник drag (логические `Size`, ADR-0098) и
+> таймаут long press.
+> Потребитель не использует `SystemPreferences` в своей логике напрямую, а строит своё
+> представление: **interaction** — `GestureSettings` (через `GestureSettingsScope`, X2);
+> **animation** — свою политику движения. Политика приложения поверх ОС («как в системе /
+> всегда / никогда» для reduce motion) — во фреймворке (realm), не в контракте.
+> Это решение **заменяет** `GestureSettingsSource` (interaction X1) и `SystemMotion` с методами
+> `PlatformWindow::system_motion`/`on_system_motion_changed` (animation reduce-motion P1): новых
+> производителей и методов окна для настроек не добавлять. Тип `DurationScale` и его проверка
+> (`InvalidPreference::DurationScale` для неконечного или отрицательного значения) берутся из
+> контракта. Порядок: тип и производитель — задача platform-layer LY8 (окно W1); потребители —
+> задачи animation и interaction после неё.
+
+## 12. Вопросы к владельцу
+
+Q2 решён (§6). Открыты; работа идёт по рекомендации:
+
+- **Q1. Имя.** A (`flui-platform` + `flui-native`, переименование в два шага) — рекомендую; или
+  D (один шаг, другое имя контракта).
+- **Q3. `AppLifecycleState` в контракт** (`#[non_exhaustive]`, политика — в scheduler) —
+  рекомендую; или оставить в scheduler.
+- **Q4. ADR-0084 заменить ADR-0152** — рекомендую.
+- **Q5. Машинерия text store** после text-ime T6 — в `flui-interaction` (заменяет часть ADR-0142)
+  — рекомендую; или в контракте за `#[doc(hidden)]`.
+- **Q6. Номера ADR 0151–0154** — записать резерв в реестр `release/tasks.md` на
+  `plans/specs-next` (чужая активная ветка; нужно ваше «да»).
+- **Q7. `flui-geometry`** (ADR-0153) — новый Stable-крейт значений, — рекомендую; или
+  объявить Stable подмножество `flui-foundation`.
