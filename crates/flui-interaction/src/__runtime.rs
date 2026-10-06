@@ -71,6 +71,19 @@ pub fn close_focus(owner: &FocusManager, mode: CloseMode) {
     owner.close_with_mode(mode);
 }
 
+/// Refuse later focus requests without running user code; [`close_focus`]
+/// still retires the owner. A realm closing several presentations withdraws
+/// every one before any of them runs a callback (ADR-0123).
+pub fn withdraw_focus(owner: &FocusManager) {
+    owner.withdraw();
+}
+
+/// Refuse later text-input callers without running user code;
+/// [`close_text_input`] still disables the platform and retires the clients.
+pub fn withdraw_text_input(owner: &TextInputOwner) {
+    owner.withdraw();
+}
+
 /// Close text input under the presentation's current recovery policy.
 pub fn close_text_input(owner: &TextInputOwner, mode: CloseMode) {
     owner.close_with_mode(mode);

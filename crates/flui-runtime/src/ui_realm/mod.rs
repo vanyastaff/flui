@@ -342,6 +342,34 @@ impl Drop for UiRealm {
         // inactive here, matching every other un-entered context.
         let presentations = self.presentations.take_all();
         let mut first = None;
+        // Every presentation's authority is withdrawn before any of them runs
+        // a callback or destructor: closing A must not let A's code drive a
+        // sibling B that has not closed yet (ADR-0123).
+        let mut keys = Vec::new();
+        for presentation in &presentations {
+            let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                keys.extend(presentation.withdraw_for_realm_close(&self.interaction_lane));
+            }))
+            .err();
+            crate::lifecycle_state::preserve_first_lifecycle_panic(
+                &mut first,
+                failure,
+                "realm presentation withdrawal",
+            );
+        }
+        for key in keys {
+            if first.is_some() || std::thread::panicking() {
+                std::mem::forget(key);
+            } else {
+                let failure =
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(key))).err();
+                crate::lifecycle_state::preserve_first_lifecycle_panic(
+                    &mut first,
+                    failure,
+                    "realm key retirement",
+                );
+            }
+        }
         for presentation in &presentations {
             let mode = if first.is_some() || std::thread::panicking() {
                 flui_interaction::__runtime::CloseMode::PreservingFailure

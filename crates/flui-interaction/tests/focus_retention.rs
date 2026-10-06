@@ -8,7 +8,9 @@ use std::rc::{Rc, Weak};
 
 use flui_interaction::__runtime::{CloseMode, close_focus};
 use flui_interaction::events::{Key, KeyEvent, KeyState, Modifiers};
-use flui_interaction::routing::{FocusManager, FocusNode, FocusScopeNode, FocusTraversalPolicy};
+use flui_interaction::routing::{
+    FocusManager, FocusNode, FocusScopeNode, FocusTraversalPolicy, KeyEventResult,
+};
 
 fn key_event() -> KeyEvent {
     KeyEvent {
@@ -146,6 +148,46 @@ fn closing_gestures_leave_shared_callbacks_with_their_caller() {
     drop(binding);
 }
 
+/// A dispatch owner that rejects registrations while its close is preserving
+/// releases the shared payload and mouse callbacks its caller still holds.
+fn closing_dispatch_leaves_shared_payloads_with_their_caller() {
+    use flui_interaction::__runtime::{CloseWindow, close_dispatch, presentation_dispatch};
+    use flui_interaction::InteractionLane;
+    use flui_interaction::routing::{MouseEnterCallback, MouseRegionCallbacks};
+
+    let (payload_capture, payload_probe) = capture();
+    let (enter_capture, enter_probe) = capture();
+    let payload: Rc<dyn std::any::Any> = Rc::new(payload_capture);
+    let on_enter: MouseEnterCallback = Rc::new(move |_, _| {
+        let _ = &enter_capture;
+    });
+    let lane = InteractionLane::try_new().expect("lane");
+    let handle = presentation_dispatch(&lane.dispatch_handle());
+    let mut window = CloseWindow::new();
+    window.dispatch(&handle);
+    window.preserve();
+    close_dispatch(&handle, CloseMode::PreservingFailure);
+    assert!(handle.register_local_payload(Rc::clone(&payload)).is_err());
+    assert!(
+        handle
+            .register_mouse_region(MouseRegionCallbacks {
+                on_enter: Some(Rc::clone(&on_enter)),
+                ..MouseRegionCallbacks::default()
+            })
+            .is_err()
+    );
+    drop((payload, on_enter));
+    assert!(
+        payload_probe.upgrade().is_none(),
+        "the payload capture is released"
+    );
+    assert!(
+        enter_probe.upgrade().is_none(),
+        "the mouse callback capture is released"
+    );
+    drop(window);
+}
+
 #[derive(Debug)]
 struct PanickingPolicy(#[expect(dead_code, reason = "held for its lifetime")] Rc<()>);
 
@@ -192,6 +234,10 @@ fn caught_callback_failures_leave_captures_with_their_owner() {
         (
             "closing gestures",
             closing_gestures_leave_shared_callbacks_with_their_caller,
+        ),
+        (
+            "closing dispatch",
+            closing_dispatch_leaves_shared_payloads_with_their_caller,
         ),
         (
             "traversal policy",
@@ -243,7 +289,27 @@ fn healthy_close_retires_children_before_their_parent() {
         node.register_context(Rc::new(DropRecorder(label, Rc::clone(&log))))
             .relinquish();
     }
+    // Within one node: key handler, then listeners, then context.
+    let recorder = DropRecorder("nested listener", Rc::clone(&log));
+    nested.add_listener(Rc::new(move || {
+        let _ = &recorder;
+    }));
+    let recorder = DropRecorder("nested key handler", Rc::clone(&log));
+    nested.set_on_key_event(Rc::new(move |_| {
+        let _ = &recorder;
+        KeyEventResult::Ignored
+    }));
     manager.close();
-    assert_eq!(*log.borrow(), ["nested", "first", "second", "parent"]);
+    assert_eq!(
+        *log.borrow(),
+        [
+            "nested key handler",
+            "nested listener",
+            "nested",
+            "first",
+            "second",
+            "parent"
+        ]
+    );
     drop(attachments);
 }
