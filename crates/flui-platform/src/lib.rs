@@ -182,6 +182,8 @@ mod redraw_poll;
 pub mod shared;
 #[cfg(feature = "storage")]
 pub mod storage;
+#[cfg(all(test, feature = "storage", not(target_arch = "wasm32")))]
+mod table_test;
 pub mod task;
 pub mod traits;
 pub mod window;

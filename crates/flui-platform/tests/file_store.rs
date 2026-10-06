@@ -9,19 +9,10 @@ use std::path::Path;
 use flui_platform::storage::{DataDirs, FileStore, data_dirs};
 use flui_platform_api::{StorageError, StorageName, StoredVersion, WriteMode};
 
+use crate::run_table;
+
 const NOTES: StorageName = StorageName::from_static("notes");
 const SESSION: StorageName = StorageName::machine_local("notes");
-
-/// Runs every case even after one fails, then panics listing the failing case
-/// names.
-fn run_table(table: &str, cases: &[(&str, fn())]) {
-    let failed: Vec<&str> = cases
-        .iter()
-        .filter(|(_, case)| std::panic::catch_unwind(*case).is_err())
-        .map(|(name, _)| *name)
-        .collect();
-    assert!(failed.is_empty(), "{table}: failing cases: {failed:?}");
-}
 
 fn separate_roots(dir: &Path) -> DataDirs {
     DataDirs {
@@ -30,15 +21,20 @@ fn separate_roots(dir: &Path) -> DataDirs {
     }
 }
 
-/// The entries of `dir` whose names start with `.tmp`: files a write staged
-/// and left behind.
+/// The entries of `dir` other than the value `notes`, the store's lock file
+/// and its machine-local directory: what a write staged and left behind.
 fn staged_files(dir: &Path) -> Vec<String> {
     std::fs::read_dir(dir)
         .map(|entries| {
             entries
                 .filter_map(Result::ok)
                 .map(|entry| entry.file_name().to_string_lossy().into_owned())
-                .filter(|name| name.starts_with(".tmp"))
+                .filter(|name| {
+                    !matches!(
+                        name.as_str(),
+                        "notes" | ".flui-storage.lock" | ".machine-local"
+                    )
+                })
                 .collect()
         })
         .unwrap_or_default()
@@ -156,16 +152,22 @@ fn a_value_over_the_limit_is_too_large() {
 }
 
 fn the_two_scopes_keep_equal_names_apart() {
-    for shared_root in [false, true] {
+    type Layout = fn(&Path) -> DataDirs;
+    let layouts: [(&str, Layout); 3] = [
+        ("separate roots", separate_roots),
+        ("one root", |dir| DataDirs {
+            roaming: dir.join("app"),
+            local: dir.join("app"),
+        }),
+        ("one root spelled two ways", |dir| DataDirs {
+            roaming: dir.join("app"),
+            local: dir.join("other").join("..").join("app"),
+        }),
+    ];
+    for (layout, dirs_in) in layouts {
         let dir = tempfile::tempdir().expect("temp dir");
-        let dirs = if shared_root {
-            DataDirs {
-                roaming: dir.path().join("app"),
-                local: dir.path().join("app"),
-            }
-        } else {
-            separate_roots(dir.path())
-        };
+        std::fs::create_dir(dir.path().join("other")).expect("a sibling directory");
+        let dirs = dirs_in(dir.path());
         let store = FileStore::new(dirs.clone());
         store
             .write(&NOTES, b"data", WriteMode::Replace)
@@ -176,27 +178,43 @@ fn the_two_scopes_keep_equal_names_apart() {
 
         let data = store.read(&NOTES, 1024).expect("data reads");
         let session = store.read(&SESSION, 1024).expect("session reads");
-        assert_eq!(
-            data.bytes.as_deref(),
-            Some(&b"data"[..]),
-            "shared root: {shared_root}"
-        );
-        assert_eq!(
-            session.bytes.as_deref(),
-            Some(&b"session"[..]),
-            "shared root: {shared_root}"
-        );
+        assert_eq!(data.bytes.as_deref(), Some(&b"data"[..]), "{layout}");
+        assert_eq!(session.bytes.as_deref(), Some(&b"session"[..]), "{layout}");
         assert_eq!(
             std::fs::read(dirs.roaming.join("notes")).expect("data under the roaming root"),
-            b"data"
+            b"data",
+            "{layout}"
         );
-        if !shared_root {
-            assert_eq!(
-                std::fs::read(dirs.local.join("notes")).expect("session under the local root"),
-                b"session"
-            );
-        }
+        assert_eq!(
+            std::fs::read(dirs.local.join(".machine-local").join("notes"))
+                .expect("session under the local root"),
+            b"session",
+            "{layout}"
+        );
     }
+}
+
+/// A based write compares the stored length before reading: a stored value
+/// far longer than the base is refused without being read, so this finishes
+/// at once instead of reading a terabyte. Sparse files make that size free
+/// on Unix; NTFS would allocate it, so the row runs there only.
+#[cfg(unix)]
+fn a_stale_base_is_refused_without_reading_a_long_value() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let dirs = separate_roots(dir.path());
+    std::fs::create_dir_all(&dirs.roaming).expect("root");
+    std::fs::File::create(dirs.roaming.join("notes"))
+        .and_then(|file| file.set_len(1 << 40))
+        .expect("a sparse terabyte");
+    let store = FileStore::new(dirs);
+    assert_eq!(
+        store.write(
+            &NOTES,
+            b"short",
+            WriteMode::IfUnchanged(StoredVersion::of_bytes(b"short"))
+        ),
+        Err(StorageError::Conflict)
+    );
 }
 
 fn long_non_ascii_path_round_trips() {
@@ -261,6 +279,56 @@ fn read_only_target_is_inaccessible_not_busy() {
     );
     assert_eq!(std::fs::read(&target).expect("the old value"), b"kept");
     assert_eq!(staged_files(&dirs.roaming), Vec::<String>::new());
+}
+
+/// A target pending delete (its delete-on-close handle closed while another
+/// handle keeps it) refuses every new open with `ERROR_ACCESS_DENIED`, the
+/// code an ACL gives; the state passes once the last handle closes, so the
+/// write must be retryable, never `Inaccessible`.
+#[cfg(windows)]
+fn a_target_pending_delete_is_busy_not_inaccessible() {
+    use std::os::windows::fs::OpenOptionsExt;
+
+    const GENERIC_READ: u32 = 0x8000_0000;
+    const DELETE: u32 = 0x0001_0000;
+    const SHARE_ALL: u32 = 0x7;
+    const FILE_FLAG_DELETE_ON_CLOSE: u32 = 0x0400_0000;
+
+    let dir = tempfile::tempdir().expect("temp dir");
+    let dirs = separate_roots(dir.path());
+    let store = FileStore::new(dirs.clone());
+    store
+        .write(&NOTES, b"kept", WriteMode::Replace)
+        .expect("written");
+    let target = dirs.roaming.join("notes");
+    let keeper = std::fs::OpenOptions::new()
+        .read(true)
+        .share_mode(SHARE_ALL)
+        .open(&target)
+        .expect("a handle that keeps the file");
+    let deleter = std::fs::OpenOptions::new()
+        .access_mode(GENERIC_READ | DELETE)
+        .share_mode(SHARE_ALL)
+        .custom_flags(FILE_FLAG_DELETE_ON_CLOSE)
+        .open(&target)
+        .expect("a delete-on-close handle");
+    drop(deleter);
+    assert_eq!(
+        std::fs::OpenOptions::new()
+            .access_mode(0)
+            .open(&target)
+            .map_err(|error| error.raw_os_error())
+            .err(),
+        Some(Some(5)),
+        "the target is pending delete: even an attributes-only open is refused"
+    );
+
+    let result = store.write(&NOTES, b"later", WriteMode::Replace);
+    drop(keeper);
+    assert_eq!(result, Err(StorageError::Busy));
+    store
+        .write(&NOTES, b"later", WriteMode::Replace)
+        .expect("the write goes through once the delete completes");
 }
 
 #[cfg(windows)]
@@ -346,11 +414,18 @@ fn platform_cases() -> Vec<(&'static str, fn())> {
             "a_target_held_without_delete_sharing_is_busy",
             a_target_held_without_delete_sharing_is_busy,
         ),
+        (
+            "a_target_pending_delete_is_busy_not_inaccessible",
+            a_target_pending_delete_is_busy_not_inaccessible,
+        ),
     ]
 }
 
 /// The rows only this platform can run.
-#[cfg(not(windows))]
+#[cfg(unix)]
 fn platform_cases() -> Vec<(&'static str, fn())> {
-    Vec::new()
+    vec![(
+        "a_stale_base_is_refused_without_reading_a_long_value",
+        a_stale_base_is_refused_without_reading_a_long_value,
+    )]
 }

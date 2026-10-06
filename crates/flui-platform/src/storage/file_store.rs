@@ -4,20 +4,31 @@ use std::fs::{self, File, OpenOptions, TryLockError};
 use std::io::{ErrorKind, Read, Write};
 use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use flui_platform_api::{StorageError, StorageName, Stored, StoredVersion, WriteMode};
 
 use super::DataDirs;
-use super::os_error::{replace_error, storage_error};
+use super::os_error::{lock_error, replace_error, storage_error};
 
 /// The file in each root that a write based on a version locks while it
 /// compares and replaces. Every process sharing the root locks the same file.
 const LOCK_FILE: &str = ".flui-storage.lock";
 
-/// The directory machine-local values move to when both roots are the same
-/// directory (Linux): a [`StorageName`] cannot start with `.`, so no value
-/// is ever named like it.
+/// The directory under the local root that machine-local values live in, so
+/// they stay apart from roaming values even when both roots name the same
+/// directory (Linux), however the two paths are spelled. A [`StorageName`]
+/// cannot start with `.`, so no value is ever named like it.
 const MACHINE_LOCAL_DIR: &str = ".machine-local";
+
+/// The start of every file this store stages a write in. Specific to this
+/// store, so a sweep never touches another program's temporary files.
+const STAGED_PREFIX: &str = ".flui-staged-";
+
+/// How old a staged file must be before a based write sweeps it away as the
+/// leftover of a killed writer. A live write keeps its file younger than
+/// this: it writes, flushes and renames in one call.
+const STALE_STAGED_AGE: Duration = Duration::from_secs(60);
 
 /// A store of named byte values, one file each, under the two roots of a
 /// [`DataDirs`].
@@ -39,20 +50,15 @@ pub struct FileStore {
 impl FileStore {
     /// A store under `dirs`. Nothing is created until the first write.
     ///
-    /// When both roots are the same directory, machine-local values live in
-    /// a subdirectory of it, so equal text in the two scopes still names two
-    /// files.
+    /// Roaming values live directly under `dirs.roaming`; machine-local ones
+    /// under `dirs.local/.machine-local`, so equal text in the two scopes
+    /// names two files even when both roots are one directory.
     #[must_use]
     pub fn new(dirs: DataDirs) -> Self {
         let DataDirs { roaming, local } = dirs;
-        let local = if local == roaming {
-            local.join(MACHINE_LOCAL_DIR)
-        } else {
-            local
-        };
         Self {
             roaming,
-            local,
+            local: local.join(MACHINE_LOCAL_DIR),
             #[cfg(test)]
             step_hook: None,
         }
@@ -66,7 +72,10 @@ impl FileStore {
     /// # Errors
     ///
     /// [`StorageError::TooLarge`] for a value over `limit` bytes, found from
-    /// its length before it is read; [`StorageError::Busy`] while another
+    /// its length before it is read. When the file grew past the limit while
+    /// it was being read, at most `limit + 1` bytes are read and
+    /// [`TooLarge::len`](StorageError::TooLarge) is a lower bound of its
+    /// length. [`StorageError::Busy`] while another
     /// process holds the file; [`StorageError::Inaccessible`] when it cannot
     /// be read (no permission, a directory in its place).
     pub fn read(&self, name: &StorageName, limit: u64) -> Result<Stored, StorageError> {
@@ -94,7 +103,7 @@ impl FileStore {
         }
         let file = match File::open(&target) {
             Ok(file) => file,
-            // Replaced by a directory, or removed, since the length was read.
+            // Removed since its length was read.
             Err(error) if error.kind() == ErrorKind::NotFound => {
                 return Ok(Stored {
                     bytes: None,
@@ -155,7 +164,8 @@ impl FileStore {
             WriteMode::Replace => None,
             WriteMode::IfUnchanged(base) => {
                 let lock = lock_root(root)?;
-                if stored_version(&target)? != base {
+                sweep_stale_staged_files(root);
+                if !holds_version(&target, base)? {
                     return Err(StorageError::Conflict);
                 }
                 Some(lock)
@@ -169,7 +179,7 @@ impl FileStore {
         }
 
         let staged = tempfile::Builder::new()
-            .prefix(".tmp")
+            .prefix(STAGED_PREFIX)
             // `std` opens the file: it takes paths past 260 characters on
             // Windows, and marks nothing temporary on the file that becomes
             // the value.
@@ -263,19 +273,65 @@ fn lock_root(root: &Path) -> Result<File, StorageError> {
     match lock.try_lock() {
         Ok(()) => Ok(lock),
         Err(TryLockError::WouldBlock) => Err(StorageError::Busy),
-        Err(TryLockError::Error(error)) if error.kind() == ErrorKind::Unsupported => {
-            Err(StorageError::LockUnsupported)
-        }
-        Err(TryLockError::Error(error)) => Err(storage_error(&error)),
+        Err(TryLockError::Error(error)) => Err(lock_error(&error)),
     }
 }
 
-/// The version of what `target` holds now.
-fn stored_version(target: &Path) -> Result<StoredVersion, StorageError> {
-    match fs::read(target) {
-        Ok(bytes) => Ok(StoredVersion::of_bytes(&bytes)),
-        Err(error) if error.kind() == ErrorKind::NotFound => Ok(StoredVersion::ABSENT),
-        Err(error) => Err(storage_error(&error)),
+/// Whether `target` holds the value `base` names. The lengths are compared
+/// first, so a value of another length, however long, is never read; one of
+/// the same length is read and hashed, never past that length.
+fn holds_version(target: &Path, base: StoredVersion) -> Result<bool, StorageError> {
+    let file = match File::open(target) {
+        Ok(file) => file,
+        Err(error) if error.kind() == ErrorKind::NotFound => {
+            return Ok(base == StoredVersion::ABSENT);
+        }
+        Err(error) => return Err(storage_error(&error)),
+    };
+    let len = file
+        .metadata()
+        .map_err(|error| storage_error(&error))?
+        .len();
+    let Some(base_len) = base.byte_len() else {
+        return Ok(false);
+    };
+    if len != base_len {
+        return Ok(false);
+    }
+    let mut bytes = Vec::with_capacity(usize::try_from(len).unwrap_or(0));
+    file.take(len.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .map_err(|error| storage_error(&error))?;
+    Ok(StoredVersion::of_bytes(&bytes) == base)
+}
+
+/// Remove files this store staged in `root` that are older than
+/// [`STALE_STAGED_AGE`]: the leftovers of writers killed before their rename.
+/// Called under the root's lock; a file that cannot be inspected or removed
+/// is left for a later sweep.
+fn sweep_stale_staged_files(root: &Path) {
+    let Ok(entries) = fs::read_dir(root) else {
+        return;
+    };
+    for entry in entries.filter_map(Result::ok) {
+        if !entry
+            .file_name()
+            .to_str()
+            .is_some_and(|name| name.starts_with(STAGED_PREFIX))
+        {
+            continue;
+        }
+        let stale = entry.metadata().is_ok_and(|metadata| {
+            metadata.is_file()
+                && metadata
+                    .modified()
+                    .ok()
+                    .and_then(|modified| modified.elapsed().ok())
+                    .is_some_and(|age| age > STALE_STAGED_AGE)
+        });
+        if stale && let Err(error) = fs::remove_file(entry.path()) {
+            tracing::debug!(%error, path = %entry.path().display(), "removing a stale staged file failed");
+        }
     }
 }
 
@@ -336,22 +392,64 @@ mod tests {
 
     use flui_platform_api::{StorageError, StorageName, StoredVersion, WriteMode};
 
-    use super::{FileStore, Step};
+    use super::{FileStore, STAGED_PREFIX, STALE_STAGED_AGE, Step};
     use crate::storage::DataDirs;
+    use crate::table_test::run_table;
 
     const NOTES: StorageName = StorageName::from_static("notes");
     const OLD: &[u8] = b"flui-document notes 1 1\n{\"titles\":[\"old\"]}";
     const NEW: &[u8] = b"flui-document notes 1 2\n{\"titles\":[\"new\",\"longer\"]}";
 
-    /// Runs every case even after one fails, then panics listing the failing
-    /// case names.
-    fn run_table(table: &str, cases: &[(&str, fn())]) {
-        let failed: Vec<&str> = cases
-            .iter()
-            .filter(|(_, case)| std::panic::catch_unwind(*case).is_err())
-            .map(|(name, _)| *name)
-            .collect();
-        assert!(failed.is_empty(), "{table}: failing cases: {failed:?}");
+    /// The files in `dir` this store staged a write in.
+    fn staged_files(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+        std::fs::read_dir(dir)
+            .expect("the root exists")
+            .filter_map(Result::ok)
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .to_str()
+                    .is_some_and(|name| name.starts_with(STAGED_PREFIX))
+            })
+            .map(|entry| entry.path())
+            .collect()
+    }
+
+    /// A writer killed before its rename leaves its staged file; a later
+    /// based write removes it once it is older than a live write could be,
+    /// and leaves a young staged file and another program's file alone.
+    #[test]
+    fn a_based_write_sweeps_stale_staged_files() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let root = dirs_in(&dir).roaming;
+        for _ in 0..2 {
+            assert_eq!(
+                interrupted_at(&dir, Step::Flushed).write(&NOTES, NEW, WriteMode::Replace),
+                Err(StorageError::Cancelled)
+            );
+        }
+        let orphans = staged_files(&root);
+        assert_eq!(orphans.len(), 2, "both killed writers left a file");
+        let old = std::time::SystemTime::now() - STALE_STAGED_AGE - Duration::from_secs(5);
+        std::fs::File::options()
+            .write(true)
+            .open(&orphans[0])
+            .and_then(|file| file.set_modified(old))
+            .expect("age the first orphan");
+        let foreign = root.join(".tmp-another-program");
+        std::fs::write(&foreign, b"theirs").expect("another program's file");
+        std::fs::File::options()
+            .write(true)
+            .open(&foreign)
+            .and_then(|file| file.set_modified(old))
+            .expect("age it too");
+
+        FileStore::new(dirs_in(&dir))
+            .write(&NOTES, OLD, WriteMode::IfUnchanged(StoredVersion::ABSENT))
+            .expect("the based write lands");
+
+        assert_eq!(staged_files(&root), vec![orphans[1].clone()]);
+        assert!(foreign.exists(), "another program's file is not swept");
     }
 
     fn dirs_in(dir: &tempfile::TempDir) -> DataDirs {

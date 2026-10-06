@@ -1240,30 +1240,49 @@ fails past 260 characters, and marks the file it creates
 the path and falls back to POSIX-semantics replacement. A write based on a
 version holds an exclusive `File::try_lock` on `<root>/.flui-storage.lock` from
 comparing the stored version to the rename, so two processes on one directory
-cannot both succeed from the same base. A file system whose locks are
-`Unsupported` refuses such a write with `LockUnsupported` rather than writing
-unguarded.
+cannot both succeed from the same base. The comparison checks the stored
+length against the base's (`StoredVersion::byte_len`) before reading, so a
+value of another length is never read for it. A file system without locks
+refuses such a write with `LockUnsupported` rather than writing unguarded:
+`std` maps only some of its codes to `ErrorKind::Unsupported`, so
+`ERROR_INVALID_FUNCTION` (1), `ERROR_NOT_SUPPORTED` (50) and `ENOLCK` are
+recognised by code.
+
+Each write stages its bytes in a `.flui-staged-*` file. A writer killed before
+its rename leaves that file behind; a based write, holding the root's lock,
+removes the store's own staged files older than 60 seconds. A live write
+finishes its file within one call, so it is never that old; another program's
+files never carry the prefix.
 
 Windows reports a sharing violation (32) and a lock violation (33) only by code;
 both are `Busy`. `ERROR_ACCESS_DENIED` (5) is both lasting (a read-only file,
 an ACL, a directory in the file's place) and passing (a holder that did not
-grant delete sharing), so a refused rename probes the target: a directory, a
-read-only file, or one that cannot be opened for writing with code 5 is
-`Inaccessible` and never retried; one that opens, or is held without write
-sharing, is `Busy`. When the roaming and local roots are the same directory
-(Linux), machine-local values live in `<root>/.machine-local/`: no
-`StorageName` starts with `.`, so neither that directory nor the lock file
-collides with a value.
+grant delete sharing, a file pending delete), so a refused rename probes the
+target. A directory or a read-only file is `Inaccessible`. A target that
+refuses even an open requesting no access is pending delete and `Busy`: an ACL
+does not refuse that open, and `fs::metadata` cannot tell, because on that
+refusal `std` reads the attributes from the directory listing. A target that
+then refuses to be opened for writing with code 5 is `Inaccessible` and never
+retried; one that opens, or is held without write sharing, is `Busy`.
+Machine-local values always live in `<local root>/.machine-local/`, so they
+stay apart from roaming values when both roots are one directory (Linux),
+however the two paths are spelled: the store never compares paths. No
+`StorageName` starts with `.`, so neither that directory, the lock file nor a
+staged file collides with a value.
 
 `storage::file_store::tests::file_store_interruption_matrix` stops a write at
 each step and reads the old whole value until the rename and the new one after
 it; `two_threads_interleave_and_exactly_one_conflicts` holds one writer between
 its comparison and its rename until the other has tried, and fails without the
-lock. `storage::os_error::tests::os_error_classification_table` pins the code
-mapping. The `file_store_contract` table in `tests/file_store.rs` covers the
-directory created on the first write, a directory in the file's place, the
-lock, the read limit, the two scopes, a long non-ASCII path and, on Windows
-only, a read-only target (`Inaccessible`) and one held without delete sharing
-(`Busy`, reached through code 5 and the probe). `sync_all` matters only on
+lock; `a_based_write_sweeps_stale_staged_files` ages one orphan and keeps a
+young one and a foreign file. `storage::os_error::tests::os_error_classification_table`
+pins the mapping of codes to `StorageError`, including the lock codes. The
+`file_store_contract` table in `tests/file_store.rs` covers the directory
+created on the first write, a directory in the file's place, the lock, the
+read limit, the two scopes under separate roots, one root and one root spelled
+two ways, a long non-ASCII path; on Unix only, a stale base refused against a
+sparse terabyte without reading it; on Windows only, a read-only target
+(`Inaccessible`), one held without delete sharing and one pending delete
+(both `Busy`, reached through code 5 and the probe). `sync_all` matters only on
 power loss, which no test causes; a killed process (`taskkill /F`) and two
 processes on one directory are left to the dated native run.
