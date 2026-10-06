@@ -297,6 +297,37 @@ impl UiRealm {
         self.frame_failure_detail.get()
     }
 
+    /// Report an application callback's panic that the host contained on
+    /// this realm's owner turn, outside any frame, as one
+    /// [`FrameFailureKind::CallbackPanic`] addressed to `address`: for a
+    /// realm-level task, the realm's primary presentation; for a
+    /// presentation's close, the presentation closing, which may already be
+    /// gone. The payload stays the caller's: it is read, never dropped here.
+    ///
+    /// Not yet delivered to the registered [`FrameFailureHandler`]: the
+    /// panic is only traced.
+    pub fn report_contained_panic(
+        &self,
+        address: flui_foundation::PresentationAddress,
+        payload: &(dyn std::any::Any + Send),
+    ) {
+        let (message, internal_invariant) = self.frame_failure_detail.get().panic_text(payload);
+        // Diagnostics are foreign code through tracing subscribers; a failed
+        // diagnostic must not unwind into the host's containment boundary.
+        if let Err(failure) = catch_unwind(AssertUnwindSafe(|| {
+            tracing::error!(
+                { flui_foundation::diagnostics::PRESENTATION_ID } =
+                    address.presentation_id.as_u64(),
+                realm_id = address.realm_id.as_u64(),
+                internal_invariant,
+                panic_message = %message,
+                "application callback panic contained; the realm keeps running"
+            );
+        })) {
+            flui_foundation::panic::retain_opaque_payload(failure);
+        }
+    }
+
     /// Surface one frame-failure report for `presentation` through tracing
     /// and the registered handler (if any).
     ///
@@ -383,6 +414,20 @@ impl UiRealm {
                     ?hook,
                     panic_message = %message,
                     "lifecycle panic contained; frame continued for this presentation"
+                );
+            }
+            FrameFailureKind::CallbackPanic {
+                message,
+                internal_invariant,
+            } => {
+                tracing::error!(
+                    { flui_foundation::diagnostics::PRESENTATION_ID } =
+                        report.address.presentation_id.as_u64(),
+                    realm_id = report.address.realm_id.as_u64(),
+                    consecutive_failures,
+                    internal_invariant,
+                    panic_message = %message,
+                    "application callback panic contained; the realm keeps running"
                 );
             }
         })) {
