@@ -358,6 +358,11 @@ struct OwnerState {
     /// runs at the anchor that closes this frame, not whenever the field is
     /// next focused.
     retired: Vec<Rc<dyn TextStore>>,
+    /// Stores whose composition commit, asked for inside a frame on a push
+    /// or storeless backend, waits as a grant behind the shut gate, oldest
+    /// first. The anchor runs them; a close runs them too, since no anchor
+    /// follows it, while it cancels every other store's queued grants.
+    completing: Vec<Rc<dyn TextStore>>,
     /// Pull host operations not yet applied, oldest first.
     host_ops: VecDeque<HostOp>,
     /// Whether the last focus the host applied named a store.
@@ -429,6 +434,7 @@ impl TextInputOwner {
                 lifecycle: OwnerLifecycle::Open,
                 active: None,
                 retired: Vec::new(),
+                completing: Vec::new(),
                 host_ops: VecDeque::new(),
                 host_focused: false,
                 platform_enabled: false,
@@ -707,7 +713,24 @@ impl TextInputOwner {
             self.apply_host_ops(&mut calls, HostTurn::Own);
         } else {
             // The commit settles a grant, which may park an owner failure.
-            calls.run_parking(&self.gate, || commit_composition_in_place(&*store));
+            // Inside a frame it is queued behind the shut gate: the store is
+            // owed its anchor, or the close, whichever comes first.
+            let deferred = self.is_transaction_open();
+            let committed = calls
+                .run_parking(&self.gate, || commit_composition_in_place(&*store))
+                .is_some();
+            if deferred && committed {
+                let mut state = self.state.borrow_mut();
+                if state.lifecycle == OwnerLifecycle::Open {
+                    push_unique(&mut state.completing, Rc::clone(&store));
+                } else {
+                    // A custom store's request closed this owner meanwhile:
+                    // the close opened the gate before the commit was
+                    // recorded, so it runs now.
+                    drop(state);
+                    calls.run_parking(&self.gate, || store.run_deferred_grants());
+                }
+            }
             calls.retire_parking(&self.gate, store);
         }
         calls.resume();
@@ -873,17 +896,21 @@ impl TextInputOwner {
 
     /// The store half of [`Self::run_deferred_grants`], inside its `calls`.
     fn run_store_grants(&self, calls: &mut OwnerCalls) -> usize {
-        let (retired, active) = {
+        let (retired, completing, active) = {
             let mut state = self.state.borrow_mut();
             let active = state
                 .active
                 .as_ref()
                 .map(|active| Rc::clone(&active.client.store));
-            (std::mem::take(&mut state.retired), active)
+            (
+                std::mem::take(&mut state.retired),
+                state.completing.clone(),
+                active,
+            )
         };
         let mut stores = retired;
-        if let Some(active) = active {
-            push_unique(&mut stores, active);
+        for store in completing.into_iter().chain(active) {
+            push_unique(&mut stores, store);
         }
         let mut ran = 0;
         for index in 0..stores.len() {
@@ -901,6 +928,10 @@ impl TextInputOwner {
                 break;
             }
         }
+        // What is left ran to completion: a commit they owed is done.
+        Vec::retain(&mut self.state.borrow_mut().completing, |owed| {
+            !stores.iter().any(|ran| Rc::ptr_eq(ran, owed))
+        });
         retire_stores(stores, calls, &self.gate);
         ran
     }
@@ -941,7 +972,9 @@ impl TextInputOwner {
     ///
     /// The close is the presentation's last turn: it ends a frame
     /// transaction still open, so the completions queued in it commit, through
-    /// the host or in place, before their stores are retired.
+    /// the host or in place, before their stores are retired. A store that
+    /// owes such a commit runs its queued grants first, in request order; the
+    /// grants every other store queued behind the frame are cancelled.
     pub fn close(&self) {
         self.close_with_mode(CloseMode::Ordinary);
     }
@@ -952,7 +985,7 @@ impl TextInputOwner {
 
     pub(crate) fn close_with_mode(&self, mode: CloseMode) {
         let mut failure = ClosePanic::for_close(mode, self.close_mode.clone());
-        let (retired, active, host_ops, host_focused) = {
+        let (retired, completing, active, host_ops, host_focused) = {
             let mut state = self.state.borrow_mut();
             if state.lifecycle == OwnerLifecycle::Closed {
                 return;
@@ -960,6 +993,7 @@ impl TextInputOwner {
             state.lifecycle = OwnerLifecycle::Closed;
             (
                 std::mem::take(&mut state.retired),
+                std::mem::take(&mut state.completing),
                 state.active.take(),
                 std::mem::take(&mut state.host_ops),
                 std::mem::replace(&mut state.host_focused, false),
@@ -971,6 +1005,18 @@ impl TextInputOwner {
         // its store is retired, instead of queueing a grant no one runs
         // (ADR-0142 items 4 and 6).
         self.gate.set_open(true);
+        // A commit a push or storeless backend queued behind the frame is
+        // accepted work: the stores that owe one run their queued grants,
+        // oldest request first, so the commit lands behind the grants
+        // accepted before it. Every other store's queued grants are
+        // cancelled with it below. After a failure the rest are retired, as
+        // the rest of a failed close is.
+        for store in completing {
+            if !failure.preserving() {
+                close_host_call(&self.gate, &mut failure, || store.run_deferred_grants());
+            }
+            close_retire(&self.gate, &mut failure, store);
+        }
         let backend = self.backend.replace(TextInputBackend::Unsupported);
         match &backend {
             TextInputBackend::Push(platform) if active.is_some() => {
@@ -1097,6 +1143,7 @@ impl Drop for TextInputOwner {
         state.lifecycle = OwnerLifecycle::Closed;
         let active = state.active.take();
         let retired = std::mem::take(&mut state.retired);
+        let completing = std::mem::take(&mut state.completing);
         let host_ops = std::mem::take(&mut state.host_ops);
         let host_focused = std::mem::replace(&mut state.host_focused, false);
         // Keep backend custody outside the invocation, including a callback
@@ -1105,6 +1152,7 @@ impl Drop for TextInputOwner {
         // An owner dropped without a close runs no queued completion; it
         // only takes its store away from the host.
         close_retire(&self.gate, &mut failure, Vec::from(host_ops));
+        close_retire(&self.gate, &mut failure, completing);
         match &backend {
             TextInputBackend::Push(platform) if disable => {
                 close_host_call(&self.gate, &mut failure, || platform.set_ime_allowed(false));

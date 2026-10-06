@@ -1161,6 +1161,97 @@ fn host_close_before_the_anchor_commits_a_queued_completion() {
     drop(harness);
 }
 
+/// A field composing "かな", moved to a push presentation whose completion
+/// is asked for inside a frame: the in-place commit is queued in the store
+/// behind the shut gate, beside a grant the platform queued before it.
+fn push_completion_queued_in_a_frame(
+    earlier_grant: impl Fn(&Log) + 'static,
+) -> (
+    Harness,
+    TextEditingController,
+    Rc<dyn TextStore>,
+    Rc<TextInputOwner>,
+    Log,
+) {
+    let controller = TextEditingController::new();
+    let node = FocusNode::with_debug_label("push, closed before the anchor");
+    let harness = focused(
+        EditableText::new(controller.clone(), Rc::clone(&node)),
+        &node,
+    );
+    let field = field(&harness);
+    assert_eq!(
+        project_ime_event(
+            &*field,
+            &ImeEvent::Preedit {
+                text: "かな".to_owned(),
+                cursor: Some((0, 0)),
+            },
+        ),
+        Ok(LockOutcome::Granted),
+        "preedit applies"
+    );
+    let owner = owner();
+    let _token = owner
+        .handle()
+        .attach(TextInputClient::new(Rc::clone(&field)))
+        .expect("the field moves to the push presentation");
+    owner.set_transaction_open(true);
+    let log: Log = Rc::default();
+    let earlier = Rc::clone(&log);
+    assert_eq!(
+        field.request_lock(
+            LockGrant::read(move |_| earlier_grant(&earlier)),
+            LockTiming::Async,
+        ),
+        Ok(LockOutcome::Deferred),
+        "the platform's grant waits for the anchor"
+    );
+    owner.complete_composition();
+    assert!(
+        controller.composing_range().is_some(),
+        "the commit waits behind the shut gate"
+    );
+    (harness, controller, field, owner, log)
+}
+
+/// A push presentation that closes before the anchor runs the commit it
+/// accepted, behind the grant queued ahead of it in the same store, before
+/// it retires the store.
+fn push_close_before_the_anchor_commits_a_queued_completion() {
+    let (harness, controller, _field, owner, log) =
+        push_completion_queued_in_a_frame(|log| log.borrow_mut().push("earlier grant"));
+    assert_eq!(raised(|| owner.close()), None, "the close fails nothing");
+    assert_eq!(
+        controller.composing_range(),
+        None,
+        "the close committed the queued completion before retiring the store"
+    );
+    assert_eq!(controller.text(), "かな", "the composed text stays");
+    assert_eq!(*log.borrow(), ["earlier grant"], "in the order accepted");
+    drop(harness);
+}
+
+/// The same, when the grant ahead of the commit panics: the close runs it
+/// inside its containment and raises its failure once the close is done;
+/// the owner is closed, and the field keeps working.
+fn push_close_whose_earlier_grant_panics() {
+    let (harness, _controller, field, owner, _log) =
+        push_completion_queued_in_a_frame(|_| panic!("queued grant failure"));
+    assert_eq!(
+        raised(|| owner.close()).as_deref(),
+        Some("queued grant failure"),
+        "the close raises the grant's failure"
+    );
+    assert!(owner.handle().ensure_open().is_err(), "the owner is closed");
+    assert_eq!(
+        edit(&*field, "z"),
+        Ok(LockOutcome::Granted),
+        "the field's next edit"
+    );
+    drop(harness);
+}
+
 // ----------------------------------------------------------------------------
 // The matrix
 // ----------------------------------------------------------------------------
@@ -1271,6 +1362,14 @@ const ROWS: &[(&str, fn())] = &[
     (
         "host: a completion queued in a frame, closed before the anchor",
         host_close_before_the_anchor_commits_a_queued_completion,
+    ),
+    (
+        "push: a completion queued in a frame, closed before the anchor",
+        push_close_before_the_anchor_commits_a_queued_completion,
+    ),
+    (
+        "push: a close whose grant ahead of a queued completion panics",
+        push_close_whose_earlier_grant_panics,
     ),
     (
         "arbiter: a refused grant during an unwind",
