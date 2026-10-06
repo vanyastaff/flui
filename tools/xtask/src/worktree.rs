@@ -159,19 +159,36 @@ impl fmt::Display for BranchName {
     }
 }
 
-/// The worktree root for the repository whose common git dir is `common_dir`:
-/// `.worktrees` in the main checkout that owns it.
-fn worktree_root(common_dir: &Path) -> anyhow::Result<PathBuf> {
-    let main = common_dir.parent().with_context(|| {
-        format!(
-            "{} has no main checkout above it to hold {ROOT_DIR}",
-            common_dir.display()
-        )
-    })?;
-    Ok(main.join(ROOT_DIR))
+/// The main checkout, from `git worktree list`'s records and, when this
+/// command runs in the main checkout, its `--show-toplevel`.
+///
+/// Neither the common git dir's parent nor, alone, the first record: for a
+/// `git init --separate-git-dir` checkout git reports the git dir itself in
+/// the checkout's place, and records the checkout nowhere a linked worktree
+/// can read it. So the main checkout's own top level wins, then a first
+/// record that holds a `.git`; anything else is refused.
+fn main_checkout(entries: &[Entry], main_toplevel: Option<&Path>) -> anyhow::Result<PathBuf> {
+    if let Some(toplevel) = main_toplevel {
+        return Ok(toplevel.to_path_buf());
+    }
+    let first = entries
+        .first()
+        .context("`git worktree list` named no main worktree")?;
+    ensure!(
+        !first.bare,
+        "{} is a bare repository: no main checkout to hold {ROOT_DIR}",
+        first.path.display()
+    );
+    ensure!(
+        first.path.join(".git").exists(),
+        "{} is a separate git dir whose checkout git does not record; \
+         run this from the main checkout",
+        first.path.display()
+    );
+    Ok(first.path.clone())
 }
 
-/// One record of `git worktree list --porcelain`.
+/// One record of `git worktree list --porcelain -z`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct Entry {
     path: PathBuf,
@@ -183,12 +200,15 @@ struct Entry {
     prunable: bool,
 }
 
-/// Parses `git worktree list --porcelain`: records separated by blank lines,
-/// the first one the main worktree.
+/// Parses `git worktree list --porcelain -z`: NUL-terminated lines, records
+/// separated by an empty one, the first record the main worktree.
+///
+/// `-z` because the newline form C-quotes some paths (a newline or a quote in
+/// them, for one) and `-z` prints every path verbatim.
 fn parse_worktrees(porcelain: &str) -> anyhow::Result<Vec<Entry>> {
     let mut entries = Vec::new();
     let mut current: Option<Entry> = None;
-    for line in porcelain.lines() {
+    for line in porcelain.split('\0') {
         let (key, value) = line.split_once(' ').unwrap_or((line, ""));
         if key == "worktree" {
             entries.extend(current.take());
@@ -203,7 +223,7 @@ fn parse_worktrees(porcelain: &str) -> anyhow::Result<Vec<Entry>> {
             continue;
         }
         let Some(entry) = current.as_mut() else {
-            bail!("`git worktree list --porcelain` line before any `worktree`: {line}");
+            bail!("`git worktree list --porcelain -z` line before any `worktree`: {line}");
         };
         match key {
             "branch" => {
@@ -545,7 +565,8 @@ impl fmt::Display for Worktree {
 /// main and a later `git push` aim at it; the branch gets its own upstream on
 /// its first `git push -u`.
 fn new(git: &Git, branch: &BranchName) -> anyhow::Result<PathBuf> {
-    let root = worktree_root(&git.common_dir()?)?;
+    let (main, _) = git.worktrees()?;
+    let root = main.join(ROOT_DIR);
     let path = root.join(branch.slug());
     ensure!(!path.exists(), "{} already exists", path.display());
     ensure!(
@@ -573,8 +594,8 @@ fn new(git: &Git, branch: &BranchName) -> anyhow::Result<PathBuf> {
 
 /// Every worktree git records, with its facts.
 fn survey(git: &Git) -> anyhow::Result<Vec<Worktree>> {
-    let root = worktree_root(&git.common_dir()?)?;
-    let entries = parse_worktrees(&git.run(&["worktree", "list", "--porcelain"])?)?;
+    let (main, entries) = git.worktrees()?;
+    let root = main.join(ROOT_DIR);
     let upstreams = parse_upstreams(&git.run(&[
         "for-each-ref",
         "--format=%(refname)%00%(upstream)",
@@ -724,24 +745,35 @@ fn remove(git: &Git, worktree: &Worktree, force: bool) -> anyhow::Result<Removed
         std::fs::remove_dir_all(&target)
             .with_context(|| format!("removing {}", target.display()))?;
     }
-    if force {
-        // The survey's verdict may be stale: delete the lone `TASKS.md` only if
-        // it is still the only change, and never pass `--force`, so anything
-        // written since makes `git worktree remove` refuse instead of deleting it.
-        let status = git.run(&[
-            "-C",
-            utf8(path)?,
-            "status",
-            "--porcelain",
-            "--untracked-files=all",
-        ])?;
-        anyhow::ensure!(
-            status.trim() == "?? TASKS.md",
-            "{} changed since it was surveyed; keeping it",
+    // The survey's verdict may be stale. `git worktree remove` refuses
+    // untracked and modified files without `--force` (never passed), but deletes
+    // ignored ones silently, so recheck everything, ignored entries included, and
+    // remove only what the verdict allowed: nothing, or a lone `TASKS.md`.
+    let expected = if force {
+        Changes::TasksOnly
+    } else {
+        Changes::None
+    };
+    let now = Changes::from_status(&Git::new(path.clone()).run(&[
+        "status",
+        "--porcelain=v1",
+        "-z",
+        "--untracked-files=all",
+        "--ignored=matching",
+    ])?);
+    if now != expected {
+        let reason = match now {
+            Changes::Ignored(paths) => Reason::Ignored(paths),
+            Changes::None | Changes::TasksOnly | Changes::Work => Reason::Dirty,
+        };
+        bail!(
+            "{} changed since it was surveyed ({reason}); keeping it",
             path.display()
         );
-        std::fs::remove_file(path.join("TASKS.md"))
-            .with_context(|| format!("removing {}", path.join("TASKS.md").display()))?;
+    }
+    if force {
+        std::fs::remove_file(path.join(TASKS_FILE))
+            .with_context(|| format!("removing {}", path.join(TASKS_FILE).display()))?;
     }
     git.run(&["worktree", "remove", utf8(path)?])?;
     let branch_kept = match &worktree.entry.branch {
@@ -810,9 +842,34 @@ impl Git {
         }
     }
 
-    /// The repository's common git dir, absolute.
-    fn common_dir(&self) -> anyhow::Result<PathBuf> {
-        let dir = self.run(&["rev-parse", "--path-format=absolute", "--git-common-dir"])?;
-        Ok(PathBuf::from(dir.trim()))
+    /// The main checkout ([`main_checkout`]) and every worktree git records,
+    /// the main one first and at that path.
+    fn worktrees(&self) -> anyhow::Result<(PathBuf, Vec<Entry>)> {
+        let mut entries =
+            parse_worktrees(&self.run(&["worktree", "list", "--porcelain", "-z"])?)?;
+        let main = main_checkout(&entries, self.main_toplevel()?.as_deref())?;
+        if let Some(first) = entries.first_mut() {
+            first.path.clone_from(&main);
+        }
+        Ok((main, entries))
+    }
+
+    /// `--show-toplevel` when this is the main checkout: its git dir is the
+    /// common one.
+    fn main_toplevel(&self) -> anyhow::Result<Option<PathBuf>> {
+        let out = self.run(&[
+            "rev-parse",
+            "--path-format=absolute",
+            "--git-dir",
+            "--git-common-dir",
+            "--show-toplevel",
+        ])?;
+        let mut lines = out.lines();
+        let (Some(git_dir), Some(common_dir), Some(toplevel)) =
+            (lines.next(), lines.next(), lines.next())
+        else {
+            bail!("`git rev-parse` printed {out:?}, not three paths");
+        };
+        Ok(same_dir(Path::new(git_dir), Path::new(common_dir)).then(|| PathBuf::from(toplevel)))
     }
 }

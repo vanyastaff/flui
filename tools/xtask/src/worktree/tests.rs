@@ -32,31 +32,58 @@ fn rejects_every_other_shape() {
     }
 }
 
-fn the_root_is_dot_worktrees_in_the_main_checkout() {
-    let root = worktree_root(Path::new("/src/flui/.git")).expect("has a parent");
-    assert_eq!(root, Path::new("/src/flui").join(ROOT_DIR));
+fn the_main_checkout_is_its_own_top_level_or_a_first_record_holding_git() {
+    let scratch = ScratchDir::new("worktree-main").expect("scratch dir");
+    let checkout = scratch.path().join("checkout");
+    std::fs::create_dir_all(checkout.join(".git")).expect("mkdir");
+    let git_dir = scratch.path().join("separate-git-dir");
+    std::fs::create_dir_all(&git_dir).expect("mkdir");
+    let entry = |path: &Path, bare| Entry {
+        path: path.to_path_buf(),
+        bare,
+        ..Entry::default()
+    };
+    let linked = entry(&checkout.join(ROOT_DIR).join("a"), false);
+    assert_eq!(
+        main_checkout(&[entry(&checkout, false), linked.clone()], None).expect("a checkout"),
+        checkout
+    );
+    // a separate git dir reported in the checkout's place
+    let separate = [entry(&git_dir, false), linked];
+    assert_eq!(
+        main_checkout(&separate, Some(&checkout)).expect("the top level wins"),
+        checkout
+    );
+    assert!(main_checkout(&separate, None).is_err());
+    assert!(main_checkout(&[entry(&git_dir, true)], None).is_err());
+    assert!(main_checkout(&[], None).is_err());
 }
 
 fn porcelain_records_parse() {
-    let porcelain = "\
-worktree D:/flui
-HEAD 1111111111111111111111111111111111111111
-branch refs/heads/main
-
-worktree D:/flui/.worktrees/a
-HEAD 2222222222222222222222222222222222222222
-branch refs/heads/tooling/a
-locked
-
-worktree C:/elsewhere/b
-HEAD 3333333333333333333333333333333333333333
-detached
-prunable gitdir file points to non-existent location
-
-worktree D:/bare
-bare
-";
-    let entries = parse_worktrees(porcelain).expect("valid porcelain");
+    // `-z` output: every line NUL-terminated, a record ended by an empty line;
+    // paths verbatim, never C-quoted
+    let porcelain = [
+        "worktree D:/flui",
+        "HEAD 1111111111111111111111111111111111111111",
+        "branch refs/heads/main",
+        "",
+        "worktree D:/flui/.worktrees/t\u{e9}st dir",
+        "HEAD 2222222222222222222222222222222222222222",
+        "branch refs/heads/tooling/a",
+        "locked",
+        "",
+        "worktree C:/elsewhere/b",
+        "HEAD 3333333333333333333333333333333333333333",
+        "detached",
+        "prunable gitdir file points to non-existent location",
+        "",
+        "worktree D:/bare",
+        "bare",
+        "",
+    ]
+    .map(|line| format!("{line}\0"))
+    .concat();
+    let entries = parse_worktrees(&porcelain).expect("valid porcelain");
     assert_eq!(
         entries,
         [
@@ -66,7 +93,7 @@ bare
                 ..Entry::default()
             },
             Entry {
-                path: PathBuf::from("D:/flui/.worktrees/a"),
+                path: PathBuf::from("D:/flui/.worktrees/t\u{e9}st dir"),
                 branch: Some("tooling/a".to_owned()),
                 locked: true,
                 ..Entry::default()
@@ -83,7 +110,7 @@ bare
             },
         ]
     );
-    assert!(parse_worktrees("HEAD abc\n").is_err());
+    assert!(parse_worktrees("HEAD abc\0").is_err());
 }
 
 fn an_upstream_is_gone_only_when_set_and_missing() {
@@ -298,6 +325,16 @@ struct Fixture {
 
 impl Fixture {
     fn new() -> Self {
+        Self::init(&[])
+    }
+
+    /// A main checkout whose git dir lives outside it (`--separate-git-dir`).
+    fn separate_git_dir() -> Self {
+        Self::init(&["--separate-git-dir", "main-git-dir"])
+    }
+
+    /// `init_args` go to the main checkout's `git init`, run in the scratch dir.
+    fn init(init_args: &[&str]) -> Self {
         let scratch = ScratchDir::new("worktree").expect("scratch dir");
         let origin = scratch.path().join("origin.git");
         let main = scratch.path().join("main");
@@ -311,8 +348,10 @@ impl Fixture {
             utf8(&origin).expect("utf8"),
         ])
         .expect("init origin");
-        top.run(&["init", "-q", "-b", "main", utf8(&main).expect("utf8")])
-            .expect("init main");
+        let mut init = vec!["init", "-q", "-b", "main"];
+        init.extend_from_slice(init_args);
+        init.push(utf8(&main).expect("utf8"));
+        top.run(&init).expect("init main");
         let fixture = Self {
             _scratch: scratch,
             main,
@@ -578,6 +617,58 @@ fn a_dry_run_fetches_nothing() {
     );
 }
 
+/// Merges a worktree that holds nothing, or only a root `TASKS.md` when
+/// `tasks`, surveys it, then writes an ignored `.env` before [`remove`] runs.
+fn ignored_file_written_after_the_verdict(tasks: bool) {
+    let fixture = Fixture::new();
+    let raced = fixture.new_worktree("t/raced");
+    commit(&raced, "raced.txt");
+    fixture.merge("t/raced");
+    if tasks {
+        std::fs::write(raced.join(TASKS_FILE), "- [x] done\n").expect("write");
+    }
+    let worktree = fixture.survey_branch("t/raced");
+    assert_eq!(classify(&worktree.facts), Decision::Remove { force: tasks });
+    let exclude = fixture.main.join(".git").join("info").join("exclude");
+    std::fs::write(&exclude, ".env\n").expect("write");
+    std::fs::write(raced.join(".env"), "KEY=1\n").expect("write");
+    let error = remove(&fixture.git(), &worktree, tasks).expect_err("removal is refused");
+    assert!(
+        format!("{error:#}").contains("ignored files: .env"),
+        "{error:#}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(raced.join(".env")).expect("the ignored file survives"),
+        "KEY=1\n"
+    );
+    assert!(fixture.has_branch("t/raced"));
+    assert_eq!(raced.join(TASKS_FILE).is_file(), tasks);
+}
+
+fn an_ignored_file_written_after_the_verdict_survives_removal() {
+    ignored_file_written_after_the_verdict(false);
+}
+
+fn an_ignored_file_written_beside_tasks_md_survives_removal() {
+    ignored_file_written_after_the_verdict(true);
+}
+
+fn a_separate_git_dir_checkout_roots_worktrees_in_the_checkout() {
+    let fixture = Fixture::separate_git_dir();
+    assert!(fixture.main.join(".git").is_file(), "`.git` is a gitfile");
+    let created = fixture.new_worktree("t/sep");
+    assert_eq!(created, fixture.main.join(ROOT_DIR).join("sep"));
+    assert!(created.is_dir());
+    assert!(!fixture.survey_branch("t/sep").outside_root);
+    // git records the checkout nowhere a linked worktree can read it: refused,
+    // not rooted in the git dir
+    let from_linked = new(
+        &Git::new(created),
+        &BranchName::parse("t/other").expect("valid"),
+    );
+    assert!(from_linked.is_err(), "{from_linked:?}");
+}
+
 #[test]
 fn worktree_contract() {
     crate::table_test::run_table(
@@ -589,8 +680,8 @@ fn worktree_contract() {
             ),
             ("rejects_every_other_shape", rejects_every_other_shape),
             (
-                "the_root_is_dot_worktrees_in_the_main_checkout",
-                the_root_is_dot_worktrees_in_the_main_checkout,
+                "the_main_checkout_is_its_own_top_level_or_a_first_record_holding_git",
+                the_main_checkout_is_its_own_top_level_or_a_first_record_holding_git,
             ),
             ("porcelain_records_parse", porcelain_records_parse),
             (
@@ -638,6 +729,18 @@ fn worktree_contract() {
                 a_merged_worktree_holding_only_target_is_removed,
             ),
             ("a_dry_run_fetches_nothing", a_dry_run_fetches_nothing),
+            (
+                "an_ignored_file_written_after_the_verdict_survives_removal",
+                an_ignored_file_written_after_the_verdict_survives_removal,
+            ),
+            (
+                "an_ignored_file_written_beside_tasks_md_survives_removal",
+                an_ignored_file_written_beside_tasks_md_survives_removal,
+            ),
+            (
+                "a_separate_git_dir_checkout_roots_worktrees_in_the_checkout",
+                a_separate_git_dir_checkout_roots_worktrees_in_the_checkout,
+            ),
         ],
     );
 }
