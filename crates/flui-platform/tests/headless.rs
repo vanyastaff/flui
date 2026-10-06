@@ -9,10 +9,13 @@
 // same binary.
 #![expect(unsafe_code)]
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 
-use flui_platform::{WindowOptions, current_platform, headless_platform};
+use flui_platform::{
+    HeadlessPlatform, Platform as _, SessionEnd, SessionEndAnswer, WindowOptions, current_platform,
+    headless_platform,
+};
 
 fn flui_headless_env_var_selects_the_headless_platform() {
     // Set environment variable
@@ -103,4 +106,32 @@ fn the_headless_platform_is_selected_and_its_exit_policy_is_honoured() {
     closing_the_only_window_without_a_hook_never_calls_quit();
     exit_policy_hook_veto_prevents_quit_even_after_the_last_window_closes();
     flui_headless_env_var_selects_the_headless_platform();
+}
+
+/// A simulated session end asks the registered callback once per phase, in
+/// order, and returns its answer to the query.
+#[test]
+#[ignore = "contract: a simulated session end reaches the registered callback"]
+fn simulated_session_end_reaches_the_hook() {
+    let platform = HeadlessPlatform::new();
+    let phases = Arc::new(Mutex::new(Vec::new()));
+    let seen = Arc::clone(&phases);
+    platform.on_session_end(Box::new(move |phase| {
+        seen.lock().expect("phase log").push(phase);
+        SessionEndAnswer::Block
+    }));
+
+    let answer = platform.simulate_session_end(SessionEnd::Query);
+    platform.simulate_session_end(SessionEnd::Cancelled);
+
+    assert_eq!(
+        *phases.lock().expect("phase log"),
+        [SessionEnd::Query, SessionEnd::Cancelled],
+        "each simulated phase reaches the callback once, in order"
+    );
+    assert_eq!(
+        answer,
+        SessionEndAnswer::Block,
+        "the query returns the callback's answer"
+    );
 }

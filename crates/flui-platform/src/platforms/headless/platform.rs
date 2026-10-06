@@ -27,8 +27,8 @@ use crate::{
         Clipboard, ClipboardItem, CursorError, DesktopCapabilities, DispatchEventResult,
         HostWindow, OpenWindowError, OwnerPlatform, PendingWindow, Platform, PlatformCapabilities,
         PlatformDisplay, PlatformExecutor, PlatformHaptics, PlatformInput, PlatformReadyCallback,
-        PlatformTextInput, PlatformWindow, WindowAppearance, WindowBackgroundAppearance,
-        WindowBounds, WindowEvent, WindowId, WindowOpen, WindowOptions,
+        PlatformTextInput, PlatformWindow, SessionEnd, SessionEndAnswer, WindowAppearance,
+        WindowBackgroundAppearance, WindowBounds, WindowEvent, WindowId, WindowOpen, WindowOptions,
         owner::{DirectOwnerHooks, OwnerHooks, ProxyTransport},
     },
 };
@@ -182,6 +182,21 @@ impl HeadlessPlatform {
         HeadlessDeferredWindowOpens {
             state: Arc::downgrade(&self.state),
         }
+    }
+
+    /// Simulate one phase of the user's session ending, as the operating
+    /// system reports it: the callback registered with
+    /// [`Platform::on_session_end`] is asked, on the calling thread, and its
+    /// answer returned; [`SessionEndAnswer::Proceed`] when none is
+    /// registered. Like [`MockWindow::simulate_close`], it may be called from
+    /// inside another callback, as a session end arriving in a nested native
+    /// loop is.
+    ///
+    /// Not yet delivered: the callback is not asked, and every phase answers
+    /// [`SessionEndAnswer::Proceed`].
+    pub fn simulate_session_end(&self, phase: SessionEnd) -> SessionEndAnswer {
+        let _ = phase;
+        SessionEndAnswer::Proceed
     }
 
     fn with_state<F, R>(&self, f: F) -> R
