@@ -20,7 +20,7 @@ pub use flui_testing::{a11y, replay};
 pub mod rendering {
     pub use flui_rendering::testing::inspect::render_diagnostics;
     pub use flui_rendering::testing::{
-        BoxQueryRun, DrawKind, FrameRun, LayoutRun, PaintRun, Probe, RenderTester, TreeNode,
-        box_node, collect_commands, sliver_node,
+        BoxQueryRun, DrawCommandSummary, DrawKind, FrameRun, LayoutRun, PaintRun, Probe,
+        RenderTester, TreeNode, box_node, collect_commands, sliver_node,
     };
 }
