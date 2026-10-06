@@ -210,13 +210,13 @@ impl ViewState<Screen> for ScreenState {
         // itself would stack an identical page that Back appears not to leave.
         if view.route != Route::Settings {
             let settings = router.clone();
+            let source = view.route.clone();
             header.push(
                 TextButton::new(Text::new("Settings"))
                     .on_pressed(move |_cx| {
-                        // The outgoing page stays actionable during the
-                        // entrance, so a second activation can arrive after
-                        // Settings is already the current route.
-                        if settings.current() != Route::Settings {
+                        // A page stays actionable while it animates in or out,
+                        // so act only while this button's page is current.
+                        if settings.current() == source {
                             settings.push(Route::Settings).expect("BUG: mounted Router");
                         }
                     })

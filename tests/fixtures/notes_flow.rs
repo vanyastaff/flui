@@ -667,6 +667,33 @@ mod notes_flow {
         );
     }
 
+    fn departing_editor_settings_does_not_open_over_home() {
+        let mut laid = ready();
+        let published = published_tree(&mut laid);
+        tap_text(&mut laid, "Note 0");
+        let settings = published()
+            .find_by_label("Settings")
+            .expect("published Settings")
+            .id();
+        queued_click(&laid, &published, "Back");
+        tick_until(
+            &mut laid,
+            &published,
+            |tree| {
+                tree.find_by_label("Note 1").is_ok()
+                    && tree.nodes().any(|node| node.id() == settings)
+            },
+            "the Note exit over Home",
+        );
+        click_node(&laid, settings);
+        frames(&mut laid);
+        rendered_text(&laid, "Note 0");
+        assert!(
+            active_text(&laid, "Compact rows: false").is_empty(),
+            "the departing editor did not open Settings over Home"
+        );
+    }
+
     fn back_is_offered_only_where_it_leaves_a_page() {
         let mut laid = ready();
         assert!(
@@ -842,7 +869,7 @@ mod notes_flow {
 
     #[test]
     fn notes_public_input_flow_matrix() {
-        let cases: [(&str, fn()); 12] = [
+        let cases: [(&str, fn()); 13] = [
             (
                 "departing_settings_toggle_keeps_the_preference",
                 departing_settings_toggle_keeps_the_preference,
@@ -878,6 +905,10 @@ mod notes_flow {
             (
                 "back_is_offered_only_where_it_leaves_a_page",
                 back_is_offered_only_where_it_leaves_a_page,
+            ),
+            (
+                "departing_editor_settings_does_not_open_over_home",
+                departing_editor_settings_does_not_open_over_home,
             ),
             (
                 "another_note_activated_during_entrance_is_ignored",
