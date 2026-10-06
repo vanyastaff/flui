@@ -234,7 +234,7 @@ pub use traits::{
     CursorError, DesktopCapabilities, DispatchEventResult, DisplayId, HostWindow,
     MobileCapabilities, PathPromptOptions, Platform, PlatformAccessibility, PlatformCapabilities,
     PlatformDisplay, PlatformExecutor, PlatformHaptics, PlatformReadyCallback, PlatformTextInput,
-    PlatformWindow, SessionEnd, SessionEndAnswer, WebCapabilities, WindowAppearance,
+    PlatformWindow, SessionEndAnswer, SessionEndPhase, WebCapabilities, WindowAppearance,
     WindowBackgroundAppearance, WindowBounds, WindowEvent, WindowExecutionState, WindowId,
     WindowMode, WindowOptions, WindowReveal, WindowShowError,
 };

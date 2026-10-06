@@ -27,7 +27,7 @@ use crate::{
         Clipboard, ClipboardItem, CursorError, DesktopCapabilities, DispatchEventResult,
         HostWindow, OpenWindowError, OwnerPlatform, PendingWindow, Platform, PlatformCapabilities,
         PlatformDisplay, PlatformExecutor, PlatformHaptics, PlatformInput, PlatformReadyCallback,
-        PlatformTextInput, PlatformWindow, SessionEnd, SessionEndAnswer, WindowAppearance,
+        PlatformTextInput, PlatformWindow, SessionEndAnswer, SessionEndPhase, WindowAppearance,
         WindowBackgroundAppearance, WindowBounds, WindowEvent, WindowId, WindowOpen, WindowOptions,
         owner::{DirectOwnerHooks, OwnerHooks, ProxyTransport},
     },
@@ -194,7 +194,7 @@ impl HeadlessPlatform {
     ///
     /// Not yet delivered: the callback is not asked, and every phase answers
     /// [`SessionEndAnswer::Proceed`].
-    pub fn simulate_session_end(&self, phase: SessionEnd) -> SessionEndAnswer {
+    pub fn simulate_session_end(&self, phase: SessionEndPhase) -> SessionEndAnswer {
         let _ = phase;
         SessionEndAnswer::Proceed
     }

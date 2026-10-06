@@ -52,6 +52,6 @@ pub use owner::{
     WaitError, WakeRegistrationError, WindowOpen,
 };
 pub use platform::{
-    PathPromptOptions, Platform, PlatformExecutor, PlatformReadyCallback, SessionEnd,
-    SessionEndAnswer,
+    PathPromptOptions, Platform, PlatformExecutor, PlatformReadyCallback, SessionEndAnswer,
+    SessionEndPhase,
 };

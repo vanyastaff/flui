@@ -56,7 +56,7 @@ pub type PlatformReadyCallback = Box<dyn FnOnce(OwnerPlatform) -> Result<(), Boo
 /// returns, or it was cancelled, by the user or by another application.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
-pub enum SessionEnd {
+pub enum SessionEndPhase {
     /// The session is about to end; the answer says whether the application
     /// asks the user to wait.
     Query,
@@ -66,8 +66,8 @@ pub enum SessionEnd {
     Ending,
 }
 
-/// The application's answer to a [`SessionEnd`]. Only an answer to
-/// [`SessionEnd::Query`] is read; the platform ignores the others.
+/// The application's answer to a [`SessionEndPhase`]. Only an answer to
+/// [`SessionEndPhase::Query`] is read; the platform ignores the others.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum SessionEndAnswer {
@@ -401,11 +401,11 @@ pub trait Platform: Send + Sync + 'static {
     /// Register the callback the platform asks when the user's session ends
     /// (log off, restart, shut down), replacing any earlier one. It runs on
     /// the owner thread, possibly inside a nested native loop, once per
-    /// phase of each session end; see [`SessionEnd`].
+    /// phase of each session end; see [`SessionEndPhase`].
     ///
     /// A backend without session-end messages never calls it, and the
     /// default implementation drops it unused.
-    fn on_session_end(&self, callback: Box<dyn FnMut(SessionEnd) -> SessionEndAnswer + Send>) {
+    fn on_session_end(&self, callback: Box<dyn FnMut(SessionEndPhase) -> SessionEndAnswer + Send>) {
         let _ = callback;
     }
 

@@ -13,8 +13,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use flui_platform::{
-    HeadlessPlatform, Platform as _, SessionEnd, SessionEndAnswer, WindowOptions, current_platform,
-    headless_platform,
+    HeadlessPlatform, Platform as _, SessionEndAnswer, SessionEndPhase, WindowOptions,
+    current_platform, headless_platform,
 };
 
 fn flui_headless_env_var_selects_the_headless_platform() {
@@ -121,12 +121,12 @@ fn simulated_session_end_reaches_the_hook() {
         SessionEndAnswer::Block
     }));
 
-    let answer = platform.simulate_session_end(SessionEnd::Query);
-    platform.simulate_session_end(SessionEnd::Cancelled);
+    let answer = platform.simulate_session_end(SessionEndPhase::Query);
+    platform.simulate_session_end(SessionEndPhase::Cancelled);
 
     assert_eq!(
         *phases.lock().expect("phase log"),
-        [SessionEnd::Query, SessionEnd::Cancelled],
+        [SessionEndPhase::Query, SessionEndPhase::Cancelled],
         "each simulated phase reaches the callback once, in order"
     );
     assert_eq!(
