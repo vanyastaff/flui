@@ -8,7 +8,9 @@ use std::rc::{Rc, Weak};
 
 use flui_interaction::__runtime::{CloseMode, close_focus};
 use flui_interaction::events::{Key, KeyEvent, KeyState, Modifiers};
-use flui_interaction::routing::{FocusManager, FocusNode, FocusScopeNode, FocusTraversalPolicy};
+use flui_interaction::routing::{
+    FocusManager, FocusNode, FocusScopeNode, FocusTraversalPolicy, KeyEventResult,
+};
 
 fn key_event() -> KeyEvent {
     KeyEvent {
@@ -287,7 +289,27 @@ fn healthy_close_retires_children_before_their_parent() {
         node.register_context(Rc::new(DropRecorder(label, Rc::clone(&log))))
             .relinquish();
     }
+    // Within one node: key handler, then listeners, then context.
+    let recorder = DropRecorder("nested listener", Rc::clone(&log));
+    nested.add_listener(Rc::new(move || {
+        let _ = &recorder;
+    }));
+    let recorder = DropRecorder("nested key handler", Rc::clone(&log));
+    nested.set_on_key_event(Rc::new(move |_| {
+        let _ = &recorder;
+        KeyEventResult::Ignored
+    }));
     manager.close();
-    assert_eq!(*log.borrow(), ["nested", "first", "second", "parent"]);
+    assert_eq!(
+        *log.borrow(),
+        [
+            "nested key handler",
+            "nested listener",
+            "nested",
+            "first",
+            "second",
+            "parent"
+        ]
+    );
     drop(attachments);
 }

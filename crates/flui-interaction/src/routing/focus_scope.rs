@@ -426,11 +426,13 @@ impl ClosedFocusNode {
             context,
             policy,
         } = self;
+        // The order a healthy close always kept: key handler, listeners,
+        // rect provider, context.
+        failure.retire(key_handler);
         let listeners = std::mem::take(&mut *node.listeners.borrow_mut());
         for (_, listener) in listeners {
             failure.retire(listener);
         }
-        failure.retire(key_handler);
         failure.retire(rect_provider);
         failure.retire(context);
         failure.retire(policy);
