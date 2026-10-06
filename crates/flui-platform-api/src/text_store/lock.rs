@@ -231,7 +231,7 @@ impl CommitGate {
     ///
     /// The gate records whether the thread was unwinding when the failure
     /// was parked: one parked by the cleanup of a panic is ordered behind
-    /// that panic ([`OwnerCalls`](super::OwnerCalls)).
+    /// that panic ([`OwnerCalls`]).
     pub fn defer_failure(&self, payload: Box<dyn Any + Send>) {
         let later = {
             let mut held = self.failure.0.borrow_mut();
