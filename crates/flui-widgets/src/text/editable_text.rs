@@ -1184,20 +1184,17 @@ impl EditObserver {
             return edit();
         }
         let before = self.controller.borrow().committed_text();
-        let result = edit();
-        self.report_if_changed(&before);
-        result
-    }
-
-    /// Call `on_changed` if the committed text is no longer `before`.
-    fn report_if_changed(&self, before: &str) {
-        let after = self.controller.borrow().committed_text();
-        if after == before {
-            return;
-        }
+        // The edit notifies the controller's listeners, whose retirement can
+        // fail after the text changed: the owner still hears of the change,
+        // and the first failure is resumed after it.
         let mut calls = OwnerCalls::new();
-        self.deliver(&after, &mut calls);
+        let result = calls.run(edit);
+        let after = self.controller.borrow().committed_text();
+        if after != before {
+            self.deliver(&after, &mut calls);
+        }
         calls.resume();
+        result.expect("BUG: an edit that failed resumed its failure above")
     }
 
     /// Call `on_changed` with `committed`, inside `calls`. The callback is a
@@ -1726,19 +1723,28 @@ impl ViewState<EditableText> for EditableTextState {
         // attachment is detached below, so this is the one path that unconditionally
         // closes the IME session on unmount. Harmless no-op if the field
         // already blurred (and so already detached) before unmounting.
-        if let Some(token) = self.ime_token.borrow_mut().take()
+        //
+        // Detaching runs owner code (a retired client, a failure the
+        // presentation reports): every later step still runs, and the first
+        // failure is resumed once dispose is complete.
+        let mut calls = OwnerCalls::new();
+        let token = self.ime_token.borrow_mut().take();
+        if let Some(token) = token
             && let Some(handle) = &self.ime_handle
-            && let Err(error) = handle.detach(token)
+            && let Some(Err(error)) = calls.run(|| handle.detach(token))
         {
-            tracing::trace!(
-                ?error,
-                "IME dispose detach reached a presentation that was already closing"
-            );
+            calls.run(|| {
+                tracing::trace!(
+                    ?error,
+                    "IME dispose detach reached a presentation that was already closing"
+                );
+            });
         }
         // A platform that still holds the store (or a grant queued in it)
         // must not reach the controller of a field that is gone.
         if let Some(store) = self.text_store.take() {
-            store.detach();
+            calls.run(|| store.detach());
+            calls.retire(store);
         }
 
         // Stop the IME cursor-area loop (ADR-0030) if one is running — the
@@ -1754,15 +1760,17 @@ impl ViewState<EditableText> for EditableTextState {
 
         // Detach through the generation-checked lifecycle authority.
         if let Some(attachment) = attachment {
-            let _ = attachment.detach();
+            calls.run(|| attachment.detach());
         }
         self.parent = None;
 
         // Remove the controller listener we registered in init_state.
         if let Some(id) = self.controller_listener_id.take() {
-            self.controller.borrow().remove_listener(id);
+            let controller = self.controller.borrow().clone();
+            calls.run(|| controller.remove_listener(id));
         }
         self.focus_manager = None;
+        calls.resume();
 
         // Deliberately NOT disposed here: `self.rebuild_notifier` is also
         // held by the `AnimatedBuilder` this state's own `build()` output

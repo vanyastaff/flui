@@ -49,7 +49,7 @@
 
 use std::cell::{Cell, RefCell};
 use std::ops::Range;
-
+use std::panic::resume_unwind;
 use std::rc::Rc;
 
 use flui_foundation::geometry::{Bounds, Point};
@@ -59,9 +59,9 @@ use flui_objects::{RenderEditable, SubtreeAnchor};
 use flui_painting::text_boundaries::graphemes;
 use flui_platform_api::text_store::{
     CommitGate, Composition, CompositionLedger, LockArbiter, LockGrant, LockOutcome, LockTiming,
-    OwnerCalls, PointMode, RangeRect, Selection, TextChange, TextStore, TextStoreEdit,
-    TextStoreError, TextStoreObserver, TextStoreRead, TextStoreStatus, Utf16Offset, Utf16Range,
-    committed_text, utf16,
+    OwnerCalls, PointMode, RangeRect, RetainOnFailure, Selection, TextChange, TextStore,
+    TextStoreEdit, TextStoreError, TextStoreObserver, TextStoreRead, TextStoreStatus, Utf16Offset,
+    Utf16Range, committed_text, utf16,
 };
 use flui_rendering::pipeline::PipelineCell;
 
@@ -212,6 +212,20 @@ pub(super) struct EditableTextStore {
     edits: EditObserver,
 }
 
+impl Drop for EditableTextStore {
+    /// The observer is the platform's code: retired inside a scope, retained
+    /// during an unwind (ADR-0127). The arbiter retires its queued grants the
+    /// same way.
+    fn drop(&mut self) {
+        let observer = self.observer.get_mut().take();
+        let mut calls = OwnerCalls::new();
+        calls.retire(observer);
+        if !std::thread::panicking() {
+            calls.resume();
+        }
+    }
+}
+
 /// The pieces of the mounted field a store reads.
 pub(super) struct FieldParts {
     pub(super) controller: Rc<RefCell<TextEditingController>>,
@@ -267,13 +281,21 @@ impl EditableTextStore {
     /// store may notify, otherwise at the next point it may.
     pub(super) fn layout_changed(&self) {
         self.layout_dirty.set(true);
-        self.flush_notifications();
+        self.flush_now();
     }
 
     /// The field's obscuring changed, so `status().protected` did.
     pub(super) fn status_changed(&self) {
         self.status_dirty.set(true);
-        self.flush_notifications();
+        self.flush_now();
+    }
+
+    /// [`Self::flush_notifications`] in a scope of its own, whose first
+    /// failure is resumed.
+    fn flush_now(&self) {
+        let mut calls = OwnerCalls::new();
+        self.flush_notifications(&mut calls);
+        calls.resume();
     }
 
     /// Whether the observer may hear from the store now: no lock is held and
@@ -283,22 +305,19 @@ impl EditableTextStore {
         !self.arbiter.is_locked() && self.may_commit().unwrap_or(false)
     }
 
-    /// Send every notification that waited for [`Self::may_notify`].
-    fn flush_notifications(&self) {
+    /// Send every notification that waited for [`Self::may_notify`], inside
+    /// `calls`: each is sent though an earlier one panicked.
+    fn flush_notifications(&self, calls: &mut OwnerCalls) {
         if !self.may_notify() {
             return;
         }
-        // Every notification owed is sent though an earlier one panicked; the
-        // first panic is resumed once all were.
-        let mut calls = OwnerCalls::new();
-        self.report_app_changes(&mut calls);
+        self.report_app_changes(calls);
         if self.status_dirty.replace(false) {
-            self.notify(&mut calls, |observer| observer.status_changed());
+            self.notify(calls, |observer| observer.status_changed());
         }
         if self.layout_dirty.replace(false) {
-            self.notify(&mut calls, |observer| observer.layout_changed());
+            self.notify(calls, |observer| observer.layout_changed());
         }
-        calls.resume();
     }
 
     /// The field is gone: refuse every later lock and drop queued ones
@@ -433,6 +452,11 @@ impl EditableTextStore {
         doc: Doc,
         original: &Doc,
     ) {
+        // A grant that unmounted the field (its owner code detached the
+        // store) is dropped: a detached store writes nothing.
+        if !self.alive.get() {
+            return;
+        }
         let current = self.controller.borrow().clone();
         if !current.is_same_controller(controller) {
             return;
@@ -479,9 +503,8 @@ impl EditableTextStore {
     /// panics, so a grant queued behind this one never runs before the
     /// platform hears of an edit the owner made; the first panic is then
     /// resumed for the arbiter to park.
-    fn settle(&self) {
+    fn settle(&self, calls: &mut OwnerCalls) {
         let owed = std::mem::take(&mut *self.owed.borrow_mut());
-        let mut calls = OwnerCalls::new();
         for Owed {
             controller,
             committed,
@@ -490,13 +513,12 @@ impl EditableTextStore {
             if let Some(committed) = committed
                 && self.alive.get()
             {
-                self.edits.deliver(&committed, &mut calls);
+                self.edits.deliver(&committed, calls);
             }
             calls.run(|| controller.notify_changed());
             calls.retire(controller);
         }
-        calls.run(|| self.flush_notifications());
-        calls.resume();
+        self.flush_notifications(calls);
     }
 
     /// The text the render object shows for `source`.
@@ -617,22 +639,35 @@ impl TextStore for EditableTextStore {
         grant: LockGrant,
         timing: LockTiming,
     ) -> Result<LockOutcome, TextStoreError> {
-        self.may_commit()?;
+        // A refused grant is the requester's code: retired inside a scope.
+        if let Err(error) = self.may_commit() {
+            let mut calls = OwnerCalls::new();
+            calls.retire(grant);
+            calls.resume();
+            return Err(error);
+        }
         // An app edit not yet reported is reported before the platform's
-        // session can see (and write back over) it.
-        self.flush_notifications();
+        // session can see (and write back over) it. A failure there refuses
+        // the request: the grant, not yet accepted, is retained unrun rather
+        // than destroyed during the unwind.
+        let mut before = OwnerCalls::new();
+        self.flush_notifications(&mut before);
+        if let Some(payload) = before.into_failure() {
+            RetainOnFailure::retain(grant);
+            resume_unwind(payload);
+        }
         // Read before any grant's owner code can move the store elsewhere.
         let admitting = self.arbiter.owner_gate();
         let outcome =
             self.arbiter
-                .request(grant, timing, &mut |grant| self.open(grant), &mut || {
-                    self.settle();
+                .request(grant, timing, &mut |grant| self.open(grant), &mut |calls| {
+                    self.settle(calls);
                 });
         // What owner code edited while the grants settled reaches the
         // observer here; a failure their settle parked came before one
         // this flush raises.
         let mut calls = OwnerCalls::new();
-        calls.run_behind_parked(admitting.as_ref(), || self.flush_notifications());
+        calls.run_behind_parked(admitting.as_ref(), || self.flush_now());
         calls.resume();
         outcome
     }
@@ -644,13 +679,15 @@ impl TextStore for EditableTextStore {
         if self.may_commit().is_err() {
             return 0;
         }
-        self.flush_notifications();
+        self.flush_now();
         let admitting = self.arbiter.owner_gate();
         let ran = self
             .arbiter
-            .run_deferred(&mut |grant| self.open(grant), &mut || self.settle());
+            .run_deferred(&mut |grant| self.open(grant), &mut |calls| {
+                self.settle(calls);
+            });
         let mut calls = OwnerCalls::new();
-        calls.run_behind_parked(admitting.as_ref(), || self.flush_notifications());
+        calls.run_behind_parked(admitting.as_ref(), || self.flush_now());
         calls.resume();
         ran
     }
