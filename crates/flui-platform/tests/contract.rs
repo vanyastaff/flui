@@ -182,7 +182,7 @@ mod native_windows {
     };
     use windows::Win32::{
         Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM},
-        Graphics::Gdi::ClientToScreen,
+        Graphics::Gdi::{ClientToScreen, UpdateWindow},
         System::Threading::GetCurrentThreadId,
         UI::Input::KeyboardAndMouse::{
             GetKeyState, GetKeyboardState, SetKeyboardState, VK_LMENU, VK_MENU,
@@ -594,9 +594,20 @@ mod native_windows {
         );
     }
 
+    #[expect(
+        unsafe_code,
+        reason = "synchronous first paint of owned Win32 windows on their creating thread"
+    )]
     fn run_deadline_windows(mode: &'static str) {
         use flui_platform::WindowOpen;
 
+        // Every frame request before the first admitted deadline is a
+        // delivery nothing asked for (a stale answer of a replaced hook).
+        // Each window's first paint is forced before the hooks arm, so no
+        // ordinary paint lands in that span.
+        let early = Arc::new(AtomicUsize::new(0));
+        let armed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let returned_early = Arc::clone(&early);
         let counts = Arc::new([AtomicUsize::new(0), AtomicUsize::new(0)]);
         let pending = Arc::new(AtomicUsize::new(if mode == "close" { 1 } else { 2 }));
         let deadlines = Arc::new(Mutex::new([None::<web_time::Instant>; 2]));
@@ -609,6 +620,7 @@ mod native_windows {
                 let shared = owner.shared();
                 let proxy = owner.proxy();
                 let mut first = None;
+                let mut windows = Vec::new();
                 for index in 0..2 {
                     let WindowOpen::Ready(window) = owner
                         .open_window(WindowOptions {
@@ -620,6 +632,7 @@ mod native_windows {
                     else {
                         panic!("Win32 on-ready window was deferred");
                     };
+                    windows.push(Arc::clone(&window));
                     if index == 0 {
                         first = Some(Arc::downgrade(&window));
                         let closed = Arc::clone(&first_closed);
@@ -631,12 +644,20 @@ mod native_windows {
                     let callback_counts = Arc::clone(&counts);
                     let callback_pending = Arc::clone(&pending);
                     let callback_proxy = proxy.clone();
+                    let callback_early = Arc::clone(&early);
+                    let callback_armed = Arc::clone(&armed);
                     let weak = Arc::downgrade(&window);
                     window.on_request_frame(Box::new(move || {
                         let now = web_time::Instant::now();
                         let count = {
                             let mut deadlines = callback_deadlines.lock().expect("deadline state");
                             if deadlines[index].is_none_or(|due| now < due) {
+                                if callback_armed.load(Ordering::SeqCst)
+                                    && callback_counts[index].load(Ordering::SeqCst) == 0
+                                    && deadlines[index].is_some()
+                                {
+                                    callback_early.fetch_add(1, Ordering::SeqCst);
+                                }
                                 return;
                             }
                             let count = callback_counts[index].fetch_add(1, Ordering::SeqCst) + 1;
@@ -654,6 +675,18 @@ mod native_windows {
                     }));
                 }
                 let first = first.expect("first native window");
+                for window in &windows {
+                    let hwnd = window
+                        .as_any()
+                        .downcast_ref::<WindowsWindow>()
+                        .expect("Win32 backend")
+                        .hwnd();
+                    // SAFETY: the live wrapper owns this HWND on its creating
+                    // thread; the paint it sends runs synchronously here.
+                    let _ = unsafe { UpdateWindow(hwnd) };
+                }
+                drop(windows);
+                armed.store(true, Ordering::SeqCst);
                 let initial = web_time::Instant::now() + Duration::from_millis(80);
                 *deadlines.lock().expect("deadline state") = [Some(initial); 2];
                 let hook_deadlines = Arc::clone(&deadlines);
@@ -689,6 +722,11 @@ mod native_windows {
                 Ok(())
             }))
             .expect("native deadline loop returns normally");
+        assert_eq!(
+            returned_early.load(Ordering::SeqCst),
+            0,
+            "{mode}: frame requests before any admitted deadline"
+        );
         assert_eq!(
             returned_counts[0].load(Ordering::SeqCst),
             if mode == "close" { 0 } else { 2 },
