@@ -65,7 +65,7 @@ use flui_platform_api::text_store::{
 };
 use flui_rendering::pipeline::PipelineCell;
 
-use super::controller::{self, ComposingState, TextEditingController};
+use super::controller::{self, ComposingState, Generation, TextEditingController};
 use super::editable_text::{EditObserver, TextChanged, bounds_from_rect, obscure};
 
 /// The committed `RenderEditable` under `inner_anchor` and its transform to
@@ -378,7 +378,7 @@ impl EditableTextStore {
 
     /// The controller, its document and its generation, read in one
     /// critical section.
-    fn snapshot(&self) -> (TextEditingController, Doc, u64) {
+    fn snapshot(&self) -> (TextEditingController, Doc, Generation) {
         let controller = self.controller.borrow().clone();
         let (doc, generation) = controller.with_inner(|inner| {
             let doc = Doc {
@@ -451,14 +451,14 @@ impl EditableTextStore {
     /// unless the application changed the field since the session opened at
     /// `generation`: then its edit stays, the session is dropped, and the
     /// platform hears of the edit once the lock is released (ADR-0142
-    /// item 3).
+    /// item 3). A controller whose edit count ran out drops every session.
     ///
     /// The listeners and `on_changed` are owed, not called: they run in
     /// [`Self::settle`], after the lock is released.
     fn write_back(
         &self,
         controller: &TextEditingController,
-        generation: u64,
+        generation: Generation,
         doc: Doc,
         original: &Doc,
     ) {
@@ -474,7 +474,7 @@ impl EditableTextStore {
         let reported = (doc.text.clone(), doc.selection());
         let committed_after = doc.committed();
         let applied = controller.with_inner_silent(|inner| {
-            if inner.generation != generation {
+            if !inner.generation.admits(generation) {
                 return false;
             }
             inner.selection = controller::Selection {

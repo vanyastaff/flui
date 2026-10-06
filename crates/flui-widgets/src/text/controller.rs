@@ -116,7 +116,29 @@ pub(super) struct ControllerInner {
     /// mutator that changes something advances it, the text store's own
     /// write-back does not. A platform session records it when its lock
     /// opens and drops its result if it moved (ADR-0142 item 3).
-    pub(super) generation: u64,
+    pub(super) generation: Generation,
+}
+
+/// [`ControllerInner::generation`]: a count of application edits that never
+/// wraps. Exhausting it is permanent, and an exhausted generation admits no
+/// session, so a count that came back round can never make a session that
+/// opened before an application edit look current.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct Generation(Option<u64>);
+
+impl Generation {
+    const FIRST: Self = Self(Some(0));
+
+    /// Count one more application edit.
+    fn advance(&mut self) {
+        self.0 = self.0.and_then(|count| count.checked_add(1));
+    }
+
+    /// Whether a session that opened at `opened` may write back now: no
+    /// application edit came since, and the count is not exhausted.
+    pub(super) fn admits(self, opened: Self) -> bool {
+        self.0.is_some() && self == opened
+    }
 }
 
 /// The in-progress IME composition: its byte range into
@@ -342,7 +364,7 @@ impl TextEditingController {
                 text: String::new(),
                 selection: Selection::collapsed(0),
                 composing: None,
-                generation: 0,
+                generation: Generation::FIRST,
             })),
             notifier: ChangeNotifier::new(),
         }
@@ -358,7 +380,7 @@ impl TextEditingController {
                 text,
                 selection,
                 composing: None,
-                generation: 0,
+                generation: Generation::FIRST,
             })),
             notifier: ChangeNotifier::new(),
         }
@@ -1005,9 +1027,7 @@ impl TextEditingController {
             let mut guard = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
             let changed = edit(&mut guard);
             if changed {
-                // A session compares two generations for equality, so a
-                // wrap after 2^64 edits inside one session is the only miss.
-                guard.generation = guard.generation.wrapping_add(1);
+                guard.generation.advance();
             }
             changed
         };
@@ -1287,5 +1307,40 @@ mod tests {
     fn backspace_grapheme_and_composition_contracts() {
         backspace_removes_a_whole_zwj_sequence_not_one_scalar();
         backspace_during_active_composition_clears_it();
+    }
+
+    // ------------------------------------------------------------------
+    // The application edit count a platform session is checked against
+    // ------------------------------------------------------------------
+
+    /// The count never wraps: a session that opened before it ran out stays
+    /// stale, and an exhausted controller admits no session again (ADR-0142
+    /// item 3). The count starts at its last value here, since no public
+    /// path makes 2^64 edits.
+    #[test]
+    fn an_exhausted_generation_admits_no_session() {
+        let controller = TextEditingController::new();
+        let now = || controller.with_inner(|inner| inner.generation);
+        let opened = now();
+        assert!(
+            now().admits(opened),
+            "no edit since: the session is current"
+        );
+        controller.with_inner_silent(|inner| inner.generation = Generation(Some(u64::MAX)));
+        controller.set_text("app");
+        assert!(
+            !now().admits(opened),
+            "a session that opened 2^64 edits ago stays stale"
+        );
+        let reopened = now();
+        assert!(
+            !now().admits(reopened),
+            "an exhausted controller admits no later session"
+        );
+        controller.set_text("more");
+        assert!(
+            !now().admits(opened) && !now().admits(reopened),
+            "exhaustion is permanent"
+        );
     }
 }
