@@ -14,10 +14,11 @@ use std::cell::{Cell, RefCell};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::rc::{Rc, Weak};
 
-use flui_foundation::geometry::{DevicePixelRatio, DevicePoint, Point};
+use flui_foundation::geometry::{DevicePixelRatio, DevicePoint};
 use flui_platform_api::text_store::{
     Composition, LockGrant, LockOutcome, LockTiming, PointMode, Selection, TextChange, TextStore,
-    TextStoreEdit, TextStoreError, TextStoreObserver, TextStoreRead, Utf16Offset, Utf16Range,
+    TextStoreEdit, TextStoreError, TextStoreObserver, TextStoreRead, TextStoreStatus, Utf16Offset,
+    Utf16Range,
 };
 use windows::Win32::{
     Foundation::{
@@ -42,7 +43,7 @@ use windows::Win32::{
 use windows_core::{BOOL, GUID, HRESULT, IUnknown, Interface, PCWSTR, PWSTR, Ref};
 
 use super::TextServices;
-use crate::shared::text_geometry::{ScreenRect, range_rect_to_screen};
+use crate::shared::text_geometry::{ScreenRect, range_rect_to_screen, screen_point_to_client};
 
 /// The state one TSF document shares between its COM object and the
 /// window's [`TextServices`].
@@ -86,12 +87,13 @@ impl DocumentState {
     }
 
     /// Forget the sink and stop listening to the store; the document is
-    /// gone for TSF.
+    /// gone for TSF. The sink goes first: retiring the observer runs the
+    /// store's code, which may panic.
     pub(super) fn close(&self) {
         self.closed.set(true);
-        self.store.set_observer(None);
         let sink = self.sink.borrow_mut().take();
         drop(sink);
+        self.store.set_observer(None);
     }
 
     /// The advised sink, if its mask includes `flag`. Cloned, so no borrow
@@ -275,6 +277,23 @@ fn store_error(error: TextStoreError) -> windows_core::Error {
         _ => E_FAIL,
     }
     .into()
+}
+
+/// What `GetStatus` tells TSF about a store whose status is `status`, read
+/// again whenever the store reports a status change (`OnStatusChange`).
+///
+/// A protected field's text cannot be read out, so it is not advertised as
+/// free of hidden text (`TS_SS_NOHIDDENTEXT`). It stays editable: no
+/// `TS_SD_READONLY`, which would refuse the input method's edits.
+pub(super) fn ts_status(status: TextStoreStatus) -> TS_STATUS {
+    TS_STATUS {
+        dwDynamicFlags: 0,
+        dwStaticFlags: if status.protected {
+            0
+        } else {
+            TS_SS_NOHIDDENTEXT
+        },
+    }
 }
 
 fn offset(acp: i32) -> windows_core::Result<Utf16Offset> {
@@ -487,12 +506,7 @@ impl ITextStoreACP_Impl for TsfStore_Impl {
     }
 
     fn GetStatus(&self) -> windows_core::Result<TS_STATUS> {
-        self.com_entry("GetStatus", |_| {
-            Ok(TS_STATUS {
-                dwDynamicFlags: 0,
-                dwStaticFlags: TS_SS_NOHIDDENTEXT,
-            })
-        })
+        self.com_entry("GetStatus", |state| Ok(ts_status(state.store.status())))
     }
 
     fn QueryInsert(
@@ -800,10 +814,8 @@ impl ITextStoreACP_Impl for TsfStore_Impl {
             // SAFETY: non-null was checked; TSF passes one point.
             let screen = unsafe { *ptscreen };
             let (scale, origin) = state.screen_frame();
-            let logical = Point::new(
-                scale.to_logical(f64::from(screen.x - origin.x)),
-                scale.to_logical(f64::from(screen.y - origin.y)),
-            );
+            let logical =
+                screen_point_to_client(DevicePoint::new(screen.x, screen.y), origin, scale);
             let mode = if dwflags & GXFPF_ROUND_NEAREST == 0 {
                 PointMode::Exact
             } else {
