@@ -43,12 +43,31 @@ pub(super) const INCREMENT: &str = "Increment";
 pub(super) const ADVANCE_WITHIN: Duration = Duration::from_secs(5);
 const POLL: Duration = Duration::from_millis(100);
 const UNCHANGED_FOR: Duration = Duration::from_secs(1);
+/// The longest [`drive`] waits before its verdict, wait by wait: the window's
+/// appearance, the count's first advance, the initial pattern state, three
+/// disclosure transitions (each a wait and an unchanged window after its
+/// refused repeat), two range values, the unchanged window after the rejected
+/// value, the counter barrier and the last range value. A wait added to
+/// `drive` is added here.
+const CHECK_DEADLINE: Duration = Duration::from_secs(
+    uia::APPEAR_WITHIN.as_secs()
+        + ADVANCE_WITHIN.as_secs() * 2
+        + (ADVANCE_WITHIN.as_secs() + UNCHANGED_FOR.as_secs()) * 3
+        + ADVANCE_WITHIN.as_secs() * 2
+        + UNCHANGED_FOR.as_secs()
+        + ADVANCE_WITHIN.as_secs() * 2,
+);
+/// How long the probe is told to stay up: twice [`CHECK_DEADLINE`], leaving
+/// the tree walks between waits room, so the probe quitting on its own can
+/// never read as a FAIL during the last wait. The session kills the probe
+/// when the check ends, so the margin costs nothing.
+const PROBE_RUN_FOR: Duration = Duration::from_secs(CHECK_DEADLINE.as_secs() * 2);
 const DISCLOSURE: &str = "Probe disclosure";
 const RANGE: &str = "Probe numeric range";
 
 /// Runs the check against the built probe and returns its exit code.
 pub(super) fn run(probe: &Path) -> anyhow::Result<u8> {
-    let mut session = match Session::start(probe) {
+    let mut session = match Session::start_for(probe, PROBE_RUN_FOR) {
         Ok(session) => session,
         Err(Start::CannotVerify(why)) => {
             println!("CANNOT_VERIFY: {why}");
@@ -367,5 +386,24 @@ fn require_unchanged(
             return Ok(true);
         }
         std::thread::sleep(POLL);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The probe outlives every wait of the check, and it reads the lifetime
+    /// the session hands it: a probe on a fixed timer shorter than the
+    /// check's waits quits during the last one, which reads as a FAIL.
+    #[test]
+    fn the_probe_stays_up_past_the_checks_deadline() {
+        assert!(PROBE_RUN_FOR > CHECK_DEADLINE);
+        let probe = include_str!("../../../../examples/a11y_probe.rs");
+        assert!(
+            probe.contains(&format!("{:?}", uia::RUN_FOR_ENV)),
+            "examples/a11y_probe.rs must read {} for its lifetime",
+            uia::RUN_FOR_ENV
+        );
     }
 }

@@ -22,7 +22,10 @@ pub(super) use windows::Win32::UI::Accessibility::{
 /// How long the probe gets to put its window up and publish a first tree.
 /// The first query is also what activates the adapter, so the tree can trail
 /// the window by a frame.
-const APPEAR_WITHIN: Duration = Duration::from_secs(15);
+pub(super) const APPEAR_WITHIN: Duration = Duration::from_secs(15);
+/// The variable `examples/a11y_probe.rs` reads for how many whole seconds it
+/// stays up before quitting on its own.
+pub(super) const RUN_FOR_ENV: &str = "FLUI_PROBE_RUN_FOR_SECS";
 const POLL: Duration = Duration::from_millis(100);
 
 /// One node of the raw view, as an assistive technology reads it.
@@ -52,6 +55,16 @@ pub(super) enum Start {
 impl Session {
     /// Initialises COM and UI Automation, then launches `probe`.
     pub(super) fn start(probe: &Path) -> Result<Self, Start> {
+        Self::launch(probe, None)
+    }
+
+    /// [`Self::start`], telling a probe that reads [`RUN_FOR_ENV`] to stay
+    /// up for `run_for`.
+    pub(super) fn start_for(probe: &Path, run_for: Duration) -> Result<Self, Start> {
+        Self::launch(probe, Some(run_for))
+    }
+
+    fn launch(probe: &Path, run_for: Option<Duration>) -> Result<Self, Start> {
         let com = Com::init().map_err(|error| {
             Start::CannotVerify(format!("COM could not be initialised: {error}"))
         })?;
@@ -71,7 +84,11 @@ impl Session {
             Stdio::null()
         };
         let log = requested_log.unwrap_or_else(|| "warn".to_owned());
-        let child = Command::new(probe)
+        let mut command = Command::new(probe);
+        if let Some(run_for) = run_for {
+            command.env(RUN_FOR_ENV, run_for.as_secs().to_string());
+        }
+        let child = command
             .env("RUST_LOG", log)
             .stdout(stdout)
             .spawn()
