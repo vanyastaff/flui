@@ -501,6 +501,142 @@ fn elastic_curves_are_continuous_at_endpoints() {
 }
 
 // ---------------------------------------------------------------------------
+// ArcCurve equality
+// ---------------------------------------------------------------------------
+
+fn equal_builtin_curves_wrapped_separately_are_equal() {
+    assert_eq!(ArcCurve::new(Curves::EaseIn), ArcCurve::new(Curves::EaseIn));
+    assert_eq!(
+        ArcCurve::new(Cubic::new(0.42, 0.0, 1.0, 1.0)),
+        ArcCurve::new(Curves::EaseIn),
+    );
+    assert_eq!(ArcCurve::new(Linear), ArcCurve::new(Curves::Linear));
+    assert_eq!(
+        ArcCurve::new(ElasticOutCurve::new(0.3)),
+        ArcCurve::new(ElasticOutCurve::new(0.3)),
+    );
+    assert_eq!(
+        ArcCurve::new(Curves::EaseInOutCubicEmphasized),
+        ArcCurve::new(Curves::EaseInOutCubicEmphasized),
+    );
+    assert_eq!(
+        ArcCurve::new(BounceInCurve),
+        ArcCurve::new(Curves::BounceIn)
+    );
+}
+
+fn different_builtin_curves_are_unequal() {
+    assert_ne!(
+        ArcCurve::new(Curves::EaseIn),
+        ArcCurve::new(Curves::EaseOut)
+    );
+    assert_ne!(
+        ArcCurve::new(ElasticOutCurve::new(0.3)),
+        ArcCurve::new(ElasticOutCurve::new(0.4)),
+    );
+    assert_ne!(
+        ArcCurve::new(ElasticInCurve::new(0.4)),
+        ArcCurve::new(ElasticOutCurve::new(0.4)),
+    );
+    assert_ne!(
+        ArcCurve::new(Curves::Linear),
+        ArcCurve::new(Curves::Decelerate)
+    );
+}
+
+fn combinators_of_builtins_compare_by_value() {
+    assert_eq!(
+        ArcCurve::new(Curves::EaseIn.flipped()),
+        ArcCurve::new(Curves::EaseIn.flipped()),
+    );
+    assert_ne!(
+        ArcCurve::new(Curves::EaseIn.flipped()),
+        ArcCurve::new(Curves::EaseIn),
+    );
+    assert_eq!(
+        ArcCurve::new(Interval::new(0.2, 0.8, Curves::Ease)),
+        ArcCurve::new(Interval::new(0.2, 0.8, Curves::Ease)),
+    );
+    assert_ne!(
+        ArcCurve::new(Interval::new(0.2, 0.8, Curves::Ease)),
+        ArcCurve::new(Interval::new(0.2, 0.9, Curves::Ease)),
+    );
+    // Re-wrapping an erased built-in keeps its value identity.
+    assert_eq!(
+        ArcCurve::new(ArcCurve::new(Curves::EaseIn)),
+        ArcCurve::new(Curves::EaseIn),
+    );
+}
+
+/// A curve the crate does not know.
+struct Quadratic;
+
+impl Curve for Quadratic {
+    fn transform(&self, t: f64) -> f64 {
+        let t = t.clamp(0.0, 1.0);
+        t * t
+    }
+}
+
+fn custom_curves_compare_by_identity() {
+    let custom = ArcCurve::new(Quadratic);
+    assert_eq!(custom, custom.clone());
+    assert_ne!(ArcCurve::new(Quadratic), ArcCurve::new(Quadratic));
+    assert_ne!(ArcCurve::new(Quadratic), ArcCurve::new(Curves::EaseIn));
+    // A combinator over a custom curve is opaque too.
+    assert_ne!(
+        ArcCurve::new(Quadratic.flipped()),
+        ArcCurve::new(Quadratic.flipped()),
+    );
+}
+
+fn erased_curves_evaluate_like_the_curve() {
+    let pairs: [(ArcCurve, &dyn Curve); 4] = [
+        (ArcCurve::new(Curves::EaseIn), &Curves::EaseIn),
+        (
+            ArcCurve::new(Interval::new(0.2, 0.8, Curves::Ease)),
+            &Interval::new(0.2, 0.8, Curves::Ease),
+        ),
+        (
+            ArcCurve::new(Curves::ElasticOut.flipped()),
+            &Curves::ElasticOut.flipped(),
+        ),
+        (ArcCurve::new(Quadratic), &Quadratic),
+    ];
+    for (erased, curve) in pairs {
+        for t in grid().step_by(97) {
+            assert_eq!(erased.transform(t).to_bits(), curve.transform(t).to_bits());
+        }
+    }
+}
+
+#[test]
+fn arc_curve_compares_builtins_by_value_and_custom_curves_by_identity() {
+    crate::run_table(&[
+        (
+            "equal built-in curves wrapped separately are equal",
+            equal_builtin_curves_wrapped_separately_are_equal,
+        ),
+        (
+            "different built-in curves are unequal",
+            different_builtin_curves_are_unequal,
+        ),
+        (
+            "combinators of built-ins compare by value",
+            combinators_of_builtins_compare_by_value,
+        ),
+        (
+            "custom curves compare by identity",
+            custom_curves_compare_by_identity,
+        ),
+        (
+            "erased curves evaluate like the curve",
+            erased_curves_evaluate_like_the_curve,
+        ),
+    ]);
+}
+
+// ---------------------------------------------------------------------------
 // Parameter validation
 // ---------------------------------------------------------------------------
 
