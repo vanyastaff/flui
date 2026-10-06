@@ -36,7 +36,7 @@ use flui_widgets::Align;
 
 use super::host::WidgetHost;
 use super::{POINTER_SAMPLE_INTERVAL, PointerContacts};
-use crate::realm::HeadlessWindow;
+use crate::host::HeadlessWindow;
 
 /// The surface every [`Harness`] mounts into.
 const SURFACE: (u32, u32) = (800, 600);

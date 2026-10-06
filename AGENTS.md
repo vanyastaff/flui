@@ -158,7 +158,10 @@ data, force-pushing, merging, publishing, or changing anything outside your work
 The repository is public. Plans, reviews, audits and session notes stay out of it (keep them in
 `TASKS.md` or outside the checkout); a decision that should outlive the task goes into an ADR,
 `design/`, or the crate's `## Mapping decisions`. Never commit local absolute paths or links to
-private chat sessions.
+private chat sessions. The exception is `docs/plans/specs/<feature>/` (`requirements.md`,
+`design.md`, `tasks.md`): the owner-approved feature specs the release work runs on, with their
+status. Requirement and task IDs live only there; once a feature merges, its lasting decisions
+move into an ADR or the crate's `ARCHITECTURE.md`, and the spec stays as history.
 
 ## Commands
 
@@ -180,6 +183,25 @@ builds xtask and not the workspace. `rust-toolchain.toml` is the toolchain's sou
 pre-1.0 the MSRV tracks latest stable. xtask commands that build or test the workspace
 (`check-changed`, `test`, `ci`, `gate`, `gpu-test`, …) queue behind one lock for the user on this
 machine; `FLUI_XTASK_NO_LOCK=1` opts out.
+
+### Running checks without fighting other runs
+
+Several agents and checkouts often share one machine. Every redundant run slows down every other
+run, and an oversubscribed host makes slow tests look hung.
+
+- **While iterating, test only what you touched:** `cargo nextest run -p <crate> [<filter>]`.
+  Run `cargo xtask check-changed` once, as the last step before a PR. It already runs fmt, clippy
+  and nextest, so don't also run them by hand.
+- **Don't re-run a gate that passed** unless the code changed since. Quote the earlier result
+  instead.
+- **One heavy run at a time per host.** `check-changed`, `test`, `ci`, `gate` and `gpu-test` take a
+  host-wide lock and queue behind each other. Don't start a second one in the background to "save
+  time", and don't kill a queued run.
+- **Cap parallelism on a shared host:** `CARGO_BUILD_JOBS=6` and `NEXTEST_TEST_THREADS=4`. GPU
+  readback suites stay at one test thread. In nextest, `-j` sets test threads; use `--build-jobs`
+  for the build.
+- **A test past its `slow-timeout` on a loaded host is not a hang by default.** Before calling it
+  a bug, re-run that one test alone (`--test-threads 1`) and report how long it took.
 
 ## What the compiler and gates enforce
 
@@ -274,10 +296,32 @@ A green gate proves the gates pass, not that the behavior exists. So a change is
 
 Pull requests are reviewed by Codex, which reads this section; a human reviewer can use it the
 same way. fmt, clippy (pedantic, `unwrap_used`, the lints in the table above), rustdoc and the
-script gates already run in CI, so style and anything they catch is not worth a comment.
+script gates already run in CI, so formatting and anything they catch is not worth a comment.
 
 - **What to report:** defects that would block the merge, each with a concrete failure
   scenario; without one, it is a hypothesis.
+- **Code quality is a merge criterion, not style.** The bar is code an experienced Rust developer
+  is not embarrassed by. Report, with a concrete better shape:
+  - **Simplicity.** A second abstraction layer, generic parameter or trait with one user. A
+    builder, newtype or enum is fine when it removes a mistake class.
+  - **Ownership.** Moving instead of cloning; `Rc`/`Arc` only where ownership is really shared;
+    `RefCell`/`Mutex` only where no `&mut` path exists. No borrow held across user code.
+  - **Lifetimes and borrowing.** A borrowed view (`&str`, `&[T]`, `impl Iterator`) instead of an
+    owned copy, with no lifetime gymnastics a reader has to decode.
+  - **Generics, traits and GATs.** Static dispatch where the type is known, `dyn` where a
+    heterogeneous collection or an object boundary needs it. Associated types and GATs over
+    parameter soup. Sealed traits for closed sets.
+  - **Types over conventions.** Illegal states unrepresentable (enums over flags plus options,
+    typestate where it pays). Errors as `thiserror` enums a caller can match.
+  - **Current stable Rust** (the toolchain in `rust-toolchain.toml`): let-chains, `let`-`else`,
+    async closures, return-position `impl Trait` in traits, precise capturing, trait upcasting
+    and current std APIs (`get_disjoint_mut`, `LazyLock`, …) where they make the code simpler.
+    Check the release notes of the pinned version rather than recalling them.
+  - **Conventions.** The Rust API Guidelines: naming, `as_`/`to_`/`into_`, getters without
+    `get_`, `From`/`TryFrom`/`Display`/`Default` where they apply, `#[must_use]`,
+    `#[non_exhaustive]` on public enums that will grow.
+  - **Architecture.** One responsibility per module, dependencies down the layers, no
+    behavior-free pass-through types.
 - **Tests:** for each behavior change, find the test that covers it and ask whether it would fail
   with the production hunk reverted. Tests here have passed both ways by reimplementing the
   predicate they pin, asserting that a widget exists rather than that it was laid out or

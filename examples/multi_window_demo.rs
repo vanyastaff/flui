@@ -52,7 +52,7 @@ impl ViewState<Root> for RootState {
                     }
                     let result = flui::app::open_window(
                         flui::AppConfig::new().with_title("Secondary"),
-                        flui::WindowPolicy::SeparateRealms,
+                        flui::WindowPolicy::Isolated,
                         Secondary,
                     );
                     match result {

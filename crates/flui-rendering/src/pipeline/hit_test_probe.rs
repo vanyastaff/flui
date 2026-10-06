@@ -30,7 +30,7 @@ use super::{PipelineCell, WeakPipelineCell};
 /// `PipelineCell`, and a widget that stores one keeps the tree's allocation
 /// alive past its presentation's close; a probe treating "the allocation is
 /// freed" as "the presentation closed" would go on answering from a detached
-/// tree. Under `SharedRealm` the realm ticket stays valid too, since a sibling
+/// tree. Under `WindowPolicy::Shared` the realm ticket stays valid too, since a sibling
 /// presentation is still live, so nothing else would catch it. The presentation
 /// therefore owns a token, and dropping the presentation drops it regardless of
 /// who still holds the tree.
