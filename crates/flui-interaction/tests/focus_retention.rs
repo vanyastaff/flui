@@ -146,6 +146,46 @@ fn closing_gestures_leave_shared_callbacks_with_their_caller() {
     drop(binding);
 }
 
+/// A dispatch owner that rejects registrations while its close is preserving
+/// releases the shared payload and mouse callbacks its caller still holds.
+fn closing_dispatch_leaves_shared_payloads_with_their_caller() {
+    use flui_interaction::__runtime::{CloseWindow, close_dispatch, presentation_dispatch};
+    use flui_interaction::InteractionLane;
+    use flui_interaction::routing::{MouseEnterCallback, MouseRegionCallbacks};
+
+    let (payload_capture, payload_probe) = capture();
+    let (enter_capture, enter_probe) = capture();
+    let payload: Rc<dyn std::any::Any> = Rc::new(payload_capture);
+    let on_enter: MouseEnterCallback = Rc::new(move |_, _| {
+        let _ = &enter_capture;
+    });
+    let lane = InteractionLane::try_new().expect("lane");
+    let handle = presentation_dispatch(&lane.dispatch_handle());
+    let mut window = CloseWindow::new();
+    window.dispatch(&handle);
+    window.preserve();
+    close_dispatch(&handle, CloseMode::PreservingFailure);
+    assert!(handle.register_local_payload(Rc::clone(&payload)).is_err());
+    assert!(
+        handle
+            .register_mouse_region(MouseRegionCallbacks {
+                on_enter: Some(Rc::clone(&on_enter)),
+                ..MouseRegionCallbacks::default()
+            })
+            .is_err()
+    );
+    drop((payload, on_enter));
+    assert!(
+        payload_probe.upgrade().is_none(),
+        "the payload capture is released"
+    );
+    assert!(
+        enter_probe.upgrade().is_none(),
+        "the mouse callback capture is released"
+    );
+    drop(window);
+}
+
 #[derive(Debug)]
 struct PanickingPolicy(#[expect(dead_code, reason = "held for its lifetime")] Rc<()>);
 
@@ -192,6 +232,10 @@ fn caught_callback_failures_leave_captures_with_their_owner() {
         (
             "closing gestures",
             closing_gestures_leave_shared_callbacks_with_their_caller,
+        ),
+        (
+            "closing dispatch",
+            closing_dispatch_leaves_shared_payloads_with_their_caller,
         ),
         (
             "traversal policy",
