@@ -259,9 +259,10 @@ A node with `HasExpandedState` advertises `Expand` while collapsed and `Collapse
 expanded, never both. It advertises the transition when it registers the matching discrete
 action; when it registers neither discrete action but has a tap handler (the shape
 `Semantics::new().expanded(false).on_tap(..)` builds), it advertises the transition too, and
-`SemanticsOwner::resolve_action` routes that request to the tap handler as `Tap`, only in the
-direction the node's current state allows. `tap_disclosure_transition` in `src/action.rs` is
-the one predicate both directions use.
+`SemanticsOwner::resolve_action` routes that request to the tap handler as `Tap`. The owner
+admits an `Expand` or `Collapse` request, to a discrete handler or the tap fallback alike, only
+in the direction the node's current state allows (`disclosure_transition` in `src/action.rs`);
+`tap_disclosure_transition` there is the one fallback predicate both directions use.
 
 **Why.** AccessKit does not count a node with an expanded state as invocable
 (`accesskit_consumer` 0.39, `Node::is_invocable`), so the Windows adapter offers only the
@@ -274,7 +275,8 @@ adapter (`accesskit_macos` 0.27, `accesskit_atspi_common` 0.20) emits `Expand`/`
 expanded state in its own copy of the tree and the owner checks the committed tree, and both
 change only when the next frame publishes. Two `Expand` requests before then, or an `Expand`
 right after an unpublished pointer tap, each run the tap handler, so a tap-only node can end
-collapsed after an expand. A node that needs the direction registers `on_expand`/`on_collapse`.
+collapsed after an expand. A node that needs the direction registers its state and both handlers together with
+`Semantics::expandable`.
 
 **Test.** `every_wire_action_routes_to_a_semantics_action` (one row per `ActionName::ALL`) in
 `src/agent/tests.rs`; `every_inbound_routable_action_is_advertised_outbound_again` in

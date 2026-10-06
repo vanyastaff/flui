@@ -5,7 +5,7 @@
 //! feature so the semantics tree the framework assembles — `RenderParagraph`
 //! labels, the Material button node — is handed to the OS through the
 //! AccessKit adapter. The process does nothing else: it opens the window and
-//! waits for [`RUN_FOR`], then quits, so an external accessibility client
+//! waits for [`run_for`], then quits, so an external accessibility client
 //! can be the one that interacts. On macOS that client is
 //! `tools/device-checks/check-macos-a11y.py` (`cargo xtask device macos-a11y`),
 //! which reads the window's `NSAccessibility` tree through `AXUIElement`, finds the button
@@ -26,8 +26,20 @@ use flui::widgets::column;
 
 /// How long the window stays up for the client before the probe quits on
 /// its own — a hang guard for the script, generous for a manual VoiceOver
-/// session.
+/// session — unless the client sets [`RUN_FOR_ENV`].
 const RUN_FOR: Duration = Duration::from_secs(60);
+/// Whole seconds to stay up instead of [`RUN_FOR`]. The Windows UIA check
+/// (`cargo xtask device windows-a11y`) sets it past its own deadline, which
+/// its waits add up to more than [`RUN_FOR`].
+const RUN_FOR_ENV: &str = "FLUI_PROBE_RUN_FOR_SECS";
+
+/// [`RUN_FOR_ENV`] when it holds whole seconds, else [`RUN_FOR`].
+fn run_for() -> Duration {
+    std::env::var(RUN_FOR_ENV)
+        .ok()
+        .and_then(|secs| secs.parse().ok())
+        .map_or(RUN_FOR, Duration::from_secs)
+}
 
 #[derive(Clone, StatefulView)]
 struct Counter;
@@ -84,10 +96,12 @@ impl ViewState<Counter> for CounterState {
                             .container(true)
                             .button(true)
                             .label("Probe disclosure")
-                            .expanded(self.expanded.get())
                             .exclude_semantics(true)
-                            .on_expand(move |_cx| expand.set(true))
-                            .on_collapse(move |_cx| collapse.set(false))
+                            .expandable(
+                                self.expanded.get(),
+                                move |_cx| expand.set(true),
+                                move |_cx| collapse.set(false),
+                            )
                             .child(Text::new(details))
                     ),
                     // This visible sibling is outside the control's excluded
@@ -135,8 +149,9 @@ fn main() {
 
     let result = Application::new(|handle: &AppHandle| {
         let handle = handle.clone();
+        let run_for = run_for();
         std::thread::spawn(move || {
-            std::thread::sleep(RUN_FOR);
+            std::thread::sleep(run_for);
             let _ = handle.request_quit();
         });
         Counter
