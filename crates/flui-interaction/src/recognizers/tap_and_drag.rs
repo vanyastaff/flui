@@ -8,13 +8,17 @@
 //! - **Drag**: pointer crosses drag slop before up → fire
 //!   `on_drag_start` / `on_drag_update` / `on_drag_end`.
 //!
-//! The recogniser does *not* eagerly decide in `handle_event`; instead it
-//! lets the gesture arena resolve between competing recognisers. The
-//! [`TapAndDragGestureRecognizer`] is a `OneSequenceGestureRecognizer`
-//! subclass that tracks a single primary pointer, captures a tap-down
-//! details payload, and — once accepted by the arena — either resolves
-//! as a tap (on pointer up) or a drag (on slop crossing + drag
-//! lifecycle).
+//! Neither outcome reaches user code before the gesture arena has accepted
+//! this recogniser: crossing drag slop *claims* the arena and the drag starts
+//! on acceptance; a tap's up waits for the arena verdict (the binding's sweep
+//! on pointer up, or a competitor releasing its hold) and fires on
+//! acceptance. A loss after `on_tap_down` or mid-drag fires `on_cancel`.
+//!
+//! Every outcome carries a **consecutive tap count**: `1` for an isolated
+//! contact, `2` for a contact that lands within the double-tap timeout and
+//! slop of the previous completed tap, `3` for the next, and so on — what a
+//! text field needs to select a word on a double click and a line on a triple
+//! click, and to extend that selection by dragging.
 //!
 //! # When to use
 //!
@@ -28,27 +32,27 @@
 //! ```rust,ignore
 //! use flui_interaction::recognizers::tap_and_drag::TapAndDragGestureRecognizer;
 //!
-//! let arena = GestureArena::new();
-//! let recogniser = TapAndDragGestureRecognizer::new(arena)
-//!     .with_on_tap_down(|d| { let _ = d; })
-//!     .with_on_drag_start(|d| { let _ = d; })
-//!     .with_on_drag_update(|d| { let _ = d; })
-//!     .with_on_drag_end(|d| { let _ = d; })
-//!     .with_on_tap_up(|d| { let _ = d; });
+//! let recogniser = TapAndDragGestureRecognizer::new(binding.arena().clone())
+//!     .with_on_tap_up(|d| select_by_count(d.local_position, d.consecutive_tap_count))
+//!     .with_on_drag_update(|d| extend_selection(d.local_position));
 //! ```
 
 use std::{cell::RefCell, rc::Rc, sync::Arc};
 
 use flui_foundation::geometry::Offset;
 use parking_lot::Mutex;
+use web_time::Instant;
 
-use super::recognizer::{GestureRecognizer, RecognizerBase};
+use super::{
+    recognizer::{GestureRecognizer, RecognizerBase},
+    scale::{finish_containment, invoke_callback, retire_callback},
+};
 use crate::{
-    arena::GestureArenaMember,
+    arena::{GestureArenaEntry, GestureArenaMember, GestureDisposition, SweepModel},
     events::{PointerEvent, PointerType},
     ids::PointerId,
     processing::{Velocity, VelocityTracker},
-    routing::PointerDispatch,
+    routing::{PointerDispatch, RoutePanic},
     settings::GestureSettings,
     traits::PointerEventExtTrait,
 };
@@ -57,7 +61,7 @@ use crate::{
 // Details types
 // ============================================================================
 
-/// Position+kind+consecutive-tap-count details for tap-down.
+/// Position, kind and consecutive-tap-count details for tap-down.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TapDragDownDetails {
     /// Global position where pointer contacted the screen.
@@ -66,9 +70,11 @@ pub struct TapDragDownDetails {
     pub local_position: Offset<f64>,
     /// Pointer device kind.
     pub kind: PointerType,
+    /// This contact's place in a run of consecutive taps, starting at `1`.
+    pub consecutive_tap_count: u32,
 }
 
-/// Position+kind details for tap-up.
+/// Position, kind and consecutive-tap-count details for tap-up.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TapDragUpDetails {
     /// Global position where pointer was released.
@@ -77,10 +83,12 @@ pub struct TapDragUpDetails {
     pub local_position: Offset<f64>,
     /// Pointer device kind.
     pub kind: PointerType,
+    /// This tap's place in a run of consecutive taps, starting at `1`.
+    pub consecutive_tap_count: u32,
 }
 
 /// Details for drag-start.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct TapDragStartDetails {
     /// Global position where the drag started (down position).
     pub global_position: Offset<f64>,
@@ -88,6 +96,9 @@ pub struct TapDragStartDetails {
     pub local_position: Offset<f64>,
     /// Pointer device kind.
     pub kind: PointerType,
+    /// The dragging contact's place in a run of consecutive taps: `2` for a
+    /// drag that follows one tap (double-click-drag).
+    pub consecutive_tap_count: u32,
 }
 
 /// Details for drag-update.
@@ -97,10 +108,13 @@ pub struct TapDragUpdateDetails {
     pub global_position: Offset<f64>,
     /// Current local position.
     pub local_position: Offset<f64>,
-    /// Delta since the previous update.
+    /// Delta since the previous update (since the down position for the
+    /// first update).
     pub delta: Offset<f64>,
     /// Pointer device kind.
     pub kind: PointerType,
+    /// The dragging contact's place in a run of consecutive taps.
+    pub consecutive_tap_count: u32,
 }
 
 /// Details for drag-end.
@@ -112,43 +126,46 @@ pub struct TapDragEndDetails {
     pub global_position: Offset<f64>,
     /// Final local position.
     pub local_position: Offset<f64>,
+    /// The dragging contact's place in a run of consecutive taps.
+    pub consecutive_tap_count: u32,
 }
 
 // ============================================================================
 // Callbacks
 // ============================================================================
 
-/// Callback fired when the primary pointer contacts the screen.
+/// Callback fired once the arena has accepted the contact (at the latest
+/// immediately before `on_tap_up` or `on_drag_start`).
 pub type TapDragDownCallback = Rc<dyn Fn(TapDragDownDetails)>;
 /// Callback fired when the pointer lifts before crossing drag slop (a tap).
 pub type TapDragUpCallback = Rc<dyn Fn(TapDragUpDetails)>;
-/// Callback fired when the pointer crosses drag slop and the drag begins.
+/// Callback fired when the drag begins (slop crossed and arena accepted).
 pub type TapDragStartCallback = Rc<dyn Fn(TapDragStartDetails)>;
 /// Callback fired for each pointer move while the drag is in progress.
 pub type TapDragUpdateCallback = Rc<dyn Fn(TapDragUpdateDetails)>;
 /// Callback fired when the pointer lifts and the drag completes.
 pub type TapDragEndCallback = Rc<dyn Fn(TapDragEndDetails)>;
-/// Callback fired when the sequence is cancelled (arena loss or pointer
-/// cancel) — neither the tap nor the drag outcome will fire.
+/// Callback fired when a sequence that already delivered `on_tap_down` or
+/// `on_drag_start` ends without `on_tap_up` or `on_drag_end` (arena loss,
+/// pointer cancel, a tap voided by drift).
 pub type TapDragCancelCallback = Rc<dyn Fn()>;
 
 // ============================================================================
 // Recogniser
 // ============================================================================
 
-/// Internal FSM phase. Tracks whether the primary pointer is currently
-/// held, whether a drag has been accepted, and whether a tap is still
-/// viable.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Phase {
     /// No pointer in flight.
     Ready,
-    /// Pointer down, slop not yet crossed, tap still viable.
+    /// Pointer down, drag slop not crossed.
     Down,
-    /// Slop crossed; drag is in progress and the tap outcome is void.
+    /// Drag slop crossed; the arena claim is pending.
+    Claiming,
+    /// Drag in progress.
     Dragging,
-    /// Sequence complete; awaiting reset.
-    Finished,
+    /// Pointer up as a viable tap; waiting for the arena verdict.
+    TapPending,
 }
 
 // Field names keep the `on_tap_down`/`on_drag_start`-style callback names.
@@ -163,62 +180,182 @@ struct TapDragCallbacks {
     on_cancel: Option<TapDragCancelCallback>,
 }
 
-#[derive(Debug, Clone)]
-struct DragState {
-    /// Initial position at down.
-    initial: Option<Offset<f64>>,
-    /// The same contact as `initial`, in the root's space — stored because
-    /// dispatch localises the event before this recognizer sees it, so the
-    /// global position exists only on arrival (issue #908).
-    initial_global: Option<Offset<f64>>,
-    /// Last update position.
-    last: Option<Offset<f64>>,
-    /// The same contact as `last`, in the root's space.
-    last_global: Option<Offset<f64>>,
-    /// Velocity tracker for end-of-drag velocity.
-    velocity_tracker: VelocityTracker,
-    /// `true` while a tap outcome is still possible. Set `false` once the
-    /// pointer wanders past tap slop (but not yet drag slop): such a move voids the tap so a later up fires nothing.
-    tap_viable: bool,
+impl TapDragCallbacks {
+    fn retire(self, first: &mut Option<RoutePanic>) {
+        retire_callback(self.on_tap_down, first);
+        retire_callback(self.on_tap_up, first);
+        retire_callback(self.on_drag_start, first);
+        retire_callback(self.on_drag_update, first);
+        retire_callback(self.on_drag_end, first);
+        retire_callback(self.on_cancel, first);
+    }
 }
 
-impl Default for DragState {
+/// The last completed tap, which the next contact may continue.
+#[derive(Debug, Clone, Copy)]
+struct LastTap {
+    up_time: Instant,
+    down_position: Offset<f64>,
+    count: u32,
+}
+
+#[derive(Debug, Clone)]
+struct TapDragState {
+    phase: Phase,
+    pointer: Option<PointerId>,
+    entry: Option<GestureArenaEntry>,
+    /// The arena accepted this recogniser for the tracked contact.
+    won: bool,
+    tap_down_delivered: bool,
+    /// `false` once the pointer wandered past tap slop.
+    tap_viable: bool,
+    kind: PointerType,
+    count: u32,
+    initial: Offset<f64>,
+    initial_global: Offset<f64>,
+    last: Offset<f64>,
+    last_global: Offset<f64>,
+    /// Position of the last published drag update.
+    last_reported: Offset<f64>,
+    velocity_tracker: VelocityTracker,
+    pending_up: Option<TapDragUpDetails>,
+    up_time: Option<Instant>,
+    /// Survives the sequence reset; a drag, cancel or loss clears it.
+    last_tap: Option<LastTap>,
+}
+
+impl Default for TapDragState {
     fn default() -> Self {
         Self {
-            initial: None,
-            initial_global: None,
-            last: None,
-            last_global: None,
-            velocity_tracker: VelocityTracker::new(),
+            phase: Phase::Ready,
+            pointer: None,
+            entry: None,
+            won: false,
+            tap_down_delivered: false,
             tap_viable: true,
+            kind: PointerType::Touch,
+            count: 1,
+            initial: Offset::ZERO,
+            initial_global: Offset::ZERO,
+            last: Offset::ZERO,
+            last_global: Offset::ZERO,
+            last_reported: Offset::ZERO,
+            velocity_tracker: VelocityTracker::new(),
+            pending_up: None,
+            up_time: None,
+            last_tap: None,
         }
+    }
+}
+
+/// A user callback owed once the state lock is released.
+enum Notice {
+    TapDown(TapDragDownDetails),
+    TapUp(TapDragUpDetails),
+    DragStart(TapDragStartDetails),
+    DragUpdate(TapDragUpdateDetails),
+    DragEnd(TapDragEndDetails),
+    Cancel,
+}
+
+/// Arena work owed once the state lock is released, run before notices.
+enum ArenaStep {
+    None,
+    Claim(GestureArenaEntry),
+    Withdraw(GestureArenaEntry),
+    /// A self-driven arena is swept by its recogniser on pointer up.
+    Sweep(GestureArenaEntry),
+}
+
+impl TapDragState {
+    /// Clear the sequence, keeping the consecutive-tap chain.
+    fn reset_sequence(&mut self) {
+        let last_tap = self.last_tap;
+        *self = Self {
+            last_tap,
+            ..Self::default()
+        };
+    }
+
+    fn deliver_tap_down(&mut self, out: &mut Vec<Notice>) {
+        if !self.tap_down_delivered {
+            self.tap_down_delivered = true;
+            out.push(Notice::TapDown(TapDragDownDetails {
+                global_position: self.initial_global,
+                local_position: self.initial,
+                kind: self.kind,
+                consecutive_tap_count: self.count,
+            }));
+        }
+    }
+
+    fn start_drag(&mut self, out: &mut Vec<Notice>) {
+        self.deliver_tap_down(out);
+        self.phase = Phase::Dragging;
+        self.last_tap = None;
+        out.push(Notice::DragStart(TapDragStartDetails {
+            global_position: self.initial_global,
+            local_position: self.initial,
+            kind: self.kind,
+            consecutive_tap_count: self.count,
+        }));
+        out.push(Notice::DragUpdate(TapDragUpdateDetails {
+            global_position: self.last_global,
+            local_position: self.last,
+            delta: (self.last - self.initial).to_delta(),
+            kind: self.kind,
+            consecutive_tap_count: self.count,
+        }));
+        self.last_reported = self.last;
+    }
+
+    fn complete_tap(&mut self, out: &mut Vec<Notice>) {
+        self.deliver_tap_down(out);
+        if let (Some(up), Some(up_time)) = (self.pending_up.take(), self.up_time) {
+            out.push(Notice::TapUp(up));
+            self.last_tap = Some(LastTap {
+                up_time,
+                down_position: self.initial,
+                count: self.count,
+            });
+        }
+        self.reset_sequence();
+    }
+
+    /// End the sequence without an outcome. Returns the arena entry, which
+    /// the caller withdraws when it is still unresolved.
+    fn abandon(&mut self, out: &mut Vec<Notice>) -> Option<GestureArenaEntry> {
+        if self.tap_down_delivered || self.phase == Phase::Dragging {
+            out.push(Notice::Cancel);
+        }
+        let entry = self.entry.take();
+        self.last_tap = None;
+        self.reset_sequence();
+        entry
     }
 }
 
 /// Composite tap-and-drag recogniser.
 ///
-/// See [module-level docs](self) for the full design.
+/// See [module-level docs](self) for the design. A second contact while one
+/// is down does not join; the same pointer going down again retires its
+/// previous sequence first. Callbacks run after the recogniser has committed
+/// its state, with no borrow held, so a callback may dispose the recogniser.
+/// A panicking callback propagates to the dispatcher; the transition's
+/// remaining callbacks are dropped and the next contact starts clean.
 #[derive(Clone)]
 pub struct TapAndDragGestureRecognizer {
     state: RecognizerBase,
-    phase: Arc<Mutex<Phase>>,
-    drag_state: Arc<Mutex<DragState>>,
+    gesture_state: Arc<Mutex<TapDragState>>,
     callbacks: Rc<RefCell<TapDragCallbacks>>,
     settings: Arc<Mutex<GestureSettings>>,
-    /// Arena verdict for the in-flight sequence: `None` until resolved,
-    /// `Some(true)` once this recogniser wins, `Some(false)` once it loses.
-    /// Tap callbacks fire only on `Some(true)` so a losing tap-and-drag never
-    /// emits `on_tap_*` to user code (a competing recogniser added earlier can
-    /// take the pointer on the resolving sweep).
-    accepted: Arc<Mutex<Option<bool>>>,
 }
 
 impl std::fmt::Debug for TapAndDragGestureRecognizer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("TapAndDragGestureRecognizer")
             .field("state", &self.state)
-            .field("phase", &*self.phase.lock())
-            .field("drag_state", &*self.drag_state.lock())
+            .field("gesture_state", &*self.gesture_state.lock())
             .field("settings", &*self.settings.lock())
             .finish_non_exhaustive()
     }
@@ -227,14 +364,7 @@ impl std::fmt::Debug for TapAndDragGestureRecognizer {
 impl TapAndDragGestureRecognizer {
     /// Create a new tap-and-drag recogniser.
     pub fn new(arena: crate::arena::GestureArena) -> Arc<Self> {
-        Arc::new(Self {
-            state: RecognizerBase::new(arena),
-            phase: Arc::new(Mutex::new(Phase::Ready)),
-            drag_state: Arc::new(Mutex::new(DragState::default())),
-            callbacks: Rc::new(RefCell::new(TapDragCallbacks::default())),
-            settings: Arc::new(Mutex::new(GestureSettings::default())),
-            accepted: Arc::new(Mutex::new(None)),
-        })
+        Self::with_settings(arena, GestureSettings::default())
     }
 
     /// Create with custom gesture settings.
@@ -244,11 +374,9 @@ impl TapAndDragGestureRecognizer {
     ) -> Arc<Self> {
         Arc::new(Self {
             state: RecognizerBase::new(arena),
-            phase: Arc::new(Mutex::new(Phase::Ready)),
-            drag_state: Arc::new(Mutex::new(DragState::default())),
+            gesture_state: Arc::new(Mutex::new(TapDragState::default())),
             callbacks: Rc::new(RefCell::new(TapDragCallbacks::default())),
             settings: Arc::new(Mutex::new(settings)),
-            accepted: Arc::new(Mutex::new(None)),
         })
     }
 
@@ -262,64 +390,56 @@ impl TapAndDragGestureRecognizer {
         *self.settings.lock() = settings;
     }
 
-    /// Drag slop threshold for `kind` (uses
-    /// [`GestureSettings::pan_slop_for`]).
-    ///
-    /// This recognizer drags in a free plane, so it takes the *pan* tier.
-    /// Axis-locked drags take the plain hit
-    /// tier instead; if this recognizer ever grows a vertical- or
-    /// horizontal-only mode, that mode reads [`Self::tap_slop`]'s tier, not
-    /// this one.
-    fn drag_slop(&self, kind: PointerType) -> f64 {
-        self.settings.lock().pan_slop_for(kind)
-    }
-
-    /// Tap slop threshold for `kind` (uses [`GestureSettings::hit_slop`]).
-    ///
-    /// The tap-viability check is a *hit* test, not a pan one, so it takes the
-    /// plain tier.
-    fn tap_slop(&self, kind: PointerType) -> f64 {
-        self.settings.lock().hit_slop(kind)
-    }
-
     // ========================================================================
     // Builder-style callback setters
     // ========================================================================
 
-    /// Register the tap-down callback (fires on pointer contact, once the
-    /// arena has accepted this recogniser).
+    /// Register the tap-down callback (fires once the arena has accepted the
+    /// contact, at the latest right before `on_tap_up` or `on_drag_start`).
     pub fn with_on_tap_down(
         self: Arc<Self>,
         cb: impl Fn(TapDragDownDetails) + 'static,
     ) -> Arc<Self> {
-        self.callbacks.borrow_mut().on_tap_down = Some(Rc::new(cb));
+        let old = self.callbacks.borrow_mut().on_tap_down.replace(Rc::new(cb));
+        drop(old);
         self
     }
 
-    /// Register the tap-up callback (fires when the pointer lifts before
-    /// crossing drag slop, resolving the sequence as a tap).
+    /// Register the tap-up callback (fires when the pointer lifted before
+    /// crossing tap slop and the arena accepted the tap).
     pub fn with_on_tap_up(self: Arc<Self>, cb: impl Fn(TapDragUpDetails) + 'static) -> Arc<Self> {
-        self.callbacks.borrow_mut().on_tap_up = Some(Rc::new(cb));
+        let old = self.callbacks.borrow_mut().on_tap_up.replace(Rc::new(cb));
+        drop(old);
         self
     }
 
-    /// Register the drag-start callback (fires when the pointer crosses drag
-    /// slop, voiding the tap outcome).
+    /// Register the drag-start callback (fires when the pointer crossed drag
+    /// slop and the arena accepted the drag).
     pub fn with_on_drag_start(
         self: Arc<Self>,
         cb: impl Fn(TapDragStartDetails) + 'static,
     ) -> Arc<Self> {
-        self.callbacks.borrow_mut().on_drag_start = Some(Rc::new(cb));
+        let old = self
+            .callbacks
+            .borrow_mut()
+            .on_drag_start
+            .replace(Rc::new(cb));
+        drop(old);
         self
     }
 
-    /// Register the drag-update callback (fires for each pointer move while
-    /// the drag is in progress).
+    /// Register the drag-update callback (fires once with the crossing move
+    /// right after `on_drag_start`, then for each move while dragging).
     pub fn with_on_drag_update(
         self: Arc<Self>,
         cb: impl Fn(TapDragUpdateDetails) + 'static,
     ) -> Arc<Self> {
-        self.callbacks.borrow_mut().on_drag_update = Some(Rc::new(cb));
+        let old = self
+            .callbacks
+            .borrow_mut()
+            .on_drag_update
+            .replace(Rc::new(cb));
+        drop(old);
         self
     }
 
@@ -329,14 +449,16 @@ impl TapAndDragGestureRecognizer {
         self: Arc<Self>,
         cb: impl Fn(TapDragEndDetails) + 'static,
     ) -> Arc<Self> {
-        self.callbacks.borrow_mut().on_drag_end = Some(Rc::new(cb));
+        let old = self.callbacks.borrow_mut().on_drag_end.replace(Rc::new(cb));
+        drop(old);
         self
     }
 
-    /// Register the cancel callback (fires when the sequence is cancelled by
-    /// an arena loss or a pointer-cancel event).
+    /// Register the cancel callback. See [`TapDragCancelCallback`] for when
+    /// it fires.
     pub fn with_on_cancel(self: Arc<Self>, cb: impl Fn() + 'static) -> Arc<Self> {
-        self.callbacks.borrow_mut().on_cancel = Some(Rc::new(cb));
+        let old = self.callbacks.borrow_mut().on_cancel.replace(Rc::new(cb));
+        drop(old);
         self
     }
 
@@ -344,26 +466,203 @@ impl TapAndDragGestureRecognizer {
     // Internal helpers
     // ========================================================================
 
-    /// Reset FSM and per-gesture tracking state to Ready. Called after
-    /// tap-up, drag-end, or cancel.
-    fn reset(&self) {
-        *self.phase.lock() = Phase::Ready;
-        *self.accepted.lock() = None;
-        let mut ds = self.drag_state.lock();
-        ds.initial = None;
-        ds.initial_global = None;
-        ds.last = None;
-        ds.tap_viable = true;
-        ds.velocity_tracker.reset();
+    /// Forget the base's record of the contact once its sequence is over.
+    fn clear_base_tracking(&self) {
+        self.state.set_primary_pointer(None);
+        self.state.clear_initial_contact();
     }
 
-    /// Distance from initial position to `current` (or 0 if no initial).
-    fn distance_from_initial(&self, current: Offset<f64>) -> f64 {
-        let initial = self.drag_state.lock().initial;
-        match initial {
-            Some(initial) => (current - initial).distance(),
-            None => 0.0,
+    /// Run the arena step, then deliver the notices in order. The state was
+    /// committed beforehand; the first panic is resumed after the arena step
+    /// ran, and the transition's later notices are dropped.
+    fn finish(&self, step: ArenaStep, notices: Vec<Notice>) {
+        let self_driven = self.state.arena().sweep_model() == SweepModel::SelfDriven;
+        let mut first = match step {
+            ArenaStep::None => None,
+            ArenaStep::Claim(entry) => {
+                RoutePanic::capture(|| entry.resolve(GestureDisposition::Accepted))
+            }
+            ArenaStep::Withdraw(entry) => RoutePanic::capture(|| {
+                entry.resolve(GestureDisposition::Rejected);
+                if self_driven {
+                    entry.sweep();
+                }
+            }),
+            ArenaStep::Sweep(entry) => RoutePanic::capture(|| {
+                if self_driven {
+                    entry.sweep();
+                }
+            }),
+        };
+        for notice in notices {
+            if first.is_some() {
+                break;
+            }
+            first = RoutePanic::capture(|| self.deliver(notice));
         }
+        if let Some(panic) = first {
+            panic.resume();
+        }
+    }
+
+    fn deliver(&self, notice: Notice) {
+        let callbacks = self.callbacks.borrow();
+        match notice {
+            Notice::TapDown(d) => {
+                let cb = callbacks.on_tap_down.clone();
+                drop(callbacks);
+                invoke_callback(cb, |cb| cb(d));
+            }
+            Notice::TapUp(d) => {
+                let cb = callbacks.on_tap_up.clone();
+                drop(callbacks);
+                invoke_callback(cb, |cb| cb(d));
+            }
+            Notice::DragStart(d) => {
+                let cb = callbacks.on_drag_start.clone();
+                drop(callbacks);
+                invoke_callback(cb, |cb| cb(d));
+            }
+            Notice::DragUpdate(d) => {
+                let cb = callbacks.on_drag_update.clone();
+                drop(callbacks);
+                invoke_callback(cb, |cb| cb(d));
+            }
+            Notice::DragEnd(d) => {
+                let cb = callbacks.on_drag_end.clone();
+                drop(callbacks);
+                invoke_callback(cb, |cb| cb(d));
+            }
+            Notice::Cancel => {
+                let cb = callbacks.on_cancel.clone();
+                drop(callbacks);
+                invoke_callback(cb, |cb| cb());
+            }
+        }
+    }
+
+    fn handle_move(&self, position: Offset<f64>, global_position: Offset<f64>, kind: PointerType) {
+        if !position.is_finite() {
+            return;
+        }
+        let (drag_slop, tap_slop) = {
+            let settings = self.settings.lock();
+            // A free-plane drag takes the pan tier; tap viability is a hit
+            // test and takes the plain tier.
+            (settings.pan_slop_for(kind), settings.hit_slop(kind))
+        };
+        let now = self.state.now();
+        let mut notices = Vec::new();
+        let mut step = ArenaStep::None;
+        let mut state = self.gesture_state.lock();
+        state.kind = kind;
+        state.last = position;
+        state.last_global = global_position;
+        state.velocity_tracker.add_position(now, position);
+        match state.phase {
+            Phase::Down => {
+                let distance = (position - state.initial).distance();
+                if distance > tap_slop {
+                    state.tap_viable = false;
+                }
+                if distance > drag_slop {
+                    if state.won {
+                        state.start_drag(&mut notices);
+                    } else {
+                        state.phase = Phase::Claiming;
+                        if let Some(entry) = state.entry.clone() {
+                            step = ArenaStep::Claim(entry);
+                        }
+                    }
+                }
+            }
+            Phase::Dragging => {
+                let delta = (position - state.last_reported).to_delta();
+                state.last_reported = position;
+                notices.push(Notice::DragUpdate(TapDragUpdateDetails {
+                    global_position,
+                    local_position: position,
+                    delta,
+                    kind,
+                    consecutive_tap_count: state.count,
+                }));
+            }
+            Phase::Ready | Phase::Claiming | Phase::TapPending => {}
+        }
+        drop(state);
+        self.finish(step, notices);
+    }
+
+    fn handle_up(&self, position: Offset<f64>, global_position: Offset<f64>, kind: PointerType) {
+        let now = self.state.now();
+        let mut notices = Vec::new();
+        let mut state = self.gesture_state.lock();
+        state.kind = kind;
+        let (position, global_position) = if position.is_finite() {
+            (position, global_position)
+        } else {
+            (state.last, state.last_global)
+        };
+        let step = match state.phase {
+            Phase::Down if state.tap_viable => {
+                state.pending_up = Some(TapDragUpDetails {
+                    global_position,
+                    local_position: position,
+                    kind,
+                    consecutive_tap_count: state.count,
+                });
+                state.up_time = Some(now);
+                if state.won {
+                    state.complete_tap(&mut notices);
+                    ArenaStep::None
+                } else {
+                    // The verdict arrives through `accept_gesture` /
+                    // `reject_gesture`: the binding sweeps after routing this
+                    // up, a self-driven arena is swept below.
+                    state.phase = Phase::TapPending;
+                    state
+                        .entry
+                        .clone()
+                        .map_or(ArenaStep::None, ArenaStep::Sweep)
+                }
+            }
+            Phase::Dragging => {
+                let velocity = state.velocity_tracker.get_velocity();
+                notices.push(Notice::DragEnd(TapDragEndDetails {
+                    velocity,
+                    global_position,
+                    local_position: position,
+                    consecutive_tap_count: state.count,
+                }));
+                let entry = state.entry.take();
+                state.last_tap = None;
+                state.reset_sequence();
+                entry.map_or(ArenaStep::None, ArenaStep::Sweep)
+            }
+            // Neither a tap (drifted) nor a drag (never accepted): give the
+            // arena up so a competitor can take it.
+            Phase::Down | Phase::Claiming => state
+                .abandon(&mut notices)
+                .map_or(ArenaStep::None, ArenaStep::Withdraw),
+            Phase::Ready | Phase::TapPending => return,
+        };
+        drop(state);
+        self.clear_base_tracking();
+        self.finish(step, notices);
+    }
+
+    fn handle_cancel(&self) {
+        let mut notices = Vec::new();
+        let mut state = self.gesture_state.lock();
+        if matches!(state.phase, Phase::Ready | Phase::TapPending) {
+            return;
+        }
+        let step = state
+            .abandon(&mut notices)
+            .map_or(ArenaStep::None, ArenaStep::Withdraw);
+        drop(state);
+        self.clear_base_tracking();
+        self.finish(step, notices);
     }
 }
 
@@ -380,27 +679,60 @@ impl GestureRecognizer for TapAndDragGestureRecognizer {
             pointer = ?pointer,
             event = %crate::observability::GestureEvent::RecognizerAdded,
         );
-        if !self.state.assert_not_disposed("add_pointer") {
+        if !self.state.assert_not_disposed("add_pointer") || !position.is_finite() {
             return;
         }
+        let (phase, tracked) = {
+            let state = self.gesture_state.lock();
+            (state.phase, state.pointer)
+        };
+        let finger_down = matches!(phase, Phase::Down | Phase::Claiming | Phase::Dragging);
+        if finger_down && tracked != Some(pointer) {
+            return;
+        }
+        if phase != Phase::Ready {
+            // The previous sequence is still waiting for a verdict (or never
+            // saw its up): it ends here, before the new contact starts.
+            let mut notices = Vec::new();
+            let step = self
+                .gesture_state
+                .lock()
+                .abandon(&mut notices)
+                .map_or(ArenaStep::None, ArenaStep::Withdraw);
+            self.clear_base_tracking();
+            self.finish(step, notices);
+        }
+
+        let now = self.state.now();
+        let (timeout, slop) = {
+            let settings = self.settings.lock();
+            (settings.double_tap_timeout(), settings.double_tap_slop())
+        };
         self.state
             .start_tracking(pointer, position, global_position, self);
-
-        // Initialise drag state for the new pointer.
-        {
-            let mut ds = self.drag_state.lock();
-            ds.initial = Some(position);
-            ds.initial_global = Some(global_position);
-            ds.last = Some(position);
-            ds.tap_viable = true;
-            ds.velocity_tracker.reset();
-            // Read the arena's clock, not the OS clock: production binds it to
-            // `SystemClock` (identical there), but a headless frame driver binds a
-            // `ManualClock`, so a replayed gesture's own sample spacing decides the
-            // velocity instead of however the test process happened to be scheduled.
-            ds.velocity_tracker.add_position(self.state.now(), position);
-        }
-        *self.phase.lock() = Phase::Down;
+        let entry = self.state.tracked_entry();
+        let mut state = self.gesture_state.lock();
+        let count = state
+            .last_tap
+            .filter(|last| {
+                now.saturating_duration_since(last.up_time) <= timeout
+                    && (position - last.down_position).distance() <= slop
+            })
+            .map_or(1, |last| last.count.saturating_add(1));
+        state.reset_sequence();
+        state.phase = Phase::Down;
+        state.pointer = Some(pointer);
+        state.entry = entry;
+        state.count = count;
+        state.initial = position;
+        state.initial_global = global_position;
+        state.last = position;
+        state.last_global = global_position;
+        state.last_reported = position;
+        // Read the arena's clock: a headless frame driver binds a
+        // `ManualClock`, so a replayed gesture's own sample spacing decides
+        // the velocity.
+        state.velocity_tracker.add_position(now, position);
     }
 
     fn handle_event(&self, dispatch: PointerDispatch<'_>) {
@@ -414,11 +746,7 @@ impl GestureRecognizer for TapAndDragGestureRecognizer {
         if !self.state.assert_not_disposed("handle_event") {
             return;
         }
-        let Some(primary) = self.state.primary_pointer() else {
-            return;
-        };
-        // Filter to the primary pointer we are tracking.
-        if event.pointer_id() != primary {
+        if self.gesture_state.lock().pointer != Some(event.pointer_id()) {
             return;
         }
         // Read once, here: this is the only point at which the untransformed
@@ -426,38 +754,48 @@ impl GestureRecognizer for TapAndDragGestureRecognizer {
         let global_position = dispatch.global.position();
 
         match event {
+            PointerEvent::Down(data) => {
+                self.gesture_state.lock().kind = data.pointer.pointer_type;
+            }
             PointerEvent::Move(data) => {
                 let pos = data.current.position;
-                let position = Offset::new(pos.x, pos.y);
-                let kind = data.pointer.pointer_type;
-                self.handle_move(position, global_position, kind);
+                self.handle_move(
+                    Offset::new(pos.x, pos.y),
+                    global_position,
+                    data.pointer.pointer_type,
+                );
             }
             PointerEvent::Up(data) => {
                 let pos = data.state.position;
-                let position = Offset::new(pos.x, pos.y);
-                self.handle_up(position, global_position, data.pointer.pointer_type);
+                self.handle_up(
+                    Offset::new(pos.x, pos.y),
+                    global_position,
+                    data.pointer.pointer_type,
+                );
             }
-            PointerEvent::Cancel(info) => {
-                if let Some(pos) = self.state.initial_position() {
-                    self.handle_cancel(Some(pos), Some(global_position), info.pointer_type);
-                } else {
-                    self.handle_cancel(None, None, info.pointer_type);
-                }
-            }
+            PointerEvent::Cancel(_) => self.handle_cancel(),
             _ => {}
         }
     }
 
     fn dispose(&self) {
+        let incoming_failure = std::thread::panicking();
         self.state.mark_disposed();
-        self.state.reject();
-        let mut cbs = self.callbacks.borrow_mut();
-        cbs.on_tap_down = None;
-        cbs.on_tap_up = None;
-        cbs.on_drag_start = None;
-        cbs.on_drag_update = None;
-        cbs.on_drag_end = None;
-        cbs.on_cancel = None;
+        let callbacks = std::mem::take(&mut *self.callbacks.borrow_mut());
+        let entry = {
+            let mut state = self.gesture_state.lock();
+            let entry = state.entry.take();
+            *state = TapDragState::default();
+            entry
+        };
+        let mut first = RoutePanic::capture(|| {
+            self.state.reject();
+            if let Some(entry) = entry {
+                entry.resolve(GestureDisposition::Rejected);
+            }
+        });
+        callbacks.retire(&mut first);
+        finish_containment(first, incoming_failure);
     }
 
     fn primary_pointer(&self) -> Option<PointerId> {
@@ -465,332 +803,58 @@ impl GestureRecognizer for TapAndDragGestureRecognizer {
     }
 }
 
-impl TapAndDragGestureRecognizer {
-    fn handle_move(&self, position: Offset<f64>, global_position: Offset<f64>, kind: PointerType) {
-        let phase = *self.phase.lock();
-        match phase {
-            Phase::Down => {
-                let distance = self.distance_from_initial(position);
-                if distance > self.drag_slop(kind) {
-                    // Slop crossed: lock in the drag outcome. Fire
-                    // `on_tap_down` (we did get a down) then promote
-                    // to drag, fire `on_drag_start` with the down
-                    // position. Then immediately fire `on_drag_update`
-                    // so observers see the crossing move.
-                    //
-                    // Defensive: if `drag_state.initial` is `None` (e.g. a
-                    // future refactor breaks the `add_pointer` invariant),
-                    // warn and bail rather than panicking in a gesture
-                    // hot path. The recogniser will simply not promote
-                    // this move to a drag — the next move can retry.
-                    let (initial_opt, initial_global_opt) = {
-                        let ds = self.drag_state.lock();
-                        (ds.initial, ds.initial_global)
-                    };
-                    let Some(initial) = initial_opt else {
-                        tracing::warn!(
-                            target: "crate::tap_and_drag",
-                            "drag_state.initial unset in handle_move; \
-                             add_pointer must be called before any move event"
-                        );
-                        return;
-                    };
-
-                    // Snapshot callbacks under lock, fire outside.
-                    let down_cb = self.callbacks.borrow().on_tap_down.clone();
-                    if let Some(cb) = down_cb {
-                        cb(TapDragDownDetails {
-                            global_position: initial_global_opt.unwrap_or(initial),
-                            local_position: initial,
-                            kind,
-                        });
-                    }
-
-                    *self.phase.lock() = Phase::Dragging;
-                    {
-                        let mut ds = self.drag_state.lock();
-                        ds.last = Some(position);
-                        ds.last_global = Some(global_position);
-                        ds.velocity_tracker.reset();
-                        ds.velocity_tracker.add_position(self.state.now(), position);
-                    }
-
-                    let start_cb = self.callbacks.borrow().on_drag_start.clone();
-                    if let Some(cb) = start_cb {
-                        cb(TapDragStartDetails {
-                            global_position: initial_global_opt.unwrap_or(initial),
-                            local_position: initial,
-                            kind,
-                        });
-                    }
-
-                    // Fire an update with the crossing move.
-                    let delta = (position - initial).to_delta();
-                    let update_cb = self.callbacks.borrow().on_drag_update.clone();
-                    if let Some(cb) = update_cb {
-                        cb(TapDragUpdateDetails {
-                            global_position,
-                            local_position: position,
-                            delta,
-                            kind,
-                        });
-                    }
-                } else if distance > self.tap_slop(kind) {
-                    // Past tap slop but not drag slop: the pointer wandered too
-                    // far to still count as a tap. Void the tap
-                    // so a later up does not fire `on_tap_*`.
-                    self.drag_state.lock().tap_viable = false;
-                }
-                // Always update last so subsequent distance checks are
-                // relative to the most recent move.
-                self.drag_state.lock().last = Some(position);
-            }
-            Phase::Dragging => {
-                // Compute delta from last position and update.
-                let last = self.drag_state.lock().last;
-                let delta = match last {
-                    Some(last_pos) => (position - last_pos).to_delta(),
-                    None => Offset::new(0.0, 0.0),
-                };
-                {
-                    let mut ds = self.drag_state.lock();
-                    ds.last = Some(position);
-                    ds.velocity_tracker.add_position(self.state.now(), position);
-                }
-                let cb = self.callbacks.borrow().on_drag_update.clone();
-                if let Some(cb) = cb {
-                    cb(TapDragUpdateDetails {
-                        global_position,
-                        local_position: position,
-                        delta,
-                        kind,
-                    });
-                }
-            }
-            _ => {}
-        }
-    }
-
-    fn handle_up(&self, position: Offset<f64>, global_position: Offset<f64>, kind: PointerType) {
-        let phase = *self.phase.lock();
-        match phase {
-            Phase::Down => {
-                let (initial, initial_global, tap_viable) = {
-                    let ds = self.drag_state.lock();
-                    (ds.initial, ds.initial_global, ds.tap_viable)
-                };
-                *self.phase.lock() = Phase::Finished;
-
-                // Resolve the arena BEFORE firing any tap callback. `stop_tracking`
-                // synchronously sweeps and dispatches `accept_gesture` /
-                // `reject_gesture`, which records the verdict in `self.accepted`.
-                // A tap-and-drag competing with an earlier-added recogniser can
-                // lose this sweep, so firing before resolution would let a loser
-                // emit `on_tap_*` (mirrors the `TapGestureRecognizer` pending-up
-                // pattern).
-                self.state.stop_tracking();
-
-                // Fire only if the tap stayed viable (no move past tap slop, see
-                // `handle_move`) AND the arena confirmed our win.
-                if tap_viable && self.accepted.lock().unwrap_or(false) {
-                    if let Some(initial) = initial {
-                        let down_cb = self.callbacks.borrow().on_tap_down.clone();
-                        if let Some(cb) = down_cb {
-                            cb(TapDragDownDetails {
-                                global_position: initial_global.unwrap_or(initial),
-                                local_position: initial,
-                                kind,
-                            });
-                        }
-                    }
-                    let up_cb = self.callbacks.borrow().on_tap_up.clone();
-                    if let Some(cb) = up_cb {
-                        cb(TapDragUpDetails {
-                            global_position,
-                            local_position: position,
-                            kind,
-                        });
-                    }
-                }
-                self.reset();
-            }
-            Phase::Dragging => {
-                // Drag ended at up: fire on_drag_end with final velocity.
-                let velocity = self.drag_state.lock().velocity_tracker.get_velocity();
-                let end_cb = self.callbacks.borrow().on_drag_end.clone();
-                if let Some(cb) = end_cb {
-                    cb(TapDragEndDetails {
-                        velocity,
-                        global_position,
-                        local_position: position,
-                    });
-                }
-                *self.phase.lock() = Phase::Finished;
-                self.state.stop_tracking();
-                self.reset();
-            }
-            _ => {}
-        }
-    }
-
-    fn handle_cancel(
-        &self,
-        position: Option<Offset<f64>>,
-        global_position: Option<Offset<f64>>,
-        _kind: PointerType,
-    ) {
-        let phase = *self.phase.lock();
-        if phase == Phase::Ready || phase == Phase::Finished {
-            return;
-        }
-        // We were mid-gesture. Withdraw and reset before invoking user code.
-        let cb = self.callbacks.borrow().on_cancel.clone();
-        // Cancel carries no details, in either space, so both positions are
-        // accepted and dropped rather than being made to look meaningful.
-        let _ = (position, global_position);
-        *self.phase.lock() = Phase::Finished;
-        self.state.reject();
-        self.reset();
-        if let Some(cb) = cb {
-            cb();
-        }
-    }
-}
-
 impl crate::recognizers::OneSequenceGestureRecognizer for TapAndDragGestureRecognizer {
     fn tracked_pointers(&self) -> Vec<PointerId> {
-        self.state
-            .primary_pointer()
-            .map(|p| vec![p])
-            .unwrap_or_default()
+        self.gesture_state.lock().pointer.into_iter().collect()
     }
 
-    fn resolve_pointer(&self, _pointer: PointerId, disposition: crate::arena::GestureDisposition) {
-        match disposition {
-            crate::arena::GestureDisposition::Accepted => {
-                // Record the win; `handle_up` reads `self.accepted` after the
-                // resolving sweep and fires the deferred tap callbacks only
-                // then. Firing here is a lock-during-callback hazard.
-                *self.accepted.lock() = Some(true);
-            }
-            crate::arena::GestureDisposition::Rejected => {
-                // Record the loss so the deferred tap callbacks never fire.
-                // Reentrancy guard: don't call `self.state.reject()` from
-                // here. The arena is already inside a synchronous
-                // `entry.lock()` while dispatching to us; calling
-                // `arena.resolve` again would re-lock the same entry and
-                // deadlock. The handle_* paths (handle_cancel, dispose)
-                // own the actual `state.reject()` call.
-                *self.accepted.lock() = Some(false);
-                *self.phase.lock() = Phase::Ready;
-            }
+    fn resolve_pointer(&self, pointer: PointerId, disposition: GestureDisposition) {
+        let entry = {
+            let state = self.gesture_state.lock();
+            (state.pointer == Some(pointer))
+                .then(|| state.entry.clone())
+                .flatten()
+        };
+        if let Some(entry) = entry {
+            entry.resolve(disposition);
         }
     }
 
-    fn stop_tracking_pointer(&self, _pointer: PointerId) {
-        self.state.stop_tracking();
+    fn stop_tracking_pointer(&self, pointer: PointerId) {
+        if self.gesture_state.lock().pointer == Some(pointer) {
+            self.handle_cancel();
+        }
     }
 }
 
 impl GestureArenaMember for TapAndDragGestureRecognizer {
-    fn accept_gesture(&self, _pointer: PointerId) {
-        // Record the arena win; `handle_up` reads this after the resolving
-        // sweep and fires the deferred tap callbacks. Do NOT invoke user
-        // callbacks here — the arena holds its entry lock while dispatching
-        // and user code may re-enter it (lock-during-callback hazard).
-        *self.accepted.lock() = Some(true);
+    fn accept_gesture(&self, pointer: PointerId) {
+        let mut notices = Vec::new();
+        let mut state = self.gesture_state.lock();
+        if state.pointer != Some(pointer) {
+            return;
+        }
+        state.won = true;
+        match state.phase {
+            Phase::Down => state.deliver_tap_down(&mut notices),
+            Phase::Claiming => state.start_drag(&mut notices),
+            Phase::TapPending => state.complete_tap(&mut notices),
+            Phase::Dragging | Phase::Ready => {}
+        }
+        drop(state);
+        self.finish(ArenaStep::None, notices);
     }
 
-    fn reject_gesture(&self, _pointer: PointerId) {
-        // Record the loss so the deferred tap callbacks never fire.
-        *self.accepted.lock() = Some(false);
-
-        // The arena is already holding its entry-lock while dispatching
-        // `reject_gesture`; calling `self.state.reject()` here would
-        // re-enter `arena.resolve` on the same pointer and try to take
-        // the entry-lock again, deadlocking the single-threaded test
-        // harness (and any other consumer that resolves synchronously).
-        //
-        // Clean up recogniser-owned state directly without touching the
-        // arena so the next add_pointer cycle starts fresh.
-        *self.phase.lock() = Phase::Ready;
-        let mut ds = self.drag_state.lock();
-        ds.initial = None;
-        ds.initial_global = None;
-        ds.last = None;
-        ds.velocity_tracker.reset();
+    fn reject_gesture(&self, pointer: PointerId) {
+        let mut notices = Vec::new();
+        let mut state = self.gesture_state.lock();
+        if state.pointer != Some(pointer) {
+            return;
+        }
+        // The entry is already resolved; dropping it is all that is left.
+        let _resolved = state.abandon(&mut notices);
+        drop(state);
+        self.clear_base_tracking();
+        self.finish(ArenaStep::None, notices);
     }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::{
-        arena::GestureArena,
-        events::{make_move_event, make_up_event},
-    };
-
-    #[test]
-    fn down_then_move_past_drag_slop_fires_drag() {
-        let arena = GestureArena::new();
-        let tap_down = Arc::new(Mutex::new(false));
-        let drag_start = Arc::new(Mutex::new(false));
-        let drag_update_count = Arc::new(Mutex::new(0u32));
-        let drag_end = Arc::new(Mutex::new(false));
-
-        let rec = TapAndDragGestureRecognizer::new(arena)
-            .with_on_tap_down({
-                let tap_down = tap_down.clone();
-                move |_| *tap_down.lock() = true
-            })
-            .with_on_drag_start({
-                let drag_start = drag_start.clone();
-                move |_| *drag_start.lock() = true
-            })
-            .with_on_drag_update({
-                let drag_update_count = drag_update_count.clone();
-                move |_| *drag_update_count.lock() += 1
-            })
-            .with_on_drag_end({
-                let drag_end = drag_end.clone();
-                move |_| *drag_end.lock() = true
-            });
-
-        let pointer = PointerId::PRIMARY;
-        let pos = Offset::new(0.0, 0.0);
-        rec.add_pointer(pointer, pos, pos);
-
-        // Big move (40px) — past the default 18px drag slop.
-        let big_pos = Offset::new(40.0, 0.0);
-        rec.handle_event(PointerDispatch::at_root(&make_move_event(
-            big_pos,
-            PointerType::Touch,
-        )));
-
-        // Drag started on slop crossing.
-        assert!(*drag_start.lock(), "drag_start fires when slop crossed");
-        assert!(
-            *tap_down.lock(),
-            "tap_down fires once at the slop-crossing point"
-        );
-
-        // One more move.
-        rec.handle_event(PointerDispatch::at_root(&make_move_event(
-            Offset::new(60.0, 0.0),
-            PointerType::Touch,
-        )));
-
-        // We expect 2 updates: one from the slop-crossing event itself,
-        // one from the follow-up move.
-        assert_eq!(*drag_update_count.lock(), 2, "two drag updates expected");
-
-        // Up — drag ends.
-        rec.handle_event(PointerDispatch::at_root(&make_up_event(
-            Offset::new(60.0, 0.0),
-            PointerType::Touch,
-        )));
-        assert!(*drag_end.lock(), "drag_end fires on pointer up");
-    }
-
-    // Sanity: constructor builder pattern.
 }
