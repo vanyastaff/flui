@@ -144,6 +144,24 @@ impl StorageName {
         self.name
     }
 
+    /// Whether the value belongs to this machine (made by
+    /// [`machine_local`](Self::machine_local)) rather than following the user
+    /// between machines (made by [`from_static`](Self::from_static)). A
+    /// [`Storage`] keeps the two in separate places, so equal text in the two
+    /// scopes names two values.
+    ///
+    /// ```
+    /// use flui_platform_api::StorageName;
+    ///
+    /// assert!(!StorageName::from_static("notes").is_machine_local());
+    /// assert!(StorageName::machine_local("notes").is_machine_local());
+    /// assert_ne!(StorageName::from_static("notes"), StorageName::machine_local("notes"));
+    /// ```
+    #[must_use]
+    pub const fn is_machine_local(&self) -> bool {
+        matches!(self.scope, Scope::MachineLocal)
+    }
+
     const fn checked(name: &'static str, scope: Scope) -> Self {
         if let Err(reason) = validate(name.as_bytes()) {
             panic!("{}", reason);
