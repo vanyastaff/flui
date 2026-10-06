@@ -229,6 +229,9 @@ pub struct PresentationState {
     pub(super) closing_requested: Cell<bool>,
     lifecycle: Cell<PresentationLifecycle>,
     close_mode: Cell<flui_interaction::__runtime::CloseMode>,
+    /// Dispatch captures a realm-wide withdrawal took before this
+    /// presentation's own close, which retires them.
+    withdrawn_dispatch: RefCell<Option<flui_interaction::__runtime::DispatchCustody>>,
     pipeline: PipelineCell,
     /// This presentation's liveness, as a token others may watch weakly.
     ///
@@ -692,6 +695,7 @@ impl PresentationState {
             closing_requested: Cell::new(false),
             lifecycle: Cell::new(PresentationLifecycle::Created),
             close_mode: Cell::new(flui_interaction::__runtime::CloseMode::Ordinary),
+            withdrawn_dispatch: RefCell::new(None),
             pipeline,
             alive: RefCell::new(Some(alive)),
             window: Arc::downgrade(&window),
@@ -771,6 +775,7 @@ impl PresentationState {
             closing_requested: Cell::new(false),
             lifecycle: Cell::new(PresentationLifecycle::Created),
             close_mode: Cell::new(flui_interaction::__runtime::CloseMode::Ordinary),
+            withdrawn_dispatch: RefCell::new(None),
             pipeline,
             alive: RefCell::new(Some(alive)),
             window: Arc::downgrade(&window),
@@ -1531,9 +1536,12 @@ impl PresentationState {
         // dispatch target's destructor may hold saved handles, and must find
         // the graph, keys, focus and text input already closed.
         let mode = failure.mode();
-        let dispatch = failure
-            .invoke_with(|| self.withdraw_interaction(lane, mode))
-            .flatten();
+        let withdrawn = self.withdrawn_dispatch.borrow_mut().take();
+        let dispatch = withdrawn.or_else(|| {
+            failure
+                .invoke_with(|| self.withdraw_interaction(lane, mode))
+                .flatten()
+        });
         self.alive.borrow_mut().take();
         self.held_pointer_input.borrow_mut().clear();
         // Owner authority is withdrawn before any final user notification.
@@ -1552,8 +1560,6 @@ impl PresentationState {
         let mode = failure.mode();
         failure.invoke(|| source.finish_close_with_mode(mode));
         let mode = failure.mode();
-        failure.invoke(|| close_gestures(&self.gestures, mode));
-        let mode = failure.mode();
         failure.invoke(|| close_mouse_tracker(self.gestures.mouse_tracker(), mode));
         failure.retire(announce);
         failure.retire(event);
@@ -1562,6 +1568,11 @@ impl PresentationState {
         failure.invoke(|| close_focus(&self.focus, mode));
         let mode = failure.mode();
         failure.invoke(|| close_text_input(&self.text_input, mode));
+        // Gesture cancellation runs recognizer callbacks, so it follows every
+        // withdrawal above: a rejected recognizer finds the presentation's
+        // graph, keys, agent, focus and text input already closed.
+        let mode = failure.mode();
+        failure.invoke(|| close_gestures(&self.gestures, mode));
         if let Some(dispatch) = dispatch {
             let mode = failure.mode();
             failure.invoke(|| flui_interaction::__runtime::retire_dispatch(dispatch, mode));
@@ -1605,6 +1616,40 @@ impl PresentationState {
 }
 
 impl PresentationState {
+    /// Withdraw this presentation's authority without running user code, as
+    /// a realm closing several presentations does for every one of them
+    /// before any closes: dispatch targets, liveness, held input, the graph,
+    /// rebuild and key authority, agent ports, focus and text input become
+    /// unavailable, so a sibling's callbacks cannot drive this presentation
+    /// (ADR-0123). The withdrawn key owners are returned for the caller to
+    /// retire; the presentation's own close later retires everything else.
+    pub(crate) fn withdraw_for_realm_close(
+        &self,
+        lane: &flui_interaction::InteractionLane,
+    ) -> Vec<Box<dyn flui_foundation::ViewKey>> {
+        use flui_view::__runtime::BindingRuntime as _;
+        if matches!(
+            self.lifecycle.get(),
+            PresentationLifecycle::Closing | PresentationLifecycle::Closed
+        ) {
+            return Vec::new();
+        }
+        if self.withdrawn_dispatch.borrow().is_none()
+            && let Some(custody) = self.withdraw_interaction(Some(lane), self.close_mode.get())
+        {
+            self.withdrawn_dispatch.replace(Some(custody));
+        }
+        self.alive.borrow_mut().take();
+        self.held_pointer_input.borrow_mut().clear();
+        let keys = self.widgets.withdraw_owner_authority();
+        if let Some(agent) = &*self.dev_agent.borrow() {
+            agent.withdraw();
+        }
+        flui_interaction::__runtime::withdraw_focus(&self.focus);
+        flui_interaction::__runtime::withdraw_text_input(&self.text_input);
+        keys
+    }
+
     /// Withdraws the root owner and closes every input owner in preserving
     /// mode, so the values they still hold are retained rather than dropped
     /// (ADR-0123, ADR-0127).

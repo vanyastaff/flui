@@ -68,11 +68,17 @@ pub struct FocusManager {
     primary_focus: RefCell<Option<Rc<FocusNode>>>,
     listeners: RefCell<Vec<(ListenerId, FocusChangeCallback)>>,
     next_listener_id: Cell<usize>,
-    global_key_handlers: RefCell<Vec<KeyEventCallback>>,
+    /// Each handler under the registration number it was added with, so a
+    /// dispatch snapshot names registrations rather than allocations.
+    global_key_handlers: RefCell<Vec<(u64, KeyEventCallback)>>,
+    next_global_key_handler: Cell<u64>,
     /// Nodes that asked to start a key's walk while nothing is focused,
     /// oldest first ([`Self::claim_unfocused_keys`]).
     unfocused_key_claims: RefCell<Vec<Weak<FocusNode>>>,
     closed: Cell<bool>,
+    /// Whether [`Self::close_with_mode`] ran; [`Self::withdraw`] only sets
+    /// `closed`, so a later close still retires what the manager holds.
+    retired: Cell<bool>,
     close_mode: CloseTombstone,
     /// Depth of the commit+notify transaction currently publishing a focus
     /// transition. Zero between transitions; `>0` while node or manager
@@ -158,8 +164,10 @@ impl FocusManager {
             listeners: RefCell::new(Vec::new()),
             next_listener_id: Cell::new(1),
             global_key_handlers: RefCell::new(Vec::new()),
+            next_global_key_handler: Cell::new(0),
             unfocused_key_claims: RefCell::new(Vec::new()),
             closed: Cell::new(false),
+            retired: Cell::new(false),
             close_mode: CloseTombstone::default(),
             notification_depth: Cell::new(0),
             pending_focus_transitions: RefCell::new(VecDeque::new()),
@@ -613,7 +621,15 @@ impl FocusManager {
             failure.retire(handler);
             failure.finish();
         } else {
-            self.global_key_handlers.borrow_mut().push(handler);
+            let registration = self.next_global_key_handler.get();
+            self.next_global_key_handler.set(
+                registration
+                    .checked_add(1)
+                    .expect("BUG: global key handler registrations exhausted"),
+            );
+            self.global_key_handlers
+                .borrow_mut()
+                .push((registration, handler));
         }
     }
 
@@ -621,7 +637,7 @@ impl FocusManager {
     pub fn clear_global_key_handlers(&self) {
         let handlers = std::mem::take(&mut *self.global_key_handlers.borrow_mut());
         let mut failure = FocusClosePanic::for_rejection(self.close_mode.mode());
-        for handler in handlers {
+        for (_, handler) in handlers {
             failure.retire(handler);
         }
         failure.finish();
@@ -629,35 +645,35 @@ impl FocusManager {
 
     /// Dispatch a key event through global handlers, then focused leaf to root.
     ///
-    /// Global handlers are snapshotted by identity. A handler removed before
-    /// its turn is skipped even if a caller still retains its `Rc`; a later
-    /// snapshot identity that remains registered can still handle the key.
+    /// Global handlers are snapshotted by registration. A handler removed
+    /// before its turn is skipped even if a caller still retains its `Rc`, and
+    /// so is one registered during this dispatch, even when it is the same
+    /// `Rc` re-added; a snapshot registration that remains registered can
+    /// still handle the key.
     pub fn dispatch_key_event(&self, event: &KeyEvent) -> bool {
         if self.closed.get() {
             return false;
         }
 
-        let global_handlers: Vec<_> = self
+        let registrations: Vec<u64> = self
             .global_key_handlers
             .borrow()
             .iter()
-            .map(Rc::downgrade)
+            .map(|(registration, _)| *registration)
             .collect();
-        for handler in global_handlers {
+        for registration in registrations {
             if self.closed.get() {
                 return false;
             }
-            let Some(handler) = handler.upgrade() else {
-                continue;
-            };
-            let registered = self
+            let handler = self
                 .global_key_handlers
                 .borrow()
                 .iter()
-                .any(|live| Rc::ptr_eq(live, &handler));
-            if !registered {
+                .find(|(live, _)| *live == registration)
+                .map(|(_, handler)| Rc::clone(handler));
+            let Some(handler) = handler else {
                 continue;
-            }
+            };
             let mut failure = FocusClosePanic::for_rejection(self.close_mode.mode());
             let handled = failure.invoke(|| handler(event)).unwrap_or(false);
             failure.retire(handler);
@@ -776,9 +792,10 @@ impl FocusManager {
 
     pub(crate) fn close_with_mode(&self, mode: CloseMode) {
         let mut failure = FocusClosePanic::for_close(mode, self.close_mode.clone());
-        if self.closed.replace(true) {
+        if self.retired.replace(true) {
             return;
         }
+        self.closed.set(true);
         let pending = std::mem::take(&mut *self.pending_focus_transitions.borrow_mut());
         let previous = self.primary_focus.borrow_mut().take();
         let mut notified = previous.as_ref().map_or_else(Vec::new, |node| {
@@ -786,7 +803,14 @@ impl FocusManager {
                 .filter(|ancestor| ancestor.parent().is_some())
                 .collect()
         });
-        notified.extend(previous.iter().cloned());
+        // A parentless node (the root scope parked on itself) is never
+        // notified, as `FocusNode::notify_listeners` never notifies it.
+        notified.extend(
+            previous
+                .iter()
+                .filter(|node| node.parent().is_some())
+                .cloned(),
+        );
         let retired =
             FocusNode::close_owned_tree(self.root_scope.as_focus_node(), self.close_mode.clone());
         let global_handlers = std::mem::take(&mut *self.global_key_handlers.borrow_mut());
@@ -813,7 +837,7 @@ impl FocusManager {
         for (_, listener) in listeners {
             failure.retire(listener);
         }
-        for handler in global_handlers {
+        for (_, handler) in global_handlers {
             failure.retire(handler);
         }
         for node in retired {
@@ -824,6 +848,12 @@ impl FocusManager {
         }
         failure.retire(previous);
         failure.finish();
+    }
+
+    /// Refuse every later request without running user code; a later
+    /// [`Self::close_with_mode`] still notifies and retires (ADR-0123).
+    pub(crate) fn withdraw(&self) {
+        self.closed.set(true);
     }
 
     /// Whether deterministic teardown has run.
@@ -1032,6 +1062,10 @@ mod tests {
             (
                 "global_key_dispatch_skips_removed_live_handlers_and_continues",
                 global_key_dispatch_skips_removed_live_handlers_and_continues,
+            ),
+            (
+                "close_does_not_notify_a_root_parked_on_itself",
+                close_does_not_notify_a_root_parked_on_itself,
             ),
             (
                 "close_during_active_unwind_preserves_outer_failure",
@@ -1424,6 +1458,23 @@ mod tests {
         assert_eq!(manager.listener_count(), 0);
     }
 
+    fn close_does_not_notify_a_root_parked_on_itself() {
+        let manager = FocusManager::new();
+        let root = Rc::clone(manager.root_scope().as_focus_node());
+        root.request_focus();
+        assert!(
+            manager
+                .primary_focus()
+                .is_some_and(|focused| Rc::ptr_eq(&focused, &root)),
+            "the root scope parks primary focus on itself"
+        );
+        let notified = Rc::new(Cell::new(false));
+        let observed = Rc::clone(&notified);
+        root.add_listener(Rc::new(move || observed.set(true)));
+        manager.close();
+        assert!(!notified.get(), "a parentless root is never notified");
+    }
+
     fn global_key_dispatch_skips_removed_live_handlers_and_continues() {
         let manager = FocusManager::new();
         let calls = Rc::new(RefCell::new(Vec::new()));
@@ -1444,19 +1495,17 @@ mod tests {
             recorded.borrow_mut().push("removing handler");
             let owner = owner.upgrade().expect("the caller retains the manager");
             owner.clear_global_key_handlers();
-            // Keep only the later snapshot identity registered. The removed
-            // callback still has an independent consumer-owned Rc below.
+            // Re-adding the same `Rc` is a new registration, which this
+            // dispatch's snapshot does not name. The removed callback still
+            // has an independent consumer-owned Rc below.
             owner.add_global_key_handler(Rc::clone(&surviving));
             false
         }));
         manager.add_global_key_handler(Rc::clone(&kept_removed));
         manager.add_global_key_handler(later);
 
-        assert!(manager.dispatch_key_event(&key_event()));
-        assert_eq!(
-            *calls.borrow(),
-            ["removing handler", "later healthy handler"]
-        );
+        assert!(!manager.dispatch_key_event(&key_event()));
+        assert_eq!(*calls.borrow(), ["removing handler"]);
         calls.borrow_mut().clear();
         assert!(manager.dispatch_key_event(&key_event()));
         assert_eq!(*calls.borrow(), ["later healthy handler"]);

@@ -182,6 +182,9 @@ mod sealed {
 pub trait BindingRuntime: sealed::Sealed {
     /// Withdraw graph, rebuild and key authority without invoking widget code.
     fn withdraw_root_owner(&self, preserving: bool);
+    /// Withdraw graph, rebuild and key authority without dropping anything:
+    /// the withdrawn key owners are returned for the caller to retire.
+    fn withdraw_owner_authority(&self) -> Vec<Box<dyn flui_foundation::ViewKey>>;
     /// Run one owner-runtime entry with this binding's `GlobalKey` registry
     /// active on the current thread.
     ///
@@ -216,6 +219,9 @@ pub trait BindingRuntime: sealed::Sealed {
 impl BindingRuntime for WidgetsBinding {
     fn withdraw_root_owner(&self, preserving: bool) {
         WidgetsBinding::withdraw_root_owner(self, preserving);
+    }
+    fn withdraw_owner_authority(&self) -> Vec<Box<dyn flui_foundation::ViewKey>> {
+        WidgetsBinding::withdraw_owner_authority(self)
     }
     fn with_global_key_registry<R>(&self, f: impl FnOnce() -> R) -> R {
         crate::key::registry::with_active_registry(&self.global_key_registry, f)
