@@ -18,6 +18,9 @@ mod simulation;
 #[path = "contracts/proxy.rs"]
 mod proxy;
 
+#[path = "contracts/curve.rs"]
+mod curve;
+
 #[path = "contracts/tween.rs"]
 mod tween;
 

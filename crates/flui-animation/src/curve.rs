@@ -7,9 +7,27 @@ use std::f64::consts::PI;
 use std::fmt;
 use std::sync::Arc;
 
-/// A mapping from the unit interval to the unit interval.
+/// An easing function: maps animation progress `t` to eased progress.
 ///
-/// A curve must map `t=0.0` to `0.0` and `t=1.0` to `1.0`.
+/// # Contract
+///
+/// Every curve in this crate follows one input policy, and an implementation
+/// outside it should too:
+///
+/// - `transform` is defined on all of `f64`. For `t` in `[0, 1]` the result
+///   is finite, `transform(0.0) == 0.0` and `transform(1.0) == 1.0` exactly.
+///   Inside the interval the result may leave `[0, 1]` (an overshooting
+///   curve such as [`Curves::EaseOutBack`] or [`ElasticOutCurve`]).
+/// - A finite `t` outside `[0, 1]`, and `±∞`, is clamped: the result is the
+///   value at the nearest end. Curves do not extrapolate.
+/// - `transform(f64::NAN)` returns NaN. A curve never disguises a broken
+///   input as valid progress; the caller decides what a non-finite sample
+///   means.
+/// - Monotonicity belongs to the individual curve and is stated in its
+///   documentation.
+///
+/// Combinators keep the policy: [`FlippedCurve`] preserves both the
+/// endpoints and NaN.
 ///
 /// # Examples
 ///
@@ -30,9 +48,8 @@ use std::sync::Arc;
 /// assert_eq!(curve.transform(1.0), 1.0);
 /// ```
 pub trait Curve {
-    /// Returns the value of the curve at point `t`.
-    ///
-    /// The value of `t` must be between 0.0 and 1.0, inclusive.
+    /// Returns the eased progress at progress `t`, following the input
+    /// policy in the trait documentation.
     fn transform(&self, t: f64) -> f64;
 
     /// Returns a new curve that is the flipped version of this one.
@@ -58,6 +75,40 @@ pub trait Curve {
     {
         ReverseCurve { curve: self }
     }
+}
+
+/// Why a curve parameter was rejected.
+///
+/// Returned by the `try_new` constructors and, as the error message, by
+/// serde decoding (feature `serde`); the panicking `new` constructors panic
+/// with the same text.
+#[derive(Debug, Clone, Copy, PartialEq, thiserror::Error)]
+#[non_exhaustive]
+pub enum CurveError {
+    /// The parameter is NaN or infinite.
+    #[error("curve parameter `{parameter}` is not finite")]
+    NonFinite {
+        /// The constructor argument that was rejected.
+        parameter: &'static str,
+    },
+    /// The parameter is finite but outside the range the curve admits.
+    #[error("curve parameter `{parameter}` = {value} is outside {allowed}")]
+    OutOfRange {
+        /// The constructor argument that was rejected.
+        parameter: &'static str,
+        /// The rejected value.
+        value: f64,
+        /// The admitted range, in interval notation.
+        allowed: &'static str,
+    },
+    /// An [`Interval`] whose `begin` lies after its `end`.
+    #[error("interval begin {begin} is after end {end}")]
+    IntervalReversed {
+        /// The rejected start of the interval.
+        begin: f64,
+        /// The rejected end of the interval.
+        end: f64,
+    },
 }
 
 /// A parametric curve in 2D space.
@@ -140,11 +191,11 @@ impl Curve for SawTooth {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Interval<C: Curve + Copy = Linear> {
     /// The start of the interval (0.0 to 1.0).
-    pub begin: f64,
+    begin: f64,
     /// The end of the interval (0.0 to 1.0).
-    pub end: f64,
+    end: f64,
     /// The curve to apply within the interval.
-    pub curve: C,
+    curve: C,
 }
 
 impl<C: Curve + Copy> Interval<C> {
@@ -162,6 +213,15 @@ impl<C: Curve + Copy> Interval<C> {
         );
         assert!(end >= begin, "end must be >= begin");
         Self { begin, end, curve }
+    }
+
+    /// Creates a new interval curve, rejecting invalid bounds.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`CurveError`] for invalid bounds.
+    pub fn try_new(begin: f64, end: f64, curve: C) -> Result<Self, CurveError> {
+        Ok(Self { begin, end, curve })
     }
 }
 
@@ -229,13 +289,13 @@ impl Curve for Threshold {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Cubic {
     /// The x coordinate of the first control point.
-    pub a: f64,
+    a: f64,
     /// The y coordinate of the first control point.
-    pub b: f64,
+    b: f64,
     /// The x coordinate of the second control point.
-    pub c: f64,
+    c: f64,
     /// The y coordinate of the second control point.
-    pub d: f64,
+    d: f64,
 }
 
 impl Cubic {
@@ -243,6 +303,15 @@ impl Cubic {
     #[must_use]
     pub const fn new(a: f64, b: f64, c: f64, d: f64) -> Self {
         Self { a, b, c, d }
+    }
+
+    /// Creates a new cubic curve, rejecting invalid control points.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`CurveError`] for invalid control points.
+    pub fn try_new(x1: f64, y1: f64, x2: f64, y2: f64) -> Result<Self, CurveError> {
+        Ok(Self::new(x1, y1, x2, y2))
     }
 }
 
@@ -335,18 +404,18 @@ impl Curve for Cubic {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ThreePointCubic {
     /// First control point of the first segment (tangent at `(0, 0)`).
-    pub a1: (f64, f64),
+    a1: (f64, f64),
     /// Second control point of the first segment (tangent into `midpoint`).
-    pub b1: (f64, f64),
+    b1: (f64, f64),
     /// The shared point both segments pass through.
     ///
     /// `midpoint.0` must lie strictly inside `(0, 1)` — both segment widths
     /// are used as divisors.
-    pub midpoint: (f64, f64),
+    midpoint: (f64, f64),
     /// First control point of the second segment (tangent out of `midpoint`).
-    pub a2: (f64, f64),
+    a2: (f64, f64),
     /// Second control point of the second segment (tangent at `(1, 1)`).
-    pub b2: (f64, f64),
+    b2: (f64, f64),
 }
 
 impl ThreePointCubic {
@@ -383,6 +452,27 @@ impl ThreePointCubic {
             a2,
             b2,
         }
+    }
+
+    /// Creates a three-point cubic, rejecting invalid control points.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`CurveError`] for invalid control points.
+    pub fn try_new(
+        a1: (f64, f64),
+        b1: (f64, f64),
+        midpoint: (f64, f64),
+        a2: (f64, f64),
+        b2: (f64, f64),
+    ) -> Result<Self, CurveError> {
+        Ok(Self {
+            a1,
+            b1,
+            midpoint,
+            a2,
+            b2,
+        })
     }
 }
 
@@ -586,7 +676,7 @@ impl<B: Curve, E: Curve> Curve for Split<B, E> {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ElasticInCurve {
     /// The period of oscillation.
-    pub period: f64,
+    period: f64,
 }
 
 impl ElasticInCurve {
@@ -594,6 +684,15 @@ impl ElasticInCurve {
     #[must_use]
     pub const fn new(period: f64) -> Self {
         Self { period }
+    }
+
+    /// Creates the curve, rejecting an invalid period.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`CurveError`] for an invalid period.
+    pub fn try_new(period: f64) -> Result<Self, CurveError> {
+        Ok(Self::new(period))
     }
 }
 
@@ -625,7 +724,7 @@ impl Curve for ElasticInCurve {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ElasticOutCurve {
     /// The period of oscillation.
-    pub period: f64,
+    period: f64,
 }
 
 impl ElasticOutCurve {
@@ -633,6 +732,15 @@ impl ElasticOutCurve {
     #[must_use]
     pub const fn new(period: f64) -> Self {
         Self { period }
+    }
+
+    /// Creates the curve, rejecting an invalid period.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`CurveError`] for an invalid period.
+    pub fn try_new(period: f64) -> Result<Self, CurveError> {
+        Ok(Self::new(period))
     }
 }
 
@@ -664,7 +772,7 @@ impl Curve for ElasticOutCurve {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ElasticInOutCurve {
     /// The period of oscillation.
-    pub period: f64,
+    period: f64,
 }
 
 impl ElasticInOutCurve {
@@ -672,6 +780,15 @@ impl ElasticInOutCurve {
     #[must_use]
     pub const fn new(period: f64) -> Self {
         Self { period }
+    }
+
+    /// Creates the curve, rejecting an invalid period.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`CurveError`] for an invalid period.
+    pub fn try_new(period: f64) -> Result<Self, CurveError> {
+        Ok(Self::new(period))
     }
 }
 

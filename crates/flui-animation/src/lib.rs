@@ -146,7 +146,7 @@ pub use vsync::{Vsync, VsyncRegistration, VsyncRegistrationError};
 // Re-exports from data type modules
 pub use curve::{
     ArcCurve, BounceInCurve, BounceInOutCurve, BounceOutCurve, CatmullRomCurve, CatmullRomSpline,
-    Cubic, Curve, Curve2D, Curve2DSample, Curves, DecelerateCurve, ElasticInCurve,
+    Cubic, Curve, Curve2D, Curve2DSample, CurveError, Curves, DecelerateCurve, ElasticInCurve,
     ElasticInOutCurve, ElasticOutCurve, FlippedCurve, Interval, Linear, ParametricCurve,
     ReverseCurve, SawTooth, Split, ThreePointCubic, Threshold,
 };
