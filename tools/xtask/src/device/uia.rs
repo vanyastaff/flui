@@ -5,9 +5,13 @@ use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
-use windows::Win32::Foundation::RECT;
+use windows::Win32::Foundation::{HANDLE, RECT};
 use windows::Win32::System::Com::{
     CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx, CoUninitialize,
+};
+use windows::Win32::System::StationsAndDesktops::{
+    CloseDesktop, DESKTOP_CONTROL_FLAGS, DESKTOP_READOBJECTS, GetUserObjectInformationW,
+    OpenInputDesktop, UOI_NAME,
 };
 use windows::Win32::System::Variant::VARIANT;
 use windows::Win32::UI::Accessibility::{
@@ -64,7 +68,12 @@ impl Session {
         Self::launch(probe, Some(run_for))
     }
 
+    /// A locked, disconnected or service desktop is `CannotVerify`, found
+    /// before the probe launches: no window of it could ever be read.
     fn launch(probe: &Path, run_for: Option<Duration>) -> Result<Self, Start> {
+        input_desktop_name()
+            .and_then(|name| interactive_desktop(&name))
+            .map_err(Start::CannotVerify)?;
         let com = Com::init().map_err(|error| {
             Start::CannotVerify(format!("COM could not be initialised: {error}"))
         })?;
@@ -303,6 +312,45 @@ impl Drop for Com {
     }
 }
 
+/// The name of this session's input desktop, or why it cannot be opened: a
+/// service session has none, and a locked workstation refuses it or
+/// switches input to `Winlogon`.
+fn input_desktop_name() -> Result<String, String> {
+    // SAFETY: plain Win32 call; the handle it returns is closed below.
+    let desktop = unsafe { OpenInputDesktop(DESKTOP_CONTROL_FLAGS(0), false, DESKTOP_READOBJECTS) }
+        .map_err(|error| format!("no input desktop is available (locked or headless?): {error}"))?;
+    let mut name = [0_u16; 64];
+    let mut needed = 0;
+    // SAFETY: `desktop` was opened above; the buffer pointer and its byte
+    // length describe the same live array.
+    let named = unsafe {
+        GetUserObjectInformationW(
+            HANDLE(desktop.0),
+            UOI_NAME,
+            Some(name.as_mut_ptr().cast()),
+            u32::try_from(std::mem::size_of_val(&name)).expect("BUG: 128 bytes fit in u32"),
+            Some(&raw mut needed),
+        )
+    };
+    // SAFETY: `desktop` was opened above and is not used after this.
+    let _ = unsafe { CloseDesktop(desktop) };
+    named.map_err(|error| format!("the input desktop's name is unreadable: {error}"))?;
+    let len = name.iter().position(|&c| c == 0).unwrap_or(name.len());
+    Ok(String::from_utf16_lossy(&name[..len]))
+}
+
+/// `Ok` for the interactive `Default` desktop, where a probe's window and
+/// its UIA tree appear; otherwise why the check cannot take its measurement.
+fn interactive_desktop(name: &str) -> Result<(), String> {
+    if name.eq_ignore_ascii_case("Default") {
+        Ok(())
+    } else {
+        Err(format!(
+            "the input desktop is {name:?}, not the interactive desktop (workstation locked?)"
+        ))
+    }
+}
+
 /// The probe process, killed when dropped so no window outlives the check.
 struct Probe(Child);
 
@@ -311,5 +359,29 @@ impl Drop for Probe {
         // The probe may already have quit on its own timer.
         let _ = self.0.kill();
         let _ = self.0.wait();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Only the interactive desktop admits a measurement; a locked
+    /// workstation's `Winlogon` desktop or a screen saver's is CANNOT VERIFY.
+    #[test]
+    fn only_the_interactive_desktop_admits_a_measurement() {
+        let rows = [
+            ("Default", true),
+            ("default", true),
+            ("Winlogon", false),
+            ("Screen-saver", false),
+            ("", false),
+        ];
+        let failed: Vec<_> = rows
+            .iter()
+            .filter(|&&(name, admitted)| interactive_desktop(name).is_ok() != admitted)
+            .map(|&(name, _)| name)
+            .collect();
+        assert!(failed.is_empty(), "desktop rows failed: {failed:?}");
     }
 }

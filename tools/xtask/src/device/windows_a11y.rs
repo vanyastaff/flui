@@ -19,7 +19,8 @@
 //! are synthetic semantics fixtures, not a widget catalog or Narrator session.
 //!
 //! Exit 0 on PASS, 1 on FAIL (with the tree dumped), 2 when this host cannot
-//! take the measurement (UI Automation could not be instantiated).
+//! take the measurement (no interactive input desktop, or UI Automation could
+//! not be instantiated).
 
 use std::path::Path;
 use std::time::{Duration, Instant};
