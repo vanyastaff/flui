@@ -221,7 +221,18 @@ impl TextFormFieldCore {
         // composition.
         .value_binding(
             Rc::new(move |value: &String| {
-                if sink.committed_text() != *value {
+                if sink.committed_text() == *value {
+                    return;
+                }
+                if sink.text() == *value {
+                    // The text shown is already the value, but a composition
+                    // stands for other text (a reconversion): ending it makes
+                    // the shown text committed. `set_text` would see an equal
+                    // buffer and leave the composition, and it must stay a
+                    // no-op there for an owner that re-sets the same text on
+                    // every build while the user composes.
+                    sink.end_composition();
+                } else {
                     sink.set_text(value.clone());
                 }
             }),
