@@ -396,6 +396,114 @@ fn observer_cleared_then_panicking() {
     observer_panicking(true);
 }
 
+/// Counts text changes; on the first it edits the field again, and on a
+/// later one it panics.
+struct EditsThenPanics {
+    controller: TextEditingController,
+    heard: Cell<usize>,
+}
+
+impl TextStoreObserver for EditsThenPanics {
+    fn text_changed(&self, _: TextChange) {
+        self.heard.set(self.heard.get() + 1);
+        if self.heard.get() == 1 {
+            self.controller.set_text("observer edit");
+        } else {
+            panic!("observer failure after the session");
+        }
+    }
+    fn selection_changed(&self) {}
+    fn layout_changed(&self) {}
+    fn status_changed(&self) {}
+}
+
+/// `on_changed` edits and panics, so settle parks its failure; the observer
+/// hears that edit and edits again, and the flush after the request's
+/// grants hears the second edit and panics. The parked failure came first,
+/// so it is the one the request raises.
+fn observer_panicking_after_a_parked_failure() {
+    let controller = TextEditingController::new();
+    let node = FocusNode::with_debug_label("observer after a parked failure");
+    let app = controller.clone();
+    let mut harness = focused(
+        EditableText::new(controller.clone(), Rc::clone(&node)).on_changed(move |_cx, text| {
+            if text == "a" {
+                app.set_text("on_changed edit");
+                panic!("on_changed failure");
+            }
+        }),
+        &node,
+    );
+    let field = field(&harness);
+    field.set_observer(Some(Rc::new(EditsThenPanics {
+        controller: controller.clone(),
+        heard: Cell::new(0),
+    })));
+    assert_eq!(
+        raised(|| {
+            let _ = edit(&*field, "a");
+        })
+        .as_deref(),
+        Some("on_changed failure"),
+        "the failure parked by the grant's settle came first"
+    );
+    field.set_observer(None);
+    the_field_keeps_working(&mut harness, &field);
+    assert_eq!(controller.text(), "observer editz");
+}
+
+/// A failure parked in a presentation's gate whose payload panics when
+/// destroyed, and the presentation and store gone before any turn took it.
+fn gate_dropped_with_a_parked_failure() {
+    let gate = CommitGate::new();
+    let store = InMemoryTextStore::new("");
+    store.set_commit_gate(gate.clone());
+    store.set_owner_listener(Some(Rc::new(|| {
+        std::panic::panic_any(PanicsOnDrop("parked payload destroyed"));
+    })));
+    assert_eq!(
+        edit(&*store, "a"),
+        Ok(LockOutcome::Granted),
+        "the grant stands"
+    );
+    store.set_owner_listener(None);
+    assert_eq!(
+        raised(move || {
+            drop(gate);
+            drop(store);
+        }),
+        None,
+        "an untaken payload is retained, not destroyed, with its gate"
+    );
+    the_owner_keeps_working(&owner());
+}
+
+/// A presentation closes with a failure a store parked for its next turn:
+/// the close is that turn, and reports it once its own work is done.
+fn close_with_a_parked_failure() {
+    let owner = owner();
+    let store = InMemoryTextStore::new("");
+    let _client = owner
+        .handle()
+        .attach(TextInputClient::new(store.clone()))
+        .expect("attach");
+    park_through(&store, "parked before the close");
+    assert_eq!(
+        raised(|| owner.close()).as_deref(),
+        Some("parked before the close"),
+        "the close reports the failure that waited for it"
+    );
+    assert_eq!(
+        owner
+            .handle()
+            .attach(TextInputClient::new(InMemoryTextStore::new("")))
+            .err(),
+        Some(flui_interaction::TextInputError::Closed),
+        "the close completed"
+    );
+    the_owner_keeps_working(&self::owner());
+}
+
 // ----------------------------------------------------------------------------
 // TextInputOwner: the session-start callback and the dispatched client
 // ----------------------------------------------------------------------------
@@ -556,8 +664,9 @@ fn dispatch_without_a_client_reports_a_parked_failure() {
         .handle()
         .attach(TextInputClient::new(store.clone()))
         .expect("attach");
-    park_through(&store, "parked owner failure");
     let _detached = owner.handle().detach(token).expect("detach");
+    // The store still follows the presentation's gate.
+    park_through(&store, "parked owner failure");
     assert_eq!(
         raised(|| owner.dispatch(&ImeEvent::Commit("b".into()))).as_deref(),
         Some("parked owner failure"),
@@ -810,16 +919,58 @@ fn host_parking_then_panicking() {
         assert_eq!(edit(&**store, "a"), Ok(LockOutcome::Granted));
     }));
     host.panics.borrow_mut().push("focus");
+    let mut attached = None;
+    assert_eq!(
+        raised(|| attached = Some(owner.handle().attach(TextInputClient::new(store.clone())))),
+        None,
+        "the client is active, so the attach returns its token"
+    );
+    let token = attached
+        .expect("the attach returned")
+        .expect("the token is the caller's");
+    assert!(owner.is_attached(token), "the client is active");
+    store.set_owner_listener(None);
+    assert_eq!(store.text(), "a", "the host's grant stands");
     assert_eq!(
         raised(|| {
-            let _ = owner.handle().attach(TextInputClient::new(store.clone()));
+            let _ = owner.run_deferred_grants();
         })
         .as_deref(),
         Some("parked by the host"),
-        "the failure parked inside the host call came before the call's own"
+        "the next turn reports the failure parked inside the host call, which came before the call's own"
     );
-    store.set_owner_listener(None);
-    assert_eq!(store.text(), "a", "the host's grant stands");
+    the_pull_owner_keeps_working(&owner, &log);
+}
+
+fn host_detach_after_a_parked_failure() {
+    let host = Rc::new(Host::default());
+    let log = Rc::clone(&host.log);
+    let owner = pull_owner(Rc::clone(&host));
+    let store = InMemoryTextStore::new("");
+    let token = owner
+        .handle()
+        .attach(TextInputClient::new(store.clone()))
+        .expect("attach");
+    park_through(&store, "parked owner failure");
+    // The host's unfocus call panics.
+    host.panics.borrow_mut().push("focus");
+    assert_eq!(
+        raised(|| {
+            let _ = owner.handle().detach(token);
+        })
+        .as_deref(),
+        Some("focus failure"),
+        "the detach raises its own failure"
+    );
+    assert!(!owner.is_attached(token), "the detach completed");
+    assert_eq!(
+        raised(|| {
+            let _ = owner.run_deferred_grants();
+        })
+        .as_deref(),
+        Some("parked owner failure"),
+        "the failure parked before the detach waited for the owner's next turn"
+    );
     the_pull_owner_keeps_working(&owner, &log);
 }
 
@@ -904,6 +1055,15 @@ fn host_closing_then_panicking_released_last() {
 
 const ROWS: &[(&str, fn())] = &[
     (
+        "gate: dropped with a parked failure",
+        gate_dropped_with_a_parked_failure,
+    ),
+    ("close: with a parked failure", close_with_a_parked_failure),
+    (
+        "observer: panicking after a parked failure",
+        observer_panicking_after_a_parked_failure,
+    ),
+    (
         "gate: a grant that moves the store",
         gate_a_grant_that_moves_the_store,
     ),
@@ -977,12 +1137,116 @@ const ROWS: &[(&str, fn())] = &[
     ),
     ("host: parking, then panicking", host_parking_then_panicking),
     (
+        "host: a detach after a parked failure",
+        host_detach_after_a_parked_failure,
+    ),
+    (
         "host: detaching, then panicking",
         host_detaching_then_panicking,
     ),
     (
         "host: closing, then panicking, released last",
         host_closing_then_panicking_released_last,
+    ),
+    (
+        "arbiter: a refused grant during an unwind",
+        arbiter_refusing_a_grant_during_an_unwind,
+    ),
+    (
+        "arbiter: an async grant behind a failing one",
+        arbiter_keeping_an_async_grant_behind_a_failing_one,
+    ),
+    (
+        "arbiter: a sync grant behind a failing one",
+        arbiter_retaining_a_sync_grant_behind_a_failing_one,
+    ),
+    (
+        "store: dropped during an unwind with a queued grant",
+        store_dropped_during_an_unwind_with_a_queued_grant,
+    ),
+    (
+        "store: a request whose flush fails",
+        store_refusing_a_grant_when_its_flush_fails,
+    ),
+    (
+        "in-memory settle: retiring after the listener failed",
+        in_memory_settle_retiring_after_the_listener_failed,
+    ),
+    (
+        "editable: a refused grant once unmounted",
+        editable_refusing_a_grant_once_unmounted,
+    ),
+    (
+        "editable: a grant unmounting its field",
+        editable_grant_unmounting_its_field,
+    ),
+    (
+        "editable: on_changed failure ahead of a nested one",
+        editable_on_changed_failure_ahead_of_a_nested_one,
+    ),
+    (
+        "editable settle: retiring after on_changed failed",
+        editable_settle_retiring_after_on_changed_failed,
+    ),
+    (
+        "editable: a key edit whose listener retirement fails",
+        editable_key_edit_whose_listener_retirement_fails,
+    ),
+    (
+        "editable: unmounting with a parked failure",
+        editable_unmount_with_a_parked_failure,
+    ),
+    (
+        "attach: a store failing to take the gate",
+        attach_with_a_store_failing_to_take_the_gate,
+    ),
+    (
+        "attach: replacing a client whose destruction parks",
+        attach_replacing_a_client_whose_destruction_parks,
+    ),
+    (
+        "dispatch: a diagnostic that panics",
+        dispatch_whose_diagnostic_panics,
+    ),
+    (
+        "editable: a key edit whose on_changed panics",
+        editable_key_edit_whose_on_changed_panics,
+    ),
+    (
+        "editable: a semantic edit whose on_changed panics",
+        editable_semantic_set_text_whose_on_changed_panics,
+    ),
+    (
+        "editable: a store outliving its field",
+        editable_store_outliving_its_field,
+    ),
+    (
+        "in-memory: a grant reading and editing its store",
+        in_memory_grant_reading_and_editing_its_store,
+    ),
+    (
+        "arbiter: a full queue refusing a grant during an unwind",
+        arbiter_refusing_a_grant_when_the_queue_is_full_during_an_unwind,
+    ),
+    (
+        "anchor: retiring stores whose drops panic",
+        anchor_retiring_stores_whose_drops_panic,
+    ),
+    (
+        "attach: rejected by a closed owner",
+        attach_rejected_by_a_closed_owner,
+    ),
+    (
+        "attach: a platform enable that panics",
+        attach_whose_platform_enable_panics,
+    ),
+    (
+        "attach and detach: diagnostics that panic",
+        attach_and_detach_whose_diagnostics_panic,
+    ),
+    (
+        "cursor area: a platform closing the owner and panicking",
+        cursor_area_whose_platform_closes_the_owner_and_panics,
     ),
 ];
 
@@ -1000,4 +1264,1036 @@ fn owner_code_is_contained_at_every_point() {
         "owner_code::owner_code_is_contained_at_every_point",
         &ROWS.iter().map(|(name, _)| *name).collect::<Vec<_>>(),
     );
+}
+
+// ----------------------------------------------------------------------------
+// Grants the arbiter refuses, queues or loses, and stores going away
+// ----------------------------------------------------------------------------
+
+/// Requests a synchronous grant of `store` when dropped; the grant holds a
+/// capture that panics when destroyed.
+struct RequestsWhenDropped(Rc<dyn TextStore>);
+
+impl Drop for RequestsWhenDropped {
+    fn drop(&mut self) {
+        let capture = PanicsOnDrop("refused grant capture destroyed");
+        let _ = self.0.request_lock(
+            LockGrant::read(move |_| {
+                let _keep_alive = &capture;
+            }),
+            LockTiming::Sync,
+        );
+    }
+}
+
+fn arbiter_refusing_a_grant_during_an_unwind() {
+    let gate = CommitGate::new();
+    let store = InMemoryTextStore::new("");
+    store.set_commit_gate(gate.clone());
+    gate.set_open(false);
+    let requester: Rc<dyn TextStore> = store.clone();
+    assert_eq!(
+        raised(move || {
+            let _requests = RequestsWhenDropped(requester);
+            panic!("unwinding");
+        })
+        .as_deref(),
+        Some("unwinding"),
+        "the refused grant is retained, not destroyed during the unwind"
+    );
+    gate.set_open(true);
+    assert_eq!(
+        edit(&*store, "a"),
+        Ok(LockOutcome::Granted),
+        "the next edit"
+    );
+}
+
+/// A grant queued behind a shut gate that panics when it runs.
+fn store_with_a_failing_queued_grant() -> (Rc<InMemoryTextStore>, CommitGate) {
+    let gate = CommitGate::new();
+    let store = InMemoryTextStore::new("");
+    store.set_commit_gate(gate.clone());
+    gate.set_open(false);
+    assert_eq!(
+        store.request_lock(
+            LockGrant::read_write(|_| panic!("queued grant failure")),
+            LockTiming::Async,
+        ),
+        Ok(LockOutcome::Deferred)
+    );
+    gate.set_open(true);
+    (store, gate)
+}
+
+fn arbiter_keeping_an_async_grant_behind_a_failing_one() {
+    let (store, _gate) = store_with_a_failing_queued_grant();
+    assert_eq!(
+        raised(|| {
+            let _ = store.request_lock(insert("b"), LockTiming::Async);
+        })
+        .as_deref(),
+        Some("queued grant failure")
+    );
+    assert_eq!(
+        store.run_deferred_grants(),
+        1,
+        "the accepted grant still runs"
+    );
+    assert_eq!(store.text(), "b");
+}
+
+fn arbiter_retaining_a_sync_grant_behind_a_failing_one() {
+    let (store, gate) = store_with_a_failing_queued_grant();
+    let capture = PanicsOnDrop("sync grant capture destroyed");
+    assert_eq!(
+        raised(|| {
+            let _ = store.request_lock(
+                LockGrant::read(move |_| {
+                    let _keep_alive = &capture;
+                }),
+                LockTiming::Sync,
+            );
+        })
+        .as_deref(),
+        Some("queued grant failure"),
+        "the grant that could not run is retained, not destroyed during the unwind"
+    );
+    assert_eq!(
+        edit(&*store, "b"),
+        Ok(LockOutcome::Granted),
+        "the next edit"
+    );
+    assert_eq!(store.text(), "b");
+    assert_eq!(parked(&gate), None);
+}
+
+fn store_dropped_during_an_unwind_with_a_queued_grant() {
+    let gate = CommitGate::new();
+    let store = InMemoryTextStore::new("");
+    store.set_commit_gate(gate.clone());
+    gate.set_open(false);
+    let capture = PanicsOnDrop("queued grant capture destroyed");
+    assert_eq!(
+        store.request_lock(
+            LockGrant::read(move |_| {
+                let _keep_alive = &capture;
+            }),
+            LockTiming::Async,
+        ),
+        Ok(LockOutcome::Deferred)
+    );
+    assert_eq!(
+        raised(move || {
+            let _store = store;
+            panic!("unwinding");
+        })
+        .as_deref(),
+        Some("unwinding"),
+        "the queued grant is retained, not destroyed during the unwind"
+    );
+    let next = InMemoryTextStore::new("");
+    assert_eq!(edit(&*next, "a"), Ok(LockOutcome::Granted));
+}
+
+/// An observer that panics on a text change.
+struct FailsOnText;
+
+impl TextStoreObserver for FailsOnText {
+    fn text_changed(&self, _: TextChange) {
+        panic!("observer failure");
+    }
+    fn selection_changed(&self) {}
+    fn layout_changed(&self) {}
+    fn status_changed(&self) {}
+}
+
+fn store_refusing_a_grant_when_its_flush_fails() {
+    let gate = CommitGate::new();
+    let store = InMemoryTextStore::new("ab");
+    store.set_commit_gate(gate.clone());
+    store.set_observer(Some(Rc::new(FailsOnText)));
+    gate.set_open(false);
+    store.app_replace(
+        flui_platform_api::text_store::Utf16Range::new(
+            flui_platform_api::text_store::Utf16Offset::new(0),
+            flui_platform_api::text_store::Utf16Offset::new(1),
+        )
+        .expect("ordered"),
+        "x",
+    );
+    gate.set_open(true);
+    let capture = PanicsOnDrop("refused grant capture destroyed");
+    assert_eq!(
+        raised(|| {
+            let _ = store.request_lock(
+                LockGrant::read(move |_| {
+                    let _keep_alive = &capture;
+                }),
+                LockTiming::Sync,
+            );
+        })
+        .as_deref(),
+        Some("observer failure"),
+        "the grant the request could not admit is retained"
+    );
+    store.set_observer(None);
+    assert_eq!(
+        edit(&*store, "b"),
+        Ok(LockOutcome::Granted),
+        "the next edit"
+    );
+    assert_eq!(store.text(), "xbb");
+    assert_eq!(parked(&gate), None);
+}
+
+/// Counts its drops.
+struct CountsDrops(Rc<Cell<usize>>);
+
+impl Drop for CountsDrops {
+    fn drop(&mut self) {
+        self.0.set(self.0.get() + 1);
+    }
+}
+
+/// An observer that clears itself on a status change, holding a capture.
+struct ClearsItself {
+    store: Weak<InMemoryTextStore>,
+    _capture: CountsDrops,
+}
+
+impl TextStoreObserver for ClearsItself {
+    fn text_changed(&self, _: TextChange) {}
+    fn selection_changed(&self) {}
+    fn layout_changed(&self) {}
+    fn status_changed(&self) {
+        if let Some(store) = self.store.upgrade() {
+            store.set_observer(None);
+        }
+    }
+}
+
+fn in_memory_settle_retiring_after_the_listener_failed() {
+    let gate = CommitGate::new();
+    let store = store_behind(&gate, || panic!("listener failure"));
+    let drops = Rc::new(Cell::new(0));
+    store.set_observer(Some(Rc::new(ClearsItself {
+        store: Rc::downgrade(&store),
+        _capture: CountsDrops(Rc::clone(&drops)),
+    })));
+    let protects = Rc::downgrade(&store);
+    assert_eq!(
+        store.request_lock(
+            LockGrant::read_write(move |session| {
+                session.insert_at_selection("a").expect("in range");
+                // Reported once the lock is released, inside the settle.
+                if let Some(store) = protects.upgrade() {
+                    store.set_protected(true);
+                }
+            }),
+            LockTiming::Sync,
+        ),
+        Ok(LockOutcome::Granted)
+    );
+    assert_eq!(parked(&gate).as_deref(), Some("listener failure"));
+    assert_eq!(
+        drops.get(),
+        0,
+        "after the settle failed, the observer it released is retained, not destroyed"
+    );
+    store.set_protected(false);
+    the_next_edit_runs_behind(&store, &gate);
+}
+
+// ----------------------------------------------------------------------------
+// EditableText: the session, its settle, a key edit, dispose
+// ----------------------------------------------------------------------------
+
+fn editable_refusing_a_grant_once_unmounted() {
+    let controller = TextEditingController::new();
+    let node = FocusNode::with_debug_label("unmounted field");
+    let mut harness = focused(EditableText::new(controller, Rc::clone(&node)), &node);
+    let field = field(&harness);
+    harness.swap_root(flui_widgets::SizedBox::new(1.0, 1.0));
+    assert_eq!(
+        raised(move || {
+            let _requests = RequestsWhenDropped(field);
+            panic!("unwinding");
+        })
+        .as_deref(),
+        Some("unwinding"),
+        "the refused grant is retained, not destroyed during the unwind"
+    );
+    assert_eq!(raised(|| harness.tick()), None, "the next frame");
+}
+
+fn editable_grant_unmounting_its_field() {
+    let controller = TextEditingController::new();
+    let node = FocusNode::with_debug_label("unmounting grant");
+    let harness = Rc::new(RefCell::new(focused(
+        EditableText::new(controller.clone(), Rc::clone(&node)),
+        &node,
+    )));
+    let field = field(&harness.borrow());
+    let nested = Rc::downgrade(&harness);
+    assert_eq!(
+        field.request_lock(
+            LockGrant::read_write(move |session| {
+                session.insert_at_selection("ime").expect("in range");
+                if let Some(harness) = nested.upgrade() {
+                    harness
+                        .borrow_mut()
+                        .swap_root(flui_widgets::SizedBox::new(1.0, 1.0));
+                }
+            }),
+            LockTiming::Sync,
+        ),
+        Ok(LockOutcome::Granted)
+    );
+    assert_eq!(
+        controller.text(),
+        "",
+        "a session the field was unmounted under is not written back"
+    );
+    assert_eq!(
+        edit(&*field, "z"),
+        Err(TextStoreError::Detached),
+        "the store stays detached"
+    );
+    assert_eq!(
+        raised(|| harness.borrow_mut().tick()),
+        None,
+        "the next frame"
+    );
+}
+
+thread_local! {
+    /// The field a controller listener reaches: a listener is `Send + Sync`
+    /// and the store is not.
+    static NESTING_FIELD: RefCell<Option<Rc<dyn TextStore>>> = const { RefCell::new(None) };
+}
+
+fn editable_on_changed_failure_ahead_of_a_nested_one() {
+    use flui_foundation::Listenable as _;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    let controller = TextEditingController::new();
+    let node = FocusNode::with_debug_label("nested failures");
+    let mut harness = focused(
+        EditableText::new(controller.clone(), Rc::clone(&node)).on_changed(|_cx, text| {
+            assert!(!matches!(text, "a" | "ab"), "on_changed failure on {text}");
+        }),
+        &node,
+    );
+    let field = field(&harness);
+    NESTING_FIELD.with(|slot| *slot.borrow_mut() = Some(Rc::clone(&field)));
+    let once = Arc::new(AtomicBool::new(false));
+    let listener = controller.add_listener(Arc::new(move || {
+        if once.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        let field = NESTING_FIELD.with(|slot| slot.borrow().clone());
+        if let Some(field) = field {
+            let _ = edit(&*field, "b");
+        }
+    }));
+    assert_eq!(edit(&*field, "a"), Ok(LockOutcome::Granted));
+    controller.remove_listener(listener);
+    NESTING_FIELD.with(|slot| slot.borrow_mut().take());
+    assert_eq!(controller.text(), "ab", "both sessions stand");
+    assert_eq!(
+        raised(|| harness.tick()).as_deref(),
+        Some("on_changed failure on a"),
+        "the outer session's failure came first"
+    );
+    the_field_keeps_working(&mut harness, &field);
+}
+
+fn editable_key_edit_whose_listener_retirement_fails() {
+    use flui_foundation::Listenable as _;
+    use std::sync::Mutex;
+
+    let controller = TextEditingController::new();
+    let node = FocusNode::with_debug_label("key edit");
+    let heard = Rc::new(RefCell::new(Vec::new()));
+    let sink = Rc::clone(&heard);
+    let mut harness = focused(
+        EditableText::new(controller.clone(), Rc::clone(&node))
+            .on_changed(move |_cx, text| sink.borrow_mut().push(text.to_owned())),
+        &node,
+    );
+    // A listener that removes itself; the notification's snapshot is then
+    // its last owner, and its capture panics when destroyed.
+    let own_id = Arc::new(Mutex::new(None));
+    let (remover, own) = (controller.clone(), Arc::clone(&own_id));
+    let capture = Arc::new(Mutex::new(Some(PanicsOnDropSend(
+        "listener capture destroyed",
+    ))));
+    let id = controller.add_listener(Arc::new(move || {
+        let _keep_alive = &capture;
+        let id = own.lock().expect("unpoisoned").take();
+        if let Some(id) = id {
+            remover.remove_listener(id);
+        }
+    }));
+    *own_id.lock().expect("unpoisoned") = Some(id);
+    let key = flui_interaction::testing::input::KeyEventBuilder::new(
+        flui_interaction::events::Code::KeyA,
+    )
+    .with_key(flui_interaction::events::Key::Character("a".to_owned()))
+    .with_state(flui_interaction::events::KeyState::Down)
+    .build();
+    let _ = raised(|| {
+        let _ = harness.focus_manager().dispatch_key_event(&key);
+    });
+    assert_eq!(controller.text(), "a");
+    assert_eq!(
+        *heard.borrow(),
+        ["a"],
+        "the owner hears of the edit though a listener's retirement failed"
+    );
+    let _ = raised(|| harness.tick());
+    assert_eq!(
+        edit(&*field(&harness), "b"),
+        Ok(LockOutcome::Granted),
+        "the next edit"
+    );
+}
+
+/// [`PanicsOnDrop`] for a `Send + Sync` controller listener.
+struct PanicsOnDropSend(&'static str);
+
+impl Drop for PanicsOnDropSend {
+    fn drop(&mut self) {
+        panic!("{}", self.0);
+    }
+}
+
+fn editable_unmount_with_a_parked_failure() {
+    let controller = TextEditingController::new();
+    let node = FocusNode::with_debug_label("dispose");
+    let mut harness = focused(
+        EditableText::new(controller.clone(), Rc::clone(&node)).on_changed(|_cx, text| {
+            assert!(text.is_empty(), "on_changed failure on {text}");
+        }),
+        &node,
+    );
+    let field = field(&harness);
+    assert_eq!(edit(&*field, "a"), Ok(LockOutcome::Granted));
+    // The failure waits in the presentation's gate for its next turn;
+    // detaching the client on unmount leaves it there, and the frame reports it.
+    assert_eq!(
+        raised(|| harness.swap_root(flui_widgets::SizedBox::new(1.0, 1.0))).as_deref(),
+        Some("on_changed failure on a")
+    );
+    assert_eq!(
+        edit(&*field, "z"),
+        Err(TextStoreError::Detached),
+        "dispose detached the store"
+    );
+    assert_eq!(
+        controller.text(),
+        "a",
+        "the disposed field's controller is untouched"
+    );
+    assert_eq!(raised(|| harness.tick()), None, "the next frame");
+}
+
+// ----------------------------------------------------------------------------
+// TextInputOwner: installing a gate, replacing a client, diagnostics
+// ----------------------------------------------------------------------------
+
+/// A store that panics when given a gate.
+struct RefusesGate(Rc<InMemoryTextStore>);
+
+impl TextStore for RefusesGate {
+    fn status(&self) -> TextStoreStatus {
+        self.0.status()
+    }
+    fn request_lock(
+        &self,
+        grant: LockGrant,
+        timing: LockTiming,
+    ) -> Result<LockOutcome, TextStoreError> {
+        self.0.request_lock(grant, timing)
+    }
+    fn run_deferred_grants(&self) -> usize {
+        self.0.run_deferred_grants()
+    }
+    fn set_commit_gate(&self, _: CommitGate) {
+        panic!("store failure installing the gate");
+    }
+    fn set_observer(&self, observer: Option<Rc<dyn TextStoreObserver>>) {
+        self.0.set_observer(observer);
+    }
+}
+
+fn attach_with_a_store_failing_to_take_the_gate() {
+    let owner = owner();
+    let capture = PanicsOnDrop("session callback capture destroyed");
+    let client = TextInputClient::new(Rc::new(RefusesGate(InMemoryTextStore::new(""))))
+        .on_session_start(move || {
+            let _keep_alive = &capture;
+        });
+    assert_eq!(
+        raised(|| {
+            let _ = owner.handle().attach(client);
+        })
+        .as_deref(),
+        Some("store failure installing the gate"),
+        "the rejected client is retained, not destroyed during the unwind"
+    );
+    the_owner_keeps_working(&owner);
+}
+
+fn attach_replacing_a_client_whose_destruction_parks() {
+    let owner = owner();
+    let inner = InMemoryTextStore::new("");
+    let dropped = Rc::clone(&inner);
+    let capture = PanicsOnDrop("replaced callback capture destroyed");
+    let _first = owner
+        .handle()
+        .attach(
+            TextInputClient::new(Rc::new(DropHook {
+                inner,
+                on_drop: RefCell::new(Some(Box::new(move || {
+                    park_through(&dropped, "parked by the replaced store");
+                }))),
+            }))
+            .on_session_start(move || {
+                let _keep_alive = &capture;
+            }),
+        )
+        .expect("attach");
+    let replacement = InMemoryTextStore::new("");
+    let token = owner
+        .handle()
+        .attach(TextInputClient::new(replacement))
+        .expect("the replacement is active, and the caller has its token");
+    assert_eq!(
+        raised(|| {
+            let _ = owner.run_deferred_grants();
+        })
+        .as_deref(),
+        Some("parked by the replaced store"),
+        "the failure the replaced store parked came before its callback's, at the next turn"
+    );
+    assert_eq!(
+        owner.handle().detach(token),
+        Ok(flui_interaction::DetachOutcome::Detached),
+        "a blur detaches the replacement with its token"
+    );
+    assert!(!owner.is_attached(token));
+    the_owner_keeps_working(&owner);
+}
+
+/// A store whose every request is refused.
+struct Refuses;
+
+impl TextStore for Refuses {
+    fn status(&self) -> TextStoreStatus {
+        TextStoreStatus::EDITABLE_SINGLE_LINE
+    }
+    fn request_lock(&self, _: LockGrant, _: LockTiming) -> Result<LockOutcome, TextStoreError> {
+        Err(TextStoreError::Detached)
+    }
+    fn run_deferred_grants(&self) -> usize {
+        0
+    }
+    fn set_commit_gate(&self, _: CommitGate) {}
+    fn set_observer(&self, _: Option<Rc<dyn TextStoreObserver>>) {}
+}
+
+/// A subscriber that panics on every event.
+struct FailingSubscriber;
+
+impl tracing::Subscriber for FailingSubscriber {
+    fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+        true
+    }
+    fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+        tracing::span::Id::from_u64(1)
+    }
+    fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+    fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+    fn event(&self, _: &tracing::Event<'_>) {
+        panic!("diagnostic failure");
+    }
+    fn enter(&self, _: &tracing::span::Id) {}
+    fn exit(&self, _: &tracing::span::Id) {}
+}
+
+fn dispatch_whose_diagnostic_panics() {
+    let owner = owner();
+    let parking = InMemoryTextStore::new("");
+    let token = owner
+        .handle()
+        .attach(TextInputClient::new(parking.clone()))
+        .expect("attach");
+    let _ = owner.handle().detach(token);
+    park_through(&parking, "parked owner failure");
+    let _client = owner
+        .handle()
+        .attach(TextInputClient::new(Rc::new(Refuses)))
+        .expect("attach");
+    assert_eq!(
+        raised(|| {
+            tracing::subscriber::with_default(FailingSubscriber, || {
+                owner.dispatch(&ImeEvent::Commit("a".into()));
+            });
+        })
+        .as_deref(),
+        Some("parked owner failure"),
+        "the diagnostic runs inside the dispatch's containment, behind the earlier failure"
+    );
+    the_owner_keeps_working(&owner);
+}
+
+/// A settle in EditableText whose `on_changed` failed and whose observer then
+/// clears itself: the observer it released is retained, not destroyed.
+fn editable_settle_retiring_after_on_changed_failed() {
+    let controller = TextEditingController::new();
+    let node = FocusNode::with_debug_label("settle retirement");
+    let app = controller.clone();
+    let mut harness = focused(
+        EditableText::new(controller, Rc::clone(&node)).on_changed(move |_cx, text| {
+            if text == "a" {
+                app.set_text("app");
+                panic!("on_changed failure");
+            }
+        }),
+        &node,
+    );
+    let field = field(&harness);
+    let drops = Rc::new(Cell::new(0));
+    field.set_observer(Some(Rc::new(ClearsOnText {
+        store: RefCell::new(Rc::downgrade(&field)),
+        _capture: CountsDrops(Rc::clone(&drops)),
+    })));
+    assert_eq!(edit(&*field, "a"), Ok(LockOutcome::Granted));
+    assert_eq!(
+        drops.get(),
+        0,
+        "after the settle failed, the observer it released is retained, not destroyed"
+    );
+    assert_eq!(
+        raised(|| harness.tick()).as_deref(),
+        Some("on_changed failure")
+    );
+    the_field_keeps_working(&mut harness, &field);
+}
+
+/// An observer that clears itself on a text change, holding a capture.
+struct ClearsOnText {
+    store: RefCell<Weak<dyn TextStore>>,
+    _capture: CountsDrops,
+}
+
+impl TextStoreObserver for ClearsOnText {
+    fn text_changed(&self, _: TextChange) {
+        if let Some(store) = self.store.borrow().upgrade() {
+            store.set_observer(None);
+        }
+    }
+    fn selection_changed(&self) {}
+    fn layout_changed(&self) {}
+    fn status_changed(&self) {}
+}
+
+// ----------------------------------------------------------------------------
+// Operations that complete their own changes before a failure is resumed
+// ----------------------------------------------------------------------------
+
+/// Hears text changes, and panics on the first one when `fails` is set.
+struct HearsText {
+    heard: Rc<Cell<usize>>,
+    fails: Cell<bool>,
+}
+
+impl TextStoreObserver for HearsText {
+    fn text_changed(&self, _: TextChange) {
+        self.heard.set(self.heard.get() + 1);
+        assert!(!self.fails.replace(false), "observer failure");
+    }
+    fn selection_changed(&self) {}
+    fn layout_changed(&self) {}
+    fn status_changed(&self) {}
+}
+
+fn hearing(field: &Rc<dyn TextStore>, fails: bool) -> Rc<Cell<usize>> {
+    let heard = Rc::new(Cell::new(0));
+    field.set_observer(Some(Rc::new(HearsText {
+        heard: Rc::clone(&heard),
+        fails: Cell::new(fails),
+    })));
+    heard
+}
+
+fn editable_key_edit_whose_on_changed_panics() {
+    let controller = TextEditingController::new();
+    let node = FocusNode::with_debug_label("key edit, failing owner");
+    let mut harness = focused(
+        EditableText::new(controller.clone(), Rc::clone(&node)).on_changed(|_cx, text| {
+            assert!(text != "a", "on_changed failure");
+        }),
+        &node,
+    );
+    let field = field(&harness);
+    let heard = hearing(&field, false);
+    let key = flui_interaction::testing::input::KeyEventBuilder::new(
+        flui_interaction::events::Code::KeyA,
+    )
+    .with_key(flui_interaction::events::Key::Character("a".to_owned()))
+    .with_state(flui_interaction::events::KeyState::Down)
+    .build();
+    let _ = raised(|| {
+        let _ = harness.focus_manager().dispatch_key_event(&key);
+    });
+    assert_eq!(controller.text(), "a");
+    assert_eq!(
+        heard.get(),
+        1,
+        "the platform heard of the key's edit though on_changed panicked"
+    );
+    field.set_observer(None);
+    the_field_keeps_working(&mut harness, &field);
+}
+
+fn editable_semantic_set_text_whose_on_changed_panics() {
+    use flui_testing::a11y::Role;
+    use flui_testing::{Action, ActionData, ActionRequest, TreeId};
+
+    let controller = TextEditingController::new();
+    let node = FocusNode::with_debug_label("semantic edit, failing owner");
+    let mut harness = focused(
+        EditableText::new(controller.clone(), Rc::clone(&node)).on_changed(|_cx, text| {
+            assert!(text != "said", "on_changed failure");
+        }),
+        &node,
+    );
+    harness.enable_semantics();
+    harness.tick();
+    let field = field(&harness);
+    let heard = hearing(&field, false);
+    let id = harness
+        .a11y_tree()
+        .expect("semantics enabled")
+        .find(Role::TextInput)
+        .expect("the field")
+        .id();
+    let _ = raised(|| {
+        let _ = harness.invoke_semantics_action(ActionRequest {
+            action: Action::SetValue,
+            target_tree: TreeId::ROOT,
+            target_node: id,
+            data: Some(ActionData::Value("said".into())),
+        });
+    });
+    assert_eq!(controller.text(), "said");
+    assert_eq!(
+        heard.get(),
+        1,
+        "the platform heard of the semantic edit though on_changed panicked"
+    );
+    field.set_observer(None);
+    the_field_keeps_working(&mut harness, &field);
+}
+
+// ----------------------------------------------------------------------------
+// Inventory points: queue limits, anchors, rejection, the platform
+// ----------------------------------------------------------------------------
+
+fn arbiter_refusing_a_grant_when_the_queue_is_full_during_an_unwind() {
+    let gate = CommitGate::new();
+    let store = InMemoryTextStore::new("");
+    store.set_commit_gate(gate.clone());
+    gate.set_open(false);
+    for _ in 0..flui_platform_api::text_store::DEFERRED_LOCK_CAPACITY {
+        assert_eq!(
+            store.request_lock(LockGrant::read(|_| {}), LockTiming::Async),
+            Ok(LockOutcome::Deferred)
+        );
+    }
+    /// Requests an asynchronous grant of a full queue when dropped.
+    struct RequestsAsync(Rc<InMemoryTextStore>);
+    impl Drop for RequestsAsync {
+        fn drop(&mut self) {
+            let capture = PanicsOnDrop("refused grant capture destroyed");
+            let outcome = self.0.request_lock(
+                LockGrant::read(move |_| {
+                    let _keep_alive = &capture;
+                }),
+                LockTiming::Async,
+            );
+            assert_eq!(outcome, Err(TextStoreError::DeferredQueueFull));
+        }
+    }
+    let requester = Rc::clone(&store);
+    assert_eq!(
+        raised(move || {
+            let _requests = RequestsAsync(requester);
+            panic!("unwinding");
+        })
+        .as_deref(),
+        Some("unwinding"),
+        "the grant the full queue refused is retained, not destroyed during the unwind"
+    );
+    gate.set_open(true);
+    assert_eq!(
+        store.run_deferred_grants(),
+        flui_platform_api::text_store::DEFERRED_LOCK_CAPACITY
+    );
+    assert_eq!(
+        edit(&*store, "b"),
+        Ok(LockOutcome::Granted),
+        "the next edit"
+    );
+    assert_eq!(store.text(), "b");
+    assert_eq!(parked(&gate), None);
+}
+
+/// A store that panics with `message` when destroyed.
+fn store_panicking_on_drop(message: &'static str) -> Rc<DropHook> {
+    Rc::new(DropHook {
+        inner: InMemoryTextStore::new(""),
+        on_drop: RefCell::new(Some(Box::new(move || panic!("{message}")))),
+    })
+}
+
+fn anchor_retiring_stores_whose_drops_panic() {
+    let owner = owner();
+    let _first = owner
+        .handle()
+        .attach(TextInputClient::new(store_panicking_on_drop(
+            "first retired store destroyed",
+        )))
+        .expect("attach");
+    owner.set_transaction_open(true);
+    let _second = owner
+        .handle()
+        .attach(TextInputClient::new(store_panicking_on_drop(
+            "second retired store destroyed",
+        )))
+        .expect("replacement inside the frame");
+    let _third = owner
+        .handle()
+        .attach(TextInputClient::new(InMemoryTextStore::new("")))
+        .expect("replacement inside the frame");
+    owner.set_transaction_open(false);
+    assert_eq!(
+        raised(|| {
+            let _ = owner.run_deferred_grants();
+        })
+        .as_deref(),
+        Some("first retired store destroyed"),
+        "the anchor retires its stores inside its scope: the first failure, the second retained"
+    );
+    the_owner_keeps_working(&owner);
+}
+
+fn attach_rejected_by_a_closed_owner() {
+    let owner = owner();
+    owner.close();
+    let capture = PanicsOnDrop("rejected callback capture destroyed");
+    let client = TextInputClient::new(store_panicking_on_drop("rejected store destroyed"))
+        .on_session_start(move || {
+            let _keep_alive = &capture;
+        });
+    assert_eq!(
+        raised(|| {
+            let _ = owner.handle().attach(client);
+        })
+        .as_deref(),
+        Some("rejected store destroyed"),
+        "the rejected client retires inside the close's containment: store first, the callback retained"
+    );
+    the_owner_keeps_working(&self::owner());
+}
+
+/// A platform whose first `set_ime_allowed` panics.
+struct FailsToEnable(std::sync::atomic::AtomicBool);
+
+impl PlatformTextInput for FailsToEnable {
+    fn set_ime_allowed(&self, _: bool) {
+        assert!(
+            self.0.swap(true, std::sync::atomic::Ordering::SeqCst),
+            "platform failure enabling input"
+        );
+    }
+    fn set_ime_cursor_area(&self, _: Bounds<f64>) {}
+}
+
+fn attach_whose_platform_enable_panics() {
+    let owner = TextInputOwner::new(TextInputBackend::Push(Arc::new(FailsToEnable(
+        std::sync::atomic::AtomicBool::new(false),
+    ))));
+    let token = owner
+        .handle()
+        .attach(TextInputClient::new(InMemoryTextStore::new("")))
+        .expect("the client is active, and the caller has its token");
+    assert_eq!(
+        raised(|| {
+            let _ = owner.run_deferred_grants();
+        })
+        .as_deref(),
+        Some("platform failure enabling input"),
+        "the failure is reported at the owner's next turn"
+    );
+    assert_eq!(
+        owner.handle().detach(token),
+        Ok(flui_interaction::DetachOutcome::Detached),
+        "the token detaches the client"
+    );
+    the_owner_keeps_working(&owner);
+}
+
+fn attach_and_detach_whose_diagnostics_panic() {
+    let owner = owner();
+    let token = tracing::subscriber::with_default(FailingSubscriber, || {
+        owner
+            .handle()
+            .attach(TextInputClient::new(InMemoryTextStore::new("")))
+    })
+    .expect("the client is active, and the caller has its token");
+    assert_eq!(
+        raised(|| {
+            let _ = owner.run_deferred_grants();
+        })
+        .as_deref(),
+        Some("diagnostic failure")
+    );
+    assert_eq!(
+        raised(|| {
+            tracing::subscriber::with_default(FailingSubscriber, || {
+                let _ = owner.handle().detach(token);
+            });
+        })
+        .as_deref(),
+        Some("diagnostic failure"),
+        "detach completes, then reports its diagnostic's failure"
+    );
+    assert!(!owner.is_attached(token), "the client was detached");
+    the_owner_keeps_working(&owner);
+}
+
+thread_local! {
+    /// The owner a platform closes from inside its own call.
+    static CLOSING_OWNER: RefCell<Option<Weak<TextInputOwner>>> = const { RefCell::new(None) };
+}
+
+/// A platform that closes its owner, then panics, from its cursor-area
+/// call, and panics when destroyed.
+struct ClosesOnCursor;
+
+impl PlatformTextInput for ClosesOnCursor {
+    fn set_ime_allowed(&self, _: bool) {}
+    fn set_ime_cursor_area(&self, _: Bounds<f64>) {
+        let owner = CLOSING_OWNER.with(|slot| slot.borrow().as_ref().and_then(Weak::upgrade));
+        if let Some(owner) = owner {
+            owner.close();
+        }
+        panic!("platform failure placing the cursor");
+    }
+}
+
+impl Drop for ClosesOnCursor {
+    fn drop(&mut self) {
+        panic!("platform destroyed");
+    }
+}
+
+fn cursor_area_whose_platform_closes_the_owner_and_panics() {
+    let owner = TextInputOwner::new(TextInputBackend::Push(Arc::new(ClosesOnCursor)));
+    CLOSING_OWNER.with(|slot| *slot.borrow_mut() = Some(Rc::downgrade(&owner)));
+    let _client = owner
+        .handle()
+        .attach(TextInputClient::new(InMemoryTextStore::new("")))
+        .expect("attach");
+    let rect = Bounds::new(
+        flui_foundation::geometry::Point::new(0.0, 0.0),
+        flui_foundation::geometry::Size::new(1.0, 1.0),
+    );
+    assert_eq!(
+        raised(|| {
+            let _ = owner.handle().set_cursor_area(rect);
+        })
+        .as_deref(),
+        Some("platform failure placing the cursor"),
+        "the platform clone is released inside the scope, not during the unwind"
+    );
+    CLOSING_OWNER.with(|slot| slot.borrow_mut().take());
+    the_owner_keeps_working(&self::owner());
+}
+
+fn editable_store_outliving_its_field() {
+    use flui_foundation::Listenable as _;
+
+    let controller = TextEditingController::new();
+    // The store ends up holding the controller's last handle; a listener
+    // capture of it panics when destroyed.
+    let listener_capture = std::sync::Mutex::new(PanicsOnDropSend("listener capture destroyed"));
+    let _listener = controller.add_listener(Arc::new(move || {
+        let _keep_alive = &listener_capture;
+    }));
+    let node = FocusNode::with_debug_label("outlived field");
+    let capture = PanicsOnDrop("on_changed capture destroyed");
+    let mut harness = focused(
+        EditableText::new(controller, Rc::clone(&node)).on_changed(move |_cx, _| {
+            let _keep_alive = &capture;
+        }),
+        &node,
+    );
+    let field = field(&harness);
+    harness.swap_root(flui_widgets::SizedBox::new(1.0, 1.0));
+    assert_eq!(
+        raised(move || drop(field)).as_deref(),
+        Some("on_changed capture destroyed"),
+        "the store retires its last handles in order; the controller is retained after the failure"
+    );
+    assert_eq!(raised(|| harness.tick()), None, "the next frame");
+}
+
+/// A grant's body reads the in-memory store and edits it as the
+/// application: no borrow of the store is held across the body, and the
+/// application's edit wins over the session.
+fn in_memory_grant_reading_and_editing_its_store() {
+    let gate = CommitGate::new();
+    let store = InMemoryTextStore::new("ab");
+    store.set_commit_gate(gate.clone());
+    let reentered = Rc::downgrade(&store);
+    let read = Rc::new(RefCell::new(String::new()));
+    let sink = Rc::clone(&read);
+    assert_eq!(
+        store.request_lock(
+            LockGrant::read_write(move |session| {
+                session.insert_at_selection("x").expect("in range");
+                if let Some(store) = reentered.upgrade() {
+                    *sink.borrow_mut() = store.text();
+                    store.app_replace(
+                        flui_platform_api::text_store::Utf16Range::new(
+                            flui_platform_api::text_store::Utf16Offset::new(0),
+                            flui_platform_api::text_store::Utf16Offset::new(0),
+                        )
+                        .expect("ordered"),
+                        "app ",
+                    );
+                }
+            }),
+            LockTiming::Sync,
+        ),
+        Ok(LockOutcome::Granted)
+    );
+    assert_eq!(*read.borrow(), "ab", "the body read the store as it was");
+    assert_eq!(store.text(), "app ab", "the application's edit wins");
+    assert_eq!(
+        edit(&*store, "!"),
+        Ok(LockOutcome::Granted),
+        "the next edit"
+    );
+    assert_eq!(
+        store.text(),
+        "app !ab",
+        "the next edit lands at the caret the application left"
+    );
+    assert_eq!(parked(&gate), None);
 }

@@ -15,13 +15,14 @@
 
 use std::cell::{Cell, RefCell};
 
+use std::panic::resume_unwind;
 use std::rc::Rc;
 
 use flui_foundation::geometry::{Bounds, Point, Size};
 
 use super::composition_ledger::{CompositionLedger, committed_text};
 use super::lock::{CommitGate, LockArbiter, LockGrant, LockOutcome, LockTiming, TextStoreError};
-use super::owner_calls::OwnerCalls;
+use super::owner_calls::{OwnerCalls, RetainOnFailure};
 use super::session::{
     Composition, PointMode, RangeRect, Selection, TextChange, TextStoreEdit, TextStoreRead,
     TextStoreStatus,
@@ -48,6 +49,9 @@ pub struct InMemoryTextStore {
     /// A session changed the committed text and its owner notification is
     /// not delivered yet: it is, once the session's lock is released.
     owner_owed: Cell<bool>,
+    /// Application edits made so far: a session the application edited
+    /// under is dropped.
+    generation: Cell<u64>,
     owner_listener: RefCell<Option<Rc<dyn Fn()>>>,
 }
 
@@ -67,6 +71,23 @@ impl std::fmt::Debug for InMemoryTextStore {
             .field("pending", &self.pending)
             .field("protected", &self.protected.get())
             .finish_non_exhaustive()
+    }
+}
+
+impl Drop for InMemoryTextStore {
+    /// The observer and the owner listener are other code: retired inside a
+    /// scope, retained during an unwind (ADR-0127). The arbiter retires its
+    /// queued grants the same way, and a failure still parked in the gate is
+    /// retained with it.
+    fn drop(&mut self) {
+        let observer = self.observer.get_mut().take();
+        let listener = self.owner_listener.get_mut().take();
+        let mut calls = OwnerCalls::new();
+        calls.retire(observer);
+        calls.retire(listener);
+        if !std::thread::panicking() {
+            calls.resume();
+        }
     }
 }
 
@@ -96,6 +117,7 @@ impl InMemoryTextStore {
             protected: Cell::new(false),
             owner_notifications: Cell::new(0),
             owner_owed: Cell::new(false),
+            generation: Cell::new(0),
             owner_listener: RefCell::new(None),
         })
     }
@@ -128,18 +150,20 @@ impl InMemoryTextStore {
     /// An edit the application makes: `range` becomes `text` under the same
     /// rules as [`TextStoreEdit::replace`], and the observer hears of it
     /// afterwards — at once, or, inside a frame transaction, once the gate
-    /// opens.
+    /// opens. Made from inside a read-write grant, it wins: that session is
+    /// dropped (ADR-0090 amendment item 3).
     ///
     /// # Panics
     ///
-    /// When `range` does not name a range of the text, or when called from
-    /// inside a grant: both are the calling test's bug.
+    /// When `range` does not name a range of the text: the calling test's
+    /// bug.
     pub fn app_replace(&self, range: Utf16Range, text: &str) {
         let change = self
             .doc
             .borrow_mut()
             .replace(range, text)
             .expect("BUG: app_replace was given a range outside the text");
+        self.generation.set(self.generation.get() + 1);
         self.pending.borrow_mut().push(Notice::Text(change));
         self.report(Notice::Selection);
     }
@@ -166,10 +190,9 @@ impl InMemoryTextStore {
     }
 
     /// Deliver what a finished grant owes, now that its lock is released:
-    /// the owner notification, then the observer's. The observer is told
-    /// even when the listener panics; the first panic is resumed after it.
-    fn settle(&self) {
-        let mut calls = OwnerCalls::new();
+    /// the owner notification, then the observer's, inside the arbiter's
+    /// settle scope. The observer is told even when the listener panics.
+    fn settle(&self, calls: &mut OwnerCalls) {
         // Taken before the listener runs: a session it opens owes its own.
         if self.owner_owed.replace(false) {
             self.owner_notifications
@@ -182,21 +205,29 @@ impl InMemoryTextStore {
                 calls.retire(listener);
             }
         }
-        calls.run(|| self.flush_notifications());
-        calls.resume();
+        self.flush_notifications(calls);
     }
 
     /// Queue `notice` and send everything queued if the observer may hear
     /// it now.
     fn report(&self, notice: Notice) {
         self.pending.borrow_mut().push(notice);
-        self.flush_notifications();
+        self.flush_now();
     }
 
-    /// Send the queued notices, unless a lock is held or the gate is shut:
-    /// an observer that answers with a synchronous lock request (a TSF sink)
-    /// must be granted it.
-    fn flush_notifications(&self) {
+    /// [`Self::flush_notifications`] in a scope of its own, whose first
+    /// failure is resumed.
+    fn flush_now(&self) {
+        let mut calls = OwnerCalls::new();
+        self.flush_notifications(&mut calls);
+        calls.resume();
+    }
+
+    /// Send the queued notices inside `calls`, unless a lock is held or the
+    /// gate is shut: an observer that answers with a synchronous lock request
+    /// (a TSF sink) must be granted it. Each notice is delivered though an
+    /// earlier one panicked.
+    fn flush_notifications(&self, calls: &mut OwnerCalls) {
         if self.arbiter.is_locked() || !self.arbiter.may_commit() {
             return;
         }
@@ -205,9 +236,6 @@ impl InMemoryTextStore {
         let Some(observer) = observer else {
             return;
         };
-        // Each notice is delivered though an earlier one panicked; the
-        // first panic is resumed once all were.
-        let mut calls = OwnerCalls::new();
         for notice in notices {
             calls.run(|| match notice {
                 Notice::Text(change) => observer.text_changed(change),
@@ -216,40 +244,45 @@ impl InMemoryTextStore {
             });
         }
         calls.retire(observer);
-        calls.resume();
     }
 
     fn open(&self, grant: LockGrant) {
         let protected = self.protected.get();
+        // A session works on a snapshot, with no borrow of the store held
+        // while the grant's body runs: the body may read the store, or edit
+        // it as the application.
+        let snapshot = self.doc.borrow().clone();
         match grant {
             LockGrant::Read(body) => {
-                let doc = self.doc.borrow();
                 body(&ReadSession {
-                    doc: &doc,
+                    doc: &snapshot,
                     protected,
                 });
             }
             LockGrant::ReadWrite(body) => {
                 // The session edits a working copy, kept only when the grant
-                // returns: a grant that panics part-way leaves the document
-                // as it was, never a composition without the origin its
-                // ledger would have given it.
-                let mut doc = self.doc.borrow_mut();
-                let committed = doc.committed();
-                let mut work = doc.clone();
-                let ledger = CompositionLedger::open(work.composing());
+                // returns and the application did not edit the store during
+                // it: a grant that panics part-way leaves the document as it
+                // was, never a composition without the origin its ledger
+                // would have given it, and an application edit wins.
+                let generation = self.generation.get();
+                let committed = snapshot.committed();
+                let mut work = snapshot;
+                let ledger = CompositionLedger::open(&work.text, work.composing());
                 let mut session = EditSession {
                     doc: &mut work,
                     protected,
                     ledger,
                 };
                 body(&mut session);
-                let origin = session.ledger.origin().unwrap_or_default().to_owned();
-                work.origin = origin;
-                *doc = work;
-                if doc.committed() != committed {
+                work.origin = session.ledger.origin(&work.text).unwrap_or_default();
+                if self.generation.get() != generation {
+                    return;
+                }
+                if work.committed() != committed {
                     self.owner_owed.set(true);
                 }
+                *self.doc.borrow_mut() = work;
             }
         }
     }
@@ -266,25 +299,41 @@ impl TextStore for InMemoryTextStore {
         timing: LockTiming,
     ) -> Result<LockOutcome, TextStoreError> {
         // An app edit still owed is reported before the platform's session
-        // can see it, and one made from inside the grant once it ends.
-        self.flush_notifications();
+        // can see it, and one made from inside the grant once it ends. A
+        // failure there refuses the request: the grant, not yet accepted, is
+        // retained unrun rather than destroyed during the unwind.
+        let mut before = OwnerCalls::new();
+        self.flush_notifications(&mut before);
+        if let Some(payload) = before.into_failure() {
+            RetainOnFailure::retain(grant);
+            resume_unwind(payload);
+        }
+        // Read before any grant's owner code can move the store elsewhere.
+        let admitting = self.arbiter.owner_gate();
         let outcome =
             self.arbiter
-                .request(grant, timing, &mut |grant| self.open(grant), &mut || {
-                    self.settle();
+                .request(grant, timing, &mut |grant| self.open(grant), &mut |calls| {
+                    self.settle(calls);
                 });
-        self.flush_notifications();
+        let mut calls = OwnerCalls::new();
+        calls.run_behind_parked(admitting.as_ref(), || self.flush_now());
+        calls.resume();
         outcome
     }
 
     /// Also where notifications held back by the frame transaction are
     /// sent, before and after the queued grants run.
     fn run_deferred_grants(&self) -> usize {
-        self.flush_notifications();
+        self.flush_now();
+        let admitting = self.arbiter.owner_gate();
         let ran = self
             .arbiter
-            .run_deferred(&mut |grant| self.open(grant), &mut || self.settle());
-        self.flush_notifications();
+            .run_deferred(&mut |grant| self.open(grant), &mut |calls| {
+                self.settle(calls);
+            });
+        let mut calls = OwnerCalls::new();
+        calls.run_behind_parked(admitting.as_ref(), || self.flush_now());
+        calls.resume();
         ran
     }
 
@@ -551,7 +600,7 @@ impl TextStoreRead for EditSession<'_> {
 impl TextStoreEdit for EditSession<'_> {
     fn replace(&mut self, range: Utf16Range, text: &str) -> Result<TextChange, TextStoreError> {
         let bytes = utf16::byte_range(&self.doc.text, range)?;
-        self.ledger.replace(&self.doc.text, bytes, text.len());
+        self.ledger.replace(&self.doc.text, bytes, text);
         self.doc.replace(range, text)
     }
 
@@ -571,7 +620,7 @@ impl TextStoreEdit for EditSession<'_> {
         let bytes = composition
             .map(|composition| utf16::byte_range(&self.doc.text, composition.range))
             .transpose()?;
-        self.ledger.set_composition(&self.doc.text, bytes);
+        self.ledger.set_composition(bytes);
         self.doc.composition = composition;
         Ok(())
     }

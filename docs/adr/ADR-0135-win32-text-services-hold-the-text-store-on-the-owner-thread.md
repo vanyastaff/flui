@@ -68,9 +68,12 @@ composition must still end somewhere.
    a completion asked for in a frame reaches its field even after a detach. The host's calls are
    platform code that reaches application code, so each goes through `OwnerCalls` like any owner
    code (ADR-0090 amendment item 8): the operation, its store and the host clone are taken from
-   the queue before the call, the presentation's gate is taken before the call and after it, and
-   the first failure in time is authoritative (a failure parked before the call, then one a grant
-   settled inside it parked, then the call's own panic). A host operation that panics releases
+   the queue before the call, and the first failure in time is authoritative (a failure parked
+   before the call, then one a grant settled inside it parked, then the call's own panic). On the
+   owner's turn (a completion, the anchor) the presentation's gate is taken before the call and
+   after it; an attach or a detach leaves a failure the gate already held for that turn, and an
+   attach parks what its host call raised there too, behind it, and returns the token (ADR-0090
+   amendment item 8). A host operation that panics releases
    its values and the queue goes on: the completed store is retained once the scope has failed,
    the host clone (framework-owned) is released, contained, even then; the first failure
    propagates once the rest (and, at the anchor, the deferred grants) have run. An `Abandoned`
@@ -134,8 +137,9 @@ composition must still end somewhere.
   reentrant retirement on a pull owner) (§1, §4).
 - `flui-widgets` `owner_code_is_contained_at_every_point`'s `host:` rows, one child process
   each: a panicking focus change with the queue behind it, a focus change and a completion both
-  panicking at the anchor, a host call after a parked failure, a host call that parks a failure
-  and then panics, one that detaches and then panics (its store's destruction panics), and one
+  panicking at the anchor, a host call after a parked failure, an attach's host call that parks a
+  failure and then panics (the token is returned, the next turn reports the parked failure
+  first), one that detaches and then panics (its store's destruction panics), and one
   that closes the owner and then panics (the host's own destruction panics), each followed by the
   next operation (§4).
 - `flui-runtime` `a_window_with_a_text_store_host_takes_input_through_it`, `flui-app`

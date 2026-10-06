@@ -67,6 +67,7 @@ pub(super) const CASES: &[Case] = &[
     case!(a_grant_that_panics_after_marking_leaves_the_committed_text, since 2),
     case!(moving_a_composition_to_adjacent_text_keeps_each_origin_apart, since 2),
     case!(narrowing_a_reconversion_keeps_the_committed_text, since 2),
+    case!(marking_part_of_new_text_leaves_the_rest_new, since 2),
 ];
 
 // ============================================================================
@@ -1050,6 +1051,42 @@ fn narrowing_a_reconversion_keeps_the_committed_text(
         expect_text(fixture, &store, range(0, 6), "abcdef")?;
     }
     Ok(())
+}
+
+/// An input method inserts "abcd", composes "ab", then moves its
+/// composition to the adjacent "cd", in one session: "ab" is committed, and
+/// "cd", which the session inserted, is still new preedit, so the owner
+/// hears of "ab" now and of "cd" once it commits.
+fn marking_part_of_new_text_leaves_the_rest_new(fixture: &mut dyn TextStoreFixture) -> Outcome {
+    let store = fresh(fixture, "");
+    let before = fixture.owner_notifications();
+    let composing = |start, end| {
+        Some(Composition {
+            range: range(start, end),
+            hides_caret: false,
+        })
+    };
+    let moved = edit(&store, move |session| -> Result<(), TextStoreError> {
+        session.insert_at_selection("abcd")?;
+        session.set_composition(composing(0, 2))?;
+        session.set_composition(composing(2, 4))
+    })?;
+    ensure_eq(moved, Ok(()), "insert \"abcd\", mark 0..2, then 2..4")?;
+    fixture.pump();
+    ensure_eq(
+        fixture.owner_notifications(),
+        before + 1,
+        "owner notifications once \"ab\" was committed",
+    )?;
+    let ended = edit(&store, |session| session.set_composition(None))?;
+    ensure_eq(ended, Ok(()), "committing \"cd\"")?;
+    fixture.pump();
+    ensure_eq(
+        fixture.owner_notifications(),
+        before + 2,
+        "owner notifications once \"cd\" was committed",
+    )?;
+    expect_text(fixture, &store, range(0, 4), "abcd")
 }
 
 fn owner_notification_runs_after_release(fixture: &mut dyn TextStoreFixture) -> Outcome {

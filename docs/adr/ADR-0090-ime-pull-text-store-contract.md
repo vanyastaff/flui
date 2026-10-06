@@ -193,10 +193,35 @@ composing. The amendment fixes what the owner sees and when:
    committed. The field's owner is told only when the committed text changed; a session that
    only composed, cancelled a composition, or only marked existing text as a composition tells
    it nothing. A store keeps that origin beside its composing range and accounts for a
-   session's edits with `text_store::CompositionLedger`: text the session inserted and then
-   marked is a new preedit, text it found and marked is a reconversion, and a composition an
-   edit cleared keeps its origin until it is marked again. A text form field validates and saves
-   the committed text (`TextEditingController::committed_text`). Kit version 2 pins it
+   session's edits with `text_store::CompositionLedger`, which knows what every character
+   stands for: a committed character stands for itself, a character the session inserted
+   stands for nothing, and committed text an edit removed from a composition (or from a
+   composition an edit cleared) is kept where it was removed. The committed text is every
+   visible character, with the composition replaced by what its characters and removals
+   stand for. So text the session inserted and then marked is a new preedit, text it found and
+   marked is a reconversion, and a composition an edit cleared keeps its origin until it is
+   marked again; the text one edit inserted, with what it removed, is one replacement, and
+   replacements that rewrote each other's text are one. A session opens with its composition
+   standing for itself when the origin is its visible text, as new preedit when the origin is
+   empty, and otherwise as one replacement of the origin by the visible text. **Narrowing:**
+   when a mark leaves part of a composition (or of a composition an edit cleared) outside the
+   new range, that part commits as the user sees it: its characters stand for themselves and its
+   removals are dropped. A removal travels with its own replacement's characters: when every
+   character a replacement inserted lies outside the new range, the replacement leaves whole,
+   its removal with it; when they lie both inside and outside it, its removal leaves (the
+   replacement is split). A removal whose replacement inserted no characters (a deletion) stays
+   only strictly inside the new range, so a deletion at its edge commits ("abcdefghi" marked whole,
+   "def" deleted, narrowed to "abc": the committed text is "abcghi"). A removal that stays sits at
+   the composition's edge nearest it. The rest keeps what its own characters and removals stand
+   for, unless a replacement with non-empty removed text is split; its removed text cannot be
+   divided, so the rest of that region then stands for its own visible text, and the committed
+   text over it is what the user sees. A replacement's removed text is therefore never
+   counted beside any of its own inserted text (no "abcdefDEF" from narrowing a conversion of
+   "abcdef" to "ABC"). Text that never stood for anything (new preedit) commits as shown beside
+   the origin the rest keeps. `flui-platform-api`'s `the_ledger_follows_the_reference` checks the
+   ledger against a reference model over random edit, mark and session sequences, with the
+   cases that model found (`composition_ledger_named_cases`). A text form field validates and
+   saves the committed text (`TextEditingController::committed_text`). Kit version 2 pins it
    (`composition_only_sessions_do_not_notify_the_owner`,
    `reconverting_committed_text_notifies_only_on_commit`).
 2. **The owner hears after the lock is released, before the next grant.** `LockArbiter::request`
@@ -244,16 +269,25 @@ composing. The amendment fixes what the owner sees and when:
    `TextInputOwner::active_store`, which is removed.
 8. **Owner code runs inside one containment.** Every point where the arbiter, a store or the
    presentation runs code it does not control — a grant's body, a settle, `on_changed`, the
-   controller's listeners, an owner listener, the observer, `on_session_start`, the projection,
-   a pull host's focus and completion calls from the presentation's queue (ADR-0135 §4), and the
-   destruction of any snapshot, replaced value, client or host clone — goes through
-   `text_store::OwnerCalls`, whose module doc lists them. What the code is owed (obligations with
-   their values, the gate a failure belongs to) is read before it runs, never after, since it may
-   reenter, settle a nested session or move the store to another presentation. Each call is
-   contained and the first failure in time is authoritative: a failure a call's grant parked in a
-   gate came before that call's own unwind, so it is taken first; a later one is retained
-   (ADR-0127). A snapshot retires inside the scope: dropped while the scope is healthy, retained
-   once it has failed or while the thread unwinds. One matrix pins every point
+   controller's listeners, an owner listener, the observer (the flush after a request's grants
+   included, which yields to a failure their settle parked), `on_session_start`, the projection,
+   a store installing a gate, a pull host's focus and completion calls from the presentation's
+   queue (ADR-0135 §4), diagnostics (a `tracing` subscriber is user code), and the destruction of
+   any snapshot, refused or queued grant, replaced value, client, store or host clone — goes
+   through `text_store::OwnerCalls`, whose module doc lists them; a gate whose last clone goes
+   with a failure no owner took retains it. What the code is owed (obligations with their values,
+   the gate a failure belongs to) is read before it runs, never after, since it may reenter,
+   settle a nested session or move the store to another presentation. Each call is contained and
+   the first failure in time is authoritative: a settle parks its failure in the admitting gate
+   the moment it is caught, ahead of any session the owner's later code opens; a failure a call
+   parked in a gate came before that call's own unwind, so it is taken first, while one the gate
+   already held waits for its owner's turn (a dispatch, an anchor, a completion, a close); a
+   later one is retained (ADR-0127). Work stays deliverable: an asynchronous request behind a
+   failing queued grant is queued, and a synchronous one, or one refused because the flush
+   before it failed, is retained rather than destroyed during the unwind. A snapshot retires
+   inside the scope: dropped while the scope is healthy, retained once it has failed or while the
+   thread unwinds. Nested work runs in the caller's scope, so it sees the caller's failure. A
+   session the field was unmounted under is not written back. One matrix pins every point
    (`owner_code_is_contained_at_every_point`).
 
 ## Interim implementation

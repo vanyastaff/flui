@@ -209,6 +209,18 @@ impl Drop for HostCall<'_> {
     }
 }
 
+/// Whose turn drains the host queue, which decides what happens to a
+/// failure parked in the presentation's gate before it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HostTurn {
+    /// The owner's turn to report (a completion, the anchor): a failure
+    /// parked before a host call came first, so it is taken ahead of it.
+    Own,
+    /// A client change (attach, detach): a failure parked before it stays
+    /// for the owner's next turn, and what the host calls park goes behind it.
+    Behind,
+}
+
 /// Ask `host` to end its composition in `store`, committing it in place
 /// when the host abandoned it, does not serve `store` or is gone. A
 /// `Deferred` answer leaves it to the host, which finishes it when the
@@ -266,6 +278,18 @@ fn retire_client_owners(
         calls.retire(store);
         calls.retire(on_session_start);
     }
+}
+
+/// Retire a client a closed owner rejected, one owner at a time (store, then
+/// session callback) inside the close's containment: dropping the client
+/// whole would drop the callback during the store's unwind.
+fn retire_rejected(failure: &mut ClosePanic, client: TextInputClient) {
+    let TextInputClient {
+        store,
+        on_session_start,
+    } = client;
+    failure.retire(store);
+    failure.retire(on_session_start);
 }
 
 /// Release a local clone of the framework-owned platform capability before
@@ -413,7 +437,7 @@ impl TextInputOwner {
     fn attach(&self, client: TextInputClient) -> Result<ClientToken, TextInputError> {
         if let Err(error) = self.ensure_open() {
             let mut failure = ClosePanic::for_rejection(self.close_mode.mode());
-            failure.retire(client);
+            retire_rejected(&mut failure, client);
             failure.finish();
             return Err(error);
         }
@@ -433,8 +457,17 @@ impl TextInputOwner {
         let token = ClientToken(current);
 
         // Before the client is reachable through `dispatch`, so no lock is
-        // ever requested on a store that does not yet follow the frame.
-        client.store.set_commit_gate(self.gate.clone());
+        // ever requested on a store that does not yet follow the frame. The
+        // store is user code: a failure there rejects the client, which is
+        // retained rather than destroyed during the unwind (ADR-0127).
+        let mut installing = OwnerCalls::new();
+        installing.run(|| {
+            client.store.set_commit_gate(self.gate.clone());
+        });
+        if let Some(payload) = installing.into_failure() {
+            RetainOnFailure::retain(client);
+            std::panic::resume_unwind(payload);
+        }
         // A user-defined store may close the owner while installing its gate.
         // The rejected client was never admitted; its owners still retire
         // one at a time, store first, behind the close-mode failure fence.
@@ -477,16 +510,30 @@ impl TextInputOwner {
         // the local capability clone is released before them: a store that
         // closes the owner and then panics must not leave this clone as the
         // backend's last owner, destroyed during that unwind. A failure the
-        // replaced client parks waits for this owner's next turn.
+        // replaced client's destruction parks is taken in time order.
         if let Some(platform) = platform {
             release_platform(platform, &mut calls);
         }
         if let Some(replaced) = replaced {
-            retire_client_owners(replaced.client, &mut calls, None);
+            retire_client_owners(replaced.client, &mut calls, Some(&self.gate));
         }
-        self.apply_host_ops(&mut calls);
-        calls.resume();
-        tracing::trace!(token = token.0.get(), "IME client attached");
+        // The host hears of the focus after the retirement, in the order the
+        // owner's state changed. A failure already parked for this owner's
+        // next turn stays there, ahead of what this attach parks behind it.
+        self.apply_host_ops(&mut calls, HostTurn::Behind);
+        // A diagnostic runs a user-installed subscriber.
+        calls.run(|| tracing::trace!(token = token.0.get(), "IME client attached"));
+        // The client is active and the token is the caller's: a failure here is
+        // this owner's to report at its next turn, so it cannot take the token
+        // with it. An owner closed meanwhile has no next turn, and the token
+        // no use: the failure is raised.
+        if let Some(payload) = calls.into_failure() {
+            if self.ensure_open().is_ok() {
+                self.gate.defer_failure(payload);
+            } else {
+                std::panic::resume_unwind(payload);
+            }
+        }
         Ok(token)
     }
 
@@ -519,13 +566,17 @@ impl TextInputOwner {
             if let Some(platform) = platform {
                 release_platform(platform, &mut calls);
             }
-            retire_client_owners(detached.client, &mut calls, None);
-            self.apply_host_ops(&mut calls);
+            retire_client_owners(detached.client, &mut calls, Some(&self.gate));
+            // A failure already parked stays for this owner's next turn, as
+            // one the retirement did not park does.
+            self.apply_host_ops(&mut calls, HostTurn::Behind);
+            calls.run(|| tracing::trace!(token = token.0.get(), "IME client detached"));
             calls.resume();
-            tracing::trace!(token = token.0.get(), "IME client detached");
             Ok(DetachOutcome::Detached)
         } else {
-            tracing::trace!(token = token.0.get(), "stale IME detach ignored");
+            let mut calls = OwnerCalls::new();
+            calls.run(|| tracing::trace!(token = token.0.get(), "stale IME detach ignored"));
+            calls.resume();
             Ok(DetachOutcome::Stale)
         }
     }
@@ -535,7 +586,13 @@ impl TextInputOwner {
         self.ensure_supported()?;
         // A pull platform asks the store for geometry itself.
         if let Some(platform) = self.push_platform() {
-            platform.set_ime_cursor_area(area);
+            // The platform's code may close this owner and then panic: the
+            // local capability clone is released inside the scope, not in
+            // the unwind.
+            let mut calls = OwnerCalls::new();
+            calls.run(|| platform.set_ime_cursor_area(area));
+            release_platform(platform, &mut calls);
+            calls.resume();
         }
         Ok(())
     }
@@ -579,7 +636,7 @@ impl TextInputOwner {
                 .borrow_mut()
                 .host_ops
                 .push_back(HostOp::Complete(store));
-            self.apply_host_ops(&mut calls);
+            self.apply_host_ops(&mut calls, HostTurn::Own);
         } else {
             // The commit settles a grant, which may park an owner failure.
             calls.run_parking(&self.gate, || commit_composition_in_place(&*store));
@@ -595,13 +652,14 @@ impl TextInputOwner {
     /// The host is platform code that reaches application code (a text
     /// service editing a store settles its grant), so each call goes
     /// through `calls` like any owner code: the operation, its store and
-    /// the host clone are taken from the queue before the call; a failure
-    /// parked in this presentation's gate is taken before the call (it came
-    /// earlier) and after it (a grant the call ran parked it before the
-    /// call's own panic). A failing operation releases its values and the
+    /// the host clone are taken from the queue before the call; on the
+    /// owner's own turn ([`HostTurn::Own`]) a failure parked in this
+    /// presentation's gate is taken before the call (it came earlier), and
+    /// one a grant the call ran parked is taken after it, ahead of the
+    /// call's own panic, unless the gate already held one. A failing operation releases its values and the
     /// queue goes on, so a panicking focus change does not strand the
     /// completion behind it; the first failure stays authoritative.
-    fn apply_host_ops(&self, calls: &mut OwnerCalls) {
+    fn apply_host_ops(&self, calls: &mut OwnerCalls, turn: HostTurn) {
         loop {
             if self.host_depth.get() > 0 || self.is_transaction_open() {
                 return;
@@ -624,7 +682,9 @@ impl TextInputOwner {
             };
             {
                 let _call = HostCall::enter(&self.host_depth);
-                calls.take_parked(&self.gate);
+                if turn == HostTurn::Own {
+                    calls.take_parked(&self.gate);
+                }
                 match op {
                     HostOp::Focus(store) => {
                         calls.run_parking(&self.gate, || host.focus_store(store));
@@ -685,10 +745,13 @@ impl TextInputOwner {
             } else if let Some(Err(error)) =
                 calls.run_parking(&self.gate, || project_ime_event(&*client.store, event))
             {
-                tracing::warn!(
-                    ?error,
-                    "an IME event could not be applied to the text store"
-                );
+                // A diagnostic runs a user-installed subscriber.
+                calls.run(|| {
+                    tracing::warn!(
+                        ?error,
+                        "an IME event could not be applied to the text store"
+                    );
+                });
             }
             // A grant or callback that detached the client left this clone its
             // last owner, and its destruction may settle a grant of its own.
@@ -734,7 +797,7 @@ impl TextInputOwner {
         // this anchor runs.
         let mut calls = OwnerCalls::new();
         calls.take_parked(&self.gate);
-        self.apply_host_ops(&mut calls);
+        self.apply_host_ops(&mut calls, HostTurn::Own);
         let ran = self.run_store_grants(&mut calls);
         calls.resume();
         ran
@@ -852,6 +915,11 @@ impl TextInputOwner {
         }
         for store in retired {
             failure.retire(store);
+        }
+        // A failure a store parked for this presentation's next turn came
+        // before the close; this is that turn.
+        if let Some(parked) = self.gate.take_failure() {
+            failure.keep_earlier(parked);
         }
         failure.finish();
     }
@@ -978,6 +1046,9 @@ impl Drop for TextInputOwner {
         for store in retired {
             failure.retire(store);
         }
+        if let Some(parked) = self.gate.take_failure() {
+            failure.keep_earlier(parked);
+        }
         failure.finish_contained();
     }
 }
@@ -995,12 +1066,23 @@ impl TextInputHandle {
 
     /// Attach `client` as this presentation's active IME client, installing
     /// the presentation's commit gate into its store.
+    ///
+    /// Once the client is active the token is returned: a failure after that
+    /// point (enabling the platform, retiring the client it replaced, telling
+    /// a pull host the store) waits
+    /// in the presentation's gate for its next dispatch, anchor or close.
+    ///
+    /// # Panics
+    ///
+    /// Resumes a failure that rejects the client before it is active (its
+    /// store failing to take the gate, or a closed owner's retirement of
+    /// it), and one after it when the owner closed meanwhile.
     pub fn attach(&self, client: TextInputClient) -> Result<ClientToken, TextInputError> {
         match self.owner() {
             Ok(owner) => owner.attach(client),
             Err(error) => {
                 let mut failure = ClosePanic::for_rejection(self.close_mode.mode());
-                failure.retire(client);
+                retire_rejected(&mut failure, client);
                 failure.finish();
                 Err(error)
             }

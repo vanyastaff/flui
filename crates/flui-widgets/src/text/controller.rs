@@ -552,6 +552,13 @@ impl TextEditingController {
         });
     }
 
+    /// End the composition, keeping the text it shows as committed text: an
+    /// application edit (listeners hear it, and a platform session open
+    /// across it is dropped). A no-op without a composition.
+    pub(crate) fn end_composition(&self) {
+        self.app_edit(|guard| guard.composing.take().is_some());
+    }
+
     /// Empty the buffer and collapse the caret to `0`.
     ///
     /// Defined in terms of [`Self::set_text`] so the two cannot drift — same

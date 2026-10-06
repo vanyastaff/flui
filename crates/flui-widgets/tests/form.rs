@@ -294,6 +294,108 @@ pub(crate) fn dropping_a_composing_controller_keeps_the_preedit_out_of_the_value
     );
 }
 
+/// An input method reconverts "abc" and shows "xyz" while still composing,
+/// and the application sets the field's value to "xyz": the visible text is
+/// already the value, so the composition ends and "xyz" is the committed
+/// text, the value the field reports.
+///
+/// Red-check: write the value with `set_text` alone — the equal buffer makes
+/// it a no-op, the composition stays, and the field still reports "abc".
+pub(crate) fn setting_the_shown_text_as_the_value_ends_a_reconversion() {
+    use flui_platform_api::text_store::{
+        Composition, LockGrant, LockOutcome, LockTiming, Utf16Offset, Utf16Range,
+    };
+
+    let form = FormHandle::new();
+    let field = FormFieldHandle::new();
+    let controller = TextEditingController::with_text("abc");
+    let node = FocusNode::with_debug_label("reconverting");
+    let mut harness = crate::common::harness::mount_with_ime(
+        Form::new(
+            RawTextFormField::new(controller.clone())
+                .focus_node(Rc::clone(&node))
+                .handle(field.clone()),
+        )
+        .handle(form),
+    );
+    node.request_focus();
+    harness.tick();
+    let store = harness
+        .active_text_store()
+        .expect("the focused field is the active IME client");
+    let whole = Utf16Range::new(Utf16Offset::new(0), Utf16Offset::new(3)).expect("ordered");
+    let composing = Some(Composition {
+        range: whole,
+        hides_caret: false,
+    });
+    let outcome = store.request_lock(
+        LockGrant::read_write(move |session| {
+            session.set_composition(composing).expect("in range");
+            session.replace(whole, "xyz").expect("in range");
+            session.set_composition(composing).expect("in range");
+        }),
+        LockTiming::Sync,
+    );
+    assert_eq!(outcome, Ok(LockOutcome::Granted));
+    harness.tick();
+    assert_eq!(controller.text(), "xyz");
+    assert_eq!(field.value(), "abc", "the reconversion stands for \"abc\"");
+
+    field.set_value("xyz".to_owned());
+    harness.tick();
+    assert_eq!(controller.composing_range(), None, "the composition ended");
+    assert_eq!(controller.text(), "xyz");
+    assert_eq!(field.value(), "xyz", "the requested value is the field's");
+}
+
+/// An input method composes a new "X" after "ab", and the application sets
+/// the field's value to the "abX" the field shows: the composition ends, so
+/// "abX" is committed and is the field's value.
+///
+/// Red-check: write the value with `set_text` alone — the equal buffer makes
+/// it a no-op and the field keeps reporting "ab".
+pub(crate) fn setting_the_shown_preedit_as_the_value_commits_it() {
+    use flui_platform_api::text_store::{
+        Composition, LockGrant, LockOutcome, LockTiming, Utf16Offset, Utf16Range,
+    };
+
+    let field = FormFieldHandle::new();
+    let controller = TextEditingController::with_text("ab");
+    let node = FocusNode::with_debug_label("composing new text");
+    let mut harness = crate::common::harness::mount_with_ime(Form::new(
+        RawTextFormField::new(controller.clone())
+            .focus_node(Rc::clone(&node))
+            .handle(field.clone()),
+    ));
+    node.request_focus();
+    harness.tick();
+    let store = harness
+        .active_text_store()
+        .expect("the focused field is the active IME client");
+    let outcome = store.request_lock(
+        LockGrant::read_write(|session| {
+            session.insert_at_selection("X").expect("in range");
+            session
+                .set_composition(Some(Composition {
+                    range: Utf16Range::new(Utf16Offset::new(2), Utf16Offset::new(3))
+                        .expect("ordered"),
+                    hides_caret: false,
+                }))
+                .expect("in range");
+        }),
+        LockTiming::Sync,
+    );
+    assert_eq!(outcome, Ok(LockOutcome::Granted));
+    harness.tick();
+    assert_eq!(controller.text(), "abX");
+    assert_eq!(field.value(), "ab", "the preedit is not committed yet");
+
+    field.set_value("abX".to_owned());
+    harness.tick();
+    assert_eq!(controller.composing_range(), None, "the composition ended");
+    assert_eq!(field.value(), "abX", "the requested value is the field's");
+}
+
 pub(crate) fn a_panicking_reset_callback_does_not_disable_later_form_validation() {
     let form = FormHandle::new();
     let field = FormFieldHandle::new();

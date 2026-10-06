@@ -310,6 +310,19 @@ impl ClosePanic {
         }
     }
 
+    /// Keep `payload`, a failure caught before this close began (one a store
+    /// parked for its presentation), ahead of the close's own: raised by an
+    /// ordinary close, retained by a preserving one (ADR-0123).
+    pub(crate) fn keep_earlier(&mut self, payload: Box<dyn Any + Send>) {
+        if self.preserving {
+            flui_foundation::panic::retain_opaque_payload(payload);
+            return;
+        }
+        if let Some(later) = self.first.replace(payload) {
+            flui_foundation::panic::retain_opaque_payload(later);
+        }
+    }
+
     pub(crate) fn finish(mut self) {
         if let Some(payload) = self.first.take() {
             resume_unwind(payload);
