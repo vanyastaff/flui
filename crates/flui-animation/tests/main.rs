@@ -21,6 +21,9 @@ mod controller_sources;
 #[path = "contracts/curved.rs"]
 mod curved;
 
+#[path = "contracts/curves.rs"]
+mod curves;
+
 mod derive_animatable;
 
 #[path = "contracts/proxy.rs"]
