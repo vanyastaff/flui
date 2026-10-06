@@ -852,6 +852,10 @@ pub(crate) struct DetachedArenaBatch {
 }
 
 impl GestureArena {
+    pub(crate) fn close_tombstone(&self) -> CloseTombstone {
+        self.close_mode.clone()
+    }
+
     fn allocate_slot(&self, pointer: PointerId) -> Arc<ArenaSlot> {
         let generation = ArenaGeneration(
             self.next_generation

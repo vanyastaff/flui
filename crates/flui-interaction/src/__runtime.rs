@@ -5,10 +5,11 @@ use std::{
     panic::{AssertUnwindSafe, catch_unwind, resume_unwind},
     sync::{
         Arc,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
 };
 
+pub use crate::routing::DispatchCustody;
 use crate::{FocusManager, TextInputOwner, retain::Retain};
 
 /// Whether terminal cleanup already owes an earlier failure to its caller.
@@ -30,6 +31,30 @@ pub fn presentation_dispatch(
 /// Withdraw a presentation's registered targets on the owner thread.
 pub fn close_dispatch(handle: &crate::InteractionDispatchHandle, mode: CloseMode) {
     handle.close_owner(mode);
+}
+
+/// Withdraw a presentation's dispatch authority on the owner thread, keeping
+/// its captures until [`retire_dispatch`]: a presentation closes every other
+/// capability before any of them is destroyed (ADR-0123).
+pub fn withdraw_dispatch(
+    handle: &crate::InteractionDispatchHandle,
+    mode: CloseMode,
+) -> Option<DispatchCustody> {
+    handle.withdraw_owner(mode)
+}
+
+/// [`withdraw_dispatch`] through the physical lane, without TLS activation.
+pub fn withdraw_dispatch_in(
+    lane: &crate::InteractionLane,
+    handle: &crate::InteractionDispatchHandle,
+    mode: CloseMode,
+) -> Option<DispatchCustody> {
+    handle.withdraw_owner_in(lane, mode)
+}
+
+/// Destroy what [`withdraw_dispatch`] withdrew, or retain it in preserving mode.
+pub fn retire_dispatch(custody: DispatchCustody, mode: CloseMode) {
+    custody.retire(mode);
 }
 
 /// Withdraw through the physical lane during realm destruction, without TLS activation.
@@ -61,26 +86,115 @@ pub fn close_mouse_tracker(owner: &crate::routing::MouseTracker, mode: CloseMode
     owner.close_with_mode(mode);
 }
 
-/// A terminal mode outlives an owner without retaining that owner or its callbacks.
-#[derive(Clone, Debug)]
-pub(crate) struct CloseTombstone(Arc<AtomicBool>);
+/// The reentry window of one presentation close, across every owner it closes.
+///
+/// A destructor or platform callback run by one owner's close can reenter
+/// another owner that closed earlier in the same presentation close. While
+/// this window is held, such a rejection follows the close's retention policy
+/// once [`Self::preserve`] marked it preserving; after the window is dropped,
+/// rejections through stale handles retire normally again.
+#[derive(Debug, Default)]
+pub struct CloseWindow {
+    terminals: Vec<CloseTombstone>,
+}
 
-impl Default for CloseTombstone {
-    fn default() -> Self {
-        Self(Arc::new(AtomicBool::new(false)))
+impl CloseWindow {
+    /// An empty window; add each owner the presentation closes.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Hold the window of a presentation's dispatch owner.
+    pub fn dispatch(&mut self, handle: &crate::InteractionDispatchHandle) {
+        if let Some(terminal) = handle.close_tombstone() {
+            self.hold(terminal);
+        }
+    }
+
+    /// Hold the window of a presentation's focus owner.
+    pub fn focus(&mut self, owner: &FocusManager) {
+        self.hold(owner.close_tombstone());
+    }
+
+    /// Hold the window of a presentation's text-input owner.
+    pub fn text_input(&mut self, owner: &TextInputOwner) {
+        self.hold(owner.close_tombstone());
+    }
+
+    /// Hold the windows of a presentation's gesture binding, its arena,
+    /// pointer router and mouse tracker.
+    pub fn gestures(&mut self, owner: &crate::GestureBinding) {
+        for terminal in owner.close_tombstones() {
+            self.hold(terminal);
+        }
+    }
+
+    /// The presentation close owes a failure: every owner it closes, earlier
+    /// or later, retains what it withdraws or rejects from now on.
+    pub fn preserve(&self) {
+        for terminal in &self.terminals {
+            terminal.preserve();
+        }
+    }
+
+    fn hold(&mut self, terminal: CloseTombstone) {
+        terminal.enter_close();
+        self.terminals.push(terminal);
     }
 }
 
+impl Drop for CloseWindow {
+    fn drop(&mut self) {
+        for terminal in &self.terminals {
+            terminal.exit_close();
+        }
+    }
+}
+
+/// A terminal mode outlives an owner without retaining that owner or its callbacks.
+///
+/// Two policies hang off it. Values a preserving close withdrew stay under
+/// retention wherever their last owner later lands ([`Self::preserved`]).
+/// Values offered to or invoked through the closed owner afterwards follow
+/// [`Self::mode`], which is preserving only while a close of this owner is in
+/// progress, so a destructor that reenters during that close cannot destroy
+/// what the close owes its failure; once the close returns and its failure is
+/// caught, rejections through stale handles retire normally again.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct CloseTombstone(Arc<TombstoneState>);
+
+#[derive(Debug, Default)]
+struct TombstoneState {
+    preserved: AtomicBool,
+    closing: AtomicUsize,
+}
+
 impl CloseTombstone {
+    /// The policy for values rejected by, or run through, the closed owner.
     pub(crate) fn mode(&self) -> CloseMode {
-        if self.0.load(Ordering::Acquire) {
+        if self.0.closing.load(Ordering::Acquire) > 0 && self.preserved() {
             CloseMode::PreservingFailure
         } else {
             CloseMode::Ordinary
         }
     }
+
+    /// Whether a close of this owner ran, or turned, preserving.
+    pub(crate) fn preserved(&self) -> bool {
+        self.0.preserved.load(Ordering::Acquire)
+    }
+
     pub(crate) fn preserve(&self) {
-        self.0.store(true, Ordering::Release);
+        self.0.preserved.store(true, Ordering::Release);
+    }
+
+    fn enter_close(&self) {
+        self.0.closing.fetch_add(1, Ordering::AcqRel);
+    }
+
+    fn exit_close(&self) {
+        self.0.closing.fetch_sub(1, Ordering::AcqRel);
     }
 }
 
@@ -103,10 +217,11 @@ impl ClosePanic {
     pub(crate) fn for_close(mode: CloseMode, terminal: CloseTombstone) -> Self {
         let preserving = mode == CloseMode::PreservingFailure
             || std::thread::panicking()
-            || terminal.mode() == CloseMode::PreservingFailure;
+            || terminal.preserved();
         if preserving {
             terminal.preserve();
         }
+        terminal.enter_close();
         Self {
             first: None,
             preserving,
@@ -118,6 +233,17 @@ impl ClosePanic {
         let mut state = Self::new();
         state.preserving |= mode == CloseMode::PreservingFailure;
         state
+    }
+
+    /// Continue this close under the caller's current mode: a failure the
+    /// caller caught since the close began makes the rest of it preserving.
+    pub(crate) fn adopt(&mut self, mode: CloseMode) {
+        if mode == CloseMode::PreservingFailure || std::thread::panicking() {
+            self.preserving = true;
+            if let Some(terminal) = &self.terminal {
+                terminal.preserve();
+            }
+        }
     }
 
     pub(crate) fn preserving(&self) -> bool {
@@ -160,14 +286,25 @@ impl ClosePanic {
         }
     }
 
-    pub(crate) fn finish(self) {
-        if let Some(payload) = self.first {
+    /// Release a framework-owned handle (a platform capability): dropping it
+    /// runs no user code, so it is destroyed even after a failure. Only an
+    /// unwind already in progress retains it (ADR-0127).
+    pub(crate) fn release<T>(&mut self, value: T) {
+        if std::thread::panicking() {
+            std::mem::forget(value);
+        } else {
+            let _ = self.invoke(|| drop(value));
+        }
+    }
+
+    pub(crate) fn finish(mut self) {
+        if let Some(payload) = self.first.take() {
             resume_unwind(payload);
         }
     }
 
-    pub(crate) fn finish_contained(self) {
-        if let Some(payload) = self.first {
+    pub(crate) fn finish_contained(mut self) {
+        if let Some(payload) = self.first.take() {
             flui_foundation::panic::retain_opaque_payload(payload);
         }
     }
@@ -179,6 +316,15 @@ impl ClosePanic {
             T::default()
         } else {
             value
+        }
+    }
+}
+
+impl Drop for ClosePanic {
+    /// Ends this close's reentry window, including when its failure unwinds.
+    fn drop(&mut self) {
+        if let Some(terminal) = &self.terminal {
+            terminal.exit_close();
         }
     }
 }
