@@ -393,7 +393,11 @@ Explicit release and element-owned release commit the slot's terminal state,
 reader removal and reusable index before retiring its value outside the graph
 borrow. Element teardown commits every owned slot before running the first
 destructor. A destructor can reenter the graph and allocate a replacement; a
-stale release cannot remove that replacement. Once a retirement fails, remaining
+stale release cannot remove that replacement. The departing element itself admits
+no new owned slot while its release runs: a destructor that creates one is refused
+(`signal_owned_by` panics holding the refused value, so the unwind retains it), and
+teardown is one pass even for a value that recreates itself from its destructor
+(`owner_release_refuses_signals_its_destructors_reintroduce`). Once a retirement fails, remaining
 opaque values are retained and the first payload resumes. Release during active
 unwind likewise retains its opaque value. The public
 `explicit_release_allows_destructor_reentry_and_slot_reuse` and
