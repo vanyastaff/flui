@@ -274,6 +274,14 @@ mod native_windows {
             unconsumed_alt_space_keeps_its_system_char,
         ),
         (
+            "pumping_consumer_of_alt_space_never_sees_its_system_char",
+            pumping_consumer_of_alt_space_never_sees_its_system_char,
+        ),
+        (
+            "pumping_handler_of_alt_space_keeps_its_system_char",
+            pumping_handler_of_alt_space_keeps_its_system_char,
+        ),
+        (
             "resize_callback_preserves_large_native_dimensions",
             resize_callback_preserves_large_native_dimensions,
         ),
@@ -1256,10 +1264,16 @@ mod native_windows {
     }
 
     fn consumed_alt_space_withdraws_its_system_char() {
-        alt_space_system_char(true);
+        alt_space_system_char(true, false);
     }
     fn unconsumed_alt_space_keeps_its_system_char() {
-        alt_space_system_char(false);
+        alt_space_system_char(false, false);
+    }
+    fn pumping_consumer_of_alt_space_never_sees_its_system_char() {
+        alt_space_system_char(true, true);
+    }
+    fn pumping_handler_of_alt_space_keeps_its_system_char() {
+        alt_space_system_char(false, true);
     }
 
     // Alt+Space goes through the message loop's own path: the keydown is
@@ -1267,12 +1281,15 @@ mod native_windows {
     // dispatched. That character is what `DefWindowProc` turns into the
     // system menu, so a consumed keydown must withdraw it and an unconsumed
     // one must leave it queued. The row never dispatches a WM_SYSCHAR itself:
-    // one left behind is counted, not allowed to open a modal menu.
+    // one left behind is counted, not allowed to open a modal menu. With
+    // `pump`, the handler pumps this window's messages before answering, as
+    // a modal API does: the character must not be dispatchable then, since
+    // the handler's result is not known yet.
     #[expect(
         unsafe_code,
         reason = "actual owned Win32 key translation and message pumping"
     )]
-    fn alt_space_system_char(consume: bool) {
+    fn alt_space_system_char(consume: bool, pump: bool) {
         let platform = WindowsPlatform::new().expect("native Windows platform");
         let window = open_shown(&platform);
         let hwnd = window
@@ -1282,12 +1299,38 @@ mod native_windows {
             .hwnd();
         let keydowns = Arc::new(AtomicUsize::new(0));
         let keydown_observations = Arc::clone(&keydowns);
+        let pumped = Arc::new(Mutex::new(Vec::new()));
+        let pumped_observations = Arc::clone(&pumped);
+        // The input callback must be `Send`; carry the handle as an address.
+        let pumped_window = hwnd.0 as usize;
         window.on_input(Box::new(move |event| {
             if event
                 .as_keyboard()
                 .is_some_and(|key| key.state == keyboard_types::KeyState::Down)
             {
                 keydown_observations.fetch_add(1, Ordering::SeqCst);
+                if pump {
+                    let mut message = MSG::default();
+                    // SAFETY: the handler runs on the window's creating
+                    // thread; only that HWND's queue is pumped. A WM_SYSCHAR
+                    // the pump reaches is recorded instead of dispatched, so
+                    // it cannot open a modal menu.
+                    let hwnd = HWND(pumped_window as *mut _);
+                    while unsafe { PeekMessageW(&raw mut message, Some(hwnd), 0, 0, PM_REMOVE) }
+                        .as_bool()
+                    {
+                        if message.message == WM_SYSCHAR {
+                            pumped_observations
+                                .lock()
+                                .expect("pumped characters")
+                                .push(message.wParam.0);
+                        } else {
+                            // SAFETY: dispatches a message this thread's
+                            // queue just returned.
+                            unsafe { DispatchMessageW(&raw const message) };
+                        }
+                    }
+                }
             }
             DispatchEventResult::resolved(true, consume)
         }));
@@ -1340,6 +1383,11 @@ mod native_windows {
             system_chars.push(message.wParam.0);
         }
         assert_eq!(keydowns.load(Ordering::SeqCst), 1, "keydown delivery");
+        let pumped = std::mem::take(&mut *pumped.lock().expect("pumped characters"));
+        assert!(
+            pumped.is_empty(),
+            "a handler's pump reached {pumped:?} before its result was known"
+        );
         if consume {
             assert!(
                 system_chars.is_empty(),

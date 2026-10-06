@@ -29,11 +29,11 @@ use windows::{
                 DispatchMessageW, GWLP_USERDATA, GetClassNameW, GetClientRect, GetForegroundWindow,
                 GetMessageW, GetWindowLongPtrW, GetWindowThreadProcessId, HICON, HTCLIENT,
                 HWND_MESSAGE, IDC_ARROW, IsWindowVisible, MSG, MWMO_INPUTAVAILABLE,
-                MsgWaitForMultipleObjectsEx, PM_REMOVE, PeekMessageW, PostQuitMessage, QS_ALLINPUT,
-                RegisterClassW, SC_KEYMENU, SW_SHOWNORMAL, SWP_NOACTIVATE, SWP_NOZORDER,
-                SetForegroundWindow, SetWindowLongPtrW, SetWindowPos, TranslateMessage,
-                WINDOW_EX_STYLE, WINDOW_STYLE, WM_CHAR, WM_CLOSE, WM_CREATE, WM_DESTROY,
-                WM_DPICHANGED, WM_ERASEBKGND, WM_INPUTLANGCHANGE, WM_KEYDOWN, WM_KEYUP,
+                MsgWaitForMultipleObjectsEx, PM_REMOVE, PeekMessageW, PostMessageW,
+                PostQuitMessage, QS_ALLINPUT, RegisterClassW, SC_KEYMENU, SW_SHOWNORMAL,
+                SWP_NOACTIVATE, SWP_NOZORDER, SetForegroundWindow, SetWindowLongPtrW, SetWindowPos,
+                TranslateMessage, WINDOW_EX_STYLE, WINDOW_STYLE, WM_CHAR, WM_CLOSE, WM_CREATE,
+                WM_DESTROY, WM_DPICHANGED, WM_ERASEBKGND, WM_INPUTLANGCHANGE, WM_KEYDOWN, WM_KEYUP,
                 WM_KILLFOCUS, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP,
                 WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_MOVE, WM_PAINT, WM_QUIT,
                 WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETCURSOR, WM_SETFOCUS, WM_SETTINGCHANGE,
@@ -1675,6 +1675,17 @@ impl WindowsPlatform {
                         // here. Pairing model and merge rules:
                         // `crate::shared::keys` module doc.
                         let translated = drain_translated_chars(hwnd);
+                        // The default a system keydown may skip also lives in
+                        // the WM_SYSCHAR `TranslateMessage` queued for it:
+                        // `DefWindowProcW` turns Alt+Space's into the system
+                        // menu. Hold it before user code runs, since a
+                        // handler that pumps messages (a modal API) would
+                        // otherwise dispatch it before the result is known.
+                        let held = if msg == WM_SYSKEYDOWN {
+                            take_translated_sys_chars(hwnd)
+                        } else {
+                            Vec::new()
+                        };
 
                         // Dispatch keyboard event via per-window callback
                         use super::events::key_down_event;
@@ -1687,15 +1698,13 @@ impl WindowsPlatform {
                         if result.default_prevented
                             || GetWindowLongPtrW(hwnd, GWLP_USERDATA) != ctx_ptr as isize
                         {
-                            // The default this keydown skipped also lives in
-                            // the WM_SYSCHAR `TranslateMessage` queued for it:
-                            // `DefWindowProcW` turns Alt+Space's into the
-                            // system menu. Withdraw it with its keydown.
-                            if msg == WM_SYSKEYDOWN {
-                                discard_translated_sys_chars(hwnd);
-                            }
+                            // Withdrawn with its keydown: the held
+                            // characters are dropped here.
                             return LRESULT(0);
                         }
+                        let handled = DefWindowProcW(hwnd, msg, wparam, lparam);
+                        restore_translated_sys_chars(hwnd, &held);
+                        return handled;
                     }
 
                     DefWindowProcW(hwnd, msg, wparam, lparam)
@@ -2731,7 +2740,7 @@ fn current_modifiers() -> keyboard_types::Modifiers {
 /// (two of them for an astral-plane character) is already posted. Draining
 /// filters exactly `WM_CHAR` for this window: `WM_SYSCHAR` is deliberately
 /// left queued so Alt+mnemonic accelerators still flow to `DefWindowProcW`
-/// (unless the keydown's default is prevented: [`discard_translated_sys_chars`]),
+/// (held across the keydown's dispatch: [`take_translated_sys_chars`]),
 /// and `WM_DEADCHAR` is left to expire so dead-key state stays Windows'
 /// business. Returns `None` for keystrokes with no typeable translation
 /// (navigation keys, Ctrl chords — see `shared::keys::wm_char_text`).
@@ -2755,16 +2764,38 @@ fn drain_translated_chars(hwnd: HWND) -> Option<String> {
 }
 
 /// Remove the `WM_SYSCHAR` burst `TranslateMessage` queued for a system
-/// keydown whose default was prevented, so its character never reaches
-/// `DefWindowProcW` (which would raise `SC_KEYMENU` from it, and open the
-/// system menu for Alt+Space). The same queue-ordering argument as
-/// [`drain_translated_chars`] makes the burst complete here.
-fn discard_translated_sys_chars(hwnd: HWND) {
+/// keydown before user code sees the keydown, so a handler that pumps
+/// messages cannot hand a character to `DefWindowProcW` (which would raise
+/// `SC_KEYMENU` from it, and open the system menu for Alt+Space) before its
+/// result says whether the default runs. The same queue-ordering argument as
+/// [`drain_translated_chars`] makes the burst complete here. The burst is
+/// almost always empty or one character, so the `Vec` rarely allocates.
+fn take_translated_sys_chars(hwnd: HWND) -> Vec<(WPARAM, LPARAM)> {
+    let mut held = Vec::new();
     let mut msg = MSG::default();
     // SAFETY: as in `drain_translated_chars`: a live writable local, and
     // `PM_REMOVE` touches only this thread's own queue.
     unsafe {
-        while PeekMessageW(&raw mut msg, Some(hwnd), WM_SYSCHAR, WM_SYSCHAR, PM_REMOVE).as_bool() {}
+        while PeekMessageW(&raw mut msg, Some(hwnd), WM_SYSCHAR, WM_SYSCHAR, PM_REMOVE).as_bool() {
+            held.push((msg.wParam, msg.lParam));
+        }
+    }
+    held
+}
+
+/// Return the characters [`take_translated_sys_chars`] held for a system
+/// keydown whose default ran, to be dispatched after it as `TranslateMessage`
+/// had queued them. If the queue refuses one, it gets its default now rather
+/// than being lost.
+fn restore_translated_sys_chars(hwnd: HWND, held: &[(WPARAM, LPARAM)]) {
+    for &(wparam, lparam) in held {
+        // SAFETY: posts integer character data to this thread's own live
+        // window, whose wndproc is running on this thread now.
+        if unsafe { PostMessageW(Some(hwnd), WM_SYSCHAR, wparam, lparam) }.is_err() {
+            // SAFETY: the same live window, called synchronously on its
+            // creating thread with the message `TranslateMessage` produced.
+            unsafe { DefWindowProcW(hwnd, WM_SYSCHAR, wparam, lparam) };
+        }
     }
 }
 
