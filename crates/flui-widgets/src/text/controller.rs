@@ -13,6 +13,7 @@ use flui_painting::text_boundaries::{
 
 use flui_foundation::ListenerId;
 use flui_foundation::notifier::{ChangeNotifier, Listenable, ListenerCallback};
+use flui_platform_api::text_store::{EditGeneration, RetainOnFailure, committed_text};
 
 // ============================================================================
 // ControllerInner
@@ -111,6 +112,11 @@ pub(super) struct ControllerInner {
     /// folded into one option rather than a sibling `caret_hidden: bool`
     /// field tracked independently.
     pub(super) composing: Option<ComposingState>,
+    /// How many application edits the controller has taken: every public
+    /// mutator that changes something advances it, the text store's own
+    /// write-back does not. A platform session records it when its lock
+    /// opens and drops its result if it moved (ADR-0142 item 3).
+    pub(super) generation: EditGeneration,
 }
 
 /// The in-progress IME composition: its byte range into
@@ -148,6 +154,10 @@ pub(super) struct ComposingState {
     /// siblings) — the user taking the caret back means the IME no longer
     /// owns its position, even though the composition itself continues.
     pub(super) caret_hidden: bool,
+    /// What the composition stands for in the committed text: the text its
+    /// range held before the composition began, empty for a new preedit and
+    /// the reconverted words for a reconversion (ADR-0142 item 1).
+    pub(super) origin: String,
 }
 
 // ============================================================================
@@ -315,6 +325,14 @@ impl Default for TextEditingController {
     }
 }
 
+impl RetainOnFailure for TextEditingController {
+    /// Forgotten whole: its listener list is a thread-shared `Arc`, which
+    /// another thread may make this clone the last owner of (ADR-0127).
+    fn retain(self) {
+        std::mem::forget(self);
+    }
+}
+
 impl TextEditingController {
     /// Create a controller with an empty text buffer and caret at position 0.
     #[must_use]
@@ -324,6 +342,7 @@ impl TextEditingController {
                 text: String::new(),
                 selection: Selection::collapsed(0),
                 composing: None,
+                generation: EditGeneration::FIRST,
             })),
             notifier: ChangeNotifier::new(),
         }
@@ -339,6 +358,7 @@ impl TextEditingController {
                 text,
                 selection,
                 composing: None,
+                generation: EditGeneration::FIRST,
             })),
             notifier: ChangeNotifier::new(),
         }
@@ -355,6 +375,28 @@ impl TextEditingController {
             .unwrap_or_else(PoisonError::into_inner)
             .text
             .clone()
+    }
+
+    /// The committed text: [`Self::text`] with the IME composition's range
+    /// replaced by the text it held before the composition began — nothing
+    /// for a new preedit, the original words for a reconversion — so what
+    /// the user has confirmed rather than what an input method is still
+    /// composing.
+    ///
+    /// This is the text a field's owner works with: `on_changed` receives
+    /// it and is called only when it changes, and a text form field
+    /// validates and saves it (ADR-0090). Equal to [`Self::text`] whenever
+    /// [`Self::is_composing`] is `false`.
+    #[must_use]
+    pub fn committed_text(&self) -> String {
+        let guard = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
+        committed_text(
+            &guard.text,
+            guard
+                .composing
+                .as_ref()
+                .map(|state| (state.range.clone(), state.origin.as_str())),
+        )
     }
 
     /// The current caret position as a byte offset into [`Self::text`].
@@ -446,20 +488,16 @@ impl TextEditingController {
     /// offset — which a pointer-move stream does constantly — does not
     /// rebuild the field on every event.
     pub fn set_selection(&self, anchor: usize, extent: usize) {
-        let changed = {
-            let mut guard = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
+        self.app_edit(|guard| {
             let next = Selection {
                 anchor: clamp_to_grapheme_boundary(&guard.text, anchor),
                 caret: clamp_to_grapheme_boundary(&guard.text, extent),
             };
             let moved = guard.selection != next;
             guard.selection = next;
-            let unhid = clear_caret_hidden(&mut guard);
+            let unhid = clear_caret_hidden(guard);
             moved || unhid
-        };
-        if changed {
-            self.notifier.notify_listeners();
-        }
+        });
     }
 
     /// Insert `text` at the current caret position and advance the caret past it.
@@ -472,8 +510,7 @@ impl TextEditingController {
     ///
     /// Notifies listeners after the insertion.
     pub fn insert_str(&self, text: &str) {
-        {
-            let mut guard = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
+        self.app_edit(|guard| {
             // A non-collapsed selection is REPLACED, which is what every text
             // editor does. Deleting first and inserting at the
             // range's start keeps this one notification, not two.
@@ -482,8 +519,8 @@ impl TextEditingController {
             let caret = clamp_to_grapheme_boundary(&guard.text, at + text.len());
             guard.selection = Selection::collapsed(caret);
             guard.composing = None;
-        }
-        self.notifier.notify_listeners();
+            true
+        });
     }
 
     /// Replace the whole buffer with `text`, ignoring the current selection —
@@ -503,8 +540,7 @@ impl TextEditingController {
     /// a rebuild loop.
     pub fn set_text(&self, text: impl Into<String>) {
         let text = text.into();
-        let changed = {
-            let mut guard = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
+        self.app_edit(|guard| {
             if guard.text == text {
                 false
             } else {
@@ -513,10 +549,14 @@ impl TextEditingController {
                 guard.composing = None;
                 true
             }
-        };
-        if changed {
-            self.notifier.notify_listeners();
-        }
+        });
+    }
+
+    /// End the composition, keeping the text it shows as committed text: an
+    /// application edit (listeners hear it, and a platform session open
+    /// across it is dropped). A no-op without a composition.
+    pub(crate) fn end_composition(&self) {
+        self.app_edit(|guard| guard.composing.take().is_some());
     }
 
     /// Empty the buffer and collapse the caret to `0`.
@@ -534,8 +574,7 @@ impl TextEditingController {
     /// [`Self::insert_str`]'s doc for why a non-IME text edit must not
     /// leave a stale composing range behind.
     pub fn backspace(&self) {
-        let changed = {
-            let mut guard = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
+        self.app_edit(|guard| {
             // With a selection, Backspace deletes the selection rather than
             // one character — the character before its start is not part of
             // what the user asked to remove.
@@ -557,10 +596,7 @@ impl TextEditingController {
                     true
                 }
             }
-        };
-        if changed {
-            self.notifier.notify_listeners();
-        }
+        });
     }
 
     /// Delete the character immediately to the **right** of the caret (Delete key).
@@ -570,8 +606,7 @@ impl TextEditingController {
     /// doc for why a non-IME text edit must not leave a stale composing
     /// range behind.
     pub fn delete_forward(&self) {
-        let changed = {
-            let mut guard = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
+        self.app_edit(|guard| {
             // Same rule as Backspace: a selection is what gets deleted.
             if guard.selection.is_extended() {
                 let at = guard.delete_selected_range();
@@ -590,10 +625,7 @@ impl TextEditingController {
                     true
                 }
             }
-        };
-        if changed {
-            self.notifier.notify_listeners();
-        }
+        });
     }
 
     /// Move the selection's EXTENT one character left, leaving the anchor —
@@ -643,21 +675,17 @@ impl TextEditingController {
     /// forgot it would silently collapse — the failure this whole shape exists
     /// to make impossible.
     fn extend_to(&self, next: impl FnOnce(&ControllerInner) -> Option<usize>) {
-        let changed = {
-            let mut guard = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
-            let moved = match next(&guard) {
+        self.app_edit(|guard| {
+            let moved = match next(guard) {
                 Some(caret) if caret != guard.selection.caret => {
                     guard.selection.caret = caret;
                     true
                 }
                 _ => false,
             };
-            let unhid = clear_caret_hidden(&mut guard);
+            let unhid = clear_caret_hidden(guard);
             moved || unhid
-        };
-        if changed {
-            self.notifier.notify_listeners();
-        }
+        });
     }
 
     /// Move the caret one character to the left.
@@ -667,8 +695,7 @@ impl TextEditingController {
     /// taking the caret back means the IME no longer owns its position, even
     /// though the composition itself keeps running.
     pub fn move_caret_left(&self) {
-        let changed = {
-            let mut guard = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
+        self.app_edit(|guard| {
             // With a selection, Left COLLAPSES to its logical start and moves
             // no further. Collapsing *and* stepping would skip a character
             // the user can see.
@@ -689,12 +716,9 @@ impl TextEditingController {
             // clear even when the caret was already at the boundary — a
             // no-op move at the buffer's edge still means the user reached
             // for the caret directly.
-            let unhid = clear_caret_hidden(&mut guard);
+            let unhid = clear_caret_hidden(guard);
             moved || unhid
-        };
-        if changed {
-            self.notifier.notify_listeners();
-        }
+        });
     }
 
     /// Move the caret one character to the right.
@@ -703,8 +727,7 @@ impl TextEditingController {
     /// [`Self::caret_hidden_by_ime`] when a composition is active — see
     /// [`Self::move_caret_left`]'s doc.
     pub fn move_caret_right(&self) {
-        let changed = {
-            let mut guard = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
+        self.app_edit(|guard| {
             // The mirror of Left — see its comment for the reference.
             let moved = if guard.selection.is_extended() {
                 guard.selection = Selection::collapsed(guard.selection.range().end);
@@ -719,12 +742,9 @@ impl TextEditingController {
                     true
                 }
             };
-            let unhid = clear_caret_hidden(&mut guard);
+            let unhid = clear_caret_hidden(guard);
             moved || unhid
-        };
-        if changed {
-            self.notifier.notify_listeners();
-        }
+        });
     }
 
     /// Move the caret to the beginning of the buffer (Home).
@@ -733,20 +753,16 @@ impl TextEditingController {
     /// [`Self::caret_hidden_by_ime`] when a composition is active — see
     /// [`Self::move_caret_left`]'s doc.
     pub fn move_caret_home(&self) {
-        let changed = {
-            let mut guard = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
+        self.app_edit(|guard| {
             let moved = if guard.selection == Selection::collapsed(0) {
                 false
             } else {
                 guard.selection = Selection::collapsed(0);
                 true
             };
-            let unhid = clear_caret_hidden(&mut guard);
+            let unhid = clear_caret_hidden(guard);
             moved || unhid
-        };
-        if changed {
-            self.notifier.notify_listeners();
-        }
+        });
     }
 
     /// Move the caret to the end of the buffer (End).
@@ -755,8 +771,7 @@ impl TextEditingController {
     /// [`Self::caret_hidden_by_ime`] when a composition is active — see
     /// [`Self::move_caret_left`]'s doc.
     pub fn move_caret_end(&self) {
-        let changed = {
-            let mut guard = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
+        self.app_edit(|guard| {
             let end = guard.text.len();
             let moved = if guard.selection == Selection::collapsed(end) {
                 false
@@ -764,12 +779,9 @@ impl TextEditingController {
                 guard.selection = Selection::collapsed(end);
                 true
             };
-            let unhid = clear_caret_hidden(&mut guard);
+            let unhid = clear_caret_hidden(guard);
             moved || unhid
-        };
-        if changed {
-            self.notifier.notify_listeners();
-        }
+        });
     }
 
     // =========================================================================
@@ -785,8 +797,7 @@ impl TextEditingController {
     /// [`Self::caret_hidden_by_ime`], for the reason
     /// [`Self::move_caret_left`] documents.
     pub fn move_caret_word_left(&self) {
-        let changed = {
-            let mut guard = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
+        self.app_edit(|guard| {
             let moved = if guard.selection.is_extended() {
                 guard.selection = Selection::collapsed(guard.selection.range().start);
                 true
@@ -800,19 +811,15 @@ impl TextEditingController {
                     true
                 }
             };
-            let unhid = clear_caret_hidden(&mut guard);
+            let unhid = clear_caret_hidden(guard);
             moved || unhid
-        };
-        if changed {
-            self.notifier.notify_listeners();
-        }
+        });
     }
 
     /// Move the caret one WORD to the right — Ctrl/Alt+Right. The mirror
     /// of [`Self::move_caret_word_left`] — see its doc.
     pub fn move_caret_word_right(&self) {
-        let changed = {
-            let mut guard = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
+        self.app_edit(|guard| {
             let moved = if guard.selection.is_extended() {
                 guard.selection = Selection::collapsed(guard.selection.range().end);
                 true
@@ -826,12 +833,9 @@ impl TextEditingController {
                     true
                 }
             };
-            let unhid = clear_caret_hidden(&mut guard);
+            let unhid = clear_caret_hidden(guard);
             moved || unhid
-        };
-        if changed {
-            self.notifier.notify_listeners();
-        }
+        });
     }
 
     /// Move the selection's EXTENT one WORD left, leaving the anchor —
@@ -862,8 +866,7 @@ impl TextEditingController {
     /// buffer. Clears any active composing region on an actual deletion,
     /// same reason as [`Self::backspace`].
     pub fn delete_word_backward(&self) {
-        let changed = {
-            let mut guard = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
+        self.app_edit(|guard| {
             if guard.selection.is_extended() {
                 let at = guard.delete_selected_range();
                 guard.selection = Selection::collapsed(at);
@@ -881,18 +884,14 @@ impl TextEditingController {
                     true
                 }
             }
-        };
-        if changed {
-            self.notifier.notify_listeners();
-        }
+        });
     }
 
     /// Delete the WORD immediately to the right of the caret — Ctrl+Delete.
     /// Mirror of [`Self::delete_word_backward`], for the same reason
     /// [`Self::delete_forward`] exists beside [`Self::backspace`].
     pub fn delete_word_forward(&self) {
-        let changed = {
-            let mut guard = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
+        self.app_edit(|guard| {
             if guard.selection.is_extended() {
                 let at = guard.delete_selected_range();
                 guard.selection = Selection::collapsed(at);
@@ -909,10 +908,7 @@ impl TextEditingController {
                     true
                 }
             }
-        };
-        if changed {
-            self.notifier.notify_listeners();
-        }
+        });
     }
 
     // =========================================================================
@@ -998,6 +994,24 @@ impl TextEditingController {
     /// Notify listeners of a change made through [`Self::with_inner_silent`].
     pub(super) fn notify_changed(&self) {
         self.notifier.notify_listeners();
+    }
+
+    /// Apply an application edit under the lock. `edit` says whether it
+    /// changed anything; a change advances [`ControllerInner::generation`]
+    /// in the same critical section, and the listeners hear of it once the
+    /// lock is released.
+    fn app_edit(&self, edit: impl FnOnce(&mut ControllerInner) -> bool) {
+        let changed = {
+            let mut guard = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
+            let changed = edit(&mut guard);
+            if changed {
+                guard.generation.advance();
+            }
+            changed
+        };
+        if changed {
+            self.notifier.notify_listeners();
+        }
     }
 
     // =========================================================================
@@ -1245,6 +1259,7 @@ mod tests {
             inner.composing = Some(ComposingState {
                 range,
                 caret_hidden,
+                origin: String::new(),
             });
         });
     }

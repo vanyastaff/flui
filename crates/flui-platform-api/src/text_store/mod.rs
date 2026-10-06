@@ -20,23 +20,34 @@
 //!   platform side of the connection.
 //! - [`project_ime_event`]: a push-model [`ImeEvent`](crate::ImeEvent)
 //!   (winit) applied as store edits, so there is one editing path.
+//! - [`CompositionLedger`] and [`committed_text`]: the committed text
+//!   (the composition replaced by what it stands for) every store reports
+//!   to its owner.
+//! - [`EditGeneration`]: the count of application edits a session is
+//!   checked against before it writes back.
 //! - [`InMemoryTextStore`]: a complete store over a `String`, the
 //!   conformance kit's reference and a backend test's field.
 //!
 //! Stores are owner-thread objects (`Rc<dyn TextStore>`, not `Send`).
 
+mod composition_ledger;
+mod generation;
 mod in_memory;
 mod lock;
+mod owner_calls;
 mod projection;
 mod session;
 mod store;
 pub mod utf16;
 
+pub use composition_ledger::{CompositionLedger, committed_text};
+pub use generation::EditGeneration;
 pub use in_memory::InMemoryTextStore;
 pub use lock::{
     CommitGate, DEFERRED_LOCK_CAPACITY, LockArbiter, LockGrant, LockKind, LockOutcome, LockTiming,
     TextStoreError,
 };
+pub use owner_calls::{OwnerCalls, RetainOnFailure};
 pub use projection::project_ime_event;
 pub use session::{
     Composition, PointMode, RangeRect, Selection, TextChange, TextStoreEdit, TextStoreRead,

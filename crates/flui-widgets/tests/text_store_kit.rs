@@ -2,7 +2,7 @@
 //! (ADR-0090 §4): the built-in field passes the same kit a third-party field
 //! runs, plain and obscured.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use flui_interaction::routing::FocusNode;
@@ -12,11 +12,15 @@ use flui_widgets::{EditableText, TextEditingController};
 
 use crate::common::harness::{Harness, mount_with_ime};
 
-/// A focused, mounted `EditableText` whose `on_changed` calls are counted.
+type OwnerHook = Rc<RefCell<Option<Rc<dyn Fn()>>>>;
+
+/// A focused, mounted `EditableText` whose `on_changed` calls are counted
+/// and run the kit's owner hook.
 struct EditableTextFixture {
     harness: Harness,
     controller: TextEditingController,
     changes: Rc<Cell<usize>>,
+    hook: OwnerHook,
     obscured: bool,
 }
 
@@ -25,11 +29,18 @@ impl EditableTextFixture {
         let controller = TextEditingController::new();
         let focus_node = FocusNode::with_debug_label("kit field");
         let changes = Rc::new(Cell::new(0));
-        let counted = Rc::clone(&changes);
+        let hook: OwnerHook = Rc::new(RefCell::new(None));
+        let (counted, hooked) = (Rc::clone(&changes), Rc::clone(&hook));
         let mut harness = mount_with_ime(
             EditableText::new(controller.clone(), Rc::clone(&focus_node))
                 .obscure_text(obscured)
-                .on_changed(move |_cx, _| counted.set(counted.get() + 1)),
+                .on_changed(move |_cx, _| {
+                    counted.set(counted.get() + 1);
+                    let hook = hooked.borrow().clone();
+                    if let Some(hook) = hook {
+                        hook();
+                    }
+                }),
         );
         focus_node.request_focus();
         harness.tick();
@@ -37,6 +48,7 @@ impl EditableTextFixture {
             harness,
             controller,
             changes,
+            hook,
             obscured,
         }
     }
@@ -71,6 +83,10 @@ impl TextStoreFixture for EditableTextFixture {
         self.changes.get()
     }
 
+    fn set_owner_hook(&mut self, hook: Option<Rc<dyn Fn()>>) {
+        *self.hook.borrow_mut() = hook;
+    }
+
     fn capabilities(&self) -> FixtureCapabilities {
         FixtureCapabilities::new()
             .with_geometry(true)
@@ -78,10 +94,14 @@ impl TextStoreFixture for EditableTextFixture {
     }
 }
 
+/// Runs the current conformance version (`KIT_VERSION`), not version 1:
+/// the name predates version 2.
 pub(crate) fn editable_text_conforms_to_kit_v1() {
     text_store_kit::assert_conforms(&mut EditableTextFixture::new(false), KIT_VERSION);
 }
 
+/// Runs the current conformance version (`KIT_VERSION`), not version 1:
+/// the name predates version 2.
 pub(crate) fn obscured_editable_text_conforms_to_kit_v1() {
     text_store_kit::assert_conforms(&mut EditableTextFixture::new(true), KIT_VERSION);
 }

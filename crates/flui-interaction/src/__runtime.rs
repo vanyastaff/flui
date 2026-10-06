@@ -274,16 +274,23 @@ impl ClosePanic {
         match catch_unwind(AssertUnwindSafe(run)) {
             Ok(value) => Some(value),
             Err(payload) => {
-                if let Some(terminal) = &self.terminal {
-                    terminal.preserve();
-                }
-                if self.preserving() {
-                    flui_foundation::panic::retain_opaque_payload(payload);
-                } else {
-                    self.first = Some(payload);
-                }
+                self.keep_caught(payload);
                 None
             }
+        }
+    }
+
+    /// Keep `payload`, a failure of this close's own code the caller caught
+    /// (in the order its own containment decided), as [`Self::invoke`] keeps
+    /// one: the first is raised by an ordinary close, the rest retained.
+    pub(crate) fn keep_caught(&mut self, payload: Box<dyn Any + Send>) {
+        if let Some(terminal) = &self.terminal {
+            terminal.preserve();
+        }
+        if self.preserving() {
+            flui_foundation::panic::retain_opaque_payload(payload);
+        } else {
+            self.first = Some(payload);
         }
     }
 
@@ -307,6 +314,19 @@ impl ClosePanic {
             std::mem::forget(value);
         } else {
             let _ = self.invoke(|| drop(value));
+        }
+    }
+
+    /// Keep `payload`, a failure caught before this close began (one a store
+    /// parked for its presentation), ahead of the close's own: raised by an
+    /// ordinary close, retained by a preserving one (ADR-0123).
+    pub(crate) fn keep_earlier(&mut self, payload: Box<dyn Any + Send>) {
+        if self.preserving {
+            flui_foundation::panic::retain_opaque_payload(payload);
+            return;
+        }
+        if let Some(later) = self.first.replace(payload) {
+            flui_foundation::panic::retain_opaque_payload(later);
         }
     }
 

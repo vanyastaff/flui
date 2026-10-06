@@ -1,10 +1,12 @@
-//! A presentation gate governs every text-store grant, including queued work.
+//! A presentation gate governs every text-store grant, including queued work,
+//! and carries owner failures caught while a grant settles.
 
 use std::cell::RefCell;
 use std::rc::Rc;
 
 use flui_platform_api::text_store::{
-    CommitGate, InMemoryTextStore, LockGrant, LockOutcome, LockTiming, TextStore, TextStoreError,
+    CommitGate, InMemoryTextStore, LockArbiter, LockGrant, LockOutcome, LockTiming, OwnerCalls,
+    TextStore, TextStoreError,
 };
 
 type Log = Rc<RefCell<Vec<&'static str>>>;
@@ -110,6 +112,128 @@ fn work_queued_inside_a_grant_waits_if_that_grant_closes_the_gate() {
     gate.set_open(true);
     assert_eq!(store.run_deferred_grants(), 1);
     assert_eq!(*log.borrow(), ["first", "second"]);
+}
+
+/// An arbiter behind a gate the test holds, with `grants` queued while it
+/// was shut, then reopened.
+fn queued_behind_a_gate(grants: usize) -> (LockArbiter, CommitGate) {
+    let arbiter = LockArbiter::new();
+    let gate = CommitGate::new();
+    arbiter.set_gate(gate.clone());
+    gate.set_open(false);
+    for _ in 0..grants {
+        assert_eq!(
+            arbiter.request(
+                LockGrant::read(|_| {}),
+                LockTiming::Async,
+                &mut |_| {},
+                &mut |_: &mut OwnerCalls| {}
+            ),
+            Ok(LockOutcome::Deferred)
+        );
+    }
+    gate.set_open(true);
+    (arbiter, gate)
+}
+
+fn settle_runs_after_each_grant_releases_its_lock() {
+    let (arbiter, _gate) = queued_behind_a_gate(2);
+    let arbiter = Rc::new(arbiter);
+    let log = Rc::new(RefCell::new(Vec::new()));
+    let (opened, settled, probe) = (Rc::clone(&log), Rc::clone(&log), Rc::clone(&arbiter));
+    let ran = arbiter.run_deferred(
+        &mut |_| opened.borrow_mut().push("grant"),
+        &mut |_: &mut OwnerCalls| {
+            settled.borrow_mut().push(if probe.is_locked() {
+                "settle under the lock"
+            } else {
+                "settle"
+            });
+        },
+    );
+    assert_eq!(ran, 2);
+    assert_eq!(*log.borrow(), ["grant", "settle", "grant", "settle"]);
+    log.borrow_mut().clear();
+    assert_eq!(
+        arbiter.request(
+            LockGrant::read(|_| {}),
+            LockTiming::Sync,
+            &mut |_| log.borrow_mut().push("grant"),
+            &mut |_: &mut OwnerCalls| log.borrow_mut().push("settle"),
+        ),
+        Ok(LockOutcome::Granted)
+    );
+    assert_eq!(*log.borrow(), ["grant", "settle"]);
+}
+
+fn a_panicking_settle_reaches_the_gate_and_the_queue_drains() {
+    let (arbiter, gate) = queued_behind_a_gate(3);
+    let settles = Rc::new(RefCell::new(0));
+    let counted = Rc::clone(&settles);
+    let ran = arbiter.run_deferred(&mut |_| {}, &mut |_: &mut OwnerCalls| {
+        *counted.borrow_mut() += 1;
+        let settled = *counted.borrow();
+        if settled < 3 {
+            std::panic::panic_any(format!("owner failure {settled}"));
+        }
+    });
+    assert_eq!(ran, 3, "every queued grant ran");
+    assert_eq!(*settles.borrow(), 3, "every grant was settled");
+    assert!(!arbiter.is_locked());
+    let first = gate
+        .take_failure()
+        .expect("the first failure waits at the gate");
+    assert_eq!(
+        flui_foundation::panic::payload_text(&*first),
+        Some("owner failure 1"),
+        "the first failure stays authoritative"
+    );
+    flui_foundation::panic::retain_opaque_payload(first);
+    assert!(gate.take_failure().is_none(), "a failure is reported once");
+}
+
+fn a_panicking_settle_with_no_owner_gate_resumes_after_release() {
+    let arbiter = LockArbiter::new();
+    let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        arbiter.request(
+            LockGrant::read(|_| {}),
+            LockTiming::Sync,
+            &mut |_| {},
+            &mut |_: &mut OwnerCalls| panic!("owner failure with no one to report to"),
+        )
+    }));
+    let payload = unwound.expect_err("the failure is not swallowed");
+    assert_eq!(
+        flui_foundation::panic::payload_text(&*payload),
+        Some("owner failure with no one to report to")
+    );
+    assert!(!arbiter.is_locked(), "the lock was released first");
+}
+
+#[test]
+fn settling_runs_owner_code_outside_the_lock() {
+    let cases: &[(&str, fn())] = &[
+        (
+            "settle_runs_after_each_grant_releases_its_lock",
+            settle_runs_after_each_grant_releases_its_lock,
+        ),
+        (
+            "a_panicking_settle_reaches_the_gate_and_the_queue_drains",
+            a_panicking_settle_reaches_the_gate_and_the_queue_drains,
+        ),
+        (
+            "a_panicking_settle_with_no_owner_gate_resumes_after_release",
+            a_panicking_settle_with_no_owner_gate_resumes_after_release,
+        ),
+    ];
+    let mut failures = Vec::new();
+    for &(name, case) in cases {
+        if let Err(payload) = std::panic::catch_unwind(case) {
+            failures.push(name);
+            flui_foundation::panic::retain_opaque_payload(payload);
+        }
+    }
+    assert!(failures.is_empty(), "failed settle cases: {failures:?}");
 }
 
 #[test]

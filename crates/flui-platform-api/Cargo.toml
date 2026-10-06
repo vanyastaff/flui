@@ -14,6 +14,7 @@ categories = ["gui"]
 
 # Dev-only files kept out of the published archive:
 exclude = ["/ARCHITECTURE.md"]
+autotests = false
 
 [lints]
 workspace = true
@@ -46,6 +47,12 @@ ui-events = { workspace = true }
 # Pins that the lock arbiter and the reference store are owner-thread only.
 static_assertions = { workspace = true }
 serde_json = { workspace = true }
+# The ledger's property test against its reference.
+proptest = { workspace = true }
+
+[[test]]
+name = "platform_api_it"
+path = "tests/main.rs"
 
 [features]
 default = []

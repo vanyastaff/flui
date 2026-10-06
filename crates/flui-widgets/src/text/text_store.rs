@@ -11,9 +11,20 @@
 //!
 //! A read session answers from a snapshot of the controller taken when the
 //! lock opens. A read-write session edits a working copy of that snapshot
-//! and writes it back to the controller once, when the session ends, with
-//! one listener notification and at most one `on_changed` call: the field
-//! sees a platform session as one change, whatever it did inside.
+//! and writes it back to the controller once, when the session ends: the
+//! field sees a platform session as one change, whatever it did inside.
+//! The write is dropped if the application changed the controller since the
+//! snapshot (its generation moved), so an application edit is never
+//! overwritten by a session that did not see it.
+//!
+//! # The owner
+//!
+//! The session's one listener notification and at most one `on_changed`
+//! call are owed, not made, inside the grant: they run in `settle`, which the
+//! arbiter calls once the lock is released and before the next grant, so
+//! owner code may request a lock or edit the field (ADR-0142 item 2).
+//! `on_changed` runs only when the committed text — the text without the
+//! composition — changed, and receives it.
 //!
 //! # What reaches the observer
 //!
@@ -38,6 +49,7 @@
 
 use std::cell::{Cell, RefCell};
 use std::ops::Range;
+use std::panic::resume_unwind;
 use std::rc::Rc;
 
 use flui_foundation::geometry::{Bounds, Point};
@@ -46,14 +58,15 @@ use flui_interaction::TextInputHandle;
 use flui_objects::{RenderEditable, SubtreeAnchor};
 use flui_painting::text_boundaries::graphemes;
 use flui_platform_api::text_store::{
-    CommitGate, Composition, LockArbiter, LockGrant, LockOutcome, LockTiming, PointMode, RangeRect,
-    Selection, TextChange, TextStore, TextStoreEdit, TextStoreError, TextStoreObserver,
-    TextStoreRead, TextStoreStatus, Utf16Offset, Utf16Range, utf16,
+    CommitGate, Composition, CompositionLedger, EditGeneration, LockArbiter, LockGrant,
+    LockOutcome, LockTiming, OwnerCalls, PointMode, RangeRect, RetainOnFailure, Selection,
+    TextChange, TextStore, TextStoreEdit, TextStoreError, TextStoreObserver, TextStoreRead,
+    TextStoreStatus, Utf16Offset, Utf16Range, committed_text, utf16,
 };
 use flui_rendering::pipeline::PipelineCell;
 
 use super::controller::{self, ComposingState, TextEditingController};
-use super::editable_text::{EditObserver, bounds_from_rect, obscure};
+use super::editable_text::{EditObserver, TextChanged, bounds_from_rect, obscure};
 
 /// The committed `RenderEditable` under `inner_anchor` and its transform to
 /// the render root, handed to `f`; `None` when the field is not mounted or
@@ -92,9 +105,32 @@ struct Doc {
     anchor: usize,
     caret: usize,
     composing: Option<(Range<usize>, bool)>,
+    /// What the composition stands for in the committed text; empty
+    /// without one.
+    origin: String,
 }
 
 impl Doc {
+    /// The text with the composing range replaced by its origin.
+    fn committed(&self) -> String {
+        committed_text(
+            &self.text,
+            self.composing
+                .as_ref()
+                .map(|(range, _)| (range.clone(), self.origin.as_str())),
+        )
+    }
+
+    /// A ledger for a session opening on this document.
+    fn ledger(&self) -> CompositionLedger {
+        CompositionLedger::open(
+            &self.text,
+            self.composing
+                .as_ref()
+                .map(|(range, _)| (range.clone(), self.origin.clone())),
+        )
+    }
+
     fn units(&self, byte: usize) -> Utf16Offset {
         utf16::utf16_offset(&self.text, byte).unwrap_or_else(|_| utf16::utf16_len(&self.text))
     }
@@ -160,6 +196,10 @@ pub(super) struct EditableTextStore {
     /// it happened while the store could not notify.
     layout_dirty: Cell<bool>,
     status_dirty: Cell<bool>,
+    /// What sessions that wrote the controller back owe its listeners and
+    /// `on_changed`, in commit order: delivered in [`Self::settle`], once
+    /// the lock is released.
+    owed: RefCell<Vec<Owed>>,
     /// The presentation's text input, whose closing detaches the store.
     /// Whether commits are allowed is the gate it installs on attach, which
     /// the arbiter reads; with no presentation IME the arbiter's own gate
@@ -170,6 +210,30 @@ pub(super) struct EditableTextStore {
     obscure: Rc<Cell<bool>>,
     obscuring_character: Rc<Cell<char>>,
     edits: EditObserver,
+}
+
+impl Drop for EditableTextStore {
+    /// The observer, `on_changed`, the controller and what a session not yet
+    /// settled owes (when the store outlives its field, it may be their last
+    /// owner) are other code:
+    /// retired inside a scope, retained after a failure or during an unwind
+    /// (ADR-0127). The arbiter retires its queued grants the same way.
+    fn drop(&mut self) {
+        let observer = self.observer.get_mut().take();
+        let controller = std::mem::replace(
+            &mut self.controller,
+            Rc::new(RefCell::new(TextEditingController::new())),
+        );
+        let owed = std::mem::take(self.owed.get_mut());
+        let mut calls = OwnerCalls::new();
+        calls.retire(observer);
+        calls.retire(owed);
+        self.edits.retire(&mut calls);
+        calls.retire(controller);
+        if !std::thread::panicking() {
+            calls.resume();
+        }
+    }
 }
 
 /// The pieces of the mounted field a store reads.
@@ -193,6 +257,7 @@ impl EditableTextStore {
             alive: Cell::new(true),
             layout_dirty: Cell::new(false),
             status_dirty: Cell::new(false),
+            owed: RefCell::new(Vec::new()),
             handle: parts.handle,
             pipeline: parts.pipeline,
             inner_anchor: parts.inner_anchor,
@@ -216,7 +281,9 @@ impl EditableTextStore {
     /// those points.
     pub(super) fn controller_changed(&self) {
         if self.may_notify() {
-            self.report_app_changes();
+            let mut calls = OwnerCalls::new();
+            self.report_app_changes(&mut calls);
+            calls.resume();
         }
     }
 
@@ -224,13 +291,21 @@ impl EditableTextStore {
     /// store may notify, otherwise at the next point it may.
     pub(super) fn layout_changed(&self) {
         self.layout_dirty.set(true);
-        self.flush_notifications();
+        self.flush_now();
     }
 
     /// The field's obscuring changed, so `status().protected` did.
     pub(super) fn status_changed(&self) {
         self.status_dirty.set(true);
-        self.flush_notifications();
+        self.flush_now();
+    }
+
+    /// [`Self::flush_notifications`] in a scope of its own, whose first
+    /// failure is resumed.
+    fn flush_now(&self) {
+        let mut calls = OwnerCalls::new();
+        self.flush_notifications(&mut calls);
+        calls.resume();
     }
 
     /// Whether the observer may hear from the store now: no lock is held and
@@ -240,17 +315,18 @@ impl EditableTextStore {
         !self.arbiter.is_locked() && self.may_commit().unwrap_or(false)
     }
 
-    /// Send every notification that waited for [`Self::may_notify`].
-    fn flush_notifications(&self) {
+    /// Send every notification that waited for [`Self::may_notify`], inside
+    /// `calls`: each is sent though an earlier one panicked.
+    fn flush_notifications(&self, calls: &mut OwnerCalls) {
         if !self.may_notify() {
             return;
         }
-        self.report_app_changes();
+        self.report_app_changes(calls);
         if self.status_dirty.replace(false) {
-            self.notify(|observer| observer.status_changed());
+            self.notify(calls, |observer| observer.status_changed());
         }
         if self.layout_dirty.replace(false) {
-            self.notify(|observer| observer.layout_changed());
+            self.notify(calls, |observer| observer.layout_changed());
         }
     }
 
@@ -259,8 +335,11 @@ impl EditableTextStore {
     /// this field's.
     pub(super) fn detach(&self) {
         self.alive.set(false);
-        let _dropped = self.arbiter.clear();
-        *self.observer.borrow_mut() = None;
+        let observer = self.observer.borrow_mut().take();
+        let mut calls = OwnerCalls::new();
+        calls.run(|| self.arbiter.clear());
+        calls.retire(observer);
+        calls.resume();
     }
 
     /// Run queued grants before a key edit, so a key typed after an IME
@@ -282,28 +361,48 @@ impl EditableTextStore {
         Ok(self.arbiter.may_commit())
     }
 
-    fn notify(&self, call: impl FnOnce(&dyn TextStoreObserver)) {
+    /// Tell the observer, inside `calls`.
+    fn notify(&self, calls: &mut OwnerCalls, call: impl FnOnce(&dyn TextStoreObserver)) {
         let observer = self.observer.borrow().clone();
         if let Some(observer) = observer {
-            call(&*observer);
+            calls.run(|| call(&*observer));
+            // An observer that replaced or cleared itself left this clone
+            // its last owner.
+            calls.retire(observer);
         }
     }
 
     fn read_doc(&self) -> Doc {
-        self.controller.borrow().with_inner(|inner| Doc {
-            text: inner.text.clone(),
-            anchor: inner.selection.anchor,
-            caret: inner.selection.caret,
-            composing: inner
-                .composing
-                .as_ref()
-                .map(|state| (state.range.clone(), state.caret_hidden)),
-        })
+        self.snapshot().1
+    }
+
+    /// The controller, its document and its generation, read in one
+    /// critical section.
+    fn snapshot(&self) -> (TextEditingController, Doc, EditGeneration) {
+        let controller = self.controller.borrow().clone();
+        let (doc, generation) = controller.with_inner(|inner| {
+            let doc = Doc {
+                text: inner.text.clone(),
+                anchor: inner.selection.anchor,
+                caret: inner.selection.caret,
+                composing: inner
+                    .composing
+                    .as_ref()
+                    .map(|state| (state.range.clone(), state.caret_hidden)),
+                origin: inner
+                    .composing
+                    .as_ref()
+                    .map(|state| state.origin.clone())
+                    .unwrap_or_default(),
+            };
+            (doc, inner.generation)
+        });
+        (controller, doc, generation)
     }
 
     /// Diff the controller against what was last reported and tell the
     /// observer.
-    fn report_app_changes(&self) {
+    fn report_app_changes(&self, calls: &mut OwnerCalls) {
         let doc = self.read_doc();
         let selection = doc.selection();
         let (change, moved) = {
@@ -314,10 +413,10 @@ impl EditableTextStore {
             (change, moved)
         };
         if let Some(change) = change {
-            self.notify(|observer| observer.text_changed(change));
+            self.notify(calls, |observer| observer.text_changed(change));
         }
         if moved {
-            self.notify(|observer| observer.selection_changed());
+            self.notify(calls, |observer| observer.selection_changed());
         }
     }
 
@@ -325,40 +424,118 @@ impl EditableTextStore {
         match grant {
             LockGrant::Read(body) => {
                 let doc = self.read_doc();
-                body(&Session { store: self, doc });
+                let ledger = doc.ledger();
+                body(&Session {
+                    store: self,
+                    doc,
+                    ledger,
+                });
             }
             LockGrant::ReadWrite(body) => {
-                let original = self.read_doc();
+                let (controller, original, generation) = self.snapshot();
                 let mut session = Session {
                     store: self,
                     doc: original.clone(),
+                    ledger: original.ledger(),
                 };
                 body(&mut session);
+                session.doc.origin = session.ledger.origin(&session.doc.text).unwrap_or_default();
                 if session.doc != original {
-                    self.write_back(session.doc, &original.text);
+                    self.write_back(&controller, generation, session.doc, &original);
                 }
             }
         }
     }
 
-    /// Apply a platform session's result to the controller: one write, one
-    /// notification, one `on_changed` when the text changed.
-    fn write_back(&self, doc: Doc, before: &str) {
-        let controller = self.controller.borrow().clone();
-        *self.reported.borrow_mut() = (doc.text.clone(), doc.selection());
-        controller.with_inner_silent(|inner| {
+    /// Apply a platform session's result to the controller in one write,
+    /// unless the application changed the field since the session opened at
+    /// `generation`: then its edit stays, the session is dropped, and the
+    /// platform hears of the edit once the lock is released (ADR-0142
+    /// item 3). A controller whose edit count ran out drops every session.
+    ///
+    /// The listeners and `on_changed` are owed, not called: they run in
+    /// [`Self::settle`], after the lock is released.
+    fn write_back(
+        &self,
+        controller: &TextEditingController,
+        generation: EditGeneration,
+        doc: Doc,
+        original: &Doc,
+    ) {
+        // A grant that unmounted the field (its owner code detached the
+        // store) is dropped: a detached store writes nothing.
+        if !self.alive.get() {
+            return;
+        }
+        let current = self.controller.borrow().clone();
+        if !current.is_same_controller(controller) {
+            return;
+        }
+        let reported = (doc.text.clone(), doc.selection());
+        let committed_after = doc.committed();
+        let applied = controller.with_inner_silent(|inner| {
+            if !inner.generation.admits(generation) {
+                return false;
+            }
             inner.selection = controller::Selection {
                 anchor: doc.anchor,
                 caret: doc.caret,
             };
+            let origin = doc.origin;
             inner.composing = doc.composing.map(|(range, caret_hidden)| ComposingState {
                 range,
                 caret_hidden,
+                origin,
             });
             inner.text = doc.text;
+            true
         });
-        controller.notify_changed();
-        self.edits.report_if_changed(before);
+        if !applied {
+            return;
+        }
+        *self.reported.borrow_mut() = reported;
+        // The `on_changed` owed is the one installed now, when the session is
+        // accepted, as for a key edit: owner code that runs before settle
+        // (an earlier obligation's listeners) may rebuild the field.
+        let change = (committed_after != original.committed())
+            .then(|| {
+                self.edits
+                    .accept()
+                    .map(|on_changed| (committed_after, on_changed))
+            })
+            .flatten();
+        self.owed.borrow_mut().push(Owed {
+            controller: controller.clone(),
+            change,
+        });
+    }
+
+    /// Deliver what a finished grant owes, now that its lock is released and
+    /// before the next grant runs: for each session written back, in commit
+    /// order, the `on_changed` installed when it was written back, with the
+    /// committed text that session produced (when it changed), then the
+    /// controller's listeners; then the observer's notifications.
+    ///
+    /// Every obligation and its value is taken before any owner code runs,
+    /// so a session that code opens owes, and settles, its own, after the
+    /// owner heard of this one. The observer is told even when owner code
+    /// panics, so a grant queued behind this one never runs before the
+    /// platform hears of an edit the owner made; the first panic is then
+    /// resumed for the arbiter to park.
+    fn settle(&self, calls: &mut OwnerCalls) {
+        let owed = std::mem::take(&mut *self.owed.borrow_mut());
+        for Owed { controller, change } in owed {
+            if let Some((committed, on_changed)) = change {
+                if self.alive.get() {
+                    self.edits.deliver(on_changed, &committed, calls);
+                } else {
+                    calls.retire(on_changed);
+                }
+            }
+            calls.run(|| controller.notify_changed());
+            calls.retire(controller);
+        }
+        self.flush_notifications(calls);
     }
 
     /// The text the render object shows for `source`.
@@ -435,6 +612,22 @@ impl EditableTextStore {
     }
 }
 
+/// What one session written back owes, fixed when it was written: the
+/// controller whose listeners hear of it, and, when the committed text
+/// changed, the text it produced with the `on_changed` installed then, which
+/// receives it.
+struct Owed {
+    controller: TextEditingController,
+    change: Option<(String, TextChanged)>,
+}
+
+impl RetainOnFailure for Owed {
+    fn retain(self) {
+        self.controller.retain();
+        self.change.map(|(_, on_changed)| on_changed).retain();
+    }
+}
+
 /// The smallest change turning `old` into `new`, as `TS_TEXTCHANGE` in
 /// UTF-16 units: the common prefix and suffix (whole scalars) are kept.
 fn text_change(old: &str, new: &str) -> TextChange {
@@ -471,14 +664,39 @@ impl TextStore for EditableTextStore {
         grant: LockGrant,
         timing: LockTiming,
     ) -> Result<LockOutcome, TextStoreError> {
-        self.may_commit()?;
+        // A refused grant is the requester's code: retired inside a scope.
+        if let Err(error) = self.may_commit() {
+            let mut calls = OwnerCalls::new();
+            calls.retire(grant);
+            calls.resume();
+            return Err(error);
+        }
         // An app edit not yet reported is reported before the platform's
-        // session can see (and write back over) it.
-        self.flush_notifications();
-        let outcome = self
-            .arbiter
-            .request(grant, timing, &mut |grant| self.open(grant));
-        self.flush_notifications();
+        // session can see (and write back over) it. A failure there refuses
+        // the request: the grant, not yet accepted, is retained unrun rather
+        // than destroyed during the unwind.
+        let mut before = OwnerCalls::new();
+        self.flush_notifications(&mut before);
+        if let Some(payload) = before.into_failure() {
+            RetainOnFailure::retain(grant);
+            resume_unwind(payload);
+        }
+        // The gate the last grant settled under, read by the arbiter before
+        // that grant's owner code ran: an earlier grant may have moved the
+        // store to another presentation.
+        let mut settled_under = self.arbiter.owner_gate();
+        let outcome =
+            self.arbiter
+                .request(grant, timing, &mut |grant| self.open(grant), &mut |calls| {
+                    settled_under = calls.parking_gate().cloned();
+                    self.settle(calls);
+                });
+        // What owner code edited while the grants settled reaches the
+        // observer here; a failure the last settle parked came before one
+        // this flush raises.
+        let mut calls = OwnerCalls::new();
+        calls.run_behind_parked(settled_under.as_ref(), || self.flush_now());
+        calls.resume();
         outcome
     }
 
@@ -489,9 +707,17 @@ impl TextStore for EditableTextStore {
         if self.may_commit().is_err() {
             return 0;
         }
-        self.flush_notifications();
-        let ran = self.arbiter.run_deferred(&mut |grant| self.open(grant));
-        self.flush_notifications();
+        self.flush_now();
+        let mut settled_under = self.arbiter.owner_gate();
+        let ran = self
+            .arbiter
+            .run_deferred(&mut |grant| self.open(grant), &mut |calls| {
+                settled_under = calls.parking_gate().cloned();
+                self.settle(calls);
+            });
+        let mut calls = OwnerCalls::new();
+        calls.run_behind_parked(settled_under.as_ref(), || self.flush_now());
+        calls.resume();
         ran
     }
 
@@ -500,7 +726,11 @@ impl TextStore for EditableTextStore {
     }
 
     fn set_observer(&self, observer: Option<Rc<dyn TextStoreObserver>>) {
-        *self.observer.borrow_mut() = observer;
+        // The replaced observer retires after the borrow is released.
+        let previous = std::mem::replace(&mut *self.observer.borrow_mut(), observer);
+        let mut calls = OwnerCalls::new();
+        calls.retire(previous);
+        calls.resume();
     }
 }
 
@@ -509,6 +739,8 @@ impl TextStore for EditableTextStore {
 struct Session<'a> {
     store: &'a EditableTextStore,
     doc: Doc,
+    /// What the composition stands for as the session edits it.
+    ledger: CompositionLedger,
 }
 
 impl Session<'_> {
@@ -668,12 +900,14 @@ fn rendered_offset_at(
 
 impl TextStoreEdit for Session<'_> {
     fn replace(&mut self, range: Utf16Range, text: &str) -> Result<TextChange, TextStoreError> {
+        let bytes = utf16::byte_range(&self.doc.text, range)?;
+        self.ledger.replace(&self.doc.text, bytes, text);
         self.doc.replace(range, text)
     }
 
     fn insert_at_selection(&mut self, text: &str) -> Result<TextChange, TextStoreError> {
         let range = self.doc.selection().range();
-        self.doc.replace(range, text)
+        self.replace(range, text)
     }
 
     fn set_selection(&mut self, selection: Selection) -> Result<(), TextStoreError> {
@@ -692,6 +926,8 @@ impl TextStoreEdit for Session<'_> {
             }
             None => None,
         };
+        let range = self.doc.composing.as_ref().map(|(range, _)| range.clone());
+        self.ledger.set_composition(range);
         Ok(())
     }
 }
