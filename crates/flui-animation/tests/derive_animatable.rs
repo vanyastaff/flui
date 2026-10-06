@@ -18,6 +18,9 @@ mod simulation;
 #[path = "contracts/proxy.rs"]
 mod proxy;
 
+#[path = "contracts/motion_clock.rs"]
+mod motion_clock;
+
 #[path = "contracts/tween.rs"]
 mod tween;
 
