@@ -1347,9 +1347,7 @@ pub(crate) mod text_store {
         let sink = Rc::clone(&calls);
         (calls, move |text: &str| {
             sink.borrow_mut().push(text.to_owned());
-            if failing.contains(&text) {
-                panic!("owner failure on {text}");
-            }
+            assert!(!failing.contains(&text), "owner failure on {text}");
         })
     }
 

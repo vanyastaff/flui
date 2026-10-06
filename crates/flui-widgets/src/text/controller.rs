@@ -13,6 +13,7 @@ use flui_painting::text_boundaries::{
 
 use flui_foundation::ListenerId;
 use flui_foundation::notifier::{ChangeNotifier, Listenable, ListenerCallback};
+use flui_platform_api::text_store::committed_text;
 
 // ============================================================================
 // ControllerInner
@@ -118,20 +119,6 @@ pub(super) struct ControllerInner {
     pub(super) generation: u64,
 }
 
-/// The text without the composing range `composing`, a byte range on char
-/// boundaries of `text`.
-pub(super) fn committed(text: &str, composing: Option<Range<usize>>) -> String {
-    match composing {
-        Some(range) => {
-            let mut committed = String::with_capacity(text.len() - range.len());
-            committed.push_str(&text[..range.start]);
-            committed.push_str(&text[range.end..]);
-            committed
-        }
-        None => text.to_owned(),
-    }
-}
-
 /// The in-progress IME composition: its byte range into
 /// [`ControllerInner::text`] plus whether the caret should stay hidden while
 /// the IME owns its position.
@@ -167,6 +154,10 @@ pub(super) struct ComposingState {
     /// siblings) — the user taking the caret back means the IME no longer
     /// owns its position, even though the composition itself continues.
     pub(super) caret_hidden: bool,
+    /// What the composition stands for in the committed text: the text its
+    /// range held before the composition began, empty for a new preedit and
+    /// the reconverted words for a reconversion (ADR-0090 amendment item 1).
+    pub(super) origin: String,
 }
 
 // ============================================================================
@@ -378,9 +369,11 @@ impl TextEditingController {
             .clone()
     }
 
-    /// The committed text: [`Self::text`] without the IME composition's
-    /// range, so what the user has confirmed rather than what an input
-    /// method is still composing.
+    /// The committed text: [`Self::text`] with the IME composition's range
+    /// replaced by the text it held before the composition began — nothing
+    /// for a new preedit, the original words for a reconversion — so what
+    /// the user has confirmed rather than what an input method is still
+    /// composing.
     ///
     /// This is the text a field's owner works with: `on_changed` receives
     /// it and is called only when it changes, and a text form field
@@ -389,9 +382,12 @@ impl TextEditingController {
     #[must_use]
     pub fn committed_text(&self) -> String {
         let guard = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
-        committed(
+        committed_text(
             &guard.text,
-            guard.composing.as_ref().map(|state| state.range.clone()),
+            guard
+                .composing
+                .as_ref()
+                .map(|state| (state.range.clone(), state.origin.as_str())),
         )
     }
 
@@ -1250,6 +1246,7 @@ mod tests {
             inner.composing = Some(ComposingState {
                 range,
                 caret_hidden,
+                origin: String::new(),
             });
         });
     }
