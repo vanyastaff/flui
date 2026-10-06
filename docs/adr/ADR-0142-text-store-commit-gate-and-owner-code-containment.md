@@ -119,7 +119,10 @@ framework does not control is contained.
    through `text_store::OwnerCalls`, whose module doc lists them; a gate whose last clone goes
    with a failure no owner took retains it. What the code is owed (obligations with their values,
    the gate a failure belongs to) is read before it runs, never after, since it may reenter,
-   settle a nested session or move the store to another presentation. Each call is contained and
+   settle a nested session or move the store to another presentation; so the `on_changed` an edit
+   is owed to is the one installed when the edit is accepted (a session written back, a key or
+   semantic edit before it runs), though the edit's listeners rebuild the field and remove or
+   replace it before the owner hears of the change. Each call is contained and
    the first failure in time is authoritative: a settle parks its failure in the admitting gate
    the moment it is caught, ahead of any session the owner's later code opens; a failure a call
    parked in a gate came before that call's own unwind, so it is taken first, while one the gate

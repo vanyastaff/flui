@@ -872,6 +872,14 @@ const ROWS: &[(&str, fn())] = &[
         editable_semantic_set_text_whose_on_changed_panics,
     ),
     (
+        "editable: a key edit whose controller listener removes on_changed",
+        editable_key_edit_whose_listener_removes_on_changed,
+    ),
+    (
+        "editable: a key edit whose controller listener replaces on_changed",
+        editable_key_edit_whose_listener_replaces_on_changed,
+    ),
+    (
         "editable: a store outliving its field",
         editable_store_outliving_its_field,
     ),
@@ -1777,6 +1785,117 @@ fn editable_semantic_set_text_whose_on_changed_panics() {
     );
     field.set_observer(None);
     the_field_keeps_working(&mut harness, &field);
+}
+
+thread_local! {
+    /// What a controller listener runs on the next change: a listener is
+    /// `Send + Sync`, and the harness it rebuilds is not.
+    static ON_NEXT_CHANGE: RefCell<Option<Box<dyn FnOnce()>>> = const { RefCell::new(None) };
+}
+
+/// An `on_changed` that logs what it hears under `name`.
+fn logs_as(
+    name: &'static str,
+    log: &Rc<RefCell<Vec<String>>>,
+) -> impl Fn(&mut flui_view::EventCx<'_>, &str) + 'static {
+    let log = Rc::clone(log);
+    move |_cx, text| log.borrow_mut().push(format!("{name}: {text}"))
+}
+
+/// A field whose controller listener, on the next change, synchronously
+/// rebuilds the mounted field as `rebuilt` (which drops or replaces its
+/// `on_changed`).
+fn field_rebuilt_by_its_listener(
+    controller: &TextEditingController,
+    node: &Rc<FocusNode>,
+    log: &Rc<RefCell<Vec<String>>>,
+    rebuilt: EditableText,
+) -> Rc<RefCell<Harness>> {
+    use flui_foundation::Listenable as _;
+
+    let harness = Rc::new(RefCell::new(focused(
+        EditableText::new(controller.clone(), Rc::clone(node))
+            .on_changed(logs_as("installed", log)),
+        node,
+    )));
+    let reach = Rc::downgrade(&harness);
+    ON_NEXT_CHANGE.with(|slot| {
+        *slot.borrow_mut() = Some(Box::new(move || {
+            if let Some(harness) = reach.upgrade() {
+                harness.borrow_mut().swap_root(rebuilt);
+            }
+        }));
+    });
+    let _listening = controller.add_listener(Arc::new(|| {
+        let rebuild = ON_NEXT_CHANGE.with(|slot| slot.borrow_mut().take());
+        if let Some(rebuild) = rebuild {
+            rebuild();
+        }
+    }));
+    harness
+}
+
+/// Types "a" into a field whose controller listener rebuilds it as
+/// `rebuilt`, then checks the field keeps working; returns what each
+/// `on_changed` heard.
+fn key_edit_whose_listener_rebuilds_the_field(
+    label: &'static str,
+    rebuilt: impl FnOnce(EditableText, &Rc<RefCell<Vec<String>>>) -> EditableText,
+) -> Vec<String> {
+    let controller = TextEditingController::new();
+    let node = FocusNode::with_debug_label(label);
+    let log = Rc::new(RefCell::new(Vec::new()));
+    let rebuilt = rebuilt(
+        EditableText::new(controller.clone(), Rc::clone(&node)),
+        &log,
+    );
+    let harness = field_rebuilt_by_its_listener(&controller, &node, &log, rebuilt);
+    let key = flui_interaction::testing::input::KeyEventBuilder::new(
+        flui_interaction::events::Code::KeyA,
+    )
+    .with_key(flui_interaction::events::Key::Character("a".to_owned()))
+    .with_state(flui_interaction::events::KeyState::Down)
+    .build();
+    let manager = harness.borrow().focus_manager();
+    assert_eq!(
+        raised(|| {
+            let _ = manager.dispatch_key_event(&key);
+        }),
+        None
+    );
+    assert_eq!(controller.text(), "a");
+    assert_eq!(
+        *log.borrow(),
+        ["installed: a"],
+        "the callback installed when the edit was accepted hears of it"
+    );
+    let field = field(&harness.borrow());
+    the_field_keeps_working(&mut harness.borrow_mut(), &field);
+    log.take()
+}
+
+fn editable_key_edit_whose_listener_removes_on_changed() {
+    let heard =
+        key_edit_whose_listener_rebuilds_the_field("key edit, on_changed removed", |field, _| {
+            field
+        });
+    assert_eq!(
+        heard,
+        ["installed: a"],
+        "a removed callback hears nothing more"
+    );
+}
+
+fn editable_key_edit_whose_listener_replaces_on_changed() {
+    let heard = key_edit_whose_listener_rebuilds_the_field(
+        "key edit, on_changed replaced",
+        |field, log| field.on_changed(logs_as("replacement", log)),
+    );
+    assert_eq!(
+        heard,
+        ["installed: a", "replacement: az"],
+        "the replacement hears only the edits accepted after it was installed"
+    );
 }
 
 // ----------------------------------------------------------------------------
