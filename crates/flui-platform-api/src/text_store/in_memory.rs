@@ -268,12 +268,16 @@ impl TextStore for InMemoryTextStore {
         // An app edit still owed is reported before the platform's session
         // can see it, and one made from inside the grant once it ends.
         self.flush_notifications();
+        // Read before any grant's owner code can move the store elsewhere.
+        let admitting = self.arbiter.owner_gate();
         let outcome =
             self.arbiter
                 .request(grant, timing, &mut |grant| self.open(grant), &mut || {
                     self.settle();
                 });
-        self.flush_notifications();
+        let mut calls = OwnerCalls::new();
+        calls.run_behind_parked(admitting.as_ref(), || self.flush_notifications());
+        calls.resume();
         outcome
     }
 
@@ -281,10 +285,13 @@ impl TextStore for InMemoryTextStore {
     /// sent, before and after the queued grants run.
     fn run_deferred_grants(&self) -> usize {
         self.flush_notifications();
+        let admitting = self.arbiter.owner_gate();
         let ran = self
             .arbiter
             .run_deferred(&mut |grant| self.open(grant), &mut || self.settle());
-        self.flush_notifications();
+        let mut calls = OwnerCalls::new();
+        calls.run_behind_parked(admitting.as_ref(), || self.flush_notifications());
+        calls.resume();
         ran
     }
 

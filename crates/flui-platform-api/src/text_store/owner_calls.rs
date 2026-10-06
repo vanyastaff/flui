@@ -13,6 +13,8 @@
 //! | the in-memory owner listener, and its snapshot | `InMemoryTextStore::settle` (`in_memory.rs`) |
 //! | a replaced in-memory owner listener or observer | `InMemoryTextStore::set_owner_listener`, `set_observer` (`in_memory.rs`) |
 //! | observer notifications, and the observer snapshot | `InMemoryTextStore::flush_notifications` (`in_memory.rs`), `EditableTextStore::notify` (`flui-widgets` `text/text_store.rs`) |
+//! | the observer flush after a request's grants, behind what their settle parked ([`OwnerCalls::run_behind_parked`]) | `request_lock`, `run_deferred_grants` of `InMemoryTextStore` (`in_memory.rs`) and `EditableTextStore` (`flui-widgets` `text/text_store.rs`) |
+//! | a parked failure no owner took when the gate's last clone goes | `CommitGate`'s failure cell (`lock.rs`), which retains it as a scope does |
 //! | `on_changed`, and its snapshot | `EditObserver::deliver` (`flui-widgets` `text/editable_text.rs`), from `EditableTextStore::settle` and a key edit |
 //! | the controller's listeners, and the controller snapshot | `EditableTextStore::settle` (`flui-widgets` `text/text_store.rs`) |
 //! | a replaced or detached `EditableText` observer | `EditableTextStore::set_observer`, `detach` (`flui-widgets` `text/text_store.rs`) |
@@ -173,6 +175,28 @@ impl OwnerCalls {
         match outcome {
             Ok(value) => Some(value),
             Err(payload) => {
+                self.keep(payload);
+                None
+            }
+        }
+    }
+
+    /// [`Self::run`], for owner code a store runs after grants whose
+    /// settle may have parked a failure in `gate` (the gate that admitted
+    /// them): when the call panics, that parked failure came first, so it is
+    /// taken ahead of the call's own. When the call succeeds the parked
+    /// failure stays for the gate's owner to report at its turn.
+    pub fn run_behind_parked<R>(
+        &mut self,
+        gate: Option<&CommitGate>,
+        call: impl FnOnce() -> R,
+    ) -> Option<R> {
+        match catch_unwind(AssertUnwindSafe(call)) {
+            Ok(value) => Some(value),
+            Err(payload) => {
+                if let Some(gate) = gate {
+                    self.take_parked(gate);
+                }
                 self.keep(payload);
                 None
             }

@@ -393,6 +393,92 @@ fn observer_cleared_then_panicking() {
     observer_panicking(true);
 }
 
+/// Counts text changes; on the first it edits the field again, and on a
+/// later one it panics.
+struct EditsThenPanics {
+    controller: TextEditingController,
+    heard: Cell<usize>,
+}
+
+impl TextStoreObserver for EditsThenPanics {
+    fn text_changed(&self, _: TextChange) {
+        self.heard.set(self.heard.get() + 1);
+        if self.heard.get() == 1 {
+            self.controller.set_text("observer edit");
+        } else {
+            panic!("observer failure after the session");
+        }
+    }
+    fn selection_changed(&self) {}
+    fn layout_changed(&self) {}
+    fn status_changed(&self) {}
+}
+
+/// `on_changed` edits and panics, so settle parks its failure; the observer
+/// hears that edit and edits again, and the flush after the request's
+/// grants hears the second edit and panics. The parked failure came first,
+/// so it is the one the request raises.
+fn observer_panicking_after_a_parked_failure() {
+    let controller = TextEditingController::new();
+    let node = FocusNode::with_debug_label("observer after a parked failure");
+    let app = controller.clone();
+    let mut harness = focused(
+        EditableText::new(controller.clone(), Rc::clone(&node)).on_changed(move |_cx, text| {
+            if text == "a" {
+                app.set_text("on_changed edit");
+                panic!("on_changed failure");
+            }
+        }),
+        &node,
+    );
+    let field = field(&harness);
+    field.set_observer(Some(Rc::new(EditsThenPanics {
+        controller: controller.clone(),
+        heard: Cell::new(0),
+    })));
+    assert_eq!(
+        raised(|| {
+            let _ = edit(&*field, "a");
+        })
+        .as_deref(),
+        Some("on_changed failure"),
+        "the failure parked by the grant's settle came first"
+    );
+    field.set_observer(None);
+    the_field_keeps_working(&mut harness, &field);
+    assert_eq!(controller.text(), "observer editz");
+}
+
+/// A failure parked in a presentation's gate whose payload panics when
+/// destroyed, and the presentation and store gone before any turn took it.
+fn gate_dropped_with_a_parked_failure() {
+    let owner = owner();
+    let store = InMemoryTextStore::new("");
+    let _client = owner
+        .handle()
+        .attach(TextInputClient::new(store.clone()))
+        .expect("attach");
+    store.set_owner_listener(Some(Rc::new(|| {
+        std::panic::panic_any(PanicsOnDrop("parked payload destroyed"));
+    })));
+    assert_eq!(
+        edit(&*store, "a"),
+        Ok(LockOutcome::Granted),
+        "the grant stands"
+    );
+    store.set_owner_listener(None);
+    assert_eq!(
+        raised(move || {
+            owner.close();
+            drop(owner);
+            drop(store);
+        }),
+        None,
+        "an untaken payload is retained, not destroyed, with its gate"
+    );
+    the_owner_keeps_working(&self::owner());
+}
+
 // ----------------------------------------------------------------------------
 // TextInputOwner: the session-start callback and the dispatched client
 // ----------------------------------------------------------------------------
@@ -625,6 +711,14 @@ fn dispatched_client_retirement_after_a_failure() {
 // ----------------------------------------------------------------------------
 
 const ROWS: &[(&str, fn())] = &[
+    (
+        "gate: dropped with a parked failure",
+        gate_dropped_with_a_parked_failure,
+    ),
+    (
+        "observer: panicking after a parked failure",
+        observer_panicking_after_a_parked_failure,
+    ),
     (
         "gate: a grant that moves the store",
         gate_a_grant_that_moves_the_store,

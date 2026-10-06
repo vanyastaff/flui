@@ -624,12 +624,19 @@ impl TextStore for EditableTextStore {
         // An app edit not yet reported is reported before the platform's
         // session can see (and write back over) it.
         self.flush_notifications();
+        // Read before any grant's owner code can move the store elsewhere.
+        let admitting = self.arbiter.owner_gate();
         let outcome =
             self.arbiter
                 .request(grant, timing, &mut |grant| self.open(grant), &mut || {
                     self.settle();
                 });
-        self.flush_notifications();
+        // What owner code edited while the grants settled reaches the
+        // observer here; a failure their settle parked came before one
+        // this flush raises.
+        let mut calls = OwnerCalls::new();
+        calls.run_behind_parked(admitting.as_ref(), || self.flush_notifications());
+        calls.resume();
         outcome
     }
 
@@ -641,10 +648,13 @@ impl TextStore for EditableTextStore {
             return 0;
         }
         self.flush_notifications();
+        let admitting = self.arbiter.owner_gate();
         let ran = self
             .arbiter
             .run_deferred(&mut |grant| self.open(grant), &mut || self.settle());
-        self.flush_notifications();
+        let mut calls = OwnerCalls::new();
+        calls.run_behind_parked(admitting.as_ref(), || self.flush_notifications());
+        calls.resume();
         ran
     }
 

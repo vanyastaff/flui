@@ -194,14 +194,14 @@ pub enum TextStoreError {
 #[derive(Clone, Default)]
 pub struct CommitGate {
     shut: Rc<Cell<bool>>,
-    failure: Rc<RefCell<Option<Box<dyn Any + Send>>>>,
+    failure: Rc<ParkedFailure>,
 }
 
 impl std::fmt::Debug for CommitGate {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CommitGate")
             .field("open", &self.is_open())
-            .field("failed", &self.failure.borrow().is_some())
+            .field("failed", &self.failure.0.borrow().is_some())
             .finish_non_exhaustive()
     }
 }
@@ -230,7 +230,7 @@ impl CommitGate {
     /// here, since dropping an opaque payload can run user code.
     pub fn defer_failure(&self, payload: Box<dyn Any + Send>) {
         let later = {
-            let mut held = self.failure.borrow_mut();
+            let mut held = self.failure.0.borrow_mut();
             if held.is_some() {
                 Some(payload)
             } else {
@@ -247,7 +247,21 @@ impl CommitGate {
     /// (resumes it inside its own containment).
     #[must_use]
     pub fn take_failure(&self) -> Option<Box<dyn Any + Send>> {
-        self.failure.borrow_mut().take()
+        self.failure.0.borrow_mut().take()
+    }
+}
+
+/// The failure a gate holds for its owner. A payload no owner took before
+/// the last clone of the gate went (the presentation closed first) is
+/// retained, not dropped (ADR-0119, ADR-0127): its destructor is user code.
+#[derive(Default)]
+struct ParkedFailure(RefCell<Option<Box<dyn Any + Send>>>);
+
+impl Drop for ParkedFailure {
+    fn drop(&mut self) {
+        if let Some(payload) = self.0.get_mut().take() {
+            flui_foundation::panic::retain_opaque_payload(payload);
+        }
     }
 }
 
@@ -302,6 +316,14 @@ impl LockArbiter {
     pub fn set_gate(&self, gate: CommitGate) {
         *self.gate.borrow_mut() = gate;
         self.owned_gate.set(true);
+    }
+
+    /// The gate an owner installed ([`Self::set_gate`]), where a failure
+    /// caught while settling waits; `None` with the arbiter's own gate. A
+    /// store reads it before owner code runs, which may install another.
+    #[must_use]
+    pub fn owner_gate(&self) -> Option<CommitGate> {
+        self.owned_gate.get().then(|| self.gate.borrow().clone())
     }
 
     /// Whether the installed gate is open.
@@ -422,7 +444,7 @@ impl LockArbiter {
         // A failure in this grant's settle belongs to the presentation that
         // admitted the grant: read before any owner code, the grant's own
         // included, can move the store to another presentation.
-        let admitting = self.owned_gate.get().then(|| self.gate.borrow().clone());
+        let admitting = self.owner_gate();
         let mut calls = OwnerCalls::new();
         {
             self.locked.set(true);
