@@ -77,7 +77,7 @@ use super::route::{
 };
 use super::subtree::RouteSubtree;
 use crate::animated::VsyncScope;
-use crate::{Overlay, OverlayEntry, OverlayHandle};
+use crate::{Overlay, OverlayEntry, OverlayEntryId, OverlayHandle};
 
 // A child module, so the admission rules and the `Router`'s doors can reach
 // `NavigatorShared` without widening it (`navigator/navigator/addressing.rs`).
@@ -114,6 +114,50 @@ impl NavigatorCommandTargetId {
         let id =
             NonZeroU64::new(raw).expect("BUG: navigator command target id counter started at zero");
         Self(id)
+    }
+}
+
+/// Every identity one route admission spends: its [`RouteId`] and the
+/// [`OverlayEntryId`] of its overlay entry.
+///
+/// Minted before the admission publishes anything — a recorded page, a filled
+/// binding slot, an inserted entry, a dismissed predecessor — so a capacity
+/// refusal fails the whole operation with nothing changed. A reservation an
+/// operation abandons is never reissued; identities stay unique either way.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct RouteReservation {
+    route: RouteId,
+    entry: OverlayEntryId,
+}
+
+impl RouteReservation {
+    /// Mint both identities, refusing permanently at either's exhaustion.
+    pub(super) fn reserve() -> Self {
+        Self::reserve_using(RouteId::next, OverlayEntryId::next)
+    }
+
+    /// The reserved route identity.
+    pub(super) fn route(self) -> RouteId {
+        self.route
+    }
+
+    /// [`reserve`](Self::reserve) while `held` — caller-owned values an
+    /// operation carries across its reservation — stays retained if the
+    /// reservation is refused (ADR-0127), then hand both back.
+    pub(super) fn reserve_retaining<T>(held: T) -> (Self, T) {
+        let mut held = super::lifecycle::Terminal::new(held);
+        let reservation = Self::reserve();
+        (reservation, held.take_value())
+    }
+
+    pub(super) fn reserve_using(
+        route: impl FnOnce() -> RouteId,
+        entry: impl FnOnce() -> OverlayEntryId,
+    ) -> Self {
+        Self {
+            route: route(),
+            entry: entry(),
+        }
     }
 }
 
@@ -1221,23 +1265,30 @@ impl NavigatorHandle {
         )
     }
 
-    /// Mint `route`'s id, fill its binding slot and insert its overlay entry —
-    /// everything a route needs before it enters the history — and, under a
-    /// `Router`, record it as a page when it is one.
+    /// Reserve `route`'s identities, then [`prepare_reserved`](Self::prepare_reserved).
     fn prepare<R: NavigatorRoute>(&self, route: &R) -> RouteId {
-        let id = RouteId::next();
-        self.prepare_with_id(route, id)
+        self.prepare_reserved(route, RouteReservation::reserve())
     }
 
-    fn prepare_with_id<R: NavigatorRoute>(&self, route: &R, id: RouteId) -> RouteId {
+    /// Fill `route`'s binding slot and insert its overlay entry under the
+    /// identities in `reservation` — everything a route needs before it enters
+    /// the history — and, under a `Router`, record it as a page when it is one.
+    ///
+    /// Spends no identity of its own: capacity refusal happened, if at all,
+    /// when the reservation was made, before anything here was published.
+    pub(super) fn prepare_reserved<R: NavigatorRoute>(
+        &self,
+        route: &R,
+        reservation: RouteReservation,
+    ) -> RouteId {
+        let RouteReservation { route: id, entry } = reservation;
         self.record_page(id, route);
         self.bind(route, id);
         let builder = route.content_builder();
-        self.shared
-            .registries
-            .entries
-            .lock()
-            .insert(id, OverlayEntry::new(move |ctx| builder(ctx)));
+        self.shared.registries.entries.lock().insert(
+            id,
+            OverlayEntry::with_reserved_id(entry, move |ctx| builder(ctx)),
+        );
         id
     }
 
@@ -1297,7 +1348,7 @@ impl NavigatorHandle {
         if let Some(refusal) = self.push_refusal(&route) {
             return self.refuse("push", refusal, route);
         }
-        self.push_reporting_id(route).1
+        self.push_reporting_id(route, RouteReservation::reserve).1
     }
 
     /// [`push`](Self::push), also handing back the [`RouteId`] it minted.
@@ -1310,8 +1361,9 @@ impl NavigatorHandle {
     pub(super) fn push_reporting_id<R: NavigatorRoute>(
         &self,
         route: R,
+        reserve: impl FnOnce() -> RouteReservation,
     ) -> (RouteId, RouteResult<R::Output>) {
-        self.push_prepared("push", route, |history, id, route| {
+        self.push_prepared("push", route, reserve, |history, id, route| {
             history.push_with_id(id, route).1
         })
     }
@@ -1361,8 +1413,13 @@ impl NavigatorHandle {
     ) -> RouteResult<R::Output> {
         // `CurrentTop`: nothing can run between this call and the flush, so "the
         // top now" is still the caller's route.
-        self.push_replacement_erased_reporting_id(route, Some(ReplaceTarget::CurrentTop), result)
-            .1
+        self.push_replacement_erased_reporting_id(
+            route,
+            Some(ReplaceTarget::CurrentTop),
+            result,
+            RouteReservation::reserve,
+        )
+        .1
     }
 
     /// [`push_replacement`](Self::push_replacement) with an already-erased
@@ -1377,8 +1434,9 @@ impl NavigatorHandle {
         route: R,
         target: Option<ReplaceTarget>,
         result: Option<AnyResult>,
+        reserve: impl FnOnce() -> RouteReservation,
     ) -> (RouteId, RouteResult<R::Output>) {
-        self.push_prepared("push_replacement", route, |history, id, route| {
+        self.push_prepared("push_replacement", route, reserve, |history, id, route| {
             history
                 .push_replacement_with_id(id, target, route, result)
                 .1
@@ -1416,7 +1474,8 @@ impl NavigatorHandle {
         if let Some(refusal) = self.placement_refusal(&route) {
             return self.refuse("push_and_remove_until", refusal, route);
         }
-        self.push_and_remove_until_reporting_id(route, keep).1
+        self.push_and_remove_until_reporting_id(route, keep, RouteReservation::reserve)
+            .1
     }
 
     /// [`push_and_remove_until`](Self::push_and_remove_until), also handing back
@@ -1424,16 +1483,21 @@ impl NavigatorHandle {
     pub(super) fn push_and_remove_until_reporting_id<R: NavigatorRoute>(
         &self,
         route: R,
-        mut keep: impl FnMut(RouteId) -> bool,
+        keep: impl FnMut(RouteId) -> bool,
+        reserve: impl FnOnce() -> RouteReservation,
     ) -> (RouteId, RouteResult<R::Output>) {
-        let (id, (result, below_top_to_bottom)) =
-            self.push_prepared("push_and_remove_until", route, |history, id, route| {
-                history.push_for_remove_until_with_id(id, route)
-            });
+        // The caller's predicate outlives a capacity refusal in the push below.
+        let mut keep = super::lifecycle::Terminal::new(keep);
+        let (id, (result, below_top_to_bottom)) = self.push_prepared(
+            "push_and_remove_until",
+            route,
+            reserve,
+            RouteHistory::push_for_remove_until_with_id,
+        );
 
         let mut remove_ids = Vec::new();
         for candidate in below_top_to_bottom {
-            if keep(candidate) {
+            if (*keep)(candidate) {
                 break;
             }
             remove_ids.push(candidate);
@@ -1446,31 +1510,26 @@ impl NavigatorHandle {
         (id, result)
     }
 
-    /// The shared push shape: mint the id, fill the route's binding slot, insert
-    /// its overlay entry, then `commit` against the locked history and apply the
-    /// flush outcome. The route is bound and its entry inserted **before** the
-    /// flush — `install()` and a zero-duration route's first status change both
-    /// reach for the entry.
-    fn push_prepared<R: NavigatorRoute, O>(
+    /// The shared push shape: take the route's reservation, fill its binding
+    /// slot, insert its overlay entry, then `commit` against the locked history
+    /// and apply the flush outcome. The route is bound and its entry inserted
+    /// **before** the flush — `install()` and a zero-duration route's first
+    /// status change both reach for the entry.
+    ///
+    /// `reserve` either mints the identities or hands back ones an operation
+    /// reserved before its own first side effect. It runs with `route` and
+    /// `commit` already held, so a capacity refusal retains both.
+    pub(super) fn push_prepared<R: NavigatorRoute, O>(
         &self,
         operation: &'static str,
         route: R,
+        reserve: impl FnOnce() -> RouteReservation,
         commit: impl FnOnce(&mut RouteHistory, RouteId, R) -> O,
-    ) -> (RouteId, O) {
-        self.push_prepared_using(operation, route, commit, RouteId::next)
-    }
-
-    fn push_prepared_using<R: NavigatorRoute, O>(
-        &self,
-        operation: &'static str,
-        route: R,
-        commit: impl FnOnce(&mut RouteHistory, RouteId, R) -> O,
-        next_id: impl FnOnce() -> RouteId,
     ) -> (RouteId, O) {
         let mut route = super::lifecycle::Terminal::new(route);
         let mut commit = super::lifecycle::Terminal::new(commit);
-        let mut next_id = super::lifecycle::Terminal::new(next_id);
-        let id = self.prepare_with_id(&*route, next_id.take_value()());
+        let mut reserve = super::lifecycle::Terminal::new(reserve);
+        let id = self.prepare_reserved(&*route, reserve.take_value()());
 
         let (result, outcome, undelivered) = {
             let mut history = self.shared.history.lock();
@@ -2138,7 +2197,9 @@ impl NavigatorHandle {
         request: impl Into<RouteSettings>,
     ) -> Result<RouteId, NamedRouteError> {
         let request = request.into();
-        Ok(self.resolve_named(&request)?.push(self, PushMode::Push).0)
+        let generated = self.resolve_named(&request)?;
+        let (reservation, _request) = RouteReservation::reserve_retaining(request);
+        Ok(generated.push(self, PushMode::Push, reservation).0)
     }
 
     /// [`push_named`](Self::push_named), keeping the new route's typed
@@ -2174,11 +2235,9 @@ impl NavigatorHandle {
         request: impl Into<RouteSettings>,
     ) -> Result<RouteResult<T>, NamedRouteError> {
         let request = request.into();
-        Ok(self
-            .resolve_named(&request)?
-            .checked::<T>(&request)?
-            .push(self, PushMode::Push)
-            .1)
+        let checked = self.resolve_named(&request)?.checked::<T>(&request)?;
+        let (reservation, _request) = RouteReservation::reserve_retaining(request);
+        Ok(checked.push(self, PushMode::Push, reservation).1)
     }
 
     /// Push the route a [`RouteKey`] names, keeping its typed [`RouteResult`].
@@ -2289,14 +2348,16 @@ impl NavigatorHandle {
         // completes nothing — which `ReplaceTarget` cannot express and so cannot
         // be mistaken for "the current top".
         let target = self.current().map(ReplaceTarget::Route);
-        Ok(self
-            .resolve_named(&request)?
+        let generated = self.resolve_named(&request)?;
+        let (reservation, _request) = RouteReservation::reserve_retaining(request);
+        Ok(generated
             .push(
                 self,
                 PushMode::Replace {
                     target,
                     result: None,
                 },
+                reservation,
             )
             .0)
     }
@@ -2339,7 +2400,13 @@ impl NavigatorHandle {
             .refuse_named_placement(&request)
             .and_then(|()| self.resolve_named(&request));
         match resolved {
-            Ok(generated) => Ok(generated.push(self, PushMode::Replace { target, result }).0),
+            Ok(generated) => {
+                let (reservation, (_request, result)) =
+                    RouteReservation::reserve_retaining((request, result));
+                Ok(generated
+                    .push(self, PushMode::Replace { target, result }, reservation)
+                    .0)
+            }
             Err(unresolved) => {
                 report_undelivered(
                     "push_replacement_named_with",
@@ -2384,6 +2451,12 @@ impl NavigatorHandle {
     /// # Errors
     ///
     /// As [`push_named`](Self::push_named); on error, nothing is popped.
+    ///
+    /// # Panics
+    ///
+    /// If route or overlay identity capacity is exhausted. The identities are
+    /// reserved before the pop, so a refusal pops nothing and retains the
+    /// request.
     pub fn pop_and_push_named(
         &self,
         request: impl Into<RouteSettings>,
@@ -2392,8 +2465,11 @@ impl NavigatorHandle {
         self.refuse_named_placement(&request)?;
         let departing = self.current();
         let generated = self.resolve_named(&request)?;
+        // Reserved before the dismissal: exhaustion refuses the whole
+        // operation rather than leaving the departing route gone unreplaced.
+        let (reservation, _request) = RouteReservation::reserve_retaining(request);
         let undelivered = self.dismiss_captured(departing, None);
-        let pushed = generated.push(self, PushMode::Push).0;
+        let pushed = generated.push(self, PushMode::Push, reservation).0;
         // After the push's own `apply`, so this operation's `didPop` **and**
         // `didPush` both precede anything a re-entrant drop triggers.
         report_undelivered("pop_and_push_named", undelivered);
@@ -2410,6 +2486,11 @@ impl NavigatorHandle {
     /// As [`push_named`](Self::push_named). On error nothing is popped, and
     /// `result` is **reported and dropped outside any guard** — see
     /// [`push_replacement_named_with`](Self::push_replacement_named_with).
+    ///
+    /// # Panics
+    ///
+    /// As [`pop_and_push_named`](Self::pop_and_push_named): a refusal pops
+    /// nothing and retains both the request and `result`.
     pub fn pop_and_push_named_with<TO: Send + 'static>(
         &self,
         request: impl Into<RouteSettings>,
@@ -2433,8 +2514,12 @@ impl NavigatorHandle {
                 return Err(unresolved);
             }
         };
+        // Reserved before the dismissal, as in `pop_and_push_named`; the
+        // erased result is retained if the reservation is refused.
+        let (reservation, (_request, result)) =
+            RouteReservation::reserve_retaining((request, result));
         let undelivered = self.dismiss_captured(departing, result);
-        let pushed = generated.push(self, PushMode::Push).0;
+        let pushed = generated.push(self, PushMode::Push, reservation).0;
         // See `pop_and_push_named`: reported after the final `apply`, not between
         // this operation's two halves.
         report_undelivered("pop_and_push_named_with", undelivered);
@@ -2463,13 +2548,15 @@ impl NavigatorHandle {
     pub fn push_named_and_remove_until(
         &self,
         request: impl Into<RouteSettings>,
-        mut keep: impl FnMut(RouteId) -> bool,
+        keep: impl FnMut(RouteId) -> bool,
     ) -> Result<RouteId, NamedRouteError> {
         let request = request.into();
         self.refuse_named_placement(&request)?;
-        Ok(self
-            .resolve_named(&request)?
-            .push(self, PushMode::RemoveUntil { keep: &mut keep })
+        let generated = self.resolve_named(&request)?;
+        let (reservation, (_request, mut keep)) =
+            RouteReservation::reserve_retaining((request, keep));
+        Ok(generated
+            .push(self, PushMode::RemoveUntil { keep: &mut keep }, reservation)
             .0)
     }
 }

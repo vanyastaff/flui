@@ -34,7 +34,7 @@ use crate::navigator::overlay_route::NavigatorRoute;
 use crate::navigator::result::{Completer, RouteResult};
 use crate::navigator::route::{Route, RouteId, RouteSettings};
 
-use super::{NavigatorHandle, report_undelivered};
+use super::{NavigatorHandle, RouteReservation, report_undelivered};
 
 /// What a Router's navigator knows about the Router: its route type, and
 /// which routes are its pages.
@@ -274,7 +274,7 @@ impl NavigatorHandle {
         top: P,
         commit: impl FnOnce(Vec<RouteId>) -> O,
     ) -> O {
-        self.replace_tail_using(keep, below, top, commit, RouteId::next)
+        self.replace_tail_using(keep, below, top, commit, RouteReservation::reserve)
     }
 
     pub(super) fn replace_tail_using<P: NavigatorRoute, O>(
@@ -283,26 +283,29 @@ impl NavigatorHandle {
         below: Vec<P>,
         top: P,
         commit: impl FnOnce(Vec<RouteId>) -> O,
-        next_id: impl FnMut() -> RouteId,
+        reserve: impl FnMut() -> RouteReservation,
     ) -> O {
         let mut remaining = super::super::lifecycle::Terminal::new(below.into_iter());
         let mut below = super::super::lifecycle::Terminal::new(Vec::new());
         let mut top = super::super::lifecycle::Terminal::new(top);
         let mut commit = super::super::lifecycle::Terminal::new(commit);
-        let mut next_id = super::super::lifecycle::Terminal::new(next_id);
+        let mut reserve = super::super::lifecycle::Terminal::new(reserve);
+        let mut reservations = Vec::new();
         for route in &mut *remaining {
             let mut route = super::super::lifecycle::Terminal::new(route);
-            let id = (*next_id)();
-            below.push((id, route.take_value()));
+            let reservation = (*reserve)();
+            reservations.push(reservation);
+            below.push((reservation.route(), route.take_value()));
         }
-        let top_id = (*next_id)();
-        // Capacity refusal precedes binding, builder or overlay publication.
-        // Successfully reserved ids can be spent by a rejected batch; they
-        // remain unique and are never rolled back or reissued.
-        for (id, route) in &*below {
-            self.prepare_with_id(route, *id);
+        let top_reservation = (*reserve)();
+        // Every route and overlay identity of the batch is reserved before any
+        // page is recorded, slot bound, builder run or entry inserted, so a
+        // capacity refusal publishes nothing. Identities a rejected batch
+        // reserved remain unique and are never rolled back or reissued.
+        for ((_, route), reservation) in below.iter().zip(reservations) {
+            self.prepare_reserved(route, reservation);
         }
-        self.prepare_with_id(&*top, top_id);
+        let top_id = self.prepare_reserved(&*top, top_reservation);
         let mut ids: Vec<RouteId> = below.iter().map(|(id, _)| *id).collect();
         ids.push(top_id);
         self.commit_pages(
