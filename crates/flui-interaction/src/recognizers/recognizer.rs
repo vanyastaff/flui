@@ -3,20 +3,124 @@
 //! Defines the core `GestureRecognizer` trait and common types used by all
 //! recognizers.
 
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, AtomicU64, Ordering},
+use std::{
+    rc::Rc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicU64, Ordering},
+    },
 };
 
 use flui_foundation::geometry::Offset;
 use parking_lot::Mutex;
 use tracing::instrument;
+use web_time::{Duration, Instant};
 
 use crate::{
     arena::{GestureArena, GestureArenaEntry, GestureArenaMember, GestureDisposition},
+    events::{PointerButton, PointerEvent},
     ids::PointerId,
-    routing::PointerDispatch,
+    retain::Retain,
+    routing::{PointerDispatch, RoutePanic},
+    traits::PointerEventExtTrait,
 };
+
+/// Whether a `Down` presses the primary button.
+///
+/// A `Down` that carries no button (touch and pen contacts may not) counts as
+/// primary. Any other event answers `false`.
+pub(crate) fn is_primary_down(event: &PointerEvent) -> bool {
+    matches!(event, PointerEvent::Down(data)
+        if data.button.is_none_or(|button| button == PointerButton::Primary))
+}
+
+/// The event's own timestamp in nanoseconds, or `0` when it carries none.
+pub(crate) fn event_time_nanos(event: &PointerEvent) -> u64 {
+    match event {
+        PointerEvent::Down(data) | PointerEvent::Up(data) => data.state.time,
+        PointerEvent::Move(data) => data.current.time,
+        PointerEvent::Scroll(data) => data.state.time,
+        PointerEvent::Gesture(data) => data.state.time,
+        PointerEvent::Cancel(_) | PointerEvent::Enter(_) | PointerEvent::Leave(_) => 0,
+    }
+}
+
+/// Places a pointer sequence's event timestamps on the arena clock.
+///
+/// Velocity is a ratio of distance to the time between samples, so samples
+/// must be stamped when the device produced them, not when dispatch got to
+/// them: events that queued up behind one frame are dispatched back to back.
+/// The first stamped event of a sequence anchors its hardware time to the
+/// arena clock's reading at dispatch; every later event lands at the anchor
+/// plus its own hardware offset. An event without a timestamp (`0`) is
+/// stamped at dispatch, and one older than the anchor is clamped to it, so
+/// the returned instants never run backwards from the anchor.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct EventTimeline {
+    anchor: Option<(u64, Instant)>,
+}
+
+impl EventTimeline {
+    /// The arena-clock instant at which an event stamped `event_nanos` happened,
+    /// given the arena clock reads `now` at dispatch.
+    pub(crate) fn instant(&mut self, event_nanos: u64, now: Instant) -> Instant {
+        if event_nanos == 0 {
+            return now;
+        }
+        let Some((anchor_nanos, anchor)) = self.anchor else {
+            self.anchor = Some((event_nanos, now));
+            return now;
+        };
+        let offset = Duration::from_nanos(event_nanos.saturating_sub(anchor_nanos));
+        anchor.checked_add(offset).unwrap_or(now)
+    }
+}
+
+/// Drop one outgoing user callback, preserving the first failure.
+///
+/// Once a failure is recorded, or while the thread is already unwinding, the
+/// capture is retained rather than destroyed: a second panic from its
+/// destructor would replace the first failure or abort.
+pub(crate) fn retire_callback<T: ?Sized>(callback: Option<Rc<T>>, first: &mut Option<RoutePanic>) {
+    if first.is_some() || std::thread::panicking() {
+        callback.retain();
+    } else {
+        RoutePanic::preserve_first(
+            first,
+            RoutePanic::capture(|| drop(callback)),
+            "recognizer callback retirement",
+        );
+    }
+}
+
+/// Run `before` (the recognizer's own state commit), then the user callback.
+///
+/// The callback runs only when `before` completed. Its capture is retired
+/// afterwards and the first failure resumes once everything is settled; a
+/// failure arriving while the thread is already unwinding is retained.
+pub(crate) fn invoke_callback<T: ?Sized>(
+    callback: Option<Rc<T>>,
+    before: impl FnOnce(),
+    invoke: impl FnOnce(&T),
+) {
+    let incoming_failure = std::thread::panicking();
+    // The opaque capture owner stays outside the catch around its body.
+    let mut first = RoutePanic::capture(before);
+    if first.is_none()
+        && !incoming_failure
+        && let Some(callback) = callback.as_ref()
+    {
+        first = RoutePanic::capture(|| invoke(callback.as_ref()));
+    }
+    retire_callback(callback, &mut first);
+    if let Some(panic) = first {
+        if incoming_failure {
+            panic.retain();
+        } else {
+            panic.resume();
+        }
+    }
+}
 
 /// Base trait for all gesture recognizers
 ///
@@ -50,6 +154,29 @@ pub trait GestureRecognizer: GestureArenaMember {
         position: Offset<f64>,
         global_position: Offset<f64>,
     );
+
+    /// Admit a pointer from the `Down` dispatch that started it.
+    ///
+    /// The event-carrying form of [`add_pointer`](Self::add_pointer), and the
+    /// one a caller holding the `Down` should use: the device kind (which
+    /// selects the slop tier) and the pressed button exist only on the event.
+    /// A recognizer that answers only some buttons — drag and long press
+    /// admit the primary button, tap its primary, secondary and tertiary
+    /// families — leaves a `Down` it does not admit out of the arena
+    /// entirely, so a right-button press neither scrolls a list nor fires a
+    /// long press. A `Down` without button information (touch, pen) counts as
+    /// the primary button. Events other than `Down` are ignored.
+    ///
+    /// The default forwards the dispatch's position pair to `add_pointer`.
+    fn add_pointer_down(self: &Arc<Self>, dispatch: PointerDispatch<'_>) {
+        if let PointerEvent::Down(_) = dispatch.local {
+            self.add_pointer(
+                dispatch.local.pointer_id(),
+                dispatch.local.position(),
+                dispatch.global.position(),
+            );
+        }
+    }
 
     /// Handle a pointer event.
     ///

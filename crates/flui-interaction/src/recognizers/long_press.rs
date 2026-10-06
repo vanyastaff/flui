@@ -17,7 +17,7 @@ use flui_foundation::geometry::Offset;
 use parking_lot::Mutex;
 use tracing::instrument;
 
-use super::recognizer::{GestureRecognizer, RecognizerBase};
+use super::recognizer::{GestureRecognizer, RecognizerBase, is_primary_down};
 use crate::{
     arena::{GestureArenaMember, GestureDeadlineRegistration},
     events::{PointerEvent, PointerType},
@@ -281,8 +281,11 @@ impl LongPressGestureRecognizer {
         state.device_kind = Some(kind);
         drop(state); // Release lock before callback
 
-        // Call on_long_press_down callback (initial contact)
-        if let Some(callback) = self.callbacks.borrow().on_long_press_down.clone() {
+        // Call on_long_press_down callback (initial contact). The callback is
+        // cloned out first: no borrow of the cell may span user code, which
+        // can dispose this recognizer or replace its callbacks.
+        let callback = self.callbacks.borrow().on_long_press_down.clone();
+        if let Some(callback) = callback {
             let details = LongPressDownDetails {
                 global_position,
                 local_position: position,
@@ -303,7 +306,7 @@ impl LongPressGestureRecognizer {
                 // Check if moved too far (slop detection)
                 if let Some(initial_pos) = self.state.initial_position() {
                     let delta = position - initial_pos;
-                    if settings.exceeds_touch_slop(delta.distance()) {
+                    if delta.distance() > settings.hit_slop(kind) {
                         // Moved too far, cancel
                         drop(state); // Release lock before calling handle_cancel
                         self.handle_cancel(position, global_position, kind);
@@ -324,7 +327,8 @@ impl LongPressGestureRecognizer {
                 drop(state); // Release lock before calling callback
 
                 // Call on_long_press_move_update callback
-                if let Some(callback) = self.callbacks.borrow().on_long_press_move_update.clone() {
+                let callback = self.callbacks.borrow().on_long_press_move_update.clone();
+                if let Some(callback) = callback {
                     let details = LongPressDetails {
                         global_position,
                         local_position: position,
@@ -365,17 +369,23 @@ impl LongPressGestureRecognizer {
                     kind,
                 };
 
-                // Call on_long_press_up callback
-                if let Some(callback) = self.callbacks.borrow().on_long_press_up.clone() {
+                // The sequence is over before user code runs: a callback that
+                // panics or disposes leaves nothing tracked.
+                self.state.stop_tracking();
+
+                let (up, end) = {
+                    let callbacks = self.callbacks.borrow();
+                    (
+                        callbacks.on_long_press_up.clone(),
+                        callbacks.on_long_press_end.clone(),
+                    )
+                };
+                if let Some(callback) = up {
                     callback(details.clone());
                 }
-
-                // Call on_long_press_end callback
-                if let Some(callback) = self.callbacks.borrow().on_long_press_end.clone() {
+                if let Some(callback) = end {
                     callback(details);
                 }
-
-                self.state.stop_tracking();
             }
             LongPressPhase::Ready => {}
         }
@@ -465,10 +475,17 @@ impl LongPressGestureRecognizer {
         // resolved arena, matching `did_exceed_deadline`.
         self.state.accept_tracked();
 
-        if let Some(callback) = self.callbacks.borrow().on_long_press.clone() {
+        let (on_long_press, on_start) = {
+            let callbacks = self.callbacks.borrow();
+            (
+                callbacks.on_long_press.clone(),
+                callbacks.on_long_press_start.clone(),
+            )
+        };
+        if let Some(callback) = on_long_press {
             callback();
         }
-        if let Some(callback) = self.callbacks.borrow().on_long_press_start.clone() {
+        if let Some(callback) = on_start {
             let details = LongPressStartDetails {
                 global_position: fired_global,
                 local_position: fired_pos,
@@ -508,6 +525,62 @@ impl GestureRecognizer for LongPressGestureRecognizer {
         position: Offset<f64>,
         global_position: Offset<f64>,
     ) {
+        self.admit(pointer, position, global_position, PointerType::Touch);
+    }
+
+    fn add_pointer_down(self: &Arc<Self>, dispatch: PointerDispatch<'_>) {
+        let event = dispatch.local;
+        // A long press answers the primary button only.
+        let PointerEvent::Down(data) = event else {
+            return;
+        };
+        if !is_primary_down(event) {
+            return;
+        }
+        let pos = data.state.position;
+        self.admit(
+            data.pointer.pointer_id.unwrap_or(PointerId::PRIMARY),
+            Offset::new(pos.x, pos.y),
+            dispatch.global.position(),
+            data.pointer.pointer_type,
+        );
+    }
+
+    fn handle_event(&self, dispatch: PointerDispatch<'_>) {
+        self.route_event(dispatch);
+    }
+
+    fn dispose(&self) {
+        self.state.mark_disposed();
+        self.stop_deadline_polling();
+        // Reject arena entries + clear tracked pointer, so a disposed
+        // recognizer never lingers in the arena for a tracked pointer.
+        self.state.reject();
+        // Captures are dropped outside the cell, so a capture whose destructor
+        // reaches this recognizer finds it unborrowed.
+        let callbacks = std::mem::take(&mut *self.callbacks.borrow_mut());
+        drop(callbacks);
+    }
+
+    fn primary_pointer(&self) -> Option<PointerId> {
+        self.state.primary_pointer()
+    }
+}
+
+impl LongPressGestureRecognizer {
+    /// Start a sequence for `pointer`.
+    ///
+    /// A long press follows one contact. While it tracks one, another contact
+    /// (a second finger) is not admitted and leaves the press running. A new
+    /// contact under the pointer still tracked means that pointer's terminal
+    /// event never arrived: the old press is cancelled first.
+    fn admit(
+        self: &Arc<Self>,
+        pointer: PointerId,
+        position: Offset<f64>,
+        global_position: Offset<f64>,
+        kind: PointerType,
+    ) {
         // per-impl span (trait fn disallows `#[instrument]`).
         let _span = tracing::info_span!(
             "long_press.add_pointer",
@@ -515,6 +588,18 @@ impl GestureRecognizer for LongPressGestureRecognizer {
             event = %crate::observability::GestureEvent::RecognizerAdded,
         );
         if !self.state.assert_not_disposed("add_pointer") {
+            return;
+        }
+        match self.state.primary_pointer() {
+            Some(tracked) if tracked != pointer => return,
+            Some(_) => {
+                let (local, global, kind) = self.last_contact();
+                self.handle_cancel(local, global, kind);
+            }
+            None => {}
+        }
+        // The cancel callback may have disposed this recognizer.
+        if self.state.is_disposed() {
             return;
         }
         // Start tracking this exact allocation in both the arena and the
@@ -534,10 +619,10 @@ impl GestureRecognizer for LongPressGestureRecognizer {
             .replace(registration);
 
         // Handle pointer down
-        self.handle_down(position, global_position, PointerType::Touch);
+        self.handle_down(position, global_position, kind);
     }
 
-    fn handle_event(&self, dispatch: PointerDispatch<'_>) {
+    fn route_event(&self, dispatch: PointerDispatch<'_>) {
         let event = dispatch.local;
         // per-impl span (trait fn disallows `#[instrument]`).
         let _span = tracing::info_span!(
@@ -548,8 +633,9 @@ impl GestureRecognizer for LongPressGestureRecognizer {
         if !self.state.assert_not_disposed("handle_event") {
             return;
         }
-        // Only process if we're tracking a pointer
-        if self.state.primary_pointer().is_none() {
+        // Only the contact this press follows: another finger's Move or Up
+        // must not end or cancel it.
+        if self.state.primary_pointer() != Some(event.pointer_id()) {
             return;
         }
         // Read once, here: this is the only point at which the untransformed
@@ -587,24 +673,18 @@ impl GestureRecognizer for LongPressGestureRecognizer {
         }
     }
 
-    fn dispose(&self) {
-        self.state.mark_disposed();
-        self.stop_deadline_polling();
-        // Reject arena entries + clear tracked pointer, so a disposed
-        // recognizer never lingers in the arena for a tracked pointer.
-        self.state.reject();
-        let mut callbacks = self.callbacks.borrow_mut();
-        callbacks.on_long_press_down = None;
-        callbacks.on_long_press = None;
-        callbacks.on_long_press_start = None;
-        callbacks.on_long_press_move_update = None;
-        callbacks.on_long_press_up = None;
-        callbacks.on_long_press_end = None;
-        callbacks.on_long_press_cancel = None;
-    }
-
-    fn primary_pointer(&self) -> Option<PointerId> {
-        self.state.primary_pointer()
+    /// The tracked contact's latest position pair and device kind.
+    fn last_contact(&self) -> (Offset<f64>, Offset<f64>, PointerType) {
+        let local = self.state.initial_position().unwrap_or(Offset::ZERO);
+        let state = self.gesture_state.lock();
+        (
+            state.current_position.unwrap_or(local),
+            state
+                .current_global_position
+                .or_else(|| self.state.initial_global_position())
+                .unwrap_or(local),
+            state.device_kind.unwrap_or(PointerType::Touch),
+        )
     }
 }
 

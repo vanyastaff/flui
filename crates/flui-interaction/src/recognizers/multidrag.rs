@@ -62,7 +62,7 @@ use web_time::Instant;
 use flui_foundation::geometry::Offset;
 use parking_lot::Mutex;
 
-use super::recognizer::{GestureRecognizer, RecognizerBase};
+use super::recognizer::{EventTimeline, GestureRecognizer, RecognizerBase, event_time_nanos};
 use crate::{
     arena::{GestureArenaEntry, GestureArenaMember, GestureDisposition},
     events::{PointerEvent, PointerType},
@@ -149,6 +149,9 @@ struct MultiDragPointerState {
     client: Option<Rc<dyn MultiDragHandle>>, // owner-local per-pointer drag client.
     /// Velocity tracker fed while `pending` and after `accepted`.
     velocity_tracker: VelocityTracker,
+    /// Places this contact's event timestamps on the arena clock, so velocity
+    /// samples are spaced by when the device produced them.
+    timeline: EventTimeline,
     /// Timestamp of the most recent movement accumulated before acceptance.
     last_pending_timestamp: Option<Instant>,
     /// Stale-safe handle to the exact arena generation and member registered
@@ -175,6 +178,7 @@ impl MultiDragPointerState {
             accepted: false,
             client: None,
             velocity_tracker: VelocityTracker::new(),
+            timeline: EventTimeline::default(),
             last_pending_timestamp: None,
             arena_entry: None,
         }
@@ -374,13 +378,14 @@ impl MultiDragGestureRecognizer {
         position: Offset<f64>,
         global_position: Offset<f64>,
         kind: PointerType,
-        timestamp: Instant,
+        event_nanos: u64,
     ) {
         let (client, update, arena_entry) = {
             let mut map = self.pointers.lock();
             let Some(state) = map.get_mut(&pointer) else {
                 return;
             };
+            let timestamp = state.timeline.instant(event_nanos, self.state.now());
             let delta = (position - state.last_position).to_delta();
             state.last_position = position;
             state.last_global_position = global_position;
@@ -627,7 +632,13 @@ impl GestureRecognizer for MultiDragGestureRecognizer {
         let global_position = dispatch.global.position();
         match event {
             PointerEvent::Move(_) => {
-                self.handle_move(pointer, position, global_position, kind, self.state.now());
+                self.handle_move(
+                    pointer,
+                    position,
+                    global_position,
+                    kind,
+                    event_time_nanos(event),
+                );
             }
             PointerEvent::Up(_) => self.handle_up(pointer, position, global_position, kind),
             _ => {}

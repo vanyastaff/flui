@@ -21,15 +21,21 @@
 //! If no button-specific callback is registered, the event is
 //! silently dropped (the recogniser stays a no-op for that button).
 
-use std::{cell::RefCell, rc::Rc, sync::Arc};
+
+use std::{
+    cell::RefCell,
+    rc::Rc,
+    sync::{Arc, Weak},
+};
 
 use flui_foundation::geometry::Offset;
 use parking_lot::Mutex;
+use smallvec::SmallVec;
 use ui_events::pointer::PointerButton;
 
 use super::recognizer::{GestureRecognizer, RecognizerBase};
 use crate::{
-    arena::GestureArenaMember,
+    arena::{GestureArenaMember, GestureDisposition},
     events::{PointerEvent, PointerType},
     ids::PointerId,
     routing::PointerDispatch,
@@ -114,8 +120,8 @@ pub struct TapDetails {
 /// let recognizer = TapGestureRecognizer::new(arena)
 ///     .with_on_tap(|details| {
 ///         // The callback fires AFTER the arena confirms this
-///         // recogniser won; the `pending_up` deferral guarantees
-///         // only the arena winner receives the user callback.
+///         // recogniser won; a released contact waits for that
+///         // verdict, so only the arena winner receives the user callback.
 ///         let _pos = details.global_position;
 ///     });
 /// // `add_pointer` and `handle_event` are wired by
@@ -128,53 +134,18 @@ pub struct TapGestureRecognizer {
     /// Callbacks
     callbacks: Rc<RefCell<TapCallbacks>>,
 
-    /// Current gesture state
-    gesture_state: Arc<Mutex<TapState>>,
+    /// Every tap sequence that has not reached its arena verdict yet.
+    sequences: Arc<Mutex<TapSequences>>,
 
     /// Gesture settings (device-specific tolerances)
     settings: Arc<Mutex<GestureSettings>>,
-
-    /// Pending tap-down details captured at add_pointer, fired on
-    /// arena accept (the `on_tap_down` callback only fires once the arena
-    /// has resolved in this recognizer's favour). Cleared on accept or reject.
-    pending_down: Arc<Mutex<Option<PendingDown>>>,
-
-    /// Pending tap-up details captured at handle_event Up; fired by
-    /// handle_tap_up *after* arena resolution confirms acceptance.
-    /// Pre-fix code fired on_tap_up + on_tap
-    /// during handle_tap_up unconditionally, but `handle_event::Up` is
-    /// dispatched to every arena member; only the eventual arena winner
-    /// should fire user callbacks.
-    pending_up: Arc<Mutex<Option<PendingDown>>>,
-
-    /// Arena-resolution outcome flag set by `accept_gesture` /
-    /// `reject_gesture`. Read by `handle_tap_up` *after*
-    /// `state.stop_tracking()` returns (which triggers arena.sweep).
-    /// `Some(true)` = won, `Some(false)` = lost, `None` = pending.
-    /// Reset to None on each new add_pointer cycle.
-    accepted: Arc<Mutex<Option<bool>>>,
-
-    /// The pointer identity that `pending_down` / `pending_up` / `accepted`
-    /// currently belong to. Set once per gesture sequence in `add_pointer`
-    /// and read by `accept_gesture` / `reject_gesture` / `resolve_pointer`
-    /// to tell a *stale* arena resolution (for a pointer this recognizer has
-    /// already abandoned) apart from the current sequence's own resolution.
-    ///
-    /// Deliberately does *not* clear when tracking stops (unlike
-    /// [`RecognizerBase::primary_pointer`], which `stop_tracking` resets to
-    /// `None` the moment the pointer's up event is processed), specifically
-    /// so a held gesture's late win/loss can still be compared against the
-    /// pointer that produced it. `accept_gesture`, `reject_gesture` and
-    /// `resolve_pointer` guard on `pointer == sequence_pointer` before
-    /// touching the pending down/up state or the accepted flag.
-    sequence_pointer: Arc<Mutex<Option<PointerId>>>,
 }
 
 impl std::fmt::Debug for TapGestureRecognizer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("TapGestureRecognizer")
             .field("state", &self.state)
-            .field("gesture_state", &*self.gesture_state.lock())
+            .field("sequences", &*self.sequences.lock())
             .finish_non_exhaustive()
     }
 }
@@ -244,37 +215,104 @@ impl TapCallbacks {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum TapState {
-    Ready,
-    Down,
-    Cancelled,
-}
-
-/// Per-pointer button tracking for the active tap sequence.
-///
-/// Stored alongside the recogniser's `gesture_state` so a switch from
-/// primary to non-primary mid-sequence is observable. Reset on every
-/// transition into `Ready` and on cancel.
+/// A contact's details and the button stream it belongs to.
 #[derive(Debug, Clone, PartialEq)]
 struct PendingDown {
     details: TapDetails,
     button: TapButton,
 }
 
+/// One tap sequence (contact down to arena verdict).
+///
+/// Its arena verdict can arrive after the contact lifted — a double tap holds
+/// the first contact's arena across its inter-tap window — and by then the
+/// next contact may already be down under the same pointer ID: a mouse
+/// reports one ID for every click. So a sequence is addressed by its own
+/// identity, which the arena reaches through the sequence's own member
+/// ([`TapArenaMember`]), never by pointer ID.
+#[derive(Debug)]
+struct TapSequence {
+    id: u64,
+    pointer: PointerId,
+    /// The contact as it went down. Consumed when `on_*_tap_down` fires.
+    down: Option<PendingDown>,
+    /// The release, recorded at Up; the tap fires once it is accepted.
+    up: Option<PendingDown>,
+    /// Whether the arena accepted this sequence.
+    accepted: bool,
+}
+
+#[derive(Debug, Default)]
+struct TapSequences {
+    /// The last sequence identity handed out.
+    last_id: u64,
+    /// The sequence whose contact is still down, if any.
+    current: Option<u64>,
+    /// Sequences still waiting for their down to lift or their verdict.
+    live: SmallVec<[TapSequence; 2]>,
+}
+
+impl TapSequences {
+    fn index_of(&self, id: u64) -> Option<usize> {
+        self.live.iter().position(|sequence| sequence.id == id)
+    }
+
+    fn current_mut(&mut self) -> Option<&mut TapSequence> {
+        let id = self.current?;
+        self.live.iter_mut().find(|sequence| sequence.id == id)
+    }
+
+    /// Remove sequence `id`, clearing `current` when it named it.
+    fn remove(&mut self, id: u64) -> Option<TapSequence> {
+        if self.current == Some(id) {
+            self.current = None;
+        }
+        let index = self.index_of(id)?;
+        Some(self.live.remove(index))
+    }
+
+    /// The live sequence an arena verdict for `pointer` addresses when it
+    /// arrives without a sequence identity: the newest one on that pointer.
+    fn newest_on(&self, pointer: PointerId) -> Option<u64> {
+        self.live
+            .iter()
+            .rev()
+            .find(|sequence| sequence.pointer == pointer)
+            .map(|sequence| sequence.id)
+    }
+}
+
+/// The arena member standing for one tap sequence.
+///
+/// Registered in place of the recognizer itself so a verdict names the exact
+/// sequence it decides. It holds the recognizer weakly: the arena must not
+/// keep an unmounted recognizer alive.
+#[derive(Clone)]
+struct TapArenaMember {
+    recognizer: Weak<TapGestureRecognizer>,
+    sequence: u64,
+}
+
+impl crate::sealed::arena_member::Sealed for TapArenaMember {}
+
+impl GestureArenaMember for TapArenaMember {
+    fn accept_gesture(&self, _pointer: PointerId) {
+        if let Some(recognizer) = self.recognizer.upgrade() {
+            recognizer.accept_sequence(self.sequence);
+        }
+    }
+
+    fn reject_gesture(&self, _pointer: PointerId) {
+        if let Some(recognizer) = self.recognizer.upgrade() {
+            recognizer.reject_sequence(self.sequence);
+        }
+    }
+}
+
 impl TapGestureRecognizer {
     /// Create a new tap recognizer with gesture arena
     pub fn new(arena: crate::arena::GestureArena) -> Arc<Self> {
-        Arc::new(Self {
-            state: RecognizerBase::new(arena),
-            callbacks: Rc::new(RefCell::new(TapCallbacks::default())),
-            gesture_state: Arc::new(Mutex::new(TapState::Ready)),
-            settings: Arc::new(Mutex::new(GestureSettings::default())),
-            pending_down: Arc::new(Mutex::new(None)),
-            pending_up: Arc::new(Mutex::new(None)),
-            accepted: Arc::new(Mutex::new(None)),
-            sequence_pointer: Arc::new(Mutex::new(None)),
-        })
+        Self::with_settings(arena, GestureSettings::default())
     }
 
     /// Create a new tap recognizer with custom settings
@@ -285,12 +323,8 @@ impl TapGestureRecognizer {
         Arc::new(Self {
             state: RecognizerBase::new(arena),
             callbacks: Rc::new(RefCell::new(TapCallbacks::default())),
-            gesture_state: Arc::new(Mutex::new(TapState::Ready)),
+            sequences: Arc::new(Mutex::new(TapSequences::default())),
             settings: Arc::new(Mutex::new(settings)),
-            pending_down: Arc::new(Mutex::new(None)),
-            pending_up: Arc::new(Mutex::new(None)),
-            accepted: Arc::new(Mutex::new(None)),
-            sequence_pointer: Arc::new(Mutex::new(None)),
         })
     }
 
@@ -302,11 +336,6 @@ impl TapGestureRecognizer {
     /// Update gesture settings
     pub fn set_settings(&self, settings: GestureSettings) {
         *self.settings.lock() = settings;
-    }
-
-    /// Check if distance exceeds touch slop from settings
-    fn exceeds_touch_slop(&self, distance: f64) -> bool {
-        self.settings.lock().exceeds_touch_slop(distance)
     }
 
     /// Set the tap down callback
@@ -425,232 +454,281 @@ impl TapGestureRecognizer {
         self
     }
 
-    /// Handle tap down event — records pending down details + transitions
-    /// state. The per-button down callback is NOT fired here; it
-    /// fires only after arena accept (see [`Self::accept_gesture`]).
+
+    /// Start a sequence for a contact that went down.
     ///
-    /// `button` is locked at down-time; a primary-button down that
-    /// later receives a secondary up is treated as cancel (button
-    /// mismatch).
-    fn handle_tap_down(
-        &self,
+    /// A tap follows one contact at a time: while one is down, another
+    /// contact (a second finger) is not admitted. A new contact under the
+    /// pointer of a sequence still marked down means that pointer's Up or
+    /// Cancel never arrived; that sequence is withdrawn first. A sequence that
+    /// has lifted and only waits for its arena verdict is left alone — its
+    /// verdict still reaches it through its own arena member.
+    fn begin_sequence(
+        self: &Arc<Self>,
+        pointer: PointerId,
         position: Offset<f64>,
         global_position: Offset<f64>,
         kind: PointerType,
         button: TapButton,
     ) {
-        *self.gesture_state.lock() = TapState::Down;
-        *self.pending_down.lock() = Some(PendingDown {
-            details: TapDetails {
-                global_position,
-                local_position: position,
-                kind,
-            },
-            button,
+        if !self.state.assert_not_disposed("add_pointer") {
+            return;
+        }
+        let stale = {
+            let mut sequences = self.sequences.lock();
+            match sequences.current_mut() {
+                Some(current) if current.pointer != pointer => return,
+                Some(current) => {
+                    let id = current.id;
+                    sequences.remove(id)
+                }
+                None => None,
+            }
+        };
+        if stale.is_some() {
+            self.state.reject();
+        }
+        let id = {
+            let mut sequences = self.sequences.lock();
+            let id = sequences
+                .last_id
+                .checked_add(1)
+                .expect("BUG: tap sequence identity exhausted");
+            sequences.last_id = id;
+            sequences.current = Some(id);
+            sequences.live.push(TapSequence {
+                id,
+                pointer,
+                down: Some(PendingDown {
+                    details: TapDetails {
+                        global_position,
+                        local_position: position,
+                        kind,
+                    },
+                    button,
+                }),
+                up: None,
+                accepted: false,
+            });
+            id
+        };
+        let member = Arc::new(TapArenaMember {
+            recognizer: Arc::downgrade(self),
+            sequence: id,
         });
+        self.state
+            .start_tracking(pointer, position, global_position, &member);
     }
 
-    /// Fire pending per-button `on_*_tap_down` callback, if any. Called
-    /// from `accept_gesture` once arena resolves us as the winner. Fires
-    /// exactly once per gesture sequence.
-    fn fire_pending_tap_down(&self) {
-        let Some(pending) = self.pending_down.lock().take() else {
-            return;
-        };
-        let callback = self.callbacks.borrow().down(pending.button).cloned();
-        if let Some(cb) = callback {
-            cb(pending.details);
-        }
-    }
-
-    /// Deliver the won tap.
+    /// Refine the current sequence's contact from its real `Down` event.
     ///
-    /// Fires the per-button `on_*_tap_down` (idempotent via `pending_down`),
-    /// then `on_*_tap_up` + `on_*_tap`, but ONLY once the arena has accepted
-    /// this recognizer (`accepted == Some(true)`) and a pending up has been
-    /// recorded. Consuming `pending_up` makes it fire exactly once per sequence,
-    /// however many times it is called: from `handle_tap_up` when the arena
-    /// already accepted at close time (single-member private arena), and from
-    /// `accept_gesture` when the win arrives later — via the self-driven sweep,
-    /// or the binding's deferred sweep / release in a shared arena.
-    fn fire_won_tap(&self) {
-        if !matches!(*self.accepted.lock(), Some(true)) {
-            return;
+    /// `add_pointer` carries only positions, so it stages a primary touch
+    /// contact; a caller that also routes the `Down` corrects kind and button
+    /// here, before any up.
+    fn refine_down(
+        &self,
+        pointer: PointerId,
+        position: Offset<f64>,
+        global_position: Offset<f64>,
+        kind: PointerType,
+        button: TapButton,
+    ) {
+        let mut sequences = self.sequences.lock();
+        if let Some(current) = sequences.current_mut()
+            && current.pointer == pointer
+            && current.down.is_some()
+        {
+            current.down = Some(PendingDown {
+                details: TapDetails {
+                    global_position,
+                    local_position: position,
+                    kind,
+                },
+                button,
+            });
         }
-        let Some(pending_up) = self.pending_up.lock().take() else {
+    }
+
+    /// Record the arena's acceptance of sequence `id`, delivering the tap if
+    /// its contact already lifted.
+    fn accept_sequence(&self, id: u64) {
+        {
+            let mut sequences = self.sequences.lock();
+            let Some(index) = sequences.index_of(id) else {
+                return;
+            };
+            sequences.live[index].accepted = true;
+        }
+        self.deliver_if_won(id);
+    }
+
+    /// Forget sequence `id` after the arena rejected it. A rejected contact
+    /// that is still down stops being tracked, so its later events are
+    /// ignored.
+    fn reject_sequence(&self, id: u64) {
+        let was_current = {
+            let mut sequences = self.sequences.lock();
+            let was_current = sequences.current == Some(id);
+            sequences.remove(id);
+            was_current
+        };
+        if was_current {
+            self.state.stop_tracking();
+        }
+    }
+
+    /// Deliver sequence `id` once it is both accepted and lifted.
+    ///
+    /// The sequence leaves the recognizer before any callback runs, so it
+    /// fires exactly once, and a callback that panics, disposes this
+    /// recognizer or starts the next contact finds no half-delivered state.
+    fn deliver_if_won(&self, id: u64) {
+        let won = {
+            let mut sequences = self.sequences.lock();
+            match sequences.index_of(id) {
+                Some(index)
+                    if sequences.live[index].accepted && sequences.live[index].up.is_some() =>
+                {
+                    sequences.remove(id)
+                }
+                _ => None,
+            }
+        };
+        let Some(TapSequence {
+            down, up: Some(up), ..
+        }) = won
+        else {
             return;
         };
-        // Fire per-button tap-down first, then up + tap.
-        self.fire_pending_tap_down();
-        let (up_cb, tap_cb) = {
-            let cbs = self.callbacks.borrow();
+        let (down_callback, up_callback, tap_callback) = {
+            let callbacks = self.callbacks.borrow();
             (
-                cbs.up(pending_up.button).cloned(),
-                cbs.tap(pending_up.button).cloned(),
+                down.as_ref()
+                    .and_then(|down| callbacks.down(down.button).cloned()),
+                callbacks.up(up.button).cloned(),
+                callbacks.tap(up.button).cloned(),
             )
         };
-        if let Some(cb) = up_cb {
-            cb(pending_up.details.clone());
+        if let (Some(callback), Some(down)) = (down_callback, down) {
+            callback(down.details);
         }
-        if let Some(cb) = tap_cb {
-            cb(pending_up.details);
+        if let Some(callback) = up_callback {
+            callback(up.details.clone());
+        }
+        if let Some(callback) = tap_callback {
+            callback(up.details);
         }
     }
 
     /// Handle tap up event.
     ///
-    /// Review-driven restructure: records pending_up, initiates
-    /// arena resolution via `state.stop_tracking()`, then fires user
-    /// callbacks ONLY if arena confirmed acceptance. Eliminates the prior
-    /// assumption that pointer-up implies victory (some competing
-    /// recognizers also receive Up events without winning).
+    /// Records the release and stops tracking; the tap fires only once the
+    /// arena accepts this sequence — now if it already did, otherwise when
+    /// the verdict arrives (a self-driven sweep inside `stop_tracking`, or the
+    /// binding's sweep, release or deferred resolution).
     ///
-    /// Button mismatch (down was Primary, up is Secondary) cancels
-    /// the tap rather than firing the secondary slot: the up is routed to
-    /// whichever button stream initiated the down.
-    fn handle_tap_up(
-        &self,
-        position: Offset<f64>,
-        global_position: Offset<f64>,
-        kind: PointerType,
-        button: TapButton,
-    ) {
-        let current_state = *self.gesture_state.lock();
-
-        if current_state != TapState::Down {
-            return;
+    /// Button mismatch (down was Primary, up is Secondary) cancels the tap
+    /// rather than firing the secondary slot: the up is routed to whichever
+    /// button stream initiated the down.
+    fn handle_tap_up(&self, pointer: PointerId, details: TapDetails, button: TapButton) {
+        enum Release {
+            Recorded(u64),
+            Mismatch(TapButton),
+            Untracked,
         }
-
-        // Button-mismatch → cancel the in-flight primary tap.
-        let down_btn = self.pending_down.lock().as_ref().map(|p| p.button);
-        if let Some(down_btn) = down_btn
-            && down_btn != button
-        {
-            *self.gesture_state.lock() = TapState::Cancelled;
-            // Notify the down-button cancel slot if any was wired.
-            let cancel_cb = self.callbacks.borrow().cancel(down_btn).cloned();
-            if let Some(cb) = cancel_cb {
-                let details = TapDetails {
-                    global_position,
-                    local_position: position,
-                    kind,
-                };
-                cb(details);
+        let release = {
+            let mut sequences = self.sequences.lock();
+            match sequences.current_mut() {
+                Some(current) if current.pointer == pointer => {
+                    let id = current.id;
+                    let down_button = current.down.as_ref().map(|down| down.button);
+                    if let Some(down_button) = down_button
+                        && down_button != button
+                    {
+                        sequences.remove(id);
+                        Release::Mismatch(down_button)
+                    } else {
+                        current.up = Some(PendingDown {
+                            details: details.clone(),
+                            button,
+                        });
+                        sequences.current = None;
+                        Release::Recorded(id)
+                    }
+                }
+                _ => Release::Untracked,
             }
-            self.state.stop_tracking();
-            *self.pending_down.lock() = None;
-            return;
-        }
-
-        *self.gesture_state.lock() = TapState::Ready;
-        let details = TapDetails {
-            global_position,
-            local_position: position,
-            kind,
         };
-        // Record pending Up — delivered only once the arena confirms accept.
-        *self.pending_up.lock() = Some(PendingDown { details, button });
-
-        // Fire now if the arena already accepted us at close time (single-member
-        // private arena). Otherwise `stop_tracking` drives the self-driven sweep
-        // whose `accept_gesture` fires the multi-member case; in a binding-driven
-        // arena `stop_tracking` does not sweep, so nothing fires here and the win
-        // arrives later via the binding's sweep / release. `fire_won_tap` is a
-        // no-op until `accepted == Some(true)`, so the close-before-up ordering
-        // does not double-fire.
-        self.fire_won_tap();
-        self.state.stop_tracking();
-    }
-
-    /// Handle tap cancel event.
-    fn handle_tap_cancel(
-        &self,
-        position: Offset<f64>,
-        global_position: Offset<f64>,
-        kind: PointerType,
-    ) {
-        let current_state = *self.gesture_state.lock();
-
-        if current_state == TapState::Down {
-            let button = self
-                .pending_down
-                .lock()
-                .take()
-                .map(|pending| pending.button);
-            let cancel_cb =
-                button.and_then(|button| self.callbacks.borrow().cancel(button).cloned());
-            *self.pending_up.lock() = None;
-            *self.gesture_state.lock() = TapState::Ready;
-
-            // Withdraw and clear tracking before user code can unwind or start
-            // another sequence from the callback.
-            self.state.reject();
-            if let Some(cb) = cancel_cb {
-                cb(TapDetails {
-                    global_position,
-                    local_position: position,
-                    kind,
-                });
+        match release {
+            Release::Recorded(id) => {
+                self.state.stop_tracking();
+                self.deliver_if_won(id);
             }
+            Release::Mismatch(down_button) => {
+                // Withdraw before user code can unwind or start the next
+                // contact from the callback.
+                self.state.reject();
+                let callback = self.callbacks.borrow().cancel(down_button).cloned();
+                if let Some(callback) = callback {
+                    callback(details);
+                }
+            }
+            Release::Untracked => self.state.stop_tracking(),
         }
     }
 
-    /// Handle tap move event (pointer moved within slop tolerance)
-    fn handle_tap_move(
-        &self,
-        position: Offset<f64>,
-        global_position: Offset<f64>,
-        kind: PointerType,
-    ) {
-        let current_state = *self.gesture_state.lock();
-
-        if current_state == TapState::Down {
-            // Call on_tap_move callback (primary-only: there is no
-            // secondary/tertiary move; a primary-button tap that moves is
-            // still observed by `on_tap_move`).
-            if let Some(callback) = self.callbacks.borrow().on_tap_move.clone() {
-                let details = TapDetails {
-                    global_position,
-                    local_position: position,
-                    kind,
-                };
-                callback(details);
-            }
+    /// Cancel the contact that is down (slop exceeded, or `PointerCancel`).
+    fn cancel_current(&self, details: TapDetails) {
+        let cancelled = {
+            let mut sequences = self.sequences.lock();
+            let Some(id) = sequences.current else {
+                return;
+            };
+            sequences.remove(id)
+        };
+        let Some(cancelled) = cancelled else {
+            return;
+        };
+        let callback = cancelled
+            .down
+            .as_ref()
+            .and_then(|down| self.callbacks.borrow().cancel(down.button).cloned());
+        // Withdraw and clear tracking before user code can unwind or start
+        // another sequence from the callback.
+        self.state.reject();
+        if let Some(callback) = callback {
+            callback(details);
         }
     }
 
-    /// Check if pointer moved too far (beyond slop tolerance)
-    fn check_slop(&self, current_position: Offset<f64>) -> bool {
-        if let Some(initial_pos) = self.state.initial_position() {
-            let delta = current_position - initial_pos;
-            let distance = delta.distance();
-
-            if self.exceeds_touch_slop(distance) {
-                return true; // Moved too far
-            }
+    /// Fire `on_tap_move` for a contact still within its slop.
+    fn handle_tap_move(&self, details: TapDetails) {
+        if self.sequences.lock().current.is_none() {
+            return;
         }
-        false
+        // Primary-only: there is no secondary/tertiary move; a primary-button
+        // tap that moves is still observed by `on_tap_move`.
+        let callback = self.callbacks.borrow().on_tap_move.clone();
+        if let Some(callback) = callback {
+            callback(details);
+        }
     }
 
-    /// Extract the [`TapButton`] slot for a `PointerEvent::Down` payload.
-    fn down_button(event: &PointerEvent) -> TapButton {
-        if let PointerEvent::Down(data) = event {
-            data.button
+    /// Whether the contact drifted beyond the hit slop of its device kind.
+    fn exceeds_slop(&self, position: Offset<f64>, kind: PointerType) -> bool {
+        self.state.initial_position().is_some_and(|initial| {
+            (position - initial).distance() > self.settings.lock().hit_slop(kind)
+        })
+    }
+
+    /// The [`TapButton`] slot a `Down`/`Up` payload belongs to.
+    fn event_button(event: &PointerEvent) -> TapButton {
+        match event {
+            PointerEvent::Down(data) | PointerEvent::Up(data) => data
+                .button
                 .and_then(TapButton::from_pointer_button)
-                .unwrap_or(TapButton::Primary)
-        } else {
-            TapButton::Primary
-        }
-    }
-
-    /// Extract the [`TapButton`] slot for a `PointerEvent::Up` payload.
-    fn up_button(event: &PointerEvent) -> TapButton {
-        if let PointerEvent::Up(data) = event {
-            data.button
-                .and_then(TapButton::from_pointer_button)
-                .unwrap_or(TapButton::Primary)
-        } else {
-            TapButton::Primary
+                .unwrap_or(TapButton::Primary),
+            _ => TapButton::Primary,
         }
     }
 }
@@ -668,39 +746,36 @@ impl GestureRecognizer for TapGestureRecognizer {
             pointer = ?pointer,
             event = %crate::observability::GestureEvent::RecognizerAdded,
         );
-        if !self.state.assert_not_disposed("add_pointer") {
-            return;
-        }
-        // Reset accepted flag + pending_up for the new sequence (flags
-        // from a prior gesture must not bleed into the new one), and adopt
-        // `pointer` as the sequence this recognizer now tracks. This holds on
-        // every `add_pointer` call, since the previous
-        // pointer's own `stop_tracking()` already cleared
-        // `RecognizerBase::primary_pointer`. A pointer whose down+up were
-        // both seen but whose arena entry is still held open (e.g. a
-        // double-tap's inter-tap window) is abandoned here — see
-        // `accept_gesture`/`reject_gesture` below
-        // for how that pointer's late resolution is then ignored rather
-        // than corrupting this new sequence.
-        *self.accepted.lock() = None;
-        *self.pending_up.lock() = None;
-        *self.sequence_pointer.lock() = Some(pointer);
-        // Start tracking this exact recognizer allocation.
-        self.state
-            .start_tracking(pointer, position, global_position, self);
-
-        // Stage the down so the documented `add_pointer` = "pointer is down"
-        // contract holds: a subsequent up fires the tap even when no separate
-        // `Down` event is routed afterwards. The button/kind are provisional —
-        // the API surface carries only a position — and a real `Down` in
-        // `handle_event` refines them before any up. `handle_tap_down` only
-        // records pending state (it fires no callback), so this cannot
-        // accidentally win the arena or double-fire `on_tap_down`.
-        self.handle_tap_down(
+        // Positions only: the contact is staged as a primary touch, which a
+        // routed `Down` refines in `handle_event`.
+        self.begin_sequence(
+            pointer,
             position,
             global_position,
             PointerType::Touch,
             TapButton::Primary,
+        );
+    }
+
+    fn add_pointer_down(self: &Arc<Self>, dispatch: PointerDispatch<'_>) {
+        let PointerEvent::Down(data) = dispatch.local else {
+            return;
+        };
+        // Primary, secondary and tertiary presses each have their own tap
+        // family; any other button is not a tap at all.
+        let Some(button) = data
+            .button
+            .map_or(Some(TapButton::Primary), TapButton::from_pointer_button)
+        else {
+            return;
+        };
+        let position = dispatch.local.position();
+        self.begin_sequence(
+            dispatch.local.pointer_id(),
+            position,
+            dispatch.global.position(),
+            data.pointer.pointer_type,
+            button,
         );
     }
 
@@ -715,43 +790,51 @@ impl GestureRecognizer for TapGestureRecognizer {
         if !self.state.assert_not_disposed("handle_event") {
             return;
         }
-        // Only process if we're tracking a pointer
+        // Only the pointer this recognizer tracks; a single-pointer
+        // recognizer ignores every other contact.
         let Some(primary) = self.state.primary_pointer() else {
             return;
         };
-        // Filter to the primary pointer we are tracking (ignore
-        // secondary-pointer events in single-pointer recognisers).
         if event.pointer_id() != primary {
             return;
         }
         // Read once, here: this is the only point at which the untransformed
         // position is available at all (issue #908).
         let global_position = dispatch.global.position();
+        let details = |position: Offset<f64>, kind: PointerType| TapDetails {
+            global_position,
+            local_position: position,
+            kind,
+        };
 
         match event {
             PointerEvent::Down(data) => {
                 let pos = data.state.position;
-                let position = Offset::new(pos.x, pos.y);
-                let button = Self::down_button(event);
-                self.handle_tap_down(position, global_position, data.pointer.pointer_type, button);
+                self.refine_down(
+                    primary,
+                    Offset::new(pos.x, pos.y),
+                    global_position,
+                    data.pointer.pointer_type,
+                    Self::event_button(event),
+                );
             }
             PointerEvent::Move(data) => {
                 let pos = data.current.position;
                 let position = Offset::new(pos.x, pos.y);
-                let pointer_type = data.pointer.pointer_type;
-                // Check if moved too far (slop detection)
-                if self.check_slop(position) {
-                    self.handle_tap_cancel(position, global_position, pointer_type);
+                let kind = data.pointer.pointer_type;
+                if self.exceeds_slop(position, kind) {
+                    self.cancel_current(details(position, kind));
                 } else {
-                    // Still within slop - call tap move callback
-                    self.handle_tap_move(position, global_position, pointer_type);
+                    self.handle_tap_move(details(position, kind));
                 }
             }
             PointerEvent::Up(data) => {
                 let pos = data.state.position;
-                let position = Offset::new(pos.x, pos.y);
-                let button = Self::up_button(event);
-                self.handle_tap_up(position, global_position, data.pointer.pointer_type, button);
+                self.handle_tap_up(
+                    primary,
+                    details(Offset::new(pos.x, pos.y), data.pointer.pointer_type),
+                    Self::event_button(event),
+                );
             }
             PointerEvent::Cancel(info) => {
                 // A cancel carries no position at all, in EITHER space — the
@@ -761,7 +844,11 @@ impl GestureRecognizer for TapGestureRecognizer {
                 // global would restate the very defect this pair exists to fix.
                 if let Some(pos) = self.state.initial_position() {
                     let global = self.state.initial_global_position().unwrap_or(pos);
-                    self.handle_tap_cancel(pos, global, info.pointer_type);
+                    self.cancel_current(TapDetails {
+                        global_position: global,
+                        local_position: pos,
+                        kind: info.pointer_type,
+                    });
                 }
             }
             _ => {}
@@ -770,27 +857,19 @@ impl GestureRecognizer for TapGestureRecognizer {
 
     fn dispose(&self) {
         self.state.mark_disposed();
-        // Reject arena entries + clear tracked pointer, so a disposed
-        // recognizer never lingers in the arena for a tracked pointer.
+        // Forget every sequence, then withdraw from the arena, so a verdict
+        // arriving during or after disposal finds nothing to deliver.
+        let live = {
+            let mut sequences = self.sequences.lock();
+            sequences.current = None;
+            std::mem::take(&mut sequences.live)
+        };
         self.state.reject();
-        let mut callbacks = self.callbacks.borrow_mut();
-        callbacks.on_tap_down = None;
-        callbacks.on_tap_move = None;
-        callbacks.on_tap_up = None;
-        callbacks.on_tap = None;
-        callbacks.on_tap_cancel = None;
-        // Secondary / tertiary slots.
-        callbacks.on_secondary_tap_down = None;
-        callbacks.on_secondary_tap_up = None;
-        callbacks.on_secondary_tap = None;
-        callbacks.on_secondary_tap_cancel = None;
-        callbacks.on_tertiary_tap_down = None;
-        callbacks.on_tertiary_tap_up = None;
-        callbacks.on_tertiary_tap = None;
-        callbacks.on_tertiary_tap_cancel = None;
-        *self.pending_down.lock() = None;
-        *self.pending_up.lock() = None;
-        *self.sequence_pointer.lock() = None;
+        // Callback captures are dropped outside the cell, so a capture whose
+        // destructor reaches this recognizer finds it unborrowed.
+        let callbacks = std::mem::take(&mut *self.callbacks.borrow_mut());
+        drop(live);
+        drop(callbacks);
     }
 
     fn primary_pointer(&self) -> Option<PointerId> {
@@ -813,22 +892,10 @@ impl crate::recognizers::OneSequenceGestureRecognizer for TapGestureRecognizer {
             .unwrap_or_default()
     }
 
-    fn resolve_pointer(&self, pointer: PointerId, disposition: crate::arena::GestureDisposition) {
-        // Ignore a resolution for a pointer this recognizer has already
-        // abandoned in favour of a newer sequence (see `sequence_pointer`
-        // doc comment / `accept_gesture` below).
-        if *self.sequence_pointer.lock() != Some(pointer) {
-            return;
-        }
+    fn resolve_pointer(&self, pointer: PointerId, disposition: GestureDisposition) {
         match disposition {
-            crate::arena::GestureDisposition::Accepted => {
-                // Arena accepted us — same path as accept_gesture below.
-                *self.accepted.lock() = Some(true);
-                self.fire_won_tap();
-            }
-            crate::arena::GestureDisposition::Rejected => {
-                self.state.reject();
-            }
+            GestureDisposition::Accepted => self.accept_gesture(pointer),
+            GestureDisposition::Rejected => self.reject_gesture(pointer),
         }
     }
 
@@ -849,48 +916,23 @@ impl crate::recognizers::PrimaryPointerGestureRecognizer for TapGestureRecognize
     }
 }
 
+/// The recognizer itself is not what it registers in the arena (each
+/// sequence registers its own [`TapArenaMember`]). A verdict addressed to the
+/// recognizer directly carries only a pointer ID, so it decides the newest
+/// sequence on that pointer.
 impl GestureArenaMember for TapGestureRecognizer {
     fn accept_gesture(&self, pointer: PointerId) {
-        // A held gesture (e.g. a double-tap's inter-tap window) can resolve
-        // *after* this recognizer has already moved on to a newer pointer's
-        // sequence (`add_pointer` reassigns `sequence_pointer` the moment a
-        // new pointer arrives — see its doc comment). A late win for an
-        // already-abandoned pointer is silently dropped, rather than
-        // resurrecting stale state or corrupting whatever sequence is now
-        // current.
-        if *self.sequence_pointer.lock() != Some(pointer) {
-            return;
+        let id = self.sequences.lock().newest_on(pointer);
+        if let Some(id) = id {
+            self.accept_sequence(id);
         }
-        // The arena dispatches `accept_gesture` from `dispatch_pending` AFTER
-        // releasing both the per-entry mutex and the DashMap shard guard, so
-        // firing user callbacks here holds no arena lock (the same guarantee
-        // `reject_gesture` already relies on). Record acceptance, then deliver
-        // the won tap: `fire_won_tap` no-ops unless a pending up was recorded,
-        // so the close-time accept (single-member private arena, no up yet) is
-        // silent, while the deferred/shared win fires the tap exactly once.
-        *self.accepted.lock() = Some(true);
-        self.fire_won_tap();
     }
 
     fn reject_gesture(&self, pointer: PointerId) {
-        // Same stale-pointer guard as `accept_gesture` — a late rejection
-        // for an abandoned pointer must not clear a newer sequence's
-        // `pending_down`/`pending_up`.
-        if *self.sequence_pointer.lock() != Some(pointer) {
-            return;
+        let id = self.sequences.lock().newest_on(pointer);
+        if let Some(id) = id {
+            self.reject_sequence(id);
         }
-        // Same lock-during-callback concern as accept_gesture. Record
-        // rejection; let the gesture-up / dispose path fire on_tap_cancel
-        // outside the arena lock.
-        *self.accepted.lock() = Some(false);
-        *self.pending_down.lock() = None;
-        *self.pending_up.lock() = None;
-        // Do NOT call handle_tap_cancel here — it calls self.state.reject(),
-        // which re-enters the arena while the arena is still dispatching
-        // reject_gesture, causing a deadlock (parking_lot::Mutex is not
-        // reentrant). The cancel callback was already fired in
-        // handle_tap_up on the button-mismatch path; the slop-exceeded
-        // path fires cancel before reject(), so no duplicate is needed.
     }
 }
 
@@ -898,8 +940,6 @@ impl GestureArenaMember for TapGestureRecognizer {
 mod tests {
     use super::*;
     use crate::arena::GestureArena;
-
-    use ui_events::pointer::PointerButton;
 
     fn pos(x: f64, y: f64) -> Offset<f64> {
         Offset::new(x, y)
@@ -971,22 +1011,4 @@ mod tests {
 
         assert!(*tapped.lock());
     }
-
-    // ========================================================================
-    // Secondary / tertiary button routing.
-    // ========================================================================
-
-    // ========================================================================
-    // `sequence_pointer` — stale arena resolution for an abandoned pointer.
-    //
-    // Mirrors the double-tap-hold overlap: pointer A's up is recorded but
-    // its arena entry is still held (e.g. `DoubleTapGestureRecognizer`'s
-    // inter-tap window) when pointer B starts a new, unrelated sequence on
-    // the SAME shared `TapGestureRecognizer`. `accept_gesture` and
-    // `reject_gesture` guard on `pointer == sequence_pointer`; a pointer
-    // whose down+up were both seen but whose
-    // arena entry never resolved before a newer pointer took over is
-    // abandoned, and its late resolution is a no-op rather than resurrected
-    // or left to clobber the newer sequence's state.
-    // ========================================================================
 }
