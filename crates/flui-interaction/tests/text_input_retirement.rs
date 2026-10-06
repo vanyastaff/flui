@@ -192,7 +192,7 @@ impl<P> TextStore for DroppingStore<P> {
     }
 }
 
-fn callback_failure_wins_store_failure_and_the_owner_recovers() {
+fn store_failure_wins_callback_failure_and_the_owner_recovers() {
     struct CallbackFailure;
     impl Drop for CallbackFailure {
         fn drop(&mut self) {
@@ -219,15 +219,48 @@ fn callback_failure_wins_store_failure_and_the_owner_recovers() {
         .expect("initial attach");
     let failure =
         catch_unwind(AssertUnwindSafe(|| handle.detach(token))).expect_err("retirement panics");
-    assert!(
-        failure.is::<CallbackFailure>(),
-        "the first opaque payload wins"
-    );
+    // The payloads panic when dropped: retain the failure before asserting.
+    let store_won = failure.is::<StoreFailure>();
     flui_foundation::panic::retain_opaque_payload(failure);
+    assert!(
+        store_won,
+        "the store retires first and its opaque payload wins"
+    );
     let next = handle.attach(client()).expect("recovery attach");
     assert!(owner.is_attached(next));
     owner.dispatch(&flui_platform_api::ImeEvent::Commit("recovered".into()));
     assert_eq!(*platform.allowed.lock(), [true, false, true]);
+}
+
+/// A client whose store and session callback record their destruction.
+fn recording_client(log: &Rc<RefCell<Vec<&'static str>>>) -> TextInputClient {
+    let store_log = Rc::clone(log);
+    let store: Rc<dyn TextStore> = Rc::new(DroppingStore {
+        inner: InMemoryTextStore::new(""),
+        _probe: OnDrop(Box::new(move || store_log.borrow_mut().push("store"))),
+    });
+    let callback_log = Rc::clone(log);
+    let probe = OnDrop(Box::new(move || callback_log.borrow_mut().push("callback")));
+    TextInputClient::new(store).on_session_start(move || {
+        let _keep_alive = &probe;
+    })
+}
+
+fn client_retires_its_store_before_its_callback() {
+    let (owner, _) = owner();
+    let handle = owner.handle();
+    let log = Rc::new(RefCell::new(Vec::new()));
+    let token = handle.attach(recording_client(&log)).expect("attach");
+    let _detached = handle.detach(token).expect("detach");
+    assert_eq!(*log.borrow(), ["store", "callback"], "detach");
+    log.borrow_mut().clear();
+    handle.attach(recording_client(&log)).expect("attach");
+    handle.attach(client()).expect("replacement");
+    assert_eq!(*log.borrow(), ["store", "callback"], "replacement");
+    log.borrow_mut().clear();
+    handle.attach(recording_client(&log)).expect("attach");
+    owner.close();
+    assert_eq!(*log.borrow(), ["store", "callback"], "close");
 }
 
 fn failed_anchor_preserves_other_retired_store_grants() {
@@ -477,8 +510,9 @@ fn text_input_retirement_allows_reentry_and_preserves_recovery() {
         ),
         (
             "competing failures",
-            callback_failure_wins_store_failure_and_the_owner_recovers,
+            store_failure_wins_callback_failure_and_the_owner_recovers,
         ),
+        ("field order", client_retires_its_store_before_its_callback),
         (
             "failed anchor",
             failed_anchor_preserves_other_retired_store_grants,
@@ -531,29 +565,100 @@ fn aggregate_store(drops: &Arc<AtomicUsize>) -> Rc<dyn TextStore> {
     })
 }
 
-fn store_after_a_failed_callback_is_retained() {
+/// A session callback whose capture double-panics when destroyed.
+fn aggregate_callback(client: TextInputClient, drops: &Arc<AtomicUsize>) -> TextInputClient {
+    let capture = (
+        AggregateField(Arc::clone(drops)),
+        AggregateField(Arc::clone(drops)),
+    );
+    client.on_session_start(move || {
+        let _keep_alive = &capture;
+    })
+}
+
+fn panicking_store(message: &'static str) -> Rc<dyn TextStore> {
+    Rc::new(DroppingStore {
+        inner: InMemoryTextStore::new(""),
+        _probe: OnDrop(Box::new(move || panic!("{message}"))),
+    })
+}
+
+fn callback_after_a_failed_store_is_retained() {
     let (owner, platform) = owner();
     let handle = owner.handle();
     let drops = Arc::new(AtomicUsize::new(0));
-    let probe = OnDrop(Box::new(|| panic!("callback retirement")));
     let token = handle
-        .attach(
-            TextInputClient::new(aggregate_store(&drops)).on_session_start(move || {
-                let _keep_alive = &probe;
-            }),
-        )
+        .attach(aggregate_callback(
+            TextInputClient::new(panicking_store("store retirement")),
+            &drops,
+        ))
         .expect("initial attach");
     let failure =
         catch_unwind(AssertUnwindSafe(|| handle.detach(token))).expect_err("retirement panics");
     assert_eq!(
         flui_foundation::panic::payload_text(failure.as_ref()),
-        Some("callback retirement")
+        Some("store retirement")
     );
     flui_foundation::panic::retain_opaque_payload(failure);
-    assert_eq!(drops.load(Ordering::Relaxed), 0, "the store is retained");
+    assert_eq!(drops.load(Ordering::Relaxed), 0, "the callback is retained");
     let next = handle.attach(client()).expect("recovery attach");
     assert!(owner.is_attached(next));
     assert_eq!(*platform.allowed.lock(), [true, false, true]);
+}
+
+/// Closes its owner while the owner installs the commit gate.
+struct ClosingStore {
+    inner: Rc<InMemoryTextStore>,
+    owner: std::rc::Weak<TextInputOwner>,
+    _probe: OnDrop,
+}
+
+impl TextStore for ClosingStore {
+    fn status(&self) -> TextStoreStatus {
+        self.inner.status()
+    }
+    fn request_lock(
+        &self,
+        grant: LockGrant,
+        timing: LockTiming,
+    ) -> Result<LockOutcome, TextStoreError> {
+        self.inner.request_lock(grant, timing)
+    }
+    fn run_deferred_grants(&self) -> usize {
+        self.inner.run_deferred_grants()
+    }
+    fn set_commit_gate(&self, gate: CommitGate) {
+        self.inner.set_commit_gate(gate);
+        if let Some(owner) = self.owner.upgrade() {
+            owner.close();
+        }
+    }
+    fn set_observer(&self, observer: Option<Rc<dyn TextStoreObserver>>) {
+        self.inner.set_observer(observer);
+    }
+}
+
+fn client_rejected_by_a_closing_store_is_retained_after_its_failure() {
+    let (owner, platform) = owner();
+    let handle = owner.handle();
+    let drops = Arc::new(AtomicUsize::new(0));
+    let store: Rc<dyn TextStore> = Rc::new(ClosingStore {
+        inner: InMemoryTextStore::new(""),
+        owner: Rc::downgrade(&owner),
+        _probe: OnDrop(Box::new(|| panic!("rejected store retirement"))),
+    });
+    let rejected = aggregate_callback(TextInputClient::new(store), &drops);
+    let failure = catch_unwind(AssertUnwindSafe(|| handle.attach(rejected)))
+        .expect_err("the rejected store's failure propagates");
+    assert_eq!(
+        flui_foundation::panic::payload_text(failure.as_ref()),
+        Some("rejected store retirement")
+    );
+    flui_foundation::panic::retain_opaque_payload(failure);
+    assert_eq!(drops.load(Ordering::Relaxed), 0, "the callback is retained");
+    assert_eq!(handle.ensure_open(), Err(TextInputError::Closed));
+    assert_eq!(handle.attach(client()), Err(TextInputError::Closed));
+    assert!(platform.allowed.lock().is_empty());
 }
 
 fn owner_dropped_during_an_unwind_retains_its_store() {
@@ -588,8 +693,12 @@ const CHILD_COMPLETED: i32 = 86;
 fn text_input_owners_are_retained_after_a_failure_and_during_unwind() {
     let cases: &[(&str, fn())] = &[
         (
-            "store after a failed callback",
-            store_after_a_failed_callback_is_retained,
+            "callback after a failed store",
+            callback_after_a_failed_store_is_retained,
+        ),
+        (
+            "client rejected by a closing store",
+            client_rejected_by_a_closing_store_is_retained_after_its_failure,
         ),
         (
             "owner drop during unwind",

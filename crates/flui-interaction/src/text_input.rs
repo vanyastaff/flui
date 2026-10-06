@@ -134,22 +134,27 @@ struct AttachedClient {
     client: TextInputClient,
 }
 
-/// Retire the independent client owners separately, preserving the first
-/// failure. After it, and while the thread is already unwinding, the remaining
-/// owners are retained rather than destroyed (ADR-0127).
+/// Retire the independent client owners separately, in the client's field
+/// order (store, then session callback), preserving the first failure. After
+/// it, and while the thread is already unwinding, the remaining owners are
+/// retained rather than destroyed (ADR-0127).
 fn retire_client(client: Option<AttachedClient>, first: &mut Option<RoutePanic>) {
     if let Some(client) = client {
-        let TextInputClient {
-            store,
-            on_session_start,
-        } = client.client;
-        retire_owner(
-            on_session_start,
-            first,
-            "text-input session callback retirement",
-        );
-        retire_owner(store, first, "text-input store retirement");
+        retire_client_owners(client.client, first);
     }
+}
+
+fn retire_client_owners(client: TextInputClient, first: &mut Option<RoutePanic>) {
+    let TextInputClient {
+        store,
+        on_session_start,
+    } = client;
+    retire_owner(store, first, "text-input store retirement");
+    retire_owner(
+        on_session_start,
+        first,
+        "text-input session callback retirement",
+    );
 }
 
 fn retire_stores(stores: Vec<Rc<dyn TextStore>>, first: &mut Option<RoutePanic>) {
@@ -263,7 +268,16 @@ impl TextInputOwner {
         // ever requested on a store that does not yet follow the frame.
         client.store.set_commit_gate(self.gate.clone());
         // A user-defined store may close the owner while installing its gate.
-        self.ensure_open()?;
+        // The rejected client was never admitted; its owners still retire
+        // one at a time behind the first-failure fence.
+        if let Err(closed) = self.ensure_open() {
+            let mut failure = None;
+            retire_client_owners(client, &mut failure);
+            if let Some(failure) = failure {
+                failure.resume();
+            }
+            return Err(closed);
+        }
         let transaction_open = self.is_transaction_open();
         let (enable_platform, replaced) = {
             let mut state = self.state.borrow_mut();
