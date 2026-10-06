@@ -833,6 +833,12 @@ impl WidgetsBinding {
         }
     }
 
+    /// Withdraw graph, inbox and key authority, handing the withdrawn key
+    /// owners to the caller instead of dropping them, so no user code runs.
+    pub(crate) fn withdraw_owner_authority(&self) -> Vec<Box<dyn flui_foundation::ViewKey>> {
+        self.inner.write().build_owner.withdraw_owner(false)
+    }
+
     pub(crate) fn withdraw_root_owner(&self, preserving: bool) {
         let keys = {
             let mut inner = self.inner.write();

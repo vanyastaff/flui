@@ -370,6 +370,101 @@ impl flui_interaction::CustomGestureRecognizer for CloseArenaMember {
     }
 }
 
+type SiblingHandles = (
+    Rc<FocusManager>,
+    TextInputHandle,
+    Rc<std::cell::RefCell<Option<flui_view::reactive::Reactive>>>,
+);
+
+/// Disposed while its realm drops: the sibling presentation it saved handles
+/// to must already refuse them.
+#[derive(Clone)]
+struct SiblingProbe {
+    graph: Rc<std::cell::RefCell<Option<flui_view::reactive::Reactive>>>,
+    sibling: Rc<std::cell::RefCell<Option<SiblingHandles>>>,
+    disposed: Rc<Cell<usize>>,
+}
+
+impl StatefulView for SiblingProbe {
+    type State = Self;
+
+    fn create_state(&self) -> Self::State {
+        self.clone()
+    }
+}
+
+impl ViewState<SiblingProbe> for SiblingProbe {
+    fn init_state(&mut self, ctx: &dyn flui_view::LifecycleContext) {
+        self.graph.borrow_mut().replace(ctx.reactive());
+    }
+    fn build(&self, _view: &SiblingProbe, _ctx: &dyn BuildContext) -> impl IntoView {
+        SizedBox::square(10.0)
+    }
+    fn dispose(&mut self) {
+        let sibling = self.sibling.borrow();
+        let (focus, input, graph) = sibling.as_ref().expect("sibling handles");
+        assert!(focus.is_closed(), "sibling focus is withdrawn");
+        assert_eq!(input.ensure_open(), Err(TextInputError::Closed));
+        assert_eq!(
+            graph
+                .borrow()
+                .as_ref()
+                .expect("sibling graph")
+                .try_signal(1_u32)
+                .expect_err("sibling graph is withdrawn"),
+            flui_view::SignalError::OwnerClosed
+        );
+        self.disposed.set(self.disposed.get() + 1);
+    }
+}
+
+impl View for SiblingProbe {
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateful(self)
+    }
+}
+
+/// Dropping a realm withdraws every presentation before any disposes: each
+/// presentation's dispose finds its sibling's saved handles refused.
+fn run_realm_sibling_child() {
+    let mut realm = UiRealm::for_test();
+    let a = realm.presentation_id();
+    let b = realm.install_second_presentation_for_test();
+    let disposed = Rc::new(Cell::new(0));
+    let graphs = [
+        Rc::new(std::cell::RefCell::new(None)),
+        Rc::new(std::cell::RefCell::new(None)),
+    ];
+    let siblings = [
+        Rc::new(std::cell::RefCell::new(None)),
+        Rc::new(std::cell::RefCell::new(None)),
+    ];
+    let probe = |index: usize| SiblingProbe {
+        graph: Rc::clone(&graphs[index]),
+        sibling: Rc::clone(&siblings[index]),
+        disposed: Rc::clone(&disposed),
+    };
+    realm.attach_root_widget(&probe(0)).expect("A mounts");
+    realm
+        .attach_root_widget_to_for_test(b, &probe(1))
+        .expect("B mounts");
+    let mut clock = flui_foundation::ManualClock::new();
+    let mut sink = ScriptedSink::new(|_, _| crate::sink::SubmitVerdict::Presented);
+    assert!(realm.pump(&mut clock, &mut sink).presented());
+    for (index, (own, other)) in [(a, b), (b, a)].into_iter().enumerate() {
+        let _ = own;
+        let presentation = realm.presentations.get(other).expect("sibling");
+        siblings[index].borrow_mut().replace((
+            presentation.focus_manager(),
+            presentation.text_input_handle(),
+            Rc::clone(&graphs[1 - index]),
+        ));
+    }
+    assert!(graphs.iter().all(|graph| graph.borrow().is_some()));
+    drop(realm);
+    assert_eq!(disposed.get(), 2, "both presentations disposed");
+}
+
 struct OwnershipWindow {
     delegate: crate::testing::TestWindow,
     external:
@@ -826,6 +921,10 @@ fn run_scoped_routes_child(fail_cursor: bool) {
     reason = "the arena requires Arc members; these hostile capture probes remain on the owner thread"
 )]
 pub(crate) fn run_presentation_close_child(kind: &str) {
+    if kind == "realm-sibling" {
+        run_realm_sibling_child();
+        return;
+    }
     if matches!(kind, "healthy-keys" | "competing-keys") {
         run_custom_key_child(kind == "competing-keys");
         return;
@@ -1455,6 +1554,7 @@ pub(crate) fn presentation_close_retirement_failures_preserve_focus_ime_and_sibl
         "cursor-reentry",
         "healthy-reentry",
         "gesture-reentry",
+        "realm-sibling",
         "healthy-platform",
         "window-owner",
         "bridge-owner",

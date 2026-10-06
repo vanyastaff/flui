@@ -73,6 +73,9 @@ pub struct FocusManager {
     /// oldest first ([`Self::claim_unfocused_keys`]).
     unfocused_key_claims: RefCell<Vec<Weak<FocusNode>>>,
     closed: Cell<bool>,
+    /// Whether [`Self::close_with_mode`] ran; [`Self::withdraw`] only sets
+    /// `closed`, so a later close still retires what the manager holds.
+    retired: Cell<bool>,
     close_mode: CloseTombstone,
     /// Depth of the commit+notify transaction currently publishing a focus
     /// transition. Zero between transitions; `>0` while node or manager
@@ -160,6 +163,7 @@ impl FocusManager {
             global_key_handlers: RefCell::new(Vec::new()),
             unfocused_key_claims: RefCell::new(Vec::new()),
             closed: Cell::new(false),
+            retired: Cell::new(false),
             close_mode: CloseTombstone::default(),
             notification_depth: Cell::new(0),
             pending_focus_transitions: RefCell::new(VecDeque::new()),
@@ -776,9 +780,10 @@ impl FocusManager {
 
     pub(crate) fn close_with_mode(&self, mode: CloseMode) {
         let mut failure = FocusClosePanic::for_close(mode, self.close_mode.clone());
-        if self.closed.replace(true) {
+        if self.retired.replace(true) {
             return;
         }
+        self.closed.set(true);
         let pending = std::mem::take(&mut *self.pending_focus_transitions.borrow_mut());
         let previous = self.primary_focus.borrow_mut().take();
         let mut notified = previous.as_ref().map_or_else(Vec::new, |node| {
@@ -824,6 +829,12 @@ impl FocusManager {
         }
         failure.retire(previous);
         failure.finish();
+    }
+
+    /// Refuse every later request without running user code; a later
+    /// [`Self::close_with_mode`] still notifies and retires (ADR-0123).
+    pub(crate) fn withdraw(&self) {
+        self.closed.set(true);
     }
 
     /// Whether deterministic teardown has run.

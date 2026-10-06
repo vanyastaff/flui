@@ -134,6 +134,9 @@ pub enum TextInputError {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum OwnerLifecycle {
     Open,
+    /// Refuses callers, but [`TextInputOwner::close_with_mode`] has not yet
+    /// disabled the platform or retired the clients.
+    Withdrawn,
     Closed,
 }
 
@@ -262,10 +265,10 @@ impl TextInputOwner {
     }
 
     fn ensure_open(&self) -> Result<(), TextInputError> {
-        if self.state.borrow().lifecycle == OwnerLifecycle::Closed {
-            Err(TextInputError::Closed)
-        } else {
+        if self.state.borrow().lifecycle == OwnerLifecycle::Open {
             Ok(())
+        } else {
+            Err(TextInputError::Closed)
         }
     }
 
@@ -379,7 +382,7 @@ impl TextInputOwner {
     pub fn dispatch(&self, event: &ImeEvent) {
         let client = {
             let state = self.state.borrow();
-            if state.lifecycle == OwnerLifecycle::Closed {
+            if state.lifecycle != OwnerLifecycle::Open {
                 return;
             }
             state.active.as_ref().map(|active| active.client.clone())
@@ -568,6 +571,16 @@ impl TextInputOwner {
         failure.finish();
     }
 
+    /// Refuse every later caller without running user code; a later
+    /// [`Self::close_with_mode`] still disables the platform and retires the
+    /// clients (ADR-0123).
+    pub(crate) fn withdraw(&self) {
+        let mut state = self.state.borrow_mut();
+        if state.lifecycle == OwnerLifecycle::Open {
+            state.lifecycle = OwnerLifecycle::Withdrawn;
+        }
+    }
+
     /// Whether `token` currently names the active client.
     #[must_use]
     pub fn is_attached(&self, token: ClientToken) -> bool {
@@ -606,7 +619,7 @@ impl Drop for TextInputOwner {
     fn drop(&mut self) {
         let mut failure = ClosePanic::for_close(CloseMode::Ordinary, self.close_mode.clone());
         let state = self.state.get_mut();
-        let disable = state.lifecycle == OwnerLifecycle::Open && state.active.is_some();
+        let disable = state.lifecycle != OwnerLifecycle::Closed && state.active.is_some();
         state.lifecycle = OwnerLifecycle::Closed;
         let active = state.active.take();
         let retired = std::mem::take(&mut state.retired);
