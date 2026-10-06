@@ -1077,6 +1077,38 @@ impl OwnerLatch {
             drop(value);
         }
     }
+
+    /// Run one target's snapshotted callback, then release the snapshot and
+    /// the target cell inside the same containment. The callback can close
+    /// its presentation, leaving these as the capture's last owners: a
+    /// failing callback retains them rather than letting its unwind destroy
+    /// them, and a successful one releases them under this latch's policy, so
+    /// a panicking capture destructor resumes as an ordinary failure
+    /// (ADR-0127).
+    fn invoke<C: Retain, S: Retain, R>(
+        &self,
+        cell: C,
+        snapshot: S,
+        call: impl FnOnce(&S) -> R,
+    ) -> R {
+        match RoutePanic::try_run(|| call(&snapshot)) {
+            Ok(value) => {
+                if let Some(failure) = RoutePanic::capture(|| self.release(snapshot)) {
+                    cell.retain();
+                    failure.resume();
+                }
+                if let Some(failure) = RoutePanic::capture(|| self.release(cell)) {
+                    failure.resume();
+                }
+                value
+            }
+            Err(failure) => {
+                snapshot.retain();
+                cell.retain();
+                failure.resume()
+            }
+        }
+    }
 }
 
 /// What a presentation's dispatch owner held when its authority was withdrawn.
@@ -1605,10 +1637,12 @@ impl InteractionDispatchHandle {
             .get(&target.target_id)
             .cloned()
             .ok_or(InteractionDispatchError::TargetGone)?;
+        let latch = lane.owner_latch(target.target_id);
+        if latch.is_closed() {
+            return Err(InteractionDispatchError::TargetGone);
+        }
         let handler = cell.snapshot();
-        let result = handler(event);
-        drop(handler);
-        Ok(result)
+        Ok(latch.invoke(cell, handler, |handler| handler(event)))
     }
 
     /// Register a trackpad pan-zoom claim handler in the active owner lane.
@@ -1700,10 +1734,12 @@ impl InteractionDispatchHandle {
             .get(&target.target_id)
             .cloned()
             .ok_or(InteractionDispatchError::TargetGone)?;
+        let latch = lane.owner_latch(target.target_id);
+        if latch.is_closed() {
+            return Err(InteractionDispatchError::TargetGone);
+        }
         let handler = cell.snapshot();
-        let result = handler(event);
-        drop(handler);
-        Ok(result)
+        Ok(latch.invoke(cell, handler, |handler| handler(event)))
     }
 
     /// Register a path clipper in the active owner lane.
@@ -1775,10 +1811,12 @@ impl InteractionDispatchHandle {
             .get(&target.target_id)
             .cloned()
             .ok_or(InteractionDispatchError::TargetGone)?;
+        let latch = lane.owner_latch(target.target_id);
+        if latch.is_closed() {
+            return Err(InteractionDispatchError::TargetGone);
+        }
         let clipper = cell.snapshot();
-        let path = clipper(size);
-        drop(clipper);
-        Ok(path)
+        Ok(latch.invoke(cell, clipper, |clipper| clipper(size)))
     }
 
     /// Register a shader-mask factory in the active owner lane.
@@ -1850,10 +1888,12 @@ impl InteractionDispatchHandle {
             .get(&target.target_id)
             .cloned()
             .ok_or(InteractionDispatchError::TargetGone)?;
+        let latch = lane.owner_latch(target.target_id);
+        if latch.is_closed() {
+            return Err(InteractionDispatchError::TargetGone);
+        }
         let factory = cell.snapshot();
-        let shader = factory(bounds);
-        drop(factory);
-        Ok(shader)
+        Ok(latch.invoke(cell, factory, |factory| factory(bounds)))
     }
 
     /// Register an owner-local payload in the active owner lane.

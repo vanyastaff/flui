@@ -1512,3 +1512,92 @@ fn interleaved_hover_stops_after_owner_close() {
         "the closed owner's later region is skipped"
     );
 }
+
+/// Records whether a callback capture was destroyed, and whether by an unwind.
+struct CaptureProbe(std::rc::Rc<std::cell::Cell<Option<bool>>>);
+
+impl Drop for CaptureProbe {
+    fn drop(&mut self) {
+        self.0.set(Some(std::thread::panicking()));
+    }
+}
+
+/// A scroll, pan-zoom, path-clip or shader-mask callback that closes its
+/// presentation and then panics leaves its snapshot and target cell as the
+/// capture's last owners: they are retained, not destroyed by that unwind.
+#[test]
+fn non_pointer_invocation_retains_its_snapshot_across_a_reentrant_close() {
+    use flui_foundation::geometry::{Offset, Rect, Size};
+    use flui_interaction::__runtime::{CloseMode, close_dispatch, presentation_dispatch};
+    use flui_interaction::events::{Modifiers, ScrollEventData};
+    use flui_interaction::{PointerDeviceKind, PointerId, PointerPanZoomEvent};
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+    use std::rc::Rc;
+
+    for kind in ["scroll", "pan-zoom", "path clip", "shader mask"] {
+        let lane = InteractionLane::try_new().expect("lane");
+        let owner = presentation_dispatch(&lane.dispatch_handle());
+        let dropped = Rc::new(std::cell::Cell::new(None));
+        let probe = CaptureProbe(Rc::clone(&dropped));
+        let closing = owner.clone();
+        let close_then_fail = move || -> ! {
+            let _keep = &probe;
+            close_dispatch(&closing, CloseMode::Ordinary);
+            panic!("reentrant close callback");
+        };
+        let failure = lane.enter(|| {
+            catch_unwind(AssertUnwindSafe(|| match kind {
+                "scroll" => {
+                    let target = owner
+                        .register_scroll(move |_| close_then_fail())
+                        .expect("scroll target");
+                    let event =
+                        ScrollEventData::new(Offset::ZERO, Offset::ZERO, Modifiers::empty());
+                    let _ = owner.invoke_scroll_target(target, &event);
+                }
+                "pan-zoom" => {
+                    let target = owner
+                        .register_pan_zoom(move |_| close_then_fail())
+                        .expect("pan-zoom target");
+                    let event = PointerPanZoomEvent::Start {
+                        pointer_id: PointerId::new(1).expect("nonzero pointer id"),
+                        position: Offset::ZERO,
+                        timestamp_nanos: 0,
+                        device_kind: PointerDeviceKind::Trackpad,
+                    };
+                    let _ = owner.invoke_pan_zoom_target(target, &event);
+                }
+                "path clip" => {
+                    let target = owner
+                        .register_path_clipper(move |_| close_then_fail())
+                        .expect("path clip target");
+                    let _ = owner.invoke_path_clipper(target, Size::new(1.0, 1.0));
+                }
+                _ => {
+                    let target = owner
+                        .register_shader_mask(move |_| close_then_fail())
+                        .expect("shader mask target");
+                    let _ = owner.invoke_shader_mask(target, Rect::from_ltwh(0.0, 0.0, 1.0, 1.0));
+                }
+            }))
+            .expect_err("the callback's failure propagates")
+        });
+        assert_eq!(
+            flui_foundation::panic::payload_text(&*failure),
+            Some("reentrant close callback"),
+            "{kind}"
+        );
+        flui_foundation::panic::retain_opaque_payload(failure);
+        assert_eq!(
+            dropped.get(),
+            None,
+            "{kind}: the capture is retained, not destroyed by the unwind"
+        );
+        assert_eq!(
+            owner.check_realm(),
+            Err(InteractionDispatchError::OwnerGone),
+            "{kind}: the reentrant close took effect"
+        );
+    }
+}
+
