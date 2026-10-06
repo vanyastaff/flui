@@ -116,9 +116,19 @@ impl CompositionLedger {
         };
         let composition = self.composition.take();
         let cleared = self.cleared.take();
+        // Two non-empty ranges share an origin only when they overlap: a
+        // composition moved to the text beside it stands for that text
+        // alone. An empty range has no text to overlap, so it joins one it
+        // touches (an input method marking a caret inside or at the edge of
+        // a composition it rewrites).
         let touches = |standing: &Option<Standing>| {
             standing.as_ref().is_some_and(|standing| {
-                standing.range.start <= range.end && standing.range.end >= range.start
+                let near = &standing.range;
+                if near.is_empty() || range.is_empty() {
+                    near.start <= range.end && near.end >= range.start
+                } else {
+                    near.start < range.end && near.end > range.start
+                }
             })
         };
         let (hit_composition, hit_cleared) = (touches(&composition), touches(&cleared));
