@@ -43,14 +43,20 @@
 //! // to forward to native view
 //! ```
 
-use std::sync::Arc;
+use std::{
+    panic::{AssertUnwindSafe, catch_unwind, resume_unwind},
+    sync::Arc,
+};
 
 use dashmap::DashMap;
 use parking_lot::Mutex;
 use smallvec::SmallVec;
 
 use crate::{
-    arena::{GestureArena, GestureArenaEntry, GestureArenaMember, GestureDisposition},
+    arena::{
+        GestureArena, GestureArenaEntry, GestureArenaMember, GestureDisposition,
+        PendingNotifications,
+    },
     ids::PointerId,
 };
 
@@ -84,11 +90,18 @@ impl TeamEntry {
             combiner.resolve(&self.member, disposition)
         };
 
-        if let Some((member, pointer)) = to_reject {
-            member.reject_gesture(pointer);
-        }
+        // A panicking rejection must not leave the team's arena entry
+        // unresolved: both steps run, and the first failure resumes after.
+        let mut first_panic = to_reject.and_then(|(member, pointer)| {
+            catch_unwind(AssertUnwindSafe(|| member.reject_gesture(pointer))).err()
+        });
         if let Some((entry, disp)) = entry_to_resolve {
-            entry.resolve(disp);
+            let pointer = entry.pointer();
+            let candidate = catch_unwind(AssertUnwindSafe(|| entry.resolve(disp))).err();
+            GestureArena::preserve_first_panic(&mut first_panic, candidate, pointer);
+        }
+        if let Some(payload) = first_panic {
+            resume_unwind(payload);
         }
     }
 
@@ -279,13 +292,21 @@ impl PendingTeamNotifications {
     }
 
     /// Fire all queued notifications. Call WITHOUT the combiner lock held.
+    ///
+    /// Every member is notified even when an earlier callback panics; the
+    /// first panic resumes once all of them ran, as in the arena itself.
     fn dispatch(self) {
-        for member in self.accepts {
-            member.accept_gesture(self.pointer);
-        }
-        for member in self.rejects {
-            member.reject_gesture(self.pointer);
-        }
+        let pending: PendingNotifications = self
+            .accepts
+            .into_iter()
+            .map(|member| (member, GestureDisposition::Accepted))
+            .chain(
+                self.rejects
+                    .into_iter()
+                    .map(|member| (member, GestureDisposition::Rejected)),
+            )
+            .collect();
+        GestureArena::dispatch_pending(pending, self.pointer);
     }
 }
 
