@@ -292,7 +292,8 @@ pub use settings::{
     DEFAULT_PEN_SLOP, DEFAULT_SCALE_SLOP, DEFAULT_TOUCH_SLOP, GestureSettings,
 };
 pub use text_input::{
-    ClientToken, DetachOutcome, TextInputClient, TextInputError, TextInputHandle, TextInputOwner,
+    ClientToken, DetachOutcome, TextInputBackend, TextInputClient, TextInputError, TextInputHandle,
+    TextInputOwner,
 };
 // ============================================================================
 // Re-exports: Testing Utilities (feature-gated)

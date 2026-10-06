@@ -1237,6 +1237,32 @@ pub(crate) mod text_store {
         assert_eq!(controller.text(), "東京おおさか");
     }
 
+    /// A field that gains focus is the store the window's input-method host
+    /// serves; losing focus takes it away (ADR-0135). The pull window is the
+    /// one Windows offers.
+    ///
+    /// Red-check: have the presentation's text-input owner skip its host —
+    /// the host hears nothing and serves no store.
+    pub(crate) fn focus_gain_and_loss_reach_the_store_host() {
+        use flui_testing::StoreHostCall;
+
+        let controller = TextEditingController::with_text("ab");
+        let (mut harness, focus_node) = focused(&controller);
+        assert_eq!(harness.store_host_calls(), [StoreHostCall::Focus]);
+        edit(&store(&harness), |session| {
+            session.insert_at_selection("c").expect("insert");
+        });
+        assert_eq!(controller.text(), "abc", "the host serves this field");
+
+        focus_node.unfocus();
+        harness.tick();
+        assert_eq!(
+            harness.store_host_calls(),
+            [StoreHostCall::Focus, StoreHostCall::Unfocus]
+        );
+        assert!(harness.active_text_store().is_none());
+    }
+
     thread_local! {
         /// The field a controller listener reaches: a listener is
         /// `Send + Sync` and the store is not.
@@ -1595,8 +1621,58 @@ pub(crate) mod text_store {
                 ("latin input", long_latin_input as fn()),
                 ("rtl input", long_rtl_input),
                 ("obscured input", long_obscured_input),
+                (
+                    "push candidate area",
+                    long_input_reports_the_visible_candidate_area,
+                ),
             ],
         );
+    }
+
+    /// A push-model platform places its candidate window from the area the
+    /// field reports, which follows the visible caret, not its position in
+    /// the whole text.
+    fn long_input_reports_the_visible_candidate_area() {
+        use flui_interaction::events::{Code, Key, KeyState, Modifiers, NamedKey};
+        use flui_interaction::testing::input::KeyEventBuilder;
+        use flui_widgets::SizedBox;
+
+        let controller = TextEditingController::new();
+        let focus = FocusNode::new();
+        let mut harness = crate::common::harness::mount_with_push_ime(
+            SizedBox::new(60.0, 30.0).child(EditableText::new(controller, Rc::clone(&focus))),
+        );
+        focus.request_focus();
+        let assert_visible = |harness: &Harness| {
+            let candidate = harness
+                .cursor_area_calls()
+                .last()
+                .copied()
+                .expect("candidate area reported");
+            assert!(
+                candidate.origin.x >= -0.001 && candidate.origin.x + candidate.size.width <= 60.001,
+                "IME candidate tracks the visible caret: {candidate:?}"
+            );
+        };
+        for ch in "abcdefghijklmnopqrstuvwxyz".chars() {
+            assert!(
+                harness
+                    .focus_manager()
+                    .dispatch_key_event(&super::character_key_event(ch))
+            );
+            harness.tick();
+        }
+        assert_visible(&harness);
+        for key in [NamedKey::Home, NamedKey::End] {
+            let event = KeyEventBuilder::new(Code::Home)
+                .with_key(Key::Named(key))
+                .with_state(KeyState::Down)
+                .with_modifiers(Modifiers::empty())
+                .build();
+            assert!(harness.focus_manager().dispatch_key_event(&event));
+            harness.tick();
+            assert_visible(&harness);
+        }
     }
 
     fn long_latin_input() {
@@ -1634,7 +1710,7 @@ pub(crate) mod text_store {
         }
         assert_eq!(controller.text(), text);
         let field = store(&harness);
-        let assert_visible = |harness: &Harness| {
+        let assert_visible = |_: &Harness| {
             let caret = controller.caret_byte_offset();
             let units =
                 flui_platform_api::text_store::utf16::utf16_offset(&controller.text(), caret)
@@ -1673,15 +1749,6 @@ pub(crate) mod text_store {
                 }
                 assert!(hidden > 0, "long input has offscreen glyphs");
             });
-            let candidate = harness
-                .cursor_area_calls()
-                .last()
-                .copied()
-                .expect("candidate area reported");
-            assert!(
-                candidate.origin.x >= -0.001 && candidate.origin.x + candidate.size.width <= 60.001,
-                "IME candidate tracks the visible caret: {candidate:?}"
-            );
             rect
         };
         assert_visible(&harness);

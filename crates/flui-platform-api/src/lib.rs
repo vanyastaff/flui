@@ -127,7 +127,7 @@ pub use storage::{
 };
 pub use target_platform::TargetPlatform;
 pub use text_input::PlatformTextInput;
-pub use text_store::{TextStore, TextStoreEdit, TextStoreObserver, TextStoreRead};
+pub use text_store::{TextStore, TextStoreEdit, TextStoreHost, TextStoreObserver, TextStoreRead};
 pub use window::{
     CursorError, WindowAppearance, WindowBackgroundAppearance, WindowBounds, WindowEvent,
     WindowExecutionState, WindowId, WindowMode, WindowOptions, WindowReveal, WindowShowError,

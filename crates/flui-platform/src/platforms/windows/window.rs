@@ -807,6 +807,21 @@ impl crate::traits::HostWindow for WindowsWindow {
     fn accessibility(&self) -> Option<Arc<dyn crate::traits::PlatformAccessibility>> {
         Some(Arc::clone(&self.accessibility) as _)
     }
+
+    /// The token proves the platform's owner thread, not this window's: an
+    /// HWND belongs to the thread that created it, and its text services
+    /// live in its `WindowContext` on that thread. So the host is read
+    /// through `with_window_context`, which refuses any other thread
+    /// (`shared::hwnd_affinity`), and a caller on one gets `None`. The
+    /// context does not hold the text services yet (ADR-0135 §3), so the
+    /// creating thread gets `None` too until it does.
+    fn text_store_host(
+        &self,
+        _owner: crate::traits::OwnerThreadToken,
+    ) -> Option<Rc<dyn flui_platform_api::text_store::TextStoreHost>> {
+        super::platform::with_window_context(self.hwnd, "text_store_host", |_context| None)
+            .flatten()
+    }
 }
 
 impl PlatformWindow for WindowsWindow {

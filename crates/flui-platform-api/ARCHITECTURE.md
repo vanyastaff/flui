@@ -77,7 +77,7 @@ the `CommitGate` for the gate's owner to report, and the queue keeps running
 to report to, and the panic resumes after the lock is released. The gate a
 failure belongs to is read before the grant runs. Every call into code a store
 does not control, here and in the stores and presentations above, goes
-through `OwnerCalls` (amendment item 8; its module doc lists the points);
+through `OwnerCalls` (ADR-0142 item 8; its module doc lists the points);
 `flui-widgets`' `owner_code_is_contained_at_every_point` pins each one.
 What a composition stands for in the committed text (nothing for a new
 preedit, the original words for a reconversion) is kept by each store beside

@@ -417,22 +417,9 @@ impl UiRealm {
 
     /// Weak text-input capability for this exact presentation.
     #[must_use]
-    #[cfg(test)]
-    pub(crate) fn text_input_handle(&self) -> flui_interaction::TextInputHandle {
-        self.presentations.primary().text_input_handle()
-    }
-
-    /// The text store of the primary presentation's active IME client: the
-    /// surface a pull-model platform input method reads and edits
-    /// (ADR-0090).
-    ///
-    /// Compiled only for tests and the `test-support` feature: until the
-    /// first pull-model backend reads it, its only caller is the headless
-    /// test host, which drives stores the way that backend will.
     #[cfg(any(test, feature = "test-support"))]
-    #[must_use]
-    pub fn active_text_store(&self) -> Option<Rc<dyn flui_platform_api::TextStore>> {
-        self.presentations.primary().text_input().active_store()
+    pub fn text_input_handle(&self) -> flui_interaction::TextInputHandle {
+        self.presentations.primary().text_input_handle()
     }
 
     /// Reassemble EVERY presentation this realm hosts, in mount order —
