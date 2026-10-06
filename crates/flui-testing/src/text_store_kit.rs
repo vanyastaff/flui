@@ -36,7 +36,11 @@ use flui_platform_api::TextStore;
 use flui_platform_api::text_store::InMemoryTextStore;
 
 /// The newest kit version.
-pub const KIT_VERSION: u32 = 1;
+///
+/// Version 2 adds the owner-notification contract (ADR-0090 §1 as amended):
+/// the owner hears only of committed-text changes, after the session's lock
+/// is released, and a composition may start over a selection.
+pub const KIT_VERSION: u32 = 2;
 
 /// A text field under test, as the kit drives it.
 pub trait TextStoreFixture {
@@ -61,9 +65,22 @@ pub trait TextStoreFixture {
     /// way to stand in for a store that ignores the gate.
     fn pump(&mut self);
 
-    /// How many change notifications the field has sent its own listeners
-    /// (a widget's `on_changed`, say). One platform session is one.
+    /// How many change notifications the field has sent its owner (a
+    /// widget's `on_changed`, say). A platform session that changed the
+    /// committed text — the text without its composition — is one; a
+    /// session that only composed is none.
     fn owner_notifications(&self) -> usize;
+
+    /// Run `hook` inside each later owner notification, after the field's
+    /// own handling of it; `None` removes it.
+    ///
+    /// The kit's hook asks the store for a synchronous lock, which a store
+    /// that notifies its owner from inside the session refuses. A fixture
+    /// that keeps this default never runs the hook and fails the cases that
+    /// need it (kit version 2 on).
+    fn set_owner_hook(&mut self, hook: Option<Rc<dyn Fn()>>) {
+        let _ = hook;
+    }
 
     /// Which optional groups of cases apply.
     fn capabilities(&self) -> FixtureCapabilities;
@@ -270,6 +287,10 @@ impl TextStoreFixture for InMemoryFixture {
 
     fn owner_notifications(&self) -> usize {
         self.store.owner_notifications()
+    }
+
+    fn set_owner_hook(&mut self, hook: Option<Rc<dyn Fn()>>) {
+        self.store.set_owner_listener(hook);
     }
 
     fn capabilities(&self) -> FixtureCapabilities {

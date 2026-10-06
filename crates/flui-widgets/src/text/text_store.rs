@@ -475,9 +475,9 @@ impl TextStore for EditableTextStore {
         // An app edit not yet reported is reported before the platform's
         // session can see (and write back over) it.
         self.flush_notifications();
-        let outcome = self
-            .arbiter
-            .request(grant, timing, &mut |grant| self.open(grant));
+        let outcome =
+            self.arbiter
+                .request(grant, timing, &mut |grant| self.open(grant), &mut || {});
         self.flush_notifications();
         outcome
     }
@@ -490,7 +490,9 @@ impl TextStore for EditableTextStore {
             return 0;
         }
         self.flush_notifications();
-        let ran = self.arbiter.run_deferred(&mut |grant| self.open(grant));
+        let ran = self
+            .arbiter
+            .run_deferred(&mut |grant| self.open(grant), &mut || {});
         self.flush_notifications();
         ran
     }

@@ -993,8 +993,8 @@ pub(crate) mod text_store {
 
     use flui_interaction::routing::FocusNode;
     use flui_platform_api::text_store::{
-        LockGrant, LockOutcome, LockTiming, Selection, TextStore, TextStoreEdit, TextStoreRead,
-        Utf16Offset,
+        LockGrant, LockOutcome, LockTiming, Selection, TextStore, TextStoreEdit, TextStoreError,
+        TextStoreRead, Utf16Offset,
     };
     use flui_widgets::{EditableText, TextEditingController};
 
@@ -1165,6 +1165,117 @@ pub(crate) mod text_store {
             .dispatch_key_event(&character_key_event('b'));
         assert!(handled);
         assert_eq!(controller.text(), "Ab");
+    }
+
+    /// `on_changed` runs once the platform's session has released its lock:
+    /// it receives the committed text (the composition left out), and a
+    /// synchronous lock it requests is granted and sees the session's
+    /// result.
+    ///
+    /// Red-check: call `on_changed` from the session's write-back, under the
+    /// lock — the nested request is refused; or compare the whole text — the
+    /// owner receives the preedit.
+    pub(crate) fn on_changed_runs_after_the_lock_is_released() {
+        use flui_platform_api::text_store::{Composition, Utf16Range};
+        type Seen = (
+            Result<LockOutcome, TextStoreError>,
+            Option<(Utf16Offset, Option<Utf16Range>)>,
+        );
+        let controller = TextEditingController::new();
+        let focus_node = FocusNode::with_debug_label("settled field");
+        let slot: Rc<RefCell<Option<Rc<dyn TextStore>>>> = Rc::new(RefCell::new(None));
+        type Heard = Rc<RefCell<Vec<(String, Option<Seen>)>>>;
+        let heard: Heard = Rc::new(RefCell::new(Vec::new()));
+        let (store_slot, sink) = (Rc::clone(&slot), Rc::clone(&heard));
+        let mut harness = mount_with_ime(
+            EditableText::new(controller.clone(), Rc::clone(&focus_node)).on_changed(
+                move |_cx, text| {
+                    let store = store_slot.borrow().clone();
+                    let seen = store.map(|store| {
+                        let read = Rc::new(RefCell::new(None));
+                        let out = Rc::clone(&read);
+                        let outcome = store.request_lock(
+                            LockGrant::read(move |session| {
+                                *out.borrow_mut() = Some((
+                                    session.document_len(),
+                                    session.composition().map(|composition| composition.range),
+                                ));
+                            }),
+                            LockTiming::Sync,
+                        );
+                        (outcome, read.take())
+                    });
+                    sink.borrow_mut().push((text.to_owned(), seen));
+                },
+            ),
+        );
+        focus_node.request_focus();
+        harness.tick();
+        let field = store(&harness);
+        *slot.borrow_mut() = Some(Rc::clone(&field));
+        let composing = Utf16Range::new(at(2), at(6)).expect("ordered");
+        edit(&field, move |session| {
+            session.insert_at_selection("東京").expect("in range");
+            session.insert_at_selection("おおさか").expect("in range");
+            session
+                .set_composition(Some(Composition {
+                    range: composing,
+                    hides_caret: false,
+                }))
+                .expect("in range");
+        });
+        // The store holds `on_changed`, which holds the slot.
+        slot.borrow_mut().take();
+        assert_eq!(
+            *heard.borrow(),
+            vec![(
+                "東京".to_owned(),
+                Some((Ok(LockOutcome::Granted), Some((at(6), Some(composing))))),
+            )],
+            "one owner notification with the committed text, its lock granted after the session"
+        );
+        assert_eq!(controller.text(), "東京おおさか");
+    }
+
+    /// The application edits the field while the platform holds a lock (a
+    /// nested modal loop, an async task): the platform's session is dropped,
+    /// the application's edit stays, and the platform hears of it once the
+    /// lock is released.
+    ///
+    /// Red-check: write the session back without comparing the controller's
+    /// generation — the text reads "ime" and the observer hears nothing.
+    pub(crate) fn an_app_edit_during_a_lock_is_not_overwritten() {
+        use flui_platform_api::text_store::{TextChange, TextStoreObserver};
+        struct Changes(Rc<RefCell<Vec<TextChange>>>);
+        impl TextStoreObserver for Changes {
+            fn text_changed(&self, change: TextChange) {
+                self.0.borrow_mut().push(change);
+            }
+            fn selection_changed(&self) {}
+            fn layout_changed(&self) {}
+            fn status_changed(&self) {}
+        }
+        let controller = TextEditingController::new();
+        let (harness, _focus) = focused(&controller);
+        let field = store(&harness);
+        let heard = Rc::new(RefCell::new(Vec::new()));
+        field.set_observer(Some(Rc::new(Changes(Rc::clone(&heard)))));
+        let app = controller.clone();
+        edit(&field, move |session| {
+            session.insert_at_selection("ime").expect("in range");
+            app.set_text("app");
+        });
+        field.set_observer(None);
+        assert_eq!(controller.text(), "app", "the application's edit stays");
+        assert_eq!(
+            *heard.borrow(),
+            [TextChange {
+                start: at(0),
+                old_end: at(0),
+                new_end: at(3),
+            }],
+            "the platform hears of the application's edit after the lock"
+        );
     }
 
     /// Text entered through the focus manager remains editable in a narrow

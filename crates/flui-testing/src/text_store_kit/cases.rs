@@ -1,4 +1,4 @@
-//! The kit's cases, version 1.
+//! The kit's cases, versions 1 and 2.
 
 use std::cell::{Cell, RefCell};
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -23,9 +23,12 @@ type Outcome = Result<(), String>;
 
 macro_rules! case {
     ($name:ident) => {
+        case!($name, since 1)
+    };
+    ($name:ident, since $since:literal) => {
         Case {
             name: stringify!($name),
-            since: 1,
+            since: $since,
             check: $name,
         }
     };
@@ -57,6 +60,9 @@ pub(super) const CASES: &[Case] = &[
     case!(index_at_point_round_trips_rect_for_range),
     case!(index_at_point_never_splits_a_surrogate_pair),
     case!(protected_store_refuses_text_reads),
+    case!(composition_over_a_selection_replaces_the_selection, since 2),
+    case!(composition_only_sessions_do_not_notify_the_owner, since 2),
+    case!(owner_notification_runs_after_release, since 2),
 ];
 
 // ============================================================================
@@ -742,6 +748,152 @@ fn one_session_is_one_owner_notification(fixture: &mut dyn TextStoreFixture) -> 
         fixture.owner_notifications(),
         before + 1,
         "owner notifications for one session of three edits",
+    )
+}
+
+// ============================================================================
+// Composition and the owner (version 2)
+// ============================================================================
+
+fn composition_over_a_selection_replaces_the_selection(
+    fixture: &mut dyn TextStoreFixture,
+) -> Outcome {
+    let store = fresh(fixture, "abcd");
+    let selected = edit(&store, |session| {
+        session.set_selection(Selection {
+            anchor: at(3),
+            active: at(1),
+        })
+    })?;
+    ensure_eq(selected, Ok(()), "set_selection(3 -> 1)")?;
+    let (change, composed) = edit(&store, |session| {
+        let change = session.insert_at_selection("か");
+        let composed = session.set_composition(Some(Composition {
+            range: range(1, 2),
+            hides_caret: false,
+        }));
+        (change, composed)
+    })?;
+    ensure_eq(
+        change,
+        Ok(TextChange {
+            start: at(1),
+            old_end: at(3),
+            new_end: at(2),
+        }),
+        "the composition's text inserted over the selection 1..3",
+    )?;
+    ensure_eq(composed, Ok(()), "set_composition(1..2)")?;
+    let (composition, selection, len) = read(&store, |session| {
+        (
+            session.composition(),
+            session.selection(),
+            session.document_len(),
+        )
+    })?;
+    ensure_eq(
+        composition,
+        Some(Composition {
+            range: range(1, 2),
+            hides_caret: false,
+        }),
+        "the composition that replaced the selection",
+    )?;
+    ensure_eq(
+        selection,
+        Selection::collapsed(at(2)),
+        "the caret after the composed text",
+    )?;
+    ensure_eq(len, at(3), "the length once the selection was replaced")?;
+    expect_text(fixture, &store, range(0, 3), "aかd")
+}
+
+fn composition_only_sessions_do_not_notify_the_owner(
+    fixture: &mut dyn TextStoreFixture,
+) -> Outcome {
+    let store = fresh(fixture, "ab");
+    let before = fixture.owner_notifications();
+    let composing = |start, end| {
+        Some(Composition {
+            range: range(start, end),
+            hides_caret: false,
+        })
+    };
+    let started = edit(&store, move |session| -> Result<(), TextStoreError> {
+        session.insert_at_selection("とうきょう")?;
+        session.set_composition(composing(2, 7))
+    })?;
+    ensure_eq(started, Ok(()), "the session starting a composition")?;
+    fixture.pump();
+    ensure_eq(
+        fixture.owner_notifications(),
+        before,
+        "owner notifications after a session that only composed",
+    )?;
+    let converted = edit(&store, move |session| -> Result<(), TextStoreError> {
+        session.replace(range(2, 7), "東京")?;
+        session.set_composition(composing(2, 4))
+    })?;
+    ensure_eq(converted, Ok(()), "the session converting the composition")?;
+    fixture.pump();
+    ensure_eq(
+        fixture.owner_notifications(),
+        before,
+        "owner notifications after a conversion that is still composing",
+    )?;
+    let committed = edit(&store, |session| session.set_composition(None))?;
+    ensure_eq(committed, Ok(()), "the session committing the composition")?;
+    fixture.pump();
+    ensure_eq(
+        fixture.owner_notifications(),
+        before + 1,
+        "owner notifications once the composition was committed",
+    )?;
+    expect_text(fixture, &store, range(0, 4), "ab東京")?;
+    let cancelled = edit(&store, move |session| -> Result<(), TextStoreError> {
+        session.insert_at_selection("x")?;
+        session.set_composition(composing(4, 5))?;
+        session.replace(range(4, 5), "")?;
+        session.set_composition(None)
+    })?;
+    ensure_eq(cancelled, Ok(()), "a session composing then removing \"x\"")?;
+    fixture.pump();
+    ensure_eq(
+        fixture.owner_notifications(),
+        before + 1,
+        "owner notifications after a cancelled composition",
+    )?;
+    expect_text(fixture, &store, range(0, 4), "ab東京")
+}
+
+fn owner_notification_runs_after_release(fixture: &mut dyn TextStoreFixture) -> Outcome {
+    let store = fresh(fixture, "");
+    let outcomes = Rc::new(RefCell::new(Vec::new()));
+    let (sink, weak) = (Rc::clone(&outcomes), Rc::downgrade(&store));
+    fixture.set_owner_hook(Some(Rc::new(move || {
+        if let Some(store) = weak.upgrade() {
+            let outcome = store.request_lock(LockGrant::read(|_| {}), LockTiming::Sync);
+            sink.borrow_mut().push(outcome);
+        }
+    })));
+    let before = fixture.owner_notifications();
+    let edited = edit(&store, |session| {
+        session.insert_at_selection("a").map(|_| ())
+    });
+    // Taken before any anchor: the owner hears of the session before the
+    // request that ran it returns.
+    let heard = outcomes.take();
+    fixture.set_owner_hook(None);
+    ensure_eq(edited?, Ok(()), "insert_at_selection(\"a\")")?;
+    ensure_eq(
+        fixture.owner_notifications(),
+        before + 1,
+        "owner notifications for one committed edit",
+    )?;
+    ensure_eq(
+        heard,
+        vec![Ok(LockOutcome::Granted)],
+        "sync lock requests made inside the owner notification, before the session's request returned",
     )
 }
 

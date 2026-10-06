@@ -44,7 +44,27 @@
 //! The arbiter reads the gate itself: a store installs the gate its owner
 //! hands it ([`TextStore::set_commit_gate`](super::TextStore::set_commit_gate))
 //! with [`LockArbiter::set_gate`], and has no flag of its own to forget.
+//!
+//! # Settling
+//!
+//! A grant runs the platform's code, never the field owner's: a store that
+//! changed its committed text inside a grant owes its owner a notification
+//! (a widget's `on_changed`), and owner code may ask for a lock of its own.
+//! So every [`LockArbiter::request`] and [`LockArbiter::run_deferred`] takes
+//! a second function, `settle`, which the arbiter calls after each grant has
+//! released the lock and before the next queued grant runs. The store
+//! delivers what it owes there: the lock is free, so a synchronous request
+//! from the owner is granted (after any grant queued ahead of it), and the
+//! platform's next grant sees whatever the owner changed.
+//!
+//! A panic in `settle` does not undo the grant before it, which already
+//! ran. The arbiter catches it and hands the payload to the store's
+//! [`CommitGate`] ([`CommitGate::defer_failure`]), whose owner reports it at
+//! its next turn, and the queue keeps running. A store whose owner never
+//! installed a gate has no one to report to, so there the panic resumes
+//! out of the request once the lock is released.
 
+use std::any::Any;
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::marker::PhantomData;
@@ -164,9 +184,24 @@ pub enum TextStoreError {
 /// ([`TextStore::set_commit_gate`](super::TextStore::set_commit_gate)); the
 /// store's [`LockArbiter`] reads it on every request. Clones share one state.
 /// Owner-thread only, and not `Send`.
-#[derive(Clone, Debug, Default)]
+///
+/// The gate is also the stores' way back to their owner when owner code
+/// fails outside any frame: a panic caught while a store settled a grant
+/// waits here ([`Self::defer_failure`]) until the owner takes it
+/// ([`Self::take_failure`]) and reports it.
+#[derive(Clone, Default)]
 pub struct CommitGate {
     shut: Rc<Cell<bool>>,
+    failure: Rc<RefCell<Option<Box<dyn Any + Send>>>>,
+}
+
+impl std::fmt::Debug for CommitGate {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CommitGate")
+            .field("open", &self.is_open())
+            .field("failed", &self.failure.borrow().is_some())
+            .finish()
+    }
 }
 
 impl CommitGate {
@@ -185,6 +220,21 @@ impl CommitGate {
     /// Open or shut the gate for every store holding a clone of it.
     pub fn set_open(&self, open: bool) {
         self.shut.set(!open);
+    }
+
+    /// Hold `payload`, a panic caught after a grant had already run, for
+    /// the owner to report. The first failure is kept until it is taken;
+    /// a later one is retained unreported (ADR-0127): it is never dropped
+    /// here, since dropping an opaque payload can run user code.
+    pub fn defer_failure(&self, payload: Box<dyn Any + Send>) {
+        flui_foundation::panic::retain_opaque_payload(payload);
+    }
+
+    /// The failure held since the last call, if any; the owner reports it
+    /// (resumes it inside its own containment).
+    #[must_use]
+    pub fn take_failure(&self) -> Option<Box<dyn Any + Send>> {
+        None
     }
 }
 
@@ -244,7 +294,9 @@ impl LockArbiter {
     }
 
     /// Decide `grant`'s fate: run it through `open` now, queue it, or refuse.
-    /// See the module doc for the table this follows.
+    /// See the module doc for the table this follows. `settle` runs after
+    /// each grant this call runs, once its lock is released and before the
+    /// next one (module doc, "Settling").
     ///
     /// # Errors
     ///
@@ -256,19 +308,20 @@ impl LockArbiter {
         grant: LockGrant,
         timing: LockTiming,
         open: &mut dyn FnMut(LockGrant),
+        settle: &mut dyn FnMut(),
     ) -> Result<LockOutcome, TextStoreError> {
         if self.locked.get() || !self.may_commit() {
             return self.defer_or_refuse(grant, timing);
         }
         // Earlier requests first, so this one cannot overtake them.
-        self.drain(open);
+        self.drain(open, settle);
         // An earlier grant may have closed the presentation's transaction gate.
         if !self.may_commit() {
             return self.defer_or_refuse(grant, timing);
         }
-        self.run_one(grant, open);
+        self.run_one(grant, open, settle);
         // Whatever this grant queued runs now that its lock is released.
-        self.drain(open);
+        self.drain(open, settle);
         Ok(LockOutcome::Granted)
     }
 
@@ -293,12 +346,13 @@ impl LockArbiter {
     /// Run every queued grant, in request order, when the store is unlocked
     /// and its gate is open. Returns how many ran.
     ///
-    /// A grant queued by one of these grants runs in the same call.
-    pub fn run_deferred(&self, open: &mut dyn FnMut(LockGrant)) -> usize {
+    /// A grant queued by one of these grants runs in the same call, and
+    /// `settle` runs after each, as for [`Self::request`].
+    pub fn run_deferred(&self, open: &mut dyn FnMut(LockGrant), settle: &mut dyn FnMut()) -> usize {
         if self.locked.get() || !self.may_commit() {
             return 0;
         }
-        self.drain(open)
+        self.drain(open, settle)
     }
 
     /// Whether a grant is running.
@@ -321,7 +375,7 @@ impl LockArbiter {
         dropped.len()
     }
 
-    fn drain(&self, open: &mut dyn FnMut(LockGrant)) -> usize {
+    fn drain(&self, open: &mut dyn FnMut(LockGrant), settle: &mut dyn FnMut()) -> usize {
         let mut ran = 0;
         loop {
             if !self.may_commit() {
@@ -331,12 +385,13 @@ impl LockArbiter {
             let Some(grant) = next else {
                 return ran;
             };
-            self.run_one(grant, open);
+            self.run_one(grant, open, settle);
             ran += 1;
         }
     }
 
-    fn run_one(&self, grant: LockGrant, open: &mut dyn FnMut(LockGrant)) {
+    fn run_one(&self, grant: LockGrant, open: &mut dyn FnMut(LockGrant), settle: &mut dyn FnMut()) {
+        let _ = settle;
         self.locked.set(true);
         let _held = Held(&self.locked);
         open(grant);
@@ -423,10 +478,11 @@ mod tests {
                 grants.grant("nested"),
                 LockTiming::Sync,
                 &mut open,
+                &mut || {},
             )));
         });
         assert_eq!(
-            arbiter.request(outer, LockTiming::Sync, &mut open),
+            arbiter.request(outer, LockTiming::Sync, &mut open, &mut || {}),
             Ok(LockOutcome::Granted)
         );
         assert_eq!(seen.get(), Some(Err(TextStoreError::SyncLockUnavailable)));
@@ -445,13 +501,23 @@ mod tests {
         let (arbiter, gate) = behind_a_shut_gate();
         let (log, grants) = labelled();
         for label in ["first", "second", "third"] {
-            let _ = arbiter.request(grants.grant(label), LockTiming::Async, &mut open);
+            let _ = arbiter.request(
+                grants.grant(label),
+                LockTiming::Async,
+                &mut open,
+                &mut || {},
+            );
         }
         // A request made once the gate reopens, before the anchor, still
         // runs after the three queued ahead of it.
         gate.set_open(true);
         assert_eq!(
-            arbiter.request(grants.grant("fourth"), LockTiming::Async, &mut open),
+            arbiter.request(
+                grants.grant("fourth"),
+                LockTiming::Async,
+                &mut open,
+                &mut || {}
+            ),
             Ok(LockOutcome::Granted)
         );
         assert_eq!(*log.borrow(), ["first", "second", "third", "fourth"]);
@@ -462,12 +528,17 @@ mod tests {
         let (_, grants) = labelled();
         for _ in 0..DEFERRED_LOCK_CAPACITY {
             assert_eq!(
-                arbiter.request(grants.grant("q"), LockTiming::Async, &mut open),
+                arbiter.request(grants.grant("q"), LockTiming::Async, &mut open, &mut || {}),
                 Ok(LockOutcome::Deferred)
             );
         }
         assert_eq!(
-            arbiter.request(grants.grant("over"), LockTiming::Async, &mut open),
+            arbiter.request(
+                grants.grant("over"),
+                LockTiming::Async,
+                &mut open,
+                &mut || {}
+            ),
             Err(TextStoreError::DeferredQueueFull)
         );
         assert_eq!(arbiter.pending(), DEFERRED_LOCK_CAPACITY);
@@ -487,13 +558,18 @@ mod tests {
         let arbiter = LockArbiter::new();
         let panicking = LockGrant::read(|_| panic!("a grant that fails"));
         let unwound = catch_unwind(AssertUnwindSafe(|| {
-            let _ = arbiter.request(panicking, LockTiming::Sync, &mut open);
+            let _ = arbiter.request(panicking, LockTiming::Sync, &mut open, &mut || {});
         }));
         assert!(unwound.is_err());
         assert!(!arbiter.is_locked());
         let (log, grants) = labelled();
         assert_eq!(
-            arbiter.request(grants.grant("after"), LockTiming::Sync, &mut open),
+            arbiter.request(
+                grants.grant("after"),
+                LockTiming::Sync,
+                &mut open,
+                &mut || {}
+            ),
             Ok(LockOutcome::Granted)
         );
         assert_eq!(*log.borrow(), ["after"]);

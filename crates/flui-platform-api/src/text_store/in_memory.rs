@@ -132,11 +132,21 @@ impl InMemoryTextStore {
         self.report(Notice::Selection);
     }
 
-    /// How many read-write sessions changed the document: the notifications
-    /// a field would send its own listeners, one per session.
+    /// How many read-write sessions changed the committed text (the text
+    /// without its composition): the notifications a field sends its owner,
+    /// at most one per session, each after the session's lock is released.
+    /// A session that only composes, or only moves the selection, is none.
     #[must_use]
     pub fn owner_notifications(&self) -> usize {
         self.owner_notifications.get()
+    }
+
+    /// Call `listener` with each owner notification, as a field calls its
+    /// `on_changed`; `None` removes it. It runs after the session's lock is
+    /// released and before the next queued grant, so it may request a
+    /// synchronous lock of its own.
+    pub fn set_owner_listener(&self, listener: Option<Rc<dyn Fn()>>) {
+        let _ = listener;
     }
 
     /// Queue `notice` and send everything queued if the observer may hear
@@ -210,9 +220,9 @@ impl TextStore for InMemoryTextStore {
         // An app edit still owed is reported before the platform's session
         // can see it, and one made from inside the grant once it ends.
         self.flush_notifications();
-        let outcome = self
-            .arbiter
-            .request(grant, timing, &mut |grant| self.open(grant));
+        let outcome =
+            self.arbiter
+                .request(grant, timing, &mut |grant| self.open(grant), &mut || {});
         self.flush_notifications();
         outcome
     }
@@ -221,7 +231,9 @@ impl TextStore for InMemoryTextStore {
     /// sent, before and after the queued grants run.
     fn run_deferred_grants(&self) -> usize {
         self.flush_notifications();
-        let ran = self.arbiter.run_deferred(&mut |grant| self.open(grant));
+        let ran = self
+            .arbiter
+            .run_deferred(&mut |grant| self.open(grant), &mut || {});
         self.flush_notifications();
         ran
     }

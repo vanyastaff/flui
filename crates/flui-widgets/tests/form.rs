@@ -145,6 +145,77 @@ pub(crate) fn reset_restores_initial_values_and_clears_errors_and_interaction() 
     );
 }
 
+/// A text form field's value is the committed text (ADR-0090): what an input
+/// method is still composing is neither validated nor saved, and the field
+/// reporting the committed text does not write it back over the preedit.
+///
+/// Red-check: read the field's value from `TextEditingController::text` —
+/// the value includes "おおさか"; or push every reported value back into the
+/// controller with `set_text` — the preedit is deleted.
+pub(crate) fn a_text_form_field_validates_and_saves_the_committed_text() {
+    use std::cell::RefCell;
+
+    use flui_platform_api::text_store::{
+        Composition, LockGrant, LockOutcome, LockTiming, Utf16Offset, Utf16Range,
+    };
+
+    let form = FormHandle::new();
+    let field = FormFieldHandle::new();
+    let controller = TextEditingController::new();
+    let node = FocusNode::with_debug_label("composing");
+    let validated = Rc::new(RefCell::new(Vec::new()));
+    let seen = Rc::clone(&validated);
+    let mut harness = crate::common::harness::mount_with_ime(
+        Form::new(
+            RawTextFormField::new(controller.clone())
+                .validator(move |value: &String| {
+                    seen.borrow_mut().push(value.clone());
+                    None
+                })
+                .autovalidate_mode(AutovalidateMode::Always)
+                .focus_node(Rc::clone(&node))
+                .handle(field.clone()),
+        )
+        .handle(form.clone()),
+    );
+    node.request_focus();
+    harness.tick();
+    validated.borrow_mut().clear();
+    let store = harness
+        .active_text_store()
+        .expect("the focused field is the active IME client");
+    let composing = Utf16Range::new(Utf16Offset::new(2), Utf16Offset::new(6)).expect("ordered");
+    let outcome = store.request_lock(
+        LockGrant::read_write(move |session| {
+            session.insert_at_selection("東京").expect("in range");
+            session.insert_at_selection("おおさか").expect("in range");
+            session
+                .set_composition(Some(Composition {
+                    range: composing,
+                    hides_caret: false,
+                }))
+                .expect("in range");
+        }),
+        LockTiming::Sync,
+    );
+    assert_eq!(outcome, Ok(LockOutcome::Granted));
+    harness.tick();
+
+    assert_eq!(controller.text(), "東京おおさか", "the preedit stays");
+    assert_eq!(controller.composing_range(), Some(6..18), "still composing");
+    assert_eq!(
+        field.value(),
+        "東京",
+        "the field's value is the committed text"
+    );
+    assert!(form.validate());
+    assert!(
+        !validated.borrow().is_empty() && validated.borrow().iter().all(|value| value == "東京"),
+        "the validator saw only the committed text: {:?}",
+        validated.borrow()
+    );
+}
+
 // ============================================================================
 // Event context (ADR-0086): the handle methods take the caller's `cx` and
 // hand it to the callbacks they run; a field's edit hands on its own.

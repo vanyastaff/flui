@@ -109,6 +109,9 @@ fn text_editing() {
             ("editable_text::focus_gain_attaches_an_ime_client_and_routes_preedit_to_the_controller", crate::editable_text::focus_gain_attaches_an_ime_client_and_routes_preedit_to_the_controller),
             ("editable_text::text_store::store_offsets_match_controller_bytes_across_surrogates_and_graphemes", crate::editable_text::text_store::store_offsets_match_controller_bytes_across_surrogates_and_graphemes),
             ("editable_text::text_store::typing_after_a_deferred_commit_lands_after_the_commit", crate::editable_text::text_store::typing_after_a_deferred_commit_lands_after_the_commit),
+            ("editable_text::text_store::on_changed_runs_after_the_lock_is_released", crate::editable_text::text_store::on_changed_runs_after_the_lock_is_released),
+            ("editable_text::text_store::an_app_edit_during_a_lock_is_not_overwritten", crate::editable_text::text_store::an_app_edit_during_a_lock_is_not_overwritten),
+            ("form::a_text_form_field_validates_and_saves_the_committed_text", crate::form::a_text_form_field_validates_and_saves_the_committed_text),
             ("editable_text::text_store::long_input_reveals_the_caret_and_maps_visible_pointer_positions", crate::editable_text::text_store::long_input_reveals_the_caret_and_maps_visible_pointer_positions),
             ("editable_text::text_store::editable_paint_places_long_text_under_the_viewport_clip", crate::editable_text::text_store::editable_paint_places_long_text_under_the_viewport_clip),
             ("editable_text_clipboard::copy_and_cut_on_an_obscured_field_leave_the_clipboard_untouched_and_the_key_unconsumed", crate::editable_text_clipboard::copy_and_cut_on_an_obscured_field_leave_the_clipboard_untouched_and_the_key_unconsumed),
@@ -130,12 +133,12 @@ fn text_store_kit_conformance() {
         "text_store_kit_conformance",
         &[
             (
-                "text_store_kit::editable_text_conforms_to_kit_v1",
-                crate::text_store_kit::editable_text_conforms_to_kit_v1 as fn(),
+                "text_store_kit::editable_text_conforms_to_the_kit",
+                crate::text_store_kit::editable_text_conforms_to_the_kit as fn(),
             ),
             (
-                "text_store_kit::obscured_editable_text_conforms_to_kit_v1",
-                crate::text_store_kit::obscured_editable_text_conforms_to_kit_v1,
+                "text_store_kit::obscured_editable_text_conforms_to_the_kit",
+                crate::text_store_kit::obscured_editable_text_conforms_to_the_kit,
             ),
         ],
     );

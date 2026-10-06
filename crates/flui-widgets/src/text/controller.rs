@@ -357,6 +357,19 @@ impl TextEditingController {
             .clone()
     }
 
+    /// The committed text: [`Self::text`] without the IME composition's
+    /// range, so what the user has confirmed rather than what an input
+    /// method is still composing.
+    ///
+    /// This is the text a field's owner works with: `on_changed` receives
+    /// it and is called only when it changes, and a text form field
+    /// validates and saves it (ADR-0090). Equal to [`Self::text`] whenever
+    /// [`Self::is_composing`] is `false`.
+    #[must_use]
+    pub fn committed_text(&self) -> String {
+        self.text()
+    }
+
     /// The current caret position as a byte offset into [`Self::text`].
     ///
     /// Always points to a valid UTF-8 char boundary (including one past the

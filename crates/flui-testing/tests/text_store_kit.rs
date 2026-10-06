@@ -16,7 +16,7 @@ use flui_testing::text_store_kit::{
     self, FixtureCapabilities, InMemoryFixture, KIT_VERSION, TextStoreFixture,
 };
 
-fn in_memory_store_conforms_to_kit_v1() {
+fn in_memory_store_conforms_to_the_kit() {
     text_store_kit::assert_conforms(&mut InMemoryFixture::new(), KIT_VERSION);
 }
 
@@ -41,6 +41,11 @@ enum Fault {
     /// Tells the observer of an app edit at once, inside a frame
     /// transaction too.
     NotifiesInsideTransaction,
+    /// Notifies its owner of every session that edited anything, the
+    /// composition included.
+    NotifiesForComposition,
+    /// Notifies its owner from inside the session, under its lock.
+    NotifiesUnderTheLock,
 }
 
 /// `InMemoryTextStore` with `fault` spliced into its sessions.
@@ -49,6 +54,33 @@ struct Faulty {
     fault: Fault,
     observer: Rc<RefCell<Option<Rc<dyn TextStoreObserver>>>>,
     edits: Rc<Cell<usize>>,
+    /// Sessions that edited anything, for the faults that notify per session.
+    sessions: Rc<Cell<usize>>,
+    owner_hook: OwnerHook,
+}
+
+type OwnerHook = Rc<RefCell<Option<Rc<dyn Fn()>>>>;
+
+impl Faulty {
+    fn new(text: &str, fault: Fault) -> Self {
+        Self {
+            inner: InMemoryTextStore::new(text),
+            fault,
+            observer: Rc::new(RefCell::new(None)),
+            edits: Rc::new(Cell::new(0)),
+            sessions: Rc::new(Cell::new(0)),
+            owner_hook: Rc::new(RefCell::new(None)),
+        }
+    }
+
+    /// Whether this store keeps its own count of owner notifications rather
+    /// than the inner store's.
+    fn counts_sessions(&self) -> bool {
+        matches!(
+            self.fault,
+            Fault::NotifiesForComposition | Fault::NotifiesUnderTheLock
+        )
+    }
 }
 
 impl TextStore for Faulty {
@@ -80,13 +112,25 @@ impl TextStore for Faulty {
             }),
             LockGrant::ReadWrite(body) => {
                 let (observer, edits) = (Rc::clone(&self.observer), Rc::clone(&self.edits));
+                let (sessions, hook) = (Rc::clone(&self.sessions), Rc::clone(&self.owner_hook));
+                let per_session = self.counts_sessions();
                 LockGrant::read_write(move |session| {
+                    let before = edits.get();
                     body(&mut EditFault {
                         inner: session,
                         fault,
                         observer,
-                        edits,
+                        edits: Rc::clone(&edits),
                     });
+                    if per_session && edits.get() != before {
+                        sessions.set(sessions.get() + 1);
+                        if fault == Fault::NotifiesUnderTheLock {
+                            let hook = hook.borrow().clone();
+                            if let Some(hook) = hook {
+                                hook();
+                            }
+                        }
+                    }
                 })
             }
         };
@@ -280,12 +324,7 @@ struct FaultyFixture {
 impl FaultyFixture {
     fn new(fault: Fault) -> Self {
         Self {
-            store: Rc::new(Faulty {
-                inner: InMemoryTextStore::new(""),
-                fault,
-                observer: Rc::new(RefCell::new(None)),
-                edits: Rc::new(Cell::new(0)),
-            }),
+            store: Rc::new(Faulty::new("", fault)),
         }
     }
 }
@@ -297,12 +336,7 @@ impl TextStoreFixture for FaultyFixture {
     }
 
     fn reset(&mut self, text: &str) {
-        self.store = Rc::new(Faulty {
-            inner: InMemoryTextStore::new(text),
-            fault: self.store.fault,
-            observer: Rc::new(RefCell::new(None)),
-            edits: Rc::new(Cell::new(0)),
-        });
+        self.store = Rc::new(Faulty::new(text, self.store.fault));
     }
 
     fn app_replace_all(&mut self, text: &str) {
@@ -336,8 +370,18 @@ impl TextStoreFixture for FaultyFixture {
     fn owner_notifications(&self) -> usize {
         if self.store.fault == Fault::NotifiesPerEdit {
             self.store.edits.get()
+        } else if self.store.counts_sessions() {
+            self.store.sessions.get()
         } else {
             self.store.inner.owner_notifications()
+        }
+    }
+
+    fn set_owner_hook(&mut self, hook: Option<Rc<dyn Fn()>>) {
+        if self.store.counts_sessions() {
+            *self.store.owner_hook.borrow_mut() = hook;
+        } else {
+            self.store.inner.set_owner_listener(hook);
         }
     }
 
@@ -371,6 +415,28 @@ fn kit_fails_a_store_that_notifies_inside_a_transaction() {
         Fault::NotifiesInsideTransaction,
         "app_edits_inside_a_transaction_reach_the_observer_after_it",
     );
+}
+
+fn kit_fails_a_store_that_notifies_its_owner_of_a_composition() {
+    assert_kit_catches(
+        Fault::NotifiesForComposition,
+        "composition_only_sessions_do_not_notify_the_owner",
+    );
+}
+
+fn kit_fails_a_store_that_notifies_its_owner_under_the_lock() {
+    assert_kit_catches(
+        Fault::NotifiesUnderTheLock,
+        "owner_notification_runs_after_release",
+    );
+}
+
+/// A kit version names the cases a downstream suite certified against: the
+/// version 2 cases fail a store that predates them, and a suite pinned to
+/// version 1 still passes it.
+fn a_pinned_kit_version_does_not_grow() {
+    let failures = text_store_kit::run(&mut FaultyFixture::new(Fault::NotifiesForComposition), 1);
+    assert!(failures.is_empty(), "kit v1 grew: {failures:#?}");
 }
 
 fn a_store_failure_before_the_grant_is_reported_and_next_grant_progresses() {
@@ -444,6 +510,9 @@ fn kit_retains_opaque_failure_payloads_and_continues() {
             }
             fn owner_notifications(&self) -> usize {
                 self.inner.owner_notifications()
+            }
+            fn set_owner_hook(&mut self, hook: Option<Rc<dyn Fn()>>) {
+                self.inner.set_owner_hook(hook);
             }
             fn capabilities(&self) -> FixtureCapabilities {
                 self.inner.capabilities()
@@ -530,8 +599,8 @@ fn text_store_kit_matrix() {
                 kit_retains_opaque_failure_payloads_and_continues as fn(),
             ),
             (
-                "in_memory_store_conforms_to_kit_v1",
-                in_memory_store_conforms_to_kit_v1 as fn(),
+                "in_memory_store_conforms_to_the_kit",
+                in_memory_store_conforms_to_the_kit as fn(),
             ),
             (
                 "kit_fails_a_store_that_grants_inside_a_transaction",
@@ -540,6 +609,18 @@ fn text_store_kit_matrix() {
             (
                 "kit_fails_a_store_that_notifies_inside_a_transaction",
                 kit_fails_a_store_that_notifies_inside_a_transaction as fn(),
+            ),
+            (
+                "kit_fails_a_store_that_notifies_its_owner_of_a_composition",
+                kit_fails_a_store_that_notifies_its_owner_of_a_composition as fn(),
+            ),
+            (
+                "kit_fails_a_store_that_notifies_its_owner_under_the_lock",
+                kit_fails_a_store_that_notifies_its_owner_under_the_lock as fn(),
+            ),
+            (
+                "a_pinned_kit_version_does_not_grow",
+                a_pinned_kit_version_does_not_grow as fn(),
             ),
         ],
     );
