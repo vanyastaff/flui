@@ -114,6 +114,30 @@ pub struct RecognizerBase {
     /// by [`start_tracking`](Self::start_tracking). The handle stores weak
     /// identities, so retaining it here cannot form a recognizer cycle.
     tracked_entry: Arc<Mutex<Option<GestureArenaEntry>>>,
+
+    /// Bumped by every [`start_tracking`](Self::start_tracking). A contact's
+    /// retirement withdraws tracking only while this still names that contact,
+    /// so a contact admitted reentrantly during the retiring sweep survives it.
+    contact: Arc<AtomicU64>,
+}
+
+/// Withdraws a retiring contact's local tracking when dropped, unless a newer
+/// contact was admitted since. Runs on unwind too; it touches only framework
+/// state, never user code.
+struct WithdrawContact<'a> {
+    base: &'a RecognizerBase,
+    contact: u64,
+}
+
+impl Drop for WithdrawContact<'_> {
+    fn drop(&mut self) {
+        if self.base.contact.load(Ordering::Acquire) == self.contact {
+            let retired = self.base.tracked_entry.lock().take();
+            self.base.set_primary_pointer(None);
+            self.base.clear_initial_contact();
+            drop(retired);
+        }
+    }
 }
 
 /// Where a gesture's primary pointer went down, in both coordinate spaces.
@@ -138,6 +162,7 @@ impl RecognizerBase {
             initial_contact: Arc::new(Mutex::new(None)),
             disposed: Arc::new(AtomicBool::new(false)),
             tracked_entry: Arc::new(Mutex::new(None)),
+            contact: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -256,6 +281,7 @@ impl RecognizerBase {
             return;
         }
 
+        self.contact.fetch_add(1, Ordering::AcqRel);
         self.set_primary_pointer(Some(pointer));
         *self.initial_contact.lock() = Some(InitialContact {
             local: position,
@@ -303,14 +329,18 @@ impl RecognizerBase {
 
     /// Stop tracking (called on success or rejection)
     ///
-    /// Withdraws local tracking before a self-driven arena sweep invokes user
-    /// code. Reentrant admission during that sweep belongs to the next contact
-    /// and is not cleared by completion of this one. Diagnostics run afterward.
+    /// The retiring contact stays visible through a self-driven arena sweep,
+    /// so a member the sweep accepts still recognizes its own pointer. Local
+    /// tracking is withdrawn after the sweep, also when it unwinds, unless the
+    /// sweep admitted the next contact reentrantly: that contact is not
+    /// cleared by completion of this one. Diagnostics run afterward.
     pub fn stop_tracking(&self) {
         let pointer = self.primary_pointer();
-        let entry = self.tracked_entry.lock().take();
-        self.set_primary_pointer(None);
-        self.clear_initial_contact();
+        let entry = self.tracked_entry.lock().clone();
+        let withdraw = WithdrawContact {
+            base: self,
+            contact: self.contact.load(Ordering::Acquire),
+        };
         // Sweep only when this recognizer owns the arena lifecycle. In a
         // binding-driven arena the binding sweeps on `PointerUp` after routing
         // the event to the whole hit-test path; a recognizer self-sweeping here
@@ -323,6 +353,7 @@ impl RecognizerBase {
         {
             entry.sweep();
         }
+        drop(withdraw);
         if pointer.is_some() {
             tracing::debug!(
                 name: "recognizer.stop_tracking",

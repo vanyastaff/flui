@@ -1466,6 +1466,20 @@ impl PresentationState {
         }
     }
 
+    /// Withdraw dispatch authority, keeping the captures for
+    /// [`flui_interaction::__runtime::retire_dispatch`].
+    fn withdraw_interaction(
+        &self,
+        lane: Option<&flui_interaction::InteractionLane>,
+        mode: flui_interaction::__runtime::CloseMode,
+    ) -> Option<flui_interaction::__runtime::DispatchCustody> {
+        let handle = self.interaction_dispatch()?;
+        match lane {
+            Some(lane) => flui_interaction::__runtime::withdraw_dispatch_in(lane, handle, mode),
+            None => flui_interaction::__runtime::withdraw_dispatch(handle, mode),
+        }
+    }
+
     pub(crate) fn close_with_mode_in(
         &self,
         mode: flui_interaction::__runtime::CloseMode,
@@ -1490,7 +1504,15 @@ impl PresentationState {
         use flui_interaction::__runtime::{
             close_focus, close_gestures, close_mouse_tracker, close_text_input,
         };
-        let mut failure = PresentationCloseRecovery::new(mode, &self.close_mode);
+        // One reentry window spans every owner this close reaches.
+        let mut window = flui_interaction::__runtime::CloseWindow::new();
+        if let Some(handle) = self.interaction_dispatch() {
+            window.dispatch(handle);
+        }
+        window.gestures(&self.gestures);
+        window.focus(&self.focus);
+        window.text_input(&self.text_input);
+        let mut failure = PresentationCloseRecovery::new(mode, &self.close_mode, window);
 
         if matches!(
             self.lifecycle.get(),
@@ -1505,8 +1527,13 @@ impl PresentationState {
         self.lifecycle.set(PresentationLifecycle::Closing);
         let window = self.window.upgrade();
         let bridge = self.accessibility.as_ref().and_then(Weak::upgrade);
+        // Every capability is withdrawn before any capture is destroyed: a
+        // dispatch target's destructor may hold saved handles, and must find
+        // the graph, keys, focus and text input already closed.
         let mode = failure.mode();
-        failure.invoke(|| self.close_interaction_with_mode(lane, mode));
+        let dispatch = failure
+            .invoke_with(|| self.withdraw_interaction(lane, mode))
+            .flatten();
         self.alive.borrow_mut().take();
         self.held_pointer_input.borrow_mut().clear();
         // Owner authority is withdrawn before any final user notification.
@@ -1535,6 +1562,10 @@ impl PresentationState {
         failure.invoke(|| close_focus(&self.focus, mode));
         let mode = failure.mode();
         failure.invoke(|| close_text_input(&self.text_input, mode));
+        if let Some(dispatch) = dispatch {
+            let mode = failure.mode();
+            failure.invoke(|| flui_interaction::__runtime::retire_dispatch(dispatch, mode));
+        }
         if let Some(bridge) = &bridge {
             failure.invoke(|| bridge.set_activation_listener(Arc::new(|_| {})));
             failure.invoke(|| bridge.set_action_listener(Arc::new(|_| {})));
@@ -1599,21 +1630,27 @@ impl PresentationState {
 struct PresentationCloseRecovery<'a> {
     first: Option<Box<dyn std::any::Any + Send>>,
     terminal: &'a Cell<flui_interaction::__runtime::CloseMode>,
+    window: flui_interaction::__runtime::CloseWindow,
 }
 
 impl<'a> PresentationCloseRecovery<'a> {
     fn new(
         mode: flui_interaction::__runtime::CloseMode,
         terminal: &'a Cell<flui_interaction::__runtime::CloseMode>,
+        window: flui_interaction::__runtime::CloseWindow,
     ) -> Self {
         if mode == flui_interaction::__runtime::CloseMode::PreservingFailure
             || std::thread::panicking()
         {
             terminal.set(flui_interaction::__runtime::CloseMode::PreservingFailure);
         }
+        if terminal.get() == flui_interaction::__runtime::CloseMode::PreservingFailure {
+            window.preserve();
+        }
         Self {
             first: None,
             terminal,
+            window,
         }
     }
     fn mode(&self) -> flui_interaction::__runtime::CloseMode {
@@ -1623,18 +1660,26 @@ impl<'a> PresentationCloseRecovery<'a> {
         self.mode() == flui_interaction::__runtime::CloseMode::PreservingFailure
     }
     fn invoke(&mut self, callback: impl FnOnce()) {
-        if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(callback)) {
-            if self.preserving() {
-                flui_foundation::panic::retain_opaque_payload(payload);
-            } else {
-                crate::lifecycle_state::preserve_first_lifecycle_panic(
-                    &mut self.first,
-                    Some(payload),
-                    "presentation terminal cleanup",
-                );
+        let _ = self.invoke_with(callback);
+    }
+    fn invoke_with<T>(&mut self, callback: impl FnOnce() -> T) -> Option<T> {
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(callback)) {
+            Ok(value) => Some(value),
+            Err(payload) => {
+                if self.preserving() {
+                    flui_foundation::panic::retain_opaque_payload(payload);
+                } else {
+                    crate::lifecycle_state::preserve_first_lifecycle_panic(
+                        &mut self.first,
+                        Some(payload),
+                        "presentation terminal cleanup",
+                    );
+                }
+                self.terminal
+                    .set(flui_interaction::__runtime::CloseMode::PreservingFailure);
+                self.window.preserve();
+                None
             }
-            self.terminal
-                .set(flui_interaction::__runtime::CloseMode::PreservingFailure);
         }
     }
     fn run(&mut self, callback: impl FnOnce()) {

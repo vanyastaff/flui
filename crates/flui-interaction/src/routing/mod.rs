@@ -40,6 +40,9 @@ pub use hit_test::{
     EventPropagation, HitTestBehavior, HitTestEntry, HitTestResult, HitTestable, RenderId,
     TransformGuard,
 };
+#[doc(hidden)]
+pub use interaction_lane::DispatchCustody;
+pub(crate) use interaction_lane::OwnerLatch;
 pub(crate) use interaction_lane::active_dispatch_handle;
 pub use interaction_lane::{
     HitTestHandle, HitTestProbe, HitTestSnapshot, InteractionDispatchError,
