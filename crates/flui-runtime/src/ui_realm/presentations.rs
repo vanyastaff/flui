@@ -163,6 +163,7 @@ impl UiRealm {
                 wake: Arc::clone(&self.wake),
                 command_sender,
                 clipboard: Arc::clone(&self.clipboard),
+                storage: self.storage.clone(),
                 clock: &self.clock,
                 text: self.text.clone(),
             },

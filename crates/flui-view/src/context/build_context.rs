@@ -473,6 +473,18 @@ pub trait LifecycleContext: BuildContext {
     /// capability registry lands; the handle it returns stays the same.
     fn clipboard_handle(&self) -> Option<flui_interaction::ClipboardHandle>;
 
+    /// The realm's byte storage, which a
+    /// [`Persisted`](crate::persist::Persisted) document reads and writes
+    /// through.
+    ///
+    /// `None` when the realm has none: a platform without files, an
+    /// application that configured no storage, or a bare owner in a unit
+    /// test. Acquire it in a lifecycle hook (`init_state` /
+    /// `did_change_dependencies`), the same rule `clipboard_handle` follows.
+    fn storage(&self) -> Option<std::sync::Arc<dyn flui_platform_api::Storage>> {
+        None
+    }
+
     /// The realm's fresh-hit-test capability, if a binding installed an
     /// interaction lane.
     ///

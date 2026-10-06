@@ -51,8 +51,12 @@ pub(super) struct WidgetHost {
 
 impl WidgetHost {
     /// Attach `tree` to a realm over `window` and run the first frame.
-    pub(super) fn mount(tree: BoxedView, window: HeadlessWindow) -> Self {
-        let realm = HeadlessRealm::new(window);
+    pub(super) fn mount(
+        tree: BoxedView,
+        window: HeadlessWindow,
+        storage: Option<Arc<dyn flui_platform_api::Storage>>,
+    ) -> Self {
+        let realm = HeadlessRealm::with_storage(window, storage);
         let slot = Rc::new(RefCell::new(tree));
         realm
             .attach(&HarnessRoot {

@@ -36,12 +36,15 @@ pub(super) fn runtime_font_collection() -> flui_painting::FontCollection {
 
 /// Builds a runner's realm over the runtime's shared services: `wake`, the
 /// loop's `needs_redraw` flag, the platform clipboard and the app's font
-/// collection. Every runner site builds its realm through this one call, so
-/// a realm cannot be handed a stand-in for any of them.
+/// collection, plus `storage`, the byte storage the host resolved from the
+/// application's configuration (`storage_host::host_storage`). Every runner
+/// site builds its realm through this one call, so a realm cannot be handed a
+/// stand-in for any of them.
 pub(super) fn build_runtime_realm(
     wake: &Arc<dyn Fn() + Send + Sync>,
     window: impl Into<crate::app::presentation::PresentationWindow>,
     scale_factor: f64,
+    storage: Option<Arc<dyn flui_platform_api::Storage>>,
 ) -> Result<crate::app::ui_realm::UiRealm, crate::app::ui_realm::UiRealmError> {
     crate::app::ui_realm::UiRealm::new(
         Arc::clone(wake),
@@ -49,6 +52,7 @@ pub(super) fn build_runtime_realm(
         scale_factor,
         runtime_needs_redraw_handle(),
         runtime_clipboard(),
+        storage,
         &runtime_font_collection(),
         flui_scheduler::ClockSource::Platform,
     )

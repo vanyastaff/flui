@@ -1148,3 +1148,58 @@ fn realm_dispatch_matrix() {
 // ========================================================================
 // Close-request veto (issue #558)
 // ========================================================================
+
+// ========================================================================
+// Storage
+// ========================================================================
+
+/// A window opened with `AppConfig::with_storage_dir` gets a realm whose
+/// build owner holds storage, which is what every `LifecycleContext::storage`
+/// under it reads. Built through `open_secondary_window`'s
+/// `SeparateRealms` path, which reaches `host::build_runtime_realm` the way
+/// every runner site does, without a GPU.
+#[cfg(feature = "persist")]
+#[test]
+#[ignore = "contract: the host gives a configured storage directory to every realm it builds"]
+fn a_configured_storage_dir_reaches_lifecycle_context() {
+    let (dispatcher_a, _clear_guard) = install_realm_a_through_a_real_owner_platform();
+    let config = AppConfig::new().with_storage_dir(flui_platform_api::StorageName::from_static(
+        "storage-host-test",
+    ));
+    open_secondary_window(config, WindowPolicy::SeparateRealms)
+        .expect("WindowPolicy::SeparateRealms installs a second realm");
+
+    let secondary = APP_RUNTIME.with(|slot| {
+        let state = slot.borrow();
+        let owner_thread = state.owner_thread.expect("the owner platform is installed");
+        state
+            .realms
+            .iter()
+            .find(|(id, _)| *id != dispatcher_a.address.realm_id)
+            .map(|(_, slot)| RealmDispatcher {
+                owner_thread,
+                address: slot.address,
+            })
+            .expect("the secondary realm is hosted")
+    });
+    let reached = Rc::new(Cell::new(None));
+    let seen = Rc::clone(&reached);
+    dispatch_platform_realm(
+        secondary,
+        RealmTask::Frame(Box::new(move |realm| {
+            seen.set(Some(
+                realm
+                    .widgets()
+                    .with_build_owner(|owner| owner.storage().is_some()),
+            ));
+        })),
+    )
+    .expect("the secondary realm dispatches");
+    teardown_platform_realm();
+
+    assert_eq!(
+        reached.get(),
+        Some(true),
+        "a realm built for a window with a configured storage directory holds storage"
+    );
+}

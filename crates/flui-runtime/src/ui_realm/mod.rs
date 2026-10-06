@@ -205,6 +205,10 @@ pub struct UiRealm {
     /// the initial one at construction, every later one through
     /// [`Self::assemble_presentation`].
     clipboard: Arc<dyn flui_platform_api::Clipboard>,
+    /// The byte storage this realm's presentations hand their widgets
+    /// (`LifecycleContext::storage`), if the host gave it one; installed
+    /// like [`Self::clipboard`].
+    storage: Option<Arc<dyn flui_platform_api::Storage>>,
     /// The realm's owner-thread text service (ADR-0092 §3): a `TextContext`
     /// over the app's font collection, built in
     /// [`RealmServices::construct`](crate::realm_services::RealmServices::construct).

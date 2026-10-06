@@ -21,6 +21,7 @@ pub(crate) mod logging;
 pub(crate) mod raster_lane;
 pub mod runner;
 pub(crate) mod runtime;
+pub(crate) mod storage_host;
 pub(crate) mod window_registry;
 // The realm core lives in the frame runtime (ADR-0083); these aliases keep
 // its `crate::app::…` paths for the runners and the dispatch layer that

@@ -288,8 +288,12 @@ where
     // transform maps to physical.
     let scale_factor = window.scale_factor();
     let wake = runtime_wake_callback();
-    let ui_realm = match super::host::build_runtime_realm(&wake, presentation_window, scale_factor)
-    {
+    let ui_realm = match super::host::build_runtime_realm(
+        &wake,
+        presentation_window,
+        scale_factor,
+        crate::app::storage_host::host_storage(&config),
+    ) {
         Ok(realm) => realm,
         Err(error) => {
             tracing::error!(%error, "UiRealm construction failed");

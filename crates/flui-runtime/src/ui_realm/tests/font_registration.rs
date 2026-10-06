@@ -25,6 +25,7 @@ fn realm_over(fonts: &FontCollection) -> UiRealm {
         1.0,
         Arc::new(AtomicBool::new(false)),
         crate::presentation::test_clipboard(),
+        None,
         fonts,
         flui_scheduler::ClockSource::Platform,
     )

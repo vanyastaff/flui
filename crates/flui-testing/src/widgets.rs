@@ -305,6 +305,26 @@ fn surface_for(constraints: &BoxConstraints) -> (u32, u32) {
 /// with `UnconstrainedBox`, so a `ListBody` or `Flex` does not see the
 /// clamped surface and trip "must have unlimited space along its main axis".
 pub fn lay_out(root: impl View, constraints: BoxConstraints) -> LaidOut {
+    mount_laid_out(root, constraints, None)
+}
+
+/// Like [`lay_out`], with `storage` as the realm's byte storage: the tree's
+/// widgets reach it through `LifecycleContext::storage`. Mounting a new tree
+/// over the same storage after dropping the first is how a test restarts an
+/// application.
+pub fn lay_out_with_storage(
+    root: impl View,
+    constraints: BoxConstraints,
+    storage: impl flui_platform_api::Storage,
+) -> LaidOut {
+    mount_laid_out(root, constraints, Some(Arc::new(storage)))
+}
+
+fn mount_laid_out(
+    root: impl View,
+    constraints: BoxConstraints,
+    storage: Option<Arc<dyn flui_platform_api::Storage>>,
+) -> LaidOut {
     let logical_root_type = root.view_type_id();
     let surface = surface_for(&constraints);
     let exact_surface =
@@ -327,7 +347,7 @@ pub fn lay_out(root: impl View, constraints: BoxConstraints) -> LaidOut {
         reapply_constraints,
         unconstrained_wrap,
     );
-    let host = WidgetHost::mount(wrapped, HeadlessWindow::new(surface.0, surface.1));
+    let host = WidgetHost::mount(wrapped, HeadlessWindow::new(surface.0, surface.1), storage);
     let pipeline_owner = host.pipeline().clone();
 
     LaidOut {

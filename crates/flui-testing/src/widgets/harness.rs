@@ -81,7 +81,7 @@ pub fn mount_with_ime(root: impl View) -> Harness {
 
 fn mount_in(root: impl View, window: HeadlessWindow) -> Harness {
     let logical_root_type = root.view_type_id();
-    let host = WidgetHost::mount(aligned(root), window);
+    let host = WidgetHost::mount(aligned(root), window, None);
     let pipeline_owner = host.pipeline().clone();
     Harness {
         host,

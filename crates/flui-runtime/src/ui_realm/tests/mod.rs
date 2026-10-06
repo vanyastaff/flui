@@ -38,6 +38,7 @@ pub(super) fn new_runtime(wake: Arc<dyn Fn() + Send + Sync>) -> Result<UiRealm, 
         1.0,
         Arc::new(AtomicBool::new(false)),
         crate::presentation::test_clipboard(),
+        None,
         &flui_painting::FontCollection::new(),
         flui_scheduler::ClockSource::Platform,
     )
@@ -54,6 +55,7 @@ fn new_runtime_with_capacity(
         1.0,
         Arc::new(AtomicBool::new(false)),
         crate::presentation::test_clipboard(),
+        None,
         &flui_painting::FontCollection::new(),
         flui_scheduler::ClockSource::Platform,
     )

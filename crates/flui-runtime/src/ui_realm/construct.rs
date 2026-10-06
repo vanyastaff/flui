@@ -15,9 +15,9 @@ use crossbeam_channel::bounded;
 use flui_foundation::{PresentationId, RealmId};
 use flui_interaction::InteractionLane;
 use flui_painting::FontCollection;
-use flui_platform_api::Clipboard;
 #[cfg(any(test, feature = "test-support"))]
 use flui_platform_api::PlatformTextInput;
+use flui_platform_api::{Clipboard, Storage};
 #[cfg(test)]
 use flui_rendering::pipeline::PipelineCell;
 use flui_scheduler::{AppLifecycleState, ClockSource};
@@ -49,6 +49,9 @@ impl UiRealm {
     /// production it is `AppRuntime::clipboard()`, installed before any realm
     /// is built.
     ///
+    /// `storage` is the byte storage those presentations hand their widgets
+    /// through `LifecycleContext::storage`; `None` gives them none.
+    ///
     /// `fonts` is the app's shared font collection (`AppRuntime`'s
     /// `SharedEngineServices` in production). The realm owns a `TextContext`
     /// built from it (ADR-0092 §3), which lives exactly as long as the realm.
@@ -66,12 +69,17 @@ impl UiRealm {
     ///
     /// [`UiRealmError::InteractionLane`] if the owner-local interaction lane
     /// could not be created.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "each is a distinct host-owned input the realm is wired from once"
+    )]
     pub fn new(
         wake: Arc<dyn Fn() + Send + Sync>,
         window: impl Into<PresentationWindow>,
         device_pixel_ratio: f64,
         needs_redraw: Arc<AtomicBool>,
         clipboard: Arc<dyn Clipboard>,
+        storage: Option<Arc<dyn Storage>>,
         fonts: &FontCollection,
         clock: ClockSource,
     ) -> Result<Self, UiRealmError> {
@@ -82,6 +90,7 @@ impl UiRealm {
             device_pixel_ratio,
             needs_redraw,
             clipboard,
+            storage,
             fonts,
             clock,
         )
@@ -109,12 +118,13 @@ impl UiRealm {
         device_pixel_ratio: f64,
         needs_redraw: Arc<AtomicBool>,
         clipboard: Arc<dyn Clipboard>,
+        storage: Option<Arc<dyn Storage>>,
         fonts: &FontCollection,
         clock: ClockSource,
     ) -> Result<Self, UiRealmError> {
         assert!(capacity > 0, "UiRealm inbox capacity must be non-zero");
         let identity = crate::realm_services::next_identity();
-        let services = RealmServices::construct(clipboard, fonts, clock);
+        let services = RealmServices::construct(clipboard, storage, fonts, clock);
         Self::construct(
             capacity,
             wake,
@@ -166,6 +176,7 @@ impl UiRealm {
             async_driver,
             scheduler,
             clipboard,
+            storage,
             clock,
             text,
         } = services;
@@ -207,6 +218,7 @@ impl UiRealm {
                     wake: Arc::clone(&wake),
                 },
                 clipboard: Arc::clone(&clipboard),
+                storage: storage.clone(),
                 clock: &clock,
                 text: text.clone(),
             },
@@ -229,6 +241,7 @@ impl UiRealm {
             needs_redraw,
             wake: Arc::clone(&wake),
             clipboard,
+            storage,
             text,
             #[cfg(any(test, feature = "test-support"))]
             now_secs_override: AtomicU64::new(0),
@@ -288,6 +301,7 @@ impl UiRealm {
             None,
             RealmServices::construct(
                 crate::presentation::test_clipboard(),
+                None,
                 &FontCollection::new(),
                 ClockSource::Platform,
             ),

@@ -349,6 +349,15 @@ impl HeadlessRealm {
     /// is exhausted).
     #[must_use]
     pub fn new(window: HeadlessWindow) -> Self {
+        Self::with_storage(window, None)
+    }
+
+    /// [`Self::new`], its widgets reaching `storage` through
+    /// `LifecycleContext::storage`.
+    pub(crate) fn with_storage(
+        window: HeadlessWindow,
+        storage: Option<Arc<dyn flui_platform_api::Storage>>,
+    ) -> Self {
         #[expect(
             clippy::cast_possible_truncation,
             clippy::cast_sign_loss,
@@ -368,6 +377,7 @@ impl HeadlessRealm {
             1.0,
             Arc::new(AtomicBool::new(false)),
             Arc::clone(&clipboard) as Arc<dyn flui_platform_api::Clipboard>,
+            storage,
             // A collection of its own: the realm owns a `TextContext` over it
             // (ADR-0092 §3), exactly as a hosted realm does. Deliberately
             // bundled-only, unlike the app's host-fed one

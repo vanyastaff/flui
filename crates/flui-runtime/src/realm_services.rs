@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 use flui_foundation::{PresentationId, RealmId};
 use flui_painting::{FontCollection, TextContext};
-use flui_platform_api::Clipboard;
+use flui_platform_api::{Clipboard, Storage};
 use flui_rendering::TextContextHandle;
 use flui_scheduler::{AsyncDriver, ClockSource, LocalPostFrameLane, UpdateScheduler};
 
@@ -23,6 +23,9 @@ pub(crate) struct RealmServices {
     /// The platform clipboard every presentation of this realm hands its
     /// widgets (`LifecycleContext::clipboard_handle`).
     pub(crate) clipboard: Arc<dyn Clipboard>,
+    /// The byte storage every presentation of this realm hands its widgets
+    /// (`LifecycleContext::storage`); `None` when the host gave it none.
+    pub(crate) storage: Option<Arc<dyn Storage>>,
     /// Where the realm reads time: its frame-time origin, and every
     /// presentation's gesture arena and frame clock.
     pub(crate) clock: ClockSource,
@@ -40,7 +43,8 @@ impl RealmServices {
     /// strong root, torn down when the realm drops.
     ///
     /// `clipboard` is the platform clipboard the realm's presentations hand
-    /// their widgets; a realm always has one.
+    /// their widgets; a realm always has one. `storage` is the byte storage
+    /// they hand their widgets, if the host has one.
     ///
     /// `fonts` is the app's font collection; the realm gets its own
     /// [`TextContext`] over it, so a face registered on the collection
@@ -48,6 +52,7 @@ impl RealmServices {
     /// reads time.
     pub(crate) fn construct(
         clipboard: Arc<dyn Clipboard>,
+        storage: Option<Arc<dyn Storage>>,
         fonts: &FontCollection,
         clock: ClockSource,
     ) -> Self {
@@ -57,6 +62,7 @@ impl RealmServices {
             async_driver: scheduler.async_driver().clone(),
             scheduler,
             clipboard,
+            storage,
             clock,
             text: TextContextHandle::new(TextContext::new(fonts)),
         }
