@@ -1626,7 +1626,7 @@ impl PresentationState {
     pub(crate) fn withdraw_for_realm_close(
         &self,
         lane: &flui_interaction::InteractionLane,
-    ) -> Vec<Box<dyn flui_foundation::ViewKey>> {
+    ) -> Vec<flui_view::__runtime::WithdrawnKey> {
         use flui_view::__runtime::BindingRuntime as _;
         if matches!(
             self.lifecycle.get(),
