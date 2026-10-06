@@ -32,6 +32,9 @@ pub mod keys_macos;
 pub mod panic_boundary;
 pub mod scroll;
 // `pub` for the same Linux-tested/off-target-consumed reason as
+// `hwnd_affinity` above (consumer: the Win32 text services).
+pub mod text_geometry;
+// `pub` for the same Linux-tested/off-target-consumed reason as
 // `hwnd_affinity` above (consumers: the Win32 and AppKit backends).
 pub mod visibility;
 
