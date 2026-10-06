@@ -163,16 +163,21 @@ impl TextFormFieldCore {
         }
     }
 
-    /// Follow a reconfiguration: a new caller controller is
-    /// edited from now on; dropping the caller's controller moves the text
-    /// into one the field owns; a new handle takes the field over.
+    /// Follow a reconfiguration: a new caller controller is edited from now
+    /// on; dropping the caller's controller moves its committed text into one
+    /// the field owns; a new handle takes the field over.
     pub fn update(&mut self, old: &TextFormFieldConfig, new: &TextFormFieldConfig) {
         match (&old.controller, &new.controller) {
             (_, Some(controller)) if !controller.is_same_controller(&self.controller) => {
                 self.controller = controller.clone();
             }
             (Some(_), None) => {
-                self.controller = TextEditingController::with_text(self.controller.text());
+                // The committed text, which is the field's value (ADR-0090):
+                // a preedit stays with the caller's controller and the input
+                // method composing in it, and is never committed by a
+                // reconfiguration.
+                self.controller =
+                    TextEditingController::with_text(self.controller.committed_text());
             }
             _ => {}
         }

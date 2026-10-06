@@ -65,6 +65,8 @@ pub(super) const CASES: &[Case] = &[
     case!(owner_notification_runs_after_release, since 2),
     case!(reconverting_committed_text_notifies_only_on_commit, since 2),
     case!(a_grant_that_panics_after_marking_leaves_the_committed_text, since 2),
+    case!(moving_a_composition_to_adjacent_text_keeps_each_origin_apart, since 2),
+    case!(narrowing_a_reconversion_keeps_the_committed_text, since 2),
 ];
 
 // ============================================================================
@@ -963,6 +965,91 @@ fn a_grant_that_panics_after_marking_leaves_the_committed_text(
         "owner notifications after a failed grant and an end of composition that changed no committed text",
     )?;
     expect_text(fixture, &store, range(0, 2), "東京")
+}
+
+/// An input method reconverts "abc", then moves its composition to the
+/// adjacent "def": the two ranges only touch, so "def" stands for itself,
+/// not for "abc" as well, and the committed text never changes.
+fn moving_a_composition_to_adjacent_text_keeps_each_origin_apart(
+    fixture: &mut dyn TextStoreFixture,
+) -> Outcome {
+    let store = fresh(fixture, "abcdef");
+    let before = fixture.owner_notifications();
+    let composing = |start, end| {
+        Some(Composition {
+            range: range(start, end),
+            hides_caret: false,
+        })
+    };
+    let moved = edit(&store, move |session| -> Result<(), TextStoreError> {
+        session.set_composition(composing(0, 3))?;
+        session.set_composition(composing(3, 6))
+    })?;
+    ensure_eq(moved, Ok(()), "marking 0..3, then the adjacent 3..6")?;
+    fixture.pump();
+    ensure_eq(
+        fixture.owner_notifications(),
+        before,
+        "owner notifications after a session that only marked committed text",
+    )?;
+    let ended = edit(&store, |session| session.set_composition(None))?;
+    ensure_eq(ended, Ok(()), "ending the composition over 3..6")?;
+    fixture.pump();
+    ensure_eq(
+        fixture.owner_notifications(),
+        before,
+        "owner notifications once the unchanged composition ended",
+    )?;
+    expect_text(fixture, &store, range(0, 6), "abcdef")
+}
+
+/// An input method reconverts "abcdef", then narrows its composition to
+/// "abc", in the same session and in a later one: "def" leaves the
+/// composition as the committed text it already was, so the composition
+/// stands for "abc" alone and the committed text never changes.
+fn narrowing_a_reconversion_keeps_the_committed_text(
+    fixture: &mut dyn TextStoreFixture,
+) -> Outcome {
+    let composing = |start, end| {
+        Some(Composition {
+            range: range(start, end),
+            hides_caret: false,
+        })
+    };
+    for split in [false, true] {
+        let store = fresh(fixture, "abcdef");
+        let before = fixture.owner_notifications();
+        if split {
+            let marked = edit(&store, move |session| {
+                session.set_composition(composing(0, 6))
+            })?;
+            ensure_eq(marked, Ok(()), "marking 0..6")?;
+            fixture.pump();
+        }
+        let narrowed = edit(&store, move |session| -> Result<(), TextStoreError> {
+            if !split {
+                session.set_composition(composing(0, 6))?;
+            }
+            session.set_composition(composing(0, 3))
+        })?;
+        ensure_eq(narrowed, Ok(()), "narrowing the composition to 0..3")?;
+        fixture.pump();
+        ensure_eq(
+            fixture.owner_notifications(),
+            before,
+            &format!("owner notifications after narrowing (split sessions: {split})"),
+        )?;
+        let ended = edit(&store, |session| session.set_composition(None))?;
+        ensure_eq(ended, Ok(()), "ending the narrowed composition")?;
+        fixture.pump();
+        ensure_eq(
+            fixture.owner_notifications(),
+            before,
+            &format!("owner notifications once it ended (split sessions: {split})"),
+        )?;
+        expect_text(fixture, &store, range(0, 6), "abcdef")?;
+    }
+    Ok(())
 }
 
 fn owner_notification_runs_after_release(fixture: &mut dyn TextStoreFixture) -> Outcome {

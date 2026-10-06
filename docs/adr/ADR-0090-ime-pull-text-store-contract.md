@@ -242,6 +242,18 @@ composing. The amendment fixes what the owner sees and when:
 7. **§3's platform mapping follows a pull host.** The Win32 backend receives the focused store
    from the presentation through an owner-thread host rather than reading
    `TextInputOwner::active_store`, which is removed.
+8. **Owner code runs inside one containment.** Every point where the arbiter, a store or the
+   presentation runs code it does not control — a grant's body, a settle, `on_changed`, the
+   controller's listeners, an owner listener, the observer, `on_session_start`, the projection,
+   and the destruction of any snapshot, replaced value or client — goes through
+   `text_store::OwnerCalls`, whose module doc lists them. What the code is owed (obligations with
+   their values, the gate a failure belongs to) is read before it runs, never after, since it may
+   reenter, settle a nested session or move the store to another presentation. Each call is
+   contained and the first failure in time is authoritative: a failure a call's grant parked in a
+   gate came before that call's own unwind, so it is taken first; a later one is retained
+   (ADR-0127). A snapshot retires inside the scope: dropped while the scope is healthy, retained
+   once it has failed or while the thread unwinds. One matrix pins every point
+   (`owner_code_is_contained_at_every_point`).
 
 ## Interim implementation
 

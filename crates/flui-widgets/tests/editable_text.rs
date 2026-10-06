@@ -1271,12 +1271,13 @@ pub(crate) mod text_store {
 
     /// A controller listener that answers the session it hears of with a
     /// synchronous session of its own: each committed session is one
-    /// `on_changed`, the nested one's settled inside the outer's, and the
-    /// outer one's is not absorbed by it.
+    /// `on_changed`, in commit order, with the committed text that session
+    /// produced; the nested one settles inside the outer's and absorbs
+    /// nothing of it.
     ///
     /// Red-check: take the owed `on_changed` after the controller's
-    /// listeners run — the nested session's settle consumes the outer
-    /// session's debt, and the owner hears once.
+    /// listeners run — the owner hears once; or deliver the live committed
+    /// text after the listeners — the owner hears "ab" twice.
     pub(crate) fn a_listener_session_inside_settle_is_its_own_on_changed() {
         use std::sync::Arc;
         use std::sync::atomic::{AtomicBool, Ordering};
@@ -1323,10 +1324,9 @@ pub(crate) mod text_store {
         );
         assert_eq!(controller.text(), "ab");
         assert_eq!(
-            calls.borrow().len(),
-            2,
-            "one on_changed per committed session, got {:?}",
-            calls.borrow()
+            *calls.borrow(),
+            ["a", "ab"],
+            "one on_changed per committed session, in commit order, each with the text it committed"
         );
     }
 

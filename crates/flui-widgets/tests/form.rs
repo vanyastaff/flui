@@ -221,6 +221,79 @@ pub(crate) fn a_text_form_field_validates_and_saves_the_committed_text() {
 // hand it to the callbacks they run; a field's edit hands on its own.
 // ============================================================================
 
+/// The caller drops its controller while an input method composes in it:
+/// the field's own controller starts from the committed text, so the
+/// preedit is not committed into the form's value by the reconfiguration.
+///
+/// Red-check: build the field's controller from `TextEditingController::text`
+/// — the value and the validator include "おおさか".
+pub(crate) fn dropping_a_composing_controller_keeps_the_preedit_out_of_the_value() {
+    use std::cell::RefCell;
+
+    use flui_platform_api::text_store::{
+        Composition, LockGrant, LockOutcome, LockTiming, Utf16Offset, Utf16Range,
+    };
+
+    let form = FormHandle::new();
+    let field = FormFieldHandle::new();
+    let controller = TextEditingController::new();
+    let node = FocusNode::with_debug_label("composing, then internalized");
+    let validated = Rc::new(RefCell::new(Vec::new()));
+    let configure = |text_field: RawTextFormField| {
+        let seen = Rc::clone(&validated);
+        Form::new(
+            text_field
+                .validator(move |value: &String| {
+                    seen.borrow_mut().push(value.clone());
+                    None
+                })
+                .focus_node(Rc::clone(&node))
+                .handle(field.clone()),
+        )
+        .handle(form.clone())
+    };
+    let mut harness =
+        crate::common::harness::mount_with_ime(configure(RawTextFormField::new(controller)));
+    node.request_focus();
+    harness.tick();
+    let store = harness
+        .active_text_store()
+        .expect("the focused field is the active IME client");
+    let composing = Utf16Range::new(Utf16Offset::new(2), Utf16Offset::new(6)).expect("ordered");
+    let outcome = store.request_lock(
+        LockGrant::read_write(move |session| {
+            session
+                .insert_at_selection("東京おおさか")
+                .expect("in range");
+            session
+                .set_composition(Some(Composition {
+                    range: composing,
+                    hides_caret: false,
+                }))
+                .expect("in range");
+        }),
+        LockTiming::Sync,
+    );
+    assert_eq!(outcome, Ok(LockOutcome::Granted));
+    harness.tick();
+    assert_eq!(field.value(), "東京", "the committed text before the swap");
+
+    harness.swap_root(configure(RawTextFormField::with_initial_value("")));
+    harness.tick();
+    validated.borrow_mut().clear();
+    assert!(form.validate());
+    assert_eq!(
+        field.value(),
+        "東京",
+        "the field's own controller holds the committed text, not the preedit"
+    );
+    assert_eq!(
+        *validated.borrow(),
+        ["東京"],
+        "the validator saw only the committed text"
+    );
+}
+
 pub(crate) fn a_panicking_reset_callback_does_not_disable_later_form_validation() {
     let form = FormHandle::new();
     let field = FormFieldHandle::new();

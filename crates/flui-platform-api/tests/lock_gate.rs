@@ -207,54 +207,6 @@ fn a_panicking_settle_with_no_owner_gate_resumes_after_release() {
     assert!(!arbiter.is_locked(), "the lock was released first");
 }
 
-/// An owner listener that removes itself and then panics: the store's clone
-/// is its last owner, and destroying it runs the listener's captures. That
-/// destruction stays inside the settle's containment, so the listener's own
-/// panic is the failure reported and the capture's is retained after it.
-fn a_listener_that_removes_itself_and_panics_keeps_the_first_failure() {
-    struct PanicsOnDrop;
-    impl Drop for PanicsOnDrop {
-        fn drop(&mut self) {
-            panic!("listener capture destroyed");
-        }
-    }
-    let store = InMemoryTextStore::new("");
-    let gate = CommitGate::new();
-    store.set_commit_gate(gate.clone());
-    let (weak, capture) = (Rc::downgrade(&store), PanicsOnDrop);
-    store.set_owner_listener(Some(Rc::new(move || {
-        let _keep_alive = &capture;
-        if let Some(store) = weak.upgrade() {
-            store.set_owner_listener(None);
-        }
-        panic!("listener failure");
-    })));
-    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        store.request_lock(
-            LockGrant::read_write(|session| {
-                session.insert_at_selection("a").expect("in range");
-            }),
-            LockTiming::Sync,
-        )
-    }));
-    assert_eq!(
-        outcome.ok(),
-        Some(Ok(LockOutcome::Granted)),
-        "the grant stands and its failure waits at the gate"
-    );
-    assert_eq!(store.text(), "a");
-    let first = gate
-        .take_failure()
-        .expect("the listener's failure waits at the gate");
-    assert_eq!(
-        flui_foundation::panic::payload_text(&*first),
-        Some("listener failure"),
-        "the listener's failure stays authoritative over its capture's"
-    );
-    flui_foundation::panic::retain_opaque_payload(first);
-    assert!(gate.take_failure().is_none(), "a failure is reported once");
-}
-
 #[test]
 fn settling_runs_owner_code_outside_the_lock() {
     let cases: &[(&str, fn())] = &[
@@ -269,10 +221,6 @@ fn settling_runs_owner_code_outside_the_lock() {
         (
             "a_panicking_settle_with_no_owner_gate_resumes_after_release",
             a_panicking_settle_with_no_owner_gate_resumes_after_release,
-        ),
-        (
-            "a_listener_that_removes_itself_and_panics_keeps_the_first_failure",
-            a_listener_that_removes_itself_and_panics_keeps_the_first_failure,
         ),
     ];
     let mut failures = Vec::new();

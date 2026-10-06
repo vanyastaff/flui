@@ -1919,13 +1919,17 @@ store. A read-write session is written back to the controller once, at the
 end of the grant: one listener notification and at most one `on_changed`,
 however many edits the session made (a TSF conversion replaces, re-marks and
 moves the caret in one session). Both run in the arbiter's `settle`, after the
-lock is released, so `on_changed` may request a lock; both debts are taken
-before the listeners run, so a session a listener opens there settles its own
-`on_changed` and never absorbs the outer one's
+lock is released, so `on_changed` may request a lock: `on_changed` first, then
+the listeners. The write-back records what it owes, with the committed text
+it produced, and `settle` takes every obligation before any owner code runs,
+so a session that code opens settles its own after the owner heard of this
+one, in commit order with each session's own text
 (`a_listener_session_inside_settle_is_its_own_on_changed`). `on_changed` receives the
 committed text (`TextEditingController::committed_text`, the composition left
 out) and runs only when that changed, so a session that only composes is no
-owner change; a text form field reads its value the same way. The write-back
+owner change; a text form field reads its value the same way. Every call into
+owner code, and every snapshot of it, goes through `OwnerCalls`
+(`owner_code_is_contained_at_every_point`). The write-back
 compares the controller's generation, in the same critical section, with the
 one the session opened at, and the controller's identity: an application edit
 or a swapped controller wins and the session is dropped. A panicking

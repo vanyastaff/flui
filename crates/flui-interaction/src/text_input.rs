@@ -67,12 +67,12 @@ use flui_foundation::geometry::Bounds;
 use flui_platform_api::ImeEvent;
 use flui_platform_api::PlatformTextInput;
 use flui_platform_api::text_store::{
-    CommitGate, CompositionEnd, TextStore, TextStoreHost, commit_composition_in_place,
-    project_ime_event,
+    CommitGate, CompositionEnd, OwnerCalls, RetainOnFailure, TextStore, TextStoreHost,
+    commit_composition_in_place, project_ime_event,
 };
 
 use crate::__runtime::{CloseMode, ClosePanic, CloseTombstone};
-use crate::{retain::Retain, routing::RoutePanic};
+use crate::retain::Retain;
 
 /// Identity returned by [`TextInputHandle::attach`].
 ///
@@ -91,8 +91,8 @@ pub struct TextInputClient {
 
 impl Retain for TextInputClient {
     fn retain(self) {
-        self.on_session_start.retain();
-        self.store.retain();
+        Retain::retain(self.on_session_start);
+        Retain::retain(self.store);
     }
 }
 
@@ -186,8 +186,8 @@ enum HostOp {
 impl Retain for HostOp {
     fn retain(self) {
         match self {
-            Self::Focus(store) => store.retain(),
-            Self::Complete(store) => store.retain(),
+            Self::Focus(store) => Retain::retain(store),
+            Self::Complete(store) => Retain::retain(store),
         }
     }
 }
@@ -238,69 +238,51 @@ struct AttachedClient {
     client: TextInputClient,
 }
 
-/// Retire the independent client owners separately, in the client's field
-/// order (store, then session callback), preserving the first failure. After
-/// it, and while the thread is already unwinding, the remaining owners are
-/// retained rather than destroyed (ADR-0127).
-fn retire_client(client: Option<AttachedClient>, first: &mut Option<RoutePanic>) {
-    if let Some(client) = client {
-        retire_client_owners(client.client, first);
+impl RetainOnFailure for TextInputClient {
+    fn retain(self) {
+        RetainOnFailure::retain(self.on_session_start);
+        RetainOnFailure::retain(self.store);
     }
 }
 
-fn retire_client_owners(client: TextInputClient, first: &mut Option<RoutePanic>) {
+/// Retire the independent client owners separately, in the client's field
+/// order (store, then session callback), inside `calls`: after a failure, and
+/// while the thread is already unwinding, they are retained rather than
+/// destroyed (ADR-0127). With `gate`, a failure their destruction parks there
+/// (a store dropped while it settles a grant) is taken too.
+fn retire_client_owners(
+    client: TextInputClient,
+    calls: &mut OwnerCalls,
+    gate: Option<&CommitGate>,
+) {
     let TextInputClient {
         store,
         on_session_start,
     } = client;
-    retire_owner(store, first, "text-input store retirement");
-    retire_owner(
-        on_session_start,
-        first,
-        "text-input session callback retirement",
-    );
+    if let Some(gate) = gate {
+        calls.retire_parking(gate, store);
+        calls.retire_parking(gate, on_session_start);
+    } else {
+        calls.retire(store);
+        calls.retire(on_session_start);
+    }
 }
 
 /// Release a local clone of the framework-owned platform capability before
 /// any user-owned value retires, so the clone is never destroyed by a later
 /// unwind; only an unwind already in progress retains it (ADR-0127).
-fn release_platform(platform: Arc<dyn PlatformTextInput>, first: &mut Option<RoutePanic>) {
+/// The pull host's clone is released the same way.
+fn release_platform<T>(platform: T, calls: &mut OwnerCalls) {
     if std::thread::panicking() {
         std::mem::forget(platform);
     } else {
-        RoutePanic::preserve_first(
-            first,
-            RoutePanic::capture(|| drop(platform)),
-            "text-input platform release",
-        );
+        calls.run(|| drop(platform));
     }
 }
 
-/// [`release_platform`] for the pull host: framework-owned, released before
-/// any user-owned value retires.
-fn release_host(host: Rc<dyn TextStoreHost>, first: &mut Option<RoutePanic>) {
-    if std::thread::panicking() {
-        std::mem::forget(host);
-    } else {
-        RoutePanic::preserve_first(
-            first,
-            RoutePanic::capture(|| drop(host)),
-            "text-store host release",
-        );
-    }
-}
-
-fn retire_stores(stores: Vec<Rc<dyn TextStore>>, first: &mut Option<RoutePanic>) {
+fn retire_stores(stores: Vec<Rc<dyn TextStore>>, calls: &mut OwnerCalls, gate: &CommitGate) {
     for store in stores {
-        retire_owner(store, first, "text-input store retirement");
-    }
-}
-
-fn retire_owner<T: Retain>(owner: T, first: &mut Option<RoutePanic>, phase: &'static str) {
-    if first.is_some() || std::thread::panicking() {
-        owner.retain();
-    } else {
-        RoutePanic::preserve_first(first, RoutePanic::capture(|| drop(owner)), phase);
+        calls.retire_parking(gate, store);
     }
 }
 
@@ -484,7 +466,8 @@ impl TextInputOwner {
             (enable_platform, replaced)
         };
 
-        let mut failure = RoutePanic::capture(|| {
+        let mut calls = OwnerCalls::new();
+        calls.run(|| {
             if enable_platform && let Some(platform) = &platform {
                 platform.set_ime_allowed(true);
             }
@@ -493,16 +476,16 @@ impl TextInputOwner {
         // Both owner state and platform enablement are committed first, and
         // the local capability clone is released before them: a store that
         // closes the owner and then panics must not leave this clone as the
-        // backend's last owner, destroyed during that unwind.
+        // backend's last owner, destroyed during that unwind. A failure the
+        // replaced client parks waits for this owner's next turn.
         if let Some(platform) = platform {
-            release_platform(platform, &mut failure);
+            release_platform(platform, &mut calls);
         }
-        retire_client(replaced, &mut failure);
-        if let Some(failure) = failure {
-            // The focus stays queued for the next drain or the anchor.
-            failure.resume();
+        if let Some(replaced) = replaced {
+            retire_client_owners(replaced.client, &mut calls, None);
         }
-        self.drain_host_ops();
+        self.apply_host_ops(&mut calls);
+        calls.resume();
         tracing::trace!(token = token.0.get(), "IME client attached");
         Ok(token)
     }
@@ -527,19 +510,18 @@ impl TextInputOwner {
         };
 
         if let Some(detached) = detached {
-            let mut failure = RoutePanic::capture(|| {
+            let mut calls = OwnerCalls::new();
+            calls.run(|| {
                 if let Some(platform) = &platform {
                     platform.set_ime_allowed(false);
                 }
             });
             if let Some(platform) = platform {
-                release_platform(platform, &mut failure);
+                release_platform(platform, &mut calls);
             }
-            retire_client(Some(detached), &mut failure);
-            if let Some(failure) = failure {
-                failure.resume();
-            }
-            self.drain_host_ops();
+            retire_client_owners(detached.client, &mut calls, None);
+            self.apply_host_ops(&mut calls);
+            calls.resume();
             tracing::trace!(token = token.0.get(), "IME client detached");
             Ok(DetachOutcome::Detached)
         } else {
@@ -584,71 +566,60 @@ impl TextInputOwner {
     }
 
     fn complete_store_composition(&self, store: Rc<dyn TextStore>) {
+        let mut calls = OwnerCalls::new();
         if self.is_pull() {
             self.state
                 .borrow_mut()
                 .host_ops
                 .push_back(HostOp::Complete(store));
-            self.drain_host_ops();
+            self.apply_host_ops(&mut calls);
         } else {
-            let mut failure = RoutePanic::capture(|| commit_composition_in_place(&*store));
-            retire_owner(store, &mut failure, "text-input store release");
-            if let Some(failure) = failure {
-                failure.resume();
-            }
+            calls.run(|| commit_composition_in_place(&*store));
+            calls.retire(store);
         }
+        calls.resume();
     }
 
-    /// [`Self::apply_host_ops`], propagating its first failure.
-    fn drain_host_ops(&self) {
-        if let Some(failure) = self.apply_host_ops() {
-            failure.resume();
-        }
-    }
-
-    /// Apply the queued host operations, oldest first. They wait while a
-    /// host call is running (its return drains them) or the frame
-    /// transaction is open (the anchor drains them).
+    /// Apply the queued host operations, oldest first, inside `calls`. They
+    /// wait while a host call is running (its return drains them) or the
+    /// frame transaction is open (the anchor drains them).
     ///
     /// A failing operation releases its values and the queue goes on, so a
     /// panicking focus change does not strand the completion behind it.
-    /// Returns the first failure; a later one is retained (ADR-0119).
-    #[must_use]
-    fn apply_host_ops(&self) -> Option<RoutePanic> {
-        let mut first = None;
+    fn apply_host_ops(&self, calls: &mut OwnerCalls) {
         loop {
             if self.host_depth.get() > 0 || self.is_transaction_open() {
-                return first;
+                return;
             }
             let (op, host) = {
                 let mut state = self.state.borrow_mut();
                 if state.lifecycle != OwnerLifecycle::Open {
-                    return first;
+                    return;
                 }
                 let Some(host) = self.pull_host() else {
-                    return first;
+                    return;
                 };
                 let Some(op) = state.host_ops.pop_front() else {
-                    return first;
+                    return;
                 };
                 if let HostOp::Focus(store) = &op {
                     state.host_focused = store.is_some();
                 }
                 (op, host)
             };
-            let mut failure = {
+            {
                 let _call = HostCall::enter(&self.host_depth);
                 match op {
-                    HostOp::Focus(store) => RoutePanic::capture(|| host.focus_store(store)),
+                    HostOp::Focus(store) => {
+                        calls.run(|| host.focus_store(store));
+                    }
                     HostOp::Complete(store) => {
-                        let mut failure = RoutePanic::capture(|| complete_through(&*host, &store));
-                        retire_owner(store, &mut failure, "text-input store release");
-                        failure
+                        calls.run(|| complete_through(&*host, &store));
+                        calls.retire(store);
                     }
                 }
-            };
-            release_host(host, &mut failure);
-            RoutePanic::preserve_first(&mut first, failure, "text-store host operation");
+            }
+            release_platform(host, calls);
         }
     }
 
@@ -670,13 +641,15 @@ impl TextInputOwner {
     /// during this projection or before the dispatch, whatever path it then
     /// takes — once the event is handled: the grant stands, and the failure
     /// reaches the caller's report. The earliest failure wins: one parked
-    /// before the dispatch, then the session-start callback's or the
-    /// projection's; later ones are retained.
+    /// before the dispatch, then one parked by a grant the session-start
+    /// callback or the projection ran, then that callback's or projection's
+    /// own panic; later ones are retained.
     pub fn dispatch(&self, event: &ImeEvent) {
+        let mut calls = OwnerCalls::new();
         // A failure parked by a grant before this dispatch (one the platform
         // requested directly) is this turn's to report, on every path, and it
         // came before anything this dispatch raises.
-        let mut first = self.take_settle_failure();
+        calls.take_parked(&self.gate);
         let client = {
             let state = self.state.borrow();
             (state.lifecycle == OwnerLifecycle::Open)
@@ -684,51 +657,23 @@ impl TextInputOwner {
                 .flatten()
         };
         if let Some(client) = client {
-            self.dispatch_to(&client, event, &mut first);
-            // A grant or callback that detached the client left this clone its
-            // last owner: it retires under the same first-failure policy.
-            retire_client_owners(client, &mut first);
-        }
-        if let Some(failure) = first {
-            failure.resume();
-        }
-    }
-
-    /// [`Self::dispatch`] to the active `client`, keeping `first` the
-    /// earliest failure.
-    fn dispatch_to(
-        &self,
-        client: &TextInputClient,
-        event: &ImeEvent,
-        first: &mut Option<RoutePanic>,
-    ) {
-        if matches!(event, ImeEvent::Enabled) {
-            if let Some(on_session_start) = &client.on_session_start {
-                let started = RoutePanic::capture(|| on_session_start());
-                RoutePanic::preserve_first(first, started, "IME session start");
+            if matches!(event, ImeEvent::Enabled) {
+                if let Some(on_session_start) = &client.on_session_start {
+                    calls.run_parking(&self.gate, || on_session_start());
+                }
+            } else if let Some(Err(error)) =
+                calls.run_parking(&self.gate, || project_ime_event(&*client.store, event))
+            {
+                tracing::warn!(
+                    ?error,
+                    "an IME event could not be applied to the text store"
+                );
             }
-            return;
+            // A grant or callback that detached the client left this clone its
+            // last owner, and its destruction may settle a grant of its own.
+            retire_client_owners(client, &mut calls, Some(&self.gate));
         }
-        let projected = RoutePanic::try_run(|| project_ime_event(&*client.store, event));
-        // A failure the store parked while settling its grant happened before
-        // anything that unwound out of the projection after it.
-        let settled = self.take_settle_failure();
-        RoutePanic::preserve_first(first, settled, "IME grant settle");
-        match projected {
-            Ok(Ok(_)) => {}
-            Ok(Err(error)) => tracing::warn!(
-                ?error,
-                "an IME event could not be applied to the text store"
-            ),
-            Err(failure) => RoutePanic::preserve_first(first, Some(failure), "IME projection"),
-        }
-    }
-
-    /// The owner failure a store caught while settling a grant and parked in
-    /// this presentation's gate (ADR-0090 amendment item 2), to be resumed
-    /// inside the caller's containment so it reaches the realm's report.
-    fn take_settle_failure(&self) -> Option<RoutePanic> {
-        self.gate.take_failure().map(RoutePanic::from_payload)
+        calls.resume();
     }
 
     /// Open or close this presentation's frame transaction: while it is
@@ -762,25 +707,18 @@ impl TextInputOwner {
             // that closes this transaction.
             return 0;
         }
-        let mut first = self.take_settle_failure();
-        RoutePanic::preserve_first(
-            &mut first,
-            self.apply_host_ops(),
-            "text-store host operation",
-        );
-        let grants = RoutePanic::try_run(|| self.run_store_grants());
-        let ran = grants.unwrap_or_else(|failure| {
-            RoutePanic::preserve_first(&mut first, Some(failure), "deferred text-store grants");
-            0
-        });
-        if let Some(first) = first {
-            first.resume();
-        }
+        // An owner failure parked since the last turn came before anything
+        // this anchor runs.
+        let mut calls = OwnerCalls::new();
+        calls.take_parked(&self.gate);
+        self.apply_host_ops(&mut calls);
+        let ran = self.run_store_grants(&mut calls);
+        calls.resume();
         ran
     }
 
-    /// The store half of [`Self::run_deferred_grants`].
-    fn run_store_grants(&self) -> usize {
+    /// The store half of [`Self::run_deferred_grants`], inside its `calls`.
+    fn run_store_grants(&self, calls: &mut OwnerCalls) -> usize {
         let (retired, active) = {
             let mut state = self.state.borrow_mut();
             let active = state
@@ -797,43 +735,19 @@ impl TextInputOwner {
         for index in 0..stores.len() {
             if self.is_transaction_open() || self.ensure_open().is_err() {
                 self.retain_pending_stores(&mut stores, index);
-                let mut failure = self.take_settle_failure();
-                retire_stores(stores, &mut failure);
-                if let Some(failure) = failure {
-                    failure.resume();
-                }
-                return ran;
+                break;
             }
-            match RoutePanic::try_run(|| stores[index].run_deferred_grants()) {
-                Ok(count) => {
-                    ran += count;
-                    if self.is_transaction_open() || self.ensure_open().is_err() {
-                        // This store may also have a tail behind the newly shut gate.
-                        self.retain_pending_stores(&mut stores, index);
-                        break;
-                    }
-                }
-                Err(failure) => {
-                    // The failed store may still owe grants, as do later stores.
-                    // Restore ownership before propagating the first failure.
-                    self.retain_pending_stores(&mut stores, index);
-                    // An owner failure parked while settling an earlier grant
-                    // came first.
-                    let mut first = self.take_settle_failure();
-                    RoutePanic::preserve_first(&mut first, Some(failure), "deferred grant");
-                    let mut failure = first;
-                    retire_stores(stores, &mut failure);
-                    failure
-                        .expect("BUG: the failed grant retains its panic")
-                        .resume();
-                }
+            let count = calls.run_parking(&self.gate, || stores[index].run_deferred_grants());
+            ran += count.unwrap_or(0);
+            if count.is_none() || self.is_transaction_open() || self.ensure_open().is_err() {
+                // A failed store may still owe grants, as do later stores, and
+                // a store may have a tail behind a newly shut gate: ownership
+                // is restored before the first failure propagates.
+                self.retain_pending_stores(&mut stores, index);
+                break;
             }
         }
-        let mut failure = self.take_settle_failure();
-        retire_stores(stores, &mut failure);
-        if let Some(failure) = failure {
-            failure.resume();
-        }
+        retire_stores(stores, calls, &self.gate);
         ran
     }
 

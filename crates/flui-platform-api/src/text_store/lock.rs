@@ -68,9 +68,10 @@ use std::any::Any;
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::marker::PhantomData;
-use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
+use std::panic::resume_unwind;
 use std::rc::Rc;
 
+use super::owner_calls::OwnerCalls;
 use super::session::{TextStoreEdit, TextStoreRead};
 use super::utf16::OffsetError;
 
@@ -386,9 +387,20 @@ impl LockArbiter {
     /// Drop every queued grant without running it; returns how many there
     /// were. A detached field calls this so a queued edit never reaches a
     /// buffer that no longer belongs to it.
+    ///
+    /// # Panics
+    ///
+    /// Resumes the first panic a dropped grant's captures raised; the grants
+    /// after it are retained (ADR-0127).
     pub fn clear(&self) -> usize {
         let dropped = std::mem::take(&mut *self.queue.borrow_mut());
-        dropped.len()
+        let count = dropped.len();
+        let mut calls = OwnerCalls::new();
+        for grant in dropped {
+            calls.retire(grant);
+        }
+        calls.resume();
+        count
     }
 
     fn drain(&self, open: &mut dyn FnMut(LockGrant), settle: &mut dyn FnMut()) -> usize {
@@ -407,21 +419,29 @@ impl LockArbiter {
     }
 
     fn run_one(&self, grant: LockGrant, open: &mut dyn FnMut(LockGrant), settle: &mut dyn FnMut()) {
+        // A failure in this grant's settle belongs to the presentation that
+        // admitted the grant: read before any owner code, the grant's own
+        // included, can move the store to another presentation.
+        let admitting = self.owned_gate.get().then(|| self.gate.borrow().clone());
+        let mut calls = OwnerCalls::new();
         {
             self.locked.set(true);
             let _held = Held(&self.locked);
-            open(grant);
+            calls.run(|| open(grant));
+        }
+        if calls.failed() {
+            // A grant's own panic reaches whoever requested it.
+            calls.resume();
+            return;
         }
         // The grant ran and its lock is released: the store's owner runs now,
         // before the next grant. A failure there cannot undo the grant.
-        let Err(payload) = catch_unwind(AssertUnwindSafe(settle)) else {
-            return;
-        };
-        if !self.owned_gate.get() {
-            resume_unwind(payload);
+        calls.run(settle);
+        match (admitting, calls.into_failure()) {
+            (_, None) => {}
+            (Some(gate), Some(payload)) => gate.defer_failure(payload),
+            (None, Some(payload)) => resume_unwind(payload),
         }
-        let gate = self.gate.borrow().clone();
-        gate.defer_failure(payload);
     }
 }
 

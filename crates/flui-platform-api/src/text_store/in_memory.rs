@@ -13,15 +13,15 @@
 //! tall, starting at the origin, so a test can compute every rect and point
 //! by hand.
 
-use std::any::Any;
 use std::cell::{Cell, RefCell};
-use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
+
 use std::rc::Rc;
 
 use flui_foundation::geometry::{Bounds, Point, Size};
 
 use super::composition_ledger::{CompositionLedger, committed_text};
 use super::lock::{CommitGate, LockArbiter, LockGrant, LockOutcome, LockTiming, TextStoreError};
+use super::owner_calls::OwnerCalls;
 use super::session::{
     Composition, PointMode, RangeRect, Selection, TextChange, TextStoreEdit, TextStoreRead,
     TextStoreStatus,
@@ -158,36 +158,32 @@ impl InMemoryTextStore {
     /// released and before the next queued grant, so it may request a
     /// synchronous lock of its own.
     pub fn set_owner_listener(&self, listener: Option<Rc<dyn Fn()>>) {
-        // The replaced listener is dropped after the borrow is released.
+        // The replaced listener retires after the borrow is released.
         let previous = std::mem::replace(&mut *self.owner_listener.borrow_mut(), listener);
-        drop(previous);
+        let mut calls = OwnerCalls::new();
+        calls.retire(previous);
+        calls.resume();
     }
 
     /// Deliver what a finished grant owes, now that its lock is released:
     /// the owner notification, then the observer's. The observer is told
-    /// even when the listener panics; the panic is resumed after it.
+    /// even when the listener panics; the first panic is resumed after it.
     fn settle(&self) {
-        let mut failure = None;
+        let mut calls = OwnerCalls::new();
+        // Taken before the listener runs: a session it opens owes its own.
         if self.owner_owed.replace(false) {
             self.owner_notifications
                 .set(self.owner_notifications.get() + 1);
             let listener = self.owner_listener.borrow().clone();
             if let Some(listener) = listener {
-                failure = catch_unwind(AssertUnwindSafe(|| listener())).err();
+                calls.run(|| listener());
                 // A listener that removed or replaced itself left this clone
-                // its last owner: its captures are destroyed here, inside
-                // the same containment, after the listener's own failure.
-                if let Err(payload) = catch_unwind(AssertUnwindSafe(move || drop(listener))) {
-                    keep_first(&mut failure, payload);
-                }
+                // its last owner.
+                calls.retire(listener);
             }
         }
-        if let Err(payload) = catch_unwind(AssertUnwindSafe(|| self.flush_notifications())) {
-            keep_first(&mut failure, payload);
-        }
-        if let Some(payload) = failure {
-            resume_unwind(payload);
-        }
+        calls.run(|| self.flush_notifications());
+        calls.resume();
     }
 
     /// Queue `notice` and send everything queued if the observer may hear
@@ -209,13 +205,18 @@ impl InMemoryTextStore {
         let Some(observer) = observer else {
             return;
         };
+        // Each notice is delivered though an earlier one panicked; the
+        // first panic is resumed once all were.
+        let mut calls = OwnerCalls::new();
         for notice in notices {
-            match notice {
+            calls.run(|| match notice {
                 Notice::Text(change) => observer.text_changed(change),
                 Notice::Selection => observer.selection_changed(),
                 Notice::Status => observer.status_changed(),
-            }
+            });
         }
+        calls.retire(observer);
+        calls.resume();
     }
 
     fn open(&self, grant: LockGrant) {
@@ -292,17 +293,11 @@ impl TextStore for InMemoryTextStore {
     }
 
     fn set_observer(&self, observer: Option<Rc<dyn TextStoreObserver>>) {
-        *self.observer.borrow_mut() = observer;
-    }
-}
-
-/// Keep the first of several caught panics; a later one is retained, never
-/// dropped (ADR-0127).
-fn keep_first(first: &mut Option<Box<dyn Any + Send>>, payload: Box<dyn Any + Send>) {
-    if first.is_none() {
-        *first = Some(payload);
-    } else {
-        flui_foundation::panic::retain_opaque_payload(payload);
+        // The replaced observer retires after the borrow is released.
+        let previous = std::mem::replace(&mut *self.observer.borrow_mut(), observer);
+        let mut calls = OwnerCalls::new();
+        calls.retire(previous);
+        calls.resume();
     }
 }
 
