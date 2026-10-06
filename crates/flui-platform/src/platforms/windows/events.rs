@@ -9,7 +9,7 @@
 #![cfg_attr(not(target_os = "windows"), expect(dead_code))]
 
 use dpi::{PhysicalPosition, PhysicalSize};
-use keyboard_types::Modifiers as KeyboardModifiers;
+use keyboard_types::{Modifiers as KeyboardModifiers, NamedKey};
 use ui_events::{
     keyboard::{Code, KeyState, KeyboardEvent, Location},
     pointer::{
@@ -318,18 +318,24 @@ pub fn mouse_hwheel_event(
 // Keyboard events (simple wrappers)
 // ============================================================================
 
+/// What `TranslateMessage` produced for one keydown.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Keystroke {
+    /// The drained `WM_CHAR` burst, or `None` for a key with no typeable
+    /// translation (navigation keys, Ctrl chords).
+    Text(Option<String>),
+    /// A dead key: an accent held for the next keystroke (`WM_DEADCHAR`).
+    DeadKey,
+}
+
 /// Convert WM_KEYDOWN to W3C KeyboardEvent.
 ///
-/// `translated_text` is the drained `WM_CHAR` burst for this keydown (see
+/// `stroke` carries the drained `WM_CHAR` burst for this keydown (see
 /// `window_proc`'s `WM_KEYDOWN` arm and `crate::shared::keys`'s module doc
 /// for the pairing model); when present and typeable it becomes the event's
 /// `Key::Character`, otherwise the layout-independent virtual-key fallback
 /// applies.
-pub fn key_down_event(
-    wparam: WPARAM,
-    lparam: LPARAM,
-    translated_text: Option<String>,
-) -> PlatformInput {
+pub fn key_down_event(wparam: WPARAM, lparam: LPARAM, stroke: Keystroke) -> PlatformInput {
     let vk = wparam.0 as u16;
     let (scan_code, extended, is_repeat) = keys::parse_key_lparam(lparam.0);
 
@@ -337,13 +343,19 @@ pub fn key_down_event(
     let modifiers = unsafe { get_modifiers() };
     let fallback = keys::vk_to_key(vk, modifiers.contains(KeyboardModifiers::SHIFT));
     let code = keys::scancode_to_code(scan_code, extended);
-    let key = keys::key_for_keydown(
-        fallback,
-        translated_text,
-        modifiers.contains(KeyboardModifiers::ALT),
-        modifiers.contains(KeyboardModifiers::CONTROL),
-        code,
-    );
+    // A dead key is reported as one, not as its unshifted fallback character:
+    // otherwise a shortcut bound to that character fires while the user is
+    // composing an accented letter.
+    let key = match stroke {
+        Keystroke::DeadKey => Key::Named(NamedKey::Dead),
+        Keystroke::Text(translated_text) => keys::key_for_keydown(
+            fallback,
+            translated_text,
+            modifiers.contains(KeyboardModifiers::ALT),
+            modifiers.contains(KeyboardModifiers::CONTROL),
+            code,
+        ),
+    };
 
     PlatformInput::Keyboard(KeyboardEvent {
         state: KeyState::Down,
