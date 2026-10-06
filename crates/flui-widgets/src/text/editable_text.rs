@@ -1197,13 +1197,16 @@ impl EditObserver {
         let Some(on_changed) = self.accept() else {
             return edit();
         };
-        let before = self.controller.borrow().committed_text();
+        // So is the controller it edits: a listener's rebuild may hand the
+        // field another controller, whose text is not this edit's result.
+        let controller = self.controller.borrow().clone();
+        let before = controller.committed_text();
         // The listeners' retirement can fail after the text changed: the
         // owner still hears of the change, and the first failure is resumed
         // after it.
         let mut calls = OwnerCalls::new();
         let result = calls.run(edit);
-        let after = self.controller.borrow().committed_text();
+        let after = controller.committed_text();
         if after == before {
             calls.retire(on_changed);
         } else {
@@ -2130,7 +2133,9 @@ fn build_key_handler(
     // doc for why the compile-time source itself is a known limitation.
     let platform = TargetPlatform::current();
     Rc::new(move |event| {
-        let controller = controller.borrow();
+        // Cloned out, so no borrow of the cell is held while the edit's
+        // listeners run: one may rebuild the field onto another controller.
+        let controller = controller.borrow().clone();
         if !focus_node.can_request_focus() {
             return KeyEventResult::Ignored;
         }

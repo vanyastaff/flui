@@ -880,6 +880,10 @@ const ROWS: &[(&str, fn())] = &[
         editable_key_edit_whose_listener_replaces_on_changed,
     ),
     (
+        "editable: a key edit whose controller listener replaces the controller",
+        editable_key_edit_whose_listener_replaces_the_controller,
+    ),
+    (
         "editable: a store outliving its field",
         editable_store_outliving_its_field,
     ),
@@ -1909,15 +1913,16 @@ fn field_rebuilt_by_its_listener(
 /// `on_changed` heard.
 fn key_edit_whose_listener_rebuilds_the_field(
     label: &'static str,
-    rebuilt: impl FnOnce(EditableText, &Rc<RefCell<Vec<String>>>) -> EditableText,
+    rebuilt: impl FnOnce(
+        &TextEditingController,
+        &Rc<FocusNode>,
+        &Rc<RefCell<Vec<String>>>,
+    ) -> EditableText,
 ) -> Vec<String> {
     let controller = TextEditingController::new();
     let node = FocusNode::with_debug_label(label);
     let log = Rc::new(RefCell::new(Vec::new()));
-    let rebuilt = rebuilt(
-        EditableText::new(controller.clone(), Rc::clone(&node)),
-        &log,
-    );
+    let rebuilt = rebuilt(&controller, &node, &log);
     let harness = field_rebuilt_by_its_listener(&controller, &node, &log, rebuilt);
     let key = flui_interaction::testing::input::KeyEventBuilder::new(
         flui_interaction::events::Code::KeyA,
@@ -1944,10 +1949,10 @@ fn key_edit_whose_listener_rebuilds_the_field(
 }
 
 fn editable_key_edit_whose_listener_removes_on_changed() {
-    let heard =
-        key_edit_whose_listener_rebuilds_the_field("key edit, on_changed removed", |field, _| {
-            field
-        });
+    let heard = key_edit_whose_listener_rebuilds_the_field(
+        "key edit, on_changed removed",
+        |controller, node, _| EditableText::new(controller.clone(), Rc::clone(node)),
+    );
     assert_eq!(
         heard,
         ["installed: a"],
@@ -1958,12 +1963,44 @@ fn editable_key_edit_whose_listener_removes_on_changed() {
 fn editable_key_edit_whose_listener_replaces_on_changed() {
     let heard = key_edit_whose_listener_rebuilds_the_field(
         "key edit, on_changed replaced",
-        |field, log| field.on_changed(logs_as("replacement", log)),
+        |controller, node, log| {
+            EditableText::new(controller.clone(), Rc::clone(node))
+                .on_changed(logs_as("replacement", log))
+        },
     );
     assert_eq!(
         heard,
         ["installed: a", "replacement: az"],
         "the replacement hears only the edits accepted after it was installed"
+    );
+}
+
+/// The field rebuilt onto a replacement controller holding "y", with no
+/// `on_changed`: what the replacement holds is not the edit's result.
+fn moved_to_a_replacement_controller(
+    _controller: &TextEditingController,
+    node: &Rc<FocusNode>,
+    _log: &Rc<RefCell<Vec<String>>>,
+) -> EditableText {
+    EditableText::new(TextEditingController::with_text("y"), Rc::clone(node))
+}
+
+/// A key edit whose controller listener rebuilds the field onto another
+/// controller: the edit's `on_changed` hears the text of the controller the
+/// edit changed, and the rebuild does not trip over a borrow the key handler
+/// holds. A semantic edit reports through the same `EditObserver::around`,
+/// but no harness path rebuilds the field inside one: the action runs in the
+/// realm's owner scope, under a shared borrow of the realm that a frame,
+/// which needs it exclusively, cannot nest in.
+fn editable_key_edit_whose_listener_replaces_the_controller() {
+    let heard = key_edit_whose_listener_rebuilds_the_field(
+        "key edit, controller replaced",
+        moved_to_a_replacement_controller,
+    );
+    assert_eq!(
+        heard,
+        ["installed: a"],
+        "on_changed hears the edit's result"
     );
 }
 
