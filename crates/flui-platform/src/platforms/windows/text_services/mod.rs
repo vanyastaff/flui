@@ -26,7 +26,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::rc::{Rc, Weak};
 
-use flui_platform_api::text_store::TextStore;
+use flui_platform_api::text_store::{CompositionEnd, LockGrant, LockTiming, TextStore};
 use windows::Win32::{
     Foundation::HWND,
     System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance},
@@ -41,17 +41,6 @@ use windows::Win32::{
 use windows_core::{IUnknown, Interface};
 
 use self::document::{DocumentState, TsfStore};
-
-/// How a request to end the focused field's composition ended.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum CompositionEnd {
-    /// The input method committed its composition into the store.
-    Committed,
-    /// The input method could not (its lock was refused): its composition
-    /// is discarded with the document, and the caller clears the store's
-    /// composition itself, keeping the text.
-    Abandoned,
-}
 
 /// A host operation waiting for the COM entry it arrived under to return.
 enum HostOp {
@@ -115,6 +104,20 @@ unsafe fn associate(
         }
         Err(error) if error.code().is_ok() => Ok(()),
         Err(error) => Err(error),
+    }
+}
+
+/// Clear `store`'s composing range, keeping its text, under an asynchronous
+/// lock: what the presentation's owner does for an abandoned composition
+/// when the answer reaches it.
+fn commit_in_place(store: &dyn TextStore) {
+    let grant = LockGrant::read_write(|session| {
+        if session.composition().is_some() {
+            let _ = session.set_composition(None);
+        }
+    });
+    if let Err(error) = store.request_lock(grant, LockTiming::Async) {
+        tracing::debug!(target: "flui_platform::tsf", ?error, "could not commit an abandoned composition");
     }
 }
 
@@ -206,20 +209,23 @@ impl TextServices {
         self.run_host_op(HostOp::Focus(store));
     }
 
-    /// End the focused field's composition. `None` when the request was
-    /// queued behind a TSF call in progress, or there is no document.
-    pub(super) fn complete_composition(&self) -> Option<CompositionEnd> {
+    /// End the focused field's composition (ADR-0135's
+    /// `TextStoreHost::complete_composition`). `Deferred` when the request
+    /// was queued behind a TSF call in progress: the queue then clears the
+    /// store's composition itself if TSF refuses. With no document there is
+    /// nothing composing, which answers `Committed`.
+    pub(super) fn complete_composition(&self) -> CompositionEnd {
         if self.entry_depth.get() > 0 {
             self.pending
                 .borrow_mut()
                 .push_back(HostOp::CompleteComposition);
-            return None;
+            return CompositionEnd::Deferred;
         }
         let depth = self.enter_host_op();
         let end = self.terminate_composition();
         drop(depth);
         self.drain_pending();
-        end
+        end.unwrap_or(CompositionEnd::Committed)
     }
 
     /// A COM entry starts: host operations queue until it ends.
@@ -278,7 +284,14 @@ impl TextServices {
         match op {
             HostOp::Focus(store) => self.apply_focus(store),
             HostOp::CompleteComposition => {
-                let _ = self.terminate_composition();
+                // Nobody waits for this answer, so an abandoned composition
+                // is committed in place here, keeping the text.
+                let store = self.focused_state().map(|state| Rc::clone(&state.store));
+                if self.terminate_composition() == Some(CompositionEnd::Abandoned)
+                    && let Some(store) = store
+                {
+                    commit_in_place(&*store);
+                }
             }
             HostOp::DropPoisoned(state) => {
                 let poisoned_is_focused = self

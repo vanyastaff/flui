@@ -643,7 +643,7 @@ fn text_services_probe() {
         late.inner.text(),
         late.inner.composition()
     );
-    if shut == Some(super::CompositionEnd::Abandoned) {
+    if shut == flui_platform_api::text_store::CompositionEnd::Abandoned {
         let outcome = late.request_lock(
             LockGrant::read_write(|s| {
                 let _ = s.set_composition(None);

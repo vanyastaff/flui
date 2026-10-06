@@ -17,14 +17,15 @@ mod clipboard;
 mod display;
 mod events;
 mod platform;
-// Not yet attached to `WindowContext`: the window wiring and the host
-// contract it answers to land together once their ADR is accepted. Until
-// then only the opt-in probe drives it.
+// Not yet attached to `WindowContext`: the window does not offer a
+// `TextStoreHost` yet (ADR-0135 §3 describes the wiring), so
+// `HostWindow::text_store_host` answers `None` and only the opt-in probe
+// drives this module.
 #[cfg_attr(
     not(test),
     expect(
         dead_code,
-        reason = "the window wiring lands with the text-store host contract"
+        reason = "WindowContext does not hold the text services until the window offers its host"
     )
 )]
 mod text_services;
