@@ -16,7 +16,7 @@ pub enum StoreHostCall {
     Focus,
     /// `focus_store(None)`: no field does.
     Unfocus,
-    /// `complete_composition()`.
+    /// `complete_composition(store)`, whatever the answer.
     CompleteComposition,
 }
 
@@ -27,7 +27,8 @@ pub enum StoreHostCall {
 /// focused store, as a text service terminating its composition edits the
 /// document; when the store refuses that lock (the frame transaction is
 /// open, or a lock is held) it answers [`CompositionEnd::Abandoned`], as the
-/// Win32 text services do. It also records a call that arrives while
+/// Win32 text services do. A store other than the focused one answers
+/// [`TextStoreHostError::NotFocused`]. It also records a call that arrives while
 /// another is running, which the presentation's owner must never make.
 #[derive(Default)]
 pub struct RecordingTextStoreHost {
@@ -109,14 +110,22 @@ impl TextStoreHost for RecordingTextStoreHost {
         drop(previous);
     }
 
-    fn complete_composition(&self) -> Result<CompositionEnd, TextStoreHostError> {
+    fn complete_composition(
+        &self,
+        store: &Rc<dyn TextStore>,
+    ) -> Result<CompositionEnd, TextStoreHostError> {
         let _depth = self.enter(StoreHostCall::CompleteComposition);
         if self.unavailable.get() {
             return Err(TextStoreHostError::Unavailable);
         }
-        let Some(store) = self.focused_store() else {
-            return Ok(CompositionEnd::Committed);
-        };
+        let focused = self
+            .focused
+            .borrow()
+            .as_ref()
+            .is_some_and(|focused| Rc::ptr_eq(focused, store));
+        if !focused {
+            return Err(TextStoreHostError::NotFocused);
+        }
         let grant = LockGrant::read_write(|session| {
             if session.composition().is_some() {
                 let _ = session.set_composition(None);

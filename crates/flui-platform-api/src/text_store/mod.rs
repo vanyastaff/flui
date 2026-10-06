@@ -19,7 +19,8 @@
 //! - [`TextStore`] and [`TextStoreObserver`]: the field side and the
 //!   platform side of the connection.
 //! - [`TextStoreHost`]: what a pull-model window offers the presentation:
-//!   which field it serves, and ending that field's composition (ADR-0135).
+//!   which field it serves, and ending that field's composition (ADR-0135);
+//!   [`commit_composition_in_place`] when the platform cannot end it.
 //! - [`project_ime_event`]: a push-model [`ImeEvent`](crate::ImeEvent)
 //!   (winit) applied as store edits, so there is one editing path.
 //! - [`InMemoryTextStore`]: a complete store over a `String`, the
@@ -35,7 +36,7 @@ mod session;
 mod store;
 pub mod utf16;
 
-pub use host::{CompositionEnd, TextStoreHost, TextStoreHostError};
+pub use host::{CompositionEnd, TextStoreHost, TextStoreHostError, commit_composition_in_place};
 pub use in_memory::InMemoryTextStore;
 pub use lock::{
     CommitGate, DEFERRED_LOCK_CAPACITY, LockArbiter, LockGrant, LockKind, LockOutcome, LockTiming,

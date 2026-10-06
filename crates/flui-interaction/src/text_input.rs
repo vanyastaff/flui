@@ -67,7 +67,8 @@ use flui_foundation::geometry::Bounds;
 use flui_platform_api::ImeEvent;
 use flui_platform_api::PlatformTextInput;
 use flui_platform_api::text_store::{
-    CommitGate, CompositionEnd, LockGrant, LockTiming, TextStore, TextStoreHost, project_ime_event,
+    CommitGate, CompositionEnd, TextStore, TextStoreHost, commit_composition_in_place,
+    project_ime_event,
 };
 
 use crate::__runtime::{CloseMode, ClosePanic, CloseTombstone};
@@ -161,7 +162,7 @@ pub enum TextInputBackend {
     Pull(Rc<dyn TextStoreHost>),
     /// No input-method support: attaching returns
     /// [`TextInputError::Unsupported`].
-    None,
+    Unsupported,
 }
 
 impl std::fmt::Debug for TextInputBackend {
@@ -169,7 +170,7 @@ impl std::fmt::Debug for TextInputBackend {
         f.write_str(match self {
             Self::Push(_) => "Push",
             Self::Pull(_) => "Pull",
-            Self::None => "None",
+            Self::Unsupported => "Unsupported",
         })
     }
 }
@@ -208,32 +209,16 @@ impl Drop for HostCall<'_> {
     }
 }
 
-/// Commit `store`'s composition where it stands: clear the composing range
-/// and keep its text. Asynchronous, so inside a frame it waits for the
-/// anchor like any other grant. A refusal is logged; the platform has no one
-/// to hand it to.
-fn commit_composition_in_place(store: &dyn TextStore) {
-    let grant = LockGrant::read_write(|session| {
-        if session.composition().is_some()
-            && let Err(error) = session.set_composition(None)
-        {
-            tracing::warn!(?error, "a composition could not be committed in place");
-        }
-    });
-    if let Err(error) = store.request_lock(grant, LockTiming::Async) {
-        tracing::warn!(?error, "a composition could not be committed in place");
-    }
-}
-
 /// Ask `host` to end its composition in `store`, committing it in place
-/// when the host abandoned it or is gone. A `Deferred` answer leaves it to
-/// the host, which finishes it when the platform call in progress returns.
-fn complete_through(host: &dyn TextStoreHost, store: &dyn TextStore) {
-    match host.complete_composition() {
-        Ok(CompositionEnd::Abandoned) => commit_composition_in_place(store),
+/// when the host abandoned it, does not serve `store` or is gone. A
+/// `Deferred` answer leaves it to the host, which finishes it when the
+/// platform call in progress returns.
+fn complete_through(host: &dyn TextStoreHost, store: &Rc<dyn TextStore>) {
+    match host.complete_composition(store) {
+        Ok(CompositionEnd::Abandoned) => commit_composition_in_place(&**store),
         Err(error) => {
-            tracing::debug!(%error, "no host to end the composition; committing it in place");
-            commit_composition_in_place(store);
+            tracing::debug!(%error, "the host did not end the composition; committing it in place");
+            commit_composition_in_place(&**store);
         }
         Ok(_) => {}
     }
@@ -355,22 +340,20 @@ fn push_unique(stores: &mut Vec<Rc<dyn TextStore>>, store: Rc<dyn TextStore>) {
 ///
 /// Construct it with the [`TextInputBackend`] that presentation's window
 /// offers. A presentation without IME support passes
-/// [`TextInputBackend::None`]; attempts to attach then return
+/// [`TextInputBackend::Unsupported`]; attempts to attach then return
 /// [`TextInputError::Unsupported`].
 ///
 /// The returned `Rc` is intentional: widgets receive weak handles derived from
 /// this exact owner, while the presentation retains the only strong ownership.
 pub struct TextInputOwner {
     close_mode: CloseTombstone,
-    /// Direct push-model OS text-input capability owned by one presentation;
-    /// no intermediary. Framework-owned: close releases it even when the rest
-    /// of the owner is retained after a failure, since on some backends it
-    /// keeps the native window alive.
-    platform: RefCell<Option<Arc<dyn PlatformTextInput>>>,
-    /// The pull-model host, framework-owned like `platform`; at most one of
-    /// the two is set.
-    host: RefCell<Option<Rc<dyn TextStoreHost>>>,
-    /// How many owner calls on `host` are running; non-zero queues the next.
+    /// The platform capability or host owned by one presentation; no
+    /// intermediary. Framework-owned: close releases it, leaving
+    /// `Unsupported`, even when the rest of the owner is retained after a
+    /// failure, since on some backends it keeps the native window alive.
+    backend: RefCell<TextInputBackend>,
+    /// How many owner calls on the pull host are running; non-zero queues
+    /// the next.
     host_depth: Cell<u32>,
     next_token: Cell<NonZeroU64>,
     /// Shut while the presentation is inside a frame transaction, where text
@@ -384,15 +367,9 @@ impl TextInputOwner {
     /// Create the text-input owner for one presentation.
     #[must_use]
     pub fn new(backend: TextInputBackend) -> Rc<Self> {
-        let (platform, host) = match backend {
-            TextInputBackend::Push(platform) => (Some(platform), None),
-            TextInputBackend::Pull(host) => (None, Some(host)),
-            TextInputBackend::None => (None, None),
-        };
         Rc::new(Self {
             close_mode: CloseTombstone::default(),
-            platform: RefCell::new(platform),
-            host: RefCell::new(host),
+            backend: RefCell::new(backend),
             host_depth: Cell::new(0),
             next_token: Cell::new(NonZeroU64::MIN),
             gate: CommitGate::new(),
@@ -417,18 +394,29 @@ impl TextInputOwner {
 
     /// The push capability, cloned so no borrow spans a call into it.
     fn push_platform(&self) -> Option<Arc<dyn PlatformTextInput>> {
-        self.platform.borrow().clone()
+        match &*self.backend.borrow() {
+            TextInputBackend::Push(platform) => Some(Arc::clone(platform)),
+            _ => None,
+        }
+    }
+
+    /// The pull host, cloned so no borrow spans a call into it.
+    fn pull_host(&self) -> Option<Rc<dyn TextStoreHost>> {
+        match &*self.backend.borrow() {
+            TextInputBackend::Pull(host) => Some(Rc::clone(host)),
+            _ => None,
+        }
     }
 
     fn is_pull(&self) -> bool {
-        self.host.borrow().is_some()
+        matches!(*self.backend.borrow(), TextInputBackend::Pull(_))
     }
 
     fn ensure_supported(&self) -> Result<(), TextInputError> {
-        if self.platform.borrow().is_some() || self.is_pull() {
-            Ok(())
-        } else {
+        if matches!(*self.backend.borrow(), TextInputBackend::Unsupported) {
             Err(TextInputError::Unsupported)
+        } else {
+            Ok(())
         }
     }
 
@@ -611,25 +599,37 @@ impl TextInputOwner {
         }
     }
 
+    /// [`Self::apply_host_ops`], propagating its first failure.
+    fn drain_host_ops(&self) {
+        if let Some(failure) = self.apply_host_ops() {
+            failure.resume();
+        }
+    }
+
     /// Apply the queued host operations, oldest first. They wait while a
     /// host call is running (its return drains them) or the frame
-    /// transaction is open (the anchor drains them). A failing operation
-    /// propagates after its values are released; the rest stay queued.
-    fn drain_host_ops(&self) {
+    /// transaction is open (the anchor drains them).
+    ///
+    /// A failing operation releases its values and the queue goes on, so a
+    /// panicking focus change does not strand the completion behind it.
+    /// Returns the first failure; a later one is retained (ADR-0119).
+    #[must_use]
+    fn apply_host_ops(&self) -> Option<RoutePanic> {
+        let mut first = None;
         loop {
             if self.host_depth.get() > 0 || self.is_transaction_open() {
-                return;
+                return first;
             }
             let (op, host) = {
                 let mut state = self.state.borrow_mut();
                 if state.lifecycle != OwnerLifecycle::Open {
-                    return;
+                    return first;
                 }
-                let Some(host) = self.host.borrow().clone() else {
-                    return;
+                let Some(host) = self.pull_host() else {
+                    return first;
                 };
                 let Some(op) = state.host_ops.pop_front() else {
-                    return;
+                    return first;
                 };
                 if let HostOp::Focus(store) = &op {
                     state.host_focused = store.is_some();
@@ -641,16 +641,14 @@ impl TextInputOwner {
                 match op {
                     HostOp::Focus(store) => RoutePanic::capture(|| host.focus_store(store)),
                     HostOp::Complete(store) => {
-                        let mut failure = RoutePanic::capture(|| complete_through(&*host, &*store));
+                        let mut failure = RoutePanic::capture(|| complete_through(&*host, &store));
                         retire_owner(store, &mut failure, "text-input store release");
                         failure
                     }
                 }
             };
             release_host(host, &mut failure);
-            if let Some(failure) = failure {
-                failure.resume();
-            }
+            RoutePanic::preserve_first(&mut first, failure, "text-store host operation");
         }
     }
 
@@ -706,13 +704,29 @@ impl TextInputOwner {
     /// of the stores replaced or detached during the frame, in that order,
     /// then the active client's. The composition root calls this once the
     /// frame returns; returns how many grants ran.
+    ///
+    /// A host operation that panics does not hold the grants back: they run,
+    /// and the host's failure, the first, propagates after them.
     pub fn run_deferred_grants(&self) -> usize {
         if self.is_transaction_open() {
             // Nothing could run, and the retired stores wait for the anchor
             // that closes this transaction.
             return 0;
         }
-        self.drain_host_ops();
+        let mut first = self.apply_host_ops();
+        let grants = RoutePanic::try_run(|| self.run_store_grants());
+        let ran = grants.unwrap_or_else(|failure| {
+            RoutePanic::preserve_first(&mut first, Some(failure), "deferred text-store grants");
+            0
+        });
+        if let Some(first) = first {
+            first.resume();
+        }
+        ran
+    }
+
+    /// The store half of [`Self::run_deferred_grants`].
+    fn run_store_grants(&self) -> usize {
         let (retired, active) = {
             let mut state = self.state.borrow_mut();
             let active = state
@@ -821,19 +835,18 @@ impl TextInputOwner {
                 std::mem::replace(&mut state.host_focused, false),
             )
         };
-        let platform = self.platform.borrow_mut().take();
-        let host = self.host.borrow_mut().take();
-        failure.invoke(|| {
-            if active.is_some()
-                && let Some(platform) = &platform
-            {
-                platform.set_ime_allowed(false);
+        let backend = self.backend.replace(TextInputBackend::Unsupported);
+        match &backend {
+            TextInputBackend::Push(platform) if active.is_some() => {
+                failure.invoke(|| platform.set_ime_allowed(false));
             }
-        });
-        self.close_host(host.as_deref(), host_ops, host_focused, &mut failure);
+            TextInputBackend::Pull(host) => {
+                self.close_host(&**host, host_ops, host_focused, &mut failure);
+            }
+            _ => {}
+        }
         // Framework-owned: released even when the clients below are retained.
-        failure.release(platform);
-        failure.release(host);
+        failure.release(backend);
         if let Some(active) = active {
             let TextInputClient {
                 store,
@@ -848,29 +861,42 @@ impl TextInputOwner {
         failure.finish();
     }
 
-    /// The pull host's part of a close: the queued completions run (a close
-    /// commits what the user typed), queued focus changes are dropped, and a
-    /// host left focused on a store is told `None`. Every host call counts
-    /// as one, so anything it reaches that asks for another is refused by
-    /// the closed lifecycle instead of nesting.
+    /// The pull host's part of a close: the queued operations run in order
+    /// (a close commits what the user typed, in the store it was asked for,
+    /// after the focus changes queued before it), and a host left focused on
+    /// a store is told `None`. After a failure the rest are retired, not
+    /// run, and the final `None` still is. Every host call counts as one, so
+    /// anything it reaches that asks for another is refused by the closed
+    /// lifecycle instead of nesting.
     fn close_host(
         &self,
-        host: Option<&dyn TextStoreHost>,
+        host: &dyn TextStoreHost,
         ops: VecDeque<HostOp>,
-        focused: bool,
+        mut focused: bool,
         failure: &mut ClosePanic,
     ) {
         let _call = HostCall::enter(&self.host_depth);
         for op in ops {
-            match (op, host) {
-                (HostOp::Complete(store), Some(host)) => {
-                    failure.run(|| complete_through(host, &*store));
+            if failure.preserving() {
+                failure.retire(op);
+                continue;
+            }
+            match op {
+                HostOp::Focus(store) => {
+                    let names_store = store.is_some();
+                    // An unwind leaves the host's focus unknown: the final
+                    // `None` then clears it.
+                    focused = failure
+                        .invoke(|| host.focus_store(store))
+                        .is_none_or(|()| names_store);
+                }
+                HostOp::Complete(store) => {
+                    failure.run(|| complete_through(host, &store));
                     failure.retire(store);
                 }
-                (op, _) => failure.retire(op),
             }
         }
-        if focused && let Some(host) = host {
+        if focused {
             failure.invoke(|| host.focus_store(None));
         }
     }
@@ -914,8 +940,7 @@ impl std::fmt::Debug for TextInputOwner {
                 "active_token",
                 &state.active.as_ref().map(|client| client.token),
             )
-            .field("push", &self.platform.borrow().is_some())
-            .field("pull", &self.is_pull())
+            .field("backend", &*self.backend.borrow())
             .field("queued_host_ops", &state.host_ops.len())
             .finish_non_exhaustive()
     }
@@ -931,22 +956,22 @@ impl Drop for TextInputOwner {
         let retired = std::mem::take(&mut state.retired);
         let host_ops = std::mem::take(&mut state.host_ops);
         let host_focused = std::mem::replace(&mut state.host_focused, false);
-        // Keep platform custody outside the invocation, including a callback
+        // Keep backend custody outside the invocation, including a callback
         // that releases its other last owner before it unwinds.
-        let platform = self.platform.get_mut().take();
-        let host = self.host.get_mut().take();
-        failure.invoke(|| {
-            if disable && let Some(platform) = &platform {
-                platform.set_ime_allowed(false);
-            }
-        });
+        let backend = std::mem::replace(self.backend.get_mut(), TextInputBackend::Unsupported);
         // An owner dropped without a close runs no queued completion; it
         // only takes its store away from the host.
         failure.retire(Vec::from(host_ops));
-        if host_focused && let Some(host) = &host {
-            failure.invoke(|| host.focus_store(None));
+        match &backend {
+            TextInputBackend::Push(platform) if disable => {
+                failure.invoke(|| platform.set_ime_allowed(false));
+            }
+            TextInputBackend::Pull(host) if host_focused => {
+                failure.invoke(|| host.focus_store(None));
+            }
+            _ => {}
         }
-        failure.release(host);
+        failure.release(backend);
         if let Some(active) = active {
             let TextInputClient {
                 store,
@@ -958,7 +983,6 @@ impl Drop for TextInputOwner {
         for store in retired {
             failure.retire(store);
         }
-        failure.release(platform);
         failure.finish_contained();
     }
 }

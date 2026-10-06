@@ -23,10 +23,15 @@ type Log = Rc<RefCell<Vec<&'static str>>>;
 struct Host {
     log: Log,
     focused: RefCell<Option<Rc<dyn TextStore>>>,
+    /// The stores whose composition the host ended, in order.
+    completed: RefCell<Vec<Rc<dyn TextStore>>>,
     depth: Cell<u32>,
     nested: Cell<bool>,
     answer: Cell<Result<CompositionEnd, TextStoreHostError>>,
     inside_focus: RefCell<Option<Box<dyn FnOnce()>>>,
+    /// Calls (`"focus"`, `"complete"`) that panic once each, after their
+    /// effect, as a host whose text service reached failing code does.
+    panics: RefCell<Vec<&'static str>>,
 }
 
 impl Host {
@@ -34,11 +39,24 @@ impl Host {
         Rc::new(Self {
             log: Rc::clone(log),
             focused: RefCell::new(None),
+            completed: RefCell::new(Vec::new()),
             depth: Cell::new(0),
             nested: Cell::new(false),
             answer: Cell::new(Ok(CompositionEnd::Committed)),
             inside_focus: RefCell::new(None),
+            panics: RefCell::new(Vec::new()),
         })
+    }
+
+    fn panic_if_told(&self, call: &'static str) {
+        let told = {
+            let mut panics = self.panics.borrow_mut();
+            let position = panics.iter().position(|&panic| panic == call);
+            position.map(|position| panics.remove(position))
+        };
+        if let Some(call) = told {
+            std::panic::panic_any(call);
+        }
     }
 
     fn enter(&self, call: &'static str) {
@@ -60,6 +78,15 @@ impl Host {
             .as_ref()
             .is_some_and(|focused| Rc::ptr_eq(focused, &store))
     }
+
+    fn completed(&self, store: &Rc<InMemoryTextStore>) -> usize {
+        let store: Rc<dyn TextStore> = store.clone();
+        self.completed
+            .borrow()
+            .iter()
+            .filter(|completed| Rc::ptr_eq(completed, &store))
+            .count()
+    }
 }
 
 impl TextStoreHost for Host {
@@ -71,11 +98,25 @@ impl TextStoreHost for Host {
             inside();
         }
         self.leave();
+        self.panic_if_told("focus");
     }
 
-    fn complete_composition(&self) -> Result<CompositionEnd, TextStoreHostError> {
+    fn complete_composition(
+        &self,
+        store: &Rc<dyn TextStore>,
+    ) -> Result<CompositionEnd, TextStoreHostError> {
         self.enter("complete");
         self.leave();
+        let focused = self
+            .focused
+            .borrow()
+            .as_ref()
+            .is_some_and(|focused| Rc::ptr_eq(focused, store));
+        if !focused {
+            return Err(TextStoreHostError::NotFocused);
+        }
+        self.completed.borrow_mut().push(Rc::clone(store));
+        self.panic_if_told("complete");
         self.answer.get()
     }
 }
@@ -234,6 +275,24 @@ fn close_completes_queued_compositions_then_unfocuses() {
     );
 }
 
+/// Focus moves from C to A and A's composition is completed, all inside one
+/// frame, and the window closes before the anchor: the close applies the
+/// queued focus first, so the completion reaches A and C keeps its own.
+fn close_applies_a_queued_focus_change_before_its_completion() {
+    let (owner, host, log) = pull_owner();
+    let handle = owner.handle();
+    let (c, a) = (composing_store(), composing_store());
+    handle.attach(client(&c)).expect("attach C");
+    owner.set_transaction_open(true);
+    handle.attach(client(&a)).expect("move to A in the frame");
+    owner.complete_composition();
+    owner.close();
+    assert_eq!(calls(&log), ["focus", "focus", "complete", "unfocus"]);
+    assert_eq!(host.completed(&a), 1, "A's composition is completed");
+    assert_eq!(host.completed(&c), 0, "C's is not touched");
+    assert!(c.composition().is_some(), "C keeps composing");
+}
+
 #[derive(Default)]
 struct Push(parking_lot::Mutex<Vec<bool>>);
 
@@ -262,7 +321,7 @@ fn push_and_storeless_backends_commit_in_place() {
     );
     assert_eq!(*platform.0.lock(), [true, false]);
 
-    let none = TextInputOwner::new(TextInputBackend::None);
+    let none = TextInputOwner::new(TextInputBackend::Unsupported);
     assert_eq!(
         none.handle().attach(client(&InMemoryTextStore::new(""))),
         Err(TextInputError::Unsupported)
@@ -297,8 +356,130 @@ fn the_owner_drives_its_text_store_host() {
             a_host_call_reaching_the_owner_is_queued_until_it_returns,
         ),
         ("close", close_completes_queued_compositions_then_unfocuses),
+        (
+            "close applies a queued focus change",
+            close_applies_a_queued_focus_change_before_its_completion,
+        ),
         ("push and none", push_and_storeless_backends_commit_in_place),
     ];
+    run_rows(cases);
+}
+
+/// Run `run`, which must propagate the host's panic `expected`.
+fn expect_host_panic(expected: &str, run: impl FnOnce()) {
+    let payload = catch_unwind(AssertUnwindSafe(run)).expect_err("the host's panic propagates");
+    assert_eq!(
+        flui_foundation::panic::payload_text(&*payload),
+        Some(expected)
+    );
+    flui_foundation::panic::retain_opaque_payload(payload);
+}
+
+fn a_panicking_focus_change_propagates_and_the_next_operation_runs() {
+    let (owner, host, log) = pull_owner();
+    let handle = owner.handle();
+    let (a, b) = (InMemoryTextStore::new("a"), InMemoryTextStore::new("b"));
+    host.panics.borrow_mut().push("focus");
+    expect_host_panic("focus", || {
+        let _ = handle.attach(client(&a));
+    });
+    let token = handle.attach(client(&b)).expect("the owner still attaches");
+    assert!(host.focuses(&b));
+    let _ = handle.detach(token).expect("detach");
+    assert_eq!(calls(&log), ["focus", "focus", "unfocus"]);
+    assert!(!host.nested.get());
+}
+
+fn a_panicking_completion_propagates_and_the_next_one_runs() {
+    let (owner, host, log) = pull_owner();
+    let store = composing_store();
+    owner.handle().attach(client(&store)).expect("attach");
+    host.panics.borrow_mut().push("complete");
+    expect_host_panic("complete", || owner.complete_composition());
+    assert!(
+        store.composition().is_some(),
+        "no answer came back, so the owner does not commit in its place"
+    );
+    owner.complete_composition();
+    assert_eq!(calls(&log), ["focus", "complete", "complete"]);
+    assert_eq!(host.completed(&store), 2);
+}
+
+/// Both queued host operations panic at the anchor: the first failure
+/// propagates, and neither the completion behind it nor the deferred grant
+/// is held back.
+fn two_panicking_host_operations_at_the_anchor_run_the_rest() {
+    let (owner, host, log) = pull_owner();
+    let handle = owner.handle();
+    let store = composing_store();
+    owner.set_transaction_open(true);
+    handle.attach(client(&store)).expect("attach in frame");
+    owner.complete_composition();
+    let granted = Rc::clone(&log);
+    let outcome = store
+        .request_lock(
+            LockGrant::read(move |_| granted.borrow_mut().push("grant")),
+            LockTiming::Async,
+        )
+        .expect("queued behind the frame");
+    assert_eq!(outcome, LockOutcome::Deferred);
+    host.panics.borrow_mut().extend(["focus", "complete"]);
+    owner.set_transaction_open(false);
+    expect_host_panic("focus", || {
+        owner.run_deferred_grants();
+    });
+    assert_eq!(calls(&log), ["focus", "complete", "grant"]);
+    owner.complete_composition();
+    assert_eq!(host.completed(&store), 2, "the next completion runs");
+}
+
+/// Both queued host operations would panic during a close: the first
+/// failure propagates, the completion behind it is retired rather than run,
+/// and the host is still told `None`.
+fn two_panicking_host_operations_in_a_close_still_unfocus() {
+    let (owner, host, log) = pull_owner();
+    let handle = owner.handle();
+    let (c, a) = (composing_store(), composing_store());
+    handle.attach(client(&c)).expect("attach C");
+    owner.set_transaction_open(true);
+    handle.attach(client(&a)).expect("move to A in the frame");
+    owner.complete_composition();
+    host.panics.borrow_mut().extend(["focus", "complete"]);
+    expect_host_panic("focus", || owner.close());
+    assert_eq!(calls(&log), ["focus", "focus", "unfocus"]);
+    assert_eq!(host.completed(&a), 0);
+    assert!(host.focused.borrow().is_none());
+    assert_eq!(
+        handle.attach(client(&InMemoryTextStore::new(""))),
+        Err(TextInputError::Closed),
+        "the next operation sees the close"
+    );
+}
+
+#[test]
+fn a_panicking_text_store_host_is_contained() {
+    let cases: &[(&str, fn())] = &[
+        (
+            "focus change",
+            a_panicking_focus_change_propagates_and_the_next_operation_runs,
+        ),
+        (
+            "completion",
+            a_panicking_completion_propagates_and_the_next_one_runs,
+        ),
+        (
+            "two at the anchor",
+            two_panicking_host_operations_at_the_anchor_run_the_rest,
+        ),
+        (
+            "two in a close",
+            two_panicking_host_operations_in_a_close_still_unfocus,
+        ),
+    ];
+    run_rows(cases);
+}
+
+fn run_rows(cases: &[(&str, fn())]) {
     let mut failed = Vec::new();
     for &(name, case) in cases {
         if let Err(payload) = catch_unwind(AssertUnwindSafe(case)) {

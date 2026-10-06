@@ -656,6 +656,7 @@ impl flui_platform_api::text_store::TextStoreHost for PullHost {
 
     fn complete_composition(
         &self,
+        _: &Rc<dyn TextStore>,
     ) -> Result<
         flui_platform_api::text_store::CompositionEnd,
         flui_platform_api::text_store::TextStoreHostError,

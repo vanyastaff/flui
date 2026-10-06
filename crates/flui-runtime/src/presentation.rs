@@ -178,7 +178,7 @@ impl PresentationWindow {
         match (text_store_host, window.text_input()) {
             (Some(host), _) => TextInputBackend::Pull(host),
             (None, Some(platform)) => TextInputBackend::Push(platform),
-            (None, None) => TextInputBackend::None,
+            (None, None) => TextInputBackend::Unsupported,
         }
     }
 }
