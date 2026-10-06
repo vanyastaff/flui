@@ -231,6 +231,10 @@ accesskit_consumer = "0.39.1"
 # Win32 bindings: the Windows platform backend, hot-reload's library loader,
 # and xtask's UI Automation client. Each member names the API families it uses.
 windows = "0.62"
+# The COM runtime under `windows`, named directly because `#[implement]`
+# expands to `::windows_core` paths (the Win32 text services implement
+# `ITextStoreACP`). The same 0.62 line, so no second copy.
+windows-core = "0.62"
 
 # COLLECTIONS - Used by multiple crates
 smallvec = { version = "1.13", features = ["union", "const_generics"] }
