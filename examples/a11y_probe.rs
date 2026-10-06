@@ -84,10 +84,12 @@ impl ViewState<Counter> for CounterState {
                             .container(true)
                             .button(true)
                             .label("Probe disclosure")
-                            .expanded(self.expanded.get())
                             .exclude_semantics(true)
-                            .on_expand(move |_cx| expand.set(true))
-                            .on_collapse(move |_cx| collapse.set(false))
+                            .expandable(
+                                self.expanded.get(),
+                                move |_cx| expand.set(true),
+                                move |_cx| collapse.set(false),
+                            )
                             .child(Text::new(details))
                     ),
                     // This visible sibling is outside the control's excluded

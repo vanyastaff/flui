@@ -741,15 +741,17 @@ pub(crate) fn queued_directional_actions_and_numeric_values_reach_the_frame_prod
         let collapse = Rc::clone(&described);
         let toggle = Rc::clone(&described);
         host()
-            .expanded(described.get())
-            .on_expand(move |cx| {
-                expand.set(true);
-                count.set(cx, 1)
-            })
-            .on_collapse(move |cx| {
-                collapse.set(false);
-                count.set(cx, 0)
-            })
+            .expandable(
+                described.get(),
+                move |cx| {
+                    expand.set(true);
+                    count.set(cx, 1)
+                },
+                move |cx| {
+                    collapse.set(false);
+                    count.set(cx, 0)
+                },
+            )
             .on_tap(move |cx| {
                 let next = !toggle.get();
                 toggle.set(next);

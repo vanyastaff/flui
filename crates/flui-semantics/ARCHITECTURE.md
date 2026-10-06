@@ -275,7 +275,8 @@ adapter (`accesskit_macos` 0.27, `accesskit_atspi_common` 0.20) emits `Expand`/`
 expanded state in its own copy of the tree and the owner checks the committed tree, and both
 change only when the next frame publishes. Two `Expand` requests before then, or an `Expand`
 right after an unpublished pointer tap, each run the tap handler, so a tap-only node can end
-collapsed after an expand. A node that needs the direction registers `on_expand`/`on_collapse`.
+collapsed after an expand. A node that needs the direction registers its state and both handlers together with
+`Semantics::expandable`.
 
 **Test.** `every_wire_action_routes_to_a_semantics_action` (one row per `ActionName::ALL`) in
 `src/agent/tests.rs`; `every_inbound_routable_action_is_advertised_outbound_again` in

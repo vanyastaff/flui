@@ -523,26 +523,37 @@ impl Semantics {
         self
     }
 
-    /// Sets this control to expanded when requested by assistive technology.
-    /// The handler must set the requested state, including repeated requests.
+    /// Publishes whether this control is expanded, with the handlers that
+    /// assistive technology's expand and collapse requests reach.
+    ///
+    /// The state and the handlers come together because a platform offers
+    /// only the transition the published state allows (`Expand` while
+    /// collapsed, `Collapse` while expanded) and the owner refuses the other:
+    /// a handler on a node without an expanded state would be registered and
+    /// never reachable. Each handler must set the requested state, including a
+    /// repeated request queued before the next frame republishes it.
+    ///
+    /// For a control that toggles through its tap handler alone, publish the
+    /// state with [`Self::expanded`] and register [`Self::on_tap`]: that
+    /// handler then serves whichever transition the state allows.
+    ///
+    /// There is no separate expand or collapse handler to attach without a
+    /// state:
+    ///
+    /// ```compile_fail
+    /// let _ = flui_widgets::Semantics::new().on_expand(|_cx| {});
+    /// ```
     #[must_use]
-    pub fn on_expand<F, R>(self, handler: F) -> Self
+    pub fn expandable<E, RE, C, RC>(self, expanded: bool, on_expand: E, on_collapse: C) -> Self
     where
-        F: Fn(&mut EventCx<'_>) -> R + 'static,
-        R: EventOutcome,
+        E: Fn(&mut EventCx<'_>) -> RE + 'static,
+        RE: EventOutcome,
+        C: Fn(&mut EventCx<'_>) -> RC + 'static,
+        RC: EventOutcome,
     {
-        self.on_plain_action(SemanticsAction::Expand, handler)
-    }
-
-    /// Sets this control to collapsed when requested by assistive technology.
-    /// The handler must set the requested state, including repeated requests.
-    #[must_use]
-    pub fn on_collapse<F, R>(self, handler: F) -> Self
-    where
-        F: Fn(&mut EventCx<'_>) -> R + 'static,
-        R: EventOutcome,
-    {
-        self.on_plain_action(SemanticsAction::Collapse, handler)
+        self.expanded(expanded)
+            .on_plain_action(SemanticsAction::Expand, on_expand)
+            .on_plain_action(SemanticsAction::Collapse, on_collapse)
     }
 
     /// Receives the exact finite numeric value admitted by the current range.

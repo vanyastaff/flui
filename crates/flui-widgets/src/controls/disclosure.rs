@@ -350,10 +350,11 @@ impl ViewState<Disclosure> for DisclosureState {
             } else {
                 header.boxed()
             };
+            let expanded = snapshot.state == ExpansionState::Expanded;
             let mut semantics = Semantics::new()
                 .button(true)
                 .enabled(enabled)
-                .expanded(snapshot.state == ExpansionState::Expanded)
+                .expanded(expanded)
                 .child(header);
             if let Some(label) = snapshot.label.as_ref() {
                 semantics = semantics.label(label.clone()).exclude_semantics(true);
@@ -366,12 +367,15 @@ impl ViewState<Disclosure> for DisclosureState {
                     .on_tap(move |cx| {
                         let _ = propose(&activate, cx, None);
                     })
-                    .on_expand(move |cx| {
-                        let _ = propose(&expand, cx, Some(ExpansionState::Expanded));
-                    })
-                    .on_collapse(move |cx| {
-                        let _ = propose(&collapse, cx, Some(ExpansionState::Collapsed));
-                    });
+                    .expandable(
+                        expanded,
+                        move |cx| {
+                            let _ = propose(&expand, cx, Some(ExpansionState::Expanded));
+                        },
+                        move |cx| {
+                            let _ = propose(&collapse, cx, Some(ExpansionState::Collapsed));
+                        },
+                    );
             }
             let changed = Rc::clone(&focused);
             let rebuild = rebuild.clone();
