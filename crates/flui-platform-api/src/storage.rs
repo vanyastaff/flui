@@ -144,6 +144,24 @@ impl StorageName {
         self.name
     }
 
+    /// Whether the value belongs to this machine (made by
+    /// [`machine_local`](Self::machine_local)) rather than following the user
+    /// between machines (made by [`from_static`](Self::from_static)). A
+    /// [`Storage`] keeps the two in separate places, so equal text in the two
+    /// scopes names two values.
+    ///
+    /// ```
+    /// use flui_platform_api::StorageName;
+    ///
+    /// assert!(!StorageName::from_static("notes").is_machine_local());
+    /// assert!(StorageName::machine_local("notes").is_machine_local());
+    /// assert_ne!(StorageName::from_static("notes"), StorageName::machine_local("notes"));
+    /// ```
+    #[must_use]
+    pub const fn is_machine_local(&self) -> bool {
+        matches!(self.scope, Scope::MachineLocal)
+    }
+
     const fn checked(name: &'static str, scope: Scope) -> Self {
         if let Err(reason) = validate(name.as_bytes()) {
             panic!("{}", reason);
@@ -209,6 +227,22 @@ impl StoredVersion {
         bytes.hash(&mut hasher);
         let len = u64::try_from(bytes.len()).expect("BUG: a byte length fits in u64");
         Self(Some((len, hasher.finish())))
+    }
+
+    /// The length in bytes of the value this version names; `None` for
+    /// [`ABSENT`](Self::ABSENT). A [`Storage`] compares it with a stored
+    /// value's length before reading the value to compare versions, so a
+    /// value of a different length is never read for the comparison.
+    ///
+    /// ```
+    /// use flui_platform_api::StoredVersion;
+    ///
+    /// assert_eq!(StoredVersion::of_bytes(b"notes").byte_len(), Some(5));
+    /// assert_eq!(StoredVersion::ABSENT.byte_len(), None);
+    /// ```
+    #[must_use]
+    pub fn byte_len(&self) -> Option<u64> {
+        self.0.map(|(len, _)| len)
     }
 }
 
