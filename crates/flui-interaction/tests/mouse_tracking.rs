@@ -414,7 +414,7 @@ fn transformed_entry(entry: HitTestEntry) -> HitTestResult {
                 Matrix4::rotation_z(std::f64::consts::FRAC_PI_2),
                 |result| {
                     result.with_paint_transform(Matrix4::scaling(2.0, 2.0, 1.0), |result| {
-                        result.add(entry)
+                        result.add(entry);
                     })
                 },
             )

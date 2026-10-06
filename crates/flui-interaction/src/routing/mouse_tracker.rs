@@ -602,27 +602,24 @@ impl MouseTracker {
 
         let mut guard = self.inner.borrow_mut();
         let inner = &mut *guard;
-        let state = match motion {
-            Some(pointer_type) => {
-                if pointer_type == PointerType::Mouse {
-                    inner.mouse_connected = true;
-                }
-                let state = inner
-                    .devices
-                    .entry(device_id)
-                    .or_insert_with(|| DeviceState::new(pointer_type, position));
-                state.pointer_type = pointer_type;
-                state.inside_window = true;
-                state.last_position = position;
-                state
+        let state = if let Some(pointer_type) = motion {
+            if pointer_type == PointerType::Mouse {
+                inner.mouse_connected = true;
             }
-            None => {
-                let Some(state) = inner.devices.get_mut(&device_id) else {
-                    work.retired.extend(resolved.annotations.into_values());
-                    return work;
-                };
-                state
-            }
+            let state = inner
+                .devices
+                .entry(device_id)
+                .or_insert_with(|| DeviceState::new(pointer_type, position));
+            state.pointer_type = pointer_type;
+            state.inside_window = true;
+            state.last_position = position;
+            state
+        } else {
+            let Some(state) = inner.devices.get_mut(&device_id) else {
+                work.retired.extend(resolved.annotations.into_values());
+                return work;
+            };
+            state
         };
 
         let new_regions: HashSet<RegionId> = resolved.order.iter().copied().collect();
@@ -671,7 +668,8 @@ impl MouseTracker {
         let released = inner.release_unhovered(exited.into_iter());
         work.retired.extend(released);
         if cursor_changed {
-            work.cursor_callback = inner.cursor_change_callback.clone();
+            work.cursor_callback
+                .clone_from(&inner.cursor_change_callback);
         }
         work
     }
