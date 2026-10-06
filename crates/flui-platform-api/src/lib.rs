@@ -31,8 +31,9 @@
 //! composition roots depend on `flui-platform` (ADR-0082 §2).
 //!
 //! The pointer and keyboard types re-exported from `ui-events` (and, through
-//! it, `keyboard-types`) are ADR-0089 debt: this crate's own types replace
-//! them before its first release.
+//! it, `keyboard-types`) are ADR-0089 debt. FLUI's own vocabulary, which
+//! replaces them in [`PlatformInput`] (ADR-0143), is in [`pointer`],
+//! [`keyboard`] and [`EventTime`].
 //!
 //! # Implementing a capability without a backend
 //!
@@ -92,12 +93,15 @@ mod brightness;
 mod clipboard;
 pub mod data_transfer;
 mod display;
+mod event_time;
 mod haptic_feedback;
 mod haptics;
 mod ime;
 mod input;
+pub mod keyboard;
 mod locale;
 mod platform_window;
+pub mod pointer;
 mod storage;
 mod target_platform;
 mod text_input;
@@ -111,6 +115,7 @@ pub use clipboard::{Clipboard, ClipboardItem, InMemoryClipboard};
 pub use cursor_icon::CursorIcon;
 pub use data_transfer::{DataTransferOffer, DataTransferSource, NullDataTransferSource};
 pub use display::{DisplayId, PlatformDisplay};
+pub use event_time::EventTime;
 pub use haptic_feedback::HapticFeedback;
 pub use haptics::PlatformHaptics;
 pub use ime::ImeEvent;
