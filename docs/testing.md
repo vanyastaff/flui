@@ -166,7 +166,7 @@ only runs when someone remembers to run it by hand.
 
 One scope for the whole local suite:
 `--workspace --exclude flui-platform --lib --bins --tests
---features flui/material,flui/cupertino,flui-devtools/agent`, run as the two
+--features flui/material,flui/cupertino,flui/persist,flui-devtools/agent`, run as the two
 stages below. Text-size tests measure on Parley because the default build does
 (ADR-0092 §10 step 4a); no feature selects another measurement.
 Two choices in it differ from CI on purpose:

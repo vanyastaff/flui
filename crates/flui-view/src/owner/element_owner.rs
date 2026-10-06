@@ -264,6 +264,10 @@ pub struct ElementOwner<'a> {
     /// `BuildCtx` the same way `text_input_handle` is.
     pub(crate) clipboard_handle: &'a Option<flui_interaction::ClipboardHandle>,
 
+    /// The realm's byte storage, threaded into every `BuildCtx` the same way
+    /// `clipboard_handle` is.
+    pub(crate) storage: &'a Option<std::sync::Arc<dyn flui_platform_api::Storage>>,
+
     /// The binding's owner-local interaction dispatch capability (ADR-0027),
     /// threaded into render-object lifecycle contexts.
     pub(crate) interaction_dispatch: &'a Option<flui_interaction::InteractionDispatchHandle>,

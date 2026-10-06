@@ -108,6 +108,9 @@ windows = { workspace = true, features = [
     "Win32_System_Memory",
     "Win32_System_Ole",
     "Win32_System_Threading",
+    # Session end: `ShutdownBlockReasonCreate`/`Destroy` while the
+    # registry is flushed on log-off.
+    "Win32_System_Shutdown",
 ] }
 
 # macOS platform
@@ -170,6 +173,11 @@ android-activity = { version = "0.6", features = ["native-activity"] }
 # Native-only async dependencies (not available on wasm32)
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread", "sync", "time"] }
+# The `storage` feature's file store: the per-user data directories, and
+# the uniquely named temporary file each write is staged in before it
+# replaces the target. No file system on wasm32, so neither is there.
+dirs = { workspace = true, optional = true }
+tempfile = { workspace = true, optional = true }
 
 # Web/WASM platform
 [target.'cfg(target_arch = "wasm32")'.dependencies]
@@ -330,6 +338,11 @@ web = []
 # Linux display server protocols
 wayland = []
 x11 = []
+
+# The file store behind application persistence (`flui::AppConfig::with_storage_dir`):
+# documents under the per-user data directories, replaced atomically. Its
+# dependencies are native-only; on wasm32 the feature adds nothing.
+storage = ["dep:dirs", "dep:tempfile"]
 
 # The `unexpected_cfgs` check-cfg declaration for objc 0.2's
 # `cfg(feature = "cargo-clippy")` probes lives in build.rs — Cargo forbids

@@ -48,6 +48,9 @@ const PLATFORM_TARGETS: [&str; 4] = [WINDOWS_TARGET, MACOS_TARGET, ANDROID_TARGE
 /// - `flui-devtools/agent`: the development agent server, off by default
 ///   because it opens an endpoint; on here so its `agent_endpoint` test runs
 ///   in the same jobs.
+/// - `flui/persist`: the storage seam the runner hands realms, off by default
+///   because it links the file store; on here so its runner tests and the
+///   Notes example, which needs it, are covered.
 /// - `--lib --bins --tests`: build and run what has tests without LINKING the
 ///   ~60 examples, which `cargo nextest run` otherwise links on every run.
 ///   Examples still compile in `lint` (`--all-targets`);
@@ -68,7 +71,7 @@ pub(crate) const TEST_SCOPE: [&str; 10] = [
 ];
 
 /// The features [`TEST_SCOPE`] turns on (see there for each one's reason).
-const TEST_FEATURES: &str = "flui/material,flui/cupertino,flui-devtools/agent";
+const TEST_FEATURES: &str = "flui/material,flui/cupertino,flui/persist,flui-devtools/agent";
 
 /// The build that links the examples and benches: the workspace's
 /// `--all-targets` with [`TEST_SCOPE`]'s features, so it reuses what a test
@@ -1154,7 +1157,7 @@ mod tests {
         steps.iter().map(ToString::to_string).collect()
     }
 
-    const SCOPE: &str = "--workspace --exclude flui-platform --locked --no-fail-fast --lib --bins --tests --features flui/material,flui/cupertino,flui-devtools/agent";
+    const SCOPE: &str = "--workspace --exclude flui-platform --locked --no-fail-fast --lib --bins --tests --features flui/material,flui/cupertino,flui/persist,flui-devtools/agent";
 
     fn native_host_suites_only_build_their_packages() {
         assert_eq!(

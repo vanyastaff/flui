@@ -25,7 +25,7 @@ source for the exact API and required features.
 - Ready to change a working example: [Counter → Todo](getting-started/tutorial-todo.md), then
   the [Cookbook](cookbook/overview.md) for forms, async work, themes, animation, and testing.
 - Ready for an application with several screens: the [Notes showcase](getting-started/showcase.md)
-  runs with `cargo run --example two_screens --features material` and has a headless flow test.
+  runs with `cargo run --example two_screens --features material,persist` and has a headless flow test.
 - Choosing a state model or learning how a view becomes a frame:
   [Concepts](concepts/overview.md) and [State](concepts/state.md).
 - Coming from Flutter and want the vocabulary mapping first:

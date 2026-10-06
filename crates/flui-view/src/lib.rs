@@ -95,6 +95,7 @@ pub mod element;
 pub mod key;
 pub mod macros;
 pub mod owner;
+pub mod persist;
 pub mod reactive;
 pub mod seq;
 pub mod state_cell;

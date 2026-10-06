@@ -25,6 +25,8 @@ mod child_payload_recovery;
 mod dense_reconcile_containment;
 #[path = "dense_update_containment.rs"]
 mod dense_update_containment;
+#[path = "flush_registry.rs"]
+mod flush_registry;
 #[path = "global_key.rs"]
 mod global_key;
 #[path = "global_key_duplication.rs"]
@@ -49,6 +51,8 @@ mod orphaned_render_mount;
 mod owner_key_lookup_reentry;
 #[path = "support/owner_key_retirement.rs"]
 mod owner_key_retirement;
+#[path = "persist.rs"]
+mod persist;
 #[path = "production_reconcile_emits.rs"]
 mod production_reconcile_emits;
 #[path = "reconcile_capture.rs"]
