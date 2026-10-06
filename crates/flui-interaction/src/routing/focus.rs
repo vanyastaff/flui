@@ -5,8 +5,10 @@
 //! when their subtree is attached below [`FocusManager::root_scope`].
 
 use std::{
+    any::Any,
     cell::{Cell, RefCell},
     collections::{HashSet, VecDeque},
+    panic::{AssertUnwindSafe, catch_unwind, resume_unwind},
     rc::{Rc, Weak},
 };
 
@@ -14,6 +16,7 @@ use flui_foundation::ListenerId;
 
 use crate::{
     events::KeyEvent,
+    retain::Retain,
     routing::focus_scope::{FocusNode, FocusScopeNode, KeyEventResult},
 };
 
@@ -22,6 +25,73 @@ pub type FocusChangeCallback = Rc<dyn Fn(Option<Rc<FocusNode>>, Option<Rc<FocusN
 
 /// Owner-local global key handler.
 pub type KeyEventCallback = Rc<dyn Fn(&KeyEvent) -> bool>;
+
+/// One terminal transaction retains its first failure across callbacks and
+/// outgoing ownership. An outer unwind remains authoritative even after an
+/// inner catch makes `thread::panicking()` temporarily false.
+pub(super) struct FocusClosePanic {
+    first: Option<Box<dyn Any + Send>>,
+    unwinding: bool,
+}
+
+impl FocusClosePanic {
+    pub(super) fn new() -> Self {
+        Self {
+            first: None,
+            unwinding: std::thread::panicking(),
+        }
+    }
+
+    pub(super) fn run(&mut self, run: impl FnOnce()) {
+        if self.unwinding || self.first.is_some() {
+            return;
+        }
+        let _ = self.invoke(run);
+    }
+
+    pub(super) fn invoke<T>(&mut self, run: impl FnOnce() -> T) -> Option<T> {
+        match catch_unwind(AssertUnwindSafe(run)) {
+            Ok(value) => Some(value),
+            Err(payload) => {
+                if self.unwinding || self.first.is_some() {
+                    flui_foundation::panic::retain_opaque_payload(payload);
+                } else {
+                    self.first = Some(payload);
+                }
+                None
+            }
+        }
+    }
+
+    pub(super) fn retire<T: Retain>(&mut self, value: T) {
+        if self.unwinding || self.first.is_some() {
+            // Retain the actual outgoing value, before invoking arbitrary
+            // destruction. Catching its Drop would not contain two fields
+            // that panic while the same aggregate is being destroyed.
+            value.retain();
+        } else {
+            self.run(|| drop(value));
+        }
+    }
+
+    pub(super) fn finish(self) {
+        if let Some(payload) = self.first {
+            resume_unwind(payload);
+        }
+    }
+
+    pub(super) fn finish_with<T: Default + Retain>(self, value: T) -> T {
+        if self.unwinding || self.first.is_some() {
+            // The result may itself own arbitrary user state. Move that
+            // custody out of the unwind path before resuming the first panic.
+            value.retain();
+            self.finish();
+            T::default()
+        } else {
+            value
+        }
+    }
+}
 
 /// Presentation-owned focus state and root focus tree.
 ///
@@ -65,7 +135,10 @@ pub struct FocusManager {
     primary_focus: RefCell<Option<Rc<FocusNode>>>,
     listeners: RefCell<Vec<(ListenerId, FocusChangeCallback)>>,
     next_listener_id: Cell<usize>,
-    global_key_handlers: RefCell<Vec<KeyEventCallback>>,
+    /// Each handler under the registration number it was added with, so a
+    /// dispatch snapshot names registrations rather than allocations.
+    global_key_handlers: RefCell<Vec<(u64, KeyEventCallback)>>,
+    next_global_key_handler: Cell<u64>,
     /// Nodes that asked to start a key's walk while nothing is focused,
     /// oldest first ([`Self::claim_unfocused_keys`]).
     unfocused_key_claims: RefCell<Vec<Weak<FocusNode>>>,
@@ -154,6 +227,7 @@ impl FocusManager {
             listeners: RefCell::new(Vec::new()),
             next_listener_id: Cell::new(1),
             global_key_handlers: RefCell::new(Vec::new()),
+            next_global_key_handler: Cell::new(0),
             unfocused_key_claims: RefCell::new(Vec::new()),
             closed: Cell::new(false),
             notification_depth: Cell::new(0),
@@ -444,20 +518,36 @@ impl FocusManager {
             .checked_add(1)
             .expect("BUG: focus-manager listener ID space exhausted");
         self.next_listener_id.set(next);
-        self.listeners.borrow_mut().push((id, callback));
+        if self.closed.get() {
+            let mut failure = FocusClosePanic::new();
+            failure.retire(callback);
+            failure.finish();
+        } else {
+            self.listeners.borrow_mut().push((id, callback));
+        }
         id
     }
 
     /// Remove one focus-change listener.
     pub fn remove_listener(&self, id: ListenerId) {
-        let mut listeners = std::mem::take(&mut *self.listeners.borrow_mut());
-        listeners.retain(|(held, _)| *held != id);
-        let _prev = std::mem::replace(&mut *self.listeners.borrow_mut(), listeners);
+        let removed = {
+            let mut listeners = self.listeners.borrow_mut();
+            listeners
+                .iter()
+                .position(|(held, _)| *held == id)
+                .map(|index| listeners.remove(index))
+        };
+        drop(removed);
     }
 
     /// Remove all focus-change listeners.
     pub fn clear_listeners(&self) {
-        let _prev = std::mem::take(&mut *self.listeners.borrow_mut());
+        let listeners = std::mem::take(&mut *self.listeners.borrow_mut());
+        let mut failure = FocusClosePanic::new();
+        for (_, listener) in listeners {
+            failure.retire(listener);
+        }
+        failure.finish();
     }
 
     /// Number of registered listeners.
@@ -468,14 +558,22 @@ impl FocusManager {
     }
 
     fn notify_listeners(&self, previous: Option<Rc<FocusNode>>, new: Option<Rc<FocusNode>>) {
-        let listeners = self.listeners.borrow().clone();
-        for (id, listener) in listeners {
+        let ids: Vec<_> = self.listeners.borrow().iter().map(|(id, _)| *id).collect();
+        for id in ids {
             // A listener already dispatched in this loop may have removed
             // a later one (itself included) — skip it: once removed, a
             // listener is never called again, even mid-dispatch.
-            let still_registered = self.listeners.borrow().iter().any(|(held, _)| *held == id);
-            if still_registered {
-                listener(previous.clone(), new.clone());
+            let listener = self
+                .listeners
+                .borrow()
+                .iter()
+                .find(|(registered, _)| *registered == id)
+                .map(|(_, listener)| Rc::clone(listener));
+            if let Some(listener) = listener {
+                let mut failure = FocusClosePanic::new();
+                let _ = failure.invoke(|| listener(previous.clone(), new.clone()));
+                failure.retire(listener);
+                failure.finish();
             }
         }
     }
@@ -574,24 +672,74 @@ impl FocusManager {
     }
 
     /// Register an owner-local handler that runs before the focus-tree walk.
+    ///
+    /// A closed owner rejects incoming callback ownership. Healthy rejection
+    /// runs its destructor outside internal borrows; rejection during an active
+    /// unwind retains it to preserve the original failure.
     pub fn add_global_key_handler(&self, handler: KeyEventCallback) {
-        self.global_key_handlers.borrow_mut().push(handler);
+        if self.closed.get() {
+            let mut failure = FocusClosePanic::new();
+            failure.retire(handler);
+            failure.finish();
+        } else {
+            let registration = self.next_global_key_handler.get();
+            self.next_global_key_handler.set(
+                registration
+                    .checked_add(1)
+                    .expect("BUG: global key handler registrations exhausted"),
+            );
+            self.global_key_handlers
+                .borrow_mut()
+                .push((registration, handler));
+        }
     }
 
     /// Remove all global key handlers.
     pub fn clear_global_key_handlers(&self) {
-        let _prev = std::mem::take(&mut *self.global_key_handlers.borrow_mut());
+        let handlers = std::mem::take(&mut *self.global_key_handlers.borrow_mut());
+        let mut failure = FocusClosePanic::new();
+        for (_, handler) in handlers {
+            failure.retire(handler);
+        }
+        failure.finish();
     }
 
     /// Dispatch a key event through global handlers, then focused leaf to root.
+    ///
+    /// Global handlers are snapshotted by registration. A handler removed
+    /// before its turn is skipped even if a caller still retains its `Rc`, and
+    /// so is one registered during this dispatch, even when it is the same
+    /// `Rc` re-added; a snapshot registration that remains registered can
+    /// still handle the key.
     pub fn dispatch_key_event(&self, event: &KeyEvent) -> bool {
         if self.closed.get() {
             return false;
         }
 
-        let global_handlers = self.global_key_handlers.borrow().clone();
-        for handler in global_handlers {
-            if handler(event) {
+        let registrations: Vec<u64> = self
+            .global_key_handlers
+            .borrow()
+            .iter()
+            .map(|(registration, _)| *registration)
+            .collect();
+        for registration in registrations {
+            if self.closed.get() {
+                return false;
+            }
+            let handler = self
+                .global_key_handlers
+                .borrow()
+                .iter()
+                .find(|(live, _)| *live == registration)
+                .map(|(_, handler)| Rc::clone(handler));
+            let Some(handler) = handler else {
+                continue;
+            };
+            let mut failure = FocusClosePanic::new();
+            let handled = failure.invoke(|| handler(event)).unwrap_or(false);
+            failure.retire(handler);
+            failure.finish();
+            if handled {
                 tracing::trace!("key event handled by global focus handler");
                 return true;
             }
@@ -667,13 +815,26 @@ impl FocusManager {
     /// Closing is idempotent. It sends the final focus-loss notification,
     /// clears manager and node callbacks, and tombstones every owned node.
     /// Tombstoned nodes cannot later attach to a different manager.
+    /// The complete tree is detached and its key, geometry, context and policy
+    /// ownership moved out before final listeners run. Listener removal still
+    /// takes effect during that final delivery; registration on a closed owner
+    /// is inert. Healthy captures retire independently. After the first failure,
+    /// remaining notifications are skipped and outgoing captures are retained
+    /// without invoking arbitrary destruction.
+    ///
+    /// The first panic propagates after the terminal state is committed. During
+    /// an already active unwind, notifications are skipped and outgoing captures
+    /// are retained so the outer failure remains authoritative instead.
+    /// As with other containment boundaries, a user value whose own aggregate
+    /// destruction double-panics can abort before any outer catch is reached.
     ///
     /// Primary focus is always cleared to `None`, even when `close` runs
     /// reentrantly from inside a focus-change listener — unlike
     /// `request_focus`/[`Self::unfocus`], `close` never takes the private
-    /// notification-depth guard itself, so its own node-level notification
-    /// (the private `notify_focus_nodes`) always runs immediately, nested
-    /// inside whatever notification is already in flight. Only its
+    /// notification-depth guard itself, so its healthy node-level notifications
+    /// run immediately, nested inside whatever notification is already in
+    /// flight. Notifications stop at the first failure and are omitted during
+    /// an already-active unwind. Its
     /// *manager*-level publication is conditional: it fires `(previous,
     /// None)` to [`FocusChangeCallback`] listeners only when
     /// `notification_depth` reads zero (no outer notification is currently
@@ -687,23 +848,58 @@ impl FocusManager {
             return;
         }
 
-        {
-            let _prev = std::mem::take(&mut *self.pending_focus_transitions.borrow_mut());
-        }
+        let mut failure = FocusClosePanic::new();
+        let pending = std::mem::take(&mut *self.pending_focus_transitions.borrow_mut());
         let previous = self.primary_focus.borrow_mut().take();
-        if let Some(previous) = previous {
-            Self::notify_focus_nodes(Some(&previous), None);
-            if self.notification_depth.get() == 0 {
-                self.notify_listeners(Some(previous), None);
+        let mut notified = previous.as_ref().map_or_else(Vec::new, |node| {
+            node.ancestors()
+                .filter(|ancestor| ancestor.parent().is_some())
+                .collect()
+        });
+        // A parentless node (the root scope parked on itself) is never
+        // notified, as `FocusNode::notify_listeners` never notifies it.
+        notified.extend(
+            previous
+                .iter()
+                .filter(|node| node.parent().is_some())
+                .cloned(),
+        );
+        let retired = FocusNode::close_owned_tree(self.root_scope.as_focus_node());
+        let global_handlers = std::mem::take(&mut *self.global_key_handlers.borrow_mut());
+
+        for node in notified {
+            node.notify_close_listeners(&mut failure);
+        }
+        if previous.is_some() && self.notification_depth.get() == 0 {
+            let ids: Vec<_> = self.listeners.borrow().iter().map(|(id, _)| *id).collect();
+            for id in ids {
+                let listener = self
+                    .listeners
+                    .borrow()
+                    .iter()
+                    .find(|(registered, _)| *registered == id)
+                    .map(|(_, listener)| Rc::clone(listener));
+                if let Some(listener) = listener {
+                    failure.run(|| listener(previous.clone(), None));
+                    failure.retire(listener);
+                }
             }
         }
-        {
-            let _prev = std::mem::take(&mut *self.listeners.borrow_mut());
+        let listeners = std::mem::take(&mut *self.listeners.borrow_mut());
+        for (_, listener) in listeners {
+            failure.retire(listener);
         }
-        {
-            let _prev = std::mem::take(&mut *self.global_key_handlers.borrow_mut());
+        for (_, handler) in global_handlers {
+            failure.retire(handler);
         }
-        FocusNode::close_owned_tree(self.root_scope.as_focus_node());
+        for node in retired {
+            node.retire(&mut failure);
+        }
+        for node in pending {
+            failure.retire(node);
+        }
+        failure.retire(previous);
+        failure.finish();
     }
 
     /// Whether deterministic teardown has run.
@@ -898,6 +1094,30 @@ mod tests {
     fn focus_failure_and_reentrancy_matrix() {
         let cases: &[(&str, fn())] = &[
             (
+                "closed_rejections_preserve_outer_failure_and_healthy_retirement",
+                closed_rejections_preserve_outer_failure_and_healthy_retirement,
+            ),
+            (
+                "close_retires_each_capture_and_preserves_first_failure",
+                close_retires_each_capture_and_preserves_first_failure,
+            ),
+            (
+                "close_commits_terminal_state_before_reentrant_callbacks",
+                close_commits_terminal_state_before_reentrant_callbacks,
+            ),
+            (
+                "global_key_dispatch_skips_removed_live_handlers_and_continues",
+                global_key_dispatch_skips_removed_live_handlers_and_continues,
+            ),
+            (
+                "close_does_not_notify_a_root_parked_on_itself",
+                close_does_not_notify_a_root_parked_on_itself,
+            ),
+            (
+                "close_during_active_unwind_preserves_outer_failure",
+                close_during_active_unwind_preserves_outer_failure,
+            ),
+            (
                 "listener_panic_does_not_leave_notification_depth_stuck",
                 listener_panic_does_not_leave_notification_depth_stuck,
             ),
@@ -918,11 +1138,706 @@ mod tests {
                 reentrant_request_during_notification_is_applied_after_and_published_in_order,
             ),
         ];
+        if let Ok(case) = std::env::var(HOSTILE_CHILD) {
+            let (_, run) = HOSTILE_CASES
+                .iter()
+                .find(|(name, _)| *name == case)
+                .expect("a known hostile case");
+            run();
+            std::process::exit(CHILD_COMPLETED);
+        }
         for &(name, case) in cases {
             if let Err(payload) = std::panic::catch_unwind(case) {
                 eprintln!("matrix case `{name}` failed");
                 std::panic::resume_unwind(payload);
             }
+        }
+    }
+
+    /// Names the single hostile case a child process of
+    /// `focus_failure_and_reentrancy_matrix` runs instead of the matrix.
+    const HOSTILE_CHILD: &str = "FLUI_FOCUS_HOSTILE_CHILD";
+    /// A child that ran its case to completion exits with this status, so a
+    /// filter that matched no test (status 0) does not pass for one.
+    const CHILD_COMPLETED: i32 = 86;
+    const HOSTILE_CASES: &[(&str, fn())] = &[
+        (
+            "close_during_active_unwind_child",
+            close_during_active_unwind_child,
+        ),
+        ("closed_rejections_child", closed_rejections_child),
+    ];
+
+    /// Run one hostile case in a child process: what it guards against is an
+    /// abort, which would otherwise take the whole test binary down.
+    fn run_hostile_case_in_child(case: &str) {
+        let mut child = std::process::Command::new(std::env::current_exe().expect("test binary"))
+            .args([
+                "--exact",
+                "routing::focus::tests::focus_failure_and_reentrancy_matrix",
+                "--nocapture",
+            ])
+            .env(HOSTILE_CHILD, case)
+            .env("RUST_BACKTRACE", "0")
+            .env("RUST_LIB_BACKTRACE", "0")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("spawn hostile case");
+        let mut stderr = child.stderr.take().expect("child stderr");
+        let stderr_reader = std::thread::spawn(move || {
+            let mut output = Vec::new();
+            std::io::Read::read_to_end(&mut stderr, &mut output).expect("read child stderr");
+            output
+        });
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+        let status = loop {
+            if let Some(status) = child.try_wait().expect("poll hostile case") {
+                break status;
+            }
+            if std::time::Instant::now() >= deadline {
+                child.kill().expect("stop timed-out hostile case");
+                child.wait().expect("reap hostile case");
+                stderr_reader.join().expect("child stderr reader");
+                panic!("hostile case `{case}` timed out");
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        };
+        let stderr = stderr_reader.join().expect("child stderr reader");
+        assert_eq!(
+            status.code(),
+            Some(CHILD_COMPLETED),
+            "hostile case `{case}` failed: {status}
+{}",
+            String::from_utf8_lossy(&stderr)
+        );
+    }
+
+    struct CloseCapture {
+        label: &'static str,
+        panic: bool,
+        drops: Rc<RefCell<Vec<&'static str>>>,
+        terminal: Rc<Cell<bool>>,
+        node: Weak<FocusNode>,
+    }
+
+    impl Drop for CloseCapture {
+        fn drop(&mut self) {
+            let terminal = self.node.upgrade().is_none_or(|node| {
+                !node.is_attached()
+                    && matches!(
+                        node.request_focus(),
+                        crate::routing::FocusRequestOutcome::OwnerClosed
+                    )
+            });
+            self.terminal.set(self.terminal.get() && terminal);
+            self.drops.borrow_mut().push(self.label);
+            if self.panic {
+                std::panic::panic_any(self.label);
+            }
+        }
+    }
+
+    struct ClosingPolicy(CloseCapture);
+
+    impl std::fmt::Debug for ClosingPolicy {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("ClosingPolicy")
+        }
+    }
+
+    impl crate::routing::FocusTraversalPolicy for ClosingPolicy {
+        fn sort_descendants(&self, nodes: &[Rc<FocusNode>]) -> Vec<Rc<FocusNode>> {
+            let _ = &self.0;
+            nodes.to_vec()
+        }
+    }
+
+    fn close_retires_each_capture_and_preserves_first_failure() {
+        use crate::routing::{FocusRequestOutcome, ReadingOrderPolicy};
+        use std::panic::{AssertUnwindSafe, catch_unwind};
+
+        // Final notifications precede outgoing ownership retirement. Each
+        // failure point runs alone, followed by chronological competition.
+        let cases: &[(&[&str], Option<&str>, &str)] = &[
+            (&[], Some("node callback"), "node callback"),
+            (&[], Some("manager callback"), "manager callback"),
+            (&["node listener"], None, "node listener"),
+            (&["manager listener"], None, "manager listener"),
+            (&["global handler"], None, "global handler"),
+            (&["key handler"], None, "key handler"),
+            (&["rect provider"], None, "rect provider"),
+            (&["context"], None, "context"),
+            (&["policy"], None, "policy"),
+            (
+                &["global handler", "context"],
+                Some("node callback"),
+                "node callback",
+            ),
+            (&["key handler", "rect provider"], None, "key handler"),
+            (
+                &["manager listener", "global handler"],
+                None,
+                "manager listener",
+            ),
+        ];
+        for &(panicking_drops, callback_failure, expected) in cases {
+            let (manager, nodes) = manager_with_nodes(2);
+            nodes[0].request_focus();
+            let drops = Rc::new(RefCell::new(Vec::new()));
+            let terminal = Rc::new(Cell::new(true));
+            let capture = |label| CloseCapture {
+                label,
+                panic: panicking_drops.contains(&label),
+                drops: Rc::clone(&drops),
+                terminal: Rc::clone(&terminal),
+                node: Rc::downgrade(&nodes[1]),
+            };
+            let owner = capture("node listener");
+            let node_listener = nodes[0].add_listener(Rc::new(move || {
+                let _ = &owner;
+                assert!(callback_failure != Some("node callback"), "node callback");
+            }));
+            let owner = capture("manager listener");
+            let manager_listener = manager.add_listener(Rc::new(move |_, _| {
+                let _ = &owner;
+                assert!(
+                    callback_failure != Some("manager callback"),
+                    "manager callback"
+                );
+            }));
+            let owner = capture("global handler");
+            manager.add_global_key_handler(Rc::new(move |_| {
+                let _ = &owner;
+                false
+            }));
+            let owner = capture("key handler");
+            let key_registration = nodes[1].register_on_key_event(Rc::new(move |_| {
+                let _ = &owner;
+                KeyEventResult::Handled
+            }));
+            let owner = capture("rect provider");
+            let rect_registration = nodes[1].register_rect_provider(Rc::new(move || {
+                let _ = &owner;
+                None
+            }));
+            let context_registration = nodes[1].register_context(Rc::new(capture("context")));
+            manager
+                .root_scope()
+                .set_traversal_policy(Rc::new(ClosingPolicy(capture("policy"))));
+
+            let outcome = catch_unwind(AssertUnwindSafe(|| manager.close()));
+            let first = outcome.err().map(|payload| {
+                let text =
+                    flui_foundation::panic::payload_text(payload.as_ref()).map(str::to_owned);
+                flui_foundation::panic::retain_opaque_payload(payload);
+                text
+            });
+            let detached = nodes.iter().all(|node| !node.is_attached());
+            let stale_tokens = !key_registration.is_current()
+                && !rect_registration.is_current()
+                && !context_registration.is_current();
+            let cleared = nodes[1].context().is_none()
+                && nodes[1].handle_key_event(&key_event()) == KeyEventResult::Ignored;
+
+            // Safe negative control: if old close stopped early, release its
+            // leftover captures separately before asserting the defect.
+            let _ = catch_unwind(AssertUnwindSafe(|| nodes[0].remove_listener(node_listener)));
+            let _ = catch_unwind(AssertUnwindSafe(|| {
+                manager.remove_listener(manager_listener);
+            }));
+            let _ = catch_unwind(AssertUnwindSafe(|| manager.clear_global_key_handlers()));
+            let _ = catch_unwind(AssertUnwindSafe(|| nodes[1].clear_on_key_event()));
+            let _ = catch_unwind(AssertUnwindSafe(|| nodes[1].clear_rect_provider()));
+            let _ = catch_unwind(AssertUnwindSafe(|| {
+                nodes[1].register_context(Rc::new(())).relinquish();
+            }));
+            let _ = catch_unwind(AssertUnwindSafe(|| {
+                manager
+                    .root_scope()
+                    .set_traversal_policy(Rc::new(ReadingOrderPolicy));
+            }));
+
+            assert_eq!(
+                first.flatten().as_deref(),
+                Some(expected),
+                "{panicking_drops:?}/{callback_failure:?}"
+            );
+            assert!(
+                detached && cleared && stale_tokens,
+                "complete terminal cleanup after {expected}"
+            );
+            assert!(
+                terminal.get(),
+                "every capture sees the complete closed tree after {expected}"
+            );
+            if callback_failure.is_some() {
+                assert!(
+                    drops.borrow().is_empty(),
+                    "captures retained after {expected}"
+                );
+            } else {
+                assert_eq!(
+                    drops.borrow().last().copied(),
+                    Some(expected),
+                    "retirement stops at the first destructor failure"
+                );
+                assert_eq!(
+                    drops
+                        .borrow()
+                        .iter()
+                        .filter(|label| panicking_drops.contains(label))
+                        .count(),
+                    1
+                );
+            }
+            assert!(matches!(
+                nodes[1].request_focus(),
+                FocusRequestOutcome::OwnerClosed
+            ));
+            assert!(manager.root_scope().attach_node(&FocusNode::new()).is_err());
+            assert!(!manager.dispatch_key_event(&key_event()));
+            manager.close();
+        }
+    }
+
+    struct CloseBomb(std::sync::Arc<std::sync::atomic::AtomicUsize>);
+    impl Drop for CloseBomb {
+        fn drop(&mut self) {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            panic!("hostile aggregate context field");
+        }
+    }
+
+    fn close_preserves_first_failure_against_hostile_context() {
+        use std::panic::{AssertUnwindSafe, catch_unwind};
+
+        struct OpaquePayload(std::sync::Arc<std::sync::atomic::AtomicUsize>);
+        impl Drop for OpaquePayload {
+            fn drop(&mut self) {
+                self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                panic!("opaque secondary payload destructor");
+            }
+        }
+        struct ThrowsOpaque(std::sync::Arc<std::sync::atomic::AtomicUsize>);
+        impl Drop for ThrowsOpaque {
+            fn drop(&mut self) {
+                std::panic::panic_any(OpaquePayload(std::sync::Arc::clone(&self.0)));
+            }
+        }
+        for notification_fails in [true, false] {
+            let (manager, nodes) = manager_with_nodes(1);
+            nodes[0].request_focus();
+            nodes[0].add_listener(Rc::new(move || {
+                assert!(!notification_fails, "first final notification");
+            }));
+            let payload_drops = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let aggregate_drops = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let captured = ThrowsOpaque(std::sync::Arc::clone(&payload_drops));
+            manager.add_global_key_handler(Rc::new(move |_| {
+                let _ = &captured;
+                false
+            }));
+            nodes[0]
+                .register_context(Rc::new((
+                    CloseBomb(std::sync::Arc::clone(&aggregate_drops)),
+                    CloseBomb(std::sync::Arc::clone(&aggregate_drops)),
+                )))
+                .relinquish();
+            let outcome = catch_unwind(AssertUnwindSafe(|| manager.close()));
+            let payload = outcome.expect_err("the first failure propagates");
+            if notification_fails {
+                assert_eq!(
+                    flui_foundation::panic::payload_text(payload.as_ref()),
+                    Some("first final notification")
+                );
+            } else {
+                assert!(
+                    payload.is::<OpaquePayload>(),
+                    "the original opaque destructor payload propagates"
+                );
+            }
+            flui_foundation::panic::retain_opaque_payload(payload);
+            assert!(!nodes[0].is_attached());
+            assert!(nodes[0].context().is_none());
+            assert_eq!(payload_drops.load(std::sync::atomic::Ordering::Relaxed), 0);
+            assert_eq!(
+                aggregate_drops.load(std::sync::atomic::Ordering::Relaxed),
+                0
+            );
+        }
+    }
+
+    fn close_commits_terminal_state_before_reentrant_callbacks() {
+        use crate::routing::FocusRequestOutcome;
+
+        let (manager, nodes) = manager_with_nodes(2);
+        nodes[0].request_focus();
+        let other = Rc::clone(&nodes[1]);
+        let owner = Rc::downgrade(&manager);
+        let notified = Rc::new(Cell::new(false));
+        let observed = Rc::clone(&notified);
+        nodes[0].add_listener(Rc::new(move || {
+            let manager = owner.upgrade().expect("the caller retains the manager");
+            assert!(manager.primary_focus().is_none());
+            assert!(!other.is_attached());
+            assert!(matches!(
+                other.request_focus(),
+                FocusRequestOutcome::OwnerClosed
+            ));
+            other.set_on_key_event(Rc::new(|_| panic!("closed node accepted a key handler")));
+            other.register_context(Rc::new(())).relinquish();
+            manager.add_listener(Rc::new(|_, _| panic!("closed owner accepted a listener")));
+            manager
+                .add_global_key_handler(Rc::new(|_| panic!("closed owner accepted a key handler")));
+            manager.close();
+            observed.set(true);
+        }));
+        manager.close();
+        assert!(notified.get());
+        assert!(nodes[1].context().is_none());
+        assert_eq!(
+            nodes[1].handle_key_event(&key_event()),
+            KeyEventResult::Ignored
+        );
+        assert!(!manager.dispatch_key_event(&key_event()));
+        assert_eq!(manager.listener_count(), 0);
+    }
+
+    fn close_does_not_notify_a_root_parked_on_itself() {
+        let manager = FocusManager::new();
+        let root = Rc::clone(manager.root_scope().as_focus_node());
+        root.request_focus();
+        assert!(
+            manager
+                .primary_focus()
+                .is_some_and(|focused| Rc::ptr_eq(&focused, &root)),
+            "the root scope parks primary focus on itself"
+        );
+        let notified = Rc::new(Cell::new(false));
+        let observed = Rc::clone(&notified);
+        root.add_listener(Rc::new(move || observed.set(true)));
+        manager.close();
+        assert!(!notified.get(), "a parentless root is never notified");
+    }
+
+    fn global_key_dispatch_skips_removed_live_handlers_and_continues() {
+        let manager = FocusManager::new();
+        let calls = Rc::new(RefCell::new(Vec::new()));
+        let recorded = Rc::clone(&calls);
+        let later: KeyEventCallback = Rc::new(move |_| {
+            recorded.borrow_mut().push("later healthy handler");
+            true
+        });
+        let recorded = Rc::clone(&calls);
+        let kept_removed: KeyEventCallback = Rc::new(move |_| {
+            recorded.borrow_mut().push("removed handler");
+            false
+        });
+        let owner = Rc::downgrade(&manager);
+        let surviving = Rc::clone(&later);
+        let recorded = Rc::clone(&calls);
+        manager.add_global_key_handler(Rc::new(move |_| {
+            recorded.borrow_mut().push("removing handler");
+            let owner = owner.upgrade().expect("the caller retains the manager");
+            owner.clear_global_key_handlers();
+            // Re-adding the same `Rc` is a new registration, which this
+            // dispatch's snapshot does not name. The removed callback still
+            // has an independent consumer-owned Rc below.
+            owner.add_global_key_handler(Rc::clone(&surviving));
+            false
+        }));
+        manager.add_global_key_handler(Rc::clone(&kept_removed));
+        manager.add_global_key_handler(later);
+
+        assert!(!manager.dispatch_key_event(&key_event()));
+        assert_eq!(*calls.borrow(), ["removing handler"]);
+        calls.borrow_mut().clear();
+        assert!(manager.dispatch_key_event(&key_event()));
+        assert_eq!(*calls.borrow(), ["later healthy handler"]);
+        drop(kept_removed);
+        manager.close();
+    }
+
+    fn close_from_key_callback_preserves_first_failure_against_hostile_capture() {
+        use std::panic::{AssertUnwindSafe, catch_unwind};
+
+        for global in [true, false] {
+            let (manager, nodes) = manager_with_nodes(1);
+            nodes[0].request_focus();
+            let capture_drops = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let hostile = (
+                CloseBomb(std::sync::Arc::clone(&capture_drops)),
+                CloseBomb(std::sync::Arc::clone(&capture_drops)),
+            );
+            let owner = Rc::downgrade(&manager);
+            let callback = move || -> ! {
+                let _ = &hostile;
+                owner
+                    .upgrade()
+                    .expect("the dispatch caller retains the owner")
+                    .close();
+                panic!("first key callback");
+            };
+            if global {
+                manager.add_global_key_handler(Rc::new(move |_| callback()));
+            } else {
+                nodes[0].set_on_key_event(Rc::new(move |_| callback()));
+            }
+            let outcome = catch_unwind(AssertUnwindSafe(|| {
+                manager.dispatch_key_event(&key_event())
+            }));
+            let payload = outcome.expect_err("the original key callback failure propagates");
+            assert_eq!(
+                flui_foundation::panic::payload_text(payload.as_ref()),
+                Some("first key callback")
+            );
+            flui_foundation::panic::retain_opaque_payload(payload);
+            assert!(!nodes[0].is_attached());
+            assert_eq!(capture_drops.load(std::sync::atomic::Ordering::Relaxed), 0);
+            assert!(!manager.dispatch_key_event(&key_event()));
+        }
+    }
+
+    fn close_during_active_unwind_preserves_outer_failure() {
+        run_hostile_case_in_child("close_during_active_unwind_child");
+    }
+
+    fn close_during_active_unwind_child() {
+        use std::panic::{AssertUnwindSafe, catch_unwind};
+
+        close_preserves_first_failure_against_hostile_context();
+        close_from_key_callback_preserves_first_failure_against_hostile_capture();
+        let survivor = Rc::new(RefCell::new(None));
+        let aggregate_drops = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let outcome = catch_unwind(AssertUnwindSafe(|| {
+            let (manager, nodes) = manager_with_nodes(1);
+            *survivor.borrow_mut() = Some(Rc::clone(&nodes[0]));
+            nodes[0].request_focus();
+            nodes[0].add_listener(Rc::new(|| panic!("secondary final listener")));
+            nodes[0]
+                .register_context(Rc::new((
+                    CloseBomb(std::sync::Arc::clone(&aggregate_drops)),
+                    CloseBomb(std::sync::Arc::clone(&aggregate_drops)),
+                )))
+                .relinquish();
+            // The final strong manager owner drops during this unwind.
+            let _ = &manager;
+            panic!("outer failure");
+        }));
+        let payload = outcome.expect_err("the outer panic propagates");
+        assert_eq!(
+            flui_foundation::panic::payload_text(payload.as_ref()),
+            Some("outer failure")
+        );
+        flui_foundation::panic::retain_opaque_payload(payload);
+        assert_eq!(
+            aggregate_drops.load(std::sync::atomic::Ordering::Relaxed),
+            0
+        );
+        let node = survivor
+            .borrow()
+            .as_ref()
+            .expect("the surviving public node")
+            .clone();
+        assert!(!node.is_attached());
+        assert!(matches!(
+            node.request_focus(),
+            crate::routing::FocusRequestOutcome::OwnerClosed
+        ));
+    }
+
+    struct RejectedPolicy<T>(T);
+
+    impl<T> std::fmt::Debug for RejectedPolicy<T> {
+        fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("RejectedPolicy")
+        }
+    }
+
+    impl<T> crate::routing::FocusTraversalPolicy for RejectedPolicy<T> {
+        fn sort_descendants(&self, _: &[Rc<FocusNode>]) -> Vec<Rc<FocusNode>> {
+            panic!("closed scope accepted policy")
+        }
+    }
+
+    fn reject_focus_capture<T: 'static>(
+        manager: &Rc<FocusManager>,
+        node: &Rc<FocusNode>,
+        kind: usize,
+        capture: T,
+    ) {
+        match kind {
+            0 => manager.add_global_key_handler(Rc::new(move |_| {
+                let _ = &capture;
+                panic!("closed manager accepted global handler");
+            })),
+            1 => {
+                manager.add_listener(Rc::new(move |_, _| {
+                    let _ = &capture;
+                    panic!("closed manager accepted listener");
+                }));
+            }
+            2 => {
+                node.add_listener(Rc::new(move || {
+                    let _ = &capture;
+                    panic!("closed node accepted listener");
+                }));
+            }
+            3 => node.set_rect_provider(Rc::new(move || {
+                let _ = &capture;
+                panic!("closed node accepted rectangle provider");
+            })),
+            4 => {
+                assert!(!node.register_context(Rc::new(capture)).is_current());
+            }
+            5 => node.set_on_key_event(Rc::new(move |_| {
+                let _ = &capture;
+                panic!("closed node accepted key handler");
+            })),
+            6 => manager
+                .root_scope()
+                .set_traversal_policy(Rc::new(RejectedPolicy(capture))),
+            _ => panic!("unknown rejection case"),
+        }
+    }
+
+    struct RejectedCapture {
+        owner: Weak<FocusManager>,
+        node: Weak<FocusNode>,
+        drops: Rc<Cell<usize>>,
+        panic: bool,
+    }
+
+    impl Drop for RejectedCapture {
+        fn drop(&mut self) {
+            self.drops.set(self.drops.get() + 1);
+            let manager = self.owner.upgrade().expect("caller retains closed manager");
+            let node = self.node.upgrade().expect("caller retains closed node");
+            assert!(manager.is_closed());
+            assert!(!node.is_attached());
+            assert!(matches!(
+                node.request_focus(),
+                crate::routing::FocusRequestOutcome::OwnerClosed
+            ));
+            manager.add_global_key_handler(Rc::new(|_| panic!("reentry accepted handler")));
+            node.clear_on_key_event();
+            assert!(!self.panic, "first rejected capture retirement");
+        }
+    }
+
+    fn closed_rejections_preserve_outer_failure_and_healthy_retirement() {
+        run_hostile_case_in_child("closed_rejections_child");
+    }
+
+    fn closed_rejections_child() {
+        use std::panic::{AssertUnwindSafe, catch_unwind};
+
+        struct RejectOnDrop {
+            manager: Rc<FocusManager>,
+            node: Rc<FocusNode>,
+            kind: usize,
+            drops: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        }
+        impl Drop for RejectOnDrop {
+            fn drop(&mut self) {
+                reject_focus_capture(
+                    &self.manager,
+                    &self.node,
+                    self.kind,
+                    (
+                        CloseBomb(std::sync::Arc::clone(&self.drops)),
+                        CloseBomb(std::sync::Arc::clone(&self.drops)),
+                    ),
+                );
+            }
+        }
+        for kind in 0..7 {
+            let (manager, nodes) = manager_with_nodes(1);
+            manager.close();
+            let drops = Rc::new(Cell::new(0));
+            for panic in [false, true] {
+                let outcome = catch_unwind(AssertUnwindSafe(|| {
+                    reject_focus_capture(
+                        &manager,
+                        &nodes[0],
+                        kind,
+                        RejectedCapture {
+                            owner: Rc::downgrade(&manager),
+                            node: Rc::downgrade(&nodes[0]),
+                            drops: Rc::clone(&drops),
+                            panic,
+                        },
+                    );
+                }));
+                if panic {
+                    let payload =
+                        outcome.expect_err("ordinary rejected capture destruction propagates");
+                    assert_eq!(
+                        flui_foundation::panic::payload_text(payload.as_ref()),
+                        Some("first rejected capture retirement")
+                    );
+                    flui_foundation::panic::retain_opaque_payload(payload);
+                } else {
+                    outcome.expect("healthy rejected capture destruction succeeds");
+                }
+            }
+            assert_eq!(
+                drops.get(),
+                2,
+                "healthy rejection destroys each incoming capture: {kind}"
+            );
+            let hostile_drops = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let outcome = catch_unwind(AssertUnwindSafe(|| {
+                let _guard = RejectOnDrop {
+                    manager: Rc::clone(&manager),
+                    node: Rc::clone(&nodes[0]),
+                    kind,
+                    drops: std::sync::Arc::clone(&hostile_drops),
+                };
+                panic!("outer rejected owner failure");
+            }));
+            let payload = outcome.expect_err("outer failure propagates unchanged");
+            assert_eq!(
+                flui_foundation::panic::payload_text(payload.as_ref()),
+                Some("outer rejected owner failure")
+            );
+            flui_foundation::panic::retain_opaque_payload(payload);
+            assert_eq!(
+                hostile_drops.load(std::sync::atomic::Ordering::Relaxed),
+                0,
+                "unwinding rejection retains aggregate: {kind}"
+            );
+            assert!(!manager.dispatch_key_event(&key_event()));
+            assert!(nodes[0].context().is_none());
+            reject_focus_capture(
+                &manager,
+                &nodes[0],
+                kind,
+                RejectedCapture {
+                    owner: Rc::downgrade(&manager),
+                    node: Rc::downgrade(&nodes[0]),
+                    drops: Rc::clone(&drops),
+                    panic: false,
+                },
+            );
+            assert_eq!(
+                drops.get(),
+                3,
+                "later healthy rejection resumes destruction: {kind}"
+            );
+            manager.close();
+            // A different owner still accepts and delivers the next operation.
+            let (healthy, healthy_nodes) = manager_with_nodes(1);
+            let calls = Rc::new(Cell::new(0));
+            let count = Rc::clone(&calls);
+            healthy_nodes[0].set_on_key_event(Rc::new(move |_| {
+                count.set(count.get() + 1);
+                KeyEventResult::Handled
+            }));
+            healthy_nodes[0].request_focus();
+            assert!(healthy.dispatch_key_event(&key_event()));
+            assert_eq!(calls.get(), 1);
         }
     }
 

@@ -66,10 +66,14 @@ pub(crate) mod intent_tests {
 }
 
 pub(crate) mod tab_tests {
-    use std::rc::Rc;
+    use std::cell::Cell;
+    use std::rc::{Rc, Weak};
 
     use flui_interaction::events::{Key, KeyEvent, KeyState, Modifiers, NamedKey};
-    use flui_interaction::routing::{FocusNode, FocusScopeNode};
+    use flui_interaction::routing::{
+        FocusAttachment, FocusDetachOutcome, FocusNode, FocusScopeNode, FocusTraversalPolicy,
+        ReadingOrderPolicy,
+    };
     use flui_view::ViewExt;
     use flui_view::prelude::*;
     use flui_widgets::interaction::{Focus, FocusScope};
@@ -90,6 +94,35 @@ pub(crate) mod tab_tests {
         }
     }
 
+    #[derive(Debug)]
+    struct ReplacingPolicy {
+        scope: Weak<FocusScopeNode>,
+        retired: Rc<Cell<bool>>,
+    }
+
+    impl FocusTraversalPolicy for ReplacingPolicy {
+        fn sort_descendants(&self, nodes: &[Rc<FocusNode>]) -> Vec<Rc<FocusNode>> {
+            self.scope
+                .upgrade()
+                .expect("the mounted scope remains alive")
+                .set_traversal_policy(Rc::new(ReadingOrderPolicy));
+            let mut order = ReadingOrderPolicy.sort_descendants(nodes);
+            order.reverse();
+            order
+        }
+    }
+
+    impl Drop for ReplacingPolicy {
+        fn drop(&mut self) {
+            let Some(scope) = self.scope.upgrade() else {
+                return;
+            };
+            let live_nodes = scope.sorted_traversal_order(None).len();
+            scope.set_traversal_policy(Rc::new(ReadingOrderPolicy));
+            self.retired.set(live_nodes == 3);
+        }
+    }
+
     /// **Tab works, end to end** (ADR-0026): a real key event enters
     /// `dispatch_key_event`, bubbles from the focused field (ADR-0023),
     /// matches the `Shortcuts` activator, resolves `NextFocusIntent` through
@@ -100,6 +133,7 @@ pub(crate) mod tab_tests {
     pub(crate) fn tab_and_shift_tab_move_the_focus_through_the_actions_chain() {
         let scope = FocusScopeNode::with_debug_label("tab-scope");
         let left = FocusNode::with_debug_label("left");
+        let middle = FocusNode::with_debug_label("middle");
         let right = FocusNode::with_debug_label("right");
 
         let field = |x: f64, node: &Rc<FocusNode>| {
@@ -114,19 +148,235 @@ pub(crate) mod tab_tests {
 
         let harness = mount(FocusScope::with_external_node(
             Rc::clone(&scope),
-            Stack::new(vec![field(0.0, &left), field(20.0, &right)]),
+            Stack::new(vec![
+                field(0.0, &left),
+                field(20.0, &middle),
+                field(40.0, &right),
+            ]),
         ));
         let manager = harness.focus_manager();
         left.request_focus();
 
         assert!(manager.dispatch_key_event(&tab(false)), "Tab is consumed");
         assert!(
-            right.has_primary_focus(),
+            middle.has_primary_focus(),
             "Tab moved the focus to the next node in reading order"
         );
 
         assert!(manager.dispatch_key_event(&tab(true)), "Shift+Tab too");
         assert!(left.has_primary_focus(), "and it stepped back");
+
+        // Begin inside the order so the outgoing-policy assertion does not
+        // depend on what happens when traversal reaches a scope edge.
+        middle.request_focus();
+        assert!(middle.has_primary_focus());
+        let retired = Rc::new(Cell::new(false));
+        scope.set_traversal_policy(Rc::new(ReplacingPolicy {
+            scope: Rc::downgrade(&scope),
+            retired: Rc::clone(&retired),
+        }));
+        assert!(manager.dispatch_key_event(&tab(false)));
+        assert!(
+            left.has_primary_focus(),
+            "the current key uses the outgoing reverse reading-order policy"
+        );
+        assert!(
+            retired.get(),
+            "policy destruction can reenter the same scope"
+        );
+        assert!(manager.dispatch_key_event(&tab(false)));
+        assert!(
+            middle.has_primary_focus(),
+            "the next key uses the replacement reading-order policy"
+        );
+    }
+
+    #[derive(Debug)]
+    struct PolicyCapture {
+        drops: Rc<Cell<usize>>,
+        panic: bool,
+    }
+
+    impl Drop for PolicyCapture {
+        fn drop(&mut self) {
+            self.drops.set(self.drops.get() + 1);
+            assert!(!self.panic, "first policy capture retirement");
+        }
+    }
+
+    #[derive(Debug)]
+    struct UnwindingPolicy {
+        scope: Weak<FocusScopeNode>,
+        detached_candidate: FocusAttachment,
+        panic_sort: bool,
+        capture: PolicyCapture,
+    }
+
+    impl FocusTraversalPolicy for UnwindingPolicy {
+        fn sort_descendants(&self, nodes: &[Rc<FocusNode>]) -> Vec<Rc<FocusNode>> {
+            let _ = &self.capture;
+            self.scope
+                .upgrade()
+                .expect("the mounted scope remains alive")
+                .set_traversal_policy(Rc::new(ReadingOrderPolicy));
+            assert_eq!(
+                self.detached_candidate.detach(),
+                FocusDetachOutcome::Detached
+            );
+            assert!(!self.panic_sort, "first traversal sort failure");
+            nodes.iter().rev().cloned().collect()
+        }
+    }
+
+    struct CandidateCapture(Rc<Cell<usize>>);
+
+    impl Drop for CandidateCapture {
+        fn drop(&mut self) {
+            self.0.set(self.0.get() + 1);
+            panic!("detached candidate aggregate capture");
+        }
+    }
+
+    /// Selects the policy-retirement case in a child process of
+    /// `contracts::focus_actions_and_shortcuts`, which then runs only it.
+    const POLICY_CHILD: &str = "FLUI_TAB_POLICY_UNWIND_CHILD";
+    /// A child that ran the case to completion exits with this status, so a
+    /// filter that matched no test (status 0) does not pass for one.
+    const CHILD_COMPLETED: i32 = 86;
+
+    /// In the child process, run the policy-retirement case alone and exit.
+    pub(crate) fn run_policy_child_if_requested() {
+        if std::env::var_os(POLICY_CHILD).is_some() {
+            policy_and_candidate_retirement_child();
+            std::process::exit(CHILD_COMPLETED);
+        }
+    }
+
+    /// What this case guards against is an abort, so it runs in a child process.
+    pub(crate) fn tab_traversal_preserves_failure_before_policy_and_candidate_retirement() {
+        let mut child = std::process::Command::new(std::env::current_exe().expect("test binary"))
+            .args([
+                "--exact",
+                "contracts::focus_actions_and_shortcuts",
+                "--nocapture",
+            ])
+            .env(POLICY_CHILD, "1")
+            .env("RUST_BACKTRACE", "0")
+            .env("RUST_LIB_BACKTRACE", "0")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("spawn policy retirement child");
+        let mut stderr = child.stderr.take().expect("child stderr");
+        let stderr_reader = std::thread::spawn(move || {
+            let mut bytes = Vec::new();
+            std::io::Read::read_to_end(&mut stderr, &mut bytes).expect("read child stderr");
+            bytes
+        });
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+        let status = loop {
+            if let Some(status) = child.try_wait().expect("poll policy retirement child") {
+                break status;
+            }
+            if std::time::Instant::now() >= deadline {
+                child
+                    .kill()
+                    .expect("stop timed-out policy retirement child");
+                child.wait().expect("reap policy retirement child");
+                stderr_reader.join().expect("child stderr reader");
+                panic!("policy retirement child timed out");
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        };
+        let stderr = stderr_reader.join().expect("child stderr reader");
+        assert_eq!(
+            status.code(),
+            Some(CHILD_COMPLETED),
+            "policy retirement child failed: {status}
+{}",
+            String::from_utf8_lossy(&stderr)
+        );
+    }
+
+    fn policy_and_candidate_retirement_child() {
+        use std::panic::{AssertUnwindSafe, catch_unwind};
+
+        for (panic_sort, panic_capture, expected, expected_policy_drops) in [
+            (true, true, "first traversal sort failure", 0),
+            (true, false, "first traversal sort failure", 0),
+            (false, true, "first policy capture retirement", 1),
+        ] {
+            let scope = FocusScopeNode::with_debug_label("policy-retirement-scope");
+            let left = FocusNode::with_debug_label("left");
+            let middle = FocusNode::with_debug_label("middle");
+            let right = FocusNode::with_debug_label("right");
+            let field = |x: f64, node: &Rc<FocusNode>| {
+                Positioned::new(Focus::new(SizedBox::new(10.0, 10.0)).focus_node(Rc::clone(node)))
+                    .left(x)
+                    .top(0.0)
+                    .width(10.0)
+                    .height(10.0)
+                    .into_view()
+                    .boxed()
+            };
+            let harness = mount(FocusScope::with_external_node(
+                Rc::clone(&scope),
+                Stack::new(vec![
+                    field(0.0, &left),
+                    field(20.0, &middle),
+                    field(40.0, &right),
+                ]),
+            ));
+            let manager = harness.focus_manager();
+            left.request_focus();
+
+            let policy_drops = Rc::new(Cell::new(0));
+            let candidate_drops = Rc::new(Cell::new(0));
+            let candidate = FocusNode::with_debug_label("detached-policy-candidate");
+            candidate
+                .register_context(Rc::new((
+                    CandidateCapture(Rc::clone(&candidate_drops)),
+                    CandidateCapture(Rc::clone(&candidate_drops)),
+                )))
+                .relinquish();
+            let detached_candidate = scope.attach_node(&candidate).expect("attach candidate");
+            drop(candidate);
+            scope.set_traversal_policy(Rc::new(UnwindingPolicy {
+                scope: Rc::downgrade(&scope),
+                detached_candidate,
+                panic_sort,
+                capture: PolicyCapture {
+                    drops: Rc::clone(&policy_drops),
+                    panic: panic_capture,
+                },
+            }));
+
+            let outcome =
+                catch_unwind(AssertUnwindSafe(|| manager.dispatch_key_event(&tab(false))));
+            let payload = outcome.expect_err("the first traversal failure propagates");
+            assert_eq!(
+                flui_foundation::panic::payload_text(payload.as_ref()),
+                Some(expected)
+            );
+            flui_foundation::panic::retain_opaque_payload(payload);
+            assert_eq!(policy_drops.get(), expected_policy_drops);
+            assert_eq!(
+                candidate_drops.get(),
+                0,
+                "detached candidate ownership stays out of the failed unwind"
+            );
+            assert!(
+                left.has_primary_focus(),
+                "the failed sort published no focus step"
+            );
+            assert!(manager.dispatch_key_event(&tab(false)));
+            assert!(
+                middle.has_primary_focus(),
+                "the replacement policy serves the next key"
+            );
+            assert!(manager.dispatch_key_event(&tab(true)));
+            assert!(left.has_primary_focus());
+        }
     }
 }
 

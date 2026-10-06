@@ -17,6 +17,7 @@ use flui_foundation::ListenerId;
 use flui_foundation::geometry::Rect;
 use thiserror::Error;
 
+use super::focus::FocusClosePanic;
 use crate::{FocusManager, events::KeyEvent};
 
 pub use crate::ids::FocusNodeId;
@@ -318,16 +319,19 @@ impl FocusNodeRegistration {
     #[must_use]
     pub fn is_current(&self) -> bool {
         self.armed
-            && self.node.upgrade().is_some_and(|node| match self.kind {
-                FocusNodeRegistrationKind::KeyHandler => {
-                    node.on_key_event_generation.get() == self.generation
-                }
-                FocusNodeRegistrationKind::RectProvider => {
-                    node.rect_provider_generation.get() == self.generation
-                }
-                FocusNodeRegistrationKind::Context => {
-                    node.context_generation.get() == self.generation
-                }
+            && self.node.upgrade().is_some_and(|node| {
+                !node.is_closed()
+                    && match self.kind {
+                        FocusNodeRegistrationKind::KeyHandler => {
+                            node.on_key_event_generation.get() == self.generation
+                        }
+                        FocusNodeRegistrationKind::RectProvider => {
+                            node.rect_provider_generation.get() == self.generation
+                        }
+                        FocusNodeRegistrationKind::Context => {
+                            node.context_generation.get() == self.generation
+                        }
+                    }
             })
     }
 
@@ -402,6 +406,37 @@ pub struct FocusNode {
     pending_focus_request: Cell<bool>,
     attachment_generation: Cell<u64>,
     on_key_event_generation: Cell<u64>,
+}
+
+pub(super) struct ClosedFocusNode {
+    node: Rc<FocusNode>,
+    key_handler: Option<KeyEventHandler>,
+    rect_provider: Option<RectProvider>,
+    context: Option<NodeContext>,
+    policy: Option<Rc<dyn FocusTraversalPolicy>>,
+}
+
+impl ClosedFocusNode {
+    pub(super) fn retire(self, failure: &mut FocusClosePanic) {
+        let Self {
+            node,
+            key_handler,
+            rect_provider,
+            context,
+            policy,
+        } = self;
+        // The order a healthy close always kept: key handler, listeners,
+        // rect provider, context.
+        failure.retire(key_handler);
+        let listeners = std::mem::take(&mut *node.listeners.borrow_mut());
+        for (_, listener) in listeners {
+            failure.retire(listener);
+        }
+        failure.retire(rect_provider);
+        failure.retire(context);
+        failure.retire(policy);
+        failure.retire(node);
+    }
 }
 
 impl FocusNode {
@@ -631,6 +666,12 @@ impl FocusNode {
     }
 
     fn replace_rect_provider(&self, provider: Option<RectProvider>) -> u64 {
+        if self.is_closed() {
+            let mut failure = FocusClosePanic::new();
+            failure.retire(provider);
+            failure.finish();
+            return self.rect_provider_generation.get();
+        }
         let generation = Self::next_property_generation(&self.rect_provider_generation);
         let _prev = std::mem::replace(&mut *self.rect_provider.borrow_mut(), provider);
         generation
@@ -643,6 +684,12 @@ impl FocusNode {
     }
 
     fn replace_context(&self, context: Option<NodeContext>) -> u64 {
+        if self.is_closed() {
+            let mut failure = FocusClosePanic::new();
+            failure.retire(context);
+            failure.finish();
+            return self.context_generation.get();
+        }
         let generation = Self::next_property_generation(&self.context_generation);
         let _prev = std::mem::replace(&mut *self.context.borrow_mut(), context);
         generation
@@ -655,6 +702,12 @@ impl FocusNode {
     }
 
     fn replace_on_key_event(&self, handler: Option<KeyEventHandler>) -> u64 {
+        if self.is_closed() {
+            let mut failure = FocusClosePanic::new();
+            failure.retire(handler);
+            failure.finish();
+            return self.on_key_event_generation.get();
+        }
         let generation = Self::next_property_generation(&self.on_key_event_generation);
         let _prev = std::mem::replace(&mut *self.on_key_event.borrow_mut(), handler);
         generation
@@ -684,15 +737,26 @@ impl FocusNode {
             .checked_add(1)
             .expect("BUG: focus-node listener ID space exhausted");
         self.next_listener_id.set(next);
-        self.listeners.borrow_mut().push((id, callback));
+        if self.is_closed() {
+            let mut failure = FocusClosePanic::new();
+            failure.retire(callback);
+            failure.finish();
+        } else {
+            self.listeners.borrow_mut().push((id, callback));
+        }
         id
     }
 
     /// Remove one node listener.
     pub fn remove_listener(&self, id: ListenerId) {
-        let mut listeners = std::mem::take(&mut *self.listeners.borrow_mut());
-        listeners.retain(|(held, _)| *held != id);
-        let _prev = std::mem::replace(&mut *self.listeners.borrow_mut(), listeners);
+        let removed = {
+            let mut listeners = self.listeners.borrow_mut();
+            listeners
+                .iter()
+                .position(|(held, _)| *held == id)
+                .map(|index| listeners.remove(index))
+        };
+        drop(removed);
     }
 
     /// Number of node listeners, for deterministic lifecycle tests.
@@ -710,16 +774,44 @@ impl FocusNode {
     }
 
     pub(crate) fn notify_listeners_after_tree_change(&self) {
-        let listeners = self.listeners.borrow().clone();
-        for (id, listener) in listeners {
+        let ids: Vec<_> = self.listeners.borrow().iter().map(|(id, _)| *id).collect();
+        for id in ids {
             // Mirrors `FocusManager::notify_listeners`: a listener removed
             // by an earlier one in this same dispatch (itself included) is
             // never called.
-            let still_registered = self.listeners.borrow().iter().any(|(held, _)| *held == id);
-            if still_registered {
-                listener();
+            let listener = self
+                .listeners
+                .borrow()
+                .iter()
+                .find(|(registered, _)| *registered == id)
+                .map(|(_, listener)| Rc::clone(listener));
+            if let Some(listener) = listener {
+                let mut failure = FocusClosePanic::new();
+                let _ = failure.invoke(|| listener());
+                failure.retire(listener);
+                failure.finish();
             }
         }
+    }
+
+    pub(super) fn notify_close_listeners(&self, failure: &mut FocusClosePanic) {
+        let ids: Vec<_> = self.listeners.borrow().iter().map(|(id, _)| *id).collect();
+        for id in ids {
+            let listener = self
+                .listeners
+                .borrow()
+                .iter()
+                .find(|(registered, _)| *registered == id)
+                .map(|(_, listener)| Rc::clone(listener));
+            if let Some(listener) = listener {
+                failure.run(|| listener());
+                failure.retire(listener);
+            }
+        }
+    }
+
+    fn is_closed(&self) -> bool {
+        matches!(*self.manager_binding.borrow(), ManagerBinding::Closed)
     }
 
     /// Whether this node or one of its descendants has primary focus.
@@ -834,7 +926,16 @@ impl FocusNode {
     /// Invoke this node's key handler.
     pub fn handle_key_event(&self, event: &KeyEvent) -> KeyEventResult {
         let handler = self.on_key_event.borrow().clone();
-        handler.map_or(KeyEventResult::Ignored, |handler| handler(event))
+        let Some(handler) = handler else {
+            return KeyEventResult::Ignored;
+        };
+        let mut failure = FocusClosePanic::new();
+        let result = failure
+            .invoke(|| handler(event))
+            .unwrap_or(KeyEventResult::Ignored);
+        failure.retire(handler);
+        failure.finish();
+        result
     }
 
     /// Iterate parent-first over ancestors.
@@ -1195,39 +1296,49 @@ impl FocusNode {
         }
     }
 
-    pub(crate) fn close_owned_tree(node: &Rc<FocusNode>) {
-        let children = std::mem::take(&mut *node.children.borrow_mut());
-        for child in children {
-            child.parent.borrow_mut().take();
-            Self::tombstone_subtree(&child);
+    pub(super) fn close_owned_tree(root: &Rc<FocusNode>) -> Vec<ClosedFocusNode> {
+        // Post-order, siblings in insertion order: a healthy close retires
+        // each child's ownership before its parent's (ADR-0127).
+        let mut nodes = Vec::new();
+        let mut stack = vec![(Rc::clone(root), false)];
+        while let Some((node, expanded)) = stack.pop() {
+            if expanded {
+                nodes.push(node);
+            } else {
+                let children = node.children();
+                stack.push((node, true));
+                stack.extend(children.into_iter().rev().map(|child| (child, false)));
+            }
         }
-        Self::tombstone_node(node);
-    }
-
-    fn tombstone_subtree(node: &Rc<FocusNode>) {
-        let children = std::mem::take(&mut *node.children.borrow_mut());
-        for child in children {
-            child.parent.borrow_mut().take();
-            Self::tombstone_subtree(&child);
+        let mut retired = Vec::with_capacity(nodes.len());
+        for node in nodes {
+            node.attached.set(false);
+            node.pending_focus_request.set(false);
+            *node.manager_binding.borrow_mut() = ManagerBinding::Closed;
+            node.parent.borrow_mut().take();
+            // All child nodes are retained by the snapshot until their own
+            // terminal state and outgoing ownership have been committed.
+            node.children.borrow_mut().clear();
+            let key_handler = node.on_key_event.borrow_mut().take();
+            let rect_provider = node.rect_provider.borrow_mut().take();
+            let context = node.context.borrow_mut().take();
+            let policy = node.as_scope().map(|scope| {
+                scope.pending_first_focus.set(false);
+                scope.focus_history.borrow_mut().clear();
+                std::mem::replace(
+                    &mut *scope.traversal_policy.borrow_mut(),
+                    Rc::new(ReadingOrderPolicy),
+                )
+            });
+            retired.push(ClosedFocusNode {
+                node,
+                key_handler,
+                rect_provider,
+                context,
+                policy,
+            });
         }
-        Self::tombstone_node(node);
-    }
-
-    fn tombstone_node(node: &Rc<FocusNode>) {
-        node.attached.set(false);
-        node.pending_focus_request.set(false);
-        *node.manager_binding.borrow_mut() = ManagerBinding::Closed;
-        node.bump_attachment_generation();
-        node.clear_on_key_event();
-        let _prev = std::mem::take(&mut *node.listeners.borrow_mut());
-        node.clear_rect_provider();
-        // The widget layer's record holds its callbacks and state; a node
-        // that outlives its owner must not keep them alive.
-        let _prev = node.replace_context(None);
-        if let Some(scope) = node.as_scope() {
-            scope.pending_first_focus.set(false);
-            scope.focus_history.borrow_mut().clear();
-        }
+        retired
     }
 
     fn bump_attachment_generation(&self) {
@@ -1374,6 +1485,12 @@ impl FocusScopeNode {
 
     /// Replace this scope's owner-local traversal policy.
     pub fn set_traversal_policy(&self, policy: Rc<dyn FocusTraversalPolicy>) {
+        if self.inner.is_closed() {
+            let mut failure = FocusClosePanic::new();
+            failure.retire(policy);
+            failure.finish();
+            return;
+        }
         let _prev = std::mem::replace(&mut *self.traversal_policy.borrow_mut(), policy);
     }
 
@@ -1510,6 +1627,14 @@ impl FocusScopeNode {
     }
 
     /// Traversal candidates in policy order.
+    ///
+    /// The current policy is retained for this call without borrowing the
+    /// policy cell across user code. A replacement installed by the policy
+    /// applies to the next traversal.
+    /// A sorting panic propagates before publishing an order. Policy and node
+    /// ownership remains outside that callback's unwind: after a failure,
+    /// outgoing values are retained rather than running arbitrary destruction.
+    /// During an existing unwind, sorting is skipped and the order is empty.
     pub fn sorted_traversal_order(&self, cursor: Option<&Rc<FocusNode>>) -> Vec<Rc<FocusNode>> {
         let mut nodes = self.collect_focusable_nodes();
         if let Some(cursor) = cursor
@@ -1518,7 +1643,15 @@ impl FocusScopeNode {
         {
             nodes.push(Rc::clone(cursor));
         }
-        self.traversal_policy.borrow().sort_descendants(&nodes)
+        let policy = Rc::clone(&self.traversal_policy.borrow());
+        let mut failure = FocusClosePanic::new();
+        let mut order = None;
+        failure.run(|| order = Some(policy.sort_descendants(&nodes)));
+        failure.retire(policy);
+        for node in nodes {
+            failure.retire(node);
+        }
+        failure.finish_with(order).unwrap_or_default()
     }
 
     /// Resolve one traversal step without applying it.

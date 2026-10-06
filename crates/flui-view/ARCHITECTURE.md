@@ -325,6 +325,20 @@ values normally, outside the graph borrow. Restoration keeps the value owned by
 the loan until the slot check completes; a restoration failure likewise retains
 that value before resuming its payload.
 
+Explicit release and element-owned release commit the slot's terminal state,
+reader removal and reusable index before retiring its value outside the graph
+borrow. Element teardown commits every owned slot before running the first
+destructor. A destructor can reenter the graph and allocate a replacement; a
+stale release cannot remove that replacement. Once a retirement fails, remaining
+opaque values are retained and the first payload resumes. Release during active
+unwind likewise retains its opaque value. The public
+`explicit_release_allows_destructor_reentry_and_slot_reuse` and
+`owner_release_commits_the_batch_before_the_first_destructor_failure` rows pin
+these graph invariants through explicit release and production element removal;
+they do not promise recovery of the surrounding element-tree teardown.
+`release_during_unwind_preserves_the_primary_failure` exercises active-unwind
+retention in a subprocess, since its negative control double-panics.
+
 Rust also provides no generic way to recover from aggregate drop glue when two
 fields both panic: the second panic occurs while the first is unwinding and the
 process aborts before an outer `catch_unwind` can observe either payload. FLUI

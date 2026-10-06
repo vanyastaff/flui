@@ -107,6 +107,169 @@ impl ViewState<Bystander> for BystanderState {
 
 const FRAME: Duration = Duration::from_millis(16);
 
+struct ReleaseProbe {
+    graph: flui_view::Reactive,
+    drops: Rc<Cell<usize>>,
+    replacement: Rc<Cell<Option<Signal<u32>>>>,
+    fails: bool,
+}
+
+impl Drop for ReleaseProbe {
+    fn drop(&mut self) {
+        self.drops.set(self.drops.get() + 1);
+        assert_eq!(
+            self.graph.live_slot_count(),
+            0,
+            "release precedes retirement"
+        );
+        self.replacement.set(Some(self.graph.signal(7u32)));
+        assert!(!self.fails, "first release destructor");
+    }
+}
+
+pub(crate) fn explicit_release_allows_destructor_reentry_and_slot_reuse() {
+    let graph = flui_view::Reactive::new();
+    let drops = Rc::new(Cell::new(0));
+    let replacement = Rc::new(Cell::new(None));
+    let signal = graph.signal(ReleaseProbe {
+        graph: graph.clone(),
+        drops: Rc::clone(&drops),
+        replacement: Rc::clone(&replacement),
+        fails: false,
+    });
+    graph.release(signal.slot());
+    assert_eq!(drops.get(), 1);
+    assert!(matches!(
+        signal.peek(&graph, |_| ()),
+        Err(flui_view::SignalError::Released { .. })
+    ));
+    let next = replacement
+        .get()
+        .expect("destructor allocated a replacement");
+    next.set(&graph, 9).expect("replacement is writable");
+    assert_eq!(next.peek(&graph, |value| *value), Ok(9));
+    graph.release(signal.slot());
+    assert_eq!(
+        next.peek(&graph, |value| *value),
+        Ok(9),
+        "stale release leaves replacement live"
+    );
+}
+
+pub(crate) fn owner_release_commits_the_batch_before_the_first_destructor_failure() {
+    struct Tail(Rc<Cell<usize>>);
+    impl Drop for Tail {
+        fn drop(&mut self) {
+            self.0.set(self.0.get() + 1);
+            panic!("later release destructor");
+        }
+    }
+    let mut owners = MountOwners::fresh();
+    let graph = owners.build_owner.reactive().clone();
+    let element = owners.tree.mount_root_with_pipeline_owner(
+        &Leaf,
+        Some(owners.pipeline_owner.clone()),
+        &mut owners.build_owner.element_owner_mut(),
+    );
+    let drops = Rc::new(Cell::new(0));
+    let tail_drops = Rc::new(Cell::new(0));
+    let replacement = Rc::new(Cell::new(None));
+    let first = graph.signal_owned_by(
+        element,
+        ReleaseProbe {
+            graph: graph.clone(),
+            drops: Rc::clone(&drops),
+            replacement: Rc::clone(&replacement),
+            fails: true,
+        },
+    );
+    let tail = graph.signal_owned_by(element, Tail(Rc::clone(&tail_drops)));
+    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        owners
+            .tree
+            .remove(element, &mut owners.build_owner.element_owner_mut());
+    }))
+    .expect_err("the first destructor failure propagates");
+    assert_eq!(
+        flui_foundation::panic::payload_text(&*failure),
+        Some("first release destructor")
+    );
+    assert_eq!(
+        (drops.get(), tail_drops.get()),
+        (1, 0),
+        "later opaque retirement is retained"
+    );
+    assert!(matches!(
+        first.peek(&graph, |_| ()),
+        Err(flui_view::SignalError::Released { .. })
+    ));
+    assert!(matches!(
+        tail.peek(&graph, |_| ()),
+        Err(flui_view::SignalError::Released { .. })
+    ));
+    let next = replacement
+        .get()
+        .expect("first destructor reentered the graph");
+    next.set(&graph, 11)
+        .expect("the next write succeeds after containment");
+    assert_eq!(next.peek(&graph, |value| *value), Ok(11));
+}
+
+pub(crate) fn owner_release_releases_signals_its_destructors_reintroduce() {
+    struct Late(Rc<Cell<usize>>);
+    impl Drop for Late {
+        fn drop(&mut self) {
+            self.0.set(self.0.get() + 1);
+        }
+    }
+    struct Reintroduce {
+        graph: flui_view::Reactive,
+        element: ElementId,
+        late_drops: Rc<Cell<usize>>,
+        created: Rc<Cell<Option<Signal<Late>>>>,
+    }
+    impl Drop for Reintroduce {
+        fn drop(&mut self) {
+            let late = self
+                .graph
+                .signal_owned_by(self.element, Late(Rc::clone(&self.late_drops)));
+            self.created.set(Some(late));
+        }
+    }
+    let mut owners = MountOwners::fresh();
+    let graph = owners.build_owner.reactive().clone();
+    let element = owners.tree.mount_root_with_pipeline_owner(
+        &Leaf,
+        Some(owners.pipeline_owner.clone()),
+        &mut owners.build_owner.element_owner_mut(),
+    );
+    let late_drops = Rc::new(Cell::new(0));
+    let created = Rc::new(Cell::new(None));
+    let _owned = graph.signal_owned_by(
+        element,
+        Reintroduce {
+            graph: graph.clone(),
+            element,
+            late_drops: Rc::clone(&late_drops),
+            created: Rc::clone(&created),
+        },
+    );
+    owners
+        .tree
+        .remove(element, &mut owners.build_owner.element_owner_mut());
+    let late = created.get().expect("the destructor created a signal");
+    assert!(matches!(
+        late.peek(&graph, |_| ()),
+        Err(flui_view::SignalError::Released { .. })
+    ));
+    assert_eq!(
+        late_drops.get(),
+        1,
+        "its value is released with the element"
+    );
+    assert_eq!(graph.live_slot_count(), 0);
+}
+
 pub(crate) fn a_read_in_build_subscribes_through_the_production_context() {
     let owners = MountOwners::fresh();
     let graph = owners.build_owner.reactive().clone();
@@ -241,10 +404,48 @@ pub(crate) fn released_read_reports_ordinary_retirement_failure() {
     released_loan_child("read retirement");
 }
 
+pub(crate) fn release_during_unwind_preserves_the_primary_failure() {
+    released_loan_child("release during unwind");
+}
+
 pub(crate) fn run_released_loan_child() -> bool {
     let Ok(case) = std::env::var(LOAN_CHILD_CASE) else {
         return false;
     };
+    if case == "release during unwind" {
+        struct Bomb(Rc<Cell<usize>>);
+        impl Drop for Bomb {
+            fn drop(&mut self) {
+                self.0.set(self.0.get() + 1);
+                panic!("secondary release destructor");
+            }
+        }
+        struct ReleaseOnUnwind(flui_view::Reactive, flui_view::SignalSlot);
+        impl Drop for ReleaseOnUnwind {
+            fn drop(&mut self) {
+                self.0.release(self.1);
+            }
+        }
+        let graph = flui_view::Reactive::new();
+        let drops = Rc::new(Cell::new(0));
+        let signal = graph.signal(Bomb(Rc::clone(&drops)));
+        let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _release = ReleaseOnUnwind(graph.clone(), signal.slot());
+            panic!("primary release failure");
+        }))
+        .expect_err("the primary panic propagates");
+        assert_eq!(
+            flui_foundation::panic::payload_text(&*failure),
+            Some("primary release failure")
+        );
+        assert_eq!(drops.get(), 0, "opaque value retained during unwind");
+        assert_eq!(graph.live_slot_count(), 0);
+        let next = graph.signal(3u32);
+        next.set(&graph, 5)
+            .expect("next write after failed release");
+        assert_eq!(next.peek(&graph, |value| *value), Ok(5));
+        return true;
+    }
     let (update, nested, callback_fails) = match case.as_str() {
         "update aggregate" => (true, false, true),
         "read aggregate" => (false, false, true),
