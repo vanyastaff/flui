@@ -38,7 +38,8 @@ struct Standing {
 /// the origin. A composition an edit cleared keeps its origin for the rest
 /// of the session, so an input method that rewrites its composition and
 /// marks it again does not lose what it stands for. Narrowing a composition
-/// keeps its whole origin until the composition ends.
+/// commits the text it no longer covers, and the origin drops that text
+/// where it begins or ends with it.
 #[derive(Clone, Debug, Default)]
 pub struct CompositionLedger {
     composition: Option<Standing>,
@@ -144,7 +145,11 @@ impl CompositionLedger {
             .map(|s| s.range.start)
             .fold(range.start, usize::min);
         let end = hit.iter().map(|s| s.range.end).fold(range.end, usize::max);
-        let origin = self.view(text, start..end, &hit);
+        let origin = rebased(
+            self.view(text, start..end, &hit),
+            &text[start..range.start],
+            &text[range.end..end],
+        );
         self.inserted
             .retain(|inserted| !(inserted.start < end && inserted.end > start));
         if !hit_cleared {
@@ -241,6 +246,24 @@ pub fn committed_text(text: &str, composing: Option<(Range<usize>, &str)>) -> St
             committed
         }
         None => text.to_owned(),
+    }
+}
+
+/// The origin of a composition that no longer covers `before` and `after`,
+/// the text on either side of it that the composition it replaces spanned
+/// (`origin` is the committed text of that whole span). That text leaves the
+/// composition as committed text, so where `origin` begins or ends with it,
+/// the composition no longer stands for it: narrowing a reconversion of
+/// "abcdef" to "abc" leaves "abc". Text the origin does not account for (an
+/// input method narrowing a conversion to commit part of its reading) stays
+/// committed beside the whole origin.
+fn rebased(origin: String, before: &str, after: &str) -> String {
+    let inner = origin.strip_prefix(before).unwrap_or(&origin);
+    let inner = inner.strip_suffix(after).unwrap_or(inner);
+    if inner.len() == origin.len() {
+        origin
+    } else {
+        inner.to_owned()
     }
 }
 
