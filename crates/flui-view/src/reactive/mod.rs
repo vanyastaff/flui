@@ -391,18 +391,27 @@ impl Reactive {
     /// values are retained rather than running more user drop glue.
     fn retire_released(values: impl IntoIterator<Item = Option<Box<dyn Any>>>) {
         let mut first = None;
+        Self::retire_released_into(values, &mut first);
+        if let Some(payload) = first {
+            std::panic::resume_unwind(payload);
+        }
+    }
+
+    /// [`Self::retire_released`] for one batch of a larger release: `first`
+    /// is the failure an earlier batch already caught, if any.
+    fn retire_released_into(
+        values: impl IntoIterator<Item = Option<Box<dyn Any>>>,
+        first: &mut Option<Box<dyn Any + Send>>,
+    ) {
         for value in values {
             if first.is_some() || std::thread::panicking() {
                 discard_secondary(value);
             } else {
                 retain_first_panic(
-                    &mut first,
+                    first,
                     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(value))),
                 );
             }
-        }
-        if let Some(payload) = first {
-            std::panic::resume_unwind(payload);
         }
     }
 
@@ -486,32 +495,50 @@ impl Reactive {
     /// created on its behalf **that is still the generation it created** is
     /// released. A slot the element released earlier and that a later owner
     /// reused is recognised by its generation and left alone.
+    ///
+    /// A released value's destructor may create another signal owned by this
+    /// element. The element is gone, so that slot is released here as well
+    /// rather than outliving it with no owner left to release it. After a
+    /// failure, those values are retained like the rest of the batch.
     pub(crate) fn release_element(&self, element: ElementId) {
-        let retired = {
-            let mut inner = self.inner.borrow_mut();
-            if inner.preserving_close {
-                return;
-            }
-            Self::forget_element_reads(&mut inner, element);
-            let mut retired = Vec::new();
-            if let Some(owned) = inner.owned_by_element.remove(&element) {
-                for slot in owned {
-                    if slot.graph() == self.id
-                        && inner
-                            .nodes
-                            .get(slot.index() as usize)
-                            .is_some_and(|node| node.live && node.generation == slot.generation())
-                    {
-                        retired.push((slot, Self::release_index(&mut inner, slot.index())));
+        let mut released = Vec::new();
+        let mut first = None;
+        loop {
+            let retired = {
+                let mut inner = self.inner.borrow_mut();
+                if inner.preserving_close {
+                    break;
+                }
+                Self::forget_element_reads(&mut inner, element);
+                let mut retired = Vec::new();
+                if let Some(owned) = inner.owned_by_element.remove(&element) {
+                    for slot in owned {
+                        // A closed graph still releases this element's live
+                        // slots, so `check`'s closed refusal does not apply.
+                        if slot.graph() == self.id
+                            && inner
+                                .nodes
+                                .get(slot.index() as usize)
+                                .is_some_and(|node| node.live && node.generation == slot.generation())
+                        {
+                            retired.push((slot, Self::release_index(&mut inner, slot.index())));
+                        }
                     }
                 }
+                retired
+            };
+            if retired.is_empty() {
+                break;
             }
-            retired
-        };
-        let (slots, values): (Vec<_>, Vec<_>) = retired.into_iter().unzip();
-        Self::retire_released(values);
+            let (slots, values): (Vec<_>, Vec<_>) = retired.into_iter().unzip();
+            released.extend(slots);
+            Self::retire_released_into(values, &mut first);
+        }
+        if let Some(payload) = first {
+            std::panic::resume_unwind(payload);
+        }
         // After retirement: a subscriber failure here owns no released value.
-        for slot in slots {
+        for slot in released {
             tracing::trace!(
                 target: "flui::signals",
                 slot = ?slot,

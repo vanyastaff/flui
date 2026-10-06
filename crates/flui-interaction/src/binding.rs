@@ -803,6 +803,15 @@ impl GestureBinding {
         }
     }
 
+    pub(crate) fn close_tombstones(&self) -> [crate::__runtime::CloseTombstone; 4] {
+        [
+            self.close_mode.clone(),
+            self.arena.close_tombstone(),
+            self.pointer_router.close_tombstone(),
+            self.mouse_tracker.close_tombstone(),
+        ]
+    }
+
     pub(crate) fn close_with_mode(&self, mode: crate::__runtime::CloseMode) {
         let mut failure = crate::__runtime::ClosePanic::for_close(mode, self.close_mode.clone());
         self.closed.set(true);
