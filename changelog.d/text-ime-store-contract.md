@@ -18,8 +18,9 @@
   the owner case). A suite pinned to version 1 is unchanged.
 - **`text_store::CompositionLedger` and `text_store::committed_text`** (`flui-platform-api`):
   how a store keeps what its composition stands for through a session's edits. The ledger opens
-  on the document's text (`open(text, composition)`) and records each edit with its inserted
-  text (`replace(edit, inserted)`).
+  on the document's text (`open(text, composition)`), records each edit with the text before
+  it and the inserted text (`replace(text, edit, inserted)`), and reads the text it is given
+  for `origin(text)` and `committed(text)`.
 - **`text_store::OwnerCalls` and `RetainOnFailure`** (`flui-platform-api`): the one
   containment a store, its arbiter and its presentation run owner code in: each call contained,
   the first failure in time authoritative, snapshots retired or retained (ADR-0127).
@@ -48,3 +49,6 @@
   input method's grant), so it reaches the realm's report; the grant itself stands.
 - **`TextInputOwner::close`** (`flui-interaction`) reports a failure a store parked for the
   presentation's next turn, after the close's own work.
+- **`TextInputHandle::attach`** (`flui-interaction`) returns the client's token once the client
+  is active; a failure after that point waits in the presentation's commit gate for its next
+  turn instead of being raised by the attach.
