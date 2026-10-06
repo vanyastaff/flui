@@ -21,7 +21,6 @@
 //! If no button-specific callback is registered, the event is
 //! silently dropped (the recogniser stays a no-op for that button).
 
-
 use std::{
     cell::RefCell,
     rc::Rc,
@@ -453,7 +452,6 @@ impl TapGestureRecognizer {
         self.callbacks.borrow_mut().on_tertiary_tap_cancel = Some(Rc::new(callback));
         self
     }
-
 
     /// Start a sequence for a contact that went down.
     ///

@@ -172,7 +172,10 @@ fn far_second_click_delivers_the_held_first_tap() {
         let mut lane = Lane::new();
         let (taps, doubles) = tap_and_double_tap(&mut lane);
         click(&lane, first, at(10.0, 10.0), kind);
-        assert!(taps.borrow().is_empty(), "the first tap waits for a double tap");
+        assert!(
+            taps.borrow().is_empty(),
+            "the first tap waits for a double tap"
+        );
         lane.frames(50);
         lane.send(&down(second, at(300.0, 10.0), kind));
         assert_eq!(
@@ -196,7 +199,11 @@ fn late_first_tap_verdict_lands_on_its_own_click() {
     // The window runs out with no frame to notice it; the next click does.
     lane.clock.advance(Duration::from_millis(400));
     lane.send(&down(PointerId::PRIMARY, at(12.0, 10.0), mouse));
-    assert_eq!(*taps.borrow(), [at(10.0, 10.0)], "the expired first tap fires");
+    assert_eq!(
+        *taps.borrow(),
+        [at(10.0, 10.0)],
+        "the expired first tap fires"
+    );
     lane.send(&up(PointerId::PRIMARY, at(12.0, 10.0), mouse));
     assert_eq!(
         *taps.borrow(),
@@ -223,7 +230,10 @@ fn near_second_click_is_a_double_tap() {
         click(&lane, second, at(14.0, 10.0), kind);
         lane.frames(400);
         assert_eq!(doubles.get(), 1, "{kind:?}");
-        assert!(taps.borrow().is_empty(), "{kind:?}: neither single tap fires");
+        assert!(
+            taps.borrow().is_empty(),
+            "{kind:?}: neither single tap fires"
+        );
         assert!(lane.arena.is_empty());
     }
 }
@@ -250,7 +260,11 @@ fn second_finger_leaves_a_running_drag_alone() {
     lane.send(&motion(id(2), at(60.0, 0.0), touch));
     assert_eq!(updates.get(), before + 1, "the first finger keeps dragging");
     lane.send(&up(id(3), at(200.0, 200.0), touch));
-    assert_eq!((ends.get(), cancels.get()), (0, 0), "the other finger ends nothing");
+    assert_eq!(
+        (ends.get(), cancels.get()),
+        (0, 0),
+        "the other finger ends nothing"
+    );
     lane.send(&up(id(2), at(60.0, 0.0), touch));
     assert_eq!((ends.get(), cancels.get()), (1, 0), "one end for one drag");
 }
@@ -269,7 +283,11 @@ fn second_finger_leaves_a_long_press_alone() {
     lane.frames(600);
     assert_eq!(starts.get(), 1);
     click(&lane, id(3), at(200.0, 200.0), touch);
-    assert_eq!((ends.get(), cancels.get()), (0, 0), "the other finger ends nothing");
+    assert_eq!(
+        (ends.get(), cancels.get()),
+        (0, 0),
+        "the other finger ends nothing"
+    );
     lane.send(&up(id(2), at(10.0, 10.0), touch));
     assert_eq!((ends.get(), cancels.get()), (1, 0));
 }
@@ -311,7 +329,10 @@ fn long_press_callback_can_dispose_its_recognizer() {
     lane.join(&long_press);
     lane.send(&down(id(2), at(10.0, 10.0), PointerType::Touch));
     let pumped = catch_unwind(AssertUnwindSafe(|| lane.frames(600)));
-    assert!(pumped.is_ok(), "disposing from on_long_press must not panic");
+    assert!(
+        pumped.is_ok(),
+        "disposing from on_long_press must not panic"
+    );
     // A disposed recognizer is no longer routed (its detector unmounted).
     assert!(lane.arena.is_empty());
 }
@@ -336,7 +357,10 @@ fn double_tap_callback_can_dispose_its_recognizer() {
     let released = catch_unwind(AssertUnwindSafe(|| {
         lane.send(&up(id(3), at(12.0, 10.0), touch));
     }));
-    assert!(released.is_ok(), "disposing from on_double_tap must not panic");
+    assert!(
+        released.is_ok(),
+        "disposing from on_double_tap must not panic"
+    );
     assert!(lane.arena.is_empty());
 }
 
@@ -383,7 +407,11 @@ fn panicking_double_tap_callback_leaves_the_next_double_tap_working() {
         lane.frames(400);
         assert!(lane.arena.is_empty(), "no arena stays held after the panic");
     }
-    assert_eq!(doubles.get(), 2, "the double tap after the panic is recognized");
+    assert_eq!(
+        doubles.get(),
+        2,
+        "the double tap after the panic is recognized"
+    );
 }
 
 fn panicking_multi_tap_callback_leaves_the_next_pair_working() {
@@ -503,7 +531,11 @@ fn held_arena_swept_on_up_leaves_room_for_the_next_contact() {
     arena.drain_deferred_resolutions();
     assert_eq!(next.get(), (1, 0), "the next contact's lone member wins");
     first_entry.release();
-    assert_eq!(first.get(), (1, 0), "the released sweep still settles the held arena");
+    assert_eq!(
+        first.get(),
+        (1, 0),
+        "the released sweep still settles the held arena"
+    );
     assert_eq!(second.get(), (0, 1));
     assert!(arena.is_empty());
 }
@@ -981,7 +1013,10 @@ impl Model {
     }
 
     fn check(&self) -> Result<(), TestCaseError> {
-        prop_assert!(self.arena.is_empty(), "arena keeps state after every contact ended");
+        prop_assert!(
+            self.arena.is_empty(),
+            "arena keeps state after every contact ended"
+        );
         for (index, sequence) in self.sequences.iter().enumerate() {
             let mut accepted = 0;
             let mut contested = false;
