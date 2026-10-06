@@ -90,6 +90,7 @@ use std::thread::ThreadId;
 use flui_foundation::panic::payload_text;
 use flui_foundation::{PresentationAddress, RealmId};
 use flui_platform::traits::PlatformWindow;
+pub use flui_view::CloseReason;
 use parking_lot::Mutex;
 
 // ============================================================================
@@ -119,6 +120,15 @@ impl CloseRequest {
     #[must_use]
     pub fn address(&self) -> PresentationAddress {
         self.address
+    }
+
+    /// Why the close was requested: by the user, by the application's own
+    /// code quitting, or by the session ending.
+    ///
+    /// Not yet carried: every request reads as [`CloseReason::User`].
+    #[must_use]
+    pub fn reason(&self) -> CloseReason {
+        CloseReason::User
     }
 }
 
@@ -421,6 +431,9 @@ impl CloseRequestRouter {
     ///
     /// An unregistered address answers [`CloseResponse::Close`], matching
     /// the platform seam's own "no callback means close is allowed".
+    ///
+    /// `reason` is why the close was asked for. Not yet carried to the
+    /// handler: [`CloseRequest::reason`] reads [`CloseReason::User`].
     #[cfg_attr(
         all(target_arch = "wasm32", not(test)),
         expect(
@@ -429,7 +442,12 @@ impl CloseRequestRouter {
                       no loop-exit teardown at all"
         )
     )]
-    pub(crate) fn consult(&self, address: PresentationAddress) -> CloseResponse {
+    pub(crate) fn consult(
+        &self,
+        address: PresentationAddress,
+        reason: CloseReason,
+    ) -> CloseResponse {
+        let _ = reason;
         // Clone the handler out from under the lock before invoking it
         // (ADR-0039): application code may re-enter this router — closing a
         // sibling window, registering a handler — and this `Mutex` is not
@@ -560,17 +578,26 @@ mod tests {
             Some(CloseRequestHandler::new(|_| CloseResponse::Close)),
         );
 
-        assert_eq!(router.consult(closes), CloseResponse::Close);
+        assert_eq!(
+            router.consult(closes, CloseReason::User),
+            CloseResponse::Close
+        );
         assert_eq!(
             keeps_open_asked.load(Ordering::SeqCst),
             0,
             "a sibling's close request must not consult this presentation's handler at all"
         );
-        assert_eq!(router.consult(keeps_open), CloseResponse::KeepOpen);
+        assert_eq!(
+            router.consult(keeps_open, CloseReason::User),
+            CloseResponse::KeepOpen
+        );
 
         // A same-numbered presentation in a different realm is a different
         // window, not this one -- the reason the address is a pair.
-        assert_eq!(router.consult(other_realm), CloseResponse::Close);
+        assert_eq!(
+            router.consult(other_realm, CloseReason::User),
+            CloseResponse::Close
+        );
     }
 
     /// A panicking handler cannot be read as consent to discard unsaved
@@ -601,7 +628,8 @@ mod tests {
         // capture below is asserting the sole surviving diagnostic.
         let previous_hook = std::panic::take_hook();
         std::panic::set_hook(Box::new(|_| {}));
-        let (vetoed, log) = flui_testing::log_capture::capture(|| router.consult(a));
+        let (vetoed, log) =
+            flui_testing::log_capture::capture(|| router.consult(a, CloseReason::User));
         std::panic::set_hook(previous_hook);
         assert_eq!(vetoed, CloseResponse::KeepOpen);
 
@@ -621,9 +649,38 @@ mod tests {
 
         panics.store(false, Ordering::SeqCst);
         assert_eq!(
-            router.consult(a),
+            router.consult(a, CloseReason::User),
             CloseResponse::Close,
             "the handler must still be registered after containing its panic"
+        );
+    }
+
+    /// The handler reads why the close was asked for: a close the
+    /// application's own quit asks for reaches it as `Program`, not as the
+    /// user's.
+    #[test]
+    #[ignore = "contract: a close request carries the reason it was asked for"]
+    fn a_close_request_carries_its_reason() {
+        let router = CloseRequestRouter::new();
+        let a = address(1, 1);
+        let reasons = Arc::new(Mutex::new(Vec::new()));
+        let seen = Arc::clone(&reasons);
+        router.register(
+            a,
+            &window(1),
+            Some(CloseRequestHandler::new(move |request| {
+                seen.lock().push(request.reason());
+                CloseResponse::KeepOpen
+            })),
+        );
+
+        router.consult(a, CloseReason::Program);
+        router.consult(a, CloseReason::User);
+
+        assert_eq!(
+            *reasons.lock(),
+            [CloseReason::Program, CloseReason::User],
+            "each request reaches the handler with the reason it was asked for"
         );
     }
 
