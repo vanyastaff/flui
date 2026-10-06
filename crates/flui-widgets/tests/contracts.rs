@@ -169,6 +169,7 @@ fn focus_actions_and_shortcuts() {
         "focus_actions_and_shortcuts",
         &[
             ("focus::platform_focus_requests_the_mounted_node_and_rejects_disabled_focus", crate::focus::platform_focus_requests_the_mounted_node_and_rejects_disabled_focus as fn()),
+            ("focus::an_adopted_external_node_ignores_the_old_elements_focus_action", crate::focus::an_adopted_external_node_ignores_the_old_elements_focus_action as fn()),
             ("actions::the_nearest_enabled_action_wins_and_receives_the_payload", crate::actions::the_nearest_enabled_action_wins_and_receives_the_payload as fn()),
             ("actions::callback_action_writes_through_the_key_events_cx", crate::actions::callback_action_writes_through_the_key_events_cx),
             ("actions::a_refused_write_in_a_callback_action_is_reported_not_panicked", crate::actions::a_refused_write_in_a_callback_action_is_reported_not_panicked),
