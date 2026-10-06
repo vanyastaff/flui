@@ -219,11 +219,13 @@ fn store_failure_wins_callback_failure_and_the_owner_recovers() {
         .expect("initial attach");
     let failure =
         catch_unwind(AssertUnwindSafe(|| handle.detach(token))).expect_err("retirement panics");
+    // The payloads panic when dropped: retain the failure before asserting.
+    let store_won = failure.is::<StoreFailure>();
+    flui_foundation::panic::retain_opaque_payload(failure);
     assert!(
-        failure.is::<StoreFailure>(),
+        store_won,
         "the store retires first and its opaque payload wins"
     );
-    flui_foundation::panic::retain_opaque_payload(failure);
     let next = handle.attach(client()).expect("recovery attach");
     assert!(owner.is_attached(next));
     owner.dispatch(&flui_platform_api::ImeEvent::Commit("recovered".into()));
