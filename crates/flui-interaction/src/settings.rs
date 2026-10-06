@@ -112,6 +112,14 @@ pub const DEFAULT_MAX_FLING_VELOCITY: f64 = 8000.0;
 /// - **Mouse**: Very precise, so small tolerances work well
 /// - **Pen/Stylus**: Medium precision, between touch and mouse
 ///
+/// # Validation
+///
+/// Every slop, ratio and velocity is finite and not negative. The settings
+/// sanitize rather than reject: [`Self::new`] replaces an inadmissible value
+/// with the touch default, and a `with_*` builder ignores one (keeping the
+/// previous value). A minimum fling velocity above the maximum raises the
+/// effective maximum ([`Self::max_fling_velocity`]). Nothing here panics.
+///
 /// # Example
 ///
 /// ```rust,ignore
@@ -172,9 +180,26 @@ impl Default for GestureSettings {
     }
 }
 
+/// Whether `value` is a usable distance, ratio or speed: finite and not
+/// negative.
+fn admissible(value: f64) -> bool {
+    value.is_finite() && value >= 0.0
+}
+
+/// `value` if it is [admissible], else `default`.
+fn admit(value: f64, default: f64) -> f64 {
+    if admissible(value) { value } else { default }
+}
+
 impl GestureSettings {
     /// Create settings with custom values.
+    ///
+    /// Every distance, ratio and velocity must be finite and not negative; an
+    /// inadmissible value is replaced by the matching
+    /// [`Self::touch_defaults`] value rather than stored, so no getter ever
+    /// returns NaN or a negative tolerance.
     #[expect(clippy::too_many_arguments)]
+    #[must_use]
     pub fn new(
         touch_slop: f64,
         pan_slop: f64,
@@ -185,19 +210,20 @@ impl GestureSettings {
         min_fling_velocity: f64,
         max_fling_velocity: f64,
     ) -> Self {
+        let pan_slop = admit(pan_slop, DEFAULT_PAN_SLOP);
         // Per-axis slops default to the free pan slop so existing
         // callers (pre-per-axis-split) keep their current tolerance.
         Self {
-            touch_slop,
+            touch_slop: admit(touch_slop, DEFAULT_TOUCH_SLOP),
             pan_slop,
             pan_slop_vertical: pan_slop,
             pan_slop_horizontal: pan_slop,
-            scale_slop,
-            double_tap_slop,
+            scale_slop: admit(scale_slop, DEFAULT_SCALE_SLOP),
+            double_tap_slop: admit(double_tap_slop, DEFAULT_DOUBLE_TAP_SLOP),
             double_tap_timeout,
             long_press_timeout,
-            min_fling_velocity,
-            max_fling_velocity,
+            min_fling_velocity: admit(min_fling_velocity, DEFAULT_MIN_FLING_VELOCITY),
+            max_fling_velocity: admit(max_fling_velocity, DEFAULT_MAX_FLING_VELOCITY),
         }
     }
 
@@ -501,9 +527,12 @@ impl GestureSettings {
     }
 
     /// Get the maximum fling velocity.
+    ///
+    /// Never below [`Self::min_fling_velocity`]: when the configured maximum
+    /// is smaller than the minimum, the minimum is the effective maximum.
     #[inline]
     pub fn max_fling_velocity(&self) -> f64 {
-        self.max_fling_velocity
+        self.max_fling_velocity.max(self.min_fling_velocity)
     }
 
     // ========================================================================
@@ -511,16 +540,27 @@ impl GestureSettings {
     // ========================================================================
 
     /// Set the touch slop.
+    ///
+    /// A negative or non-finite value is ignored (see the type's
+    /// "Validation" section).
     #[inline]
+    #[must_use]
     pub fn with_touch_slop(mut self, slop: f64) -> Self {
-        self.touch_slop = slop;
+        if admissible(slop) {
+            self.touch_slop = slop;
+        }
         self
     }
 
     /// Set the pan slop.
+    ///
+    /// A negative or non-finite value is ignored.
     #[inline]
+    #[must_use]
     pub fn with_pan_slop(mut self, slop: f64) -> Self {
-        self.pan_slop = slop;
+        if admissible(slop) {
+            self.pan_slop = slop;
+        }
         self
     }
 
@@ -528,33 +568,46 @@ impl GestureSettings {
     ///
     /// Independent of [`Self::with_pan_slop`] so callers can tune vertical
     /// drag without affecting free pan. Use this in vertical-only widgets
-    /// (e.g. scroll views).
+    /// (e.g. scroll views). A negative or non-finite value is ignored.
     #[inline]
+    #[must_use]
     pub fn with_pan_slop_vertical(mut self, slop: f64) -> Self {
-        self.pan_slop_vertical = slop;
+        if admissible(slop) {
+            self.pan_slop_vertical = slop;
+        }
         self
     }
 
     /// Set the horizontal-only pan slop (per-axis tolerance).
     ///
     /// See [`Self::with_pan_slop_vertical`] — same rationale, horizontal axis.
+    /// A negative or non-finite value is ignored.
     #[inline]
+    #[must_use]
     pub fn with_pan_slop_horizontal(mut self, slop: f64) -> Self {
-        self.pan_slop_horizontal = slop;
+        if admissible(slop) {
+            self.pan_slop_horizontal = slop;
+        }
         self
     }
 
-    /// Set the scale slop.
+    /// Set the scale slop. A negative or non-finite value is ignored.
     #[inline]
+    #[must_use]
     pub fn with_scale_slop(mut self, slop: f64) -> Self {
-        self.scale_slop = slop;
+        if admissible(slop) {
+            self.scale_slop = slop;
+        }
         self
     }
 
-    /// Set the double-tap slop.
+    /// Set the double-tap slop. A negative or non-finite value is ignored.
     #[inline]
+    #[must_use]
     pub fn with_double_tap_slop(mut self, slop: f64) -> Self {
-        self.double_tap_slop = slop;
+        if admissible(slop) {
+            self.double_tap_slop = slop;
+        }
         self
     }
 
@@ -572,17 +625,31 @@ impl GestureSettings {
         self
     }
 
-    /// Set the minimum fling velocity.
+    /// Set the minimum fling velocity, in px/s.
+    ///
+    /// A negative or non-finite value is ignored. A minimum above the maximum
+    /// is kept and raises the effective maximum (see
+    /// [`Self::max_fling_velocity`]), so the order of the two builder calls
+    /// does not matter.
     #[inline]
+    #[must_use]
     pub fn with_min_fling_velocity(mut self, velocity: f64) -> Self {
-        self.min_fling_velocity = velocity;
+        if admissible(velocity) {
+            self.min_fling_velocity = velocity;
+        }
         self
     }
 
-    /// Set the maximum fling velocity.
+    /// Set the maximum fling velocity, in px/s.
+    ///
+    /// A negative or non-finite value is ignored: the maximum is always a
+    /// finite bound.
     #[inline]
+    #[must_use]
     pub fn with_max_fling_velocity(mut self, velocity: f64) -> Self {
-        self.max_fling_velocity = velocity;
+        if admissible(velocity) {
+            self.max_fling_velocity = velocity;
+        }
         self
     }
 
@@ -610,10 +677,22 @@ impl GestureSettings {
         (scale - 1.0).abs() > self.scale_slop
     }
 
-    /// Clamp a fling velocity to the configured range.
+    /// Clamp a signed release velocity (px/s along one axis) to at most
+    /// [`Self::max_fling_velocity`] in magnitude, keeping its sign.
+    ///
+    /// Slow velocities are returned unchanged: whether a release is a fling
+    /// at all is [`Self::is_fling_velocity`]'s question, and raising a slow
+    /// release to the minimum would turn a gentle lift into a fling. A NaN
+    /// velocity is no velocity (`0.0`); an infinite one is clamped like any
+    /// other. Never panics.
     #[inline]
+    #[must_use]
     pub fn clamp_fling_velocity(&self, velocity: f64) -> f64 {
-        velocity.clamp(self.min_fling_velocity, self.max_fling_velocity)
+        if velocity.is_nan() {
+            return 0.0;
+        }
+        let max = self.max_fling_velocity();
+        velocity.clamp(-max, max)
     }
 
     /// Check if a velocity is fast enough for a fling.

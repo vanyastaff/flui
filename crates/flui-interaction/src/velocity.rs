@@ -220,10 +220,20 @@ impl Velocity {
         self.pixels_per_second.dx.is_finite() && self.pixels_per_second.dy.is_finite()
     }
 
-    /// Clamps the magnitude of the velocity
+    /// Clamps the magnitude of the velocity, keeping its direction.
     ///
-    /// If the magnitude exceeds `max`, scales the velocity to have magnitude
-    /// `max`.
+    /// A speed above `max` is scaled down to `max`, a non-zero speed below
+    /// `min` is scaled up to `min`; a zero velocity stays zero (it has no
+    /// direction to scale along).
+    ///
+    /// Never panics and never returns NaN:
+    ///
+    /// - a negative or NaN `min` is treated as `0.0`, and a NaN `max` as no
+    ///   upper bound;
+    /// - when `min > max`, the larger bound wins (`max` is raised to `min`);
+    /// - a velocity with a NaN component is [`Velocity::ZERO`];
+    /// - an infinite component points the result along that axis (or the
+    ///   diagonal, when both are infinite), at magnitude `max`.
     ///
     /// # Examples
     ///
@@ -234,22 +244,48 @@ impl Velocity {
     /// let velocity = Velocity::new(Offset::new(100.0, 0.0));
     /// let clamped = velocity.clamp_magnitude(0.0, 50.0);
     /// assert_eq!(clamped.magnitude(), 50.0);
+    ///
+    /// // Inverted or NaN bounds do not panic.
+    /// let inverted = velocity.clamp_magnitude(80.0, 50.0);
+    /// assert_eq!(inverted.magnitude(), 80.0);
     /// ```
     #[must_use]
-    #[inline]
     pub fn clamp_magnitude(&self, min: f64, max: f64) -> Self {
-        let magnitude = self.magnitude();
-        if magnitude == 0.0 {
+        let Offset { dx, dy } = self.pixels_per_second;
+        if dx.is_nan() || dy.is_nan() {
+            return Self::ZERO;
+        }
+        // `f64::max` ignores a NaN operand, so a NaN `min` becomes 0.
+        let lo = min.max(0.0);
+        let hi = if max.is_nan() {
+            f64::INFINITY
+        } else {
+            max.max(lo)
+        };
+
+        // Work on the unit direction so neither the magnitude nor the
+        // rescale can overflow: scale by the larger component first.
+        let (ux, uy) = if dx.is_infinite() || dy.is_infinite() {
+            let axis = |v: f64| {
+                if v.is_infinite() { v.signum() } else { 0.0 }
+            };
+            (axis(dx), axis(dy))
+        } else {
+            let largest = dx.abs().max(dy.abs());
+            if largest == 0.0 {
+                return Self::ZERO;
+            }
+            (dx / largest, dy / largest)
+        };
+        let unit_length = ux.hypot(uy);
+        let (ux, uy) = (ux / unit_length, uy / unit_length);
+
+        let magnitude = dx.hypot(dy);
+        let clamped = magnitude.clamp(lo, hi);
+        if clamped == magnitude {
             return *self;
         }
-
-        let clamped_magnitude = magnitude.clamp(min, max);
-        if clamped_magnitude == magnitude {
-            return *self;
-        }
-
-        let scale = clamped_magnitude / magnitude;
-        Self::new(self.pixels_per_second * scale)
+        Self::from_components(ux * clamped, uy * clamped)
     }
 
     /// Negates the velocity (reverses direction)

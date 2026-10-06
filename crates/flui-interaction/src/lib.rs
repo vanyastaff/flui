@@ -388,5 +388,4 @@ mod static_assertions {
     // Data-path types should be Send + Sync
     impl AssertSendSync for HitTestResult {}
     impl AssertSendSync for HitTestEntry {}
-    impl AssertSendSync for PointerEventResampler {}
 }

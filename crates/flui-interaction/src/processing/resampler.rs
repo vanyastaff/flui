@@ -1,29 +1,32 @@
 //! Event resampler for smooth pointer event processing
 //!
-//! The resampler enables smoother touch/pointer event processing by:
-//! - Buffering incoming pointer events
-//! - Resampling at a caller-determined frequency
-//! - Interpolating positions between events for smooth motion
-//! - Removing duplicate events
+//! The resampler buffers one pointer's events and releases them on a
+//! caller-paced sampling clock:
+//!
+//! - every buffered event whose time is at or before the sample time is
+//!   emitted, in arrival order;
+//! - when the next buffered move lies after the sample time, one extra move
+//!   is synthesized at the position interpolated between the last emitted
+//!   point and that move, at the sample time;
+//! - `Down`, `Up`, `Cancel` and every other non-move event are never dropped
+//!   or reordered. When the queue is full, adjacent moves are coalesced (the
+//!   older one's samples move into the newer one's `coalesced` history).
 //!
 //! This is particularly beneficial for:
 //! - Devices with low-frequency sensors
 //! - Mismatched input/display refresh rates (e.g., 120Hz input, 90Hz display)
 //! - High-precision stylus input
 //!
-//! # Architecture
+//! # Time
 //!
-//! ```text
-//! Platform Events → Resampler → Resampled Events → GestureRecognizers
-//!                      ↓
-//!                 Event Queue
-//!                      ↓
-//!              Interpolation Logic
-//! ```
-//!
-//! # Type System Features
-//!
-//! - **Newtype pattern**: Uses `PointerId` for type-safe pointer identification
+//! Each event is placed on the sampling clock by its own time, not by when it
+//! reached the resampler. [`PointerEventResampler::add_event_at`] takes that
+//! time from the caller. [`PointerEventResampler::add_event`] reads the
+//! event's `PointerState::time` and maps it onto [`Instant`] through the
+//! smallest delivery latency seen so far, so a burst of events delivered
+//! together keeps its original spacing; an event without a time (a `Cancel`,
+//! or a zero timestamp) is placed at its arrival. Times are made monotonic in
+//! queue order, and emitted events carry non-decreasing `time` values.
 //!
 //! # Example
 //!
@@ -44,12 +47,11 @@
 //! let _has_pending = resampler.has_pending_events();
 //! ```
 
-use std::{collections::VecDeque, sync::Arc};
+use std::{cell::RefCell, collections::VecDeque, rc::Rc};
 
 use web_time::{Duration, Instant};
 
 use flui_foundation::geometry::Offset;
-use parking_lot::Mutex;
 use smallvec::SmallVec;
 
 use crate::{
@@ -65,23 +67,43 @@ use crate::{
 /// appropriate instead — pass your own offset to [`PointerEventResampler::sample`].
 pub const DEFAULT_RESAMPLE_LOOKBACK: Duration = Duration::from_millis(38);
 
-/// Maximum number of events to buffer (prevents unbounded memory growth)
+/// Number of buffered events above which moves are coalesced. Non-move
+/// events are always queued, so the queue exceeds this only by the
+/// terminal events a caller adds without ever sampling.
 const MAX_BUFFERED_EVENTS: usize = 100;
+
+/// Most `coalesced` samples one move keeps when the queue folds older moves
+/// into it; the oldest beyond this are dropped.
+const MAX_COALESCED_HISTORY: usize = MAX_BUFFERED_EVENTS;
 
 /// Minimum time between samples to prevent excessive resampling
 const MIN_SAMPLE_INTERVAL: Duration = Duration::from_millis(1); // 1ms
 
-/// Callback for handling resampled events
-#[expect(dead_code)] // Future public API
-pub type HandleEventCallback = Box<dyn FnMut(PointerEvent) + Send>;
+/// Where a buffered event sits on the sampling clock.
+#[derive(Debug, Clone, Copy)]
+enum Stamp {
+    /// Given by the caller ([`PointerEventResampler::add_event_at`]).
+    Explicit(Instant),
+    /// The event's own nanosecond time, mapped through the event-clock base
+    /// when the event is sampled.
+    EventTime(u64),
+    /// The event carried no time; placed at its arrival.
+    Arrival(Instant),
+}
 
-/// Buffered pointer event with timestamp
+/// Buffered pointer event with its place on the sampling clock.
 #[derive(Debug, Clone)]
 struct BufferedEvent {
-    /// The pointer event
     event: PointerEvent,
-    /// Time when the event was received
+    stamp: Stamp,
+}
+
+/// The last emitted contact point: where interpolation starts from.
+#[derive(Debug, Clone, Copy)]
+struct Anchor {
+    position: Offset<f64>,
     timestamp: Instant,
+    nanos: u64,
 }
 
 /// Pointer event resampler for smooth motion
@@ -89,41 +111,145 @@ struct BufferedEvent {
 /// Maintains a queue of pointer events and generates resampled events
 /// at caller-determined frequencies for smoother gesture recognition.
 ///
-/// # Thread Safety
+/// # Ownership
 ///
-/// This type is thread-safe using `Arc<Mutex<_>>` internally.
+/// A cheap shared handle (`Rc<RefCell<_>>`) for the owner thread: clones
+/// address the same queue, so the owner can sample while user callbacks
+/// re-enter it. No borrow is held while a callback runs.
 #[derive(Debug, Clone)]
 pub struct PointerEventResampler {
-    inner: Arc<Mutex<ResamplerInner>>,
+    inner: Rc<RefCell<ResamplerInner>>,
 }
 
 #[derive(Debug)]
 struct ResamplerInner {
     /// Pointer ID this resampler tracks
     pointer_id: PointerId,
-    /// Queue of buffered events
+    /// Queue of buffered events, in arrival order.
     event_queue: VecDeque<BufferedEvent>,
     /// Whether the pointer is currently down
     is_down: bool,
     /// Whether the pointer is being tracked
     is_tracked: bool,
-    /// Last sampled position (for interpolation)
-    last_position: Option<Offset<f64>>,
+    /// The last emitted contact point; `None` after a terminal event.
+    anchor: Option<Anchor>,
     /// Last sample time
     last_sample_time: Option<Instant>,
+    /// Sampling-clock time of the last dequeued event; later stamps are
+    /// raised to it so queue order and time order agree.
+    last_stamp: Option<Instant>,
+    /// The latest `time` value emitted; later emitted times are raised to it.
+    last_emitted_nanos: u64,
+    /// The [`Instant`] at which the event clock read zero, estimated from
+    /// the smallest delivery latency seen (`arrival - event time`).
+    event_clock_base: Option<Instant>,
+}
+
+/// The event's own time in nanoseconds, if it carries a usable one.
+fn event_nanos(event: &PointerEvent) -> Option<u64> {
+    let nanos = match event {
+        PointerEvent::Down(button) | PointerEvent::Up(button) => button.state.time,
+        PointerEvent::Move(update) => update.current.time,
+        _ => return None,
+    };
+    (nanos != 0).then_some(nanos)
+}
+
+/// Raise the event's own `time` to at least `floor`; returns the time it
+/// now carries (or `floor` when it has none).
+fn raise_time(event: &mut PointerEvent, floor: u64) -> u64 {
+    let time = match event {
+        PointerEvent::Down(button) | PointerEvent::Up(button) => &mut button.state.time,
+        PointerEvent::Move(update) => &mut update.current.time,
+        _ => return floor,
+    };
+    *time = (*time).max(floor);
+    *time
+}
+
+impl ResamplerInner {
+    fn timestamp(&self, stamp: Stamp) -> Instant {
+        let raw = match stamp {
+            Stamp::Explicit(at) | Stamp::Arrival(at) => at,
+            Stamp::EventTime(nanos) => self
+                .event_clock_base
+                .and_then(|base| base.checked_add(Duration::from_nanos(nanos)))
+                .expect("BUG: an EventTime stamp is only created after the base is set"),
+        };
+        match self.last_stamp {
+            Some(floor) => raw.max(floor),
+            None => raw,
+        }
+    }
+
+    /// Make room for one more move: fold the oldest move that has a newer
+    /// move right behind it into that newer move's `coalesced` history.
+    /// Returns `false` when no two moves are adjacent.
+    fn coalesce_one_move(&mut self) -> bool {
+        let Some(index) = (0..self.event_queue.len().saturating_sub(1)).find(|&i| {
+            matches!(self.event_queue[i].event, PointerEvent::Move(_))
+                && matches!(self.event_queue[i + 1].event, PointerEvent::Move(_))
+        }) else {
+            return false;
+        };
+        let mut history = match &mut self.event_queue[index].event {
+            PointerEvent::Move(older) => {
+                let mut history = std::mem::take(&mut older.coalesced);
+                history.push(older.current.clone());
+                history
+            }
+            _ => return false,
+        };
+        if let PointerEvent::Move(newer) = &mut self.event_queue[index + 1].event {
+            history.append(&mut newer.coalesced);
+            // Keep the newest samples only, so a queue that is never sampled
+            // cannot grow without bound through the history either.
+            let excess = history.len().saturating_sub(MAX_COALESCED_HISTORY);
+            history.drain(..excess);
+            newer.coalesced = history;
+        }
+        self.event_queue.remove(index);
+        true
+    }
+
+    fn emit(
+        &mut self,
+        mut event: PointerEvent,
+        at: Instant,
+        out: &mut SmallVec<[PointerEvent; 4]>,
+    ) {
+        self.last_stamp = Some(at);
+        let nanos = raise_time(&mut event, self.last_emitted_nanos);
+        self.last_emitted_nanos = nanos;
+        match &event {
+            PointerEvent::Down(..) | PointerEvent::Move(..) => {
+                self.anchor = Some(Anchor {
+                    position: event.position(),
+                    timestamp: at,
+                    nanos,
+                });
+            }
+            PointerEvent::Up(..) | PointerEvent::Cancel(..) => self.anchor = None,
+            _ => {}
+        }
+        out.push(event);
+    }
 }
 
 impl PointerEventResampler {
     /// Creates a new resampler for the given pointer ID
     pub fn new(pointer_id: PointerId) -> Self {
         Self {
-            inner: Arc::new(Mutex::new(ResamplerInner {
+            inner: Rc::new(RefCell::new(ResamplerInner {
                 pointer_id,
-                event_queue: VecDeque::with_capacity(16),
+                event_queue: VecDeque::new(),
                 is_down: false,
                 is_tracked: false,
-                last_position: None,
+                anchor: None,
                 last_sample_time: None,
+                last_stamp: None,
+                last_emitted_nanos: 0,
+                event_clock_base: None,
             })),
         }
     }
@@ -136,17 +262,50 @@ impl PointerEventResampler {
     /// that `sample()` requires (`is_tracked`) so subsequent moves are paced
     /// instead of silently dropped.
     pub fn start_tracking(&self) {
-        let mut inner = self.inner.lock();
+        let mut inner = self.inner.borrow_mut();
         inner.is_down = true;
         inner.is_tracked = true;
     }
 
-    /// Adds a pointer event to the resampling queue
+    /// Adds a pointer event to the resampling queue, placed on the sampling
+    /// clock by the event's own time (see the module's "Time" section).
     ///
     /// Events are buffered and will be processed during the next `sample()`
-    /// call.
+    /// call. `Down`, `Up`, `Cancel` and other non-move events are never
+    /// dropped; a full queue coalesces moves instead.
     pub fn add_event(&self, event: PointerEvent) {
-        let mut inner = self.inner.lock();
+        let arrival = Instant::now();
+        let stamp = {
+            let mut inner = self.inner.borrow_mut();
+            match event_nanos(&event)
+                .and_then(|nanos| Some((nanos, arrival.checked_sub(Duration::from_nanos(nanos))?)))
+            {
+                Some((nanos, candidate)) => {
+                    let base = inner
+                        .event_clock_base
+                        .map_or(candidate, |base| base.min(candidate));
+                    inner.event_clock_base = Some(base);
+                    Stamp::EventTime(nanos)
+                }
+                None => Stamp::Arrival(arrival),
+            }
+        };
+        self.push(event, stamp);
+    }
+
+    /// Adds a pointer event that happened at `timestamp` on the sampling
+    /// clock (the clock whose times are passed to [`Self::sample`]).
+    ///
+    /// The deterministic form of [`Self::add_event`], for callers that
+    /// already map event times onto the sampling clock (replay, virtual
+    /// clocks). A timestamp earlier than one already queued is raised to it,
+    /// so arrival order is kept.
+    pub fn add_event_at(&self, event: PointerEvent, timestamp: Instant) {
+        self.push(event, Stamp::Explicit(timestamp));
+    }
+
+    fn push(&self, event: PointerEvent, stamp: Stamp) {
+        let mut inner = self.inner.borrow_mut();
 
         // Update tracking state
         match &event {
@@ -163,18 +322,16 @@ impl PointerEventResampler {
             _ => {}
         }
 
-        // Add to queue (with size limit)
-        if inner.event_queue.len() < MAX_BUFFERED_EVENTS {
-            inner.event_queue.push_back(BufferedEvent {
-                event,
-                timestamp: Instant::now(),
-            });
-        } else {
-            tracing::warn!(
+        if matches!(event, PointerEvent::Move(_))
+            && inner.event_queue.len() >= MAX_BUFFERED_EVENTS
+            && !inner.coalesce_one_move()
+        {
+            tracing::debug!(
                 pointer_id = ?inner.pointer_id,
-                "Event queue full, dropping event"
+                "resampler queue full of non-move events; queueing the move past the cap"
             );
         }
+        inner.event_queue.push_back(BufferedEvent { event, stamp });
     }
 
     /// Samples events at the specified time and invokes callback with resampled
@@ -183,30 +340,34 @@ impl PointerEventResampler {
     /// # Arguments
     ///
     /// * `sample_time` - Current sample time (typically current frame time)
-    /// * `next_sample_time` - Next expected sample time (for interpolation)
+    /// * `next_sample_time` - Next expected sample time; must be after
+    ///   `sample_time` (a non-advancing window is ignored)
     /// * `callback` - Function to call with each resampled event
     ///
     /// # Resampling Strategy
     ///
-    /// - Events are sorted by timestamp
-    /// - Duplicate positions are removed
-    /// - Positions are interpolated for smooth motion
-    /// - Move events are only generated if position changed
+    /// - Every queued event at or before `sample_time` is emitted, in order.
+    /// - If the next queued event is a move after `sample_time`, one move is
+    ///   synthesized at the position interpolated between the last emitted
+    ///   point and that move, at the fraction
+    ///   `(sample_time - last) / (next - last)`; it is skipped when the
+    ///   position did not change.
+    /// - A sample time earlier than the previous one, or less than 1 ms after
+    ///   it, emits nothing.
+    ///
+    /// The callback runs after the resampler's state is committed, with no
+    /// borrow held, so it may re-enter this resampler.
     pub fn sample<F>(&self, sample_time: Instant, next_sample_time: Instant, mut callback: F)
     where
         F: FnMut(PointerEvent),
     {
-        let Some(sample_duration) = next_sample_time.checked_duration_since(sample_time) else {
+        if next_sample_time <= sample_time {
             tracing::warn!("ignoring a non-advancing pointer sampling window");
-            return;
-        };
-        if sample_duration.is_zero() {
-            tracing::warn!("ignoring a zero-width pointer sampling window");
             return;
         }
 
         let emitted = {
-            let mut inner = self.inner.lock();
+            let mut inner = self.inner.borrow_mut();
 
             // Skip if not tracking or no events
             if !inner.is_tracked || inner.event_queue.is_empty() {
@@ -232,59 +393,55 @@ impl PointerEventResampler {
 
             // Process all events up to sample_time
             while let Some(front) = inner.event_queue.front() {
-                if front.timestamp > sample_time {
+                let at = inner.timestamp(front.stamp);
+                if at > sample_time {
                     break; // Future event, wait for next sample
                 }
-
-                // The queue cannot change between `front` and `pop_front`
-                // while the state lock is held.
                 let buffered = inner
                     .event_queue
                     .pop_front()
-                    .expect("event_queue front returned Some in the loop guard");
-                let event = buffered.event;
-
-                // Update last position for interpolation
-                let position = event.position();
-                inner.last_position = Some(position);
-
-                emitted.push(event);
+                    .expect("BUG: event_queue front returned Some in the loop guard");
+                inner.emit(buffered.event, at, &mut emitted);
             }
 
-            // Interpolate if we have move events pending: synthesize a Move at
-            // the interpolated position.
-            if !inner.event_queue.is_empty()
-                && inner.last_position.is_some()
-                && let Some(next_event) = inner.event_queue.front()
-                && matches!(next_event.event, PointerEvent::Move(..))
-                && let Some(last_pos) = inner.last_position
+            // The next move is in the future: emit the position the pointer
+            // had at the sample time, on the segment from the last emitted
+            // point to that move.
+            if let Some(anchor) = inner.anchor
+                && let Some(next) = inner.event_queue.front()
+                && let PointerEvent::Move(next_move) = &next.event
             {
-                let next_pos = next_event.event.position();
-                let total_duration = next_event.timestamp.duration_since(sample_time);
-                if total_duration > Duration::ZERO {
-                    let t = sample_duration.as_secs_f64() / total_duration.as_secs_f64();
-                    let t = t.clamp(0.0, 1.0);
-
-                    let interpolated_pos = Offset::new(
-                        last_pos.dx + (next_pos.dx - last_pos.dx) * t,
-                        last_pos.dy + (next_pos.dy - last_pos.dy) * t,
-                    );
-
-                    // Only emit if position actually changed
-                    if interpolated_pos != last_pos {
-                        // Synthesize the interpolated Move from the pending
-                        // event: same pointer/buttons/pressure state, position
-                        // replaced.
-                        let mut interpolated = next_event.event.clone();
-                        if let PointerEvent::Move(update) = &mut interpolated {
-                            update.current.position = dpi::PhysicalPosition::new(
-                                interpolated_pos.dx,
-                                interpolated_pos.dy,
-                            );
-                        }
-                        inner.last_position = Some(interpolated_pos);
-                        emitted.push(interpolated);
+                let next_at = inner.timestamp(next.stamp);
+                // anchor.timestamp <= sample_time < next_at, so the span is
+                // positive and the fraction lies in [0, 1).
+                let span = next_at.duration_since(anchor.timestamp).as_secs_f64();
+                let elapsed = sample_time.duration_since(anchor.timestamp).as_secs_f64();
+                let fraction = (elapsed / span).clamp(0.0, 1.0);
+                let next_pos = next.event.position();
+                let lerp = |from: f64, to: f64| from + (to - from) * fraction;
+                let position = Offset::new(
+                    lerp(anchor.position.dx, next_pos.dx),
+                    lerp(anchor.position.dy, next_pos.dy),
+                );
+                if position != anchor.position && position.dx.is_finite() && position.dy.is_finite()
+                {
+                    let next_nanos = next_move.current.time;
+                    let nanos = if next_nanos > anchor.nanos {
+                        // Exact in f64 for any realistic span; rounding down
+                        // keeps the stamp at or before the next event.
+                        anchor.nanos + ((next_nanos - anchor.nanos) as f64 * fraction) as u64
+                    } else {
+                        anchor.nanos
+                    };
+                    let mut interpolated = next.event.clone();
+                    if let PointerEvent::Move(update) = &mut interpolated {
+                        update.current.position =
+                            dpi::PhysicalPosition::new(position.dx, position.dy);
+                        update.current.time = nanos;
+                        update.coalesced.clear();
+                        update.predicted.clear();
                     }
+                    inner.emit(interpolated, sample_time, &mut emitted);
                 }
             }
 
@@ -292,8 +449,8 @@ impl PointerEventResampler {
         };
 
         // User dispatch happens only after the state transaction is complete.
-        // Re-entrant callbacks may therefore add/clear/stop without deadlocking
-        // or mutating the batch currently being emitted.
+        // Re-entrant callbacks may therefore add/clear/stop without a borrow
+        // conflict or mutating the batch currently being emitted.
         for event in emitted {
             callback(event);
         }
@@ -301,24 +458,28 @@ impl PointerEventResampler {
 
     /// Stops resampling and flushes all remaining events
     ///
-    /// Invokes the callback with any buffered events and clears the queue.
+    /// Invokes the callback with every buffered event, in order, and resets
+    /// the resampler for the next sequence.
     pub fn stop<F>(&self, mut callback: F)
     where
         F: FnMut(PointerEvent),
     {
         let emitted: SmallVec<[PointerEvent; 4]> = {
-            let mut inner = self.inner.lock();
-            let emitted = inner
-                .event_queue
-                .drain(..)
-                .map(|buffered| buffered.event)
-                .collect();
+            let mut inner = self.inner.borrow_mut();
+            let mut emitted = SmallVec::new();
+            while let Some(buffered) = inner.event_queue.pop_front() {
+                let at = inner.timestamp(buffered.stamp);
+                inner.emit(buffered.event, at, &mut emitted);
+            }
 
             // Reset state before callbacks can re-enter this resampler.
             inner.is_tracked = false;
             inner.is_down = false;
-            inner.last_position = None;
+            inner.anchor = None;
             inner.last_sample_time = None;
+            inner.last_stamp = None;
+            inner.last_emitted_nanos = 0;
+            inner.event_clock_base = None;
             emitted
         };
 
@@ -329,35 +490,35 @@ impl PointerEventResampler {
 
     /// Checks if the pointer is currently down
     pub fn is_down(&self) -> bool {
-        self.inner.lock().is_down
+        self.inner.borrow().is_down
     }
 
     /// Checks if the pointer is being tracked
     pub fn is_tracked(&self) -> bool {
-        self.inner.lock().is_tracked
+        self.inner.borrow().is_tracked
     }
 
     /// Checks if there are pending events in the queue
     pub fn has_pending_events(&self) -> bool {
-        !self.inner.lock().event_queue.is_empty()
+        !self.inner.borrow().event_queue.is_empty()
     }
 
     /// Number of input events waiting for a sampling window.
     #[inline]
     #[must_use]
     pub fn pending_event_count(&self) -> usize {
-        self.inner.lock().event_queue.len()
+        self.inner.borrow().event_queue.len()
     }
 
     /// Returns the pointer ID this resampler tracks
     pub fn pointer_id(&self) -> PointerId {
-        self.inner.lock().pointer_id
+        self.inner.borrow().pointer_id
     }
 
     /// Clears all buffered events
     pub fn clear(&self) {
-        let mut inner = self.inner.lock();
+        let mut inner = self.inner.borrow_mut();
         inner.event_queue.clear();
-        inner.last_position = None;
+        inner.anchor = None;
     }
 }

@@ -20,11 +20,34 @@
 //! exceeds 40 ms (the pointer is considered stationary). For the least-
 //! squares flavour, the surviving samples are fed to `LeastSquaresSolver`
 //! which fits a quadratic polynomial in time and reports its derivative at
-//! `t = 0` as the velocity.
+//! `t = 0` as the velocity. When the samples carry fewer than three distinct
+//! timestamps (moves drained in one frame share one) the quadratic is
+//! rank-deficient and a straight line is fitted instead, so a moving pointer
+//! never reports zero velocity just because its samples were batched.
 //!
 //! Confidence is the product of the R² fit quality of the x and y
 //! polynomials; a perfect linear swipe gives 1.0, a noisy curve gives
 //! something close to 0.0.
+//!
+//! # Numerical contract
+//!
+//! For any sequence of finite samples — duplicate or out-of-order
+//! timestamps, sub-microsecond spacing, coordinates anywhere in the `f64`
+//! range — every tracker publishes a finite estimate whose speed is at most
+//! [`DEFAULT_MAX_FLING_VELOCITY`], in the direction of the measured motion.
+//! A gesture with a stricter configured maximum clamps further through
+//! [`GestureSettings::clamp_fling_velocity`](crate::settings::GestureSettings::clamp_fling_velocity).
+//!
+//! # Stop detection
+//!
+//! The "pointer stopped" gate compares the newest sample's time with the
+//! time of the query. [`VelocityTracker::estimate_at`] and
+//! [`VelocityTracker::velocity_at`] take that time from the caller — the
+//! same clock that stamped the samples, so virtual clocks, replays and
+//! tests are deterministic. The argument-free queries measure the gap on the
+//! wall clock between the last [`VelocityTracker::add_position`] call and
+//! the query instead, which is only meaningful when samples are stamped as
+//! they arrive.
 //!
 //! # Example
 //!
@@ -55,10 +78,11 @@
 use web_time::{Duration, Instant};
 
 pub use crate::device_kind::PointerDeviceKind;
+use crate::settings::DEFAULT_MAX_FLING_VELOCITY;
 pub use crate::velocity::{Velocity, VelocityEstimate};
 use flui_foundation::geometry::Offset;
 
-use super::lsq_solver::{MAX_SAMPLES, solve_two};
+use super::lsq_solver::{MAX_SAMPLES, PolynomialFit, solve_two};
 
 // ============================================================================
 // Constants
@@ -78,8 +102,62 @@ const MIN_SAMPLE_SIZE: usize = 3;
 /// the shared `LeastSquaresSolver` scratch buffer.
 const HISTORY_SIZE: usize = MAX_SAMPLES;
 
-/// Polynomial degree for the least-squares fit. Quadratic.
+/// Polynomial degree for the least-squares fit. Quadratic, falling back to
+/// linear when the sample times cannot determine a quadratic.
 const POLYNOMIAL_DEGREE: usize = 2;
+
+/// [`HORIZON`] in milliseconds, the unit of the fit.
+const HORIZON_MS: f64 = 100.0;
+
+/// [`ASSUME_POINTER_STOPPED`] in milliseconds, the unit of the fit.
+const ASSUME_POINTER_STOPPED_MS: f64 = 40.0;
+
+/// Bound a measured velocity: finite, at most [`DEFAULT_MAX_FLING_VELOCITY`],
+/// direction kept. A NaN component (no direction to keep) gives zero.
+fn bounded(pixels_per_second: Offset<f64>) -> Offset<f64> {
+    Velocity::new(pixels_per_second)
+        .clamp_magnitude(0.0, DEFAULT_MAX_FLING_VELOCITY)
+        .pixels_per_second
+}
+
+/// `newest - oldest`, saturated to the finite range: two coordinates of
+/// opposite sign near `f64::MAX` would otherwise subtract to infinity.
+fn finite_offset(newest: Offset<f64>, oldest: Offset<f64>) -> Offset<f64> {
+    let saturate = |v: f64| v.clamp(f64::MIN, f64::MAX);
+    let delta = newest - oldest;
+    Offset::new(saturate(delta.dx), saturate(delta.dy))
+}
+
+/// `time - reference` in milliseconds, negative when `time` is earlier.
+fn signed_ms(time: Instant, reference: Instant) -> f64 {
+    match time.checked_duration_since(reference) {
+        Some(later) => later.as_secs_f64() * 1000.0,
+        None => -(reference.duration_since(time).as_secs_f64() * 1000.0),
+    }
+}
+
+/// The memoized, buffer-pure result of a least-squares fit.
+#[derive(Debug, Clone, Copy)]
+struct Fit {
+    estimate: VelocityEstimate,
+    /// Second derivative of the fit at the newest sample, px/s²; zero for a
+    /// linear or degenerate fit.
+    acceleration: Offset<f64>,
+}
+
+impl Fit {
+    const fn without_acceleration(estimate: VelocityEstimate) -> Self {
+        Self {
+            estimate,
+            acceleration: Offset::ZERO,
+        }
+    }
+}
+
+/// The estimate reported once the pointer is known to have stopped: zero
+/// velocity with full confidence.
+const STOPPED: VelocityEstimate =
+    VelocityEstimate::new(Offset::ZERO, Offset::ZERO, Duration::ZERO, 1.0);
 
 /// Speed below which a release is not a fling, in px/s.
 ///
@@ -155,9 +233,9 @@ pub struct VelocityTracker {
     /// `HISTORY_SIZE`.
     index: usize,
 
-    /// When the most recent sample was added. Used to detect "the pointer
-    /// has been still for 40 ms or more" — the signal that the velocity is
-    /// zero.
+    /// Wall-clock time of the most recent [`Self::add_position`] call. Only
+    /// the argument-free queries read it, to detect "no sample for 40 ms";
+    /// [`Self::estimate_at`] measures that gap on the samples' own clock.
     since_last_sample: Option<Instant>,
 
     /// Memoized result of the buffer-pure part of [`Self::get_velocity_estimate`]
@@ -170,7 +248,7 @@ pub struct VelocityTracker {
     /// the repeated queries on the drag-end path — most visibly
     /// [`super::InputPredictor::predict`], which asks for both the velocity
     /// and the estimate in one call — from two O(N) QR solves to one.
-    cached_estimate: Option<VelocityEstimate>,
+    cached_fit: Option<Fit>,
 }
 
 impl Default for VelocityTracker {
@@ -192,7 +270,7 @@ impl VelocityTracker {
             samples: [None; HISTORY_SIZE],
             index: 0,
             since_last_sample: None,
-            cached_estimate: None,
+            cached_fit: None,
         }
     }
 
@@ -207,12 +285,10 @@ impl VelocityTracker {
     /// O(1). The samples are stored in a 20-slot circular buffer; older
     /// samples are silently overwritten.
     ///
-    /// The `time` parameter is the *logical* timestamp used for the
-    /// velocity fit (it can come from a synthetic test clock, a high-
-    /// resolution pointer-event clock, or a frame-time source). The
-    /// "stationary for 40 ms" gate uses `Instant::now()` so the check
-    /// always reflects wall-clock time, regardless of how the caller
-    /// generates the logical timestamps.
+    /// The `time` parameter is the timestamp used for the velocity fit and
+    /// for [`Self::estimate_at`]'s stop gate: the pointer event's time, or any
+    /// other clock the caller also queries with. Samples need not arrive in
+    /// time order. A non-finite position is ignored.
     pub fn add_position(&mut self, time: Instant, position: Offset<f64>) {
         // Reject non-finite coordinates: NaN/Inf would poison the least-squares
         // fit (NaN comparisons defeat the singular-matrix guard) and propagate
@@ -220,16 +296,11 @@ impl VelocityTracker {
         if !position.dx.is_finite() || !position.dy.is_finite() {
             return;
         }
-        // Mark "now" as the latest activity. Used by get_velocity_estimate()
-        // to short-circuit when the pointer has been still for >= 40 ms.
-        // We use the real wall clock here, NOT the `time` argument, so a
-        // caller that supplies synthetic timestamps (tests, frame-time
-        // extrapolation, replay logs) still gets the correct stationary
-        // signal.
+        // Arrival time for the argument-free queries' wall-clock stop gate.
         self.since_last_sample = Some(Instant::now());
 
         // The sample buffer is about to change, so any memoized fit is stale.
-        self.cached_estimate = None;
+        self.cached_fit = None;
 
         // Advance the write index, wrapping at HISTORY_SIZE.
         self.index = (self.index + 1) % HISTORY_SIZE;
@@ -241,7 +312,7 @@ impl VelocityTracker {
         self.samples = [None; HISTORY_SIZE];
         self.index = 0;
         self.since_last_sample = None;
-        self.cached_estimate = None;
+        self.cached_fit = None;
     }
 
     /// Number of samples currently stored.
@@ -263,36 +334,107 @@ impl VelocityTracker {
     ///
     /// Returns `None` if the tracker has no samples at all.
     ///
+    /// The stop gate here runs on the wall clock: the estimate is zero once
+    /// 40 ms have passed since the last [`Self::add_position`] *call*. Prefer
+    /// [`Self::estimate_at`], which measures that gap on the samples' own
+    /// clock.
+    ///
     /// Takes `&mut self` because the buffer-pure part of the result is
     /// memoized (see the private `compute_estimate`); the cache is reused until
     /// the next [`Self::add_position`] / [`Self::reset`]. The "stationary for
     /// 40 ms" gate below is time-dependent and re-checked every call, so a
     /// cached fit is only ever returned while the pointer is still moving.
     pub fn get_velocity_estimate(&mut self) -> Option<VelocityEstimate> {
-        // Pointer has been still for >= 40 ms → velocity is exactly zero with
-        // perfect confidence. A fully-populated VelocityEstimate is returned
-        // so callers can still ask for `duration` / `offset`.
+        let stopped = self
+            .since_last_sample
+            .is_some_and(|last| last.elapsed() >= ASSUME_POINTER_STOPPED);
+        self.estimate_unless_stopped(stopped)
+    }
+
+    /// The velocity estimate as of `now`, on the clock that stamped the
+    /// samples.
+    ///
+    /// When `now` is 40 ms or more after the newest sample's time, the
+    /// pointer has stopped and the estimate is zero with full confidence.
+    /// A `now` before the newest sample (a query racing a late sample) is
+    /// treated as "still moving". Returns `None` if the tracker has no
+    /// samples. The result is finite and its speed is at most
+    /// [`DEFAULT_MAX_FLING_VELOCITY`].
+    ///
+    /// `&mut self` because the fit is memoized like
+    /// [`Self::get_velocity_estimate`]'s.
+    pub fn estimate_at(&mut self, now: Instant) -> Option<VelocityEstimate> {
+        let newest = self.samples[self.index]?;
+        let stopped = now
+            .checked_duration_since(newest.time)
+            .is_some_and(|gap| gap >= ASSUME_POINTER_STOPPED);
+        self.estimate_unless_stopped(stopped)
+    }
+
+    /// The velocity as of `now`, on the clock that stamped the samples:
+    /// [`Self::estimate_at`]'s velocity, or [`Velocity::ZERO`] without an
+    /// estimate.
+    pub fn velocity_at(&mut self, now: Instant) -> Velocity {
+        velocity_from_estimate(self.estimate_at(now))
+    }
+
+    /// The stop-gated, memoized estimate shared by both query clocks.
+    fn estimate_unless_stopped(&mut self, stopped: bool) -> Option<VelocityEstimate> {
+        // A stopped pointer has exactly zero velocity with perfect confidence.
         // Time-dependent, so never cached.
-        if let Some(last) = self.since_last_sample
-            && last.elapsed() >= ASSUME_POINTER_STOPPED
-        {
-            return Some(VelocityEstimate::new(
-                Offset::ZERO,
-                Offset::ZERO,
-                Duration::ZERO,
-                1.0,
-            ));
+        if stopped {
+            return Some(STOPPED);
         }
 
         // Reuse the memoized fit if the sample buffer hasn't changed since it
         // was computed. `VelocityEstimate` is `Copy`, so this is a cheap read.
-        if let Some(cached) = self.cached_estimate {
-            return Some(cached);
+        if let Some(cached) = self.cached_fit {
+            return Some(cached.estimate);
         }
 
-        let estimate = self.compute_estimate()?;
-        self.cached_estimate = Some(estimate);
-        Some(estimate)
+        let fit = self.compute_estimate()?;
+        self.cached_fit = Some(fit);
+        Some(fit.estimate)
+    }
+
+    /// Walk the circular buffer back from the newest sample while the samples
+    /// represent continuous motion: within [`HORIZON`] of the newest sample
+    /// and no more than [`ASSUME_POINTER_STOPPED`] from their neighbour.
+    /// Distances are absolute, so an out-of-order sample is measured by how
+    /// far it is in time, not dropped at the boundary. `visit` receives each
+    /// accepted sample with its signed time relative to the newest one, in
+    /// milliseconds. Returns the newest sample, the oldest accepted one and
+    /// how many were accepted.
+    fn walk_window(
+        &self,
+        mut visit: impl FnMut(PointAtTime, f64),
+    ) -> Option<(PointAtTime, PointAtTime, usize)> {
+        let newest = self.samples[self.index]?;
+        let mut previous = newest;
+        let mut oldest = newest;
+        let mut n = 0usize;
+        let mut cursor = self.index;
+        // Bound the walk at one full lap — anything beyond that is stale.
+        for _ in 0..HISTORY_SIZE {
+            let Some(sample) = self.samples[cursor] else {
+                break;
+            };
+            let t_ms = signed_ms(sample.time, newest.time);
+            let gap_ms = signed_ms(previous.time, sample.time).abs();
+            previous = sample;
+            if t_ms.abs() > HORIZON_MS || gap_ms > ASSUME_POINTER_STOPPED_MS {
+                break;
+            }
+            oldest = sample;
+            visit(sample, t_ms);
+            n += 1;
+            cursor = if cursor == 0 {
+                HISTORY_SIZE - 1
+            } else {
+                cursor - 1
+            };
+        }
+        Some((newest, oldest, n))
     }
 
     /// Compute the buffer-pure part of the velocity estimate: walk the
@@ -303,61 +445,24 @@ impl VelocityTracker {
     /// time-dependent stationary gate, nor the memo cache — which is exactly
     /// what makes the cache in [`Self::get_velocity_estimate`] sound. O(N)
     /// where N ≤ `HISTORY_SIZE` (the buffer is bounded at 20 samples).
-    fn compute_estimate(&self) -> Option<VelocityEstimate> {
-        let newest = self.samples[self.index]?;
-        // Walk backwards through the circular buffer, collecting samples that
-        // represent continuous motion: age <= HORIZON and gap between
-        // adjacent samples <= ASSUME_POINTER_STOPPED.
-        let mut previous = newest;
-        let mut oldest = newest;
+    fn compute_estimate(&self) -> Option<Fit> {
         let mut xs = [0.0f64; HISTORY_SIZE];
         let mut ys = [0.0f64; HISTORY_SIZE];
         let mut ts = [0.0f64; HISTORY_SIZE];
-        let mut ws = [0.0f64; HISTORY_SIZE];
         let mut n: usize = 0;
-        let mut cursor = self.index;
-
-        // Bound the walk at one full lap — anything beyond that is stale.
-        for _ in 0..HISTORY_SIZE {
-            let Some(sample) = self.samples[cursor] else {
-                break;
-            };
-
-            // age is in ms; delta is the gap from the previously-iterated
-            // sample, also in ms.
-            let age_ms = newest
-                .time
-                .checked_duration_since(sample.time)
-                .map_or(0.0, |d| d.as_secs_f64() * 1000.0);
-            let delta_ms = previous
-                .time
-                .checked_duration_since(sample.time)
-                .map_or(0.0, |d| d.as_secs_f64() * 1000.0);
-            previous = sample;
-
-            // Stop the walk if the sample is past the horizon or the gap from
-            // the previous one is too large — the pointer was stationary
-            // between them.
-            if age_ms > HORIZON.as_secs_f64() * 1000.0
-                || delta_ms > ASSUME_POINTER_STOPPED.as_secs_f64() * 1000.0
-            {
-                break;
-            }
-
-            oldest = sample;
-            ts[n] = -age_ms; // Negative: we go back from the newest sample.
+        let (newest, oldest, _) = self.walk_window(|sample, t_ms| {
+            ts[n] = t_ms;
             xs[n] = sample.position.dx;
             ys[n] = sample.position.dy;
-            ws[n] = 1.0; // Uniform weights.
             n += 1;
-
-            // Step the cursor one slot backwards through the circular buffer.
-            cursor = if cursor == 0 {
-                HISTORY_SIZE - 1
-            } else {
-                cursor - 1
-            };
-        }
+        })?;
+        let ws = [1.0f64; HISTORY_SIZE]; // Uniform weights.
+        let offset = finite_offset(newest.position, oldest.position);
+        let duration = if newest.time >= oldest.time {
+            newest.time.duration_since(oldest.time)
+        } else {
+            oldest.time.duration_since(newest.time)
+        };
 
         // We were unable to gather enough samples to fit. Report zero
         // velocity with confidence 1.0 and the span we did see.
@@ -371,33 +476,31 @@ impl VelocityTracker {
             tracing::trace!(
                 target: "flui.velocity",
                 contiguous_samples = n,
-                span_ms = newest
-                    .time
-                    .saturating_duration_since(oldest.time)
-                    .as_secs_f64()
-                    * 1000.0,
+                span_ms = duration.as_secs_f64() * 1000.0,
                 reason = "too_few_contiguous_samples",
                 "velocity estimate: no fling"
             );
-            return Some(VelocityEstimate::new(
+            return Some(Fit::without_acceleration(VelocityEstimate::new(
                 Offset::ZERO,
                 Offset::ZERO,
-                newest.time.saturating_duration_since(oldest.time),
+                duration,
                 1.0,
-            ));
+            )));
         }
 
         // Guard: if the total time window is effectively zero (all samples at
         // the same timestamp, which happens when pointer events arrive within a
         // single OS timer tick — common in headless tests with coarse clocks on
-        // Windows), the least-squares system is singular and would produce NaN.
-        // Report zero velocity with zero confidence so callers can still decide
-        // whether to spring back based on position (e.g. overscroll), rather
-        // than silently corrupting the simulation with NaN.
-        let total_span_ms = ts[..n]
+        // Windows), no polynomial in time can be fitted. Report zero velocity
+        // with zero confidence so callers can still decide whether to spring
+        // back based on position (e.g. overscroll), rather than silently
+        // corrupting the simulation with NaN.
+        let (t_min, t_max) = ts[..n]
             .iter()
-            .map(|&t| -t) // ts are stored as negative age_ms; max(-ts) = total age
-            .fold(0.0_f64, f64::max);
+            .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), &t| {
+                (lo.min(t), hi.max(t))
+            });
+        let total_span_ms = t_max - t_min;
         if total_span_ms < 1e-6 {
             // Enough samples, but they all carry one timestamp — the batched
             // drain. See the note at the sibling return above for why this is
@@ -409,37 +512,68 @@ impl VelocityTracker {
                 reason = "degenerate_time_span",
                 "velocity estimate: no fling"
             );
-            return Some(VelocityEstimate::new(
-                newest.position - oldest.position,
+            return Some(Fit::without_acceleration(VelocityEstimate::new(
+                offset,
                 Offset::ZERO,
-                newest.time.saturating_duration_since(oldest.time),
+                duration,
                 0.0,
-            ));
+            )));
         }
 
         // Fit a quadratic in milliseconds; velocity in px/ms is the linear
         // coefficient. Scale to px/s (× 1000). The x and y fits share the same
         // sample times and weights, so `solve_two` computes the QR
-        // factorization once for both.
-        let (x_fit, y_fit) = solve_two(&ts[..n], &ws[..n], &xs[..n], &ys[..n], POLYNOMIAL_DEGREE);
-
-        match (x_fit, y_fit) {
-            (Some(xf), Some(yf)) => Some(VelocityEstimate::new(
-                newest.position - oldest.position,
-                Offset::new(xf.coefficients[1] * 1000.0, yf.coefficients[1] * 1000.0),
-                newest.time.saturating_duration_since(oldest.time),
-                xf.confidence * yf.confidence,
-            )),
-            // Numerical failure on one axis — keep going with zero on that
-            // axis and the other axis's confidence. Rare; happens on
-            // degenerate data.
-            _ => Some(VelocityEstimate::new(
+        // factorization once for both. Samples with only two distinct times
+        // cannot determine a quadratic; a line still fits them.
+        let fit = |degree| match solve_two(&ts[..n], &ws[..n], &xs[..n], &ys[..n], degree) {
+            (Some(x), Some(y)) => Some((x, y)),
+            _ => None,
+        };
+        let Some((x_fit, y_fit)) = fit(POLYNOMIAL_DEGREE).or_else(|| fit(1)) else {
+            // Neither fit is determined: the times are distinct but closer than
+            // the solver can separate. Same answer as the degenerate span.
+            tracing::trace!(
+                target: "flui.velocity",
+                contiguous_samples = n,
+                span_ms = total_span_ms,
+                reason = "unsolvable_time_span",
+                "velocity estimate: no fling"
+            );
+            return Some(Fit::without_acceleration(VelocityEstimate::new(
+                offset,
                 Offset::ZERO,
-                Offset::ZERO,
-                newest.time.saturating_duration_since(oldest.time),
+                duration,
                 0.0,
-            )),
+            )));
+        };
+        let slope = |fit: &PolynomialFit| fit.coefficients[1] * 1000.0;
+        // x(t) = c0 + c1·t + c2·t² in ms, so x''(t) = 2·c2 px/ms² = 2e6·c2 px/s².
+        let curvature = |fit: &PolynomialFit| fit.coefficients[2] * 2.0e6;
+        let acceleration = Offset::new(curvature(&x_fit), curvature(&y_fit));
+        Some(Fit {
+            estimate: VelocityEstimate::new(
+                offset,
+                bounded(Offset::new(slope(&x_fit), slope(&y_fit))),
+                duration,
+                x_fit.confidence * y_fit.confidence,
+            ),
+            acceleration: if acceleration.dx.is_finite() && acceleration.dy.is_finite() {
+                acceleration
+            } else {
+                Offset::ZERO
+            },
+        })
+    }
+
+    /// The acceleration of the current fit, in px/s², zero when the fit is
+    /// linear, degenerate or the pointer has stopped (wall-clock gate, like
+    /// [`Self::get_velocity_estimate`]). Finite, but not bounded: callers
+    /// bound what they derive from it.
+    pub(crate) fn acceleration(&mut self) -> Offset<f64> {
+        if self.get_velocity_estimate() == Some(STOPPED) {
+            return Offset::ZERO;
         }
+        self.cached_fit.map_or(Offset::ZERO, |fit| fit.acceleration)
     }
 
     /// The most recent velocity as a [`Velocity`].
@@ -486,40 +620,9 @@ impl VelocityTracker {
         Self::default()
     }
 
-    /// Estimate of contiguous samples in the walk window. O(HISTORY_SIZE).
+    /// Number of contiguous samples in the walk window. O(HISTORY_SIZE).
     fn estimate_sample_count(&self) -> usize {
-        let Some(newest) = self.samples[self.index] else {
-            return 0;
-        };
-        let mut previous = newest;
-        let mut n = 0usize;
-        let mut cursor = self.index;
-        for _ in 0..HISTORY_SIZE {
-            let Some(sample) = self.samples[cursor] else {
-                break;
-            };
-            let age_ms = newest
-                .time
-                .checked_duration_since(sample.time)
-                .map_or(0.0, |d| d.as_secs_f64() * 1000.0);
-            let delta_ms = previous
-                .time
-                .checked_duration_since(sample.time)
-                .map_or(0.0, |d| d.as_secs_f64() * 1000.0);
-            previous = sample;
-            if age_ms > HORIZON.as_secs_f64() * 1000.0
-                || delta_ms > ASSUME_POINTER_STOPPED.as_secs_f64() * 1000.0
-            {
-                break;
-            }
-            n += 1;
-            cursor = if cursor == 0 {
-                HISTORY_SIZE - 1
-            } else {
-                cursor - 1
-            };
-        }
-        n
+        self.walk_window(|_, _| {}).map_or(0, |(_, _, n)| n)
     }
 }
 
@@ -587,15 +690,10 @@ impl IosFlingVelocityTracker {
         if let Some(last) = self.inner.since_last_sample
             && last.elapsed() >= ASSUME_POINTER_STOPPED
         {
-            return Some(VelocityEstimate::new(
-                Offset::ZERO,
-                Offset::ZERO,
-                Duration::ZERO,
-                1.0,
-            ));
+            return Some(STOPPED);
         }
 
-        let estimated_velocity = self.estimated_velocity();
+        let estimated_velocity = bounded(self.estimated_velocity());
         let newest = self.inner.samples[self.inner.index]?;
         // Walk forward through the buffer to find the oldest non-null sample.
         let mut oldest: Option<PointAtTime> = None;
@@ -609,7 +707,7 @@ impl IosFlingVelocityTracker {
         let oldest = oldest.expect("newest was Some, so at least one slot is non-null");
 
         Some(VelocityEstimate::new(
-            newest.position - oldest.position,
+            finite_offset(newest.position, oldest.position),
             estimated_velocity,
             newest.time.saturating_duration_since(oldest.time),
             1.0,
@@ -623,11 +721,16 @@ impl IosFlingVelocityTracker {
     }
 
     /// The raw weighted-average velocity, regardless of the
-    /// "stationary for 40 ms" gate.
+    /// "stationary for 40 ms" gate. Each two-point velocity is bounded
+    /// before weighting, so the sum cannot overflow.
     fn estimated_velocity(&self) -> Offset<f64> {
-        let v = |offset: isize| self.two_sample_velocity_at_f64(offset);
-        let dx = v(-2).0 * self.weights[0] + v(-1).0 * self.weights[1] + v(0).0 * self.weights[2];
-        let dy = v(-2).1 * self.weights[0] + v(-1).1 * self.weights[1] + v(0).1 * self.weights[2];
+        let v = |offset: isize| {
+            let (dx, dy) = self.two_sample_velocity_at_f64(offset);
+            bounded(Offset::new(dx, dy))
+        };
+        let (a, b, c) = (v(-2), v(-1), v(0));
+        let dx = a.dx * self.weights[0] + b.dx * self.weights[1] + c.dx * self.weights[2];
+        let dy = a.dy * self.weights[0] + b.dy * self.weights[1] + c.dy * self.weights[2];
         Offset::new(dx, dy)
     }
 
@@ -805,7 +908,10 @@ impl ImpulseVelocityTracker {
         let mut work = 0.0_f64;
         for i in 0..positions.len() - 1 {
             let v_prev = Self::kinetic_energy_to_velocity(work);
-            let v_curr = (positions[i + 1] - positions[i]) / dts[i];
+            // Bounded per interval, so the squared term cannot overflow; the
+            // published vector is bounded again as a whole.
+            let v_curr = ((positions[i + 1] - positions[i]) / dts[i])
+                .clamp(-DEFAULT_MAX_FLING_VELOCITY, DEFAULT_MAX_FLING_VELOCITY);
             work += (v_curr - v_prev) * v_curr.abs();
             if i == 0 {
                 // Boundary condition (AOSP "approach 2"): with no information
@@ -827,12 +933,7 @@ impl ImpulseVelocityTracker {
         if let Some(last) = self.inner.since_last_sample
             && last.elapsed() >= ASSUME_POINTER_STOPPED
         {
-            return Some(VelocityEstimate::new(
-                Offset::ZERO,
-                Offset::ZERO,
-                Duration::ZERO,
-                1.0,
-            ));
+            return Some(STOPPED);
         }
 
         let newest = self.inner.samples[self.inner.index]?;
@@ -911,8 +1012,8 @@ impl ImpulseVelocityTracker {
         let vy = Self::impulse_axis(&ys[..m], &dts[..m - 1]);
 
         Some(VelocityEstimate::new(
-            newest.position - oldest.position,
-            Offset::new(vx, vy),
+            finite_offset(newest.position, oldest.position),
+            bounded(Offset::new(vx, vy)),
             newest.time.saturating_duration_since(oldest.time),
             // The impulse model makes no fit-quality claim (AOSP reports the
             // value unconditionally).
