@@ -9,9 +9,14 @@
 //! Windows; elsewhere `$XDG_RUNTIME_DIR/flui/`, or `~/.cache/flui/` without
 //! it. Without those variables it falls back to `flui-<user>` in the
 //! temporary directory (the user id on Unix, the user name on Windows), so
-//! accounts sharing that directory keep separate locks.
-//! `FLUI_XTASK_LOCK_FILE` names another file and `FLUI_XTASK_NO_LOCK=1`
-//! skips the lock.
+//! accounts sharing that directory keep separate locks; if that temporary
+//! directory is itself relative, the run warns and proceeds unlocked.
+//! An absolute `FLUI_XTASK_LOCK_FILE` names another file (a relative one is
+//! refused with a warning) and `FLUI_XTASK_NO_LOCK=1` skips the lock.
+//!
+//! `~/.cache/flui/` is used only without `XDG_RUNTIME_DIR`. On a home
+//! directory shared over the network, runs on different machines then share
+//! one lock and queue behind one another: a slowdown, not a failure.
 //!
 //! The lock is the operating system's advisory lock on an open file
 //! ([`File::lock`]): it is released when the handle closes, and so when the
@@ -75,6 +80,9 @@ pub(crate) struct LockSettings {
     path: PathBuf,
     /// A relative `FLUI_XTASK_LOCK_FILE`, refused in favour of the default.
     rejected: Option<PathBuf>,
+    /// The path falls back to a relative temporary directory, so no two
+    /// runs could agree on it.
+    unlocated: bool,
     opted_out: bool,
     held_by: Option<PathBuf>,
 }
@@ -82,14 +90,20 @@ pub(crate) struct LockSettings {
 impl LockSettings {
     /// The settings this process's environment gives.
     pub(crate) fn from_env() -> Self {
-        Self::from_vars(|key| std::env::var_os(key), current_user)
+        Self::from_vars(
+            |key| std::env::var_os(key),
+            current_user,
+            std::env::temp_dir,
+        )
     }
 
-    /// `var` reads the environment; `user` names the current user, asked
-    /// only when no per-user directory variable is set.
+    /// `var` reads the environment; `user` names the current user and
+    /// `temp` the temporary directory, both asked only when no per-user
+    /// directory variable is set.
     fn from_vars(
         var: impl Fn(&str) -> Option<OsString>,
         user: impl FnOnce() -> Option<String>,
+        temp: impl FnOnce() -> PathBuf,
     ) -> Self {
         let set = |key| var(key).filter(|value| !value.is_empty());
         let user_dir = if cfg!(windows) {
@@ -101,17 +115,25 @@ impl LockSettings {
         };
         // Without one, the shared temporary directory, in a directory named
         // after the user so accounts on one machine keep separate locks.
+        // A relative temporary directory would name a different file from
+        // each directory a run starts in: no lock at all then.
+        let mut unlocated = false;
         let dir = user_dir.map_or_else(
-            || std::env::temp_dir().join(fallback_dir_name(user())),
+            || {
+                let temp = temp();
+                unlocated = !temp.is_absolute();
+                temp.join(fallback_dir_name(user()))
+            },
             |dir| dir.join("flui"),
         );
         // A relative override would name a different file from each
         // directory a run starts in, so it is refused, not resolved.
-        let (path, rejected) = match set(LOCK_FILE).map(PathBuf::from) {
-            Some(path) if path.is_absolute() => (path, None),
-            rejected => (dir.join("xtask-heavy.lock"), rejected),
+        let (path, rejected, unlocated) = match set(LOCK_FILE).map(PathBuf::from) {
+            Some(path) if path.is_absolute() => (path, None, false),
+            rejected => (dir.join("xtask-heavy.lock"), rejected, unlocated),
         };
         Self {
+            unlocated,
             path,
             rejected,
             opted_out: set(NO_LOCK).is_some_and(|value| value == "1"),
@@ -125,6 +147,7 @@ impl LockSettings {
         Self {
             path: path.to_path_buf(),
             rejected: None,
+            unlocated: false,
             opted_out: false,
             held_by: None,
         }
@@ -249,6 +272,15 @@ impl HeavyRunLock {
             return unheld;
         }
         let path = &settings.path;
+        if settings.unlocated {
+            let _ = writeln!(
+                out,
+                "xtask: warning: the run lock's path {} is not absolute (no per-user directory \
+                 and a relative temporary directory); running without it",
+                path.display()
+            );
+            return unheld;
+        }
         if let Some(rejected) = &settings.rejected {
             let _ = writeln!(
                 out,
@@ -560,6 +592,26 @@ mod tests {
         assert!(guard.holds() && locked(&path), "the default is locked");
     }
 
+    /// A lock path that falls back to a relative temporary directory is not
+    /// used: one warning, and the run proceeds unlocked.
+    fn relative_temp_dir_warns_and_runs_unlocked() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = lock_path(&dir);
+        let settings = LockSettings {
+            unlocated: true,
+            ..LockSettings::at(&path)
+        };
+        let mut out = Vec::new();
+        let guard = HeavyRunLock::acquire(&settings, &holder("cargo xtask gate"), &mut out);
+        let printed = String::from_utf8_lossy(&out);
+        assert!(!guard.holds(), "no lock is held");
+        assert!(
+            printed.matches("warning").count() == 1 && printed.contains("not absolute"),
+            "one warning: {printed}"
+        );
+        assert!(!path.exists(), "no lock file is created");
+    }
+
     #[test]
     fn host_lock_contract() {
         if std::env::var_os(CHILD).is_some() {
@@ -591,6 +643,10 @@ mod tests {
                 (
                     "relative_override_warns_and_locks_the_default",
                     relative_override_warns_and_locks_the_default,
+                ),
+                (
+                    "relative_temp_dir_warns_and_runs_unlocked",
+                    relative_temp_dir_warns_and_runs_unlocked,
                 ),
                 (
                     "unopenable_lock_file_warns_and_proceeds",
@@ -688,19 +744,51 @@ mod tests {
             .iter()
             .filter_map(|(row, env, user, [windows, other])| {
                 let user = user.map(str::to_owned);
-                let got = LockSettings::from_vars(vars(env), || user).path;
+                let got = LockSettings::from_vars(vars(env), || user, || tmp.clone());
                 let want = if cfg!(windows) { windows } else { other };
-                (got != *want).then(|| format!("{row}: {} != {}", got.display(), want.display()))
+                (got.path != *want || got.unlocated)
+                    .then(|| format!("{row}: {} != {}", got.path.display(), want.display()))
             })
             .collect();
         assert!(wrong.is_empty(), "lock path selection: {wrong:#?}");
-        let user = LockSettings::from_vars(vars(&[]), alice);
+        /// A row name, the environment, and whether a relative temporary
+        /// directory leaves the run unlocated.
+        type TempRow = (&'static str, &'static [(&'static str, &'static str)], bool);
+        let relative_temp: [TempRow; 3] = [
+            ("relative_temp_without_a_user_directory", &[], true),
+            (
+                "relative_temp_under_an_absolute_override",
+                &[(LOCK_FILE, ABSOLUTE)],
+                false,
+            ),
+            (
+                "relative_temp_unused_beside_a_user_directory",
+                &[("LOCALAPPDATA", "local"), ("XDG_RUNTIME_DIR", "runtime")],
+                false,
+            ),
+        ];
+        let wrong: Vec<&str> = relative_temp
+            .iter()
+            .filter(|(_, env, unlocated)| {
+                LockSettings::from_vars(vars(env), alice, || PathBuf::from("relative-tmp"))
+                    .unlocated
+                    != *unlocated
+            })
+            .map(|(row, _, _)| *row)
+            .collect();
+        assert!(wrong.is_empty(), "relative temporary directory: {wrong:?}");
+        let user = LockSettings::from_vars(vars(&[]), alice, std::env::temp_dir);
         assert!(!user.opted_out && user.held_by.is_none() && user.rejected.is_none());
-        let refused = LockSettings::from_vars(vars(&[(LOCK_FILE, "relative.lock")]), alice);
+        let refused = LockSettings::from_vars(
+            vars(&[(LOCK_FILE, "relative.lock")]),
+            alice,
+            std::env::temp_dir,
+        );
         assert_eq!(refused.rejected, Some(PathBuf::from("relative.lock")));
         let set = LockSettings::from_vars(
             vars(&[(LOCK_FILE, ABSOLUTE), (NO_LOCK, "1"), (LOCK_HELD, ABSOLUTE)]),
             alice,
+            std::env::temp_dir,
         );
         assert!(set.opted_out && set.parent_holds());
         let other = LockSettings::from_vars(
@@ -710,6 +798,7 @@ mod tests {
                 (LOCK_HELD, "another.lock"),
             ]),
             alice,
+            std::env::temp_dir,
         );
         assert!(!other.opted_out && !other.parent_holds());
     }
