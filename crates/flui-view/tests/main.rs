@@ -317,6 +317,10 @@ fn signal_read_and_write_matrix() {
                 signal_reads::owner_release_refuses_signals_its_destructors_reintroduce,
             ),
             (
+                "signal_reads::owner_release_bounds_a_destructor_that_always_recreates_itself",
+                signal_reads::owner_release_bounds_a_destructor_that_always_recreates_itself,
+            ),
+            (
                 "signal_reads::release_during_unwind_preserves_the_primary_failure",
                 signal_reads::release_during_unwind_preserves_the_primary_failure,
             ),

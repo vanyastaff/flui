@@ -137,6 +137,9 @@ struct Inner {
     /// Elements whose `release_element` is running: they admit no new owned
     /// slot.
     retiring: SmallVec<[ElementId; 1]>,
+    /// A refused value's destructor is running: a refusal it causes retains
+    /// its value instead of running another destructor.
+    destroying_refused: bool,
 }
 
 /// The reactive graph of one `BuildOwner` (one realm). Cheap to clone (an
@@ -288,8 +291,32 @@ impl Reactive {
 
     /// Destroy a value [`Self::alloc`] refused, outside the graph borrow; during
     /// an unwind it is retained instead (ADR-0127).
-    fn refuse<T>(refused: (SignalError, T)) -> SignalError {
+    ///
+    /// A refusal made while another refused value's destructor runs retains
+    /// its value too: a destructor that recreates itself would otherwise turn
+    /// each refusal into another destructor and another refusal, without
+    /// bound. One refused destructor runs at a time per graph.
+    fn refuse<T>(&self, refused: (SignalError, T)) -> SignalError {
+        /// Ends the destroying window even when the destructor unwinds.
+        struct Destroying<'a>(&'a RefCell<Inner>);
+        impl Drop for Destroying<'_> {
+            fn drop(&mut self) {
+                self.0.borrow_mut().destroying_refused = false;
+            }
+        }
+
         let (error, value) = refused;
+        let nested = std::mem::replace(&mut self.inner.borrow_mut().destroying_refused, true);
+        if nested {
+            tracing::debug!(
+                target: "flui::signals",
+                %error,
+                "a refused value's destructor caused another refusal; that value is retained"
+            );
+            discard_secondary(value);
+            return error;
+        }
+        let _destroying = Destroying(&self.inner);
         drop(RetainOnUnwind(Some(value)));
         error
     }
@@ -329,7 +356,7 @@ impl Reactive {
     pub fn try_signal<T: 'static>(&self, value: T) -> Result<Signal<T>, SignalError> {
         self.alloc(value, None)
             .map(Signal::from_slot)
-            .map_err(Self::refuse)
+            .map_err(|refused| self.refuse(refused))
     }
 
     /// [`Reactive::try_signal`], panicking on refusal.
@@ -353,7 +380,9 @@ impl Reactive {
     /// building element).
     ///
     /// A refused value is dropped after the graph borrow ends, or retained if
-    /// the thread is already unwinding.
+    /// the thread is already unwinding or the refusal comes from another
+    /// refused value's destructor (ADR-0127): a value whose `Drop` recreates
+    /// itself through this call runs its destructor once, not without bound.
     ///
     /// # Errors
     ///
@@ -368,7 +397,7 @@ impl Reactive {
     ) -> Result<Signal<T>, SignalError> {
         self.alloc(value, Some(owner))
             .map(Signal::from_slot)
-            .map_err(Self::refuse)
+            .map_err(|refused| self.refuse(refused))
     }
 
     /// [`Reactive::try_signal_owned_by`], panicking on refusal. The refused

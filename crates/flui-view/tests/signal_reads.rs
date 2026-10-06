@@ -331,6 +331,78 @@ pub(crate) fn owner_release_refuses_signals_its_destructors_reintroduce() {
     );
 }
 
+pub(crate) fn owner_release_bounds_a_destructor_that_always_recreates_itself() {
+    // Recreates itself from every destructor through the fallible
+    // constructor, with no limit of its own.
+    struct Recreate {
+        graph: flui_view::Reactive,
+        element: ElementId,
+        drops: Rc<Cell<usize>>,
+    }
+    impl Drop for Recreate {
+        fn drop(&mut self) {
+            self.drops.set(self.drops.get() + 1);
+            let next = self.graph.try_signal_owned_by(
+                self.element,
+                Recreate {
+                    graph: self.graph.clone(),
+                    element: self.element,
+                    drops: Rc::clone(&self.drops),
+                },
+            );
+            assert!(
+                matches!(next, Err(flui_view::SignalError::Released { .. })),
+                "a departing element admits no new owned signal"
+            );
+        }
+    }
+
+    let mut owners = MountOwners::fresh();
+    let graph = owners.build_owner.reactive().clone();
+    let drops = Rc::new(Cell::new(0));
+    // Twice: the second release shows the first left no refusal state behind.
+    for pass in 1..=2 {
+        let element = owners.tree.mount_root_with_pipeline_owner(
+            &Leaf,
+            Some(owners.pipeline_owner.clone()),
+            &mut owners.build_owner.element_owner_mut(),
+        );
+        let _owned = graph.signal_owned_by(
+            element,
+            Recreate {
+                graph: graph.clone(),
+                element,
+                drops: Rc::clone(&drops),
+            },
+        );
+        owners
+            .tree
+            .remove(element, &mut owners.build_owner.element_owner_mut());
+        assert_eq!(
+            drops.get(),
+            2 * pass,
+            "the released value and its first refused recreation drop; the nested refusal is retained"
+        );
+        assert_eq!(graph.live_slot_count(), 0);
+    }
+
+    let element = owners.tree.mount_root_with_pipeline_owner(
+        &Leaf,
+        Some(owners.pipeline_owner.clone()),
+        &mut owners.build_owner.element_owner_mut(),
+    );
+    let next = graph.signal_owned_by(element, 5u32);
+    assert_eq!(
+        next.peek(&graph, |value| *value),
+        Ok(5),
+        "the next element owns signals after the bounded refusal"
+    );
+    owners
+        .tree
+        .remove(element, &mut owners.build_owner.element_owner_mut());
+    assert_eq!(graph.live_slot_count(), 0);
+}
+
 pub(crate) fn a_read_in_build_subscribes_through_the_production_context() {
     let owners = MountOwners::fresh();
     let graph = owners.build_owner.reactive().clone();
