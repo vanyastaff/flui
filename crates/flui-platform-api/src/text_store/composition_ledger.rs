@@ -662,8 +662,15 @@ impl CompositionLedger {
         extent.expect("BUG: a live region keeps at least one run")
     }
 
+    /// A region id no other region of this session had. Ids are never
+    /// reissued: a session that ran through them all fails the edit that
+    /// asked for one more (the grant's panic, contained by the arbiter, and
+    /// nothing written back) instead of wrapping onto a live region.
     fn new_region(&mut self) -> RegionId {
-        self.next_region += 1;
+        self.next_region = self
+            .next_region
+            .checked_add(1)
+            .expect("BUG: one session makes fewer than usize::MAX compositions");
         RegionId(self.next_region)
     }
 
@@ -717,5 +724,21 @@ fn touches(extent: &Range<usize>, range: &Range<usize>) -> bool {
         extent.start <= range.end && extent.end >= range.start
     } else {
         extent.start < range.end && extent.end > range.start
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A session that ran through its region ids fails the next mark rather
+    /// than reissue an id a live region holds. The counter starts at its
+    /// last value here, since no public path makes that many marks.
+    #[test]
+    #[should_panic(expected = "fewer than usize::MAX compositions")]
+    fn exhausted_region_ids_are_never_reissued() {
+        let mut ledger = CompositionLedger::open("ab", Some((0..1, "a".to_owned())));
+        ledger.next_region = usize::MAX;
+        ledger.set_composition(Some(1..2));
     }
 }
