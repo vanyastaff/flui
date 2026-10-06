@@ -419,8 +419,9 @@ impl TextInputOwner {
     /// during this projection or before the dispatch, whatever path it then
     /// takes — once the event is handled: the grant stands, and the failure
     /// reaches the caller's report. The earliest failure wins: one parked
-    /// before the dispatch, then the session-start callback's or the
-    /// projection's; later ones are retained.
+    /// before the dispatch, then one parked by a grant the session-start
+    /// callback or the projection ran, then that callback's or projection's
+    /// own panic; later ones are retained.
     pub fn dispatch(&self, event: &ImeEvent) {
         // A failure parked by a grant before this dispatch (one the platform
         // requested directly) is this turn's to report, on every path, and it
@@ -454,6 +455,10 @@ impl TextInputOwner {
         if matches!(event, ImeEvent::Enabled) {
             if let Some(on_session_start) = &client.on_session_start {
                 let started = RoutePanic::capture(|| on_session_start());
+                // A failure the callback parked through a grant of its own
+                // happened before anything that unwound out of it after.
+                let settled = self.take_settle_failure();
+                RoutePanic::preserve_first(first, settled, "IME grant settle");
                 RoutePanic::preserve_first(first, started, "IME session start");
             }
             return;

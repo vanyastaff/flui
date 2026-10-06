@@ -1025,6 +1025,64 @@ fn a_dispatch_with_no_client_reports_a_parked_failure() {
     );
 }
 
+/// A client whose session-start callback edits its own store, whose owner
+/// listener fails, so the callback parks a failure; it then panics itself
+/// when `then_panic`.
+fn client_parking_from_its_session_start(
+    owner: &Rc<TextInputOwner>,
+    then_panic: bool,
+) -> Rc<InMemoryTextStore> {
+    let store = InMemoryTextStore::new("");
+    store.set_owner_listener(Some(Rc::new(|| panic!("parked by session start"))));
+    let edited = Rc::clone(&store);
+    owner
+        .handle()
+        .attach(
+            TextInputClient::new(store.clone()).on_session_start(move || {
+                let granted = edited.request_lock(
+                    LockGrant::read_write(|session| {
+                        session.insert_at_selection("a").expect("in range");
+                    }),
+                    LockTiming::Sync,
+                );
+                assert_eq!(granted, Ok(LockOutcome::Granted), "the callback's grant");
+                assert!(!then_panic, "session start failure");
+            }),
+        )
+        .expect("attach");
+    store
+}
+
+fn a_failure_the_session_start_parks_is_reported_by_its_dispatch() {
+    let (owner, _) = owner();
+    let store = client_parking_from_its_session_start(&owner, false);
+    assert_eq!(
+        raised(|| owner.dispatch(&flui_platform_api::ImeEvent::Enabled)),
+        Some("parked by session start".to_owned()),
+        "the dispatch that ran the callback reports what it parked"
+    );
+    store.set_owner_listener(None);
+    assert_eq!(store.text(), "a", "the callback's grant stands");
+}
+
+fn a_failure_the_session_start_parks_comes_before_its_panic() {
+    let (owner, _) = owner();
+    let store = client_parking_from_its_session_start(&owner, true);
+    assert_eq!(
+        raised(|| owner.dispatch(&flui_platform_api::ImeEvent::Enabled)),
+        Some("parked by session start".to_owned()),
+        "the failure parked inside the callback happened before the callback's own"
+    );
+    store.set_owner_listener(None);
+    assert_eq!(
+        raised(|| {
+            owner.run_deferred_grants();
+        }),
+        None,
+        "the callback's own failure is retained, not reported later"
+    );
+}
+
 #[test]
 fn ime_dispatch_reports_an_owner_failure_parked_before_it() {
     let cases: &[(&str, fn())] = &[
@@ -1039,6 +1097,14 @@ fn ime_dispatch_reports_an_owner_failure_parked_before_it() {
         (
             "no client",
             a_dispatch_with_no_client_reports_a_parked_failure,
+        ),
+        (
+            "parked by the session start",
+            a_failure_the_session_start_parks_is_reported_by_its_dispatch,
+        ),
+        (
+            "parked by the session start, which then fails",
+            a_failure_the_session_start_parks_comes_before_its_panic,
         ),
     ];
     let mut failed = Vec::new();
