@@ -28,7 +28,7 @@ use flui_scheduler::AppLifecycleState;
 
 use crate::WidgetsBinding;
 use crate::dev_agent::{AgentAnswer, AgentFault, AgentWindow};
-pub use crate::lifecycle::LifecycleSource;
+pub use crate::lifecycle::{LifecycleCloseWindow, LifecycleSource};
 
 /// What an [`AgentWindow`] calls: one window's read and act, enqueued on its
 /// owner. The runtime's semantics agent is the implementation.

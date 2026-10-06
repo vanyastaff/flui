@@ -300,6 +300,8 @@ fn run_custom_key_child(fail: bool) {
     );
     assert_eq!(realm.global_key_scope.claim_count(), 2);
     let scope = realm.global_key_scope.clone();
+    let closing = realm.presentations.get(a).expect("A");
+    let (focus, input) = (closing.focus_manager(), closing.text_input_handle());
     let reentered = Rc::new(Cell::new(0));
     let calls = Rc::clone(&reentered);
     CLOSE_REENTRY.with(|hook| {
@@ -308,6 +310,10 @@ fn run_custom_key_child(fail: bool) {
                 scope.claim_count(),
                 0,
                 "all claims leave the RefCell before arbitrary key Drop"
+            );
+            assert!(
+                focus.is_closed() && input.ensure_open() == Err(TextInputError::Closed),
+                "a key's destructor finds focus and text input already closed"
             );
             calls.set(calls.get() + 1);
         }));

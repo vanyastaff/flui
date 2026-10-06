@@ -215,7 +215,7 @@ pub(crate) fn owner_release_commits_the_batch_before_the_first_destructor_failur
     assert_eq!(next.peek(&graph, |value| *value), Ok(11));
 }
 
-pub(crate) fn owner_release_releases_signals_its_destructors_reintroduce() {
+pub(crate) fn owner_release_refuses_signals_its_destructors_reintroduce() {
     struct Late(Rc<Cell<usize>>);
     impl Drop for Late {
         fn drop(&mut self) {
@@ -226,16 +226,43 @@ pub(crate) fn owner_release_releases_signals_its_destructors_reintroduce() {
         graph: flui_view::Reactive,
         element: ElementId,
         late_drops: Rc<Cell<usize>>,
-        created: Rc<Cell<Option<Signal<Late>>>>,
+        refused: Rc<Cell<Option<bool>>>,
     }
     impl Drop for Reintroduce {
         fn drop(&mut self) {
             let late = self
                 .graph
-                .signal_owned_by(self.element, Late(Rc::clone(&self.late_drops)));
-            self.created.set(Some(late));
+                .try_signal_owned_by(self.element, Late(Rc::clone(&self.late_drops)));
+            self.refused.set(Some(matches!(
+                late,
+                Err(flui_view::SignalError::Released { .. })
+            )));
         }
     }
+    // Recreates itself from its destructor, at most `LIMIT` times, through
+    // the panicking constructor.
+    struct Producer {
+        graph: flui_view::Reactive,
+        element: ElementId,
+        attempts: Rc<Cell<usize>>,
+    }
+    impl Drop for Producer {
+        fn drop(&mut self) {
+            const LIMIT: usize = 32;
+            self.attempts.set(self.attempts.get() + 1);
+            if self.attempts.get() < LIMIT {
+                let _next = self.graph.signal_owned_by(
+                    self.element,
+                    Producer {
+                        graph: self.graph.clone(),
+                        element: self.element,
+                        attempts: Rc::clone(&self.attempts),
+                    },
+                );
+            }
+        }
+    }
+
     let mut owners = MountOwners::fresh();
     let graph = owners.build_owner.reactive().clone();
     let element = owners.tree.mount_root_with_pipeline_owner(
@@ -244,30 +271,64 @@ pub(crate) fn owner_release_releases_signals_its_destructors_reintroduce() {
         &mut owners.build_owner.element_owner_mut(),
     );
     let late_drops = Rc::new(Cell::new(0));
-    let created = Rc::new(Cell::new(None));
+    let refused = Rc::new(Cell::new(None));
     let _owned = graph.signal_owned_by(
         element,
         Reintroduce {
             graph: graph.clone(),
             element,
             late_drops: Rc::clone(&late_drops),
-            created: Rc::clone(&created),
+            refused: Rc::clone(&refused),
         },
     );
     owners
         .tree
         .remove(element, &mut owners.build_owner.element_owner_mut());
-    let late = created.get().expect("the destructor created a signal");
-    assert!(matches!(
-        late.peek(&graph, |_| ()),
-        Err(flui_view::SignalError::Released { .. })
-    ));
     assert_eq!(
-        late_drops.get(),
+        refused.get(),
+        Some(true),
+        "a departing element admits no new owned signal"
+    );
+    assert_eq!(late_drops.get(), 1, "the refused value is dropped");
+    assert_eq!(graph.live_slot_count(), 0);
+
+    let element = owners.tree.mount_root_with_pipeline_owner(
+        &Leaf,
+        Some(owners.pipeline_owner.clone()),
+        &mut owners.build_owner.element_owner_mut(),
+    );
+    let attempts = Rc::new(Cell::new(0));
+    let _producer = graph.signal_owned_by(
+        element,
+        Producer {
+            graph: graph.clone(),
+            element,
+            attempts: Rc::clone(&attempts),
+        },
+    );
+    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        owners
+            .tree
+            .remove(element, &mut owners.build_owner.element_owner_mut());
+    }))
+    .expect_err("the refused recreation propagates from the destructor");
+    assert!(
+        flui_foundation::panic::payload_text(&*failure)
+            .is_some_and(|text| text.starts_with("Reactive::signal_owned_by")),
+        "the refusal is the reported failure"
+    );
+    assert_eq!(
+        attempts.get(),
         1,
-        "its value is released with the element"
+        "the release ends after one pass; the refused producer is retained"
     );
     assert_eq!(graph.live_slot_count(), 0);
+    let next = graph.signal(3u32);
+    assert_eq!(
+        next.peek(&graph, |value| *value),
+        Ok(3),
+        "the graph admits signals after the contained refusal"
+    );
 }
 
 pub(crate) fn a_read_in_build_subscribes_through_the_production_context() {

@@ -168,6 +168,21 @@ fn retire_client_owners(client: TextInputClient, first: &mut Option<RoutePanic>)
     );
 }
 
+/// Release a local clone of the framework-owned platform capability before
+/// any user-owned value retires, so the clone is never destroyed by a later
+/// unwind; only an unwind already in progress retains it (ADR-0127).
+fn release_platform(platform: Arc<dyn PlatformTextInput>, first: &mut Option<RoutePanic>) {
+    if std::thread::panicking() {
+        std::mem::forget(platform);
+    } else {
+        RoutePanic::preserve_first(
+            first,
+            RoutePanic::capture(|| drop(platform)),
+            "text-input platform release",
+        );
+    }
+}
+
 fn retire_stores(stores: Vec<Rc<dyn TextStore>>, first: &mut Option<RoutePanic>) {
     for store in stores {
         retire_owner(store, first, "text-input store retirement");
@@ -337,7 +352,11 @@ impl TextInputOwner {
             }
         });
         // Callback captures and custom stores may reenter through this owner.
-        // Both owner state and platform enablement are committed first.
+        // Both owner state and platform enablement are committed first, and
+        // the local capability clone is released before them: a store that
+        // closes the owner and then panics must not leave this clone as the
+        // backend's last owner, destroyed during that unwind.
+        release_platform(platform, &mut failure);
         retire_client(replaced, &mut failure);
         if let Some(failure) = failure {
             failure.resume();
@@ -362,6 +381,7 @@ impl TextInputOwner {
 
         if let Some(detached) = detached {
             let mut failure = RoutePanic::capture(|| platform.set_ime_allowed(false));
+            release_platform(platform, &mut failure);
             retire_client(Some(detached), &mut failure);
             if let Some(failure) = failure {
                 failure.resume();

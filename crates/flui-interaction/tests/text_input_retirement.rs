@@ -563,6 +563,83 @@ fn store_closing_its_owner_while_gated_releases_the_platform_outside_the_unwind(
     assert_eq!(handle.ensure_open(), Err(TextInputError::Closed));
 }
 
+/// A store that closes its owner when it is destroyed.
+struct CloseOnDropStore {
+    inner: Rc<InMemoryTextStore>,
+    owner: std::rc::Weak<TextInputOwner>,
+}
+
+impl TextStore for CloseOnDropStore {
+    fn status(&self) -> TextStoreStatus {
+        self.inner.status()
+    }
+    fn request_lock(
+        &self,
+        grant: LockGrant,
+        timing: LockTiming,
+    ) -> Result<LockOutcome, TextStoreError> {
+        self.inner.request_lock(grant, timing)
+    }
+    fn run_deferred_grants(&self) -> usize {
+        self.inner.run_deferred_grants()
+    }
+    fn set_commit_gate(&self, gate: CommitGate) {
+        self.inner.set_commit_gate(gate);
+    }
+    fn set_observer(&self, observer: Option<Rc<dyn TextStoreObserver>>) {
+        self.inner.set_observer(observer);
+    }
+}
+
+impl Drop for CloseOnDropStore {
+    fn drop(&mut self) {
+        if let Some(owner) = self.owner.upgrade() {
+            owner.close();
+        }
+    }
+}
+
+/// A replaced or detached client whose store closes the owner and whose
+/// callback then panics: the owner's close releases the platform, and no
+/// clone attach or detach held is left for that unwind to destroy.
+fn retired_store_closing_its_owner_releases_the_platform_outside_the_unwind() {
+    for replace in [true, false] {
+        let released = Arc::new(parking_lot::Mutex::new(None));
+        let platform: Arc<dyn PlatformTextInput> =
+            Arc::new(UnwindProbePlatform(Arc::clone(&released)));
+        let owner = TextInputOwner::new(Some(platform));
+        let handle = owner.handle();
+        let store = Rc::new(CloseOnDropStore {
+            inner: InMemoryTextStore::new(""),
+            owner: Rc::downgrade(&owner),
+        });
+        let token = handle
+            .attach(callback_client_with_store(store, || {
+                panic!("retired client callback");
+            }))
+            .expect("first client attaches");
+        let failure = catch_unwind(AssertUnwindSafe(|| {
+            if replace {
+                handle.attach(client()).map(|_| ())
+            } else {
+                handle.detach(token).map(|_| ())
+            }
+        }))
+        .expect_err("the retired client's callback fails");
+        assert_eq!(
+            flui_foundation::panic::payload_text(&*failure),
+            Some("retired client callback")
+        );
+        flui_foundation::panic::retain_opaque_payload(failure);
+        assert_eq!(
+            *released.lock(),
+            Some(false),
+            "replace={replace}: the close released the platform, not the unwind"
+        );
+        assert_eq!(handle.ensure_open(), Err(TextInputError::Closed));
+    }
+}
+
 fn callback_client_with_store(
     store: Rc<dyn TextStore>,
     on_drop: impl Fn() + 'static,
@@ -618,6 +695,10 @@ fn text_input_retirement_allows_reentry_and_preserves_recovery() {
         (
             "store closes owner while gated",
             store_closing_its_owner_while_gated_releases_the_platform_outside_the_unwind,
+        ),
+        (
+            "retired store closes owner",
+            retired_store_closing_its_owner_releases_the_platform_outside_the_unwind,
         ),
     ];
     let failed = RefCell::new(Vec::new());
