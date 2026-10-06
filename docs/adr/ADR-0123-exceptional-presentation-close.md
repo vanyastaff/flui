@@ -40,9 +40,15 @@ value can no longer be reached through the realm. The platform window and the
 accessibility bridge are framework-owned and are released in preserving mode
 as in a healthy close; only an unwind already in progress when they are
 released retains them. Later failures and panic payloads cannot replace the
-first failure. Healthy close drops its owners normally. Healthy closed-owner
-rejection remains ordinary; an unrelated rejection unwind does not permanently
-change that owner's terminal policy.
+first failure. Healthy close drops its owners normally, and only after every capability
+above is withdrawn: a dispatch target's destructor finds the whole presentation
+closed. Preserving mode governs rejections through a closed owner only while
+the presentation close is in progress, across every owner it closes; once the
+close returns, rejections through stale handles retire normally again. A saved
+route that outlives a preserving close retains the cells that close released to
+it, and a dispatch batch rechecks each snapshotted callback's owner before
+invoking it. Healthy closed-owner rejection remains ordinary; an unrelated
+rejection unwind does not permanently change that owner's terminal policy.
 
 An ordinary `LifecycleSource::drain` still attempts all eligible callbacks,
 including reentrant terminal callbacks, before resuming its first local panic.

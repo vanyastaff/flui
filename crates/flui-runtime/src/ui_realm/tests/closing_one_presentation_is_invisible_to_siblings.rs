@@ -555,6 +555,23 @@ impl Drop for CursorCapture {
     }
 }
 
+/// A dispatch capture that records, when destroyed, what its saved handles
+/// observed: a healthy close withdraws every capability first.
+struct WithdrawalProbe {
+    focus: Rc<FocusManager>,
+    input: TextInputHandle,
+    seen: Rc<Cell<Option<(bool, bool)>>>,
+}
+
+impl Drop for WithdrawalProbe {
+    fn drop(&mut self) {
+        self.seen.set(Some((
+            self.focus.is_closed(),
+            self.input.ensure_open() == Err(TextInputError::Closed),
+        )));
+    }
+}
+
 fn run_scoped_routes_child(fail_cursor: bool) {
     use flui_interaction::{HitTestEntry, HitTestResult, InteractionDispatchError};
     let mut realm = UiRealm::for_test();
@@ -598,7 +615,19 @@ fn run_scoped_routes_child(fail_cursor: bool) {
         flui_foundation::geometry::Offset::new(2.0, 2.0),
         flui_interaction::events::PointerType::Touch,
     );
+    let withdrawal_seen = Rc::new(Cell::new(None));
+    let probe = WithdrawalProbe {
+        focus: realm.focus_manager(),
+        input: realm.text_input_handle(),
+        seen: Rc::clone(&withdrawal_seen),
+    };
     let (a_target, b_target, saved_route, dispatch) = realm.enter(|realm| {
+        // No route saves this target, so close is its last owner.
+        a_handle
+            .register_pointer(move |_| {
+                let _ = &probe;
+            })
+            .expect("A probe target");
         let counts = Rc::clone(&calls_a);
         let target_a = a_handle
             .register_pointer(move |_| {
@@ -647,8 +676,18 @@ fn run_scoped_routes_child(fail_cursor: bool) {
         assert!(
             message.is_some_and(|message| message.contains("cursor capture retirement failure"))
         );
+        assert_eq!(
+            withdrawal_seen.get(),
+            None,
+            "a capture withdrawn after the failure is retained"
+        );
     } else {
         assert!(close.expect("healthy close"));
+        assert_eq!(
+            withdrawal_seen.get(),
+            Some((true, true)),
+            "a dispatch capture is destroyed only after focus and text input are closed"
+        );
     }
     realm.enter(|_| {
         assert!(
@@ -706,13 +745,15 @@ fn run_scoped_routes_child(fail_cursor: bool) {
             assert!(rejected.is_err());
             assert_eq!(unwind_drops.load(Ordering::Relaxed), 0);
         }
+        // The close and its failure are over: a healthy rejection through the
+        // stale handle destroys its captures instead of leaking them.
         let bundle = DropCompetition {
             first: CursorCapture {
-                fail: fail_cursor,
+                fail: false,
                 drops: Arc::clone(&rejected_drops),
             },
             second: CursorCapture {
-                fail: fail_cursor,
+                fail: false,
                 drops: Arc::clone(&rejected_drops),
             },
         };
@@ -761,7 +802,8 @@ fn run_scoped_routes_child(fail_cursor: bool) {
     );
     assert_eq!(
         rejected_drops.load(Ordering::Relaxed),
-        if fail_cursor { 0 } else { 2 }
+        2,
+        "a rejection after the close retires normally"
     );
     assert!(!realm.close_presentation_entered(a));
     let mut clock = flui_foundation::ManualClock::new();
@@ -1120,13 +1162,15 @@ pub(crate) fn run_presentation_close_child(kind: &str) {
                 0,
                 "closed arena cannot notify saved entries"
             );
+            // The close and the outer unwind are over: a healthy rejection
+            // destroys its captures instead of leaking them.
             let captures = DropCompetition {
                 first: CursorCapture {
-                    fail: true,
+                    fail: false,
                     drops: Arc::clone(&arena_drops),
                 },
                 second: CursorCapture {
-                    fail: true,
+                    fail: false,
                     drops: Arc::clone(&arena_drops),
                 },
             };
@@ -1139,7 +1183,11 @@ pub(crate) fn run_presentation_close_child(kind: &str) {
             );
             assert!(rejected.member().is_none());
             assert!(arena.is_empty());
-            assert_eq!(arena_drops.load(Ordering::Relaxed), 0);
+            assert_eq!(
+                arena_drops.load(Ordering::Relaxed),
+                2,
+                "only the rejected member is destroyed; the retained one is not"
+            );
             assert_eq!(route_drops.load(Ordering::Relaxed), 0);
         }
         assert!(!agent.is_open());
