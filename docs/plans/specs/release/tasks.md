@@ -36,6 +36,7 @@
 | `publish-pipeline`: package/staging-реестр/consumer по реестру/порядок публикации | R1, R2, R15 | `facade-surface` | `.github/workflows`, нужно подтверждение владельца | — |
 | `measurements`: бюджеты кадра, памяти, старта | R13 | `persistence` | `refresh_period` не в facade | — |
 | `ci-coverage`: Notes acceptance на линии по умолчанию, красный weekly | R15 | — | `.github/workflows`, нужно подтверждение владельца | — |
+| `authoring-styles`: три стиля описания виджетов из одного определения | R18 | `send-flip` (сигнатуры callback'ов), `facade-surface` | нет ADR; документация `column!` обещает несуществующий struct-литерал | — |
 | `docs-community`: tutorial, README-матрица, docs.rs, шаблоны issue, обновление BETA | R16, R17 | всё остальное | — | — |
 
 Первый полный поток showcase (цель октября): `persistence` + `router-restore` + `teardown` +
