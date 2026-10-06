@@ -225,6 +225,16 @@ impl<R: Routable> RouterHandle<R> {
             .expect("BUG: a Router's stack always holds a page once it is built")
     }
 
+    /// The route stack, bottom to top, as every committed edit left it: what
+    /// an application saves to reopen with
+    /// [`Router::from_stack`](super::Router::from_stack).
+    ///
+    /// Not yet the whole stack: it holds the top route alone.
+    #[must_use]
+    pub fn stack(&self) -> Vec<R> {
+        vec![self.current()]
+    }
+
     /// Whether a [`pop`](Self::pop) would remove a page: more than one page is
     /// on the stack.
     #[must_use]
@@ -249,4 +259,7 @@ pub enum RouterError {
     /// The location did not produce a route.
     #[error(transparent)]
     Parse(#[from] RouteParseError),
+    /// A router was asked to open on an empty stack; it needs a page.
+    #[error("a Router cannot open on an empty stack")]
+    EmptyStack,
 }
