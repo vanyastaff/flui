@@ -236,7 +236,7 @@ fn apply_state(node: &mut Node, flags: u64) {
 /// AccessKit does not count a node with an expanded state as invocable
 /// (`accesskit_consumer` 0.39, `Node::is_invocable`), so without this a
 /// tap-only expandable node could be neither invoked nor expanded.
-fn apply_actions(node: &mut Node, actions: u64, flags: u64) {
+fn apply_actions(node: &mut Node, actions: u64, flags: u64, has_numeric_range: bool) {
     if has_action(actions, SemanticsAction::Tap) {
         node.add_action(accesskit::Action::Click);
     }
@@ -282,8 +282,11 @@ fn apply_actions(node: &mut Node, actions: u64, flags: u64) {
     if has_action(actions, SemanticsAction::SetSelection) {
         node.add_action(accesskit::Action::SetTextSelection);
     }
+    // A numeric handler is reachable only through a range: without one the
+    // platform has no `RangeValue` to write, a Windows `SetValue` arrives as
+    // text, and the owner refuses a number it cannot check against a range.
     if has_action(actions, SemanticsAction::SetText)
-        || has_action(actions, SemanticsAction::SetNumericValue)
+        || (has_numeric_range && has_action(actions, SemanticsAction::SetNumericValue))
     {
         node.add_action(accesskit::Action::SetValue);
     }
@@ -528,7 +531,12 @@ pub(crate) fn to_node(data: &SemanticsNodeData) -> Node {
     }
 
     apply_state(&mut node, data.flags);
-    apply_actions(&mut node, data.actions, data.flags);
+    apply_actions(
+        &mut node,
+        data.actions,
+        data.flags,
+        data.numeric_range.is_some(),
+    );
 
     node.set_children(
         data.children

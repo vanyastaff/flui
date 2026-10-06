@@ -736,6 +736,136 @@ fn set_value_reaches_set_text_with_its_text() {
     }
 }
 
+/// What one node publishes for `set_value`: a text value, a numeric range,
+/// and which handlers it registers.
+struct ValueShape {
+    text: Option<&'static str>,
+    range: bool,
+    set_text: bool,
+    set_number: bool,
+}
+
+/// Publishes `shape`, then checks the wire value it reads, whether
+/// `set_value` is advertised, and which handler a wire `set_value` of `"7"`
+/// reaches. The desktop backend writes through the `Value` pattern ahead of
+/// `RangeValue`, so `expected` is the action it would invoke too.
+fn value_case(shape: &ValueShape, value: Option<&str>, expected: Option<SemanticsAction>) {
+    let mut f = Fixture::new();
+    let root = f.add(None, 1, |_| {});
+    f.add(Some(root), 2, |c| {
+        // A role keeps the node from being lifted as a generic container.
+        if shape.range {
+            c.set_slider(true);
+        } else {
+            c.set_text_field(true);
+        }
+        if let Some(text) = shape.text {
+            c.set_value(text);
+        }
+        if shape.range {
+            c.set_numeric_range(
+                crate::NumericRange::new(5.0, 0.0, 10.0, 1.0).expect("finite fixture"),
+            );
+        }
+        if shape.set_text {
+            c.add_action(SemanticsAction::SetText, noop());
+        }
+        if shape.set_number {
+            c.add_action(SemanticsAction::SetNumericValue, noop());
+        }
+    });
+    let node = f.only(e(2));
+    assert_eq!(node.value.as_deref(), value, "wire value");
+    assert_eq!(
+        node.actions.contains(&ActionName::SetValue),
+        expected.is_some(),
+        "set_value advertised"
+    );
+    let request = f
+        .owner
+        .resolve_wire_action(&ActionRequest::set_value(e(2), "7"));
+    let Some(expected) = expected else {
+        assert!(
+            matches!(request, Err(WireActionError::ActionUnsupported { .. })),
+            "{request:?}"
+        );
+        return;
+    };
+    let request = request.expect("an advertised set_value resolves");
+    assert_eq!(request.action, expected);
+    let arguments = match expected {
+        SemanticsAction::SetNumericValue => ActionArgs::SetNumericValue { value: 7.0 },
+        _ => ActionArgs::SetText { text: "7".into() },
+    };
+    assert_eq!(request.arguments, Some(arguments));
+    let _ = f
+        .owner
+        .resolve_action(request)
+        .expect("the owner invokes the handler the wire chose");
+}
+
+fn numeric_handler_without_range() {
+    let shape = ValueShape {
+        text: Some("0"),
+        range: false,
+        set_text: false,
+        set_number: true,
+    };
+    value_case(&shape, Some("0"), None);
+}
+
+fn numeric_handler_with_range() {
+    let shape = ValueShape {
+        text: None,
+        range: true,
+        set_text: false,
+        set_number: true,
+    };
+    value_case(&shape, Some("5"), Some(SemanticsAction::SetNumericValue));
+}
+
+fn text_only() {
+    let shape = ValueShape {
+        text: Some("fixed"),
+        range: false,
+        set_text: true,
+        set_number: false,
+    };
+    value_case(&shape, Some("fixed"), Some(SemanticsAction::SetText));
+}
+
+fn text_and_numeric() {
+    let shape = ValueShape {
+        text: Some("50%"),
+        range: true,
+        set_text: true,
+        set_number: true,
+    };
+    value_case(&shape, Some("50%"), Some(SemanticsAction::SetText));
+}
+
+/// `set_value` is advertised only where a request can reach a handler, and a
+/// node with both a text value and a number takes text, as the desktop
+/// backend's `Value`-before-`RangeValue` precedence does.
+#[test]
+fn set_value_follows_the_value_pattern_precedence() {
+    let rows: &[(&str, fn())] = &[
+        (
+            "numeric_handler_without_range",
+            numeric_handler_without_range,
+        ),
+        ("numeric_handler_with_range", numeric_handler_with_range),
+        ("text_only", text_only),
+        ("text_and_numeric", text_and_numeric),
+    ];
+    let failed: Vec<&str> = rows
+        .iter()
+        .filter(|(_, row)| std::panic::catch_unwind(row).is_err())
+        .map(|(name, _)| *name)
+        .collect();
+    assert!(failed.is_empty(), "set_value rows failed: {failed:?}");
+}
+
 #[test]
 fn a_disabled_node_refuses_with_disabled() {
     let mut f = Fixture::new();

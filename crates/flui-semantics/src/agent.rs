@@ -132,7 +132,7 @@ pub enum WireActionError {
 /// click, which is FLUI's tap; `expand` and `collapse` are the discrete
 /// actions, which the owner routes to a tap-only node's tap handler (mapping
 /// decision 5); `set_value` sets text, or the number on a numeric node
-/// ([`SemanticsOwner::resolve_wire_action`]); `scroll_into_view` is
+/// without a text value ([`SemanticsOwner::resolve_wire_action`]); `scroll_into_view` is
 /// `ShowOnScreen`.
 ///
 /// `None` for a wire action FLUI has no route for; `ActionName` is
@@ -477,6 +477,13 @@ fn element_id(node: &NodeRef<'_>) -> Option<ElementId> {
     ElementId::from_u64(node.locate().0.0)
 }
 
+/// Whether UI Automation exposes `node` through the `Value` pattern, which
+/// the desktop backend reads and writes ahead of `RangeValue`: a text value
+/// that is not the node's name.
+fn has_text_value(node: &NodeRef<'_>) -> bool {
+    node.value().is_some() && !node.label_comes_from_value()
+}
+
 /// `node`'s own fields, without children or bounds.
 fn wire_node(node: &NodeRef<'_>, id: ElementId, root_claims_focus: bool) -> Node {
     let ak_role = node.role();
@@ -492,9 +499,11 @@ fn wire_node(node: &NodeRef<'_>, id: ElementId, root_claims_focus: bool) -> Node
     // name, and never a password field's. A numeric node without text reads
     // its `RangeValue` number, spelled as the desktop backend spells it.
     if !node.label_comes_from_value() && ak_role != accesskit::Role::PasswordInput {
-        out.value = node
-            .value()
-            .or_else(|| node.numeric_value().map(|number| number.to_string()));
+        out.value = if has_text_value(node) {
+            node.value()
+        } else {
+            node.numeric_value().map(|number| number.to_string())
+        };
     }
     out.disabled = node.is_disabled();
     out.focused = node.is_focused() && (!node.is_root() || root_claims_focus);
@@ -631,8 +640,13 @@ impl SemanticsOwner {
                     action: request.action,
                 });
             }
+            // The desktop backend writes through the `Value` pattern whenever
+            // the node has one and falls back to `RangeValue` only without
+            // it, so a node with both a text value and a number takes text
+            // here too, and both backends reach the same handler.
             Ok(node
                 .numeric_value()
+                .filter(|_| !has_text_value(&node))
                 .map(|_| (node.min_numeric_value(), node.max_numeric_value())))
         });
         let numeric = match checked {
