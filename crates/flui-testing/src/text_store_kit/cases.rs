@@ -64,6 +64,7 @@ pub(super) const CASES: &[Case] = &[
     case!(composition_only_sessions_do_not_notify_the_owner, since 2),
     case!(owner_notification_runs_after_release, since 2),
     case!(reconverting_committed_text_notifies_only_on_commit, since 2),
+    case!(a_grant_that_panics_after_marking_leaves_the_committed_text, since 2),
 ];
 
 // ============================================================================
@@ -918,6 +919,50 @@ fn reconverting_committed_text_notifies_only_on_commit(
         "owner notifications once the reconversion was committed",
     )?;
     expect_text(fixture, &store, range(0, 5), "とうきょう")
+}
+
+/// A read-write grant that marks committed text and then panics: whatever
+/// the store keeps of the session, its composition and what that stands for
+/// agree, so ending the composition later is no committed-text change.
+fn a_grant_that_panics_after_marking_leaves_the_committed_text(
+    fixture: &mut dyn TextStoreFixture,
+) -> Outcome {
+    let store = fresh(fixture, "東京");
+    let before = fixture.owner_notifications();
+    let marked = Rc::new(Cell::new(false));
+    let ran = Rc::clone(&marked);
+    let unwound = catch_unwind(AssertUnwindSafe(|| {
+        let _ = store.request_lock(
+            LockGrant::read_write(move |session| {
+                let _ = session.set_composition(Some(Composition {
+                    range: range(0, 2),
+                    hides_caret: false,
+                }));
+                ran.set(true);
+                panic!("the kit's grant failing after it marked the text");
+            }),
+            LockTiming::Sync,
+        );
+    }));
+    match unwound {
+        Err(payload) if marked.get() => flui_foundation::panic::retain_opaque_payload(payload),
+        Err(payload) => std::panic::resume_unwind(payload),
+        Ok(()) => return Err("a panicking grant did not unwind out of request_lock".to_owned()),
+    }
+    fixture.pump();
+    let ended = edit(&store, |session| session.set_composition(None))?;
+    ensure_eq(
+        ended,
+        Ok(()),
+        "ending whatever composition the failed grant left",
+    )?;
+    fixture.pump();
+    ensure_eq(
+        fixture.owner_notifications(),
+        before,
+        "owner notifications after a failed grant and an end of composition that changed no committed text",
+    )?;
+    expect_text(fixture, &store, range(0, 2), "東京")
 }
 
 fn owner_notification_runs_after_release(fixture: &mut dyn TextStoreFixture) -> Outcome {

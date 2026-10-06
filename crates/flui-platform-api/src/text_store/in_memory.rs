@@ -33,7 +33,9 @@ use super::utf16::{self, Utf16Offset, Utf16Range};
 ///
 /// Owner-thread only (`Rc`, not `Send`). Platform edits go through
 /// [`TextStore::request_lock`]; [`Self::app_replace`] is an edit the
-/// application makes, reported to the observer afterwards.
+/// application makes, reported to the observer afterwards. A read-write
+/// grant's edits are kept when it returns; one that panics changes nothing,
+/// as a field's store drops a session it never wrote back.
 pub struct InMemoryTextStore {
     doc: RefCell<Document>,
     arbiter: LockArbiter,
@@ -227,17 +229,23 @@ impl InMemoryTextStore {
                 });
             }
             LockGrant::ReadWrite(body) => {
+                // The session edits a working copy, kept only when the grant
+                // returns: a grant that panics part-way leaves the document
+                // as it was, never a composition without the origin its
+                // ledger would have given it.
                 let mut doc = self.doc.borrow_mut();
                 let committed = doc.committed();
-                let ledger = CompositionLedger::open(doc.composing());
+                let mut work = doc.clone();
+                let ledger = CompositionLedger::open(work.composing());
                 let mut session = EditSession {
-                    doc: &mut doc,
+                    doc: &mut work,
                     protected,
                     ledger,
                 };
                 body(&mut session);
                 let origin = session.ledger.origin().unwrap_or_default().to_owned();
-                doc.origin = origin;
+                work.origin = origin;
+                *doc = work;
                 if doc.committed() != committed {
                     self.owner_owed.set(true);
                 }
@@ -299,7 +307,7 @@ fn keep_first(first: &mut Option<Box<dyn Any + Send>>, payload: Box<dyn Any + Se
 }
 
 /// The document an [`InMemoryTextStore`] holds.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 struct Document {
     text: String,
     selection: Selection,

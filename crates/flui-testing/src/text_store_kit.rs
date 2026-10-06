@@ -41,7 +41,8 @@ use flui_platform_api::text_store::InMemoryTextStore;
 ///
 /// Version 2 adds the owner-notification contract (ADR-0090 §1 as amended):
 /// the owner hears only of committed-text changes, after the session's lock
-/// is released, and a composition may start over a selection.
+/// is released, a composition may start over a selection, and a grant that
+/// panics leaves no composition without what it stands for.
 pub const KIT_VERSION: u32 = 2;
 
 /// A text field under test, as the kit drives it.
