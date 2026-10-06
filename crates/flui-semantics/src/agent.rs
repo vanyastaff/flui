@@ -489,9 +489,12 @@ fn wire_node(node: &NodeRef<'_>, id: ElementId, root_claims_focus: bool) -> Node
     }
     .filter(|name| !name.is_empty());
     // The `Value` pattern's value: not for a static text, whose value is its
-    // name, and never a password field's.
+    // name, and never a password field's. A numeric node without text reads
+    // its `RangeValue` number, spelled as the desktop backend spells it.
     if !node.label_comes_from_value() && ak_role != accesskit::Role::PasswordInput {
-        out.value = node.value();
+        out.value = node
+            .value()
+            .or_else(|| node.numeric_value().map(|number| number.to_string()));
     }
     out.disabled = node.is_disabled();
     out.focused = node.is_focused() && (!node.is_root() || root_claims_focus);
