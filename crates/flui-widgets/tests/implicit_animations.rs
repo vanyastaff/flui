@@ -12,11 +12,14 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::common::{lay_out_animated, loose, tight};
-use flui_animation::Vsync;
+use crate::common::{LaidOut, lay_out_animated, loose, tight};
+use flui_animation::{Curves, Vsync};
+use flui_foundation::geometry::{Angle, EdgeInsets, Matrix4};
 use flui_view::prelude::{BuildContext, StatefulView};
 use flui_view::{IntoView, ViewState};
-use flui_widgets::{AnimatedContainer, AnimatedOpacity, SizedBox, VsyncScope};
+use flui_widgets::{
+    AnimatedContainer, AnimatedOpacity, AnimatedRotation, RotationPath, SizedBox, VsyncScope,
+};
 use parking_lot::Mutex;
 
 /// A 100 ms run pumped in 20 ms frames spans the run in five steps.
@@ -213,3 +216,263 @@ pub(crate) fn animated_container_interpolates_size_over_frames() {
 // ----------------------------------------------------------------------------
 // Non-cubic curve — compile-and-run gate
 // ----------------------------------------------------------------------------
+
+// ----------------------------------------------------------------------------
+// Overshoot stays inside the property's domain
+// ----------------------------------------------------------------------------
+
+/// A container whose one animated property is set by `configure` from a shared
+/// value, eased along `Curves::EaseOutBack` (which overshoots past the target).
+#[derive(Clone, StatefulView)]
+struct OvershootProbe {
+    vsync: Vsync,
+    value: Arc<Mutex<f64>>,
+    configure: fn(AnimatedContainer, f64) -> AnimatedContainer,
+}
+
+struct OvershootProbeState {
+    probe: OvershootProbe,
+}
+
+impl StatefulView for OvershootProbe {
+    type State = OvershootProbeState;
+
+    fn create_state(&self) -> Self::State {
+        OvershootProbeState {
+            probe: self.clone(),
+        }
+    }
+}
+
+impl ViewState<OvershootProbe> for OvershootProbeState {
+    fn build(&self, _view: &OvershootProbe, _ctx: &dyn BuildContext) -> impl IntoView {
+        let container = AnimatedContainer::new(SizedBox::new(10.0, 10.0))
+            .duration(RUN)
+            .curve(Curves::EaseOutBack);
+        VsyncScope::new(
+            self.probe.vsync.clone(),
+            (self.probe.configure)(container, *self.probe.value.lock()),
+        )
+    }
+}
+
+/// Animate the configured property from `from` to `0` along the overshooting
+/// curve, checking `check` on every 10 ms frame of the run.
+fn overshoot_to_zero(
+    configure: fn(AnimatedContainer, f64) -> AnimatedContainer,
+    from: f64,
+    check: fn(&LaidOut),
+) {
+    let vsync = Vsync::new();
+    let value = Arc::new(Mutex::new(from));
+    let probe = OvershootProbe {
+        vsync: vsync.clone(),
+        value: Arc::clone(&value),
+        configure,
+    };
+    let mut laid = lay_out_animated(probe, loose(200.0), vsync);
+    *value.lock() = 0.0;
+    laid.pump();
+    for _ in 0..12 {
+        laid.pump_for(Duration::from_millis(10));
+        check(&laid);
+    }
+}
+
+/// An overshooting padding (16 → 0 along a back-out curve) never pushes the
+/// child outside the container.
+pub(crate) fn overshooting_padding_stays_non_negative() {
+    overshoot_to_zero(
+        |container, value| container.padding(EdgeInsets::all(value)),
+        16.0,
+        |laid| {
+            let container = laid.find_by_render_type("RenderContainer");
+            let child = laid.only_child(container);
+            let offset = laid.offset(child);
+            assert!(
+                offset.dx >= 0.0 && offset.dy >= 0.0,
+                "padding pushed the child to {offset:?}"
+            );
+        },
+    );
+}
+
+/// An overshooting margin never makes the box smaller than its decorated area.
+pub(crate) fn overshooting_margin_stays_non_negative() {
+    overshoot_to_zero(
+        |container, value| container.margin(EdgeInsets::all(value)),
+        16.0,
+        |laid| {
+            let root = laid.find_by_render_type("RenderContainer");
+            let outer = laid.size(root);
+            let inner = laid.container_inner_size(root);
+            assert!(
+                outer.width >= inner.width && outer.height >= inner.height,
+                "margin shrank the box: outer {outer:?}, inner {inner:?}"
+            );
+        },
+    );
+}
+
+/// An overshooting width and height never go negative.
+pub(crate) fn overshooting_size_stays_non_negative() {
+    overshoot_to_zero(
+        |container, value| container.width(value).height(value),
+        10.0,
+        |laid| {
+            let size = laid.size(laid.find_by_render_type("RenderContainer"));
+            assert!(
+                size.width >= 0.0 && size.height >= 0.0,
+                "negative size {size:?}"
+            );
+        },
+    );
+}
+
+// ----------------------------------------------------------------------------
+// AnimatedContainer transform
+// ----------------------------------------------------------------------------
+
+#[derive(Clone, StatefulView)]
+struct TransformProbe {
+    vsync: Vsync,
+    transform: Arc<Mutex<Matrix4>>,
+}
+
+struct TransformProbeState {
+    probe: TransformProbe,
+}
+
+impl StatefulView for TransformProbe {
+    type State = TransformProbeState;
+
+    fn create_state(&self) -> Self::State {
+        TransformProbeState {
+            probe: self.clone(),
+        }
+    }
+}
+
+impl ViewState<TransformProbe> for TransformProbeState {
+    fn build(&self, _view: &TransformProbe, _ctx: &dyn BuildContext) -> impl IntoView {
+        VsyncScope::new(
+            self.probe.vsync.clone(),
+            AnimatedContainer::new(SizedBox::new(10.0, 10.0))
+                .transform(*self.probe.transform.lock())
+                .duration(RUN)
+                .curve(Curves::Linear),
+        )
+    }
+}
+
+/// A scale-in from a collapsed transform: every intermediate layer matrix is the
+/// finite uniform scale `scaling(s, s, 1)`, with `s` growing strictly between the
+/// ends.
+pub(crate) fn animated_container_animates_its_transform() {
+    let vsync = Vsync::new();
+    let transform = Arc::new(Mutex::new(Matrix4::scaling(0.0, 0.0, 1.0)));
+    let probe = TransformProbe {
+        vsync: vsync.clone(),
+        transform: Arc::clone(&transform),
+    };
+    let mut laid = lay_out_animated(probe, loose(200.0), vsync);
+    *transform.lock() = Matrix4::IDENTITY;
+    laid.pump();
+    laid.pump_for(FRAME); // detection
+    let mut scales = Vec::new();
+    for _ in 0..3 {
+        laid.pump_for(FRAME);
+        let matrices = laid.transform_layer_matrices();
+        let [matrix] = matrices.as_slice() else {
+            panic!("one transform layer expected, got {matrices:?}");
+        };
+        let s = matrix.m[0];
+        assert!(s > 0.0 && s < 1.0, "intermediate scale {s} in {matrix:?}");
+        let expected = Matrix4::scaling(s, s, 1.0);
+        for (index, (got, want)) in matrix.m.iter().zip(expected.m.iter()).enumerate() {
+            assert!(
+                (got - want).abs() < 1e-12,
+                "element {index}: {got} vs {want} in {matrix:?}"
+            );
+        }
+        scales.push(s);
+    }
+    assert!(
+        scales.windows(2).all(|pair| pair[1] > pair[0]),
+        "the scale grows: {scales:?}"
+    );
+}
+
+// ----------------------------------------------------------------------------
+// AnimatedRotation
+// ----------------------------------------------------------------------------
+
+#[derive(Clone, StatefulView)]
+struct RotationProbe {
+    vsync: Vsync,
+    angle: Arc<Mutex<Angle>>,
+    path: RotationPath,
+}
+
+struct RotationProbeState {
+    probe: RotationProbe,
+}
+
+impl StatefulView for RotationProbe {
+    type State = RotationProbeState;
+
+    fn create_state(&self) -> Self::State {
+        RotationProbeState {
+            probe: self.clone(),
+        }
+    }
+}
+
+impl ViewState<RotationProbe> for RotationProbeState {
+    fn build(&self, _view: &RotationProbe, _ctx: &dyn BuildContext) -> impl IntoView {
+        VsyncScope::new(
+            self.probe.vsync.clone(),
+            AnimatedRotation::new(*self.probe.angle.lock(), SizedBox::new(10.0, 10.0))
+                .path(self.probe.path)
+                .duration(RUN)
+                .curve(Curves::Linear),
+        )
+    }
+}
+
+/// Rotate 0 → ¾ turn and read the child's rotation, in turns, half way through
+/// the run.
+fn rotation_at_half_way(path: RotationPath) -> f64 {
+    let vsync = Vsync::new();
+    let angle = Arc::new(Mutex::new(Angle::ZERO));
+    let probe = RotationProbe {
+        vsync: vsync.clone(),
+        angle: Arc::clone(&angle),
+        path,
+    };
+    let mut laid = lay_out_animated(probe, loose(200.0), vsync);
+    *angle.lock() = Angle::from_turns(0.75);
+    laid.pump();
+    laid.pump_for(FRAME); // detection
+    laid.pump_for(RUN / 2);
+    let transform = laid.find_by_render_type("RenderTransform");
+    laid.transform_rotation(transform) / std::f64::consts::TAU
+}
+
+/// `Shorter` reaches ¾ turn by turning back: half way it shows −⅛ turn.
+pub(crate) fn animated_rotation_takes_the_shorter_arc() {
+    let turns = rotation_at_half_way(RotationPath::Shorter);
+    assert!(
+        (turns - -0.125).abs() < 1e-9,
+        "shorter arc half way: {turns} turns"
+    );
+}
+
+/// `Numeric` turns forward through the whole ¾: half way it shows ⅜ turn.
+pub(crate) fn animated_rotation_takes_the_numeric_arc() {
+    let turns = rotation_at_half_way(RotationPath::Numeric);
+    assert!(
+        (turns - 0.375).abs() < 1e-9,
+        "numeric half way: {turns} turns"
+    );
+}

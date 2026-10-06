@@ -10,7 +10,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
-use flui_animation::Threshold;
+use flui_animation::{Curves, Threshold};
 use flui_foundation::ValueKey;
 use flui_foundation::geometry::Rect;
 use flui_view::ViewExt;
@@ -263,6 +263,31 @@ pub(crate) fn a_push_eases_on_the_destination_hero_curve() {
         flight.begin_rect(),
         "below the destination hero's threshold curve, the shuttle has not moved",
     );
+}
+
+/// A hero that shrinks to nothing along an overshooting curve: the curve passes 1
+/// near the end, which extrapolates the rect past its zero-size end. The shuttle's
+/// width and height stay non-negative on every sampled frame.
+pub(crate) fn a_shrinking_flight_with_overshoot_keeps_a_non_negative_size() {
+    let navigator = seeded_navigator();
+    let controller = install(&navigator);
+    let mut harness = mount_navigator(&navigator);
+    let transition = fly(
+        &navigator,
+        &mut harness,
+        hero_page("shared", 100.0, 80.0),
+        hero_page_with("shared", 0.0, 0.0, |hero| hero.curve(Curves::EaseOutBack)),
+    );
+    let flight = controller.flights().get(&tag("shared")).expect("airborne");
+    for step in 0..=20 {
+        let t = f64::from(step) / 20.0;
+        harness.enter_owner_scope(|| transition.controller().expect("installed").set_value(t));
+        let rect = flight.shuttle_rect();
+        assert!(
+            rect.width() >= 0.0 && rect.height() >= 0.0,
+            "t = {t}: shuttle rect {rect:?}"
+        );
+    }
 }
 
 // ============================================================================

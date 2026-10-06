@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use flui_animation::Animation;
 use flui_animation::curve::{ArcCurve, Curve};
-use flui_foundation::geometry::EdgeInsets;
+use flui_foundation::geometry::{EdgeInsets, Matrix4};
 use flui_painting::Alignment;
 use flui_painting::styling::Color;
 use flui_view::prelude::{BuildContext, LifecycleContext, StatefulView};
@@ -36,6 +36,7 @@ pub struct AnimatedContainer {
     width: Option<f64>,
     height: Option<f64>,
     margin: Option<EdgeInsets>,
+    transform: Option<Matrix4>,
     duration: Duration,
     curve: ArcCurve,
     child: BoxedView,
@@ -52,6 +53,7 @@ impl AnimatedContainer {
             width: None,
             height: None,
             margin: None,
+            transform: None,
             duration: DEFAULT_DURATION,
             curve: default_curve(),
             child: child.into_view().boxed(),
@@ -97,6 +99,17 @@ impl AnimatedContainer {
     #[must_use]
     pub fn margin(mut self, margin: EdgeInsets) -> Self {
         self.margin = Some(margin);
+        self
+    }
+
+    /// Animate toward this paint transform, applied about the container's origin.
+    ///
+    /// The matrix interpolates by decomposition ([`Matrix4::lerp`]): rotation turns
+    /// along the shorter arc, and a scale that starts or ends at zero takes the other
+    /// end's rotation, so a scale-in from nothing grows without spinning.
+    #[must_use]
+    pub fn transform(mut self, transform: Matrix4) -> Self {
+        self.transform = Some(transform);
         self
     }
 
@@ -162,7 +175,7 @@ impl ViewState<AnimatedContainer> for AnimatedContainerState {
         }
     }
 
-    fn build(&self, _view: &AnimatedContainer, _ctx: &dyn BuildContext) -> impl IntoView {
+    fn build(&self, view: &AnimatedContainer, _ctx: &dyn BuildContext) -> impl IntoView {
         let curved = self.controller.curved();
         let alignment = self.alignment.clone();
         let padding = self.padding.clone();
@@ -171,6 +184,7 @@ impl ViewState<AnimatedContainer> for AnimatedContainerState {
         let height = self.height.clone();
         let margin = self.margin.clone();
         let child = self.child.clone();
+        let transform = view.transform;
         AnimatedBuilder::new(self.controller.listenable(), move || {
             let t = curved.value();
             let mut container = Container::new();
@@ -191,6 +205,9 @@ impl ViewState<AnimatedContainer> for AnimatedContainerState {
             }
             if let Some(value) = margin.current(t) {
                 container = container.margin(value);
+            }
+            if let Some(value) = transform {
+                container = container.transform(value);
             }
             container.child(child.clone())
         })
