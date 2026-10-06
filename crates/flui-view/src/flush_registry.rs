@@ -18,7 +18,7 @@ use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::task::{Context, Poll};
+use std::task::{Context, Poll, Waker};
 use std::time::Instant;
 
 use flui_platform_api::{Storage, StorageError, StorageName, StoredVersion, WriteMode};
@@ -43,9 +43,13 @@ pub enum FlushState {
     Failed(StorageError),
 }
 
-/// Who published a slot's bytes: one [`FlushPublisher`] and its clones.
-/// Compared by address; the slot keeps it alive, so an address is never
-/// reused while a slot names it.
+/// Who published a name's bytes: one [`FlushPublisher`] and its clones.
+///
+/// Compared by `Arc` address. Both the pending slot and the committed
+/// record hold the publisher's `Arc` itself — never a raw address or a
+/// `Weak` — so the allocation stays alive as long as any record names it,
+/// and a publisher made later can never be handed the same address and
+/// pass for the one that committed.
 struct PublisherIdentity;
 
 /// The latest bytes published under one name.
@@ -57,10 +61,22 @@ struct Slot {
     publisher: Arc<PublisherIdentity>,
 }
 
-/// The registry's state: one slot per published name.
+/// The last write the storage confirmed for one name.
+struct CommittedWrite {
+    revision: Revision,
+    version: StoredVersion,
+    /// The publisher whose line the next edit must continue to be rebased
+    /// rather than conflict; kept as its `Arc` (see [`PublisherIdentity`]).
+    #[expect(dead_code, reason = "compared once the registry rebases edits")]
+    publisher: Arc<PublisherIdentity>,
+}
+
+/// The registry's state: one slot of unwritten bytes per published name,
+/// and the last confirmed write per name.
 #[derive(Default)]
 struct Slots {
     by_name: HashMap<StorageName, Slot>,
+    committed: HashMap<StorageName, CommittedWrite>,
 }
 
 /// What the host gave the registry to write with: the storage, the IO pool
@@ -86,7 +102,7 @@ struct Shared {
 /// Cheap to clone; every clone is the same registry.
 ///
 /// Not yet wired: published bytes are kept, but nothing is written to the
-/// storage, so nothing is ever committed.
+/// storage, so no write is ever recorded as committed.
 #[derive(Clone)]
 pub struct FlushRegistry {
     shared: Arc<Shared>,
@@ -122,8 +138,12 @@ impl FlushRegistry {
     /// `None` before the first confirmed write.
     #[must_use]
     pub fn committed(&self, name: StorageName) -> Option<(Revision, StoredVersion)> {
-        let _ = name;
-        None
+        self.shared
+            .slots
+            .lock()
+            .committed
+            .get(&name)
+            .map(|write| (write.revision, write.version))
     }
 
     /// Where the bytes published under `name` stand.
@@ -280,8 +300,17 @@ impl FlushHost {
     }
 
     /// Settle the registry on the owner's turn: record the writes that
-    /// finished and wake the [`FlushChanged`] futures they resolved.
-    pub fn settle(&self) {}
+    /// finished, and return the wakers of the [`FlushChanged`] futures they
+    /// resolved.
+    ///
+    /// Nothing is woken here: the registry's state is committed and its lock
+    /// released before this returns, and the owner wakes the wakers itself,
+    /// inside its single containment boundary, one by one, so a waker that
+    /// panics does not lose the ones after it.
+    #[must_use = "the owner wakes the returned wakers"]
+    pub fn settle(&self) -> Vec<Waker> {
+        Vec::new()
+    }
 
     /// Write the latest unconfirmed bytes of every name before `deadline`,
     /// waiting for a write already in flight first. Synchronous, on the owner
@@ -303,6 +332,7 @@ impl FlushHost {
 mod tests {
     use std::future::Future;
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::task::{Context, Waker};
     use std::time::{Duration, Instant};
 
@@ -432,8 +462,11 @@ mod tests {
         let storage = MemoryStorage::new();
         let (host, signals) = host(&storage);
         let registry = host.registry();
+        let counter = Arc::new(CountingWaker::default());
+        let waker = Waker::from(Arc::clone(&counter));
+        let mut cx = Context::from_waker(&waker);
         let mut changed = std::pin::pin!(registry.changed());
-        let mut cx = Context::from_waker(Waker::noop());
+        let _ = changed.as_mut().poll(&mut cx);
 
         registry.publisher(SESSION).publish(
             Arc::from(&b"open"[..]),
@@ -441,18 +474,36 @@ mod tests {
             Revision::new(1),
         );
         let _ = flush(&host);
-        let before_settle = changed.as_mut().poll(&mut cx).is_ready();
-        host.settle();
+        let after_write = counter.0.load(Ordering::SeqCst);
+        let wake = host.settle();
+        let after_settle = counter.0.load(Ordering::SeqCst);
+        // The owner wakes what settle returned, inside its containment.
+        for waker in wake {
+            waker.wake();
+        }
 
         assert_eq!(
             signals.lock().as_slice(),
             [LifecycleEvent::FlushChanged],
             "the finished write signalled the owner once"
         );
-        assert!(!before_settle, "nothing wakes before the owner settles");
-        assert!(
-            changed.as_mut().poll(&mut cx).is_ready(),
-            "the owner's settle resolves the change"
+        assert_eq!(
+            counter.0.load(Ordering::SeqCst),
+            1,
+            "the owner wakes the waiter once, from what settle returned"
         );
+        assert_eq!(after_write, 0, "the finished write wakes nothing itself");
+        assert_eq!(after_settle, 0, "settle wakes nothing itself");
+        assert!(changed.as_mut().poll(&mut cx).is_ready());
+    }
+
+    /// Counts its wakes, so a test can tell where a wake happened.
+    #[derive(Default)]
+    struct CountingWaker(AtomicUsize);
+
+    impl std::task::Wake for CountingWaker {
+        fn wake(self: Arc<Self>) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
     }
 }

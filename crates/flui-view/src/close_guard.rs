@@ -37,7 +37,7 @@ use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
 use std::rc::Rc;
-use std::task::{Context, Poll};
+use std::task::{Context, Poll, Waker};
 
 use crate::owner_notify::OwnerNotify;
 
@@ -59,6 +59,11 @@ pub enum CloseReason {
 
 /// One presentation's close state, shared by its guard, holds, pending
 /// closes and change futures.
+///
+/// Every transition commits its change here and releases the `RefCell`
+/// borrow before it calls [`OwnerNotify`]: a host may settle the guard
+/// synchronously from inside the signal, and must find the state committed
+/// and unborrowed.
 struct GuardState {
     /// The reasons the presentation's platform lets the application refuse.
     vetoable: Vec<CloseReason>,
@@ -141,6 +146,11 @@ impl CloseGuard {
 /// A hold on a presentation's close, from [`CloseGuard::hold`] or
 /// [`CloseGuard::require_decision`]. Dropping it releases the hold; if it was
 /// the last, a recorded close becomes due. Owner-thread only.
+///
+/// Releasing it commits the release to the guard's state and drops the
+/// state's borrow before the owner is signalled, so a host that settles
+/// synchronously from inside the signal finds the release already
+/// recorded.
 #[must_use = "the hold is released as soon as it is dropped"]
 pub struct CloseHold {
     _state: Rc<RefCell<GuardState>>,
@@ -189,6 +199,11 @@ impl PendingClose {
     /// Close the presentation now, past every hold, discarding what the
     /// holds protected. The decision of the presentation's owner, for
     /// example after the user chose "Close without saving".
+    ///
+    /// On success the close becomes due: the owner is signalled
+    /// ([`LifecycleEvent::CloseDue`](crate::__runtime::LifecycleEvent::CloseDue)),
+    /// its next [`CloseGuardSource::settle`] returns this reason, and the
+    /// owner carries the close out.
     ///
     /// # Errors
     ///
@@ -288,12 +303,32 @@ impl CloseGuardSource {
         let _ = reason;
     }
 
-    /// Settle the guard on the owner's turn: wake the [`CloseChanged`]
-    /// futures a change resolved, and return the recorded close that is due
-    /// to be carried out now, once. A due close whose signal could not be
-    /// delivered is still returned here.
-    #[must_use = "a due close is carried out by the caller"]
-    pub fn settle(&self) -> Option<CloseReason> {
-        None
+    /// Settle the guard on the owner's turn: take the recorded close that is
+    /// due to be carried out now, once, and the wakers of the
+    /// [`CloseChanged`] futures a change resolved. A due close whose signal
+    /// could not be delivered is still returned here.
+    ///
+    /// Nothing is woken or run here: the guard's state is committed and its
+    /// borrow released before this returns, and the owner wakes the wakers
+    /// itself, inside its single containment boundary, one by one. A waker
+    /// that panics therefore loses neither the due close, which the owner
+    /// already holds, nor the wakers after it.
+    pub fn settle(&self) -> SettledClose {
+        SettledClose {
+            close: None,
+            wake: Vec::new(),
+        }
     }
+}
+
+/// What [`CloseGuardSource::settle`] hands its owner.
+#[derive(Debug)]
+#[must_use = "a due close is carried out, and the wakers woken, by the owner"]
+#[non_exhaustive]
+pub struct SettledClose {
+    /// The recorded close due to be carried out now, if one is.
+    pub close: Option<CloseReason>,
+    /// The wakers of the [`CloseChanged`] futures a change resolved, for the
+    /// owner to wake inside its containment boundary.
+    pub wake: Vec<Waker>,
 }

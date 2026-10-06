@@ -275,8 +275,8 @@ impl LifecycleSource {
     /// Claim this presentation's close delivery: the token for the call that
     /// runs it, `None` once a delivery has run or is running, so a close
     /// requested again from inside a Detached observer, or repeated when the
-    /// realm drops, delivers nothing twice. The token records how the
-    /// delivery ended; see [`Self::close_delivery_state`].
+    /// realm drops, delivers nothing twice. The token records whether the
+    /// delivery completed or was interrupted.
     ///
     /// Not yet latched: every call gets a token.
     #[must_use = "dropping the token without completing it records an interrupted delivery"]
@@ -287,8 +287,15 @@ impl LifecycleSource {
     /// How this presentation's close delivery stands.
     ///
     /// Not yet recorded: always [`CloseDeliveryState::NotStarted`].
-    #[must_use]
-    pub fn close_delivery_state(&self) -> CloseDeliveryState {
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "read once the host classifies a failed close")
+    )]
+    #[expect(
+        clippy::unused_self,
+        reason = "read from the source once the latch records"
+    )]
+    pub(crate) fn close_delivery_state(&self) -> CloseDeliveryState {
         CloseDeliveryState::NotStarted
     }
     /// Fence new subscriptions and ordinary commits before terminal callbacks.
@@ -431,11 +438,14 @@ impl LifecycleSource {
     }
 }
 /// How a presentation's close delivery stands; see
-/// [`LifecycleSource::claim_close_delivery`].
-#[doc(hidden)]
+/// [`LifecycleSource::claim_close_delivery`]. Crate-private until a
+/// production reader exists.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum CloseDeliveryState {
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "recorded once the close delivery latches")
+)]
+pub(crate) enum CloseDeliveryState {
     /// No delivery was claimed.
     NotStarted,
     /// A delivery was claimed and its token is alive.

@@ -262,8 +262,12 @@ fn releasing_the_last_hold_queues_one_close() {
     );
     assert_eq!(due_while_held, 0, "a hold is still held, so nothing is due");
     assert!(refused, "a hold refuses the user's close");
-    assert_eq!(source.settle(), Some(CloseReason::User), "the close is due");
-    assert_eq!(source.settle(), None, "and carried out once");
+    assert_eq!(
+        source.settle().close,
+        Some(CloseReason::User),
+        "the close is due"
+    );
+    assert_eq!(source.settle().close, None, "and carried out once");
 }
 
 /// A repeated request for the same reason records nothing more: resolving
@@ -337,7 +341,7 @@ fn a_recorded_close_runs_when_the_last_hold_goes_unless_kept_open() {
     let _ = retried.refuses(CloseReason::User);
     drop(decision);
     assert_eq!(
-        retried.settle(),
+        retried.settle().close,
         Some(CloseReason::User),
         "a successful retry releases the decision and the close runs"
     );
@@ -350,7 +354,11 @@ fn a_recorded_close_runs_when_the_last_hold_goes_unless_kept_open() {
     let resolved = guard.pending().map(PendingClose::stay_open);
     drop(decision);
     assert_eq!(resolved, Some(Ok(())), "the user chose to stay");
-    assert_eq!(kept.settle(), None, "a close kept open is not carried out");
+    assert_eq!(
+        kept.settle().close,
+        None,
+        "a close kept open is not carried out"
+    );
     assert_eq!(
         stale.map(PendingClose::discard_and_close),
         Some(Err(StaleClose)),
@@ -394,34 +402,67 @@ fn an_undelivered_signal_keeps_the_due_close() {
     drop(saving);
 
     assert_eq!(
-        source.settle(),
+        source.settle().close,
         Some(CloseReason::User),
         "the due close survives a failed signal"
     );
     assert_eq!(due_signals(&signals), 1, "the owner was signalled once");
 }
 
-/// A change wakes `changed()` on the owner's turn, never inside the change:
-/// the future taken before a close is recorded is still pending until the
-/// owner settles, and ready after.
-#[test]
-#[ignore = "contract: a close change wakes waiters on the owner's turn"]
-fn a_close_change_wakes_on_the_owner_turn() {
+/// A waker that counts how often it is woken, so a test can tell a wake on
+/// the owner's turn from one inside the change.
+#[derive(Default)]
+struct CountingWaker(AtomicUsize);
+
+impl std::task::Wake for CountingWaker {
+    fn wake(self: Arc<Self>) {
+        self.wake_by_ref();
+    }
+
+    fn wake_by_ref(self: &Arc<Self>) {
+        self.0.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+impl CountingWaker {
+    fn wakes(&self) -> usize {
+        self.0.load(Ordering::SeqCst)
+    }
+}
+
+/// The owner wakes what a settle returned, as its containment boundary does.
+fn wake_on_the_owner_turn(wakers: Vec<Waker>) {
+    for waker in wakers {
+        waker.wake();
+    }
+}
+
+/// A future taken before a close is recorded wakes neither in `refuses` nor
+/// in `settle`, and once when the owner wakes what `settle` returned.
+fn a_change_recorded_under_a_hold_wakes_on_the_owner_turn() {
     let (source, signals) = desktop_close_guard(true);
     let guard = source.guard();
     let _saving = guard.hold();
+    let counter = Arc::new(CountingWaker::default());
+    let waker = Waker::from(Arc::clone(&counter));
+    let mut cx = Context::from_waker(&waker);
     let mut changed = std::pin::pin!(guard.changed());
-    let mut cx = Context::from_waker(Waker::noop());
+    let pending_before = changed.as_mut().poll(&mut cx).is_pending();
 
     let _ = source.refuses(CloseReason::User);
-    let inside_the_change = changed.as_mut().poll(&mut cx).is_ready();
-    let _ = source.settle();
+    let after_refuses = counter.wakes();
+    let settled = source.settle();
+    let after_settle = counter.wakes();
+    wake_on_the_owner_turn(settled.wake);
 
-    assert!(
-        changed.as_mut().poll(&mut cx).is_ready(),
-        "the owner's settle resolves the change"
+    assert_eq!(
+        counter.wakes(),
+        1,
+        "the owner wakes the waiter once, from what settle returned"
     );
-    assert!(!inside_the_change, "nothing wakes inside the change");
+    assert_eq!(after_refuses, 0, "nothing wakes inside the change");
+    assert_eq!(after_settle, 0, "settle wakes nothing itself");
+    assert!(pending_before && changed.as_mut().poll(&mut cx).is_ready());
     assert!(
         signals
             .lock()
@@ -429,4 +470,77 @@ fn a_close_change_wakes_on_the_owner_turn() {
             .contains(&LifecycleEvent::CloseChanged),
         "the change signalled the owner"
     );
+}
+
+/// A future taken after a close was recorded, across the release of the
+/// last hold: the release wakes nothing, settle returns the due close with
+/// the waker, and the waker wakes once the owner wakes it.
+fn a_change_taken_across_the_release_wakes_on_the_owner_turn() {
+    let (source, _signals) = desktop_close_guard(true);
+    let guard = source.guard();
+    let saving = guard.hold();
+    let _ = source.refuses(CloseReason::User);
+    let counter = Arc::new(CountingWaker::default());
+    let waker = Waker::from(Arc::clone(&counter));
+    let mut cx = Context::from_waker(&waker);
+    let mut changed = std::pin::pin!(guard.changed());
+    let _ = changed.as_mut().poll(&mut cx);
+
+    drop(saving);
+    let after_release = counter.wakes();
+    let settled = source.settle();
+    let due = settled.close;
+    let after_settle = counter.wakes();
+    wake_on_the_owner_turn(settled.wake);
+
+    assert_eq!(
+        counter.wakes(),
+        1,
+        "the owner wakes the waiter once, from what settle returned"
+    );
+    assert_eq!(due, Some(CloseReason::User), "the close is due");
+    assert_eq!(after_release, 0, "releasing the hold wakes nothing");
+    assert_eq!(after_settle, 0, "settle wakes nothing itself");
+}
+
+/// A change wakes `changed()` on the owner's turn, never inside the change
+/// and never inside `settle`.
+#[test]
+#[ignore = "contract: a close change wakes waiters on the owner's turn"]
+fn a_close_change_wakes_on_the_owner_turn() {
+    crate::run_table(
+        "a_close_change_wakes_on_the_owner_turn",
+        &[
+            (
+                "a_change_recorded_under_a_hold_wakes_on_the_owner_turn",
+                a_change_recorded_under_a_hold_wakes_on_the_owner_turn as fn(),
+            ),
+            (
+                "a_change_taken_across_the_release_wakes_on_the_owner_turn",
+                a_change_taken_across_the_release_wakes_on_the_owner_turn as fn(),
+            ),
+        ],
+    );
+}
+
+/// Discarding a recorded close makes it due: the owner is signalled, its
+/// settle returns the reason, and the record is gone.
+#[test]
+#[ignore = "contract: discarding a recorded close makes it due"]
+fn discarding_a_recorded_close_makes_it_due() {
+    let (source, signals) = desktop_close_guard(true);
+    let guard = source.guard();
+    let _unsaved = guard.require_decision();
+    let _ = source.refuses(CloseReason::User);
+
+    let discarded = guard.pending().map(PendingClose::discard_and_close);
+
+    assert_eq!(discarded, Some(Ok(())), "the recorded close is discarded");
+    assert_eq!(due_signals(&signals), 1, "the owner is signalled once");
+    assert_eq!(
+        source.settle().close,
+        Some(CloseReason::User),
+        "settle returns the discarded close for the owner to carry out"
+    );
+    assert!(guard.pending().is_none(), "the record is gone");
 }

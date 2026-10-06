@@ -500,6 +500,19 @@ pub trait LifecycleContext: BuildContext {
         None
     }
 
+    /// The host's flush registry, which a
+    /// [`Persisted`](crate::persist::Persisted) document publishes into.
+    /// Uncallable outside `flui-view`: it takes a crate-private token, so
+    /// the registry is not part of the widget surface.
+    #[doc(hidden)]
+    fn flush_registry_in_crate(
+        &self,
+        token: sealed::CrateToken,
+    ) -> Option<crate::flush_registry::FlushRegistry> {
+        let _ = token;
+        None
+    }
+
     /// The realm's fresh-hit-test capability, if a binding installed an
     /// interaction lane.
     ///

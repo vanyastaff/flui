@@ -268,6 +268,10 @@ pub struct ElementOwner<'a> {
     /// `clipboard_handle` is.
     pub(crate) storage: &'a Option<std::sync::Arc<dyn flui_platform_api::Storage>>,
 
+    /// The host's flush registry, threaded into every `BuildCtx` the same way
+    /// `storage` is; crate-private, for `Persisted`.
+    pub(crate) flush_registry: &'a Option<crate::flush_registry::FlushRegistry>,
+
     /// The binding's owner-local interaction dispatch capability (ADR-0027),
     /// threaded into render-object lifecycle contexts.
     pub(crate) interaction_dispatch: &'a Option<flui_interaction::InteractionDispatchHandle>,

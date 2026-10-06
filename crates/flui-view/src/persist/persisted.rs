@@ -10,6 +10,8 @@ use flui_platform_api::{Storage, StorageError};
 
 use super::{Document, PersistError, Revision, SaveStatus};
 use crate::LifecycleContext;
+use crate::context::CrateToken;
+use crate::flush_registry::FlushRegistry;
 
 /// One [`Document`] kept for a widget: loaded from the realm's storage,
 /// written on every [`set`](Self::set), with its [`SaveStatus`].
@@ -31,6 +33,9 @@ pub struct Persisted<D: Document> {
 struct OpenDocument<D> {
     /// The realm's storage, if it has one.
     storage: Option<Arc<dyn Storage>>,
+    /// The host's flush registry, which `set` publishes into.
+    #[expect(dead_code, reason = "published into once set writes")]
+    registry: Option<FlushRegistry>,
     value_type: PhantomData<D>,
 }
 
@@ -60,6 +65,7 @@ impl<D: Document> Persisted<D> {
         Self {
             document: Rc::new(OpenDocument {
                 storage: cx.storage(),
+                registry: cx.flush_registry_in_crate(CrateToken::new()),
                 value_type: PhantomData,
             }),
         }

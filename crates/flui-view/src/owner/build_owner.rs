@@ -642,6 +642,12 @@ pub struct BuildOwner {
     /// that has none, which `LifecycleContext::storage` reports as such.
     pub(crate) storage: Option<std::sync::Arc<dyn flui_platform_api::Storage>>,
 
+    /// The host's flush registry, which `Persisted` publishes into through
+    /// the crate-private `LifecycleContext::flush_registry_in_crate`. `None`
+    /// on a bare owner, and under every realm until the host's installer
+    /// lands with the registry's wiring.
+    pub(crate) flush_registry: Option<crate::flush_registry::FlushRegistry>,
+
     /// The binding's owner-local interaction dispatch capability (ADR-0027).
     ///
     /// `None` means the owner was built detached from a runtime interaction lane;
@@ -809,6 +815,7 @@ impl BuildOwner {
             text_input_handle: None,
             clipboard_handle: None,
             storage: None,
+            flush_registry: None,
             interaction_dispatch: None,
             hit_test_handle: None,
             owner_tag,
@@ -1331,6 +1338,7 @@ impl BuildOwner {
             text_input_handle: &self.text_input_handle,
             clipboard_handle: &self.clipboard_handle,
             storage: &self.storage,
+            flush_registry: &self.flush_registry,
             interaction_dispatch: &self.interaction_dispatch,
             hit_test_handle: &self.hit_test_handle,
             global_key_scope: &mut self.global_key_scope,
@@ -1856,6 +1864,7 @@ impl BuildOwner {
                     text_input_handle: &self.text_input_handle,
                     clipboard_handle: &self.clipboard_handle,
                     storage: &self.storage,
+                    flush_registry: &self.flush_registry,
                     interaction_dispatch: &self.interaction_dispatch,
                     hit_test_handle: &self.hit_test_handle,
                     global_key_scope: &mut self.global_key_scope,
@@ -2071,6 +2080,7 @@ impl BuildOwner {
                     text_input_handle: &self.text_input_handle,
                     clipboard_handle: &self.clipboard_handle,
                     storage: &self.storage,
+                    flush_registry: &self.flush_registry,
                     interaction_dispatch: &self.interaction_dispatch,
                     hit_test_handle: &self.hit_test_handle,
                     global_key_scope: &mut self.global_key_scope,
@@ -2506,6 +2516,7 @@ impl BuildOwner {
                 text_input_handle: &self.text_input_handle,
                 clipboard_handle: &self.clipboard_handle,
                 storage: &self.storage,
+                flush_registry: &self.flush_registry,
                 interaction_dispatch: &self.interaction_dispatch,
                 hit_test_handle: &self.hit_test_handle,
                 global_key_scope: &mut self.global_key_scope,
@@ -2714,6 +2725,7 @@ impl BuildOwner {
             text_input_handle: &self.text_input_handle,
             clipboard_handle: &self.clipboard_handle,
             storage: &self.storage,
+            flush_registry: &self.flush_registry,
             interaction_dispatch: &self.interaction_dispatch,
             hit_test_handle: &self.hit_test_handle,
             global_key_scope: &mut self.global_key_scope,
