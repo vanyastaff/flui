@@ -91,8 +91,9 @@ framework does not control is contained.
    owner thread, an async task), the session's result is discarded, the application's edit
    stays, and the platform hears of it through the observer once the lock is released, so the
    text service re-reads the document. There is no merge: nothing gives a base for a three-way
-   comparison. The count never wraps: a controller that exhausts it drops every later session,
-   so no session can find its count again after the application moved past it.
+   comparison. The count never wraps: a store that exhausts it drops every later session, so
+   no session can find its count again after the application moved past it. The controller and
+   the in-memory store share the count's type, `flui_platform_api::text_store::EditGeneration`.
 4. **A field losing its input resolves its composition by committing it.** Pointer-down in the
    presentation (inside the composing field too), an accepted close request, the end of the
    session, blur, paste and undo, and unmount commit the visible composition before the event's
