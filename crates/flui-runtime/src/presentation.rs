@@ -1522,8 +1522,17 @@ impl PresentationState {
         self.alive.borrow_mut().take();
         self.held_pointer_input.borrow_mut().clear();
         // Owner authority is withdrawn before any final user notification.
-        let preserving = failure.preserving();
-        failure.invoke(|| self.widgets.withdraw_root_owner(preserving));
+        // The withdrawn key owners stay in custody until focus, text input,
+        // gestures and mouse tracking are closed too: a key's destructor may
+        // hold a saved focus node or text-input handle (ADR-0123).
+        let withdrawn_keys = if failure.preserving() {
+            failure.invoke(|| self.widgets.withdraw_root_owner(true));
+            Vec::new()
+        } else {
+            failure
+                .invoke_with(|| self.widgets.withdraw_owner_authority())
+                .unwrap_or_default()
+        };
         let agent = self.dev_agent.take();
         if let Some(agent) = &agent {
             agent.withdraw();
@@ -1550,6 +1559,11 @@ impl PresentationState {
         // graph, keys, agent, focus and text input already closed.
         let mode = failure.mode();
         failure.invoke(|| close_gestures(&self.gestures, mode));
+        // Every presentation authority is revoked: the withdrawn keys retire,
+        // one at a time, so a failing destructor retains the rest.
+        for key in withdrawn_keys {
+            failure.retire(key);
+        }
         if let Some(dispatch) = dispatch {
             let mode = failure.mode();
             failure.invoke(|| flui_interaction::__runtime::retire_dispatch(dispatch, mode));
