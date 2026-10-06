@@ -549,6 +549,29 @@ fn work_written_after_the_verdict_survives_removal() {
     assert!(tasks.join("TASKS.md").exists() && fixture.has_branch("t/tasks"));
 }
 
+fn a_kept_worktree_keeps_its_target() {
+    let fixture = Fixture::new();
+    let busy = fixture.new_worktree("t/busy");
+    commit(&busy, "busy.txt");
+    fixture.merge("t/busy");
+    let worktree = fixture.survey_branch("t/busy");
+    assert_eq!(classify(&worktree.facts), Decision::Remove { force: false });
+    // new work arrives before removal, while a build is using `target/`
+    std::fs::create_dir_all(busy.join("target")).expect("mkdir");
+    std::fs::write(busy.join("target").join("blob"), [0_u8; 64]).expect("write");
+    std::fs::write(
+        busy.join("late.txt"),
+        "unsaved
+",
+    )
+    .expect("write");
+    assert!(remove(&fixture.git(), &worktree, false).is_err());
+    assert!(
+        busy.join("target").join("blob").exists(),
+        "a kept worktree keeps its build cache"
+    );
+}
+
 /// A merged worktree with `target/` and, unless `secret` is `None`, an
 /// ignored file of that name; returns its path after a real prune.
 fn prune_merged_with_ignored(secret: Option<&str>) -> (Fixture, PathBuf, PruneReport) {
@@ -719,6 +742,10 @@ fn worktree_contract() {
             (
                 "work_written_after_the_verdict_survives_removal",
                 work_written_after_the_verdict_survives_removal,
+            ),
+            (
+                "a_kept_worktree_keeps_its_target",
+                a_kept_worktree_keeps_its_target,
             ),
             (
                 "an_ignored_file_keeps_a_merged_worktree",

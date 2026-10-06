@@ -740,11 +740,6 @@ struct Removed {
 /// predates this call, and a commit made on the branch since must not be lost.
 fn remove(git: &Git, worktree: &Worktree, force: bool) -> anyhow::Result<Removed> {
     let path = &worktree.entry.path;
-    let target = path.join("target");
-    if target.is_dir() {
-        std::fs::remove_dir_all(&target)
-            .with_context(|| format!("removing {}", target.display()))?;
-    }
     // The survey's verdict may be stale. `git worktree remove` refuses
     // untracked and modified files without `--force` (never passed), but deletes
     // ignored ones silently, so recheck everything, ignored entries included, and
@@ -770,6 +765,13 @@ fn remove(git: &Git, worktree: &Worktree, force: bool) -> anyhow::Result<Removed
             "{} changed since it was surveyed ({reason}); keeping it",
             path.display()
         );
+    }
+    // Only now, with the worktree confirmed unchanged, is its build cache
+    // disposable; a worktree kept above keeps its `target/`.
+    let target = path.join("target");
+    if target.is_dir() {
+        std::fs::remove_dir_all(&target)
+            .with_context(|| format!("removing {}", target.display()))?;
     }
     if force {
         std::fs::remove_file(path.join(TASKS_FILE))
