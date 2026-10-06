@@ -995,6 +995,14 @@ impl GestureArenaMember for ScaleGestureRecognizer {
         let Some(index) = state.index_of(pointer) else {
             return;
         };
+        if state.phase == ScalePhase::Started {
+            // A started scale that loses one of its contacts is over: it is
+            // cancelled, and the remaining contacts are released, exactly as
+            // a pointer cancel ends it.
+            drop(state);
+            self.handle_cancel(pointer);
+            return;
+        }
         state.contacts.remove(index);
         let outcome = if state.after_contact_removed().is_some() {
             Outcome::Cancel

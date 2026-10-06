@@ -385,13 +385,15 @@ impl ForcePressGestureRecognizer {
                 "force press arena withdrawal",
             ),
         }
+        // Every notice of a committed transition is delivered: a panic in
+        // `on_start` must not leave the caller with a start and no end. The
+        // first failure stays authoritative and resumes after the rest.
         for notice in notices {
-            if first.is_some() {
-                // An earlier failure stays authoritative; later callbacks of
-                // the same transition are dropped.
-                break;
-            }
-            first = RoutePanic::capture(|| self.deliver(notice));
+            RoutePanic::preserve_first(
+                &mut first,
+                RoutePanic::capture(|| self.deliver(notice)),
+                "force press callback",
+            );
         }
         if let Some(panic) = first {
             panic.resume();

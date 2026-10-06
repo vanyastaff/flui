@@ -91,6 +91,17 @@ impl Rig {
         recognizer: &Arc<R>,
         only: Option<u64>,
     ) -> Rc<Cell<bool>> {
+        self.attach_with_global(recognizer, only, PointerEvent::clone)
+    }
+
+    /// [`attach`](Self::attach), delivering `global(event)` as the root-space
+    /// event that accompanies each local one.
+    fn attach_with_global<R: GestureRecognizer + 'static>(
+        &self,
+        recognizer: &Arc<R>,
+        only: Option<u64>,
+        global: impl Fn(&PointerEvent) -> PointerEvent + 'static,
+    ) -> Rc<Cell<bool>> {
         let live = Rc::new(Cell::new(true));
         let recognizer = Arc::clone(recognizer);
         let alive = Rc::clone(&live);
@@ -103,7 +114,11 @@ impl Rig {
                     return;
                 }
             }
-            recognizer.handle_event(PointerDispatch::at_root(event));
+            let global = global(event);
+            recognizer.handle_event(PointerDispatch {
+                local: event,
+                global: &global,
+            });
         });
         self.routes
             .borrow_mut()
@@ -422,6 +437,32 @@ fn scale_cancel_mid_gesture_then_next_gesture() {
     assert!(log.updates.borrow().len() > updates);
 }
 
+fn scale_contact_lost_to_a_competitor_cancels_the_scale() {
+    let rig = Rig::new();
+    // An eager member that sees only the third contact claims its arena first.
+    let eager = EagerGestureRecognizer::new(rig.binding.arena().clone());
+    rig.attach(&eager, Some(3));
+    let (_scale, log) = scale_on(&rig);
+    pinch_out(&rig, 1, 2);
+    assert_eq!(log.starts.get(), 1);
+    rig.down(3, 200.0, 250.0);
+    rig.frame();
+    assert_eq!(log.cancels.get(), 1, "losing a contact's arena cancels");
+    let updates = log.updates.borrow().len();
+    rig.move_to(1, 20.0, 200.0);
+    rig.up(1, 20.0, 200.0);
+    rig.up(2, 350.0, 200.0);
+    rig.up(3, 200.0, 250.0);
+    assert_eq!(
+        log.updates.borrow().len(),
+        updates,
+        "a cancelled scale is over"
+    );
+    assert!(log.ends.borrow().is_empty());
+    pinch_out(&rig, 4, 5);
+    assert_eq!(log.starts.get(), 2, "the next gesture starts clean");
+}
+
 fn scale_disposed_from_its_update() {
     let rig = Rig::new();
     let slot: Rc<RefCell<Option<Arc<ScaleGestureRecognizer>>>> = Rc::default();
@@ -481,6 +522,10 @@ fn scale_publishes_finite_continuous_values_and_owns_its_contacts() {
                 scale_update_and_end_panics_then_next_gesture,
             ),
             ("cancel", scale_cancel_mid_gesture_then_next_gesture),
+            (
+                "contact lost to a competitor",
+                scale_contact_lost_to_a_competitor_cancels_the_scale,
+            ),
             ("dispose from update", scale_disposed_from_its_update),
         ],
     );
@@ -571,6 +616,24 @@ fn force_press_start_panic_then_next_press() {
     assert_eq!(log.ends.get(), 2);
 }
 
+fn force_press_start_panic_still_delivers_peak_and_end() {
+    let rig = Rig::new();
+    let (press_rec, log) = press_on(&rig);
+    rig.attach(&press_rec, None);
+    log.panic_start.set(true);
+    rig.down_with(1, 100.0, 100.0, PointerType::Pen, 0.2);
+    rig.frame(); // the lone member wins by default
+    // Start and peak are one transition; the start's panic must not drop the peak.
+    expect_panic("on_start", || {
+        rig.move_with(1, 100.0, 100.0, PointerType::Pen, 0.9);
+    });
+    rig.up_with(1, 100.0, 100.0, PointerType::Pen);
+    assert_eq!(
+        (log.starts.get(), log.peaks.get(), log.ends.get()),
+        (1, 1, 1)
+    );
+}
+
 fn force_press_cancel_ends_once() {
     let rig = Rig::new();
     let (press_rec, log) = press_on(&rig);
@@ -617,6 +680,10 @@ fn force_press_needs_a_sensor_and_the_arena() {
                 force_press_claims_the_arena_before_starting,
             ),
             ("start panic", force_press_start_panic_then_next_press),
+            (
+                "start panic keeps peak and end",
+                force_press_start_panic_still_delivers_peak_and_end,
+            ),
             ("cancel", force_press_cancel_ends_once),
             ("dispose from start", force_press_disposed_from_its_start),
         ],
@@ -631,6 +698,7 @@ fn force_press_needs_a_sensor_and_the_arena() {
 struct TapDragLog {
     events: RefCell<Vec<String>>,
     counts: RefCell<Vec<u32>>,
+    panic_down: Cell<bool>,
     panic_up: Cell<bool>,
     panic_update: Cell<bool>,
 }
@@ -647,15 +715,13 @@ fn tap_drag_on(rig: &Rig) -> (Arc<TapAndDragGestureRecognizer>, Rc<TapDragLog>) 
         let log = log.clone();
         move || log.events.borrow_mut().push(name.to_owned())
     };
-    let (down, start, end, cancel) = (
-        push(&log, "down"),
-        push(&log, "start"),
-        push(&log, "end"),
-        push(&log, "cancel"),
-    );
-    let (up_log, update_log) = (log.clone(), log.clone());
+    let (start, end, cancel) = (push(&log, "start"), push(&log, "end"), push(&log, "cancel"));
+    let (down_log, up_log, update_log) = (log.clone(), log.clone(), log.clone());
     let recognizer = TapAndDragGestureRecognizer::new(rig.binding.arena().clone())
-        .with_on_tap_down(move |_| down())
+        .with_on_tap_down(move |_| {
+            down_log.events.borrow_mut().push("down".to_owned());
+            trip(&down_log.panic_down, "tap-and-drag down callback panic");
+        })
         .with_on_tap_up(move |d| {
             up_log.events.borrow_mut().push("up".to_owned());
             up_log.counts.borrow_mut().push(d.consecutive_tap_count);
@@ -764,6 +830,81 @@ fn drag_update_panic_then_drag_continues() {
     assert_eq!(log.count("up"), 1);
 }
 
+fn tap_down_panic_still_starts_and_ends_the_drag() {
+    let rig = Rig::new();
+    let (tad, log) = tap_drag_on(&rig);
+    rig.attach(&tad, None);
+    // A competing pan keeps the arena open, so the claim delivers tap-down,
+    // drag-start and the first update as one transition.
+    let pan = DragGestureRecognizer::new(rig.binding.arena().clone(), DragAxis::Free);
+    rig.attach(&pan, None);
+    rig.down(1, 100.0, 100.0);
+    rig.frame();
+    log.panic_down.set(true);
+    expect_panic("on_tap_down", || rig.move_to(1, 200.0, 100.0));
+    rig.move_to(1, 220.0, 100.0);
+    rig.up(1, 220.0, 100.0);
+    assert_eq!(
+        *log.events.borrow(),
+        ["down", "start", "update", "update", "end"]
+    );
+}
+
+fn tap_down_panic_still_delivers_the_tap_up() {
+    let rig = Rig::new();
+    let (tad, log) = tap_drag_on(&rig);
+    rig.attach(&tad, None);
+    // A competing tap keeps the arena open until the sweep on up, which
+    // delivers tap-down and tap-up together.
+    let tap = TapGestureRecognizer::new(rig.binding.arena().clone());
+    rig.attach(&tap, None);
+    rig.down(1, 100.0, 100.0);
+    rig.frame();
+    log.panic_down.set(true);
+    expect_panic("on_tap_down", || rig.up(1, 100.0, 100.0));
+    assert_eq!(*log.events.borrow(), ["down", "up"]);
+}
+
+/// The same event with its position replaced by NaN, for every event after
+/// the down.
+fn nan_after_down(event: &PointerEvent) -> PointerEvent {
+    let pointer = id(pointer_of(event).expect("event carries an id"));
+    let nan = Offset::new(f64::NAN, f64::NAN);
+    match event {
+        PointerEvent::Move(_) => make_move_event_for_id(pointer, nan, PointerType::Touch),
+        PointerEvent::Up(_) => make_up_event_for_id(pointer, nan, PointerType::Touch),
+        _ => event.clone(),
+    }
+}
+
+fn tap_drag_publishes_no_non_finite_global_position() {
+    let rig = Rig::new();
+    let globals: Rc<RefCell<Vec<Offset<f64>>>> = Rc::default();
+    let (s, u, e, t) = (
+        globals.clone(),
+        globals.clone(),
+        globals.clone(),
+        globals.clone(),
+    );
+    let tad = TapAndDragGestureRecognizer::new(rig.binding.arena().clone())
+        .with_on_drag_start(move |d| s.borrow_mut().push(d.global_position))
+        .with_on_drag_update(move |d| u.borrow_mut().push(d.global_position))
+        .with_on_drag_end(move |d| e.borrow_mut().push(d.global_position))
+        .with_on_tap_up(move |d| t.borrow_mut().push(d.global_position));
+    rig.attach_with_global(&tad, None, nan_after_down);
+    rig.down(1, 100.0, 100.0);
+    rig.frame();
+    rig.move_to(1, 200.0, 100.0);
+    rig.move_to(1, 220.0, 100.0);
+    rig.up(1, 220.0, 100.0);
+    rig.down(2, 100.0, 100.0);
+    rig.frame();
+    rig.up(2, 100.0, 100.0);
+    let globals = globals.borrow();
+    assert_eq!(globals.len(), 5, "start, two updates, end, tap up");
+    assert!(globals.iter().all(|g| g.is_finite()), "{globals:?}");
+}
+
 fn cancel_mid_drag_cancels_once() {
     let rig = Rig::new();
     let (tad, log) = tap_drag_on(&rig);
@@ -818,6 +959,18 @@ fn tap_and_drag_resolves_through_the_shared_arena() {
             ("consecutive clicks", consecutive_clicks_count_up_and_reset),
             ("tap up panic", tap_up_panic_then_next_tap),
             ("drag update panic", drag_update_panic_then_drag_continues),
+            (
+                "tap down panic in a drag",
+                tap_down_panic_still_starts_and_ends_the_drag,
+            ),
+            (
+                "tap down panic in a tap",
+                tap_down_panic_still_delivers_the_tap_up,
+            ),
+            (
+                "non-finite global position",
+                tap_drag_publishes_no_non_finite_global_position,
+            ),
             ("cancel mid drag", cancel_mid_drag_cancels_once),
             (
                 "dispose from drag start",

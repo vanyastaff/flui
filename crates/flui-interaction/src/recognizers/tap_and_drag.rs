@@ -63,6 +63,7 @@ use crate::{
 
 /// Position, kind and consecutive-tap-count details for tap-down.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct TapDragDownDetails {
     /// Global position where pointer contacted the screen.
     pub global_position: Offset<f64>,
@@ -76,6 +77,7 @@ pub struct TapDragDownDetails {
 
 /// Position, kind and consecutive-tap-count details for tap-up.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct TapDragUpDetails {
     /// Global position where pointer was released.
     pub global_position: Offset<f64>,
@@ -89,6 +91,7 @@ pub struct TapDragUpDetails {
 
 /// Details for drag-start.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct TapDragStartDetails {
     /// Global position where the drag started (down position).
     pub global_position: Offset<f64>,
@@ -103,6 +106,7 @@ pub struct TapDragStartDetails {
 
 /// Details for drag-update.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct TapDragUpdateDetails {
     /// Current global position.
     pub global_position: Offset<f64>,
@@ -119,6 +123,7 @@ pub struct TapDragUpdateDetails {
 
 /// Details for drag-end.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct TapDragEndDetails {
     /// Velocity at the end of the drag.
     pub velocity: Velocity,
@@ -474,7 +479,7 @@ impl TapAndDragGestureRecognizer {
 
     /// Run the arena step, then deliver the notices in order. The state was
     /// committed beforehand; the first panic is resumed after the arena step
-    /// ran, and the transition's later notices are dropped.
+    /// ran and every notice of the transition was delivered.
     fn finish(&self, step: ArenaStep, notices: Vec<Notice>) {
         let self_driven = self.state.arena().sweep_model() == SweepModel::SelfDriven;
         let mut first = match step {
@@ -494,11 +499,15 @@ impl TapAndDragGestureRecognizer {
                 }
             }),
         };
+        // Every notice of a committed transition is delivered, so a panic in
+        // `on_tap_down` cannot strand a started drag without its end or a tap
+        // without its up. The first failure resumes after the rest.
         for notice in notices {
-            if first.is_some() {
-                break;
-            }
-            first = RoutePanic::capture(|| self.deliver(notice));
+            RoutePanic::preserve_first(
+                &mut first,
+                RoutePanic::capture(|| self.deliver(notice)),
+                "tap and drag callback",
+            );
         }
         if let Some(panic) = first {
             panic.resume();
@@ -557,7 +566,10 @@ impl TapAndDragGestureRecognizer {
         let mut state = self.gesture_state.lock();
         state.kind = kind;
         state.last = position;
-        state.last_global = global_position;
+        if global_position.is_finite() {
+            state.last_global = global_position;
+        }
+        let global_position = state.last_global;
         state.velocity_tracker.add_position(now, position);
         match state.phase {
             Phase::Down => {
@@ -598,10 +610,15 @@ impl TapAndDragGestureRecognizer {
         let mut notices = Vec::new();
         let mut state = self.gesture_state.lock();
         state.kind = kind;
-        let (position, global_position) = if position.is_finite() {
-            (position, global_position)
+        let position = if position.is_finite() {
+            position
         } else {
-            (state.last, state.last_global)
+            state.last
+        };
+        let global_position = if global_position.is_finite() {
+            global_position
+        } else {
+            state.last_global
         };
         let step = match state.phase {
             Phase::Down if state.tap_viable => {
@@ -725,6 +742,13 @@ impl GestureRecognizer for TapAndDragGestureRecognizer {
         state.entry = entry;
         state.count = count;
         state.initial = position;
+        // A non-finite global position is never published: with no earlier
+        // sample in this sequence, the local position stands in for it.
+        let global_position = if global_position.is_finite() {
+            global_position
+        } else {
+            position
+        };
         state.initial_global = global_position;
         state.last = position;
         state.last_global = global_position;
