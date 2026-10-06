@@ -180,8 +180,7 @@ impl OwnerPlatform {
     /// [`PlatformWindow::text_input`]: super::PlatformWindow::text_input
     #[must_use]
     pub fn text_store_host(&self, window: &Arc<dyn HostWindow>) -> Option<Rc<dyn TextStoreHost>> {
-        let _ = (window, super::host_window::OwnerThreadToken::new());
-        None
+        window.text_store_host(super::host_window::OwnerThreadToken::new())
     }
 }
 

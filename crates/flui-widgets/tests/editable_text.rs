@@ -1332,8 +1332,7 @@ pub(crate) mod text_store {
         let controller = TextEditingController::new();
         let focus = FocusNode::new();
         let mut harness = crate::common::harness::mount_with_push_ime(
-            SizedBox::new(60.0, 30.0)
-                .child(EditableText::new(controller.clone(), Rc::clone(&focus))),
+            SizedBox::new(60.0, 30.0).child(EditableText::new(controller, Rc::clone(&focus))),
         );
         focus.request_focus();
         let assert_visible = |harness: &Harness| {

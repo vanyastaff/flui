@@ -580,9 +580,6 @@ impl TextInputOwner {
     /// another call on the host, the request is queued with its store and
     /// runs at the anchor or when that call returns.
     pub fn complete_composition(&self) {
-        if self.host_depth.get() < u32::MAX {
-            return;
-        }
         let store = {
             let state = self.state.borrow();
             if state.lifecycle != OwnerLifecycle::Open {
@@ -619,9 +616,6 @@ impl TextInputOwner {
     /// transaction is open (the anchor drains them). A failing operation
     /// propagates after its values are released; the rest stay queued.
     fn drain_host_ops(&self) {
-        if self.host_depth.get() < u32::MAX {
-            return;
-        }
         loop {
             if self.host_depth.get() > 0 || self.is_transaction_open() {
                 return;
@@ -866,9 +860,6 @@ impl TextInputOwner {
         focused: bool,
         failure: &mut ClosePanic,
     ) {
-        if self.host_depth.get() < u32::MAX {
-            return;
-        }
         let _call = HostCall::enter(&self.host_depth);
         for op in ops {
             match (op, host) {

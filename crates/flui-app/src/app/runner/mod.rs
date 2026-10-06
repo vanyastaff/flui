@@ -98,8 +98,7 @@ pub(crate) fn presentation_window(
 fn text_store_host_of(
     window: &std::sync::Arc<dyn flui_platform::traits::HostWindow>,
 ) -> Option<std::rc::Rc<dyn flui_platform_api::TextStoreHost>> {
-    let _ = window;
-    None
+    host::with_owner_platform(|owner| owner.text_store_host(window)).flatten()
 }
 
 /// Wire one presentation into the close-request seam (issue #558):
