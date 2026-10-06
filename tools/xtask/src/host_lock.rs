@@ -73,6 +73,8 @@ pub(crate) fn mark_child(child: &mut Command) {
 #[derive(Debug, Clone)]
 pub(crate) struct LockSettings {
     path: PathBuf,
+    /// A relative `FLUI_XTASK_LOCK_FILE`, refused in favour of the default.
+    rejected: Option<PathBuf>,
     opted_out: bool,
     held_by: Option<PathBuf>,
 }
@@ -103,8 +105,15 @@ impl LockSettings {
             || std::env::temp_dir().join(fallback_dir_name(user())),
             |dir| dir.join("flui"),
         );
+        // A relative override would name a different file from each
+        // directory a run starts in, so it is refused, not resolved.
+        let (path, rejected) = match set(LOCK_FILE).map(PathBuf::from) {
+            Some(path) if path.is_absolute() => (path, None),
+            rejected => (dir.join("xtask-heavy.lock"), rejected),
+        };
         Self {
-            path: set(LOCK_FILE).map_or_else(|| dir.join("xtask-heavy.lock"), PathBuf::from),
+            path,
+            rejected,
             opted_out: set(NO_LOCK).is_some_and(|value| value == "1"),
             held_by: set(LOCK_HELD).map(PathBuf::from),
         }
@@ -115,6 +124,7 @@ impl LockSettings {
     pub(crate) fn at(path: &Path) -> Self {
         Self {
             path: path.to_path_buf(),
+            rejected: None,
             opted_out: false,
             held_by: None,
         }
@@ -128,13 +138,16 @@ impl LockSettings {
     }
 }
 
-/// `flui-<user>` with any character outside `[A-Za-z0-9._-]` replaced, or
-/// plain `flui` when the user cannot be named.
+/// `flui-<user>-<hash>`: the user with any character outside
+/// `[A-Za-z0-9._-]` replaced, so it stays one path component, then a hash
+/// of the user as given, so two names that read the same once replaced
+/// (`a b`, `a_b`) keep separate directories. Plain `flui` when the user
+/// cannot be named.
 fn fallback_dir_name(user: Option<String>) -> String {
     let Some(user) = user.filter(|user| !user.is_empty()) else {
         return "flui".to_owned();
     };
-    let user: String = user
+    let readable: String = user
         .chars()
         .map(|c| {
             if c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-') {
@@ -144,7 +157,16 @@ fn fallback_dir_name(user: Option<String>) -> String {
             }
         })
         .collect();
-    format!("flui-{user}")
+    format!("flui-{readable}-{:08x}", fnv1a32(user.as_bytes()))
+}
+
+/// 32-bit FNV-1a: fixed by its definition, so every xtask build, whatever
+/// its Rust version, names the same directory (std's `DefaultHasher`
+/// promises no such stability).
+fn fnv1a32(bytes: &[u8]) -> u32 {
+    bytes.iter().fold(0x811c_9dc5, |hash, &byte| {
+        (hash ^ u32::from(byte)).wrapping_mul(0x0100_0193)
+    })
 }
 
 /// The current user's numeric id: the owner of a file this process creates
@@ -227,6 +249,14 @@ impl HeavyRunLock {
             return unheld;
         }
         let path = &settings.path;
+        if let Some(rejected) = &settings.rejected {
+            let _ = writeln!(
+                out,
+                "xtask: warning: {LOCK_FILE}={} is not an absolute path; using {} instead",
+                rejected.display(),
+                path.display()
+            );
+        }
         let opened = path
             .parent()
             .map_or(Ok(()), std::fs::create_dir_all)
@@ -512,6 +542,24 @@ mod tests {
         );
     }
 
+    /// A refused relative override is reported, and the default is locked.
+    fn relative_override_warns_and_locks_the_default() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = lock_path(&dir);
+        let settings = LockSettings {
+            rejected: Some(PathBuf::from("relative.lock")),
+            ..LockSettings::at(&path)
+        };
+        let mut out = Vec::new();
+        let guard = HeavyRunLock::acquire(&settings, &holder("cargo xtask gate"), &mut out);
+        let printed = String::from_utf8_lossy(&out);
+        assert!(
+            printed.contains("relative.lock is not an absolute path"),
+            "the refusal is reported: {printed}"
+        );
+        assert!(guard.holds() && locked(&path), "the default is locked");
+    }
+
     #[test]
     fn host_lock_contract() {
         if std::env::var_os(CHILD).is_some() {
@@ -541,6 +589,10 @@ mod tests {
                 ),
                 ("opted_out_run_does_not_wait", opted_out_run_does_not_wait),
                 (
+                    "relative_override_warns_and_locks_the_default",
+                    relative_override_warns_and_locks_the_default,
+                ),
+                (
                     "unopenable_lock_file_warns_and_proceeds",
                     unopenable_lock_file_warns_and_proceeds,
                 ),
@@ -569,7 +621,8 @@ mod tests {
             Option<&'static str>,
             [PathBuf; 2],
         );
-        let paths: [PathRow; 6] = [
+        let alice_tmp = lock(tmp.join("flui-alice-872213e7"));
+        let paths: [PathRow; 7] = [
             (
                 "per_user_directory_variable",
                 &[
@@ -587,34 +640,48 @@ mod tests {
                 "home_cache_without_a_runtime_dir",
                 &[("HOME", "home")],
                 Some("alice"),
-                [
-                    lock(tmp.join("flui-alice")),
-                    lock(PathBuf::from("home/.cache/flui")),
-                ],
+                [alice_tmp.clone(), lock(PathBuf::from("home/.cache/flui"))],
             ),
             (
                 "temp_fallback_names_the_user",
                 &[],
                 Some("alice"),
-                [lock(tmp.join("flui-alice")), lock(tmp.join("flui-alice"))],
-            ),
-            (
-                "temp_fallback_differs_per_user",
-                &[],
-                Some("1001"),
-                [lock(tmp.join("flui-1001")), lock(tmp.join("flui-1001"))],
-            ),
-            (
-                "user_name_cannot_leave_the_directory",
-                &[],
-                Some("../x y"),
-                [lock(tmp.join("flui-.._x_y")), lock(tmp.join("flui-.._x_y"))],
+                [alice_tmp.clone(), alice_tmp.clone()],
             ),
             (
                 "unnamed_user_shares_the_plain_directory",
                 &[],
                 None,
                 [lock(tmp.join("flui")), lock(tmp.join("flui"))],
+            ),
+            (
+                "absolute_override_wins",
+                &[
+                    ("LOCALAPPDATA", "local"),
+                    ("XDG_RUNTIME_DIR", "runtime"),
+                    (LOCK_FILE, ABSOLUTE),
+                ],
+                Some("alice"),
+                [PathBuf::from(ABSOLUTE), PathBuf::from(ABSOLUTE)],
+            ),
+            (
+                "relative_override_is_refused",
+                &[
+                    ("LOCALAPPDATA", "local"),
+                    ("XDG_RUNTIME_DIR", "runtime"),
+                    (LOCK_FILE, "relative.lock"),
+                ],
+                Some("alice"),
+                [
+                    lock(PathBuf::from("local/flui")),
+                    lock(PathBuf::from("runtime/flui")),
+                ],
+            ),
+            (
+                "relative_override_without_a_user_directory",
+                &[(LOCK_FILE, "relative.lock")],
+                Some("alice"),
+                [alice_tmp.clone(), alice_tmp],
             ),
         ];
         let wrong: Vec<String> = paths
@@ -628,28 +695,59 @@ mod tests {
             .collect();
         assert!(wrong.is_empty(), "lock path selection: {wrong:#?}");
         let user = LockSettings::from_vars(vars(&[]), alice);
-        assert!(!user.opted_out && user.held_by.is_none());
+        assert!(!user.opted_out && user.held_by.is_none() && user.rejected.is_none());
+        let refused = LockSettings::from_vars(vars(&[(LOCK_FILE, "relative.lock")]), alice);
+        assert_eq!(refused.rejected, Some(PathBuf::from("relative.lock")));
         let set = LockSettings::from_vars(
-            vars(&[
-                ("LOCALAPPDATA", "local"),
-                ("XDG_RUNTIME_DIR", "runtime"),
-                (LOCK_FILE, "elsewhere.lock"),
-                (NO_LOCK, "1"),
-                (LOCK_HELD, "elsewhere.lock"),
-            ]),
+            vars(&[(LOCK_FILE, ABSOLUTE), (NO_LOCK, "1"), (LOCK_HELD, ABSOLUTE)]),
             alice,
         );
-        assert_eq!(set.path, PathBuf::from("elsewhere.lock"));
         assert!(set.opted_out && set.parent_holds());
         let other = LockSettings::from_vars(
             vars(&[
-                (LOCK_FILE, "elsewhere.lock"),
+                (LOCK_FILE, ABSOLUTE),
                 (NO_LOCK, "0"),
                 (LOCK_HELD, "another.lock"),
             ]),
             alice,
         );
         assert!(!other.opted_out && !other.parent_holds());
+    }
+
+    /// An absolute lock path on this platform.
+    const ABSOLUTE: &str = if cfg!(windows) {
+        r"C:\locks\heavy.lock"
+    } else {
+        "/locks/heavy.lock"
+    };
+
+    /// The fallback directory is one path component, distinct for names that
+    /// read the same once sanitized, and fixed by a hash every build agrees
+    /// on.
+    #[test]
+    fn fallback_directory_names_each_user_apart() {
+        let name = |user: &str| fallback_dir_name(Some(user.to_owned()));
+        assert_eq!(fnv1a32(b""), 0x811c_9dc5, "FNV-1a offset basis");
+        assert_eq!(fnv1a32(b"a"), 0xe40c_292c, "FNV-1a test vector");
+        let colliding = [("a b", "a_b"), ("x/y", "x_y"), ("é", "_")];
+        let merged: Vec<_> = colliding
+            .iter()
+            .filter(|(one, other)| name(one) == name(other))
+            .collect();
+        assert!(
+            merged.is_empty(),
+            "names that share a directory: {merged:?}"
+        );
+        assert_eq!(name("a"), "flui-a-e40c292c");
+        for user in ["../x y", r"a\b", "x/y"] {
+            let dir = name(user);
+            assert_eq!(
+                Path::new(&dir).components().count(),
+                1,
+                "`{user}` stays one component: {dir}"
+            );
+            assert!(dir.starts_with("flui-"), "`{user}` cannot climb: {dir}");
+        }
     }
 
     /// An argument that is not Unicode, which clap accepts as a path, is

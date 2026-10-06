@@ -143,9 +143,9 @@ enum Command {
 }
 
 impl Command {
-    /// Whether this command builds or tests the workspace, and so waits for
-    /// any other such run on the host ([`host_lock`]). A dry run builds
-    /// nothing.
+    /// Whether this command builds or tests the workspace, or deletes what
+    /// such a run uses, and so waits for any other such run on the host
+    /// ([`host_lock`]). A dry run builds and deletes nothing.
     ///
     /// Every command is classified here, with no catch-all, so a new one
     /// must be placed on one side or the other.
@@ -172,14 +172,17 @@ impl Command {
             Self::Miri(args) => args.run,
             Self::BenchCompile(args) => args.run,
             Self::DemoSnapshots(args) => args.run,
+            // Deletes the nested-test caches a running test would use.
+            Self::CleanNested(args) => args.run,
             Self::DocStrict(_) | Self::Device(_) | Self::BenchCollect(_) => return true,
             // The planted-fixture comparison builds nothing.
             Self::Perf(args) => return !args.self_test,
+            // `prune` deletes worktrees and their target directories.
+            Self::Worktree(args) => return args.deletes(),
             // Source checks, metadata queries and bookkeeping: they build at
             // most xtask itself.
             Self::Checks(_)
             | Self::Deps(_)
-            | Self::CleanNested(_)
             | Self::Workspace(_)
             | Self::Reach(_)
             | Self::ModuleDag(_)
@@ -198,8 +201,7 @@ impl Command {
             | Self::FileLength(_)
             | Self::Markers(_)
             | Self::Changelog(_)
-            | Self::Doctor(_)
-            | Self::Worktree(_) => return false,
+            | Self::Doctor(_) => return false,
         };
         !run.dry_run
     }
@@ -316,7 +318,8 @@ mod tests {
         ("lint --dry-run", false),
         ("checks", false),
         ("deps", false),
-        ("clean-nested", false),
+        ("clean-nested", true),
+        ("clean-nested --dry-run", false),
         ("workspace", false),
         ("reach", false),
         ("module-dag", false),
@@ -337,6 +340,9 @@ mod tests {
         ("changelog --check", false),
         ("doctor", false),
         ("worktree list", false),
+        ("worktree new area/slug", false),
+        ("worktree prune", true),
+        ("worktree prune --dry-run", false),
     ];
 
     #[test]

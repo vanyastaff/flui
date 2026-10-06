@@ -148,7 +148,10 @@ The xtask commands that build or test the workspace (`check-changed`, `test`,
 `ci`, `gate`, `lint`, `gpu-test` and the rest; `Command::is_heavy` in
 `tools/xtask/src/main.rs` is the list) take one lock for the user on this
 machine: `%LOCALAPPDATA%\flui\xtask-heavy.lock` on Windows, otherwise under
-`$XDG_RUNTIME_DIR/flui/` or `~/.cache/flui/`, or `FLUI_XTASK_LOCK_FILE`. Runs
+`$XDG_RUNTIME_DIR/flui/` or `~/.cache/flui/`, or an absolute
+`FLUI_XTASK_LOCK_FILE` (a relative one is refused with a warning).
+`clean-nested` and `worktree prune` take it too, since they delete what a
+running build uses. Runs
 from different checkouts queue instead of oversubscribing the machine, and a
 waiting run names the one it waits for (best effort). The OS releases the lock
 when its holder exits, crashed or not. One composite command running another,
