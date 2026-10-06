@@ -1930,8 +1930,8 @@ transaction (the whole frame drive, post-frame callbacks included, in the
 harness's `tick` as in `flui-app`'s `UiRealm::drive_frame`) runs after the
 frame; a key press first runs those queued grants, so it lands after an IME
 commit. **Tests:** `tests/text_store_kit.rs`
-(`editable_text_conforms_to_the_kit`,
-`obscured_editable_text_conforms_to_the_kit`; among the kit's cases,
+(`editable_text_conforms_to_kit_v1`,
+`obscured_editable_text_conforms_to_kit_v1`; among the kit's cases,
 `tsf_style_conversion_script` counts one owner notification for a whole
 conversion session and `async_request_inside_a_transaction_waits_for_the_next_anchor`
 defers a lock asked for inside the frame transaction to the next frame),

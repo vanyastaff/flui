@@ -258,7 +258,7 @@ either.
   Mapping decision #35); the tap and arrow-key snapping is **Unasserted:** no test pins this.
 - **Obscured means protected.** An obscured field reports `status().protected`: text reads
   return `Protected`, while edits, selection and geometry (through the mask) work. Pinned by
-  `obscured_editable_text_conforms_to_the_kit`.
+  `obscured_editable_text_conforms_to_kit_v1`.
 - **Composition tracking.** An edit that does not touch the composition shifts it; one that
   overlaps it, or inserts strictly inside it, clears it; no edit creates or extends one. Pinned
   by the kit's `edit_shifts_an_untouched_composition_and_clears_an_overlapped_one`.
@@ -336,10 +336,10 @@ In place:
   `a_text_store_lock_requested_during_a_frame_is_granted_after_the_drive_returns` (the grant
   runs in `Idle`); `flui-app` `runner_frame_ordering`'s scan that every runner drives frames
   through `UiRealm::drive_frame`; the existing `EditableText` IME tests, now through the projection.
-- §4: `flui-testing` `tests/text_store_kit.rs` (`in_memory_store_conforms_to_the_kit` and one
+- §4: `flui-testing` `tests/text_store_kit.rs` (`in_memory_store_conforms_to_kit_v1` and one
   `kit_fails_a_store_that_…` test per fault, including a store that ignores the commit gate it
   is handed and one that notifies inside a transaction); `flui-widgets` `tests/text_store_kit.rs`
-  (`editable_text_conforms_to_the_kit`, `obscured_editable_text_conforms_to_the_kit`) and
+  (`editable_text_conforms_to_kit_v1`, `obscured_editable_text_conforms_to_kit_v1`) and
   `tests/editable_text.rs`'s `text_store` module (offset mapping, one `on_changed` per session,
   exact platform selection, controller swap, `layout_changed`, `Detached` after dispose, a lock
   from a post-frame callback, typing after a deferred commit).
@@ -349,9 +349,9 @@ In place:
   installed a gate); kit version 2's `composition_over_a_selection_replaces_the_selection`,
   `composition_only_sessions_do_not_notify_the_owner` and
   `owner_notification_runs_after_release`, with `flui-testing`'s
-  `kit_fails_a_store_that_notifies_its_owner_of_a_composition`,
-  `kit_fails_a_store_that_notifies_its_owner_under_the_lock` and
-  `a_pinned_kit_version_does_not_grow`; `flui-widgets`
+  `conformance_fails_a_store_that_notifies_its_owner_of_a_composition`,
+  `conformance_fails_a_store_that_notifies_its_owner_under_the_lock` and
+  `a_pinned_conformance_version_does_not_grow`; `flui-widgets`
   `on_changed_runs_after_the_lock_is_released`, `an_app_edit_during_a_lock_is_not_overwritten`
   and `a_text_form_field_validates_and_saves_the_committed_text`.
 

@@ -94,10 +94,10 @@ impl TextStoreFixture for EditableTextFixture {
     }
 }
 
-pub(crate) fn editable_text_conforms_to_the_kit() {
+pub(crate) fn editable_text_conforms_to_kit_v1() {
     text_store_kit::assert_conforms(&mut EditableTextFixture::new(false), KIT_VERSION);
 }
 
-pub(crate) fn obscured_editable_text_conforms_to_the_kit() {
+pub(crate) fn obscured_editable_text_conforms_to_kit_v1() {
     text_store_kit::assert_conforms(&mut EditableTextFixture::new(true), KIT_VERSION);
 }

@@ -76,7 +76,7 @@ the `CommitGate` for the gate's owner to report, and the queue keeps running
 (ADR-0090 amendment item 2). With no gate installed by an owner there is no one
 to report to, and the panic resumes after the lock is released.
 **Tests:** the `text_store` module's unit tests, and `flui-testing`'s
-`in_memory_store_conforms_to_the_kit`; the public
+`in_memory_store_conforms_to_kit_v1`; the public
 `queued_text_store_grants_respect_gate_changes` family covers gate closure
 during deferred and direct grants, FIFO ordering, refusal and resumed progress,
 and `settling_runs_owner_code_outside_the_lock` the settle order and its

@@ -133,12 +133,12 @@ fn text_store_kit_conformance() {
         "text_store_kit_conformance",
         &[
             (
-                "text_store_kit::editable_text_conforms_to_the_kit",
-                crate::text_store_kit::editable_text_conforms_to_the_kit as fn(),
+                "text_store_kit::editable_text_conforms_to_kit_v1",
+                crate::text_store_kit::editable_text_conforms_to_kit_v1 as fn(),
             ),
             (
-                "text_store_kit::obscured_editable_text_conforms_to_the_kit",
-                crate::text_store_kit::obscured_editable_text_conforms_to_the_kit,
+                "text_store_kit::obscured_editable_text_conforms_to_kit_v1",
+                crate::text_store_kit::obscured_editable_text_conforms_to_kit_v1,
             ),
         ],
     );

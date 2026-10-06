@@ -16,7 +16,7 @@ use flui_testing::text_store_kit::{
     self, FixtureCapabilities, InMemoryFixture, KIT_VERSION, TextStoreFixture,
 };
 
-fn in_memory_store_conforms_to_the_kit() {
+fn in_memory_store_conforms_to_kit_v1() {
     text_store_kit::assert_conforms(&mut InMemoryFixture::new(), KIT_VERSION);
 }
 
@@ -417,14 +417,14 @@ fn kit_fails_a_store_that_notifies_inside_a_transaction() {
     );
 }
 
-fn kit_fails_a_store_that_notifies_its_owner_of_a_composition() {
+fn conformance_fails_a_store_that_notifies_its_owner_of_a_composition() {
     assert_kit_catches(
         Fault::NotifiesForComposition,
         "composition_only_sessions_do_not_notify_the_owner",
     );
 }
 
-fn kit_fails_a_store_that_notifies_its_owner_under_the_lock() {
+fn conformance_fails_a_store_that_notifies_its_owner_under_the_lock() {
     assert_kit_catches(
         Fault::NotifiesUnderTheLock,
         "owner_notification_runs_after_release",
@@ -434,7 +434,7 @@ fn kit_fails_a_store_that_notifies_its_owner_under_the_lock() {
 /// A kit version names the cases a downstream suite certified against: the
 /// version 2 cases fail a store that predates them, and a suite pinned to
 /// version 1 still passes it.
-fn a_pinned_kit_version_does_not_grow() {
+fn a_pinned_conformance_version_does_not_grow() {
     let failures = text_store_kit::run(&mut FaultyFixture::new(Fault::NotifiesForComposition), 1);
     assert!(failures.is_empty(), "kit v1 grew: {failures:#?}");
 }
@@ -599,8 +599,8 @@ fn text_store_kit_matrix() {
                 kit_retains_opaque_failure_payloads_and_continues as fn(),
             ),
             (
-                "in_memory_store_conforms_to_the_kit",
-                in_memory_store_conforms_to_the_kit as fn(),
+                "in_memory_store_conforms_to_kit_v1",
+                in_memory_store_conforms_to_kit_v1 as fn(),
             ),
             (
                 "kit_fails_a_store_that_grants_inside_a_transaction",
@@ -611,16 +611,16 @@ fn text_store_kit_matrix() {
                 kit_fails_a_store_that_notifies_inside_a_transaction as fn(),
             ),
             (
-                "kit_fails_a_store_that_notifies_its_owner_of_a_composition",
-                kit_fails_a_store_that_notifies_its_owner_of_a_composition as fn(),
+                "conformance_fails_a_store_that_notifies_its_owner_of_a_composition",
+                conformance_fails_a_store_that_notifies_its_owner_of_a_composition as fn(),
             ),
             (
-                "kit_fails_a_store_that_notifies_its_owner_under_the_lock",
-                kit_fails_a_store_that_notifies_its_owner_under_the_lock as fn(),
+                "conformance_fails_a_store_that_notifies_its_owner_under_the_lock",
+                conformance_fails_a_store_that_notifies_its_owner_under_the_lock as fn(),
             ),
             (
-                "a_pinned_kit_version_does_not_grow",
-                a_pinned_kit_version_does_not_grow as fn(),
+                "a_pinned_conformance_version_does_not_grow",
+                a_pinned_conformance_version_does_not_grow as fn(),
             ),
         ],
     );
