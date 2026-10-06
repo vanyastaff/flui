@@ -37,6 +37,7 @@ pub use global_key_scope::GlobalKeyScope;
 // never by naming the containers.
 pub(crate) use global_key_registry::GlobalKeyRegistry;
 pub(crate) use global_key_reservations::GlobalKeyReservations;
+pub(crate) use global_key_scope::ScopedKeyOwner;
 pub(crate) use keep_alive::KeepAliveHolds;
 pub use keep_alive::{KeepAliveHandle, KeepAliveLease};
 pub use rebuild_handle::RebuildHandle;

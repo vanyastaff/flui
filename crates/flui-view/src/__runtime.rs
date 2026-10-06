@@ -174,6 +174,20 @@ mod sealed {
     impl Sealed for crate::WidgetsBinding {}
 }
 
+/// One GlobalKey claim withdrawn from a closing owner. Dropping it retires
+/// the key; while the thread is panicking the key is retained instead
+/// (ADR-0127).
+pub struct WithdrawnKey(
+    #[expect(dead_code, reason = "held only so dropping it retires the key")]
+    crate::owner::ScopedKeyOwner,
+);
+
+impl std::fmt::Debug for WithdrawnKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WithdrawnKey").finish_non_exhaustive()
+    }
+}
+
 /// The composition root's access to one [`WidgetsBinding`].
 ///
 /// Sealed: [`WidgetsBinding`] is its only implementation. Callers import it
@@ -184,7 +198,7 @@ pub trait BindingRuntime: sealed::Sealed {
     fn withdraw_root_owner(&self, preserving: bool);
     /// Withdraw graph, rebuild and key authority without dropping anything:
     /// the withdrawn key owners are returned for the caller to retire.
-    fn withdraw_owner_authority(&self) -> Vec<Box<dyn flui_foundation::ViewKey>>;
+    fn withdraw_owner_authority(&self) -> Vec<WithdrawnKey>;
     /// Run one owner-runtime entry with this binding's `GlobalKey` registry
     /// active on the current thread.
     ///
@@ -220,8 +234,11 @@ impl BindingRuntime for WidgetsBinding {
     fn withdraw_root_owner(&self, preserving: bool) {
         WidgetsBinding::withdraw_root_owner(self, preserving);
     }
-    fn withdraw_owner_authority(&self) -> Vec<Box<dyn flui_foundation::ViewKey>> {
+    fn withdraw_owner_authority(&self) -> Vec<WithdrawnKey> {
         WidgetsBinding::withdraw_owner_authority(self)
+            .into_iter()
+            .map(WithdrawnKey)
+            .collect()
     }
     fn with_global_key_registry<R>(&self, f: impl FnOnce() -> R) -> R {
         crate::key::registry::with_active_registry(&self.global_key_registry, f)
