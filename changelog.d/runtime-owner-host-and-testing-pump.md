@@ -1,6 +1,6 @@
 ### Added
 
-- **`flui_testing::HeadlessRealm`**: a headless host for a `UiRealm` — a
+- **`flui_testing::HeadlessHost`**: a headless host for a `UiRealm` — a
   `HeadlessWindow`, a `HeadlessSink` that keeps the last scene, and one
   `ManualClock` the realm reads as its clock source — that drives every frame
   through `UiRealm::pump` and raises a frame failure the realm contained after

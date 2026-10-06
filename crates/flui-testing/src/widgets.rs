@@ -5,7 +5,7 @@
 //! It mounts a root [`View`] (a widget tree) as the render-tree root, runs a
 //! build pass (reconciling and mounting the whole subtree's render objects),
 //! then drives a real headless frame and exposes the resulting render-node
-//! geometry. The tree is the root of a [`HeadlessRealm`](crate::HeadlessRealm):
+//! geometry. The tree is the root of a [`HeadlessHost`](crate::HeadlessHost):
 //! every frame is the realm's own `UiRealm::pump` on a manual clock, under
 //! the realm's root scopes (`GestureArenaScope`, `VsyncScope`, `FocusRoot`,
 //! `MediaQuery`), exactly as a runner drives it on screen. No GPU, no OS
@@ -64,9 +64,9 @@ use flui_view::element::InheritedElementAccess;
 use flui_widgets::{Align, ConstrainedBox, UnconstrainedBox};
 
 use self::host::WidgetHost;
-use crate::realm::HeadlessWindow;
+use crate::host::HeadlessWindow;
 
-/// A laid-out widget tree, mounted in a [`HeadlessRealm`](crate::HeadlessRealm)
+/// A laid-out widget tree, mounted in a [`HeadlessHost`](crate::HeadlessHost)
 /// so geometry can be queried after layout, and re-driven with
 /// [`LaidOut::pump`] / [`LaidOut::tick`] / [`LaidOut::pump_for`]. Every frame
 /// is the realm's own `UiRealm::pump`.
@@ -480,7 +480,7 @@ impl LaidOut {
 
     /// The listener the realm registered on its window for actions assistive
     /// technology requests; see
-    /// [`HeadlessRealm::accessibility_action_listener`](crate::HeadlessRealm::accessibility_action_listener).
+    /// [`HeadlessHost::accessibility_action_listener`](crate::HeadlessHost::accessibility_action_listener).
     pub fn accessibility_action_listener(
         &self,
     ) -> Option<flui_semantics::platform::AccessibilityActionListener> {
