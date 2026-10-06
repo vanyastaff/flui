@@ -183,7 +183,7 @@ fn drive(session: &mut Session) -> anyhow::Result<Verdict> {
     Ok(Verdict::Pass)
 }
 
-fn centre(rect: RECT) -> POINT {
+pub(super) fn centre(rect: RECT) -> POINT {
     POINT {
         x: rect.left + (rect.right - rect.left) / 2,
         y: rect.top + (rect.bottom - rect.top) / 2,
@@ -191,7 +191,7 @@ fn centre(rect: RECT) -> POINT {
 }
 
 /// Brings `hwnd` forward, or prints why the host refused.
-fn foreground(hwnd: HWND) -> Option<()> {
+pub(super) fn foreground(hwnd: HWND) -> Option<()> {
     // SAFETY: `hwnd` is the probe's live top-level window; both calls only
     // read or request foreground state.
     unsafe {
@@ -208,7 +208,7 @@ fn foreground(hwnd: HWND) -> Option<()> {
 }
 
 /// Whether `hwnd` is still the foreground window; printed when not.
-fn still_foreground(hwnd: HWND) -> bool {
+pub(super) fn still_foreground(hwnd: HWND) -> bool {
     // SAFETY: reads foreground state only.
     let current = unsafe { GetForegroundWindow() };
     if current != hwnd {
@@ -228,7 +228,7 @@ fn still_foreground(hwnd: HWND) -> bool {
 /// front does not make the probe the window under the point — a
 /// non-activating overlay, or the probe having moved, would take the press.
 /// A press that went out is always released ([`release`]).
-fn click(hwnd: HWND, point: POINT) -> anyhow::Result<bool> {
+pub(super) fn click(hwnd: HWND, point: POINT) -> anyhow::Result<bool> {
     if !still_foreground(hwnd) {
         return Ok(false);
     }
@@ -261,7 +261,7 @@ fn press(hwnd: HWND, key: VIRTUAL_KEY) -> anyhow::Result<bool> {
 
 /// Whether `point` hits `hwnd` itself: the top-level window under it, as the
 /// OS hit-tests, is the probe's. Printed when not.
-fn hits(hwnd: HWND, point: POINT) -> bool {
+pub(super) fn hits(hwnd: HWND, point: POINT) -> bool {
     // SAFETY: both calls only read window-manager state for a screen point
     // and a window handle.
     let root = unsafe { GetAncestor(WindowFromPoint(point), GA_ROOT) };
@@ -277,7 +277,7 @@ fn hits(hwnd: HWND, point: POINT) -> bool {
 /// Sends the release of a press that already went out, retrying once: the
 /// release is what keeps a button or key from staying held after the check,
 /// so a transient refusal (a desktop or UIPI change) is not the last word.
-fn release(inputs: &[INPUT]) -> anyhow::Result<()> {
+pub(super) fn release(inputs: &[INPUT]) -> anyhow::Result<()> {
     send(inputs).or_else(|first| {
         std::thread::sleep(HOLD);
         send(inputs).map_err(|second| {
@@ -288,7 +288,9 @@ fn release(inputs: &[INPUT]) -> anyhow::Result<()> {
     })
 }
 
-fn mouse(flags: windows::Win32::UI::Input::KeyboardAndMouse::MOUSE_EVENT_FLAGS) -> INPUT {
+pub(super) fn mouse(
+    flags: windows::Win32::UI::Input::KeyboardAndMouse::MOUSE_EVENT_FLAGS,
+) -> INPUT {
     INPUT {
         r#type: INPUT_MOUSE,
         Anonymous: INPUT_0 {
@@ -302,7 +304,7 @@ fn mouse(flags: windows::Win32::UI::Input::KeyboardAndMouse::MOUSE_EVENT_FLAGS) 
 
 /// A key event carrying both the virtual key and its scan code, as a real
 /// keyboard's does.
-fn keyboard(key: VIRTUAL_KEY, flags: KEYBD_EVENT_FLAGS) -> INPUT {
+pub(super) fn keyboard(key: VIRTUAL_KEY, flags: KEYBD_EVENT_FLAGS) -> INPUT {
     // SAFETY: a pure table lookup.
     let scan = unsafe { MapVirtualKeyW(u32::from(key.0), MAPVK_VK_TO_VSC) };
     INPUT {
@@ -318,7 +320,7 @@ fn keyboard(key: VIRTUAL_KEY, flags: KEYBD_EVENT_FLAGS) -> INPUT {
     }
 }
 
-fn send(inputs: &[INPUT]) -> anyhow::Result<()> {
+pub(super) fn send(inputs: &[INPUT]) -> anyhow::Result<()> {
     let size = i32::try_from(size_of::<INPUT>()).expect("BUG: INPUT is a few dozen bytes");
     // SAFETY: `inputs` is a valid slice of initialised `INPUT`s and `size`
     // is the size of one, as the API requires.
@@ -332,10 +334,10 @@ fn send(inputs: &[INPUT]) -> anyhow::Result<()> {
 }
 
 /// The user's cursor position, restored when dropped.
-struct Cursor(Option<POINT>);
+pub(super) struct Cursor(Option<POINT>);
 
 impl Cursor {
-    fn save() -> Self {
+    pub(super) fn save() -> Self {
         let mut point = POINT::default();
         // SAFETY: `point` is a valid out-parameter.
         Self(unsafe { GetCursorPos(&raw mut point) }.ok().map(|()| point))

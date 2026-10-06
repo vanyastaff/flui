@@ -62,12 +62,18 @@ impl Session {
                 |error| Start::CannotVerify(format!("UI Automation is not available: {error}")),
             )?;
         println!("running: {}", probe.display());
-        // `FLUI_PROBE_RUST_LOG` raises the probe's own logging (its stderr is
-        // this terminal) without touching xtask's.
-        let log = std::env::var("FLUI_PROBE_RUST_LOG").unwrap_or_else(|_| "warn".to_owned());
+        // The desktop logger writes to stdout. An explicit probe filter must
+        // preserve that stream so frame and pacing diagnostics reach the caller.
+        let requested_log = std::env::var("FLUI_PROBE_RUST_LOG").ok();
+        let stdout = if requested_log.is_some() {
+            Stdio::inherit()
+        } else {
+            Stdio::null()
+        };
+        let log = requested_log.unwrap_or_else(|| "warn".to_owned());
         let child = Command::new(probe)
             .env("RUST_LOG", log)
-            .stdout(Stdio::null())
+            .stdout(stdout)
             .spawn()
             .map_err(|error| {
                 Start::Failed(anyhow::anyhow!("starting {}: {error}", probe.display()))
@@ -123,6 +129,14 @@ impl Session {
             dump(&self.walk(window));
         }
         Ok(tree)
+    }
+
+    /// Observe graceful termination before Probe's forced-drop fallback.
+    pub(super) fn wait_for_exit(
+        &mut self,
+        within: Duration,
+    ) -> anyhow::Result<Option<std::process::ExitStatus>> {
+        wait_for(within, || Ok(self.probe.0.try_wait()?))
     }
 
     /// The raw view under `root`, depth first. The raw view is used rather

@@ -14,4 +14,4 @@
   (`WidgetsApp<NavigatorForm>`), and the sealed `AppForm` trait bounds the two.
 - **`two_screens` example**: a derived route enum, `WidgetsApp::router`, and pages that push
   and pop through the `RouterHandle` they take in `init_state`
-  (`cargo run --example two_screens`).
+  (`cargo run --example two_screens --features material`).

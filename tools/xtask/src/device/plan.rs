@@ -209,6 +209,8 @@ pub(super) enum Native {
     /// The built `a11y_probe` driven by `SendInput` (`device/windows_input.rs`,
     /// Windows only).
     WindowsInput { probe: PathBuf },
+    /// The existing Notes tree through real input and UIA observations.
+    WindowsNotes { probe: PathBuf },
 }
 
 impl Native {
@@ -217,12 +219,16 @@ impl Native {
         match self {
             Self::WindowsA11y { probe } => windows_a11y(&root.join(probe)),
             Self::WindowsInput { probe } => windows_input(&root.join(probe)),
+            Self::WindowsNotes { probe } => windows_notes(&root.join(probe)),
         }
     }
 }
 
 #[cfg(windows)]
-use super::{windows_a11y::run as windows_a11y, windows_input::run as windows_input};
+use super::{
+    windows_a11y::run as windows_a11y, windows_input::run as windows_input,
+    windows_notes::run as windows_notes,
+};
 
 /// Unreachable in practice: the check is skipped off Windows before any step
 /// runs.
@@ -235,6 +241,11 @@ fn windows_a11y(_probe: &Path) -> anyhow::Result<u8> {
 #[cfg(not(windows))]
 fn windows_input(_probe: &Path) -> anyhow::Result<u8> {
     anyhow::bail!("the SendInput driver only exists on Windows")
+}
+
+#[cfg(not(windows))]
+fn windows_notes(_probe: &Path) -> anyhow::Result<u8> {
+    anyhow::bail!("the native Notes driver only exists on Windows")
 }
 
 /// Whether the plan goes on after a step.
@@ -660,6 +671,7 @@ impl fmt::Display for Step {
                 let (driver, probe) = match check {
                     Native::WindowsA11y { probe } => ("uia-client", probe),
                     Native::WindowsInput { probe } => ("send-input", probe),
+                    Native::WindowsNotes { probe } => ("native-notes", probe),
                 };
                 write!(
                     f,

@@ -13,10 +13,14 @@ pub use flui_testing::{a11y, replay};
 /// plus the render-tree diagnostics dump a mounted application can be
 /// inspected with ([`render_diagnostics`](rendering::render_diagnostics) over
 /// [`HeadlessBinding::pipeline_owner`]).
+/// [`collect_commands`](rendering::collect_commands) inspects recorded drawing
+/// commands reachable from a committed layer tree. It does not evaluate clipping,
+/// opacity, or GPU pixels; use it to distinguish painted content from retained
+/// elements that have no commands in that tree.
 pub mod rendering {
     pub use flui_rendering::testing::inspect::render_diagnostics;
     pub use flui_rendering::testing::{
-        BoxQueryRun, FrameRun, LayoutRun, PaintRun, Probe, RenderTester, TreeNode, box_node,
-        sliver_node,
+        BoxQueryRun, DrawCommandSummary, DrawKind, FrameRun, LayoutRun, PaintRun, Probe,
+        RenderTester, TreeNode, box_node, collect_commands, sliver_node,
     };
 }

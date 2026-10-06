@@ -1,20 +1,14 @@
 [book]
 title = "FLUI"
-description = "A Flutter-inspired declarative UI framework for Rust."
+description = "Build declarative Rust applications with FLUI: installation, tutorials, concepts, and runnable recipes."
 authors = ["FLUI Contributors"]
 language = "en"
 src = "src"
 
 [build]
-# Rust code fences are marked `rust,ignore` wherever they are not copied
-# verbatim from a compiling source (an example, a CLI template, or a
-# doctest). That is an authoring convention, not a check: nothing
-# compiles an ignored fence, so a renamed API can go stale in one. This
-# flag is a backstop, not the primary defense: it stops an accidentally
-# un-ignored fence from failing a `mdbook test` run, but `mdbook test`
-# is not part of this book's CI gate (see .github/workflows/docs.yml's
-# comment) precisely because most fences here are prose-adjacent
-# snippets, not standalone compiling programs.
+# Refuse a SUMMARY entry whose chapter is missing instead of creating a stub.
+# Building the book does not compile Rust fences; ignored snippets must be
+# checked against their linked source. See .github/workflows/docs.yml.
 create-missing = false
 
 [output.html]
