@@ -104,6 +104,7 @@ pub mod curved;
 pub mod error;
 pub mod ext;
 pub mod proxy;
+pub mod retarget;
 pub mod reverse;
 pub mod simulation;
 pub mod smoothing;
@@ -127,6 +128,7 @@ pub use curved::CurvedAnimation;
 pub use error::AnimationError;
 pub use ext::{AnimatableExt, AnimationExt};
 pub use proxy::ProxyAnimation;
+pub use retarget::MotionSpec;
 pub use reverse::ReverseAnimation;
 pub use simulation::{
     BoundedFrictionSimulation, ClampedSimulation, FrictionSimulation, GravitySimulation,

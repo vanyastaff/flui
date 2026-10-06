@@ -21,6 +21,9 @@ mod proxy;
 #[path = "contracts/curve.rs"]
 mod curve;
 
+#[path = "contracts/retarget.rs"]
+mod retarget;
+
 #[path = "contracts/tween.rs"]
 mod tween;
 
