@@ -245,7 +245,8 @@ composing. The amendment fixes what the owner sees and when:
 8. **Owner code runs inside one containment.** Every point where the arbiter, a store or the
    presentation runs code it does not control — a grant's body, a settle, `on_changed`, the
    controller's listeners, an owner listener, the observer, `on_session_start`, the projection,
-   and the destruction of any snapshot, replaced value or client — goes through
+   a pull host's focus and completion calls from the presentation's queue (ADR-0135 §4), and the
+   destruction of any snapshot, replaced value, client or host clone — goes through
    `text_store::OwnerCalls`, whose module doc lists them. What the code is owed (obligations with
    their values, the gate a failure belongs to) is read before it runs, never after, since it may
    reenter, settle a nested session or move the store to another presentation. Each call is

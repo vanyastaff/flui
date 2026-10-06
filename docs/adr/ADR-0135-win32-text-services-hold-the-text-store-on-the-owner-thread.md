@@ -65,9 +65,16 @@ composition must still end somewhere.
    token) queues a completion that captures its store. The queue drains when no owner call on
    the host is running and the frame transaction is closed, and at the anchor before any deferred
    grant, so a call that reaches the owner again from inside the host waits for the outer one, and
-   a completion asked for in a frame reaches its field even after a detach. A host operation that
-   panics releases its values and the queue goes on; the first failure propagates once the rest
-   (and, at the anchor, the deferred grants) have run. An `Abandoned` answer or an error commits
+   a completion asked for in a frame reaches its field even after a detach. The host's calls are
+   platform code that reaches application code, so each goes through `OwnerCalls` like any owner
+   code (ADR-0090 amendment item 8): the operation, its store and the host clone are taken from
+   the queue before the call, the presentation's gate is taken before the call and after it, and
+   the first failure in time is authoritative (a failure parked before the call, then one a grant
+   settled inside it parked, then the call's own panic). A host operation that panics releases
+   its values and the queue goes on: the completed store is retained once the scope has failed,
+   the host clone (framework-owned) is released, contained, even then; the first failure
+   propagates once the rest (and, at the anchor, the deferred grants) have run. An `Abandoned`
+   answer or an error commits
    the composition in place; a push or storeless owner does that directly. Close applies the
    queued operations in order (a focus change queued before a completion moves the host first,
    so the completion reaches its own store), then tells a host left focused `None`; after a
@@ -121,10 +128,16 @@ composition must still end somewhere.
 - `flui-interaction` `the_owner_drives_its_text_store_host` (focus follows attach, frame and
   reentry queueing, the answers, a completion that outlives its detach, close, a close that
   applies a queued focus change before its completion, push and no backend),
-  `a_panicking_text_store_host_is_contained` (a panicking focus change and completion alone,
-  two at the anchor, two in a close, and the next operation after each) and
+  `two_panicking_host_operations_in_a_close_still_unfocus` (a close keeps its ADR-0123
+  containment) and
   `text_input_retirement_allows_reentry_and_preserves_recovery`'s pull-host row (issue #1052's
   reentrant retirement on a pull owner) (§1, §4).
+- `flui-widgets` `owner_code_is_contained_at_every_point`'s `host:` rows, one child process
+  each: a panicking focus change with the queue behind it, a focus change and a completion both
+  panicking at the anchor, a host call after a parked failure, a host call that parks a failure
+  and then panics, one that detaches and then panics (its store's destruction panics), and one
+  that closes the owner and then panics (the host's own destruction panics), each followed by the
+  next operation (§4).
 - `flui-runtime` `a_window_with_a_text_store_host_takes_input_through_it`, `flui-app`
   `runner_bootstrap_matrix`'s
   `presentation_window_hands_a_pull_window_s_host_to_its_presentation` and `flui-widgets`
