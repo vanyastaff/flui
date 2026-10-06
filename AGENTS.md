@@ -177,9 +177,9 @@ touches genuinely process-global state (the global `tracing` subscriber `flui-lo
 global ID counter such as `flui-foundation`'s key counters) — scope a lock to that test module
 rather than serializing the suite. A docs-only change needs only `cargo xtask checks`, which
 builds xtask and not the workspace. `rust-toolchain.toml` is the toolchain's source of truth;
-pre-1.0 the MSRV tracks latest stable. `check-changed`, `test`, `ci`, `ci-full`, `gate` and
-`gpu-test` queue behind a host-wide lock, one heavy run per machine; `FLUI_XTASK_NO_LOCK=1` opts
-out.
+pre-1.0 the MSRV tracks latest stable. xtask commands that build or test the workspace
+(`check-changed`, `test`, `ci`, `gate`, `gpu-test`, …) queue behind one lock for the user on this
+machine; `FLUI_XTASK_NO_LOCK=1` opts out.
 
 ## What the compiler and gates enforce
 

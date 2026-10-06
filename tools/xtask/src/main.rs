@@ -146,17 +146,62 @@ impl Command {
     /// Whether this command builds or tests the workspace, and so waits for
     /// any other such run on the host ([`host_lock`]). A dry run builds
     /// nothing.
+    ///
+    /// Every command is classified here, with no catch-all, so a new one
+    /// must be placed on one side or the other.
     fn is_heavy(&self) -> bool {
         let run = match self {
+            // Builds, tests, docs or benches of the workspace.
+            Self::Lint(args) => args.run,
             Self::Gate(args) => args.run,
             Self::Test(args) => args.run,
+            Self::PlatformTest(args) => args.run,
+            Self::CliTest(args) => args.run,
+            Self::BuildAllTargets(args) => args.run,
             Self::Ci(args) => args.run,
             Self::CiFull(args) => args.run,
             Self::CheckChanged(args) => args.run,
+            Self::FeatureMatrix(args) => args.run,
+            Self::FacadeCombos(args) => args.run,
+            Self::CrossTypecheck(args) => args.run,
+            Self::WasmCheck(args) => args.run,
+            Self::WasmLink(args) => args.run,
+            Self::WasmTest(args) => args.run,
+            Self::LiveSmoke(args) => args.run,
             Self::GpuTest(args) => args.run,
-            _ => return false,
+            Self::Miri(args) => args.run,
+            Self::BenchCompile(args) => args.run,
+            Self::DemoSnapshots(args) => args.run,
+            Self::DocStrict(_) | Self::Device(_) | Self::BenchCollect(_) => return true,
+            // The planted-fixture comparison builds nothing.
+            Self::Perf(args) => return !args.self_test,
+            // Source checks, metadata queries and bookkeeping: they build at
+            // most xtask itself.
+            Self::Checks(_)
+            | Self::Deps(_)
+            | Self::CleanNested(_)
+            | Self::Workspace(_)
+            | Self::Reach(_)
+            | Self::ModuleDag(_)
+            | Self::Affected(_)
+            | Self::PathsFilter(_)
+            | Self::CiVerify(_)
+            | Self::Toolchain(_)
+            | Self::Wgsl(_)
+            | Self::Globals(_)
+            | Self::WasmImports(_)
+            | Self::WasmTestCrates(_)
+            | Self::LockedVersion(_)
+            | Self::DocsLinks(_)
+            | Self::DocsPaths(_)
+            | Self::FontAssets(_)
+            | Self::FileLength(_)
+            | Self::Markers(_)
+            | Self::Changelog(_)
+            | Self::Doctor(_)
+            | Self::Worktree(_) => return false,
         };
-        !run.dry_run()
+        !run.dry_run
     }
 }
 
@@ -228,5 +273,95 @@ fn main() -> ExitCode {
             eprintln!("xtask: {error:#}");
             ExitCode::FAILURE
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use clap::{CommandFactory, Parser};
+
+    use super::Cli;
+
+    /// Every command, as typed, and whether it queues behind the run lock.
+    const COMMANDS: &[(&str, bool)] = &[
+        ("lint", true),
+        ("gate", true),
+        ("test", true),
+        ("test --fast", true),
+        ("platform-test", true),
+        ("cli-test", true),
+        ("build-all-targets", true),
+        ("ci", true),
+        ("ci-full", true),
+        ("check-changed", true),
+        ("feature-matrix", true),
+        ("facade-combos", true),
+        ("cross-typecheck", true),
+        ("wasm-check", true),
+        ("wasm-link", true),
+        ("wasm-test", true),
+        ("live-smoke", true),
+        ("gpu-test", true),
+        ("miri", true),
+        ("bench-compile", true),
+        ("demo-snapshots", true),
+        ("doc-strict", true),
+        ("device macos-close-path", true),
+        ("bench-collect baseline", true),
+        ("perf", true),
+        ("perf --self-test", false),
+        ("gate --dry-run", false),
+        ("check-changed --dry-run", false),
+        ("ci --dry-run", false),
+        ("lint --dry-run", false),
+        ("checks", false),
+        ("deps", false),
+        ("clean-nested", false),
+        ("workspace", false),
+        ("reach", false),
+        ("module-dag", false),
+        ("affected", false),
+        ("paths-filter", false),
+        ("ci-verify", false),
+        ("toolchain", false),
+        ("wgsl", false),
+        ("globals", false),
+        ("wasm-imports module.wasm", false),
+        ("wasm-test-crates", false),
+        ("locked-version wgpu", false),
+        ("docs-links", false),
+        ("docs-paths", false),
+        ("font-assets", false),
+        ("file-length", false),
+        ("markers", false),
+        ("changelog --check", false),
+        ("doctor", false),
+        ("worktree list", false),
+    ];
+
+    #[test]
+    fn heavy_commands_take_the_run_lock() {
+        let wrong: Vec<String> = COMMANDS
+            .iter()
+            .filter_map(|&(line, heavy)| {
+                let argv = std::iter::once("xtask").chain(line.split_whitespace());
+                match Cli::try_parse_from(argv) {
+                    Ok(cli) if cli.command.is_heavy() == heavy => None,
+                    Ok(_) => Some(format!("`{line}`: expected heavy = {heavy}")),
+                    Err(error) => Some(format!("`{line}`: {error}")),
+                }
+            })
+            .collect();
+        assert!(wrong.is_empty(), "misclassified: {wrong:#?}");
+        let covered: std::collections::BTreeSet<&str> = COMMANDS
+            .iter()
+            .filter_map(|(line, _)| line.split_whitespace().next())
+            .collect();
+        let missing: Vec<String> = Cli::command()
+            .get_subcommands()
+            .map(|sub| sub.get_name().to_owned())
+            .filter(|name| !covered.contains(name.as_str()))
+            .collect();
+        assert!(missing.is_empty(), "commands with no row: {missing:?}");
     }
 }
