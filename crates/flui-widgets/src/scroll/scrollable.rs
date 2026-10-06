@@ -839,10 +839,10 @@ impl ViewState<Scrollable> for ScrollableState {
 /// the axes itself) is passed through unchanged.
 fn wheel_axis_delta(axis: Axis, data: &ScrollEventData) -> f64 {
     let shifted = data.modifiers.shift() && data.delta.dx == 0.0;
-    match (axis, shifted) {
-        (Axis::Vertical, false) => data.delta.dy,
-        (Axis::Vertical, true) => 0.0,
-        (Axis::Horizontal, false) => data.delta.dx,
-        (Axis::Horizontal, true) => data.delta.dy,
+    match axis {
+        Axis::Vertical if shifted => 0.0,
+        Axis::Vertical => data.delta.dy,
+        Axis::Horizontal if shifted => data.delta.dy,
+        Axis::Horizontal => data.delta.dx,
     }
 }
