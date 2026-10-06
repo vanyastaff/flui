@@ -538,8 +538,8 @@ enum Disclosure {
 /// both ending in `SemanticsOwner::resolve_action`. The node advertises and
 /// accepts only the transition its state allows, and the request reaches the
 /// discrete handler, or the tap handler for a tap-only node. The reverse
-/// direction is refused on the wire; the owner also refuses it for a tap-only
-/// node, whose tap handler has no direction of its own.
+/// direction is refused on the wire and by the owner, for discrete handlers
+/// and a tap-only node's tap handler alike.
 fn disclosure_case(shape: Disclosure, expanded: bool) {
     let received = Arc::new(Mutex::new(Vec::new()));
     let mut f = Fixture::new();
@@ -616,14 +616,17 @@ fn disclosure_case(shape: Disclosure, expanded: bool) {
         .invoke();
     assert_eq!(*received.lock().expect("log"), [reaches, reaches]);
 
-    if matches!(shape, Disclosure::TapOnly) {
-        let reverse = crate::semantics_action_request_for(&platform(ak_refused))
-            .expect("the reverse transition is routable");
-        assert!(matches!(
-            f.owner.resolve_action(reverse),
-            Err(crate::SemanticsActionError::UnsupportedAction { .. })
-        ));
-    }
+    let reverse = crate::semantics_action_request_for(&platform(ak_refused))
+        .expect("the reverse transition is routable");
+    assert!(matches!(
+        f.owner.resolve_action(reverse),
+        Err(crate::SemanticsActionError::UnsupportedAction { .. })
+    ));
+    assert_eq!(
+        *received.lock().expect("log"),
+        [reaches, reaches],
+        "a refused transition reaches no handler"
+    );
 }
 
 fn explicit_collapsed() {
