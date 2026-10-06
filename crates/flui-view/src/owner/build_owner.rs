@@ -755,6 +755,20 @@ impl BuildOwner {
     /// The manager is not replaceable after construction: the element tree and
     /// focus tree share one ownership lifetime.
     pub fn with_focus_manager(focus_manager: Rc<FocusManager>) -> Self {
+        Self::admit(focus_manager, OwnerTag::fresh)
+    }
+
+    /// Admits an owner for `focus_manager` under the tag `mint` issues.
+    ///
+    /// The tag is reserved before the owner takes the manager. An exhausted
+    /// tag counter refuses admission by panicking; the supplied manager,
+    /// possibly the caller's last strong reference, is then retained rather
+    /// than dropped by the unwind, so a refusal never closes a focus tree
+    /// and tombstones its nodes when no owner was admitted for it.
+    fn admit(focus_manager: Rc<FocusManager>, mint: impl FnOnce() -> OwnerTag) -> Self {
+        let focus_manager = std::mem::ManuallyDrop::new(focus_manager);
+        let owner_tag = mint();
+        let focus_manager = std::mem::ManuallyDrop::into_inner(focus_manager);
         let owner = Self {
             dirty_elements: BinaryHeap::new(),
             dirty_reasons: HashMap::new(),
@@ -792,7 +806,7 @@ impl BuildOwner {
             clipboard_handle: None,
             interaction_dispatch: None,
             hit_test_handle: None,
-            owner_tag: OwnerTag::fresh(),
+            owner_tag,
             global_key_scope: None,
         };
         // ADR-0074: writes must reach the inbox from the first frame, before any
@@ -3822,12 +3836,43 @@ mod tests {
         owner.build_scope(&mut tree);
     }
 
+    /// A refused admission leaves the caller's focus manager, even its last
+    /// strong reference, open with its nodes still focusable.
+    fn exhausted_owner_tag_refusal_retains_the_supplied_focus_manager() {
+        use flui_interaction::routing::FocusNode;
+        let manager = FocusManager::new();
+        let node = FocusNode::with_debug_label("survives-refusal");
+        let _attachment = manager
+            .root_scope()
+            .attach_node(&node)
+            .expect("a fresh node attaches under the root scope");
+        let weak = Rc::downgrade(&manager);
+        let exhausted = std::sync::atomic::AtomicU64::new(0);
+        let refusal = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            BuildOwner::admit(manager, || OwnerTag::fresh_with_counter(&exhausted))
+        }));
+        assert!(refusal.is_err(), "an exhausted counter refuses admission");
+        let manager = weak
+            .upgrade()
+            .expect("the refusal retained the supplied manager");
+        assert!(!manager.is_closed(), "the refusal closed the focus tree");
+        assert!(node.is_attached());
+        let _ = node.request_focus();
+        assert!(
+            manager
+                .primary_focus()
+                .is_some_and(|focused| Rc::ptr_eq(&focused, &node)),
+            "the node stayed focusable under its manager"
+        );
+    }
+
     #[test]
     fn build_owner_scheduling_matrix() {
         crate::table_test::run_table(
             "build_owner_scheduling_matrix",
             &[
                 ("exhausted_owner_tag_counter_preserves_claim_authority", OwnerTag::exhausted_owner_tag_counter_preserves_claim_authority as fn()),
+                ("exhausted_owner_tag_refusal_retains_the_supplied_focus_manager", exhausted_owner_tag_refusal_retains_the_supplied_focus_manager as fn()),
                 ("wake_debt_is_shared_and_only_a_hooked_scheduler_can_pay_it", wake_debt_is_shared_and_only_a_hooked_scheduler_can_pay_it as fn()),
                 ("same_id_schedule_racing_a_failed_wake_gets_a_compensating_wake", same_id_schedule_racing_a_failed_wake_gets_a_compensating_wake as fn()),
                 ("reentrant_retry_preserves_the_first_panic_when_the_retry_payload_drop_panics", reentrant_retry_preserves_the_first_panic_when_the_retry_payload_drop_panics as fn()),
