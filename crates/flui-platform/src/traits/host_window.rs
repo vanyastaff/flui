@@ -32,12 +32,16 @@ use super::{PlatformAccessibility, PlatformWindow};
 mod sealed {
     use std::marker::PhantomData;
 
-    /// Proof that a call runs on the window's owner thread: minted only by
+    /// Proof that a call runs on the platform's owner thread: minted only by
     /// [`OwnerPlatform::text_store_host`](crate::OwnerPlatform::text_store_host),
     /// which only that thread can hold, and itself neither `Send` nor
     /// `Sync`. Public in a private module, so no other crate can name or
     /// build one, and the method that takes it cannot be called outside
     /// this crate.
+    ///
+    /// It proves the owner thread, not the window's thread: a backend
+    /// whose windows belong to the thread that created them (Win32) checks
+    /// that itself before it hands out a host.
     #[derive(Debug)]
     pub struct OwnerThreadToken(PhantomData<*const ()>);
 
@@ -71,12 +75,17 @@ pub trait HostWindow: PlatformWindow {
     /// backend (it offers [`PlatformWindow::text_input`]) or one with no
     /// input-method integration.
     ///
+    /// The token proves the platform's owner thread; an implementation whose
+    /// windows are bound to their creating thread checks that the caller is
+    /// on it, and answers `None` otherwise.
+    ///
     /// Callable only inside this crate, because only
     /// [`OwnerPlatform::text_store_host`](crate::OwnerPlatform::text_store_host)
-    /// can build the token. Outside it, the token's type cannot be named:
+    /// can build the token. Outside it, the token's type is not exported
+    /// beside this trait:
     ///
-    /// ```compile_fail,E0603
-    /// use flui_platform::traits::host_window::OwnerThreadToken;
+    /// ```compile_fail,E0432
+    /// use flui_platform::traits::OwnerThreadToken;
     /// ```
     ///
     /// nor conjured:

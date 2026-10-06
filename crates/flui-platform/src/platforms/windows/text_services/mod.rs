@@ -4,7 +4,7 @@
 //! One [`TextServices`] per window activates the thread's `ITfThreadMgr`
 //! and associates an empty document manager with the window, so an input
 //! method sees "no editable field" until a field takes focus. A focused
-//! field gets a document of its own ([`TextServices::focus_store`]): a new
+//! field gets a document of its own ([`TextStoreHost::focus_store`]): a new
 //! document manager and context over a [`TsfStore`] that reads and edits the
 //! field's [`TextStore`] under the store's own locks. A grant captures its
 //! document, so a lock deferred for one field never reaches the next.
@@ -15,18 +15,24 @@
 //! still on the stack. Every COM entry and every host operation counts in
 //! `entry_depth`; an operation that arrives while it is non-zero is queued
 //! and runs when the outermost entry returns (explicitly, after its body).
+//! A queued completion keeps the store it was asked for, and commits that
+//! store's composition in place whenever TSF cannot end it.
 //!
 //! Owner-thread only: nothing here is `Send` or `Sync`.
 
 mod document;
 #[cfg(test)]
 mod probe;
+#[cfg(test)]
+mod tests;
 
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::rc::{Rc, Weak};
 
-use flui_platform_api::text_store::{CompositionEnd, LockGrant, LockTiming, TextStore};
+use flui_platform_api::text_store::{
+    CompositionEnd, TextStore, TextStoreHost, TextStoreHostError, commit_composition_in_place,
+};
 use windows::Win32::{
     Foundation::HWND,
     System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance},
@@ -45,7 +51,9 @@ use self::document::{DocumentState, TsfStore};
 /// A host operation waiting for the COM entry it arrived under to return.
 enum HostOp {
     Focus(Option<Rc<dyn TextStore>>),
-    CompleteComposition,
+    /// End the composition in this store, the one focused when the request
+    /// was queued.
+    CompleteComposition(Rc<dyn TextStore>),
     /// Replace a poisoned document with the empty one.
     DropPoisoned(Rc<DocumentState>),
 }
@@ -59,17 +67,27 @@ struct Document {
     _store: ITextStoreACP,
 }
 
+/// What a window's text services offer TSF.
+enum Serving {
+    /// No field: TSF sees the empty document.
+    Nothing,
+    /// The focused field's document.
+    Field(Document),
+    /// Shut down: TSF is deactivated for the window, and text input falls
+    /// back to `WM_CHAR`.
+    Shutdown,
+}
+
 /// One window's TSF connection; see the module doc.
 pub(super) struct TextServices {
     hwnd: HWND,
     thread_manager: ITfThreadMgr,
     client_id: u32,
     empty: ITfDocumentMgr,
-    document: RefCell<Option<Document>>,
+    serving: RefCell<Serving>,
     entry_depth: Cell<u32>,
     pending: RefCell<VecDeque<HostOp>>,
     poisonings: Cell<u8>,
-    active: Cell<bool>,
     me: Weak<TextServices>,
 }
 
@@ -104,20 +122,6 @@ unsafe fn associate(
         }
         Err(error) if error.code().is_ok() => Ok(()),
         Err(error) => Err(error),
-    }
-}
-
-/// Clear `store`'s composing range, keeping its text, under an asynchronous
-/// lock: what the presentation's owner does for an abandoned composition
-/// when the answer reaches it.
-fn commit_in_place(store: &dyn TextStore) {
-    let grant = LockGrant::read_write(|session| {
-        if session.composition().is_some() {
-            let _ = session.set_composition(None);
-        }
-    });
-    if let Err(error) = store.request_lock(grant, LockTiming::Async) {
-        tracing::debug!(target: "flui_platform::tsf", ?error, "could not commit an abandoned composition");
     }
 }
 
@@ -164,11 +168,10 @@ impl TextServices {
             thread_manager,
             client_id,
             empty,
-            document: RefCell::new(None),
+            serving: RefCell::new(Serving::Nothing),
             entry_depth: Cell::new(0),
             pending: RefCell::new(VecDeque::new()),
             poisonings: Cell::new(0),
-            active: Cell::new(true),
             me: me.clone(),
         }))
     }
@@ -185,47 +188,35 @@ impl TextServices {
 
     /// Whether TSF's focus is on the focused field's document.
     pub(super) fn document_has_focus(&self) -> bool {
-        let manager = self
-            .document
-            .borrow()
-            .as_ref()
-            .map(|document| document.manager.clone());
+        let manager = match &*self.serving.borrow() {
+            Serving::Field(document) => document.manager.clone(),
+            Serving::Nothing | Serving::Shutdown => return false,
+        };
         // SAFETY: a plain COM call.
         let focus = unsafe { self.thread_manager.GetFocus() };
-        matches!((manager, focus), (Some(manager), Ok(focus)) if same_object(&manager, &focus))
+        focus.is_ok_and(|focus| same_object(&manager, &focus))
     }
 
     /// The focused document's state, for the window's diagnostics.
     fn focused_state(&self) -> Option<Rc<DocumentState>> {
-        self.document
-            .borrow()
-            .as_ref()
-            .map(|document| Rc::clone(&document.state))
-    }
-
-    /// `store` now receives this window's text input; `None` when no field
-    /// does. Queued when called under a TSF call into a store.
-    pub(super) fn focus_store(&self, store: Option<Rc<dyn TextStore>>) {
-        self.run_host_op(HostOp::Focus(store));
-    }
-
-    /// End the focused field's composition (ADR-0135's
-    /// `TextStoreHost::complete_composition`). `Deferred` when the request
-    /// was queued behind a TSF call in progress: the queue then clears the
-    /// store's composition itself if TSF refuses. With no document there is
-    /// nothing composing, which answers `Committed`.
-    pub(super) fn complete_composition(&self) -> CompositionEnd {
-        if self.entry_depth.get() > 0 {
-            self.pending
-                .borrow_mut()
-                .push_back(HostOp::CompleteComposition);
-            return CompositionEnd::Deferred;
+        match &*self.serving.borrow() {
+            Serving::Field(document) => Some(Rc::clone(&document.state)),
+            Serving::Nothing | Serving::Shutdown => None,
         }
-        let depth = self.enter_host_op();
-        let end = self.terminate_composition();
-        drop(depth);
-        self.drain_pending();
-        end.unwrap_or(CompositionEnd::Committed)
+    }
+
+    fn is_shut_down(&self) -> bool {
+        matches!(*self.serving.borrow(), Serving::Shutdown)
+    }
+
+    /// The store the host was last told to focus: the newest queued focus
+    /// change, else the open document's.
+    fn focused_store(&self) -> Option<Rc<dyn TextStore>> {
+        let queued = self.pending.borrow().iter().rev().find_map(|op| match op {
+            HostOp::Focus(store) => Some(store.clone()),
+            HostOp::CompleteComposition(_) | HostOp::DropPoisoned(_) => None,
+        });
+        queued.unwrap_or_else(|| self.focused_state().map(|state| Rc::clone(&state.store)))
     }
 
     /// A COM entry starts: host operations queue until it ends.
@@ -278,27 +269,29 @@ impl TextServices {
     }
 
     fn apply(&self, op: HostOp) {
-        if !self.active.get() {
+        if self.is_shut_down() {
+            // A queued completion was answered `Deferred`: with TSF gone,
+            // the composition is still committed, in place.
+            if let HostOp::CompleteComposition(store) = op {
+                commit_composition_in_place(&*store);
+            }
             return;
         }
         match op {
             HostOp::Focus(store) => self.apply_focus(store),
-            HostOp::CompleteComposition => {
-                // Nobody waits for this answer, so an abandoned composition
-                // is committed in place here, keeping the text.
-                let store = self.focused_state().map(|state| Rc::clone(&state.store));
-                if self.terminate_composition() == Some(CompositionEnd::Abandoned)
-                    && let Some(store) = store
-                {
-                    commit_in_place(&*store);
+            HostOp::CompleteComposition(store) => {
+                // Nobody waits for this answer, so whatever TSF did not
+                // commit (no document for the store, or a refused lock) is
+                // committed in place here, keeping the text.
+                if self.terminate_composition(&store) != Some(CompositionEnd::Committed) {
+                    commit_composition_in_place(&*store);
                 }
             }
             HostOp::DropPoisoned(state) => {
-                let poisoned_is_focused = self
-                    .document
-                    .borrow()
-                    .as_ref()
-                    .is_some_and(|document| Rc::ptr_eq(&document.state, &state));
+                let poisoned_is_focused = matches!(
+                    &*self.serving.borrow(),
+                    Serving::Field(document) if Rc::ptr_eq(&document.state, &state)
+                );
                 if poisoned_is_focused {
                     self.close_document();
                 }
@@ -314,13 +307,10 @@ impl TextServices {
     }
 
     fn apply_focus(&self, store: Option<Rc<dyn TextStore>>) {
-        let unchanged = {
-            let document = self.document.borrow();
-            match (&*document, &store) {
-                (Some(document), Some(store)) => Rc::ptr_eq(&document.state.store, store),
-                (None, None) => true,
-                _ => false,
-            }
+        let unchanged = match (&*self.serving.borrow(), &store) {
+            (Serving::Field(document), Some(store)) => Rc::ptr_eq(&document.state.store, store),
+            (Serving::Nothing, None) => true,
+            _ => false,
         };
         if unchanged {
             return;
@@ -370,7 +360,7 @@ impl TextServices {
             focused_after = self.focus_is(&manager),
             "TSF document opened"
         );
-        *self.document.borrow_mut() = Some(Document {
+        *self.serving.borrow_mut() = Serving::Field(Document {
             manager,
             context,
             state,
@@ -384,12 +374,23 @@ impl TextServices {
         unsafe { self.thread_manager.GetFocus() }.is_ok_and(|focus| same_object(manager, &focus))
     }
 
-    /// Close the focused document: TSF focus back to the empty manager,
-    /// then pop and release everything.
+    /// Close the focused document, if any, and serve the empty one.
     fn close_document(&self) {
-        let Some(document) = self.document.borrow_mut().take() else {
-            return;
+        let previous = {
+            let mut serving = self.serving.borrow_mut();
+            match *serving {
+                Serving::Field(_) => std::mem::replace(&mut *serving, Serving::Nothing),
+                Serving::Nothing | Serving::Shutdown => return,
+            }
         };
+        if let Serving::Field(document) = previous {
+            self.release_document(document);
+        }
+    }
+
+    /// TSF focus back to the empty manager, then pop and release
+    /// everything of `document`.
+    fn release_document(&self, document: Document) {
         document.state.close();
         // SAFETY: plain COM calls on this STA thread.
         unsafe {
@@ -404,11 +405,15 @@ impl TextServices {
         drop(document);
     }
 
-    fn terminate_composition(&self) -> Option<CompositionEnd> {
-        let (context, store) = {
-            let document = self.document.borrow();
-            let document = document.as_ref()?;
-            (document.context.clone(), Rc::clone(&document.state.store))
+    /// End TSF's composition in `store`'s document; `None` when `store` has
+    /// no open document. A refusal replaces the document, which discards
+    /// TSF's composition, and answers `Abandoned`.
+    fn terminate_composition(&self, store: &Rc<dyn TextStore>) -> Option<CompositionEnd> {
+        let context = match &*self.serving.borrow() {
+            Serving::Field(document) if Rc::ptr_eq(&document.state.store, store) => {
+                document.context.clone()
+            }
+            _ => return None,
         };
         let services: windows_core::Result<ITfContextOwnerCompositionServices> = context.cast();
         // SAFETY: a plain COM call; `None` asks TSF to end every composition.
@@ -428,7 +433,7 @@ impl TextServices {
                     "TerminateComposition refused; the document is replaced"
                 );
                 self.close_document();
-                if let Err(error) = self.open_document(store) {
+                if let Err(error) = self.open_document(Rc::clone(store)) {
                     tracing::warn!(target: "flui_platform::tsf", ?error, "could not reopen the TSF document");
                 }
                 Some(CompositionEnd::Abandoned)
@@ -439,10 +444,11 @@ impl TextServices {
     /// Close the document, release the empty one and deactivate TSF for
     /// the window. Idempotent.
     pub(super) fn shutdown(&self) {
-        if !self.active.replace(false) {
-            return;
+        match self.serving.replace(Serving::Shutdown) {
+            Serving::Shutdown => return,
+            Serving::Field(document) => self.release_document(document),
+            Serving::Nothing => {}
         }
-        self.close_document();
         // SAFETY: plain COM calls on this STA thread.
         unsafe {
             let _ = associate(&self.thread_manager, self.hwnd, None);
@@ -450,6 +456,44 @@ impl TextServices {
                 tracing::debug!(target: "flui_platform::tsf", ?error, "Deactivate failed");
             }
         }
+    }
+}
+
+impl TextStoreHost for TextServices {
+    /// Queued when called under a TSF call into a store.
+    fn focus_store(&self, store: Option<Rc<dyn TextStore>>) {
+        self.run_host_op(HostOp::Focus(store));
+    }
+
+    /// `Deferred` when the request is queued behind a TSF call in progress:
+    /// the queue keeps `store` and commits its composition in place if TSF
+    /// then cannot end it, or has shut down.
+    fn complete_composition(
+        &self,
+        store: &Rc<dyn TextStore>,
+    ) -> Result<CompositionEnd, TextStoreHostError> {
+        if self.is_shut_down() {
+            return Err(TextStoreHostError::Unavailable);
+        }
+        if !self
+            .focused_store()
+            .is_some_and(|focused| Rc::ptr_eq(&focused, store))
+        {
+            return Err(TextStoreHostError::NotFocused);
+        }
+        if self.entry_depth.get() > 0 {
+            self.pending
+                .borrow_mut()
+                .push_back(HostOp::CompleteComposition(Rc::clone(store)));
+            return Ok(CompositionEnd::Deferred);
+        }
+        let depth = self.enter_host_op();
+        let end = self.terminate_composition(store);
+        drop(depth);
+        self.drain_pending();
+        // Focused but without a document: opening it failed, so TSF holds
+        // no composition there.
+        end.ok_or(TextStoreHostError::NotFocused)
     }
 }
 

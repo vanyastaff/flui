@@ -56,6 +56,7 @@ use windows_core::{BOOL, GUID, PWSTR};
 use super::TextServices;
 use crate::shared::text_geometry::range_rect_to_screen;
 use crate::traits::{Platform, WindowOptions};
+use flui_platform_api::text_store::TextStoreHost as _;
 
 /// Microsoft IME ja-JP: its TIP class and profile.
 const MS_IME_JA: (GUID, GUID) = (
@@ -628,29 +629,25 @@ fn text_services_probe() {
     );
 
     // (7) TerminateComposition with the gate open, then shut.
+    let late_store: Rc<dyn TextStore> = Rc::clone(late) as Rc<dyn TextStore>;
     type_keys(hwnd, "toukyou", &probe);
     println!(
         "PROBE (7) open gate: {:?}; store {:?}, composition {:?}",
-        services.complete_composition(),
+        services.complete_composition(&late_store),
         late.inner.text(),
         late.inner.composition()
     );
     type_keys(hwnd, "kyou", &probe);
     gate.set_open(false);
-    let shut = services.complete_composition();
+    let shut = services.complete_composition(&late_store);
     println!(
         "PROBE (7) shut gate: {shut:?}; store {:?}, composition {:?}",
         late.inner.text(),
         late.inner.composition()
     );
-    if shut == flui_platform_api::text_store::CompositionEnd::Abandoned {
-        let outcome = late.request_lock(
-            LockGrant::read_write(|s| {
-                let _ = s.set_composition(None);
-            }),
-            LockTiming::Async,
-        );
-        println!("PROBE (7) owner clears the composition: {outcome:?}");
+    if shut == Ok(flui_platform_api::text_store::CompositionEnd::Abandoned) {
+        flui_platform_api::text_store::commit_composition_in_place(&*late_store);
+        println!("PROBE (7) owner commits the composition in place");
     }
     gate.set_open(true);
     pump(300, &probe);
