@@ -217,6 +217,12 @@ Toolchain 1.99.0, edition 2024 (MSRV = channel). Версия у std-средс�
   настройки берутся в `init_state`/`did_change_dependencies` и доходят до распознавателей с учётом
   типа указателя). Порядок: тип и производитель — platform-layer LY8 (окно W1); потребитель — LY9
   совместно с этой работой (задача I11).
+  Контракт (platform-layer `d222a6142`, vanyastaff/flui#1469): `GesturePreferences` — все поля
+  `Option` (None = у ОС нет значения, потребитель держит свой default): `double_click_interval`,
+  `double_click_area`, `drag_area`, `long_press_timeout`, `touch_slop() -> Option<Distance>`,
+  `fling() -> Option<FlingSpeeds>` (min ≤ max по построению; заменяет зашитые 8000 px/s, matrix
+  V6); отдельная группа `wheel()` — `vertical() -> Option<WheelStep::{Lines(u32), Page}>`,
+  `horizontal_chars()`; перевод строки в пиксели — здесь (matrix M1 строка 26).
 - **2026-10-06, спека `recognizer-api/` подтверждена** (сквозной рефакторинг распознавателей: builder до `Rc`, композиция вместо иерархии, удаление трейтов без пользователей, dyn-compatible `GestureRecognizer`, `Listener::recognizer`); реализация — после слияния веток I1/I2.
 - **2026-10-06, воспроизведение:** каждый фикс начинается с теста, воспроизводящего дефект через
   публичный путь; не воспроизвёлся — гипотеза, без фикса.
