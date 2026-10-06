@@ -89,29 +89,29 @@ impl Drop for DeadlineQuery {
 }
 
 /// The last deadline the loop delivered. The hook answers with an instant
-/// only, so the same `(hook, instant)` pair is either work a frame has not
-/// serviced yet, which must not spin, or new work a frame accepted at the
-/// instant it just serviced, which must get its frame.
+/// only, so the same `(hook, instant)` pair is either work no frame has had
+/// a chance to service, which must not spin, or work a frame left or
+/// accepted at the instant it just serviced (a queue of obligations all due
+/// at one instant answers the same pair once per item), which must get its
+/// frame. The frame count is the delivery generation that tells them apart.
 struct DeadlineDelivery {
     arm: DeadlineArm,
     /// The platform's frame count when the delivery was made.
     frames: u64,
-    /// Whether this delivery already re-armed the pair delivered before it.
-    repeat: bool,
 }
 
 impl DeadlineDelivery {
     /// Whether `deadline` from `hook` may be armed after this delivery: a
-    /// different pair always, the same pair once if a frame callback ran
-    /// since. An answer no frame changed stays delivered, and one repeated
-    /// past its re-arm is not re-armed again, so neither spins.
+    /// different pair always, the same pair whenever a frame callback ran
+    /// since. An answer no frame could have serviced stays delivered, so a
+    /// delivery that reaches no frame never spins the loop.
     fn admits(
         &self,
         deadline: web_time::Instant,
         hook: &Weak<WakeDeadlineHook>,
         frames: u64,
     ) -> bool {
-        !self.arm.matches(deadline, hook) || (!self.repeat && frames != self.frames)
+        !self.arm.matches(deadline, hook) || frames != self.frames
     }
 }
 
@@ -1871,15 +1871,11 @@ impl WindowsPlatform {
                         .deadline_hook()
                         .is_some_and(|hook| Weak::ptr_eq(&arm.hook, &Arc::downgrade(&hook)))
                     {
-                        let repeat = delivered
-                            .as_ref()
-                            .is_some_and(|last| last.arm.matches(arm.deadline, &arm.hook));
                         let before = frame_count();
                         self.redraw_deadline_windows();
                         delivered = Some(DeadlineDelivery {
                             arm,
                             frames: before,
-                            repeat,
                         });
                     }
                 }
