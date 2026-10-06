@@ -216,6 +216,11 @@ pub struct SemanticsOwner {
     /// the dirty bits it travels with).
     full_publish_pending: bool,
 
+    /// Physical pixels per logical pixel of the window this tree is
+    /// published to, carried by the published root as a scale transform
+    /// (see [`Self::set_device_pixel_ratio`]).
+    device_pixel_ratio: f64,
+
     /// Arena ids of the nodes currently claiming
     /// [`SemanticsFlag::IsFocused`](crate::SemanticsFlag), maintained
     /// incrementally so a flush derives focus in O(dirty) instead of
@@ -317,6 +322,7 @@ impl SemanticsOwner {
             published: None,
             full_publish_pending: false,
             focus_claimants: FxHashSet::default(),
+            device_pixel_ratio: 1.0,
             #[cfg(any(test, feature = "testing"))]
             examined_last_flush: 0,
         }
@@ -337,6 +343,7 @@ impl SemanticsOwner {
             published: None,
             full_publish_pending: false,
             focus_claimants: FxHashSet::default(),
+            device_pixel_ratio: 1.0,
             #[cfg(any(test, feature = "testing"))]
             examined_last_flush: 0,
         }
@@ -351,6 +358,7 @@ impl SemanticsOwner {
             published: None,
             full_publish_pending: false,
             focus_claimants: FxHashSet::default(),
+            device_pixel_ratio: 1.0,
             #[cfg(any(test, feature = "testing"))]
             examined_last_flush: 0,
         }
@@ -376,7 +384,11 @@ impl SemanticsOwner {
     pub fn set_callback(&mut self, callback: SemanticsUpdateCallback) {
         self.published = None;
         if self.enabled
-            && let Some(update) = crate::tree_to_update(&self.tree, None)
+            && let Some(update) = crate::accesskit_translation::tree_to_scaled_update(
+                &self.tree,
+                None,
+                self.device_pixel_ratio,
+            )
         {
             callback(&update);
             self.published = Some(PublishedState::mirror_of(update));
@@ -433,7 +445,11 @@ impl SemanticsOwner {
         &self,
         focus: Option<SemanticsId>,
     ) -> Option<accesskit::TreeUpdate> {
-        crate::accesskit_translation::tree_to_update(&self.tree, focus)
+        crate::accesskit_translation::tree_to_scaled_update(
+            &self.tree,
+            focus,
+            self.device_pixel_ratio,
+        )
     }
 
     /// Returns a mutable reference to the semantics tree.
@@ -762,7 +778,11 @@ impl SemanticsOwner {
     fn publish_full(&mut self) -> usize {
         // Translate before touching the callback so the borrow of `self.tree`
         // ends first.
-        let Some(update) = crate::tree_to_update(&self.tree, None) else {
+        let Some(update) = crate::accesskit_translation::tree_to_scaled_update(
+            &self.tree,
+            None,
+            self.device_pixel_ratio,
+        ) else {
             // No root yet — nothing an adapter could apply. Leave the tree
             // dirty (and any full publish pending) so the next flush retries
             // once assembly has rooted it, rather than silently swallowing
@@ -878,8 +898,11 @@ impl SemanticsOwner {
             let Some(data) = self.tree.node_data_of(node) else {
                 continue;
             };
-            let translated =
-                crate::accesskit_translation::to_published_node(&data, id == state.root);
+            let translated = crate::accesskit_translation::to_published_node(
+                &data,
+                id == state.root,
+                self.device_pixel_ratio,
+            );
             if state.nodes.get(&id) != Some(&translated) {
                 changed.push((id, translated));
             }
@@ -963,6 +986,43 @@ impl SemanticsOwner {
     pub fn schedule_full_publish(&mut self) {
         self.published = None;
         self.full_publish_pending = true;
+    }
+
+    /// Sets how many physical pixels the window has per logical pixel.
+    ///
+    /// The tree stays in logical pixels; the ratio reaches the platform as
+    /// a scale transform on the published root, because AccessKit adapters
+    /// read bounds in physical pixels. A changed ratio marks the root dirty,
+    /// so the next [`Self::flush`] republishes the root with the new
+    /// transform (the descendants inherit it and are not resent).
+    ///
+    /// A non-finite or non-positive ratio is ignored, keeping the previous
+    /// one: it would publish degenerate or non-finite bounds.
+    pub fn set_device_pixel_ratio(&mut self, device_pixel_ratio: f64) {
+        if !(device_pixel_ratio.is_finite() && device_pixel_ratio > 0.0) {
+            tracing::warn!(
+                device_pixel_ratio,
+                "ignoring a non-finite or non-positive device pixel ratio for semantics"
+            );
+            return;
+        }
+        #[expect(
+            clippy::float_cmp,
+            reason = "an unchanged ratio is bit-identical, not approximately equal"
+        )]
+        if device_pixel_ratio == self.device_pixel_ratio {
+            return;
+        }
+        self.device_pixel_ratio = device_pixel_ratio;
+        if let Some(root) = self.tree.root() {
+            self.mark_dirty(root);
+        }
+    }
+
+    /// The device pixel ratio the published root is scaled by.
+    #[must_use]
+    pub fn device_pixel_ratio(&self) -> f64 {
+        self.device_pixel_ratio
     }
 
     /// Forces a full tree update, now.
