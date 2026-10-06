@@ -2,6 +2,9 @@
 
 - **Status:** Accepted
 - **Date:** 2026-08-18
+- **Superseded-by:** [ADR-0123](ADR-0123-exceptional-presentation-close.md), in
+  part: the remaining-element disposal policy, during a terminal presentation
+  close that holds a failure or runs inside an unwind.
 - **Related:** [ADR-0027](ADR-0027-owner-affine-ui-realms.md) (runtime topology
   is a sanctioned leapfrog zone); [ADR-0043](ADR-0043-presentation-bundled-trees-and-realm-globalkey-scope.md)
   (`PresentationState` bundles the trees this boundary scopes);
@@ -173,6 +176,10 @@ observable recovery floor and narrows several blast radii:
 - `BuildOwner.finalizeTree` catches around the inactive drain as a whole.
   FLUI catches `dispose` per element, so the remaining inactive elements still
   finalize.
+
+  **Superseded in part by ADR-0123.** During a terminal presentation close
+  that holds a failure or runs inside an unwind, the remaining elements are
+  not disposed: they are retained with the closed presentation, per ADR-0127.
 - `RenderObjectElement.unmount` calls `super.unmount()` before
   `didUnmountRenderObject`; if that hook throws, render-object `dispose` is
   skipped. FLUI's ordering differs: the element behavior runs before

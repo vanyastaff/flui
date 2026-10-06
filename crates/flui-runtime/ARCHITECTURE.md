@@ -466,3 +466,18 @@ one segment report, no partial submission and the next automatic retry presentin
 The existing private segment probe injects a failure that consumers cannot place
 at this exact outer boundary; the registered report handler and real frame driver
 are the production paths.
+
+## Exceptional terminal presentation ownership
+
+A presentation close that holds a failure, or runs inside an unwind, is in
+preserving mode ([ADR-0123](../../docs/adr/ADR-0123-exceptional-presentation-close.md)).
+The close first withdraws the presentation's authority: its lane targets and
+cached routes, signal graph, writers, rebuild handles, local and realm
+GlobalKeys and agent ports refuse further use, while siblings stay live. It then
+retains the values the presentation still owns (its trees and their callbacks)
+instead of dropping them, and skips optional disposal
+([ADR-0127](../../docs/adr/ADR-0127-exceptional-path-retention.md)). The platform
+window and the accessibility bridge are framework-owned and are released in
+either mode. A healthy close drops everything normally, and a lifecycle drain
+still runs every eligible callback before propagating its first failure. Tested
+by `presentation_close_retirement_failures_preserve_focus_ime_and_siblings`.

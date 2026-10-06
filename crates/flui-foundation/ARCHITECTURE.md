@@ -327,3 +327,12 @@ and misses retain their quadratic calculation; no wider-range quadratic solution
 is promised. Public family `circle_line_intersection_requires_a_computed_direction`
 checks refusals followed by a healthy crossing and intersections outside the
 endpoint segment.
+
+### Closed signal graph
+
+Once a presentation closes, its signal graph refuses reads, writes and new
+signals with `SignalError::OwnerClosed`
+([ADR-0123](../../docs/adr/ADR-0123-exceptional-presentation-close.md)). After an
+exceptional close the graph's existing values are retained rather than dropped
+([ADR-0127](../../docs/adr/ADR-0127-exceptional-path-retention.md)), but they
+cannot be read or written through it.

@@ -145,12 +145,14 @@ impl RebuildHandle {
 
     /// Whether [`schedule`](Self::schedule) can do anything at all.
     ///
-    /// `false` only for a handle minted before mount. It does **not** report
+    /// `false` for a handle minted before mount or whose owner has closed. It does **not** report
     /// whether the element is still in the tree — a handle cannot know that, and
     /// scheduling a dead element is already a safe no-op.
     #[must_use]
     pub fn is_active(&self) -> bool {
-        self.inner.is_some()
+        self.inner
+            .as_ref()
+            .is_some_and(|active| active.scheduler.is_active())
     }
 }
 

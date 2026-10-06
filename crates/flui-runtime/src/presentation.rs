@@ -228,6 +228,10 @@ pub struct PresentationState {
     pub(super) window_execution: Cell<flui_platform_api::WindowExecutionState>,
     pub(super) closing_requested: Cell<bool>,
     lifecycle: Cell<PresentationLifecycle>,
+    close_mode: Cell<flui_interaction::__runtime::CloseMode>,
+    /// Dispatch captures a realm-wide withdrawal took before this
+    /// presentation's own close, which retires them.
+    withdrawn_dispatch: RefCell<Option<flui_interaction::__runtime::DispatchCustody>>,
     pipeline: PipelineCell,
     /// This presentation's liveness, as a token others may watch weakly.
     ///
@@ -236,17 +240,14 @@ pub struct PresentationState {
     /// `LifecycleContext::pipeline_owner()` hands out a strong `PipelineCell`, so
     /// a widget that stores one keeps the tree alive past the close — and
     /// under `SharedRealm` the realm outlives any single presentation too.
-    #[expect(
-        dead_code,
-        reason = "a liveness token: its VALUE is never read, only its lifetime                   observed through the weak handles handed out at construction.                   Dropping the presentation drops it, which is the whole signal."
-    )]
-    alive: Rc<()>,
+    alive: RefCell<Option<Rc<()>>>,
     window: Weak<dyn PlatformWindow>,
     /// The window's accessibility bridge, if its backend has one. `Weak`
     /// like [`Self::window`]: the backend window owns the bridge, and this
     /// presentation must not keep it alive past the window.
     accessibility: Option<Weak<dyn PlatformAccessibility>>,
     gestures: GestureBinding,
+    interaction_dispatch: Option<InteractionDispatchHandle>,
     /// Pointer input retained while this presentation has no committed tree.
     /// The queue is owner-thread-only and internally capped; replay detaches
     /// its batch before invoking dispatch so callbacks may enqueue reentrantly.
@@ -588,6 +589,9 @@ impl PresentationState {
             pipeline.with_mut(|owner| owner.set_device_pixel_ratio(device_pixel_ratio));
         }
         let gestures = Self::build_gestures(id, &window, capabilities.clock);
+        let interaction_dispatch = flui_interaction::__runtime::presentation_dispatch(
+            &capabilities.interaction_dispatch_handle,
+        );
         let frame_clock = FrameClock::with_source(capabilities.clock.clone());
         let alive = Rc::new(());
         let focus = FocusManager::new();
@@ -600,7 +604,7 @@ impl PresentationState {
             owner.set_async_driver(capabilities.async_driver);
             owner.set_post_frame_handle(PostFrameHandle::new(capabilities.scheduler));
             owner.set_local_post_frame_handle(capabilities.local_post_frame_handle);
-            owner.set_interaction_dispatch_handle(capabilities.interaction_dispatch_handle.clone());
+            owner.set_interaction_dispatch_handle(interaction_dispatch.clone());
             owner.set_text_input_handle(text_input.handle());
             owner.set_clipboard_handle(flui_interaction::ClipboardHandle::new(
                 capabilities.clipboard,
@@ -611,7 +615,7 @@ impl PresentationState {
             // its own `PipelineOwner`, so a probe installed once per realm
             // would answer every presentation with the first one's tree.
             owner.set_hit_test_handle(flui_interaction::HitTestHandle::new(
-                capabilities.interaction_dispatch_handle,
+                interaction_dispatch.clone(),
                 Rc::new(
                     flui_rendering::pipeline::hit_test_probe::PipelineHitTestProbe::new(
                         &pipeline,
@@ -690,11 +694,14 @@ impl PresentationState {
             window_execution: Cell::new(window.execution_state()),
             closing_requested: Cell::new(false),
             lifecycle: Cell::new(PresentationLifecycle::Created),
+            close_mode: Cell::new(flui_interaction::__runtime::CloseMode::Ordinary),
+            withdrawn_dispatch: RefCell::new(None),
             pipeline,
-            alive,
+            alive: RefCell::new(Some(alive)),
             window: Arc::downgrade(&window),
             accessibility: accessibility.as_ref().map(Arc::downgrade),
             gestures,
+            interaction_dispatch: Some(interaction_dispatch),
             held_pointer_input: RefCell::new(HeldPointerQueue::new(id)),
             focus,
             text_input,
@@ -767,11 +774,14 @@ impl PresentationState {
             window_execution: Cell::new(window.execution_state()),
             closing_requested: Cell::new(false),
             lifecycle: Cell::new(PresentationLifecycle::Created),
+            close_mode: Cell::new(flui_interaction::__runtime::CloseMode::Ordinary),
+            withdrawn_dispatch: RefCell::new(None),
             pipeline,
-            alive,
+            alive: RefCell::new(Some(alive)),
             window: Arc::downgrade(&window),
             accessibility: accessibility.as_ref().map(Arc::downgrade),
             gestures,
+            interaction_dispatch: None,
             held_pointer_input: RefCell::new(HeldPointerQueue::new(id)),
             focus,
             text_input,
@@ -1436,112 +1446,313 @@ impl PresentationState {
         }
     }
 
-    /// Begin deterministic owner-local teardown (ADR-0043 §5's per-presentation
-    /// ordering, the part of it this type alone can carry out): input/cursor
-    /// first, IME and focus deactivate next, THEN the root widget detaches
-    /// through this exact presentation's own `WidgetsBinding` — so any
-    /// `State::dispose()` hook a descendant runs sees focus/IME already
-    /// quiesced, never a live input surface mid-teardown. `GlobalKeyScope`
-    /// reclamation is not this method's job: it happens when this
-    /// presentation's `BuildOwner` itself drops (`GlobalKeyScope::
-    /// reclaim_owner`, wired through `BuildOwner`'s own `Drop`), which
-    /// dropping this `WidgetsBinding` triggers regardless of whether
-    /// `detach_root_widget` found a root to unmount.
-    ///
-    /// Callers that need dispose hooks to resolve `GlobalKey` lookups
-    /// correctly must run this inside the realm's own `enter()` (see
-    /// `UiRealm`'s `Drop` impl) — this method itself does not activate any
-    /// registry.
+    /// Healthy close retires input before widget disposal. Exceptional close
+    /// withdraws owner admission and key publication but retains the closed
+    /// tree, so a caught first failure cannot be displaced by opaque Drop.
+    pub(crate) fn preserving_close(&self) -> bool {
+        self.close_mode.get() == flui_interaction::__runtime::CloseMode::PreservingFailure
+    }
+
+    pub(crate) fn interaction_dispatch(&self) -> Option<&InteractionDispatchHandle> {
+        self.interaction_dispatch.as_ref()
+    }
+
+    fn close_interaction_with_mode(
+        &self,
+        lane: Option<&flui_interaction::InteractionLane>,
+        mode: flui_interaction::__runtime::CloseMode,
+    ) {
+        if let Some(handle) = self.interaction_dispatch() {
+            if let Some(lane) = lane {
+                flui_interaction::__runtime::close_dispatch_in(lane, handle, mode);
+            } else {
+                flui_interaction::__runtime::close_dispatch(handle, mode);
+            }
+        }
+    }
+
+    /// Withdraw dispatch authority, keeping the captures for
+    /// [`flui_interaction::__runtime::retire_dispatch`].
+    fn withdraw_interaction(
+        &self,
+        lane: Option<&flui_interaction::InteractionLane>,
+        mode: flui_interaction::__runtime::CloseMode,
+    ) -> Option<flui_interaction::__runtime::DispatchCustody> {
+        let handle = self.interaction_dispatch()?;
+        match lane {
+            Some(lane) => flui_interaction::__runtime::withdraw_dispatch_in(lane, handle, mode),
+            None => flui_interaction::__runtime::withdraw_dispatch(handle, mode),
+        }
+    }
+
+    pub(crate) fn close_with_mode_in(
+        &self,
+        mode: flui_interaction::__runtime::CloseMode,
+        lane: &flui_interaction::InteractionLane,
+    ) {
+        self.close_impl(mode, Some(lane));
+    }
+
     pub(crate) fn close(&self) {
-        match self.lifecycle.get() {
-            PresentationLifecycle::Closing | PresentationLifecycle::Closed => return,
-            PresentationLifecycle::Created
-            | PresentationLifecycle::SurfaceAttached
-            | PresentationLifecycle::Suspended => {}
+        self.close_with_mode(flui_interaction::__runtime::CloseMode::Ordinary);
+    }
+
+    pub(crate) fn close_with_mode(&self, mode: flui_interaction::__runtime::CloseMode) {
+        self.close_impl(mode, None);
+    }
+
+    fn close_impl(
+        &self,
+        mode: flui_interaction::__runtime::CloseMode,
+        lane: Option<&flui_interaction::InteractionLane>,
+    ) {
+        use flui_interaction::__runtime::{
+            close_focus, close_gestures, close_mouse_tracker, close_text_input,
+        };
+        // One reentry window spans every owner this close reaches.
+        let mut window = flui_interaction::__runtime::CloseWindow::new();
+        if let Some(handle) = self.interaction_dispatch() {
+            window.dispatch(handle);
+        }
+        window.gestures(&self.gestures);
+        window.focus(&self.focus);
+        window.text_input(&self.text_input);
+        let mut failure = PresentationCloseRecovery::new(mode, &self.close_mode, window);
+
+        if matches!(
+            self.lifecycle.get(),
+            PresentationLifecycle::Closing | PresentationLifecycle::Closed
+        ) {
+            if failure.preserving() {
+                self.withdraw_retained_ownership(&mut failure, lane);
+            }
+            failure.finish();
+            return;
         }
         self.lifecycle.set(PresentationLifecycle::Closing);
-        // Normal owner reconciliation has already delivered the terminal
-        // ladder. Direct teardown still delivers final Detached and invalidates
-        // weak subscriptions before any callback can dispose the tree.
+        let window = self.window.upgrade();
+        let bridge = self.accessibility.as_ref().and_then(Weak::upgrade);
+        // Every capability is withdrawn before any capture is destroyed: a
+        // dispatch target's destructor may hold saved handles, and must find
+        // the graph, keys, focus and text input already closed.
+        let mode = failure.mode();
+        let withdrawn = self.withdrawn_dispatch.borrow_mut().take();
+        let dispatch = withdrawn.or_else(|| {
+            failure
+                .invoke_with(|| self.withdraw_interaction(lane, mode))
+                .flatten()
+        });
+        self.alive.borrow_mut().take();
+        self.held_pointer_input.borrow_mut().clear();
+        // Owner authority is withdrawn before any final user notification.
+        let preserving = failure.preserving();
+        failure.invoke(|| self.widgets.withdraw_root_owner(preserving));
+        let agent = self.dev_agent.take();
+        if let Some(agent) = &agent {
+            agent.withdraw();
+        }
+        let (announce, event) = self.semantics.take_close_callbacks();
+
         let source = self.widgets.lifecycle_source();
         source.begin_close();
         let _ = source.commit_terminal(flui_scheduler::AppLifecycleState::Detached);
-        let mut first =
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| source.drain())).err();
-        crate::lifecycle_state::preserve_first_lifecycle_panic(
-            &mut first,
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| source.finish_close())).err(),
-            "lifecycle direct close",
-        );
-        let cleanup = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            self.gestures.cancel_all_pointer_sequences();
-            self.gestures.mouse_tracker().clear_cursor_change_callback();
-            // A stray announce/event racing this teardown must not reach a
-            // platform accessibility bridge that is itself about to go away —
-            // see `SemanticsHost::clear_announce_callback`'s doc for the
-            // announce-after-close decision this pins.
-            self.semantics.clear_announce_callback();
-            self.semantics.clear_event_callback();
-            // The development agent goes with the window: its handles answer
-            // `gone` from here on.
-            drop(self.dev_agent.take());
-            // Withdraw from the platform accessibility bridge: detach both
-            // listeners so an activation flip or action request arriving after
-            // close is dropped at the platform seam (an action that slips
-            // through anyway is still dropped at the drain's forest-membership
-            // check — two independent gates, same verdict), and stop assembly
-            // so the owner's disposed notifier fires while the pipeline is
-            // still alive. Guarded on `is_free()` because `close()` also runs
-            // from `Drop`, where a panicking unwind may hold the checkout.
-            if self.window.strong_count() > 0
-                && let Some(bridge) = self.accessibility.as_ref().and_then(Weak::upgrade)
-            {
-                bridge.set_activation_listener(Arc::new(|_| {}));
-                bridge.set_action_listener(Arc::new(|_| {}));
-            }
-            if self.pipeline.is_free() {
+        failure.run(|| source.drain());
+        let mode = failure.mode();
+        failure.invoke(|| source.finish_close_with_mode(mode));
+        let mode = failure.mode();
+        failure.invoke(|| close_mouse_tracker(self.gestures.mouse_tracker(), mode));
+        failure.retire(announce);
+        failure.retire(event);
+        failure.retire(agent);
+        let mode = failure.mode();
+        failure.invoke(|| close_focus(&self.focus, mode));
+        let mode = failure.mode();
+        failure.invoke(|| close_text_input(&self.text_input, mode));
+        // Gesture cancellation runs recognizer callbacks, so it follows every
+        // withdrawal above: a rejected recognizer finds the presentation's
+        // graph, keys, agent, focus and text input already closed.
+        let mode = failure.mode();
+        failure.invoke(|| close_gestures(&self.gestures, mode));
+        if let Some(dispatch) = dispatch {
+            let mode = failure.mode();
+            failure.invoke(|| flui_interaction::__runtime::retire_dispatch(dispatch, mode));
+        }
+        if let Some(bridge) = &bridge {
+            failure.invoke(|| bridge.set_activation_listener(Arc::new(|_| {})));
+            failure.invoke(|| bridge.set_action_listener(Arc::new(|_| {})));
+        }
+        if self.pipeline.is_free() {
+            failure.invoke(|| {
                 self.pipeline.with_mut(|owner| {
                     if owner.semantics_enabled() {
                         owner.set_semantics_enabled(false);
                     }
                 });
-            }
-            if let Some(window) = self.window.upgrade()
-                && let Err(error) = window.set_cursor(CursorIcon::Default)
-                && !matches!(error, CursorError::Unsupported)
-            {
-                tracing::warn!(
-                    { flui_foundation::diagnostics::PRESENTATION_ID } = self.id.as_u64(),
-                    ?error,
-                    "failed to restore the default cursor while closing the presentation"
-                );
-            }
-            self.focus.close();
-            self.text_input.close();
-            // Detach LAST: a no-op if nothing was ever attached (many tests never
-            // mount a root), and otherwise unmounts through this presentation's
-            // OWN element tree only -- never a sibling's, since each
-            // PresentationState owns an exclusive WidgetsBinding.
-        }))
-        .err();
-        crate::lifecycle_state::preserve_first_lifecycle_panic(
-            &mut first,
-            cleanup,
-            "presentation input disposal",
-        );
-        let disposal = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            self.widgets.detach_root_widget();
-        }))
-        .err();
+            });
+        }
+        if let Some(window) = &window {
+            failure.invoke(|| {
+                let _ = window.set_cursor(CursorIcon::Default);
+            });
+        }
+
+        if !failure.preserving() {
+            failure.invoke(|| self.widgets.withdraw_root_owner(false));
+            failure.run(|| self.widgets.detach_root_widget());
+        }
+        // Reached in preserving mode, or when the healthy disposal above
+        // failed part way: what the tree still owns is retained.
+        if failure.preserving() {
+            self.withdraw_retained_ownership(&mut failure, lane);
+        }
+        // The window and the accessibility bridge are framework-owned: they
+        // are released even after a failure (ADR-0127).
+        failure.release(bridge);
+        failure.release(window);
+
         self.lifecycle.set(PresentationLifecycle::Closed);
-        crate::lifecycle_state::preserve_first_lifecycle_panic(
-            &mut first,
-            disposal,
-            "presentation widget disposal",
-        );
-        if let Some(payload) = first {
+        failure.finish();
+    }
+}
+
+impl PresentationState {
+    /// Withdraw this presentation's authority without running user code, as
+    /// a realm closing several presentations does for every one of them
+    /// before any closes: dispatch targets, liveness, held input, the graph,
+    /// rebuild and key authority, agent ports, focus and text input become
+    /// unavailable, so a sibling's callbacks cannot drive this presentation
+    /// (ADR-0123). The withdrawn key owners are returned for the caller to
+    /// retire; the presentation's own close later retires everything else.
+    pub(crate) fn withdraw_for_realm_close(
+        &self,
+        lane: &flui_interaction::InteractionLane,
+    ) -> Vec<Box<dyn flui_foundation::ViewKey>> {
+        use flui_view::__runtime::BindingRuntime as _;
+        if matches!(
+            self.lifecycle.get(),
+            PresentationLifecycle::Closing | PresentationLifecycle::Closed
+        ) {
+            return Vec::new();
+        }
+        if self.withdrawn_dispatch.borrow().is_none()
+            && let Some(custody) = self.withdraw_interaction(Some(lane), self.close_mode.get())
+        {
+            self.withdrawn_dispatch.replace(Some(custody));
+        }
+        self.alive.borrow_mut().take();
+        self.held_pointer_input.borrow_mut().clear();
+        let keys = self.widgets.withdraw_owner_authority();
+        if let Some(agent) = &*self.dev_agent.borrow() {
+            agent.withdraw();
+        }
+        flui_interaction::__runtime::withdraw_focus(&self.focus);
+        flui_interaction::__runtime::withdraw_text_input(&self.text_input);
+        keys
+    }
+
+    /// Withdraws the root owner and closes every input owner in preserving
+    /// mode, so the values they still hold are retained rather than dropped
+    /// (ADR-0123, ADR-0127).
+    fn withdraw_retained_ownership(
+        &self,
+        failure: &mut PresentationCloseRecovery<'_>,
+        lane: Option<&flui_interaction::InteractionLane>,
+    ) {
+        use flui_interaction::__runtime::{
+            CloseMode, close_focus, close_gestures, close_mouse_tracker, close_text_input,
+        };
+        failure.invoke(|| self.widgets.withdraw_root_owner(true));
+        failure.invoke(|| close_gestures(&self.gestures, CloseMode::PreservingFailure));
+        failure.invoke(|| {
+            close_mouse_tracker(self.gestures.mouse_tracker(), CloseMode::PreservingFailure);
+        });
+        failure.invoke(|| close_focus(&self.focus, CloseMode::PreservingFailure));
+        failure.invoke(|| close_text_input(&self.text_input, CloseMode::PreservingFailure));
+        failure.invoke(|| self.close_interaction_with_mode(lane, CloseMode::PreservingFailure));
+    }
+}
+
+struct PresentationCloseRecovery<'a> {
+    first: Option<Box<dyn std::any::Any + Send>>,
+    terminal: &'a Cell<flui_interaction::__runtime::CloseMode>,
+    window: flui_interaction::__runtime::CloseWindow,
+}
+
+impl<'a> PresentationCloseRecovery<'a> {
+    fn new(
+        mode: flui_interaction::__runtime::CloseMode,
+        terminal: &'a Cell<flui_interaction::__runtime::CloseMode>,
+        window: flui_interaction::__runtime::CloseWindow,
+    ) -> Self {
+        if mode == flui_interaction::__runtime::CloseMode::PreservingFailure
+            || std::thread::panicking()
+        {
+            terminal.set(flui_interaction::__runtime::CloseMode::PreservingFailure);
+        }
+        if terminal.get() == flui_interaction::__runtime::CloseMode::PreservingFailure {
+            window.preserve();
+        }
+        Self {
+            first: None,
+            terminal,
+            window,
+        }
+    }
+    fn mode(&self) -> flui_interaction::__runtime::CloseMode {
+        self.terminal.get()
+    }
+    fn preserving(&self) -> bool {
+        self.mode() == flui_interaction::__runtime::CloseMode::PreservingFailure
+    }
+    fn invoke(&mut self, callback: impl FnOnce()) {
+        let _ = self.invoke_with(callback);
+    }
+    fn invoke_with<T>(&mut self, callback: impl FnOnce() -> T) -> Option<T> {
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(callback)) {
+            Ok(value) => Some(value),
+            Err(payload) => {
+                if self.preserving() {
+                    flui_foundation::panic::retain_opaque_payload(payload);
+                } else {
+                    crate::lifecycle_state::preserve_first_lifecycle_panic(
+                        &mut self.first,
+                        Some(payload),
+                        "presentation terminal cleanup",
+                    );
+                }
+                self.terminal
+                    .set(flui_interaction::__runtime::CloseMode::PreservingFailure);
+                self.window.preserve();
+                None
+            }
+        }
+    }
+    fn run(&mut self, callback: impl FnOnce()) {
+        if !self.preserving() {
+            self.invoke(callback);
+        }
+    }
+    /// Drops a user-owned value, or retains it once the close is preserving.
+    fn retire<T>(&mut self, value: T) {
+        if self.preserving() {
+            std::mem::forget(value);
+        } else {
+            self.invoke(|| drop(value));
+        }
+    }
+    /// Drops a framework-owned handle even after a failure; only an unwind
+    /// already in progress retains it.
+    fn release<T>(&mut self, value: T) {
+        if std::thread::panicking() {
+            std::mem::forget(value);
+        } else {
+            self.invoke(|| drop(value));
+        }
+    }
+    fn finish(self) {
+        if let Some(payload) = self.first {
             if std::thread::panicking() {
-                std::mem::forget(payload);
+                flui_foundation::panic::retain_opaque_payload(payload);
             } else {
                 std::panic::resume_unwind(payload);
             }

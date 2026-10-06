@@ -146,6 +146,9 @@
 // Core infrastructure modules
 // ============================================================================
 
+#[doc(hidden)]
+pub mod __runtime;
+
 pub mod ids;
 pub mod sealed;
 pub mod traits;

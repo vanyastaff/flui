@@ -65,6 +65,7 @@ use smallvec::SmallVec;
 use tracing::instrument;
 use web_time::Instant;
 
+use crate::__runtime::{CloseMode, ClosePanic, CloseTombstone};
 use crate::ids::PointerId;
 use flui_foundation::{MonotonicClock, SystemClock};
 
@@ -396,6 +397,9 @@ impl GestureArenaEntry {
 
     /// Hold this exact arena generation against a pointer-up sweep.
     pub fn hold(&self) {
+        if self.arena.owner_closed.load(Ordering::Acquire) {
+            return;
+        }
         if let Some(slot) = self.slot.upgrade() {
             GestureArena::hold_slot(&slot);
         }
@@ -403,6 +407,9 @@ impl GestureArenaEntry {
 
     /// Release a hold on this exact arena generation.
     pub fn release(&self) {
+        if self.arena.owner_closed.load(Ordering::Acquire) {
+            return;
+        }
         if let Some(slot) = self.slot.upgrade() {
             self.arena.release_slot(&slot);
         }
@@ -410,6 +417,9 @@ impl GestureArenaEntry {
 
     /// Sweep this exact arena generation.
     pub fn sweep(&self) {
+        if self.arena.owner_closed.load(Ordering::Acquire) {
+            return;
+        }
         if let Some(slot) = self.slot.upgrade() {
             self.arena.sweep_slot(&slot);
         }
@@ -424,6 +434,9 @@ impl GestureArenaEntry {
     /// Get the member for this entry.
     #[inline]
     pub fn member(&self) -> Option<Arc<dyn GestureArenaMember>> {
+        if self.arena.owner_closed.load(Ordering::Acquire) {
+            return None;
+        }
         self.member.upgrade()
     }
 }
@@ -805,6 +818,8 @@ pub fn run_pointer_lifecycle(arena: &GestureArena, event: &crate::events::Pointe
 /// ```
 #[derive(Clone)]
 pub struct GestureArena {
+    owner_closed: Arc<std::sync::atomic::AtomicBool>,
+    close_mode: CloseTombstone,
     /// Map from pointer ID to the active exact-generation arena slot.
     entries: Arc<DashMap<PointerId, Arc<ArenaSlot>>>,
     /// Held arenas detached from the active pointer map during an Up
@@ -837,6 +852,10 @@ pub(crate) struct DetachedArenaBatch {
 }
 
 impl GestureArena {
+    pub(crate) fn close_tombstone(&self) -> CloseTombstone {
+        self.close_mode.clone()
+    }
+
     fn allocate_slot(&self, pointer: PointerId) -> Arc<ArenaSlot> {
         let generation = ArenaGeneration(
             self.next_generation
@@ -946,6 +965,8 @@ impl GestureArena {
             deferred: Arc::new(Mutex::new(VecDeque::new())),
             deadlines: Arc::new(DeadlineRegistry::new()),
             next_generation: Arc::new(AtomicU64::new(1)),
+            owner_closed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            close_mode: CloseTombstone::default(),
             clock,
             sweep_model: SweepModel::SelfDriven,
         }
@@ -966,6 +987,8 @@ impl GestureArena {
             deferred: Arc::new(Mutex::new(VecDeque::new())),
             deadlines: Arc::new(DeadlineRegistry::new()),
             next_generation: Arc::new(AtomicU64::new(1)),
+            owner_closed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            close_mode: CloseTombstone::default(),
             clock,
             sweep_model: SweepModel::BindingDriven,
         }
@@ -980,6 +1003,8 @@ impl GestureArena {
             deferred: Arc::new(Mutex::new(VecDeque::new())),
             deadlines: Arc::new(DeadlineRegistry::new()),
             next_generation: Arc::new(AtomicU64::new(1)),
+            owner_closed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            close_mode: CloseTombstone::default(),
             clock: Arc::new(SystemClock),
             sweep_model: SweepModel::SelfDriven,
         }
@@ -1060,6 +1085,19 @@ impl GestureArena {
         member: Arc<dyn GestureArenaMember>,
     ) -> GestureArenaEntry {
         use dashmap::mapref::entry::Entry;
+        if self.owner_closed.load(Ordering::Acquire) {
+            let inert = GestureArenaEntry {
+                arena: self.clone(),
+                pointer,
+                generation: ArenaGeneration(0),
+                slot: Weak::new(),
+                member: Arc::downgrade(&member),
+            };
+            let mut failure = ClosePanic::for_rejection(self.close_mode.mode());
+            failure.retire(crate::retain::Owned(member));
+            failure.finish();
+            return inert;
+        }
 
         // Keep the occupied shard guard until membership is recorded. This
         // makes slot selection and membership insertion one transaction even
@@ -1145,6 +1183,12 @@ impl GestureArena {
         member: Arc<dyn GestureArenaMember>,
         disposition: GestureDisposition,
     ) {
+        if self.owner_closed.load(Ordering::Acquire) {
+            let mut failure = ClosePanic::for_rejection(self.close_mode.mode());
+            failure.retire(crate::retain::Owned(member));
+            failure.finish();
+            return;
+        }
         let (mut pending, follow_up) = {
             let mut entry = slot.data.lock();
             match disposition {
@@ -1165,6 +1209,12 @@ impl GestureArena {
     ///
     /// Prefer using [`GestureArenaEntry::resolve`] instead of this method.
     pub fn accept(&self, pointer: PointerId, member: Arc<dyn GestureArenaMember>) {
+        if self.owner_closed.load(Ordering::Acquire) {
+            let mut failure = ClosePanic::for_rejection(self.close_mode.mode());
+            failure.retire(crate::retain::Owned(member));
+            failure.finish();
+            return;
+        }
         let Some(slot) = self.current_slot(pointer) else {
             return;
         };
@@ -1251,6 +1301,12 @@ impl GestureArena {
         )
     )]
     pub fn resolve(&self, pointer: PointerId, winner: Option<Arc<dyn GestureArenaMember>>) {
+        if self.owner_closed.load(Ordering::Acquire) {
+            let mut failure = ClosePanic::for_rejection(self.close_mode.mode());
+            failure.retire(crate::retain::Owned(winner));
+            failure.finish();
+            return;
+        }
         let Some(slot) = self.current_slot(pointer) else {
             return;
         };
@@ -1404,6 +1460,38 @@ impl GestureArena {
         }
     }
 
+    pub(crate) fn close_owner(&self, mode: CloseMode) {
+        let mut failure = ClosePanic::for_close(mode, self.close_mode.clone());
+        self.owner_closed.store(true, Ordering::Release);
+        let mut pointers: Vec<_> = self.entries.iter().map(|entry| *entry.key()).collect();
+        pointers.extend(self.retained.iter().map(|entry| entry.value().pointer));
+        pointers.sort_unstable();
+        pointers.dedup();
+        let batches: Vec<_> = pointers
+            .into_iter()
+            .map(|pointer| self.detach(pointer))
+            .collect();
+        self.deferred.lock().clear();
+        for batch in batches {
+            for slot in batch.slots {
+                if failure.preserving() {
+                    failure.retire(crate::retain::Owned(slot));
+                    continue;
+                }
+                let pending = slot.data.lock().resolve(None);
+                for (member, disposition) in pending {
+                    failure.run(|| match disposition {
+                        GestureDisposition::Accepted => member.accept_gesture(batch.pointer),
+                        GestureDisposition::Rejected => member.reject_gesture(batch.pointer),
+                    });
+                    failure.retire(crate::retain::Owned(member));
+                }
+                failure.retire(crate::retain::Owned(slot));
+            }
+        }
+        failure.finish();
+    }
+
     /// Tear down every interrupted pointer sequence without choosing winners.
     ///
     /// All slots are detached first. Recognizer notifications keep their
@@ -1501,6 +1589,9 @@ impl GestureArena {
     /// Complexity: O(P + M) where P is the number of open arenas and M the
     /// total active members — both bounded by the simultaneous-pointer cap.
     pub fn poll_deadlines(&self) {
+        if self.owner_closed.load(Ordering::Acquire) {
+            return;
+        }
         let mut first_panic = None;
         for poll in self.deadline_members_snapshot() {
             if poll
@@ -1526,6 +1617,9 @@ impl GestureArena {
     /// per-entry locks before querying — the same discipline `poll_deadlines`
     /// follows — and the predicate itself is a pure state read.
     pub fn has_pending_deadlines(&self) -> bool {
+        if self.owner_closed.load(Ordering::Acquire) {
+            return false;
+        }
         self.deadline_members_snapshot().into_iter().any(|poll| {
             poll.registration
                 .is_none_or(|id| self.deadlines.contains(id))
@@ -1542,6 +1636,9 @@ impl GestureArena {
     /// deadline, rather than only lazily on the next unrelated event. Same
     /// snapshot/locking discipline as `has_pending_deadlines`.
     pub fn next_deadline(&self) -> Option<Instant> {
+        if self.owner_closed.load(Ordering::Acquire) {
+            return None;
+        }
         self.deadline_members_snapshot()
             .into_iter()
             .filter(|poll| {

@@ -34,6 +34,9 @@ impl std::fmt::Debug for PresentationForest {
 }
 
 impl PresentationForest {
+    pub(crate) fn take_all(&mut self) -> Vec<PresentationState> {
+        std::mem::take(&mut self.presentations)
+    }
     /// Construct a forest holding exactly one presentation — every realm's
     /// starting shape; [`Self::install`] grows it from there.
     pub(crate) fn single(presentation: PresentationState) -> Self {

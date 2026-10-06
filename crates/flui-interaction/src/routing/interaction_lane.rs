@@ -23,6 +23,7 @@ use flui_painting::paint::{Path, Shader};
 use super::hit_test::{EventPropagation, HitTestEntry, HitTestResult, transform_pointer_event};
 use crate::events::{DeviceId, PointerEvent, PointerEventExt, ScrollEventData};
 use crate::pan_zoom::PointerPanZoomEvent;
+use crate::retain::Retain;
 
 static NEXT_LANE_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -370,6 +371,14 @@ pub struct MouseRegionCallbacks {
     pub on_hover: Option<MouseHoverCallback>,
 }
 
+impl crate::retain::Retain for MouseRegionCallbacks {
+    fn retain(self) {
+        self.on_enter.retain();
+        self.on_exit.retain();
+        self.on_hover.retain();
+    }
+}
+
 impl fmt::Debug for MouseRegionCallbacks {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("MouseRegionCallbacks")
@@ -534,12 +543,51 @@ impl LocalEventTransform {
 }
 
 struct ResolvedHitEntry {
+    owner: Option<std::sync::Arc<DispatchOwner>>,
     handler_cell: Rc<HandlerCell>,
     local_transform: LocalEventTransform,
 }
 
 struct ResolvedHitRoute {
     entries: Vec<ResolvedHitEntry>,
+}
+
+impl Drop for ResolvedHitRoute {
+    /// A saved route can outlive its target's owner. When that owner's close
+    /// was preserving, it released its own clones of the cell, so the route
+    /// may now hold the last one: the cell then follows that close's
+    /// retention instead of running the capture's destructor here (ADR-0127).
+    /// Retained entries are settled before any other entry is destroyed. The
+    /// rest are destroyed one at a time: once one capture's destructor fails,
+    /// or during an unwind, the remaining entries are retained, so a second
+    /// failing capture can neither replace the first failure nor abort.
+    fn drop(&mut self) {
+        let mut released = Vec::new();
+        for entry in std::mem::take(&mut self.entries) {
+            if entry
+                .owner
+                .as_ref()
+                .is_some_and(|owner| owner.retains_withdrawn())
+            {
+                entry.handler_cell.retain();
+            } else {
+                released.push(entry);
+            }
+        }
+        let mut first = None;
+        for entry in released {
+            if first.is_some() || std::thread::panicking() {
+                entry.handler_cell.retain();
+            } else if let Err(payload) =
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(entry)))
+            {
+                first = Some(payload);
+            }
+        }
+        if let Some(payload) = first {
+            std::panic::resume_unwind(payload);
+        }
+    }
 }
 
 impl ResolvedHitRoute {
@@ -552,6 +600,9 @@ impl ResolvedHitRoute {
     fn invoke(&self, event: &PointerEvent) -> Option<RoutePanic> {
         let mut first_panic = None;
         for entry in &self.entries {
+            if entry.owner.as_ref().is_some_and(|owner| owner.is_closed()) {
+                continue;
+            }
             let local_event = match &entry.local_transform {
                 LocalEventTransform::Global => None,
                 LocalEventTransform::Local(local) => Some(transform_pointer_event(event, local)),
@@ -576,7 +627,8 @@ impl ResolvedHitRoute {
             // the callback's final owner. Keep that destructor inside the same
             // dispatch transaction so later hit targets, the pointer router,
             // and lifecycle cleanup still run before the first unwind resumes.
-            let snapshot_cleanup = RoutePanic::capture(|| drop(handler));
+            let latch = OwnerLatch(entry.owner.clone());
+            let snapshot_cleanup = RoutePanic::capture(|| latch.release(handler));
             RoutePanic::preserve_first(
                 &mut first_panic,
                 snapshot_cleanup,
@@ -601,8 +653,8 @@ impl ResolvedHitRoute {
 /// move never has a cached Down route to reuse, so this type is resolved and
 /// invoked once, inline, with nothing stored in `lane.routes`.
 struct ResolvedHoverInterleavedEntry {
-    pointer: Option<(Rc<HandlerCell>, LocalEventTransform)>,
-    hover_callback: Option<MouseHoverCallback>,
+    pointer: Option<(Rc<HandlerCell>, LocalEventTransform, OwnerLatch)>,
+    hover_callback: Option<(MouseHoverCallback, OwnerLatch)>,
 }
 
 /// The first panic captured while invoking a resolved pointer route.
@@ -652,7 +704,7 @@ impl RoutePanic {
             // panic in Drop. Discarding a secondary payload normally could
             // therefore replace the first panic (or abort during unwind).
             // Only a known inert payload is released.
-            crate::retain::Retain::retain(candidate);
+            candidate.retain();
         }
     }
 
@@ -741,6 +793,7 @@ impl HitTestSnapshot {
 }
 
 struct LocalLaneInner {
+    target_owners: RefCell<HashMap<TargetId, std::sync::Arc<DispatchOwner>>>,
     ticket: LaneTicket,
     target_ids: MonotonicIdSource,
     route_ids: MonotonicIdSource,
@@ -752,6 +805,12 @@ struct LocalLaneInner {
     shader_mask_targets: RefCell<HashMap<TargetId, Rc<ShaderMaskCell>>>,
     payload_targets: RefCell<HashMap<TargetId, Rc<dyn Any>>>,
     routes: RefCell<HashMap<RouteId, Rc<ResolvedHitRoute>>>,
+}
+
+impl LocalLaneInner {
+    fn owner_latch(&self, id: TargetId) -> OwnerLatch {
+        OwnerLatch(self.target_owners.borrow().get(&id).cloned())
+    }
 }
 
 thread_local! {
@@ -780,6 +839,7 @@ impl InteractionLane {
     pub fn try_new() -> Result<Self, InteractionDispatchError> {
         let lane_id = try_mint_lane_id(&NEXT_LANE_ID)?;
         let inner = Rc::new(LocalLaneInner {
+            target_owners: RefCell::new(HashMap::new()),
             ticket: LaneTicket {
                 lane_id,
                 owner: thread::current().id(),
@@ -806,6 +866,7 @@ impl InteractionLane {
     pub fn dispatch_handle(&self) -> InteractionDispatchHandle {
         InteractionDispatchHandle {
             ticket: self.inner.ticket,
+            owner: None,
         }
     }
 
@@ -961,16 +1022,296 @@ impl Drop for LaneActivation<'_> {
 
 /// Send-safe ticket for owner-local interaction registration and route access.
 ///
-/// It carries identity only. Calls succeed exclusively while its lane is the
+/// It carries identity and an optional terminal owner latch. Calls succeed while its lane is the
 /// active top scope on the owner thread.
 #[doc(hidden)]
 #[derive(Clone)]
 pub struct InteractionDispatchHandle {
     ticket: LaneTicket,
+    owner: Option<std::sync::Arc<DispatchOwner>>,
+}
+
+#[derive(Default)]
+struct DispatchOwner {
+    closed: std::sync::atomic::AtomicBool,
+    mode: crate::__runtime::CloseTombstone,
+}
+
+impl DispatchOwner {
+    fn is_closed(&self) -> bool {
+        self.closed.load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    /// Whether this owner closed preservingly: what its close withdrew stays
+    /// under retention wherever the last clone lands.
+    fn retains_withdrawn(&self) -> bool {
+        self.is_closed() && self.mode.preserved()
+    }
+}
+
+/// The terminal latch of the owner that registered one dispatch target.
+///
+/// A dispatch snapshots callbacks before invoking any of them, and a callback
+/// can close its presentation reentrantly. Every snapshot carries this latch,
+/// is skipped once the latch is closed, and is released under that close's
+/// retention policy.
+#[derive(Clone, Default)]
+pub(crate) struct OwnerLatch(Option<std::sync::Arc<DispatchOwner>>);
+
+impl OwnerLatch {
+    /// Whether the registering owner has closed since the snapshot.
+    pub(crate) fn is_closed(&self) -> bool {
+        self.0.as_ref().is_some_and(|owner| owner.is_closed())
+    }
+
+    /// Drop a snapshot, or retain it when the owner's close was preserving
+    /// and released its own clone first (ADR-0127).
+    pub(crate) fn release<T: Retain>(&self, value: T) {
+        if self
+            .0
+            .as_ref()
+            .is_some_and(|owner| owner.retains_withdrawn())
+        {
+            value.retain();
+        } else {
+            drop(value);
+        }
+    }
+}
+
+/// What a presentation's dispatch owner held when its authority was withdrawn.
+///
+/// Withdrawal detaches every target from the lane at once; the captures are
+/// destroyed only by [`DispatchCustody::retire`], once the presentation has
+/// withdrawn its other capabilities too, so a reentrant destructor finds the
+/// whole presentation closed (ADR-0123). Dropped without `retire`, it retires
+/// its contents under the active unwind's policy.
+#[doc(hidden)]
+#[must_use = "withdrawn dispatch captures must be retired"]
+pub struct DispatchCustody {
+    failure: Option<crate::__runtime::ClosePanic>,
+    pointers: Vec<Rc<HandlerCell>>,
+    mice: Vec<Rc<MouseRegionCell>>,
+    scrolls: Vec<Rc<ScrollCell>>,
+    pans: Vec<Rc<PanZoomCell>>,
+    clips: Vec<Rc<PathClipCell>>,
+    masks: Vec<Rc<ShaderMaskCell>>,
+    payloads: Vec<Rc<dyn Any>>,
+}
+
+impl DispatchCustody {
+    /// Destroy the withdrawn captures, or retain them once `mode` (or a
+    /// failure during retirement) is preserving. The first failure resumes.
+    pub(crate) fn retire(mut self, mode: crate::__runtime::CloseMode) {
+        if let Some(failure) = self.retire_contents(mode) {
+            failure.finish();
+        }
+    }
+
+    fn retire_contents(
+        &mut self,
+        mode: crate::__runtime::CloseMode,
+    ) -> Option<crate::__runtime::ClosePanic> {
+        let mut failure = self.failure.take()?;
+        failure.adopt(mode);
+        for cell in std::mem::take(&mut self.pointers) {
+            failure.retire(cell);
+        }
+        for cell in std::mem::take(&mut self.mice) {
+            // A tracker annotation may still hold the cell; only the
+            // callbacks it carried are user-owned.
+            let callbacks = cell.replace(MouseRegionCallbacks::default());
+            failure.retire(callbacks.on_enter);
+            failure.retire(callbacks.on_exit);
+            failure.retire(callbacks.on_hover);
+            failure.retire(cell);
+        }
+        for cell in std::mem::take(&mut self.scrolls) {
+            failure.retire(cell);
+        }
+        for cell in std::mem::take(&mut self.pans) {
+            failure.retire(cell);
+        }
+        for cell in std::mem::take(&mut self.clips) {
+            failure.retire(cell);
+        }
+        for cell in std::mem::take(&mut self.masks) {
+            failure.retire(cell);
+        }
+        for payload in std::mem::take(&mut self.payloads) {
+            failure.retire(payload);
+        }
+        Some(failure)
+    }
+}
+
+impl fmt::Debug for DispatchCustody {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("DispatchCustody")
+            .field("pointers", &self.pointers.len())
+            .field("mice", &self.mice.len())
+            .finish_non_exhaustive()
+    }
+}
+
+impl Drop for DispatchCustody {
+    fn drop(&mut self) {
+        let mode = if std::thread::panicking() {
+            crate::__runtime::CloseMode::PreservingFailure
+        } else {
+            crate::__runtime::CloseMode::Ordinary
+        };
+        if let Some(failure) = self.retire_contents(mode) {
+            failure.finish_contained();
+        }
+    }
 }
 
 impl InteractionDispatchHandle {
+    pub(crate) fn scoped_owner(&self) -> Self {
+        Self {
+            ticket: self.ticket,
+            owner: Some(std::sync::Arc::new(DispatchOwner::default())),
+        }
+    }
+
+    /// Admit a uniquely owned value (a user closure): a rejection during a
+    /// preserving close retains it whole.
+    fn admit<T>(&self, value: T) -> Result<T, InteractionDispatchError> {
+        self.admit_retained(crate::retain::Owned(value))
+            .map(|crate::retain::Owned(value)| value)
+    }
+
+    /// Admit a value under its own [`Retain`](crate::retain::Retain) policy: a
+    /// shared `Rc` the caller still holds is released on rejection, since
+    /// dropping a non-last clone runs no user code (ADR-0127).
+    fn admit_retained<T: crate::retain::Retain>(
+        &self,
+        value: T,
+    ) -> Result<T, InteractionDispatchError> {
+        if let Some(owner) = &self.owner
+            && owner.closed.load(std::sync::atomic::Ordering::Acquire)
+        {
+            let mut failure = crate::__runtime::ClosePanic::for_rejection(owner.mode.mode());
+            failure.retire(value);
+            failure.finish();
+            return Err(InteractionDispatchError::OwnerGone);
+        }
+        Ok(value)
+    }
+
+    fn stamp(&self, lane: &LocalLaneInner, id: TargetId) {
+        if let Some(owner) = &self.owner {
+            lane.target_owners
+                .borrow_mut()
+                .insert(id, std::sync::Arc::clone(owner));
+        }
+    }
+
+    pub(crate) fn close_tombstone(&self) -> Option<crate::__runtime::CloseTombstone> {
+        self.owner.as_ref().map(|owner| owner.mode.clone())
+    }
+
+    pub(crate) fn close_owner(&self, mode: crate::__runtime::CloseMode) {
+        if let Some(custody) = self.withdraw_owner(mode) {
+            custody.retire(mode);
+        }
+    }
+
+    pub(crate) fn close_owner_in(&self, lane: &InteractionLane, mode: crate::__runtime::CloseMode) {
+        if let Some(custody) = self.withdraw_owner_in(lane, mode) {
+            custody.retire(mode);
+        }
+    }
+
+    /// Withdraw this owner's authority on the owner thread, keeping custody
+    /// of its captures for a later [`DispatchCustody::retire`].
+    pub(crate) fn withdraw_owner(
+        &self,
+        mode: crate::__runtime::CloseMode,
+    ) -> Option<DispatchCustody> {
+        let lane = LOCAL_LANES
+            .try_with(|lanes| {
+                lanes
+                    .borrow()
+                    .get(&self.ticket.lane_id)
+                    .and_then(Weak::upgrade)
+            })
+            .ok()
+            .flatten();
+        self.withdraw_owner_inner(lane.as_deref(), mode)
+    }
+
+    /// Withdraw through the physical lane during realm destruction.
+    pub(crate) fn withdraw_owner_in(
+        &self,
+        lane: &InteractionLane,
+        mode: crate::__runtime::CloseMode,
+    ) -> Option<DispatchCustody> {
+        assert!(
+            self.ticket == lane.inner.ticket,
+            "BUG: terminal dispatch owner belongs to another realm"
+        );
+        self.withdraw_owner_inner(Some(&lane.inner), mode)
+    }
+
+    fn withdraw_owner_inner(
+        &self,
+        lane: Option<&LocalLaneInner>,
+        mode: crate::__runtime::CloseMode,
+    ) -> Option<DispatchCustody> {
+        let owner = self.owner.as_ref()?;
+        // The close's reentry window stays open until the custody retires.
+        let failure = crate::__runtime::ClosePanic::for_close(mode, owner.mode.clone());
+        owner
+            .closed
+            .store(true, std::sync::atomic::Ordering::Release);
+        let mut custody = DispatchCustody {
+            failure: Some(failure),
+            pointers: Vec::new(),
+            mice: Vec::new(),
+            scrolls: Vec::new(),
+            pans: Vec::new(),
+            clips: Vec::new(),
+            masks: Vec::new(),
+            payloads: Vec::new(),
+        };
+        let Some(lane) = lane else {
+            return Some(custody);
+        };
+        let ids = {
+            let mut owners = lane.target_owners.borrow_mut();
+            let mut ids: Vec<_> = owners
+                .iter()
+                .filter_map(|(id, held)| std::sync::Arc::ptr_eq(held, owner).then_some(*id))
+                .collect();
+            ids.sort_unstable();
+            for id in &ids {
+                owners.remove(id);
+            }
+            ids
+        };
+        // Detach every typed target before any capture can reenter this lane.
+        // A cached route that still holds one of these cells keeps it; the
+        // route's own release follows this close's policy.
+        custody.pointers = take_targets(&lane.targets, &ids);
+        custody.mice = take_targets(&lane.mouse_targets, &ids);
+        custody.scrolls = take_targets(&lane.scroll_targets, &ids);
+        custody.pans = take_targets(&lane.pan_zoom_targets, &ids);
+        custody.clips = take_targets(&lane.path_clip_targets, &ids);
+        custody.masks = take_targets(&lane.shader_mask_targets, &ids);
+        custody.payloads = take_targets(&lane.payload_targets, &ids);
+        Some(custody)
+    }
+
     fn active_lane(&self) -> Result<Rc<LocalLaneInner>, InteractionDispatchError> {
+        if self
+            .owner
+            .as_ref()
+            .is_some_and(|owner| owner.closed.load(std::sync::atomic::Ordering::Acquire))
+        {
+            return Err(InteractionDispatchError::OwnerGone);
+        }
         if thread::current().id() != self.ticket.owner {
             return Err(InteractionDispatchError::WrongThread);
         }
@@ -1020,8 +1361,10 @@ impl InteractionDispatchHandle {
         &self,
         handler: impl Fn(PointerDispatch<'_>) + 'static,
     ) -> Result<PointerTarget, InteractionDispatchError> {
+        let handler = self.admit(handler)?;
         let lane = self.active_lane()?;
         let target_id = TargetId(lane.target_ids.try_next()?);
+        self.stamp(&lane, target_id);
         lane.targets
             .borrow_mut()
             .insert(target_id, Rc::new(HandlerCell::new(Rc::new(handler))));
@@ -1037,6 +1380,7 @@ impl InteractionDispatchHandle {
         target: PointerTarget,
         handler: impl Fn(PointerDispatch<'_>) + 'static,
     ) -> Result<(), InteractionDispatchError> {
+        let handler = self.admit(handler)?;
         let lane = self.active_lane()?;
         self.validate_lane(target.lane_id)?;
         let cell = lane
@@ -1062,6 +1406,7 @@ impl InteractionDispatchHandle {
             .borrow_mut()
             .remove(&target.target_id)
             .ok_or(InteractionDispatchError::TargetGone)?;
+        lane.target_owners.borrow_mut().remove(&target.target_id);
         drop(removed);
         Ok(())
     }
@@ -1071,8 +1416,10 @@ impl InteractionDispatchHandle {
         &self,
         callbacks: MouseRegionCallbacks,
     ) -> Result<MouseRegionTarget, InteractionDispatchError> {
+        let callbacks = self.admit_retained(callbacks)?;
         let lane = self.active_lane()?;
         let target_id = TargetId(lane.target_ids.try_next()?);
+        self.stamp(&lane, target_id);
         lane.mouse_targets
             .borrow_mut()
             .insert(target_id, Rc::new(MouseRegionCell::new(callbacks)));
@@ -1088,6 +1435,7 @@ impl InteractionDispatchHandle {
         target: MouseRegionTarget,
         callbacks: MouseRegionCallbacks,
     ) -> Result<(), InteractionDispatchError> {
+        let callbacks = self.admit_retained(callbacks)?;
         let lane = self.active_lane()?;
         self.validate_lane(target.lane_id)?;
         let cell = lane
@@ -1169,6 +1517,7 @@ impl InteractionDispatchHandle {
     ) -> Result<Rc<MouseRegionCell>, InteractionDispatchError> {
         let lane = self.active_lane()?;
         self.validate_lane(target.lane_id)?;
+        lane.target_owners.borrow_mut().remove(&target.target_id);
         lane.mouse_targets
             .borrow_mut()
             .remove(&target.target_id)
@@ -1178,14 +1527,16 @@ impl InteractionDispatchHandle {
     pub(super) fn resolve_mouse_region(
         &self,
         target: MouseRegionTarget,
-    ) -> Result<Rc<MouseRegionCell>, InteractionDispatchError> {
+    ) -> Result<(Rc<MouseRegionCell>, OwnerLatch), InteractionDispatchError> {
         let lane = self.active_lane()?;
         self.validate_lane(target.lane_id)?;
-        lane.mouse_targets
+        let cell = lane
+            .mouse_targets
             .borrow()
             .get(&target.target_id)
             .cloned()
-            .ok_or(InteractionDispatchError::TargetGone)
+            .ok_or(InteractionDispatchError::TargetGone)?;
+        Ok((cell, lane.owner_latch(target.target_id)))
     }
 
     /// Register a scroll/pointer-signal handler in the active owner lane.
@@ -1193,8 +1544,10 @@ impl InteractionDispatchHandle {
         &self,
         handler: impl Fn(&ScrollEventData) -> EventPropagation + 'static,
     ) -> Result<ScrollTarget, InteractionDispatchError> {
+        let handler = self.admit(handler)?;
         let lane = self.active_lane()?;
         let target_id = TargetId(lane.target_ids.try_next()?);
+        self.stamp(&lane, target_id);
         lane.scroll_targets
             .borrow_mut()
             .insert(target_id, Rc::new(ScrollCell::new(Rc::new(handler))));
@@ -1210,6 +1563,7 @@ impl InteractionDispatchHandle {
         target: ScrollTarget,
         handler: impl Fn(&ScrollEventData) -> EventPropagation + 'static,
     ) -> Result<(), InteractionDispatchError> {
+        let handler = self.admit(handler)?;
         let lane = self.active_lane()?;
         self.validate_lane(target.lane_id)?;
         let cell = lane
@@ -1232,6 +1586,7 @@ impl InteractionDispatchHandle {
             .borrow_mut()
             .remove(&target.target_id)
             .ok_or(InteractionDispatchError::TargetGone)?;
+        lane.target_owners.borrow_mut().remove(&target.target_id);
         drop(removed);
         Ok(())
     }
@@ -1266,8 +1621,10 @@ impl InteractionDispatchHandle {
         &self,
         handler: impl Fn(&PointerPanZoomEvent) -> EventPropagation + 'static,
     ) -> Result<PanZoomTarget, InteractionDispatchError> {
+        let handler = self.admit(handler)?;
         let lane = self.active_lane()?;
         let target_id = TargetId(lane.target_ids.try_next()?);
+        self.stamp(&lane, target_id);
         lane.pan_zoom_targets
             .borrow_mut()
             .insert(target_id, Rc::new(PanZoomCell::new(Rc::new(handler))));
@@ -1288,6 +1645,7 @@ impl InteractionDispatchHandle {
         target: PanZoomTarget,
         handler: impl Fn(&PointerPanZoomEvent) -> EventPropagation + 'static,
     ) -> Result<(), InteractionDispatchError> {
+        let handler = self.admit(handler)?;
         let lane = self.active_lane()?;
         self.validate_lane(target.lane_id)?;
         let cell = lane
@@ -1318,6 +1676,7 @@ impl InteractionDispatchHandle {
             .borrow_mut()
             .remove(&target.target_id)
             .ok_or(InteractionDispatchError::TargetGone)?;
+        lane.target_owners.borrow_mut().remove(&target.target_id);
         drop(removed);
         Ok(())
     }
@@ -1352,8 +1711,10 @@ impl InteractionDispatchHandle {
         &self,
         clipper: impl Fn(Size) -> Path + 'static,
     ) -> Result<PathClipTarget, InteractionDispatchError> {
+        let clipper = self.admit(clipper)?;
         let lane = self.active_lane()?;
         let target_id = TargetId(lane.target_ids.try_next()?);
+        self.stamp(&lane, target_id);
         lane.path_clip_targets
             .borrow_mut()
             .insert(target_id, Rc::new(PathClipCell::new(Rc::new(clipper))));
@@ -1369,6 +1730,7 @@ impl InteractionDispatchHandle {
         target: PathClipTarget,
         clipper: impl Fn(Size) -> Path + 'static,
     ) -> Result<(), InteractionDispatchError> {
+        let clipper = self.admit(clipper)?;
         let lane = self.active_lane()?;
         self.validate_lane(target.lane_id)?;
         let cell = lane
@@ -1394,6 +1756,7 @@ impl InteractionDispatchHandle {
             .borrow_mut()
             .remove(&target.target_id)
             .ok_or(InteractionDispatchError::TargetGone)?;
+        lane.target_owners.borrow_mut().remove(&target.target_id);
         drop(removed);
         Ok(())
     }
@@ -1423,8 +1786,10 @@ impl InteractionDispatchHandle {
         &self,
         factory: impl Fn(Rect<f64>) -> Shader + 'static,
     ) -> Result<ShaderMaskTarget, InteractionDispatchError> {
+        let factory = self.admit(factory)?;
         let lane = self.active_lane()?;
         let target_id = TargetId(lane.target_ids.try_next()?);
+        self.stamp(&lane, target_id);
         lane.shader_mask_targets
             .borrow_mut()
             .insert(target_id, Rc::new(ShaderMaskCell::new(Rc::new(factory))));
@@ -1440,6 +1805,7 @@ impl InteractionDispatchHandle {
         target: ShaderMaskTarget,
         factory: impl Fn(Rect<f64>) -> Shader + 'static,
     ) -> Result<(), InteractionDispatchError> {
+        let factory = self.admit(factory)?;
         let lane = self.active_lane()?;
         self.validate_lane(target.lane_id)?;
         let cell = lane
@@ -1465,6 +1831,7 @@ impl InteractionDispatchHandle {
             .borrow_mut()
             .remove(&target.target_id)
             .ok_or(InteractionDispatchError::TargetGone)?;
+        lane.target_owners.borrow_mut().remove(&target.target_id);
         drop(removed);
         Ok(())
     }
@@ -1499,8 +1866,10 @@ impl InteractionDispatchHandle {
         &self,
         payload: Rc<dyn Any>,
     ) -> Result<LocalPayloadTarget, InteractionDispatchError> {
+        let payload = self.admit_retained(payload)?;
         let lane = self.active_lane()?;
         let target_id = TargetId(lane.target_ids.try_next()?);
+        self.stamp(&lane, target_id);
         lane.payload_targets.borrow_mut().insert(target_id, payload);
         Ok(LocalPayloadTarget {
             lane_id: self.ticket.lane_id,
@@ -1522,6 +1891,7 @@ impl InteractionDispatchHandle {
         target: LocalPayloadTarget,
         payload: Rc<dyn Any>,
     ) -> Result<(), InteractionDispatchError> {
+        let payload = self.admit_retained(payload)?;
         let lane = self.active_lane()?;
         self.validate_lane(target.lane_id)?;
         let previous = {
@@ -1555,6 +1925,7 @@ impl InteractionDispatchHandle {
             .borrow_mut()
             .remove(&target.target_id)
             .ok_or(InteractionDispatchError::TargetGone)?;
+        lane.target_owners.borrow_mut().remove(&target.target_id);
         drop(removed);
         Ok(())
     }
@@ -1604,6 +1975,7 @@ impl InteractionDispatchHandle {
                 };
                 if let Some(cell) = registered.get(&target.target_id) {
                     entries.push(ResolvedHitEntry {
+                        owner: lane.target_owners.borrow().get(&target.target_id).cloned(),
                         handler_cell: Rc::clone(cell),
                         local_transform: LocalEventTransform::capture(entry.transform),
                     });
@@ -1670,6 +2042,33 @@ impl InteractionDispatchHandle {
             .remove(&token.route_id)
             .ok_or(InteractionDispatchError::StaleRoute)?;
         drop(removed);
+        Ok(())
+    }
+
+    pub(crate) fn release_route_for_close(
+        &self,
+        token: ResolvedRouteToken,
+        failure: &mut crate::__runtime::ClosePanic,
+    ) -> Result<(), InteractionDispatchError> {
+        let lane = self.active_lane()?;
+        self.validate_lane(token.lane_id)?;
+        let removed = lane
+            .routes
+            .borrow_mut()
+            .remove(&token.route_id)
+            .ok_or(InteractionDispatchError::StaleRoute)?;
+        if failure.preserving() {
+            failure.retire(removed);
+        } else {
+            match Rc::try_unwrap(removed) {
+                Ok(mut route) => {
+                    for entry in std::mem::take(&mut route.entries) {
+                        failure.retire(entry.handler_cell);
+                    }
+                }
+                Err(shared) => failure.retire(shared),
+            }
+        }
         Ok(())
     }
 
@@ -1747,17 +2146,22 @@ impl InteractionDispatchHandle {
             path.iter()
                 .filter_map(|entry| {
                     let pointer = entry.pointer_target.and_then(|target| {
-                        targets
-                            .get(&target.target_id)
-                            .cloned()
-                            .map(|cell| (cell, LocalEventTransform::capture(entry.transform)))
+                        targets.get(&target.target_id).cloned().map(|cell| {
+                            (
+                                cell,
+                                LocalEventTransform::capture(entry.transform),
+                                lane.owner_latch(target.target_id),
+                            )
+                        })
                     });
                     let hover_callback = hover_qualifies
                         .then_some(entry.mouse_annotation)
                         .flatten()
                         .and_then(|annotation| {
                             match self.resolve_mouse_region(annotation.target) {
-                                Ok(cell) => cell.snapshot().on_hover,
+                                Ok((cell, latch)) => {
+                                    cell.snapshot().on_hover.map(|callback| (callback, latch))
+                                }
                                 Err(error) => {
                                     tracing::debug!(
                                         ?error,
@@ -1781,14 +2185,15 @@ impl InteractionDispatchHandle {
         let position = event.position();
         let mut first_panic = None;
         for entry in resolved {
-            if let Some((cell, transform)) = entry.pointer {
+            if let Some((cell, transform, latch)) = entry.pointer {
                 let local_event = match &transform {
                     LocalEventTransform::Local(local) => {
                         Some(transform_pointer_event(event, local))
                     }
                     LocalEventTransform::Global | LocalEventTransform::NonInvertible => None,
                 };
-                if !matches!(transform, LocalEventTransform::NonInvertible) {
+                // An earlier callback may have closed this entry's owner.
+                if !latch.is_closed() && !matches!(transform, LocalEventTransform::NonInvertible) {
                     let handler = cell.snapshot();
                     let dispatch = match local_event.as_ref() {
                         Some(local) => PointerDispatch {
@@ -1809,25 +2214,47 @@ impl InteractionDispatchHandle {
                     // the snapshot's destructor inside this transaction rather
                     // than unwinding before later entries and the caller's
                     // mandatory cleanup run.
-                    let snapshot_cleanup = RoutePanic::capture(|| drop(handler));
+                    let snapshot_cleanup = RoutePanic::capture(|| latch.release(handler));
                     RoutePanic::preserve_first(
                         &mut first_panic,
                         snapshot_cleanup,
                         "pointer target snapshot cleanup (hover-interleaved)",
                     );
                 }
-            }
-            if let Some(callback) = entry.hover_callback {
-                let delivered = RoutePanic::capture(|| callback(device_id, position));
+                let cell_cleanup = RoutePanic::capture(|| latch.release(cell));
                 RoutePanic::preserve_first(
                     &mut first_panic,
-                    delivered,
-                    "mouse hover callback (hover-interleaved)",
+                    cell_cleanup,
+                    "pointer target cell cleanup (hover-interleaved)",
+                );
+            }
+            if let Some((callback, latch)) = entry.hover_callback {
+                if !latch.is_closed() {
+                    let delivered = RoutePanic::capture(|| callback(device_id, position));
+                    RoutePanic::preserve_first(
+                        &mut first_panic,
+                        delivered,
+                        "mouse hover callback (hover-interleaved)",
+                    );
+                }
+                let snapshot_cleanup = RoutePanic::capture(|| latch.release(callback));
+                RoutePanic::preserve_first(
+                    &mut first_panic,
+                    snapshot_cleanup,
+                    "mouse hover snapshot cleanup (hover-interleaved)",
                 );
             }
         }
         first_panic
     }
+}
+
+fn take_targets<T: ?Sized>(
+    targets: &RefCell<HashMap<TargetId, Rc<T>>>,
+    ids: &[TargetId],
+) -> Vec<Rc<T>> {
+    let mut targets = targets.borrow_mut();
+    ids.iter().filter_map(|id| targets.remove(id)).collect()
 }
 
 impl fmt::Debug for InteractionDispatchHandle {
@@ -1852,7 +2279,10 @@ pub(crate) fn active_dispatch_handle() -> Result<InteractionDispatchHandle, Inte
 {
     let ticket = ACTIVE_LANES.with(|active| active.borrow().last().copied());
     ticket
-        .map(|ticket| InteractionDispatchHandle { ticket })
+        .map(|ticket| InteractionDispatchHandle {
+            ticket,
+            owner: None,
+        })
         .ok_or(InteractionDispatchError::InactiveRealm)
 }
 

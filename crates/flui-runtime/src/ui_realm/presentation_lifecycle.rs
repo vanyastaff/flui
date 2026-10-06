@@ -11,6 +11,16 @@ use crate::lifecycle_state::{
     derive_lifecycle_state, lifecycle_ladder, preserve_first_lifecycle_panic,
 };
 
+/// The close mode for the next terminal step of a lifecycle pass: preserving
+/// once a failure is held or the thread is already unwinding (ADR-0123).
+fn terminal_close_mode(failure_held: bool) -> flui_interaction::__runtime::CloseMode {
+    if failure_held || std::thread::panicking() {
+        flui_interaction::__runtime::CloseMode::PreservingFailure
+    } else {
+        flui_interaction::__runtime::CloseMode::Ordinary
+    }
+}
+
 /// An observed Detached state is reversible; terminal lifetime is explicit.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum HostLifecycle {
@@ -232,7 +242,38 @@ impl UiRealm {
             .unwrap_or(Detached)
     }
 
+    fn seed_terminal_lifecycle_recovery(&self) {
+        for presentation in self
+            .presentations
+            .iter()
+            .filter(|owner| owner.closing_requested.get())
+        {
+            presentation
+                .widgets()
+                .lifecycle_source()
+                .begin_close_with_mode(flui_interaction::__runtime::CloseMode::PreservingFailure);
+        }
+    }
+
+    /// Keeps the first failure of a lifecycle pass. Once any failure is held,
+    /// or the thread is already unwinding, every closing presentation's
+    /// lifecycle source switches to preserving mode (ADR-0123).
+    fn record_lifecycle_failure(
+        &self,
+        first_panic: &mut Option<Box<dyn std::any::Any + Send>>,
+        failure: Option<Box<dyn std::any::Any + Send>>,
+        phase: &'static str,
+    ) {
+        if first_panic.is_some() || failure.is_some() || std::thread::panicking() {
+            self.seed_terminal_lifecycle_recovery();
+        }
+        preserve_first_lifecycle_panic(first_panic, failure, phase);
+    }
+
     fn reconcile_lifecycle(&self, mut cancel: Vec<PresentationId>) {
+        if std::thread::panicking() {
+            self.seed_terminal_lifecycle_recovery();
+        }
         let transitions: Vec<_> = self
             .presentations
             .iter()
@@ -294,9 +335,20 @@ impl UiRealm {
             cancel.sort_unstable();
             cancel.dedup();
             for id in cancel.drain(..) {
+                // A closing presentation's gestures are cancelled by its
+                // terminal close below, after every presentation-wide
+                // capability is withdrawn: a recognizer's rejection callback
+                // must not reenter the closing presentation (ADR-0123).
+                if self
+                    .presentations
+                    .get(id)
+                    .is_some_and(|presentation| presentation.closing_requested.get())
+                {
+                    continue;
+                }
                 let failure =
                     catch_unwind(AssertUnwindSafe(|| self.cancel_pointer_sequences_for(id))).err();
-                preserve_first_lifecycle_panic(
+                self.record_lifecycle_failure(
                     &mut first_panic,
                     failure,
                     "presentation input cancellation",
@@ -327,7 +379,7 @@ impl UiRealm {
                     self.scheduler().handle_app_lifecycle_state_change(step);
                 }))
                 .err();
-                preserve_first_lifecycle_panic(
+                self.record_lifecycle_failure(
                     &mut first_panic,
                     failure,
                     "realm lifecycle scheduler",
@@ -342,18 +394,38 @@ impl UiRealm {
                     self.wake_frame();
                 }))
                 .err();
-                preserve_first_lifecycle_panic(
+                self.record_lifecycle_failure(
                     &mut first_panic,
                     failure,
                     "presentation redraw restoration",
                 );
             }
             for (presentation, _, step) in changed {
+                if presentation.closing_requested.get()
+                    && terminal_close_mode(first_panic.is_some())
+                        == flui_interaction::__runtime::CloseMode::PreservingFailure
+                {
+                    let failure = catch_unwind(AssertUnwindSafe(|| {
+                        presentation
+                            .widgets()
+                            .lifecycle_source()
+                            .begin_close_with_mode(
+                                flui_interaction::__runtime::CloseMode::PreservingFailure,
+                            );
+                    }))
+                    .err();
+                    self.record_lifecycle_failure(
+                        &mut first_panic,
+                        failure,
+                        "terminal lifecycle withdrawal",
+                    );
+                    continue;
+                }
                 let failure = catch_unwind(AssertUnwindSafe(|| {
                     presentation.widgets().notify_committed_lifecycle(step);
                 }))
                 .err();
-                preserve_first_lifecycle_panic(
+                self.record_lifecycle_failure(
                     &mut first_panic,
                     failure,
                     "presentation lifecycle observers",
@@ -367,24 +439,34 @@ impl UiRealm {
             .iter()
             .filter(|p| p.closing_requested.get())
         {
+            let mode = terminal_close_mode(first_panic.is_some());
             let failure = catch_unwind(AssertUnwindSafe(|| {
-                presentation.widgets().lifecycle_source().finish_close();
+                presentation
+                    .widgets()
+                    .lifecycle_source()
+                    .finish_close_with_mode(mode);
             }))
             .err();
-            preserve_first_lifecycle_panic(
+            self.record_lifecycle_failure(
                 &mut first_panic,
                 failure,
                 "lifecycle subscription close",
             );
-            let failure = catch_unwind(AssertUnwindSafe(|| presentation.close())).err();
-            preserve_first_lifecycle_panic(
+            let mode = terminal_close_mode(first_panic.is_some());
+            let failure =
+                catch_unwind(AssertUnwindSafe(|| presentation.close_with_mode(mode))).err();
+            self.record_lifecycle_failure(
                 &mut first_panic,
                 failure,
                 "terminal presentation cleanup",
             );
         }
         if let Some(payload) = first_panic {
-            resume_unwind(payload);
+            if std::thread::panicking() {
+                flui_foundation::panic::retain_opaque_payload(payload);
+            } else {
+                resume_unwind(payload);
+            }
         }
     }
 }

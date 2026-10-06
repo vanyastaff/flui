@@ -296,6 +296,8 @@ const fn px_f32(v: f64) -> f64 {
 /// callbacks are not `Send + Sync`; render hit-test entries and route tokens
 /// remain on the separate data plane.
 pub struct GestureBinding {
+    closed: Cell<bool>,
+    close_mode: crate::__runtime::CloseTombstone,
     /// Cached hit paths and resolved routes per pointer.
     /// Down resolves once; move/up events reuse the cached route.
     hit_tests: DashMap<PointerId, CachedPointerRoute>,
@@ -384,6 +386,8 @@ impl GestureBinding {
         clock: std::sync::Arc<dyn MonotonicClock>,
     ) -> Self {
         Self {
+            closed: Cell::new(false),
+            close_mode: crate::__runtime::CloseTombstone::default(),
             hit_tests: DashMap::new(),
             pending_moves: DashMap::new(),
             resampling_enabled: Cell::new(false),
@@ -539,6 +543,12 @@ impl GestureBinding {
     where
         F: FnOnce(Offset<f64>) -> HitTestResult,
     {
+        if self.closed.get() {
+            let mut failure = crate::__runtime::ClosePanic::for_rejection(self.close_mode.mode());
+            failure.retire(crate::retain::Owned(hit_test_fn));
+            failure.finish();
+            return;
+        }
         self.handle_pointer_event_kernel(event, hit_test_fn);
     }
     /// Handle pointer event without hit testing.
@@ -570,6 +580,9 @@ impl GestureBinding {
     /// }
     /// ```
     pub fn flush_pending_moves(&self) -> usize {
+        if self.closed.get() {
+            return 0;
+        }
         let sample_window = self
             .is_resampling_enabled()
             .then(|| self.sampling_clock.get().tick())
@@ -595,6 +608,9 @@ impl GestureBinding {
     ) -> Result<usize, InvalidSamplingWindow> {
         if next_sample_time <= sample_time {
             return Err(InvalidSamplingWindow);
+        }
+        if self.closed.get() {
+            return Ok(0);
         }
         Ok(self.flush_pending_moves_kernel(Some((sample_time, next_sample_time))))
     }
@@ -785,6 +801,71 @@ impl GestureBinding {
         if let Some(panic) = panic {
             panic.resume();
         }
+    }
+
+    pub(crate) fn close_tombstones(&self) -> [crate::__runtime::CloseTombstone; 4] {
+        [
+            self.close_mode.clone(),
+            self.arena.close_tombstone(),
+            self.pointer_router.close_tombstone(),
+            self.mouse_tracker.close_tombstone(),
+        ]
+    }
+
+    pub(crate) fn close_with_mode(&self, mode: crate::__runtime::CloseMode) {
+        let mut failure = crate::__runtime::ClosePanic::for_close(mode, self.close_mode.clone());
+        self.closed.set(true);
+        let mut pointers: Vec<_> = self.hit_tests.iter().map(|entry| *entry.key()).collect();
+        pointers.sort_unstable();
+        let routes: Vec<_> = pointers
+            .into_iter()
+            .filter_map(|pointer| self.hit_tests.remove(&pointer).map(|(_, route)| route))
+            .collect();
+        let mut pointers: Vec<_> = self
+            .pending_moves
+            .iter()
+            .map(|entry| *entry.key())
+            .collect();
+        pointers.sort_unstable();
+        let moves: Vec<_> = pointers
+            .into_iter()
+            .filter_map(|pointer| self.pending_moves.remove(&pointer).map(|(_, event)| event))
+            .collect();
+        let arena_mode = if failure.preserving() {
+            crate::__runtime::CloseMode::PreservingFailure
+        } else {
+            crate::__runtime::CloseMode::Ordinary
+        };
+        failure.invoke(|| self.arena.close_owner(arena_mode));
+        let router_mode = if failure.preserving() {
+            crate::__runtime::CloseMode::PreservingFailure
+        } else {
+            crate::__runtime::CloseMode::Ordinary
+        };
+        failure.invoke(|| self.pointer_router.close_with_mode(router_mode));
+        for route in routes {
+            route.resampler.clear();
+            if let Some(token) = route.token
+                && let Ok(handle) = active_dispatch_handle()
+            {
+                let _ = handle.release_route_for_close(token, &mut failure);
+            }
+            failure.retire(crate::retain::Owned(route));
+        }
+        for event in moves {
+            failure.retire(crate::retain::Owned(event));
+        }
+        if failure.preserving() {
+            failure.invoke(|| {
+                self.arena
+                    .close_owner(crate::__runtime::CloseMode::PreservingFailure);
+            });
+            failure.invoke(|| {
+                self.pointer_router
+                    .close_with_mode(crate::__runtime::CloseMode::PreservingFailure);
+            });
+        }
+        failure.finish();
     }
 
     /// Synthesize a terminal [`PointerEvent::Cancel`] for every pointer

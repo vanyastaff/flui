@@ -118,6 +118,8 @@ struct Node {
 
 #[derive(Default)]
 struct Inner {
+    closed: bool,
+    preserving_close: bool,
     nodes: Vec<Node>,
     free: Vec<u32>,
     /// Slots each element read during its last build.
@@ -204,6 +206,18 @@ impl Reactive {
         self.inner.borrow_mut().scheduler = Some(scheduler);
     }
 
+    pub(crate) fn withdraw_owner(&self, preserving: bool) {
+        let mut inner = self.inner.borrow_mut();
+        inner.closed = true;
+        inner.preserving_close |= preserving;
+        // Values and scheduler ownership remain in the closed graph; no user
+        // destructor is required to revoke their scheduling authority.
+    }
+
+    pub(crate) fn owner_closed(&self) -> bool {
+        self.inner.borrow().closed
+    }
+
     // ------------------------------------------------------------------ slots
 
     fn alloc<T: 'static>(
@@ -212,6 +226,15 @@ impl Reactive {
         owner: Option<ElementId>,
     ) -> Result<SignalSlot, SignalError> {
         let mut inner = self.inner.borrow_mut();
+        if inner.closed {
+            drop(inner);
+            // A rejected value is dropped like any other; only an unwind
+            // already in progress retains it (ADR-0127).
+            if std::thread::panicking() {
+                std::mem::forget(value);
+            }
+            return Err(SignalError::OwnerClosed);
+        }
         if let Some(element) = inner.building {
             tracing::warn!(
                 target: "flui::signals",
@@ -247,6 +270,9 @@ impl Reactive {
     }
 
     fn check(&self, inner: &Inner, slot: SignalSlot) -> Result<(), SignalError> {
+        if inner.closed {
+            return Err(SignalError::OwnerClosed);
+        }
         if slot.is_unbound() {
             return Err(SignalError::Unbound);
         }
@@ -480,11 +506,20 @@ impl Reactive {
         loop {
             let retired = {
                 let mut inner = self.inner.borrow_mut();
+                if inner.preserving_close {
+                    break;
+                }
                 Self::forget_element_reads(&mut inner, element);
                 let mut retired = Vec::new();
                 if let Some(owned) = inner.owned_by_element.remove(&element) {
                     for slot in owned {
-                        if self.check(&inner, slot).is_ok() {
+                        // A closed graph still releases this element's live
+                        // slots, so `check`'s closed refusal does not apply.
+                        if slot.graph() == self.id
+                            && inner.nodes.get(slot.index() as usize).is_some_and(|node| {
+                                node.live && node.generation == slot.generation()
+                            })
+                        {
                             retired.push((slot, Self::release_index(&mut inner, slot.index())));
                         }
                     }
@@ -626,6 +661,16 @@ impl Reactive {
     /// the loan so retirement happens outside the graph borrow.
     fn put_back(&self, slot: SignalSlot, value: &mut Option<Box<dyn Any>>) {
         let mut inner = self.inner.borrow_mut();
+        if inner.closed
+            && slot.graph() == self.id
+            && let Some(node) = inner.nodes.get_mut(slot.index() as usize)
+            && node.live
+            && node.generation == slot.generation()
+            && node.value.is_none()
+        {
+            node.value = value.take();
+            return;
+        }
         if self.check(&inner, slot).is_ok() {
             inner.nodes[slot.index() as usize].value = value.take();
         }
@@ -654,7 +699,15 @@ impl Reactive {
         slot: SignalSlot,
         mut f: impl FnMut(&T) -> R,
     ) -> Result<R, SignalError> {
-        let loan = self.loan(slot)?;
+        let loan = match self.loan(slot) {
+            Ok(loan) => loan,
+            Err(error) => {
+                if std::thread::panicking() {
+                    std::mem::forget(f);
+                }
+                return Err(error);
+            }
+        };
         let typed = loan
             .value
             .as_deref()
@@ -714,7 +767,13 @@ impl Reactive {
             self.loan(slot)
         }));
         let mut loan = match prepared {
-            Ok(result) => result?,
+            Ok(Ok(loan)) => loan,
+            Ok(Err(error)) => {
+                if std::thread::panicking() {
+                    std::mem::forget(f);
+                }
+                return Err(error);
+            }
             Err(payload) => {
                 std::mem::forget(f);
                 std::panic::resume_unwind(payload)
@@ -955,7 +1014,12 @@ impl<T: 'static> SignalWriteExt<T> for Signal<T> {
         }));
         let mut loan = match prepared {
             Ok(Ok(loan)) => loan,
-            Ok(Err(error)) => return Err(error),
+            Ok(Err(error)) => {
+                if std::thread::panicking() {
+                    discard_secondary(pending.take());
+                }
+                return Err(error);
+            }
             Err(payload) => {
                 discard_secondary(pending.take());
                 std::panic::resume_unwind(payload)
@@ -1031,7 +1095,13 @@ impl<T: 'static> SignalWriteExt<T> for Signal<T> {
             })
         }));
         let equal = match compared {
-            Ok(result) => result?,
+            Ok(Ok(equal)) => equal,
+            Ok(Err(error)) => {
+                if std::thread::panicking() {
+                    discard_secondary(pending.take());
+                }
+                return Err(error);
+            }
             Err(payload) => {
                 discard_secondary(pending.take());
                 std::panic::resume_unwind(payload)

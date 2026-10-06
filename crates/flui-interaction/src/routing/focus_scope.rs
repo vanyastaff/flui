@@ -18,6 +18,7 @@ use flui_foundation::geometry::Rect;
 use thiserror::Error;
 
 use super::focus::FocusClosePanic;
+use crate::__runtime::{CloseMode, CloseTombstone};
 use crate::{FocusManager, events::KeyEvent};
 
 pub use crate::ids::FocusNodeId;
@@ -167,7 +168,7 @@ pub enum FocusDetachOutcome {
 enum ManagerBinding {
     Unbound,
     Bound(Weak<FocusManager>),
-    Closed,
+    Closed(CloseTombstone),
 }
 
 /// Generation-checked ownership of one focus-tree attachment.
@@ -246,7 +247,7 @@ impl FocusAttachment {
         let Some(node) = self.node.upgrade() else {
             return FocusDetachOutcome::Stale;
         };
-        if matches!(*node.manager_binding.borrow(), ManagerBinding::Closed) {
+        if matches!(*node.manager_binding.borrow(), ManagerBinding::Closed(_)) {
             return FocusDetachOutcome::OwnerClosed;
         }
         if node.manager().is_some_and(|manager| manager.is_closed()) {
@@ -263,7 +264,7 @@ impl FocusAttachment {
     }
 
     fn ensure_current(&self, node: &FocusNode) -> Result<(), FocusTreeError> {
-        if matches!(*node.manager_binding.borrow(), ManagerBinding::Closed) {
+        if matches!(*node.manager_binding.borrow(), ManagerBinding::Closed(_)) {
             return Err(FocusTreeError::OwnerClosed { node: node.id() });
         }
         if node.manager().is_some_and(|manager| manager.is_closed()) {
@@ -667,7 +668,7 @@ impl FocusNode {
 
     fn replace_rect_provider(&self, provider: Option<RectProvider>) -> u64 {
         if self.is_closed() {
-            let mut failure = FocusClosePanic::new();
+            let mut failure = FocusClosePanic::for_rejection(self.close_mode());
             failure.retire(provider);
             failure.finish();
             return self.rect_provider_generation.get();
@@ -685,7 +686,7 @@ impl FocusNode {
 
     fn replace_context(&self, context: Option<NodeContext>) -> u64 {
         if self.is_closed() {
-            let mut failure = FocusClosePanic::new();
+            let mut failure = FocusClosePanic::for_rejection(self.close_mode());
             failure.retire(context);
             failure.finish();
             return self.context_generation.get();
@@ -703,7 +704,7 @@ impl FocusNode {
 
     fn replace_on_key_event(&self, handler: Option<KeyEventHandler>) -> u64 {
         if self.is_closed() {
-            let mut failure = FocusClosePanic::new();
+            let mut failure = FocusClosePanic::for_rejection(self.close_mode());
             failure.retire(handler);
             failure.finish();
             return self.on_key_event_generation.get();
@@ -738,7 +739,7 @@ impl FocusNode {
             .expect("BUG: focus-node listener ID space exhausted");
         self.next_listener_id.set(next);
         if self.is_closed() {
-            let mut failure = FocusClosePanic::new();
+            let mut failure = FocusClosePanic::for_rejection(self.close_mode());
             failure.retire(callback);
             failure.finish();
         } else {
@@ -786,7 +787,7 @@ impl FocusNode {
                 .find(|(registered, _)| *registered == id)
                 .map(|(_, listener)| Rc::clone(listener));
             if let Some(listener) = listener {
-                let mut failure = FocusClosePanic::new();
+                let mut failure = FocusClosePanic::for_rejection(self.close_mode());
                 let _ = failure.invoke(|| listener());
                 failure.retire(listener);
                 failure.finish();
@@ -810,8 +811,15 @@ impl FocusNode {
         }
     }
 
+    fn close_mode(&self) -> CloseMode {
+        match &*self.manager_binding.borrow() {
+            ManagerBinding::Closed(tombstone) => tombstone.mode(),
+            _ => CloseMode::Ordinary,
+        }
+    }
+
     fn is_closed(&self) -> bool {
-        matches!(*self.manager_binding.borrow(), ManagerBinding::Closed)
+        matches!(*self.manager_binding.borrow(), ManagerBinding::Closed(_))
     }
 
     /// Whether this node or one of its descendants has primary focus.
@@ -885,7 +893,7 @@ impl FocusNode {
                 self.pending_focus_request.set(true);
                 FocusRequestOutcome::Queued
             }
-            ManagerBinding::Closed => FocusRequestOutcome::OwnerClosed,
+            ManagerBinding::Closed(_) => FocusRequestOutcome::OwnerClosed,
             ManagerBinding::Bound(manager) => {
                 let Some(manager) = manager.upgrade() else {
                     return FocusRequestOutcome::OwnerClosed;
@@ -929,7 +937,7 @@ impl FocusNode {
         let Some(handler) = handler else {
             return KeyEventResult::Ignored;
         };
-        let mut failure = FocusClosePanic::new();
+        let mut failure = FocusClosePanic::for_rejection(self.close_mode());
         let result = failure
             .invoke(|| handler(event))
             .unwrap_or(KeyEventResult::Ignored);
@@ -977,7 +985,7 @@ impl FocusNode {
     pub(crate) fn manager(&self) -> Option<Rc<FocusManager>> {
         match &*self.manager_binding.borrow() {
             ManagerBinding::Bound(manager) => manager.upgrade(),
-            ManagerBinding::Unbound | ManagerBinding::Closed => None,
+            ManagerBinding::Unbound | ManagerBinding::Closed(_) => None,
         }
     }
 
@@ -1040,7 +1048,7 @@ impl FocusNode {
                     replacement: replacement.id(),
                 });
             }
-            ManagerBinding::Closed => {
+            ManagerBinding::Closed(_) => {
                 return Err(FocusTreeError::OwnerClosed {
                     node: replacement.id(),
                 });
@@ -1189,7 +1197,7 @@ impl FocusNode {
                 .filter(|manager| !manager.is_closed())
                 .map(Some)
                 .ok_or(FocusTreeError::OwnerClosed { node: self.id }),
-            ManagerBinding::Closed => Err(FocusTreeError::OwnerClosed { node: self.id }),
+            ManagerBinding::Closed(_) => Err(FocusTreeError::OwnerClosed { node: self.id }),
         }
     }
 
@@ -1199,7 +1207,7 @@ impl FocusNode {
     ) -> Result<(), FocusTreeError> {
         match &*node.manager_binding.borrow() {
             ManagerBinding::Unbound => {}
-            ManagerBinding::Closed => {
+            ManagerBinding::Closed(_) => {
                 return Err(FocusTreeError::OwnerClosed { node: node.id() });
             }
             ManagerBinding::Bound(actual) => {
@@ -1296,7 +1304,10 @@ impl FocusNode {
         }
     }
 
-    pub(super) fn close_owned_tree(root: &Rc<FocusNode>) -> Vec<ClosedFocusNode> {
+    pub(super) fn close_owned_tree(
+        root: &Rc<FocusNode>,
+        tombstone: CloseTombstone,
+    ) -> Vec<ClosedFocusNode> {
         // Post-order, siblings in insertion order: a healthy close retires
         // each child's ownership before its parent's (ADR-0127).
         let mut nodes = Vec::new();
@@ -1314,7 +1325,7 @@ impl FocusNode {
         for node in nodes {
             node.attached.set(false);
             node.pending_focus_request.set(false);
-            *node.manager_binding.borrow_mut() = ManagerBinding::Closed;
+            *node.manager_binding.borrow_mut() = ManagerBinding::Closed(tombstone.clone());
             node.parent.borrow_mut().take();
             // All child nodes are retained by the snapshot until their own
             // terminal state and outgoing ownership have been committed.
@@ -1418,6 +1429,9 @@ pub struct FocusScopeNode {
 }
 
 impl FocusScopeNode {
+    fn close_mode(&self) -> CloseMode {
+        self.inner.close_mode()
+    }
     /// Create an unattached focus scope.
     #[must_use]
     pub fn new() -> Rc<Self> {
@@ -1486,7 +1500,7 @@ impl FocusScopeNode {
     /// Replace this scope's owner-local traversal policy.
     pub fn set_traversal_policy(&self, policy: Rc<dyn FocusTraversalPolicy>) {
         if self.inner.is_closed() {
-            let mut failure = FocusClosePanic::new();
+            let mut failure = FocusClosePanic::for_rejection(self.close_mode());
             failure.retire(policy);
             failure.finish();
             return;
@@ -1505,7 +1519,7 @@ impl FocusScopeNode {
         while let Some(candidate) = history.front() {
             match candidate.upgrade() {
                 Some(node)
-                    if !matches!(*node.manager_binding.borrow(), ManagerBinding::Closed)
+                    if !matches!(*node.manager_binding.borrow(), ManagerBinding::Closed(_))
                         && self.inner.has_descendant_node(&node) =>
                 {
                     return Some(node);
@@ -1553,11 +1567,13 @@ impl FocusScopeNode {
     /// This lets a route request focus before its lazily built subtree mounts
     /// without a second manager-side "active scope" state.
     pub fn set_first_focus(self: &Rc<Self>) -> bool {
-        if matches!(*self.inner.manager_binding.borrow(), ManagerBinding::Closed)
-            || self
-                .inner
-                .manager()
-                .is_some_and(|manager| manager.is_closed())
+        if matches!(
+            *self.inner.manager_binding.borrow(),
+            ManagerBinding::Closed(_)
+        ) || self
+            .inner
+            .manager()
+            .is_some_and(|manager| manager.is_closed())
         {
             self.pending_first_focus.set(false);
             return false;
@@ -1644,7 +1660,7 @@ impl FocusScopeNode {
             nodes.push(Rc::clone(cursor));
         }
         let policy = Rc::clone(&self.traversal_policy.borrow());
-        let mut failure = FocusClosePanic::new();
+        let mut failure = FocusClosePanic::for_rejection(self.close_mode());
         let mut order = None;
         failure.run(|| order = Some(policy.sort_descendants(&nodes)));
         failure.retire(policy);

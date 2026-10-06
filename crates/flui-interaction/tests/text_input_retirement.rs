@@ -487,6 +487,92 @@ fn closing_during_a_grant_cancels_the_tail_and_preserves_the_first_failure() {
     assert_eq!(owner.run_deferred_grants(), 0);
 }
 
+/// A platform capability that records whether its destructor ran during an
+/// unwind.
+struct UnwindProbePlatform(Arc<parking_lot::Mutex<Option<bool>>>);
+
+impl PlatformTextInput for UnwindProbePlatform {
+    fn set_ime_allowed(&self, _: bool) {}
+    fn set_ime_cursor_area(&self, _: Bounds<f64>) {}
+}
+
+impl Drop for UnwindProbePlatform {
+    fn drop(&mut self) {
+        *self.0.lock() = Some(std::thread::panicking());
+    }
+}
+
+/// A store that closes its owner while the owner installs its commit gate.
+struct ClosingStore {
+    inner: Rc<InMemoryTextStore>,
+    owner: std::rc::Weak<TextInputOwner>,
+}
+
+impl TextStore for ClosingStore {
+    fn status(&self) -> TextStoreStatus {
+        self.inner.status()
+    }
+    fn request_lock(
+        &self,
+        grant: LockGrant,
+        timing: LockTiming,
+    ) -> Result<LockOutcome, TextStoreError> {
+        self.inner.request_lock(grant, timing)
+    }
+    fn run_deferred_grants(&self) -> usize {
+        self.inner.run_deferred_grants()
+    }
+    fn set_commit_gate(&self, gate: CommitGate) {
+        self.inner.set_commit_gate(gate);
+        if let Some(owner) = self.owner.upgrade() {
+            owner.close();
+        }
+    }
+    fn set_observer(&self, observer: Option<Rc<dyn TextStoreObserver>>) {
+        self.inner.set_observer(observer);
+    }
+}
+
+/// The close the store runs releases the platform capability: attach holds no
+/// clone of its own across the store, so a failing rejection of the client
+/// cannot destroy the backend during its unwind.
+fn store_closing_its_owner_while_gated_releases_the_platform_outside_the_unwind() {
+    let released = Arc::new(parking_lot::Mutex::new(None));
+    let platform: Arc<dyn PlatformTextInput> = Arc::new(UnwindProbePlatform(Arc::clone(&released)));
+    let owner = TextInputOwner::new(Some(platform));
+    let handle = owner.handle();
+    let store = Rc::new(ClosingStore {
+        inner: InMemoryTextStore::new(""),
+        owner: Rc::downgrade(&owner),
+    });
+    let failure = catch_unwind(AssertUnwindSafe(|| {
+        handle.attach(callback_client_with_store(store, || {
+            panic!("rejected client retirement");
+        }))
+    }))
+    .expect_err("the rejected client's retirement fails");
+    assert_eq!(
+        flui_foundation::panic::payload_text(&*failure),
+        Some("rejected client retirement")
+    );
+    assert_eq!(
+        *released.lock(),
+        Some(false),
+        "the close released the platform, not the unwind"
+    );
+    assert_eq!(handle.ensure_open(), Err(TextInputError::Closed));
+}
+
+fn callback_client_with_store(
+    store: Rc<dyn TextStore>,
+    on_drop: impl Fn() + 'static,
+) -> TextInputClient {
+    let probe = OnDrop(Box::new(on_drop));
+    TextInputClient::new(store).on_session_start(move || {
+        let _keep_alive = &probe;
+    })
+}
+
 #[test]
 fn text_input_retirement_allows_reentry_and_preserves_recovery() {
     let cases: &[(&str, fn())] = &[
@@ -528,6 +614,10 @@ fn text_input_retirement_allows_reentry_and_preserves_recovery() {
         (
             "close during grant",
             closing_during_a_grant_cancels_the_tail_and_preserves_the_first_failure,
+        ),
+        (
+            "store closes owner while gated",
+            store_closing_its_owner_while_gated_releases_the_platform_outside_the_unwind,
         ),
     ];
     let failed = RefCell::new(Vec::new());
@@ -607,13 +697,13 @@ fn callback_after_a_failed_store_is_retained() {
 }
 
 /// Closes its owner while the owner installs the commit gate.
-struct ClosingStore {
+struct ProbedClosingStore {
     inner: Rc<InMemoryTextStore>,
     owner: std::rc::Weak<TextInputOwner>,
     _probe: OnDrop,
 }
 
-impl TextStore for ClosingStore {
+impl TextStore for ProbedClosingStore {
     fn status(&self) -> TextStoreStatus {
         self.inner.status()
     }
@@ -642,7 +732,7 @@ fn client_rejected_by_a_closing_store_is_retained_after_its_failure() {
     let (owner, platform) = owner();
     let handle = owner.handle();
     let drops = Arc::new(AtomicUsize::new(0));
-    let store: Rc<dyn TextStore> = Rc::new(ClosingStore {
+    let store: Rc<dyn TextStore> = Rc::new(ProbedClosingStore {
         inner: InMemoryTextStore::new(""),
         owner: Rc::downgrade(&owner),
         _probe: OnDrop(Box::new(|| panic!("rejected store retirement"))),
@@ -683,6 +773,29 @@ fn owner_dropped_during_an_unwind_retains_its_store() {
     assert_eq!(*platform.allowed.lock(), [true, false]);
 }
 
+/// A preserving close retains the user's store but releases the platform
+/// capability, a framework-owned handle that can keep the native window alive.
+fn preserving_close_releases_the_platform() {
+    use flui_interaction::__runtime::{CloseMode, close_text_input};
+
+    let (owner, platform) = owner();
+    let handle = owner.handle();
+    let drops = Arc::new(AtomicUsize::new(0));
+    handle
+        .attach(TextInputClient::new(aggregate_store(&drops)))
+        .expect("initial attach");
+    close_text_input(&owner, CloseMode::PreservingFailure);
+    assert_eq!(drops.load(Ordering::Relaxed), 0, "the store is retained");
+    assert_eq!(*platform.allowed.lock(), [true, false]);
+    assert_eq!(
+        Arc::strong_count(&platform),
+        1,
+        "the open owner no longer holds the platform"
+    );
+    assert_eq!(handle.ensure_open(), Err(TextInputError::Closed));
+    drop(owner);
+}
+
 /// Selects the single case a child process of the test below runs.
 const RETENTION_CHILD: &str = "FLUI_TEXT_INPUT_RETENTION_CHILD";
 /// A child that ran its case to completion exits with this status, so a
@@ -703,6 +816,10 @@ fn text_input_owners_are_retained_after_a_failure_and_during_unwind() {
         (
             "owner drop during unwind",
             owner_dropped_during_an_unwind_retains_its_store,
+        ),
+        (
+            "preserving close releases the platform",
+            preserving_close_releases_the_platform,
         ),
     ];
     if let Ok(selected) = std::env::var(RETENTION_CHILD) {

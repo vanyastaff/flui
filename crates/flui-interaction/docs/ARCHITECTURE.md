@@ -239,6 +239,18 @@ grant ordering, gate changes and the next operation;
 store whose destructor panics twice after a failed callback and under an
 unwinding owner drop, each in its own process.
 
+### Presentation-scoped terminal withdrawal
+
+Closing a presentation closes its focus, text-input, gesture, mouse-tracker and
+interaction-lane owners in the close mode the runtime passes down
+([ADR-0123](../../../docs/adr/ADR-0123-exceptional-presentation-close.md)). A
+closed owner admits no new work, and a cached route that spans presentations
+skips the closed one's targets while a sibling's targets stay callable. Each
+owner removes its callbacks from its locks before dropping them. In preserving
+mode, the callbacks still owned are retained rather than dropped
+([ADR-0127](../../../docs/adr/ADR-0127-exceptional-path-retention.md)); a healthy
+close, and a later call that a closed owner rejects, drop them normally.
+
 ## Terminal drag ownership
 
 The physical shared drag callback owner guards independently owned callbacks

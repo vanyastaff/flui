@@ -234,6 +234,10 @@ fn pointer_router_competing_retirement_preserves_first_failure_and_recovery() {
         ("all_unwind", RouterCleanup::All, true, true),
     ];
     if let Ok(selected) = std::env::var(SELECTED) {
+        if selected == "saved_route_entries" {
+            assert_saved_route_entry_retirement();
+            return;
+        }
         if let Some((competing, active_unwind)) = match selected.as_str() {
             "owner_one" => Some((false, false)),
             "owner_two" => Some((true, false)),
@@ -252,12 +256,12 @@ fn pointer_router_competing_retirement_preserves_first_failure_and_recovery() {
     }
 
     let mut failures = Vec::new();
-    for name in
-        cases
-            .iter()
-            .map(|(name, _, _, _)| *name)
-            .chain(["owner_one", "owner_two", "owner_unwind"])
-    {
+    for name in cases.iter().map(|(name, _, _, _)| *name).chain([
+        "owner_one",
+        "owner_two",
+        "owner_unwind",
+        "saved_route_entries",
+    ]) {
         let mut child = Command::new(std::env::current_exe().expect("test executable"))
             .args([
                 "--exact",
@@ -512,6 +516,87 @@ fn assert_router_owner_retirement(competing: bool, active_unwind: bool) {
         weak_owner.upgrade().is_none(),
         "retired owner cannot resurrect"
     );
+}
+
+/// A saved route that holds the last owner of two targets' captures: when the
+/// first capture's destructor fails, the second is retained rather than
+/// dropped during that unwind, and the lane serves the next route.
+fn assert_saved_route_entry_retirement() {
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use flui_interaction::events::{PointerType, make_down_event};
+    use flui_interaction::{HitTestResult, Offset};
+
+    struct FailingCapture {
+        drops: Arc<AtomicUsize>,
+        message: &'static str,
+    }
+    impl Drop for FailingCapture {
+        fn drop(&mut self) {
+            self.drops.fetch_add(1, Ordering::Relaxed);
+            std::panic::panic_any(self.message);
+        }
+    }
+
+    let lane = InteractionLane::try_new().expect("lane");
+    let handle = lane.dispatch_handle();
+    let drops = Arc::new(AtomicUsize::new(0));
+    lane.enter(|| {
+        let mut result = HitTestResult::new();
+        let mut targets = Vec::new();
+        for message in [
+            "first route capture failure",
+            "second route capture failure",
+        ] {
+            let capture = FailingCapture {
+                drops: Arc::clone(&drops),
+                message,
+            };
+            let target = handle
+                .register_pointer(move |_| {
+                    let _keep_capture_alive = &capture;
+                })
+                .expect("target");
+            result.add(hit_entry(target));
+            targets.push(target);
+        }
+        let token = handle
+            .resolve_pointer_route(result.path())
+            .expect("route")
+            .token();
+        for target in targets {
+            handle.unregister_pointer(target).expect("unregister");
+        }
+        let failure = catch_unwind(AssertUnwindSafe(|| handle.release_route(token)))
+            .expect_err("the first capture failure propagates");
+        assert_eq!(
+            failure.downcast_ref::<&str>(),
+            Some(&"first route capture failure")
+        );
+        assert_eq!(drops.load(Ordering::Relaxed), 1, "the second is retained");
+
+        let delivered = std::rc::Rc::new(std::cell::Cell::new(0));
+        let counter = std::rc::Rc::clone(&delivered);
+        let next = handle
+            .register_pointer(move |_| counter.set(counter.get() + 1))
+            .expect("next target");
+        let token = handle
+            .resolve_pointer_route(&[hit_entry(next)])
+            .expect("next route")
+            .token();
+        let event = make_down_event(Offset::ZERO, PointerType::Touch);
+        assert!(
+            handle
+                .invoke_pointer_route(token, &event)
+                .expect("dispatch")
+                .is_none()
+        );
+        assert_eq!(delivered.get(), 1, "the lane serves the next route");
+        handle.release_route(token).expect("release");
+        handle.unregister_pointer(next).expect("unregister next");
+    });
 }
 
 struct DragRetirementProbe(Box<dyn Fn()>);
@@ -1288,4 +1373,142 @@ fn assert_stop_tracking_preserves_reentrant_contact(fail_after_admission: bool) 
     assert_eq!(next_accepts.get(), 1, "accepted tail remains deliverable");
     assert!(arena.is_empty());
     fresh_drag_completes_after_retirement();
+}
+
+/// A batch snapshots its callbacks before running any of them. When one of
+/// them closes its presentation, the rest of the batch from that presentation
+/// must not run.
+#[test]
+fn reentrant_presentation_close_stops_snapshotted_callbacks() {
+    let cases: &[(&str, fn())] = &[
+        (
+            "mouse tracker enter batch",
+            enter_batch_stops_after_owner_close,
+        ),
+        (
+            "mouse tracker hover batch",
+            hover_batch_stops_after_owner_close,
+        ),
+        (
+            "interleaved hover dispatch",
+            interleaved_hover_stops_after_owner_close,
+        ),
+    ];
+    let mut failed = Vec::new();
+    for &(name, case) in cases {
+        if let Err(payload) = std::panic::catch_unwind(case) {
+            failed.push(name);
+            flui_foundation::panic::retain_opaque_payload(payload);
+        }
+    }
+    assert!(failed.is_empty(), "failed cases: {failed:?}");
+}
+
+/// Two hover-sensitive regions of one presentation whose callbacks each count
+/// a call and close the presentation's dispatch owner.
+struct ClosingRegions {
+    lane: InteractionLane,
+    calls: std::rc::Rc<std::cell::Cell<usize>>,
+    result: flui_interaction::HitTestResult,
+}
+
+fn closing_regions(on_enter: bool) -> ClosingRegions {
+    use flui_interaction::__runtime::{CloseMode, close_dispatch, presentation_dispatch};
+    use flui_interaction::routing::{MouseRegionCallbacks, MouseTrackerAnnotation};
+    use std::rc::Rc;
+
+    let lane = InteractionLane::try_new().expect("lane");
+    let owner = presentation_dispatch(&lane.dispatch_handle());
+    let calls = Rc::new(std::cell::Cell::new(0));
+    let mut result = flui_interaction::HitTestResult::new();
+    lane.enter(|| {
+        for region in 1..=2_usize {
+            let counted = Rc::clone(&calls);
+            let closing = owner.clone();
+            let callback: flui_interaction::routing::MouseEnterCallback = Rc::new(move |_, _| {
+                counted.set(counted.get() + 1);
+                close_dispatch(&closing, CloseMode::Ordinary);
+            });
+            let callbacks = if on_enter {
+                MouseRegionCallbacks {
+                    on_enter: Some(callback),
+                    ..MouseRegionCallbacks::default()
+                }
+            } else {
+                MouseRegionCallbacks {
+                    on_hover: Some(callback),
+                    ..MouseRegionCallbacks::default()
+                }
+            };
+            let target = owner.register_mouse_region(callbacks).expect("region");
+            result.add(
+                HitTestEntry::new(RenderId::new(region))
+                    .mouse_annotation(MouseTrackerAnnotation::new(RenderId::new(region), target)),
+            );
+        }
+    });
+    ClosingRegions {
+        lane,
+        calls,
+        result,
+    }
+}
+
+/// A buttonless mouse move: the only shape that carries hover semantics.
+fn hover_move() -> flui_interaction::events::PointerEvent {
+    use flui_foundation::geometry::Offset;
+    use flui_interaction::events::{PointerButtons, PointerEvent, PointerType, make_move_event};
+
+    let mut event = make_move_event(Offset::ZERO, PointerType::Mouse);
+    if let PointerEvent::Move(update) = &mut event {
+        update.current.buttons = PointerButtons::new();
+    }
+    event
+}
+
+fn enter_batch_stops_after_owner_close() {
+    use flui_interaction::routing::{MouseTracker, PointerMotionKind};
+
+    let regions = closing_regions(true);
+    let tracker = MouseTracker::new();
+    regions.lane.enter(|| {
+        tracker.update_with_motion(&hover_move(), PointerMotionKind::Hover, &regions.result);
+    });
+    assert_eq!(
+        regions.calls.get(),
+        1,
+        "the closed owner's later region is skipped"
+    );
+}
+
+fn hover_batch_stops_after_owner_close() {
+    use flui_interaction::routing::MouseTracker;
+
+    let regions = closing_regions(false);
+    let tracker = MouseTracker::new();
+    regions.lane.enter(|| {
+        let panic = tracker.dispatch_hover(&hover_move(), &regions.result);
+        assert!(panic.is_none());
+    });
+    assert_eq!(
+        regions.calls.get(),
+        1,
+        "the closed owner's later region is skipped"
+    );
+}
+
+fn interleaved_hover_stops_after_owner_close() {
+    use flui_interaction::GestureBinding;
+
+    let regions = closing_regions(false);
+    let binding = GestureBinding::new();
+    regions.lane.enter(|| {
+        binding.handle_pointer_event(&hover_move(), |_| regions.result.clone());
+        binding.flush_pending_moves();
+    });
+    assert_eq!(
+        regions.calls.get(),
+        1,
+        "the closed owner's later region is skipped"
+    );
 }

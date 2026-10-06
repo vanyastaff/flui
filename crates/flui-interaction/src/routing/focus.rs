@@ -5,10 +5,8 @@
 //! when their subtree is attached below [`FocusManager::root_scope`].
 
 use std::{
-    any::Any,
     cell::{Cell, RefCell},
     collections::{HashSet, VecDeque},
-    panic::{AssertUnwindSafe, catch_unwind, resume_unwind},
     rc::{Rc, Weak},
 };
 
@@ -16,7 +14,6 @@ use flui_foundation::ListenerId;
 
 use crate::{
     events::KeyEvent,
-    retain::Retain,
     routing::focus_scope::{FocusNode, FocusScopeNode, KeyEventResult},
 };
 
@@ -26,72 +23,8 @@ pub type FocusChangeCallback = Rc<dyn Fn(Option<Rc<FocusNode>>, Option<Rc<FocusN
 /// Owner-local global key handler.
 pub type KeyEventCallback = Rc<dyn Fn(&KeyEvent) -> bool>;
 
-/// One terminal transaction retains its first failure across callbacks and
-/// outgoing ownership. An outer unwind remains authoritative even after an
-/// inner catch makes `thread::panicking()` temporarily false.
-pub(super) struct FocusClosePanic {
-    first: Option<Box<dyn Any + Send>>,
-    unwinding: bool,
-}
-
-impl FocusClosePanic {
-    pub(super) fn new() -> Self {
-        Self {
-            first: None,
-            unwinding: std::thread::panicking(),
-        }
-    }
-
-    pub(super) fn run(&mut self, run: impl FnOnce()) {
-        if self.unwinding || self.first.is_some() {
-            return;
-        }
-        let _ = self.invoke(run);
-    }
-
-    pub(super) fn invoke<T>(&mut self, run: impl FnOnce() -> T) -> Option<T> {
-        match catch_unwind(AssertUnwindSafe(run)) {
-            Ok(value) => Some(value),
-            Err(payload) => {
-                if self.unwinding || self.first.is_some() {
-                    flui_foundation::panic::retain_opaque_payload(payload);
-                } else {
-                    self.first = Some(payload);
-                }
-                None
-            }
-        }
-    }
-
-    pub(super) fn retire<T: Retain>(&mut self, value: T) {
-        if self.unwinding || self.first.is_some() {
-            // Retain the actual outgoing value, before invoking arbitrary
-            // destruction. Catching its Drop would not contain two fields
-            // that panic while the same aggregate is being destroyed.
-            value.retain();
-        } else {
-            self.run(|| drop(value));
-        }
-    }
-
-    pub(super) fn finish(self) {
-        if let Some(payload) = self.first {
-            resume_unwind(payload);
-        }
-    }
-
-    pub(super) fn finish_with<T: Default + Retain>(self, value: T) -> T {
-        if self.unwinding || self.first.is_some() {
-            // The result may itself own arbitrary user state. Move that
-            // custody out of the unwind path before resuming the first panic.
-            value.retain();
-            self.finish();
-            T::default()
-        } else {
-            value
-        }
-    }
-}
+pub(super) use crate::__runtime::ClosePanic as FocusClosePanic;
+use crate::__runtime::{CloseMode, CloseTombstone};
 
 /// Presentation-owned focus state and root focus tree.
 ///
@@ -143,6 +76,10 @@ pub struct FocusManager {
     /// oldest first ([`Self::claim_unfocused_keys`]).
     unfocused_key_claims: RefCell<Vec<Weak<FocusNode>>>,
     closed: Cell<bool>,
+    /// Whether [`Self::close_with_mode`] ran; [`Self::withdraw`] only sets
+    /// `closed`, so a later close still retires what the manager holds.
+    retired: Cell<bool>,
+    close_mode: CloseTombstone,
     /// Depth of the commit+notify transaction currently publishing a focus
     /// transition. Zero between transitions; `>0` while node or manager
     /// listeners for that transition are running, including reentrant
@@ -230,6 +167,8 @@ impl FocusManager {
             next_global_key_handler: Cell::new(0),
             unfocused_key_claims: RefCell::new(Vec::new()),
             closed: Cell::new(false),
+            retired: Cell::new(false),
+            close_mode: CloseTombstone::default(),
             notification_depth: Cell::new(0),
             pending_focus_transitions: RefCell::new(VecDeque::new()),
         })
@@ -519,7 +458,7 @@ impl FocusManager {
             .expect("BUG: focus-manager listener ID space exhausted");
         self.next_listener_id.set(next);
         if self.closed.get() {
-            let mut failure = FocusClosePanic::new();
+            let mut failure = FocusClosePanic::for_rejection(self.close_mode.mode());
             failure.retire(callback);
             failure.finish();
         } else {
@@ -543,7 +482,7 @@ impl FocusManager {
     /// Remove all focus-change listeners.
     pub fn clear_listeners(&self) {
         let listeners = std::mem::take(&mut *self.listeners.borrow_mut());
-        let mut failure = FocusClosePanic::new();
+        let mut failure = FocusClosePanic::for_rejection(self.close_mode.mode());
         for (_, listener) in listeners {
             failure.retire(listener);
         }
@@ -570,7 +509,7 @@ impl FocusManager {
                 .find(|(registered, _)| *registered == id)
                 .map(|(_, listener)| Rc::clone(listener));
             if let Some(listener) = listener {
-                let mut failure = FocusClosePanic::new();
+                let mut failure = FocusClosePanic::for_rejection(self.close_mode.mode());
                 let _ = failure.invoke(|| listener(previous.clone(), new.clone()));
                 failure.retire(listener);
                 failure.finish();
@@ -678,7 +617,7 @@ impl FocusManager {
     /// unwind retains it to preserve the original failure.
     pub fn add_global_key_handler(&self, handler: KeyEventCallback) {
         if self.closed.get() {
-            let mut failure = FocusClosePanic::new();
+            let mut failure = FocusClosePanic::for_rejection(self.close_mode.mode());
             failure.retire(handler);
             failure.finish();
         } else {
@@ -697,7 +636,7 @@ impl FocusManager {
     /// Remove all global key handlers.
     pub fn clear_global_key_handlers(&self) {
         let handlers = std::mem::take(&mut *self.global_key_handlers.borrow_mut());
-        let mut failure = FocusClosePanic::new();
+        let mut failure = FocusClosePanic::for_rejection(self.close_mode.mode());
         for (_, handler) in handlers {
             failure.retire(handler);
         }
@@ -735,7 +674,7 @@ impl FocusManager {
             let Some(handler) = handler else {
                 continue;
             };
-            let mut failure = FocusClosePanic::new();
+            let mut failure = FocusClosePanic::for_rejection(self.close_mode.mode());
             let handled = failure.invoke(|| handler(event)).unwrap_or(false);
             failure.retire(handler);
             failure.finish();
@@ -844,11 +783,19 @@ impl FocusManager {
     /// Any request a reentrant listener queues afterward is dropped, never
     /// applied, once closed.
     pub fn close(&self) {
-        if self.closed.replace(true) {
+        self.close_with_mode(CloseMode::Ordinary);
+    }
+
+    pub(crate) fn close_tombstone(&self) -> CloseTombstone {
+        self.close_mode.clone()
+    }
+
+    pub(crate) fn close_with_mode(&self, mode: CloseMode) {
+        let mut failure = FocusClosePanic::for_close(mode, self.close_mode.clone());
+        if self.retired.replace(true) {
             return;
         }
-
-        let mut failure = FocusClosePanic::new();
+        self.closed.set(true);
         let pending = std::mem::take(&mut *self.pending_focus_transitions.borrow_mut());
         let previous = self.primary_focus.borrow_mut().take();
         let mut notified = previous.as_ref().map_or_else(Vec::new, |node| {
@@ -864,7 +811,8 @@ impl FocusManager {
                 .filter(|node| node.parent().is_some())
                 .cloned(),
         );
-        let retired = FocusNode::close_owned_tree(self.root_scope.as_focus_node());
+        let retired =
+            FocusNode::close_owned_tree(self.root_scope.as_focus_node(), self.close_mode.clone());
         let global_handlers = std::mem::take(&mut *self.global_key_handlers.borrow_mut());
 
         for node in notified {
@@ -900,6 +848,12 @@ impl FocusManager {
         }
         failure.retire(previous);
         failure.finish();
+    }
+
+    /// Refuse every later request without running user code; a later
+    /// [`Self::close_with_mode`] still notifies and retires (ADR-0123).
+    pub(crate) fn withdraw(&self) {
+        self.closed.set(true);
     }
 
     /// Whether deterministic teardown has run.

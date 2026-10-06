@@ -404,6 +404,10 @@ fn wake_debt_and_signal_write_matrix() {
 
 #[test]
 fn realm_and_presentation_isolation_matrix() {
+    if let Ok(kind) = std::env::var("FLUI_PRESENTATION_CLOSE_CHILD") {
+        closing_one_presentation_is_invisible_to_siblings::run_presentation_close_child(&kind);
+        return;
+    }
     crate::table_test::run_table(
         "realm_and_presentation_isolation_matrix",
         &[
@@ -411,6 +415,7 @@ fn realm_and_presentation_isolation_matrix() {
             ("addressed_input_routing::input_stamped_for_b_never_reaches_as_arena", addressed_input_routing::input_stamped_for_b_never_reaches_as_arena as fn()),
             ("async_completion_isolation::async_completion_after_presentation_teardown_fails_closed_no_sibling_reach", async_completion_isolation::async_completion_after_presentation_teardown_fails_closed_no_sibling_reach as fn()),
             ("closing_one_presentation_is_invisible_to_siblings::closing_presentation_a_leaves_sibling_layer_tree_identical", closing_one_presentation_is_invisible_to_siblings::closing_presentation_a_leaves_sibling_layer_tree_identical as fn()),
+            ("closing_one_presentation_is_invisible_to_siblings::presentation_close_retirement_failures_preserve_focus_ime_and_siblings", closing_one_presentation_is_invisible_to_siblings::presentation_close_retirement_failures_preserve_focus_ime_and_siblings as fn()),
             ("global_key_lookup_during_frame::state_read_across_presentations_during_a_segment_resolves", global_key_lookup_during_frame::state_read_across_presentations_during_a_segment_resolves as fn()),
             ("presentation_forest_isolation::sibling_presentations_flush_independently", presentation_forest_isolation::sibling_presentations_flush_independently as fn()),
             ("two_realms_two_threads_no_shared_state", two_realms_two_threads_no_shared_state as fn()),

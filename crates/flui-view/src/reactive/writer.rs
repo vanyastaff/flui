@@ -213,6 +213,9 @@ impl WriterSource {
     /// but is not a transaction or proof that the target widget is mounted.
     /// The target must separately invalidate its stored source on disposal.
     pub fn check_context(&self, cx: &EventCx<'_>) -> Result<(), EventContextError> {
+        if self.graph.inner.borrow().closed {
+            return Err(EventContextError::Detached);
+        }
         if self.graph.id() != cx.writer.graph.id() {
             return Err(EventContextError::ForeignPresentation);
         }

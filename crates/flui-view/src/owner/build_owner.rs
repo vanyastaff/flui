@@ -89,6 +89,9 @@ pub(crate) struct ExternalBuildScheduler {
 }
 
 impl ExternalBuildScheduler {
+    pub(crate) fn is_active(&self) -> bool {
+        !self.inbox.is_closed()
+    }
     /// Enqueue `id` for the next `build_scope` drain and request a frame.
     ///
     /// Deduplicating: a repeat tick for an id already queued consumes no extra
@@ -111,6 +114,9 @@ impl ExternalBuildScheduler {
     ) {
         let any_newly_queued = {
             let mut inbox = self.inbox.lock();
+            if self.inbox.is_closed() {
+                return;
+            }
             let mut any_newly_queued = false;
             for id in ids {
                 match inbox.entry(id) {
@@ -722,6 +728,19 @@ impl Default for BuildOwner {
 }
 
 impl BuildOwner {
+    pub(crate) fn withdraw_owner(
+        &mut self,
+        preserving: bool,
+    ) -> Vec<Box<dyn flui_foundation::ViewKey>> {
+        self.external_inbox.close();
+        self.reactive.withdraw_owner(preserving);
+        self.global_key_scope
+            .as_ref()
+            .map_or_else(Vec::new, |scope| scope.take_owner_claims(self.owner_tag))
+    }
+    pub(crate) fn owner_closed(&self) -> bool {
+        self.reactive.owner_closed()
+    }
     /// Create a build owner with a fresh, isolated focus manager.
     pub fn new() -> Self {
         Self::with_focus_manager(FocusManager::new())
