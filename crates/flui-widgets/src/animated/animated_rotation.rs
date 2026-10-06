@@ -130,7 +130,7 @@ impl AnimatedRotationState {
     /// retarget or a curve change.
     fn compose(&self) -> Arc<dyn Animation<f64>> {
         let curved: Arc<dyn Animation<f64>> = Arc::new(self.controller.curved());
-        Arc::new(Turns(self.tween.clone()).animate(curved))
+        Arc::new(Turns(self.tween).animate(curved))
     }
 }
 
@@ -141,7 +141,7 @@ impl StatefulView for AnimatedRotation {
         let controller = ImplicitController::new(self.duration, self.curve.clone());
         let tween = Tween::new(self.angle, self.angle);
         let curved: Arc<dyn Animation<f64>> = Arc::new(controller.curved());
-        let proxy = ProxyAnimation::new(Arc::new(Turns(tween.clone()).animate(curved)));
+        let proxy = ProxyAnimation::new(Arc::new(Turns(tween).animate(curved)));
         AnimatedRotationState {
             controller,
             target: self.angle,
