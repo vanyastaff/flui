@@ -45,10 +45,12 @@ pub(super) fn docs_only_include_targets(root: &Path) -> anyhow::Result<Vec<Offen
     let walker = WalkDir::new(root).into_iter().filter_entry(|e| {
         let name = e.file_name().to_string_lossy();
         // build output, the optional reference clones, git's own store; a
-        // top-level `target-*` is a per-agent CARGO_TARGET_DIR, never source
-        let top_level_target = e.depth() == 1 && name.starts_with("target-");
+        // top-level `target-*` is a per-agent CARGO_TARGET_DIR, never source;
+        // the top-level worktree root holds other checkouts of the repository
+        let top_level_skip =
+            e.depth() == 1 && (name.starts_with("target-") || name == crate::worktree::ROOT_DIR);
         !(e.file_type().is_dir()
-            && (matches!(&*name, "target" | ".flutter" | ".gpui" | ".git") || top_level_target))
+            && (matches!(&*name, "target" | ".flutter" | ".gpui" | ".git") || top_level_skip))
     });
     for entry in walker {
         let entry = entry.context("walking the repository")?;
@@ -92,7 +94,12 @@ mod tests {
     fn a_docs_only_include_target_is_reported() {
         let dir = std::env::temp_dir().join(format!("xtask-paths-filter-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        for sub in ["docs", "crates/a/src", "crates/a/target"] {
+        for sub in [
+            "docs",
+            "crates/a/src",
+            "crates/a/target",
+            ".worktrees/x/crates/a/src",
+        ] {
             std::fs::create_dir_all(dir.join(sub)).expect("mkdir");
         }
         std::fs::write(dir.join("docs/guide.md"), "# guide\n").expect("write");
@@ -105,6 +112,12 @@ mod tests {
         std::fs::write(
             dir.join("crates/a/target/gen.rs"),
             "include_str!(\"../../../docs/guide.md\");",
+        )
+        .expect("write");
+        // nor is another checkout under the worktree root
+        std::fs::write(
+            dir.join(".worktrees/x/crates/a/src/lib.rs"),
+            "include_str!(\"../../../../../docs/guide.md\");",
         )
         .expect("write");
         let offenders = docs_only_include_targets(&dir).expect("walk");
