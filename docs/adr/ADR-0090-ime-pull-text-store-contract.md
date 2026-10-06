@@ -6,7 +6,9 @@
 - **Amendment (proposed 2026-10-05):** "Committed text, settling and resolving a composition"
   below amends §1, §2, §3, the interim implementation and the verification. Items 1–3 are
   implemented; items 4–7 land with the Win32 text-services host, the widget's composition
-  handling and the runtime's anchor debt, and are not yet in the code.
+  handling and the runtime's anchor debt. Of those, the host contract, the owner's
+  `complete_composition` with the `Abandoned` path, and the removal of `active_store` are in the
+  code ([ADR-0135](ADR-0135-win32-text-services-hold-the-text-store-on-the-owner-thread.md)).
 - **Date:** 2026-09-25
 - **Supersedes in part:** [ADR-0030](ADR-0030-platform-text-input-ime-capability.md) §1
   (the winit-shaped push vocabulary as the contract) and the push-only shape of §2
@@ -242,12 +244,11 @@ handler runs queued grants first), but a programmatic `set_text` made while a gr
 ahead of it. App edits reach the observer at the next frame, key press or lock request, since
 controller listeners are `Send + Sync` and the store is not.
 
-No platform backend holds a store yet: `PlatformTextInput` is `Send + Sync` and the store is an
-owner-thread `Rc`, so the pull connection waits for ADR-0082's owner-thread capability split. Until
-then the production caller is the push projection. `TextInputOwner::active_store` is
-`#[doc(hidden)]` until the Win32 TSF backend (§3) reads it, and the observer,
-`rect_for_range`, `index_at_point` and `document_bounds` have no production caller before then
-either.
+A pull platform receives the focused store through an owner-thread `TextStoreHost`
+([ADR-0135](ADR-0135-win32-text-services-hold-the-text-store-on-the-owner-thread.md));
+`TextInputOwner::active_store` is removed. No window offers a host yet, so the production caller
+is still the push projection, and the observer, `rect_for_range`, `index_at_point` and
+`document_bounds` have no production caller until the Win32 window offers its host.
 
 ## Divergences
 
@@ -357,8 +358,8 @@ In place:
 
 Outstanding:
 
-- Amendment items 4–7, with their tests: the Win32 text-services host and the removal of
-  `active_store` (item 7), the widget's committing of a composition on blur, paste, undo and
+- Amendment items 4–7, with their tests: the Win32 window offering its text-services host
+  (item 7; the host contract and the removal of `active_store` are ADR-0135's), the widget's committing of a composition on blur, paste, undo and
   unmount (item 4), the runtime's pointer-down and close hooks, anchor debt and the gate's realm
   rule (items 4–6), and the realm reporting a failure the gate holds (item 2's consumer).
 
