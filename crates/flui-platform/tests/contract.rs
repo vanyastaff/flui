@@ -223,6 +223,10 @@ mod native_windows {
             deadline_reaches_minimized_window,
         ),
         (
+            "deadline_reaches_hidden_window",
+            deadline_reaches_hidden_window,
+        ),
+        (
             "unhandled_system_key_closes_window",
             unhandled_system_key_closes_window,
         ),
@@ -497,26 +501,50 @@ mod native_windows {
         );
     }
 
+    fn deadline_reaches_minimized_window() {
+        deadline_reaches_unpainted_window(true);
+    }
+    fn deadline_reaches_hidden_window() {
+        deadline_reaches_unpainted_window(false);
+    }
+
+    // Whether the owned `hwnd` is in the state its row put it in: minimized,
+    // or never shown.
+    #[expect(unsafe_code, reason = "Win32 visibility queries of an owned HWND")]
+    fn unpainted(hwnd: HWND, minimized: bool) -> bool {
+        // SAFETY: queries of a live HWND the calling row owns, on its
+        // creating thread.
+        unsafe {
+            if minimized {
+                IsIconic(hwnd).as_bool()
+            } else {
+                !IsWindowVisible(hwnd).as_bool()
+            }
+        }
+    }
+
     #[expect(
         unsafe_code,
-        reason = "actual owned Win32 minimize and iconic query on its creating thread"
+        reason = "actual owned Win32 minimize on its creating thread"
     )]
-    fn deadline_reaches_minimized_window() {
+    fn deadline_reaches_unpainted_window(minimized: bool) {
         use flui_platform::WindowOpen;
 
-        // A minimized window paints nothing, so a due deadline must reach its
-        // frame callback by another route or stay stranded until input.
+        // A minimized or hidden window paints nothing, so a due deadline must
+        // reach its frame callback by another route or stay stranded until
+        // input. A watchdog quits a stranded loop so the row fails instead of
+        // hanging.
         let serviced = Arc::new(Mutex::new(None::<bool>));
         let result = Arc::clone(&serviced);
         Box::new(WindowsPlatform::new().expect("native Windows platform"))
             .run(Box::new(move |owner| {
                 let WindowOpen::Ready(window) = owner
                     .open_window(WindowOptions {
-                        visible: true,
+                        visible: minimized,
                         size: Size::new(160.0, 120.0),
                         ..Default::default()
                     })
-                    .expect("open minimizable window")
+                    .expect("open unpainted window")
                 else {
                     panic!("Win32 on-ready window was deferred");
                 };
@@ -525,11 +553,17 @@ mod native_windows {
                     .downcast_ref::<WindowsWindow>()
                     .expect("Win32 backend")
                     .hwnd();
-                // SAFETY: the live wrapper owns this HWND, minimized on its
-                // creating thread.
-                let _ = unsafe { ShowWindow(hwnd, SW_MINIMIZE) };
-                // SAFETY: as above; a query of the same owned HWND.
-                assert!(unsafe { IsIconic(hwnd) }.as_bool(), "window minimized");
+                if minimized {
+                    // SAFETY: the live wrapper owns this HWND, minimized on
+                    // its creating thread.
+                    let _ = unsafe { ShowWindow(hwnd, SW_MINIMIZE) };
+                }
+                assert!(unpainted(hwnd, minimized), "window minimized or hidden");
+                let watchdog = owner.proxy();
+                std::thread::spawn(move || {
+                    std::thread::sleep(Duration::from_secs(3));
+                    let _ = watchdog.request_quit();
+                });
                 let due = web_time::Instant::now() + Duration::from_millis(60);
                 let pending = Arc::new(Mutex::new(Some(due)));
                 let callback_pending = Arc::clone(&pending);
@@ -541,22 +575,22 @@ mod native_windows {
                         return;
                     }
                     *pending = None;
-                    // SAFETY: the frame callback runs on the window's
-                    // creating thread while its wrapper is alive.
-                    let iconic = unsafe { IsIconic(HWND(raw_hwnd as *mut _)) }.as_bool();
-                    *serviced.lock().expect("serviced state") = Some(iconic);
-                    proxy.request_quit().expect("quit after minimized deadline");
+                    // The frame callback runs on the window's creating
+                    // thread while its wrapper is alive.
+                    let still = unpainted(HWND(raw_hwnd as *mut _), minimized);
+                    *serviced.lock().expect("serviced state") = Some(still);
+                    proxy.request_quit().expect("quit after unpainted deadline");
                 }));
                 owner.shared().set_wake_deadline_hook(Box::new(move || {
                     *pending.lock().expect("deadline state")
                 }));
                 Ok(())
             }))
-            .expect("native minimized deadline loop returns normally");
+            .expect("native unpainted deadline loop returns normally");
         assert_eq!(
             *result.lock().expect("serviced state"),
             Some(true),
-            "a due deadline reaches a minimized window's frame callback"
+            "a due deadline reaches a minimized or hidden window's frame callback"
         );
     }
 
