@@ -919,6 +919,10 @@ const ROWS: &[(&str, fn())] = &[
         "editable: an anchor behind a queued grant that moves the store",
         editable_anchor_behind_a_queued_gate_move,
     ),
+    (
+        "editable: an update whose observer and focus listener panic",
+        editable_update_whose_observer_and_focus_listener_panic,
+    ),
 ];
 
 #[test]
@@ -2145,4 +2149,67 @@ fn editable_request_behind_a_queued_gate_move() {
 
 fn editable_anchor_behind_a_queued_gate_move() {
     editable_behind_a_queued_gate_move(true);
+}
+
+// ----------------------------------------------------------------------------
+// An update replacing a focused node
+// ----------------------------------------------------------------------------
+
+/// An observer whose status change panics.
+struct FailsOnStatus;
+
+impl TextStoreObserver for FailsOnStatus {
+    fn text_changed(&self, _: TextChange) {}
+    fn selection_changed(&self) {}
+    fn layout_changed(&self) {}
+    fn status_changed(&self) {
+        panic!("observer failure on status");
+    }
+}
+
+/// One rebuild obscures the field, whose observer panics on the status
+/// change, and replaces its focused node, whose listener panics on the
+/// focus loss and so cuts the focus notifications short. The update still
+/// moves the field onto the replacement node and ends the old node's IME
+/// session before it raises the observer's failure, the first. The frame
+/// recovers from the update's panic by retiring the field, which releases
+/// the replacement node it now holds; the harness does not raise a
+/// recovered panic, so the row checks what the update left behind.
+fn editable_update_whose_observer_and_focus_listener_panic() {
+    let controller = TextEditingController::new();
+    let (old, new) = (
+        FocusNode::with_debug_label("replaced node"),
+        FocusNode::with_debug_label("replacement node"),
+    );
+    let mut harness = focused(EditableText::new(controller.clone(), Rc::clone(&old)), &old);
+    let field = field(&harness);
+    // Behind a gate of its own, open during the frame, the store tells its
+    // observer of the update's status change at once.
+    field.set_commit_gate(CommitGate::new());
+    field.set_observer(Some(Rc::new(FailsOnStatus)));
+    let heard = Rc::new(Cell::new(false));
+    let listener = Rc::clone(&heard);
+    let _listening = old.add_listener(Rc::new(move || {
+        assert!(listener.replace(true), "focus listener failure");
+    }));
+    harness.swap_root(EditableText::new(controller.clone(), Rc::clone(&new)).obscure_text(true));
+    field.set_observer(None);
+    assert!(heard.get(), "the old node heard its focus loss");
+    assert!(!old.is_attached(), "the old node was replaced");
+    assert!(
+        !new.is_attached(),
+        "the field holds the replacement's attachment, so recovering from the \
+         update's failure releases it"
+    );
+    assert!(
+        harness.active_text_store().is_none(),
+        "the old node's IME session ended with its focus"
+    );
+    assert_eq!(raised(|| harness.tick()), None, "the next frame");
+    let next = FocusNode::with_debug_label("next field");
+    harness.swap_root(EditableText::new(controller, Rc::clone(&next)));
+    next.request_focus();
+    harness.tick();
+    let field = self::field(&harness);
+    the_field_keeps_working(&mut harness, &field);
 }

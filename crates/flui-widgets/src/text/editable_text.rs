@@ -1567,10 +1567,13 @@ impl ViewState<EditableText> for EditableTextState {
             if let Some(id) = self.controller_listener_id.take() {
                 self.controller.borrow().remove_listener(id);
             }
-            let _prev = std::mem::replace(
+            // The replaced controller retires inside the update's scope: it
+            // may hold the last handle to listeners the application added.
+            let replaced = std::mem::replace(
                 &mut *self.controller.borrow_mut(),
                 new_view.controller.clone(),
             );
+            calls.retire(replaced);
             let rebuild_notifier_for_text = self.rebuild_notifier.clone();
             self.controller_listener_id =
                 Some(self.controller.borrow().add_listener(Arc::new(move || {
@@ -1614,9 +1617,32 @@ impl ViewState<EditableText> for EditableTextState {
             // Once replacement commits, the old generation is already stale
             // before focus listeners run, so semantic reentry is refused until
             // the returned replacement authority is installed below.
-            let replacement_attachment = attachment
-                .replace_node(&replacement)
-                .expect("BUG: EditableText could not atomically replace its focus node");
+            //
+            // The focus listeners the replacement notifies are application
+            // code, run inside this update's scope. One that panics unwinds
+            // out of the notifications after the replacement committed,
+            // taking the returned handle and the notifications after it
+            // (this field's own focus listener among them) with it: the
+            // field re-adopts the replacement in place for a handle, then
+            // reconciles its IME session with the focus the listeners left.
+            let replaced = calls
+                .run(|| attachment.replace_node(&replacement))
+                .map(|replaced| {
+                    replaced.expect("BUG: EditableText could not atomically replace its focus node")
+                });
+            let notified = replaced.is_some();
+            let replacement_attachment = replaced.or_else(|| {
+                let parent = self
+                    .parent
+                    .clone()
+                    .expect("BUG: a mounted EditableText holds its focus parent");
+                calls
+                    .run(|| parent.adopt_node(&replacement))
+                    .map(|adopted| {
+                        adopted
+                            .expect("BUG: EditableText could not adopt its replacement focus node")
+                    })
+            });
 
             self.key_handler_registration.take();
             self.rect_provider_registration.take();
@@ -1625,20 +1651,30 @@ impl ViewState<EditableText> for EditableTextState {
             self.key_handler_registration = Some(replacement_key_handler_registration);
             self.rect_provider_registration = replacement_rect_provider_registration;
             self.action_chain_registration = replacement_action_chain_registration;
-            let _prev = std::mem::replace(
+            let observed = std::mem::replace(
                 &mut *self.observed_focus_node.borrow_mut(),
                 Rc::clone(&self.focus_node),
             );
-            let previous = self
-                .focus_attachment
-                .replace(Some(Rc::new(replacement_attachment)));
-            drop(previous);
+            calls.retire(observed);
+            // With no handle (the re-adoption failed too) the stale one
+            // stays: it refuses semantic reentry, as the replacement's would
+            // until installed.
+            if let Some(replacement_attachment) = replacement_attachment {
+                let previous = self
+                    .focus_attachment
+                    .replace(Some(Rc::new(replacement_attachment)));
+                drop(previous);
+            }
 
             if self.focus_node.has_primary_focus() {
                 self.rebuild_notifier.notify_listeners();
                 if let Some(transition) = &self.ime_focus_transition {
                     calls.run(|| transition(true));
                 }
+            } else if !notified && let Some(transition) = &self.ime_focus_transition {
+                // The notifications were cut short before this field heard
+                // its old node lose focus: its IME session ends here.
+                calls.run(|| transition(false));
             }
         }
 
