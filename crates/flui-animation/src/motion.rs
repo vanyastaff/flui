@@ -199,7 +199,15 @@ impl MotionClock {
     /// tick repeats the current time and the clock is unchanged. Overflow
     /// saturates at [`Duration::MAX`]. Never panics.
     pub fn frame(&mut self, raw: Duration) -> FrameTick {
-        let _ = raw;
+        if raw < self.last_raw {
+            return FrameTick { now: self.now };
+        }
+        self.last_raw = raw;
+        let scaled = scale(raw.saturating_sub(self.epoch_raw), self.rate);
+        let candidate = AnimationTime(self.epoch_time.saturating_add(scaled));
+        // The epoch formula is already monotone in `raw` within one epoch and
+        // continuous across a rebase; `max` keeps that true under saturation.
+        self.now = self.now.max(candidate);
         FrameTick { now: self.now }
     }
 
@@ -220,13 +228,16 @@ impl MotionClock {
     /// The epoch is rebased there, so animation time is continuous across
     /// the change and the interval since the last frame runs at `rate`.
     pub fn set_rate(&mut self, rate: PlaybackRate) {
+        self.epoch_raw = self.last_raw;
+        self.epoch_time = self.now.0;
         self.rate = rate;
     }
 
     /// Advance animation time by exactly `dt` at any rate, paused included,
     /// and return the new time. Saturates at [`Duration::MAX`].
     pub fn step(&mut self, dt: Duration) -> AnimationTime {
-        let _ = dt;
+        self.epoch_time = self.epoch_time.saturating_add(dt);
+        self.now = AnimationTime(self.now.0.saturating_add(dt));
         self.now
     }
 
@@ -235,4 +246,17 @@ impl MotionClock {
     pub fn is_paused(&self) -> bool {
         self.rate.is_paused()
     }
+}
+
+/// `span · rate`, saturating at [`Duration::MAX`]. The normal rate is exact.
+fn scale(span: Duration, rate: PlaybackRate) -> Duration {
+    if rate == PlaybackRate::NORMAL {
+        return span;
+    }
+    if rate.is_paused() {
+        return Duration::ZERO;
+    }
+    // Both factors are finite and non-negative, so the product is either a
+    // representable duration or too large for one (including +∞).
+    Duration::try_from_secs_f64(span.as_secs_f64() * rate.get()).unwrap_or(Duration::MAX)
 }
