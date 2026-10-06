@@ -256,17 +256,12 @@ fn pointer_router_competing_retirement_preserves_first_failure_and_recovery() {
     }
 
     let mut failures = Vec::new();
-    for name in
-        cases
-            .iter()
-            .map(|(name, _, _, _)| *name)
-            .chain([
-                "owner_one",
-                "owner_two",
-                "owner_unwind",
-                "saved_route_entries",
-            ])
-    {
+    for name in cases.iter().map(|(name, _, _, _)| *name).chain([
+        "owner_one",
+        "owner_two",
+        "owner_unwind",
+        "saved_route_entries",
+    ]) {
         let mut child = Command::new(std::env::current_exe().expect("test executable"))
             .args([
                 "--exact",
@@ -551,7 +546,10 @@ fn assert_saved_route_entry_retirement() {
     lane.enter(|| {
         let mut result = HitTestResult::new();
         let mut targets = Vec::new();
-        for message in ["first route capture failure", "second route capture failure"] {
+        for message in [
+            "first route capture failure",
+            "second route capture failure",
+        ] {
             let capture = FailingCapture {
                 drops: Arc::clone(&drops),
                 message,
