@@ -16,6 +16,8 @@ use flui_testing::text_store_kit::{
     self, FixtureCapabilities, InMemoryFixture, KIT_VERSION, TextStoreFixture,
 };
 
+/// Runs the current conformance version (`KIT_VERSION`), not version 1:
+/// the name predates version 2.
 fn in_memory_store_conforms_to_kit_v1() {
     text_store_kit::assert_conforms(&mut InMemoryFixture::new(), KIT_VERSION);
 }

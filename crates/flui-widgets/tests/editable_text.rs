@@ -1278,6 +1278,249 @@ pub(crate) mod text_store {
         );
     }
 
+    /// The application gives the field another controller while an input
+    /// method holds a read-write lock (a rebuild in a nested owner-thread
+    /// loop): the session was made against the replaced controller, so it is
+    /// dropped, and neither controller receives it.
+    ///
+    /// Red-check: drop the `is_same_controller` check in the store's
+    /// write-back — the replaced controller, whose generation did not move,
+    /// receives "ime".
+    pub(crate) fn swapping_the_controller_during_a_grant_drops_the_session() {
+        let old = TextEditingController::with_text("old");
+        let new = TextEditingController::with_text("new");
+        let focus_node = FocusNode::with_debug_label("swapped field");
+        let harness = Rc::new(RefCell::new(mount_with_ime(EditableText::new(
+            old.clone(),
+            Rc::clone(&focus_node),
+        ))));
+        focus_node.request_focus();
+        harness.borrow_mut().tick();
+        let field = store(&harness.borrow());
+        let (nested, replacement, node) =
+            (Rc::clone(&harness), new.clone(), Rc::clone(&focus_node));
+        edit(&field, move |session| {
+            session.insert_at_selection("ime").expect("in range");
+            nested
+                .borrow_mut()
+                .swap_root(EditableText::new(replacement, node));
+        });
+        assert_eq!(old.text(), "old", "the replaced controller is not written");
+        assert_eq!(
+            new.text(),
+            "new",
+            "the new controller keeps the application's text"
+        );
+    }
+
+    /// A focused field whose `on_changed` runs `on_changed`.
+    fn focused_with(
+        controller: &TextEditingController,
+        on_changed: impl Fn(&str) + 'static,
+    ) -> (Harness, Rc<FocusNode>) {
+        let focus_node = FocusNode::with_debug_label("owner failure field");
+        let mut harness = mount_with_ime(
+            EditableText::new(controller.clone(), Rc::clone(&focus_node))
+                .on_changed(move |_cx, text| on_changed(text)),
+        );
+        focus_node.request_focus();
+        harness.tick();
+        (harness, focus_node)
+    }
+
+    /// The text of the panic `run` raised, if it raised one.
+    fn raised(run: impl FnOnce()) -> Option<String> {
+        let payload = std::panic::catch_unwind(std::panic::AssertUnwindSafe(run)).err()?;
+        let text = flui_foundation::panic::payload_text(&*payload)
+            .unwrap_or("an opaque payload")
+            .to_owned();
+        flui_foundation::panic::retain_opaque_payload(payload);
+        Some(text)
+    }
+
+    /// An `on_changed` that records each committed text it receives and
+    /// panics, naming the text, for the texts in `failing`.
+    fn failing_owner(
+        failing: &'static [&'static str],
+    ) -> (Rc<RefCell<Vec<String>>>, impl Fn(&str) + 'static) {
+        let calls = Rc::new(RefCell::new(Vec::new()));
+        let sink = Rc::clone(&calls);
+        (calls, move |text: &str| {
+            sink.borrow_mut().push(text.to_owned());
+            if failing.contains(&text) {
+                panic!("owner failure on {text}");
+            }
+        })
+    }
+
+    /// Queue `grants` read-write grants from a post-frame callback, inside
+    /// the frame's transaction, so the next commit anchor runs them in order.
+    fn queue_in_a_frame(harness: &mut Harness, field: &Rc<dyn TextStore>, grants: Vec<LockGrant>) {
+        let field = Rc::clone(field);
+        harness
+            .local_post_frame_handle()
+            .schedule_local(move |_| {
+                for grant in grants {
+                    assert_eq!(
+                        field.request_lock(grant, LockTiming::Async),
+                        Ok(LockOutcome::Deferred)
+                    );
+                }
+            })
+            .expect("post-frame handle installed");
+    }
+
+    fn insert(text: &'static str) -> LockGrant {
+        LockGrant::read_write(move |session| {
+            session.insert_at_selection(text).expect("in range");
+        })
+    }
+
+    /// A failure-path matrix for an `on_changed` that panics after an input
+    /// method's grant (ADR-0090 amendment item 2): the grant stands, the
+    /// failure reaches the realm's report exactly once, the first of two
+    /// stays authoritative, the field keeps working, and the platform hears
+    /// of an owner's edit before the next grant runs.
+    pub(crate) fn a_panicking_on_changed_is_reported_once_and_the_field_keeps_working() {
+        crate::common::cases::run_cases(
+            "panicking on_changed",
+            &[
+                (
+                    "a failure after a direct grant reaches the next owner turn once",
+                    a_failure_after_a_direct_grant_reaches_the_next_owner_turn_once as fn(),
+                ),
+                (
+                    "a failure in a dispatched commit is raised by the dispatch",
+                    a_failure_in_a_dispatched_commit_is_raised_by_the_dispatch,
+                ),
+                (
+                    "of two failures at one anchor the first is reported",
+                    of_two_failures_at_one_anchor_the_first_is_reported,
+                ),
+                (
+                    "the platform hears of an owner edit before the next grant",
+                    the_platform_hears_of_an_owner_edit_before_the_next_grant,
+                ),
+            ],
+        );
+    }
+
+    fn a_failure_after_a_direct_grant_reaches_the_next_owner_turn_once() {
+        let controller = TextEditingController::new();
+        let (calls, owner) = failing_owner(&["a"]);
+        let (mut harness, _focus) = focused_with(&controller, owner);
+        let field = store(&harness);
+        assert_eq!(
+            field.request_lock(insert("a"), LockTiming::Sync),
+            Ok(LockOutcome::Granted),
+            "the owner's failure does not undo the grant"
+        );
+        assert_eq!(controller.text(), "a");
+        assert_eq!(
+            raised(|| harness.tick()),
+            Some("owner failure on a".to_owned()),
+            "the next owner turn reports the failure"
+        );
+        assert_eq!(raised(|| harness.tick()), None, "and reports it once");
+        edit(&field, |session| {
+            session.insert_at_selection("b").expect("in range");
+        });
+        assert_eq!(controller.text(), "ab", "the next grant runs");
+        assert_eq!(*calls.borrow(), ["a", "ab"], "and its owner hears of it");
+    }
+
+    fn a_failure_in_a_dispatched_commit_is_raised_by_the_dispatch() {
+        let controller = TextEditingController::new();
+        let (calls, owner) = failing_owner(&["a"]);
+        let (mut harness, _focus) = focused_with(&controller, owner);
+        assert_eq!(
+            raised(|| harness.dispatch_ime(&flui_platform_api::ImeEvent::Commit("a".to_owned()))),
+            Some("owner failure on a".to_owned()),
+            "the dispatch that ran the grant reports the failure"
+        );
+        assert_eq!(controller.text(), "a");
+        assert_eq!(raised(|| harness.tick()), None, "it is reported once");
+        harness.dispatch_ime(&flui_platform_api::ImeEvent::Commit("b".to_owned()));
+        assert_eq!(controller.text(), "ab");
+        assert_eq!(*calls.borrow(), ["a", "ab"]);
+    }
+
+    fn of_two_failures_at_one_anchor_the_first_is_reported() {
+        let controller = TextEditingController::new();
+        let (calls, owner) = failing_owner(&["a", "ab"]);
+        let (mut harness, _focus) = focused_with(&controller, owner);
+        let field = store(&harness);
+        queue_in_a_frame(&mut harness, &field, vec![insert("a"), insert("b")]);
+        assert_eq!(
+            raised(|| harness.tick()),
+            Some("owner failure on a".to_owned()),
+            "the first failure stays authoritative"
+        );
+        assert_eq!(
+            controller.text(),
+            "ab",
+            "the queue drained past the failure"
+        );
+        assert_eq!(*calls.borrow(), ["a", "ab"]);
+        assert_eq!(
+            raised(|| harness.tick()),
+            None,
+            "the second failure is retained, not reported"
+        );
+        edit(&field, |session| {
+            session.insert_at_selection("c").expect("in range");
+        });
+        assert_eq!(
+            *calls.borrow(),
+            ["a", "ab", "abc"],
+            "the next grant reaches its owner"
+        );
+    }
+
+    fn the_platform_hears_of_an_owner_edit_before_the_next_grant() {
+        use flui_platform_api::text_store::{TextChange, TextStoreObserver};
+        struct Logged(Rc<RefCell<Vec<&'static str>>>);
+        impl TextStoreObserver for Logged {
+            fn text_changed(&self, _: TextChange) {
+                self.0.borrow_mut().push("platform heard the owner's edit");
+            }
+            fn selection_changed(&self) {}
+            fn layout_changed(&self) {}
+            fn status_changed(&self) {}
+        }
+        let controller = TextEditingController::new();
+        let app = controller.clone();
+        let (mut harness, _focus) = focused_with(&controller, move |text| {
+            if text == "a" {
+                app.set_text("app");
+                panic!("owner failure on {text}");
+            }
+        });
+        let field = store(&harness);
+        let log = Rc::new(RefCell::new(Vec::new()));
+        field.set_observer(Some(Rc::new(Logged(Rc::clone(&log)))));
+        let second = Rc::clone(&log);
+        queue_in_a_frame(
+            &mut harness,
+            &field,
+            vec![
+                insert("a"),
+                LockGrant::read_write(move |_| second.borrow_mut().push("second grant")),
+            ],
+        );
+        assert_eq!(
+            raised(|| harness.tick()),
+            Some("owner failure on a".to_owned())
+        );
+        field.set_observer(None);
+        assert_eq!(
+            *log.borrow(),
+            ["platform heard the owner's edit", "second grant"],
+            "the owner's edit is reported before the next grant, though the owner panicked"
+        );
+        assert_eq!(controller.text(), "app");
+    }
+
     /// Text entered through the focus manager remains editable in a narrow
     /// viewport: geometry, candidate placement and pointer insertion agree.
     pub(crate) fn long_input_reveals_the_caret_and_maps_visible_pointer_positions() {

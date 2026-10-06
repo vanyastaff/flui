@@ -111,6 +111,8 @@ fn text_editing() {
             ("editable_text::text_store::typing_after_a_deferred_commit_lands_after_the_commit", crate::editable_text::text_store::typing_after_a_deferred_commit_lands_after_the_commit),
             ("editable_text::text_store::on_changed_runs_after_the_lock_is_released", crate::editable_text::text_store::on_changed_runs_after_the_lock_is_released),
             ("editable_text::text_store::an_app_edit_during_a_lock_is_not_overwritten", crate::editable_text::text_store::an_app_edit_during_a_lock_is_not_overwritten),
+            ("editable_text::text_store::swapping_the_controller_during_a_grant_drops_the_session", crate::editable_text::text_store::swapping_the_controller_during_a_grant_drops_the_session),
+            ("editable_text::text_store::a_panicking_on_changed_is_reported_once_and_the_field_keeps_working", crate::editable_text::text_store::a_panicking_on_changed_is_reported_once_and_the_field_keeps_working),
             ("form::a_text_form_field_validates_and_saves_the_committed_text", crate::form::a_text_form_field_validates_and_saves_the_committed_text),
             ("editable_text::text_store::long_input_reveals_the_caret_and_maps_visible_pointer_positions", crate::editable_text::text_store::long_input_reveals_the_caret_and_maps_visible_pointer_positions),
             ("editable_text::text_store::editable_paint_places_long_text_under_the_viewport_clip", crate::editable_text::text_store::editable_paint_places_long_text_under_the_viewport_clip),
