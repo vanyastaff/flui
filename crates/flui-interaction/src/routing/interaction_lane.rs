@@ -676,12 +676,6 @@ impl RoutePanic {
         catch_unwind(AssertUnwindSafe(run)).map_err(|payload| Self { payload })
     }
 
-    /// A failure another boundary already caught and handed over, such as
-    /// one a text store parked in its commit gate.
-    pub(crate) fn from_payload(payload: Box<dyn Any + Send>) -> Self {
-        Self { payload }
-    }
-
     /// Capture an unwind from one synchronous dispatch phase.
     pub(crate) fn capture(run: impl FnOnce()) -> Option<Self> {
         Self::try_run(run).err()
