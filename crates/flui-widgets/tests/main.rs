@@ -16,6 +16,8 @@ mod contracts;
 mod absorb_pointer;
 #[path = "actions.rs"]
 mod actions;
+#[path = "activity_indicator.rs"]
+mod activity_indicator;
 #[path = "animated_size.rs"]
 mod animated_size;
 #[path = "back_gesture.rs"]

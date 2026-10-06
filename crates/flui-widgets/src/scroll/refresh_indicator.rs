@@ -20,9 +20,6 @@
 //!
 //! # Deferred (v1)
 //!
-//! - DEFERRED (v1): animated rotation spinner — current indicator is a static
-//!   `ColoredBox`. A full `RotationTransition`-based spinner requires a
-//!   dedicated vsync-registered `AnimationController`.
 //! - DEFERRED (v1): pull-distance → indicator progress easing curve.
 //! - DEFERRED (v1): overscroll glow effect.
 //! - DEFERRED (v1): nested-scroll coordination and horizontal pull-to-refresh.
@@ -50,7 +47,7 @@ use flui_view::{
 use crate::animated::VsyncScope;
 use crate::scroll::single_child_scroll_view::SingleChildScrollView;
 use crate::scroll::{ClampingScrollPhysics, ScrollController, ScrollMetrics, SharedScrollPhysics};
-use crate::{AnimatedBuilder, ColoredBox, GestureDetector, Positioned, Stack};
+use crate::{ActivityIndicator, AnimatedBuilder, Center, GestureDetector, Positioned, Stack};
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -59,17 +56,17 @@ use crate::{AnimatedBuilder, ColoredBox, GestureDetector, Positioned, Stack};
 /// Default pull distance (logical pixels) required to trigger a refresh.
 const DEFAULT_THRESHOLD_PX: f64 = 80.0;
 
-/// Height of the indicator overlay while refreshing (logical pixels).
+/// Height of the band the spinner is centred in while refreshing (logical pixels).
 /// 56 dp, a standard FAB height.
 const INDICATOR_HEIGHT_PX: f64 = 56.0;
 
-/// Indicator background colour: Material Blue 500 at 80 % opacity.
+/// Spinner colour: Material Blue 500.
 /// DEFERRED (v1): theming / custom indicator builders.
 const INDICATOR_COLOR: Color = Color {
     r: 33,
     g: 150,
     b: 243,
-    a: 204,
+    a: 255,
 };
 
 // ---------------------------------------------------------------------------
@@ -461,8 +458,7 @@ impl ViewState<RefreshIndicator> for RefreshIndicatorState {
                 let pixels = sc_inner.pixels();
                 let is_refreshing = rc_outer.is_refreshing();
 
-                // Visual indicator: static coloured overlay while refreshing.
-                // DEFERRED (v1): animated rotation spinner via RotationTransition.
+                // Visual indicator: a spinner while refreshing.
                 let show_indicator = is_refreshing;
 
                 // Gesture clones — each closure needs its own Arc-counted handle.
@@ -488,8 +484,12 @@ impl ViewState<RefreshIndicator> for RefreshIndicatorState {
                 let mut stack_children: Vec<_> = vec![scroll_view.boxed()];
                 if show_indicator {
                     // Overlay the spinner at the very top of the content area.
-                    // DEFERRED (v1): replace with RotationTransition-based spinner.
-                    let indicator = Positioned::new(ColoredBox::new(INDICATOR_COLOR))
+                    // It owns its own controller: unmounting it on `finish()`
+                    // unregisters and disposes that controller.
+                    let spinner = ActivityIndicator::new()
+                        .color(INDICATOR_COLOR)
+                        .label("Refreshing");
+                    let indicator = Positioned::new(Center::new().child(spinner))
                         .top(0.0)
                         .left(0.0)
                         .right(0.0)
