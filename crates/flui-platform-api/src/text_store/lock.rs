@@ -228,13 +228,20 @@ impl CommitGate {
     /// the owner to report. The first failure is kept until it is taken;
     /// a later one is retained unreported (ADR-0127): it is never dropped
     /// here, since dropping an opaque payload can run user code.
+    ///
+    /// The gate records whether the thread was unwinding when the failure
+    /// was parked: one parked by the cleanup of a panic is ordered behind
+    /// that panic ([`OwnerCalls`](super::OwnerCalls)).
     pub fn defer_failure(&self, payload: Box<dyn Any + Send>) {
         let later = {
             let mut held = self.failure.0.borrow_mut();
             if held.is_some() {
                 Some(payload)
             } else {
-                *held = Some(payload);
+                *held = Some(Parked {
+                    payload,
+                    while_unwinding: std::thread::panicking(),
+                });
                 None
             }
         };
@@ -252,20 +259,34 @@ impl CommitGate {
     /// (resumes it inside its own containment).
     #[must_use]
     pub fn take_failure(&self) -> Option<Box<dyn Any + Send>> {
+        self.take_parked().map(|parked| parked.payload)
+    }
+
+    /// [`Self::take_failure`], with whether the thread was unwinding when it
+    /// was parked.
+    pub(crate) fn take_parked(&self) -> Option<Parked> {
         self.failure.0.borrow_mut().take()
     }
+}
+
+/// A failure a gate holds, and whether the thread was unwinding when it was
+/// parked (by the cleanup of a panic, a guard's `Drop` that requested a
+/// grant whose settle failed).
+pub(crate) struct Parked {
+    pub(crate) payload: Box<dyn Any + Send>,
+    pub(crate) while_unwinding: bool,
 }
 
 /// The failure a gate holds for its owner. A payload no owner took before
 /// the last clone of the gate went (the presentation closed first) is
 /// retained, not dropped (ADR-0119, ADR-0127): its destructor is user code.
 #[derive(Default)]
-struct ParkedFailure(RefCell<Option<Box<dyn Any + Send>>>);
+struct ParkedFailure(RefCell<Option<Parked>>);
 
 impl Drop for ParkedFailure {
     fn drop(&mut self) {
-        if let Some(payload) = self.0.get_mut().take() {
-            flui_foundation::panic::retain_opaque_payload(payload);
+        if let Some(parked) = self.0.get_mut().take() {
+            flui_foundation::panic::retain_opaque_payload(parked.payload);
         }
     }
 }

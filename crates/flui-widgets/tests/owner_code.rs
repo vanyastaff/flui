@@ -944,6 +944,10 @@ const ROWS: &[(&str, fn())] = &[
         attach_with_a_store_parking_while_taking_the_gate,
     ),
     (
+        "attach: a store whose failure's unwind parks a failure",
+        attach_with_a_store_parking_while_its_failure_unwinds,
+    ),
+    (
         "detach: a stale token whose diagnostic closes the owner and panics",
         stale_detach_whose_diagnostic_closes_the_owner_and_panics,
     ),
@@ -1511,6 +1515,71 @@ fn attach_with_a_store_parking_then_failing_to_take_the_gate() {
         "the failure parked inside the store's call came before the call's own"
     );
     assert_eq!(other.text(), "a", "the store's grant stands");
+    the_owner_keeps_working(&owner);
+}
+
+/// Parks a failure through `0` when dropped.
+struct ParksWhenDropped(Rc<InMemoryTextStore>);
+
+impl Drop for ParksWhenDropped {
+    fn drop(&mut self) {
+        park_through(&self.0, "parked by the unwind's cleanup");
+    }
+}
+
+/// A store that panics when given a gate, holding a guard whose drop, during
+/// that panic's unwind, edits `other` and so parks a failure in the gate
+/// `other` follows.
+struct ParksWhileUnwinding {
+    inner: Rc<InMemoryTextStore>,
+    other: Rc<InMemoryTextStore>,
+}
+
+impl TextStore for ParksWhileUnwinding {
+    fn status(&self) -> TextStoreStatus {
+        self.inner.status()
+    }
+    fn request_lock(
+        &self,
+        grant: LockGrant,
+        timing: LockTiming,
+    ) -> Result<LockOutcome, TextStoreError> {
+        self.inner.request_lock(grant, timing)
+    }
+    fn run_deferred_grants(&self) -> usize {
+        self.inner.run_deferred_grants()
+    }
+    fn set_commit_gate(&self, _: CommitGate) {
+        let _cleanup = ParksWhenDropped(Rc::clone(&self.other));
+        panic!("store failure installing the gate");
+    }
+    fn set_observer(&self, observer: Option<Rc<dyn TextStoreObserver>>) {
+        self.inner.set_observer(observer);
+    }
+}
+
+/// The failure the unwind's cleanup parked came after the store's own panic,
+/// which started that unwind: attach raises the store's.
+fn attach_with_a_store_parking_while_its_failure_unwinds() {
+    let owner = owner();
+    let other = InMemoryTextStore::new("");
+    let _other = owner
+        .handle()
+        .attach(TextInputClient::new(other.clone()))
+        .expect("attach");
+    let client = TextInputClient::new(Rc::new(ParksWhileUnwinding {
+        inner: InMemoryTextStore::new(""),
+        other: other.clone(),
+    }));
+    assert_eq!(
+        raised(|| {
+            let _ = owner.handle().attach(client);
+        })
+        .as_deref(),
+        Some("store failure installing the gate"),
+        "the call's own panic came before what its unwind's cleanup parked"
+    );
+    assert_eq!(other.text(), "a", "the cleanup's grant stands");
     the_owner_keeps_working(&owner);
 }
 
