@@ -63,6 +63,7 @@ pub(super) const CASES: &[Case] = &[
     case!(composition_over_a_selection_replaces_the_selection, since 2),
     case!(composition_only_sessions_do_not_notify_the_owner, since 2),
     case!(owner_notification_runs_after_release, since 2),
+    case!(reconverting_committed_text_notifies_only_on_commit, since 2),
 ];
 
 // ============================================================================
@@ -864,6 +865,59 @@ fn composition_only_sessions_do_not_notify_the_owner(
         "owner notifications after a cancelled composition",
     )?;
     expect_text(fixture, &store, range(0, 4), "ab東京")
+}
+
+/// Reconversion: the input method marks text the user already committed as
+/// its composition and converts it again. Until it commits, the committed
+/// text is still what the composition replaced, so the owner hears nothing;
+/// the commit is one notification.
+fn reconverting_committed_text_notifies_only_on_commit(
+    fixture: &mut dyn TextStoreFixture,
+) -> Outcome {
+    let store = fresh(fixture, "東京");
+    let before = fixture.owner_notifications();
+    let composing = |end| {
+        Some(Composition {
+            range: range(0, end),
+            hides_caret: false,
+        })
+    };
+    let marked = edit(&store, move |session| session.set_composition(composing(2)))?;
+    ensure_eq(
+        marked,
+        Ok(()),
+        "marking the committed \"東京\" as the composition",
+    )?;
+    fixture.pump();
+    ensure_eq(
+        fixture.owner_notifications(),
+        before,
+        "owner notifications after a session that only marked committed text",
+    )?;
+    let reconverted = edit(&store, move |session| -> Result<(), TextStoreError> {
+        session.replace(range(0, 2), "とうきょう")?;
+        session.set_composition(composing(5))
+    })?;
+    ensure_eq(
+        reconverted,
+        Ok(()),
+        "the session replacing the reconverted text",
+    )?;
+    fixture.pump();
+    ensure_eq(
+        fixture.owner_notifications(),
+        before,
+        "owner notifications while the reconversion is still composing",
+    )?;
+    let committed = edit(&store, |session| session.set_composition(None))?;
+    ensure_eq(committed, Ok(()), "the session committing the reconversion")?;
+    fixture.pump();
+    ensure_eq(
+        fixture.owner_notifications(),
+        before + 1,
+        "owner notifications once the reconversion was committed",
+    )?;
+    expect_text(fixture, &store, range(0, 5), "とうきょう")
 }
 
 fn owner_notification_runs_after_release(fixture: &mut dyn TextStoreFixture) -> Outcome {

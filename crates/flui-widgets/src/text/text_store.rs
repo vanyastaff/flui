@@ -47,8 +47,10 @@
 //! `TS_E_NOLAYOUT`. An obscured field answers through the mask: one mask
 //! character per source grapheme cluster.
 
+use std::any::Any;
 use std::cell::{Cell, RefCell};
 use std::ops::Range;
+use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::rc::Rc;
 
 use flui_foundation::geometry::{Bounds, Point};
@@ -57,9 +59,10 @@ use flui_interaction::TextInputHandle;
 use flui_objects::{RenderEditable, SubtreeAnchor};
 use flui_painting::text_boundaries::graphemes;
 use flui_platform_api::text_store::{
-    CommitGate, Composition, LockArbiter, LockGrant, LockOutcome, LockTiming, PointMode, RangeRect,
-    Selection, TextChange, TextStore, TextStoreEdit, TextStoreError, TextStoreObserver,
-    TextStoreRead, TextStoreStatus, Utf16Offset, Utf16Range, utf16,
+    CommitGate, Composition, CompositionLedger, LockArbiter, LockGrant, LockOutcome, LockTiming,
+    PointMode, RangeRect, Selection, TextChange, TextStore, TextStoreEdit, TextStoreError,
+    TextStoreObserver, TextStoreRead, TextStoreStatus, Utf16Offset, Utf16Range, committed_text,
+    utf16,
 };
 use flui_rendering::pipeline::PipelineCell;
 
@@ -103,14 +106,28 @@ struct Doc {
     anchor: usize,
     caret: usize,
     composing: Option<(Range<usize>, bool)>,
+    /// What the composition stands for in the committed text; empty
+    /// without one.
+    origin: String,
 }
 
 impl Doc {
-    /// The text without the composing range.
+    /// The text with the composing range replaced by its origin.
     fn committed(&self) -> String {
-        controller::committed(
+        committed_text(
             &self.text,
-            self.composing.as_ref().map(|(range, _)| range.clone()),
+            self.composing
+                .as_ref()
+                .map(|(range, _)| (range.clone(), self.origin.as_str())),
+        )
+    }
+
+    /// A ledger for a session opening on this document.
+    fn ledger(&self) -> CompositionLedger {
+        CompositionLedger::open(
+            self.composing
+                .as_ref()
+                .map(|(range, _)| (range.clone(), self.origin.clone())),
         )
     }
 
@@ -333,6 +350,11 @@ impl EditableTextStore {
                     .composing
                     .as_ref()
                     .map(|state| (state.range.clone(), state.caret_hidden)),
+                origin: inner
+                    .composing
+                    .as_ref()
+                    .map(|state| state.origin.clone())
+                    .unwrap_or_default(),
             };
             (doc, inner.generation)
         });
@@ -363,15 +385,26 @@ impl EditableTextStore {
         match grant {
             LockGrant::Read(body) => {
                 let doc = self.read_doc();
-                body(&Session { store: self, doc });
+                let ledger = doc.ledger();
+                body(&Session {
+                    store: self,
+                    doc,
+                    ledger,
+                });
             }
             LockGrant::ReadWrite(body) => {
                 let (controller, original, generation) = self.snapshot();
                 let mut session = Session {
                     store: self,
                     doc: original.clone(),
+                    ledger: original.ledger(),
                 };
                 body(&mut session);
+                session
+                    .ledger
+                    .origin()
+                    .unwrap_or_default()
+                    .clone_into(&mut session.doc.origin);
                 if session.doc != original {
                     self.write_back(&controller, generation, session.doc, &original);
                 }
@@ -408,9 +441,11 @@ impl EditableTextStore {
                 anchor: doc.anchor,
                 caret: doc.caret,
             };
+            let origin = doc.origin;
             inner.composing = doc.composing.map(|(range, caret_hidden)| ComposingState {
                 range,
                 caret_hidden,
+                origin,
             });
             inner.text = doc.text;
             true
@@ -434,18 +469,31 @@ impl EditableTextStore {
     /// when the committed text changed, then the observer's notifications.
     /// Each is taken out before the user code it runs, so a nested lock or
     /// a reentrant edit from that code finds nothing half-delivered.
+    ///
+    /// The observer is told even when owner code panics, so a grant queued
+    /// behind this one never runs before the platform hears of an edit the
+    /// owner made; the first panic is then resumed for the arbiter to park.
     fn settle(&self) {
+        let mut failure = None;
         if self.listeners_owed.replace(false) {
             let controller = self.controller.borrow().clone();
-            controller.notify_changed();
+            failure = catch_unwind(AssertUnwindSafe(|| controller.notify_changed())).err();
         }
         let before = self.owner_owed.borrow_mut().take();
         if let Some(before) = before
             && self.alive.get()
         {
-            self.edits.report_if_changed(&before);
+            let owner = catch_unwind(AssertUnwindSafe(|| self.edits.report_if_changed(&before)));
+            if let Err(payload) = owner {
+                keep_first(&mut failure, payload);
+            }
         }
-        self.flush_notifications();
+        if let Err(payload) = catch_unwind(AssertUnwindSafe(|| self.flush_notifications())) {
+            keep_first(&mut failure, payload);
+        }
+        if let Some(payload) = failure {
+            resume_unwind(payload);
+        }
     }
 
     /// The text the render object shows for `source`.
@@ -519,6 +567,16 @@ impl EditableTextStore {
             })
             .flatten()
             .ok_or(TextStoreError::NoLayout)
+    }
+}
+
+/// Keep the first of several caught panics; a later one is retained, never
+/// dropped (ADR-0127).
+fn keep_first(first: &mut Option<Box<dyn Any + Send>>, payload: Box<dyn Any + Send>) {
+    if first.is_none() {
+        *first = Some(payload);
+    } else {
+        flui_foundation::panic::retain_opaque_payload(payload);
     }
 }
 
@@ -600,6 +658,8 @@ impl TextStore for EditableTextStore {
 struct Session<'a> {
     store: &'a EditableTextStore,
     doc: Doc,
+    /// What the composition stands for as the session edits it.
+    ledger: CompositionLedger,
 }
 
 impl Session<'_> {
@@ -759,12 +819,14 @@ fn rendered_offset_at(
 
 impl TextStoreEdit for Session<'_> {
     fn replace(&mut self, range: Utf16Range, text: &str) -> Result<TextChange, TextStoreError> {
+        let bytes = utf16::byte_range(&self.doc.text, range)?;
+        self.ledger.replace(&self.doc.text, bytes, text.len());
         self.doc.replace(range, text)
     }
 
     fn insert_at_selection(&mut self, text: &str) -> Result<TextChange, TextStoreError> {
         let range = self.doc.selection().range();
-        self.doc.replace(range, text)
+        self.replace(range, text)
     }
 
     fn set_selection(&mut self, selection: Selection) -> Result<(), TextStoreError> {
@@ -783,6 +845,8 @@ impl TextStoreEdit for Session<'_> {
             }
             None => None,
         };
+        let range = self.doc.composing.as_ref().map(|(range, _)| range.clone());
+        self.ledger.set_composition(&self.doc.text, range);
         Ok(())
     }
 }

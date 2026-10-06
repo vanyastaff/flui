@@ -14,10 +14,12 @@
 //! by hand.
 
 use std::cell::{Cell, RefCell};
+use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::rc::Rc;
 
 use flui_foundation::geometry::{Bounds, Point, Size};
 
+use super::composition_ledger::{CompositionLedger, committed_text};
 use super::lock::{CommitGate, LockArbiter, LockGrant, LockOutcome, LockTiming, TextStoreError};
 use super::session::{
     Composition, PointMode, RangeRect, Selection, TextChange, TextStoreEdit, TextStoreRead,
@@ -83,6 +85,7 @@ impl InMemoryTextStore {
                 text,
                 selection: Selection::collapsed(end),
                 composition: None,
+                origin: String::new(),
             }),
             arbiter: LockArbiter::new(),
             observer: RefCell::new(None),
@@ -158,17 +161,27 @@ impl InMemoryTextStore {
     }
 
     /// Deliver what a finished grant owes, now that its lock is released:
-    /// the owner notification, then the observer's.
+    /// the owner notification, then the observer's. The observer is told
+    /// even when the listener panics; the panic is resumed after it.
     fn settle(&self) {
+        let mut failure = None;
         if self.owner_owed.replace(false) {
             self.owner_notifications
                 .set(self.owner_notifications.get() + 1);
             let listener = self.owner_listener.borrow().clone();
             if let Some(listener) = listener {
-                listener();
+                failure = catch_unwind(AssertUnwindSafe(|| listener())).err();
             }
         }
-        self.flush_notifications();
+        if let Err(payload) = catch_unwind(AssertUnwindSafe(|| self.flush_notifications())) {
+            match failure {
+                None => failure = Some(payload),
+                Some(_) => flui_foundation::panic::retain_opaque_payload(payload),
+            }
+        }
+        if let Some(payload) = failure {
+            resume_unwind(payload);
+        }
     }
 
     /// Queue `notice` and send everything queued if the observer may hear
@@ -212,10 +225,15 @@ impl InMemoryTextStore {
             LockGrant::ReadWrite(body) => {
                 let mut doc = self.doc.borrow_mut();
                 let committed = doc.committed();
-                body(&mut EditSession {
+                let ledger = CompositionLedger::open(doc.composing());
+                let mut session = EditSession {
                     doc: &mut doc,
                     protected,
-                });
+                    ledger,
+                };
+                body(&mut session);
+                let origin = session.ledger.origin().unwrap_or_default().to_owned();
+                doc.origin = origin;
                 if doc.committed() != committed {
                     self.owner_owed.set(true);
                 }
@@ -272,19 +290,30 @@ struct Document {
     text: String,
     selection: Selection,
     composition: Option<Composition>,
+    /// What the composition stands for in the committed text; empty
+    /// without one.
+    origin: String,
 }
 
 impl Document {
-    /// The text without the composition's range.
+    /// The composition's byte range and origin.
+    fn composing(&self) -> Option<(std::ops::Range<usize>, String)> {
+        self.composition.map(|composition| {
+            let bytes = utf16::byte_range(&self.text, composition.range)
+                .expect("BUG: a composition is checked against the text it lies in");
+            (bytes, self.origin.clone())
+        })
+    }
+
+    /// The text with the composition replaced by its origin.
     fn committed(&self) -> String {
-        let Some(composition) = self.composition else {
-            return self.text.clone();
-        };
-        let bytes = utf16::byte_range(&self.text, composition.range)
-            .expect("BUG: a composition is checked against the text it lies in");
-        let mut committed = self.text.clone();
-        committed.replace_range(bytes, "");
-        committed
+        let composing = self.composing();
+        committed_text(
+            &self.text,
+            composing
+                .as_ref()
+                .map(|(range, origin)| (range.clone(), origin.as_str())),
+        )
     }
 
     fn check(&self, offset: Utf16Offset) -> Result<(), TextStoreError> {
@@ -301,6 +330,9 @@ impl Document {
         self.composition = self
             .composition
             .and_then(|composition| shift_composition(composition, range, inserted));
+        if self.composition.is_none() {
+            self.origin.clear();
+        }
         Ok(TextChange {
             start: range.start(),
             old_end: range.end(),
@@ -360,6 +392,7 @@ struct ReadSession<'a> {
 struct EditSession<'a> {
     doc: &'a mut Document,
     protected: bool,
+    ledger: CompositionLedger,
 }
 
 fn read_text(doc: &Document, protected: bool, range: Utf16Range) -> Result<String, TextStoreError> {
@@ -500,6 +533,8 @@ impl TextStoreRead for EditSession<'_> {
 
 impl TextStoreEdit for EditSession<'_> {
     fn replace(&mut self, range: Utf16Range, text: &str) -> Result<TextChange, TextStoreError> {
+        let bytes = utf16::byte_range(&self.doc.text, range)?;
+        self.ledger.replace(&self.doc.text, bytes, text.len());
         self.doc.replace(range, text)
     }
 
@@ -516,10 +551,10 @@ impl TextStoreEdit for EditSession<'_> {
     }
 
     fn set_composition(&mut self, composition: Option<Composition>) -> Result<(), TextStoreError> {
-        if let Some(composition) = composition {
-            self.doc.check(composition.range.start())?;
-            self.doc.check(composition.range.end())?;
-        }
+        let bytes = composition
+            .map(|composition| utf16::byte_range(&self.doc.text, composition.range))
+            .transpose()?;
+        self.ledger.set_composition(&self.doc.text, bytes);
         self.doc.composition = composition;
         Ok(())
     }

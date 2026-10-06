@@ -75,6 +75,11 @@ for a lock is granted it; a panic there is caught by the arbiter and parked in
 the `CommitGate` for the gate's owner to report, and the queue keeps running
 (ADR-0090 amendment item 2). With no gate installed by an owner there is no one
 to report to, and the panic resumes after the lock is released.
+What a composition stands for in the committed text (nothing for a new
+preedit, the original words for a reconversion) is kept by each store beside
+its composing range and followed through a session by CompositionLedger,
+which applies the same composition rules the stores do, so the owner hears of
+a reconversion only when it commits.
 **Tests:** the `text_store` module's unit tests, and `flui-testing`'s
 `in_memory_store_conforms_to_kit_v1`; the public
 `queued_text_store_grants_respect_gate_changes` family covers gate closure

@@ -187,11 +187,18 @@ was still held, so owner code that asked for a lock was refused, and it compared
 text, so `on_changed`, autovalidation and a saved draft saw text the input method was still
 composing. The amendment fixes what the owner sees and when:
 
-1. **The owner works with the committed text**: the document without its composing range.
-   The field's owner is told only when the committed text changed; a session that only
-   composed, or cancelled a composition, tells it nothing. A text form field validates and
-   saves the committed text (`TextEditingController::committed_text`). Kit version 2 pins it
-   (`composition_only_sessions_do_not_notify_the_owner`).
+1. **The owner works with the committed text**: the document with its composing range replaced
+   by the text that occupied that range before the composition began — nothing for a new
+   preedit, the original words when an input method reconverts text the user already
+   committed. The field's owner is told only when the committed text changed; a session that
+   only composed, cancelled a composition, or only marked existing text as a composition tells
+   it nothing. A store keeps that origin beside its composing range and accounts for a
+   session's edits with `text_store::CompositionLedger`: text the session inserted and then
+   marked is a new preedit, text it found and marked is a reconversion, and a composition an
+   edit cleared keeps its origin until it is marked again. A text form field validates and saves
+   the committed text (`TextEditingController::committed_text`). Kit version 2 pins it
+   (`composition_only_sessions_do_not_notify_the_owner`,
+   `reconverting_committed_text_notifies_only_on_commit`).
 2. **The owner hears after the lock is released, before the next grant.** `LockArbiter::request`
    and `run_deferred` take a second function, `settle`, called after each grant has released its
    lock and before the next queued grant runs. A store commits the session's result inside the
@@ -202,8 +209,12 @@ composing. The amendment fixes what the owner sees and when:
    not undo the grant, which already ran: the arbiter catches it, hands the first payload to the
    store's `CommitGate` (`defer_failure`; later ones are retained per ADR-0127), and the queue
    keeps running; the gate's owner takes it (`take_failure`) and reports it at its next turn
-   through the realm's panic report. A store whose owner never installed a gate resumes the
-   panic once the lock is released. Under TSF the grant's `RequestLock` still returns `S_OK` with
+   through the realm's panic report: `TextInputOwner::dispatch` and `run_deferred_grants` take it
+   once they return and resume it inside their containment (the first failure stays
+   authoritative), so it reaches the realm's report from the dispatch or anchor that follows. A
+   store also tells its observer before it resumes an owner panic, so a grant queued behind it
+   never runs before the platform hears of an edit the owner made. A store whose owner never
+   installed a gate resumes the panic once the lock is released. Under TSF the grant's `RequestLock` still returns `S_OK` with
    `*phrSession` from `OnLockGranted`. Kit version 2 pins it
    (`owner_notification_runs_after_release`).
 3. **A platform session the application overtook is dropped.** The controller counts its
@@ -220,7 +231,8 @@ composing. The amendment fixes what the owner sees and when:
    `Abandoned`; the field then clears the composing range itself, keeping the text. Unmount
    commits in place and calls no `on_changed`; only an input-method edit not yet applied when the
    store detaches is lost. This supersedes ADR-0030 §6's "blur detaches the IME client but does
-   not end the composition".
+   not end the composition". Until this item lands, a form reset during a composition leaves the
+   preedit in the field (the reset writes only the committed text it compares against).
 5. **A commit anchor skipped by an unwound frame is a debt of the realm**, paid at its next owner
    turn (a drained inbox, a background pump or a pump), not at the next frame, and a failed wake
    does not clear it.
@@ -352,16 +364,21 @@ In place:
   `owner_notification_runs_after_release`, with `flui-testing`'s
   `conformance_fails_a_store_that_notifies_its_owner_of_a_composition`,
   `conformance_fails_a_store_that_notifies_its_owner_under_the_lock` and
-  `a_pinned_conformance_version_does_not_grow`; `flui-widgets`
-  `on_changed_runs_after_the_lock_is_released`, `an_app_edit_during_a_lock_is_not_overwritten`
-  and `a_text_form_field_validates_and_saves_the_committed_text`.
+  `a_pinned_conformance_version_does_not_grow`, and `reconverting_committed_text_notifies_only_on_commit`;
+  `flui-widgets` `on_changed_runs_after_the_lock_is_released`,
+  `an_app_edit_during_a_lock_is_not_overwritten`,
+  `swapping_the_controller_during_a_grant_drops_the_session`,
+  `a_panicking_on_changed_is_reported_once_and_the_field_keeps_working` (a failure reaching the
+  next owner turn once, one raised by the dispatch, the first of two kept, and the observer
+  told before the next grant) and `a_text_form_field_validates_and_saves_the_committed_text`.
 
 Outstanding:
 
 - Amendment items 4–7, with their tests: the Win32 window offering its text-services host
   (item 7; the host contract and the removal of `active_store` are ADR-0135's), the widget's committing of a composition on blur, paste, undo and
   unmount (item 4), the runtime's pointer-down and close hooks, anchor debt and the gate's realm
-  rule (items 4–6), and the realm reporting a failure the gate holds (item 2's consumer).
+  rule (items 4–6), and a failure the gate holds being reported through the anchor debt when no
+  dispatch or anchor follows (items 2 and 5).
 
 - Mock `ITextStoreACP` unit tests in the Win32 backend (§3), clippy-only in CI like the rest of
   Win32 until a Windows test job runs them.

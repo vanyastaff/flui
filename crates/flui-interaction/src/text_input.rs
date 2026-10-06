@@ -662,6 +662,13 @@ impl TextInputOwner {
     /// The client is cloned out before use so the store's grant may
     /// reentrantly attach, detach, or close without colliding with a
     /// `RefCell` borrow.
+    ///
+    /// # Panics
+    ///
+    /// Resumes a panic the owner's code raised after a grant (a field's
+    /// `on_changed`), which the store parked in this presentation's gate,
+    /// once the projection returned: the grant stands, and the failure reaches
+    /// the caller's report.
     pub fn dispatch(&self, event: &ImeEvent) {
         let client = {
             let state = self.state.borrow();
@@ -679,12 +686,28 @@ impl TextInputOwner {
             }
             return;
         }
-        if let Err(error) = project_ime_event(&*client.store, event) {
-            tracing::warn!(
+        let projected = RoutePanic::try_run(|| project_ime_event(&*client.store, event));
+        // A failure the store parked while settling its grant happened before
+        // anything that unwound out of the projection after it.
+        let mut first = self.take_settle_failure();
+        match projected {
+            Ok(Ok(_)) => {}
+            Ok(Err(error)) => tracing::warn!(
                 ?error,
                 "an IME event could not be applied to the text store"
-            );
+            ),
+            Err(failure) => RoutePanic::preserve_first(&mut first, Some(failure), "IME projection"),
         }
+        if let Some(failure) = first {
+            failure.resume();
+        }
+    }
+
+    /// The owner failure a store caught while settling a grant and parked in
+    /// this presentation's gate (ADR-0090 amendment item 2), to be resumed
+    /// inside the caller's containment so it reaches the realm's report.
+    fn take_settle_failure(&self) -> Option<RoutePanic> {
+        self.gate.take_failure().map(RoutePanic::from_payload)
     }
 
     /// Open or close this presentation's frame transaction: while it is
@@ -705,15 +728,25 @@ impl TextInputOwner {
     /// then the active client's. The composition root calls this once the
     /// frame returns; returns how many grants ran.
     ///
-    /// A host operation that panics does not hold the grants back: they run,
-    /// and the host's failure, the first, propagates after them.
+    /// # Panics
+    ///
+    /// Resumes the first failure, after everything else has run: an owner
+    /// panic a store parked in this presentation's gate while settling a
+    /// grant since the last anchor, a host operation that panicked, a grant
+    /// that panicked, or one parked while settling here. Later ones are
+    /// retained. A panicking host operation does not hold the grants back.
     pub fn run_deferred_grants(&self) -> usize {
         if self.is_transaction_open() {
             // Nothing could run, and the retired stores wait for the anchor
             // that closes this transaction.
             return 0;
         }
-        let mut first = self.apply_host_ops();
+        let mut first = self.take_settle_failure();
+        RoutePanic::preserve_first(
+            &mut first,
+            self.apply_host_ops(),
+            "text-store host operation",
+        );
         let grants = RoutePanic::try_run(|| self.run_store_grants());
         let ran = grants.unwrap_or_else(|failure| {
             RoutePanic::preserve_first(&mut first, Some(failure), "deferred text-store grants");
@@ -743,7 +776,7 @@ impl TextInputOwner {
         for index in 0..stores.len() {
             if self.is_transaction_open() || self.ensure_open().is_err() {
                 self.retain_pending_stores(&mut stores, index);
-                let mut failure = None;
+                let mut failure = self.take_settle_failure();
                 retire_stores(stores, &mut failure);
                 if let Some(failure) = failure {
                     failure.resume();
@@ -763,7 +796,11 @@ impl TextInputOwner {
                     // The failed store may still owe grants, as do later stores.
                     // Restore ownership before propagating the first failure.
                     self.retain_pending_stores(&mut stores, index);
-                    let mut failure = Some(failure);
+                    // An owner failure parked while settling an earlier grant
+                    // came first.
+                    let mut first = self.take_settle_failure();
+                    RoutePanic::preserve_first(&mut first, Some(failure), "deferred grant");
+                    let mut failure = first;
                     retire_stores(stores, &mut failure);
                     failure
                         .expect("BUG: the failed grant retains its panic")
@@ -771,7 +808,7 @@ impl TextInputOwner {
                 }
             }
         }
-        let mut failure = None;
+        let mut failure = self.take_settle_failure();
         retire_stores(stores, &mut failure);
         if let Some(failure) = failure {
             failure.resume();
