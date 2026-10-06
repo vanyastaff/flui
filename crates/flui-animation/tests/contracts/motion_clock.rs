@@ -68,7 +68,10 @@ fn rate_change_rebases_without_a_jump() {
         ("one_to_a_tenth", one_to_a_tenth),
         ("one_to_paused", one_to_paused),
         ("paused_to_one", paused_to_one),
-        ("change_before_the_first_frame", change_before_the_first_frame),
+        (
+            "change_before_the_first_frame",
+            change_before_the_first_frame,
+        ),
     ]);
 }
 
@@ -130,7 +133,7 @@ fn invalid_rates_are_refused_and_leave_state_unchanged() {
 fn back_by_one_nanosecond() {
     let mut clock = MotionClock::new();
     let at = now_after(&mut clock, ms(100));
-    assert_eq!(now_after(&mut clock, ms(100) - Duration::from_nanos(1)), at);
+    assert_eq!(now_after(&mut clock, Duration::from_nanos(99_999_999)), at);
     assert_eq!(now_after(&mut clock, ms(116)), ms(116));
 }
 
@@ -160,7 +163,10 @@ fn backwards_raw_time_holds_the_timeline() {
         ("back_by_one_nanosecond", back_by_one_nanosecond),
         ("back_by_ten_seconds", back_by_ten_seconds),
         ("back_to_zero", back_to_zero),
-        ("repeated_raw_time_is_the_same_tick", repeated_raw_time_is_the_same_tick),
+        (
+            "repeated_raw_time_is_the_same_tick",
+            repeated_raw_time_is_the_same_tick,
+        ),
     ]);
 }
 
@@ -179,9 +185,15 @@ fn the_largest_raw_time() {
 fn an_enormous_rate() {
     let mut clock = MotionClock::new();
     clock.set_rate(rate(1e300));
-    assert_eq!(now_after(&mut clock, Duration::from_secs(1_000_000)), Duration::MAX);
+    assert_eq!(
+        now_after(&mut clock, Duration::from_secs(1_000_000)),
+        Duration::MAX
+    );
     clock.set_rate(PlaybackRate::NORMAL);
-    assert_eq!(now_after(&mut clock, Duration::from_secs(2_000_000)), Duration::MAX);
+    assert_eq!(
+        now_after(&mut clock, Duration::from_secs(2_000_000)),
+        Duration::MAX
+    );
 }
 
 #[test]

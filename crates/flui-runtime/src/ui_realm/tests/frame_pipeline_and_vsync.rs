@@ -144,14 +144,24 @@ pub(crate) fn an_invalid_or_backwards_frame_time_holds_the_animation() {
         ("backwards", 0.6),
     ] {
         frame_at(secs);
-        assert_eq!(controller.value().to_bits(), held.to_bits(), "{case}: the value holds");
+        assert_eq!(
+            controller.value().to_bits(),
+            held.to_bits(),
+            "{case}: the value holds"
+        );
         assert!(controller.is_animating(), "{case}: the run keeps running");
-        assert!(realm.vsync().has_running(), "{case}: the run still demands frames");
+        assert!(
+            realm.vsync().has_running(),
+            "{case}: the run still demands frames"
+        );
     }
 
     frame_at(1.0);
     let resumed = controller.value();
-    assert!((resumed - 0.5).abs() < 1e-9, "continues from the timeline, got {resumed}");
+    assert!(
+        (resumed - 0.5).abs() < 1e-9,
+        "continues from the timeline, got {resumed}"
+    );
 }
 
 // ---- render_frame retry / first-frame-deferral semantics ----

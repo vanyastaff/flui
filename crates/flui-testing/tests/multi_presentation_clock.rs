@@ -106,18 +106,34 @@ pub(crate) fn the_motion_clock_rate_and_step_drive_the_binding_vsync() {
         .motion_clock_mut()
         .set_rate(PlaybackRate::new(2.0).expect("2 is a valid rate"));
     binding.pump_frame(Duration::from_millis(250));
-    assert!((controller.value() - 0.5).abs() < 1e-9, "double rate: {}", controller.value());
+    assert!(
+        (controller.value() - 0.5).abs() < 1e-9,
+        "double rate: {}",
+        controller.value()
+    );
 
     binding.motion_clock_mut().set_rate(PlaybackRate::PAUSED);
     binding.pump_frame(Duration::from_secs(10));
-    assert!((controller.value() - 0.5).abs() < 1e-9, "paused: {}", controller.value());
+    assert!(
+        (controller.value() - 0.5).abs() < 1e-9,
+        "paused: {}",
+        controller.value()
+    );
     assert!(controller.is_animating(), "a paused run is still running");
 
     binding.motion_clock_mut().step(Duration::from_millis(100));
     binding.pump_frame(Duration::ZERO);
-    assert!((controller.value() - 0.6).abs() < 1e-9, "stepped: {}", controller.value());
+    assert!(
+        (controller.value() - 0.6).abs() < 1e-9,
+        "stepped: {}",
+        controller.value()
+    );
 
     binding.motion_clock_mut().set_rate(PlaybackRate::NORMAL);
     binding.pump_frame(Duration::from_millis(100));
-    assert!((controller.value() - 0.7).abs() < 1e-9, "resumed: {}", controller.value());
+    assert!(
+        (controller.value() - 0.7).abs() < 1e-9,
+        "resumed: {}",
+        controller.value()
+    );
 }

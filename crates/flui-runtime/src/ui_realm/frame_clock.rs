@@ -7,8 +7,8 @@ use flui_animation::Vsync;
 use flui_platform_api::HapticFeedback;
 use flui_rendering::binding::RendererBinding as _;
 use std::sync::Arc;
-use std::time::Duration;
 use std::sync::atomic::Ordering;
+use std::time::Duration;
 
 impl UiRealm {
     // ========================================================================
@@ -98,9 +98,8 @@ impl UiRealm {
         }
         match self.frame_time.get() {
             Some(frame_time) => frame_time.saturating_duration_since(self.start),
-            None => {
-                flui_foundation::MonotonicClock::now(&self.clock).saturating_duration_since(self.start)
-            }
+            None => flui_foundation::MonotonicClock::now(&self.clock)
+                .saturating_duration_since(self.start),
         }
     }
 
