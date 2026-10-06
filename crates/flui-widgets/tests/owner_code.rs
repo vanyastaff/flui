@@ -903,6 +903,22 @@ const ROWS: &[(&str, fn())] = &[
         "cursor area: a platform closing the owner and panicking",
         cursor_area_whose_platform_closes_the_owner_and_panics,
     ),
+    (
+        "in-memory: a request behind a queued grant that moves the store",
+        in_memory_request_behind_a_queued_gate_move,
+    ),
+    (
+        "in-memory: an anchor behind a queued grant that moves the store",
+        in_memory_anchor_behind_a_queued_gate_move,
+    ),
+    (
+        "editable: a request behind a queued grant that moves the store",
+        editable_request_behind_a_queued_gate_move,
+    ),
+    (
+        "editable: an anchor behind a queued grant that moves the store",
+        editable_anchor_behind_a_queued_gate_move,
+    ),
 ];
 
 #[test]
@@ -1951,4 +1967,182 @@ fn in_memory_grant_reading_and_editing_its_store() {
         "the next edit lands at the caret the application left"
     );
     assert_eq!(parked(&gate), None);
+}
+
+// ----------------------------------------------------------------------------
+// A queued grant that moves its store before a later grant settles
+// ----------------------------------------------------------------------------
+
+/// Queue, behind `queued_behind` shut, a grant that moves `store` to
+/// `moved_to`, then the grants in `then`; reopen the gate. They run in order
+/// at the next request or anchor, the later ones behind `moved_to`.
+fn queue_a_gate_move(
+    store: &Rc<dyn TextStore>,
+    queued_behind: &CommitGate,
+    moved_to: &CommitGate,
+    then: Vec<LockGrant>,
+) {
+    store.set_commit_gate(queued_behind.clone());
+    queued_behind.set_open(false);
+    let (weak, moved_to) = (Rc::downgrade(store), moved_to.clone());
+    let moving = LockGrant::read(move |_| {
+        if let Some(store) = weak.upgrade() {
+            store.set_commit_gate(moved_to);
+        }
+    });
+    for grant in std::iter::once(moving).chain(then) {
+        assert_eq!(
+            store.request_lock(grant, LockTiming::Async),
+            Ok(LockOutcome::Deferred)
+        );
+    }
+    queued_behind.set_open(true);
+}
+
+/// Run an edit inserting "a" behind a queued grant that moves `store` to
+/// `moved_to`: as a request after it, or with it at an anchor. What the run
+/// raised.
+fn edit_behind_a_queued_gate_move(
+    store: &Rc<dyn TextStore>,
+    moved_to: &CommitGate,
+    through_anchor: bool,
+) -> Option<String> {
+    let queued_behind = CommitGate::new();
+    let outcome = if through_anchor {
+        queue_a_gate_move(store, &queued_behind, moved_to, vec![insert("a")]);
+        raised(|| {
+            let _ = store.run_deferred_grants();
+        })
+    } else {
+        queue_a_gate_move(store, &queued_behind, moved_to, Vec::new());
+        raised(|| {
+            let _ = edit(&**store, "a");
+        })
+    };
+    assert_eq!(
+        parked(&queued_behind),
+        None,
+        "nothing waits at the gate the store left"
+    );
+    outcome
+}
+
+/// An application edit of `store` behind `gate` shut for its duration, so
+/// the observer hears of it only at the store's next flush.
+fn app_edit_held_back(store: &Weak<InMemoryTextStore>, gate: &CommitGate) {
+    if let Some(store) = store.upgrade() {
+        gate.set_open(false);
+        store.app_replace(
+            flui_platform_api::text_store::Utf16Range::new(
+                flui_platform_api::text_store::Utf16Offset::new(0),
+                flui_platform_api::text_store::Utf16Offset::new(0),
+            )
+            .expect("ordered"),
+            "app ",
+        );
+        gate.set_open(true);
+    }
+}
+
+/// On its first text change, makes an application edit held back to the
+/// store's next flush; panics on the next text change.
+struct AppEditsThenPanics {
+    store: Weak<InMemoryTextStore>,
+    gate: CommitGate,
+    heard: Cell<usize>,
+}
+
+impl TextStoreObserver for AppEditsThenPanics {
+    fn text_changed(&self, _: TextChange) {
+        self.heard.set(self.heard.get() + 1);
+        assert!(self.heard.get() == 1, "observer failure after the session");
+        app_edit_held_back(&self.store, &self.gate);
+    }
+    fn selection_changed(&self) {}
+    fn layout_changed(&self) {}
+    fn status_changed(&self) {}
+}
+
+/// The last grant settles behind the gate an earlier queued grant moved the
+/// store to: its listener edits and panics, parking its failure there; the
+/// observer hears that edit in the settle and edits again, and the flush
+/// after the grants hears the second edit and panics. The parked failure
+/// came first, so it is raised.
+fn in_memory_behind_a_queued_gate_move(through_anchor: bool) {
+    let moved_to = CommitGate::new();
+    let store = InMemoryTextStore::new("");
+    let (edited, behind) = (Rc::downgrade(&store), moved_to.clone());
+    store.set_owner_listener(Some(Rc::new(move || {
+        app_edit_held_back(&edited, &behind);
+        panic!("owner failure");
+    })));
+    store.set_observer(Some(Rc::new(AppEditsThenPanics {
+        store: Rc::downgrade(&store),
+        gate: moved_to.clone(),
+        heard: Cell::new(0),
+    })));
+    let moved: Rc<dyn TextStore> = store.clone();
+    assert_eq!(
+        edit_behind_a_queued_gate_move(&moved, &moved_to, through_anchor).as_deref(),
+        Some("owner failure"),
+        "the failure the last grant's settle parked came before the flush's"
+    );
+    store.set_observer(None);
+    store.set_owner_listener(None);
+    assert_eq!(parked(&moved_to), None, "raised, not left parked");
+    assert_eq!(
+        edit(&*store, "b"),
+        Ok(LockOutcome::Granted),
+        "the next edit"
+    );
+    assert_eq!(parked(&moved_to), None, "the next edit fails nothing");
+}
+
+fn in_memory_request_behind_a_queued_gate_move() {
+    in_memory_behind_a_queued_gate_move(false);
+}
+
+fn in_memory_anchor_behind_a_queued_gate_move() {
+    in_memory_behind_a_queued_gate_move(true);
+}
+
+/// [`in_memory_behind_a_queued_gate_move`] for `EditableText`: its
+/// `on_changed` edits and panics, and the observer's own edit reaches only
+/// the flush after the grants, which panics.
+fn editable_behind_a_queued_gate_move(through_anchor: bool) {
+    let controller = TextEditingController::new();
+    let node = FocusNode::with_debug_label("queued gate move");
+    let app = controller.clone();
+    let mut harness = focused(
+        EditableText::new(controller.clone(), Rc::clone(&node)).on_changed(move |_cx, text| {
+            if text == "a" {
+                app.set_text("on_changed edit");
+                panic!("on_changed failure");
+            }
+        }),
+        &node,
+    );
+    let field = field(&harness);
+    field.set_observer(Some(Rc::new(EditsThenPanics {
+        controller: controller.clone(),
+        heard: Cell::new(0),
+    })));
+    let moved_to = CommitGate::new();
+    assert_eq!(
+        edit_behind_a_queued_gate_move(&field, &moved_to, through_anchor).as_deref(),
+        Some("on_changed failure"),
+        "the failure the last grant's settle parked came before the flush's"
+    );
+    field.set_observer(None);
+    assert_eq!(parked(&moved_to), None, "raised, not left parked");
+    the_field_keeps_working(&mut harness, &field);
+    assert_eq!(controller.text(), "observer editz");
+}
+
+fn editable_request_behind_a_queued_gate_move() {
+    editable_behind_a_queued_gate_move(false);
+}
+
+fn editable_anchor_behind_a_queued_gate_move() {
+    editable_behind_a_queued_gate_move(true);
 }

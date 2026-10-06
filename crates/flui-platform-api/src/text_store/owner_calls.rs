@@ -18,7 +18,7 @@
 //! | a replaced in-memory owner listener or observer, and both when the store goes | `InMemoryTextStore::set_owner_listener`, `set_observer`, `Drop` (`in_memory.rs`) |
 //! | observer notifications and the observer snapshot, in the caller's scope (a settle's included) | `InMemoryTextStore::flush_notifications` (`in_memory.rs`), `EditableTextStore::flush_notifications`, `notify` (`flui-widgets` `text/text_store.rs`) |
 //! | the flush before a request: a failure there refuses it and retains the grant | `request_lock` of `InMemoryTextStore` (`in_memory.rs`) and `EditableTextStore` (`flui-widgets` `text/text_store.rs`) |
-//! | the flush after a request's grants, behind what their settle parked ([`OwnerCalls::run_behind_parked`]) | `request_lock`, `run_deferred_grants` of both stores |
+//! | the flush after a request's grants, behind what the last one's settle parked in the gate that admitted it ([`OwnerCalls::run_behind_parked`], [`OwnerCalls::parking_gate`]) | `request_lock`, `run_deferred_grants` of both stores |
 //! | a grant a detached field refuses | `EditableTextStore::request_lock` (`flui-widgets` `text/text_store.rs`) |
 //! | a grant's body reading or editing the in-memory store: no borrow is held across it, and an application edit wins | `InMemoryTextStore::open` (`in_memory.rs`) |
 //! | `on_changed`, and its snapshot | `EditObserver::deliver` (`flui-widgets` `text/editable_text.rs`), from `EditableTextStore::settle` and from a key edit's `EditObserver::around`, which contains the edit's listener notification so the owner still hears of the change |
@@ -185,6 +185,16 @@ impl OwnerCalls {
         }
     }
 
+    /// The gate this scope parks its failures in ([`Self::parking_in`]): for
+    /// a settle scope, the gate that admitted its grant. A store records it
+    /// from each settle, so the flush after its grants runs behind the gate
+    /// the last of them settled under, though an earlier grant moved the
+    /// store ([`Self::run_behind_parked`]).
+    #[must_use]
+    pub fn parking_gate(&self) -> Option<&CommitGate> {
+        self.parks_in.as_ref()
+    }
+
     /// Whether a failure has been caught or taken.
     #[must_use]
     pub fn failed(&self) -> bool {
@@ -243,7 +253,8 @@ impl OwnerCalls {
 
     /// [`Self::run`], for owner code a store runs after grants whose
     /// settle may have parked a failure in `gate` (the gate that admitted
-    /// them): when the call panics, that parked failure came first, so it is
+    /// the last of them, which an earlier one may have moved the store to):
+    /// when the call panics, that parked failure came first, so it is
     /// taken ahead of the call's own. When the call succeeds the parked
     /// failure stays for the gate's owner to report at its turn.
     pub fn run_behind_parked<R>(

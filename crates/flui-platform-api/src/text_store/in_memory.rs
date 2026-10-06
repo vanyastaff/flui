@@ -308,15 +308,18 @@ impl TextStore for InMemoryTextStore {
             RetainOnFailure::retain(grant);
             resume_unwind(payload);
         }
-        // Read before any grant's owner code can move the store elsewhere.
-        let admitting = self.arbiter.owner_gate();
+        // The gate the last grant settled under, read by the arbiter before
+        // that grant's owner code ran: an earlier grant may have moved the
+        // store to another presentation.
+        let mut settled_under = self.arbiter.owner_gate();
         let outcome =
             self.arbiter
                 .request(grant, timing, &mut |grant| self.open(grant), &mut |calls| {
+                    settled_under = calls.parking_gate().cloned();
                     self.settle(calls);
                 });
         let mut calls = OwnerCalls::new();
-        calls.run_behind_parked(admitting.as_ref(), || self.flush_now());
+        calls.run_behind_parked(settled_under.as_ref(), || self.flush_now());
         calls.resume();
         outcome
     }
@@ -325,14 +328,15 @@ impl TextStore for InMemoryTextStore {
     /// sent, before and after the queued grants run.
     fn run_deferred_grants(&self) -> usize {
         self.flush_now();
-        let admitting = self.arbiter.owner_gate();
+        let mut settled_under = self.arbiter.owner_gate();
         let ran = self
             .arbiter
             .run_deferred(&mut |grant| self.open(grant), &mut |calls| {
+                settled_under = calls.parking_gate().cloned();
                 self.settle(calls);
             });
         let mut calls = OwnerCalls::new();
-        calls.run_behind_parked(admitting.as_ref(), || self.flush_now());
+        calls.run_behind_parked(settled_under.as_ref(), || self.flush_now());
         calls.resume();
         ran
     }
