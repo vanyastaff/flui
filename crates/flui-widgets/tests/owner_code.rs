@@ -1117,6 +1117,50 @@ fn host_close_completion_whose_unwind_parks_a_failure() {
     );
 }
 
+/// A field composing "かな" whose completion is queued inside a frame, and
+/// whose presentation closes before that frame's anchor: the host abandons
+/// the composition, and the close commits it in place before it retires the
+/// store, so the controller the field keeps holds no composing range.
+fn host_close_before_the_anchor_commits_a_queued_completion() {
+    let controller = TextEditingController::new();
+    let node = FocusNode::with_debug_label("closed before the anchor");
+    let harness = focused(
+        EditableText::new(controller.clone(), Rc::clone(&node)),
+        &node,
+    );
+    let field = field(&harness);
+    assert_eq!(
+        project_ime_event(
+            &*field,
+            &ImeEvent::Preedit {
+                text: "かな".to_owned(),
+                cursor: Some((0, 0)),
+            },
+        ),
+        Ok(LockOutcome::Granted),
+        "preedit applies"
+    );
+    assert!(controller.composing_range().is_some(), "the field composes");
+    let host = Rc::new(Host::default());
+    let log = Rc::clone(&host.log);
+    let owner = pull_owner(host);
+    let _token = owner
+        .handle()
+        .attach(TextInputClient::new(Rc::clone(&field)))
+        .expect("the field moves to the closing presentation");
+    owner.set_transaction_open(true);
+    owner.complete_composition();
+    assert_eq!(raised(|| owner.close()), None, "the close fails nothing");
+    assert_eq!(*log.borrow(), ["focus", "complete", "unfocus"]);
+    assert_eq!(
+        controller.composing_range(),
+        None,
+        "the close committed the abandoned composition before retiring the store"
+    );
+    assert_eq!(controller.text(), "かな", "the composed text stays");
+    drop(harness);
+}
+
 // ----------------------------------------------------------------------------
 // The matrix
 // ----------------------------------------------------------------------------
@@ -1223,6 +1267,10 @@ const ROWS: &[(&str, fn())] = &[
     (
         "host: a close completion whose unwind parks a failure",
         host_close_completion_whose_unwind_parks_a_failure,
+    ),
+    (
+        "host: a completion queued in a frame, closed before the anchor",
+        host_close_before_the_anchor_commits_a_queued_completion,
     ),
     (
         "arbiter: a refused grant during an unwind",

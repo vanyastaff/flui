@@ -938,6 +938,10 @@ impl TextInputOwner {
     /// Closing is idempotent. If a client is active, the exact capability
     /// owned by this presentation is disabled once. Existing weak handles
     /// subsequently return [`TextInputError::Closed`].
+    ///
+    /// The close is the presentation's last turn: it ends a frame
+    /// transaction still open, so the completions queued in it commit, through
+    /// the host or in place, before their stores are retired.
     pub fn close(&self) {
         self.close_with_mode(CloseMode::Ordinary);
     }
@@ -961,6 +965,12 @@ impl TextInputOwner {
                 std::mem::replace(&mut state.host_focused, false),
             )
         };
+        // The close is this presentation's last turn, so it ends a frame
+        // transaction still open: no anchor follows it. A queued completion
+        // then commits through the host or, abandoned, in place now, before
+        // its store is retired, instead of queueing a grant no one runs
+        // (ADR-0142 items 4 and 6).
+        self.gate.set_open(true);
         let backend = self.backend.replace(TextInputBackend::Unsupported);
         match &backend {
             TextInputBackend::Push(platform) if active.is_some() => {
