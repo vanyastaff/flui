@@ -6,17 +6,20 @@
 //! machine, and two workspace builds at once oversubscribe it until every run
 //! looks hung. The lock file sits in a fixed per-user directory, so every
 //! checkout the user has finds the same one: `%LOCALAPPDATA%\flui\` on
-//! Windows; elsewhere `$XDG_RUNTIME_DIR/flui/`, or `~/.cache/flui/` without
-//! it. Without those variables it falls back to `flui-<user>` in the
-//! temporary directory (the user id on Unix, the user name on Windows), so
-//! accounts sharing that directory keep separate locks; if that temporary
-//! directory is itself relative, the run warns and proceeds unlocked.
-//! An absolute `FLUI_XTASK_LOCK_FILE` names another file (a relative one is
-//! refused with a warning) and `FLUI_XTASK_NO_LOCK=1` skips the lock.
+//! Windows, `$HOME/.cache/flui/` elsewhere (`XDG_RUNTIME_DIR` is not
+//! consulted, so sessions with and without it pick the same file). Without
+//! that variable, or with a relative value, it falls back to `flui-<user>`
+//! in the temporary directory (the user id on Unix, the user name on
+//! Windows), so accounts sharing that directory keep separate locks; if that
+//! temporary directory is itself relative, the run warns and proceeds
+//! unlocked. An absolute `FLUI_XTASK_LOCK_FILE` names another file (a
+//! relative one is refused with a warning) and `FLUI_XTASK_NO_LOCK=1` skips
+//! the lock.
 //!
-//! `~/.cache/flui/` is used only without `XDG_RUNTIME_DIR`. On a home
-//! directory shared over the network, runs on different machines then share
-//! one lock and queue behind one another: a slowdown, not a failure.
+//! On a home directory shared over the network, runs on different machines
+//! share one lock and queue behind one another: a slowdown, not a failure.
+//! On Windows the user-name fallback applies only without `LOCALAPPDATA`
+//! (rare); accounts sharing a user name may then share a lock.
 //!
 //! The lock is the operating system's advisory lock on an open file
 //! ([`File::lock`]): it is released when the handle closes, and so when the
@@ -105,14 +108,27 @@ impl LockSettings {
         user: impl FnOnce() -> Option<String>,
         temp: impl FnOnce() -> PathBuf,
     ) -> Self {
+        Self::for_platform(cfg!(windows), var, user, temp)
+    }
+
+    /// [`Self::from_vars`] choosing Windows' or the other platforms' rules,
+    /// so a test on one host covers both.
+    fn for_platform(
+        windows: bool,
+        var: impl Fn(&str) -> Option<OsString>,
+        user: impl FnOnce() -> Option<String>,
+        temp: impl FnOnce() -> PathBuf,
+    ) -> Self {
         let set = |key| var(key).filter(|value| !value.is_empty());
-        let user_dir = if cfg!(windows) {
+        // A relative value would name a different file from each directory a
+        // run starts in, so it counts as unset. XDG_RUNTIME_DIR is not
+        // consulted: a session with it and one without must agree.
+        let user_dir = if windows {
             set("LOCALAPPDATA").map(PathBuf::from)
         } else {
-            set("XDG_RUNTIME_DIR")
-                .map(PathBuf::from)
-                .or_else(|| set("HOME").map(|home| PathBuf::from(home).join(".cache")))
-        };
+            set("HOME").map(|home| PathBuf::from(home).join(".cache"))
+        }
+        .filter(|dir| dir.is_absolute());
         // Without one, the shared temporary directory, in a directory named
         // after the user so accounts on one machine keep separate locks.
         // A relative temporary directory would name a different file from
@@ -678,25 +694,38 @@ mod tests {
             [PathBuf; 2],
         );
         let alice_tmp = lock(tmp.join("flui-alice-872213e7"));
-        let paths: [PathRow; 7] = [
+        let per_user = [
+            lock(Path::new(LOCAL).join("flui")),
+            lock(Path::new(HOME).join(".cache").join("flui")),
+        ];
+        let paths: [PathRow; 9] = [
             (
                 "per_user_directory_variable",
-                &[
-                    ("LOCALAPPDATA", "local"),
-                    ("XDG_RUNTIME_DIR", "runtime"),
-                    ("HOME", "home"),
-                ],
+                &[("LOCALAPPDATA", LOCAL), ("HOME", HOME)],
                 Some("alice"),
-                [
-                    lock(PathBuf::from("local/flui")),
-                    lock(PathBuf::from("runtime/flui")),
-                ],
+                per_user.clone(),
             ),
             (
-                "home_cache_without_a_runtime_dir",
-                &[("HOME", "home")],
+                "same_path_with_or_without_xdg_runtime_dir",
+                &[
+                    ("LOCALAPPDATA", LOCAL),
+                    ("HOME", HOME),
+                    ("XDG_RUNTIME_DIR", RUNTIME),
+                ],
                 Some("alice"),
-                [alice_tmp.clone(), lock(PathBuf::from("home/.cache/flui"))],
+                per_user.clone(),
+            ),
+            (
+                "relative_user_directory_counts_as_unset",
+                &[("LOCALAPPDATA", "local"), ("HOME", "home")],
+                Some("alice"),
+                [alice_tmp.clone(), alice_tmp.clone()],
+            ),
+            (
+                "home_is_not_read_on_windows",
+                &[("HOME", HOME)],
+                Some("alice"),
+                [alice_tmp.clone(), per_user[1].clone()],
             ),
             (
                 "temp_fallback_names_the_user",
@@ -713,8 +742,8 @@ mod tests {
             (
                 "absolute_override_wins",
                 &[
-                    ("LOCALAPPDATA", "local"),
-                    ("XDG_RUNTIME_DIR", "runtime"),
+                    ("LOCALAPPDATA", LOCAL),
+                    ("HOME", HOME),
                     (LOCK_FILE, ABSOLUTE),
                 ],
                 Some("alice"),
@@ -723,15 +752,12 @@ mod tests {
             (
                 "relative_override_is_refused",
                 &[
-                    ("LOCALAPPDATA", "local"),
-                    ("XDG_RUNTIME_DIR", "runtime"),
+                    ("LOCALAPPDATA", LOCAL),
+                    ("HOME", HOME),
                     (LOCK_FILE, "relative.lock"),
                 ],
                 Some("alice"),
-                [
-                    lock(PathBuf::from("local/flui")),
-                    lock(PathBuf::from("runtime/flui")),
-                ],
+                per_user,
             ),
             (
                 "relative_override_without_a_user_directory",
@@ -743,11 +769,25 @@ mod tests {
         let wrong: Vec<String> = paths
             .iter()
             .filter_map(|(row, env, user, [windows, other])| {
-                let user = user.map(str::to_owned);
-                let got = LockSettings::from_vars(vars(env), || user, || tmp.clone());
-                let want = if cfg!(windows) { windows } else { other };
-                (got.path != *want || got.unlocated)
-                    .then(|| format!("{row}: {} != {}", got.path.display(), want.display()))
+                [(true, "windows", windows), (false, "other", other)]
+                    .into_iter()
+                    .filter_map(|(platform, name, want)| {
+                        let user = user.map(str::to_owned);
+                        let got = LockSettings::for_platform(
+                            platform,
+                            vars(env),
+                            || user,
+                            || tmp.clone(),
+                        );
+                        (got.path != *want || got.unlocated).then(|| {
+                            format!(
+                                "{row} ({name}): {} != {}",
+                                got.path.display(),
+                                want.display()
+                            )
+                        })
+                    })
+                    .reduce(|a, b| format!("{a}; {b}"))
             })
             .collect();
         assert!(wrong.is_empty(), "lock path selection: {wrong:#?}");
@@ -763,7 +803,7 @@ mod tests {
             ),
             (
                 "relative_temp_unused_beside_a_user_directory",
-                &[("LOCALAPPDATA", "local"), ("XDG_RUNTIME_DIR", "runtime")],
+                &[("LOCALAPPDATA", LOCAL), ("HOME", HOME)],
                 false,
             ),
         ];
@@ -802,6 +842,24 @@ mod tests {
         );
         assert!(!other.opted_out && !other.parent_holds());
     }
+
+    /// A `LOCALAPPDATA` and a `HOME` that are absolute on this host, so
+    /// both platforms' rules can be checked here.
+    const LOCAL: &str = if cfg!(windows) {
+        r"C:\Users\alice\AppData\Local"
+    } else {
+        "/users/alice/local"
+    };
+    const RUNTIME: &str = if cfg!(windows) {
+        r"C:\run\user\1000"
+    } else {
+        "/run/user/1000"
+    };
+    const HOME: &str = if cfg!(windows) {
+        r"C:\home\alice"
+    } else {
+        "/home/alice"
+    };
 
     /// An absolute lock path on this platform.
     const ABSOLUTE: &str = if cfg!(windows) {
