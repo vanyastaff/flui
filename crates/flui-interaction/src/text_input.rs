@@ -314,8 +314,17 @@ impl TextInputOwner {
         let token = ClientToken(current);
 
         // Before the client is reachable through `dispatch`, so no lock is
-        // ever requested on a store that does not yet follow the frame.
-        client.store.set_commit_gate(self.gate.clone());
+        // ever requested on a store that does not yet follow the frame. The
+        // store is user code: a failure there rejects the client, which is
+        // retained rather than destroyed during the unwind (ADR-0127).
+        let mut installing = OwnerCalls::new();
+        installing.run(|| {
+            client.store.set_commit_gate(self.gate.clone());
+        });
+        if let Some(payload) = installing.into_failure() {
+            RetainOnFailure::retain(client);
+            std::panic::resume_unwind(payload);
+        }
         // A user-defined store may close the owner while installing its gate.
         // The rejected client was never admitted; its owners still retire
         // one at a time, store first, behind the close-mode failure fence.
@@ -354,13 +363,14 @@ impl TextInputOwner {
         // the local capability clone is released before them: a store that
         // closes the owner and then panics must not leave this clone as the
         // backend's last owner, destroyed during that unwind. A failure the
-        // replaced client parks waits for this owner's next turn.
+        // replaced client's destruction parks is taken in time order.
         release_platform(platform, &mut calls);
         if let Some(replaced) = replaced {
-            retire_client_owners(replaced.client, &mut calls, None);
+            retire_client_owners(replaced.client, &mut calls, Some(&self.gate));
         }
+        // A diagnostic runs a user-installed subscriber.
+        calls.run(|| tracing::trace!(token = token.0.get(), "IME client attached"));
         calls.resume();
-        tracing::trace!(token = token.0.get(), "IME client attached");
         Ok(token)
     }
 
@@ -382,12 +392,14 @@ impl TextInputOwner {
             let mut calls = OwnerCalls::new();
             calls.run(|| platform.set_ime_allowed(false));
             release_platform(platform, &mut calls);
-            retire_client_owners(detached.client, &mut calls, None);
+            retire_client_owners(detached.client, &mut calls, Some(&self.gate));
+            calls.run(|| tracing::trace!(token = token.0.get(), "IME client detached"));
             calls.resume();
-            tracing::trace!(token = token.0.get(), "IME client detached");
             Ok(DetachOutcome::Detached)
         } else {
-            tracing::trace!(token = token.0.get(), "stale IME detach ignored");
+            let mut calls = OwnerCalls::new();
+            calls.run(|| tracing::trace!(token = token.0.get(), "stale IME detach ignored"));
+            calls.resume();
             Ok(DetachOutcome::Stale)
         }
     }
@@ -440,10 +452,13 @@ impl TextInputOwner {
             } else if let Some(Err(error)) =
                 calls.run_parking(&self.gate, || project_ime_event(&*client.store, event))
             {
-                tracing::warn!(
-                    ?error,
-                    "an IME event could not be applied to the text store"
-                );
+                // A diagnostic runs a user-installed subscriber.
+                calls.run(|| {
+                    tracing::warn!(
+                        ?error,
+                        "an IME event could not be applied to the text store"
+                    );
+                });
             }
             // A grant or callback that detached the client left this clone its
             // last owner, and its destruction may settle a grant of its own.
@@ -607,6 +622,11 @@ impl TextInputOwner {
         for store in retired {
             failure.retire(store);
         }
+        // A failure a store parked for this presentation's next turn came
+        // before the close; this is that turn.
+        if let Some(parked) = self.gate.take_failure() {
+            failure.keep_earlier(parked);
+        }
         failure.finish();
     }
 
@@ -682,6 +702,9 @@ impl Drop for TextInputOwner {
             failure.retire(store);
         }
         failure.release(platform);
+        if let Some(parked) = self.gate.take_failure() {
+            failure.keep_earlier(parked);
+        }
         failure.finish_contained();
     }
 }
