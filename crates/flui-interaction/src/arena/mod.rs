@@ -754,7 +754,8 @@ pub enum SweepModel {
 /// — the route-before-sweep order is load-bearing (it lets a double-tap's
 /// first-up `hold` run before the sweep, so the sweep observes the hold
 /// and defers).
-/// Shared by the headless binding and the production `GestureBinding`.
+/// No workspace code calls it: `GestureBinding` runs the same sequence inline
+/// (`binding.rs`). Kept public for standalone arena users and tests.
 pub fn run_pointer_lifecycle(arena: &GestureArena, event: &crate::events::PointerEvent) {
     use crate::events::PointerEvent;
     let pointer = crate::events::extract_pointer_id(event);
