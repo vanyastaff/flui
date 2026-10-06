@@ -1,10 +1,13 @@
-//! Accepted cancellation restores a dragged card instead of dismissing it.
+//! Dismissible release: cancellation restores a dragged card, a fling keeps
+//! the finger's speed.
 use crate::common::{lay_out_animated, tight};
 use flui_animation::Vsync;
 use flui_foundation::geometry::Offset;
 use flui_painting::styling::Color;
-use flui_widgets::{ColoredBox, DismissDirection, Dismissible, GestureDetector, VsyncScope};
-use std::cell::Cell;
+use flui_widgets::{
+    ColoredBox, DismissDirection, DismissUpdateDetails, Dismissible, GestureDetector, VsyncScope,
+};
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -102,4 +105,55 @@ pub(crate) fn a_cancelled_vertical_dismiss_restores_the_card() {
 
 pub(crate) fn cancelling_a_fully_slid_card_restores_it_without_dismissal() {
     cancelled_card(DismissDirection::Horizontal, 250.0);
+}
+
+/// The card's speed, in px/s, just after a release at 1500 px/s on a card
+/// `width` px wide.
+fn release_speed(width: f64) -> f64 {
+    let progress = Rc::new(RefCell::new(Vec::new()));
+    let recorder = Rc::clone(&progress);
+    let vsync = Vsync::new();
+    let card = Dismissible::new(ColoredBox::new(Color::rgb(10, 20, 30)))
+        .resize_duration(None)
+        .on_update(move |_, details: DismissUpdateDetails| {
+            recorder.borrow_mut().push(details.progress);
+        });
+    let mut laid = lay_out_animated(
+        VsyncScope::new(vsync.clone(), card),
+        tight(width, 100.0),
+        vsync,
+    );
+    laid.dispatch_pointer_down(10.0, 50.0);
+    // 15 px every 10 ms: 1500 px/s to the right.
+    let mut x = 10.0;
+    for _ in 0..5 {
+        x += 15.0;
+        laid.dispatch_pointer_move_after(x, 50.0, Duration::from_millis(10));
+    }
+    laid.dispatch_pointer_up(x, 50.0);
+    laid.pump();
+    progress.borrow_mut().clear();
+    // A frame anchors the fling, then a 0.1 ms step samples its start: the
+    // settle spring's acceleration changes the speed by under 5 % that soon.
+    let step = Duration::from_micros(100);
+    for _ in 0..3 {
+        laid.pump_for(step);
+    }
+    let samples = progress.borrow();
+    let moving: Vec<_> = samples.windows(2).filter(|pair| pair[1] != pair[0]).collect();
+    let pair = moving.first().expect("the released card moves");
+    (pair[1] - pair[0]) * width / step.as_secs_f64()
+}
+
+/// A fling hands the finger's speed to the settle animation whatever the
+/// card's width: the gesture's px/s become controller units per second by
+/// dividing by the width, not by a fixed scale.
+pub(crate) fn a_dismissible_release_keeps_finger_speed_on_any_width() {
+    for width in [150.0, 1200.0] {
+        let speed = release_speed(width);
+        assert!(
+            (speed - 1500.0).abs() <= 0.1 * 1500.0,
+            "a {width} px card left at {speed} px/s after a 1500 px/s release"
+        );
+    }
 }
