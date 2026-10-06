@@ -1487,6 +1487,7 @@ impl PresentationState {
             close_focus, close_gestures, close_mouse_tracker, close_text_input,
         };
         // One reentry window spans every owner this close reaches.
+        let _lifecycle_window = self.widgets.lifecycle_source().close_window();
         let mut window = flui_interaction::__runtime::CloseWindow::new();
         if let Some(handle) = self.interaction_dispatch() {
             window.dispatch(handle);

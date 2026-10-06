@@ -258,6 +258,7 @@ fn lifecycle_panic_containment_matrix() {
             ("lifecycle_recovery::dead_source_rejection_during_unwind_retains_captures", lifecycle_recovery::dead_source_rejection_during_unwind_retains_captures as fn()),
             ("lifecycle_recovery::caught_failure_protects_nested_pending_subscription_retirement", lifecycle_recovery::caught_failure_protects_nested_pending_subscription_retirement as fn()),
             ("lifecycle_recovery::successful_lifecycle_cancellation_retires_captures_and_keeps_fifo", lifecycle_recovery::successful_lifecycle_cancellation_retires_captures_and_keeps_fifo as fn()),
+            ("lifecycle_recovery::preserving_close_retains_rejections_only_while_it_is_in_progress", lifecycle_recovery::preserving_close_retains_rejections_only_while_it_is_in_progress as fn()),
             ("build_payload_recovery::aggregate_build_payload_is_retained_before_recovery", lifecycle_panic_containment::build_payload_recovery::aggregate_build_payload_is_retained_before_recovery as fn()),
             ("build_payload_recovery::recovery_reporting_preserves_original_attribution", lifecycle_panic_containment::build_payload_recovery::recovery_reporting_preserves_original_attribution as fn()),
             ("build_payload_recovery::original_and_reporting_payloads_do_not_compete_at_retirement", lifecycle_panic_containment::build_payload_recovery::original_and_reporting_payloads_do_not_compete_at_retirement as fn()),

@@ -534,3 +534,38 @@ pub(crate) fn live_source_rejection_during_unwind_retains_captures() {
 pub(crate) fn dead_source_rejection_during_unwind_retains_captures() {
     child("rejected_dead_unwind");
 }
+
+pub(crate) fn preserving_close_retains_rejections_only_while_it_is_in_progress() {
+    struct CountDrop(Arc<AtomicUsize>);
+    impl Drop for CountDrop {
+        fn drop(&mut self) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+    let source = LifecycleSource::new();
+    let handle = source.handle();
+    let drops = Arc::new(AtomicUsize::new(0));
+    let reject = || {
+        let capture = CountDrop(Arc::clone(&drops));
+        let result = handle.subscribe(move |_| {
+            let _keep = &capture;
+        });
+        assert!(matches!(result, Err(LifecycleClosed)));
+    };
+    {
+        let _window = source.close_window();
+        source.finish_close_with_mode(flui_interaction::__runtime::CloseMode::PreservingFailure);
+        reject();
+        assert_eq!(
+            drops.load(Ordering::SeqCst),
+            0,
+            "a preserving close in progress retains a rejected callback"
+        );
+    }
+    reject();
+    assert_eq!(
+        drops.load(Ordering::SeqCst),
+        1,
+        "once the close returns, a stale handle's rejection retires normally"
+    );
+}

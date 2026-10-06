@@ -271,6 +271,14 @@ impl UiRealm {
     }
 
     fn reconcile_lifecycle(&self, mut cancel: Vec<PresentationId>) {
+        // A closing presentation's terminal recovery spans this whole pass;
+        // its preserving policy ends when the pass returns (ADR-0123).
+        let lifecycle_windows: Vec<_> = self
+            .presentations
+            .iter()
+            .filter(|presentation| presentation.closing_requested.get())
+            .map(|presentation| presentation.widgets().lifecycle_source().close_window())
+            .collect();
         if std::thread::panicking() {
             self.seed_terminal_lifecycle_recovery();
         }
@@ -461,6 +469,7 @@ impl UiRealm {
                 "terminal presentation cleanup",
             );
         }
+        drop(lifecycle_windows);
         if let Some(payload) = first_panic {
             if std::thread::panicking() {
                 flui_foundation::panic::retain_opaque_payload(payload);
