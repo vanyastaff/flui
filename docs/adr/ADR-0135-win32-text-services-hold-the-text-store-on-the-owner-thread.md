@@ -2,7 +2,7 @@
 
 - **Status:** Proposed (2026-10-06). §1, §2 and the owner's queue in §4 are implemented; the
   Win32 window does not offer its host yet (§3), so `HostWindow::text_store_host` answers `None`
-  on every backend.
+  on every production backend (a headless window offers one only when a test asks).
 - **Date:** 2026-10-06
 - **Implements part of:** [ADR-0082](ADR-0082-platform-api-contract-crate.md) §4 (owner-thread
   storage, step 1; the owner-proof shape of step 2, for one capability)
@@ -29,38 +29,50 @@ composition must still end somewhere.
 ## Decision
 
 1. **The pull side is `TextStoreHost`** (`flui_platform_api::text_store`): `focus_store(Option<Rc<dyn
-   TextStore>>)` tells the window which field's store takes input, and `complete_composition()`
-   ends the platform's composition in it, answering `CompositionEnd::Committed`, `Abandoned` (the
-   platform could not, and the caller clears the store's composing range, keeping the text) or
-   `Deferred` (the request arrived inside a platform call into a store; the host ends it when
-   that call returns and clears the composing range itself if the platform then cannot), or
-   `TextStoreHostError::Unavailable` once the window's text services are gone, which the caller
-   treats as `Abandoned`. The host is shared as `Rc<dyn TextStoreHost>` and is not `Send`.
+   TextStore>>)` tells the window which field's store takes input, and
+   `complete_composition(&Rc<dyn TextStore>)` ends the platform's composition in that store. The
+   host compares it by identity (`Rc::ptr_eq`) with the store it was last told to focus, queued
+   focus changes included, and answers `CompositionEnd::Committed`, `Abandoned` (the platform
+   could not), `Deferred` (the request arrived inside a platform call into a store; the host
+   keeps the store, ends the composition when that call returns, and commits it in place itself
+   if the platform then cannot or has shut down), `TextStoreHostError::NotFocused` for any other
+   store, or `TextStoreHostError::Unavailable` once the window's text services are gone. On
+   `Abandoned` and either error the caller commits in place:
+   `text_store::commit_composition_in_place` clears the composing range under an asynchronous
+   lock and keeps the text, the one function every caller uses. The host is shared as
+   `Rc<dyn TextStoreHost>` and is not `Send`.
 2. **Only owner-thread proof reaches it.** `OwnerPlatform::text_store_host(&Arc<dyn HostWindow>)`
    reads the window's host through `HostWindow::text_store_host`, whose argument, an
    `OwnerThreadToken`, only `OwnerPlatform` can build: its type is public in a private module, so
-   the method cannot be called outside `flui-platform`. This is the interim home until ADR-0082
+   the method cannot be called outside `flui-platform`. The token proves the platform's owner
+   thread, not the window's: the Win32 window reads its host through `with_window_context`, which
+   refuses a thread other than the one that created the HWND. This is the interim home until ADR-0082
    §4 step 2's owner window exists, when the method moves there. `PlatformWindow` and
    `PlatformTextInput` do not change. The runner reads the host once, beside the accessibility
    bridge (`runner::presentation_window`), and `PresentationWindow` carries it, so a
    `PresentationWindow` is not `Send`.
 3. **Win32 keeps the text services in the window.** The `ITfThreadMgr`, the empty document and
-   the focused field's document live in the window's `WindowContext`, on the owner thread, with
+   the focused field's document (one state: nothing, a field's document, or shut down) live in
+   the window's `WindowContext`, on the owner thread, with
    no `static` or `thread_local!`; no `windows::*` type leaves `flui-platform`. The window offers
    the host once `WindowContext` holds them; until then it answers `None` and the presentation
    uses the push path it had.
 4. **The presentation's owner orders host calls and never nests them.**
    `TextInputOwner::new(TextInputBackend)` takes `Push(Arc<dyn PlatformTextInput>)`,
-   `Pull(Rc<dyn TextStoreHost>)` or `None`; the presentation picks `Pull` when the window has a
-   host. An attach queues the store's focus, the active detach and close queue `None`, and
-   `complete_composition` (the owner's, and the handle's for its own token) queues a completion
-   that captures its store. The queue drains when no owner call on the host is running and the
-   frame transaction is closed, and at the anchor before any deferred grant, so a call that
-   reaches the owner again from inside the host waits for the outer one, and a completion asked
-   for in a frame reaches its field even after a detach. An `Abandoned` or `Unavailable` answer
-   commits the composition in place under an asynchronous lock; a push or storeless owner does
-   that directly. Close runs the queued completions, then tells a host left focused `None`; an
-   owner dropped without a close only does the latter. The host queues what reaches it inside a
+   `Pull(Rc<dyn TextStoreHost>)` or `Unsupported`, held in one `RefCell`; the presentation picks
+   `Pull` when the window has a host. An attach queues the store's focus, the active detach and
+   close queue `None`, and `complete_composition` (the owner's, and the handle's for its own
+   token) queues a completion that captures its store. The queue drains when no owner call on
+   the host is running and the frame transaction is closed, and at the anchor before any deferred
+   grant, so a call that reaches the owner again from inside the host waits for the outer one, and
+   a completion asked for in a frame reaches its field even after a detach. A host operation that
+   panics releases its values and the queue goes on; the first failure propagates once the rest
+   (and, at the anchor, the deferred grants) have run. An `Abandoned` answer or an error commits
+   the composition in place; a push or storeless owner does that directly. Close applies the
+   queued operations in order (a focus change queued before a completion moves the host first,
+   so the completion reaches its own store), then tells a host left focused `None`; after a
+   failure it retires the rest and still sends the `None`. An owner dropped without a close only
+   does the latter. The host queues what reaches it inside a
    platform call that did not come from the owner (the Win32 text services count those entries,
    `entry_depth`), and answers `Deferred`.
 5. **One TSF document per focused field**, associated with `AssociateFocus` and focused with an
@@ -93,7 +105,10 @@ composition must still end somewhere.
   the focused store through the host the headless window offers:
   `HeadlessWindow::with_text_store_host` and `flui_testing::RecordingTextStoreHost`;
   `widgets::harness::mount_with_ime` is pull-model and `mount_with_push_ime` keeps the push
-  recorder.
+  recorder. A presentation without input-method support passes `TextInputBackend::Unsupported`.
+- A platform-level test makes a headless window pull-model with
+  `HeadlessPlatform::with_text_store_host`, which is how the runner's
+  `runner::presentation_window` is tested.
 - `TextInputOwner::complete_composition` and `TextInputHandle::complete_composition` have no
   production caller yet: the runtime's pointer-down and close hooks and the field's blur, paste,
   undo and unmount handling (ADR-0090 amendment item 4) call them.
@@ -104,11 +119,20 @@ composition must still end somewhere.
 - `flui-platform` `traits::owner::tests::the_owner_platform_reads_a_window_s_text_store_host`
   and the `compile_fail` examples on `HostWindow::text_store_host` (§2).
 - `flui-interaction` `the_owner_drives_its_text_store_host` (focus follows attach, frame and
-  reentry queueing, the four answers, a completion that outlives its detach, close, push and no
-  backend) and `text_input_retirement_allows_reentry_and_preserves_recovery`'s pull-host row
-  (issue #1052's reentrant retirement on a pull owner) (§4).
-- `flui-runtime` `a_window_with_a_text_store_host_takes_input_through_it` and `flui-widgets`
+  reentry queueing, the answers, a completion that outlives its detach, close, a close that
+  applies a queued focus change before its completion, push and no backend),
+  `a_panicking_text_store_host_is_contained` (a panicking focus change and completion alone,
+  two at the anchor, two in a close, and the next operation after each) and
+  `text_input_retirement_allows_reentry_and_preserves_recovery`'s pull-host row (issue #1052's
+  reentrant retirement on a pull owner) (§1, §4).
+- `flui-runtime` `a_window_with_a_text_store_host_takes_input_through_it`, `flui-app`
+  `runner_bootstrap_matrix`'s
+  `presentation_window_hands_a_pull_window_s_host_to_its_presentation` and `flui-widgets`
   `focus_gain_and_loss_reach_the_store_host` (§2, §4).
+- `flui-platform` `text_services::tests::the_text_services_answer_a_completion_for_its_store`,
+  Windows only, against the real TSF in a hidden window: a completion queued behind a COM entry
+  commits its store in place after a shutdown or without a document, and a store the host does
+  not serve, or any store after shutdown, is refused (§1, §3).
 - The Win32 text services' opt-in probe,
   `cargo test -p flui-platform --lib text_services -- --ignored --nocapture`, run 2026-10-06 with
   Microsoft IME ja-JP at 100 %: activation, `toukyou` → 東京, `TS_S_ASYNC` behind a shut gate,

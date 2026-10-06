@@ -2,19 +2,27 @@
 
 - **`flui_platform_api::text_store::TextStoreHost`**: the owner-thread side of a pull-model
   window's text input, with `CompositionEnd { Committed, Abandoned, Deferred }` and
-  `TextStoreHostError` (ADR-0135). `flui_platform::OwnerPlatform::text_store_host` reads a
-  window's host; no backend offers one yet.
+  `TextStoreHostError { NotFocused, Unavailable }` (ADR-0135). `complete_composition(&store)`
+  ends the composition in the store it names, if the host serves that store.
+  `flui_platform::OwnerPlatform::text_store_host` reads a window's host; no production backend
+  offers one yet.
+- **`flui_platform_api::text_store::commit_composition_in_place`**: clear a store's composing
+  range, keeping its text, when the platform cannot end the composition.
 - **`TextInputOwner::complete_composition`** and **`TextInputHandle::complete_composition`**:
   commit the active field's composition, keeping its text, through the host or in place.
+- **`flui_platform::HeadlessPlatform::with_text_store_host`**: headless windows that offer a
+  text-store host, for tests of the pull path.
 - **`flui_testing::RecordingTextStoreHost`**, `HeadlessWindow::with_text_store_host`,
-  `HeadlessRealm::text_store_host` and `widgets::harness::Harness::store_host_calls`.
+  `HeadlessRealm::text_store_host`, `widgets::harness::Harness::store_host_calls` and, under
+  `test-support`, `flui_runtime::UiRealm::text_input_handle`.
 
 ### Changed
 
 - **`TextInputOwner::new`** takes a `TextInputBackend` (`Push(Arc<dyn PlatformTextInput>)`,
-  `Pull(Rc<dyn TextStoreHost>)` or `None`) instead of an `Option<Arc<dyn PlatformTextInput>>`:
-  `new(Some(platform))` becomes `new(TextInputBackend::Push(platform))`, `new(None)` becomes
-  `new(TextInputBackend::None)`.
+  `Pull(Rc<dyn TextStoreHost>)` or `Unsupported`) instead of an
+  `Option<Arc<dyn PlatformTextInput>>`: `new(Some(platform))` becomes
+  `new(TextInputBackend::Push(platform))`, `new(None)` becomes
+  `new(TextInputBackend::Unsupported)`.
 - **`PresentationWindow`** carries the window's text-store host
   (`PresentationWindow::with_text_store_host`) and is no longer `Send`.
 - **`widgets::harness::mount_with_ime`** mounts a pull-model window; a test that reads
