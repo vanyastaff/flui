@@ -20,24 +20,37 @@
 //! | the flush before a request: a failure there refuses it and retains the grant | `request_lock` of `InMemoryTextStore` (`in_memory.rs`) and `EditableTextStore` (`flui-widgets` `text/text_store.rs`) |
 //! | the flush after a request's grants, behind what their settle parked ([`OwnerCalls::run_behind_parked`]) | `request_lock`, `run_deferred_grants` of both stores |
 //! | a grant a detached field refuses | `EditableTextStore::request_lock` (`flui-widgets` `text/text_store.rs`) |
+//! | a grant's body reading or editing the in-memory store: no borrow is held across it, and an application edit wins | `InMemoryTextStore::open` (`in_memory.rs`) |
 //! | `on_changed`, and its snapshot | `EditObserver::deliver` (`flui-widgets` `text/editable_text.rs`), from `EditableTextStore::settle` and from a key edit's `EditObserver::around`, which contains the edit's listener notification so the owner still hears of the change |
 //! | the controller's listeners, and the controller snapshot | `EditableTextStore::settle` (`flui-widgets` `text/text_store.rs`) |
-//! | a replaced or detached `EditableText` observer, and the observer when the store goes | `EditableTextStore::set_observer`, `detach`, `Drop` (`flui-widgets` `text/text_store.rs`) |
+//! | a replaced or detached `EditableText` observer; the observer, `on_changed` and the controller when the store outlives its field | `EditableTextStore::set_observer`, `detach`, `Drop` (`flui-widgets` `text/text_store.rs`), `EditObserver::retire` |
+//! | a key edit, and a semantic text edit: the queued grants, the edit with `on_changed`, the platform's notification, each run though an earlier one failed | the key handler and `FieldSemanticsActions::set_text` (`flui-widgets` `text/editable_text.rs`) |
+//! | an update's store notifications and focus transition, `set_can_request_focus` last | `EditableTextState::did_update_view` (`flui-widgets` `text/editable_text.rs`) |
+//! | the cursor-area loop: the store's notifications, the platform's cursor area, the loop rescheduled before a failure is resumed | `CursorAreaLoop::fire` (`flui-widgets` `text/editable_text.rs`) |
+//! | a blur's detach, with the token taken before it | the field's focus listener (`flui-widgets` `text/editable_text.rs`) |
 //! | dispose: detaching the client and the store, the attachment, the controller listener, each run though an earlier one failed | `EditableTextState::dispose` (`flui-widgets` `text/editable_text.rs`) |
 //! | a store installing the presentation's gate | `TextInputOwner::attach` (`flui-interaction` `text_input.rs`) |
+//! | a client a closed owner rejects, store then callback | `retire_rejected`, from `TextInputOwner::attach` and `TextInputHandle::attach` (`flui-interaction` `text_input.rs`) |
+//! | the platform's `set_ime_allowed` | `TextInputOwner::attach`, `detach` (`flui-interaction` `text_input.rs`) |
+//! | the platform's `set_ime_cursor_area` | `TextInputOwner::set_cursor_area` (`flui-interaction` `text_input.rs`) |
 //! | `on_session_start`, the projection, and the dispatched client snapshot | `TextInputOwner::dispatch` (`flui-interaction` `text_input.rs`) |
-//! | clients replaced or detached, and what their destruction parks | `TextInputOwner::attach`, `detach` (`flui-interaction` `text_input.rs`) |
+//! | clients replaced or detached, and what their destruction parks; once the client is active, attach parks its failures and returns the token | `TextInputOwner::attach`, `detach` (`flui-interaction` `text_input.rs`) |
 //! | stores retired at an anchor | `TextInputOwner::run_deferred_grants` (`flui-interaction` `text_input.rs`) |
-//! | diagnostics (`tracing` runs a user-installed subscriber) | `TextInputOwner::attach`, `detach`, `dispatch`; `EditableTextState::dispose` |
+//! | diagnostics (`tracing` runs a user-installed subscriber) | `TextInputOwner::attach`, `detach`, `dispatch`; `EditableTextState::dispose`, the blur detach and the cursor-area loop |
 //!
 //! Presentation close (`TextInputOwner::close_with_mode` and its `Drop`)
 //! keeps its close-mode containment (ADR-0123), which retires the same
 //! values under the same retention rule; it takes a failure parked for its
 //! next turn too, ahead of its own, raised by an ordinary close and retained
-//! by a preserving one or by `Drop`. Diagnostics outside these paths (a
-//! field's focus listener and cursor-area loop, a deferred projection's
-//! warning inside a grant body) run inside the containment of the code
-//! that calls them: the focus notifier, the post-frame callback, the grant.
+//! by a preserving one or by `Drop`. The remaining diagnostics (the focus
+//! listener's attach warnings, a deferred projection's warning inside a
+//! grant body) run inside the containment of the code that calls them: the
+//! focus notifier, the grant.
+//!
+//! An update and the cursor-area loop run inside a frame, whose shut gate
+//! defers every store notification they make to after it, so with the
+//! headless platform no other code of theirs can fail; they are contained
+//! for platforms whose cursor-area call is other code.
 //!
 //! The rules it keeps, in order of the calls a scope makes:
 //!

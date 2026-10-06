@@ -213,13 +213,20 @@ pub(super) struct EditableTextStore {
 }
 
 impl Drop for EditableTextStore {
-    /// The observer is the platform's code: retired inside a scope, retained
-    /// during an unwind (ADR-0127). The arbiter retires its queued grants the
-    /// same way.
+    /// The observer, `on_changed` and the controller (when the store
+    /// outlives its field, it may be their last owner) are other code:
+    /// retired inside a scope, retained after a failure or during an unwind
+    /// (ADR-0127). The arbiter retires its queued grants the same way.
     fn drop(&mut self) {
         let observer = self.observer.get_mut().take();
+        let controller = std::mem::replace(
+            &mut self.controller,
+            Rc::new(RefCell::new(TextEditingController::new())),
+        );
         let mut calls = OwnerCalls::new();
         calls.retire(observer);
+        self.edits.retire(&mut calls);
+        calls.retire(controller);
         if !std::thread::panicking() {
             calls.resume();
         }
