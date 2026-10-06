@@ -177,6 +177,18 @@ fn retire_client_owners(
     }
 }
 
+/// Retire a client a closed owner rejected, one owner at a time (store, then
+/// session callback) inside the close's containment: dropping the client
+/// whole would drop the callback during the store's unwind.
+fn retire_rejected(failure: &mut ClosePanic, client: TextInputClient) {
+    let TextInputClient {
+        store,
+        on_session_start,
+    } = client;
+    failure.retire(store);
+    failure.retire(on_session_start);
+}
+
 /// Release a local clone of the framework-owned platform capability before
 /// any user-owned value retires, so the clone is never destroyed by a later
 /// unwind; only an unwind already in progress retains it (ADR-0127).
@@ -292,7 +304,7 @@ impl TextInputOwner {
     fn attach(&self, client: TextInputClient) -> Result<ClientToken, TextInputError> {
         if let Err(error) = self.ensure_open() {
             let mut failure = ClosePanic::for_rejection(self.close_mode.mode());
-            failure.retire(client);
+            retire_rejected(&mut failure, client);
             failure.finish();
             return Err(error);
         }
@@ -370,7 +382,17 @@ impl TextInputOwner {
         }
         // A diagnostic runs a user-installed subscriber.
         calls.run(|| tracing::trace!(token = token.0.get(), "IME client attached"));
-        calls.resume();
+        // The client is active and the token is the caller's: a failure here is
+        // this owner's to report at its next turn, so it cannot take the token
+        // with it. An owner closed meanwhile has no next turn, and the token
+        // no use: the failure is raised.
+        if let Some(payload) = calls.into_failure() {
+            if self.ensure_open().is_ok() {
+                self.gate.defer_failure(payload);
+            } else {
+                std::panic::resume_unwind(payload);
+            }
+        }
         Ok(token)
     }
 
@@ -407,7 +429,12 @@ impl TextInputOwner {
     fn set_cursor_area(&self, area: Bounds<f64>) -> Result<(), TextInputError> {
         self.ensure_open()?;
         let platform = self.platform()?;
-        platform.set_ime_cursor_area(area);
+        // The platform's code may close this owner and then panic: the local
+        // capability clone is released inside the scope, not in the unwind.
+        let mut calls = OwnerCalls::new();
+        calls.run(|| platform.set_ime_cursor_area(area));
+        release_platform(platform, &mut calls);
+        calls.resume();
         Ok(())
     }
 
@@ -722,12 +749,22 @@ impl TextInputHandle {
 
     /// Attach `client` as this presentation's active IME client, installing
     /// the presentation's commit gate into its store.
+    ///
+    /// Once the client is active the token is returned: a failure after that
+    /// point (enabling the platform, retiring the client it replaced) waits
+    /// in the presentation's gate for its next dispatch, anchor or close.
+    ///
+    /// # Panics
+    ///
+    /// Resumes a failure that rejects the client before it is active (its
+    /// store failing to take the gate, or a closed owner's retirement of
+    /// it), and one after it when the owner closed meanwhile.
     pub fn attach(&self, client: TextInputClient) -> Result<ClientToken, TextInputError> {
         match self.owner() {
             Ok(owner) => owner.attach(client),
             Err(error) => {
                 let mut failure = ClosePanic::for_rejection(self.close_mode.mode());
-                failure.retire(client);
+                retire_rejected(&mut failure, client);
                 failure.finish();
                 Err(error)
             }
