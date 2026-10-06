@@ -32,7 +32,7 @@
 //!
 //! The pointer and keyboard types re-exported from `ui-events` (and, through
 //! it, `keyboard-types`) are ADR-0089 debt. FLUI's own vocabulary, which
-//! replaces them in [`PlatformInput`] (ADR-0143), is in [`pointer`],
+//! replaces them in [`PlatformInput`] (ADR-0143), is in [`pointer`](mod@pointer),
 //! [`keyboard`] and [`EventTime`].
 //!
 //! # Implementing a capability without a backend

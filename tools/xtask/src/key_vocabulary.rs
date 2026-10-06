@@ -415,6 +415,8 @@ fn doc_line(out: &mut String, indent: &str, line: &str) -> std::fmt::Result {
     if line.is_empty() {
         writeln!(out, "{indent}///")
     } else {
+        // A bare `*` inside upstream `<kbd>*</kbd>` reads as Markdown emphasis.
+        let line = line.replace("<kbd>*</kbd>", r"<kbd>\*</kbd>");
         writeln!(out, "{indent}/// {line}")
     }
 }

@@ -280,16 +280,16 @@ pub enum Code {
     NumpadMemoryStore,
     /// <kbd>M-</kbd> Subtract current entry from the value stored in memory.
     NumpadMemorySubtract,
-    /// <kbd>*</kbd> on a keyboard. For use with numpads that provide mathematical
-    /// operations (<kbd>+</kbd>, <kbd>-</kbd>, <kbd>*</kbd> and <kbd>/</kbd>).<br/>Use [`NumpadStar`][Code::NumpadStar] for the <kbd>*</kbd> key on phones and remote controls.
+    /// <kbd>\*</kbd> on a keyboard. For use with numpads that provide mathematical
+    /// operations (<kbd>+</kbd>, <kbd>-</kbd>, <kbd>\*</kbd> and <kbd>/</kbd>).<br/>Use [`NumpadStar`][Code::NumpadStar] for the <kbd>\*</kbd> key on phones and remote controls.
     NumpadMultiply,
     /// <kbd>(</kbd> Found on the Microsoft Natural Keyboard.
     NumpadParenLeft,
     /// <kbd>)</kbd> Found on the Microsoft Natural Keyboard.
     NumpadParenRight,
-    /// <kbd>*</kbd> on a phone or remote control device.
+    /// <kbd>\*</kbd> on a phone or remote control device.
     /// This key is typically found below the <kbd>7</kbd> key and to the left of
-    /// the <kbd>0</kbd> key.<br/>Use [`NumpadMultiply`][Code::NumpadMultiply] for the <kbd>*</kbd> key on
+    /// the <kbd>0</kbd> key.<br/>Use [`NumpadMultiply`][Code::NumpadMultiply] for the <kbd>\*</kbd> key on
     /// numeric keypads.
     NumpadStar,
     /// <kbd>-</kbd>
