@@ -486,3 +486,13 @@ Accessibility input uses the whole-request translator of ADR-0124 before
 presentation inbox admission, preserving numeric values and explicit
 expand/collapse requests. Payload admission remains with the current semantics
 owner at delivery.
+
+`RenderingBinding` keeps its semantics-enabled listeners in their own storage,
+and `set_semantics_enabled` calls an owned snapshot of them after releasing the
+lock, so a callback may add or remove listeners or toggle the state again. Both
+the storage (when the binding drops) and each snapshot retire their envelopes
+in registration order. A panic from a callback or a capture destructor
+propagates with the committed semantics state intact; while it unwinds, the
+retiring container retains every envelope clone it holds, since a thread-shared
+clone cannot be proven non-last (ADR-0127). Competing destructors inside one callback's capture, and the
+binding's other fields, are outside this contract.

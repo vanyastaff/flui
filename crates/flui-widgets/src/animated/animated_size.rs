@@ -280,8 +280,8 @@ impl ViewState<AnimatedSize> for AnimatedSizeState {
         if let Some(id) = self.status_listener_id.take() {
             self.controller.remove_status_listener(id);
         }
-        if let (Some(vsync), Some(registration)) = (&self.vsync, self.vsync_registration) {
-            vsync.unregister(registration);
+        if let (Some(vsync), Some(registration)) = (&self.vsync, self.vsync_registration.take()) {
+            vsync.unregister(&registration);
         }
         self.controller.dispose();
     }

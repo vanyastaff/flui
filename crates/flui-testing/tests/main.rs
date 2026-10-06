@@ -16,6 +16,12 @@
 //! is — but they hold no state, receive no events, and never occupy the global
 //! default subscriber slot, so nothing here can observe another module's
 //! capture.
+//!
+//! `semantics_listener_retirement_preserves_independent_envelopes` re-executes
+//! this binary once per case, because the failure it guards against is an
+//! abort. It is a test of its own rather than a table row, so each child runs
+//! exactly one case, and it sets the child's environment only on the spawned
+//! command.
 
 #[path = "a11y_query.rs"]
 mod a11y_query;
@@ -95,4 +101,9 @@ fn containment_and_isolation_matrix() {
             ("multi_presentation_clock::two_presentations_at_independent_scripted_cadences_tick_and_advance_independently", multi_presentation_clock::two_presentations_at_independent_scripted_cadences_tick_and_advance_independently as fn()),
         ],
     );
+}
+
+#[test]
+fn semantics_listener_retirement_preserves_independent_envelopes() {
+    owner_scope::semantics_listener_retirement_preserves_independent_envelopes();
 }

@@ -22,7 +22,7 @@ mod measured {
         Animation as _, AnimationController as _, AnimationStatus as _, ArcCurve as _,
         ConstantAnimation as _, Curve as _, CurvedAnimation as _, Curves as _, FloatTween as _,
         TickerFuture as _, Tween as _, UpdateScheduler as _, Vsync as _, VsyncRegistration as _,
-        animate as _,
+        VsyncRegistrationError as _, animate as _,
     };
     use flui_sdk::foundation::notifier::Listenable as _;
     use flui_sdk::foundation::observe::{

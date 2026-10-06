@@ -601,7 +601,7 @@ impl ViewState<CupertinoButton> for CupertinoButtonState {
 
     fn dispose(&mut self) {
         if let (Some(vsync), Some(registration)) = (self.vsync.take(), self.registration.take()) {
-            vsync.unregister(registration);
+            vsync.unregister(&registration);
         }
         if let Some(controller) = self.controller.take() {
             controller.dispose();

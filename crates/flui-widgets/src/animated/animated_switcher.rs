@@ -399,7 +399,7 @@ impl ChildEntry {
         if let (Some(vsync), Some(registration)) =
             (self.vsync.take(), self.vsync_registration.take())
         {
-            vsync.unregister(registration);
+            vsync.unregister(&registration);
         }
         self.controller.dispose();
     }
