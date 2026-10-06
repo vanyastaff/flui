@@ -382,13 +382,15 @@ use flui_interaction::GestureSettings;
 use std::time::Duration;
 
 let settings = GestureSettings::default()
-    .with_touch_slop(18.0)                                 // Movement before drag starts
-    .with_pan_slop(36.0)                                   // Movement for pan gesture
     .with_double_tap_timeout(Duration::from_millis(300))   // Between double-tap contacts
     .with_long_press_timeout(Duration::from_millis(500))   // To trigger long press
-    .with_min_fling_velocity(50.0)
-    .with_max_fling_velocity(8000.0);
+    .try_with_touch_slop(18.0)?                            // Movement before drag starts
+    .try_with_pan_slop(36.0)?                              // Movement for pan gesture
+    .try_with_fling_velocity(50.0, 8000.0)?;               // Rejects min > max
 ```
+
+The `try_with_*` builders return a `GestureSettingsError` for NaN, infinite or negative
+values and for an inverted fling range, so an invalid configuration never exists.
 
 ---
 

@@ -106,11 +106,14 @@ const HISTORY_SIZE: usize = MAX_SAMPLES;
 /// linear when the sample times cannot determine a quadratic.
 const POLYNOMIAL_DEGREE: usize = 2;
 
-/// [`HORIZON`] in milliseconds, the unit of the fit.
-const HORIZON_MS: f64 = 100.0;
-
-/// [`ASSUME_POINTER_STOPPED`] in milliseconds, the unit of the fit.
-const ASSUME_POINTER_STOPPED_MS: f64 = 40.0;
+/// The distance between two instants, whichever is later.
+fn time_between(a: Instant, b: Instant) -> Duration {
+    if a >= b {
+        a.duration_since(b)
+    } else {
+        b.duration_since(a)
+    }
+}
 
 /// Bound a measured velocity: finite, at most [`DEFAULT_MAX_FLING_VELOCITY`],
 /// direction kept. A NaN component (no direction to keep) gives zero.
@@ -419,14 +422,14 @@ impl VelocityTracker {
             let Some(sample) = self.samples[cursor] else {
                 break;
             };
-            let t_ms = signed_ms(sample.time, newest.time);
-            let gap_ms = signed_ms(previous.time, sample.time).abs();
+            let age = time_between(sample.time, newest.time);
+            let gap = time_between(previous.time, sample.time);
             previous = sample;
-            if t_ms.abs() > HORIZON_MS || gap_ms > ASSUME_POINTER_STOPPED_MS {
+            if age > HORIZON || gap > ASSUME_POINTER_STOPPED {
                 break;
             }
             oldest = sample;
-            visit(sample, t_ms);
+            visit(sample, signed_ms(sample.time, newest.time));
             n += 1;
             cursor = if cursor == 0 {
                 HISTORY_SIZE - 1
@@ -450,7 +453,11 @@ impl VelocityTracker {
         let mut ys = [0.0f64; HISTORY_SIZE];
         let mut ts = [0.0f64; HISTORY_SIZE];
         let mut n: usize = 0;
+        let mut earliest: Option<Instant> = None;
+        let mut latest: Option<Instant> = None;
         let (newest, oldest, _) = self.walk_window(|sample, t_ms| {
+            earliest = Some(earliest.map_or(sample.time, |t| t.min(sample.time)));
+            latest = Some(latest.map_or(sample.time, |t| t.max(sample.time)));
             ts[n] = t_ms;
             xs[n] = sample.position.dx;
             ys[n] = sample.position.dy;
@@ -458,11 +465,7 @@ impl VelocityTracker {
         })?;
         let ws = [1.0f64; HISTORY_SIZE]; // Uniform weights.
         let offset = finite_offset(newest.position, oldest.position);
-        let duration = if newest.time >= oldest.time {
-            newest.time.duration_since(oldest.time)
-        } else {
-            oldest.time.duration_since(newest.time)
-        };
+        let duration = time_between(newest.time, oldest.time);
 
         // We were unable to gather enough samples to fit. Report zero
         // velocity with confidence 1.0 and the span we did see.
@@ -495,13 +498,12 @@ impl VelocityTracker {
         // with zero confidence so callers can still decide whether to spring
         // back based on position (e.g. overscroll), rather than silently
         // corrupting the simulation with NaN.
-        let (t_min, t_max) = ts[..n]
-            .iter()
-            .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), &t| {
-                (lo.min(t), hi.max(t))
-            });
-        let total_span_ms = t_max - t_min;
-        if total_span_ms < 1e-6 {
+        let span = match (earliest, latest) {
+            (Some(earliest), Some(latest)) => latest.duration_since(earliest),
+            _ => Duration::ZERO,
+        };
+        let total_span_ms = span.as_secs_f64() * 1000.0;
+        if span.is_zero() {
             // Enough samples, but they all carry one timestamp — the batched
             // drain. See the note at the sibling return above for why this is
             // reported rather than left silent.

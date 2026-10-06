@@ -18,6 +18,7 @@ use flui_interaction::processing::{
 use flui_interaction::{
     DEFAULT_MAX_FLING_VELOCITY, GestureBinding, GestureSettings, HitTestResult, PointerId,
     PointerPanZoomEvent, PointerRouteHandler, Velocity, VelocityEstimate, from_w3c_event,
+    settings::GestureSettingsError,
 };
 use proptest::prelude::*;
 use web_time::Instant;
@@ -311,14 +312,19 @@ fn fling_clamp_keeps_sign_and_rejects_nan() {
     );
 }
 
-fn inverted_fling_range_does_not_panic() {
-    let settings = GestureSettings::default().with_min_fling_velocity(9000.0);
+fn inverted_fling_range_is_rejected() {
     assert_eq!(
-        settings.max_fling_velocity(),
-        9000.0,
-        "a minimum above the maximum raises the effective maximum"
+        GestureSettings::default().try_with_fling_velocity(9000.0, 8000.0),
+        Err(GestureSettingsError::InvertedFlingRange {
+            min: 9000.0,
+            max: 8000.0
+        }),
+        "a minimum above the maximum cannot be configured"
     );
-    assert_eq!(settings.clamp_fling_velocity(-20_000.0), -9000.0);
+    let raised = GestureSettings::default()
+        .try_with_fling_velocity(9000.0, 12_000.0)
+        .expect("an ordered range is accepted");
+    assert_eq!(raised.clamp_fling_velocity(-20_000.0), -12_000.0);
     let clamped = Velocity::from_components(30_000.0, 40_000.0).clamp_magnitude(9000.0, 8000.0);
     assert!(
         (clamped.magnitude() - 9000.0).abs() < 1e-6,
@@ -330,35 +336,51 @@ fn inverted_fling_range_does_not_panic() {
     assert_eq!(nan_velocity, Velocity::ZERO);
 }
 
-fn invalid_settings_are_sanitized() {
-    let base = GestureSettings::mouse_defaults();
-    let settings = base
-        .clone()
-        .with_touch_slop(f64::NAN)
-        .with_pan_slop(-4.0)
-        .with_scale_slop(f64::INFINITY)
-        .with_double_tap_slop(f64::NAN)
-        .with_min_fling_velocity(-1.0)
-        .with_max_fling_velocity(f64::NAN);
+fn invalid_settings_are_rejected() {
+    let base = GestureSettings::mouse_defaults;
+    let invalid = |field, value| Err(GestureSettingsError::InvalidValue { field, value });
     assert_eq!(
-        settings, base,
-        "invalid builder values keep the previous value"
+        base().try_with_touch_slop(-1.0),
+        invalid("touch_slop", -1.0)
     );
-    let built = GestureSettings::new(
-        f64::NAN,
-        -1.0,
-        f64::NAN,
-        f64::INFINITY,
+    assert_eq!(base().try_with_pan_slop(-4.0), invalid("pan_slop", -4.0));
+    assert_eq!(
+        base().try_with_scale_slop(f64::INFINITY),
+        invalid("scale_slop", f64::INFINITY)
+    );
+    assert!(base().try_with_double_tap_slop(f64::NAN).is_err());
+    assert!(base().try_with_pan_slop_vertical(f64::NAN).is_err());
+    assert!(base().try_with_pan_slop_horizontal(-0.5).is_err());
+    assert_eq!(
+        base().try_with_fling_velocity(-1.0, 10.0),
+        invalid("min_fling_velocity", -1.0)
+    );
+    assert!(base().try_with_fling_velocity(50.0, f64::NAN).is_err());
+    let built = GestureSettings::try_new(
+        18.0,
+        18.0,
+        0.05,
+        100.0,
         Duration::from_millis(300),
         Duration::from_millis(500),
-        f64::NAN,
-        -8.0,
+        50.0,
+        8000.0,
     );
-    assert_eq!(
-        built,
-        GestureSettings::touch_defaults(),
-        "invalid constructor values use the touch defaults"
+    assert_eq!(built, Ok(GestureSettings::touch_defaults()));
+    let rejected = GestureSettings::try_new(
+        18.0,
+        18.0,
+        0.05,
+        100.0,
+        Duration::from_millis(300),
+        Duration::from_millis(500),
+        9000.0,
+        8000.0,
     );
+    assert!(matches!(
+        rejected,
+        Err(GestureSettingsError::InvertedFlingRange { .. })
+    ));
 }
 
 #[test]
@@ -367,8 +389,8 @@ fn fling_clamp_and_settings_never_panic_or_flip_sign() {
         "settings",
         &[
             ("clamp keeps sign", fling_clamp_keeps_sign_and_rejects_nan),
-            ("inverted range", inverted_fling_range_does_not_panic),
-            ("sanitized values", invalid_settings_are_sanitized),
+            ("inverted range", inverted_fling_range_is_rejected),
+            ("invalid values", invalid_settings_are_rejected),
         ],
     );
 }

@@ -8,14 +8,16 @@
 
 ### Changed
 
+- **`GestureSettings`** (`flui-interaction`) is validated: `new` is replaced by `try_new`, the
+  `f64` builders by `try_with_touch_slop`/`try_with_pan_slop`/`try_with_pan_slop_vertical`/
+  `try_with_pan_slop_horizontal`/`try_with_scale_slop`/`try_with_double_tap_slop`, and
+  `with_min_fling_velocity`/`with_max_fling_velocity` by `try_with_fling_velocity(min, max)`.
+  They return `GestureSettingsError` for NaN, infinite or negative values and for `min > max`.
 - **`GestureSettings::clamp_fling_velocity`** (`flui-interaction`) clamps the magnitude to the
   maximum fling velocity and keeps the sign; it no longer raises slow velocities to the minimum
-  (which flipped negative velocities) and never panics. `max_fling_velocity()` is never below
-  `min_fling_velocity()`. Negative or non-finite settings values are sanitized: `new` uses the
-  touch default, `with_*` builders keep the previous value.
-- **`PointerEventResampler`** (`flui-interaction`) is an owner-thread handle (`Rc<RefCell<_>>`,
-  no longer `Send`/`Sync`); it places events by their own time, interpolates at
-  `(sample - last) / (next - last)`, and coalesces moves instead of dropping events when full.
+  (which flipped negative velocities) and never panics.
+- **`PointerEventResampler`** (`flui-interaction`) places events by their own time, interpolates
+  at `(sample - last) / (next - last)`, and coalesces moves instead of dropping events when full.
 - **`SamplingClock::tick`** (`flui-interaction`) returns a window for `Manual` clocks too.
 - **`PointerPanZoomEvent::Update`** (`flui-interaction`): `scale` and `rotation` are documented as
   per-tick deltas (as delivered); a non-finite or non-positive scale and a non-finite rotation
