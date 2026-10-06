@@ -454,6 +454,92 @@ fn closing_during_a_grant_cancels_the_tail_and_preserves_the_first_failure() {
     assert_eq!(owner.run_deferred_grants(), 0);
 }
 
+/// A platform capability that records whether its destructor ran during an
+/// unwind.
+struct UnwindProbePlatform(Arc<parking_lot::Mutex<Option<bool>>>);
+
+impl PlatformTextInput for UnwindProbePlatform {
+    fn set_ime_allowed(&self, _: bool) {}
+    fn set_ime_cursor_area(&self, _: Bounds<f64>) {}
+}
+
+impl Drop for UnwindProbePlatform {
+    fn drop(&mut self) {
+        *self.0.lock() = Some(std::thread::panicking());
+    }
+}
+
+/// A store that closes its owner while the owner installs its commit gate.
+struct ClosingStore {
+    inner: Rc<InMemoryTextStore>,
+    owner: std::rc::Weak<TextInputOwner>,
+}
+
+impl TextStore for ClosingStore {
+    fn status(&self) -> TextStoreStatus {
+        self.inner.status()
+    }
+    fn request_lock(
+        &self,
+        grant: LockGrant,
+        timing: LockTiming,
+    ) -> Result<LockOutcome, TextStoreError> {
+        self.inner.request_lock(grant, timing)
+    }
+    fn run_deferred_grants(&self) -> usize {
+        self.inner.run_deferred_grants()
+    }
+    fn set_commit_gate(&self, gate: CommitGate) {
+        self.inner.set_commit_gate(gate);
+        if let Some(owner) = self.owner.upgrade() {
+            owner.close();
+        }
+    }
+    fn set_observer(&self, observer: Option<Rc<dyn TextStoreObserver>>) {
+        self.inner.set_observer(observer);
+    }
+}
+
+/// The close the store runs releases the platform capability: attach holds no
+/// clone of its own across the store, so a failing rejection of the client
+/// cannot destroy the backend during its unwind.
+fn store_closing_its_owner_while_gated_releases_the_platform_outside_the_unwind() {
+    let released = Arc::new(parking_lot::Mutex::new(None));
+    let platform: Arc<dyn PlatformTextInput> = Arc::new(UnwindProbePlatform(Arc::clone(&released)));
+    let owner = TextInputOwner::new(Some(platform));
+    let handle = owner.handle();
+    let store = Rc::new(ClosingStore {
+        inner: InMemoryTextStore::new(""),
+        owner: Rc::downgrade(&owner),
+    });
+    let failure = catch_unwind(AssertUnwindSafe(|| {
+        handle.attach(callback_client_with_store(store, || {
+            panic!("rejected client retirement");
+        }))
+    }))
+    .expect_err("the rejected client's retirement fails");
+    assert_eq!(
+        flui_foundation::panic::payload_text(&*failure),
+        Some("rejected client retirement")
+    );
+    assert_eq!(
+        *released.lock(),
+        Some(false),
+        "the close released the platform, not the unwind"
+    );
+    assert_eq!(handle.ensure_open(), Err(TextInputError::Closed));
+}
+
+fn callback_client_with_store(
+    store: Rc<dyn TextStore>,
+    on_drop: impl Fn() + 'static,
+) -> TextInputClient {
+    let probe = OnDrop(Box::new(on_drop));
+    TextInputClient::new(store).on_session_start(move || {
+        let _keep_alive = &probe;
+    })
+}
+
 #[test]
 fn text_input_retirement_allows_reentry_and_preserves_recovery() {
     let cases: &[(&str, fn())] = &[
@@ -494,6 +580,10 @@ fn text_input_retirement_allows_reentry_and_preserves_recovery() {
         (
             "close during grant",
             closing_during_a_grant_cancels_the_tail_and_preserves_the_first_failure,
+        ),
+        (
+            "store closes owner while gated",
+            store_closing_its_owner_while_gated_releases_the_platform_outside_the_unwind,
         ),
     ];
     let failed = RefCell::new(Vec::new());

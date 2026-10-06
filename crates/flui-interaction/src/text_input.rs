@@ -276,7 +276,13 @@ impl TextInputOwner {
             failure.finish();
             return Err(error);
         }
-        let platform = self.platform()?;
+        // No strong platform clone is held across the user store below: a
+        // store that closes this owner must leave the close as the
+        // capability's last owner, so a failing rejection of the client
+        // cannot destroy the backend during its unwind.
+        if self.platform.borrow().is_none() {
+            return Err(TextInputError::Unsupported);
+        }
 
         let current = self.next_token.get();
         let next = current
@@ -297,6 +303,8 @@ impl TextInputOwner {
             failure.finish();
             return Err(error);
         }
+        // Open, so close has not taken the capability.
+        let platform = self.platform()?;
         let transaction_open = self.is_transaction_open();
         let (enable_platform, replaced) = {
             let mut state = self.state.borrow_mut();
