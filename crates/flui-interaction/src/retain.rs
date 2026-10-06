@@ -57,8 +57,9 @@ impl<T: Retain> Retain for Vec<T> {
 
 /// A value retained whole: a uniquely owned opaque value such as a user
 /// closure, or a shared handle whose other owners are framework structures
-/// (a lane's target cell is also held by saved routes) that would otherwise
-/// destroy it later, outside the failure that retired it.
+/// that would otherwise destroy it later, outside the failure that retired it.
+/// A shared handle whose later owners follow the same retention (a lane cell
+/// in a saved route) is retired with [`Retain`] directly instead.
 pub(crate) struct Owned<T>(pub(crate) T);
 
 impl<T> Retain for Owned<T> {

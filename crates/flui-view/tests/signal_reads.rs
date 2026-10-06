@@ -215,6 +215,61 @@ pub(crate) fn owner_release_commits_the_batch_before_the_first_destructor_failur
     assert_eq!(next.peek(&graph, |value| *value), Ok(11));
 }
 
+pub(crate) fn owner_release_releases_signals_its_destructors_reintroduce() {
+    struct Late(Rc<Cell<usize>>);
+    impl Drop for Late {
+        fn drop(&mut self) {
+            self.0.set(self.0.get() + 1);
+        }
+    }
+    struct Reintroduce {
+        graph: flui_view::Reactive,
+        element: ElementId,
+        late_drops: Rc<Cell<usize>>,
+        created: Rc<Cell<Option<Signal<Late>>>>,
+    }
+    impl Drop for Reintroduce {
+        fn drop(&mut self) {
+            let late = self
+                .graph
+                .signal_owned_by(self.element, Late(Rc::clone(&self.late_drops)));
+            self.created.set(Some(late));
+        }
+    }
+    let mut owners = MountOwners::fresh();
+    let graph = owners.build_owner.reactive().clone();
+    let element = owners.tree.mount_root_with_pipeline_owner(
+        &Leaf,
+        Some(owners.pipeline_owner.clone()),
+        &mut owners.build_owner.element_owner_mut(),
+    );
+    let late_drops = Rc::new(Cell::new(0));
+    let created = Rc::new(Cell::new(None));
+    let _owned = graph.signal_owned_by(
+        element,
+        Reintroduce {
+            graph: graph.clone(),
+            element,
+            late_drops: Rc::clone(&late_drops),
+            created: Rc::clone(&created),
+        },
+    );
+    owners
+        .tree
+        .remove(element, &mut owners.build_owner.element_owner_mut());
+    let late = created.get().expect("the destructor created a signal");
+    assert!(matches!(
+        late.peek(&graph, |_| ()),
+        Err(flui_view::SignalError::Released { .. })
+    ));
+    assert_eq!(
+        late_drops.get(),
+        1,
+        "its value is released with the element"
+    );
+    assert_eq!(graph.live_slot_count(), 0);
+}
+
 pub(crate) fn a_read_in_build_subscribes_through_the_production_context() {
     let owners = MountOwners::fresh();
     let graph = owners.build_owner.reactive().clone();

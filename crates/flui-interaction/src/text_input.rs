@@ -189,8 +189,16 @@ impl OwnerState {
     /// if it may still hold grants queued behind the frame.
     fn retire(&mut self, client: &AttachedClient, transaction_open: bool) {
         if transaction_open {
-            self.retired.push(Rc::clone(&client.client.store));
+            push_unique(&mut self.retired, Rc::clone(&client.client.store));
         }
+    }
+}
+
+/// Queue `store` for the anchor unless it is already queued: a store runs its
+/// grants once per anchor, however many times it left the active slot.
+fn push_unique(stores: &mut Vec<Rc<dyn TextStore>>, store: Rc<dyn TextStore>) {
+    if !stores.iter().any(|queued| Rc::ptr_eq(queued, &store)) {
+        stores.push(store);
     }
 }
 
@@ -204,7 +212,11 @@ impl OwnerState {
 /// this exact owner, while the presentation retains the only strong ownership.
 pub struct TextInputOwner {
     close_mode: CloseTombstone,
-    platform: Option<Arc<dyn PlatformTextInput>>, // direct OS text-input capability owned by one presentation; no intermediary.
+    /// Direct OS text-input capability owned by one presentation; no
+    /// intermediary. Framework-owned: close releases it even when the rest of
+    /// the owner is retained after a failure, since on some backends it keeps
+    /// the native window alive.
+    platform: RefCell<Option<Arc<dyn PlatformTextInput>>>,
     next_token: Cell<NonZeroU64>,
     /// Shut while the presentation is inside a frame transaction, where text
     /// stores may not commit (ADR-0027 §3); installed into every attached
@@ -221,7 +233,7 @@ impl TextInputOwner {
     ) -> Rc<Self> {
         Rc::new(Self {
             close_mode: CloseTombstone::default(),
-            platform,
+            platform: RefCell::new(platform),
             next_token: Cell::new(NonZeroU64::MIN),
             gate: CommitGate::new(),
             state: RefCell::new(OwnerState {
@@ -241,6 +253,14 @@ impl TextInputOwner {
         }
     }
 
+    /// The platform capability, cloned so no borrow spans a call into it.
+    fn platform(&self) -> Result<Arc<dyn PlatformTextInput>, TextInputError> {
+        self.platform
+            .borrow()
+            .clone()
+            .ok_or(TextInputError::Unsupported)
+    }
+
     fn ensure_open(&self) -> Result<(), TextInputError> {
         if self.state.borrow().lifecycle == OwnerLifecycle::Closed {
             Err(TextInputError::Closed)
@@ -256,7 +276,7 @@ impl TextInputOwner {
             failure.finish();
             return Err(error);
         }
-        let platform = self.platform.as_ref().ok_or(TextInputError::Unsupported)?;
+        let platform = self.platform()?;
 
         let current = self.next_token.get();
         let next = current
@@ -305,7 +325,7 @@ impl TextInputOwner {
 
     fn detach(&self, token: ClientToken) -> Result<DetachOutcome, TextInputError> {
         self.ensure_open()?;
-        let platform = self.platform.as_ref().ok_or(TextInputError::Unsupported)?;
+        let platform = self.platform()?;
 
         let transaction_open = self.is_transaction_open();
         let detached = {
@@ -333,7 +353,7 @@ impl TextInputOwner {
 
     fn set_cursor_area(&self, area: Bounds<f64>) -> Result<(), TextInputError> {
         self.ensure_open()?;
-        let platform = self.platform.as_ref().ok_or(TextInputError::Unsupported)?;
+        let platform = self.platform()?;
         platform.set_ime_cursor_area(area);
         Ok(())
     }
@@ -403,7 +423,10 @@ impl TextInputOwner {
                 .map(|active| Rc::clone(&active.client.store));
             (std::mem::take(&mut state.retired), active)
         };
-        let mut stores: Vec<_> = retired.into_iter().chain(active).collect();
+        let mut stores = retired;
+        if let Some(active) = active {
+            push_unique(&mut stores, active);
+        }
         let mut ran = 0;
         for index in 0..stores.len() {
             if self.is_transaction_open() || self.ensure_open().is_err() {
@@ -447,8 +470,26 @@ impl TextInputOwner {
     fn retain_pending_stores(&self, stores: &mut Vec<Rc<dyn TextStore>>, from: usize) {
         let mut state = self.state.borrow_mut();
         if state.lifecycle == OwnerLifecycle::Open {
-            let mut pending: Vec<_> = stores.drain(from..).collect();
-            pending.append(&mut state.retired);
+            // The active store is not requeued: the next anchor runs it as the
+            // active client, and listing it twice would run its grants twice.
+            // Each dropped handle is a clone the active slot or the queue
+            // still holds, so dropping it runs no user code.
+            let mut pending = Vec::with_capacity(stores.len() - from + state.retired.len());
+            let active = state
+                .active
+                .as_ref()
+                .map(|active| Rc::clone(&active.client.store));
+            for store in stores
+                .drain(from..)
+                .chain(std::mem::take(&mut state.retired))
+            {
+                if !active
+                    .as_ref()
+                    .is_some_and(|active| Rc::ptr_eq(active, &store))
+                {
+                    push_unique(&mut pending, store);
+                }
+            }
             state.retired = pending;
         }
         // Closing explicitly cancels the tail; its owners retire outside this borrow.
@@ -481,6 +522,10 @@ impl TextInputOwner {
         self.close_with_mode(CloseMode::Ordinary);
     }
 
+    pub(crate) fn close_tombstone(&self) -> CloseTombstone {
+        self.close_mode.clone()
+    }
+
     pub(crate) fn close_with_mode(&self, mode: CloseMode) {
         let mut failure = ClosePanic::for_close(mode, self.close_mode.clone());
         let (retired, active) = {
@@ -491,13 +536,16 @@ impl TextInputOwner {
             state.lifecycle = OwnerLifecycle::Closed;
             (std::mem::take(&mut state.retired), state.active.take())
         };
+        let platform = self.platform.borrow_mut().take();
         failure.invoke(|| {
             if active.is_some()
-                && let Some(platform) = &self.platform
+                && let Some(platform) = &platform
             {
                 platform.set_ime_allowed(false);
             }
         });
+        // Framework-owned: released even when the clients below are retained.
+        failure.release(platform);
         if let Some(active) = active {
             let TextInputClient {
                 store,
@@ -541,7 +589,7 @@ impl std::fmt::Debug for TextInputOwner {
                 "active_token",
                 &state.active.as_ref().map(|client| client.token),
             )
-            .field("platform_supported", &self.platform.is_some())
+            .field("platform_supported", &self.platform.borrow().is_some())
             .finish_non_exhaustive()
     }
 }
@@ -556,7 +604,7 @@ impl Drop for TextInputOwner {
         let retired = std::mem::take(&mut state.retired);
         // Keep platform custody outside the invocation, including a callback
         // that releases its other last owner before it unwinds.
-        let platform = self.platform.take();
+        let platform = self.platform.get_mut().take();
         failure.invoke(|| {
             if disable && let Some(platform) = &platform {
                 platform.set_ime_allowed(false);
@@ -573,7 +621,7 @@ impl Drop for TextInputOwner {
         for store in retired {
             failure.retire(store);
         }
-        failure.retire(platform);
+        failure.release(platform);
         failure.finish_contained();
     }
 }

@@ -334,6 +334,78 @@ fn reopened_frame_preserves_older_grants_before_new_retirements() {
     );
 }
 
+struct CountingStore {
+    inner: Rc<InMemoryTextStore>,
+    runs: Cell<usize>,
+}
+
+impl TextStore for CountingStore {
+    fn status(&self) -> TextStoreStatus {
+        self.inner.status()
+    }
+    fn request_lock(
+        &self,
+        grant: LockGrant,
+        timing: LockTiming,
+    ) -> Result<LockOutcome, TextStoreError> {
+        self.inner.request_lock(grant, timing)
+    }
+    fn run_deferred_grants(&self) -> usize {
+        self.runs.set(self.runs.get() + 1);
+        self.inner.run_deferred_grants()
+    }
+    fn set_commit_gate(&self, gate: CommitGate) {
+        self.inner.set_commit_gate(gate);
+    }
+    fn set_observer(&self, observer: Option<Rc<dyn TextStoreObserver>>) {
+        self.inner.set_observer(observer);
+    }
+}
+
+fn active_store_that_reopens_the_frame_runs_once_per_anchor() {
+    let (owner, _) = owner();
+    let handle = owner.handle();
+    let inner = InMemoryTextStore::new("");
+    let store = Rc::new(CountingStore {
+        inner: inner.clone(),
+        runs: Cell::new(0),
+    });
+    handle
+        .attach(TextInputClient::new(store.clone()))
+        .expect("attach");
+    owner.set_transaction_open(true);
+    let opening = Rc::downgrade(&owner);
+    let _queued = inner
+        .request_lock(
+            LockGrant::read(move |_| {
+                opening
+                    .upgrade()
+                    .expect("live owner")
+                    .set_transaction_open(true);
+            }),
+            LockTiming::Async,
+        )
+        .expect("queued frame opener");
+    let tail = Rc::new(Cell::new(0));
+    let observed = tail.clone();
+    let _queued = inner
+        .request_lock(
+            LockGrant::read(move |_| observed.set(observed.get() + 1)),
+            LockTiming::Async,
+        )
+        .expect("queued tail");
+    owner.set_transaction_open(false);
+    owner.run_deferred_grants();
+    assert_eq!((store.runs.get(), tail.get()), (1, 0));
+    owner.set_transaction_open(false);
+    owner.run_deferred_grants();
+    assert_eq!(
+        (store.runs.get(), tail.get()),
+        (2, 1),
+        "the still-active store runs once at the next anchor"
+    );
+}
+
 fn closing_during_a_grant_cancels_the_tail_and_preserves_the_first_failure() {
     let (owner, _) = owner();
     let handle = owner.handle();
@@ -414,6 +486,10 @@ fn text_input_retirement_allows_reentry_and_preserves_recovery() {
         (
             "reopened frame",
             reopened_frame_preserves_older_grants_before_new_retirements,
+        ),
+        (
+            "active store reopens frame",
+            active_store_that_reopens_the_frame_runs_once_per_anchor,
         ),
         (
             "close during grant",
@@ -502,6 +578,29 @@ fn owner_dropped_during_an_unwind_retains_its_store() {
     assert_eq!(*platform.allowed.lock(), [true, false]);
 }
 
+/// A preserving close retains the user's store but releases the platform
+/// capability, a framework-owned handle that can keep the native window alive.
+fn preserving_close_releases_the_platform() {
+    use flui_interaction::__runtime::{CloseMode, close_text_input};
+
+    let (owner, platform) = owner();
+    let handle = owner.handle();
+    let drops = Arc::new(AtomicUsize::new(0));
+    handle
+        .attach(TextInputClient::new(aggregate_store(&drops)))
+        .expect("initial attach");
+    close_text_input(&owner, CloseMode::PreservingFailure);
+    assert_eq!(drops.load(Ordering::Relaxed), 0, "the store is retained");
+    assert_eq!(*platform.allowed.lock(), [true, false]);
+    assert_eq!(
+        Arc::strong_count(&platform),
+        1,
+        "the open owner no longer holds the platform"
+    );
+    assert_eq!(handle.ensure_open(), Err(TextInputError::Closed));
+    drop(owner);
+}
+
 /// Selects the single case a child process of the test below runs.
 const RETENTION_CHILD: &str = "FLUI_TEXT_INPUT_RETENTION_CHILD";
 /// A child that ran its case to completion exits with this status, so a
@@ -518,6 +617,10 @@ fn text_input_owners_are_retained_after_a_failure_and_during_unwind() {
         (
             "owner drop during unwind",
             owner_dropped_during_an_unwind_retains_its_store,
+        ),
+        (
+            "preserving close releases the platform",
+            preserving_close_releases_the_platform,
         ),
     ];
     if let Ok(selected) = std::env::var(RETENTION_CHILD) {
