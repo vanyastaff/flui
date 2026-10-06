@@ -90,14 +90,15 @@ pub(crate) fn pump_post_frame_callback_observes_this_frames_committed_layout() {
 /// A realm on its own manual-clock source over a headless test window.
 fn manual_clock_realm(clock: &ManualClock) -> UiRealm {
     UiRealm::new(
-        Arc::new(|| {}),
         test_window(),
         1.0,
-        Arc::new(AtomicBool::new(false)),
-        crate::presentation::test_clipboard(),
-        None,
-        &flui_painting::FontCollection::new(),
-        flui_scheduler::ClockSource::Manual(clock.clone()),
+        crate::realm_services::RealmHostServices::new(
+            Arc::new(|| {}),
+            Arc::new(AtomicBool::new(false)),
+            crate::presentation::test_clipboard(),
+            &flui_painting::FontCollection::new(),
+            flui_scheduler::ClockSource::Manual(clock.clone()),
+        ),
     )
     .expect("runtime")
 }

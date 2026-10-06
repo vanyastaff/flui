@@ -22,14 +22,15 @@ pub(crate) fn a_cross_thread_frame_request_reaches_the_realms_platform_wake() {
 
     let (window, _calls) = counting_window(1);
     let realm = UiRealm::new(
-        wake,
         window,
         1.0,
-        Arc::new(AtomicBool::new(false)),
-        crate::presentation::test_clipboard(),
-        None,
-        &flui_painting::FontCollection::new(),
-        flui_scheduler::ClockSource::Platform,
+        crate::realm_services::RealmHostServices::new(
+            wake,
+            Arc::new(AtomicBool::new(false)),
+            crate::presentation::test_clipboard(),
+            &flui_painting::FontCollection::new(),
+            flui_scheduler::ClockSource::Platform,
+        ),
     )
     .expect("realm constructs");
     // Clear the `frame_scheduled` latch so the request below is a real

@@ -115,18 +115,14 @@ where
         // DPR to the freshly built pipeline before returning.
         let scale_factor = window.scale_factor() as f64;
         let wake = runtime_wake_callback();
-        let ui_realm = match super::host::build_runtime_realm(
-            &wake,
-            presentation_window,
-            scale_factor,
-            crate::app::storage_host::host_storage(&config),
-        ) {
-            Ok(realm) => realm,
-            Err(error) => {
-                tracing::error!(%error, "UiRealm construction failed");
-                return Err(anyhow::anyhow!(error).context("UiRealm construction failed"));
-            }
-        };
+        let ui_realm =
+            match super::host::build_runtime_realm(&wake, presentation_window, scale_factor) {
+                Ok(realm) => realm,
+                Err(error) => {
+                    tracing::error!(%error, "UiRealm construction failed");
+                    return Err(anyhow::anyhow!(error).context("UiRealm construction failed"));
+                }
+            };
 
         // Debug overlay: `Some` stats IS the enable flag, so this is the
         // single point that turns the frame path's overlay work on.
@@ -419,6 +415,7 @@ where
     // whose lifetime encloses the RAF registration.
     let result = platform.run(Box::new(move |owner| {
         install_owner_platform(owner)?;
+        APP_RUNTIME.with(|slot| slot.borrow_mut().install_host_storage(&config));
         bootstrap_web(root, config)?;
         tracing::info!("Web platform ready");
         Ok(())

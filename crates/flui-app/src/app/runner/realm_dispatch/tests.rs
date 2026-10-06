@@ -1153,20 +1153,23 @@ fn realm_dispatch_matrix() {
 // Storage
 // ========================================================================
 
-/// A window opened with `AppConfig::with_storage_dir` gets a realm whose
-/// build owner holds storage, which is what every `LifecycleContext::storage`
-/// under it reads. Built through `open_secondary_window`'s
-/// `SeparateRealms` path, which reaches `host::build_runtime_realm` the way
-/// every runner site does, without a GPU.
+/// A storage directory in the run's configuration reaches every realm the
+/// host builds afterwards: the host resolves it once at start
+/// (`AppRuntime::install_host_storage`, as the runners call it with the main
+/// configuration), and a realm built later holds it in its build owner, which
+/// every `LifecycleContext::storage` under it reads. The later realm comes
+/// from `open_secondary_window`'s `SeparateRealms` path, which reaches
+/// `host::build_runtime_realm` the way every runner site does, without a GPU.
 #[cfg(feature = "persist")]
 #[test]
 #[ignore = "contract: the host gives a configured storage directory to every realm it builds"]
 fn a_configured_storage_dir_reaches_lifecycle_context() {
     let (dispatcher_a, _clear_guard) = install_realm_a_through_a_real_owner_platform();
-    let config = AppConfig::new().with_storage_dir(flui_platform_api::StorageName::from_static(
-        "storage-host-test",
-    ));
-    open_secondary_window(config, WindowPolicy::SeparateRealms)
+    let main_config = AppConfig::new().with_storage_dir(
+        flui_platform_api::StorageName::from_static("storage-host-test"),
+    );
+    APP_RUNTIME.with(|slot| slot.borrow_mut().install_host_storage(&main_config));
+    open_secondary_window(AppConfig::default(), WindowPolicy::SeparateRealms)
         .expect("WindowPolicy::SeparateRealms installs a second realm");
 
     let secondary = APP_RUNTIME.with(|slot| {
@@ -1200,6 +1203,6 @@ fn a_configured_storage_dir_reaches_lifecycle_context() {
     assert_eq!(
         reached.get(),
         Some(true),
-        "a realm built for a window with a configured storage directory holds storage"
+        "a realm built after the host started with a storage directory holds storage"
     );
 }

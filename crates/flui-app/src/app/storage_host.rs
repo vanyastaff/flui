@@ -6,9 +6,10 @@ use flui_platform_api::Storage;
 
 use super::AppConfig;
 
-/// The storage `config` asks for, which every realm the runner builds hands
-/// its widgets through `LifecycleContext::storage`: `None` when the
-/// application configured none, or where no file store exists.
+/// The storage `config` asks for. The host resolves it once, when it starts
+/// (`AppRuntime::install_host_storage`), and every realm it builds afterwards
+/// hands it to its widgets through `LifecycleContext::storage`: `None` when
+/// the application configured none, or where no file store exists.
 ///
 /// Not yet wired: a configured directory is reported and no storage is
 /// given.

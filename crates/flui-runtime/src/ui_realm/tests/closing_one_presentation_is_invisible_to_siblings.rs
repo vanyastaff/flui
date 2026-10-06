@@ -595,14 +595,15 @@ fn run_platform_ownership_child(kind: &str) {
     *external_bridge.lock() =
         Some(bridge.clone() as Arc<dyn flui_semantics::platform::PlatformAccessibility>);
     let mut realm = UiRealm::new(
-        Arc::new(|| {}),
         crate::presentation::PresentationWindow::new(window.clone(), Some(bridge.clone())),
         1.0,
-        Arc::new(AtomicBool::new(false)),
-        crate::presentation::test_clipboard(),
-        None,
-        &flui_painting::FontCollection::new(),
-        flui_scheduler::ClockSource::Platform,
+        crate::realm_services::RealmHostServices::new(
+            Arc::new(|| {}),
+            Arc::new(AtomicBool::new(false)),
+            crate::presentation::test_clipboard(),
+            &flui_painting::FontCollection::new(),
+            flui_scheduler::ClockSource::Platform,
+        ),
     )
     .expect("owned platform realm");
     let a = realm.presentation_id();

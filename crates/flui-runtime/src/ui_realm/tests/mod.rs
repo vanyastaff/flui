@@ -33,14 +33,15 @@ fn test_window() -> crate::presentation::PresentationWindow {
 
 pub(super) fn new_runtime(wake: Arc<dyn Fn() + Send + Sync>) -> Result<UiRealm, UiRealmError> {
     UiRealm::new(
-        wake,
         test_window(),
         1.0,
-        Arc::new(AtomicBool::new(false)),
-        crate::presentation::test_clipboard(),
-        None,
-        &flui_painting::FontCollection::new(),
-        flui_scheduler::ClockSource::Platform,
+        crate::realm_services::RealmHostServices::new(
+            wake,
+            Arc::new(AtomicBool::new(false)),
+            crate::presentation::test_clipboard(),
+            &flui_painting::FontCollection::new(),
+            flui_scheduler::ClockSource::Platform,
+        ),
     )
 }
 
@@ -50,14 +51,15 @@ fn new_runtime_with_capacity(
 ) -> Result<UiRealm, UiRealmError> {
     UiRealm::with_capacity(
         capacity,
-        wake,
         test_window(),
         1.0,
-        Arc::new(AtomicBool::new(false)),
-        crate::presentation::test_clipboard(),
-        None,
-        &flui_painting::FontCollection::new(),
-        flui_scheduler::ClockSource::Platform,
+        crate::realm_services::RealmHostServices::new(
+            wake,
+            Arc::new(AtomicBool::new(false)),
+            crate::presentation::test_clipboard(),
+            &flui_painting::FontCollection::new(),
+            flui_scheduler::ClockSource::Platform,
+        ),
     )
 }
 

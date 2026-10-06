@@ -34,27 +34,35 @@ pub(super) fn runtime_font_collection() -> flui_painting::FontCollection {
     APP_RUNTIME.with(|slot| slot.borrow().font_collection())
 }
 
+/// The host's byte storage, resolved once from the run's configuration when
+/// the host started (`AppRuntime::install_host_storage`). Same borrow rule
+/// as [`runtime_wake_callback`].
+pub(super) fn runtime_storage() -> Option<Arc<dyn flui_platform_api::Storage>> {
+    APP_RUNTIME.with(|slot| slot.borrow().host_storage())
+}
+
 /// Builds a runner's realm over the runtime's shared services: `wake`, the
-/// loop's `needs_redraw` flag, the platform clipboard and the app's font
-/// collection, plus `storage`, the byte storage the host resolved from the
-/// application's configuration (`storage_host::host_storage`). Every runner
-/// site builds its realm through this one call, so a realm cannot be handed a
-/// stand-in for any of them.
+/// loop's `needs_redraw` flag, the platform clipboard, the app's font
+/// collection and the host's byte storage. Every runner site and secondary
+/// window builds its realm through this one call, so a realm cannot be
+/// handed a stand-in for any of them.
 pub(super) fn build_runtime_realm(
     wake: &Arc<dyn Fn() + Send + Sync>,
     window: impl Into<crate::app::presentation::PresentationWindow>,
     scale_factor: f64,
-    storage: Option<Arc<dyn flui_platform_api::Storage>>,
 ) -> Result<crate::app::ui_realm::UiRealm, crate::app::ui_realm::UiRealmError> {
+    let fonts = runtime_font_collection();
     crate::app::ui_realm::UiRealm::new(
-        Arc::clone(wake),
         window,
         scale_factor,
-        runtime_needs_redraw_handle(),
-        runtime_clipboard(),
-        storage,
-        &runtime_font_collection(),
-        flui_scheduler::ClockSource::Platform,
+        crate::app::ui_realm::RealmHostServices::new(
+            Arc::clone(wake),
+            runtime_needs_redraw_handle(),
+            runtime_clipboard(),
+            &fonts,
+            flui_scheduler::ClockSource::Platform,
+        )
+        .with_storage(runtime_storage()),
     )
 }
 
@@ -556,7 +564,7 @@ impl OwnerHostClearGuard {
 
 impl Drop for OwnerHostClearGuard {
     fn drop(&mut self) {
-        let (removed, owner_turn_wake) = APP_RUNTIME.with(|slot| {
+        let (removed, owner_turn_wake, storage) = APP_RUNTIME.with(|slot| {
             let mut runtime = slot.borrow_mut();
             if runtime.owner_install_generation == self.expected_generation {
                 runtime.owner_turn_continuation = None;
@@ -566,12 +574,14 @@ impl Drop for OwnerHostClearGuard {
                 (
                     runtime.owner_platform.take(),
                     runtime.owner_turn_wake.take(),
+                    runtime.host_storage.take(),
                 )
             } else {
-                (None, None)
+                (None, None, None)
             }
         });
         drop(removed);
         drop(owner_turn_wake);
+        drop(storage);
     }
 }

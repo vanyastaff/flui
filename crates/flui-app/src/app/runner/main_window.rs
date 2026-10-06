@@ -541,6 +541,7 @@ where
             let mut runtime = slot.borrow_mut();
             runtime.main_ingress = Some(Arc::clone(&ingress));
             runtime.main_host_lifecycle = flui_scheduler::AppLifecycleState::Resumed;
+            runtime.install_host_storage(&config);
             if let Some(executors) = config.executors.clone() {
                 runtime.install_host_executors(executors);
             }

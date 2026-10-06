@@ -48,7 +48,7 @@ use flui_runtime::frame_failure::{
 use flui_runtime::presentation::PresentationWindow;
 use flui_runtime::pump::FrameOutcome;
 use flui_runtime::sink::{FrameSink, SubmitVerdict};
-use flui_runtime::ui_realm::UiRealm;
+use flui_runtime::ui_realm::{RealmHostServices, UiRealm};
 use flui_scheduler::{ClockSource, LocalPostFrameHandle};
 use flui_semantics::platform::{
     AccessibilityActionListener, AccessibilityActivationListener, PlatformAccessibility,
@@ -368,23 +368,26 @@ impl HeadlessRealm {
         let accessibility = Arc::new(HeadlessAccessibility::default());
         let clipboard = Arc::new(InMemoryClipboard::new());
         let clock = ManualClock::new();
+        // A collection of its own: the realm owns a `TextContext` over it
+        // (ADR-0092 §3), exactly as a hosted realm does. Deliberately
+        // bundled-only, unlike the app's host-fed one
+        // (`FontCollection::with_host_fonts`), so text measures the same on
+        // every host a test runs on.
+        let fonts = flui_painting::FontCollection::new();
         let realm = UiRealm::new(
-            Arc::new(|| {}),
             PresentationWindow::new(
                 Arc::clone(&window) as Arc<dyn PlatformWindow>,
                 Some(Arc::clone(&accessibility) as Arc<dyn PlatformAccessibility>),
             ),
             1.0,
-            Arc::new(AtomicBool::new(false)),
-            Arc::clone(&clipboard) as Arc<dyn flui_platform_api::Clipboard>,
-            storage,
-            // A collection of its own: the realm owns a `TextContext` over it
-            // (ADR-0092 §3), exactly as a hosted realm does. Deliberately
-            // bundled-only, unlike the app's host-fed one
-            // (`FontCollection::with_host_fonts`), so text measures the same
-            // on every host a test runs on.
-            &flui_painting::FontCollection::new(),
-            ClockSource::Manual(clock.clone()),
+            RealmHostServices::new(
+                Arc::new(|| {}),
+                Arc::new(AtomicBool::new(false)),
+                Arc::clone(&clipboard) as Arc<dyn flui_platform_api::Clipboard>,
+                &fonts,
+                ClockSource::Manual(clock.clone()),
+            )
+            .with_storage(storage),
         )
         .expect("BUG: interaction lane identity exhausted");
         let failures = Arc::new(Mutex::new(Vec::new()));

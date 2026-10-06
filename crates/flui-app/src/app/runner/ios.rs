@@ -190,6 +190,7 @@ where
         APP_RUNTIME.with(|slot| {
             let mut runtime = slot.borrow_mut();
             runtime.ios_running = true;
+            runtime.install_host_storage(&config);
             if let Some(executors) = config.executors.clone() {
                 runtime.install_host_executors(executors);
             }
@@ -288,12 +289,8 @@ where
     // transform maps to physical.
     let scale_factor = window.scale_factor();
     let wake = runtime_wake_callback();
-    let ui_realm = match super::host::build_runtime_realm(
-        &wake,
-        presentation_window,
-        scale_factor,
-        crate::app::storage_host::host_storage(&config),
-    ) {
+    let ui_realm = match super::host::build_runtime_realm(&wake, presentation_window, scale_factor)
+    {
         Ok(realm) => realm,
         Err(error) => {
             tracing::error!(%error, "UiRealm construction failed");

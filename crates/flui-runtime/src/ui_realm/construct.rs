@@ -10,17 +10,19 @@ use crate::frame_failure::{
 };
 use crate::presentation::{PresentationState, PresentationWindow, RealmCapabilities};
 use crate::presentation_forest::PresentationForest;
-use crate::realm_services::RealmServices;
+use crate::realm_services::{RealmHostServices, RealmServices};
 use crossbeam_channel::bounded;
 use flui_foundation::{PresentationId, RealmId};
 use flui_interaction::InteractionLane;
+#[cfg(any(test, feature = "test-support"))]
 use flui_painting::FontCollection;
 #[cfg(any(test, feature = "test-support"))]
 use flui_platform_api::PlatformTextInput;
-use flui_platform_api::{Clipboard, Storage};
 #[cfg(test)]
 use flui_rendering::pipeline::PipelineCell;
-use flui_scheduler::{AppLifecycleState, ClockSource};
+use flui_scheduler::AppLifecycleState;
+#[cfg(any(test, feature = "test-support"))]
+use flui_scheduler::ClockSource;
 use flui_view::GlobalKeyScope;
 use std::cell::{Cell, RefCell};
 use std::marker::PhantomData;
@@ -33,67 +35,24 @@ use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 
 impl UiRealm {
-    /// Construct the runtime with the default inbox capacity.
+    /// Construct the runtime with the default inbox capacity, over the
+    /// services its `host` hands it (see [`RealmHostServices::new`]).
     ///
-    /// `wake` is the platform wake: it must deliver a wake to the owner's
-    /// event loop without spawning a thread — in production this is
-    /// `AppRuntime::frame_wake_callback()`. `needs_redraw` is a clone of
-    /// that same runtime's flag (see [`Self::needs_redraw`]'s field doc).
     /// `device_pixel_ratio` is applied to the freshly built pipeline BEFORE
     /// this constructor returns — the window's constraints are set later,
     /// but the scale must already agree so the first frame's `RenderView`
     /// configuration and layout do not disagree on it.
     ///
-    /// `clipboard` is the platform clipboard every presentation of this realm
-    /// hands its widgets through `LifecycleContext::clipboard_handle`; in
-    /// production it is `AppRuntime::clipboard()`, installed before any realm
-    /// is built.
-    ///
-    /// `storage` is the byte storage those presentations hand their widgets
-    /// through `LifecycleContext::storage`; `None` gives them none.
-    ///
-    /// `fonts` is the app's shared font collection (`AppRuntime`'s
-    /// `SharedEngineServices` in production). The realm owns a `TextContext`
-    /// built from it (ADR-0092 §3), which lives exactly as long as the realm.
-    ///
-    /// `clock` is where the realm reads time: its frame-time origin, every
-    /// presentation's gesture-arena deadlines and its [`FrameClock`]'s
-    /// produce gate all read this one source. A host passes
-    /// [`ClockSource::Platform`]; a headless test driver passes the
-    /// [`ClockSource::Manual`] clock it advances by hand, so those three
-    /// share the driver's timeline instead of the wall clock.
-    ///
-    /// [`FrameClock`]: flui_scheduler::FrameClock
-    ///
     /// # Errors
     ///
     /// [`UiRealmError::InteractionLane`] if the owner-local interaction lane
     /// could not be created.
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "each is a distinct host-owned input the realm is wired from once"
-    )]
     pub fn new(
-        wake: Arc<dyn Fn() + Send + Sync>,
         window: impl Into<PresentationWindow>,
         device_pixel_ratio: f64,
-        needs_redraw: Arc<AtomicBool>,
-        clipboard: Arc<dyn Clipboard>,
-        storage: Option<Arc<dyn Storage>>,
-        fonts: &FontCollection,
-        clock: ClockSource,
+        host: RealmHostServices<'_>,
     ) -> Result<Self, UiRealmError> {
-        Self::with_capacity(
-            DEFAULT_COMMAND_CAPACITY,
-            wake,
-            window,
-            device_pixel_ratio,
-            needs_redraw,
-            clipboard,
-            storage,
-            fonts,
-            clock,
-        )
+        Self::with_capacity(DEFAULT_COMMAND_CAPACITY, window, device_pixel_ratio, host)
     }
 
     /// [`Self::new`] with an explicit inbox capacity.
@@ -107,42 +66,30 @@ impl UiRealm {
     ///
     /// Panics if `capacity == 0` (a zero-capacity inbox could never accept
     /// a command; every sender would spuriously report backpressure).
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "`Self::new`'s parameters plus the inbox capacity; each is a distinct host-owned input"
-    )]
     pub(crate) fn with_capacity(
         capacity: usize,
-        wake: Arc<dyn Fn() + Send + Sync>,
         window: impl Into<PresentationWindow>,
         device_pixel_ratio: f64,
-        needs_redraw: Arc<AtomicBool>,
-        clipboard: Arc<dyn Clipboard>,
-        storage: Option<Arc<dyn Storage>>,
-        fonts: &FontCollection,
-        clock: ClockSource,
+        host: RealmHostServices<'_>,
     ) -> Result<Self, UiRealmError> {
         assert!(capacity > 0, "UiRealm inbox capacity must be non-zero");
         let identity = crate::realm_services::next_identity();
-        let services = RealmServices::construct(clipboard, storage, fonts, clock);
         Self::construct(
             capacity,
-            wake,
             identity,
             window,
             Some(device_pixel_ratio),
-            services,
-            needs_redraw,
+            RealmServices::construct(host),
         )
     }
 
     /// Builds the realm from already-resolved pieces: identity, the
-    /// presentation's window, and `services: RealmServices` — a fresh
-    /// `UpdateScheduler` plus the `local_post_frame_lane()`/`async_driver()`
-    /// handles derived from it, built by the caller (`RealmServices::
-    /// construct`, in `runtime.rs`), which is what makes `UiRealm` perform
-    /// zero `::instance()` calls and gives every realm its own scheduler
-    /// strong root instead of sharing a process-global one.
+    /// presentation's window, and `services: RealmServices` — the host's
+    /// services plus a fresh `UpdateScheduler` and the
+    /// `local_post_frame_lane()`/`async_driver()` handles derived from it,
+    /// built by `RealmServices::construct`, which is what makes `UiRealm`
+    /// perform zero `::instance()` calls and gives every realm its own
+    /// scheduler strong root instead of sharing a process-global one.
     ///
     /// `device_pixel_ratio` is `None` only for the `#[cfg(test)]`
     /// constructors, which never touched it before this function existed
@@ -161,12 +108,10 @@ impl UiRealm {
     /// exists.
     pub(super) fn construct(
         capacity: usize,
-        wake: Arc<dyn Fn() + Send + Sync>,
         (realm_id, presentation_id): (RealmId, PresentationId),
         window: impl Into<PresentationWindow>,
         device_pixel_ratio: Option<f64>,
         services: RealmServices,
-        needs_redraw: Arc<AtomicBool>,
     ) -> Result<Self, UiRealmError> {
         let (tx, rx) = bounded(capacity);
         let redraw_pending = Arc::new(AtomicBool::new(false));
@@ -175,6 +120,8 @@ impl UiRealm {
             local_post_frame,
             async_driver,
             scheduler,
+            wake,
+            needs_redraw,
             clipboard,
             storage,
             clock,
@@ -295,17 +242,16 @@ impl UiRealm {
             Arc::new(move || wake_needs_redraw.store(true, Ordering::Relaxed));
         Self::construct(
             DEFAULT_COMMAND_CAPACITY,
-            wake,
             identity,
             window,
             None,
-            RealmServices::construct(
+            RealmServices::construct(RealmHostServices::new(
+                wake,
+                needs_redraw,
                 crate::presentation::test_clipboard(),
-                None,
                 &FontCollection::new(),
                 ClockSource::Platform,
-            ),
-            needs_redraw,
+            )),
         )
         .expect("test UiRealm should create an interaction lane")
     }

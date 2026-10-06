@@ -225,8 +225,6 @@ struct SecondaryWindowInstallConfig {
     reservation: WindowReservation,
     close_request_handler: Option<CloseRequestHandler>,
     frame_failure_detail: FrameFailureDetail,
-    /// The byte storage a realm built for this window hands its widgets.
-    storage: Option<Arc<dyn flui_platform_api::Storage>>,
 }
 
 /// A resolved `Pending`-arm window waiting for installation.
@@ -720,7 +718,6 @@ pub(super) fn open_secondary_window_impl(
         reservation,
         close_request_handler: config.close_request_handler.clone(),
         frame_failure_detail: config.frame_failure_detail,
-        storage: crate::app::storage_host::host_storage(&config),
     };
 
     match open {
@@ -800,7 +797,6 @@ where
                 reservation,
                 close_request_handler: config.close_request_handler.clone(),
                 frame_failure_detail: config.frame_failure_detail,
-                storage: crate::app::storage_host::host_storage(&config),
             };
             let reload = crate::app::hot_reload::WorkerReload::from_config(&config);
             let host = APP_RUNTIME.with(|slot| slot.borrow().main_host_lifecycle);
@@ -940,7 +936,6 @@ fn finish_open_secondary_window(
         reservation: _reservation,
         close_request_handler,
         frame_failure_detail,
-        storage,
     } = config;
 
     let realm_dispatch = match policy {
@@ -978,7 +973,6 @@ fn finish_open_secondary_window(
                 &wake,
                 super::presentation_window(Arc::clone(&host)),
                 scale_factor,
-                storage,
             )
             .map_err(mount_error)?;
             ui_realm.set_frame_failure_detail(frame_failure_detail);

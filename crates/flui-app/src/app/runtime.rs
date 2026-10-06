@@ -740,6 +740,11 @@ pub(crate) struct AppRuntime {
     /// loop's exit. See [`Drop`]'s impl below for the last-resort third clear
     /// path.
     platform_clipboard: Arc<Mutex<Option<Arc<dyn Clipboard>>>>,
+    /// The byte storage every realm this host builds hands its widgets,
+    /// resolved once from the run's configuration when the host starts
+    /// ([`Self::install_host_storage`]) and released with the owner platform
+    /// at loop exit.
+    pub(super) host_storage: Option<Arc<dyn flui_platform_api::Storage>>,
 }
 
 impl AppRuntime {
@@ -830,6 +835,7 @@ impl AppRuntime {
             needs_redraw: Arc::new(AtomicBool::new(false)),
             redraw_window: Arc::new(Mutex::new(None)),
             platform_clipboard: Arc::new(Mutex::new(None)),
+            host_storage: None,
         }
     }
 
@@ -1706,6 +1712,18 @@ impl AppRuntime {
     /// Access the installed platform clipboard, if any. Every runner reads it
     /// through `runner::host::runtime_clipboard` to hand each realm it builds
     /// the platform clipboard.
+    /// Resolve the host's byte storage from the run's `config`, once, when
+    /// the host starts: every realm the runners and secondary windows build
+    /// afterwards takes this one (`runner::host::build_runtime_realm`).
+    pub(super) fn install_host_storage(&mut self, config: &super::AppConfig) {
+        self.host_storage = super::storage_host::host_storage(config);
+    }
+
+    /// The host's byte storage, if the run configured one.
+    pub(super) fn host_storage(&self) -> Option<Arc<dyn flui_platform_api::Storage>> {
+        self.host_storage.clone()
+    }
+
     pub(super) fn clipboard(&self) -> Option<Arc<dyn Clipboard>> {
         let clipboard = self.platform_clipboard.lock().clone();
         if clipboard.is_none() {
