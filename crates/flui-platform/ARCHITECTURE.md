@@ -1228,3 +1228,42 @@ Produced records cover duplicate model labels, a primary after index zero,
 changed labels for the same identity, the no-primary fallback, absent primary
 identity and empty input. This does not execute native discovery or validate a
 physical two-monitor macOS setup; that native path remains unverified.
+
+### The file store replaces a value with `std::fs::rename`, and probes an access refusal
+
+`storage::FileStore::write` stages the bytes in a file `tempfile` names uniquely
+in the target's own directory, but opens it with `std` and moves it with
+`std::fs::rename`, never `NamedTempFile::persist`. On Windows `tempfile` passes
+`MoveFileExW` and `SetFileAttributesW` a path without the `\\?\` prefix, which
+fails past 260 characters, and marks the file it creates
+`FILE_ATTRIBUTE_TEMPORARY`, which the replaced value would keep; `std` prefixes
+the path and falls back to POSIX-semantics replacement. A write based on a
+version holds an exclusive `File::try_lock` on `<root>/.flui-storage.lock` from
+comparing the stored version to the rename, so two processes on one directory
+cannot both succeed from the same base. A file system whose locks are
+`Unsupported` refuses such a write with `LockUnsupported` rather than writing
+unguarded.
+
+Windows reports a sharing violation (32) and a lock violation (33) only by code;
+both are `Busy`. `ERROR_ACCESS_DENIED` (5) is both lasting (a read-only file,
+an ACL, a directory in the file's place) and passing (a holder that did not
+grant delete sharing), so a refused rename probes the target: a directory, a
+read-only file, or one that cannot be opened for writing with code 5 is
+`Inaccessible` and never retried; one that opens, or is held without write
+sharing, is `Busy`. When the roaming and local roots are the same directory
+(Linux), machine-local values live in `<root>/.machine-local/`: no
+`StorageName` starts with `.`, so neither that directory nor the lock file
+collides with a value.
+
+`storage::file_store::tests::file_store_interruption_matrix` stops a write at
+each step and reads the old whole value until the rename and the new one after
+it; `two_threads_interleave_and_exactly_one_conflicts` holds one writer between
+its comparison and its rename until the other has tried, and fails without the
+lock. `storage::os_error::tests::os_error_classification_table` pins the code
+mapping. The `file_store_contract` table in `tests/file_store.rs` covers the
+directory created on the first write, a directory in the file's place, the
+lock, the read limit, the two scopes, a long non-ASCII path and, on Windows
+only, a read-only target (`Inaccessible`) and one held without delete sharing
+(`Busy`, reached through code 5 and the probe). `sync_all` matters only on
+power loss, which no test causes; a killed process (`taskkill /F`) and two
+processes on one directory are left to the dated native run.
