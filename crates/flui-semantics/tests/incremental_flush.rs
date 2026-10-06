@@ -747,3 +747,158 @@ fn semantics_property_presence_includes_every_public_annotation() {
         "property presence rows failed: {failures:?}"
     );
 }
+
+/// A public owner fixture exposing one native numeric control.
+struct NumericControl {
+    owner: SemanticsOwner,
+    id: flui_foundation::SemanticsId,
+    target: flui_semantics::AccessibilityNodeId,
+    received: Arc<Mutex<Vec<f64>>>,
+}
+
+impl NumericControl {
+    fn new() -> Self {
+        use flui_semantics::{ActionArgs, NumericRange, SemanticsAction};
+        let (mut owner, _) = recording_owner();
+        let mut control = node(1, "numeric control");
+        let target = control.accessibility_id().expect("render-backed identity");
+        let received = Arc::new(Mutex::new(Vec::new()));
+        let numeric = Arc::clone(&received);
+        control
+            .config_mut()
+            .set_numeric_range(NumericRange::new(0.0, 0.0, 10.0, 1.0).expect("finite fixture"));
+        control.config_mut().add_action(
+            SemanticsAction::SetNumericValue,
+            Arc::new(move |_, args| {
+                let Some(ActionArgs::SetNumericValue { value }) = args else {
+                    panic!("numeric callback lost its payload");
+                };
+                numeric.lock().push(value);
+            }),
+        );
+        let id = owner.insert(control);
+        owner.set_root(Some(id));
+        owner.flush();
+        Self {
+            owner,
+            id,
+            target,
+            received,
+        }
+    }
+
+    fn resolve(
+        &self,
+        arguments: Option<flui_semantics::ActionArgs>,
+    ) -> Result<flui_semantics::SemanticsActionInvocation, flui_semantics::SemanticsActionError>
+    {
+        use flui_semantics::{SemanticsAction, SemanticsActionRequest};
+        self.owner.resolve_action(SemanticsActionRequest {
+            node_id: self.target,
+            action: SemanticsAction::SetNumericValue,
+            arguments,
+        })
+    }
+
+    fn set(
+        &self,
+        value: f64,
+    ) -> Result<flui_semantics::SemanticsActionInvocation, flui_semantics::SemanticsActionError>
+    {
+        self.resolve(Some(flui_semantics::ActionArgs::SetNumericValue { value }))
+    }
+
+    fn narrow_and_publish(&mut self) {
+        self.owner
+            .get_mut(self.id)
+            .expect("control remains live")
+            .config_mut()
+            .set_numeric_range(
+                flui_semantics::NumericRange::new(0.0, 0.0, 5.0, 1.0)
+                    .expect("finite narrower range"),
+            );
+        self.owner.mark_dirty(self.id);
+        assert_eq!(
+            self.owner.flush(),
+            1,
+            "the narrower metadata reaches the adapter"
+        );
+    }
+}
+
+fn an_exact_value_inside_the_current_range_reaches_the_handler() {
+    let mut control = NumericControl::new();
+    control.narrow_and_publish();
+    control
+        .set(4.375)
+        .expect("the current range admits an exact value off the step")
+        .invoke();
+    assert_eq!(*control.received.lock(), [4.375]);
+}
+
+fn a_value_outside_the_current_range_is_refused() {
+    use flui_semantics::SemanticsActionError;
+    let mut control = NumericControl::new();
+    control
+        .set(9.0)
+        .expect("the published range admits 9")
+        .invoke();
+    control.narrow_and_publish();
+    assert_eq!(
+        control.set(9.0).err(),
+        Some(SemanticsActionError::InvalidNumericValue {
+            node_id: control.target
+        })
+    );
+    assert_eq!(*control.received.lock(), [9.0]);
+}
+
+fn non_finite_or_missing_values_are_refused() {
+    use flui_semantics::{ActionArgs, SemanticsActionError};
+    let control = NumericControl::new();
+    let refused = Some(SemanticsActionError::InvalidNumericValue {
+        node_id: control.target,
+    });
+    for value in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, -1.0, 10.5] {
+        assert_eq!(control.set(value).err(), refused, "{value} was admitted");
+    }
+    assert_eq!(control.resolve(None).err(), refused);
+    assert_eq!(
+        control
+            .resolve(Some(ActionArgs::SetText { text: "5".into() }))
+            .err(),
+        refused
+    );
+    assert!(control.received.lock().is_empty());
+}
+
+/// A numeric setter is admitted only with a finite value inside the node's
+/// current range; a refused value never reaches the handler.
+#[test]
+fn numeric_setters_are_checked_against_the_current_range() {
+    let cases: &[(&str, fn())] = &[
+        (
+            "exact_value_in_range",
+            an_exact_value_inside_the_current_range_reaches_the_handler,
+        ),
+        (
+            "value_outside_narrowed_range",
+            a_value_outside_the_current_range_is_refused,
+        ),
+        (
+            "non_finite_or_missing",
+            non_finite_or_missing_values_are_refused,
+        ),
+    ];
+    let mut failures = Vec::new();
+    for &(name, run) in cases {
+        if let Err(payload) = catch_unwind(run) {
+            failures.push(name);
+            std::mem::forget(payload);
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "numeric range admission rows failed: {failures:?}"
+    );
+}

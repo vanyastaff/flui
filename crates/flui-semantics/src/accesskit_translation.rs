@@ -227,23 +227,32 @@ fn apply_state(node: &mut Node, flags: u64) {
 /// interface, not as tree actions). `Dismiss` likewise has no equivalent. They
 /// are dropped rather than approximated, so nothing claims support it lacks.
 ///
-/// A node with an expanded state and a tap handler also advertises the one
-/// transition its state allows — `Expand` while collapsed, `Collapse` while
-/// expanded — because [`semantics_action_for`] routes both to its tap handler,
-/// which is how FLUI toggles an expandable node. AccessKit does not count a
-/// node with an expanded state as invocable (`accesskit_consumer` 0.39,
-/// `Node::is_invocable`), so its Windows adapter offers UI Automation's
-/// `ExpandCollapse` pattern for it and no `Invoke`; without these an agent or a
-/// screen reader could neither invoke nor expand such a node.
-fn apply_actions(node: &mut Node, actions: u64, flags: u64) {
+/// A node with an expanded state advertises only the one transition its state
+/// allows: `Expand` while collapsed, `Collapse` while expanded. It advertises
+/// that transition when it registers the matching discrete action, or, when it
+/// registers neither discrete action, when it has a tap handler; the owner
+/// then routes the request to that handler
+/// ([`tap_disclosure_transition`](crate::action::tap_disclosure_transition)).
+/// AccessKit does not count a node with an expanded state as invocable
+/// (`accesskit_consumer` 0.39, `Node::is_invocable`), so without this a
+/// tap-only expandable node could be neither invoked nor expanded.
+fn apply_actions(node: &mut Node, actions: u64, flags: u64, has_numeric_range: bool) {
     if has_action(actions, SemanticsAction::Tap) {
         node.add_action(accesskit::Action::Click);
-        if has_flag(flags, SemanticsFlag::HasExpandedState) {
-            node.add_action(if has_flag(flags, SemanticsFlag::IsExpanded) {
-                accesskit::Action::Collapse
-            } else {
-                accesskit::Action::Expand
-            });
+    }
+    if has_flag(flags, SemanticsFlag::HasExpandedState) {
+        let fallback = crate::action::tap_disclosure_transition(actions, flags);
+        if !has_flag(flags, SemanticsFlag::IsExpanded)
+            && (has_action(actions, SemanticsAction::Expand)
+                || fallback == Some(SemanticsAction::Expand))
+        {
+            node.add_action(accesskit::Action::Expand);
+        }
+        if has_flag(flags, SemanticsFlag::IsExpanded)
+            && (has_action(actions, SemanticsAction::Collapse)
+                || fallback == Some(SemanticsAction::Collapse))
+        {
+            node.add_action(accesskit::Action::Collapse);
         }
     }
     if has_action(actions, SemanticsAction::LongPress) {
@@ -273,7 +282,12 @@ fn apply_actions(node: &mut Node, actions: u64, flags: u64) {
     if has_action(actions, SemanticsAction::SetSelection) {
         node.add_action(accesskit::Action::SetTextSelection);
     }
-    if has_action(actions, SemanticsAction::SetText) {
+    // A numeric handler is reachable only through a range: without one the
+    // platform has no `RangeValue` to write, a Windows `SetValue` arrives as
+    // text, and the owner refuses a number it cannot check against a range.
+    if has_action(actions, SemanticsAction::SetText)
+        || (has_numeric_range && has_action(actions, SemanticsAction::SetNumericValue))
+    {
         node.add_action(accesskit::Action::SetValue);
     }
     if has_action(actions, SemanticsAction::ScrollToOffset) {
@@ -301,7 +315,7 @@ fn apply_actions(node: &mut Node, actions: u64, flags: u64) {
 /// `None` for actions FLUI has no counterpart for (never emitted outbound, so
 /// nothing advertised them); the caller drops the request with a trace.
 ///
-/// Three deliberate asymmetries against the outbound table:
+/// Two deliberate focus asymmetries against the outbound table:
 ///
 /// - `Focus` maps to [`SemanticsAction::Focus`] only. Outbound, a node
 ///   registering only the legacy `DidGainAccessibilityFocus` *notification*
@@ -310,21 +324,12 @@ fn apply_actions(node: &mut Node, actions: u64, flags: u64) {
 ///   hook, not the action's implementation.
 /// - `Blur` maps to `DidLoseAccessibilityFocus`, which IS the notification,
 ///   because that is the only vocabulary FLUI has for it.
-/// - `Expand` and `Collapse` have no FLUI action. They reach the node's tap
-///   handler ([`SemanticsAction::Tap`]), which is how FLUI toggles an
-///   expandable node, and `apply_actions` advertises only the one its expanded
-///   state allows. The adapter that emits them refuses a transition to the
-///   state the node already has (accesskit_windows 0.35.0, `node.rs`
-///   `ExpandCollapse` provider); no other shipped adapter emits them. That
-///   check reads the adapter's copy of the tree, which lags until the next
-///   published update, so two `Expand`s before the next frame both pass it and
-///   both toggle; the routed `Tap` carries no direction for FLUI to check.
-///   Discrete `Expand`/`Collapse` actions would close this
-///   (`crates/flui-semantics/ARCHITECTURE.md`, mapping decision 5).
 ///
-/// `SetValue` lands on [`SemanticsAction::SetText`] whatever its payload: a
-/// numeric value (UI Automation's `RangeValue.SetValue`) arrives without its
-/// number, because [`semantics_action_args_for`] has no argument shape for it.
+/// `Expand` and `Collapse` map to the discrete actions. A tap-only expandable
+/// node still receives the transition its state allows through its tap
+/// handler, which the owner resolves at dispatch. `SetValue` defaults to text
+/// when only its action is known; [`semantics_action_request_for`] also
+/// examines its payload to route numeric values distinctly.
 ///
 /// The match names every AccessKit action, with no wildcard arm:
 /// `accesskit::Action` is not `#[non_exhaustive]`, so an upstream release that
@@ -333,10 +338,9 @@ fn apply_actions(node: &mut Node, actions: u64, flags: u64) {
 #[must_use]
 pub fn semantics_action_for(action: accesskit::Action) -> Option<SemanticsAction> {
     match action {
-        // Expand and collapse toggle through the tap handler (see above).
-        accesskit::Action::Click | accesskit::Action::Expand | accesskit::Action::Collapse => {
-            Some(SemanticsAction::Tap)
-        }
+        accesskit::Action::Click => Some(SemanticsAction::Tap),
+        accesskit::Action::Expand => Some(SemanticsAction::Expand),
+        accesskit::Action::Collapse => Some(SemanticsAction::Collapse),
         accesskit::Action::ShowContextMenu => Some(SemanticsAction::LongPress),
         accesskit::Action::ScrollLeft => Some(SemanticsAction::ScrollLeft),
         accesskit::Action::ScrollRight => Some(SemanticsAction::ScrollRight),
@@ -369,7 +373,7 @@ pub fn semantics_action_for(action: accesskit::Action) -> Option<SemanticsAction
 /// whose positions live on a *different* node (AccessKit expresses
 /// cross-run selections; FLUI's `SetSelection` is offsets within one node)
 /// is unroutable and returns `None`, as does any payload kind FLUI has no
-/// argument shape for (`NumericValue`, `ScrollUnit`, `ScrollHint`,
+/// argument shape for (`ScrollUnit`, `ScrollHint`,
 /// `ScrollToPoint`). The caller routes the action WITHOUT arguments and
 /// traces the drop — the action itself is still meaningful argument-free
 /// for some handlers, and swallowing the whole request would turn a lossy
@@ -398,11 +402,40 @@ pub fn semantics_action_args_for(
             let extent = i32::try_from(selection.focus.character_index).ok()?;
             Some(crate::ActionArgs::SetSelection { base, extent })
         }
-        accesskit::ActionData::NumericValue(_)
-        | accesskit::ActionData::ScrollUnit(_)
+        accesskit::ActionData::NumericValue(value) => {
+            Some(crate::ActionArgs::SetNumericValue { value: *value })
+        }
+        accesskit::ActionData::ScrollUnit(_)
         | accesskit::ActionData::ScrollHint(_)
         | accesskit::ActionData::ScrollToPoint(_) => None,
     }
+}
+
+/// Translates an entire platform request without discarding numeric payloads.
+///
+/// Payload validity is checked by the owner against the current node before
+/// invoking its handler. Unroutable platform actions return `None`.
+#[must_use]
+pub fn semantics_action_request_for(
+    request: &accesskit::ActionRequest,
+) -> Option<crate::SemanticsActionRequest> {
+    let node_id = crate::AccessibilityNodeId::from_u64(request.target_node.0)?;
+    let action = if request.action == accesskit::Action::SetValue
+        && matches!(request.data, Some(accesskit::ActionData::NumericValue(_)))
+    {
+        SemanticsAction::SetNumericValue
+    } else {
+        semantics_action_for(request.action)?
+    };
+    let arguments = request
+        .data
+        .as_ref()
+        .and_then(|data| semantics_action_args_for(data, request.target_node));
+    Some(crate::SemanticsActionRequest {
+        node_id,
+        action,
+        arguments,
+    })
 }
 
 /// Translate one FLUI semantics node into an AccessKit node.
@@ -437,6 +470,12 @@ pub(crate) fn to_node(data: &SemanticsNodeData) -> Node {
         }
     } else if let Some(value) = &data.value {
         node.set_value(value.as_str());
+    }
+    if let Some(range) = data.numeric_range {
+        node.set_numeric_value(range.value());
+        node.set_min_numeric_value(range.min());
+        node.set_max_numeric_value(range.max());
+        node.set_numeric_value_step(range.step());
     }
     // FLUI's `hint` is supplementary prose about what a control does, which is
     // what AccessKit calls a description.
@@ -492,7 +531,12 @@ pub(crate) fn to_node(data: &SemanticsNodeData) -> Node {
     }
 
     apply_state(&mut node, data.flags);
-    apply_actions(&mut node, data.actions, data.flags);
+    apply_actions(
+        &mut node,
+        data.actions,
+        data.flags,
+        data.numeric_range.is_some(),
+    );
 
     node.set_children(
         data.children

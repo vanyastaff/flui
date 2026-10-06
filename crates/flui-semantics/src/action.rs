@@ -11,6 +11,33 @@ pub use flui_protocol::SemanticsAction;
 
 use crate::identity::AccessibilityNodeId;
 
+/// The disclosure transition an expandable node offers through its tap handler.
+///
+/// A node with an expanded state and a [`SemanticsAction::Tap`] handler but no
+/// [`SemanticsAction::Expand`] or [`SemanticsAction::Collapse`] handler toggles
+/// by tapping, as consumers built before the discrete actions existed do. It
+/// offers [`SemanticsAction::Expand`] while collapsed and
+/// [`SemanticsAction::Collapse`] while expanded, and the owner routes that one
+/// request to the tap handler. A node registering either discrete action offers
+/// only what it registers. `actions` are effective action bits and `flags` the
+/// node's flag bits.
+pub(crate) fn tap_disclosure_transition(actions: u64, flags: u64) -> Option<SemanticsAction> {
+    let has = |action: SemanticsAction| actions & action.value() != 0;
+    let flagged = |flag: crate::SemanticsFlag| flags & (flag as u64) != 0;
+    if !flagged(crate::SemanticsFlag::HasExpandedState)
+        || !has(SemanticsAction::Tap)
+        || has(SemanticsAction::Expand)
+        || has(SemanticsAction::Collapse)
+    {
+        return None;
+    }
+    Some(if flagged(crate::SemanticsFlag::IsExpanded) {
+        SemanticsAction::Collapse
+    } else {
+        SemanticsAction::Expand
+    })
+}
+
 // ============================================================================
 // SemanticsActionHandler
 // ============================================================================
@@ -37,6 +64,12 @@ pub enum ActionArgs {
     SetText {
         /// The text to set.
         text: String,
+    },
+
+    /// An exact numeric value, validated against the current node before dispatch.
+    SetNumericValue {
+        /// Requested finite value.
+        value: f64,
     },
 
     /// Custom action arguments.

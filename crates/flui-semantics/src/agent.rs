@@ -129,20 +129,20 @@ pub enum WireActionError {
 
 /// The FLUI action a wire action reaches, as AccessKit's Windows adapter
 /// routes the UI Automation call behind it: `invoke`, `toggle` and `select`
-/// click, which is FLUI's tap; `expand` and `collapse` toggle an expandable
-/// node through its tap handler (mapping decision 5); `set_value` sets text
-/// (mapping decision 3); `scroll_into_view` is `ShowOnScreen`.
+/// click, which is FLUI's tap; `expand` and `collapse` are the discrete
+/// actions, which the owner routes to a tap-only node's tap handler (mapping
+/// decision 5); `set_value` sets text, or the number on a numeric node
+/// without a text value ([`SemanticsOwner::resolve_wire_action`]); `scroll_into_view` is
+/// `ShowOnScreen`.
 ///
 /// `None` for a wire action FLUI has no route for; `ActionName` is
 /// `#[non_exhaustive]`, so a tool added to the vocabulary lands here.
 #[must_use]
 pub(crate) fn semantics_action_for_wire(action: ActionName) -> Option<SemanticsAction> {
     Some(match action {
-        ActionName::Invoke
-        | ActionName::Toggle
-        | ActionName::Select
-        | ActionName::Expand
-        | ActionName::Collapse => SemanticsAction::Tap,
+        ActionName::Invoke | ActionName::Toggle | ActionName::Select => SemanticsAction::Tap,
+        ActionName::Expand => SemanticsAction::Expand,
+        ActionName::Collapse => SemanticsAction::Collapse,
         ActionName::SetValue => SemanticsAction::SetText,
         ActionName::Focus => SemanticsAction::Focus,
         ActionName::ScrollIntoView => SemanticsAction::ShowOnScreen,
@@ -477,6 +477,13 @@ fn element_id(node: &NodeRef<'_>) -> Option<ElementId> {
     ElementId::from_u64(node.locate().0.0)
 }
 
+/// Whether UI Automation exposes `node` through the `Value` pattern, which
+/// the desktop backend reads and writes ahead of `RangeValue`: a text value
+/// that is not the node's name.
+fn has_text_value(node: &NodeRef<'_>) -> bool {
+    node.value().is_some() && !node.label_comes_from_value()
+}
+
 /// `node`'s own fields, without children or bounds.
 fn wire_node(node: &NodeRef<'_>, id: ElementId, root_claims_focus: bool) -> Node {
     let ak_role = node.role();
@@ -489,9 +496,14 @@ fn wire_node(node: &NodeRef<'_>, id: ElementId, root_claims_focus: bool) -> Node
     }
     .filter(|name| !name.is_empty());
     // The `Value` pattern's value: not for a static text, whose value is its
-    // name, and never a password field's.
+    // name, and never a password field's. A numeric node without text reads
+    // its `RangeValue` number, spelled as the desktop backend spells it.
     if !node.label_comes_from_value() && ak_role != accesskit::Role::PasswordInput {
-        out.value = node.value();
+        out.value = if has_text_value(node) {
+            node.value()
+        } else {
+            node.numeric_value().map(|number| number.to_string())
+        };
     }
     out.disabled = node.is_disabled();
     out.focused = node.is_focused() && (!node.is_root() || root_claims_focus);
@@ -598,10 +610,12 @@ impl SemanticsOwner {
     /// and `collapse` are advertised only toward the state the element lacks,
     /// so `expand` on an element the tree shows expanded is refused.
     ///
-    /// The tree is the last committed one, so the check does not close the
-    /// double-toggle race of mapping decision 5: two `expand`s resolved
-    /// before the frame that shows the first one's effect both pass, and the
-    /// second collapses the element again.
+    /// The tree is the last committed one. A node registering the discrete
+    /// `Expand`/`Collapse` actions keeps each request's direction when several
+    /// precede the next frame. A tap-only expandable node toggles through its
+    /// tap handler instead, so two `expand`s before the frame that shows the
+    /// first one's effect both pass this check and the second collapses it
+    /// again (mapping decision 5).
     ///
     /// # Errors
     ///
@@ -626,15 +640,39 @@ impl SemanticsOwner {
                     action: request.action,
                 });
             }
-            Ok(())
+            // The desktop backend writes through the `Value` pattern whenever
+            // the node has one and falls back to `RangeValue` only without
+            // it, so a node with both a text value and a number takes text
+            // here too, and both backends reach the same handler.
+            Ok(node
+                .numeric_value()
+                .filter(|_| !has_text_value(&node))
+                .map(|_| (node.min_numeric_value(), node.max_numeric_value())))
         });
-        match checked {
+        let numeric = match checked {
             Ok(result) => result?,
             Err(Published::NoTree) => return Err(WireActionError::NoTree),
             Err(Published::Malformed) => return Err(WireActionError::Malformed),
-        }
+        };
 
         let arguments = match (request.action, &request.value) {
+            (ActionName::SetValue, Some(text)) if numeric.is_some() => {
+                let value = text
+                    .parse::<f64>()
+                    .ok()
+                    .filter(|value| value.is_finite())
+                    .ok_or(WireActionError::InvalidArgument {
+                        reason: "numeric set_value needs a finite number",
+                    })?;
+                if numeric.is_some_and(|(min, max)| {
+                    min.is_some_and(|min| value < min) || max.is_some_and(|max| value > max)
+                }) {
+                    return Err(WireActionError::InvalidArgument {
+                        reason: "numeric set_value lies outside the published range",
+                    });
+                }
+                Some(ActionArgs::SetNumericValue { value })
+            }
             (ActionName::SetValue, Some(text)) => Some(ActionArgs::SetText { text: text.clone() }),
             (ActionName::SetValue, None) => {
                 return Err(WireActionError::InvalidArgument {
@@ -648,12 +686,15 @@ impl SemanticsOwner {
             }
             (_, None) => None,
         };
-        let action = semantics_action_for_wire(request.action).ok_or(
-            WireActionError::ActionUnsupported {
-                element,
-                action: request.action,
-            },
-        )?;
+        let action = if request.action == ActionName::SetValue && numeric.is_some() {
+            Some(SemanticsAction::SetNumericValue)
+        } else {
+            semantics_action_for_wire(request.action)
+        }
+        .ok_or(WireActionError::ActionUnsupported {
+            element,
+            action: request.action,
+        })?;
         let node_id = AccessibilityNodeId::from_u64(element.get())
             .ok_or(WireActionError::NotFound { element })?;
         Ok(SemanticsActionRequest {

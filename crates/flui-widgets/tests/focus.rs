@@ -245,3 +245,133 @@ pub(crate) mod event_cx {
         assert_eq!(probe.value(), Ok(0));
     }
 }
+
+/// An assistive focus request uses the actual mounted focus node, then publishes it.
+pub(crate) fn platform_focus_requests_the_mounted_node_and_rejects_disabled_focus() {
+    use crate::common::{lay_out, loose};
+    use flui_testing::{Action, ActionRequest, TreeId};
+    use flui_widgets::Semantics;
+
+    let node = FocusNode::with_debug_label("assistive-target");
+    let mut laid = lay_out(
+        Focus::new(
+            Semantics::new()
+                .label("assistive target")
+                .child(SizedBox::new(10.0, 10.0)),
+        )
+        .focus_node(Rc::clone(&node)),
+        loose(100.0),
+    );
+    laid.enable_semantics();
+    laid.pump();
+    assert!(!node.has_primary_focus());
+    let tree = laid.a11y_tree().expect("semantics enabled");
+    let target = tree
+        .find_by_label("assistive target")
+        .expect("named focus target");
+    assert!(
+        target.supports_action(Action::Focus),
+        "focusable control must expose the action"
+    );
+    let listener = laid
+        .accessibility_action_listener()
+        .expect("production platform listener");
+    listener(ActionRequest {
+        action: Action::Focus,
+        target_tree: TreeId::ROOT,
+        target_node: target.id(),
+        data: None,
+    });
+    laid.tick();
+    assert!(
+        node.has_primary_focus(),
+        "the actual FocusNode accepted assistive focus"
+    );
+    let tree = laid.a11y_tree().expect("focused frame published");
+    assert_eq!(
+        tree.raw().focus,
+        tree.find_by_label("assistive target")
+            .expect("live target")
+            .id()
+    );
+
+    let refused = FocusNode::with_debug_label("disabled-assistive-target");
+    let mut disabled = lay_out(
+        Focus::new(
+            Semantics::new()
+                .label("disabled target")
+                .child(SizedBox::new(10.0, 10.0)),
+        )
+        .focus_node(Rc::clone(&refused))
+        .can_request_focus(false),
+        loose(100.0),
+    );
+    disabled.enable_semantics();
+    disabled.pump();
+    let tree = disabled.a11y_tree().expect("disabled tree published");
+    let target = tree
+        .find_by_label("disabled target")
+        .expect("named disabled target");
+    assert!(!target.supports_action(Action::Focus));
+    assert!(
+        disabled
+            .invoke_semantics_action(ActionRequest {
+                action: Action::Focus,
+                target_tree: TreeId::ROOT,
+                target_node: target.id(),
+                data: None
+            })
+            .is_err()
+    );
+    assert!(!refused.has_primary_focus());
+}
+
+/// A `Focus` whose external node another owner adopted no longer focuses it
+/// on an assistive request: the request reaches the old element, which no
+/// longer owns the attachment.
+pub(crate) fn an_adopted_external_node_ignores_the_old_elements_focus_action() {
+    use crate::common::{lay_out, loose};
+    use flui_testing::{Action, ActionRequest, TreeId};
+    use flui_widgets::Semantics;
+
+    let node = FocusNode::with_debug_label("adopted-target");
+    let mut laid = lay_out(
+        Focus::new(
+            Semantics::new()
+                .label("adopted target")
+                .child(SizedBox::new(10.0, 10.0)),
+        )
+        .focus_node(Rc::clone(&node)),
+        loose(100.0),
+    );
+    laid.enable_semantics();
+    laid.pump();
+    let target = laid
+        .a11y_tree()
+        .expect("semantics enabled")
+        .find_by_label("adopted target")
+        .expect("named focus target")
+        .id();
+    let adopter = node
+        .parent()
+        .and_then(|parent| parent.parent())
+        .expect("the mounted node hangs below a scope with a parent");
+    let _adopted = adopter
+        .adopt_node(&node)
+        .expect("a live node moves under another owner");
+
+    let listener = laid
+        .accessibility_action_listener()
+        .expect("production platform listener");
+    listener(ActionRequest {
+        action: Action::Focus,
+        target_tree: TreeId::ROOT,
+        target_node: target,
+        data: None,
+    });
+    laid.tick();
+    assert!(
+        !node.has_primary_focus(),
+        "the old element focused a node another owner adopted"
+    );
+}

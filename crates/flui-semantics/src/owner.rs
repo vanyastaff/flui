@@ -81,6 +81,13 @@ pub enum SemanticsActionError {
         action: SemanticsAction,
     },
 
+    /// The requested numeric value is absent, malformed, or outside the current range.
+    #[error("accessibility node {node_id} refused an invalid numeric value")]
+    InvalidNumericValue {
+        /// Stable platform-facing node identity.
+        node_id: AccessibilityNodeId,
+    },
+
     /// The owning presentation has begun or completed teardown; actions are
     /// refused regardless of whether the node itself still resolves.
     #[error("presentation is closing or closed; accessibility action refused")]
@@ -453,6 +460,12 @@ impl SemanticsOwner {
     /// `blocks_user_actions` applies identically to snapshot export and input
     /// dispatch.
     ///
+    /// An `Expand` or `Collapse` request to an expandable node that registers
+    /// neither discrete action but has a tap handler resolves to that handler
+    /// with [`SemanticsAction::Tap`], and only for the transition the node's
+    /// current state allows. A numeric setter is refused unless its value lies
+    /// in the node's current range.
+    ///
     /// The returned invocation owns an `Arc` clone of the handler and may be
     /// invoked after any outer owner lock has been released.
     pub fn resolve_action(
@@ -496,10 +509,19 @@ impl SemanticsOwner {
         let node = resolved.ok_or(SemanticsActionError::NodeNotFound {
             node_id: request.node_id,
         })?;
-        let action_is_effective =
-            node.config().effective_actions_as_bits() & request.action.value() != 0;
-        let Some(handler) = action_is_effective
-            .then(|| node.config().action_handler(request.action))
+        let config = node.config();
+        let actions = config.effective_actions_as_bits();
+        // A tap-only expandable node receives the transition its current
+        // state allows through its tap handler.
+        let routed = if crate::action::tap_disclosure_transition(actions, config.flags().bits())
+            == Some(request.action)
+        {
+            SemanticsAction::Tap
+        } else {
+            request.action
+        };
+        let Some(handler) = (actions & routed.value() != 0)
+            .then(|| config.action_handler(routed))
             .flatten()
             .map(Arc::clone)
         else {
@@ -509,9 +531,23 @@ impl SemanticsOwner {
             });
         };
 
+        if routed == SemanticsAction::SetNumericValue {
+            let admitted = match (&request.arguments, config.numeric_range()) {
+                (Some(ActionArgs::SetNumericValue { value }), Some(range)) => {
+                    range.contains(*value)
+                }
+                _ => false,
+            };
+            if !admitted {
+                return Err(SemanticsActionError::InvalidNumericValue {
+                    node_id: request.node_id,
+                });
+            }
+        }
+
         Ok(SemanticsActionInvocation {
             node_id: request.node_id,
-            action: request.action,
+            action: routed,
             arguments: request.arguments,
             handler,
         })

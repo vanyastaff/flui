@@ -25,7 +25,9 @@ pub use flui_rendering::parent_data::{
 };
 pub use flui_rendering::pipeline::RenderInvalidationHandle;
 pub use flui_rendering::protocol::{BoxProtocol, Protocol, SliverProtocol, UsageByParent};
-pub use flui_rendering::semantics::{SemanticsConfiguration, SemanticsProperties, SemanticsRole};
+pub use flui_rendering::semantics::{
+    NumericRange, NumericRangeError, SemanticsConfiguration, SemanticsProperties, SemanticsRole,
+};
 pub use flui_rendering::traits::{
     HitTestOutcome, PaintClip, PaintEffects, PaintOpacity, RenderBox, RenderObject, RenderSliver,
     TextBaseline,

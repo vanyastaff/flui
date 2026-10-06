@@ -290,9 +290,8 @@ fn wire_role_matches_the_windows_adapter_for_every_role_flui_publishes() {
 /// (`semantics_action_for_wire`) must reach the same FLUI action, so an
 /// agent's `invoke` means one thing whichever backend carries it.
 ///
-/// `set_value` lands on `SetText` (mapping decision 3); `expand` and
-/// `collapse` land on the tap handler, which is how FLUI toggles an
-/// expandable node (mapping decision 5).
+/// Text `set_value` lands on `SetText`; numeric requests use their typed
+/// route, and expand/collapse retain their explicit direction.
 #[test]
 fn every_wire_action_routes_to_a_semantics_action() {
     use crate::accesskit_translation::semantics_action_for;
@@ -311,8 +310,12 @@ fn every_wire_action_routes_to_a_semantics_action() {
         (ActionName::Focus, Ak::Focus, SemanticsAction::Focus),
         // `ExpandCollapse` -> Expand / Collapse, only toward the state the
         // node lacks (node.rs:955-975).
-        (ActionName::Expand, Ak::Expand, SemanticsAction::Tap),
-        (ActionName::Collapse, Ak::Collapse, SemanticsAction::Tap),
+        (ActionName::Expand, Ak::Expand, SemanticsAction::Expand),
+        (
+            ActionName::Collapse,
+            Ak::Collapse,
+            SemanticsAction::Collapse,
+        ),
         // `ScrollItem` -> ScrollIntoView (node.rs:1374).
         (
             ActionName::ScrollIntoView,
@@ -450,6 +453,8 @@ fn advertised_actions_follow_the_uia_patterns() {
     f.add(Some(root), 7, |c| {
         c.set_button(true);
         c.set_expanded(false);
+        c.add_action(SemanticsAction::Expand, noop());
+        c.add_action(SemanticsAction::Collapse, noop());
         c.add_action(SemanticsAction::Tap, noop());
     });
     f.add(Some(root), 8, |c| {
@@ -461,6 +466,11 @@ fn advertised_actions_follow_the_uia_patterns() {
         c.set_obscured(true);
         c.set_value("hunter2");
         c.add_action(SemanticsAction::SetText, noop());
+    });
+    f.add(Some(root), 10, |c| {
+        c.set_slider(true);
+        c.set_numeric_range(crate::NumericRange::new(2.5, 0.0, 10.0, 0.5).expect("finite range"));
+        c.add_action(SemanticsAction::SetNumericValue, noop());
     });
 
     let button = f.only(e(2));
@@ -503,38 +513,151 @@ fn advertised_actions_follow_the_uia_patterns() {
     assert_eq!(password.role, Role::PasswordInput);
     assert_eq!(password.value, None, "a password's value is never read");
     assert_eq!(password.actions, [N::SetValue]);
+
+    let slider = f.only(e(10));
+    assert_eq!(
+        slider.value.as_deref(),
+        Some("2.5"),
+        "a numeric node reads its number as the desktop RangeValue does"
+    );
+    assert_eq!(slider.actions, [N::SetValue]);
 }
 
-/// Mapping decision 7: an in-process `expand` reads the live expanded flag,
-/// so the second of two `expand`s before a frame is refused rather than
-/// routed to the tap handler, which would collapse the node again.
-#[test]
-fn expand_on_an_expanded_node_is_action_unsupported() {
+/// Which handlers a disclosure fixture registers.
+#[derive(Clone, Copy)]
+enum Disclosure {
+    /// Discrete `Expand` and `Collapse` handlers beside a tap handler.
+    Explicit,
+    /// Only a tap handler, as `Semantics::new().expanded(..).on_tap(..)`
+    /// builds; the transition its state allows reaches that handler.
+    TapOnly,
+}
+
+/// Drives one disclosure shape and state through the wire path
+/// (`resolve_wire_action`) and the platform path (`semantics_action_request_for`),
+/// both ending in `SemanticsOwner::resolve_action`. The node advertises and
+/// accepts only the transition its state allows, and the request reaches the
+/// discrete handler, or the tap handler for a tap-only node. The reverse
+/// direction is refused on the wire; the owner also refuses it for a tap-only
+/// node, whose tap handler has no direction of its own.
+fn disclosure_case(shape: Disclosure, expanded: bool) {
+    let received = Arc::new(Mutex::new(Vec::new()));
     let mut f = Fixture::new();
     let root = f.add(None, 1, |_| {});
-    f.add(Some(root), 2, |c| {
+    let log = Arc::clone(&received);
+    f.add(Some(root), 2, move |c| {
         c.set_button(true);
-        c.set_expanded(true);
-        c.add_action(SemanticsAction::Tap, noop());
+        c.set_expanded(expanded);
+        let handler = || -> crate::SemanticsActionHandler {
+            let log = Arc::clone(&log);
+            Arc::new(move |action, _| log.lock().expect("log").push(action))
+        };
+        c.add_action(SemanticsAction::Tap, handler());
+        if matches!(shape, Disclosure::Explicit) {
+            c.add_action(SemanticsAction::Expand, handler());
+            c.add_action(SemanticsAction::Collapse, handler());
+        }
     });
+    let (allowed, refused, ak_allowed, ak_refused) = if expanded {
+        (
+            ActionName::Collapse,
+            ActionName::Expand,
+            accesskit::Action::Collapse,
+            accesskit::Action::Expand,
+        )
+    } else {
+        (
+            ActionName::Expand,
+            ActionName::Collapse,
+            accesskit::Action::Expand,
+            accesskit::Action::Collapse,
+        )
+    };
+    let discrete = if expanded {
+        SemanticsAction::Collapse
+    } else {
+        SemanticsAction::Expand
+    };
+    let reaches = match shape {
+        Disclosure::Explicit => discrete,
+        Disclosure::TapOnly => SemanticsAction::Tap,
+    };
 
-    let expand = f
-        .owner
-        .resolve_wire_action(&ActionRequest::new(e(2), ActionName::Expand));
+    assert_eq!(f.only(e(2)).actions, [allowed], "advertised transition");
     assert_eq!(
-        expand,
+        f.owner
+            .resolve_wire_action(&ActionRequest::new(e(2), refused)),
         Err(WireActionError::ActionUnsupported {
             element: e(2),
-            action: ActionName::Expand
+            action: refused
         })
     );
-
-    let collapse = f
+    let wire = f
         .owner
-        .resolve_wire_action(&ActionRequest::new(e(2), ActionName::Collapse))
-        .expect("collapse is the transition an expanded node allows");
-    assert_eq!(collapse.action, SemanticsAction::Tap);
-    assert_eq!(collapse.arguments, None);
+        .resolve_wire_action(&ActionRequest::new(e(2), allowed))
+        .expect("the wire accepts the transition the state allows");
+    assert_eq!((wire.action, wire.arguments.clone()), (discrete, None));
+    f.owner
+        .resolve_action(wire)
+        .expect("the owner routes the wire request")
+        .invoke();
+
+    let platform = |action| accesskit::ActionRequest {
+        action,
+        target_tree: accesskit::TreeId::ROOT,
+        target_node: accesskit::NodeId(e(2).get()),
+        data: None,
+    };
+    let translated = crate::semantics_action_request_for(&platform(ak_allowed))
+        .expect("the platform transition is routable");
+    f.owner
+        .resolve_action(translated)
+        .expect("the owner routes the platform request")
+        .invoke();
+    assert_eq!(*received.lock().expect("log"), [reaches, reaches]);
+
+    if matches!(shape, Disclosure::TapOnly) {
+        let reverse = crate::semantics_action_request_for(&platform(ak_refused))
+            .expect("the reverse transition is routable");
+        assert!(matches!(
+            f.owner.resolve_action(reverse),
+            Err(crate::SemanticsActionError::UnsupportedAction { .. })
+        ));
+    }
+}
+
+fn explicit_collapsed() {
+    disclosure_case(Disclosure::Explicit, false);
+}
+
+fn explicit_expanded() {
+    disclosure_case(Disclosure::Explicit, true);
+}
+
+fn tap_only_collapsed() {
+    disclosure_case(Disclosure::TapOnly, false);
+}
+
+fn tap_only_expanded() {
+    disclosure_case(Disclosure::TapOnly, true);
+}
+
+/// Expand and collapse reach a node only toward the state it lacks, through
+/// its discrete handlers or, for a tap-only node, its tap handler.
+#[test]
+fn disclosure_requests_follow_the_expanded_state() {
+    let rows: &[(&str, fn())] = &[
+        ("explicit_collapsed", explicit_collapsed),
+        ("explicit_expanded", explicit_expanded),
+        ("tap_only_collapsed", tap_only_collapsed),
+        ("tap_only_expanded", tap_only_expanded),
+    ];
+    let failed: Vec<&str> = rows
+        .iter()
+        .filter(|(_, row)| std::panic::catch_unwind(row).is_err())
+        .map(|(name, _)| *name)
+        .collect();
+    assert!(failed.is_empty(), "disclosure rows failed: {failed:?}");
 }
 
 #[test]
@@ -581,6 +704,166 @@ fn set_value_reaches_set_text_with_its_text() {
         matches!(without_value, Err(WireActionError::InvalidArgument { .. })),
         "{without_value:?}"
     );
+    let mut numeric = Fixture::new();
+    let root = numeric.add(None, 1, |_| {});
+    numeric.add(Some(root), 2, |c| {
+        c.set_numeric_range(crate::NumericRange::new(0.0, 0.0, 10.0, 1.0).expect("finite fixture"));
+        c.add_action(SemanticsAction::SetNumericValue, noop());
+    });
+    let request = numeric
+        .owner
+        .resolve_wire_action(&ActionRequest::set_value(e(2), "2.375"))
+        .expect("numeric range advertises set_value");
+    assert_eq!(request.action, SemanticsAction::SetNumericValue);
+    assert_eq!(
+        request.arguments,
+        Some(ActionArgs::SetNumericValue { value: 2.375 })
+    );
+    let _ = numeric
+        .owner
+        .resolve_action(request)
+        .expect("exact fraction admitted despite step");
+    for text in ["NaN", "inf", "not a number", "-1", "11"] {
+        assert!(
+            matches!(
+                numeric
+                    .owner
+                    .resolve_wire_action(&ActionRequest::set_value(e(2), text)),
+                Err(WireActionError::InvalidArgument { .. })
+            ),
+            "numeric wire input {text:?} was admitted"
+        );
+    }
+}
+
+/// What one node publishes for `set_value`: a text value, a numeric range,
+/// and which handlers it registers.
+struct ValueShape {
+    text: Option<&'static str>,
+    range: bool,
+    set_text: bool,
+    set_number: bool,
+}
+
+/// Publishes `shape`, then checks the wire value it reads, whether
+/// `set_value` is advertised, and which handler a wire `set_value` of `"7"`
+/// reaches. The desktop backend writes through the `Value` pattern ahead of
+/// `RangeValue`, so `expected` is the action it would invoke too.
+fn value_case(shape: &ValueShape, value: Option<&str>, expected: Option<SemanticsAction>) {
+    let mut f = Fixture::new();
+    let root = f.add(None, 1, |_| {});
+    f.add(Some(root), 2, |c| {
+        // A role keeps the node from being lifted as a generic container.
+        if shape.range {
+            c.set_slider(true);
+        } else {
+            c.set_text_field(true);
+        }
+        if let Some(text) = shape.text {
+            c.set_value(text);
+        }
+        if shape.range {
+            c.set_numeric_range(
+                crate::NumericRange::new(5.0, 0.0, 10.0, 1.0).expect("finite fixture"),
+            );
+        }
+        if shape.set_text {
+            c.add_action(SemanticsAction::SetText, noop());
+        }
+        if shape.set_number {
+            c.add_action(SemanticsAction::SetNumericValue, noop());
+        }
+    });
+    let node = f.only(e(2));
+    assert_eq!(node.value.as_deref(), value, "wire value");
+    assert_eq!(
+        node.actions.contains(&ActionName::SetValue),
+        expected.is_some(),
+        "set_value advertised"
+    );
+    let request = f
+        .owner
+        .resolve_wire_action(&ActionRequest::set_value(e(2), "7"));
+    let Some(expected) = expected else {
+        assert!(
+            matches!(request, Err(WireActionError::ActionUnsupported { .. })),
+            "{request:?}"
+        );
+        return;
+    };
+    let request = request.expect("an advertised set_value resolves");
+    assert_eq!(request.action, expected);
+    let arguments = match expected {
+        SemanticsAction::SetNumericValue => ActionArgs::SetNumericValue { value: 7.0 },
+        _ => ActionArgs::SetText { text: "7".into() },
+    };
+    assert_eq!(request.arguments, Some(arguments));
+    let _ = f
+        .owner
+        .resolve_action(request)
+        .expect("the owner invokes the handler the wire chose");
+}
+
+fn numeric_handler_without_range() {
+    let shape = ValueShape {
+        text: Some("0"),
+        range: false,
+        set_text: false,
+        set_number: true,
+    };
+    value_case(&shape, Some("0"), None);
+}
+
+fn numeric_handler_with_range() {
+    let shape = ValueShape {
+        text: None,
+        range: true,
+        set_text: false,
+        set_number: true,
+    };
+    value_case(&shape, Some("5"), Some(SemanticsAction::SetNumericValue));
+}
+
+fn text_only() {
+    let shape = ValueShape {
+        text: Some("fixed"),
+        range: false,
+        set_text: true,
+        set_number: false,
+    };
+    value_case(&shape, Some("fixed"), Some(SemanticsAction::SetText));
+}
+
+fn text_and_numeric() {
+    let shape = ValueShape {
+        text: Some("50%"),
+        range: true,
+        set_text: true,
+        set_number: true,
+    };
+    value_case(&shape, Some("50%"), Some(SemanticsAction::SetText));
+}
+
+/// `set_value` is advertised only where a request can reach a handler, and a
+/// node with both a text value and a number takes text, as the desktop
+/// backend's `Value`-before-`RangeValue` precedence does.
+#[test]
+fn set_value_follows_the_value_pattern_precedence() {
+    let rows: &[(&str, fn())] = &[
+        (
+            "numeric_handler_without_range",
+            numeric_handler_without_range,
+        ),
+        ("numeric_handler_with_range", numeric_handler_with_range),
+        ("text_only", text_only),
+        ("text_and_numeric", text_and_numeric),
+    ];
+    let failed: Vec<&str> = rows
+        .iter()
+        .filter(|(_, row)| std::panic::catch_unwind(row).is_err())
+        .map(|(name, _)| *name)
+        .collect();
+    assert!(failed.is_empty(), "set_value rows failed: {failed:?}");
 }
 
 #[test]

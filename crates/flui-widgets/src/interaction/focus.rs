@@ -579,7 +579,9 @@ pub struct FocusState {
     focus_manager: Option<Rc<FocusManager>>,
     /// Generation-checked ownership of this widget's attachment. Holding the
     /// token prevents stale lifecycle callbacks from detaching a newer host.
-    attachment: Option<FocusAttachment>,
+    /// Shared so the assistive focus handler can tell whether this widget
+    /// still owns the node before it requests focus.
+    attachment: Option<Rc<FocusAttachment>>,
     /// The node this one currently hangs under; `did_change_dependencies`
     /// moves it when the provider changes.
     parent: Option<Rc<FocusNode>>,
@@ -773,11 +775,10 @@ impl ViewState<Focus> for FocusState {
             install_rect_provider(&self.node, &self.anchor, ctx);
         self.rect_provider = Some(rect_provider);
         self.rect_provider_registration = Some(rect_provider_registration);
-        self.attachment = Some(
-            parent
-                .attach_node(&self.node)
-                .expect("BUG: Focus could not attach its node to the enclosing focus tree"),
-        );
+        self.attachment =
+            Some(Rc::new(parent.attach_node(&self.node).expect(
+                "BUG: Focus could not attach its node to the enclosing focus tree",
+            )));
         self.parent = Some(parent);
         self.record_action_chain(ctx);
 
@@ -868,7 +869,7 @@ impl ViewState<Focus> for FocusState {
             self.key_handler_registration = replacement_key_handler_registration;
             self.rect_provider_registration = replacement_rect_provider_registration;
             self.context_registration = replacement_context_registration;
-            self.attachment = Some(replacement_attachment);
+            self.attachment = Some(Rc::new(replacement_attachment));
         } else {
             // Re-sync flags and handlers from the latest configuration.
             new_view.configure(&self.node, &mut self.key_handler_registration, &self.writer);
@@ -891,7 +892,7 @@ impl ViewState<Focus> for FocusState {
         let owns_attachment = self
             .attachment
             .as_ref()
-            .is_some_and(FocusAttachment::is_attached);
+            .is_some_and(|attachment| attachment.is_attached());
         if owns_attachment {
             self.key_handler_registration.take();
             self.rect_provider_registration.take();
@@ -923,9 +924,8 @@ impl ViewState<Focus> for FocusState {
     ///
     /// The subtree publishes whether its node can take focus (`focusable`)
     /// and, while it holds the primary focus, `focused`. The node listener rebuilds this widget on
-    /// every focus edge, so the flag follows the focus. The semantics
-    /// focus action (focus requested by an assistive technology) is not
-    /// wired yet.
+    /// every focus edge, so the flag follows the focus. Assistive focus requests
+    /// use this same mounted node and its normal admission policy.
     fn build(&self, view: &Focus, _ctx: &dyn BuildContext) -> impl IntoView {
         // Only a node that can take focus is annotated. A node that cannot —
         // the one a `Shortcuts` hosts its key handler on — gets no render
@@ -933,12 +933,25 @@ impl ViewState<Focus> for FocusState {
         // nothing to hit testing or to the semantics tree; and an annotation
         // setting even a false flag would gather its subtree into one node.
         let child = if view.include_semantics && self.node.can_request_focus() {
-            Semantics::new()
+            let semantics = Semantics::new()
                 .focusable(true)
-                .focused(self.node.has_primary_focus())
-                .child(view.child.clone())
-                .into_view()
-                .boxed()
+                .focused(self.node.has_primary_focus());
+            // Only the current attachment may focus the node: once another
+            // owner adopts it, this element neither advertises nor performs
+            // an assistive focus request on the adopter's behalf.
+            let semantics = match self.attachment.as_ref().filter(|a| a.is_attached()) {
+                Some(attachment) => {
+                    let node = Rc::clone(&self.node);
+                    let attachment = Rc::downgrade(attachment);
+                    semantics.on_focus(move |_cx| {
+                        if attachment.upgrade().is_some_and(|a| a.is_attached()) {
+                            let _ = node.request_focus();
+                        }
+                    })
+                }
+                None => semantics,
+            };
+            semantics.child(view.child.clone()).into_view().boxed()
         } else {
             view.child.clone()
         };

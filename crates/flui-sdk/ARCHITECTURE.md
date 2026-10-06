@@ -125,3 +125,8 @@ instead of the internal crates. The reasons are ADR-0088; the tests above pin it
 facade (ADR-0112). Material drawer callbacks use it to settle cancelled drags
 without release velocity. The existing surface list and type-identity tests
 include this package-author decision.
+
+ADR-0124 adds controlled `Slider` and `Disclosure`, their state types,
+`ExpansionState`, and checked `NumericRange` configuration through the existing
+whole-widget-module export. `surface` names these items as representative
+package-author surface; no new framework dependency is required by a package.

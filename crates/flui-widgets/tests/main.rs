@@ -7,6 +7,8 @@
     reason = "scenario functions are rows of the contract tables, so clippy no longer sees them as test functions"
 )]
 
+mod catalog_disclosure;
+mod catalog_slider;
 mod common;
 mod contracts;
 

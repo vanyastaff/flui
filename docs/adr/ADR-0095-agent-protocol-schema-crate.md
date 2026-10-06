@@ -16,6 +16,10 @@
 - **Date:** 2026-09-25
 - **Amends:** [ADR-0080](ADR-0080-agent-protocol-desktop-contract.md) (settles its "Not
   decided here" in-process transport; the wire contract is unchanged)
+- **Superseded in part by:** [ADR-0124](ADR-0124-controlled-numeric-and-disclosure-actions.md):
+  `expand` and `collapse` reach FLUI's discrete `Expand`/`Collapse` actions rather than the tap
+  handler, and a numeric `set_value` keeps its number; the double-toggle race stated below
+  remains only for a node that registers neither discrete action
 - **Related:** [ADR-0040](ADR-0040-tree-observation-seam.md),
   [ADR-0079](ADR-0079-keyboard-activation-and-focus-for-assistive-technology.md),
   [ADR-0081](ADR-0081-workspace-tiers-and-reach-facts.md),
@@ -257,7 +261,7 @@ For the accepted part:
   `wire_role_matches_the_windows_adapter_for_every_role_flui_publishes`,
   `the_role_fold_was_transcribed_from_the_locked_windows_adapter`,
   `generic_containers_are_lifted_and_hidden_subtrees_dropped`,
-  `advertised_actions_follow_the_uia_patterns`, `expand_on_an_expanded_node_is_action_unsupported`,
+  `advertised_actions_follow_the_uia_patterns`, `disclosure_requests_follow_the_expanded_state`,
   `set_value_reaches_set_text_with_its_text`, `a_disabled_node_refuses_with_disabled`,
   `read_honours_max_depth_and_max_nodes_and_says_truncated` and
   `a_read_tree_round_trips_through_json`.
@@ -274,6 +278,9 @@ For the accepted part:
   drain, a panic before the handler reported as `ResolvePanicked` rather than the handler's, and
   traces without labels or values. The in-process `expand`/`collapse` check reads the committed
   tree and does not close the double-toggle race (`flui-semantics` mapping decisions 5 and 7).
+  *Superseded in part by ADR-0124:* a node with discrete `Expand`/`Collapse` handlers receives
+  each request's direction, so the race remains only for a tap-only expandable node, whose
+  request is routed to its tap handler.
 - **The server of §3.** `cargo nextest run -p flui-devtools --features agent --test
   agent_endpoint`: `reads_the_counter_and_taps_it_over_the_endpoint` (a headless counter served
   over a real pipe or socket: the hello, `windows`, a read retried while `busy`, a tap, the new

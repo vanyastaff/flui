@@ -101,6 +101,9 @@ pub struct SemanticsConfiguration {
     /// The current value of this node.
     value: Option<AttributedString>,
 
+    /// Validated native numeric-range metadata.
+    numeric_range: Option<crate::NumericRange>,
+
     /// The value when increased.
     increased_value: Option<AttributedString>,
 
@@ -184,6 +187,7 @@ impl PartialEq for SemanticsConfiguration {
             && actions_are_identical
             && self.label == other.label
             && self.value == other.value
+            && self.numeric_range == other.numeric_range
             && self.increased_value == other.increased_value
             && self.decreased_value == other.decreased_value
             && self.hint == other.hint
@@ -667,6 +671,24 @@ impl SemanticsConfiguration {
         self.value.as_ref()
     }
 
+    /// Publishes a validated numeric range and identifies the node as a slider.
+    ///
+    /// This always sets the slider flag, as [`Self::set_slider`]`(true)` does.
+    /// The node publishes the slider role unless an explicit role or a more
+    /// specific role flag (a checked or toggled state, button, link or text
+    /// field) takes precedence.
+    pub fn set_numeric_range(&mut self, range: crate::NumericRange) {
+        self.numeric_range = Some(range);
+        self.set_slider(true);
+        self.has_been_annotated = true;
+    }
+
+    /// The validated range currently described by this node.
+    #[must_use]
+    pub const fn numeric_range(&self) -> Option<crate::NumericRange> {
+        self.numeric_range
+    }
+
     /// Sets the increased value.
     pub fn set_increased_value(&mut self, value: impl Into<AttributedString>) {
         self.increased_value = Some(value.into());
@@ -1049,6 +1071,7 @@ impl SemanticsConfiguration {
         if self.actions_as_bits() & other.actions_as_bits() != 0
             || self.flags.bits() & other.flags.bits() != 0
             || self.platform_view_id.is_some() && other.platform_view_id.is_some()
+            || self.numeric_range.is_some() && other.numeric_range.is_some()
             || self.max_value_length.is_some() && other.max_value_length.is_some()
             || self.current_value_length.is_some() && other.current_value_length.is_some()
             || self
@@ -1165,6 +1188,9 @@ impl SemanticsConfiguration {
         }
 
         // ----- first-wins fields -----
+        if self.numeric_range.is_none() {
+            self.numeric_range = other.numeric_range;
+        }
         if self.value.is_none() {
             self.value.clone_from(&other.value);
         }
