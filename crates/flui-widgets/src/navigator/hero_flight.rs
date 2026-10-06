@@ -846,6 +846,15 @@ impl FlightManager {
     /// `plan.animation` is the **destination** route's primary animation for a
     /// push, the **source** route's for a pop.
     pub(crate) fn start(self: &Arc<Self>, manifest: &HeroFlightManifest, plan: FlightPlan) {
+        self.start_reserving(manifest, plan, crate::OverlayEntryId::next);
+    }
+
+    fn start_reserving(
+        self: &Arc<Self>,
+        manifest: &HeroFlightManifest,
+        plan: FlightPlan,
+        reserve_entry: impl FnOnce() -> crate::OverlayEntryId,
+    ) {
         // Divert redirects the airborne flight in place, keeping its one overlay
         // entry, rather than an end-and-restart. The flight stays in the map under
         // its tag.
@@ -854,6 +863,12 @@ impl FlightManager {
             existing.divert(manifest, plan);
             return;
         }
+
+        // The shuttle's overlay identity is reserved before either hero becomes
+        // a placeholder: a capacity refusal leaves both heroes as they were,
+        // with no flight registered that `finish_all` would have to restore.
+        // The plan's user-owned fields are terminal slots, retained on refusal.
+        let entry_id = reserve_entry();
 
         let FlightPlan {
             direction,
@@ -927,7 +942,7 @@ impl FlightManager {
         let entry = {
             let inner = Arc::clone(&inner);
             let manager = Arc::downgrade(self);
-            OverlayEntry::new(move |_ctx| {
+            OverlayEntry::with_reserved_id(entry_id, move |_ctx| {
                 Shuttle {
                     flight: Arc::clone(&inner),
                     manager: manager.clone(),
@@ -1237,6 +1252,69 @@ mod terminal_tests {
             },
             [callback_drops, rect_drops, shuttle_drops],
         )
+    }
+
+    /// Overlay-identity refusal at a flight's start leaves both heroes as
+    /// they were — no placeholder with no flight to restore it — and the same
+    /// manager starts the next flight normally.
+    #[test]
+    fn overlay_refusal_at_flight_start_leaves_heroes_unfrozen() {
+        let hero = Hero::new(
+            flui_foundation::ValueKey::new("refused"),
+            crate::SizedBox::new(1.0, 1.0),
+        );
+        let (from, _from_tree) = HeroHandle::test_laid_out(&hero);
+        let (to, _to_tree) = HeroHandle::test_laid_out(&hero);
+        let manifest = HeroFlightManifest {
+            tag: HeroTag::new(flui_foundation::ValueKey::new("refused")),
+            direction: Some(FlightDirection::Push),
+            from_route: crate::navigator::RouteId::next(),
+            to_route: crate::navigator::RouteId::next(),
+            from_rect: Rect::ZERO,
+            to_rect: Rect::ZERO,
+            is_user_gesture_transition: false,
+        };
+        let overlay = OverlayHandle::new();
+        let plan = || FlightPlan {
+            direction: FlightDirection::Push,
+            from_hero: Terminal::new(from.clone()),
+            to_hero: Terminal::new(to.clone()),
+            to_route_subtree: RenderId::new(1),
+            overlay: Terminal::new(overlay.clone()),
+            animation: Terminal::new(Arc::new(flui_animation::ConstantAnimation::new(0.0))),
+            rect_factory: Terminal::new(None),
+            shuttle_builder: Terminal::new(None),
+            is_user_gesture_transition: false,
+            gesture_signal: Terminal::new(NavigatorHandle::new().user_gesture_signal()),
+        };
+        let manager = Arc::new(FlightManager::default());
+        let exhausted = std::sync::atomic::AtomicU64::new(0);
+        let failure = catch_unwind(AssertUnwindSafe(|| {
+            manager.start_reserving(&manifest, plan(), || {
+                crate::OverlayEntryId::from_counter(&exhausted)
+            });
+        }))
+        .expect_err("the shuttle's overlay identity is refused");
+        assert_failure(failure, "overlay entry identity space exhausted: 0");
+        assert_eq!(
+            from.placeholder_size(),
+            None,
+            "the source hero is not frozen"
+        );
+        assert_eq!(
+            to.placeholder_size(),
+            None,
+            "the destination hero is not frozen"
+        );
+        assert_eq!(manager.len(), 0);
+        assert_eq!(overlay.ids_bottom_to_top(), Vec::new());
+
+        manager.start(&manifest, plan());
+        assert!(from.placeholder_size().is_some() && to.placeholder_size().is_some());
+        assert_eq!(manager.len(), 1);
+        manager.finish_all();
+        assert_eq!(from.placeholder_size(), None);
+        assert_eq!(to.placeholder_size(), None);
     }
 
     #[test]
