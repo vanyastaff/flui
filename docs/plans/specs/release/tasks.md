@@ -74,3 +74,25 @@
 | Документация `column!` показывает несуществующий struct-литерал и метку `FR-034`; гейт `markers` не ловит `FR-NNN` | `crates/flui-view/src/macros/mod.rs:1-30` | — |
 | Закрыть issue, исправленные в коде: #1092 полностью, #1187 с пометкой | ревью `teardown` и `focus-keyboard` | ждёт владельца |
 | `docs/FOUNDATIONS.md:103`, `crates/flui-widgets/src/lib.rs:32` описывают `bon`-builder'ы, которых нет | `authoring-styles/requirements.md` | — |
+
+## Реестр номеров ADR (владелец — оркестратор)
+
+Номера зарезервированы 2026-10-05. Файл ADR создаёт задача-владелец, указанная в `tasks.md`
+фичи. Неиспользованный номер не переиспользуется.
+
+| Номер | Фича | Название |
+|---|---|---|
+| ADR-0128 | realm-model (D4) | One owner thread; realms are isolation units |
+| ADR-0129 | teardown | Owner-turn panic boundary and terminal exit |
+| ADR-0130 | teardown | Close guard, close reasons and the flush registry |
+| ADR-0131 | teardown | Session end |
+| ADR-0132 | teardown | Owner drop ends observation |
+| ADR-0133 | persistence | Byte storage capability and versioned documents |
+| ADR-0134 | render-proof | Golden-image proof is a wgpu readback through the windowed frame path |
+| ADR-0135 | text-ime | Win32 text services hold the text store on the owner thread |
+| ADR-0136 | send-flip | UI surfaces are owner-local; one thread boundary |
+| ADR-0137 | focus-keyboard | Focus requests on retired nodes and nested node replacement |
+| ADR-0138 | focus-keyboard | Keyboard focus across routes, lazy lists and removal |
+| ADR-0139 | focus-keyboard | Pinned lazy children |
+| ADR-0140 | focus-keyboard | Key-press records, input modality and navigation keys |
+| ADR-0141 | authoring-styles | (резерв) |
