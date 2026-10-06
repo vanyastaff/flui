@@ -96,6 +96,55 @@ fn closing_manager_leaves_shared_callbacks_with_their_caller() {
     drop(manager);
 }
 
+/// The same holds for a preserving gesture close: router routes, global
+/// handlers and the cursor callback the caller still holds are released with
+/// the caller rather than leaked by the closed binding.
+fn closing_gestures_leave_shared_callbacks_with_their_caller() {
+    use flui_interaction::__runtime::{close_gestures, close_mouse_tracker};
+    use flui_interaction::GestureBinding;
+    use flui_interaction::PointerId;
+    use flui_interaction::events::PointerEvent;
+
+    let (route_capture, route_probe) = capture();
+    let (global_capture, global_probe) = capture();
+    let (cursor_capture, cursor_probe) = capture();
+    let route: Rc<dyn Fn(&PointerEvent)> = Rc::new(move |_| {
+        let _ = &route_capture;
+    });
+    let global: Rc<dyn Fn(&PointerEvent)> = Rc::new(move |_| {
+        let _ = &global_capture;
+    });
+    let cursor: flui_interaction::routing::CursorChangeCallback = Rc::new(move |_, _| {
+        let _ = &cursor_capture;
+    });
+    let binding = GestureBinding::new();
+    binding
+        .pointer_router()
+        .add_route(PointerId::PRIMARY, Rc::clone(&route));
+    binding
+        .pointer_router()
+        .add_global_handler(Rc::clone(&global));
+    binding
+        .mouse_tracker()
+        .set_cursor_change_callback(Rc::clone(&cursor));
+    close_gestures(&binding, CloseMode::PreservingFailure);
+    close_mouse_tracker(binding.mouse_tracker(), CloseMode::PreservingFailure);
+    drop((route, global, cursor));
+    assert!(
+        route_probe.upgrade().is_none(),
+        "the route capture is released"
+    );
+    assert!(
+        global_probe.upgrade().is_none(),
+        "the global capture is released"
+    );
+    assert!(
+        cursor_probe.upgrade().is_none(),
+        "the cursor capture is released"
+    );
+    drop(binding);
+}
+
 #[derive(Debug)]
 struct PanickingPolicy(#[expect(dead_code, reason = "held for its lifetime")] Rc<()>);
 
@@ -138,6 +187,10 @@ fn caught_callback_failures_leave_captures_with_their_owner() {
         (
             "closing manager",
             closing_manager_leaves_shared_callbacks_with_their_caller,
+        ),
+        (
+            "closing gestures",
+            closing_gestures_leave_shared_callbacks_with_their_caller,
         ),
         (
             "traversal policy",

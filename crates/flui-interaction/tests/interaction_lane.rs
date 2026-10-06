@@ -1289,3 +1289,141 @@ fn assert_stop_tracking_preserves_reentrant_contact(fail_after_admission: bool) 
     assert!(arena.is_empty());
     fresh_drag_completes_after_retirement();
 }
+
+/// A batch snapshots its callbacks before running any of them. When one of
+/// them closes its presentation, the rest of the batch from that presentation
+/// must not run.
+#[test]
+fn reentrant_presentation_close_stops_snapshotted_callbacks() {
+    let cases: &[(&str, fn())] = &[
+        (
+            "mouse tracker enter batch",
+            enter_batch_stops_after_owner_close,
+        ),
+        (
+            "mouse tracker hover batch",
+            hover_batch_stops_after_owner_close,
+        ),
+        (
+            "interleaved hover dispatch",
+            interleaved_hover_stops_after_owner_close,
+        ),
+    ];
+    let mut failed = Vec::new();
+    for &(name, case) in cases {
+        if let Err(payload) = std::panic::catch_unwind(case) {
+            failed.push(name);
+            flui_foundation::panic::retain_opaque_payload(payload);
+        }
+    }
+    assert!(failed.is_empty(), "failed cases: {failed:?}");
+}
+
+/// Two hover-sensitive regions of one presentation whose callbacks each count
+/// a call and close the presentation's dispatch owner.
+struct ClosingRegions {
+    lane: InteractionLane,
+    calls: std::rc::Rc<std::cell::Cell<usize>>,
+    result: flui_interaction::HitTestResult,
+}
+
+fn closing_regions(on_enter: bool) -> ClosingRegions {
+    use flui_interaction::__runtime::{CloseMode, close_dispatch, presentation_dispatch};
+    use flui_interaction::routing::{MouseRegionCallbacks, MouseTrackerAnnotation};
+    use std::rc::Rc;
+
+    let lane = InteractionLane::try_new().expect("lane");
+    let owner = presentation_dispatch(&lane.dispatch_handle());
+    let calls = Rc::new(std::cell::Cell::new(0));
+    let mut result = flui_interaction::HitTestResult::new();
+    lane.enter(|| {
+        for region in 1..=2_usize {
+            let counted = Rc::clone(&calls);
+            let closing = owner.clone();
+            let callback: flui_interaction::routing::MouseEnterCallback = Rc::new(move |_, _| {
+                counted.set(counted.get() + 1);
+                close_dispatch(&closing, CloseMode::Ordinary);
+            });
+            let callbacks = if on_enter {
+                MouseRegionCallbacks {
+                    on_enter: Some(callback),
+                    ..MouseRegionCallbacks::default()
+                }
+            } else {
+                MouseRegionCallbacks {
+                    on_hover: Some(callback),
+                    ..MouseRegionCallbacks::default()
+                }
+            };
+            let target = owner.register_mouse_region(callbacks).expect("region");
+            result.add(
+                HitTestEntry::new(RenderId::new(region))
+                    .mouse_annotation(MouseTrackerAnnotation::new(RenderId::new(region), target)),
+            );
+        }
+    });
+    ClosingRegions {
+        lane,
+        calls,
+        result,
+    }
+}
+
+/// A buttonless mouse move: the only shape that carries hover semantics.
+fn hover_move() -> flui_interaction::events::PointerEvent {
+    use flui_foundation::geometry::Offset;
+    use flui_interaction::events::{PointerButtons, PointerEvent, PointerType, make_move_event};
+
+    let mut event = make_move_event(Offset::ZERO, PointerType::Mouse);
+    if let PointerEvent::Move(update) = &mut event {
+        update.current.buttons = PointerButtons::new();
+    }
+    event
+}
+
+fn enter_batch_stops_after_owner_close() {
+    use flui_interaction::routing::{MouseTracker, PointerMotionKind};
+
+    let regions = closing_regions(true);
+    let tracker = MouseTracker::new();
+    regions.lane.enter(|| {
+        tracker.update_with_motion(&hover_move(), PointerMotionKind::Hover, &regions.result);
+    });
+    assert_eq!(
+        regions.calls.get(),
+        1,
+        "the closed owner's later region is skipped"
+    );
+}
+
+fn hover_batch_stops_after_owner_close() {
+    use flui_interaction::routing::MouseTracker;
+
+    let regions = closing_regions(false);
+    let tracker = MouseTracker::new();
+    regions.lane.enter(|| {
+        let panic = tracker.dispatch_hover(&hover_move(), &regions.result);
+        assert!(panic.is_none());
+    });
+    assert_eq!(
+        regions.calls.get(),
+        1,
+        "the closed owner's later region is skipped"
+    );
+}
+
+fn interleaved_hover_stops_after_owner_close() {
+    use flui_interaction::GestureBinding;
+
+    let regions = closing_regions(false);
+    let binding = GestureBinding::new();
+    regions.lane.enter(|| {
+        binding.handle_pointer_event(&hover_move(), |_| regions.result.clone());
+        binding.flush_pending_moves();
+    });
+    assert_eq!(
+        regions.calls.get(),
+        1,
+        "the closed owner's later region is skipped"
+    );
+}

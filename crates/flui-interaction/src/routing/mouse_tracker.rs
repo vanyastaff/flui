@@ -39,10 +39,11 @@ use smallvec::SmallVec;
 pub use super::interaction_lane::{
     MouseEnterCallback, MouseExitCallback, MouseHoverCallback, MouseRegionTarget,
 };
-use super::{HitTestResult, RoutePanic, active_dispatch_handle};
+use super::{HitTestResult, OwnerLatch, RoutePanic, active_dispatch_handle};
 use crate::{
     events::{CursorIcon, PointerEvent, PointerEventExt, PointerType},
     ids::RegionId,
+    retain::Retain,
     routing::interaction_lane::MouseRegionCell,
 };
 
@@ -97,7 +98,41 @@ impl MouseTrackerAnnotation {
 #[derive(Clone)]
 struct ResolvedMouseTrackerAnnotation {
     cell: Rc<MouseRegionCell>,
+    /// The region owner's terminal latch, carried into every callback snapshot.
+    latch: OwnerLatch,
 }
+
+impl ResolvedMouseTrackerAnnotation {
+    fn on_enter(&self) -> Option<Latched<MouseEnterCallback>> {
+        self.cell
+            .snapshot()
+            .on_enter
+            .map(|callback| (callback, self.latch.clone()))
+    }
+
+    fn on_exit(&self) -> Option<Latched<MouseExitCallback>> {
+        self.cell
+            .snapshot()
+            .on_exit
+            .map(|callback| (callback, self.latch.clone()))
+    }
+
+    fn on_hover(&self) -> Option<Latched<MouseHoverCallback>> {
+        self.cell
+            .snapshot()
+            .on_hover
+            .map(|callback| (callback, self.latch.clone()))
+    }
+}
+
+impl Retain for ResolvedMouseTrackerAnnotation {
+    fn retain(self) {
+        self.cell.retain();
+    }
+}
+
+/// A callback snapshot and the terminal latch of the owner that registered it.
+type Latched<C> = (C, OwnerLatch);
 
 /// State for a single mouse device.
 #[derive(Debug, Clone)]
@@ -272,14 +307,14 @@ impl MouseTracker {
                     {
                         return None;
                     }
-                    let exit_callbacks: SmallVec<[MouseExitCallback; 4]> = state
+                    let exit_callbacks: SmallVec<[Latched<MouseExitCallback>; 4]> = state
                         .active_order
                         .iter()
                         .filter_map(|id| {
                             inner
                                 .annotations
                                 .get(id)
-                                .and_then(|ann| ann.cell.snapshot().on_exit)
+                                .and_then(ResolvedMouseTrackerAnnotation::on_exit)
                         })
                         .collect();
                     let cursor_callback = (state.current_cursor != CursorIcon::Default)
@@ -291,6 +326,7 @@ impl MouseTracker {
                     state.current_cursor = CursorIcon::Default;
                     state.inside_window = false;
                     Some(DeviceWork {
+                        tracker: Rc::clone(&self.inner),
                         device_id,
                         position,
                         enter_callbacks: SmallVec::new(),
@@ -389,22 +425,22 @@ impl MouseTracker {
             state.active_regions = new_regions;
             state.current_cursor = new_cursor;
 
-            let enter_callbacks: SmallVec<[MouseEnterCallback; 4]> = entered
+            let enter_callbacks: SmallVec<[Latched<MouseEnterCallback>; 4]> = entered
                 .iter()
                 .filter_map(|id| {
                     inner
                         .annotations
                         .get(id)
-                        .and_then(|ann| ann.cell.snapshot().on_enter)
+                        .and_then(ResolvedMouseTrackerAnnotation::on_enter)
                 })
                 .collect();
-            let exit_callbacks: SmallVec<[MouseExitCallback; 4]> = exited
+            let exit_callbacks: SmallVec<[Latched<MouseExitCallback>; 4]> = exited
                 .iter()
                 .filter_map(|id| {
                     inner
                         .annotations
                         .get(id)
-                        .and_then(|ann| ann.cell.snapshot().on_exit)
+                        .and_then(ResolvedMouseTrackerAnnotation::on_exit)
                 })
                 .collect();
             for id in exited {
@@ -420,6 +456,7 @@ impl MouseTracker {
                 .active_order = resolved.order;
 
             DeviceWork {
+                tracker: Rc::clone(&self.inner),
                 device_id,
                 position,
                 enter_callbacks,
@@ -464,21 +501,26 @@ impl MouseTracker {
         let position = event.position();
 
         let resolved = resolve_hit_test_annotations(hit_test_result);
-        let hover_callbacks: SmallVec<[MouseHoverCallback; 4]> = resolved
+        let hover_callbacks: SmallVec<[Latched<MouseHoverCallback>; 4]> = resolved
             .order
             .iter()
             .filter_map(|id| {
                 resolved
                     .annotations
                     .get(id)
-                    .and_then(|ann| ann.cell.snapshot().on_hover)
+                    .and_then(ResolvedMouseTrackerAnnotation::on_hover)
             })
             .collect();
 
         let mut first_panic = None;
-        for callback in hover_callbacks {
-            let delivered = RoutePanic::capture(|| callback(device_id, position));
-            RoutePanic::preserve_first(&mut first_panic, delivered, "mouse hover callback");
+        for (callback, latch) in hover_callbacks {
+            // An earlier callback may have closed this region's owner.
+            if !latch.is_closed() {
+                let delivered = RoutePanic::capture(|| callback(device_id, position));
+                RoutePanic::preserve_first(&mut first_panic, delivered, "mouse hover callback");
+            }
+            let cleanup = RoutePanic::capture(|| latch.release(callback));
+            RoutePanic::preserve_first(&mut first_panic, cleanup, "mouse hover snapshot cleanup");
         }
         first_panic
     }
@@ -541,22 +583,22 @@ impl MouseTracker {
                 state.active_order = resolved.order;
                 state.current_cursor = new_cursor;
 
-                let enter_callbacks: SmallVec<[MouseEnterCallback; 4]> = entered
+                let enter_callbacks: SmallVec<[Latched<MouseEnterCallback>; 4]> = entered
                     .iter()
                     .filter_map(|id| {
                         inner
                             .annotations
                             .get(id)
-                            .and_then(|ann| ann.cell.snapshot().on_enter)
+                            .and_then(ResolvedMouseTrackerAnnotation::on_enter)
                     })
                     .collect();
-                let exit_callbacks: SmallVec<[MouseExitCallback; 4]> = exited
+                let exit_callbacks: SmallVec<[Latched<MouseExitCallback>; 4]> = exited
                     .iter()
                     .filter_map(|id| {
                         inner
                             .annotations
                             .get(id)
-                            .and_then(|ann| ann.cell.snapshot().on_exit)
+                            .and_then(ResolvedMouseTrackerAnnotation::on_exit)
                     })
                     .collect();
                 for id in exited {
@@ -567,6 +609,7 @@ impl MouseTracker {
                     .flatten();
 
                 DeviceWork {
+                    tracker: Rc::clone(&self.inner),
                     device_id,
                     position,
                     enter_callbacks,
@@ -634,7 +677,7 @@ impl MouseTracker {
             (outgoing, mode)
         };
         let mut failure = crate::__runtime::ClosePanic::for_rejection(mode);
-        failure.retire(crate::retain::Owned(outgoing));
+        failure.retire(outgoing);
         failure.finish();
     }
 
@@ -645,8 +688,12 @@ impl MouseTracker {
             (inner.cursor_change_callback.take(), inner.close_mode.mode())
         };
         let mut failure = crate::__runtime::ClosePanic::for_rejection(mode);
-        failure.retire(crate::retain::Owned(outgoing));
+        failure.retire(outgoing);
         failure.finish();
+    }
+
+    pub(crate) fn close_tombstone(&self) -> crate::__runtime::CloseTombstone {
+        self.inner.borrow().close_mode.clone()
     }
 
     pub(crate) fn close_with_mode(&self, mode: crate::__runtime::CloseMode) {
@@ -667,9 +714,9 @@ impl MouseTracker {
             )
         };
         let mut failure = crate::__runtime::ClosePanic::for_close(mode, terminal);
-        failure.retire(crate::retain::Owned(callback));
+        failure.retire(callback);
         for annotation in annotations.into_values() {
-            failure.retire(crate::retain::Owned(annotation));
+            failure.retire(annotation);
         }
         failure.finish();
     }
@@ -727,7 +774,7 @@ fn resolve_annotation_with_handle(
     annotation: MouseTrackerAnnotation,
 ) -> Option<ResolvedMouseTrackerAnnotation> {
     match handle.resolve_mouse_region(annotation.target) {
-        Ok(cell) => Some(ResolvedMouseTrackerAnnotation { cell }),
+        Ok((cell, latch)) => Some(ResolvedMouseTrackerAnnotation { cell, latch }),
         Err(error) => {
             tracing::debug!(
                 ?error,
@@ -739,60 +786,75 @@ fn resolve_annotation_with_handle(
 }
 
 struct DeviceWork {
+    /// The tracker whose cursor callback this batch snapshotted.
+    tracker: Rc<RefCell<MouseTrackerInner>>,
     device_id: DeviceId,
     position: Offset<f64>,
-    enter_callbacks: SmallVec<[MouseEnterCallback; 4]>,
-    exit_callbacks: SmallVec<[MouseExitCallback; 4]>,
+    enter_callbacks: SmallVec<[Latched<MouseEnterCallback>; 4]>,
+    exit_callbacks: SmallVec<[Latched<MouseExitCallback>; 4]>,
     cursor_callback: Option<CursorChangeCallback>,
     new_cursor: CursorIcon,
 }
 
 impl DeviceWork {
+    /// Run the batch. A callback may close its presentation reentrantly, so
+    /// each snapshot is rechecked against its owner's latch (and the cursor
+    /// callback against this tracker) right before it runs, and released
+    /// under that close's retention policy afterwards (ADR-0127).
     fn invoke(self) {
         let mut first_panic = None;
-        for callback in self.exit_callbacks {
-            let delivered = catch_unwind(AssertUnwindSafe(|| {
-                callback(self.device_id, self.position);
-            }));
-            if let Err(payload) = delivered {
-                if first_panic.is_none() {
-                    first_panic = Some(payload);
-                } else {
-                    tracing::error!(
-                        "mouse exit callback panicked after an earlier mouse callback already \
-                         panicked; only the first panic is resumed"
-                    );
-                }
+        let mut record = |payload, kind: &str| {
+            if first_panic.is_none() {
+                first_panic = Some(payload);
+            } else {
+                tracing::error!(
+                    kind,
+                    "mouse callback panicked after an earlier mouse callback already \
+                     panicked; only the first panic is resumed"
+                );
+            }
+        };
+        for (callback, latch) in self.exit_callbacks {
+            if !latch.is_closed()
+                && let Err(payload) = catch_unwind(AssertUnwindSafe(|| {
+                    callback(self.device_id, self.position);
+                }))
+            {
+                record(payload, "exit");
+            }
+            if let Err(payload) = catch_unwind(AssertUnwindSafe(|| latch.release(callback))) {
+                record(payload, "exit snapshot cleanup");
             }
         }
-        for callback in self.enter_callbacks {
-            let delivered = catch_unwind(AssertUnwindSafe(|| {
-                callback(self.device_id, self.position);
-            }));
-            if let Err(payload) = delivered {
-                if first_panic.is_none() {
-                    first_panic = Some(payload);
-                } else {
-                    tracing::error!(
-                        "mouse enter callback panicked after an earlier mouse callback already \
-                         panicked; only the first panic is resumed"
-                    );
-                }
+        for (callback, latch) in self.enter_callbacks {
+            if !latch.is_closed()
+                && let Err(payload) = catch_unwind(AssertUnwindSafe(|| {
+                    callback(self.device_id, self.position);
+                }))
+            {
+                record(payload, "enter");
+            }
+            if let Err(payload) = catch_unwind(AssertUnwindSafe(|| latch.release(callback))) {
+                record(payload, "enter snapshot cleanup");
             }
         }
         if let Some(callback) = self.cursor_callback {
-            let delivered = catch_unwind(AssertUnwindSafe(|| {
-                callback(self.device_id, self.new_cursor);
-            }));
-            if let Err(payload) = delivered {
-                if first_panic.is_none() {
-                    first_panic = Some(payload);
-                } else {
-                    tracing::error!(
-                        "mouse cursor callback panicked after an earlier mouse callback already \
-                         panicked; only the first panic is resumed"
-                    );
-                }
+            let closed = self.tracker.borrow().closed;
+            if !closed
+                && let Err(payload) = catch_unwind(AssertUnwindSafe(|| {
+                    callback(self.device_id, self.new_cursor);
+                }))
+            {
+                record(payload, "cursor");
+            }
+            let preserved = {
+                let inner = self.tracker.borrow();
+                inner.closed && inner.close_mode.preserved()
+            };
+            if preserved {
+                callback.retain();
+            } else if let Err(payload) = catch_unwind(AssertUnwindSafe(|| drop(callback))) {
+                record(payload, "cursor snapshot cleanup");
             }
         }
         if let Some(payload) = first_panic {

@@ -138,7 +138,7 @@ impl PointerRouter {
     pub fn add_route(&self, pointer: PointerId, handler: PointerRouteHandler) {
         if self.closed.get() {
             let mut failure = crate::__runtime::ClosePanic::for_rejection(self.close_mode.mode());
-            failure.retire(crate::retain::Owned(handler));
+            failure.retire(handler);
             failure.finish();
             return;
         }
@@ -202,12 +202,16 @@ impl PointerRouter {
     pub fn add_global_handler(&self, handler: GlobalPointerHandler) {
         if self.closed.get() {
             let mut failure = crate::__runtime::ClosePanic::for_rejection(self.close_mode.mode());
-            failure.retire(crate::retain::Owned(handler));
+            failure.retire(handler);
             failure.finish();
             return;
         }
         self.global_handlers.borrow_mut().push(handler);
         tracing::trace!("Added global pointer handler");
+    }
+
+    pub(crate) fn close_tombstone(&self) -> crate::__runtime::CloseTombstone {
+        self.close_mode.clone()
     }
 
     pub(crate) fn close_with_mode(&self, mode: crate::__runtime::CloseMode) {
@@ -216,7 +220,7 @@ impl PointerRouter {
         let routes = std::mem::take(&mut *self.routes.borrow_mut());
         let globals = std::mem::take(&mut *self.global_handlers.borrow_mut());
         for handler in routes.into_values().flatten().chain(globals) {
-            failure.retire(crate::retain::Owned(handler));
+            failure.retire(handler);
         }
         failure.finish();
     }
@@ -315,7 +319,7 @@ impl PointerRouter {
             // Removing a callback during dispatch can leave the snapshot as
             // its final owner. Capture that destructor independently so the
             // rest of the already-snapshotted router transaction still runs.
-            let snapshot_cleanup = RoutePanic::capture(|| drop(handler));
+            let snapshot_cleanup = self.release_snapshot(handler);
             RoutePanic::preserve_first(
                 &mut first_panic,
                 snapshot_cleanup,
@@ -330,7 +334,7 @@ impl PointerRouter {
                 RoutePanic::preserve_first(&mut first_panic, delivered, "global router callback");
             }
 
-            let snapshot_cleanup = RoutePanic::capture(|| drop(handler));
+            let snapshot_cleanup = self.release_snapshot(handler);
             RoutePanic::preserve_first(
                 &mut first_panic,
                 snapshot_cleanup,
@@ -339,6 +343,18 @@ impl PointerRouter {
         }
 
         first_panic
+    }
+
+    /// Drop a dispatch snapshot. A preserving close during this dispatch
+    /// released the router's own clone, which can leave the snapshot as the
+    /// callback's last owner: it then follows that close's retention.
+    fn release_snapshot(&self, handler: PointerRouteHandler) -> Option<RoutePanic> {
+        if self.closed.get() && self.close_mode.preserved() {
+            crate::retain::Retain::retain(handler);
+            None
+        } else {
+            RoutePanic::capture(|| drop(handler))
+        }
     }
 
     /// Whether a snapshotted per-pointer callback is still registered.

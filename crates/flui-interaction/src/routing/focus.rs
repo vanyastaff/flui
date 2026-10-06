@@ -770,6 +770,10 @@ impl FocusManager {
         self.close_with_mode(CloseMode::Ordinary);
     }
 
+    pub(crate) fn close_tombstone(&self) -> CloseTombstone {
+        self.close_mode.clone()
+    }
+
     pub(crate) fn close_with_mode(&self, mode: CloseMode) {
         let mut failure = FocusClosePanic::for_close(mode, self.close_mode.clone());
         if self.closed.replace(true) {

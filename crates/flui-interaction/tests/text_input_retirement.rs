@@ -578,6 +578,29 @@ fn owner_dropped_during_an_unwind_retains_its_store() {
     assert_eq!(*platform.allowed.lock(), [true, false]);
 }
 
+/// A preserving close retains the user's store but releases the platform
+/// capability, a framework-owned handle that can keep the native window alive.
+fn preserving_close_releases_the_platform() {
+    use flui_interaction::__runtime::{CloseMode, close_text_input};
+
+    let (owner, platform) = owner();
+    let handle = owner.handle();
+    let drops = Arc::new(AtomicUsize::new(0));
+    handle
+        .attach(TextInputClient::new(aggregate_store(&drops)))
+        .expect("initial attach");
+    close_text_input(&owner, CloseMode::PreservingFailure);
+    assert_eq!(drops.load(Ordering::Relaxed), 0, "the store is retained");
+    assert_eq!(*platform.allowed.lock(), [true, false]);
+    assert_eq!(
+        Arc::strong_count(&platform),
+        1,
+        "the open owner no longer holds the platform"
+    );
+    assert_eq!(handle.ensure_open(), Err(TextInputError::Closed));
+    drop(owner);
+}
+
 /// Selects the single case a child process of the test below runs.
 const RETENTION_CHILD: &str = "FLUI_TEXT_INPUT_RETENTION_CHILD";
 /// A child that ran its case to completion exits with this status, so a
@@ -594,6 +617,10 @@ fn text_input_owners_are_retained_after_a_failure_and_during_unwind() {
         (
             "owner drop during unwind",
             owner_dropped_during_an_unwind_retains_its_store,
+        ),
+        (
+            "preserving close releases the platform",
+            preserving_close_releases_the_platform,
         ),
     ];
     if let Ok(selected) = std::env::var(RETENTION_CHILD) {
