@@ -68,3 +68,6 @@ mod controller_robustness;
 
 #[path = "contracts/frame_path.rs"]
 mod frame_path;
+
+#[path = "contracts/ownership.rs"]
+mod ownership;
