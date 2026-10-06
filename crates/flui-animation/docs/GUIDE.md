@@ -244,7 +244,7 @@ IntTween::new(0, 255)
 StepTween::new(0, 10)  // floors
 
 // Color
-ColorTween::new(Color::RED, Color::BLUE)
+ColorTween::new(Color::RED, Color::BLUE) // Oklab, premultiplied alpha
 
 // Geometry
 SizeTween::new(Size::ZERO, Size::new(100.0, 100.0))

@@ -200,7 +200,7 @@ IntTween::new(0, 255)      // Rounds to nearest
 StepTween::new(0, 10)      // Floors to integer
 
 // Geometric
-ColorTween::new(Color::RED, Color::BLUE)
+ColorTween::new(Color::RED, Color::BLUE) // Oklab, premultiplied alpha
 SizeTween::new(Size::new(0.0, 0.0), Size::new(100.0, 100.0))
 OffsetTween::new(Offset::ZERO, Offset::new(50.0, 50.0))
 RectTween::new(rect1, rect2)
