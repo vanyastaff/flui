@@ -46,6 +46,7 @@ pub mod keys;
 pub mod lerp;
 pub mod line;
 pub mod matrix4;
+mod matrix4_decompose;
 pub mod offset;
 pub mod point;
 pub mod rect;

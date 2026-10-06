@@ -134,7 +134,7 @@ impl<T: Lerp> Lerp for Corners<T> {
 impl Lerp for Matrix4 {
     #[inline]
     fn lerp_to(&self, other: &Self, t: f64) -> Self {
-        // Decompose -> slerp rotation -> recompose; see `Matrix4::lerp`.
+        // Decompose, interpolate the parts, recompose; see `Matrix4::lerp`.
         Matrix4::lerp(*self, *other, t)
     }
 }
