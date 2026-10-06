@@ -1601,3 +1601,44 @@ fn non_pointer_invocation_retains_its_snapshot_across_a_reentrant_close() {
     }
 }
 
+/// A presentation-scoped handle mutates only the targets its own owner
+/// registered; a sibling presentation sharing the realm is refused.
+#[test]
+fn scoped_handle_cannot_mutate_a_sibling_owners_targets() {
+    use flui_interaction::__runtime::presentation_dispatch;
+    use flui_interaction::routing::MouseRegionCallbacks;
+
+    let lane = InteractionLane::try_new().expect("lane");
+    let realm = lane.dispatch_handle();
+    let owner = presentation_dispatch(&realm);
+    let sibling = presentation_dispatch(&realm);
+    lane.enter(|| {
+        let pointer = owner.register_pointer(|_| {}).expect("pointer target");
+        let scroll = owner
+            .register_scroll(|_| flui_interaction::EventPropagation::Continue)
+            .expect("scroll target");
+        let region = owner
+            .register_mouse_region(MouseRegionCallbacks::default())
+            .expect("mouse region");
+        assert_eq!(
+            sibling.replace_pointer(pointer, |_| {}),
+            Err(InteractionDispatchError::TargetGone)
+        );
+        assert_eq!(
+            sibling.unregister_pointer(pointer),
+            Err(InteractionDispatchError::TargetGone)
+        );
+        assert_eq!(
+            sibling.unregister_scroll(scroll),
+            Err(InteractionDispatchError::TargetGone)
+        );
+        assert!(
+            sibling.detach_mouse_region(region).is_err(),
+            "a sibling cannot detach the region"
+        );
+        assert_eq!(owner.replace_pointer(pointer, |_| {}), Ok(()));
+        assert_eq!(owner.unregister_pointer(pointer), Ok(()));
+        assert_eq!(owner.unregister_scroll(scroll), Ok(()));
+        assert!(owner.detach_mouse_region(region).is_ok());
+    });
+}

@@ -1388,6 +1388,29 @@ impl InteractionDispatchHandle {
         }
     }
 
+    /// Admit a mutation of `target`: it belongs to this realm and, through a
+    /// presentation-scoped handle, to the owner that registered it. Another
+    /// presentation sharing the realm cannot replace, remove or detach it.
+    fn validate_target(
+        &self,
+        lane: &LocalLaneInner,
+        lane_id: LaneId,
+        target_id: TargetId,
+    ) -> Result<(), InteractionDispatchError> {
+        self.validate_lane(lane_id)?;
+        if let Some(owner) = &self.owner {
+            let owned = lane
+                .target_owners
+                .borrow()
+                .get(&target_id)
+                .is_some_and(|held| std::sync::Arc::ptr_eq(held, owner));
+            if !owned {
+                return Err(InteractionDispatchError::TargetGone);
+            }
+        }
+        Ok(())
+    }
+
     /// Register an ordinary pointer handler in the active owner lane.
     pub fn register_pointer(
         &self,
@@ -1414,7 +1437,7 @@ impl InteractionDispatchHandle {
     ) -> Result<(), InteractionDispatchError> {
         let handler = self.admit(handler)?;
         let lane = self.active_lane()?;
-        self.validate_lane(target.lane_id)?;
+        self.validate_target(&lane, target.lane_id, target.target_id)?;
         let cell = lane
             .targets
             .borrow()
@@ -1432,7 +1455,7 @@ impl InteractionDispatchHandle {
         target: PointerTarget,
     ) -> Result<(), InteractionDispatchError> {
         let lane = self.active_lane()?;
-        self.validate_lane(target.lane_id)?;
+        self.validate_target(&lane, target.lane_id, target.target_id)?;
         let removed = lane
             .targets
             .borrow_mut()
@@ -1469,7 +1492,7 @@ impl InteractionDispatchHandle {
     ) -> Result<(), InteractionDispatchError> {
         let callbacks = self.admit_retained(callbacks)?;
         let lane = self.active_lane()?;
-        self.validate_lane(target.lane_id)?;
+        self.validate_target(&lane, target.lane_id, target.target_id)?;
         let cell = lane
             .mouse_targets
             .borrow()
@@ -1548,7 +1571,7 @@ impl InteractionDispatchHandle {
         target: MouseRegionTarget,
     ) -> Result<Rc<MouseRegionCell>, InteractionDispatchError> {
         let lane = self.active_lane()?;
-        self.validate_lane(target.lane_id)?;
+        self.validate_target(&lane, target.lane_id, target.target_id)?;
         lane.target_owners.borrow_mut().remove(&target.target_id);
         lane.mouse_targets
             .borrow_mut()
@@ -1597,7 +1620,7 @@ impl InteractionDispatchHandle {
     ) -> Result<(), InteractionDispatchError> {
         let handler = self.admit(handler)?;
         let lane = self.active_lane()?;
-        self.validate_lane(target.lane_id)?;
+        self.validate_target(&lane, target.lane_id, target.target_id)?;
         let cell = lane
             .scroll_targets
             .borrow()
@@ -1612,7 +1635,7 @@ impl InteractionDispatchHandle {
     /// Remove a scroll target from future dispatch.
     pub fn unregister_scroll(&self, target: ScrollTarget) -> Result<(), InteractionDispatchError> {
         let lane = self.active_lane()?;
-        self.validate_lane(target.lane_id)?;
+        self.validate_target(&lane, target.lane_id, target.target_id)?;
         let removed = lane
             .scroll_targets
             .borrow_mut()
@@ -1681,7 +1704,7 @@ impl InteractionDispatchHandle {
     ) -> Result<(), InteractionDispatchError> {
         let handler = self.admit(handler)?;
         let lane = self.active_lane()?;
-        self.validate_lane(target.lane_id)?;
+        self.validate_target(&lane, target.lane_id, target.target_id)?;
         let cell = lane
             .pan_zoom_targets
             .borrow()
@@ -1704,7 +1727,7 @@ impl InteractionDispatchHandle {
         target: PanZoomTarget,
     ) -> Result<(), InteractionDispatchError> {
         let lane = self.active_lane()?;
-        self.validate_lane(target.lane_id)?;
+        self.validate_target(&lane, target.lane_id, target.target_id)?;
         let removed = lane
             .pan_zoom_targets
             .borrow_mut()
@@ -1768,7 +1791,7 @@ impl InteractionDispatchHandle {
     ) -> Result<(), InteractionDispatchError> {
         let clipper = self.admit(clipper)?;
         let lane = self.active_lane()?;
-        self.validate_lane(target.lane_id)?;
+        self.validate_target(&lane, target.lane_id, target.target_id)?;
         let cell = lane
             .path_clip_targets
             .borrow()
@@ -1786,7 +1809,7 @@ impl InteractionDispatchHandle {
         target: PathClipTarget,
     ) -> Result<(), InteractionDispatchError> {
         let lane = self.active_lane()?;
-        self.validate_lane(target.lane_id)?;
+        self.validate_target(&lane, target.lane_id, target.target_id)?;
         let removed = lane
             .path_clip_targets
             .borrow_mut()
@@ -1845,7 +1868,7 @@ impl InteractionDispatchHandle {
     ) -> Result<(), InteractionDispatchError> {
         let factory = self.admit(factory)?;
         let lane = self.active_lane()?;
-        self.validate_lane(target.lane_id)?;
+        self.validate_target(&lane, target.lane_id, target.target_id)?;
         let cell = lane
             .shader_mask_targets
             .borrow()
@@ -1863,7 +1886,7 @@ impl InteractionDispatchHandle {
         target: ShaderMaskTarget,
     ) -> Result<(), InteractionDispatchError> {
         let lane = self.active_lane()?;
-        self.validate_lane(target.lane_id)?;
+        self.validate_target(&lane, target.lane_id, target.target_id)?;
         let removed = lane
             .shader_mask_targets
             .borrow_mut()
@@ -1933,7 +1956,7 @@ impl InteractionDispatchHandle {
     ) -> Result<(), InteractionDispatchError> {
         let payload = self.admit_retained(payload)?;
         let lane = self.active_lane()?;
-        self.validate_lane(target.lane_id)?;
+        self.validate_target(&lane, target.lane_id, target.target_id)?;
         let previous = {
             let mut payloads = lane.payload_targets.borrow_mut();
             let slot = payloads
@@ -1959,7 +1982,7 @@ impl InteractionDispatchHandle {
         target: LocalPayloadTarget,
     ) -> Result<(), InteractionDispatchError> {
         let lane = self.active_lane()?;
-        self.validate_lane(target.lane_id)?;
+        self.validate_target(&lane, target.lane_id, target.target_id)?;
         let removed = lane
             .payload_targets
             .borrow_mut()
