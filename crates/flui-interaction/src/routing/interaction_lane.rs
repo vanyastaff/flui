@@ -371,6 +371,14 @@ pub struct MouseRegionCallbacks {
     pub on_hover: Option<MouseHoverCallback>,
 }
 
+impl crate::retain::Retain for MouseRegionCallbacks {
+    fn retain(self) {
+        self.on_enter.retain();
+        self.on_exit.retain();
+        self.on_hover.retain();
+    }
+}
+
 impl fmt::Debug for MouseRegionCallbacks {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("MouseRegionCallbacks")
@@ -549,7 +557,10 @@ impl Drop for ResolvedHitRoute {
     /// was preserving, it released its own clones of the cell, so the route
     /// may now hold the last one: the cell then follows that close's
     /// retention instead of running the capture's destructor here (ADR-0127).
-    /// Retained entries are settled before any other entry is destroyed.
+    /// Retained entries are settled before any other entry is destroyed. The
+    /// rest are destroyed one at a time: once one capture's destructor fails,
+    /// or during an unwind, the remaining entries are retained, so a second
+    /// failing capture can neither replace the first failure nor abort.
     fn drop(&mut self) {
         let mut released = Vec::new();
         for entry in std::mem::take(&mut self.entries) {
@@ -563,7 +574,19 @@ impl Drop for ResolvedHitRoute {
                 released.push(entry);
             }
         }
-        drop(released);
+        let mut first = None;
+        for entry in released {
+            if first.is_some() || std::thread::panicking() {
+                entry.handler_cell.retain();
+            } else if let Err(payload) =
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(entry)))
+            {
+                first = Some(payload);
+            }
+        }
+        if let Some(payload) = first {
+            std::panic::resume_unwind(payload);
+        }
     }
 }
 
@@ -1152,12 +1175,25 @@ impl InteractionDispatchHandle {
         }
     }
 
+    /// Admit a uniquely owned value (a user closure): a rejection during a
+    /// preserving close retains it whole.
     fn admit<T>(&self, value: T) -> Result<T, InteractionDispatchError> {
+        self.admit_retained(crate::retain::Owned(value))
+            .map(|crate::retain::Owned(value)| value)
+    }
+
+    /// Admit a value under its own [`Retain`](crate::retain::Retain) policy: a
+    /// shared `Rc` the caller still holds is released on rejection, since
+    /// dropping a non-last clone runs no user code (ADR-0127).
+    fn admit_retained<T: crate::retain::Retain>(
+        &self,
+        value: T,
+    ) -> Result<T, InteractionDispatchError> {
         if let Some(owner) = &self.owner
             && owner.closed.load(std::sync::atomic::Ordering::Acquire)
         {
             let mut failure = crate::__runtime::ClosePanic::for_rejection(owner.mode.mode());
-            failure.retire(crate::retain::Owned(value));
+            failure.retire(value);
             failure.finish();
             return Err(InteractionDispatchError::OwnerGone);
         }
@@ -1380,7 +1416,7 @@ impl InteractionDispatchHandle {
         &self,
         callbacks: MouseRegionCallbacks,
     ) -> Result<MouseRegionTarget, InteractionDispatchError> {
-        let callbacks = self.admit(callbacks)?;
+        let callbacks = self.admit_retained(callbacks)?;
         let lane = self.active_lane()?;
         let target_id = TargetId(lane.target_ids.try_next()?);
         self.stamp(&lane, target_id);
@@ -1399,7 +1435,7 @@ impl InteractionDispatchHandle {
         target: MouseRegionTarget,
         callbacks: MouseRegionCallbacks,
     ) -> Result<(), InteractionDispatchError> {
-        let callbacks = self.admit(callbacks)?;
+        let callbacks = self.admit_retained(callbacks)?;
         let lane = self.active_lane()?;
         self.validate_lane(target.lane_id)?;
         let cell = lane
@@ -1830,7 +1866,7 @@ impl InteractionDispatchHandle {
         &self,
         payload: Rc<dyn Any>,
     ) -> Result<LocalPayloadTarget, InteractionDispatchError> {
-        let payload = self.admit(payload)?;
+        let payload = self.admit_retained(payload)?;
         let lane = self.active_lane()?;
         let target_id = TargetId(lane.target_ids.try_next()?);
         self.stamp(&lane, target_id);
@@ -1855,7 +1891,7 @@ impl InteractionDispatchHandle {
         target: LocalPayloadTarget,
         payload: Rc<dyn Any>,
     ) -> Result<(), InteractionDispatchError> {
-        let payload = self.admit(payload)?;
+        let payload = self.admit_retained(payload)?;
         let lane = self.active_lane()?;
         self.validate_lane(target.lane_id)?;
         let previous = {
