@@ -735,10 +735,11 @@ fn prune(git: &Git, dry_run: bool) -> anyhow::Result<PruneReport> {
     } else {
         git.run(&["fetch", "--prune", "origin"])?;
     }
+    // `--verbose` names each stale record on stderr, not stdout
     let stale = if dry_run {
-        git.run(&["worktree", "prune", "--dry-run", "--verbose"])?
+        git.run_with_stderr(&["worktree", "prune", "--dry-run", "--verbose"])?
     } else {
-        git.run(&["worktree", "prune", "--verbose"])?
+        git.run_with_stderr(&["worktree", "prune", "--verbose"])?
     };
     report
         .lines
@@ -886,6 +887,18 @@ impl Git {
     /// stdout of a command that must succeed and prints only UTF-8.
     fn run<S: AsRef<OsStr>>(&self, args: &[S]) -> anyhow::Result<String> {
         String::from_utf8(self.run_bytes(args)?).context("non-UTF-8 `git` output")
+    }
+
+    /// stdout, then stderr, of a command that must succeed and reports on
+    /// stderr; read lossily, since the report is only shown.
+    fn run_with_stderr<S: AsRef<OsStr>>(&self, args: &[S]) -> anyhow::Result<String> {
+        let out = self.output(args)?;
+        if !out.status.success() {
+            return Err(self.failure(args, &out));
+        }
+        let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
+        text.push_str(&String::from_utf8_lossy(&out.stderr));
+        Ok(text)
     }
 
     /// Whether a yes/no command said yes (exit 0) or no (exit 1).

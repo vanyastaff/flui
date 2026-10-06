@@ -674,6 +674,34 @@ fn a_dry_run_fetches_nothing() {
     );
 }
 
+/// `git worktree prune --verbose` names a stale record on stderr; both a dry
+/// run and a real prune report it, and only the real one drops it.
+fn a_stale_record_is_reported() {
+    let fixture = Fixture::new();
+    let gone = fixture.new_worktree("t/gone");
+    std::fs::remove_dir_all(&gone).expect("rmdir");
+    let recorded = || {
+        fixture
+            .git()
+            .run(&["worktree", "list", "--porcelain"])
+            .expect("list")
+            .contains("/gone")
+    };
+    for dry_run in [true, false] {
+        let report = prune(&fixture.git(), dry_run).expect("prune");
+        assert!(!report.failed, "{:?}", report.lines);
+        assert!(
+            report
+                .lines
+                .iter()
+                .any(|l| l.starts_with("stale: ") && l.contains("gone")),
+            "dry run {dry_run}: {:?}",
+            report.lines
+        );
+        assert_eq!(recorded(), dry_run, "dry run {dry_run}");
+    }
+}
+
 /// Merges a worktree that holds nothing, or only a root `TASKS.md` when
 /// `tasks`, surveys it, then writes an ignored `.env` before [`remove`] runs.
 fn ignored_file_written_after_the_verdict(tasks: bool) {
@@ -794,6 +822,7 @@ fn worktree_contract() {
                 a_merged_worktree_holding_only_target_is_removed,
             ),
             ("a_dry_run_fetches_nothing", a_dry_run_fetches_nothing),
+            ("a_stale_record_is_reported", a_stale_record_is_reported),
             (
                 "an_ignored_file_written_after_the_verdict_survives_removal",
                 an_ignored_file_written_after_the_verdict_survives_removal,
