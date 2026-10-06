@@ -570,3 +570,36 @@ W6a (10-14 → 10-17) → [ждёт W2 10-23] W4 + W5 (10-23 → 11-04) → W8 (
    поставленное в очередь завершение сохраняет свой store после detach.
 3. `PresentationWindow` больше не `Send` (нигде не пересекал потоки).
 4. ADR-0135 — Proposed; принимает владелец.
+
+## Изменения контракта после ревью T2b (2026-10-06, решение оркестратора)
+
+Основание — независимое ревью `text-ime/host-contract` @ `2f021adbd` (fix first).
+
+**В T2b, до принятия ADR-0135:**
+1. `TextStoreHost::complete_composition(&self, store: &Rc<dyn TextStore>) -> Result<CompositionEnd,
+   TextStoreHostError>`: хост сравнивает с фокусным store через `Rc::ptr_eq`; чужой store —
+   `Err(NotFocused)`; выключенный хост — `Err(Unavailable)`. Закрытие применяет поставленные в
+   очередь изменения фокуса по порядку, а не отбрасывает их. Строка: закрытие окна при ожидающей
+   смене фокуса.
+2. Win32-хост фиксирует store в момент постановки завершения в очередь; при `None`, `Abandoned` или
+   неактивном хосте фиксирует композицию на месте (обещание `Deferred`).
+3. Строки отказа для паникующего хоста (`focus_store`, `complete_composition`): одиночный сбой, два
+   в конкуренции, следующая операция после изоляции.
+4. Тест, который падает без строки в `runner::presentation_window`: test-support окно в
+   `flui-platform` (`HeadlessPlatform::with_text_store_host`) и flui-app тест, где хост слышит
+   `focus_store(Some)`.
+5. `OwnerThreadToken` доказывает «owner-поток», не «поток этого окна»: Win32 `text_store_host`
+   проверяет принадлежность `hwnd` потоку, документ это говорит.
+6. Качество: `TextInputOwner` держит один `RefCell<TextInputBackend>` (не два `Option`);
+   `TextServices` — одно state-enum; одна функция фиксации на месте, перенесённая в
+   `flui_platform_api::text_store`; `TextInputBackend::None` → `Unsupported`; doctest запечатанности
+   токена через экспортированный путь; doc-комментарии тестов в `editable_text.rs` разведены.
+
+**В T6 (COM-слой подключается к окну), обязательные пункты:**
+7. `leave()` под `catch_unwind`: паника пользователя из очереди хоста не раскручивается через
+   `extern "system"`; очередь после раскрутки уходит в posted `WM_APP`.
+8. `DocumentState::run_grant` считается входом (`enter`/`leave`): документ не закрывается под
+   собственным `OnLockGranted`.
+9. `close_document` принимает `OnEndComposition`, пришедший во время `Pop` (флаг `closed` ставится
+   после), чтобы диапазон композиции не оставался у контроллера, переживающего окно.
+10. Документация модуля `document.rs` не утверждает, что все методы vtable идут через `com_entry`.
