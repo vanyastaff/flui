@@ -77,7 +77,7 @@ fn refused_offset(offset: Offset) {
     result.with_paint_offset(Offset::new(10.0, 20.0), |result| {
         // Refusal is observed through the subtree, not the scope's return
         // value, so the contract holds whatever shape that value takes.
-        let _ = result.with_paint_offset(offset, |result| {
+        result.with_paint_offset(offset, |result| {
             called.set(true);
             result.add(HitTestEntry::new(RenderId::new(1)));
         });
