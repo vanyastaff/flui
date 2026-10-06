@@ -587,7 +587,7 @@ where
     // exit" on every subsequent window close, including the very last
     // one, silently hanging the app open with no window left at all.
     // `close_this_window` (not `request_realm_uninstall` directly): the
-    // primary window closing while a `WindowPolicy::SharedRealm` sibling
+    // primary window closing while a `WindowPolicy::Shared` sibling
     // survives must remove only THIS presentation, never the whole
     // realm out from under that sibling; `close_this_window` reduces to
     // the same full-realm-uninstall effect exactly when this is the
@@ -609,7 +609,7 @@ where
         // callback clear existed, the GPU surface teardown chained
         // behind it) to after the loop was gone: the Wayland post-quit
         // SIGSEGV of issue #713. Keyed by id, not unconditional, so
-        // closing a `SharedRealm` sibling never unpins the primary.
+        // closing a `WindowPolicy::Shared` sibling never unpins the primary.
         // Dropped outside the TLS borrow: the winit window's own drop
         // may re-enter platform code.
         let released =

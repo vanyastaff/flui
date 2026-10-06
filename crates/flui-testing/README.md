@@ -4,7 +4,7 @@
 transaction, the widget test harness built on it, a deterministic substrate
 driver, virtual-clock gesture replay, and accessibility queries.
 
-`HeadlessRealm` hosts a `UiRealm` the way a runner does, over a headless
+`HeadlessHost` hosts a `UiRealm` the way a runner does, over a headless
 window and frame sink, and drives every frame through `UiRealm::pump` on a
 virtual `ManualClock`: the realm's frame time, its gesture-arena deadlines
 (long-press, double-tap windows) and its produce gate all read that one
@@ -29,7 +29,7 @@ assert!(long_press_fired.load(Ordering::SeqCst));
 
 Implemented:
 
-- **The realm host** (`realm::HeadlessRealm`) — a `UiRealm` over a
+- **The headless host** (`host::HeadlessHost`) — a `UiRealm` over a
   `HeadlessWindow` and a `HeadlessSink`, pumped on a `ManualClock`. A frame
   failure the realm contains is raised after the pump, and the first one of a
   pump stays authoritative over a later unwind.

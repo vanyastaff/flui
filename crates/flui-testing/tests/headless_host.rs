@@ -1,4 +1,4 @@
-//! [`HeadlessRealm`]'s failure contract: a frame failure the realm contains
+//! [`HeadlessHost`]'s failure contract: a frame failure the realm contains
 //! is raised after the pump, the first failure of a pump stays authoritative,
 //! and the realm keeps producing frames once the cause is gone.
 
@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use flui_foundation::geometry::Size;
 use flui_rendering::prelude::{BoxLayoutContext, BoxParentData, Leaf, PaintCx, RenderBox};
-use flui_testing::{HeadlessRealm, HeadlessWindow};
+use flui_testing::{HeadlessHost, HeadlessWindow};
 use flui_view::{RenderView, View};
 
 /// A 40 × 24 leaf whose paint panics while `armed` is set. A paint panic is
@@ -66,9 +66,9 @@ impl View for Tripwire {
 }
 
 /// A realm with a tripwire root, armed as asked, before its first frame.
-fn tripwire_realm(armed: bool) -> (HeadlessRealm, Arc<AtomicBool>) {
+fn tripwire_realm(armed: bool) -> (HeadlessHost, Arc<AtomicBool>) {
     let armed = Arc::new(AtomicBool::new(armed));
-    let realm = HeadlessRealm::new(HeadlessWindow::new(40, 24));
+    let realm = HeadlessHost::new(HeadlessWindow::new(40, 24));
     realm
         .attach(&Tripwire {
             armed: Arc::clone(&armed),
@@ -129,7 +129,7 @@ fn the_realm_makes_progress_after_a_raised_failure() {
 
 /// Schedule a post-frame callback that panics, through the realm's own
 /// owner-local lane.
-fn schedule_post_frame_panic(realm: &HeadlessRealm) {
+fn schedule_post_frame_panic(realm: &HeadlessHost) {
     realm
         .local_post_frame_handle()
         .schedule_local(|_timing| panic!("post-frame callback panicked"))
@@ -140,7 +140,7 @@ fn schedule_post_frame_panic(realm: &HeadlessRealm) {
 /// post-frame lane the unwind went through still runs a callback. A frame is
 /// requested first, so the frame latch the unwind left behind must let it
 /// through.
-fn assert_progress_after_unwind(realm: &mut HeadlessRealm) -> flui_runtime::pump::FrameOutcome {
+fn assert_progress_after_unwind(realm: &mut HeadlessHost) -> flui_runtime::pump::FrameOutcome {
     let ran = Arc::new(AtomicBool::new(false));
     let ran_in_callback = Arc::clone(&ran);
     realm

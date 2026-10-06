@@ -33,7 +33,7 @@ the same bug found by a whole-demo snapshot names a demo.
 | Render object | A real `PipelineOwner` — layout, paint, hit-test, intrinsics | `flui_rendering::testing::{RenderTester, Probe}` | `flui-rendering/testing` |
 | **Frame** | A **whole headless frame** on a virtual clock: build → layout → paint → composite, gestures, animation, async tasks | `flui_testing::HeadlessBinding` | dev-dependency |
 | Realm | A `UiRealm`'s own frame transaction, multi-presentation routing and failure containment, submitting to a scripted sink | `flui_runtime::ui_realm::UiRealm::for_test` with `flui_runtime::testing::{ScriptedSink, TestWindow}` (the realm tests live in `crates/flui-runtime/src/ui_realm/`) | `flui-runtime/test-support` |
-| **Widget** | A mounted widget tree with geometry probes and synthetic input, every frame the realm's own `UiRealm::pump` on a manual clock | `flui_testing::widgets::{lay_out, LaidOut}`, `flui_testing::HeadlessRealm` | dev-dependency |
+| **Widget** | A mounted widget tree with geometry probes and synthetic input, every frame the realm's own `UiRealm::pump` on a manual clock | `flui_testing::widgets::{lay_out, LaidOut}`, `flui_testing::HeadlessHost` | dev-dependency |
 | Accessibility | The assembled semantics tree, queried by role | `flui_testing::a11y::{A11yTree, A11yQuery}` | dev-dependency |
 | Gesture replay | A scripted gesture replayed with its timing | `flui_testing::replay::PointerScript` | dev-dependency |
 | Log capture | The `tracing` events a frame emitted | `flui_testing::log_capture::capture` | dev-dependency |
@@ -46,7 +46,7 @@ Two structural rules hold across the stack:
 - **Test-only APIs live in `flui-testing`**, not behind a `testing` feature on a
   shipped crate. It sits above the frame runtime and the widget catalog, so
   the widget harness lives there too and drives the product frame
-  transaction: `lay_out` mounts its tree in a `HeadlessRealm`, whose frames are
+  transaction: `lay_out` mounts its tree in a `HeadlessHost`, whose frames are
   `UiRealm::pump` (ADR-0083 §4).
 - **On the substrate driver, mount through `HeadlessBinding::mount_root`.** It owns the eight-step
   bootstrap whose ordering is load-bearing, and its contract is that the
@@ -645,7 +645,7 @@ binding.pump_frame(Duration::from_millis(16));
 ```
 
 `flui_testing::widgets::lay_out` is the widget tier: it mounts the tree in a
-`HeadlessRealm`, under the realm's own root scopes, and adds geometry probes;
+`HeadlessHost`, under the realm's own root scopes, and adds geometry probes;
 every frame, the mount included, is `UiRealm::pump`. It is one harness, shared verbatim by
 `flui-widgets`, `flui-material`, and `flui-cupertino` — the per-crate
 `tests/common/mod.rs` files are thin re-export shims, so mount ordering,

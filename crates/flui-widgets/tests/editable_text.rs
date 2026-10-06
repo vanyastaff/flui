@@ -22,7 +22,7 @@ pub(crate) mod native_actions {
     use flui_rendering::pipeline::PipelineCell;
     use flui_testing::a11y::Role;
     use flui_testing::{
-        A11yTree, Action, ActionData, ActionRequest, HeadlessRealm, HeadlessWindow, NodeId, TreeId,
+        A11yTree, Action, ActionData, ActionRequest, HeadlessHost, HeadlessWindow, NodeId, TreeId,
     };
     use flui_view::prelude::*;
     use flui_widgets::{EditableText, SizedBox, TextEditingController};
@@ -68,7 +68,7 @@ pub(crate) mod native_actions {
     }
 
     struct Fixture {
-        realm: HeadlessRealm,
+        realm: HeadlessHost,
         probe: SignalProbe,
         controller: Rc<RefCell<TextEditingController>>,
         node: Rc<RefCell<Rc<FocusNode>>>,
@@ -116,7 +116,7 @@ pub(crate) mod native_actions {
                     child,
                 }
             });
-            let mut realm = HeadlessRealm::new(HeadlessWindow::new(400, 100).with_text_input());
+            let mut realm = HeadlessHost::new(HeadlessWindow::new(400, 100).with_text_input());
             realm.attach(&probe.view()).expect("fresh realm");
             realm.enable_semantics();
             let _ = realm.pump(Duration::ZERO);
