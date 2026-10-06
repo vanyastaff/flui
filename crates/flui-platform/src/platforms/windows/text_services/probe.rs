@@ -69,20 +69,20 @@ const FIELD: (f64, f64) = (40.0, 60.0);
 /// no layout (`NoLayout`) until the probe's next tick lays it out, as a
 /// widget's does until its next frame. Its rects sit at [`FIELD`] plus
 /// `shift`.
-struct LateStore {
+struct LateLayoutStore {
     inner: Rc<InMemoryTextStore>,
     laid_out: Rc<Cell<usize>>,
     shift: Rc<Cell<f64>>,
     observer: std::cell::RefCell<Option<Rc<dyn TextStoreObserver>>>,
 }
 
-struct Late<S> {
+struct LateLayoutSession<S> {
     session: S,
     laid_out: usize,
     shift: f64,
 }
 
-impl<S: Deref<Target = T>, T: TextStoreRead + ?Sized> TextStoreRead for Late<S> {
+impl<S: Deref<Target = T>, T: TextStoreRead + ?Sized> TextStoreRead for LateLayoutSession<S> {
     fn document_len(&self) -> Utf16Offset {
         self.session.document_len()
     }
@@ -120,7 +120,7 @@ impl<S: Deref<Target = T>, T: TextStoreRead + ?Sized> TextStoreRead for Late<S> 
     }
 }
 
-impl<S: DerefMut<Target = T>, T: TextStoreEdit + ?Sized> TextStoreEdit for Late<S> {
+impl<S: DerefMut<Target = T>, T: TextStoreEdit + ?Sized> TextStoreEdit for LateLayoutSession<S> {
     fn replace(&mut self, range: Utf16Range, text: &str) -> Result<TextChange, TextStoreError> {
         self.session.replace(range, text)
     }
@@ -135,7 +135,7 @@ impl<S: DerefMut<Target = T>, T: TextStoreEdit + ?Sized> TextStoreEdit for Late<
     }
 }
 
-impl TextStore for LateStore {
+impl TextStore for LateLayoutStore {
     fn status(&self) -> TextStoreStatus {
         self.inner.status()
     }
@@ -147,14 +147,14 @@ impl TextStore for LateStore {
         let (laid_out, shift) = (Rc::clone(&self.laid_out), Rc::clone(&self.shift));
         let grant = match grant {
             LockGrant::Read(body) => LockGrant::read(move |session| {
-                body(&Late {
+                body(&LateLayoutSession {
                     session,
                     laid_out: laid_out.get(),
                     shift: shift.get(),
                 });
             }),
             LockGrant::ReadWrite(body) => LockGrant::read_write(move |session| {
-                body(&mut Late {
+                body(&mut LateLayoutSession {
                     session,
                     laid_out: laid_out.get(),
                     shift: shift.get(),
@@ -175,7 +175,7 @@ impl TextStore for LateStore {
     }
 }
 
-impl LateStore {
+impl LateLayoutStore {
     /// The probe's "frame": lay out what the last sessions inserted and say so.
     fn tick(&self) {
         let len = flui_platform_api::text_store::utf16::utf16_len(&self.inner.text()).get();
@@ -275,7 +275,7 @@ fn pump(ms: u64, probe: &Probe) {
 
 /// The probe's field, gate and keystroke routing.
 struct Probe {
-    late: Rc<LateStore>,
+    late: Rc<LateLayoutStore>,
     gate: CommitGate,
     processkeys: Cell<usize>,
     /// When set, key messages are offered to TSF's keystroke manager first.
@@ -405,7 +405,7 @@ fn text_services_probe() {
         .with_env_filter("flui_platform::tsf=debug")
         .with_ansi(false)
         .without_time()
-        .with_writer(move || Tee(Arc::clone(&sink)))
+        .with_writer(move || JournalWriter(Arc::clone(&sink)))
         .finish();
     let _subscriber = tracing::subscriber::set_default(subscriber);
 
@@ -423,7 +423,7 @@ fn text_services_probe() {
         .hwnd();
     println!("PROBE foreground: {}", bring_to_front(hwnd));
     let probe = Probe {
-        late: Rc::new(LateStore {
+        late: Rc::new(LateLayoutStore {
             inner: InMemoryTextStore::new(""),
             laid_out: Rc::new(Cell::new(0)),
             shift: Rc::new(Cell::new(0.0)),
@@ -472,7 +472,7 @@ fn text_services_probe() {
     // changed near the field must start within one line of the field's
     // bottom edge, horizontally over the field.
     let line = (20.0 * scale.get()).ceil() as i32;
-    let gate_check = |label: &str, pre: &Shot, post: &Shot| {
+    let gate_check = |label: &str, pre: &ScreenCapture, post: &ScreenCapture| {
         let changed = pre.changed(post);
         let pass = changed.is_some_and(|r| {
             (field.bottom - line..=field.bottom + line).contains(&r.top)
@@ -530,12 +530,12 @@ fn text_services_probe() {
         HKL(0x0409_0409 as _),
     );
     println!("PROBE control: en-US layout for this thread: {us:?}");
-    let pre = Shot::grab(field);
+    let pre = ScreenCapture::grab(field);
     type_keys(hwnd, "toukyou", &probe);
     press(hwnd, VK_SPACE);
     press(hwnd, VK_SPACE);
     pump(800, &probe);
-    let post = Shot::grab(field);
+    let post = ScreenCapture::grab(field);
     post.save("control-ime-off");
     let control = gate_check("control (IME off)", &pre, &post);
     println!(
@@ -571,10 +571,10 @@ fn text_services_probe() {
 
     // (2), (3), (4), (5), (6): toukyou with the gate shut for part of it.
     let before = top_level_windows();
-    let pre = Shot::grab(field);
+    let pre = ScreenCapture::grab(field);
     type_keys(hwnd, "t", &probe);
     pump(400, &probe);
-    let post = Shot::grab(field);
+    let post = ScreenCapture::grab(field);
     post.save("first-keystroke");
     let first_key = gate_check("(4) first keystroke", &pre, &post);
     windows_report("(4) first keystroke", &before);
@@ -603,7 +603,7 @@ fn text_services_probe() {
         late.inner.text(),
         late.inner.composition()
     );
-    let pre = Shot::grab(field);
+    let pre = ScreenCapture::grab(field);
     press(hwnd, VK_SPACE);
     pump(600, &probe);
     println!(
@@ -612,7 +612,7 @@ fn text_services_probe() {
     );
     press(hwnd, VK_SPACE);
     pump(800, &probe);
-    let post = Shot::grab(field);
+    let post = ScreenCapture::grab(field);
     post.save("after-space");
     let after_space = gate_check("(4) after Space (candidate list)", &pre, &post);
     windows_report("(4) after Space", &before);
@@ -662,13 +662,13 @@ fn text_services_probe() {
 
     // Negative control: the store reports its rects 150 px lower.
     late.shift.set(150.0);
-    let pre = Shot::grab(field);
+    let pre = ScreenCapture::grab(field);
     type_keys(hwnd, "toukyou", &probe);
     press(hwnd, VK_SPACE);
     pump(400, &probe);
     press(hwnd, VK_SPACE);
     pump(800, &probe);
-    let post = Shot::grab(field);
+    let post = ScreenCapture::grab(field);
     post.save("shifted");
     let shifted = gate_check("control (rect shifted)", &pre, &post);
     for _ in 0..3 {
@@ -770,7 +770,7 @@ fn frame(hwnd: HWND) -> (DevicePixelRatio, DevicePoint) {
 }
 
 /// A screenshot of the screen around the field: 32-bit BGRA, top-down.
-struct Shot {
+struct ScreenCapture {
     x: i32,
     y: i32,
     w: i32,
@@ -778,7 +778,7 @@ struct Shot {
     pixels: Vec<u8>,
 }
 
-impl Shot {
+impl ScreenCapture {
     fn grab(field: crate::shared::text_geometry::ScreenRect) -> Self {
         use windows::Win32::Graphics::Gdi::{
             BITMAPINFO, BITMAPINFOHEADER, BitBlt, CreateCompatibleBitmap, CreateCompatibleDC,
@@ -880,9 +880,9 @@ impl Shot {
     }
 }
 /// Journal writer: every line to stdout and to the shared buffer.
-struct Tee(Arc<Mutex<Vec<u8>>>);
+struct JournalWriter(Arc<Mutex<Vec<u8>>>);
 
-impl std::io::Write for Tee {
+impl std::io::Write for JournalWriter {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         print!("{}", String::from_utf8_lossy(buf));
         self.0.lock().expect("journal").extend_from_slice(buf);
