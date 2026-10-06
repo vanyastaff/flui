@@ -52,6 +52,7 @@ Pilot прошёл (ADR-0086 §9); ADR-0086 — Proposed. Gesture arena уже `
 | Внутренности `AnimationController`, `ScrollController`, `CupertinoTabController` | см. «Handles сегодня» | flip: owner-local, без `Arc<Mutex>` |
 | `OneShotFrameCallback`, `RecurringFrameCallback`, `PostFrameCallback`; `LifecycleStateCallback` | `crates/flui-scheduler/src/frame.rs:712`, `:720`, `:726`; `:416` | flip |
 | `UpdateScheduler`, `PostFrameHandle` (закреплены `Send + Sync`) | `crates/flui-scheduler/src/post_frame.rs:304-305` | разделить: `Send` wake-handle + owner-local очередь |
+| `BoxedTask`, `BoxedResultFuture`, `FutureBuilder`, `AsyncDriver` (futures виджетов `Send`) | `crates/flui-view/src/.../async_driver.rs:106`, `crates/flui-widgets/src/.../future_builder.rs:62` (уточнить пути в design) | разделить: `Send` waker + owner-local очередь `!Send` задач. Через границу IO ходят только `Send`-байты, как `IoFuture` (найдено ревью persistence) |
 | `TickerCallback`, `TickerProvider` | `crates/flui-scheduler/src/ticker.rs:77`, `:92` | flip |
 | `TimingsCallback` | `crates/flui-scheduler/src/config.rs:29` | ? зависит от потока вызова |
 | `RenderView::RenderObject` | `crates/flui-view/src/view/render.rs:511` | flip |

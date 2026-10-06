@@ -62,3 +62,13 @@
 |---|---|---|
 | R4 | `ordinary_facade_graph_excludes_test_support` | есть |
 | остальные | заполняются из `tasks.md` спек уровня 1 | — |
+
+## Карточки (мелкие фиксы без полной спеки)
+
+| Карточка | Доказательство | Статус |
+|---|---|---|
+| Доки `WindowPolicy::SeparateRealms` обещают, что медленное окно не задержит соседа; все realm'ы на одном потоке | `crates/flui-app/src/app/runtime.rs:441-446`; `realm-model/experiment.md` §2 | — |
+| Rebuild любого realm'а будит только последнее открытое окно (выведено чтением, не запуском) | `runtime.rs:468-482`, `desktop.rs:709`; `realm-model/experiment.md` §1 | — |
+| Документация `column!` показывает несуществующий struct-литерал и метку `FR-034`; гейт `markers` не ловит `FR-NNN` | `crates/flui-view/src/macros/mod.rs:1-30` | — |
+| Закрыть issue, исправленные в коде: #1092 полностью, #1187 с пометкой | ревью `teardown` и `focus-keyboard` | ждёт владельца |
+| `docs/FOUNDATIONS.md:103`, `crates/flui-widgets/src/lib.rs:32` описывают `bon`-builder'ы, которых нет | `authoring-styles/requirements.md` | — |
