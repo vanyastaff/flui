@@ -44,7 +44,7 @@ pub trait Animatable<T> {
 /// `transform` does **not** clamp `t`: bouncy/elastic/spring curves emit
 /// `t > 1` (or `t < 0`) and the overshoot must reach the value. The exact
 /// endpoints (`t == 0`, `t == 1`) are returned verbatim without interpolation.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Tween<V> {
     /// The value at the start of the animation.
@@ -112,7 +112,10 @@ impl IntTween {
 }
 
 impl Animatable<i32> for IntTween {
-    #[expect(clippy::cast_possible_truncation)] // rounded f64->i32, saturating cast
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "rounded f64->i32, saturating cast"
+    )]
     fn transform(&self, t: f64) -> i32 {
         let t = t.clamp(0.0, 1.0);
         (f64::from(self.begin) + (f64::from(self.end) - f64::from(self.begin)) * t).round() as i32
@@ -139,7 +142,10 @@ impl StepTween {
 }
 
 impl Animatable<i32> for StepTween {
-    #[expect(clippy::cast_possible_truncation)] // floored f64->i32, saturating cast
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "floored f64->i32, saturating cast"
+    )]
     fn transform(&self, t: f64) -> i32 {
         let t = t.clamp(0.0, 1.0);
         (f64::from(self.begin) + (f64::from(self.end) - f64::from(self.begin)) * t).floor() as i32
@@ -147,7 +153,7 @@ impl Animatable<i32> for StepTween {
 }
 
 /// A tween that always returns the same value.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ConstantTween<T: Clone> {
     /// The constant value.
@@ -171,7 +177,7 @@ impl<T: Clone> Animatable<T> for ConstantTween<T> {
 /// A tween that reverses another tween.
 ///
 /// The reversed tween starts at the end value and goes to the begin value.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ReverseTween<T, A: Animatable<T>> {
     /// The tween to reverse.
@@ -229,7 +235,7 @@ pub type ColorTween = Tween<Color>;
 /// // The perceptual path differs from the muddy componentwise-sRGB midpoint.
 /// assert_ne!(perceptual_mid, srgb_mid);
 /// ```
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct OklabColorTween {
     /// The color at the start of the animation.
@@ -501,7 +507,7 @@ impl<T, A: Animatable<T>> TweenSequenceItem<T, A> {
 /// ```
 ///
 /// [`CurvedAnimation`]: crate::curved::CurvedAnimation
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CurveTween<C: Curve> {
     /// The curve to apply.
     pub curve: C,
@@ -549,7 +555,7 @@ impl<C: Curve> Animatable<f64> for CurveTween<C> {
 /// assert!(chained.transform(0.5) < 50.0); // ease-in effect
 /// assert!((chained.transform(1.0) - 100.0).abs() < 0.1); // ~100
 /// ```
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ChainedTween<A, B> {
     /// The first animatable (transforms t).
     pub first: A,

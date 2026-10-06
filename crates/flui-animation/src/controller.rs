@@ -407,6 +407,10 @@ impl AnimationController {
     /// * `duration` - Duration of the forward animation
     /// * `scheduler` - UpdateScheduler the controller's ticker auto-schedules against
     #[must_use]
+    #[expect(
+        clippy::missing_panics_doc,
+        reason = "this file is being reworked by the in-flight controller ownership change, which converts the site"
+    )]
     pub fn new(duration: Duration, scheduler: &UpdateScheduler) -> Self {
         // 0.0 < 1.0 always holds, so the default-bounds path cannot fail.
         Self::with_bounds(duration, scheduler, 0.0, 1.0)
@@ -426,6 +430,10 @@ impl AnimationController {
     /// simply doesn't allocate the ticker (and the dead scheduler) that
     /// would have gone unused.
     #[must_use]
+    #[expect(
+        clippy::missing_panics_doc,
+        reason = "this file is being reworked by the in-flight controller ownership change, which converts the site"
+    )]
     pub fn without_ticker(duration: Duration) -> Self {
         Self::with_bounds_inner(duration, None, 0.0, 1.0)
             .expect("default bounds (0.0, 1.0) satisfy lower < upper")
@@ -482,6 +490,10 @@ impl AnimationController {
     /// the throwaway-`UpdateScheduler` shape it replaces, but without allocating
     /// the scheduler nobody was ever going to pump.
     #[must_use]
+    #[expect(
+        clippy::missing_panics_doc,
+        reason = "this file is being reworked by the in-flight controller ownership change, which converts the site"
+    )]
     pub fn with_detached_ticker(duration: Duration) -> Self {
         Self::with_bounds_inner(duration, Some(Ticker::new()), 0.0, 1.0)
             .expect("default bounds (0.0, 1.0) satisfy lower < upper")
@@ -1387,6 +1399,11 @@ impl AnimationController {
     /// [`unbounded`](Self::unbounded) controller with `min`/`max` left
     /// unset (or set on only one side); pass an explicit finite range to
     /// repeat on an unbounded controller.
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "this file is being reworked by the in-flight controller ownership change, which converts the site"
+    )]
     pub fn repeat_with(
         &self,
         min: Option<f64>,

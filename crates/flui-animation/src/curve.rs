@@ -110,7 +110,7 @@ impl Curve for Linear {
 }
 
 /// A sawtooth curve that repeats.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct SawTooth {
     /// The number of repetitions of the sawtooth pattern.
@@ -149,6 +149,10 @@ pub struct Interval<C: Curve + Copy = Linear> {
 
 impl<C: Curve + Copy> Interval<C> {
     /// Creates a new interval curve.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `begin` or `end` is outside `[0.0, 1.0]` (NaN included) or `end < begin`.
     #[inline]
     #[must_use]
     pub fn new(begin: f64, end: f64, curve: C) -> Self {
@@ -201,6 +205,10 @@ pub struct Threshold {
 
 impl Threshold {
     /// Creates a new threshold curve.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `threshold` is outside `[0.0, 1.0]` (NaN included).
     #[inline]
     #[must_use]
     pub fn new(threshold: f64) -> Self {
@@ -536,6 +544,10 @@ impl<B: Curve, E: Curve> Split<B, E> {
     }
 
     /// Creates a split curve with explicit segment curves.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `split` is outside `[0.0, 1.0]` (NaN included).
     #[must_use]
     pub fn with_curves(split: f64, begin_curve: B, end_curve: E) -> Self {
         let begin_curve = Terminal::new(begin_curve);
@@ -553,7 +565,10 @@ impl<B: Curve, E: Curve> Split<B, E> {
 }
 
 impl<B: Curve, E: Curve> Curve for Split<B, E> {
-    #[expect(clippy::float_cmp)] // Intentional exact comparisons at the split boundary
+    #[expect(
+        clippy::float_cmp,
+        reason = "Intentional exact comparisons at the split boundary"
+    )]
     fn transform(&self, t: f64) -> f64 {
         if t.is_nan() {
             return 0.0;
@@ -604,7 +619,7 @@ impl Default for ElasticInCurve {
 }
 
 impl Curve for ElasticInCurve {
-    #[expect(clippy::float_cmp)] // Intentional exact comparison after clamp
+    #[expect(clippy::float_cmp, reason = "Intentional exact comparison after clamp")]
     fn transform(&self, t: f64) -> f64 {
         let t = t.clamp(0.0, 1.0);
         // Guarantee exact boundary values per Curve contract
@@ -643,7 +658,7 @@ impl Default for ElasticOutCurve {
 }
 
 impl Curve for ElasticOutCurve {
-    #[expect(clippy::float_cmp)] // Intentional exact comparison after clamp
+    #[expect(clippy::float_cmp, reason = "Intentional exact comparison after clamp")]
     fn transform(&self, t: f64) -> f64 {
         let t = t.clamp(0.0, 1.0);
         // Guarantee exact boundary values per Curve contract
@@ -682,7 +697,7 @@ impl Default for ElasticInOutCurve {
 }
 
 impl Curve for ElasticInOutCurve {
-    #[expect(clippy::float_cmp)] // Intentional exact comparison after clamp
+    #[expect(clippy::float_cmp, reason = "Intentional exact comparison after clamp")]
     fn transform(&self, t: f64) -> f64 {
         let t = t.clamp(0.0, 1.0);
         // Guarantee exact boundary values per Curve contract
@@ -803,6 +818,10 @@ pub struct CatmullRomCurve {
 
 impl CatmullRomCurve {
     /// Creates a new Catmull-Rom curve.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `points` holds fewer than two points.
     #[inline]
     #[must_use]
     pub fn new(points: impl Into<SmallVec<[(f64, f64); 8]>>, tension: f64) -> Self {
@@ -820,6 +839,11 @@ impl CatmullRomCurve {
 }
 
 impl Curve for CatmullRomCurve {
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "`t` is clamped to [0, 1] (NaN casts to 0), so `t_scaled.floor()` is a segment index in [0, segment_count]"
+    )]
     fn transform(&self, t: f64) -> f64 {
         let t = t.clamp(0.0, 1.0);
 
@@ -874,6 +898,10 @@ pub struct CatmullRomSpline {
 
 impl CatmullRomSpline {
     /// Creates a new Catmull-Rom spline.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `points` holds fewer than two points.
     #[inline]
     #[must_use]
     pub fn new(points: impl Into<SmallVec<[Curve2DSample; 8]>>) -> Self {
@@ -884,6 +912,11 @@ impl CatmullRomSpline {
 }
 
 impl Curve2D for CatmullRomSpline {
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "`t` is clamped to [0, 1] (NaN casts to 0), so `t_scaled.floor()` is a segment index in [0, segment_count]"
+    )]
     fn transform(&self, t: f64) -> Curve2DSample {
         let t = t.clamp(0.0, 1.0);
 
@@ -946,7 +979,7 @@ impl Curve2D for CatmullRomSpline {
 /// It is the 180° rotation, not the vertical mirror `1.0 - curve.transform(t)`
 /// — a mirror would invert every consumer expecting a rotation (a
 /// `CurvedAnimation` reverse-curve default, most visibly).
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct FlippedCurve<C: Curve> {
     /// The curve to flip.
@@ -972,7 +1005,7 @@ impl<C: Curve> Curve for FlippedCurve<C> {
 /// A curve that is the reversed version of another curve.
 ///
 /// Reversing swaps the input: `transform(t)` becomes `transform(1.0 - t)`.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ReverseCurve<C: Curve> {
     /// The curve to reverse.
@@ -1003,7 +1036,10 @@ impl<C: Curve> Curve for ReverseCurve<C> {
 #[derive(Debug)]
 pub struct Curves;
 
-#[expect(non_upper_case_globals)]
+#[expect(
+    non_upper_case_globals,
+    reason = "curve constants are spelled like the curve types they name"
+)]
 impl Curves {
     /// A linear curve (the identity function).
     pub const Linear: Linear = Linear;

@@ -83,9 +83,12 @@ impl TwoWayConverter for Color {
         ]
     }
     #[inline]
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "`clamp(0.0, 255.0).round()` pins each channel into the exact u8 range; NaN casts to 0"
+    )]
     fn from_vector(v: Self::Vector) -> Self {
-        // The `clamp(0.0, 255.0).round()` pins the value into the exact u8 range
-        // before the cast, so the truncation/sign-loss lints do not apply.
         let to_u8 = |c: f64| c.clamp(0.0, 255.0).round() as u8;
         Color::rgba(to_u8(v[0]), to_u8(v[1]), to_u8(v[2]), to_u8(v[3]))
     }

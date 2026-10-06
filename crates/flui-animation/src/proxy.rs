@@ -181,6 +181,10 @@ where
     /// Get the current parent animation.
     #[inline]
     #[must_use]
+    #[expect(
+        clippy::clone_on_ref_ptr,
+        reason = "this file is being reworked by the in-flight controller ownership change, which converts the site"
+    )]
     pub fn parent(&self) -> Arc<dyn Animation<T>> {
         self.inner.parent.read().get().clone()
     }
@@ -291,6 +295,10 @@ where
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::clone_on_ref_ptr,
+    reason = "test fixtures share controllers; converted with the in-flight controller ownership change"
+)]
 mod tests {
     use super::*;
     use crate::AnimationController;

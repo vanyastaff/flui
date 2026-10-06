@@ -249,6 +249,10 @@ impl fmt::Debug for CompoundAnimation {
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::clone_on_ref_ptr,
+    reason = "test fixtures share controllers; converted with the in-flight controller ownership change"
+)]
 mod tests {
     use super::*;
     use crate::AnimationController;
