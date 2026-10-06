@@ -180,8 +180,26 @@ impl<T: Lerp + TwoWayConverter> Keyframes<T> {
     /// The value `elapsed` after the start, clamped to [`total`](Self::total).
     #[must_use]
     pub fn value_at(&self, elapsed: Duration) -> T {
-        let _ = elapsed;
-        self.start.clone()
+        let elapsed = elapsed.min(self.total);
+        // The first segment still running at `elapsed`. Segments that ended
+        // at or before it — including zero-length jumps at `elapsed` — are
+        // passed, which makes the track right-continuous.
+        let index = self
+            .segments
+            .partition_point(|segment| segment.end <= elapsed);
+        let Some(segment) = self.segments.get(index) else {
+            return self
+                .segments
+                .last()
+                .map_or_else(|| self.start.clone(), |last| last.to.clone());
+        };
+        // Segments are contiguous, so this one started at or before `elapsed`.
+        let offset = elapsed.saturating_sub(segment.start);
+        if offset.is_zero() {
+            return segment.from.clone();
+        }
+        let length = segment.end.saturating_sub(segment.start);
+        segment.sample(offset.as_secs_f64() / length.as_secs_f64(), length)
     }
 
     /// The value at `elapsed` modulo [`total`](Self::total), for a track
@@ -189,9 +207,93 @@ impl<T: Lerp + TwoWayConverter> Keyframes<T> {
     /// [`Duration::MAX`].
     #[must_use]
     pub fn value_at_looped(&self, elapsed: Duration) -> T {
-        let _ = elapsed;
-        self.start.clone()
+        let phase = elapsed.as_nanos() % self.total.as_nanos();
+        // `phase < total`, so both parts fit their types.
+        let seconds = u64::try_from(phase / NANOS_PER_SECOND)
+            .expect("BUG: a phase inside the track's total fits Duration");
+        let nanos =
+            u32::try_from(phase % NANOS_PER_SECOND).expect("BUG: a remainder of 1e9 fits in u32");
+        self.value_at(Duration::new(seconds, nanos))
     }
+}
+
+const NANOS_PER_SECOND: u128 = 1_000_000_000;
+
+impl<T: Lerp + TwoWayConverter> Segment<T> {
+    /// The value at local progress `s ∈ (0, 1)` of a segment lasting `length`.
+    /// A non-finite result is replaced by `from`.
+    fn sample(&self, s: f64, length: Duration) -> T {
+        let sampled = match &self.motion {
+            Motion::Hold | Motion::Jump => return self.from.clone(),
+            Motion::Eased(curve) => {
+                let eased = curve.transform(s);
+                if !eased.is_finite() {
+                    return self.from.clone();
+                }
+                self.from.lerp_to(&self.to, eased)
+            }
+            Motion::Cubic {
+                start_velocity,
+                end_velocity,
+            } => {
+                let d = length.as_secs_f64();
+                let (s2, s3) = (s * s, s * s * s);
+                let h00 = 2.0 * s3 - 3.0 * s2 + 1.0;
+                let h10 = s3 - 2.0 * s2 + s;
+                let h01 = 3.0 * s2 - 2.0 * s3;
+                let h11 = s3 - s2;
+                let mut out = self.from.to_vector();
+                let p1 = self.to.to_vector();
+                for (i, component) in out.as_mut().iter_mut().enumerate() {
+                    let p0 = *component;
+                    *component = h00 * p0
+                        + h10 * d * start_velocity.as_ref()[i]
+                        + h01 * p1.as_ref()[i]
+                        + h11 * d * end_velocity.as_ref()[i];
+                }
+                if !is_finite_vector(&out) {
+                    return self.from.clone();
+                }
+                T::from_vector(out)
+            }
+        };
+        if is_finite_vector(&sampled.to_vector()) {
+            sampled
+        } else {
+            self.from.clone()
+        }
+    }
+
+    /// The velocity, in units per second, at which this segment arrives at
+    /// `to` (`at_end`) or leaves `from`, for a neighbouring cubic segment.
+    fn velocity(&self, at_end: bool, zero: T::Vector) -> T::Vector {
+        let Motion::Eased(curve) = &self.motion else {
+            return zero;
+        };
+        let length = self.end.saturating_sub(self.start).as_secs_f64();
+        if length == 0.0 {
+            return zero;
+        }
+        let rate = curve.slope(if at_end { 1.0 } else { 0.0 }) / length;
+        difference(self.to.to_vector(), self.from.to_vector(), rate)
+    }
+}
+
+/// `(a − b) · scale` per component, with non-finite components as 0.
+fn difference<V: AsRef<[f64]> + AsMut<[f64]> + Copy>(a: V, b: V, scale: f64) -> V {
+    let mut out = a;
+    for (component, &b) in out.as_mut().iter_mut().zip(b.as_ref()) {
+        let value = (*component - b) * scale;
+        *component = if value.is_finite() { value } else { 0.0 };
+    }
+    out
+}
+
+fn is_finite_vector<V: AsRef<[f64]>>(vector: &V) -> bool {
+    vector
+        .as_ref()
+        .iter()
+        .all(|component| component.is_finite())
 }
 
 impl<T: Lerp + TwoWayConverter> KeyframesBuilder<T> {
@@ -253,20 +355,124 @@ impl<T: Lerp + TwoWayConverter> KeyframesBuilder<T> {
     ///
     /// The first of these, in segment order, is reported.
     pub fn build(self) -> Result<Keyframes<T>, KeyframesError> {
+        let Self {
+            start,
+            total,
+            segments: pending,
+        } = self;
+        if total.is_zero() {
+            return Err(KeyframesError::ZeroTotal);
+        }
+        if !is_finite_vector(&start.to_vector()) {
+            return Err(KeyframesError::NonFiniteValue { index: 0 });
+        }
+        let mut zero = start.to_vector();
+        zero.as_mut().fill(0.0);
+
+        let mut segments = Vec::with_capacity(pending.len());
+        let mut cursor = Duration::ZERO;
+        let mut current = start.clone();
+        for (index, pending) in pending.into_iter().enumerate() {
+            let (value, over, motion) = match pending {
+                Pending::Eased { value, over, curve } => (value, over, Motion::Eased(curve)),
+                Pending::Cubic { value, over } => (
+                    value,
+                    over,
+                    Motion::Cubic {
+                        start_velocity: zero,
+                        end_velocity: zero,
+                    },
+                ),
+                Pending::Hold { over } => (current.clone(), over, Motion::Hold),
+                Pending::Jump { value } => (value, Duration::ZERO, Motion::Jump),
+            };
+            if !is_finite_vector(&value.to_vector()) {
+                return Err(KeyframesError::NonFiniteValue { index: index + 1 });
+            }
+            let end = cursor
+                .checked_add(over)
+                .ok_or(KeyframesError::DurationOverflow { index })?;
+            if end > total {
+                return Err(KeyframesError::Overrun { index, end, total });
+            }
+            segments.push(Segment {
+                start: cursor,
+                end,
+                from: current,
+                to: value.clone(),
+                motion,
+            });
+            cursor = end;
+            current = value;
+        }
+
+        // Cubic velocities: Catmull-Rom by keyframe time between cubic
+        // segments, the neighbour's own velocity next to an eased segment,
+        // zero at the track's ends and next to a hold or jump.
+        for index in 0..segments.len() {
+            if !matches!(segments[index].motion, Motion::Cubic { .. }) {
+                continue;
+            }
+            let segment = &segments[index];
+            let incoming = match index.checked_sub(1).map(|i| &segments[i]) {
+                Some(previous) if matches!(previous.motion, Motion::Cubic { .. }) => catmull_rom(
+                    previous.from.to_vector(),
+                    previous.start,
+                    segment.to.to_vector(),
+                    segment.end,
+                ),
+                Some(previous) => previous.velocity(true, zero),
+                None => zero,
+            };
+            let outgoing = match segments.get(index + 1) {
+                Some(next) if matches!(next.motion, Motion::Cubic { .. }) => catmull_rom(
+                    segment.from.to_vector(),
+                    segment.start,
+                    next.to.to_vector(),
+                    next.end,
+                ),
+                Some(next) => next.velocity(false, zero),
+                None => zero,
+            };
+            segments[index].motion = Motion::Cubic {
+                start_velocity: incoming,
+                end_velocity: outgoing,
+            };
+        }
+
         Ok(Keyframes {
-            start: self.start,
-            total: self.total,
-            segments: Box::new([]),
+            start,
+            total,
+            segments: segments.into_boxed_slice(),
         })
     }
+}
+
+/// The Catmull-Rom tangent at the knot between `(before, at_before)` and
+/// `(after, at_after)`: the chord's slope, in units per second.
+fn catmull_rom<V: AsRef<[f64]> + AsMut<[f64]> + Copy>(
+    before: V,
+    at_before: Duration,
+    after: V,
+    at_after: Duration,
+) -> V {
+    let span = at_after.saturating_sub(at_before).as_secs_f64();
+    difference(after, before, 1.0 / span)
 }
 
 impl<T: Lerp + TwoWayConverter> Animatable<T> for Keyframes<T> {
     /// Reads the track at progress `t` of [`total`](Keyframes::total):
     /// `t` is clamped into `[0, 1]` and NaN reads as 0.
     fn transform(&self, t: f64) -> T {
-        let _ = t;
-        self.start.clone()
+        let elapsed = if t.is_nan() || t <= 0.0 {
+            Duration::ZERO
+        } else if t >= 1.0 {
+            self.total
+        } else {
+            Duration::try_from_secs_f64(self.total.as_secs_f64() * t)
+                .map_or(self.total, |elapsed| elapsed.min(self.total))
+        };
+        self.value_at(elapsed)
     }
 }
 

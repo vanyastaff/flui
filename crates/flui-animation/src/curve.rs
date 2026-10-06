@@ -71,8 +71,17 @@ pub trait Curve {
     /// assert_eq!(Curves::Linear.slope(f64::NAN), 0.0);
     /// ```
     fn slope(&self, t: f64) -> f64 {
-        let _ = t;
-        0.0
+        const H: f64 = 1e-4;
+        let t = t.clamp(0.0, 1.0);
+        let f = |x: f64| self.transform(x);
+        let estimate = if t < H {
+            (-3.0 * f(t) + 4.0 * f(t + H) - f(t + 2.0 * H)) / (2.0 * H)
+        } else if t > 1.0 - H {
+            (3.0 * f(t) - 4.0 * f(t - H) + f(t - 2.0 * H)) / (2.0 * H)
+        } else {
+            (f(t + H) - f(t - H)) / (2.0 * H)
+        };
+        if estimate.is_finite() { estimate } else { 0.0 }
     }
 
     /// Returns a new curve that is the flipped version of this one.
@@ -1718,7 +1727,20 @@ impl Steps {
 
 impl Curve for Steps {
     fn transform(&self, t: f64) -> f64 {
-        t
+        if let Some(end) = settled(t) {
+            return end;
+        }
+        let count = f64::from(self.count);
+        let jumps = match self.jump {
+            JumpAt::Start | JumpAt::End => count,
+            JumpAt::None => count - 1.0,
+            JumpAt::Both => count + 1.0,
+        };
+        let mut step = (t * count).floor();
+        if matches!(self.jump, JumpAt::Start | JumpAt::Both) {
+            step += 1.0;
+        }
+        step.min(jumps) / jumps
     }
 }
 

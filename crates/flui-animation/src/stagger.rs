@@ -56,7 +56,24 @@ impl Stagger {
     /// computed exactly in nanoseconds and saturating at [`Duration::MAX`].
     #[must_use]
     pub fn delay(&self, index: usize, count: usize) -> Duration {
-        let _ = (index, count);
-        Duration::ZERO
+        // Work in half-steps so a centre between two indices stays exact.
+        let index = index as u128 * 2;
+        let origin = match self.origin {
+            StaggerOrigin::First => 0,
+            StaggerOrigin::Last => count.saturating_sub(1) as u128 * 2,
+            StaggerOrigin::Center => count.saturating_sub(1) as u128,
+            StaggerOrigin::Index(origin) => origin as u128 * 2,
+        };
+        let half_steps = origin.abs_diff(index);
+        let nanos = self.step.as_nanos().saturating_mul(half_steps) / 2;
+        let seconds = nanos / 1_000_000_000;
+        match u64::try_from(seconds) {
+            Ok(seconds) => {
+                let subsec = u32::try_from(nanos % 1_000_000_000)
+                    .expect("BUG: a remainder of 1e9 fits in u32");
+                Duration::new(seconds, subsec)
+            }
+            Err(_) => Duration::MAX,
+        }
     }
 }

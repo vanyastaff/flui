@@ -116,9 +116,10 @@ fn jump_is_right_continuous() {
         .to(6.0, ms(100), Linear)
         .build()
         .expect("fits");
+    // One nanosecond before the jump the ramp is 1e-8 short of its key.
     assert_close(
-        track.value_at(ms(100) - Duration::from_nanos(1)),
-        1.0,
+        track.value_at(Duration::from_nanos(99_999_999)),
+        1.0 - 1e-8,
         "before",
     );
     assert_eq!(
@@ -248,7 +249,9 @@ fn keyframes_progress_maps_to_time() {
 // ---- build errors -----------------------------------------------------------
 
 fn zero_total() {
-    let error = Keyframes::builder(0.0, Duration::ZERO).build().unwrap_err();
+    let error = Keyframes::builder(0.0, Duration::ZERO)
+        .build()
+        .expect_err("the track is invalid");
     assert_eq!(error, KeyframesError::ZeroTotal);
 }
 
@@ -257,7 +260,7 @@ fn overrun() {
         .to(1.0, ms(60), Linear)
         .to(2.0, ms(60), Linear)
         .build()
-        .unwrap_err();
+        .expect_err("the track is invalid");
     assert_eq!(
         error,
         KeyframesError::Overrun {
@@ -273,14 +276,14 @@ fn duration_overflow() {
         .hold(Duration::MAX)
         .hold(Duration::from_nanos(1))
         .build()
-        .unwrap_err();
+        .expect_err("the track is invalid");
     assert_eq!(error, KeyframesError::DurationOverflow { index: 1 });
 }
 
 fn non_finite_start() {
     let error = Keyframes::builder(f64::INFINITY, ms(100))
         .build()
-        .unwrap_err();
+        .expect_err("the track is invalid");
     assert_eq!(error, KeyframesError::NonFiniteValue { index: 0 });
 }
 
@@ -290,7 +293,7 @@ fn non_finite_keyframe() {
         .hold(ms(50))
         .cubic(f64::NAN, ms(100))
         .build()
-        .unwrap_err();
+        .expect_err("the track is invalid");
     assert_eq!(error, KeyframesError::NonFiniteValue { index: 3 });
 }
 
@@ -298,7 +301,7 @@ fn non_finite_jump() {
     let error = Keyframes::builder(0.0, ms(100))
         .jump(f64::NEG_INFINITY)
         .build()
-        .unwrap_err();
+        .expect_err("the track is invalid");
     assert_eq!(error, KeyframesError::NonFiniteValue { index: 1 });
 }
 
@@ -393,7 +396,7 @@ fn cubic_hermite_midpoint() {
         .expect("fits");
     assert_close(track.value_at(ms(500)), 0.5, "rising half");
     assert_close(track.value_at(ms(1500)), 0.5, "falling half");
-    assert!(track.value_at(ms(1000)) == 1.0);
+    assert_eq!(track.value_at(ms(1000)), 1.0);
 }
 
 #[test]
@@ -408,7 +411,8 @@ fn cubic_keyframes_pass_through_keys() {
 fn one_sided_slopes(track: &Keyframes<f64>, at: Duration, h: Duration) -> (f64, f64) {
     let f = |t: Duration| track.value_at(t);
     let hs = h.as_secs_f64();
-    let left = (3.0 * f(at) - 4.0 * f(at - h) + f(at - 2 * h)) / (2.0 * hs);
+    let left =
+        (3.0 * f(at) - 4.0 * f(at.saturating_sub(h)) + f(at.saturating_sub(2 * h))) / (2.0 * hs);
     let right = (-3.0 * f(at) + 4.0 * f(at + h) - f(at + 2 * h)) / (2.0 * hs);
     (left, right)
 }
