@@ -34,14 +34,14 @@ fn bezier_derivative(p1: f64, p2: f64, s: f64) -> f64 {
 fn parameter_at(curve: (f64, f64, f64, f64), t: f64) -> f64 {
     let (mut lo, mut hi) = (0.0, 1.0);
     for _ in 0..200 {
-        let mid = 0.5 * (lo + hi);
+        let mid = f64::midpoint(lo, hi);
         if bezier(curve.0, curve.2, mid) < t {
             lo = mid;
         } else {
             hi = mid;
         }
     }
-    0.5 * (lo + hi)
+    f64::midpoint(lo, hi)
 }
 
 /// The eased progress of `curve` at `t`, independent of `Cubic::transform`.
@@ -106,7 +106,10 @@ fn seam<T: flui_animation::TwoWayConverter>(
             velocity_before.as_ref()[component],
             velocity_after.as_ref()[component],
         );
-        assert!(x1.is_finite() && v1.is_finite(), "non-finite seam: {x1}, {v1}");
+        assert!(
+            x1.is_finite() && v1.is_finite(),
+            "non-finite seam: {x1}, {v1}"
+        );
         assert!(close(x1, x0, 1e-12), "C0 broken: {x0} -> {x1}");
         assert!(close(v1, v0, 1e-9), "C1 broken: {v0} -> {v1}");
         assert_velocity_is_the_derivative(value, component, mode, range);
@@ -266,8 +269,14 @@ fn seam_at_zero() {
     // Two retargets with no time between them: the second starts from the
     // first one's start, at rest.
     for mode in [
-        Mode::Spring { omega: 10.0, zeta: 0.5 },
-        Mode::Curve { curve: 3, millis: 200 },
+        Mode::Spring {
+            omega: 10.0,
+            zeta: 0.5,
+        },
+        Mode::Curve {
+            curve: 3,
+            millis: 200,
+        },
     ] {
         let mut value = AnimatedValue::with_motion(5.0_f64, mode.spec());
         value.animate_to(50.0);
@@ -282,7 +291,15 @@ fn seam_on_the_completing_frame() {
     value.animate_to(10.0);
     value.advance(0.2);
     assert!(value.is_settled());
-    seam(&mut value, 30.0, &Mode::Curve { curve: 0, millis: 200 }, 20.0);
+    seam(
+        &mut value,
+        30.0,
+        &Mode::Curve {
+            curve: 0,
+            millis: 200,
+        },
+        20.0,
+    );
     assert_eq!(value.value(), 10.0);
     assert_eq!(value.velocity()[0], 0.0);
 }
@@ -342,7 +359,10 @@ fn reversal_shortens_by_the_eased_fraction() {
 
     let ease = CUBICS[0];
     let shortened = eased(ease, 0.25);
-    assert!((shortened - 0.408_510_591_355_396).abs() <= 1e-12, "S' = {shortened}");
+    assert!(
+        (shortened - 0.408_510_591_355_396).abs() <= 1e-12,
+        "S' = {shortened}"
+    );
     let mut value = AnimatedValue::with_motion(0.0_f64, curve_spec(ease, 200));
     value.animate_to(100.0);
     value.advance(0.05);

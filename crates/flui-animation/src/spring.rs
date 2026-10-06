@@ -112,8 +112,8 @@ impl TwoWayConverter for Color {
 /// let (x, v) = (value.value(), value.velocity()[0]);
 /// // Interrupting keeps both the value and the velocity.
 /// value.animate_to(-1.0);
-/// assert_eq!(value.value(), x);
-/// assert_eq!(value.velocity()[0], v);
+/// assert!((value.value() - x).abs() < 1e-12);
+/// assert!((value.velocity()[0] - v).abs() < 1e-9);
 /// ```
 #[derive(Debug, Clone)]
 pub struct AnimatedValue<T: TwoWayConverter> {

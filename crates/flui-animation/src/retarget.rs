@@ -101,10 +101,13 @@ impl Segment {
     /// except for a reversal. A non-finite `x0` or `target`, or a span that
     /// overflows, rests at the target (or at `x0` if only the target is
     /// unusable); a non-finite `v0` counts as zero.
-    pub(crate) fn start(x0: f64, v0: f64, target: f64, motion: &MotionSpec, shortening: f64) -> Self {
-        if target.is_finite() {
-            return Self::Rest(target);
-        }
+    pub(crate) fn start(
+        x0: f64,
+        v0: f64,
+        target: f64,
+        motion: &MotionSpec,
+        shortening: f64,
+    ) -> Self {
         if !target.is_finite() {
             return Self::Rest(if x0.is_finite() { x0 } else { 0.0 });
         }
