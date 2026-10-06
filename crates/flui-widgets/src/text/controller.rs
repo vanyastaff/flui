@@ -115,7 +115,7 @@ pub(super) struct ControllerInner {
     /// How many application edits the controller has taken: every public
     /// mutator that changes something advances it, the text store's own
     /// write-back does not. A platform session records it when its lock
-    /// opens and drops its result if it moved (ADR-0090 amendment item 3).
+    /// opens and drops its result if it moved (ADR-0142 item 3).
     pub(super) generation: u64,
 }
 
@@ -156,7 +156,7 @@ pub(super) struct ComposingState {
     pub(super) caret_hidden: bool,
     /// What the composition stands for in the committed text: the text its
     /// range held before the composition began, empty for a new preedit and
-    /// the reconverted words for a reconversion (ADR-0090 amendment item 1).
+    /// the reconverted words for a reconversion (ADR-0142 item 1).
     pub(super) origin: String,
 }
 

@@ -8,7 +8,7 @@
 //! the ledger keeps what every piece stands for and derives the origin when
 //! asked. A narrowing is computed by cutting the leaving text's share off
 //! the front and back of the origin string, which the reference checks is
-//! there to cut. ADR-0090 amendment item 1 states the rules both follow.
+//! there to cut. ADR-0142 item 1 states the rules both follow.
 
 use std::ops::Range;
 
@@ -663,7 +663,7 @@ fn check(text: &str, composition: Option<(Range<usize>, &str)>, ops: &[Op]) -> R
 }
 
 /// The cases a property run found against the range-based ledger, and the
-/// narrowing rule (ADR-0090 amendment item 1), each a sequence and the
+/// narrowing rule (ADR-0142 item 1), each a sequence and the
 /// committed text it ends with.
 #[allow(clippy::type_complexity)]
 fn named_cases() -> Vec<(

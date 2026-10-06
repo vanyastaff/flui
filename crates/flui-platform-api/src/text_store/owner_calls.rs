@@ -1,5 +1,5 @@
 //! [`OwnerCalls`]: the one containment around code a text store's owner or
-//! platform supplies (ADR-0090 amendment, "Owner code").
+//! platform supplies (ADR-0142 item 8).
 //!
 //! A store, its [`LockArbiter`](super::LockArbiter) and the presentation that
 //! attaches it run code they do not control at these points, and every one

@@ -1,7 +1,7 @@
 //! Owner code at every point a text store, its arbiter and its presentation
 //! run code they do not control, all contained by
-//! `flui_platform_api::text_store::OwnerCalls` (ADR-0090 amendment, "Owner
-//! code"; its module doc lists the points).
+//! `flui_platform_api::text_store::OwnerCalls` (ADR-0142 item 8; its module
+//! doc lists the points).
 //!
 //! One row per point and failure shape: a panic in the owner code, a
 //! snapshot whose last owner the code released and whose captured value

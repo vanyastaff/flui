@@ -8,8 +8,8 @@
   bridge); ADR-0078 (capability acquisition);
   [ADR-0090](ADR-0090-ime-pull-text-store-contract.md) (§1, and the push-only shape of §2: the
   push vocabulary is now projected onto a pull text store)
-- **Superseded-by:** [ADR-0090](ADR-0090-ime-pull-text-store-contract.md) amendment item 4
-  (proposed), for §6's blur rule only: a field losing its input commits its composition
+- **Superseded-by:** [ADR-0142](ADR-0142-text-store-commit-gate-and-owner-code-containment.md) item 4
+  (accepted, not yet implemented), for §6's blur rule only: a field losing its input commits its composition
   instead of leaving it in place
 - **Amended by:** [ADR-0082](ADR-0082-platform-api-contract-crate.md) (§2: `PlatformTextInput`
   now lives in `flui-platform-api`, re-exported at its old `flui-platform` path; its contract is
@@ -118,7 +118,7 @@ composition continues.
   object only while the field is enabled and has primary focus (Flutter's
   `withComposing: !readOnly && _hasFocus`). Blur detaches the IME client but
   does not end the composition, so an unfocused field must not keep painting a
-  stale underline. (Superseded by ADR-0090 amendment item 4, once implemented:
+  stale underline. (Superseded by ADR-0142 item 4, once implemented:
   blur commits the composition before detaching.)
 - `rect_for_composing_range()` returns `None`, never `Rect::ZERO`, when there
   is no active range, no layout or no boxes: a zero rect would tell the

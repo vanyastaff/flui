@@ -73,7 +73,7 @@ A grant runs only the platform's code. The store's own owner (a widget's
 has released its lock and before the next queued one, so owner code that asks
 for a lock is granted it; a panic there is caught by the arbiter and parked in
 the `CommitGate` for the gate's owner to report, and the queue keeps running
-(ADR-0090 amendment item 2). With no gate installed by an owner there is no one
+(ADR-0142 item 2). With no gate installed by an owner there is no one
 to report to, and the panic resumes after the lock is released. The gate a
 failure belongs to is read before the grant runs. Every call into code a store
 does not control, here and in the stores and presentations above, goes
