@@ -237,6 +237,11 @@ pub struct AppConfig {
     /// Native-only today — the lifecycle layer has no wasm32 slice yet.
     #[cfg(not(target_arch = "wasm32"))]
     pub services: Vec<ServiceDefinition>,
+
+    /// The application's directory name under the per-user data roots, set
+    /// with [`Self::with_storage_dir`].
+    #[cfg(feature = "persist")]
+    pub(crate) storage_dir: Option<flui_platform_api::StorageName>,
 }
 
 impl Default for AppConfig {
@@ -263,6 +268,8 @@ impl Default for AppConfig {
             close_request_handler: None,
             #[cfg(not(target_arch = "wasm32"))]
             services: Vec::new(),
+            #[cfg(feature = "persist")]
+            storage_dir: None,
         }
     }
 }
@@ -427,6 +434,21 @@ impl AppConfig {
     #[must_use = "the builder returns the updated configuration; assign or chain it"]
     pub fn with_service(mut self, service: ServiceDefinition) -> Self {
         self.services.push(service);
+        self
+    }
+
+    /// Give the application's widgets storage under the directory `name`:
+    /// documents in `<data_dir>/<name>/`, which follows the user between
+    /// machines, and machine-local state such as a session in
+    /// `<data_local_dir>/<name>/` (the per-user roots of the `dirs` crate).
+    /// Widgets reach it through `LifecycleContext::storage`; without this,
+    /// or on a platform without files, they get none.
+    ///
+    /// Not yet wired: the realm's widgets get no storage either way.
+    #[cfg(feature = "persist")]
+    #[must_use = "the builder returns the updated configuration; assign or chain it"]
+    pub fn with_storage_dir(mut self, name: flui_platform_api::StorageName) -> Self {
+        self.storage_dir = Some(name);
         self
     }
 }

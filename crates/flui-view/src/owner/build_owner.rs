@@ -638,6 +638,10 @@ pub struct BuildOwner {
     /// a realm installs one over its platform's clipboard.
     pub(crate) clipboard_handle: Option<flui_interaction::ClipboardHandle>,
 
+    /// The realm's byte storage. `None` on a bare owner and under a realm
+    /// that has none, which `LifecycleContext::storage` reports as such.
+    pub(crate) storage: Option<std::sync::Arc<dyn flui_platform_api::Storage>>,
+
     /// The binding's owner-local interaction dispatch capability (ADR-0027).
     ///
     /// `None` means the owner was built detached from a runtime interaction lane;
@@ -804,6 +808,7 @@ impl BuildOwner {
             local_post_frame_handle: None,
             text_input_handle: None,
             clipboard_handle: None,
+            storage: None,
             interaction_dispatch: None,
             hit_test_handle: None,
             owner_tag,
@@ -890,6 +895,14 @@ impl BuildOwner {
     /// answers `Some` under every realm.
     pub fn set_clipboard_handle(&mut self, handle: flui_interaction::ClipboardHandle) {
         self.clipboard_handle = Some(handle);
+    }
+
+    /// Install the realm's byte storage.
+    ///
+    /// Called during presentation construction when the realm has storage,
+    /// so `LifecycleContext::storage` answers `Some` under it.
+    pub fn set_storage(&mut self, storage: std::sync::Arc<dyn flui_platform_api::Storage>) {
+        self.storage = Some(storage);
     }
 
     /// Install the binding's owner-local interaction dispatch handle (ADR-0027).
@@ -1019,6 +1032,12 @@ impl BuildOwner {
     #[must_use]
     pub fn clipboard_handle(&self) -> Option<&flui_interaction::ClipboardHandle> {
         self.clipboard_handle.as_ref()
+    }
+
+    /// The realm's byte storage, if one was installed.
+    #[must_use]
+    pub fn storage(&self) -> Option<&std::sync::Arc<dyn flui_platform_api::Storage>> {
+        self.storage.as_ref()
     }
 
     /// Set the callback for when a build is scheduled.
@@ -1311,6 +1330,7 @@ impl BuildOwner {
             local_post_frame_handle: &self.local_post_frame_handle,
             text_input_handle: &self.text_input_handle,
             clipboard_handle: &self.clipboard_handle,
+            storage: &self.storage,
             interaction_dispatch: &self.interaction_dispatch,
             hit_test_handle: &self.hit_test_handle,
             global_key_scope: &mut self.global_key_scope,
@@ -1835,6 +1855,7 @@ impl BuildOwner {
                     local_post_frame_handle: &self.local_post_frame_handle,
                     text_input_handle: &self.text_input_handle,
                     clipboard_handle: &self.clipboard_handle,
+                    storage: &self.storage,
                     interaction_dispatch: &self.interaction_dispatch,
                     hit_test_handle: &self.hit_test_handle,
                     global_key_scope: &mut self.global_key_scope,
@@ -2049,6 +2070,7 @@ impl BuildOwner {
                     local_post_frame_handle: &self.local_post_frame_handle,
                     text_input_handle: &self.text_input_handle,
                     clipboard_handle: &self.clipboard_handle,
+                    storage: &self.storage,
                     interaction_dispatch: &self.interaction_dispatch,
                     hit_test_handle: &self.hit_test_handle,
                     global_key_scope: &mut self.global_key_scope,
@@ -2483,6 +2505,7 @@ impl BuildOwner {
                 local_post_frame_handle: &self.local_post_frame_handle,
                 text_input_handle: &self.text_input_handle,
                 clipboard_handle: &self.clipboard_handle,
+                storage: &self.storage,
                 interaction_dispatch: &self.interaction_dispatch,
                 hit_test_handle: &self.hit_test_handle,
                 global_key_scope: &mut self.global_key_scope,
@@ -2690,6 +2713,7 @@ impl BuildOwner {
             local_post_frame_handle: &self.local_post_frame_handle,
             text_input_handle: &self.text_input_handle,
             clipboard_handle: &self.clipboard_handle,
+            storage: &self.storage,
             interaction_dispatch: &self.interaction_dispatch,
             hit_test_handle: &self.hit_test_handle,
             global_key_scope: &mut self.global_key_scope,

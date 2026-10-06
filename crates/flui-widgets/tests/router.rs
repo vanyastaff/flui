@@ -1401,6 +1401,94 @@ pub(crate) fn router_opens_at_a_location_with_its_back_stack() {
 }
 
 // ============================================================================
+// Restoring a saved stack
+// ============================================================================
+
+/// Pages that each record their router handle in `probe`, so whichever page
+/// a restored router opens on hands the test a handle.
+fn recording_pages(probe: &Probe) -> impl Fn(&AppRoute, &dyn BuildContext) -> BoxedView + 'static {
+    let probe = probe.clone();
+    move |route, _cx| {
+        let label = match route {
+            AppRoute::Home => "Home".to_owned(),
+            AppRoute::Note { id } => format!("Note {id}"),
+            AppRoute::NoteEdit { id } => format!("Edit {id}"),
+            AppRoute::Tag { name } => format!("Tag {name}"),
+        };
+        page(&probe, move || text(label.clone()))
+    }
+}
+
+/// A stack saved as `Home → Note 5 → Tag x` reopens on `Tag x`, and two
+/// Backs lead to `Note 5` and then `Home`.
+pub(crate) fn from_stack_restores_back_order() {
+    let probe = Probe::default();
+    let stack = vec![
+        AppRoute::Home,
+        AppRoute::Note { id: 5 },
+        AppRoute::Tag { name: "x".into() },
+    ];
+    let router = Router::from_stack(stack, recording_pages(&probe)).expect("a non-empty stack");
+    let mut laid = mount(router);
+    settle(&mut laid);
+
+    let router = probe.handle();
+    assert!(laid_out_text(&laid, "Tag x"), "the restored top is shown");
+    assert_eq!(router.pop(), Ok(true), "Back from the restored top");
+    settle(&mut laid);
+    assert_eq!(router.current(), AppRoute::Note { id: 5 });
+    assert!(laid_out_text(&laid, "Note 5"));
+    assert_eq!(router.pop(), Ok(true), "Back from the middle page");
+    settle(&mut laid);
+    assert_eq!(router.current(), AppRoute::Home);
+    assert!(!router.can_pop());
+}
+
+/// `stack()` reads the whole stack after each push, replace and pop.
+pub(crate) fn stack_reads_every_committed_edit() {
+    let (mut laid, home) = two_screen_app();
+    let router = home.handle();
+    assert_eq!(router.stack(), vec![AppRoute::Home]);
+
+    router
+        .push(AppRoute::Note { id: 1 })
+        .expect("mounted router");
+    assert_eq!(
+        router.stack(),
+        vec![AppRoute::Home, AppRoute::Note { id: 1 }]
+    );
+    router
+        .push(AppRoute::Tag { name: "x".into() })
+        .expect("mounted router");
+    router
+        .replace(AppRoute::NoteEdit { id: 1 })
+        .expect("mounted router");
+    assert_eq!(
+        router.stack(),
+        vec![
+            AppRoute::Home,
+            AppRoute::Note { id: 1 },
+            AppRoute::NoteEdit { id: 1 }
+        ]
+    );
+    settle(&mut laid);
+    assert_eq!(router.pop(), Ok(true));
+    assert_eq!(
+        router.stack(),
+        vec![AppRoute::Home, AppRoute::Note { id: 1 }]
+    );
+}
+
+/// A router cannot open on an empty stack, and says so.
+pub(crate) fn empty_stack_is_refused() {
+    let home = Probe::default();
+    assert!(matches!(
+        Router::<AppRoute>::from_stack(Vec::new(), pages(&home)),
+        Err(RouterError::EmptyStack)
+    ));
+}
+
+// ============================================================================
 // The facade under a Router
 // ============================================================================
 
