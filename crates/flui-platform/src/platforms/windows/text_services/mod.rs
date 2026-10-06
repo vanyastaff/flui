@@ -95,7 +95,9 @@ impl Drop for Recovery {
     fn drop(&mut self) {
         let mut calls = OwnerCalls::new();
         for store in self.0.drain(..) {
-            calls.run(|| commit_composition_in_place(&*store));
+            calls.run(|| {
+                let _ = commit_composition_in_place(&*store);
+            });
             calls.retire(store);
         }
     }
@@ -325,7 +327,7 @@ impl TextServices {
         if self.failure.borrow().is_some() {
             self.recovery.borrow_mut().push(store);
         } else {
-            commit_composition_in_place(&*store);
+            let _ = commit_composition_in_place(&*store);
         }
     }
 

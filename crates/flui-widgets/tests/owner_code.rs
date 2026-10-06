@@ -1252,6 +1252,91 @@ fn push_close_whose_earlier_grant_panics() {
     drop(harness);
 }
 
+/// A grant on a composing store asks its presentation for the completion,
+/// outside any frame, and then panics: the in-place commit the arbiter queued
+/// behind the locked store is accepted work, so a close before any anchor
+/// runs it before retiring the store.
+fn completion_inside_a_failing_grant_then_closed(owner: &Rc<TextInputOwner>) {
+    let store = composing_store();
+    let _token = owner
+        .handle()
+        .attach(TextInputClient::new(store.clone()))
+        .expect("attach");
+    let completing = Rc::downgrade(owner);
+    assert_eq!(
+        raised(|| {
+            let _ = store.request_lock(
+                LockGrant::read(move |_| {
+                    if let Some(owner) = completing.upgrade() {
+                        owner.complete_composition();
+                    }
+                    panic!("grant failure");
+                }),
+                LockTiming::Sync,
+            );
+        })
+        .as_deref(),
+        Some("grant failure"),
+        "the grant's own failure reaches its requester"
+    );
+    assert!(
+        store.composition().is_some(),
+        "the commit waits behind the failed grant"
+    );
+    assert_eq!(raised(|| owner.close()), None, "the close fails nothing");
+    assert_eq!(
+        store.composition(),
+        None,
+        "the close ran the commit it accepted"
+    );
+    assert_eq!(store.text(), "abかな", "the composed text stays");
+    assert_eq!(
+        edit(&*store, "z"),
+        Ok(LockOutcome::Granted),
+        "the store's next edit"
+    );
+}
+
+fn push_completion_inside_a_failing_grant_then_closed() {
+    completion_inside_a_failing_grant_then_closed(&owner());
+}
+
+/// The same on a pull host that abandons the composition, so the owner
+/// commits it in place behind the running grant.
+fn host_completion_inside_a_failing_grant_then_closed() {
+    let host = Rc::new(Host::default());
+    let log = Rc::clone(&host.log);
+    completion_inside_a_failing_grant_then_closed(&pull_owner(host));
+    assert_eq!(*log.borrow(), ["focus", "complete", "unfocus"]);
+}
+
+/// An owner dropped without a close, holding the last owners of two stores
+/// that owe a queued commit, both of whose destructors panic: they retire one
+/// at a time, the second retained behind the first, so the drop neither
+/// aborts nor raises.
+fn owner_dropped_with_two_completing_stores_whose_drops_panic() {
+    let owner = owner();
+    for message in [
+        "first completing store destroyed",
+        "second completing store destroyed",
+    ] {
+        let token = owner
+            .handle()
+            .attach(TextInputClient::new(store_panicking_on_drop(message)))
+            .expect("attach");
+        owner.set_transaction_open(true);
+        owner.complete_composition();
+        owner.set_transaction_open(false);
+        let _ = owner.handle().detach(token).expect("detach");
+    }
+    assert_eq!(
+        raised(|| drop(owner)),
+        None,
+        "a dropped owner contains its stores' failures"
+    );
+    the_owner_keeps_working(&self::owner());
+}
+
 // ----------------------------------------------------------------------------
 // The matrix
 // ----------------------------------------------------------------------------
@@ -1370,6 +1455,18 @@ const ROWS: &[(&str, fn())] = &[
     (
         "push: a close whose grant ahead of a queued completion panics",
         push_close_whose_earlier_grant_panics,
+    ),
+    (
+        "push: a completion inside a failing grant, closed before the anchor",
+        push_completion_inside_a_failing_grant_then_closed,
+    ),
+    (
+        "host: a completion inside a failing grant, closed before the anchor",
+        host_completion_inside_a_failing_grant_then_closed,
+    ),
+    (
+        "drop: two completing stores whose destructors panic",
+        owner_dropped_with_two_completing_stores_whose_drops_panic,
     ),
     (
         "arbiter: a refused grant during an unwind",

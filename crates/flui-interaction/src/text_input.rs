@@ -68,7 +68,7 @@ use flui_foundation::geometry::Bounds;
 use flui_platform_api::ImeEvent;
 use flui_platform_api::PlatformTextInput;
 use flui_platform_api::text_store::{
-    CommitGate, CompositionEnd, OwnerCalls, RetainOnFailure, TextStore, TextStoreHost,
+    CommitGate, CompositionEnd, LockOutcome, OwnerCalls, RetainOnFailure, TextStore, TextStoreHost,
     commit_composition_in_place, project_ime_event,
 };
 
@@ -226,15 +226,25 @@ enum HostTurn {
 /// when the host abandoned it, does not serve `store` or is gone. A
 /// `Deferred` answer leaves it to the host, which finishes it when the
 /// platform call in progress returns.
-fn complete_through(host: &dyn TextStoreHost, store: &Rc<dyn TextStore>) {
+///
+/// Returns whether an in-place commit was queued in the store rather than
+/// run: accepted work the caller owes a run ([`TextInputOwner::owe_commit`]).
+fn complete_through(host: &dyn TextStoreHost, store: &Rc<dyn TextStore>) -> bool {
     match host.complete_composition(store) {
-        Ok(CompositionEnd::Abandoned) => commit_composition_in_place(&**store),
+        Ok(CompositionEnd::Abandoned) => {}
         Err(error) => {
             tracing::debug!(%error, "the host did not end the composition; committing it in place");
-            commit_composition_in_place(&**store);
         }
-        Ok(_) => {}
+        Ok(_) => return false,
     }
+    commit_queued(&**store)
+}
+
+/// Commit `store`'s composition in place; whether the commit was queued in
+/// the store (behind its shut gate, or behind a grant running on it) rather
+/// than run or refused.
+fn commit_queued(store: &dyn TextStore) -> bool {
+    commit_composition_in_place(store) == Ok(LockOutcome::Deferred)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -358,10 +368,12 @@ struct OwnerState {
     /// runs at the anchor that closes this frame, not whenever the field is
     /// next focused.
     retired: Vec<Rc<dyn TextStore>>,
-    /// Stores whose composition commit, asked for inside a frame on a push
-    /// or storeless backend, waits as a grant behind the shut gate, oldest
-    /// first. The anchor runs them; a close runs them too, since no anchor
-    /// follows it, while it cancels every other store's queued grants.
+    /// Stores whose in-place composition commit waits as a queued grant,
+    /// oldest first: behind the shut gate (a completion asked for inside a
+    /// frame on a push or storeless backend), or behind a grant that was
+    /// running on the store when it was asked for, which may fail and leave
+    /// it queued. The anchor runs them; a close runs them too, since no
+    /// anchor follows it, while it cancels every other store's queued grants.
     completing: Vec<Rc<dyn TextStore>>,
     /// Pull host operations not yet applied, oldest first.
     host_ops: VecDeque<HostOp>,
@@ -713,27 +725,34 @@ impl TextInputOwner {
             self.apply_host_ops(&mut calls, HostTurn::Own);
         } else {
             // The commit settles a grant, which may park an owner failure.
-            // Inside a frame it is queued behind the shut gate: the store is
-            // owed its anchor, or the close, whichever comes first.
-            let deferred = self.is_transaction_open();
-            let committed = calls
-                .run_parking(&self.gate, || commit_composition_in_place(&*store))
-                .is_some();
-            if deferred && committed {
-                let mut state = self.state.borrow_mut();
-                if state.lifecycle == OwnerLifecycle::Open {
-                    push_unique(&mut state.completing, Rc::clone(&store));
-                } else {
-                    // A custom store's request closed this owner meanwhile:
-                    // the close opened the gate before the commit was
-                    // recorded, so it runs now.
-                    drop(state);
-                    calls.run_parking(&self.gate, || store.run_deferred_grants());
-                }
+            // It is queued behind the shut gate inside a frame, and behind
+            // the running grant when asked for from inside one on this store,
+            // gate open or not: the store is then owed its anchor, or the
+            // close, whichever comes first.
+            let queued = calls.run_parking(&self.gate, || commit_queued(&*store));
+            if queued == Some(true) {
+                self.owe_commit(&store, &mut calls);
             }
             calls.retire_parking(&self.gate, store);
         }
         calls.resume();
+    }
+
+    /// Record that `store` holds a queued in-place commit this owner
+    /// accepted, for the anchor or the close to run (whichever comes first).
+    /// The record follows what the request did, not the gate: a grant ahead
+    /// of the commit that fails leaves it queued with the gate open.
+    fn owe_commit(&self, store: &Rc<dyn TextStore>, calls: &mut OwnerCalls) {
+        let mut state = self.state.borrow_mut();
+        if state.lifecycle == OwnerLifecycle::Open {
+            push_unique(&mut state.completing, Rc::clone(store));
+        } else {
+            // A custom store's request closed this owner meanwhile: the
+            // close opened the gate before the commit was recorded, so it
+            // runs now.
+            drop(state);
+            calls.run_parking(&self.gate, || store.run_deferred_grants());
+        }
     }
 
     /// Apply the queued host operations, oldest first, inside `calls`. They
@@ -781,7 +800,11 @@ impl TextInputOwner {
                         calls.run_parking(&self.gate, || host.focus_store(store));
                     }
                     HostOp::Complete(store) => {
-                        calls.run_parking(&self.gate, || complete_through(&*host, &store));
+                        let queued =
+                            calls.run_parking(&self.gate, || complete_through(&*host, &store));
+                        if queued == Some(true) {
+                            self.owe_commit(&store, calls);
+                        }
                         // A host call that detached the client left this
                         // clone the store's last owner.
                         calls.retire_parking(&self.gate, store);
@@ -1150,9 +1173,17 @@ impl Drop for TextInputOwner {
         // that releases its other last owner before it unwinds.
         let backend = std::mem::replace(self.backend.get_mut(), TextInputBackend::Unsupported);
         // An owner dropped without a close runs no queued completion; it
-        // only takes its store away from the host.
-        close_retire(&self.gate, &mut failure, Vec::from(host_ops));
-        close_retire(&self.gate, &mut failure, completing);
+        // only takes its store away from the host. Each operation and store
+        // retires on its own, as a close retires them: one collection
+        // dropped whole would destroy the rest during the first's unwind,
+        // and a second panicking destructor would abort. After a failure
+        // the tail is retained (ADR-0127).
+        for op in host_ops {
+            close_retire(&self.gate, &mut failure, op);
+        }
+        for store in completing {
+            close_retire(&self.gate, &mut failure, store);
+        }
         match &backend {
             TextInputBackend::Push(platform) if disable => {
                 close_host_call(&self.gate, &mut failure, || platform.set_ime_allowed(false));

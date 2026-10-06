@@ -115,7 +115,9 @@ framework does not control is contained.
    frame the close cuts short commits (item 4) before its store is retired. An accepted
    composition commit is completed and the rest of the queued tail is cancelled: a pull host's
    queued completion runs through the host (in place if it abandons it), and a store whose
-   commit a push or storeless backend queued as a grant behind the shut gate runs its queued
+   in-place commit was queued as a grant (behind the shut gate, or behind a grant running on the
+   store when the completion was asked for from inside it, which may fail and leave it queued;
+   the owner records the debt from the request's outcome, not from the gate) runs its queued
    grants, in request order, so the commit lands behind the grants accepted before it; every
    other store's queued grants are dropped with the store. Each runs inside the close's
    containment, and after a failure the rest are retired, not run.
