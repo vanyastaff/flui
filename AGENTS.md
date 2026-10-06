@@ -91,37 +91,23 @@ Each of these has shipped more than once; design against them up front.
 
 ## Codebase map
 
-24 crates under `crates/`, the official packages under `packages/`, and the `flui` facade
-(`src/`), strictly layered. Each manifest
-declares its tier and layer in `[package.metadata.flui]` (checked by `cargo xtask workspace`);
-`docs/crates.md` is the readable version. Bottom to top:
+24 crates under `crates/`, official packages under `packages/`, and the `flui` facade (`src/`),
+strictly layered; each manifest's `[package.metadata.flui]` declares its tier and layer, and
+`docs/crates.md` is the readable map. Bottom to top: values (`flui-macros`, `flui-foundation`
+with its `f64` geometry, ADR-0098) → contracts (`flui-platform-api`, `flui-protocol`) →
+substrate (`flui-platform`, `flui-scheduler`, `flui-painting`, `flui-interaction`,
+`flui-assets`, `flui-log`) → compositing (`flui-layer`, `flui-semantics`, `flui-animation`) →
+render machine (`flui-rendering` protocols, `flui-objects` catalog, `flui-engine` → `wgpu`) →
+spine (`flui-view`, `flui-widgets`, `flui-runtime`, `flui-sdk`, `flui-testing`) → packages →
+composition roots (`flui-app`, `flui-cli`, the facade). What the layout doesn't tell you:
 
-- **Values & primitives** — `flui-macros` (View derives), `flui-foundation` (IDs, and the
-  plain-`f64` geometry values in `flui_foundation::geometry`; ADR-0098).
-- **Contracts** — `flui-platform-api` (platform contracts: capability traits and window/input
-  vocabulary, no OS code; ADR-0082), `flui-protocol` (semantics roles and actions, the
-  agent-protocol wire vocabulary; ADR-0095).
-- **Substrate** — `flui-platform` (the backends behind those
-  contracts: windows, input, IME, clipboard; every `windows::*`/`objc2::*` type stays inside it;
-  only `flui-app` depends on it), `flui-scheduler` (frame phases),
-  `flui-painting` (paint, styling and typography values; records into a `DisplayList`),
-  `flui-interaction` (event routing, gestures),
-  `flui-assets`, `flui-log`.
-- **Compositing** — `flui-layer`, `flui-semantics`, `flui-animation`.
-- **Render machine** — `flui-rendering` (the `RenderBox`/`RenderSliver` protocols),
-  `flui-objects` (the concrete render-object catalog), `flui-engine` (layers → `wgpu`).
-- **Spine & catalog** — `flui-view` (View/Element, `BuildContext`/`LifecycleContext`,
-  reconciliation, signals), `flui-widgets`, `flui-runtime` (the frame runtime a realm drives,
-  moving out of `flui-app` per ADR-0083; no host, platform or GPU edge), `flui-sdk` (the
-  Evolving package-author surface, versioned `0.N` apart from the train; ADR-0088), `flui-testing`
-  (a headless host that pumps a realm on a virtual clock, and the widget harness on it).
-- **Official packages** (`packages/`, ADR-0088) — `flui-material`, `flui-cupertino` and
-  `flui-devtools`, built on `flui-sdk` alone, as a third-party package would be;
-  `flui-hot-reload` is an official package still under `crates/`; `flui-app` reaches it only
-  through the `DevReloadHook` (ADR-0094 §1), and it moves once ADR-0088 settles its plugin
-  half, which names `flui_view::__runtime` and the pipeline types the SDK does not carry.
-- **Composition roots** — `flui-app` (per-window `UiRealm`s, the run loop), `flui-cli`, and
-  the facade.
+- Only `flui-app` depends on `flui-platform`, and every `windows::*`/`objc2::*` type stays
+  inside it (ADR-0082).
+- `flui-runtime` is moving out of `flui-app` (ADR-0083); it has no host, platform or GPU edge.
+- `flui-sdk` is the Evolving package-author surface, versioned `0.N` apart from the train
+  (ADR-0088). Official packages (`flui-material`, `flui-cupertino`, `flui-devtools`) build on it
+  alone, as a third-party package would. `flui-hot-reload` is an official package still under
+  `crates/`, reached from `flui-app` only through `DevReloadHook` (ADR-0094 §1).
 
 The non-obvious invariants live in the per-crate `ARCHITECTURE.md` files — read the one for the
 crate you're changing before changing it (`flui-animation`, `flui-assets`, `flui-interaction`,
@@ -176,49 +162,39 @@ private chat sessions.
 
 ## Commands
 
+`cargo xtask --help` lists every repository task (crate `tools/xtask`); anything else is plain
+`cargo`. The ones you need most:
+
 | Need | Run |
 |------|-----|
-| Every task | `cargo xtask --help` (crate `tools/xtask`; the alias is in `.cargo/config.toml`). Anything else is a plain `cargo` command |
-| Worktrees | `cargo xtask worktree new <area>/<slug>`; `worktree list` (branch state, dirty, `target/` size); `worktree prune [--dry-run]` removes clean ones whose branch a merge commit brought into origin/main (a fresh branch, at a main commit, is kept) |
-| Before a PR | `cargo xtask check-changed` — fmt + clippy + nextest over changed crates and their dependents (the classification CI's `plan` uses) |
-| Full local gate | `cargo xtask ci` = `cargo xtask gate` (`checks`: fmt, typos, taplo, docs-links, docs-paths, workspace, reach, toolchain, wgsl, …; `lint`; `doc-strict`) + `cargo xtask test` + doctests |
-| CI heavy jobs locally | `cargo xtask ci-full`; `cargo xtask doctor full` names any missing tool; job table in `docs/testing.md` |
-| One crate / one test | `cargo nextest run -p <crate>`, `cargo nextest run -p <crate> <test> --no-capture` |
-| Other targets (no link) | `cargo xtask cross-typecheck` — clippy for Win32 / AppKit / Android / iOS |
-| Dependencies | `cargo xtask deps` — cargo-deny (bans, licenses, sources, advisories) over every member, and cargo-shear (`cargo shear --fix` applies its fixes) |
-| Examples | `cargo run --example counter`, `cargo run --example <name>` (without a name, cargo lists them) |
+| Before a PR | `cargo xtask check-changed` — fmt, clippy and nextest over the changed crates and their dependents, classified the way CI's `plan` does |
+| Full local gate | `cargo xtask ci` (`gate` + `test` + doctests); `cargo xtask ci-full` adds the heavy jobs, `cargo xtask doctor full` names missing tools |
+| One crate / one test | `cargo nextest run -p <crate> [<test>] --no-capture` |
 | Render-object catalog | `cargo test -p flui-objects --test render_object_harness` |
-| Toolchain | `rust-toolchain.toml` is the source of truth; pre-1.0 the MSRV tracks latest stable. `cargo xtask toolchain` keeps every copy in sync |
 
 Gotchas: nextest doesn't run doctests (`cargo test --doc`). A flaky test that isn't yours usually
 touches genuinely process-global state (the global `tracing` subscriber `flui-log` installs, a
 global ID counter such as `flui-foundation`'s key counters) — scope a lock to that test module
-rather than serializing the suite. No build-job count is checked in; cap one with
-`CARGO_BUILD_JOBS` on a smaller machine. A docs-only change needs only `cargo xtask checks`, which
-builds xtask and not the workspace.
+rather than serializing the suite. A docs-only change needs only `cargo xtask checks`, which
+builds xtask and not the workspace. `rust-toolchain.toml` is the toolchain's source of truth;
+pre-1.0 the MSRV tracks latest stable.
 
 ## What the compiler and gates enforce
 
+The gates explain their own findings; this is what to design for up front.
+
 | Rule | Enforced by |
 |------|-------------|
-| Presentation capabilities (`rebuild_handle`, `writer_source`, `post_frame_handle`, `focus_manager`, `text_input_handle`, `keep_alive_*`, `pipeline_owner`, `async_driver`, …) are acquired only in `init_state`/`did_change_dependencies` | type system: they live on `LifecycleContext`, which only those hooks receive (ADR-0078) |
+| Presentation capabilities (`rebuild_handle`, `focus_manager`, `text_input_handle`, `pipeline_owner`, …) are acquired only in `init_state`/`did_change_dependencies` | type system: they live on `LifecycleContext`, which only those hooks receive (ADR-0078) |
 | Signals are read in `build`, never written or created there | run-time guard in `flui-view::reactive` (ADR-0074) |
 | **ID offset** — slab indices are 0-based. Plain slab-backed IDs (`ViewId`, `LayerId`, `SemanticsId`) are 1-based `NonZeroUsize`: insert `slab_index + 1`, look up `id.get() - 1`. Generational keys (`ElementId`, `RenderId`, `RealmId`) pack the 0-based slot and a non-zero generation: mint with `new_gen(slab_index, generation)`, read `.index()` | `NonZeroUsize` / `NonZeroU64` + ID newtypes |
-| No lock guard held across an `if let`/`match` arm | `clippy::significant_drop_in_scrutinee` |
-| No `todo!`/`unimplemented!`/`dbg!` in production (linux/ios/android init stubs carry an `#[expect]`) | clippy `todo`/`unimplemented`/`dbg_macro` |
-| No `println!`/`eprintln!` in `flui-foundation`/`flui-macros` | clippy `print_stdout`/`print_stderr` |
-| Logical and device geometry don't mix: no `Point + Point`, no `Size` as an `Offset`, no `DevicePoint` as a `Point`, no literal `DevicePixelRatio`, no `f64`/`i32` geometry mixing (ADR-0098) | trybuild suite `crates/flui-painting/tests/compile_fail/` |
-| No bare `unwrap()` in production; by convention `expect("BUG: <invariant>")` for internal invariants, `thiserror` in libraries, `anyhow` in apps ([`docs/PANIC-POLICY.md`](docs/PANIC-POLICY.md)) | `clippy::unwrap_used`; the conventions are review |
-| Crate layering (a normal or build dependency points to a lower tier, or a smaller `order` in the same tier, unless the dependent lists it in `edge-exceptions` with the ADR that removes it; and, until `layer` is removed, to the same layer or lower — ADR-0081); no framework crate but `flui-app`, `flui-cli` and the facade links `flui-log`; none but `flui-app` depends on `flui-platform` (ADR-0082); only applications name an official package, in any dependency kind, an official package names another only through a declared exception, and an official package's normal and build dependencies are `flui-sdk` and the contract crates, each refused edge needing the dependent's `edge-exceptions` entry; a member under `packages/` is official and lists no exception (the kind rule, ADR-0081 §3, ADR-0088 §2); manifests inherit the workspace keys and lints, except that a `tier-kind = "evolving"` crate sets its own `0.N` version; `flui-foundation`, and no other member, declares the train guard `links = "flui_train"` (ADR-0088 §5); no unreachable test file; unique ADR numbers | `cargo xtask workspace` (`[package.metadata.flui]` in each manifest) |
-| No crate reaches what its tier forbids (`[workspace.metadata.flui.reach]`, where H forbids nothing, plus its own `reach-forbid`) in any root build, over normal and build edges on every target, except through a `reach-exceptions` entry that names its ADR and still excuses something; hot reload stays out of `flui-app`'s graph under every feature (ADR-0081 §2, ADR-0094 §1) | `cargo xtask reach` |
-| Import direction between a crate's top-level modules (flui-widgets): non-test code names only modules in lower layers, through re-exports too; `#[cfg(test)]` code is exempt; a refused edge needs a dated `exceptions` entry naming the ADR that removes it | `cargo xtask module-dag` (`[package.metadata.flui.modules]`) |
-| No dependency that no code uses, no test-only dependency in `[dependencies]`, no `[workspace.dependencies]` entry nothing inherits (an optional dependency, or one a feature names, is only warned about); licenses, sources and banned crates per `deny.toml`, including crates std now replaces (`once_cell`, `cfg-if`, …); RustSec advisories | `cargo xtask deps` (cargo-shear, cargo-deny; CI's `deps` job) |
-| No new `static` or `thread_local!` outside `#[cfg(test)]` without a `[package.metadata.flui] globals` entry: an `exit` ADR that removes it, or a `grant` under ADR-0097 with a checked `class` (one `trampoline` in the host, one per platform backend); an entry for a removed or exempt global is a finding | `cargo xtask globals` (ADR-0097), part of `cargo xtask checks` |
-| Links from the non-archival markdown into the checkout resolve without climbing out of it: files, `#heading` anchors, and this repository's own `main` URLs | `cargo xtask docs-links` (lychee, offline), part of `cargo xtask checks` |
-| A repository path in a code span of the non-archival markdown or `llms.txt` (a word starting at a top-level directory such as `crates/` or `docs/`), a link in `llms.txt` (an `#anchor` into Markdown included), and the package after `-p`/`--package`/`-p<name>` in a cargo command (a local package; a `Cargo.lock` one for `cargo update`/`tree`/`pkgid`/`clean`) name something git knows; changelogs are history and not read | `cargo xtask docs-paths`, part of `cargo xtask checks`; allowlist `tools/xtask/allowlists/docs-paths.toml`, exact counts that only shrink, a reason each |
-| No process markers (`Cycle N`, `Phase B`, wave and slice labels, `PR-N`, spec task ids, `H`-tracker ids) in comments, doc comments, strings, the snake-case pieces of identifiers (`test_t064_x`), Markdown text or TOML/YAML/WGSL files read whole, outside the archival roots | `cargo xtask markers`; allowlist `tools/xtask/allowlists/markers.toml`, exact counts that only shrink |
-| At most 3000 production lines per `.rs` file (test-only modules and items excluded) | `cargo xtask file-length`; allowlist `tools/xtask/allowlists/file-length.toml`, exact counts that only shrink |
-| A `changelog.d/` fragment has a known section header, only bullets under it, and only root-relative or absolute links; `CHANGELOG.md` has one `## [Unreleased]` holding only those sections | `cargo xtask changelog --check`, part of `cargo xtask checks` |
+| Logical and device geometry don't mix (no `Point + Point`, no `Size` as an `Offset`, no `DevicePoint` as a `Point`, no `f64`/`i32` mixing; ADR-0098) | trybuild suite `crates/flui-painting/tests/compile_fail/` |
+| No bare `unwrap()` in production: `expect("BUG: <invariant>")` for internal invariants, `thiserror` in libraries, `anyhow` in apps ([`docs/PANIC-POLICY.md`](docs/PANIC-POLICY.md)); no `todo!`/`dbg!`; no lock guard held across an `if let`/`match` | clippy (`unwrap_used`, `significant_drop_in_scrutinee`, …) |
+| Dependencies point down the tiers declared in `[package.metadata.flui]`; an exception names the ADR that removes it. Official packages depend on `flui-sdk` and the contract crates only | `cargo xtask workspace`, `cargo xtask reach` (ADR-0081, ADR-0088) |
+| `flui-widgets` modules import only lower modules | `cargo xtask module-dag` |
+| Every `static`/`thread_local!` outside tests has a `globals` entry: an ADR that removes it, or an ADR-0097 grant | `cargo xtask globals` |
+| No unused or test-only dependency in `[dependencies]`; licenses and advisories per `deny.toml` | `cargo xtask deps` |
+| No process markers (see "Working here"); at most 3000 production lines per `.rs` file; doc links and repository paths resolve; `changelog.d/` fragments are well-formed | `cargo xtask checks` (`markers`, `file-length`, `docs-links`, `docs-paths`, `changelog`); their allowlists under `tools/xtask/allowlists/` only shrink |
 
 ## ADR Policy
 
@@ -243,57 +219,34 @@ the history.
 ## Writing tests
 
 A test earns its place by pinning a contract, not a structure. The suite is small on purpose (a
-few hundred tests): a new test needs a reason to exist next to the ones already there. No gate
-caps the count, so the review question is which existing table the new case joins.
+few hundred tests), so a new case usually joins an existing table rather than adding a test.
 
-- **Test through the public API.** A test lives in `tests/` and sees what a consumer sees. An
-  in-`src` `mod tests` is for what a consumer cannot reach: a failure-path matrix that needs a
-  private seam, a decision recorded in `## Mapping decisions`. Compile-fail cases are not among them: they are
-  trybuild fixtures driven from `tests/` (or `compile_fail` doctests on public items), so
-  privacy and sealing are checked the way a consumer meets them. Do not pin private fields or
-  helpers, which dirty flag a setter raises, `size_of`, an implementation's constants and token
-  tables, or `Default`/`Debug`/getter round trips: a refactor that keeps behavior must not touch
-  a test. Values a consumer sees and a document fixes (wire spellings such as `flui-protocol`'s
-  ADR-0080 names, ABI, other ADR-pinned tokens) are contract, and their tests stay.
-- **One behavior, one test; a family is one table.** Cases that differ only in their input are
-  rows of one table-driven `#[test]`: each row a plain `fn` named after the case, every row run
-  after an ordinary panic, and the failure report naming each failing row. Use the crate's
-  existing runner (`table_test::run_table`, `test_cases::run_cases`, `tests/contracts.rs`)
-  instead of a new one. Most runners do not contain a panic payload whose `Drop` itself panics
-  (those in `flui-foundation` and `flui-animation` do): a row must not throw one. A new
-  `#[test]` beside a near-identical one is a row.
-- **Few binaries.** Every root `tests/*.rs` file is its own binary: it links the whole dependency
-  stack and grows `target/`. Crates build their integration tests as modules of one binary
-  (`tests/main.rs` with `#[path = "x.rs"] mod x;`, `autotests = false` and one `[[test]]` in the
-  manifest, as `flui-widgets`, `flui-material` and `flui-rendering` do). A new file is a new
-  `mod` line, not a new `[[test]]` (with `autotests = false` only the `[[test]]` entries are
-  targets). Subdirectories are never auto-discovered as targets: a helper directory
-  (`tests/common/`, `tests/support/`) is mounted from `main.rs` as a module, a trybuild fixture
-  directory (`tests/ui/`) is not mounted at all, since its sources are meant not to compile. A
-  separate target is for process-global state (a global subscriber, allocation counting) and for a feature the rest of the crate builds without.
-- **Do not fold what runs its own process.** Tests that spawn `cargo` or another program
-  (trybuild suites, `cli_create::generated_*`, `flui::facade_consumer`) stay separate tests:
-  `.config/nextest.toml` names them one by one (groups `trybuild` and `nested-cargo`) so nextest runs them in
-  parallel, and a folded one runs serially and holds the whole job. GPU readbacks share a
-  single-threaded group and fold freely.
-- **Keep what the Definition of Done requires.** Every concrete `RenderBox`/`RenderSliver` has
-  a row in the `render_object_harness` family tables (`RENDER_OBJECT_TYPES` is checked against
-  them); a decision in the crate's `## Mapping decisions` has its test, named there; a
-  failure-path matrix keeps each failure point alone, two in competition, and the next
-  operation after containment.
+- **Test through the public API**, from `tests/`. An in-`src` `mod tests` is only for what a
+  consumer cannot reach (a failure-path matrix needing a private seam, a `## Mapping decisions`
+  entry); compile-fail cases are trybuild fixtures driven from `tests/`. Don't pin private
+  fields, dirty flags, `size_of`, internal constants or `Default`/`Debug`/getter round trips: a
+  refactor that keeps behavior must not touch a test. Values a document fixes (ADR-pinned wire
+  spellings, ABI) are contract and keep their tests.
+- **A family is one table.** Cases that differ only in input are rows of one table-driven
+  `#[test]`, each row a plain `fn` named after the case, run with the crate's existing runner
+  (`table_test::run_table`, `test_cases::run_cases`, `tests/contracts.rs`). Only the runners in
+  `flui-foundation` and `flui-animation` contain a panic payload whose `Drop` panics; elsewhere a
+  row must not throw one.
+- **Few binaries.** Each root `tests/*.rs` is a binary that links the whole stack, so crates
+  mount their integration tests as modules of one `tests/main.rs` (see `flui-widgets`'
+  manifest); a new file is a new `mod` line. A separate target is only for process-global state
+  or a feature the rest of the crate builds without. Tests that spawn a process (trybuild,
+  nested `cargo`) stay separate: `.config/nextest.toml` names them so they run in parallel.
+- **Keep what the Definition of Done requires**: a `render_object_harness` row for every
+  concrete `RenderBox`/`RenderSliver` (checked against `RENDER_OBJECT_TYPES`), the test named by
+  each `## Mapping decisions` entry, and a failure-path matrix's single, competing and
+  after-containment cases.
 - **Test names are references.** ARCHITECTURE.md files, ADRs and `docs/` cite tests by name:
-  `rg` the name before renaming, folding or deleting a test.
+  `rg` the name before renaming, folding or deleting one.
 
-What only CI sees: the host compiles one platform, so a test written on Windows can be red on
-Linux or wasm32 in CI (and on macOS, which CI only type-checks).
-
-- A helper kept alive by `cfg(any(target_os = "windows", test))` is dead once the test that used
-  it goes: gate the item, and any import only a `cfg`'d test uses, with the same `cfg`.
-- Once a function stops being `#[test]` (a table row), clippy applies `unwrap_used` to it.
-- A test that reads its own source with `include_str!` must not depend on line endings.
-- `cargo clippy --all-targets --target x86_64-unknown-linux-gnu` and `--target aarch64-apple-darwin`
-  check unix test code without linking (without `--all-targets` the test targets are skipped),
-  except in crates whose dependencies have a C build script; `cargo xtask wasm-check` covers wasm.
+A test written on Windows can be red in CI on Linux or wasm32. `cargo clippy --all-targets
+--target x86_64-unknown-linux-gnu` (or `aarch64-apple-darwin`) type-checks unix test code
+without linking, except in crates with a C build script; `cargo xtask wasm-check` covers wasm.
 
 ## Definition of Done
 
@@ -321,9 +274,8 @@ Pull requests are reviewed by Codex, which reads this section; a human reviewer 
 same way. fmt, clippy (pedantic, `unwrap_used`, the lints in the table above), rustdoc and the
 script gates already run in CI, so style and anything they catch is not worth a comment.
 
-- **What to report:** defects that would make a maintainer block the merge. Each finding names
-  the defect and a concrete failure scenario — the input or sequence that produces the wrong
-  result. If you can't construct one, label it a hypothesis. No praise, no restating the diff.
+- **What to report:** defects that would block the merge, each with a concrete failure
+  scenario; without one, it is a hypothesis.
 - **Tests:** for each behavior change, find the test that covers it and ask whether it would fail
   with the production hunk reverted. Tests here have passed both ways by reimplementing the
   predicate they pin, asserting that a widget exists rather than that it was laid out or
@@ -333,14 +285,10 @@ script gates already run in CI, so style and anything they catch is not worth a 
   the PR must say what changed and why. A test that mutates genuinely process-global state
   (the global subscriber, a global ID counter) needs a module-scoped lock, because nextest runs one
   process per test in parallel.
-- **Failure paths and recovery:** do not stop at the first reported error or panic. Inventory
-  every owned value, guard, callback and deferred obligation still live at each failure boundary,
-  including user-defined generic values whose `Drop` can panic. Exercise each failure point
-  alone, two failures in chronological competition, and the next operation after containment;
-  the first failure must remain authoritative and the subsystem must still make progress. For
-  queued or coalesced work, test durability and liveness separately: fail delivery, restore the
-  hook, repeat the same id, cross independent handles sharing the state, and prove that a handle
-  without a delivery hook cannot erase pending wake debt. See
+- **Failure paths and recovery:** check the change against "Recurring defects" above. At each
+  failure boundary, every owned value, guard, callback and deferred obligation must be
+  accounted for; each failure point alone, two in competition, and the next operation after
+  containment must leave the first failure authoritative and the subsystem making progress. See
   [`docs/research/signal-unwind-contract.ru.md`](docs/research/signal-unwind-contract.ru.md) for a
   concrete postmortem and regression matrix.
 - **Unwired surface:** a new `pub` item that no production path reaches (test, example and
@@ -370,9 +318,7 @@ script gates already run in CI, so style and anything they catch is not worth a 
   features stay additive and every optional dependency sits behind a `dep:` feature; a new crate
   declares its `[package.metadata.flui]` `tier`, `tier-kind`, `order` and `layer`, and
   `wasm = false` if it cannot build for wasm32. In workflows: actions pinned to a full SHA,
-  `--locked` on every cargo call, caches saved only on `main`, a job's name equals its key, and a
-  new job is listed in the `ci` aggregator's `needs` (a lane-gated one also in `HEAVY_JOBS`,
-  `FULL_JOBS` or `EXTENDED_JOBS`, matching its `if:`).
+  `--locked` on every cargo call, caches saved only on `main`.
 - **Registries and exemptions** (`RENDER_OBJECT_TYPES`, `docs/ROADMAP.md`, a `deny.toml` skip, a
   `typos.toml` word, an `#[expect]`): check that each entry matches the code in the same PR and
   that a new exemption states its reason.
