@@ -134,3 +134,48 @@ pub(crate) fn a_text_store_lock_requested_during_a_frame_is_granted_after_the_dr
         "the drive reopened commits"
     );
 }
+
+/// A host that records which store it was told to serve.
+#[derive(Default)]
+struct FocusLog(std::cell::RefCell<Vec<bool>>);
+
+impl flui_platform_api::TextStoreHost for FocusLog {
+    fn focus_store(&self, store: Option<Rc<dyn TextStore>>) {
+        self.0.borrow_mut().push(store.is_some());
+    }
+
+    fn complete_composition(
+        &self,
+    ) -> Result<
+        flui_platform_api::text_store::CompositionEnd,
+        flui_platform_api::text_store::TextStoreHostError,
+    > {
+        Ok(flui_platform_api::text_store::CompositionEnd::Committed)
+    }
+}
+
+/// A window that carries a text-store host takes text input through it, even
+/// though the headless window also offers a push capability: the
+/// presentation's owner tells the host which store is focused (ADR-0135).
+///
+/// Red-check: build the owner from the window's push capability alone — the
+/// host hears nothing.
+pub(crate) fn a_window_with_a_text_store_host_takes_input_through_it() {
+    let log = Rc::new(FocusLog::default());
+    let host: Rc<dyn flui_platform_api::TextStoreHost> = log.clone();
+    let realm = UiRealm::new(
+        Arc::new(|| {}),
+        super::test_window().with_text_store_host(Some(host)),
+        1.0,
+        Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        crate::presentation::test_clipboard(),
+        &flui_painting::FontCollection::new(),
+        flui_scheduler::ClockSource::Platform,
+    )
+    .expect("realm");
+    let (_store, client) = in_memory_client("");
+    let handle = realm.text_input_handle();
+    let token = handle.attach(client).expect("a pull window takes input");
+    let _ = handle.detach(token).expect("detach");
+    assert_eq!(*log.0.borrow(), [true, false]);
+}

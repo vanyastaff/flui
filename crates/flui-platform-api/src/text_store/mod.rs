@@ -18,6 +18,8 @@
 //!   presentation's frame transaction as that machine reads it.
 //! - [`TextStore`] and [`TextStoreObserver`]: the field side and the
 //!   platform side of the connection.
+//! - [`TextStoreHost`]: what a pull-model window offers the presentation:
+//!   which field it serves, and ending that field's composition (ADR-0135).
 //! - [`project_ime_event`]: a push-model [`ImeEvent`](crate::ImeEvent)
 //!   (winit) applied as store edits, so there is one editing path.
 //! - [`InMemoryTextStore`]: a complete store over a `String`, the
@@ -25,6 +27,7 @@
 //!
 //! Stores are owner-thread objects (`Rc<dyn TextStore>`, not `Send`).
 
+mod host;
 mod in_memory;
 mod lock;
 mod projection;
@@ -32,6 +35,7 @@ mod session;
 mod store;
 pub mod utf16;
 
+pub use host::{CompositionEnd, TextStoreHost, TextStoreHostError};
 pub use in_memory::InMemoryTextStore;
 pub use lock::{
     CommitGate, DEFERRED_LOCK_CAPACITY, LockArbiter, LockGrant, LockKind, LockOutcome, LockTiming,

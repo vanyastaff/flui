@@ -29,12 +29,14 @@
 //! substitution) is not raised: the frame it happened in completed.
 
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
+use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use flui_foundation::ManualClock;
 use flui_foundation::geometry::{Bounds, Size};
+use flui_platform_api::TextStoreHost;
 use flui_platform_api::{
     CursorError, CursorIcon, InMemoryClipboard, PlatformInput, PlatformTextInput, PlatformWindow,
     WindowId,
@@ -56,6 +58,8 @@ use flui_semantics::platform::{
 use flui_view::dev_agent::DevAgentHook;
 use parking_lot::Mutex;
 
+use crate::text_store_host::RecordingTextStoreHost;
+
 /// The window a [`HeadlessRealm`] presents into: window 1 at scale factor 1,
 /// focused and visible, with the logical size the realm was built at.
 ///
@@ -66,6 +70,7 @@ pub struct HeadlessWindow {
     size: Size<f64>,
     cursor: Mutex<CursorIcon>,
     text_input: Option<Arc<RecordingTextInput>>,
+    text_store_host: bool,
 }
 
 impl std::fmt::Debug for HeadlessWindow {
@@ -85,7 +90,18 @@ impl HeadlessWindow {
             size: Size::new(f64::from(width), f64::from(height)),
             cursor: Mutex::new(CursorIcon::Default),
             text_input: None,
+            text_store_host: false,
         }
+    }
+
+    /// Offer a pull-model text input instead: the realm's presentation gets
+    /// a [`RecordingTextStoreHost`] ([`HeadlessRealm::text_store_host`]) and
+    /// tells it which field's store takes input, as it tells the Win32 text
+    /// services. It wins over [`Self::with_text_input`].
+    #[must_use]
+    pub fn with_text_store_host(mut self) -> Self {
+        self.text_store_host = true;
+        self
     }
 
     /// Offer a text-input capability that records every call the realm's
@@ -324,6 +340,7 @@ pub struct HeadlessRealm {
     window: Arc<HeadlessWindow>,
     accessibility: Arc<HeadlessAccessibility>,
     clipboard: Arc<InMemoryClipboard>,
+    text_store_host: Option<Rc<RecordingTextStoreHost>>,
     /// Dropped-frame reports not yet raised, as the text a raised failure
     /// carries: those of the pump in progress, and any the realm made
     /// between pumps, which the next pump raises before it frames.
@@ -355,6 +372,7 @@ impl HeadlessRealm {
             reason = "the window size came from u32 pixel counts"
         )]
         let surface = (window.size.width as u32, window.size.height as u32);
+        let text_store_host = window.text_store_host.then(RecordingTextStoreHost::new);
         let window = Arc::new(window);
         let accessibility = Arc::new(HeadlessAccessibility::default());
         let clipboard = Arc::new(InMemoryClipboard::new());
@@ -364,6 +382,11 @@ impl HeadlessRealm {
             PresentationWindow::new(
                 Arc::clone(&window) as Arc<dyn PlatformWindow>,
                 Some(Arc::clone(&accessibility) as Arc<dyn PlatformAccessibility>),
+            )
+            .with_text_store_host(
+                text_store_host
+                    .clone()
+                    .map(|host| host as Rc<dyn TextStoreHost>),
             ),
             1.0,
             Arc::new(AtomicBool::new(false)),
@@ -392,6 +415,7 @@ impl HeadlessRealm {
             window,
             accessibility,
             clipboard,
+            text_store_host,
             failures,
         }
     }
@@ -603,6 +627,13 @@ impl HeadlessRealm {
     #[must_use]
     pub fn window(&self) -> &HeadlessWindow {
         &self.window
+    }
+
+    /// The pull-model host the realm's presentation speaks to, for a window
+    /// built [`HeadlessWindow::with_text_store_host`].
+    #[must_use]
+    pub fn text_store_host(&self) -> Option<&Rc<RecordingTextStoreHost>> {
+        self.text_store_host.as_ref()
     }
 
     /// The clipboard the realm hands its widgets.

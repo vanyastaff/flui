@@ -12,14 +12,43 @@
 //!
 //! Every backend fixes its bridge when it builds the window, so reading it
 //! once at open time sees the same bridge a later read would.
+//!
+//! The window's text-store host (ADR-0135) is owner-thread state, so it is
+//! not read here directly: [`HostWindow::text_store_host`] takes an
+//! `OwnerThreadToken` that only
+//! [`OwnerPlatform::text_store_host`](crate::OwnerPlatform::text_store_host)
+//! mints, on the thread that owns the window.
 
+use std::rc::Rc;
 use std::sync::Arc;
 
+use flui_platform_api::text_store::TextStoreHost;
 use raw_window_handle::{
     DisplayHandle, HandleError, HasDisplayHandle, HasWindowHandle, WindowHandle,
 };
 
 use super::{PlatformAccessibility, PlatformWindow};
+
+mod sealed {
+    use std::marker::PhantomData;
+
+    /// Proof that a call runs on the window's owner thread: minted only by
+    /// [`OwnerPlatform::text_store_host`](crate::OwnerPlatform::text_store_host),
+    /// which only that thread can hold, and itself neither `Send` nor
+    /// `Sync`. Public in a private module, so no other crate can name or
+    /// build one, and the method that takes it cannot be called outside
+    /// this crate.
+    #[derive(Debug)]
+    pub struct OwnerThreadToken(PhantomData<*const ()>);
+
+    impl OwnerThreadToken {
+        pub(crate) const fn new() -> Self {
+            Self(PhantomData)
+        }
+    }
+}
+
+pub(crate) use sealed::OwnerThreadToken;
 
 /// A window as a backend hands it to the composition root.
 ///
@@ -34,6 +63,30 @@ pub trait HostWindow: PlatformWindow {
     /// one with no such platform API. A composition root that gets `None`
     /// never enables semantics assembly, so the cost is not paid either.
     fn accessibility(&self) -> Option<Arc<dyn PlatformAccessibility>> {
+        None
+    }
+
+    /// This window's text-store host (ADR-0135), for a backend whose input
+    /// methods pull from the focused field's store; `None` for a push-model
+    /// backend (it offers [`PlatformWindow::text_input`]) or one with no
+    /// input-method integration.
+    ///
+    /// Callable only inside this crate, because only
+    /// [`OwnerPlatform::text_store_host`](crate::OwnerPlatform::text_store_host)
+    /// can build the token. Outside it, the token's type cannot be named:
+    ///
+    /// ```compile_fail,E0603
+    /// use flui_platform::traits::host_window::OwnerThreadToken;
+    /// ```
+    ///
+    /// nor conjured:
+    ///
+    /// ```compile_fail,E0277
+    /// fn read(window: &dyn flui_platform::traits::HostWindow) {
+    ///     let _ = window.text_store_host(Default::default());
+    /// }
+    /// ```
+    fn text_store_host(&self, _owner: OwnerThreadToken) -> Option<Rc<dyn TextStoreHost>> {
         None
     }
 }

@@ -76,17 +76,30 @@ pub use secondary_window::open_window;
 use web::run_web;
 
 /// The presentation window for a freshly opened host window: the window
-/// itself, upcast to the contract the realm drives, and the accessibility
-/// bridge its backend fixed when it built it.
+/// itself, upcast to the contract the realm drives, the accessibility
+/// bridge its backend fixed when it built it, and its text-store host when
+/// the backend's input methods pull from the field (ADR-0135).
 ///
 /// The one place the runner turns an `open_window` result into what a realm
-/// constructor takes. Reading the bridge here, once, is sound because every
-/// backend sets it at construction and never swaps it.
+/// constructor takes. Reading the bridge and the host here, once, is sound
+/// because every backend sets both at construction and never swaps them.
+/// The host is owner-thread state, so it is read through the loop's
+/// [`OwnerPlatform`](flui_platform::OwnerPlatform); without one installed
+/// (no loop on this thread) the window has none.
 pub(crate) fn presentation_window(
     host: std::sync::Arc<dyn flui_platform::traits::HostWindow>,
 ) -> crate::app::presentation::PresentationWindow {
     let accessibility = host.accessibility();
+    let text_store_host = text_store_host_of(&host);
     crate::app::presentation::PresentationWindow::new(host, accessibility)
+        .with_text_store_host(text_store_host)
+}
+
+fn text_store_host_of(
+    window: &std::sync::Arc<dyn flui_platform::traits::HostWindow>,
+) -> Option<std::rc::Rc<dyn flui_platform_api::TextStoreHost>> {
+    let _ = window;
+    None
 }
 
 /// Wire one presentation into the close-request seam (issue #558):

@@ -30,10 +30,12 @@
 use std::fmt;
 use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::sync::Arc;
 use std::thread::ThreadId;
 
 use flui_foundation::{ClaimHandle, ClaimOutcome};
+use flui_platform_api::text_store::TextStoreHost;
 use static_assertions::{assert_impl_all, assert_not_impl_any};
 
 use super::{
@@ -163,6 +165,23 @@ impl OwnerPlatform {
     #[must_use]
     pub fn proxy(&self) -> PlatformProxy {
         PlatformProxy::new(self.hooks.transport())
+    }
+
+    /// `window`'s text-store host (ADR-0135): the pull-model input-method
+    /// integration the presentation tells which field's store to serve.
+    /// `None` when the backend offers none (a push-model backend reports
+    /// its input through [`PlatformWindow::text_input`] instead).
+    ///
+    /// Here because the host is owner-thread state and this type proves the
+    /// thread; it moves to the owner-minted window registrar of ADR-0082 §4
+    /// step 2 once that exists. The runner reads it once, where it reads the
+    /// accessibility bridge (`runner::presentation_window`).
+    ///
+    /// [`PlatformWindow::text_input`]: super::PlatformWindow::text_input
+    #[must_use]
+    pub fn text_store_host(&self, window: &Arc<dyn HostWindow>) -> Option<Rc<dyn TextStoreHost>> {
+        let _ = (window, super::host_window::OwnerThreadToken::new());
+        None
     }
 }
 
@@ -902,5 +921,97 @@ impl ProxyTransport for ClosedTransport {
 
     fn owner_thread(&self) -> ThreadId {
         self.owner_thread
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::Cell;
+
+    use cursor_icon::CursorIcon;
+    use flui_foundation::geometry::{EdgeInsets, Size};
+    use flui_platform_api::CursorError;
+    use flui_platform_api::text_store::{CompositionEnd, TextStore, TextStoreHostError};
+    use raw_window_handle::{DisplayHandle, HandleError, WindowHandle};
+
+    use super::*;
+    use crate::traits::PlatformWindow;
+    use crate::traits::host_window::OwnerThreadToken;
+
+    /// What a pull-model backend's window answers: a host of its own.
+    struct PullWindow;
+
+    struct Host;
+
+    impl TextStoreHost for Host {
+        fn focus_store(&self, _: Option<Rc<dyn TextStore>>) {}
+
+        fn complete_composition(&self) -> Result<CompositionEnd, TextStoreHostError> {
+            Ok(CompositionEnd::Committed)
+        }
+    }
+
+    impl PlatformWindow for PullWindow {
+        fn id(&self) -> WindowId {
+            WindowId::new(1)
+        }
+        fn physical_size(&self) -> Size<i32> {
+            Size::new(1, 1)
+        }
+        fn logical_size(&self) -> Size<f64> {
+            Size::new(1.0, 1.0)
+        }
+        fn scale_factor(&self) -> f64 {
+            1.0
+        }
+        fn request_redraw(&self) {}
+        fn is_focused(&self) -> bool {
+            true
+        }
+        fn is_visible(&self) -> bool {
+            true
+        }
+        fn set_cursor(&self, _: CursorIcon) -> Result<(), CursorError> {
+            Ok(())
+        }
+        fn on_safe_area_change(&self, _: Box<dyn FnMut(EdgeInsets) + Send>) {}
+        fn window_handle(&self) -> Result<WindowHandle<'_>, HandleError> {
+            Err(HandleError::Unavailable)
+        }
+        fn display_handle(&self) -> Result<DisplayHandle<'_>, HandleError> {
+            Err(HandleError::Unavailable)
+        }
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+    }
+
+    impl HostWindow for PullWindow {
+        fn text_store_host(&self, _: OwnerThreadToken) -> Option<Rc<dyn TextStoreHost>> {
+            Some(Rc::new(Host))
+        }
+    }
+
+    /// The owner-thread capability reaches the window's host; a window
+    /// without one (the headless backend is push-model) answers `None`.
+    #[test]
+    fn the_owner_platform_reads_a_window_s_text_store_host() {
+        let checked = Rc::new(Cell::new(false));
+        let observed = Rc::clone(&checked);
+        Box::new(crate::platforms::HeadlessPlatform::new())
+            .run(Box::new(move |owner| {
+                let pull: Arc<dyn HostWindow> = Arc::new(PullWindow);
+                assert!(owner.text_store_host(&pull).is_some(), "pull window");
+                let push = owner
+                    .open_window(WindowOptions::default())
+                    .expect("headless window")
+                    .try_ready()
+                    .expect("ready inside on_ready");
+                assert!(owner.text_store_host(&push).is_none(), "push window");
+                observed.set(true);
+                Ok(())
+            }))
+            .expect("headless run");
+        assert!(checked.get());
     }
 }

@@ -14,12 +14,14 @@ use std::sync::{Arc, Weak};
 use flui_animation::Vsync;
 use flui_foundation::PresentationId;
 use flui_interaction::{
-    FocusManager, GestureBinding, InteractionDispatchHandle, TextInputHandle, TextInputOwner,
+    FocusManager, GestureBinding, InteractionDispatchHandle, TextInputBackend, TextInputHandle,
+    TextInputOwner,
 };
 use flui_layer::{LayerTree, PerformanceOverlayLayer, PerformanceOverlayOption, PerformanceSample};
 use flui_platform_api::HapticFeedback;
 #[cfg(any(test, feature = "test-support"))]
 use flui_platform_api::PlatformTextInput;
+use flui_platform_api::TextStoreHost;
 use flui_platform_api::{Clipboard, CursorError, CursorIcon, PlatformWindow};
 use flui_rendering::binding::RendererBinding as _;
 use flui_rendering::pipeline::PipelineCell;
@@ -115,9 +117,16 @@ pub fn test_clipboard() -> Arc<dyn Clipboard> {
 /// conversion into this type: a runner builds it through
 /// `runner::presentation_window` or names the bridge explicitly in
 /// [`Self::new`], so dropping the bridge is never an accident of a `.into()`.
+///
+/// It also carries the window's text-store host when its backend is
+/// pull-model (ADR-0135): the runner reads it through owner-thread proof
+/// beside the bridge, and the presentation's text-input owner then speaks to
+/// the host instead of the window's push capability. Owner-thread state, so
+/// a `PresentationWindow` is not `Send`.
 pub struct PresentationWindow {
     window: Arc<dyn PlatformWindow>,
     accessibility: Option<Arc<dyn PlatformAccessibility>>,
+    text_store_host: Option<Rc<dyn TextStoreHost>>,
 }
 
 impl std::fmt::Debug for PresentationWindow {
@@ -125,6 +134,7 @@ impl std::fmt::Debug for PresentationWindow {
         f.debug_struct("PresentationWindow")
             .field("window", &self.window.id())
             .field("accessibility", &self.accessibility.is_some())
+            .field("text_store_host", &self.text_store_host.is_some())
             .finish()
     }
 }
@@ -138,6 +148,18 @@ impl PresentationWindow {
         Self {
             window,
             accessibility,
+            text_store_host: None,
+        }
+    }
+
+    /// The window's text-store host, when its backend offers one; the
+    /// presentation's text input then uses it rather than the window's push
+    /// capability.
+    #[must_use]
+    pub fn with_text_store_host(self, text_store_host: Option<Rc<dyn TextStoreHost>>) -> Self {
+        Self {
+            text_store_host,
+            ..self
         }
     }
 
@@ -145,6 +167,19 @@ impl PresentationWindow {
     #[must_use]
     pub fn window(&self) -> &Arc<dyn PlatformWindow> {
         &self.window
+    }
+
+    /// How this window takes text input: through its host if it has one,
+    /// else through its push capability, else not at all.
+    fn text_input_backend(
+        window: &dyn PlatformWindow,
+        text_store_host: Option<Rc<dyn TextStoreHost>>,
+    ) -> TextInputBackend {
+        match (text_store_host, window.text_input()) {
+            (Some(host), _) => TextInputBackend::Pull(host),
+            (None, Some(platform)) => TextInputBackend::Push(platform),
+            (None, None) => TextInputBackend::None,
+        }
     }
 }
 
@@ -560,6 +595,7 @@ impl PresentationState {
         let PresentationWindow {
             window,
             accessibility,
+            text_store_host,
         } = window.into();
         let pipeline = PipelineCell::new(PipelineOwner::new(capabilities.text));
         if let Some(device_pixel_ratio) = device_pixel_ratio {
@@ -572,7 +608,10 @@ impl PresentationState {
         let frame_clock = FrameClock::with_source(capabilities.clock.clone());
         let alive = Rc::new(());
         let focus = FocusManager::new();
-        let text_input = TextInputOwner::new(window.text_input());
+        let text_input = TextInputOwner::new(PresentationWindow::text_input_backend(
+            window.as_ref(),
+            text_store_host,
+        ));
 
         let widgets = WidgetsBinding::with_focus_manager(Rc::clone(&focus));
         widgets.set_pipeline_owner(pipeline.clone());
@@ -726,7 +765,10 @@ impl PresentationState {
         let gestures = Self::build_gestures(id, &window, &ClockSource::Platform);
         let alive = Rc::new(());
         let focus = FocusManager::new();
-        let text_input = TextInputOwner::new(window.text_input());
+        let text_input = TextInputOwner::new(PresentationWindow::text_input_backend(
+            window.as_ref(),
+            None,
+        ));
 
         let widgets = WidgetsBinding::with_focus_manager(Rc::clone(&focus));
         widgets.set_pipeline_owner(pipeline.clone());

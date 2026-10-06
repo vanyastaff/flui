@@ -99,6 +99,7 @@ pub mod bootstrap;
 pub mod log_capture;
 pub mod realm;
 pub mod replay;
+pub mod text_store_host;
 pub mod text_store_kit;
 pub mod widgets;
 
@@ -110,6 +111,7 @@ pub use bootstrap::{BuildCapabilities, MountOptions, MountOwners, Mounted};
 pub use log_capture::{CapturedLog, CapturedRecord, capture, disarm_interest_cache};
 pub use realm::{HeadlessDevAgent, HeadlessRealm, HeadlessSink, HeadlessWindow};
 pub use replay::{GestureRecorder, PointerPhase, PointerScript, ScriptedPointer};
+pub use text_store_host::{RecordingTextStoreHost, StoreHostCall};
 
 use std::collections::HashMap;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
