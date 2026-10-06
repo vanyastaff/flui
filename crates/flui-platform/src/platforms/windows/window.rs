@@ -164,6 +164,7 @@ impl WindowsWindow {
         options: WindowOptions,
         windows_map: Arc<Mutex<HashMap<isize, Arc<WindowsWindow>>>>,
         handlers: Rc<RefCell<PlatformHandlers>>,
+        frames: Rc<super::platform::FrameCount>,
         config: crate::config::WindowConfiguration,
     ) -> Result<Arc<Self>, OpenWindowError> {
         // Admission refuses identity exhaustion before creating an HWND
@@ -177,6 +178,7 @@ impl WindowsWindow {
             options,
             windows_map,
             handlers,
+            frames,
             config,
             identity,
             hwnd,
@@ -257,6 +259,7 @@ impl WindowsWindow {
         options: WindowOptions,
         windows_map: Arc<Mutex<HashMap<isize, Arc<WindowsWindow>>>>,
         handlers: Rc<RefCell<PlatformHandlers>>,
+        frames: Rc<super::platform::FrameCount>,
         config: crate::config::WindowConfiguration,
         identity: super::platform::WindowIdentity,
         hwnd: HWND,
@@ -344,6 +347,7 @@ impl WindowsWindow {
                 windows: Arc::downgrade(&windows_map),
                 window_state: Arc::downgrade(&state),
                 handlers,
+                frames,
                 callbacks: WindowCallbacks::new(),
                 scale_factor: std::cell::Cell::new(scale_factor),
                 mode: std::cell::Cell::new(WindowMode::Normal),

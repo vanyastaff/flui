@@ -6,7 +6,7 @@
 //! `WM_NCDESTROY` on that thread, so what it owns is never run or dropped
 //! anywhere else. A platform dropped off its owner thread keeps the native
 //! window, and so leaks the context instead.
-use super::platform::WindowIdentity;
+use super::platform::{FrameCount, WindowIdentity};
 use crate::{
     PlatformError, WakeRegistrationError,
     shared::{
@@ -53,6 +53,7 @@ pub(super) struct OwnerControlContext {
     signal: Arc<OwnerSignal>,
     handlers: Rc<RefCell<PlatformHandlers>>,
     turn: Rc<OwnerTurnSlot>,
+    frames: Rc<FrameCount>,
 }
 
 /// Owner-thread handles cloned out of the [`OwnerControlContext`]. Holding
@@ -64,6 +65,8 @@ pub(super) struct OwnerShares {
     pub(super) handlers: Rc<RefCell<PlatformHandlers>>,
     /// Where the owner-turn callback waits between turns.
     pub(super) turn: Rc<OwnerTurnSlot>,
+    /// Frame callbacks dispatched by every window this platform opens.
+    pub(super) frames: Rc<FrameCount>,
 }
 
 /// The owner window's address, and the owner-thread gate onto its context.
@@ -126,6 +129,7 @@ impl OwnerControl {
             signal: Arc::clone(&signal),
             handlers: Rc::new(RefCell::new(PlatformHandlers::default())),
             turn: Rc::new(OwnerTurnSlot::default()),
+            frames: Rc::new(FrameCount::default()),
         });
         // SAFETY: dedicated registered class, created on this (the owner) thread;
         // userdata is the boxed context, reclaimed exactly once by WM_NCDESTROY.
@@ -245,6 +249,7 @@ impl OwnerGate {
                 Ok(OwnerShares {
                     handlers: Rc::clone(&context.handlers),
                     turn: Rc::clone(&context.turn),
+                    frames: Rc::clone(&context.frames),
                 })
             }
             UserDataVerdict::Refuse(reason) => {
