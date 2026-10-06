@@ -335,17 +335,19 @@ impl UiRealm {
             cancel.sort_unstable();
             cancel.dedup();
             for id in cancel.drain(..) {
-                let mode = terminal_close_mode(first_panic.is_some());
-                let failure = catch_unwind(AssertUnwindSafe(|| {
-                    if let Some(presentation) = self.presentations.get(id)
-                        && presentation.closing_requested.get()
-                    {
-                        flui_interaction::__runtime::close_gestures(presentation.gestures(), mode);
-                    } else {
-                        self.cancel_pointer_sequences_for(id);
-                    }
-                }))
-                .err();
+                // A closing presentation's gestures are cancelled by its
+                // terminal close below, after every presentation-wide
+                // capability is withdrawn: a recognizer's rejection callback
+                // must not reenter the closing presentation (ADR-0123).
+                if self
+                    .presentations
+                    .get(id)
+                    .is_some_and(|presentation| presentation.closing_requested.get())
+                {
+                    continue;
+                }
+                let failure =
+                    catch_unwind(AssertUnwindSafe(|| self.cancel_pointer_sequences_for(id))).err();
                 self.record_lifecycle_failure(
                     &mut first_panic,
                     failure,

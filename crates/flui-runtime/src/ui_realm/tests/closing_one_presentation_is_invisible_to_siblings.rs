@@ -362,6 +362,11 @@ impl flui_interaction::CustomGestureRecognizer for CloseArenaMember {
     fn on_arena_reject(&self, _: flui_interaction::PointerId) {
         let _ = (&self.captures.first, &self.captures.second);
         self.calls.set(self.calls.get() + 1);
+        CLOSE_REENTRY.with(|hook| {
+            if let Some(hook) = &*hook.borrow() {
+                hook();
+            }
+        });
     }
 }
 
@@ -858,11 +863,13 @@ pub(crate) fn run_presentation_close_child(kind: &str) {
     let realm_drop = kind == "realm-prior";
     let outer_unwind = kind == "outer-unwind";
     let reentry = matches!(kind, "cursor-reentry" | "healthy-reentry");
+    let gesture_reentry = kind == "gesture-reentry";
     let focus_failure = matches!(kind, "focus" | "cursor-focus");
     let ime_failure = matches!(kind, "ime" | "cursor-ime");
     assert!(matches!(
         kind,
         "healthy"
+            | "gesture-reentry"
             | "cursor"
             | "focus"
             | "ime"
@@ -1079,6 +1086,47 @@ pub(crate) fn run_presentation_close_child(kind: &str) {
         });
     }
 
+    let rejected_member = if gesture_reentry {
+        // A recognizer rejected by the close reenters through saved handles:
+        // every presentation-wide capability is already withdrawn.
+        let target_focus = Rc::clone(&focus);
+        let target_input = input.clone();
+        let closed_key = observer.key.clone();
+        let captured = Rc::clone(&capabilities);
+        CLOSE_REENTRY.with(|hook| {
+            *hook.borrow_mut() = Some(Box::new(move || {
+                assert!(target_focus.is_closed(), "focus closes before rejection");
+                assert_eq!(target_input.ensure_open(), Err(TextInputError::Closed));
+                assert!(closed_key.with_current_state(|_| ()).is_none());
+                let captured = captured.borrow();
+                let captured = captured.as_ref().expect("mounted capabilities");
+                assert_eq!(
+                    captured.graph.try_signal(1_u32).expect_err("closed graph"),
+                    flui_view::SignalError::OwnerClosed
+                );
+                assert!(!captured.rebuild.is_active());
+            }));
+        });
+        let captures = DropCompetition {
+            first: CursorCapture {
+                fail: false,
+                drops: Arc::clone(&arena_drops),
+            },
+            second: CursorCapture {
+                fail: false,
+                drops: Arc::clone(&arena_drops),
+            },
+        };
+        Some(realm.gestures().arena().add(
+            flui_interaction::PointerId::PRIMARY,
+            Arc::new(CloseArenaMember {
+                calls: Rc::clone(&arena_calls),
+                captures,
+            }),
+        ))
+    } else {
+        None
+    };
     if between_rounds {
         // A pump renders content but does not adopt the initial window
         // lifecycle snapshot. Initialize it through the same host API as a
@@ -1207,6 +1255,11 @@ pub(crate) fn run_presentation_close_child(kind: &str) {
     } else {
         catch_unwind(AssertUnwindSafe(|| realm.close_presentation_entered(a)))
     };
+    if let Some(entry) = rejected_member {
+        CLOSE_REENTRY.with(|hook| hook.borrow_mut().take());
+        assert!(entry.member().is_none());
+        assert_eq!(arena_calls.get(), 1, "the close rejected the recognizer");
+    }
     if reentry {
         CLOSE_REENTRY.with(|hook| hook.borrow_mut().take());
         assert_eq!(
@@ -1401,6 +1454,7 @@ pub(crate) fn presentation_close_retirement_failures_preserve_focus_ime_and_sibl
         "realm-prior",
         "cursor-reentry",
         "healthy-reentry",
+        "gesture-reentry",
         "healthy-platform",
         "window-owner",
         "bridge-owner",

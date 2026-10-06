@@ -1552,8 +1552,6 @@ impl PresentationState {
         let mode = failure.mode();
         failure.invoke(|| source.finish_close_with_mode(mode));
         let mode = failure.mode();
-        failure.invoke(|| close_gestures(&self.gestures, mode));
-        let mode = failure.mode();
         failure.invoke(|| close_mouse_tracker(self.gestures.mouse_tracker(), mode));
         failure.retire(announce);
         failure.retire(event);
@@ -1562,6 +1560,11 @@ impl PresentationState {
         failure.invoke(|| close_focus(&self.focus, mode));
         let mode = failure.mode();
         failure.invoke(|| close_text_input(&self.text_input, mode));
+        // Gesture cancellation runs recognizer callbacks, so it follows every
+        // withdrawal above: a rejected recognizer finds the presentation's
+        // graph, keys, agent, focus and text input already closed.
+        let mode = failure.mode();
+        failure.invoke(|| close_gestures(&self.gestures, mode));
         if let Some(dispatch) = dispatch {
             let mode = failure.mode();
             failure.invoke(|| flui_interaction::__runtime::retire_dispatch(dispatch, mode));
