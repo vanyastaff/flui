@@ -557,6 +557,6 @@ Each implemented from the canonical published source:
 | Critically damped follower with max-speed clamp | Unity `SmoothDamp` / Game Programming Gems 4 ch. 1.10 | `smoothing::SmoothDamp` |
 | Perceptually uniform color interpolation | Ottosson, Oklab (2020) | `OklabColorTween`, `Color::lerp_oklab` |
 | M3 emphasized easing + full Penner catalog | Material 3 / Penner | `Curves::EaseInOutCubicEmphasized`, `ThreePointCubic`, `Split` |
-| Interruptible springs with velocity-preserving retarget | analytic closed forms | `AnimatedValue`, `#[derive(Animatable)]` |
+| Interruptible springs with velocity-preserving retarget | analytic closed forms | `AnimatedValue`, `#[derive(TwoWayConverter)]` |
 
 See `examples/smoothing_follow.rs` and `examples/oklab_gradient.rs`.

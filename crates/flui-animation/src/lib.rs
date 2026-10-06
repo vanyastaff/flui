@@ -22,7 +22,7 @@
 //!   [`exp_decay`]/[`Smoothed`] (half-life exponential decay) and
 //!   [`SmoothDamp`] (critically damped, max-speed-clamped)
 //! - [`AnimatedValue`] - Interruptible spring value with velocity-preserving
-//!   retargeting (`#[derive(Animatable)]` for custom types)
+//!   retargeting (`#[derive(TwoWayConverter)]` for custom types)
 //! - [`AnimationError`] - Error type for animation operations
 //!
 //! ## Persistent Object Pattern
@@ -141,11 +141,12 @@ pub use simulation::{
 pub use smoothing::{SmoothDamp, Smoothed, exp_decay, exp_decay_half_life};
 pub use spring::{AnimatedValue, TwoWayConverter};
 pub use stagger::{Stagger, StaggerOrigin};
-// `#[derive(Animatable)]` generates a `TwoWayConverter` impl. It shares the name
-// `Animatable` with the trait above but lives in the macro namespace (the serde
-// `Serialize` trait+derive pattern), so a single `use flui_animation::Animatable`
+// `#[derive(TwoWayConverter)]` generates `TwoWayConverter` and `Lerp` impls. It
+// shares the trait's name but lives in the macro namespace (the serde
+// `Serialize` trait+derive pattern), so one `use flui_animation::TwoWayConverter`
 // brings in both.
-pub use flui_macros::Animatable;
+pub use flui_foundation::geometry::Lerp;
+pub use flui_macros::TwoWayConverter;
 pub use switch::AnimationSwitch;
 pub use tween::{TweenAnimation, animate};
 pub use vsync::{Vsync, VsyncRegistration, VsyncRegistrationError};

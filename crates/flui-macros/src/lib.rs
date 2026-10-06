@@ -46,7 +46,7 @@
 #![warn(clippy::print_stdout, clippy::print_stderr)]
 #![warn(missing_debug_implementations, rust_2018_idioms)]
 
-mod derive_animatable;
+mod derive_two_way_converter;
 mod derive_diagnosticable;
 mod derive_inherited_data;
 mod derive_routable;
@@ -263,28 +263,30 @@ pub fn derive_diagnosticable(input: TokenStream) -> TokenStream {
         .into()
 }
 
-/// Emit `impl TwoWayConverter` for a struct of `f64` fields,
-/// so the type can be spring-animated by `flui_animation::AnimatedValue`.
+/// Emit `impl TwoWayConverter` and a componentwise `impl Lerp` for a struct
+/// of `f64` fields, so the type can be spring-animated by
+/// `flui_animation::AnimatedValue`, tweened, and used as a
+/// `flui_animation::Keyframes` value.
 ///
 /// Every field must be `f64`; a non-`f64` field is a compile error. The type
-/// must also be `Clone` (the trait's supertrait).
+/// must also be `Clone` (both traits' supertrait).
 ///
 /// # Example
 ///
 /// ```rust,ignore
-/// use flui_animation::Animatable;
+/// use flui_animation::TwoWayConverter;
 ///
-/// #[derive(Clone, Animatable)]
+/// #[derive(Clone, TwoWayConverter)]
 /// struct Translation {
 ///     x: f64,
 ///     y: f64,
 ///     z: f64,
 /// }
 /// ```
-#[proc_macro_derive(Animatable)]
-pub fn derive_animatable(input: TokenStream) -> TokenStream {
+#[proc_macro_derive(TwoWayConverter)]
+pub fn derive_two_way_converter(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
-    derive_animatable::expand(&input).into()
+    derive_two_way_converter::expand(&input).into()
 }
 
 /// Emit `impl Routable` for a route enum: `to_path` and `from_path` from one

@@ -7,7 +7,7 @@
 // The derive copies fields verbatim and the asserted values are exactly
 // representable in f64, so exact-equality round-trip assertions are correct.
 
-use flui_animation::{Animatable, TwoWayConverter};
+use flui_animation::{Keyframes, Lerp, Linear, TwoWayConverter};
 
 #[path = "support/child_process.rs"]
 mod child_process;
@@ -27,14 +27,16 @@ mod tween;
 #[path = "contracts/keyframes.rs"]
 mod keyframes;
 
-#[derive(Clone, Animatable)]
+#[derive(Clone, TwoWayConverter)]
 struct Translation {
     x: f64,
     y: f64,
     z: f64,
 }
 
-#[test]
+#[derive(Clone, TwoWayConverter)]
+struct Pair(f64, f64);
+
 fn named_struct_round_trips_through_vector() {
     let t = Translation {
         x: 1.0,
@@ -45,6 +47,42 @@ fn named_struct_round_trips_through_vector() {
 
     let back = Translation::from_vector([4.0, 5.0, 6.0]);
     assert_eq!((back.x, back.y, back.z), (4.0, 5.0, 6.0));
+}
+
+fn derived_lerp_is_componentwise() {
+    let a = Translation {
+        x: 0.0,
+        y: 10.0,
+        z: -4.0,
+    };
+    let b = Translation {
+        x: 2.0,
+        y: 20.0,
+        z: 4.0,
+    };
+    let mid = a.lerp_to(&b, 0.5);
+    assert_eq!((mid.x, mid.y, mid.z), (1.0, 15.0, 0.0));
+    let past = Pair(0.0, 1.0).lerp_to(&Pair(1.0, 3.0), 1.5);
+    assert_eq!((past.0, past.1), (1.5, 4.0), "extrapolates past 1");
+}
+
+fn derived_type_is_a_keyframe_value() {
+    let ms = std::time::Duration::from_millis;
+    let track = Keyframes::builder(Pair(0.0, 0.0), ms(100))
+        .to(Pair(10.0, -10.0), ms(100), Linear)
+        .build()
+        .expect("fits");
+    let half = track.value_at(ms(50));
+    assert_eq!((half.0, half.1), (5.0, -5.0));
+}
+
+#[test]
+fn two_way_converter_derive_contract() {
+    run_table(&[
+        ("vector round trip", named_struct_round_trips_through_vector),
+        ("componentwise lerp", derived_lerp_is_componentwise),
+        ("keyframe value", derived_type_is_a_keyframe_value),
+    ]);
 }
 
 /// Execute every named scenario before reporting failures. Keep opaque panic
