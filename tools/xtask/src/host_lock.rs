@@ -7,7 +7,10 @@
 //! looks hung. The lock file sits in a fixed per-user directory, so every
 //! checkout the user has finds the same one: `%LOCALAPPDATA%\flui\` on
 //! Windows; elsewhere `$XDG_RUNTIME_DIR/flui/`, or `~/.cache/flui/` without
-//! it. `FLUI_XTASK_LOCK_FILE` names another file and `FLUI_XTASK_NO_LOCK=1`
+//! it. Without those variables it falls back to `flui-<user>` in the
+//! temporary directory (the user id on Unix, the user name on Windows), so
+//! accounts sharing that directory keep separate locks.
+//! `FLUI_XTASK_LOCK_FILE` names another file and `FLUI_XTASK_NO_LOCK=1`
 //! skips the lock.
 //!
 //! The lock is the operating system's advisory lock on an open file
@@ -77,10 +80,15 @@ pub(crate) struct LockSettings {
 impl LockSettings {
     /// The settings this process's environment gives.
     pub(crate) fn from_env() -> Self {
-        Self::from_vars(|key| std::env::var_os(key))
+        Self::from_vars(|key| std::env::var_os(key), current_user)
     }
 
-    fn from_vars(var: impl Fn(&str) -> Option<OsString>) -> Self {
+    /// `var` reads the environment; `user` names the current user, asked
+    /// only when no per-user directory variable is set.
+    fn from_vars(
+        var: impl Fn(&str) -> Option<OsString>,
+        user: impl FnOnce() -> Option<String>,
+    ) -> Self {
         let set = |key| var(key).filter(|value| !value.is_empty());
         let user_dir = if cfg!(windows) {
             set("LOCALAPPDATA").map(PathBuf::from)
@@ -89,16 +97,14 @@ impl LockSettings {
                 .map(PathBuf::from)
                 .or_else(|| set("HOME").map(|home| PathBuf::from(home).join(".cache")))
         };
+        // Without one, the shared temporary directory, in a directory named
+        // after the user so accounts on one machine keep separate locks.
+        let dir = user_dir.map_or_else(
+            || std::env::temp_dir().join(fallback_dir_name(user())),
+            |dir| dir.join("flui"),
+        );
         Self {
-            path: set(LOCK_FILE).map_or_else(
-                || {
-                    user_dir
-                        .unwrap_or_else(std::env::temp_dir)
-                        .join("flui")
-                        .join("xtask-heavy.lock")
-                },
-                PathBuf::from,
-            ),
+            path: set(LOCK_FILE).map_or_else(|| dir.join("xtask-heavy.lock"), PathBuf::from),
             opted_out: set(NO_LOCK).is_some_and(|value| value == "1"),
             held_by: set(LOCK_HELD).map(PathBuf::from),
         }
@@ -122,6 +128,49 @@ impl LockSettings {
     }
 }
 
+/// `flui-<user>` with any character outside `[A-Za-z0-9._-]` replaced, or
+/// plain `flui` when the user cannot be named.
+fn fallback_dir_name(user: Option<String>) -> String {
+    let Some(user) = user.filter(|user| !user.is_empty()) else {
+        return "flui".to_owned();
+    };
+    let user: String = user
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-') {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    format!("flui-{user}")
+}
+
+/// The current user's numeric id: the owner of a file this process creates
+/// is its effective user (no libc call needed). `USER`/`LOGNAME` if that
+/// fails.
+#[cfg(unix)]
+fn current_user() -> Option<String> {
+    use std::os::unix::fs::MetadataExt;
+
+    tempfile::tempfile()
+        .and_then(|file| file.metadata())
+        .map(|metadata| metadata.uid().to_string())
+        .ok()
+        .or_else(|| {
+            ["USER", "LOGNAME"]
+                .into_iter()
+                .find_map(|key| std::env::var(key).ok())
+        })
+}
+
+/// The current user's name.
+#[cfg(not(unix))]
+fn current_user() -> Option<String> {
+    std::env::var("USERNAME").ok()
+}
+
 /// Whether `a` and `b` name the same file, however each is spelled.
 fn same_file(a: &Path, b: &Path) -> bool {
     match (a.canonicalize(), b.canonicalize()) {
@@ -142,10 +191,19 @@ pub(crate) struct Holder {
 impl Holder {
     /// This process: its own arguments and checkout.
     pub(crate) fn this_run() -> Self {
-        let args: Vec<String> = std::env::args().skip(1).collect();
+        Self::from_args(std::env::args_os().skip(1), crate::util::repo_root())
+    }
+
+    /// The holder running `cargo xtask <args>` in `checkout`. An argument
+    /// that is not Unicode (clap accepts one as a path) is shown lossily.
+    fn from_args(args: impl IntoIterator<Item = OsString>, checkout: PathBuf) -> Self {
+        let args: Vec<String> = args
+            .into_iter()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
         Self {
             command: format!("cargo xtask {}", args.join(" ")),
-            checkout: crate::util::repo_root(),
+            checkout,
         }
     }
 }
@@ -500,35 +558,115 @@ mod tests {
                     .map(|(_, value)| OsString::from(value))
             }
         };
-        let user = LockSettings::from_vars(vars(&[
-            ("LOCALAPPDATA", "local"),
-            ("XDG_RUNTIME_DIR", "runtime"),
-            ("HOME", "home"),
-        ]));
-        let user_dir = if cfg!(windows) { "local" } else { "runtime" };
-        assert_eq!(
-            user.path,
-            Path::new(user_dir).join("flui").join("xtask-heavy.lock")
+        let alice = || Some("alice".to_owned());
+        let tmp = std::env::temp_dir();
+        let lock = |dir: PathBuf| dir.join("xtask-heavy.lock");
+        /// A row name, the environment, the user, and the expected path on
+        /// Windows and elsewhere.
+        type PathRow = (
+            &'static str,
+            &'static [(&'static str, &'static str)],
+            Option<&'static str>,
+            [PathBuf; 2],
         );
+        let paths: [PathRow; 6] = [
+            (
+                "per_user_directory_variable",
+                &[
+                    ("LOCALAPPDATA", "local"),
+                    ("XDG_RUNTIME_DIR", "runtime"),
+                    ("HOME", "home"),
+                ],
+                Some("alice"),
+                [
+                    lock(PathBuf::from("local/flui")),
+                    lock(PathBuf::from("runtime/flui")),
+                ],
+            ),
+            (
+                "home_cache_without_a_runtime_dir",
+                &[("HOME", "home")],
+                Some("alice"),
+                [
+                    lock(tmp.join("flui-alice")),
+                    lock(PathBuf::from("home/.cache/flui")),
+                ],
+            ),
+            (
+                "temp_fallback_names_the_user",
+                &[],
+                Some("alice"),
+                [lock(tmp.join("flui-alice")), lock(tmp.join("flui-alice"))],
+            ),
+            (
+                "temp_fallback_differs_per_user",
+                &[],
+                Some("1001"),
+                [lock(tmp.join("flui-1001")), lock(tmp.join("flui-1001"))],
+            ),
+            (
+                "user_name_cannot_leave_the_directory",
+                &[],
+                Some("../x y"),
+                [lock(tmp.join("flui-.._x_y")), lock(tmp.join("flui-.._x_y"))],
+            ),
+            (
+                "unnamed_user_shares_the_plain_directory",
+                &[],
+                None,
+                [lock(tmp.join("flui")), lock(tmp.join("flui"))],
+            ),
+        ];
+        let wrong: Vec<String> = paths
+            .iter()
+            .filter_map(|(row, env, user, [windows, other])| {
+                let user = user.map(str::to_owned);
+                let got = LockSettings::from_vars(vars(env), || user).path;
+                let want = if cfg!(windows) { windows } else { other };
+                (got != *want).then(|| format!("{row}: {} != {}", got.display(), want.display()))
+            })
+            .collect();
+        assert!(wrong.is_empty(), "lock path selection: {wrong:#?}");
+        let user = LockSettings::from_vars(vars(&[]), alice);
         assert!(!user.opted_out && user.held_by.is_none());
-        if !cfg!(windows) {
-            let home = LockSettings::from_vars(vars(&[("HOME", "home")]));
-            assert_eq!(home.path, Path::new("home/.cache/flui/xtask-heavy.lock"));
-        }
-        let set = LockSettings::from_vars(vars(&[
-            ("LOCALAPPDATA", "local"),
-            ("XDG_RUNTIME_DIR", "runtime"),
-            (LOCK_FILE, "elsewhere.lock"),
-            (NO_LOCK, "1"),
-            (LOCK_HELD, "elsewhere.lock"),
-        ]));
+        let set = LockSettings::from_vars(
+            vars(&[
+                ("LOCALAPPDATA", "local"),
+                ("XDG_RUNTIME_DIR", "runtime"),
+                (LOCK_FILE, "elsewhere.lock"),
+                (NO_LOCK, "1"),
+                (LOCK_HELD, "elsewhere.lock"),
+            ]),
+            alice,
+        );
         assert_eq!(set.path, PathBuf::from("elsewhere.lock"));
         assert!(set.opted_out && set.parent_holds());
-        let other = LockSettings::from_vars(vars(&[
-            (LOCK_FILE, "elsewhere.lock"),
-            (NO_LOCK, "0"),
-            (LOCK_HELD, "another.lock"),
-        ]));
+        let other = LockSettings::from_vars(
+            vars(&[
+                (LOCK_FILE, "elsewhere.lock"),
+                (NO_LOCK, "0"),
+                (LOCK_HELD, "another.lock"),
+            ]),
+            alice,
+        );
         assert!(!other.opted_out && !other.parent_holds());
+    }
+
+    /// An argument that is not Unicode, which clap accepts as a path, is
+    /// shown lossily instead of panicking.
+    #[test]
+    fn holder_shows_a_non_unicode_argument() {
+        #[cfg(windows)]
+        let odd = {
+            use std::os::windows::ffi::OsStringExt;
+            OsString::from_wide(&[u16::from(b'a'), 0xD800])
+        };
+        #[cfg(unix)]
+        let odd = {
+            use std::os::unix::ffi::OsStringExt;
+            OsString::from_vec(vec![b'a', 0xFF])
+        };
+        let holder = Holder::from_args([OsString::from("device"), odd], PathBuf::from("checkout"));
+        assert_eq!(holder.command, "cargo xtask device a\u{FFFD}");
     }
 }
