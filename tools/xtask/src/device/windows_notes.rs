@@ -161,7 +161,7 @@ impl Driver<'_> {
         self.editor(0, true)?;
         self.value("")?;
         self.text("Fix the title")?;
-        self.invoke("Back")?;
+        self.back_from_editor()?;
         self.wait_node(BUTTON, Some("Note 0"))?;
         anyhow::ensure!(
             self.node(BUTTON, Some(FIRST))?.is_none(),
@@ -172,7 +172,7 @@ impl Driver<'_> {
         self.open("Note 0", 0, "")?;
         self.replace(FIRST)?;
         self.save_by_keyboard()?;
-        self.invoke("Back")?;
+        self.back_from_editor()?;
         self.home_title(FIRST)?;
         println!("notes: keyboard Save ok");
 
@@ -182,17 +182,17 @@ impl Driver<'_> {
         self.text("Compact rows: false")?;
         self.invoke("Toggle compact rows")?;
         self.text("Compact rows: true")?;
-        self.invoke("Back")?;
+        self.back_from_settings()?;
         self.editor(0, false)?;
         self.value(DRAFT)?;
         // Back to Home proves the unsaved draft did not modify the saved row.
-        self.invoke("Back")?;
+        self.back_from_editor()?;
         self.home_title(FIRST)?;
         self.spacing("Note 1", "Note 2", 32.0)?;
         self.open(FIRST, 0, DRAFT)?;
         self.click_button("Save note")?;
         self.text("Saved note 0")?;
-        self.invoke("Back")?;
+        self.back_from_editor()?;
         self.home_title(DRAFT)?;
         anyhow::ensure!(
             self.node(BUTTON, Some(FIRST))?.is_none(),
@@ -213,7 +213,7 @@ impl Driver<'_> {
         self.replace(RESIZED_DRAFT)?;
         self.resize(640, 720)?;
         self.value(RESIZED_DRAFT)?;
-        self.invoke("Back")?;
+        self.back_from_editor()?;
         self.stable_band()?;
         self.open(&format!("Note {id}"), id, RESIZED_DRAFT)?;
         println!("notes: resize ok");
@@ -436,6 +436,35 @@ impl Driver<'_> {
                 .Invoke()
         }?;
         Ok(())
+    }
+
+    /// Backs out of a Note and waits for its editor to leave the UIA tree.
+    /// The departing page stays published for its 300 ms exit, above Home,
+    /// so Home's rows appearing does not mean Home is the only page.
+    fn back_from_editor(&self) -> anyhow::Result<()> {
+        self.invoke("Back")?;
+        self.wait("departing Notes editor left the UIA tree", |driver| {
+            let gone = !driver.session.walk(&driver.window).iter().any(|node| {
+                node.control == UIA_EditControlTypeId
+                    || (node.control == UIA_GroupControlTypeId
+                        && node.name.starts_with("Editing note "))
+            });
+            Ok(gone.then_some(()))
+        })
+    }
+
+    /// Backs out of Settings and waits for the departing page to leave the
+    /// UIA tree before the Note beneath is driven.
+    fn back_from_settings(&self) -> anyhow::Result<()> {
+        self.invoke("Back")?;
+        self.wait("departing Settings left the UIA tree", |driver| {
+            let gone = !driver
+                .session
+                .walk(&driver.window)
+                .iter()
+                .any(|node| node.name.starts_with("Compact rows: "));
+            Ok(gone.then_some(()))
+        })
     }
 
     fn chord(&self, keys: &[VIRTUAL_KEY]) -> anyhow::Result<()> {
@@ -737,7 +766,7 @@ impl Driver<'_> {
             target.id,
             &format!("Note {}", target.id),
         )?;
-        self.invoke("Back")?;
+        self.back_from_editor()?;
         let returned = self.stable_band()?;
         let row = returned
             .iter()
