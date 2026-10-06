@@ -459,14 +459,25 @@ impl TextInputOwner {
         // Before the client is reachable through `dispatch`, so no lock is
         // ever requested on a store that does not yet follow the frame. The
         // store is user code: a failure there rejects the client, which is
-        // retained rather than destroyed during the unwind (ADR-0127).
+        // retained rather than destroyed during the unwind (ADR-0127). The
+        // store may request grants of stores behind this owner's gate, whose
+        // settles park their failures there: one parked during a call that
+        // then panics came first, and is the one raised. When the store took
+        // the gate, what it parked stays for this owner's next turn, as any
+        // grant's parked failure does.
         let mut installing = OwnerCalls::new();
-        installing.run(|| {
-            client.store.set_commit_gate(self.gate.clone());
-        });
+        let installed = installing
+            .run_parking(&self.gate, || {
+                client.store.set_commit_gate(self.gate.clone());
+            })
+            .is_some();
         if let Some(payload) = installing.into_failure() {
-            RetainOnFailure::retain(client);
-            std::panic::resume_unwind(payload);
+            if installed {
+                self.gate.defer_failure(payload);
+            } else {
+                RetainOnFailure::retain(client);
+                std::panic::resume_unwind(payload);
+            }
         }
         // A user-defined store may close the owner while installing its gate.
         // The rejected client was never admitted; its owners still retire
@@ -603,7 +614,7 @@ impl TextInputOwner {
 
     /// Commit the active client's composition, keeping its text: what a
     /// pointer-down in the presentation or an accepted close request does
-    /// before its handlers run (ADR-0090 amendment item 4).
+    /// before its handlers run (ADR-0142 item 4).
     ///
     /// On a pull platform the host ends its composition; if it abandons it
     /// (or is gone), the owner clears the store's composing range itself.
@@ -1117,7 +1128,7 @@ impl TextInputHandle {
     /// Commit `token`'s composition, keeping its text, as
     /// [`TextInputOwner::complete_composition`] does for the active client;
     /// a stale token is a no-op. What a field does before blur, paste or
-    /// undo (ADR-0090 amendment item 4).
+    /// undo (ADR-0142 item 4).
     ///
     /// # Errors
     ///

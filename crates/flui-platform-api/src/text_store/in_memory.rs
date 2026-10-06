@@ -151,7 +151,7 @@ impl InMemoryTextStore {
     /// rules as [`TextStoreEdit::replace`], and the observer hears of it
     /// afterwards — at once, or, inside a frame transaction, once the gate
     /// opens. Made from inside a read-write grant, it wins: that session is
-    /// dropped (ADR-0090 amendment item 3).
+    /// dropped (ADR-0142 item 3).
     ///
     /// # Panics
     ///

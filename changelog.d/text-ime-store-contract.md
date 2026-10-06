@@ -3,7 +3,7 @@
 - **`TextEditingController::committed_text`** (`flui-widgets`): the text with the IME
   composition replaced by what it stands for (nothing for a new preedit, the original words for a
   reconversion), the text a field's owner works with
-  ([ADR-0090](/docs/adr/ADR-0090-ime-pull-text-store-contract.md) amendment).
+  ([ADR-0142](/docs/adr/ADR-0142-text-store-commit-gate-and-owner-code-containment.md)).
 - **`CommitGate::defer_failure` and `take_failure`** (`flui-platform-api`): a panic caught while
   a text store settled a grant waits at its presentation's gate for the owner to report; the
   first is kept, later ones are retained.
@@ -53,4 +53,6 @@
   presentation's next turn, after the close's own work.
 - **`TextInputHandle::attach`** (`flui-interaction`) returns the client's token once the client
   is active; a failure after that point waits in the presentation's commit gate for its next
-  turn instead of being raised by the attach.
+  turn instead of being raised by the attach. A store whose `set_commit_gate` panics is
+  rejected, and a failure its grants of other stores parked in the gate meanwhile is raised
+  ahead of its own.

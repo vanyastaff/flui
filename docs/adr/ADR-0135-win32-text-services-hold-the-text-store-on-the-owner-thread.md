@@ -6,9 +6,10 @@
 - **Date:** 2026-10-06
 - **Implements part of:** [ADR-0082](ADR-0082-platform-api-contract-crate.md) §4 (owner-thread
   storage, step 1; the owner-proof shape of step 2, for one capability)
-- **Related:** [ADR-0090](ADR-0090-ime-pull-text-store-contract.md) (the store contract; its
-  amendment items 4 and 7), [ADR-0097](ADR-0097-no-process-global-state-gate.md) (no new global),
-  [ADR-0127](ADR-0127-exceptional-path-retention.md) (retirement on failure)
+- **Related:** [ADR-0090](ADR-0090-ime-pull-text-store-contract.md) (the store contract),
+  [ADR-0142](ADR-0142-text-store-commit-gate-and-owner-code-containment.md) (resolving a
+  composition, the pull host and owner-code containment: items 4, 7 and 8),
+  [ADR-0097](ADR-0097-no-process-global-state-gate.md) (no new global), [ADR-0127](ADR-0127-exceptional-path-retention.md) (retirement on failure)
 
 ## Context
 
@@ -67,18 +68,17 @@ composition must still end somewhere.
    grant, so a call that reaches the owner again from inside the host waits for the outer one, and
    a completion asked for in a frame reaches its field even after a detach. The host's calls are
    platform code that reaches application code, so each goes through `OwnerCalls` like any owner
-   code (ADR-0090 amendment item 8): the operation, its store and the host clone are taken from
-   the queue before the call, and the first failure in time is authoritative (a failure parked
-   before the call, then one a grant settled inside it parked, then the call's own panic). On the
-   owner's turn (a completion, the anchor) the presentation's gate is taken before the call and
-   after it; an attach or a detach leaves a failure the gate already held for that turn, and an
-   attach parks what its host call raised there too, behind it, and returns the token (ADR-0090
-   amendment item 8). A host operation that panics releases
-   its values and the queue goes on: the completed store is retained once the scope has failed,
-   the host clone (framework-owned) is released, contained, even then; the first failure
-   propagates once the rest (and, at the anchor, the deferred grants) have run. An `Abandoned`
-   answer or an error commits
-   the composition in place; a push or storeless owner does that directly. Close applies the
+   code ([ADR-0142](ADR-0142-text-store-commit-gate-and-owner-code-containment.md) item 8): the
+   operation, its store and the host clone are taken from the queue before the call, and the
+   first failure in time is authoritative (a failure parked before the call, then one a grant
+   settled inside it parked, then the call's own panic). On the owner's turn (a completion, the
+   anchor) the presentation's gate is taken before the call and after it; an attach or a detach
+   leaves a failure the gate already held for that turn, and an attach parks what its host call
+   raised there too, behind it, and returns the token (ADR-0142 item 8). A host operation that
+   panics releases its values and the queue goes on: the completed store is retained once the
+   scope has failed, the host clone (framework-owned) is released, contained, even then; the
+   first failure propagates once the rest (and, at the anchor, the deferred grants) have run. An
+   `Abandoned` answer or an error commits the composition in place; a push or storeless owner does that directly. Close applies the
    queued operations in order (a focus change queued before a completion moves the host first,
    so the completion reaches its own store), then tells a host left focused `None`; after a
    failure it retires the rest and still sends the `None`. An owner dropped without a close only
@@ -121,7 +121,7 @@ composition must still end somewhere.
   `runner::presentation_window` is tested.
 - `TextInputOwner::complete_composition` and `TextInputHandle::complete_composition` have no
   production caller yet: the runtime's pointer-down and close hooks and the field's blur, paste,
-  undo and unmount handling (ADR-0090 amendment item 4) call them.
+  undo and unmount handling (ADR-0142 item 4) call them.
 - When ADR-0082 §4 step 2 lands, `text_store_host` moves to the owner window and the token goes.
 
 ## Verification

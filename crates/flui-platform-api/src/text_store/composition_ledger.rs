@@ -1,5 +1,5 @@
 //! [`CompositionLedger`]: what a document's composition stands for in its
-//! committed text (ADR-0090 amendment item 1).
+//! committed text (ADR-0142 item 1).
 //!
 //! The committed text is the document with the composing range replaced by
 //! what that range stands for: nothing for a new preedit, the reconverted

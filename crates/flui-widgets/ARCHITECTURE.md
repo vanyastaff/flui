@@ -1934,7 +1934,7 @@ compares the controller's generation, in the same critical section, with the
 one the session opened at, and the controller's identity: an application edit
 or a swapped controller wins and the session is dropped. A panicking
 `on_changed` is parked in the presentation's gate, after the observer heard of
-the session, and resumed by the owner's next dispatch or anchor (ADR-0090 amendment items 1–3). A lock asked for inside the frame
+the session, and resumed by the owner's next dispatch or anchor (ADR-0142 items 1–3). A lock asked for inside the frame
 transaction (the whole frame drive, post-frame callbacks included, in the
 harness's `tick` as in `flui-app`'s `UiRealm::drive_frame`) runs after the
 frame; a key press first runs those queued grants, so it lands after an IME

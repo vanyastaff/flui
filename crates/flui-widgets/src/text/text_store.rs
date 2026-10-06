@@ -22,7 +22,7 @@
 //! The session's one listener notification and at most one `on_changed`
 //! call are owed, not made, inside the grant: they run in `settle`, which the
 //! arbiter calls once the lock is released and before the next grant, so
-//! owner code may request a lock or edit the field (ADR-0090 amendment).
+//! owner code may request a lock or edit the field (ADR-0142 item 2).
 //! `on_changed` runs only when the committed text — the text without the
 //! composition — changed, and receives it.
 //!
@@ -447,8 +447,8 @@ impl EditableTextStore {
     /// Apply a platform session's result to the controller in one write,
     /// unless the application changed the field since the session opened at
     /// `generation`: then its edit stays, the session is dropped, and the
-    /// platform hears of the edit once the lock is released (ADR-0090
-    /// amendment item 3).
+    /// platform hears of the edit once the lock is released (ADR-0142
+    /// item 3).
     ///
     /// The listeners and `on_changed` are owed, not called: they run in
     /// [`Self::settle`], after the lock is released.

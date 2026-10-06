@@ -1,5 +1,5 @@
 //! [`OwnerCalls`]: the one containment around code a text store's owner or
-//! platform supplies (ADR-0090 amendment, "Owner code").
+//! platform supplies (ADR-0142 item 8).
 //!
 //! A store, its [`LockArbiter`](super::LockArbiter) and the presentation that
 //! attaches it run code they do not control at these points, and every one
@@ -29,7 +29,7 @@
 //! | the cursor-area loop: the store's notifications, the platform's cursor area, the loop rescheduled before a failure is resumed | `CursorAreaLoop::fire` (`flui-widgets` `text/editable_text.rs`) |
 //! | a blur's detach, with the token taken before it | the field's focus listener (`flui-widgets` `text/editable_text.rs`) |
 //! | dispose: detaching the client and the store, the attachment, the controller listener, each run though an earlier one failed | `EditableTextState::dispose` (`flui-widgets` `text/editable_text.rs`) |
-//! | a store installing the presentation's gate | `TextInputOwner::attach` (`flui-interaction` `text_input.rs`) |
+//! | a store installing the presentation's gate, behind what its grants of other stores parked there ([`OwnerCalls::run_parking`]) | `TextInputOwner::attach` (`flui-interaction` `text_input.rs`) |
 //! | a client a closed owner rejects, store then callback | `retire_rejected`, from `TextInputOwner::attach` and `TextInputHandle::attach` (`flui-interaction` `text_input.rs`) |
 //! | the platform's `set_ime_allowed` | `TextInputOwner::attach`, `detach` (`flui-interaction` `text_input.rs`) |
 //! | the platform's `set_ime_cursor_area` | `TextInputOwner::set_cursor_area` (`flui-interaction` `text_input.rs`) |

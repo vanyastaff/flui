@@ -1468,7 +1468,7 @@ pub(crate) mod text_store {
     }
 
     /// A failure-path matrix for an `on_changed` that panics after an input
-    /// method's grant (ADR-0090 amendment item 2): the grant stands, the
+    /// method's grant (ADR-0142 item 2): the grant stands, the
     /// failure reaches the realm's report exactly once, the first of two
     /// stays authoritative, the field keeps working, and the platform hears
     /// of an owner's edit before the next grant runs.

@@ -8,7 +8,7 @@ use super::store::TextStore;
 /// A pull-model platform's side of one window's text input: the object a
 /// window's input-method integration (Win32 text services) hands the
 /// presentation, through which the presentation tells it which field's
-/// [`TextStore`] it reads and edits (ADR-0090 §3, ADR-0135).
+/// [`TextStore`] it reads and edits (ADR-0090 §3, ADR-0142 item 7, ADR-0135).
 ///
 /// Owner thread only: shared as `Rc<dyn TextStoreHost>` and not `Send`.
 /// A backend hands one out only to a caller holding owner-thread proof

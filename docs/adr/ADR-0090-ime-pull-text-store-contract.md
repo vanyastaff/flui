@@ -3,13 +3,12 @@
 - **Status:** Accepted in part (2026-09-26): §1, §2 and §4 are implemented (the migration
   plan's IME text-store row); §3 waits for the Win32 TSF backend, §5 for exit B1. §2 was amended
   on acceptance: the projection takes an asynchronous lock, not a synchronous one (see §2).
-- **Amendment (proposed 2026-10-05):** "Committed text, settling and resolving a composition"
-  below amends §1, §2, §3, the interim implementation and the verification. Items 1–3 are
-  implemented; items 4–7 land with the Win32 text-services host, the widget's composition
-  handling and the runtime's anchor debt. Of those, the host contract, the owner's
-  `complete_composition` with the `Abandoned` path, and the removal of `active_store` are in the
-  code ([ADR-0135](ADR-0135-win32-text-services-hold-the-text-store-on-the-owner-thread.md)).
 - **Date:** 2026-09-25
+- **Superseded-by:** [ADR-0142](ADR-0142-text-store-commit-gate-and-owner-code-containment.md),
+  in part: §1's one change notification per session (the owner hears only of committed-text
+  changes, after the lock is released), §2's reporting of a failure after a projected grant, §3's
+  reading of `TextInputOwner::active_store`, and the interim implementation's write-back. The
+  rest of this ADR stands.
 - **Supersedes in part:** [ADR-0030](ADR-0030-platform-text-input-ime-capability.md) §1
   (the winit-shaped push vocabulary as the contract) and the push-only shape of §2
 - **Related:** [ADR-0037](ADR-0037-presentation-ownership-domains.md) §5 (who owns a text-input
@@ -127,9 +126,9 @@ The surface is `flui_platform_api::text_store`:
   transaction keeps its queued grants for that anchor.
 - One read-write session is one change notification to the widget. There is no undo stack in
   the framework yet, so "one undo step" has nothing to apply to; it binds the first undo
-  implementation. As amended (item 1, 2 below), the owner of the field — `on_changed`, a form
-  field — hears of a session only when it changed the committed text, and only after the
-  session's lock is released.
+  implementation. Under [ADR-0142](ADR-0142-text-store-commit-gate-and-owner-code-containment.md)
+  items 1 and 2, the owner of the field — `on_changed`, a form field — hears of a session only
+  when it changed the committed text, and only after the session's lock is released.
 
 ### 2. The push vocabulary becomes a projection
 
@@ -168,8 +167,8 @@ several UTF-16 units, composing ranges, async grants that arrive after a frame, 
 synchronous locks, and rect/point queries against layout. The built-in text field passes the same
 kit. This kit, not a live session, is the H0 gate for IME.
 
-The kit is `flui_testing::text_store_kit`, versioned by `KIT_VERSION` (2 since the amendment
-below; version 1's cases are unchanged): a field supplies a `TextStoreFixture` (its store, a
+The kit is `flui_testing::text_store_kit`, versioned by `KIT_VERSION` (2 since ADR-0142's owner
+notification rules; version 1's cases are unchanged): a field supplies a `TextStoreFixture` (its store, a
 reset, an app-side edit, a commit anchor, its own change count, a hook run inside its owner
 notification, and its capabilities) and calls `assert_conforms`. The kit holds frame transactions itself,
 through a `CommitGate` it installs with `set_commit_gate`, so no fixture can stand in for a
@@ -179,116 +178,13 @@ InMemoryTextStore` is the test-only minimal field, with `text_store_kit::InMemor
 worked example; the kit's own tests wrap it with one fault each and assert the kit catches every
 one.
 
-## Amendment: committed text, settling and resolving a composition
+## Owner notification and owner-code containment
 
-Proposed 2026-10-05. The store contract above let a store run its owner's code inside a
-platform session: `EditableText` wrote a session back and called `on_changed` while the lock
-was still held, so owner code that asked for a lock was refused, and it compared the whole
-text, so `on_changed`, autovalidation and a saved draft saw text the input method was still
-composing. The amendment fixes what the owner sees and when:
-
-1. **The owner works with the committed text**: the document with its composing range replaced
-   by the text that occupied that range before the composition began — nothing for a new
-   preedit, the original words when an input method reconverts text the user already
-   committed. The field's owner is told only when the committed text changed; a session that
-   only composed, cancelled a composition, or only marked existing text as a composition tells
-   it nothing. A store keeps that origin beside its composing range and accounts for a
-   session's edits with `text_store::CompositionLedger`, which knows what every character
-   stands for: a committed character stands for itself, a character the session inserted
-   stands for nothing, and committed text an edit removed from a composition (or from a
-   composition an edit cleared) is kept where it was removed. The committed text is every
-   visible character, with the composition replaced by what its characters and removals
-   stand for. So text the session inserted and then marked is a new preedit, text it found and
-   marked is a reconversion, and a composition an edit cleared keeps its origin until it is
-   marked again; the text one edit inserted, with what it removed, is one replacement, and
-   replacements that rewrote each other's text are one. A session opens with its composition
-   standing for itself when the origin is its visible text, as new preedit when the origin is
-   empty, and otherwise as one replacement of the origin by the visible text. **Narrowing:**
-   when a mark leaves part of a composition (or of a composition an edit cleared) outside the
-   new range, that part commits as the user sees it: its characters stand for themselves and its
-   removals are dropped. A removal travels with its own replacement's characters: when every
-   character a replacement inserted lies outside the new range, the replacement leaves whole,
-   its removal with it; when they lie both inside and outside it, its removal leaves (the
-   replacement is split). A removal whose replacement inserted no characters (a deletion) stays
-   only strictly inside the new range, so a deletion at its edge commits ("abcdefghi" marked whole,
-   "def" deleted, narrowed to "abc": the committed text is "abcghi"). A removal that stays sits at
-   the composition's edge nearest it. The rest keeps what its own characters and removals stand
-   for, unless a replacement with non-empty removed text is split; its removed text cannot be
-   divided, so the rest of that region then stands for its own visible text, and the committed
-   text over it is what the user sees. A replacement's removed text is therefore never
-   counted beside any of its own inserted text (no "abcdefDEF" from narrowing a conversion of
-   "abcdef" to "ABC"). Text that never stood for anything (new preedit) commits as shown beside
-   the origin the rest keeps. `flui-platform-api`'s `the_ledger_follows_the_reference` checks the
-   ledger against a reference model over random edit, mark and session sequences, with the
-   cases that model found (`composition_ledger_named_cases`). A text form field validates and
-   saves the committed text (`TextEditingController::committed_text`). Kit version 2 pins it
-   (`composition_only_sessions_do_not_notify_the_owner`,
-   `reconverting_committed_text_notifies_only_on_commit`).
-2. **The owner hears after the lock is released, before the next grant.** `LockArbiter::request`
-   and `run_deferred` take a second function, `settle`, called after each grant has released its
-   lock and before the next queued grant runs. A store commits the session's result inside the
-   grant and records the notification it owes; it delivers it in `settle`, then the observer
-   notifications that waited for the lock. A synchronous lock requested from the owner's code is
-   granted (after the grants queued ahead of it), so an `on_changed` that edits the field lands
-   after the session and reaches the platform as an application edit. A panic in `settle` does
-   not undo the grant, which already ran: the arbiter catches it, hands the first payload to the
-   store's `CommitGate` (`defer_failure`; later ones are retained per ADR-0127), and the queue
-   keeps running; the gate's owner takes it (`take_failure`) and reports it at its next turn
-   through the realm's panic report: `TextInputOwner::dispatch` and `run_deferred_grants` take it
-   once they return and resume it inside their containment (the first failure stays
-   authoritative), so it reaches the realm's report from the dispatch or anchor that follows. A
-   store also tells its observer before it resumes an owner panic, so a grant queued behind it
-   never runs before the platform hears of an edit the owner made. A store whose owner never
-   installed a gate resumes the panic once the lock is released. Under TSF the grant's `RequestLock` still returns `S_OK` with
-   `*phrSession` from `OnLockGranted`. Kit version 2 pins it
-   (`owner_notification_runs_after_release`).
-3. **A platform session the application overtook is dropped.** The controller counts its
-   changes (a generation); a read-write session records the count when it opens, and if the
-   application changed the field before the session writes back (a nested modal loop on the
-   owner thread, an async task), the session's result is discarded, the application's edit
-   stays, and the platform hears of it through the observer once the lock is released, so the
-   text service re-reads the document. There is no merge: nothing gives a base for a three-way
-   comparison.
-4. **A field losing its input resolves its composition by committing it.** Pointer-down in the
-   presentation (inside the composing field too), an accepted close request, the end of the
-   session, blur, paste and undo, and unmount commit the visible composition before the event's
-   handlers run. A platform that cannot terminate its composition (a refused lock) reports
-   `Abandoned`; the field then clears the composing range itself, keeping the text. Unmount
-   commits in place and calls no `on_changed`; only an input-method edit not yet applied when the
-   store detaches is lost. This supersedes ADR-0030 §6's "blur detaches the IME client but does
-   not end the composition". Until this item lands, a form reset during a composition leaves the
-   preedit in the field (the reset writes only the committed text it compares against).
-5. **A commit anchor skipped by an unwound frame is a debt of the realm**, paid at its next owner
-   turn (a drained inbox, a background pump or a pump), not at the next frame, and a failed wake
-   does not clear it.
-6. **The commit gate is open only while the realm is in its slot and not driving a frame.** A
-   platform entry while the realm is checked out (a frame, the end of a session) is refused a
-   synchronous lock and queues an asynchronous one; no user code runs.
-7. **§3's platform mapping follows a pull host.** The Win32 backend receives the focused store
-   from the presentation through an owner-thread host rather than reading
-   `TextInputOwner::active_store`, which is removed.
-8. **Owner code runs inside one containment.** Every point where the arbiter, a store or the
-   presentation runs code it does not control — a grant's body, a settle, `on_changed`, the
-   controller's listeners, an owner listener, the observer (the flush after a request's grants
-   included, which yields to a failure their settle parked), `on_session_start`, the projection,
-   a store installing a gate, a pull host's focus and completion calls from the presentation's
-   queue (ADR-0135 §4), diagnostics (a `tracing` subscriber is user code), and the destruction of
-   any snapshot, refused or queued grant, replaced value, client, store or host clone — goes
-   through `text_store::OwnerCalls`, whose module doc lists them; a gate whose last clone goes
-   with a failure no owner took retains it. What the code is owed (obligations with their values,
-   the gate a failure belongs to) is read before it runs, never after, since it may reenter,
-   settle a nested session or move the store to another presentation. Each call is contained and
-   the first failure in time is authoritative: a settle parks its failure in the admitting gate
-   the moment it is caught, ahead of any session the owner's later code opens; a failure a call
-   parked in a gate came before that call's own unwind, so it is taken first, while one the gate
-   already held waits for its owner's turn (a dispatch, an anchor, a completion, a close); a
-   later one is retained (ADR-0127). Work stays deliverable: an asynchronous request behind a
-   failing queued grant is queued, and a synchronous one, or one refused because the flush
-   before it failed, is retained rather than destroyed during the unwind. A snapshot retires
-   inside the scope: dropped while the scope is healthy, retained once it has failed or while the
-   thread unwinds. Nested work runs in the caller's scope, so it sees the caller's failure. A
-   session the field was unmounted under is not written back. One matrix pins every point
-   (`owner_code_is_contained_at_every_point`).
+[ADR-0142](ADR-0142-text-store-commit-gate-and-owner-code-containment.md) decides what the
+field's owner sees (the committed text), when it hears of a session (after the lock is released,
+before the next grant), what happens to a session the application overtook, how a field resolves
+a composition when it loses its input, and how every call into code the store does not control is
+contained.
 
 ## Interim implementation
 
@@ -296,8 +192,8 @@ composing. The amendment fixes what the owner sees and when:
 (`crates/flui-widgets/src/text/text_store.rs`) until ADR-0092's `TextFieldState` replaces both
 behind the same trait. The controller's `Arc<Mutex<…>>` survives behind the trait for now: the
 store reads a snapshot of it when a lock opens and writes a read-write session back once,
-checking the controller's generation in the same critical section (amendment item 3); its
-listeners and `on_changed` run in `settle` (item 2). There is no undo stack. Converting offsets walks the text (O(n)), fine for single-line fields; multiline
+checking the controller's generation in the same critical section (ADR-0142 item 3); its
+listeners and `on_changed` run in `settle` (ADR-0142 item 2). There is no undo stack. Converting offsets walks the text (O(n)), fine for single-line fields; multiline
 needs a cached index. A push event queued behind a frame lands before a later key press (the key
 handler runs queued grants first), but a programmatic `set_text` made while a grant is queued goes
 ahead of it. App edits reach the observer at the next frame, key press or lock request, since
@@ -305,9 +201,10 @@ controller listeners are `Send + Sync` and the store is not.
 
 A pull platform receives the focused store through an owner-thread `TextStoreHost`
 ([ADR-0135](ADR-0135-win32-text-services-hold-the-text-store-on-the-owner-thread.md));
-`TextInputOwner::active_store` is removed. No window offers a host yet, so the production caller
-is still the push projection, and the observer, `rect_for_range`, `index_at_point` and
-`document_bounds` have no production caller until the Win32 window offers its host.
+`TextInputOwner::active_store` is removed (ADR-0142 item 7). No window offers a host yet, so the
+production caller is still the push projection, and the observer, `rect_for_range`,
+`index_at_point` and `document_bounds` have no production caller until the Win32 window offers
+its host.
 
 ## Divergences
 
@@ -329,7 +226,7 @@ No backend code exists for any of these yet; this is the shape each backend impl
 
 | Platform | Mapping |
 |---|---|
-| Windows, TSF `ITextStoreACP` (ACP offsets are UTF-16) | `RequestLock(TS_LF_READ\|TS_LF_READWRITE [\|TS_LF_SYNC])` → `LockGrant::{Read, ReadWrite}` with `LockTiming::{Sync, Async}`; `Granted` sets `*phrSession` to `OnLockGranted`'s HRESULT (the grant calls it), `Deferred` returns `TS_S_ASYNC`, `SyncLockUnavailable` returns `TS_E_SYNCHRONOUS`. `GetStatus` → `status()` (protected → an `IS_PASSWORD` input scope); `GetEndACP` → `document_len`; `GetText` → `text`, one `TS_RT_PLAIN` run; `GetSelection` → `selection()` (`TS_AE_START` when active < anchor, `fInterimChar` false). `SetSelection` → `set_selection`; `SetText` → `replace`; `InsertTextAtSelection` → `insert_at_selection` (`TF_IAS_QUERYONLY` answered from `selection()`); `QueryInsert` returns the range as given. `GetTextExt` → `rect_for_range` in screen physical pixels (`pfClipped` from `clipped`, `NoLayout` → `TS_E_NOLAYOUT`); `GetScreenExt` → `document_bounds`; `GetACPFromPoint` → `index_at_point` (`GXFPF_NEAREST` → `Nearest`, else `Exact`; `PointOutside` → `TS_E_INVALIDPOINT`). `AdviseSink`/`UnadviseSink` → `set_observer` (`OnTextChange`, `OnSelectionChange`, `OnLayoutChange(TS_LC_CHANGE)`, `OnStatusChange`). `ITfContextOwnerCompositionSink` `OnStart`/`OnUpdate`/`OnEndComposition` → `set_composition` inside the text service's read-write session. Embedded-object verbs return `E_NOTIMPL`; no attributes are reported. Errors: `Offset` → `TS_E_INVALIDPOS`, `Detached` → `E_UNEXPECTED`, `DeferredQueueFull` → `E_FAIL`. A panic in the owner's notification after a grant (amendment item 2) does not change the answer: `S_OK`, with `*phrSession` from `OnLockGranted`. No field is read-only yet, so `TS_SD_READONLY` and `TS_E_READONLY` have no source; the status flag and the error are added with the first read-only field. UIA `TextPattern`/`ValuePattern` read the same store under sync read locks. |
+| Windows, TSF `ITextStoreACP` (ACP offsets are UTF-16) | `RequestLock(TS_LF_READ\|TS_LF_READWRITE [\|TS_LF_SYNC])` → `LockGrant::{Read, ReadWrite}` with `LockTiming::{Sync, Async}`; `Granted` sets `*phrSession` to `OnLockGranted`'s HRESULT (the grant calls it), `Deferred` returns `TS_S_ASYNC`, `SyncLockUnavailable` returns `TS_E_SYNCHRONOUS`. `GetStatus` → `status()` (protected → an `IS_PASSWORD` input scope); `GetEndACP` → `document_len`; `GetText` → `text`, one `TS_RT_PLAIN` run; `GetSelection` → `selection()` (`TS_AE_START` when active < anchor, `fInterimChar` false). `SetSelection` → `set_selection`; `SetText` → `replace`; `InsertTextAtSelection` → `insert_at_selection` (`TF_IAS_QUERYONLY` answered from `selection()`); `QueryInsert` returns the range as given. `GetTextExt` → `rect_for_range` in screen physical pixels (`pfClipped` from `clipped`, `NoLayout` → `TS_E_NOLAYOUT`); `GetScreenExt` → `document_bounds`; `GetACPFromPoint` → `index_at_point` (`GXFPF_NEAREST` → `Nearest`, else `Exact`; `PointOutside` → `TS_E_INVALIDPOINT`). `AdviseSink`/`UnadviseSink` → `set_observer` (`OnTextChange`, `OnSelectionChange`, `OnLayoutChange(TS_LC_CHANGE)`, `OnStatusChange`). `ITfContextOwnerCompositionSink` `OnStart`/`OnUpdate`/`OnEndComposition` → `set_composition` inside the text service's read-write session. Embedded-object verbs return `E_NOTIMPL`; no attributes are reported. Errors: `Offset` → `TS_E_INVALIDPOS`, `Detached` → `E_UNEXPECTED`, `DeferredQueueFull` → `E_FAIL`. A panic in the owner's notification after a grant (ADR-0142 item 2) does not change the answer: `S_OK`, with `*phrSession` from `OnLockGranted`. No field is read-only yet, so `TS_SD_READONLY` and `TS_E_READONLY` have no source; the status flag and the error are added with the first read-only field. UIA `TextPattern`/`ValuePattern` read the same store under sync read locks. |
 | macOS, `NSTextInputClient` (`NSRange` is UTF-16) | Every call is synchronous and uses `Sync`; a refused lock returns today's empty answers (`nil`, `{NSNotFound, 0}`), never blocks. `markedRange`/`hasMarkedText` → `composition`; `selectedRange` → `selection().range()`; `attributedSubstringForProposedRange:actualRange:` → `text` over the clamped range, returned as `actualRange`; `firstRectForCharacterRange:actualRange:` → `rect_for_range` through `convertRectToScreen` with a flipped y (single-line today); `characterIndexForPoint:` → `index_at_point(Nearest)` or `NSNotFound`. `setMarkedText:selectedRange:replacementRange:` → `replace` of the replacement range, else the composition, else the selection, then `set_composition(hides_caret: false)` and `set_selection`; `insertText:replacementRange:` → `replace` and clear the composition; `unmarkText` → clear the composition keeping the text (unlike winit's `Disabled`). `layout_changed` → `invalidateCharacterCoordinates`; an app edit overlapping the composition → `discardMarkedText`. The backend's own UTF-16 converter is replaced by `text_store::utf16`. |
 | Linux, winit (X11 XIM, Wayland) | Push-only: through `project_ime_event`. The candidate area comes from `rect_for_range` over the composition or the caret. |
 | Linux, native Wayland `text-input-v3` (if a backend bypasses winit) | `set_surrounding_text` takes UTF-8 byte cursor and anchor (at most 4000 bytes), read under a sync read lock; `delete_surrounding_text` → `replace`; `preedit_string` byte cursors are handled as the projection handles them; `done(serial)` is one read-write lock. |
@@ -403,29 +300,8 @@ In place:
   `tests/editable_text.rs`'s `text_store` module (offset mapping, one `on_changed` per session,
   exact platform selection, controller swap, `layout_changed`, `Detached` after dispose, a lock
   from a post-frame callback, typing after a deferred commit).
-- Amendment items 1–3: `flui-platform-api` `tests/lock_gate.rs`'s
-  `settling_runs_owner_code_outside_the_lock` (settle after each release and before the next
-  grant, a panicking settle reaching the gate while the queue drains, and resuming when no owner
-  installed a gate); kit version 2's `composition_over_a_selection_replaces_the_selection`,
-  `composition_only_sessions_do_not_notify_the_owner` and
-  `owner_notification_runs_after_release`, with `flui-testing`'s
-  `conformance_fails_a_store_that_notifies_its_owner_of_a_composition`,
-  `conformance_fails_a_store_that_notifies_its_owner_under_the_lock` and
-  `a_pinned_conformance_version_does_not_grow`, and `reconverting_committed_text_notifies_only_on_commit`;
-  `flui-widgets` `on_changed_runs_after_the_lock_is_released`,
-  `an_app_edit_during_a_lock_is_not_overwritten`,
-  `swapping_the_controller_during_a_grant_drops_the_session`,
-  `a_panicking_on_changed_is_reported_once_and_the_field_keeps_working` (a failure reaching the
-  next owner turn once, one raised by the dispatch, the first of two kept, and the observer
-  told before the next grant) and `a_text_form_field_validates_and_saves_the_committed_text`.
 
 Outstanding:
-
-- Amendment items 4–7, with their tests: the Win32 window offering its text-services host
-  (item 7; the host contract and the removal of `active_store` are ADR-0135's), the widget's committing of a composition on blur, paste, undo and
-  unmount (item 4), the runtime's pointer-down and close hooks, anchor debt and the gate's realm
-  rule (items 4–6), and a failure the gate holds being reported through the anchor debt when no
-  dispatch or anchor follows (items 2 and 5).
 
 - Mock `ITextStoreACP` unit tests in the Win32 backend (§3), clippy-only in CI like the rest of
   Win32 until a Windows test job runs them.

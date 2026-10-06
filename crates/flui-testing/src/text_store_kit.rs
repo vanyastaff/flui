@@ -39,7 +39,7 @@ use flui_platform_api::text_store::InMemoryTextStore;
 
 /// The newest kit version.
 ///
-/// Version 2 adds the owner-notification contract (ADR-0090 §1 as amended):
+/// Version 2 adds the owner-notification contract (ADR-0142 items 1 and 2):
 /// the owner hears only of committed-text changes, after the session's lock
 /// is released, a composition may start over a selection, and a grant that
 /// panics leaves no composition without what it stands for.
