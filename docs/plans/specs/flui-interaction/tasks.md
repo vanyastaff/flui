@@ -60,9 +60,9 @@
 | ID | Задача | [P] |
 |---|---|---|
 | I10 | Арена: `DashMap` + `parking_lot::Mutex` внутри `!Send + !Sync` `GestureArena` → однопоточное хранилище (`RefCell` + слоты с поколением); `Arc` участника не роняется под lock слота (`arena/mod.rs:942,1221,1313`); порядок map/slot зафиксирован; `signal_resolver.rs:152` — `checked_add` | после I1 |
-| I11 | Распознаватели: `Arc<Mutex<GestureSettings>>` (10 мест) → `Cell<GestureSettings>`; `GestureSettings` из binding/виджета доходит до распознавателя (matrix X2) | после I1, I3 |
+| I11 | Распознаватели: `GestureSettings` строится из `SystemPreferences::gestures()` (ADR-0151 §4, после platform-layer LY8) через `GestureSettingsScope`; `Arc<Mutex<GestureSettings>>` (10 мест) → `Cell<GestureSettings>`; `GestureSettings` из binding/виджета доходит до распознавателя (matrix X2) | после I1, I3 |
 
-## Требует подтверждения владельца (сквозной рефакторинг, отдельная спека `recognizer-api/`)
+## Спека `recognizer-api/` (сквозной рефакторинг; подтверждена владельцем 2026-10-06)
 
 - Builder до `Rc` вместо 45 методов `with_on_*(self: Arc<Self>)`; `Arc` → `Rc` у распознавателей.
 - Свернуть `OneSequenceGestureRecognizer`/`PrimaryPointerGestureRecognizer` в поле-помощник;
