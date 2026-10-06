@@ -116,26 +116,39 @@ pub enum SimulationError {
     },
 }
 
+fn out_of_range(parameter: SimulationParameter, value: f64) -> SimulationError {
+    SimulationError::OutOfRange { parameter, value }
+}
+
 /// `Ok(value)` when `value` is finite and `> 0`.
 fn positive(parameter: SimulationParameter, value: f64) -> Result<f64, SimulationError> {
-    let _ = parameter;
-    Ok(value)
+    if value.is_finite() && value > 0.0 {
+        Ok(value)
+    } else {
+        Err(out_of_range(parameter, value))
+    }
 }
 
 fn finite(parameter: SimulationParameter, value: f64) -> Result<f64, SimulationError> {
-    let _ = parameter;
-    Ok(value)
+    if value.is_finite() {
+        Ok(value)
+    } else {
+        Err(out_of_range(parameter, value))
+    }
 }
 
 /// `Ok(value)` when a derived constant is finite.
 fn representable(value: f64) -> Result<f64, SimulationError> {
-    Ok(value)
+    if value.is_finite() {
+        Ok(value)
+    } else {
+        Err(SimulationError::Overflow)
+    }
 }
 
 /// Before the simulation began: `t < 0` or `t` is NaN.
 fn before_start(time: f64) -> bool {
-    let _ = time;
-    false
+    time.is_nan() || time < 0.0
 }
 
 // ---------------------------------------------------------------------------
@@ -199,6 +212,9 @@ impl Tolerance {
     /// ```
     pub fn new(distance: f64, velocity: f64) -> Result<Self, SimulationError> {
         let distance = positive(SimulationParameter::Distance, distance)?;
+        if velocity.is_nan() || velocity <= 0.0 {
+            return Err(out_of_range(SimulationParameter::Velocity, velocity));
+        }
         Ok(Self {
             distance,
             velocity,
@@ -228,8 +244,9 @@ impl Tolerance {
     /// # Ok::<(), flui_animation::simulation::SimulationError>(())
     /// ```
     pub fn for_device_pixel_ratio(device_pixel_ratio: f64) -> Result<Self, SimulationError> {
-        let _ = device_pixel_ratio;
-        Ok(Self::DEFAULT)
+        let refused = || out_of_range(SimulationParameter::DevicePixelRatio, device_pixel_ratio);
+        let ratio = positive(SimulationParameter::DevicePixelRatio, device_pixel_ratio)?;
+        Self::new(0.5 / ratio, f64::INFINITY).map_err(|_| refused())
     }
 
     /// The speed limit for a motion whose natural rate is `rate` per second.
@@ -411,6 +428,9 @@ impl SpringDescription {
         bounce: f64,
     ) -> Result<Self, SimulationError> {
         let omega = angular_frequency(duration)?;
+        if bounce.is_nan() || bounce <= -1.0 || bounce >= 1.0 {
+            return Err(out_of_range(SimulationParameter::Bounce, bounce));
+        }
         let zeta = if bounce >= 0.0 {
             1.0 - bounce
         } else {
@@ -462,13 +482,28 @@ impl SpringDescription {
     }
 
     fn from_omega_zeta(omega: f64, zeta: f64) -> Result<Self, SimulationError> {
-        Ok(Self { omega, zeta })
+        let admitted = |value: f64| value.is_finite() && value > 0.0;
+        if admitted(omega)
+            && admitted(zeta)
+            && admitted(omega * omega)
+            && admitted(omega * zeta)
+            && (omega * omega * ((1.0 - zeta) * (1.0 + zeta))).is_finite()
+        {
+            Ok(Self { omega, zeta })
+        } else {
+            Err(SimulationError::Overflow)
+        }
     }
 }
 
 /// `2π / period`, refusing a zero period.
 fn angular_frequency(period: Duration) -> Result<f64, SimulationError> {
-    Ok(TAU / period.as_secs_f64())
+    let seconds = period.as_secs_f64();
+    if seconds > 0.0 {
+        Ok(TAU / seconds)
+    } else {
+        Err(out_of_range(SimulationParameter::Duration, seconds))
+    }
 }
 
 /// The motion regime of a spring.
@@ -636,7 +671,7 @@ impl SpringSimulation {
             rest_secs: 0.0,
             tolerance,
         };
-        simulation.rest_secs = f64::INFINITY;
+        simulation.rest_secs = simulation.settle_time(tolerance);
         Ok(simulation)
     }
 
@@ -710,6 +745,60 @@ impl SpringSimulation {
         let (c, s) = self.propagator(t);
         c * self.v0 - s * self.velocity_s
     }
+
+    /// The first time after which the displacement stays within
+    /// `tolerance.distance` and the speed within the velocity limit.
+    fn settle_time(&self, tolerance: Tolerance) -> f64 {
+        let distance = tolerance.distance;
+        let speed = tolerance.velocity_limit(self.omega);
+        let (x0, v0) = (self.x0.abs(), self.v0.abs());
+        // e^{−at}|C + aS| ≤ (1 + at)e^{−rt} and e^{−at}|S| ≤ t·e^{−rt}, with
+        // r = a (ζ ≤ 1) or −λs (ζ > 1).
+        let rate = match self.roots {
+            Roots::Decaying { slow, .. } => -slow,
+            _ => self.a,
+        };
+        // A bound specific to the regime first; the polynomial bound is then
+        // searched only below it.
+        let (position, velocity) = match self.roots {
+            Roots::Oscillating { damped_omega } => {
+                // |x| ≤ A·e^{−at}, |v| ≤ B·e^{−at}.
+                let amplitude_x = self.x0.hypot(self.position_s / damped_omega);
+                let amplitude_v = self.v0.hypot(self.velocity_s / damped_omega);
+                (
+                    settle_exponential(amplitude_x, self.a, distance),
+                    settle_exponential(amplitude_v, self.a, speed),
+                )
+            }
+            Roots::Critical => (f64::INFINITY, f64::INFINITY),
+            Roots::Decaying { s, slow, fast } => {
+                // x = c_s·e^{λs t} + c_f·e^{λf t}.
+                let slow_coefficient = (self.v0 - fast * self.x0) / (2.0 * s);
+                let fast_coefficient = self.x0 - slow_coefficient;
+                (
+                    settle_two_exponentials(
+                        (slow_coefficient.abs(), slow),
+                        (fast_coefficient.abs(), fast),
+                        distance,
+                    ),
+                    settle_two_exponentials(
+                        ((slow_coefficient * slow).abs(), slow),
+                        ((fast_coefficient * fast).abs(), fast),
+                        speed,
+                    ),
+                )
+            }
+        };
+        let position = settle_polynomial(x0, self.a * x0 + v0, rate, distance, position);
+        let velocity = settle_polynomial(
+            v0,
+            self.omega * self.omega * x0 + self.a * v0,
+            rate,
+            speed,
+            velocity,
+        );
+        position.max(velocity)
+    }
 }
 
 impl Simulation for SpringSimulation {
@@ -734,13 +823,138 @@ impl Simulation for SpringSimulation {
     }
 
     fn is_done(&self, time: f64) -> bool {
-        self.displacement(time).abs() < self.tolerance.distance
-            && self.velocity(time).abs() < self.tolerance.velocity
+        time >= self.rest_secs
     }
 
     fn tolerance(&self) -> Tolerance {
         self.tolerance
     }
+}
+
+// ---------------------------------------------------------------------------
+// Rest-time envelopes
+// ---------------------------------------------------------------------------
+
+/// The bisection budget; each envelope is monotone on the searched interval.
+const BISECTION_STEPS: u32 = 128;
+
+/// A rest time is resolved to this many seconds (rounded up, so it stays
+/// conservative); a frame is millions of times longer.
+const REST_RESOLUTION_SECS: f64 = 1e-7;
+
+/// The smallest `T` with `envelope(t) ≤ limit` for all `t ≥ T`, given that
+/// `envelope` (supplied as its natural logarithm) is non-increasing from
+/// `from` on and already within `limit` at `known` (pass `+inf` when no
+/// such time is known). Returns `from` when the limit holds there and
+/// `+inf` when no representable time satisfies it.
+fn settle_monotone(
+    from: f64,
+    scale: f64,
+    ln_limit: f64,
+    known: f64,
+    ln_envelope: impl Fn(f64) -> f64,
+) -> f64 {
+    if ln_envelope(from) <= ln_limit {
+        return from;
+    }
+    let mut low = from;
+    let mut high = if known.is_finite() {
+        known
+    } else {
+        let mut high = from + scale;
+        while ln_envelope(high) > ln_limit {
+            low = high;
+            high = from + 2.0 * (high - from);
+            if !high.is_finite() {
+                return f64::INFINITY;
+            }
+        }
+        high
+    };
+    for _ in 0..BISECTION_STEPS {
+        if high - low <= REST_RESOLUTION_SECS.max(high * f64::EPSILON) {
+            break;
+        }
+        let middle = low + 0.5 * (high - low);
+        if ln_envelope(middle) > ln_limit {
+            low = middle;
+        } else {
+            high = middle;
+        }
+    }
+    high
+}
+
+/// Rest time of `e^{−rt}(p + q·t) ≤ limit`, `p, q ≥ 0`, `r > 0`, or `known`
+/// when that is earlier (another valid bound of the same motion).
+fn settle_polynomial(p: f64, q: f64, rate: f64, limit: f64, known: f64) -> f64 {
+    if p == 0.0 && q == 0.0 {
+        return 0.0;
+    }
+    let ln_limit = limit.ln();
+    let ln_envelope = |t: f64| {
+        let linear = if q == 0.0 {
+            p.ln()
+        } else {
+            q.ln() + (t + p / q).ln()
+        };
+        linear - rate * t
+    };
+    // The envelope peaks at 1/r − p/q and decreases after it.
+    let peak = if q == 0.0 {
+        0.0
+    } else {
+        (rate.recip() - p / q).max(0.0)
+    };
+    if ln_envelope(peak) <= ln_limit {
+        return 0.0;
+    }
+    // This bound rests after its peak; `known` is earlier unless it is past
+    // the peak and the envelope is already within the limit there.
+    if known <= peak || ln_envelope(known) > ln_limit {
+        return known;
+    }
+    settle_monotone(peak, rate.recip(), ln_limit, known, ln_envelope)
+}
+
+/// Rest time of `amplitude·e^{−rt} ≤ limit`.
+fn settle_exponential(amplitude: f64, rate: f64, limit: f64) -> f64 {
+    if amplitude <= limit {
+        0.0
+    } else {
+        // A non-finite amplitude leaves the polynomial bound in charge.
+        let time = (amplitude.ln() - limit.ln()) / rate;
+        if time.is_nan() { f64::INFINITY } else { time }
+    }
+}
+
+/// Rest time of `c_s·e^{λs t} + c_f·e^{λf t} ≤ limit`, each term given as
+/// `(cᵢ ≥ 0, λᵢ < 0)`.
+fn settle_two_exponentials(slow: (f64, f64), fast: (f64, f64), limit: f64) -> f64 {
+    let ((slow_amplitude, slow_rate), (fast_amplitude, fast_rate)) = (slow, fast);
+    if !(slow_amplitude.is_finite() && fast_amplitude.is_finite()) {
+        return f64::INFINITY;
+    }
+    if slow_amplitude == 0.0 && fast_amplitude == 0.0 {
+        return 0.0;
+    }
+    let ln_envelope = |t: f64| {
+        let first = slow_amplitude.ln() + slow_rate * t;
+        let second = fast_amplitude.ln() + fast_rate * t;
+        let (high, low) = if first >= second {
+            (first, second)
+        } else {
+            (second, first)
+        };
+        high + (low - high).exp().ln_1p()
+    };
+    settle_monotone(
+        0.0,
+        (-slow_rate).recip(),
+        limit.ln(),
+        f64::INFINITY,
+        ln_envelope,
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -792,6 +1006,9 @@ impl FrictionSimulation {
         velocity: f64,
         tolerance: Tolerance,
     ) -> Result<Self, SimulationError> {
+        if drag.is_nan() || drag <= 0.0 || drag >= 1.0 {
+            return Err(out_of_range(SimulationParameter::Drag, drag));
+        }
         let position = finite(SimulationParameter::Position, position)?;
         let velocity = finite(SimulationParameter::Velocity, velocity)?;
         let drag_log = drag.ln();
@@ -800,8 +1017,11 @@ impl FrictionSimulation {
         let speed_limit = tolerance
             .velocity_limit(-drag_log)
             .min(tolerance.distance * -drag_log);
-        let _ = speed_limit;
-        let rest_secs = f64::INFINITY;
+        let rest_secs = if velocity.abs() <= speed_limit {
+            0.0
+        } else {
+            (speed_limit.ln() - velocity.abs().ln()) / drag_log
+        };
         Ok(Self {
             drag,
             drag_log,
@@ -833,7 +1053,7 @@ impl FrictionSimulation {
         }
         // x(t) = x₀ + v·(dᵗ − 1)/ln d  ⇒  t = ln(1 + ln d·(x − x₀)/v)/ln d.
         let time = (self.drag_log * (x - self.position) / self.velocity).ln_1p() / self.drag_log;
-        time
+        if time > 0.0 { time } else { f64::INFINITY }
     }
 
     fn glide(&self, time: f64) -> f64 {
@@ -868,7 +1088,7 @@ impl Simulation for FrictionSimulation {
     }
 
     fn is_done(&self, time: f64) -> bool {
-        self.speed(time).abs() < self.tolerance.velocity
+        time >= self.rest_secs
     }
 
     fn tolerance(&self) -> Tolerance {
@@ -905,7 +1125,11 @@ impl SimulationBounds {
     /// [`SimulationError::InvalidBounds`] when either end is not finite or
     /// `min > max`.
     pub fn new(min: f64, max: f64) -> Result<Self, SimulationError> {
-        Ok(Self { min, max })
+        if min.is_finite() && max.is_finite() && min <= max {
+            Ok(Self { min, max })
+        } else {
+            Err(SimulationError::InvalidBounds { min, max })
+        }
     }
 
     fn contains(self, x: f64) -> bool {
@@ -1086,7 +1310,7 @@ impl BouncingScrollSimulation {
             BouncingPhase::Spring(edge_spring(bounds.max, position, velocity)?)
         } else {
             let friction = FrictionSimulation::new(drag, position, velocity, tolerance)?;
-            if bounds.contains(friction.final_x) || bounds.min <= bounds.max {
+            if bounds.contains(friction.final_x) {
                 BouncingPhase::Friction(friction)
             } else {
                 let edge = if friction.final_x > bounds.max {
