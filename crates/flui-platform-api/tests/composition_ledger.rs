@@ -947,9 +947,18 @@ fn start() -> impl Strategy<Value = (String, Option<(u8, u8)>, usize)> {
         .prop_map(|(text, composition, origin)| (text.to_owned(), composition, origin))
 }
 
+/// The property's case count: `PROPTEST_CASES` when set, for a deeper run,
+/// and 3000 otherwise.
+fn cases() -> u32 {
+    std::env::var("PROPTEST_CASES")
+        .ok()
+        .and_then(|cases| cases.parse().ok())
+        .unwrap_or(3000)
+}
+
 proptest! {
     #![proptest_config(ProptestConfig {
-        cases: 3000,
+        cases: cases(),
         failure_persistence: None,
         ..ProptestConfig::default()
     })]
