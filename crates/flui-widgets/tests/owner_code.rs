@@ -940,6 +940,10 @@ const ROWS: &[(&str, fn())] = &[
         editable_update_to_a_node_attached_elsewhere,
     ),
     (
+        "editable: an obscuring update to a node attached elsewhere",
+        editable_update_obscuring_and_to_a_node_attached_elsewhere,
+    ),
+    (
         "attach: a store parking a failure while taking the gate, then panicking",
         attach_with_a_store_parking_then_failing_to_take_the_gate,
     ),
@@ -2586,6 +2590,93 @@ fn editable_update_to_a_node_attached_elsewhere() {
             .parent()
             .is_some_and(|held| Rc::ptr_eq(&held, &parent)),
         "under its own parent"
+    );
+    assert_eq!(raised(|| harness.tick()), None, "the next frame");
+    harness.swap_root(flui_widgets::SizedBox::new(1.0, 1.0));
+    assert!(
+        !second.is_attached(),
+        "the second field's handle still owned its node, so its dispose detached it"
+    );
+}
+
+/// Records the message of every lifecycle-hook panic the element tree
+/// contains (`ElementOwner::push_recovered_panic`'s `panic_message` field).
+struct RecordsContainedPanics<'a>(&'a std::sync::Mutex<Vec<String>>);
+
+impl tracing::field::Visit for RecordsContainedPanics<'_> {
+    fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+        if field.name() == "panic_message" {
+            self.0
+                .lock()
+                .expect("the recorder is not poisoned")
+                .push(format!("{value:?}"));
+        }
+    }
+}
+
+/// [`RecordsContainedPanics`] as a subscriber.
+struct ContainedPanics(Arc<std::sync::Mutex<Vec<String>>>);
+
+impl tracing::Subscriber for ContainedPanics {
+    fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+        true
+    }
+    fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+        tracing::span::Id::from_u64(1)
+    }
+    fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+    fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+    fn event(&self, event: &tracing::Event<'_>) {
+        event.record(&mut RecordsContainedPanics(&self.0));
+    }
+    fn enter(&self, _: &tracing::span::Id) {}
+    fn exit(&self, _: &tracing::span::Id) {}
+}
+
+/// [`editable_update_to_a_node_attached_elsewhere`], in an update that
+/// first obscures the field, whose observer panics on the status change.
+/// The observer's failure came first and is the update's; the rejection is
+/// kept behind it, and the update completes rather than unwinding from the
+/// rejection.
+fn editable_update_obscuring_and_to_a_node_attached_elsewhere() {
+    let controllers = (TextEditingController::new(), TextEditingController::new());
+    let (first, second) = (
+        FocusNode::with_debug_label("first field"),
+        FocusNode::with_debug_label("second field"),
+    );
+    let mut harness = focused(two_fields(&controllers, &first, &second), &first);
+    let field = field(&harness);
+    field.set_commit_gate(CommitGate::new());
+    field.set_observer(Some(Rc::new(FailsOnStatus)));
+    let parent = second
+        .parent()
+        .expect("the second field's node is attached");
+    let contained = Arc::new(std::sync::Mutex::new(Vec::new()));
+    tracing::subscriber::with_default(ContainedPanics(Arc::clone(&contained)), || {
+        harness.swap_root(flui_widgets::Column::new(flui_widgets::column![
+            EditableText::new(controllers.0.clone(), Rc::clone(&second)).obscure_text(true),
+            EditableText::new(controllers.1.clone(), Rc::clone(&second)),
+        ]));
+    });
+    field.set_observer(None);
+    assert_eq!(
+        contained
+            .lock()
+            .expect("the recorder is not poisoned")
+            .first()
+            .map(String::as_str),
+        Some("observer failure on status"),
+        "the first failure is the update's, not the later rejection"
+    );
+    assert!(
+        !first.is_attached(),
+        "the update failed, and the frame retired the first field"
+    );
+    assert!(
+        second
+            .parent()
+            .is_some_and(|held| Rc::ptr_eq(&held, &parent)),
+        "the second field's node stays attached under its own parent"
     );
     assert_eq!(raised(|| harness.tick()), None, "the next frame");
     harness.swap_root(flui_widgets::SizedBox::new(1.0, 1.0));

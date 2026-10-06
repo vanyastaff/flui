@@ -25,7 +25,7 @@
 //! | the controller's listeners, and the controller snapshot | `EditableTextStore::settle` (`flui-widgets` `text/text_store.rs`) |
 //! | a replaced or detached `EditableText` observer; the observer, `on_changed` and the controller when the store outlives its field | `EditableTextStore::set_observer`, `detach`, `Drop` (`flui-widgets` `text/text_store.rs`), `EditObserver::retire` |
 //! | a key edit, and a semantic text edit: the queued grants, the edit with `on_changed`, the platform's notification, each run though an earlier one failed | the key handler and `FieldSemanticsActions::set_text` (`flui-widgets` `text/editable_text.rs`) |
-//! | an update's store notifications, the replaced controller and focus node, the focus node replacement (the focus listeners it notifies) and the focus transition, `set_can_request_focus` last | `EditableTextState::did_update_view` (`flui-widgets` `text/editable_text.rs`) |
+//! | an update's store notifications, the replaced controller and focus node, the focus node replacement (the focus listeners it notifies, or its refusal of a node attached elsewhere) and the focus transition, `set_can_request_focus` last | `EditableTextState::did_update_view` (`flui-widgets` `text/editable_text.rs`) |
 //! | the cursor-area loop: the store's notifications, the platform's cursor area, the loop rescheduled before a failure is resumed | `CursorAreaLoop::fire` (`flui-widgets` `text/editable_text.rs`) |
 //! | a blur's detach, with the token taken before it | the field's focus listener (`flui-widgets` `text/editable_text.rs`) |
 //! | dispose: detaching the client and the store, the attachment, the controller listener, each run though an earlier one failed | `EditableTextState::dispose` (`flui-widgets` `text/editable_text.rs`) |
