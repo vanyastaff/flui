@@ -121,6 +121,10 @@ fn encode(linear: f64) -> f64 {
 }
 
 /// Ottosson's Oklab, in `f64`, from <https://bottosson.github.io/posts/oklab/>.
+#[expect(
+    clippy::many_single_char_names,
+    reason = "r, g, b and l, m, s are the colour-science names"
+)]
 fn oklab(color: Color) -> [f64; 3] {
     let (r, g, b) = (decode(color.r), decode(color.g), decode(color.b));
     let l = (0.412_221_470_8 * r + 0.536_332_536_3 * g + 0.051_445_992_9 * b).cbrt();

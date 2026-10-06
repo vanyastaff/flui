@@ -3,7 +3,9 @@
 //! This module provides a comprehensive Color type with conversions between
 //! different color spaces (RGB, HSL, HSV).
 
-use super::srgb_tables::{LINEAR_ROUNDING_THRESHOLDS, SRGB_TO_LINEAR};
+use super::srgb_tables::{
+    LINEAR_BUCKET_CODES, LINEAR_BUCKETS, LINEAR_ROUNDING_THRESHOLDS, SRGB_TO_LINEAR,
+};
 
 /// An RGBA color with four 8-bit channels and straight (unmultiplied) alpha.
 ///
@@ -62,6 +64,16 @@ pub struct PremultipliedOklab {
 }
 
 impl Oklab {
+    /// Oklab from the cube roots of the LMS response.
+    #[inline]
+    fn from_cube_roots(l: f32, m: f32, s: f32) -> Self {
+        Oklab {
+            l: 0.210_454_26 * l + 0.793_617_8 * m - 0.004_072_047 * s,
+            a: 1.977_998_5 * l - 2.428_592_2 * m + 0.450_593_7 * s,
+            b: 0.025_904_037 * l + 0.782_771_77 * m - 0.808_675_77 * s,
+        }
+    }
+
     /// `self` with its components multiplied by the 8-bit `alpha` as a fraction.
     fn premultiplied(self, alpha: u8) -> PremultipliedOklab {
         let alpha = f32::from(alpha) / 255.0;
@@ -304,7 +316,7 @@ impl Color {
         )]
         let t = t as f32;
         let mix = |from: f32, to: f32| from + (to - from) * t;
-        let (la, lb) = (a.to_oklab(), b.to_oklab());
+        let (la, lb) = a.to_oklab_pair(b);
         if a.a == b.a {
             // Equal alphas cancel out of the premultiplied mix exactly: mix straight
             // and keep the alpha (the common opaque-to-opaque case, no divisions).
@@ -596,23 +608,32 @@ impl Color {
     /// part of Oklab and is carried separately by the caller.
     #[must_use]
     pub fn to_oklab(self) -> Oklab {
+        let [l, m, s] = self.lms();
+        let [l_, m_, s_, _] = cbrt_lanes([l, m, s, 1.0]);
+        Oklab::from_cube_roots(l_, m_, s_)
+    }
+
+    /// Both colours in Oklab, their six cube roots taken in one set of lanes.
+    fn to_oklab_pair(self, other: Color) -> (Oklab, Oklab) {
+        let ([l0, m0, s0], [l1, m1, s1]) = (self.lms(), other.lms());
+        let [l0, m0, s0, _, l1, m1, s1, _] = cbrt_lanes([l0, m0, s0, 1.0, l1, m1, s1, 1.0]);
+        (
+            Oklab::from_cube_roots(l0, m0, s0),
+            Oklab::from_cube_roots(l1, m1, s1),
+        )
+    }
+
+    /// The colour's cone response (Oklab's LMS), before the cube root.
+    #[inline]
+    fn lms(self) -> [f32; 3] {
         let r = SRGB_TO_LINEAR[usize::from(self.r)];
         let g = SRGB_TO_LINEAR[usize::from(self.g)];
         let b = SRGB_TO_LINEAR[usize::from(self.b)];
-
-        let l = 0.412_221_47 * r + 0.536_332_54 * g + 0.051_445_995 * b;
-        let m = 0.211_903_5 * r + 0.680_699_5 * g + 0.107_396_96 * b;
-        let s = 0.088_302_46 * r + 0.281_718_85 * g + 0.629_978_7 * b;
-
-        let l_ = cbrt(l);
-        let m_ = cbrt(m);
-        let s_ = cbrt(s);
-
-        Oklab {
-            l: 0.210_454_26 * l_ + 0.793_617_8 * m_ - 0.004_072_047 * s_,
-            a: 1.977_998_5 * l_ - 2.428_592_2 * m_ + 0.450_593_7 * s_,
-            b: 0.025_904_037 * l_ + 0.782_771_77 * m_ - 0.808_675_77 * s_,
-        }
+        [
+            0.412_221_47 * r + 0.536_332_54 * g + 0.051_445_995 * b,
+            0.211_903_5 * r + 0.680_699_5 * g + 0.107_396_96 * b,
+            0.088_302_46 * r + 0.281_718_85 * g + 0.629_978_7 * b,
+        ]
     }
 
     /// Convert from Oklab back to sRGB, with the given alpha channel.
@@ -931,35 +952,53 @@ pub fn linear_to_srgb(c: f32) -> f32 {
 ///
 /// Equal to `round(linear_to_srgb(c) * 255)`, without a `powf`: the transfer function is
 /// monotonic, so the code is the number of rounding boundaries (linear light of
-/// `(k + 0.5) / 255`) at or below `c`, found by binary search.
+/// `(k + 0.5) / 255`) at or below `c`. The bucket table gives that count at the bucket's
+/// lower edge, and at most one more boundary lies inside a bucket.
 #[inline]
 fn encode_linear(c: f32) -> u8 {
-    let code = LINEAR_ROUNDING_THRESHOLDS.partition_point(|&threshold| threshold <= c);
-    // 255 thresholds: the count is at most 255.
-    u8::try_from(code).unwrap_or(u8::MAX)
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        clippy::cast_precision_loss,
+        reason = "the float-to-usize cast saturates (negative and NaN to 0) and is clamped"
+    )]
+    let bucket = ((c * LINEAR_BUCKETS as f32) as usize).min(LINEAR_BUCKETS);
+    let code = LINEAR_BUCKET_CODES[bucket];
+    match LINEAR_ROUNDING_THRESHOLDS.get(usize::from(code)) {
+        Some(&threshold) if c >= threshold => code + 1,
+        _ => code,
+    }
 }
 
-/// Cube root of an LMS response, for [`Color::to_oklab`].
+/// Cube roots of LMS responses, lane by lane, for [`Color::to_oklab`].
 ///
 /// An estimate from the bits (the biased exponent divided by three, `0x2a51_37a0`
 /// restoring the bias; within about 4 %) refined by two Halley steps
 /// `y ← y·(y³ + 2x)/(2y³ + x)`. Measured worst relative error over `[1e-30, 1e10]`:
-/// 2.3e-7, the `f32` rounding level. Six of these run per colour interpolation; on the
-/// reference host the six cost about 9 ns against about 44 ns for `f32::cbrt` (libm),
-/// and beat division-free inverse-root Newton iterations, whose dependent chain is
-/// longer. Zero, negative, subnormal and NaN inputs (which `to_oklab`'s non-negative
-/// weights and table produce only as zero) take `f32::cbrt`.
+/// 2.3e-7, the `f32` rounding level. Six roots run per colour interpolation; in
+/// isolation on the reference host the six cost about 9 ns against about 44 ns for
+/// `f32::cbrt` (libm), and beat division-free inverse-root Newton iterations (four
+/// steps for the same precision, a longer dependent chain). Zero, negative, subnormal
+/// and NaN inputs (which `to_oklab`'s non-negative weights and table produce only as
+/// zero) take `f32::cbrt`.
 #[inline]
-fn cbrt(x: f32) -> f32 {
-    if x.is_nan() || x < f32::MIN_POSITIVE {
-        return x.cbrt();
-    }
-    let mut y = f32::from_bits(x.to_bits() / 3 + 0x2a51_37a0);
+fn cbrt_lanes<const N: usize>(x: [f32; N]) -> [f32; N] {
+    // Lanes with no branch inside the loop, so the steps vectorise (one packed
+    // division per step for four roots instead of one each).
+    let mut y = x.map(|x| f32::from_bits(x.to_bits() / 3 + 0x2a51_37a0));
     for _ in 0..2 {
-        let y3 = y * y * y;
-        y *= (y3 + 2.0 * x) / (2.0 * y3 + x);
+        for (y, x) in y.iter_mut().zip(x) {
+            let y3 = *y * *y * *y;
+            *y *= (y3 + 2.0 * x) / (2.0 * y3 + x);
+        }
     }
-    y
+    std::array::from_fn(|i| {
+        if x[i].is_nan() || x[i] < f32::MIN_POSITIVE {
+            x[i].cbrt()
+        } else {
+            y[i]
+        }
+    })
 }
 
 // ===== Blend-mode evaluation helpers (used by `Color::blend`) =====
