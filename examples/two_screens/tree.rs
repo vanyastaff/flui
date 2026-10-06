@@ -293,6 +293,12 @@ fn home(shared: Shared, router: RouterHandle<Route>) -> BoxedView {
                                             ..ButtonStyle::default()
                                         })
                                         .on_pressed(move |_cx| {
+                                            // Home stays actionable while a Note
+                                            // animates in; only the current Home
+                                            // may open a note.
+                                            if navigate.current() != Route::Home {
+                                                return;
+                                            }
                                             if open.selected.with(|selected| *selected) != Some(id)
                                             {
                                                 open.draft.set_text(

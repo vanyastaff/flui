@@ -519,6 +519,35 @@ mod notes_flow {
         rendered_text(&laid, "Note 0");
     }
 
+    fn another_note_activated_during_entrance_is_ignored() {
+        let mut laid = ready();
+        let published = published_tree(&mut laid);
+        queued_click(&laid, &published, "Note 0");
+        // Wait for the first entrance frames: the editor's field is published
+        // while Home is still onstage.
+        let mut entering = false;
+        for _ in 0..8 {
+            laid.tick();
+            if published().find(Role::TextInput).is_ok() {
+                entering = true;
+                break;
+            }
+        }
+        assert!(entering, "the Note editor enters after a queued activation");
+        // Home's rows stay published while the Note animates in.
+        queued_click(&laid, &published, "Note 1");
+        frames(&mut laid);
+        rendered_text(&laid, "Editing note 0");
+        tap_text(&mut laid, "Back");
+        frames(&mut laid);
+        assert!(
+            active_text(&laid, "Editing note 0").is_empty()
+                && active_text(&laid, "Editing note 1").is_empty(),
+            "one Back returns from the only Note page"
+        );
+        rendered_text(&laid, "Note 0");
+    }
+
     fn back_is_offered_only_where_it_leaves_a_page() {
         let mut laid = ready();
         assert!(
@@ -694,7 +723,7 @@ mod notes_flow {
 
     #[test]
     fn notes_public_input_flow_matrix() {
-        let cases: [(&str, fn()); 8] = [
+        let cases: [(&str, fn()); 9] = [
             (
                 "loading_retry_replacement_and_unmount_retire_old_service_work",
                 loading_retry_replacement_and_unmount_retire_old_service_work,
@@ -718,6 +747,10 @@ mod notes_flow {
             (
                 "back_is_offered_only_where_it_leaves_a_page",
                 back_is_offered_only_where_it_leaves_a_page,
+            ),
+            (
+                "another_note_activated_during_entrance_is_ignored",
+                another_note_activated_during_entrance_is_ignored,
             ),
             (
                 "settings_activated_again_during_entrance_stacks_one_page",
