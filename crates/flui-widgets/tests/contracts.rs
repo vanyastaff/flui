@@ -402,6 +402,7 @@ fn forms_and_async_builders() {
             ("form::reset_restores_initial_values_and_clears_errors_and_interaction", crate::form::reset_restores_initial_values_and_clears_errors_and_interaction as fn()),
             ("form::validate_shows_the_validator_error_and_revalidating_a_valid_value_clears_it", crate::form::validate_shows_the_validator_error_and_revalidating_a_valid_value_clears_it),
             ("future_builder::future_builder_pending_then_error", crate::future_builder::future_builder_pending_then_error),
+            ("future_builder::future_builder_accepts_an_owner_local_future", crate::future_builder::future_builder_accepts_an_owner_local_future),
             ("stream_builder::stream_builder_data_error_data_then_done", crate::stream_builder::stream_builder_data_error_data_then_done),
         ],
     );

@@ -1798,6 +1798,7 @@ dependencies = [
  "toml",
  "tracing",
  "tracing-subscriber",
+ "trybuild",
  "wgpu",
  "winit",
 ]
