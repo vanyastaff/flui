@@ -41,6 +41,7 @@ use flui_animation::{Animation, AnimationController, Vsync, VsyncRegistration};
 use flui_foundation::{ChangeNotifier, Listenable, ListenerCallback, ListenerId};
 use flui_painting::styling::Color;
 use flui_rendering::hit_testing::HitTestBehavior;
+use flui_rendering::pipeline::WeakPipelineCell;
 use flui_view::prelude::StatefulView;
 use flui_view::{
     BuildContext, BuildContextExt, Child, EventCx, EventOutcome, IntoView, LifecycleContext,
@@ -49,6 +50,7 @@ use flui_view::{
 
 use crate::animated::VsyncScope;
 use crate::scroll::single_child_scroll_view::SingleChildScrollView;
+use crate::scroll::scrollable::presentation_device_pixel_ratio;
 use crate::scroll::{ClampingScrollPhysics, ScrollController, ScrollMetrics, SharedScrollPhysics};
 use crate::{AnimatedBuilder, ColoredBox, GestureDetector, Positioned, Stack};
 
@@ -376,6 +378,9 @@ pub struct RefreshIndicatorState {
     vsync: Option<Vsync>,
     /// Registration returned by `vsync.register(fling_controller)`.
     vsync_registration: Option<VsyncRegistration>,
+    /// The presentation's pipeline, acquired in `init_state`/
+    /// `did_change_dependencies`; a release reads its device pixel ratio.
+    pipeline: Option<WeakPipelineCell>,
 }
 
 impl std::fmt::Debug for RefreshIndicatorState {
@@ -405,6 +410,7 @@ impl StatefulView for RefreshIndicator {
             fling_listener_id: None,
             vsync: None,
             vsync_registration: None,
+            pipeline: None,
         }
     }
 }
@@ -424,6 +430,7 @@ impl RefreshIndicatorState {
 
 impl ViewState<RefreshIndicator> for RefreshIndicatorState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
+        self.pipeline = ctx.pipeline_owner().map(|cell| cell.downgrade());
         self.install_fling_listener();
 
         // Register with the ambient VsyncScope so the binding ticks the fling
@@ -437,6 +444,10 @@ impl ViewState<RefreshIndicator> for RefreshIndicatorState {
         // gesture updates still work but ballistic runs do not advance.
     }
 
+    fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
+        self.pipeline = ctx.pipeline_owner().map(|cell| cell.downgrade());
+    }
+
     fn build(&self, view: &RefreshIndicator, _ctx: &dyn BuildContext) -> impl IntoView {
         let scroll_controller = self.scroll_controller.clone();
         let fling_controller = self.fling_controller.clone();
@@ -445,9 +456,11 @@ impl ViewState<RefreshIndicator> for RefreshIndicatorState {
         let threshold_px = view.threshold_px;
         let physics = view.physics.clone();
         let child = view.child.clone();
+        let pipeline = self.pipeline.clone();
 
         // Outer AnimatedBuilder: rebuilds on every scroll-position change.
         AnimatedBuilder::new(scroll_controller.as_listenable(), move || {
+            let pipeline_inner = pipeline.clone();
             let rc_outer = refresh_controller.clone();
             let sc_inner = scroll_controller.clone();
             let fc_inner = fling_controller.clone();
@@ -476,6 +489,7 @@ impl ViewState<RefreshIndicator> for RefreshIndicatorState {
                 let ph_end = ph_inner.clone();
                 let fc_fling = fc_inner.clone();
                 let on_refresh_cb = on_refresh_inner.clone();
+                let pipeline_end = pipeline_inner.clone();
 
                 let scroll_view = {
                     let mut sv = SingleChildScrollView::new().offset(pixels);
@@ -539,7 +553,9 @@ impl ViewState<RefreshIndicator> for RefreshIndicatorState {
                         }
                         if details.reason == flui_interaction::GestureEndReason::Cancelled {
                             rc_end.set_pull_distance_px(0.0);
-                            let metrics = ScrollMetrics::from(&sc_end.position());
+                            let metrics = ScrollMetrics::from(&sc_end.position()).with_device_pixel_ratio(
+                                presentation_device_pixel_ratio(pipeline_end.as_ref()),
+                            );
                             if let Some(sim) = ph_end.create_ballistic_simulation(&metrics, 0.0) {
                                 let _ = fc_fling.animate_with(sim);
                             }
@@ -564,7 +580,9 @@ impl ViewState<RefreshIndicator> for RefreshIndicatorState {
                                 // so spring-back still works without measurable velocity.
                                 if bounded.is_nan() { 0.0 } else { bounded }
                             };
-                            let metrics = ScrollMetrics::from(&sc_end.position());
+                            let metrics = ScrollMetrics::from(&sc_end.position()).with_device_pixel_ratio(
+                                presentation_device_pixel_ratio(pipeline_end.as_ref()),
+                            );
                             if let Some(sim) =
                                 ph_end.create_ballistic_simulation(&metrics, fling_vel_px_per_sec)
                             {
