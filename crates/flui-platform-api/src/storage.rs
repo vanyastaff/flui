@@ -140,7 +140,7 @@ impl StorageName {
 
     /// The name's text.
     #[must_use]
-    pub const fn as_str(&self) -> &str {
+    pub const fn as_str(&self) -> &'static str {
         self.name
     }
 

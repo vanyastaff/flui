@@ -151,10 +151,48 @@ impl MemoryStorage {
 
     /// Write but commit nothing while the returned barrier is alive: reads
     /// and [`contents`](Self::contents) keep the old values and the write
-    /// futures stay pending. [`CommitBarrier::commit`] commits the held
-    /// writes in order; dropping the barrier discards them, as a process
-    /// killed before it replaced its files would, and their futures resolve
-    /// to [`StorageError::Cancelled`].
+    /// futures stay pending. Barriers are counted, and the last one released
+    /// decides: [`CommitBarrier::commit`] commits the held writes in order,
+    /// while dropping it uncommitted discards them, as a process killed
+    /// before it replaced its files would, and their futures resolve to
+    /// [`StorageError::Cancelled`]. Releasing a barrier while another is
+    /// alive keeps the writes held.
+    ///
+    /// ```
+    /// use std::future::Future;
+    /// use std::pin::pin;
+    /// use std::task::{Context, Poll, Waker};
+    ///
+    /// use flui_platform_api::{Storage, StorageError, StorageName, WriteMode};
+    /// use flui_testing::storage::MemoryStorage;
+    ///
+    /// const NOTES: StorageName = StorageName::from_static("notes");
+    /// let storage = MemoryStorage::new();
+    /// let mut cx = Context::from_waker(Waker::noop());
+    ///
+    /// // A commit while another barrier is alive commits nothing.
+    /// let (outer, inner) = (storage.hold_commits(), storage.hold_commits());
+    /// let mut first = pin!(storage.publish(&NOTES, b"one".to_vec(), WriteMode::Replace));
+    /// inner.commit();
+    /// assert!(first.as_mut().poll(&mut cx).is_pending());
+    /// assert_eq!(storage.contents(&NOTES), None);
+    /// outer.commit();
+    /// assert!(matches!(first.as_mut().poll(&mut cx), Poll::Ready(Ok(_))));
+    /// assert_eq!(storage.contents(&NOTES).as_deref(), Some(&b"one"[..]));
+    ///
+    /// // Dropping a barrier while another is alive discards nothing; the
+    /// // last one dropped uncommitted discards the held writes.
+    /// let (outer, inner) = (storage.hold_commits(), storage.hold_commits());
+    /// let mut second = pin!(storage.publish(&NOTES, b"two".to_vec(), WriteMode::Replace));
+    /// drop(inner);
+    /// assert!(second.as_mut().poll(&mut cx).is_pending());
+    /// drop(outer);
+    /// assert_eq!(
+    ///     second.as_mut().poll(&mut cx),
+    ///     Poll::Ready(Err(StorageError::Cancelled))
+    /// );
+    /// assert_eq!(storage.contents(&NOTES).as_deref(), Some(&b"one"[..]));
+    /// ```
     #[must_use = "commits are held only while the barrier is alive"]
     pub fn hold_commits(&self) -> CommitBarrier {
         self.state.lock().commit_holds += 1;
@@ -308,15 +346,18 @@ impl fmt::Debug for CommitBarrier {
 }
 
 impl CommitBarrier {
-    /// Commit every held write, in the order they were written, and release
-    /// this barrier.
+    /// Release this barrier; if it is the last one, commit every held write,
+    /// in the order they were written.
     pub fn commit(mut self) {
         self.released = true;
         let mut state = self.state.lock();
         state.commit_holds -= 1;
         let mut wakers = Vec::new();
-        for write in std::mem::take(&mut state.written) {
-            wakers.extend(state.commit(write));
+        let last = state.commit_holds == 0;
+        if last {
+            for write in std::mem::take(&mut state.written) {
+                wakers.extend(state.commit(write));
+            }
         }
         drop(state);
         wake_all(wakers);
@@ -331,8 +372,10 @@ impl Drop for CommitBarrier {
         let mut state = self.state.lock();
         state.commit_holds -= 1;
         let mut wakers = Vec::new();
-        for write in std::mem::take(&mut state.written) {
-            wakers.extend(state.answer(write.id, Err(StorageError::Cancelled)));
+        if state.commit_holds == 0 {
+            for write in std::mem::take(&mut state.written) {
+                wakers.extend(state.answer(write.id, Err(StorageError::Cancelled)));
+            }
         }
         drop(state);
         wake_all(wakers);

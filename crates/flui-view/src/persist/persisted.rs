@@ -75,8 +75,15 @@ impl<D: Document> Persisted<D> {
     /// The [`PersistError`] that kept the document from loading: the
     /// storage's error, corrupt bytes, a body the document cannot decode, a
     /// newer format, a contained codec panic, or edits not yet stored.
+    ///
+    /// The future is not promised to be [`Unpin`]: pin it (`Box::pin`,
+    /// `std::pin::pin!`) before polling it by hand.
     pub fn load(&self) -> impl Future<Output = Result<Rc<D>, PersistError>> + 'static {
-        std::future::ready(Err(PersistError::Storage(StorageError::Unavailable)))
+        // An async block, so the future is `!Unpin` like the owner-local load
+        // that replaces it; the captured value keeps it `!Send`.
+        let failed: Result<Rc<D>, PersistError> =
+            Err(PersistError::Storage(StorageError::Unavailable));
+        async move { failed }
     }
 
     /// Make `value` the document's value and hand it to the storage,

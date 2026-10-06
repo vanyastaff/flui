@@ -58,7 +58,7 @@ use flui_platform_api::{StorageError, StorageName};
 /// into body bytes and [`decode`](Self::decode) turns body bytes of any
 /// version up to [`VERSION`](Self::VERSION) back into a value, migrating an
 /// older format on the way.
-pub trait Document: 'static {
+pub trait Document: Sized + 'static {
     /// The name the document is stored under.
     const NAME: StorageName;
 
@@ -84,9 +84,7 @@ pub trait Document: 'static {
     ///
     /// A [`DecodeError`] describing why the body is not a value of this
     /// document.
-    fn decode(version: u32, body: &[u8]) -> Result<Self, DecodeError>
-    where
-        Self: Sized;
+    fn decode(version: u32, body: &[u8]) -> Result<Self, DecodeError>;
 }
 
 /// Why [`Document::decode`] could not read a body.
@@ -128,8 +126,8 @@ impl Revision {
 #[non_exhaustive]
 pub enum PersistError {
     /// The storage refused the request.
-    #[error("the storage request failed: {0}")]
-    Storage(#[source] StorageError),
+    #[error(transparent)]
+    Storage(#[from] StorageError),
     /// The stored bytes are not a document of this name: no header, another
     /// document's header, or a malformed one.
     #[error("the stored document is corrupt: {detail}")]
@@ -151,8 +149,8 @@ pub enum PersistError {
     /// The application's codec panicked; the panic was contained.
     #[error("the document's {during} panicked: {message}")]
     Panicked {
-        /// Which step panicked, such as `"encode"` or `"decode"`.
-        during: &'static str,
+        /// Which step panicked.
+        during: CodecStep,
         /// The panic's message.
         message: String,
     },
@@ -180,10 +178,43 @@ pub enum SaveStatus {
     /// The last write failed; the edits stay in memory and
     /// [`Persisted::retry`] writes the latest value.
     Failed(PersistError),
-    /// The stored file is never written: it is from a newer format, or its
-    /// directory cannot be locked.
-    ReadOnly(PersistError),
+    /// The stored file is never written, for the reason given.
+    ReadOnly(ReadOnlyReason),
     /// The realm has no storage (a platform without files, or none
     /// configured): the document lives in memory only.
     Unavailable,
+}
+
+/// Why a [`Persisted`] document's stored file is never written.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ReadOnlyReason {
+    /// The stored file was written in a newer format than this build reads.
+    NewerVersion {
+        /// The version in the stored file.
+        found: u32,
+        /// [`Document::VERSION`].
+        supported: u32,
+    },
+    /// The storage directory cannot be locked, so a write based on the loaded
+    /// version cannot be made safely there.
+    LockUnsupported,
+}
+
+/// Which step of a [`Document`]'s codec ran when it panicked.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CodecStep {
+    /// [`Document::encode`].
+    Encode,
+    /// [`Document::decode`].
+    Decode,
+}
+
+impl std::fmt::Display for CodecStep {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Encode => "encode",
+            Self::Decode => "decode",
+        })
+    }
 }
