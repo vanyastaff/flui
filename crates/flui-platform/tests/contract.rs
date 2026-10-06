@@ -220,8 +220,12 @@ mod native_windows {
             deadline_reinstalled_by_its_frame_gets_another_frame,
         ),
         (
-            "deadline_left_unchanged_by_its_frames_does_not_spin",
-            deadline_left_unchanged_by_its_frames_does_not_spin,
+            "deadline_queued_three_times_at_one_instant_gets_three_frames",
+            deadline_queued_three_times_at_one_instant_gets_three_frames,
+        ),
+        (
+            "deadline_no_frame_can_service_does_not_spin",
+            deadline_no_frame_can_service_does_not_spin,
         ),
         (
             "deadline_query_unwind_retains_replaced_hostile_captures",
@@ -268,6 +272,14 @@ mod native_windows {
         (
             "unconsumed_alt_space_keeps_its_system_char",
             unconsumed_alt_space_keeps_its_system_char,
+        ),
+        (
+            "pumping_consumer_of_alt_space_never_sees_its_system_char",
+            pumping_consumer_of_alt_space_never_sees_its_system_char,
+        ),
+        (
+            "pumping_handler_of_alt_space_keeps_its_system_char",
+            pumping_handler_of_alt_space_keeps_its_system_char,
         ),
         (
             "resize_callback_preserves_large_native_dimensions",
@@ -481,32 +493,59 @@ mod native_windows {
 
     fn deadline_reinstalled_by_its_frame_gets_another_frame() {
         assert_eq!(
-            same_instant_deadline_frames(true),
+            same_instant_deadline_frames(2),
             2,
             "a frame that accepts new work at the instant it serviced gets a second frame"
         );
     }
 
-    fn deadline_left_unchanged_by_its_frames_does_not_spin() {
-        // The pair is re-armed once after a serviced frame (it may be new
-        // work) and then left delivered until the hook's answer changes.
+    fn deadline_queued_three_times_at_one_instant_gets_three_frames() {
+        // Every frame that services one obligation leaves the next due at
+        // the same instant; each must get its own frame, not only the first
+        // repeat of the pair.
         assert_eq!(
-            same_instant_deadline_frames(false),
-            2,
-            "an answer no frame changes stops waking frames"
+            same_instant_deadline_frames(3),
+            3,
+            "the third obligation due at one instant is stranded"
+        );
+    }
+
+    fn deadline_no_frame_can_service_does_not_spin() {
+        // No window is open, so a delivery runs no frame callback and
+        // nothing can service the deadline: the hook keeps answering the
+        // same past instant, and the loop must park instead of re-arming it.
+        let queries = Arc::new(AtomicUsize::new(0));
+        let result = Arc::clone(&queries);
+        Box::new(WindowsPlatform::new().expect("native Windows platform"))
+            .run(Box::new(move |owner| {
+                let watchdog = owner.proxy();
+                std::thread::spawn(move || {
+                    std::thread::sleep(Duration::from_millis(300));
+                    let _ = watchdog.request_quit();
+                });
+                let due = web_time::Instant::now() + Duration::from_millis(30);
+                owner.shared().set_wake_deadline_hook(Box::new(move || {
+                    queries.fetch_add(1, Ordering::SeqCst);
+                    Some(due)
+                }));
+                Ok(())
+            }))
+            .expect("native frameless loop returns normally");
+        let queries = result.load(Ordering::SeqCst);
+        assert!(
+            queries < 16,
+            "a deadline no frame can service was re-armed {queries} times"
         );
     }
 
     // Frame callbacks that run at or after one fixed instant the hook keeps
-    // answering. With `reinstall`, the first such frame services the
-    // deadline and accepts new work due at the same instant, and the second
-    // services that; without it, no frame ever services it. A watchdog ends
-    // the loop either way.
+    // answering while `obligations` remain: each such frame services one,
+    // leaving the next due at the same instant. A watchdog ends the loop.
     #[expect(
         unsafe_code,
         reason = "synchronous first paint of an owned Win32 window on its creating thread"
     )]
-    fn same_instant_deadline_frames(reinstall: bool) -> usize {
+    fn same_instant_deadline_frames(obligations: usize) -> usize {
         use flui_platform::WindowOpen;
 
         let frames = Arc::new(AtomicUsize::new(0));
@@ -537,20 +576,19 @@ mod native_windows {
                     let _ = watchdog.request_quit();
                 });
                 let due = web_time::Instant::now() + Duration::from_millis(60);
-                let pending = Arc::new(Mutex::new(Some(due)));
+                let pending = Arc::new(AtomicUsize::new(obligations));
                 let callback_pending = Arc::clone(&pending);
                 window.on_request_frame(Box::new(move || {
-                    let mut pending = callback_pending.lock().expect("deadline state");
-                    if pending.is_none_or(|due| web_time::Instant::now() < due) {
+                    if callback_pending.load(Ordering::SeqCst) == 0
+                        || web_time::Instant::now() < due
+                    {
                         return;
                     }
-                    let count = frames.fetch_add(1, Ordering::SeqCst) + 1;
-                    if reinstall {
-                        *pending = (count == 1).then_some(due);
-                    }
+                    callback_pending.fetch_sub(1, Ordering::SeqCst);
+                    frames.fetch_add(1, Ordering::SeqCst);
                 }));
                 owner.shared().set_wake_deadline_hook(Box::new(move || {
-                    *pending.lock().expect("deadline state")
+                    (pending.load(Ordering::SeqCst) > 0).then_some(due)
                 }));
                 Ok(())
             }))
@@ -1226,10 +1264,16 @@ mod native_windows {
     }
 
     fn consumed_alt_space_withdraws_its_system_char() {
-        alt_space_system_char(true);
+        alt_space_system_char(true, false);
     }
     fn unconsumed_alt_space_keeps_its_system_char() {
-        alt_space_system_char(false);
+        alt_space_system_char(false, false);
+    }
+    fn pumping_consumer_of_alt_space_never_sees_its_system_char() {
+        alt_space_system_char(true, true);
+    }
+    fn pumping_handler_of_alt_space_keeps_its_system_char() {
+        alt_space_system_char(false, true);
     }
 
     // Alt+Space goes through the message loop's own path: the keydown is
@@ -1237,12 +1281,15 @@ mod native_windows {
     // dispatched. That character is what `DefWindowProc` turns into the
     // system menu, so a consumed keydown must withdraw it and an unconsumed
     // one must leave it queued. The row never dispatches a WM_SYSCHAR itself:
-    // one left behind is counted, not allowed to open a modal menu.
+    // one left behind is counted, not allowed to open a modal menu. With
+    // `pump`, the handler pumps this window's messages before answering, as
+    // a modal API does: the character must not be dispatchable then, since
+    // the handler's result is not known yet.
     #[expect(
         unsafe_code,
         reason = "actual owned Win32 key translation and message pumping"
     )]
-    fn alt_space_system_char(consume: bool) {
+    fn alt_space_system_char(consume: bool, pump: bool) {
         let platform = WindowsPlatform::new().expect("native Windows platform");
         let window = open_shown(&platform);
         let hwnd = window
@@ -1252,12 +1299,38 @@ mod native_windows {
             .hwnd();
         let keydowns = Arc::new(AtomicUsize::new(0));
         let keydown_observations = Arc::clone(&keydowns);
+        let pumped = Arc::new(Mutex::new(Vec::new()));
+        let pumped_observations = Arc::clone(&pumped);
+        // The input callback must be `Send`; carry the handle as an address.
+        let pumped_window = hwnd.0 as usize;
         window.on_input(Box::new(move |event| {
             if event
                 .as_keyboard()
                 .is_some_and(|key| key.state == keyboard_types::KeyState::Down)
             {
                 keydown_observations.fetch_add(1, Ordering::SeqCst);
+                if pump {
+                    let mut message = MSG::default();
+                    // SAFETY: the handler runs on the window's creating
+                    // thread; only that HWND's queue is pumped. A WM_SYSCHAR
+                    // the pump reaches is recorded instead of dispatched, so
+                    // it cannot open a modal menu.
+                    let hwnd = HWND(pumped_window as *mut _);
+                    while unsafe { PeekMessageW(&raw mut message, Some(hwnd), 0, 0, PM_REMOVE) }
+                        .as_bool()
+                    {
+                        if message.message == WM_SYSCHAR {
+                            pumped_observations
+                                .lock()
+                                .expect("pumped characters")
+                                .push(message.wParam.0);
+                        } else {
+                            // SAFETY: dispatches a message this thread's
+                            // queue just returned.
+                            unsafe { DispatchMessageW(&raw const message) };
+                        }
+                    }
+                }
             }
             DispatchEventResult::resolved(true, consume)
         }));
@@ -1310,6 +1383,11 @@ mod native_windows {
             system_chars.push(message.wParam.0);
         }
         assert_eq!(keydowns.load(Ordering::SeqCst), 1, "keydown delivery");
+        let pumped = std::mem::take(&mut *pumped.lock().expect("pumped characters"));
+        assert!(
+            pumped.is_empty(),
+            "a handler's pump reached {pumped:?} before its result was known"
+        );
         if consume {
             assert!(
                 system_chars.is_empty(),
