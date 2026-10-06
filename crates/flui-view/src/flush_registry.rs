@@ -40,6 +40,7 @@ struct Slot {
     bytes: Arc<[u8]>,
     #[expect(dead_code, reason = "written once the registry flushes")]
     mode: WriteMode,
+    #[expect(dead_code, reason = "committed once the registry flushes")]
     revision: Revision,
 }
 
@@ -83,17 +84,18 @@ impl fmt::Debug for FlushRegistry {
 
 impl FlushRegistry {
     /// Make `bytes` the latest value of `name`, to be written under `mode`,
-    /// replacing bytes published earlier that are not written yet, and
-    /// return the revision they were published as. Owner thread; never
-    /// waits for the storage.
-    pub fn publish(&self, name: StorageName, bytes: Arc<[u8]>, mode: WriteMode) -> Revision {
-        let mut slots = self.slots.lock();
-        let revision = slots.by_name.get(&name).map_or(Revision::FIRST, |slot| {
-            slot.revision
-                .next()
-                .expect("BUG: one name is published fewer than u64::MAX times")
-        });
-        slots.by_name.insert(
+    /// replacing bytes published earlier that are not written yet.
+    /// `revision` is the document's own revision of these bytes, the one
+    /// written in their header; the registry records it and never mints one.
+    /// Owner thread; never waits for the storage.
+    pub fn publish(
+        &self,
+        name: StorageName,
+        bytes: Arc<[u8]>,
+        mode: WriteMode,
+        revision: Revision,
+    ) {
+        self.slots.lock().by_name.insert(
             name,
             Slot {
                 bytes,
@@ -101,11 +103,11 @@ impl FlushRegistry {
                 revision,
             },
         );
-        revision
     }
 
-    /// The latest revision of `name` the storage confirmed, with the stored
-    /// version it confirmed it as; `None` before the first confirmation.
+    /// The document's revision last written for `name`, as it was
+    /// published, with the stored version the storage confirmed for it;
+    /// `None` before the first confirmed write.
     #[must_use]
     pub fn committed(&self, name: StorageName) -> Option<(Revision, StoredVersion)> {
         let _ = name;

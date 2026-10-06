@@ -11,10 +11,15 @@ use flui_rendering::protocol::BoxProtocol;
 use flui_testing::storage::MemoryStorage;
 use flui_testing::widgets::{lay_out, tight};
 use flui_view::__runtime::{FlushRegistry, FlushRegistryHost as _};
+use flui_view::persist::Revision;
 use flui_view::prelude::*;
 use flui_view::{CloseReason, LifecycleSubscription};
 
 const SESSION: StorageName = StorageName::machine_local("session");
+
+/// The document's revision of the bytes published at Detached: not the
+/// first, so a registry counting its own publications would not match it.
+const CLOSING_REVISION: Revision = Revision::new(7);
 
 /// A leaf that renders nothing, so the build chain bottoms out.
 #[derive(Clone)]
@@ -73,7 +78,12 @@ impl ViewState<SavesOnDetach> for SavesOnDetachState {
         let (_, subscription) = lifecycle
             .subscribe(move |state| {
                 if state == AppLifecycleState::Detached {
-                    registry.publish(SESSION, Arc::from(&b"closing"[..]), WriteMode::Replace);
+                    registry.publish(
+                        SESSION,
+                        Arc::from(&b"closing"[..]),
+                        WriteMode::Replace,
+                        CLOSING_REVISION,
+                    );
                 }
             })
             .expect("the presentation is open");
@@ -115,5 +125,10 @@ fn a_registry_entry_published_at_detached_is_written_at_teardown() {
     assert!(
         report.is_complete(),
         "nothing is left unwritten: {report:?}"
+    );
+    assert_eq!(
+        registry.committed(SESSION).map(|(revision, _)| revision),
+        Some(CLOSING_REVISION),
+        "the committed revision is the document's, as published"
     );
 }

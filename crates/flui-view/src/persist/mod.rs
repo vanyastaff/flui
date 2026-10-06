@@ -114,18 +114,16 @@ impl DecodeError {
 pub struct Revision(u64);
 
 impl Revision {
-    /// The revision of a document's first write.
-    pub(crate) const FIRST: Self = Self(1);
+    /// The revision numbered `n`, as a stored file's header records it.
+    #[must_use]
+    pub const fn new(n: u64) -> Self {
+        Self(n)
+    }
 
     /// The revision as a number.
     #[must_use]
     pub const fn get(self) -> u64 {
         self.0
-    }
-
-    /// The revision after this one; `None` once the counter is exhausted.
-    pub(crate) fn next(self) -> Option<Self> {
-        self.0.checked_add(1).map(Self)
     }
 }
 
