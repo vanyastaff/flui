@@ -45,9 +45,7 @@ use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Weak};
 use std::thread::{self, ThreadId};
-use std::time::Duration;
 
-use flui_animation::Curve;
 use flui_foundation::ChangeNotifier;
 use flui_scheduler::TickerFuture;
 use flui_view::BuildContextExt;
@@ -1595,27 +1593,22 @@ impl NavigatorHandle {
         self.pop_erased(Some(AnyResult::new(result)))
     }
 
-    /// Pop `route`, but drive its exit transition with `duration`/`curve`
-    /// instead of its own default reverse pacing — for a gesture-driven pop
-    /// whose pacing comes from the drag itself (fling velocity, or the flat
-    /// "stay" pacing), not the route's static configuration.
+    /// Pop `route`, but drive its exit transition with `pacing` instead of
+    /// its own default reverse pacing — for a gesture-driven pop whose pacing
+    /// comes from the drag itself (fling velocity, or the flat "stay"
+    /// pacing), not the route's static configuration.
     ///
     /// Returns `false` and pops nothing if `route` is no longer the current
     /// top route: a route swept away by something else between the gesture's last frame and this call must not
     /// have a stale drag finish it. Only a [`TransitionRoute`](super::transition_route::TransitionRoute)
     /// (directly, or via `ModalRoute`/`PageRoute`) consumes the pacing; a plain
     /// route's `did_pop` never asks for it.
-    pub(crate) fn pop_paced(
-        &self,
-        route: RouteId,
-        duration: Duration,
-        curve: Arc<dyn Curve + Send + Sync>, // see `PopPacing`'s marker (binding.rs) — same erased-easing-curve boundary
-    ) -> bool {
+    pub(crate) fn pop_paced(&self, route: RouteId, pacing: PopPacing) -> bool {
         if self.current() != Some(route) {
             return false;
         }
         // Both `insert` and `remove` hand back the displaced `PopPacing`, which
-        // owns an `Arc<dyn Curve + Send + Sync>` — a caller-supplied value whose
+        // may own an `Arc<dyn Curve + Send + Sync>` — a caller-supplied value whose
         // `Drop` is user code. The guard is the first temporary in the statement,
         // so it would otherwise still be alive when that value drops. Same rule as
         // the registry's displaced closures and the history's undelivered results.
@@ -1624,7 +1617,7 @@ impl NavigatorHandle {
                 .registries
                 .pop_pacing
                 .lock()
-                .insert(route, PopPacing { duration, curve })
+                .insert(route, pacing)
         };
         drop(displaced);
 

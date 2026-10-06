@@ -150,7 +150,11 @@ impl NavigatorProbe for NavigatorHandle {
         duration: Duration,
         curve: Arc<dyn Curve + Send + Sync>,
     ) -> bool {
-        NavigatorHandle::pop_paced(self, route, duration, curve)
+        NavigatorHandle::pop_paced(
+            self,
+            route,
+            crate::navigator::binding::PopPacing::Curved { duration, curve },
+        )
     }
 }
 
