@@ -151,6 +151,7 @@ pub(crate) fn future_builder_pending_then_error() {
 /// the realm's owner thread, and the owner completes it between frames.
 pub(crate) fn future_builder_accepts_an_owner_local_future() {
     type Shared = Rc<std::cell::Cell<i32>>;
+    type Builds = Rc<std::cell::RefCell<Vec<(ConnectionState, Option<i32>)>>>;
     let waker: Rc<std::cell::RefCell<Option<Waker>>> = Rc::default();
     let result: Rc<std::cell::RefCell<Option<Shared>>> = Rc::default();
     let factory: FutureFactory<Shared, Boom> = {
@@ -168,7 +169,7 @@ pub(crate) fn future_builder_accepts_an_owner_local_future() {
             }))
         })
     };
-    let seen: Rc<std::cell::RefCell<Vec<(ConnectionState, Option<i32>)>>> = Rc::default();
+    let seen: Builds = Rc::default();
     let builder: SnapshotBuilder<Shared, Boom> = {
         let seen = Rc::clone(&seen);
         Rc::new(move |_ctx, snapshot| {
@@ -184,12 +185,21 @@ pub(crate) fn future_builder_accepts_an_owner_local_future() {
         FutureBuilder::keyed(Some(Rc::<str>::from("owner-local")), factory, builder),
         loose(400.0),
     );
-    assert_eq!(seen.borrow().last(), Some(&(ConnectionState::Waiting, None)));
+    assert_eq!(
+        seen.borrow().last(),
+        Some(&(ConnectionState::Waiting, None))
+    );
 
     *result.borrow_mut() = Some(Rc::new(std::cell::Cell::new(7)));
-    let wake = waker.borrow_mut().take().expect("the first poll stored its waker");
+    let wake = waker
+        .borrow_mut()
+        .take()
+        .expect("the first poll stored its waker");
     wake.wake();
     laid.tick();
 
-    assert_eq!(seen.borrow().last(), Some(&(ConnectionState::Done, Some(7))));
+    assert_eq!(
+        seen.borrow().last(),
+        Some(&(ConnectionState::Done, Some(7)))
+    );
 }

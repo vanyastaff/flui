@@ -34,7 +34,7 @@ use std::hint::black_box;
 use std::task::Poll;
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
-use flui_scheduler::AsyncDriver;
+use flui_scheduler::{OwnerFrame, UpdateScheduler};
 
 /// `R=0`: every task is dormant (spawned once, never woken again). Measures
 /// the claim issue #1056 exists for — an idle pump must cost O(R), not O(N).
@@ -42,7 +42,9 @@ fn empty_pump(c: &mut Criterion) {
     let mut group = c.benchmark_group("empty_pump");
 
     for dormant in [0usize, 100_000] {
-        let driver = AsyncDriver::new();
+        let scheduler = UpdateScheduler::new();
+        let frame = OwnerFrame::new(&scheduler);
+        let driver = frame.async_driver();
         let mut tokens = Vec::with_capacity(dormant);
         for _ in 0..dormant {
             tokens.push(driver.spawn_local(Box::pin(std::future::pending::<()>())));
@@ -51,16 +53,12 @@ fn empty_pump(c: &mut Criterion) {
         // once (spawn seeds `ready`), making all of them dormant. Every
         // measured iteration after this one polls zero tasks — nothing to
         // re-arm between iterations for this group.
-        assert_eq!(driver.poll_ready(), dormant);
-        assert_eq!(driver.ready_task_count(), 0);
+        assert_eq!(frame.poll_ready(), dormant);
+        assert_eq!(frame.ready_task_count(), 0);
 
-        group.bench_with_input(
-            BenchmarkId::from_parameter(dormant),
-            &driver,
-            |b, driver| {
-                b.iter(|| black_box(driver.poll_ready()));
-            },
-        );
+        group.bench_with_input(BenchmarkId::from_parameter(dormant), &frame, |b, frame| {
+            b.iter(|| black_box(frame.poll_ready()));
+        });
 
         drop(tokens);
     }
@@ -77,7 +75,9 @@ fn ready_heavy(c: &mut Criterion) {
     let mut group = c.benchmark_group("ready_heavy");
 
     for ready in [1_000usize, 10_000] {
-        let driver = AsyncDriver::new();
+        let scheduler = UpdateScheduler::new();
+        let frame = OwnerFrame::new(&scheduler);
+        let driver = frame.async_driver();
         let mut tokens = Vec::with_capacity(ready);
         for _ in 0..ready {
             tokens.push(driver.spawn_local(Box::pin(std::future::poll_fn(|cx| {
@@ -88,10 +88,10 @@ fn ready_heavy(c: &mut Criterion) {
             }))));
         }
         // Untimed warm-up pump, excluded from the measured distribution.
-        assert_eq!(driver.poll_ready(), ready);
+        assert_eq!(frame.poll_ready(), ready);
 
-        group.bench_with_input(BenchmarkId::from_parameter(ready), &driver, |b, driver| {
-            b.iter(|| black_box(driver.poll_ready()));
+        group.bench_with_input(BenchmarkId::from_parameter(ready), &frame, |b, frame| {
+            b.iter(|| black_box(frame.poll_ready()));
         });
 
         drop(tokens);

@@ -9,16 +9,16 @@ use flui_foundation::{PresentationId, RealmId};
 use flui_painting::{FontCollection, TextContext};
 use flui_platform_api::Clipboard;
 use flui_rendering::TextContextHandle;
-use flui_scheduler::{AsyncDriver, ClockSource, LocalPostFrameLane, UpdateScheduler};
+use flui_scheduler::{ClockSource, OwnerFrame, UpdateScheduler};
 
 /// What [`UiRealm`](crate::ui_realm::UiRealm)'s constructors need to wire it
 /// up: a fresh, realm-owned [`UpdateScheduler`] — the strong root — plus the
-/// `local_post_frame_lane()` and `async_driver()` handles derived from that
-/// SAME scheduler. Resolved once, here, so the realm's own source reaches no
-/// process-global scheduler.
+/// [`OwnerFrame`] made for that SAME scheduler, the only strong owner of the
+/// realm's owner-local post-frame callbacks and async tasks (ADR-0136 §2).
+/// Resolved once, here, so the realm's own source reaches no process-global
+/// scheduler.
 pub(crate) struct RealmServices {
-    pub(crate) local_post_frame: LocalPostFrameLane,
-    pub(crate) async_driver: AsyncDriver,
+    pub(crate) owner_frame: OwnerFrame,
     pub(crate) scheduler: UpdateScheduler,
     /// The platform clipboard every presentation of this realm hands its
     /// widgets (`LifecycleContext::clipboard_handle`).
@@ -53,8 +53,7 @@ impl RealmServices {
     ) -> Self {
         let scheduler = UpdateScheduler::new();
         Self {
-            local_post_frame: scheduler.new_local_post_frame_lane(),
-            async_driver: scheduler.async_driver().clone(),
+            owner_frame: OwnerFrame::new(&scheduler),
             scheduler,
             clipboard,
             clock,

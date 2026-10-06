@@ -36,12 +36,14 @@ use super::*;
 /// explicitly classifies it -- a `Mutex` gets a `try_lock` assertion;
 /// anything else (an atomic, an id generator, a sharded-`RwLock`
 /// `DashMap`) is bound `_` deliberately, so the classification decision is
-/// visible, not silently skipped. `TaskQueue` and `AsyncDriver` hold their
-/// own mutexes behind fields private to their own modules, so they are
-/// probed through their own `#[cfg(test)] is_unlocked()` methods instead
-/// of a field destructure here.
+/// visible, not silently skipped. `TaskQueue` holds its own mutex behind a
+/// field private to its module, so it is probed through its own
+/// `#[cfg(test)] is_unlocked()` instead of a field destructure here. The
+/// async tasks are not scheduler storage: they live in the owner's
+/// `OwnerFrame`, whose `AsyncDriver::is_unlocked` probe serves the owner's
+/// own reentrancy tests.
 ///
-/// `callbacks.cancelled` and `LocalPostFrameLane`'s owner-local queue are
+/// `callbacks.cancelled` and the `OwnerFrame`'s owner-local queues are
 /// not probed here. Neither is a `Mutex`, but each is still a real
 /// reentrancy hazard with its own different failure mode, not a lesser
 /// one: `DashMap` (6.2.1) is a SHARDED `RwLock`, not lock-free --
@@ -54,7 +56,7 @@ use super::*;
 /// deadlocking, a third failure mode again. DashMap 6.2.1 has no
 /// all-shards "is anything locked" API to assert here, and a lane is never
 /// a field of `SchedulerInner` for this destructure to see in the first
-/// place -- each `new_local_post_frame_lane()` call hands the caller its
+/// place -- each `OwnerFrame::new` call hands the caller its
 /// own, held separately from the scheduler's own storage.
 fn assert_no_scheduler_lock_held(scheduler: &UpdateScheduler) {
     // Destructured without `..` on purpose: a `Mutex` added directly to
@@ -66,7 +68,6 @@ fn assert_no_scheduler_lock_held(scheduler: &UpdateScheduler) {
         callbacks,
         binding,
         task_queue,
-        async_driver,
     } = &*scheduler.inner;
 
     let FrameState {
@@ -193,10 +194,6 @@ fn assert_no_scheduler_lock_held(scheduler: &UpdateScheduler) {
         task_queue.is_unlocked(),
         "TaskQueue's lock is locked during a callback"
     );
-    assert!(
-        async_driver.is_unlocked(),
-        "AsyncDriver's lock(s) are locked during a callback"
-    );
 }
 
 /// Also pins that `current_frame()` observes THIS frame's own timing from
@@ -213,7 +210,8 @@ fn transient_callback_runs_with_no_scheduler_lock_held() {
         let _prev = std::mem::replace(&mut *observed_for_callback.lock(), probe.current_frame());
     }));
 
-    let frame_id = scheduler.handle_begin_frame(Instant::now());
+    let frame_id =
+        scheduler.handle_begin_frame(Instant::now(), &crate::OwnerFrame::new(&scheduler));
 
     assert_eq!(
         observed.lock().map(|timing| timing.id),
@@ -258,7 +256,7 @@ fn completion_waker_runs_with_no_scheduler_lock_held() {
     let mut cx = Context::from_waker(&waker);
     assert!(Pin::new(&mut future).poll(&mut cx).is_pending());
 
-    scheduler.execute_frame();
+    scheduler.execute_frame(&crate::OwnerFrame::new(&scheduler));
 
     assert!(
         ran.load(Ordering::Acquire),

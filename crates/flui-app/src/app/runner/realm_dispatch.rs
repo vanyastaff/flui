@@ -1856,7 +1856,7 @@ fn for_each_installed_realm(mut f: impl FnMut(&crate::app::ui_realm::UiRealm)) {
     );
     // Same rationale as `dispatch_platform_realm`'s own tail: a visited
     // realm's frame callback may have resolved an `open_secondary_window`
-    // Pending completion via `UpdateScheduler::drive_async_tasks`, which cannot
+    // Pending completion via the realm's owner-task poll, which cannot
     // complete mid-visit for the same reason it cannot complete
     // mid-dispatch (`iterating_all_realms` holds this thread's checkout
     // state just as `dispatched_realm_id` does). The visitor is available

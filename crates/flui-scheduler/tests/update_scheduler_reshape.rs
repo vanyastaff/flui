@@ -44,7 +44,12 @@ fn tiny_deadline_defers_idle_but_never_defers_build_or_animation() {
     // A deadline that has already passed by the time `handle_draw_frame`
     // checks it — the tightest possible Idle-slice.
     let already_passed_deadline = IdleDeadline(now);
-    scheduler.drive_frame(now, already_passed_deadline, || {});
+    scheduler.drive_frame(
+        &flui_scheduler::OwnerFrame::new(&scheduler),
+        now,
+        already_passed_deadline,
+        || {},
+    );
 
     assert!(
         animation_ran.load(Ordering::SeqCst),
@@ -105,7 +110,9 @@ fn a_self_reenqueuing_build_task_is_bounded_by_the_reentry_cap_not_hung_forever(
     // Terminates at all -- the primary regression this test guards -- and
     // the warning fires exactly once. `execute_frame` runs a full
     // `handle_draw_frame` reentrant-pass loop identically to `drive_frame`.
-    let (_frame_id, log) = flui_testing::log_capture::capture(|| scheduler.execute_frame());
+    let (_frame_id, log) = flui_testing::log_capture::capture(|| {
+        scheduler.execute_frame(&flui_scheduler::OwnerFrame::new(&scheduler))
+    });
 
     assert_eq!(
         runs.load(Ordering::SeqCst),

@@ -128,8 +128,8 @@ impl UiRealm {
 
     /// Builds the realm from already-resolved pieces: identity, the
     /// presentation's window, and `services: RealmServices` — a fresh
-    /// `UpdateScheduler` plus the `local_post_frame_lane()`/`async_driver()`
-    /// handles derived from it, built by the caller (`RealmServices::
+    /// `UpdateScheduler` plus the `OwnerFrame` made for it, built by the
+    /// caller (`RealmServices::
     /// construct`, in `runtime.rs`), which is what makes `UiRealm` perform
     /// zero `::instance()` calls and gives every realm its own scheduler
     /// strong root instead of sharing a process-global one.
@@ -162,8 +162,7 @@ impl UiRealm {
         let redraw_pending = Arc::new(AtomicBool::new(false));
         let command_wake_debt = Arc::new(WakeDebt::default());
         let RealmServices {
-            local_post_frame,
-            async_driver,
+            owner_frame,
             scheduler,
             clipboard,
             clock,
@@ -172,8 +171,8 @@ impl UiRealm {
 
         // The realm's scheduler fires the SAME platform wake its presentation
         // and command sender use. This is the edge an async completion travels:
-        // a background task's `Waker::wake()` reaches `AsyncDriver`'s
-        // request-frame, which reaches `UpdateScheduler::request_frame`, whose
+        // a background task's `Waker::wake()` reaches the owner frame's
+        // `FrameWaker`, which sets the scheduler's frame latch, whose
         // `frame_scheduled` false->true transition fires this hook. Without it
         // that demand is a bare atomic store only an already-running pump can
         // observe, so an idle `ControlFlow::Wait` loop sleeps through it and
@@ -193,8 +192,8 @@ impl UiRealm {
             window,
             RealmCapabilities {
                 global_key_scope: global_key_scope.clone(),
-                async_driver,
-                local_post_frame_handle: local_post_frame.local_handle(),
+                async_driver: owner_frame.async_driver(),
+                local_post_frame_handle: owner_frame.local_post_frame_handle(),
                 interaction_dispatch_handle: interaction_lane.dispatch_handle(),
                 scheduler: &scheduler,
                 wake: Arc::clone(&wake),
@@ -217,7 +216,7 @@ impl UiRealm {
         let start = flui_foundation::MonotonicClock::now(&clock);
         Ok(Self {
             realm_id,
-            local_post_frame,
+            owner_frame,
             interaction_lane,
             global_key_scope,
             presentations: PresentationForest::single(presentation),

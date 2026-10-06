@@ -1,5 +1,5 @@
 //! Frame demand survives failed delivery and overlapping hook invocations.
-use flui_scheduler::{AsyncDriver, UpdateScheduler};
+use flui_scheduler::{AsyncDriver, OwnerFrame, UpdateScheduler};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::task::{Poll, Waker};
@@ -122,14 +122,16 @@ fn reentrant_fresh_request_is_delivered_without_recursing() {
 }
 
 fn repeated_cloned_task_wake_retries_a_panicking_hook() {
-    let driver = AsyncDriver::new();
+    let scheduler = UpdateScheduler::new();
+    let frame = OwnerFrame::new(&scheduler);
+    let driver = frame.async_driver();
     let observed = Arc::new(Mutex::new(None::<Waker>));
     let task_observed = Arc::clone(&observed);
     let token = driver.spawn_local(Box::pin(std::future::poll_fn(move |cx| {
         *task_observed.lock().expect("observed waker") = Some(cx.waker().clone());
         Poll::<()>::Pending
     })));
-    assert_eq!(driver.poll_ready(), 1);
+    assert_eq!(frame.poll_ready(), 1);
     let calls = Arc::new(AtomicUsize::new(0));
     let hook_calls = Arc::clone(&calls);
     driver.set_request_frame(move || {
@@ -151,7 +153,7 @@ fn repeated_cloned_task_wake_retries_a_panicking_hook() {
     waker.wake_by_ref();
     assert_eq!(calls.load(Ordering::Relaxed), 2);
     assert_eq!(
-        driver.poll_ready(),
+        frame.poll_ready(),
         1,
         "failed delivery must not lose the indexed task"
     );
@@ -164,7 +166,8 @@ fn repeated_cloned_task_wake_retries_a_panicking_hook() {
 
 fn scheduled_async_wake_retries_both_delivery_layers() {
     let scheduler = UpdateScheduler::new();
-    let driver = scheduler.async_driver();
+    let frame = OwnerFrame::new(&scheduler);
+    let driver = frame.async_driver();
     let observed = Arc::new(Mutex::new(None::<Waker>));
     let task_observed = Arc::clone(&observed);
     let token = driver.spawn_local(Box::pin(std::future::poll_fn(move |cx| {
@@ -172,7 +175,7 @@ fn scheduled_async_wake_retries_both_delivery_layers() {
         Poll::<()>::Pending
     })));
     scheduler.finish_async_pump();
-    assert_eq!(driver.poll_ready(), 1);
+    assert_eq!(frame.poll_ready(), 1);
     let calls = Arc::new(AtomicUsize::new(0));
     let hook_calls = Arc::clone(&calls);
     scheduler.set_on_frame_scheduled(Some(Arc::new(move || {
@@ -196,21 +199,22 @@ fn scheduled_async_wake_retries_both_delivery_layers() {
         "both the task and frame latch must permit retry"
     );
     scheduler.finish_async_pump();
-    assert_eq!(driver.poll_ready(), 1);
+    assert_eq!(frame.poll_ready(), 1);
     waker.wake_by_ref();
     assert_eq!(calls.load(Ordering::Relaxed), 3);
     drop(token);
 }
 
 fn driver_older_success_cannot_erase_newer_failed_wake() {
-    fn pending(driver: &AsyncDriver) -> (flui_scheduler::TaskToken, Waker) {
+    fn pending(frame: &OwnerFrame) -> (flui_scheduler::TaskToken, Waker) {
+        let driver = frame.async_driver();
         let observed = Arc::new(Mutex::new(None::<Waker>));
         let task_observed = Arc::clone(&observed);
         let token = driver.spawn_local(Box::pin(std::future::poll_fn(move |cx| {
             *task_observed.lock().expect("observed waker") = Some(cx.waker().clone());
             Poll::<()>::Pending
         })));
-        assert_eq!(driver.poll_ready(), 1);
+        assert_eq!(frame.poll_ready(), 1);
         let waker = observed
             .lock()
             .expect("observed waker")
@@ -218,9 +222,11 @@ fn driver_older_success_cannot_erase_newer_failed_wake() {
             .expect("polled waker");
         (token, waker)
     }
-    let driver = AsyncDriver::new();
-    let (_first_token, first) = pending(&driver);
-    let (_second_token, second) = pending(&driver);
+    let scheduler = UpdateScheduler::new();
+    let frame = OwnerFrame::new(&scheduler);
+    let driver = frame.async_driver();
+    let (_first_token, first) = pending(&frame);
+    let (_second_token, second) = pending(&frame);
     let calls = Arc::new(AtomicUsize::new(0));
     let hook_calls = Arc::clone(&calls);
     let (entered_tx, entered_rx) = mpsc::channel();
@@ -248,7 +254,7 @@ fn driver_older_success_cannot_erase_newer_failed_wake() {
     assert!(failure.is_err());
     second.wake_by_ref();
     assert_eq!(calls.load(Ordering::Relaxed), 3);
-    assert_eq!(driver.poll_ready(), 2);
+    assert_eq!(frame.poll_ready(), 2);
 }
 
 fn competing_reentrant_failures_preserve_the_first_panic() {
@@ -421,9 +427,16 @@ fn reentrant_hook_replacement_delivers_the_current_hook_after_failure() {
     );
 }
 
+thread_local! {
+    /// The driver a hook replaces itself through, on the owner thread.
+    static OWNER_DRIVER: std::cell::RefCell<Option<AsyncDriver>> =
+        const { std::cell::RefCell::new(None) };
+}
+
 fn assert_reentrant_hook_replacement_after_failure(use_driver: bool) {
     let scheduler = UpdateScheduler::new();
-    let driver = scheduler.async_driver();
+    let frame = OwnerFrame::new(&scheduler);
+    let driver = frame.async_driver();
     let observed = Arc::new(Mutex::new(None::<Waker>));
     let task_observed = Arc::clone(&observed);
     let token = use_driver.then(|| {
@@ -433,7 +446,7 @@ fn assert_reentrant_hook_replacement_after_failure(use_driver: bool) {
         })))
     });
     if use_driver {
-        assert_eq!(driver.poll_ready(), 1);
+        assert_eq!(frame.poll_ready(), 1);
     }
     scheduler.finish_async_pump();
     let initial_calls = Arc::new(AtomicUsize::new(0));
@@ -449,13 +462,22 @@ fn assert_reentrant_hook_replacement_after_failure(use_driver: bool) {
             replacement_calls.fetch_add(1, Ordering::Relaxed);
         };
         if use_driver {
-            scheduler.async_driver().set_request_frame(replacement);
+            // The driver is owner-local, so a `Send` hook reaches it through
+            // the owner thread it runs on here.
+            OWNER_DRIVER.with(|owner| {
+                owner
+                    .borrow()
+                    .as_ref()
+                    .expect("owner driver installed")
+                    .set_request_frame(replacement);
+            });
         } else {
             scheduler.set_on_frame_scheduled(Some(Arc::new(replacement)));
         }
         panic!("initial hook failure");
     };
     if use_driver {
+        OWNER_DRIVER.with(|owner| *owner.borrow_mut() = Some(driver.clone()));
         driver.set_request_frame(initial);
     } else {
         scheduler.set_on_frame_scheduled(Some(Arc::new(initial)));
@@ -481,6 +503,7 @@ fn assert_reentrant_hook_replacement_after_failure(use_driver: bool) {
     if let Some(token) = token {
         token.cancel();
     }
+    OWNER_DRIVER.with(|owner| owner.borrow_mut().take());
 }
 
 fn initial_hook_retirement_retains_the_compensating_envelope_on_failure() {

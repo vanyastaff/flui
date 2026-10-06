@@ -54,7 +54,7 @@ use flui_rendering::binding::RendererBinding as _;
 use flui_rendering::constraints::BoxConstraints;
 #[cfg(test)]
 use flui_scheduler::SchedulerPhase;
-use flui_scheduler::{LocalPostFrameLane, UpdateScheduler};
+use flui_scheduler::{OwnerFrame, UpdateScheduler};
 use flui_view::GlobalKeyScope;
 #[cfg(test)]
 use parking_lot::RwLock;
@@ -139,8 +139,11 @@ pub enum UiRealmError {
 /// access goes through [`UiCommandSender`] only.
 pub struct UiRealm {
     realm_id: RealmId,
-    /// Owner-local callback queue, activated with the realm's other TLS scope.
-    local_post_frame: LocalPostFrameLane,
+    /// The realm's owner-local frame state — its post-frame queue and its
+    /// async tasks — of which the realm is the only strong owner (ADR-0136
+    /// §2). Every frame drive passes it; teardown retires it in `Drop`, on
+    /// the owner thread, before resuming any earlier failure.
+    owner_frame: OwnerFrame,
     /// Owner-local interaction callback storage, activated with the realm scope.
     interaction_lane: InteractionLane,
     /// This realm's cross-tree `GlobalKey` uniqueness domain (ADR-0043 §1),
@@ -412,6 +415,18 @@ impl Drop for UiRealm {
                 );
             }
         }
+        // The realm is the only strong owner of its owner-local post-frame
+        // callbacks and async tasks: retire them here, on the owner thread,
+        // after the presentations (whose widgets may still cancel tasks) and
+        // before any earlier failure resumes, so every capture is dropped
+        // once, here, and never by a later unwind (ADR-0136 §2). Each value
+        // is dropped under its own catch; the realm's first failure stays
+        // authoritative.
+        crate::lifecycle_state::preserve_first_lifecycle_panic(
+            &mut first,
+            self.owner_frame.retire(),
+            "realm owner-local frame retirement",
+        );
         if let Some(payload) = first {
             if std::thread::panicking() {
                 flui_foundation::panic::retain_opaque_payload(payload);

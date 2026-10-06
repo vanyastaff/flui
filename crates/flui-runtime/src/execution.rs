@@ -962,14 +962,15 @@ mod tests {
             "background lane is saturated"
         );
 
-        // Frame-lane work: an AsyncDriver task polled on THIS thread.
-        let driver = flui_scheduler::AsyncDriver::new();
+        // Frame-lane work: an owner-local task polled on THIS thread.
+        let scheduler = flui_scheduler::UpdateScheduler::new();
+        let owner_frame = flui_scheduler::OwnerFrame::new(&scheduler);
         let done = Arc::new(AtomicBool::new(false));
         let done_for_task = Arc::clone(&done);
-        let _token = driver.spawn_local(Box::pin(async move {
+        let _token = owner_frame.async_driver().spawn_local(Box::pin(async move {
             done_for_task.store(true, Ordering::Release);
         }));
-        assert_eq!(driver.poll_ready(), 1);
+        assert_eq!(owner_frame.poll_ready(), 1);
         assert!(
             done.load(Ordering::Acquire),
             "the frame lane must complete without waiting for pool capacity"

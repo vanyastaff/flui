@@ -1,5 +1,5 @@
 //! The actual complexity proof for issue #1056's ready-index rewrite:
-//! [`AsyncDriver::poll_ready`] must cost allocations proportional to *ready*
+//! [`OwnerFrame::poll_ready`] must cost allocations proportional to *ready*
 //! work, not resident tasks. `cargo xtask ci` has no bench step, so this test — not
 //! `benches/async_driver_pump.rs` — is the merge-blocking gate.
 //!
@@ -30,7 +30,7 @@ use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 use std::task::Poll;
 
-use flui_scheduler::AsyncDriver;
+use flui_scheduler::{OwnerFrame, UpdateScheduler};
 
 // Per-thread, not process-global: a `GlobalAlloc` sees every thread's
 // allocations, and libtest runs a test on a spawned thread while its own
@@ -88,7 +88,9 @@ static ALLOCATOR: CountingAllocator = CountingAllocator;
 fn poll_ready_costs_zero_extra_allocations_once_warm() {
     // (a) R=0 at N in {0, 100_000}: dormant tasks must never be scanned.
     for dormant in [0usize, 100_000] {
-        let driver = AsyncDriver::new();
+        let scheduler = UpdateScheduler::new();
+        let frame = OwnerFrame::new(&scheduler);
+        let driver = frame.async_driver();
         driver.set_request_frame(|| {});
         let mut tokens = Vec::with_capacity(dormant);
         for _ in 0..dormant {
@@ -98,9 +100,9 @@ fn poll_ready_costs_zero_extra_allocations_once_warm() {
         // Warm-up: the first pump polls every freshly spawned task once
         // (spawn seeds `ready`), making all of them dormant. Excluded from
         // the measured window, same convention as frame_telemetry's.
-        assert_eq!(driver.poll_ready(), dormant, "the warm-up pump");
+        assert_eq!(frame.poll_ready(), dormant, "the warm-up pump");
         assert_eq!(
-            driver.ready_task_count(),
+            frame.ready_task_count(),
             0,
             "every task is dormant after warm-up"
         );
@@ -108,7 +110,7 @@ fn poll_ready_costs_zero_extra_allocations_once_warm() {
         let count_before = read();
         const EMPTY_PUMPS: usize = 20;
         for _ in 0..EMPTY_PUMPS {
-            assert_eq!(driver.poll_ready(), 0, "R=0 must poll nothing");
+            assert_eq!(frame.poll_ready(), 0, "R=0 must poll nothing");
         }
         let allocations = read() - count_before;
 
@@ -129,7 +131,9 @@ fn poll_ready_costs_zero_extra_allocations_once_warm() {
     const READY_TASKS: usize = 64;
     const STEADY_PUMPS: usize = 4;
 
-    let driver = AsyncDriver::new();
+    let scheduler = UpdateScheduler::new();
+    let frame = OwnerFrame::new(&scheduler);
+    let driver = frame.async_driver();
     driver.set_request_frame(|| {});
     let mut tokens = Vec::with_capacity(READY_TASKS);
     for _ in 0..READY_TASKS {
@@ -141,12 +145,12 @@ fn poll_ready_costs_zero_extra_allocations_once_warm() {
     }
 
     // Warm-up settles the ready index capacity; spawn already created each waker.
-    assert_eq!(driver.poll_ready(), READY_TASKS, "the warm-up pump");
+    assert_eq!(frame.poll_ready(), READY_TASKS, "the warm-up pump");
 
     let count_before = read();
     for _ in 0..STEADY_PUMPS {
         assert_eq!(
-            driver.poll_ready(),
+            frame.poll_ready(),
             READY_TASKS,
             "every task re-wakes itself every pump"
         );

@@ -131,7 +131,8 @@ use flui_foundation::geometry::Offset;
 use flui_rendering::layer::LayerTree;
 use flui_rendering::pipeline::PipelineCell;
 use flui_scheduler::{
-    BoxedTask, ClockSource, DemandKind, FrameClock, LocalPostFrameLane, TaskToken, UpdateScheduler,
+    AsyncDriver, BoxedTask, ClockSource, DemandKind, FrameClock, OwnerFrame, TaskToken,
+    UpdateScheduler,
 };
 use flui_view::{BuildOwner, ElementId, ElementTree, View};
 
@@ -207,14 +208,16 @@ pub struct HeadlessBinding {
     /// The mounted tree this binding rebuilds + renders each frame. `None` for a
     /// gesture-only binding ([`new`](Self::new)); `Some` once tree-bound.
     tree: Option<TreeBinding>,
-    /// Owns the frame-driven async task driver. Binding-local — its own
-    /// fresh `UpdateScheduler` value, never shared with any other binding — so
-    /// headless tests stay isolated and parallel-safe; the *driver step* is
-    /// the same `drive_async_tasks` method a production frame drive calls on
-    /// its own, likewise dedicated, `UpdateScheduler`.
+    /// Binding-local — its own fresh `UpdateScheduler` value, never shared
+    /// with any other binding — so headless tests stay isolated and
+    /// parallel-safe; its frames run the same begin/draw/end steps a
+    /// production frame drive runs on its own, likewise dedicated, scheduler.
     scheduler: UpdateScheduler,
-    /// Owner-affine post-frame callback storage, active across every owner entry.
-    local_post_frame: LocalPostFrameLane,
+    /// The binding's owner-local frame state — post-frame callbacks and async
+    /// tasks — of which the binding is the only strong owner, as a realm is
+    /// of its own. Declared after `tree`, so the widgets' own teardown runs
+    /// before what is left of their tasks is retired.
+    owner_frame: OwnerFrame,
     /// Owner-affine interaction callback storage, active across every owner entry.
     interaction_lane: InteractionLane,
     /// Stands in for the presentation's open-for-business token.
@@ -296,7 +299,7 @@ impl HeadlessBinding {
         let clock = ManualClock::new();
         let gestures = GestureBinding::with_clock(Arc::new(clock.clone()));
         let scheduler = UpdateScheduler::new();
-        let local_post_frame = scheduler.new_local_post_frame_lane();
+        let owner_frame = OwnerFrame::new(&scheduler);
         let interaction_lane = InteractionLane::try_new()?;
         Ok(Self {
             lifecycle: flui_view::__runtime::LifecycleSource::new(),
@@ -305,7 +308,7 @@ impl HeadlessBinding {
             vsync: Vsync::new(),
             tree: None,
             scheduler,
-            local_post_frame,
+            owner_frame,
             interaction_lane,
             presentation_alive: std::rc::Rc::new(()),
             last_layer_tree: None,
@@ -368,9 +371,9 @@ impl HeadlessBinding {
     /// pump.
     pub fn install_build_capabilities(&self, build_owner: &mut flui_view::BuildOwner) {
         build_owner.set_lifecycle_handle(self.lifecycle.handle());
-        build_owner.set_async_driver(self.scheduler.async_driver().clone());
+        build_owner.set_async_driver(self.owner_frame.async_driver());
         build_owner.set_post_frame_handle(flui_scheduler::PostFrameHandle::new(&self.scheduler));
-        build_owner.set_local_post_frame_handle(self.local_post_frame.local_handle());
+        build_owner.set_local_post_frame_handle(self.owner_frame.local_post_frame_handle());
         build_owner.set_interaction_dispatch_handle(self.interaction_dispatch_handle());
     }
 
@@ -421,10 +424,10 @@ impl HeadlessBinding {
         ));
     }
 
-    /// The binding's scheduler, which owns the frame-driven async task driver.
+    /// The binding's scheduler.
     ///
-    /// Binding-local: two `HeadlessBinding`s never share a task set, so async
-    /// tests stay parallel-safe.
+    /// Binding-local: two `HeadlessBinding`s never share a scheduler or a
+    /// task set, so async tests stay parallel-safe.
     #[must_use]
     pub fn scheduler(&self) -> &UpdateScheduler {
         &self.scheduler
@@ -435,10 +438,18 @@ impl HeadlessBinding {
     ///
     /// The headless test helper: spawn a future (or a channel
     /// receiver a test completes between frames), pump, and observe that the
-    /// frame saw it. Dropping the returned token cancels the task.
+    /// frame saw it. The future runs on this (the owner) thread, so it may
+    /// hold `Rc` state; a worker completes it through its waker. Dropping the
+    /// returned token cancels the task.
     #[must_use = "dropping the TaskToken immediately cancels the task"]
     pub fn spawn_local(&self, future: BoxedTask) -> TaskToken {
-        self.scheduler.spawn_local(future)
+        self.owner_frame.async_driver().spawn_local(future)
+    }
+
+    /// The handle a widget's `LifecycleContext::async_driver` hands out on
+    /// this binding.
+    pub(crate) fn async_driver(&self) -> AsyncDriver {
+        self.owner_frame.async_driver()
     }
 
     /// Create a tree-bound binding from already-bootstrapped owners.
@@ -530,7 +541,7 @@ impl HeadlessBinding {
         // the caller already did. The async driver goes in under either policy:
         // withholding it would change *which* capability is under test.
         let mut build_owner = build_owner;
-        build_owner.set_async_driver(self.scheduler.async_driver().clone());
+        build_owner.set_async_driver(self.owner_frame.async_driver());
         if capabilities == bootstrap::BuildCapabilities::Installed {
             build_owner.set_lifecycle_handle(self.lifecycle.handle());
             // The post-frame capability must name THIS binding's
@@ -539,7 +550,7 @@ impl HeadlessBinding {
             // headlessly.
             build_owner
                 .set_post_frame_handle(flui_scheduler::PostFrameHandle::new(&self.scheduler));
-            build_owner.set_local_post_frame_handle(self.local_post_frame.local_handle());
+            build_owner.set_local_post_frame_handle(self.owner_frame.local_post_frame_handle());
             build_owner.set_interaction_dispatch_handle(self.interaction_dispatch_handle());
             self.install_hit_test_capability(&mut build_owner, &pipeline_owner);
         }
@@ -976,7 +987,7 @@ impl HeadlessBinding {
             vsync,
             tree,
             scheduler,
-            local_post_frame,
+            owner_frame,
             interaction_lane,
             last_layer_tree,
             last_frame_painted,
@@ -1017,9 +1028,8 @@ impl HeadlessBinding {
             // its binding-local scheduler. A post-frame callback therefore observes THIS
             // frame's committed layout in both, which is what `HeroController` needs.
             //
-            // `drive_async_tasks` is no longer called here: the scheduler owns that
-            // step now. It still runs before `build_scope`, in
-            // `handle_begin_frame`'s mid-frame slot.
+            // The binding's owner-local tasks are polled by the scheduler's
+            // begin frame, before `build_scope`, in its mid-frame slot.
             //
             // `UpdateScheduler` is `Arc`-backed and `Clone`, so the handle taken here shares
             // the callback queues with `self.scheduler` — cloning it merely releases
@@ -1032,53 +1042,48 @@ impl HeadlessBinding {
             // work is never deferred here, matching this binding's
             // behavior before `drive_frame` took a deadline.
             let idle_deadline = flui_scheduler::IdleDeadline::far_future(vsync_time);
-            scheduler.drive_frame_with_lane(
-                vsync_time,
-                idle_deadline,
-                || {
-                    let (painted_layer_tree, report) = Self::run_pipeline(tree);
-                    *last_frame_report = report;
-                    *last_frame_painted = painted_layer_tree.is_some();
-                    if let Some(layer_tree) = painted_layer_tree {
-                        *last_layer_tree = Some(layer_tree);
-                        *painted_frame_count = painted_frame_count.saturating_add(1);
-                    }
+            scheduler.drive_frame(owner_frame, vsync_time, idle_deadline, || {
+                let (painted_layer_tree, report) = Self::run_pipeline(tree);
+                *last_frame_report = report;
+                *last_frame_painted = painted_layer_tree.is_some();
+                if let Some(layer_tree) = painted_layer_tree {
+                    *last_layer_tree = Some(layer_tree);
+                    *painted_frame_count = painted_frame_count.saturating_add(1);
+                }
 
-                    // 7. Re-hit-test every stationary device against the
-                    //    tree layout/paint that just committed above,
-                    //    still inside this closure's `PersistentCallbacks`
-                    //    slot — i.e. BEFORE `end_frame` drains post-frame
-                    //    callbacks below, not after `drive_frame` returns.
-                    //    Placement matters: production
-                    //    (`UiRealm::render_frame`,
-                    //    `crates/flui-runtime/src/ui_realm/`, invoked from
-                    //    `crates/flui-app/src/app/runner.rs`) calls
-                    //    `update_all_devices` from inside the SAME
-                    //    `drive_frame` pipeline closure it runs its own
-                    //    layout/paint step in, so any post-frame work an
-                    //    enter/exit callback queues (e.g. a rebuild
-                    //    handle) lands in THIS frame's post-frame phase —
-                    //    matching the oracle, where
-                    //    `_scheduleMouseTrackerUpdate` posts
-                    //    `updateAllDevices` from
-                    //    `_handlePersistentFrameCallback`, still inside
-                    //    the persistent phase, ahead of the post-frame
-                    //    queue. Running this after `drive_frame` returns
-                    //    would defer that queued work to a LATER pump
-                    //    instead. Unconditional and every frame; a
-                    //    gesture-only binding has no tree to hit-test, so
-                    //    this is a no-op there.
-                    if let Some(tree_binding) = tree.as_ref() {
-                        let pipeline_owner = &tree_binding.pipeline_owner;
-                        gestures.mouse_tracker().update_all_devices(|position| {
-                            let mut result = HitTestResult::new();
-                            pipeline_owner.with(|owner| owner.hit_test(position, &mut result));
-                            result
-                        });
-                    }
-                },
-                local_post_frame,
-            );
+                // 7. Re-hit-test every stationary device against the
+                //    tree layout/paint that just committed above,
+                //    still inside this closure's `PersistentCallbacks`
+                //    slot — i.e. BEFORE `end_frame` drains post-frame
+                //    callbacks below, not after `drive_frame` returns.
+                //    Placement matters: production
+                //    (`UiRealm::render_frame`,
+                //    `crates/flui-runtime/src/ui_realm/`, invoked from
+                //    `crates/flui-app/src/app/runner.rs`) calls
+                //    `update_all_devices` from inside the SAME
+                //    `drive_frame` pipeline closure it runs its own
+                //    layout/paint step in, so any post-frame work an
+                //    enter/exit callback queues (e.g. a rebuild
+                //    handle) lands in THIS frame's post-frame phase —
+                //    matching the oracle, where
+                //    `_scheduleMouseTrackerUpdate` posts
+                //    `updateAllDevices` from
+                //    `_handlePersistentFrameCallback`, still inside
+                //    the persistent phase, ahead of the post-frame
+                //    queue. Running this after `drive_frame` returns
+                //    would defer that queued work to a LATER pump
+                //    instead. Unconditional and every frame; a
+                //    gesture-only binding has no tree to hit-test, so
+                //    this is a no-op there.
+                if let Some(tree_binding) = tree.as_ref() {
+                    let pipeline_owner = &tree_binding.pipeline_owner;
+                    gestures.mouse_tracker().update_all_devices(|position| {
+                        let mut result = HitTestResult::new();
+                        pipeline_owner.with(|owner| owner.hit_test(position, &mut result));
+                        result
+                    });
+                }
+            });
         });
     }
 

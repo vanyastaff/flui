@@ -55,9 +55,12 @@ the [flui facade's README](../../README.md).
 ### Basic Frame Scheduling
 
 ```rust
-use flui_scheduler::{UpdateScheduler, Priority};
+use flui_scheduler::{OwnerFrame, Priority, UpdateScheduler};
 
 let scheduler = UpdateScheduler::new();
+// The owner thread's frame state (owner-local post-frame callbacks and
+// async tasks); every frame entry point takes it.
+let owner = OwnerFrame::new(&scheduler);
 
 // Schedule a one-time frame callback (animation tick)
 scheduler.schedule_frame_callback(Box::new(|vsync_time| {
@@ -74,7 +77,7 @@ scheduler.add_task(Priority::Build, || {
 });
 
 // Execute frame (called by event loop)
-scheduler.execute_frame();
+scheduler.execute_frame(&owner);
 ```
 
 ### Animation Tickers
@@ -82,9 +85,10 @@ scheduler.execute_frame();
 ```rust
 use std::sync::Arc;
 
-use flui_scheduler::{UpdateScheduler, Ticker};
+use flui_scheduler::{OwnerFrame, Ticker, UpdateScheduler};
 
 let scheduler = Arc::new(UpdateScheduler::new());
+let owner = OwnerFrame::new(&scheduler);
 let mut ticker = Ticker::new_with_scheduler(&scheduler);
 
 ticker.start(|elapsed| {
@@ -93,7 +97,7 @@ ticker.start(|elapsed| {
 });
 
 // In your frame loop, scheduler transient callbacks drive the ticker.
-scheduler.execute_frame();
+scheduler.execute_frame(&owner);
 
 // dispose()/drop stops the ticker the same way. The ticker itself resolves
 // no future of its own — see "Ticker Run Completion" below for the
@@ -273,15 +277,16 @@ impl PipelineOwner {
 ### In Event Loop
 
 ```rust,ignore
-use flui_scheduler::{UpdateScheduler, Priority};
+use flui_scheduler::{OwnerFrame, Priority, UpdateScheduler};
 
 let scheduler = UpdateScheduler::new();
+let owner = OwnerFrame::new(&scheduler);
 
 // In your event loop
 match event {
     Event::MainEventsCleared => {
         if scheduler.is_frame_scheduled() {
-            scheduler.execute_frame();
+            scheduler.execute_frame(&owner);
             window.request_redraw();
         }
     }

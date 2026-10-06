@@ -58,8 +58,9 @@ use crate::{
     view::{IntoView, StatefulView, View, ViewState},
 };
 
-/// A boxed, `Send` future yielding `Result<T, E>`.
-pub type BoxedResultFuture<T, E> = Pin<Box<dyn Future<Output = Result<T, E>> + Send + 'static>>;
+/// A boxed future yielding `Result<T, E>`, polled on the owner thread: it may
+/// hold `Rc` state, and only its waker crosses threads.
+pub type BoxedResultFuture<T, E> = Pin<Box<dyn Future<Output = Result<T, E>> + 'static>>;
 
 /// Produces the future to await. `Fn`, not `FnOnce`: the view is cloned on every
 /// rebuild. Called once per subscription.
@@ -118,13 +119,15 @@ impl<K: std::fmt::Debug, T, E> std::fmt::Debug for FutureBuilder<K, T, E> {
     }
 }
 
-/// Bounds shared by the view and its state. `T`/`E` are `Send + 'static` because
-/// the task moves them across the driver; neither needs `Clone`.
+/// Bounds shared by the view and its state. The task runs on the owner thread
+/// (ADR-0136 §2), so neither the key nor `T`/`E` needs `Send`; `T`/`E` are
+/// `'static` because the task outlives the call that spawns it, and neither
+/// needs `Clone`.
 impl<K, T, E> FutureBuilder<K, T, E>
 where
-    K: Clone + PartialEq + Send + Sync + 'static,
-    T: Send + 'static,
-    E: Send + 'static,
+    K: Clone + PartialEq + std::fmt::Debug + 'static,
+    T: 'static,
+    E: 'static,
 {
     /// Subscribe to the future identified by `key`; `None` means no future.
     pub fn keyed(
@@ -153,9 +156,9 @@ where
 
 impl<K, T, E> StatefulView for FutureBuilder<K, T, E>
 where
-    K: Clone + PartialEq + Send + Sync + std::fmt::Debug + 'static,
-    T: Send + Sync + 'static,
-    E: Send + Sync + 'static,
+    K: Clone + PartialEq + std::fmt::Debug + 'static,
+    T: 'static,
+    E: 'static,
 {
     type State = FutureBuilderState<K, T, E>;
 
@@ -178,9 +181,9 @@ where
 
 impl<K, T, E> View for FutureBuilder<K, T, E>
 where
-    K: Clone + PartialEq + Send + Sync + std::fmt::Debug + 'static,
-    T: Send + Sync + 'static,
-    E: Send + Sync + 'static,
+    K: Clone + PartialEq + std::fmt::Debug + 'static,
+    T: 'static,
+    E: 'static,
 {
     fn create_element(&self) -> crate::element::ElementKind {
         crate::element::ElementKind::stateful(self)
@@ -235,9 +238,9 @@ where
 
 impl<K, T, E> FutureBuilderState<K, T, E>
 where
-    K: Clone + PartialEq + Send + Sync + 'static,
-    T: Send + Sync + 'static,
-    E: Send + Sync + 'static,
+    K: Clone + PartialEq + std::fmt::Debug + 'static,
+    T: 'static,
+    E: 'static,
 {
     /// Cancel the live subscription, if any, and invalidate its generation so a
     /// completion already in flight is discarded.
@@ -295,9 +298,9 @@ where
 
 impl<K, T, E> ViewState<FutureBuilder<K, T, E>> for FutureBuilderState<K, T, E>
 where
-    K: Clone + PartialEq + Send + Sync + std::fmt::Debug + 'static,
-    T: Send + Sync + 'static,
-    E: Send + Sync + 'static,
+    K: Clone + PartialEq + std::fmt::Debug + 'static,
+    T: 'static,
+    E: 'static,
 {
     /// `_FutureBuilderState.initState`: seed from `initialData`, then subscribe.
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
@@ -362,7 +365,7 @@ mod tests {
     use std::task::{Context, Poll, Waker};
 
     use flui_foundation::ElementId;
-    use flui_scheduler::UpdateScheduler;
+    use flui_scheduler::{OwnerFrame, UpdateScheduler};
 
     use crate::view::{ErrorView, ViewExt};
     use crate::{BuildOwner, tree::ElementTree};
@@ -451,25 +454,27 @@ mod tests {
     }
 
     /// Drives the exact steps a binding's frame drives, in the same order:
-    /// `UpdateScheduler::drive_async_tasks()` (the shared async step) then
+    /// `OwnerFrame::poll_ready()` (the shared async step) then
     /// `BuildOwner::build_scope()`. Not a bespoke loop — it is `pump_frame`'s
     /// body minus the parts (clock, gestures, pipeline) a `FutureBuilder` cannot
     /// observe. `flui-view` cannot depend on `flui-testing` (that would cycle).
     struct Harness {
         owner: BuildOwner,
         tree: ElementTree,
-        scheduler: UpdateScheduler,
+        _scheduler: UpdateScheduler,
+        owner_frame: OwnerFrame,
         root: ElementId,
     }
 
     impl Harness {
         fn mount<K>(view: &FutureBuilder<K, Payload, Boom>) -> Self
         where
-            K: Clone + PartialEq + Send + Sync + std::fmt::Debug + 'static,
+            K: Clone + PartialEq + std::fmt::Debug + 'static,
         {
             let scheduler = UpdateScheduler::new();
             let mut owner = BuildOwner::new();
-            owner.set_async_driver(scheduler.async_driver().clone());
+            let owner_frame = OwnerFrame::new(&scheduler);
+            owner.set_async_driver(owner_frame.async_driver());
             let mut tree = ElementTree::new();
 
             let root = tree.mount_root(view, &mut owner.element_owner_mut());
@@ -480,14 +485,15 @@ mod tests {
             Self {
                 owner,
                 tree,
-                scheduler,
+                _scheduler: scheduler,
+                owner_frame,
                 root,
             }
         }
 
         /// One frame, in the binding's order.
         fn frame(&mut self) {
-            self.scheduler.drive_async_tasks();
+            self.owner_frame.poll_ready();
             self.owner.build_scope(&mut self.tree);
         }
     }
@@ -525,7 +531,7 @@ mod tests {
             },
             "the first build shows Waiting"
         );
-        assert_eq!(harness.scheduler.pending_task_count(), 1);
+        assert_eq!(harness.owner_frame.pending_task_count(), 1);
 
         completer.complete(Ok(Payload(42)));
         harness.frame();
@@ -539,7 +545,7 @@ mod tests {
             },
             "the completion is observed in the frame that polls it"
         );
-        assert_eq!(harness.scheduler.pending_task_count(), 0);
+        assert_eq!(harness.owner_frame.pending_task_count(), 0);
     }
 
     // ── update semantics ────────────────────────────────────────────────────

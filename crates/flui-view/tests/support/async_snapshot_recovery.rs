@@ -1,6 +1,6 @@
 //! Real async builders publish before retiring caller-owned values.
 use flui_foundation::{AsyncSnapshot, ConnectionState};
-use flui_scheduler::UpdateScheduler;
+use flui_scheduler::{OwnerFrame, UpdateScheduler};
 use flui_view::{
     BuildOwner, ElementTree, ErrorView, RebuildReason, ViewExt,
     element::{FutureBuilder, FutureFactory, SnapshotBuilder, StreamBuilder, StreamFactory},
@@ -92,7 +92,8 @@ fn builder(log: &Arc<Mutex<Vec<(ConnectionState, i32)>>>) -> SnapshotBuilder<Val
 fn run_child(stream: bool, competing_value: bool, competing_wake: bool) {
     let scheduler = UpdateScheduler::new();
     let mut owner = BuildOwner::new();
-    owner.set_async_driver(scheduler.async_driver().clone());
+    let owner_frame = OwnerFrame::new(&scheduler);
+    owner.set_async_driver(owner_frame.async_driver());
     let fail_wake = Arc::new(AtomicBool::new(false));
     let wake_failures = Arc::new(AtomicUsize::new(0));
     let fail = Arc::clone(&fail_wake);
@@ -132,7 +133,7 @@ fn run_child(stream: bool, competing_value: bool, competing_wake: bool) {
         Some((ConnectionState::Waiting, 0))
     );
     if stream {
-        scheduler.drive_async_tasks();
+        owner_frame.poll_ready();
     }
     send(
         &mailbox,
@@ -143,7 +144,7 @@ fn run_child(stream: bool, competing_value: bool, competing_wake: bool) {
         },
     );
     fail_wake.store(competing_wake, Ordering::SeqCst);
-    let payload = catch_unwind(AssertUnwindSafe(|| scheduler.drive_async_tasks()))
+    let payload = catch_unwind(AssertUnwindSafe(|| owner_frame.poll_ready()))
         .expect_err("old snapshot retirement panics");
     assert_eq!(
         flui_foundation::panic::payload_text(&*payload),
@@ -185,7 +186,7 @@ fn run_child(stream: bool, competing_value: bool, competing_wake: bool) {
     owner.schedule_build_for(root, 0, RebuildReason::StateChange);
     owner.build_scope(&mut tree);
     if stream {
-        scheduler.drive_async_tasks();
+        owner_frame.poll_ready();
     }
     send(
         &next_mailbox,
@@ -195,7 +196,7 @@ fn run_child(stream: bool, competing_value: bool, competing_wake: bool) {
             drops: Arc::clone(&next_drops),
         },
     );
-    let outcome = catch_unwind(AssertUnwindSafe(|| scheduler.drive_async_tasks()));
+    let outcome = catch_unwind(AssertUnwindSafe(|| owner_frame.poll_ready()));
     if competing_value {
         let payload = outcome.expect_err("incoming value has its own ordinary retirement failure");
         assert_eq!(
@@ -237,7 +238,8 @@ fn eager_disposal() {
     }
     let scheduler = UpdateScheduler::new();
     let mut owner = BuildOwner::new();
-    owner.set_async_driver(scheduler.async_driver().clone());
+    let owner_frame = OwnerFrame::new(&scheduler);
+    owner.set_async_driver(owner_frame.async_driver());
     let old_drops = Arc::new(AtomicUsize::new(0));
     let incoming_drops = Arc::new(AtomicUsize::new(0));
     let field_drops = Arc::new(AtomicUsize::new(0));
@@ -296,7 +298,7 @@ fn eager_disposal() {
     owner.schedule_build_for(root, 0, RebuildReason::InitialMount);
     owner.build_scope(&mut tree);
     assert_eq!(seen.lock().last().copied(), Some(Some(4)));
-    drop((tree, owner, scheduler));
+    drop((tree, owner, owner_frame, scheduler));
     assert_eq!(incoming_drops.load(Ordering::SeqCst), 0);
     assert_eq!(field_drops.load(Ordering::SeqCst), 0);
 }

@@ -96,7 +96,7 @@ fn an_idle_registration_demands_one_frame_and_resolves_with_its_timing() {
         "registering IS the demand, and it fires the platform wake hook exactly once"
     );
 
-    let frame_id = scheduler.execute_frame();
+    let frame_id = scheduler.execute_frame(&flui_scheduler::OwnerFrame::new(&scheduler));
     let resolved = Pin::new(&mut waiter).poll(&mut Context::from_waker(Waker::noop()));
     let Poll::Ready(outcome) = resolved else {
         panic!("the frame the registration demanded must resolve it");
@@ -143,7 +143,7 @@ fn a_registration_from_inside_an_aborted_frames_waker_demands_exactly_one_frame(
 
     let edges_before = edges.load(Ordering::SeqCst);
     let attempt = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        scheduler.execute_frame();
+        scheduler.execute_frame(&flui_scheduler::OwnerFrame::new(&scheduler));
     }));
     assert!(attempt.is_err(), "the frame must have aborted");
 

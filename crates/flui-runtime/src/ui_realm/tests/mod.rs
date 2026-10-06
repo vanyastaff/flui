@@ -172,7 +172,8 @@ pub(crate) fn two_realms_two_threads_no_shared_state() {
 
             sender_b.request_redraw();
             let _ = realm_b.drain_commands();
-            realm_b.scheduler().drive_frame_with_lane(
+            realm_b.scheduler().drive_frame(
+                realm_b.owner_frame(),
                 flui_scheduler::Instant::now(),
                 flui_scheduler::IdleDeadline::far_future(flui_scheduler::Instant::now()),
                 || {
@@ -182,21 +183,20 @@ pub(crate) fn two_realms_two_threads_no_shared_state() {
                     rendezvous_or_timeout("realm B");
                     let _ = realm_b.draw_frame(coexistence_constraints());
                 },
-                realm_b.local_post_frame_lane(),
             );
             (wakes_b.load(Ordering::Relaxed), realm_b.realm_id())
         });
 
         sender_a.request_redraw();
         let _ = realm_a.drain_commands();
-        realm_a.scheduler().drive_frame_with_lane(
+        realm_a.scheduler().drive_frame(
+            realm_a.owner_frame(),
             flui_scheduler::Instant::now(),
             flui_scheduler::IdleDeadline::far_future(flui_scheduler::Instant::now()),
             || {
                 rendezvous_or_timeout("realm A");
                 let _ = realm_a.draw_frame(coexistence_constraints());
             },
-            realm_a.local_post_frame_lane(),
         );
 
         handle.join().expect("realm B's thread did not panic")

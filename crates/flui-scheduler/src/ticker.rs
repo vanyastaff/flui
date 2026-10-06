@@ -1945,9 +1945,9 @@ mod tests {
             });
         });
 
-        scheduler.execute_frame();
+        scheduler.execute_frame(&crate::OwnerFrame::new(&scheduler));
         let pending_after_restart = scheduler.transient_callback_count();
-        scheduler.execute_frame();
+        scheduler.execute_frame(&crate::OwnerFrame::new(&scheduler));
 
         assert_eq!(
             old_calls.load(Ordering::SeqCst),
@@ -1989,7 +1989,7 @@ mod tests {
         });
 
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            scheduler.execute_frame();
+            scheduler.execute_frame(&crate::OwnerFrame::new(&scheduler));
         }));
         assert!(
             result.is_err(),
@@ -2014,7 +2014,7 @@ mod tests {
         // that then dispatches into nothing.
         ticker.mute();
         ticker.unmute();
-        scheduler.execute_frame();
+        scheduler.execute_frame(&crate::OwnerFrame::new(&scheduler));
         assert_eq!(
             calls.load(Ordering::SeqCst),
             2,
@@ -2086,7 +2086,7 @@ mod tests {
             ticker_in_hook.lock().stop();
         })));
 
-        scheduler.execute_frame();
+        scheduler.execute_frame(&crate::OwnerFrame::new(&scheduler));
 
         assert_eq!(
             scheduler.transient_callback_count(),

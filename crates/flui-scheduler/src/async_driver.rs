@@ -1,59 +1,73 @@
-//! [`AsyncDriver`] — the frame-driven task driver.
+//! [`AsyncDriver`] — the frame-driven, owner-local task driver.
 //!
 //! # What this is
 //!
 //! A single-threaded executor with no runtime, no thread pool, and no
 //! dependency beyond [`std::future`] / [`std::task`]. Futures are polled on the
-//! **frame thread**, in the gap between a frame's transient callbacks
+//! **owner thread**, in the gap between a frame's transient callbacks
 //! (animation ticks) and its persistent callbacks (build → layout → paint) —
-//! [`SchedulerPhase::MidFrameMicrotasks`](crate::SchedulerPhase::MidFrameMicrotasks).
+//! [`SchedulerPhase::MidFrameMicrotasks`](crate::SchedulerPhase::MidFrameMicrotasks) —
+//! or by a background pump that runs no frame.
 //!
-//! That is not a compromise: a future's completion callbacks (a future
-//! builder's, say) run on the UI thread, and polling on the frame thread
-//! gives exactly that, while keeping an async runtime out of
-//! `flui-view` / `flui-widgets` / `flui-app`.
+//! # Ownership
+//!
+//! The tasks live in a `TaskStore` owned by the realm's
+//! [`OwnerFrame`](crate::OwnerFrame), which holds the only strong reference.
+//! An [`AsyncDriver`] is a `Weak` handle to that store: a widget state keeps
+//! one, and even a leaked one keeps no task — and none of a task's captures —
+//! alive after the realm. Because the futures never leave the owner thread
+//! they need not be `Send`: a task may hold `Rc` state, and its captures are
+//! created, polled and dropped on the owner thread.
+//!
+//! Spawning through a handle whose realm is gone drops the future at once,
+//! on the calling (owner) thread, and returns an already-cancelled
+//! [`TaskToken`].
 //!
 //! # Waking
 //!
-//! A task's [`Waker`] sets a per-task `ready` flag and — **only on the
-//! `false → true` transition** — asks the binding for a frame through the
-//! scheduler's existing `request_frame` hook. So a burst of wakes between frames
-//! costs one readiness transition and one successfully delivered frame request.
-//! A failed or absent hook retains delivery debt for the next wake or hook
-//! installation, including a wake through another clone of the same waker. As
-//! `ExternalBuildScheduler` coalesces rebuild requests.
+//! A task's [`Waker`] is `Send + Sync` and reaches only the store's
+//! cross-thread half (`WakeShared`), through a `Weak`: a ready queue and the
+//! frame-request hook. It sets a per-task `ready` flag and — **only on the
+//! `false → true` transition** — queues the task's id and asks for a frame
+//! through the hook ([`OwnerFrame::new`](crate::OwnerFrame::new) installs the
+//! scheduler's [`FrameWaker`](crate::FrameWaker)). So a burst of wakes between
+//! frames costs one readiness transition and one successfully delivered frame
+//! request. A failed or absent hook retains delivery debt for the next wake or
+//! hook installation, including a wake through another clone of the same
+//! waker. A wake after the realm is gone upgrades nothing and does nothing.
 //!
 //! Waking is legal from any thread. Polling is not: it happens only inside
-//! [`AsyncDriver::poll_ready`], which the binding calls once per frame.
+//! [`OwnerFrame::poll_ready`](crate::OwnerFrame::poll_ready), on the owner.
 //!
 //! # Readiness index
 //!
-//! Readiness discovery is separate from task ownership (issue #1056):
-//! `TaskStore` keeps `tasks` (every live task, keyed by id) beside `ready`
-//! (the ids due a poll, in wake-arrival order), so `poll_ready` on an idle
-//! driver touches neither a dormant task's slot nor its atomic flag — it
-//! only drains `ready`, which is empty.
+//! Readiness discovery is separate from task ownership (issue #1056): the
+//! store keeps `tasks` (every live task, keyed by id, owner-local) beside
+//! `ready` (the ids due a poll, in wake-arrival order, in the cross-thread
+//! half), so a pump on an idle driver touches neither a dormant task's slot
+//! nor its atomic flag — it only drains `ready`, which is empty.
 //!
 //! **Invariant:** `ready == true` (a task's own flag) implies its id is in
-//! `store.ready` **or** in the in-flight pump's own unprocessed tail (the
-//! ids `PumpGuard` has not reached yet). Every path that sets the flag
-//! `true` also pushes the id, in the same locked section:
-//! [`spawn_local`](AsyncDriver::spawn_local) (seeds the flag `true` and
-//! pushes); `TaskWaker::wake_by_ref`'s `false → true` edge (pushes iff the
-//! task is still live); [`spawn_local_eager`](AsyncDriver::spawn_local_eager)
-//! (pushes iff a wake landed during the inline poll); and a pump's own
-//! unreached remainder, restored by `PumpGuard::drop` on panic and consumed
-//! normally on success.
+//! `ready` **or** in the in-flight pump's own unprocessed tail (the ids
+//! `PumpGuard` has not reached yet). Every path that sets the flag `true` also
+//! pushes the id: [`spawn_local`](AsyncDriver::spawn_local) (seeds the flag
+//! `true` and pushes); the waker's `false → true` edge (pushes unless the task
+//! is retired or cancelled, or not yet admitted);
+//! [`spawn_local_eager`](AsyncDriver::spawn_local_eager) (pushes iff a wake
+//! armed the task during its inline poll, once it is admitted); and a pump's
+//! own unreached remainder, restored by `PumpGuard::drop` on panic and
+//! consumed normally on success.
 //!
-//! `store.ready` is **never proactively purged** on cancel, nor scrubbed for
-//! an id whose task then panics — both go stale for at most one pump and
-//! self-heal via `poll_ready`'s "id not found in `tasks` ⇒ skip" arm, which
-//! is cheaper than an O(R) scan on every cancel. A stale entry can also be a
-//! same-id **duplicate**: `spawn_local_eager`'s inline poll and a concurrent
-//! `wake_by_ref` can both observe the armed flag and each push the id before
-//! either sees the other's write (no pump ran between them to clear it), so
-//! `poll_ready` sorts and `dedup()`s its drained batch rather than assuming
-//! the flag makes a duplicate impossible.
+//! `ready` is **never proactively purged** on cancel or retirement, nor
+//! scrubbed for an id whose task then panics — such an entry goes stale for at
+//! most one pump and self-heals via the pump's "id not found in `tasks` ⇒
+//! skip" arm, which is cheaper than an O(R) scan on every cancel. A waker that
+//! read the task as live just before the owner retired it can likewise push
+//! one stale id and request one spurious frame. A stale entry can also be a
+//! same-id **duplicate** — a cross-thread wake racing an eager spawn's
+//! admission can push the id while the spawn pushes it too — so the pump
+//! sorts and `dedup()`s its drained batch rather than assuming the flag
+//! makes a duplicate impossible.
 //!
 //! A same-id duplicate can also **straddle a drain**: if one push lands
 //! before a pump's swap (drained and polled this pump) and the other lands
@@ -61,27 +75,26 @@
 //! own flag reads `false` — not a ghost, so it is polled rather than
 //! skipped. That poll is spurious (nothing new is actually ready), but
 //! harmless and self-limiting: `Future::poll` may be called at any time and
-//! must handle it, and the extra entry does not recur — nothing re-pushes an
-//! id no new event woke.
+//! must handle it, and the extra entry does not recur.
 //!
 //! Churn without an intervening pump is bounded by the spawns and wakes
-//! since the last drain — one entry per event, 8 bytes each, two for an
-//! eager spawn that races its own wake (the duplicate above) — and a pump
-//! drains all of it. That bound is per gap between pumps, not a global
-//! cap: a tight
-//! `spawn_local` + immediate `cancel()` loop, with no pump running between
-//! iterations, leaves one stale id per pair even though
-//! `pending_task_count()` is `0` throughout — the next pump still clears
-//! every one of them via the "not found" skip arm.
+//! since the last drain — one entry per event, 8 bytes each — and a pump
+//! drains all of it. That bound is per gap between pumps, not a global cap: a
+//! tight `spawn_local` + immediate `cancel()` loop, with no pump between
+//! iterations, leaves one stale id per pair even though the pending count is
+//! `0` throughout — the next pump still clears every one of them.
 //!
-//! # Cancellation
+//! # Cancellation and retirement
 //!
 //! [`TaskToken`] cancels on drop: the future is removed from the driver and
 //! dropped, so it is never polled again and its destructors run. During an
 //! existing unwind the detached future is retained instead: running opaque
-//! destruction then could abort the process. A `Waker` held
-//! by a cancelled task is inert — it sets a flag nobody reads and finds no task
-//! to poll. This is real cancellation, not "ignore the late callback".
+//! destruction then could abort the process. A `Waker` held by a cancelled or
+//! retired task is inert — it finds the task's flags closed and does nothing.
+//!
+//! The realm's teardown retires every remaining task explicitly
+//! ([`OwnerFrame::retire`](crate::OwnerFrame::retire)), on the owner thread,
+//! each future dropped under its own catch, the first panic kept.
 //!
 //! # What it never does
 //!
@@ -89,129 +102,431 @@
 //! rebuild calls `RebuildHandle::schedule()`, which only writes to the
 //! build owner's inbox.
 
+use std::any::Any;
+use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
 use std::future::Future;
 use std::mem;
+use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::rc::{Rc, Weak as RcWeak};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};
 use std::task::{Context, Poll, Wake, Waker};
 
 use parking_lot::Mutex;
 
-/// A future the driver polls on the frame thread.
+/// A future the driver polls on the owner thread.
 ///
-/// `Send` because the driver is shared across threads (a worker may wake a
-/// task); the future itself is only ever polled on the frame thread.
-pub type BoxedTask = Pin<Box<dyn Future<Output = ()> + Send>>;
+/// Not `Send`: the driver never moves it off the thread that spawned it, so
+/// it may hold `Rc` state. Only its [`Waker`] crosses threads.
+pub type BoxedTask = Pin<Box<dyn Future<Output = ()> + 'static>>;
 
-/// Frame-request hook: the binding's "please schedule another frame".
+/// Frame-request hook: "please schedule another frame".
 type RequestFrame = Arc<dyn Fn() + Send + Sync>;
 
 /// Monotonic task id. Never reused, so a stale [`Waker`] cannot resurrect or
 /// mis-target a later task.
 type TaskId = u64;
 
-/// A task's own readiness flag: `true` between a wake and the poll that
-/// clears it.
-struct ReadyFlag(AtomicBool);
+/// A panic payload kept from a retirement.
+pub(crate) type RetirePanic = Box<dyn Any + Send>;
 
-impl ReadyFlag {
-    fn new(value: bool) -> Self {
-        Self(AtomicBool::new(value))
+/// One task's cross-thread flags: what its waker and its token read.
+struct TaskFlags {
+    /// `true` between a wake and the poll that clears it.
+    ready: AtomicBool,
+    /// Set by [`TaskToken`]'s cancellation and by a poll that panicked.
+    /// Checked after a poll returns, so a token dropped *during* a poll still
+    /// cancels rather than re-queueing.
+    cancelled: AtomicBool,
+    /// Set once the task has left the store for any reason, so its waker
+    /// stops queueing ids and requesting frames.
+    retired: AtomicBool,
+    /// `false` only while `spawn_local_eager` polls the task inline, before
+    /// it is in the store: a wake then only arms `ready`, and the spawn
+    /// queues the id and requests the frame once the task is admitted.
+    admitted: AtomicBool,
+}
+
+impl TaskFlags {
+    fn new(ready: bool, admitted: bool) -> Self {
+        Self {
+            ready: AtomicBool::new(ready),
+            cancelled: AtomicBool::new(false),
+            retired: AtomicBool::new(false),
+            admitted: AtomicBool::new(admitted),
+        }
     }
 
-    fn load(&self, order: Ordering) -> bool {
-        self.0.load(order)
-    }
-
-    fn store(&self, value: bool, order: Ordering) {
-        self.0.store(value, order);
-    }
-
-    fn swap(&self, value: bool, order: Ordering) -> bool {
-        self.0.swap(value, order)
+    fn closed() -> Self {
+        Self {
+            ready: AtomicBool::new(false),
+            cancelled: AtomicBool::new(true),
+            retired: AtomicBool::new(true),
+            admitted: AtomicBool::new(true),
+        }
     }
 }
 
 /// One live task.
 struct Task {
-    /// The future, absent while it is being polled (moved out so the driver's
-    /// lock is not held across user code).
+    /// The future, absent while it is being polled (moved out so no borrow of
+    /// the task map is held across user code).
     future: Option<BoxedTask>,
     /// One identity for the task lifetime; cloning it for a poll never allocates.
     waker: Waker,
-    /// Set by the waker; cleared immediately before each poll.
-    ready: Arc<ReadyFlag>,
-    /// Set by [`TaskToken::drop`]. Checked after a poll returns, so a token
-    /// dropped *during* a poll still cancels rather than re-queueing.
-    cancelled: Arc<AtomicBool>,
+    flags: Arc<TaskFlags>,
 }
 
-/// Task ownership plus the independent index of which tasks are due a poll.
-///
-/// Separating `ready` from `tasks` (issue #1056) is what lets `poll_ready`
-/// scale with ready work instead of resident tasks: draining an empty `ready`
-/// touches no entry in `tasks` at all. See the module's "Readiness index"
-/// doc for the invariant this pair must hold.
-struct TaskStore {
-    /// `BTreeMap`, not `HashMap`: a lookup/removal by id needs no ordering
-    /// now that poll order comes from sorting `ready` at drain, but a
-    /// `HashMap`'s hash-seed-dependent iteration is still worth avoiding
-    /// wherever this map is walked directly (e.g. `pending_task_count`).
-    tasks: BTreeMap<TaskId, Task>,
+/// The store's cross-thread half: everything a [`Waker`] may reach.
+struct WakeShared {
     /// Ids whose waker fired since the last drain, in wake-arrival order.
-    /// Sorted and deduplicated once per pump, outside the lock — see
-    /// [`AsyncDriver::poll_ready`].
-    ready: Vec<TaskId>,
-    /// An always-empty scratch buffer, ping-ponged with `ready` at the start
-    /// of every pump (`mem::swap`, not `mem::take`) purely so `ready` always
-    /// starts a pump already capacity-warmed. Without this second buffer,
-    /// draining `ready` via `mem::take` would install a fresh, zero-capacity
-    /// `Vec` in its place: fine between pumps, but a self-waking task pushes
-    /// its own id back into that same zero-capacity `ready` *during* this
-    /// very pump (its `wake_by_ref` fires synchronously inside `poll`), so a
-    /// steady `R` would regrow `ready` from empty every single pump instead
-    /// of reaching zero allocations. [`recycle`] is what warms this buffer
-    /// back up for the pump after next.
-    spare: Vec<TaskId>,
-}
-
-/// Shared driver state.
-struct Inner {
-    store: Mutex<TaskStore>,
-    next_id: AtomicU64,
+    /// Sorted and deduplicated once per pump, outside the lock.
+    ready: Mutex<Vec<TaskId>>,
     request_frame: Mutex<Option<RequestFrame>>,
     wake_delivery: crate::wake_delivery::WakeDelivery,
 }
 
-impl Inner {
-    fn next_task_id(&self) -> Option<TaskId> {
-        self.next_id
-            .try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
-                current.checked_add(1)
-            })
-            .ok()
-    }
-
-    /// Ask the binding for a frame, if a hook is installed.
-    ///
-    /// The lock is released before the hook runs: a hook that re-enters the
-    /// driver (or takes the binding's own locks) must not deadlock against us.
+impl WakeShared {
+    /// Ask for a frame, if a hook is installed. No lock is held while the
+    /// hook runs.
     fn request_frame(&self, fresh: bool) {
         self.wake_delivery
             .request(|| fresh, || self.request_frame.lock().clone());
     }
 }
 
-/// The `Waker` payload for one task.
+/// The realm's task set: owner-local, reached through [`AsyncDriver`]'s
+/// `Weak` and owned only by [`OwnerFrame`](crate::OwnerFrame).
+pub(crate) struct TaskStore {
+    /// `BTreeMap`, not `HashMap`: a `HashMap`'s hash-seed-dependent
+    /// iteration is worth avoiding wherever this map is walked directly.
+    tasks: RefCell<BTreeMap<TaskId, Task>>,
+    /// An always-empty scratch buffer, ping-ponged with `ready` at the start
+    /// of every pump (`mem::swap`, not `mem::take`) purely so `ready` always
+    /// starts a pump already capacity-warmed. Without it, a self-waking task
+    /// pushing its own id back during the pump would regrow `ready` from
+    /// empty every pump instead of reaching zero allocations.
+    spare: RefCell<Vec<TaskId>>,
+    /// The next id to issue. `u64::MAX` is reserved for permanent exhaustion.
+    next_id: Cell<TaskId>,
+    /// Set by retirement: no task is admitted afterwards.
+    closed: Cell<bool>,
+    shared: Arc<WakeShared>,
+}
+
+impl TaskStore {
+    pub(crate) fn new() -> Self {
+        Self::with_first_id(1)
+    }
+
+    pub(crate) fn with_first_id(first: TaskId) -> Self {
+        Self {
+            tasks: RefCell::new(BTreeMap::new()),
+            spare: RefCell::new(Vec::new()),
+            next_id: Cell::new(first),
+            closed: Cell::new(false),
+            shared: Arc::new(WakeShared {
+                ready: Mutex::new(Vec::new()),
+                request_frame: Mutex::new(None),
+                wake_delivery: crate::wake_delivery::WakeDelivery::default(),
+            }),
+        }
+    }
+
+    fn next_task_id(&self) -> Option<TaskId> {
+        let current = self.next_id.get();
+        let next = current.checked_add(1)?;
+        self.next_id.set(next);
+        Some(current)
+    }
+
+    /// Install the "request a frame" hook; installation retries undelivered
+    /// demand. The displaced hook is dropped only after the lock is released:
+    /// its captures are user code that may re-enter the driver.
+    pub(crate) fn set_request_frame(&self, hook: RequestFrame) {
+        let previous = { self.shared.request_frame.lock().replace(hook) };
+        drop(previous);
+        self.shared.request_frame(false);
+    }
+
+    fn new_waker(&self, id: TaskId, flags: &Arc<TaskFlags>) -> Waker {
+        Waker::from(Arc::new(TaskWaker {
+            id,
+            flags: Arc::clone(flags),
+            shared: Arc::downgrade(&self.shared),
+        }))
+    }
+
+    fn token(self: &Rc<Self>, id: TaskId, flags: Arc<TaskFlags>) -> TaskToken {
+        TaskToken {
+            id,
+            flags,
+            store: Rc::downgrade(self),
+        }
+    }
+
+    fn spawn(self: &Rc<Self>, future: BoxedTask) -> TaskToken {
+        let Some(id) = self.next_task_id() else {
+            // Capacity refusal is authoritative over rejected opaque destruction.
+            mem::forget(future);
+            panic!("AsyncDriver task identities exhausted; refusing identity reuse");
+        };
+        let flags = Arc::new(TaskFlags::new(true, true));
+        let waker = self.new_waker(id, &flags);
+        self.tasks.borrow_mut().insert(
+            id,
+            Task {
+                future: Some(future),
+                waker,
+                flags: Arc::clone(&flags),
+            },
+        );
+        // Starts ready (see `spawn_local`'s doc): index it immediately.
+        self.shared.ready.lock().push(id);
+        let token = self.token(id, flags);
+        // Establish rollback ownership before calling the host hook. If the
+        // hook fails, token destruction detaches the unreturned task.
+        self.shared.request_frame(true);
+        token
+    }
+
+    fn spawn_eager(self: &Rc<Self>, mut future: BoxedTask) -> Option<TaskToken> {
+        let Some(id) = self.next_task_id() else {
+            mem::forget(future);
+            panic!("AsyncDriver task identities exhausted; refusing identity reuse");
+        };
+        // Starts NOT ready and NOT admitted: we are about to poll it
+        // ourselves. A wake landing during that poll only arms `ready`; once
+        // the task is inserted below, an armed task is queued and its frame
+        // requested, exactly once, here.
+        let flags = Arc::new(TaskFlags::new(false, false));
+        let waker = self.new_waker(id, &flags);
+        let mut cx = Context::from_waker(&waker);
+
+        let outcome = catch_unwind(AssertUnwindSafe(|| future.as_mut().poll(&mut cx)));
+        let outcome = match outcome {
+            Ok(outcome) => outcome,
+            Err(payload) => {
+                flags.cancelled.store(true, Ordering::Release);
+                flags.retired.store(true, Ordering::Release);
+                mem::forget(future);
+                resume_unwind(payload);
+            }
+        };
+        if outcome.is_ready() {
+            flags.retired.store(true, Ordering::Release);
+            return None;
+        }
+
+        self.tasks.borrow_mut().insert(
+            id,
+            Task {
+                future: Some(future),
+                waker,
+                flags: Arc::clone(&flags),
+            },
+        );
+        // `SeqCst` pairs with the waker's `ready` swap and `admitted` load: a
+        // wake either armed `ready` before this load (queued here) or sees
+        // `admitted` (queues itself). It may do both; the pump deduplicates.
+        flags.admitted.store(true, Ordering::SeqCst);
+        let armed = flags.ready.load(Ordering::SeqCst);
+        if armed {
+            self.shared.ready.lock().push(id);
+        }
+        let token = self.token(id, flags);
+        if armed {
+            self.shared.request_frame(true);
+        }
+        Some(token)
+    }
+
+    /// Remove `id`'s slot, marking it retired. The caller drops the returned
+    /// task (and so its future) after the map borrow is released.
+    fn remove(&self, id: TaskId) -> Option<Task> {
+        let removed = self.tasks.borrow_mut().remove(&id);
+        if let Some(task) = &removed {
+            task.flags.retired.store(true, Ordering::Release);
+        }
+        removed
+    }
+
+    pub(crate) fn poll_ready(&self) -> usize {
+        // Drain the ready index, then release every lock and borrow: a task's
+        // `poll` may spawn, cancel, or wake. Swap with `spare`, not
+        // `mem::take` `ready` directly — see `spare`'s doc for why.
+        let mut remaining: Vec<TaskId> = {
+            let mut ready = self.shared.ready.lock();
+            self.shared.wake_delivery.consume(|| {});
+            let mut spare = self.spare.borrow_mut();
+            mem::swap(&mut *ready, &mut *spare);
+            mem::take(&mut *spare)
+        };
+
+        // Ascending order keeps polling deterministic; `dedup` (adjacent-only,
+        // hence the sort first) collapses a same-id double push.
+        remaining.sort_unstable();
+        remaining.dedup();
+
+        let mut guard = PumpGuard {
+            store: self,
+            remaining,
+            cursor: 0,
+            in_flight: None,
+            done: false,
+        };
+
+        let mut polled = 0;
+        while guard.cursor < guard.remaining.len() {
+            let id = guard.remaining[guard.cursor];
+            // Advance before polling, so `cursor` always means "ids already
+            // consumed" — including the one about to be polled — no matter
+            // where a panic below unwinds from.
+            guard.cursor += 1;
+
+            // Take the future out so no borrow is held across user code.
+            let taken = {
+                let mut tasks = self.tasks.borrow_mut();
+                tasks.get_mut(&id).and_then(|task| {
+                    // Clear BEFORE polling: a wake landing during the poll must
+                    // re-arm the task rather than be swallowed.
+                    task.flags.ready.store(false, Ordering::Release);
+                    task.future
+                        .take()
+                        .map(|future| (future, task.waker.clone(), Arc::clone(&task.flags)))
+                })
+            };
+            let Some((mut future, waker, flags)) = taken else {
+                // Stale id: cancelled, retired, or a same-pump duplicate whose
+                // first occurrence already took the slot.
+                continue;
+            };
+
+            // Armed for the poll only: if `future.poll` panics, `PumpGuard`
+            // removes this slot on unwind (issue #1057).
+            guard.in_flight = Some(id);
+
+            let mut cx = Context::from_waker(&waker);
+            // Borrow the future into the recovery boundary: it must remain
+            // owned outside the closure so poll unwinding cannot drop it.
+            let outcome = catch_unwind(AssertUnwindSafe(|| future.as_mut().poll(&mut cx)));
+            let outcome = match outcome {
+                Ok(outcome) => outcome,
+                Err(payload) => {
+                    flags.cancelled.store(true, Ordering::Release);
+                    mem::forget(future);
+                    // PumpGuard removes the empty slot and restores siblings;
+                    // none of its recovery values run user destruction.
+                    resume_unwind(payload);
+                }
+            };
+            guard.in_flight = None;
+            polled += 1;
+
+            let finished = match outcome {
+                Poll::Ready(()) => {
+                    drop(self.remove(id));
+                    Some(future)
+                }
+                Poll::Pending if flags.cancelled.load(Ordering::Acquire) => {
+                    // The token was dropped while we polled; honour it.
+                    drop(self.remove(id));
+                    Some(future)
+                }
+                Poll::Pending => {
+                    let mut tasks = self.tasks.borrow_mut();
+                    if let Some(task) = tasks.get_mut(&id) {
+                        task.future = Some(future);
+                        None
+                    } else {
+                        // `cancel()` already removed the slot; drop the future.
+                        Some(future)
+                    }
+                }
+            };
+            // The finished future's destructor is user code (it may hold a
+            // nested `TaskToken`) and runs with no borrow held.
+            drop(finished);
+        }
+
+        // `done` first: if anything below ever panicked, `PumpGuard::drop`
+        // would see `done == true` and never `split_off` a consumed batch.
+        guard.done = true;
+        let buffer = mem::take(&mut guard.remaining);
+        recycle(&mut self.spare.borrow_mut(), buffer);
+
+        polled
+    }
+
+    pub(crate) fn pending_task_count(&self) -> usize {
+        self.tasks.borrow().len()
+    }
+
+    pub(crate) fn ready_task_count(&self) -> usize {
+        let ready = self.shared.ready.lock();
+        let tasks = self.tasks.borrow();
+        ready
+            .iter()
+            .filter(|id| {
+                tasks
+                    .get(id)
+                    .is_some_and(|task| task.flags.ready.load(Ordering::Acquire))
+            })
+            .count()
+    }
+
+    /// Close the store and drop every remaining task on this (the owner)
+    /// thread, each under its own catch. Returns the first panic a future's
+    /// destructor raised; later ones are retained, not dropped. During an
+    /// existing unwind the futures are retained without running their
+    /// destructors: catching cannot contain an aggregate whose drop glue
+    /// panics twice. Idempotent.
+    pub(crate) fn retire(&self) -> Option<RetirePanic> {
+        self.closed.set(true);
+        let tasks = mem::take(&mut *self.tasks.borrow_mut());
+        self.shared.ready.lock().clear();
+        let mut first: Option<RetirePanic> = None;
+        for (_, mut task) in tasks {
+            task.flags.cancelled.store(true, Ordering::Release);
+            task.flags.retired.store(true, Ordering::Release);
+            let Some(future) = task.future.take() else {
+                continue;
+            };
+            if std::thread::panicking() {
+                mem::forget(future);
+                continue;
+            }
+            if let Err(payload) = catch_unwind(AssertUnwindSafe(move || drop(future))) {
+                if first.is_none() {
+                    first = Some(payload);
+                } else {
+                    flui_foundation::panic::retain_opaque_payload(payload);
+                }
+            }
+        }
+        first
+    }
+
+    #[cfg(any(test, feature = "testing"))]
+    pub(crate) fn is_unlocked(&self) -> bool {
+        self.tasks.try_borrow_mut().is_ok()
+            && self.spare.try_borrow_mut().is_ok()
+            && self.shared.ready.try_lock().is_some()
+            && self.shared.request_frame.try_lock().is_some()
+            && self.shared.wake_delivery.is_unlocked()
+    }
+}
+
+/// The `Waker` payload for one task: `Send + Sync`, reaching only the
+/// store's cross-thread half, through a `Weak`.
 struct TaskWaker {
     id: TaskId,
-    ready: Arc<ReadyFlag>,
-    cancelled: Arc<AtomicBool>,
-    /// `Weak`, because the task's future holds this waker and `Inner` holds the
-    /// future — an `Arc` here would leak the whole driver.
-    inner: Weak<Inner>,
+    flags: Arc<TaskFlags>,
+    /// `Weak`: a waker a worker keeps must not keep the realm's wake state
+    /// alive, and nothing on this side may reach the owner-local tasks.
+    shared: Weak<WakeShared>,
 }
 
 impl Wake for TaskWaker {
@@ -220,60 +535,91 @@ impl Wake for TaskWaker {
     }
 
     fn wake_by_ref(self: &Arc<Self>) {
-        if self.cancelled.load(Ordering::Acquire) {
+        if self.flags.cancelled.load(Ordering::Acquire)
+            || self.flags.retired.load(Ordering::Acquire)
+        {
             return;
         }
-
-        let fresh = !self.ready.swap(true, Ordering::AcqRel);
-        if let Some(inner) = self.inner.upgrade() {
-            let task_is_live = {
-                let mut store = inner.store.lock();
-                let is_live = store.tasks.contains_key(&self.id);
-                if is_live && fresh {
-                    store.ready.push(self.id);
-                }
-                is_live
-            };
-            if task_is_live {
-                inner.request_frame(fresh);
-            }
+        let fresh = !self.flags.ready.swap(true, Ordering::SeqCst);
+        if !self.flags.admitted.load(Ordering::SeqCst) {
+            // Mid inline poll: the eager spawn queues the armed task.
+            return;
         }
+        let Some(shared) = self.shared.upgrade() else {
+            return;
+        };
+        if fresh {
+            shared.ready.lock().push(self.id);
+        }
+        shared.request_frame(fresh);
     }
 }
 
 /// Cancels its task when dropped.
 ///
 /// Hold it for as long as the task should run. `ViewState::dispose` dropping one
-/// is what stops an in-flight `FutureBuilder` subscription.
+/// is what stops an in-flight `FutureBuilder` subscription. Owner-local, like
+/// the driver that issued it.
 #[derive(Debug)]
 pub struct TaskToken {
     id: TaskId,
-    cancelled: Arc<AtomicBool>,
-    inner: Weak<Inner>,
+    flags: Arc<TaskFlags>,
+    store: RcWeak<TaskStore>,
+}
+
+impl std::fmt::Debug for TaskFlags {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TaskFlags")
+            .field("ready", &self.ready.load(Ordering::Relaxed))
+            .field("cancelled", &self.cancelled.load(Ordering::Relaxed))
+            .finish_non_exhaustive()
+    }
+}
+
+impl std::fmt::Debug for TaskStore {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TaskStore")
+            .field(
+                "tasks",
+                &self.tasks.try_borrow().map(|tasks| tasks.len()).ok(),
+            )
+            .field("closed", &self.closed.get())
+            .finish_non_exhaustive()
+    }
 }
 
 impl TaskToken {
-    /// The driver-unique id of the task, for diagnostics.
+    /// A token for a task that was never admitted: already cancelled, and
+    /// reaching no store.
+    fn refused() -> Self {
+        Self {
+            id: 0,
+            flags: Arc::new(TaskFlags::closed()),
+            store: RcWeak::new(),
+        }
+    }
+
+    /// The driver-unique id of the task, for diagnostics. `0` for a task the
+    /// driver refused because its realm was gone.
     #[must_use]
     pub fn id(&self) -> u64 {
         self.id
     }
 
-    /// Whether the task has been cancelled (by dropping a previous token is
-    /// impossible — a token is unique — so this only reports explicit cancel).
+    /// Whether the task has been cancelled: explicitly, by its realm's
+    /// teardown, or because its driver's realm was already gone when it was
+    /// spawned.
     #[must_use]
     pub fn is_cancelled(&self) -> bool {
-        self.cancelled.load(Ordering::Acquire)
+        self.flags.cancelled.load(Ordering::Acquire)
     }
 
     /// Cancel now rather than at drop. Idempotent.
     ///
-    /// The removed task — and so the user future it owns — is dropped only
-    /// once `Inner::store`'s lock has been released. A future's destructor is user
-    /// code: it may cancel another task from this same driver (a nested
-    /// [`TaskToken`]), spawn cleanup work, or wake a sibling, all of which
-    /// take this same lock. Never held while that runs, or a reentrant
-    /// destructor deadlocks on the non-reentrant mutex.
+    /// The removed future is dropped only once the task map's borrow has been
+    /// released. A future's destructor is user code: it may cancel another
+    /// task from this same driver (a nested [`TaskToken`]), spawn cleanup
+    /// work, or wake a sibling.
     ///
     /// # Panics
     ///
@@ -282,16 +628,11 @@ impl TaskToken {
     /// backtrace. During an existing unwind this type's `Drop` detaches and
     /// retains the future instead of running its destructor.
     pub fn cancel(&self) {
-        self.cancelled.store(true, Ordering::Release);
-        if let Some(inner) = self.inner.upgrade() {
-            // Dropping the future here runs its destructors on the caller's
-            // thread. If the task is mid-poll its slot holds `None`, and
-            // `poll_ready` will honour `cancelled` when it tries to re-queue.
-            //
-            // Extracted in its own block so the lock guard (a statement
-            // temporary) is released at the `}` — before the removed task,
-            // now a named binding, is explicitly dropped below.
-            let removed = { inner.store.lock().tasks.remove(&self.id) };
+        self.flags.cancelled.store(true, Ordering::Release);
+        if let Some(store) = self.store.upgrade() {
+            // If the task is mid-poll its slot holds `None`, and the pump
+            // honours `cancelled` when it tries to re-queue.
+            let removed = store.remove(self.id);
             drop(removed);
         }
     }
@@ -301,24 +642,19 @@ impl Drop for TaskToken {
     /// Cancels the task, same as an explicit [`cancel`](Self::cancel) call —
     /// except while the thread is already unwinding.
     ///
-    /// `cancel()` drops the removed future outside this driver's lock (see
-    /// its own doc), but that future's destructor is still arbitrary user
-    /// code that can itself panic. Ordinary destruction propagates that
-    /// failure. During an existing unwind even catching the future's Drop
-    /// cannot contain two of its fields panicking in succession. Detach its
-    /// slot and retain the opaque future without invoking any user destruction.
-    /// This also retains any resources and nested tokens it owns; cancellation
-    /// of this task is guaranteed, recursive destruction of its captures is not.
+    /// During an existing unwind even catching the future's Drop cannot
+    /// contain two of its fields panicking in succession. Detach its slot and
+    /// retain the opaque future without invoking any user destruction. This
+    /// also retains any resources and nested tokens it owns; cancellation of
+    /// this task is guaranteed, recursive destruction of its captures is not.
     fn drop(&mut self) {
         if std::thread::panicking() {
-            self.cancelled.store(true, Ordering::Release);
-            if let Some(inner) = self.inner.upgrade() {
-                let removed = { inner.store.lock().tasks.remove(&self.id) };
-                if let Some(mut task) = removed
-                    && let Some(future) = task.future.take()
-                {
-                    mem::forget(future);
-                }
+            self.flags.cancelled.store(true, Ordering::Release);
+            if let Some(store) = self.store.upgrade()
+                && let Some(mut task) = store.remove(self.id)
+                && let Some(future) = task.future.take()
+            {
+                mem::forget(future);
             }
         } else {
             self.cancel();
@@ -326,56 +662,32 @@ impl Drop for TaskToken {
     }
 }
 
-/// Warm `store.spare` with a drained batch's own allocation (clear and
-/// reuse `buf`, never drop it) — see `TaskStore`'s `spare` field doc for why
-/// the next pump needs this buffer already warm. Called on both
-/// `poll_ready`'s normal return and [`PumpGuard::drop`]'s unwind path;
-/// `store.ready` itself is untouched here, since it already holds exactly
-/// the ids this pump discovered as ready for the next one.
-fn recycle(store: &mut TaskStore, mut buf: Vec<TaskId>) {
+/// Warm `spare` with a drained batch's own allocation (clear and reuse `buf`,
+/// never drop it).
+fn recycle(spare: &mut Vec<TaskId>, mut buf: Vec<TaskId>) {
     buf.clear();
-    store.spare = buf;
+    *spare = buf;
 }
 
-/// Owns one pump's whole ready-id batch until [`AsyncDriver::poll_ready`]
-/// returns normally.
+/// Owns one pump's whole ready-id batch until the pump returns normally.
 ///
-/// `poll_ready` drains `store.ready` into this guard's `remaining` up front
-/// and processes it, one id at a time, with no lock held across a poll. If a
-/// poll (or a completed/cancelled task's own destructor, which runs just
-/// after) panics, this guard's `Drop` restores every id the pump has not
-/// yet reached (`remaining[cursor..]`) back into `store.ready`, so the next
-/// pump still indexes them. An O(N)-scan design never needed this: it
-/// re-derives readiness from ground truth on every call and cannot strand a
-/// sibling. Owning the batch (rather than, say, re-deriving it) is what an
-/// index-based design owes back in return for not scanning.
-///
-/// This `Drop`'s own `self.inner.store.lock()` never contends with a
-/// destructor it triggered. On unwind, Rust drops the *current* scope's
-/// locals first (the panicking loop iteration's `future`, waker, and
-/// `cancelled`, none of which hold this lock) before propagating to
-/// `poll_ready`'s own frame, where this guard (declared outside the loop)
-/// finally drops last. Poll failure retains the opaque future before resuming;
-/// ordinary retirement releases the map lock before running destruction, and
-/// nested tokens reached during that unwind detach without user destruction.
-/// The slot this removes holds `future: None` (taken
-/// before the poll), so `tasks.remove` itself runs no user code: only
-/// framework-owned waker and readiness reference-count decrements.
+/// If a poll panics, this guard's `Drop` removes the slot whose future was
+/// taken for that poll and restores every id the pump has not yet reached
+/// (`remaining[cursor..]`) into `ready`, so the next pump still indexes them.
+/// The slot it removes holds `future: None` (taken before the poll), so the
+/// removal runs no user code: only framework-owned waker and flag
+/// reference-count decrements.
 struct PumpGuard<'a> {
-    inner: &'a Inner,
+    store: &'a TaskStore,
     /// This pump's whole ready batch, sorted and deduplicated, consumed
     /// front-to-back via `cursor`.
     remaining: Vec<TaskId>,
-    /// Ids already consumed from `remaining` — the index of the next
-    /// (not yet polled) id, or `remaining.len()` once the pump is done.
+    /// The index of the next (not yet polled) id.
     cursor: usize,
     /// The id whose future is between "taken out of its slot" and "outcome
-    /// applied", if any. Set right before a poll and cleared right after —
-    /// a completed/cancelled future's own destructor runs later, with this
-    /// already `None`, since its slot's fate was already decided under lock.
+    /// applied", if any.
     in_flight: Option<TaskId>,
-    /// Set just before `poll_ready`'s normal return, so `Drop` on the happy
-    /// path — the common case — does nothing.
+    /// Set just before the pump's normal return.
     done: bool,
 }
 
@@ -384,90 +696,73 @@ impl Drop for PumpGuard<'_> {
         if self.done {
             return;
         }
-
-        let mut store = self.inner.store.lock();
-        // Only a panic *during* `future.poll` leaves a slot whose future was
-        // taken but whose outcome was never applied — remove it, the same
-        // zombie-slot hazard of issue #1057. A panic in a completed future's
-        // own destructor runs with `in_flight` already `None`: that slot's
-        // fate was already committed under lock before the destructor ran,
-        // so there is nothing left here to undo for it.
         if let Some(id) = self.in_flight.take() {
-            store.tasks.remove(&id);
+            drop(self.store.remove(id));
         }
-        // Every id this pump had not yet reached, `cursor` already having
-        // been advanced past whichever id panicked — restore them so the
-        // next pump still indexes them instead of losing them silently.
         let mut tail = self.remaining.split_off(self.cursor);
-        recycle(&mut store, mem::take(&mut self.remaining));
-        store.ready.append(&mut tail);
+        recycle(
+            &mut self.store.spare.borrow_mut(),
+            mem::take(&mut self.remaining),
+        );
+        self.store.shared.ready.lock().append(&mut tail);
     }
 }
 
-/// A frame-driven task driver.
+/// A widget's handle to its realm's frame-driven tasks.
 ///
-/// Cheap to clone; every clone refers to the same task set. Owned by
-/// [`UpdateScheduler`](crate::UpdateScheduler), which exposes
-/// [`spawn_local`](crate::UpdateScheduler::spawn_local) and
-/// [`drive_async_tasks`](crate::UpdateScheduler::drive_async_tasks).
+/// Acquired in `init_state` through `LifecycleContext::async_driver`. Cheap to
+/// clone; every clone reaches the same task set. Owner-local: it may spawn
+/// futures holding `Rc` state, so it never leaves the owner thread. A task
+/// that must be completed from another thread is woken through its
+/// [`Waker`]; a worker that needs a frame for any other reason uses a
+/// [`FrameWaker`](crate::FrameWaker).
+///
+/// A `Weak` handle: the realm's [`OwnerFrame`](crate::OwnerFrame) owns the
+/// tasks, so a handle that outlives its realm holds nothing, and spawning
+/// through it drops the future at once.
 #[derive(Clone)]
 pub struct AsyncDriver {
-    inner: Arc<Inner>,
-}
-
-impl Default for AsyncDriver {
-    fn default() -> Self {
-        Self::new()
-    }
+    store: RcWeak<TaskStore>,
 }
 
 impl AsyncDriver {
-    /// An empty driver with no frame-request hook.
-    #[must_use]
-    pub fn new() -> Self {
-        Self::new_with_counter(AtomicU64::new(1))
-    }
-
-    fn new_with_counter(next_id: AtomicU64) -> Self {
+    pub(crate) fn new(store: &Rc<TaskStore>) -> Self {
         Self {
-            inner: Arc::new(Inner {
-                store: Mutex::new(TaskStore {
-                    tasks: BTreeMap::new(),
-                    ready: Vec::new(),
-                    spare: Vec::new(),
-                }),
-                next_id,
-                request_frame: Mutex::new(None),
-                wake_delivery: crate::wake_delivery::WakeDelivery::default(),
-            }),
+            store: Rc::downgrade(store),
         }
     }
 
-    /// Install the binding's "request a frame" hook.
+    /// The live store, unless its realm is gone or retiring.
+    fn live_store(&self) -> Option<Rc<TaskStore>> {
+        self.store.upgrade().filter(|store| !store.closed.get())
+    }
+
+    /// Replace the "request a frame" hook.
     ///
-    /// Called at wiring time; installation retries undelivered demand. A driver
-    /// with no hook still polls whenever a frame runs — headless tests rely on that.
-    ///
-    /// Nothing enforces "once": a later call replaces the hook, and the
-    /// displaced `Arc` is dropped only after `request_frame`'s lock is
-    /// released — the same discipline [`TaskToken::cancel`] uses — since a
-    /// hook's captured state is user code that may re-enter the driver.
+    /// The realm's [`OwnerFrame`](crate::OwnerFrame) installs its scheduler's
+    /// [`FrameWaker`](crate::FrameWaker) here; installation retries undelivered
+    /// demand. A later call replaces the hook, and the displaced `Arc` is
+    /// dropped only after the hook lock is released, since its captured state
+    /// is user code that may re-enter the driver. Does nothing once the realm
+    /// is gone.
     pub fn set_request_frame<F>(&self, hook: F)
     where
         F: Fn() + Send + Sync + 'static,
     {
-        let previous = { self.inner.request_frame.lock().replace(Arc::new(hook)) };
-        drop(previous);
-        self.inner.request_frame(false);
+        if let Some(store) = self.store.upgrade() {
+            store.set_request_frame(Arc::new(hook));
+        }
     }
 
-    /// Queue `future` for polling on the frame thread, and request a frame.
+    /// Queue `future` for polling on the owner thread, and request a frame.
     ///
-    /// The task starts `ready`, so the **next** [`poll_ready`](Self::poll_ready)
-    /// polls it — an already-complete future finishes on that frame without a
-    /// wake.
+    /// The task starts ready, so the **next** frame polls it — an
+    /// already-complete future finishes on that frame without a wake.
     ///
     /// Dropping the returned [`TaskToken`] cancels the task.
+    ///
+    /// If this handle's realm is gone, the future is dropped here, at once,
+    /// and the returned token is already cancelled.
     ///
     /// # Panics
     ///
@@ -477,47 +772,14 @@ impl AsyncDriver {
     /// permits another admission. On exhausted admission, the rejected future is
     /// retained without polling it or running its destructor, preserving the
     /// capacity failure. Accepted futures retain their ordinary lifetime policy.
+    ///
+    /// Propagates a panic from a refused future's destructor.
     #[must_use = "dropping the TaskToken immediately cancels the task"]
     pub fn spawn_local(&self, future: BoxedTask) -> TaskToken {
-        let Some(id) = self.inner.next_task_id() else {
-            // Capacity refusal is authoritative over rejected opaque destruction.
-            mem::forget(future);
-            panic!("AsyncDriver task identities exhausted; refusing identity reuse");
-        };
-        let ready = Arc::new(ReadyFlag::new(true));
-        let cancelled = Arc::new(AtomicBool::new(false));
-        let waker = Waker::from(Arc::new(TaskWaker {
-            id,
-            ready: Arc::clone(&ready),
-            cancelled: Arc::clone(&cancelled),
-            inner: Arc::downgrade(&self.inner),
-        }));
-
-        {
-            let mut store = self.inner.store.lock();
-            store.tasks.insert(
-                id,
-                Task {
-                    future: Some(future),
-                    waker,
-                    ready: Arc::clone(&ready),
-                    cancelled: Arc::clone(&cancelled),
-                },
-            );
-            // Starts ready (see this method's doc): index it immediately, in
-            // the same locked section as the insert.
-            store.ready.push(id);
+        match self.live_store() {
+            Some(store) => store.spawn(future),
+            None => refuse(future),
         }
-
-        let token = TaskToken {
-            id,
-            cancelled,
-            inner: Arc::downgrade(&self.inner),
-        };
-        // Establish rollback ownership before calling the host hook. If the
-        // hook fails, token destruction detaches the unreturned task.
-        self.inner.request_frame(true);
-        token
     }
 
     /// Spawn `future` and poll it **once, inline, right now**.
@@ -532,311 +794,73 @@ impl AsyncDriver {
     ///
     /// A future builder subscribes to its future in `init_state`; an
     /// already-complete future must run its completion **inline** there, so it
-    /// never shows a `waiting` state. The Rust analogue is a future that is
-    /// `Ready` on its first poll.
+    /// never shows a `waiting` state. `spawn_local` cannot reproduce it: a
+    /// subscription is created in `ViewState::init_state`, which runs inside
+    /// `build_scope`, and the frame's driver step already ran *before*
+    /// `build_scope`.
     ///
-    /// `spawn_local` cannot reproduce it: a subscription is created in
-    /// `ViewState::init_state`, which runs inside `build_scope`, and the frame's
-    /// driver step already ran *before* `build_scope`. The task would first be
-    /// polled on the next frame, so the first build would show `Waiting`.
+    /// The inline poll runs user code during the build phase, deliberately: a
+    /// single task polled at its own subscription point, not the frame's
+    /// driver step.
     ///
-    /// The inline poll runs user code during the build phase, deliberately. It does **not** go through
-    /// [`UpdateScheduler::drive_async_tasks`](crate::UpdateScheduler::drive_async_tasks), and
-    /// so does not trip that method's "never poll during persistent callbacks"
-    /// guard: this is a single task polled at its own subscription point, not the
-    /// frame's driver step.
+    /// If this handle's realm is gone, the future is dropped unpolled and the
+    /// returned token is already cancelled.
     ///
     /// # Panics
     ///
-    /// Panics when this driver's task counter exhausts identities `1..u64::MAX`.
-    /// `u64::MAX` is reserved for permanent exhaustion, shared by both spawn
-    /// methods and all driver clones. Catching the panic or removing tasks never
-    /// permits another admission. On exhausted admission, the rejected future is
-    /// retained without polling it or running its destructor, preserving the
-    /// capacity failure. Accepted futures retain their ordinary lifetime policy.
+    /// As [`spawn_local`](Self::spawn_local), plus a panic from the inline poll.
     #[must_use = "dropping the TaskToken immediately cancels the task"]
-    pub fn spawn_local_eager(&self, mut future: BoxedTask) -> Option<TaskToken> {
-        let Some(id) = self.inner.next_task_id() else {
-            mem::forget(future);
-            panic!("AsyncDriver task identities exhausted; refusing identity reuse");
-        };
-        // Starts NOT ready: we are about to poll it ourselves. A wake landing
-        // during that poll flips this to `true` (and requests a frame), so the
-        // task is correctly re-armed when we queue it below.
-        let ready = Arc::new(ReadyFlag::new(false));
-        let cancelled = Arc::new(AtomicBool::new(false));
-
-        let waker = Waker::from(Arc::new(TaskWaker {
-            id,
-            ready: Arc::clone(&ready),
-            cancelled: Arc::clone(&cancelled),
-            inner: Arc::downgrade(&self.inner),
-        }));
-        let mut cx = Context::from_waker(&waker);
-
-        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            future.as_mut().poll(&mut cx)
-        }));
-        let outcome = match outcome {
-            Ok(outcome) => outcome,
-            Err(payload) => {
-                cancelled.store(true, Ordering::Release);
-                mem::forget(future);
-                std::panic::resume_unwind(payload);
-            }
-        };
-        if outcome.is_ready() {
-            return None;
+    pub fn spawn_local_eager(&self, future: BoxedTask) -> Option<TaskToken> {
+        match self.live_store() {
+            Some(store) => store.spawn_eager(future),
+            None => Some(refuse(future)),
         }
-
-        // A wake that landed *during* the inline poll found no task in the map
-        // (we insert only after polling), so `wake_by_ref`'s stale-waker guard
-        // suppressed its frame request AND its index push. Insert and — iff a
-        // wake already armed it — index it, in the same locked section, then
-        // request the frame outside the lock the same way `spawn_local` does.
-        let armed = {
-            let mut store = self.inner.store.lock();
-            store.tasks.insert(
-                id,
-                Task {
-                    future: Some(future),
-                    waker,
-                    ready: Arc::clone(&ready),
-                    cancelled: Arc::clone(&cancelled),
-                },
-            );
-            let armed = ready.load(Ordering::Acquire);
-            if armed {
-                store.ready.push(id);
-            }
-            armed
-        };
-
-        let token = TaskToken {
-            id,
-            cancelled,
-            inner: Arc::downgrade(&self.inner),
-        };
-        if armed {
-            self.inner.request_frame(true);
-        }
-
-        Some(token)
     }
 
-    /// Poll every task whose waker fired since the last frame.
+    /// Number of tasks the realm is holding; `0` once the realm is gone.
     ///
-    /// Called exactly once per frame, from the binding's async-driver step
-    /// ([`UpdateScheduler::drive_async_tasks`](crate::UpdateScheduler::drive_async_tasks)).
-    /// Never call it from build, layout, or paint.
-    ///
-    /// Returns the number of tasks polled. Tasks are polled in ascending id
-    /// order; a task that completes or is cancelled is removed. A task woken
-    /// *during* this call is left `ready` and picked up next frame — the driver
-    /// never spins. Cost scales with **ready** tasks, not resident ones
-    /// (issue #1056): an idle driver drains an empty index and touches no
-    /// dormant task at all.
-    pub fn poll_ready(&self) -> usize {
-        // Drain the ready index, then release the lock: a task's `poll` may
-        // spawn, cancel, or wake — all of which take this lock. Swap with
-        // `spare`, not `mem::take` `ready` directly — see `TaskStore`'s
-        // `spare` field doc for why the swap matters.
-        let mut remaining: Vec<TaskId> = {
-            let mut guard = self.inner.store.lock();
-            // One `DerefMut` first: two separate `&mut store.field` calls
-            // through the `MutexGuard`'s `deref_mut` are each their own
-            // opaque borrow, which the compiler cannot prove disjoint.
-            let store: &mut TaskStore = &mut guard;
-            self.inner.wake_delivery.consume(|| {});
-            mem::swap(&mut store.ready, &mut store.spare);
-            mem::take(&mut store.spare)
-        };
-
-        // Outside the lock: exclusively this thread's data now, so an
-        // O(R log R) sort touches no shared state. Ascending order keeps
-        // polling deterministic (module doc); `dedup` (adjacent-only, hence
-        // the sort first) collapses the rare same-id double push a
-        // `spawn_local_eager` inline poll can race against a concurrent
-        // `wake_by_ref` before any pump has run to clear the flag between
-        // them — without it, the second entry would poll an already-handled
-        // task a second time in the same pump.
-        remaining.sort_unstable();
-        remaining.dedup();
-
-        let mut guard = PumpGuard {
-            inner: &self.inner,
-            remaining,
-            cursor: 0,
-            in_flight: None,
-            done: false,
-        };
-
-        let mut polled = 0;
-        while guard.cursor < guard.remaining.len() {
-            let id = guard.remaining[guard.cursor];
-            // Advance before polling, so `cursor` always means "ids already
-            // consumed" — including the one about to be polled — no matter
-            // where a panic below unwinds from (`PumpGuard::drop` relies on
-            // this to restore exactly the unreached tail).
-            guard.cursor += 1;
-
-            // Take the future out so no lock is held across user code.
-            let Some((mut future, waker, cancelled)) = ({
-                let mut store = self.inner.store.lock();
-                store.tasks.get_mut(&id).and_then(|task| {
-                    // Clear BEFORE polling: a wake landing during the poll must
-                    // re-arm the task rather than be swallowed.
-                    task.ready.store(false, Ordering::Release);
-                    task.future
-                        .take()
-                        .map(|future| (future, task.waker.clone(), Arc::clone(&task.cancelled)))
-                })
-            }) else {
-                // Stale id: cancelled, or a same-pump duplicate whose first
-                // occurrence already took the slot. Self-heals — nothing to
-                // restore for an id that no longer owns a task.
-                continue;
-            };
-
-            // Armed for the poll only: if `future.poll` panics, `PumpGuard`
-            // removes this slot on unwind (issue #1057) — it already holds
-            // `future: None` (taken above), so nothing else would ever
-            // revisit it otherwise.
-            guard.in_flight = Some(id);
-
-            let mut cx = Context::from_waker(&waker);
-            // Borrow the future into the recovery boundary: it must remain
-            // owned outside the closure so poll unwinding cannot drop it.
-            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                future.as_mut().poll(&mut cx)
-            }));
-            let outcome = match outcome {
-                Ok(outcome) => outcome,
-                Err(payload) => {
-                    cancelled.store(true, Ordering::Release);
-                    mem::forget(future);
-                    // PumpGuard removes the empty slot and restores siblings;
-                    // none of its recovery values run user destruction.
-                    std::panic::resume_unwind(payload);
-                }
-            };
-            guard.in_flight = None;
-            polled += 1;
-
-            let mut store = self.inner.store.lock();
-            match outcome {
-                Poll::Ready(()) => {
-                    store.tasks.remove(&id);
-                }
-                Poll::Pending => {
-                    if cancelled.load(Ordering::Acquire) {
-                        // The token was dropped while we polled; honour it.
-                        store.tasks.remove(&id);
-                    } else if let Some(task) = store.tasks.get_mut(&id) {
-                        task.future = Some(future);
-                    }
-                    // else: `cancel()` already removed the slot; drop the future.
-                }
-            }
-            // `store`'s lock guard, declared after `future`, drops first at
-            // this iteration's end — releasing the lock — before `future`
-            // itself drops (only reached on the `Ready`/cancelled arms; the
-            // `Pending`-and-live arm moved it into the map). That destructor
-            // is user code (it may hold a nested `TaskToken`, per #1038) and
-            // must never run under this lock.
-        }
-
-        {
-            let mut store = self.inner.store.lock();
-            // `done` first: if anything below this line ever panicked,
-            // `PumpGuard::drop` would already see `done == true` and return
-            // immediately, so it can never attempt its own `split_off` on a
-            // `remaining` this block is mid-consuming — unreachable by this
-            // ordering, not merely because `recycle`/`mem::take` happen not
-            // to panic today.
-            guard.done = true;
-            recycle(&mut store, mem::take(&mut guard.remaining));
-        }
-
-        polled
-    }
-
-    /// Number of tasks the driver is holding.
-    ///
-    /// A count, never a guard — the lock stays private.
+    /// A count, never a guard.
     #[must_use]
     pub fn pending_task_count(&self) -> usize {
-        self.inner.store.lock().tasks.len()
+        self.store
+            .upgrade()
+            .map_or(0, |store| store.pending_task_count())
     }
 
-    /// Number of tasks currently indexed as due a poll.
+    /// Diagnostic: `true` if none of this driver's locks or borrows is
+    /// currently held — never blocks, and never exposes a guard.
     ///
-    /// R lookups into `tasks` (O(R log N)), never a walk of it, so this
-    /// still scales with ready work rather than resident tasks. Exact per
-    /// *physical* index entry: an entry counts once if its task is live and
-    /// armed (still present *and* that task's own flag reads `true`), so a
-    /// ghost left by a cancel or a self-woken-then-panicked id contributes
-    /// nothing. A same-batch duplicate from the eager inline-poll/wake race
-    /// (module doc, "Readiness index") is *not* collapsed here — both
-    /// entries are physically present and both reference the same live,
-    /// still-armed task, so this counts it twice until the next pump's
-    /// `dedup()` reduces the batch to one.
-    #[must_use]
-    pub fn ready_task_count(&self) -> usize {
-        let store = self.inner.store.lock();
-        store
-            .ready
-            .iter()
-            .filter(|id| {
-                store
-                    .tasks
-                    .get(id)
-                    .is_some_and(|task| task.ready.load(Ordering::Acquire))
-            })
-            .count()
-    }
-
-    /// Diagnostic: `true` if both of this driver's locks are currently
-    /// free — never blocks, and never exposes a guard (this crate
-    /// hands out no lock guard from any public signature).
-    ///
-    /// Backs `flui-scheduler`'s own scheduler-wide lock-discipline oracle
-    /// (`scheduler/lock_discipline_tests.rs`'s `assert_no_scheduler_lock_held`)
-    /// so a callback that calls `spawn_local`/`spawn_local_eager` from
-    /// inside another callback can be observed NOT deadlocking against this
-    /// driver's own mutexes. Gated behind the `testing` feature (on by
-    /// default in this crate's own test builds via `cfg(test)`) rather than
-    /// unconditionally public, so a downstream crate's own reentrancy test
-    /// — a nested `TaskToken` owned by a task's future, cancelled from
-    /// inside that future's own destructor — can reach it too, through an
-    /// explicit `dev-dependencies` edge with `features = ["testing"]`
-    /// (see `crates/flui-view/Cargo.toml`), without this ever becoming part
-    /// of the crate's unconditional public surface.
+    /// Backs the lock-discipline oracles that prove a callback calling
+    /// `spawn_local`/`spawn_local_eager` from inside another callback does not
+    /// deadlock or hit a `BorrowMutError`. Gated behind the `testing` feature
+    /// (on by default in this crate's own test builds) so a downstream crate's
+    /// reentrancy test can reach it through a dev-dependency edge.
     #[cfg(any(test, feature = "testing"))]
     #[must_use]
     pub fn is_unlocked(&self) -> bool {
-        self.inner.store.try_lock().is_some()
-            && self.inner.request_frame.try_lock().is_some()
-            && self.inner.wake_delivery.is_unlocked()
+        self.store.upgrade().is_none_or(|store| store.is_unlocked())
     }
+}
+
+/// Drop a future a dead driver cannot admit, on the calling (owner) thread,
+/// and hand back a cancelled token.
+fn refuse(future: BoxedTask) -> TaskToken {
+    tracing::warn!(
+        "AsyncDriver: the realm that owned this driver is gone; dropping the spawned future"
+    );
+    let token = TaskToken::refused();
+    drop(future);
+    token
 }
 
 impl std::fmt::Debug for AsyncDriver {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // `try_lock`: `{:?}` while the task map is held (e.g. instrumenting a
-        // poll) must not deadlock — same discipline as `ExternalBuildScheduler`.
+        let store = self.store.upgrade();
         f.debug_struct("AsyncDriver")
+            .field("alive", &store.is_some())
             .field(
                 "tasks",
-                &self.inner.store.try_lock().map(|store| store.tasks.len()),
-            )
-            .field(
-                "has_request_frame",
-                &self
-                    .inner
-                    .request_frame
-                    .try_lock()
-                    .map(|hook| hook.is_some()),
+                &store.and_then(|store| store.tasks.try_borrow().map(|tasks| tasks.len()).ok()),
             )
             .finish()
     }
@@ -845,8 +869,8 @@ impl std::fmt::Debug for AsyncDriver {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{OwnerFrame, UpdateScheduler};
     use std::sync::atomic::AtomicUsize;
-    use std::task::Poll;
 
     /// A future that reports `Pending` until `ready` flips, recording polls.
     struct Controlled {
@@ -893,6 +917,13 @@ mod tests {
         )
     }
 
+    /// A fresh scheduler and the owner frame that holds its tasks.
+    fn owner_frame() -> (UpdateScheduler, OwnerFrame) {
+        let scheduler = UpdateScheduler::new();
+        let frame = OwnerFrame::new(&scheduler);
+        (scheduler, frame)
+    }
+
     fn exhausted_task_ids_preserve_cancellation_and_progress() {
         struct Rejected {
             polls: Arc<AtomicUsize>,
@@ -912,7 +943,9 @@ mod tests {
         }
 
         for eager_first in [false, true] {
-            let driver = AsyncDriver::new_with_counter(AtomicU64::new(u64::MAX - 2));
+            let scheduler = UpdateScheduler::new();
+            let frame = OwnerFrame::with_first_task_id(&scheduler, u64::MAX - 2);
+            let driver = frame.async_driver();
             let alias = driver.clone();
             let mut accepted = Vec::new();
             for eager in [eager_first, !eager_first] {
@@ -932,7 +965,7 @@ mod tests {
                 };
                 accepted.push((token, polls, finish, waker));
             }
-            assert_eq!(driver.poll_ready(), 2);
+            assert_eq!(frame.poll_ready(), 2);
             assert_eq!(driver.pending_task_count(), 2);
 
             let rejected_polls = Arc::new(AtomicUsize::new(0));
@@ -943,7 +976,7 @@ mod tests {
                         polls: Arc::clone(&rejected_polls),
                         drops: Arc::clone(&rejected_drops),
                     });
-                    let refusal = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    let refusal = catch_unwind(AssertUnwindSafe(|| {
                         if eager {
                             alias.spawn_local_eager(future)
                         } else {
@@ -956,7 +989,7 @@ mod tests {
                         Some("AsyncDriver task identities exhausted; refusing identity reuse")
                     );
                     assert_eq!(driver.pending_task_count(), 2);
-                    assert_eq!(driver.poll_ready(), 0);
+                    assert_eq!(frame.poll_ready(), 0);
                 }
             }
             assert_eq!(rejected_polls.load(Ordering::Relaxed), 0);
@@ -969,7 +1002,7 @@ mod tests {
                 .as_ref()
                 .expect("first pending task stores waker")
                 .wake_by_ref();
-            assert_eq!(driver.poll_ready(), 1);
+            assert_eq!(frame.poll_ready(), 1);
             first.cancel();
             assert_eq!(driver.pending_task_count(), 1);
             let (_, _, finish, waker) = &accepted[1];
@@ -979,10 +1012,10 @@ mod tests {
                 .as_ref()
                 .expect("sibling stores waker")
                 .wake_by_ref();
-            assert_eq!(alias.poll_ready(), 1);
+            assert_eq!(frame.poll_ready(), 1);
             assert_eq!(driver.pending_task_count(), 0);
             for eager in [false, true] {
-                let refusal = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let refusal = catch_unwind(AssertUnwindSafe(|| {
                     if eager {
                         driver.spawn_local_eager(Box::pin(async {}))
                     } else {
@@ -996,18 +1029,16 @@ mod tests {
             }
         }
 
-        let fresh = AsyncDriver::new();
+        let (_scheduler, fresh) = owner_frame();
         let completed = Arc::new(AtomicBool::new(false));
         let output = Arc::clone(&completed);
-        let _token = fresh.spawn_local(Box::pin(async move {
+        let _token = fresh.async_driver().spawn_local(Box::pin(async move {
             output.store(true, Ordering::Release);
         }));
         assert_eq!(fresh.poll_ready(), 1);
         assert!(completed.load(Ordering::Acquire));
         assert_eq!(fresh.pending_task_count(), 0);
     }
-
-    // ── 1. ready future completes on the next poll ──────────────────────────
 
     /// A future that panics on its very first poll.
     struct PanicsOnPoll;
@@ -1021,42 +1052,35 @@ mod tests {
     }
 
     /// A panic inside `future.poll` must not leave a zombie slot behind
-    /// (issue #1057): the slot's `future` field is already `None` (taken
-    /// before polling) and nothing else on the normal path ever revisits
-    /// it, so without the guard `pending_task_count` would count this task
-    /// forever, and a later `poll_ready` would silently skip over it
-    /// (not `ready`, so never selected) rather than ever making progress
-    /// or erroring.
+    /// (issue #1057).
     fn async_driver_poll_panic_does_not_leave_a_zombie_slot() {
-        let driver = AsyncDriver::new();
-        let before = driver.pending_task_count();
+        let (_scheduler, frame) = owner_frame();
+        let driver = frame.async_driver();
+        let before = frame.pending_task_count();
 
         let _token = driver.spawn_local(Box::pin(PanicsOnPoll));
-        assert_eq!(driver.pending_task_count(), before + 1);
+        assert_eq!(frame.pending_task_count(), before + 1);
 
-        let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| driver.poll_ready()));
+        let unwind = catch_unwind(AssertUnwindSafe(|| frame.poll_ready()));
         assert!(
             unwind.is_err(),
             "the panic must propagate out of poll_ready"
         );
 
         assert_eq!(
-            driver.pending_task_count(),
+            frame.pending_task_count(),
             before,
             "the panicking task's slot must be removed, not left as a zombie"
         );
 
         // A later poll must not touch the removed slot.
-        assert_eq!(driver.poll_ready(), 0);
-        assert_eq!(driver.pending_task_count(), before);
+        assert_eq!(frame.poll_ready(), 0);
+        assert_eq!(frame.pending_task_count(), before);
     }
 
-    // ── eager spawn (the SynchronousFuture window) ──────────────────────────
-
-    // ── 2. wake coalescing + frame requests ─────────────────────────────────
-
     fn async_driver_coalesces_repeated_wakes_into_one_frame_request() {
-        let driver = AsyncDriver::new();
+        let (_scheduler, frame) = owner_frame();
+        let driver = frame.async_driver();
         let frames = Arc::new(AtomicUsize::new(0));
         let frames_for_hook = Arc::clone(&frames);
         driver.set_request_frame(move || {
@@ -1071,7 +1095,7 @@ mod tests {
             "spawn requests the frame that will poll the task"
         );
 
-        driver.poll_ready();
+        frame.poll_ready();
         let waker = waker.lock().clone().expect("waker stored");
 
         for _ in 0..5 {
@@ -1083,37 +1107,36 @@ mod tests {
             2,
             "five wakes between frames must request exactly one more frame"
         );
-        assert_eq!(driver.ready_task_count(), 1);
+        assert_eq!(frame.ready_task_count(), 1);
 
         // After a poll clears `ready`, the next wake requests again.
-        driver.poll_ready();
+        frame.poll_ready();
         waker.wake_by_ref();
         assert_eq!(frames.load(Ordering::Relaxed), 3);
     }
 
-    // ── 3. cancellation ─────────────────────────────────────────────────────
-
-    // ── 4. cross-thread wake ────────────────────────────────────────────────
-
     /// A wake from a worker thread arms the task and requests a frame, but the
-    /// future is polled only when the frame thread calls `poll_ready`.
+    /// future is polled only when the owner thread pumps.
     fn async_driver_wake_from_another_thread_polls_on_the_driving_thread() {
-        let driver = AsyncDriver::new();
+        let (_scheduler, frame) = owner_frame();
+        let driver = frame.async_driver();
         let frames = Arc::new(AtomicUsize::new(0));
         let frames_for_hook = Arc::clone(&frames);
         driver.set_request_frame(move || {
             frames_for_hook.fetch_add(1, Ordering::Relaxed);
         });
 
-        let polled_on = Arc::new(Mutex::new(Vec::<std::thread::ThreadId>::new()));
-        let polled_on_for_task = Arc::clone(&polled_on);
+        let polled_on = Rc::new(RefCell::new(Vec::<std::thread::ThreadId>::new()));
+        let polled_on_for_task = Rc::clone(&polled_on);
         let (task, polls, finish, waker) = controlled();
         let _token = driver.spawn_local(Box::pin(async move {
-            polled_on_for_task.lock().push(std::thread::current().id());
+            polled_on_for_task
+                .borrow_mut()
+                .push(std::thread::current().id());
             task.await;
         }));
 
-        driver.poll_ready();
+        frame.poll_ready();
         let polls_after_first = polls.load(Ordering::Relaxed);
         let waker = waker.lock().clone().expect("waker");
 
@@ -1129,129 +1152,116 @@ mod tests {
             polls_after_first,
             "waking must not poll on the worker thread"
         );
-        assert_eq!(driver.ready_task_count(), 1);
+        assert_eq!(frame.ready_task_count(), 1);
 
-        driver.poll_ready();
+        frame.poll_ready();
         assert_eq!(polls.load(Ordering::Relaxed), polls_after_first + 1);
 
-        let threads = polled_on.lock().clone();
+        let threads = polled_on.borrow().clone();
         assert!(
             threads.iter().all(|id| *id != worker_id),
             "the future was polled only on the driving thread"
         );
     }
 
-    // ── determinism / re-entrancy ───────────────────────────────────────────
-
     /// Tasks are polled in ascending spawn order, so a frame is reproducible.
     fn async_driver_polls_in_deterministic_spawn_order() {
-        let driver = AsyncDriver::new();
-        let order = Arc::new(Mutex::new(Vec::new()));
+        let (_scheduler, frame) = owner_frame();
+        let driver = frame.async_driver();
+        let order = Rc::new(RefCell::new(Vec::new()));
         let mut tokens = Vec::new();
 
         for index in 0..8 {
-            let order = Arc::clone(&order);
+            let order = Rc::clone(&order);
             tokens.push(driver.spawn_local(Box::pin(async move {
-                order.lock().push(index);
+                order.borrow_mut().push(index);
             })));
         }
 
-        driver.poll_ready();
-        assert_eq!(*order.lock(), (0..8).collect::<Vec<_>>());
+        frame.poll_ready();
+        assert_eq!(*order.borrow(), (0..8).collect::<Vec<_>>());
         // Retain cancellation tokens until every task has been observed.
         drop(tokens);
     }
 
     /// A task woken *during* the poll is picked up next frame, not spun on.
     fn async_driver_self_wake_defers_to_the_next_frame() {
-        let driver = AsyncDriver::new();
-        let polls = Arc::new(AtomicUsize::new(0));
-        let polls_for_task = Arc::clone(&polls);
+        let (_scheduler, frame) = owner_frame();
+        let polls = Rc::new(Cell::new(0_usize));
+        let polls_for_task = Rc::clone(&polls);
 
-        let _token = driver.spawn_local(Box::pin(std::future::poll_fn(move |cx| {
-            polls_for_task.fetch_add(1, Ordering::Relaxed);
-            cx.waker().wake_by_ref(); // immediate self-wake
-            Poll::Pending
-        })));
+        let _token = frame
+            .async_driver()
+            .spawn_local(Box::pin(std::future::poll_fn(move |cx| {
+                polls_for_task.set(polls_for_task.get() + 1);
+                cx.waker().wake_by_ref(); // immediate self-wake
+                Poll::<()>::Pending
+            })));
 
-        assert_eq!(driver.poll_ready(), 1);
-        assert_eq!(polls.load(Ordering::Relaxed), 1, "one poll, no spin");
-        assert_eq!(driver.ready_task_count(), 1, "re-armed for the next frame");
+        assert_eq!(frame.poll_ready(), 1);
+        assert_eq!(polls.get(), 1, "one poll, no spin");
+        assert_eq!(frame.ready_task_count(), 1, "re-armed for the next frame");
 
-        assert_eq!(driver.poll_ready(), 1);
-        assert_eq!(polls.load(Ordering::Relaxed), 2);
+        assert_eq!(frame.poll_ready(), 1);
+        assert_eq!(polls.get(), 2);
     }
 
-    // ── readiness index (issue #1056) ───────────────────────────────────────
-
-    /// The stranding fix this rewrite exists for: three tasks spawn ready
-    /// (ascending id); the middle one panics on its first poll. The third —
-    /// never reached this pump — must still be indexed as ready after the
-    /// unwind, and the very next pump must poll exactly it, with no
-    /// external wake needed. `tests/frame_panic_recovery.rs`'s
-    /// `async_future_poll_panic_closes_the_frame` is this same fixture
-    /// end-to-end, through `UpdateScheduler`; this is the driver-level unit.
+    /// Three tasks spawn ready (ascending id); the middle one panics on its
+    /// first poll. The third — never reached this pump — must still be
+    /// indexed as ready after the unwind, and the very next pump must poll
+    /// exactly it, with no external wake needed.
     fn panic_mid_pump_keeps_unreached_siblings_indexed() {
-        let driver = AsyncDriver::new();
-        let third_polls = Arc::new(AtomicUsize::new(0));
-        let third_polls_for_task = Arc::clone(&third_polls);
+        let (_scheduler, frame) = owner_frame();
+        let driver = frame.async_driver();
+        let third_polls = Rc::new(Cell::new(0_usize));
+        let third_polls_for_task = Rc::clone(&third_polls);
 
         let _first = driver.spawn_local(Box::pin(async {}));
         let _second = driver.spawn_local(Box::pin(PanicsOnPoll));
         let _third = driver.spawn_local(Box::pin(std::future::poll_fn(move |_cx| {
-            third_polls_for_task.fetch_add(1, Ordering::Relaxed);
+            third_polls_for_task.set(third_polls_for_task.get() + 1);
             Poll::<()>::Pending
         })));
 
-        let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| driver.poll_ready()));
+        let unwind = catch_unwind(AssertUnwindSafe(|| frame.poll_ready()));
         assert!(
             unwind.is_err(),
             "the panic must propagate out of poll_ready"
         );
 
         assert_eq!(
-            third_polls.load(Ordering::Relaxed),
+            third_polls.get(),
             0,
             "the third task must not have been reached in the aborted pump"
         );
         assert_eq!(
-            driver.pending_task_count(),
+            frame.pending_task_count(),
             1,
             "the completed first and the panicking second are both gone; only the third remains"
         );
         assert_eq!(
-            driver.ready_task_count(),
+            frame.ready_task_count(),
             1,
             "the unreached third task must still be indexed as ready after the unwind"
         );
 
         assert_eq!(
-            driver.poll_ready(),
+            frame.poll_ready(),
             1,
             "the next pump must poll exactly the stranded third task"
         );
-        assert_eq!(third_polls.load(Ordering::Relaxed), 1);
+        assert_eq!(third_polls.get(), 1);
         assert_eq!(
-            driver.pending_task_count(),
+            frame.pending_task_count(),
             1,
             "third stays pending, never woken again"
         );
-        assert_eq!(driver.ready_task_count(), 0);
+        assert_eq!(frame.ready_task_count(), 0);
     }
-
-    // ── cancellation must not hold the task lock across a user destructor ──
-    // (#1038)
-
-    // ── `TaskToken` panic policy: `cancel()` propagates, `Drop` contains
-    // only while already unwinding ──
 
     /// Called directly (not via `Drop`, and not while already unwinding),
     /// `cancel()` must propagate a panic raised by the removed future's own
-    /// destructor. The dominant caller (`ViewState::dispose` →
-    /// `FutureBuilder::unsubscribe` → `dispose`) already runs inside
-    /// `on_unmount`'s own `catch_unwind`-based hook-panic recovery;
-    /// `cancel()` swallowing this panic itself would hide it from that
-    /// accounting instead of reporting through it.
+    /// destructor.
     fn cancel_propagates_the_removed_futures_panic() {
         struct PanicsOnDrop;
         impl Drop for PanicsOnDrop {
@@ -1260,21 +1270,71 @@ mod tests {
             }
         }
 
-        let driver = AsyncDriver::new();
-        let token = driver.spawn_local(Box::pin(async move {
+        let (_scheduler, frame) = owner_frame();
+        let token = frame.async_driver().spawn_local(Box::pin(async move {
             let _payload = PanicsOnDrop;
             std::future::pending::<()>().await;
         }));
         // Poll once so the async block actually starts executing (and so
-        // constructs `_payload`) before it is cancelled — an unpolled
-        // future's body never ran, so there would be nothing to panic.
-        assert_eq!(driver.poll_ready(), 1);
+        // constructs `_payload`) before it is cancelled.
+        assert_eq!(frame.poll_ready(), 1);
 
-        let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| token.cancel()));
+        let unwind = catch_unwind(AssertUnwindSafe(|| token.cancel()));
         assert!(
             unwind.is_err(),
             "cancel() must propagate the removed future's destructor panic"
         );
+    }
+
+    /// Retirement drops every remaining future once, under its own catch: a
+    /// panicking destructor neither stops its siblings' nor replaces the first
+    /// failure, and a token or driver used afterwards reaches nothing.
+    fn retirement_drops_every_task_and_keeps_the_first_panic() {
+        struct Probe {
+            drops: Rc<Cell<usize>>,
+            panic_with: Option<&'static str>,
+        }
+        impl Drop for Probe {
+            fn drop(&mut self) {
+                self.drops.set(self.drops.get() + 1);
+                if let Some(message) = self.panic_with {
+                    panic!("{message}");
+                }
+            }
+        }
+
+        let (_scheduler, frame) = owner_frame();
+        let driver = frame.async_driver();
+        let drops = Rc::new(Cell::new(0));
+        let tokens: Vec<_> = [None, Some("first"), None, Some("second")]
+            .into_iter()
+            .map(|panic_with| {
+                let probe = Probe {
+                    drops: Rc::clone(&drops),
+                    panic_with,
+                };
+                driver.spawn_local(Box::pin(async move {
+                    let _probe = probe;
+                    std::future::pending::<()>().await;
+                }))
+            })
+            .collect();
+        assert_eq!(frame.poll_ready(), 4);
+
+        let first = frame.retire().expect("a destructor panicked");
+        assert_eq!(
+            first.downcast_ref::<String>().map(String::as_str),
+            Some("first")
+        );
+        assert_eq!(drops.get(), 4, "every capture dropped exactly once");
+        assert!(tokens.iter().all(TaskToken::is_cancelled));
+        assert!(frame.retire().is_none(), "retirement is idempotent");
+        drop(tokens);
+        assert_eq!(drops.get(), 4);
+
+        let late = driver.spawn_local(Box::pin(async {}));
+        assert!(late.is_cancelled(), "a retired store admits nothing");
+        assert_eq!(frame.pending_task_count(), 0);
     }
 
     #[test]
@@ -1313,6 +1373,10 @@ mod tests {
                 (
                     "cancel_propagates_the_removed_futures_panic",
                     cancel_propagates_the_removed_futures_panic as fn(),
+                ),
+                (
+                    "retirement_drops_every_task_and_keeps_the_first_panic",
+                    retirement_drops_every_task_and_keeps_the_first_panic as fn(),
                 ),
             ],
         );

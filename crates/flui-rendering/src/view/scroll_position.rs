@@ -893,7 +893,7 @@ mod tests {
 
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use flui_scheduler::UpdateScheduler;
+    use flui_scheduler::{OwnerFrame, UpdateScheduler};
 
     use super::*;
 
@@ -922,7 +922,7 @@ mod tests {
             "the flush must not fire before the frame completes"
         );
 
-        scheduler.execute_frame();
+        scheduler.execute_frame(&OwnerFrame::new(&scheduler));
 
         assert_eq!(
             notified.load(Ordering::SeqCst),

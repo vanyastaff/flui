@@ -1,12 +1,14 @@
 //! Task wakers retain identity across polls and become inert after retirement.
 
-use flui_scheduler::AsyncDriver;
+use flui_scheduler::{OwnerFrame, UpdateScheduler};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::task::{Poll, Waker};
 
 fn retained_waker_lifecycle(eager: bool, complete: bool) {
-    let driver = AsyncDriver::new();
+    let scheduler = UpdateScheduler::new();
+    let frame = OwnerFrame::new(&scheduler);
+    let driver = frame.async_driver();
     let requests = Arc::new(AtomicUsize::new(0));
     let hook_requests = Arc::clone(&requests);
     driver.set_request_frame(move || {
@@ -33,7 +35,7 @@ fn retained_waker_lifecycle(eager: bool, complete: bool) {
             .expect("pending eager task")
     } else {
         let token = driver.spawn_local(future);
-        assert_eq!(driver.poll_ready(), 1);
+        assert_eq!(frame.poll_ready(), 1);
         token
     };
     let first = observed.lock().expect("waker observations")[0].clone();
@@ -42,7 +44,7 @@ fn retained_waker_lifecycle(eager: bool, complete: bool) {
     first.wake_by_ref();
     clone.wake_by_ref();
     assert_eq!(requests.load(Ordering::Relaxed), before + 1);
-    assert_eq!(driver.poll_ready(), 1);
+    assert_eq!(frame.poll_ready(), 1);
     let second = observed.lock().expect("waker observations")[1].clone();
     assert!(
         first.will_wake(&second),
@@ -52,7 +54,7 @@ fn retained_waker_lifecycle(eager: bool, complete: bool) {
     if complete {
         finish.store(true, Ordering::Release);
         second.wake_by_ref();
-        assert_eq!(driver.poll_ready(), 1);
+        assert_eq!(frame.poll_ready(), 1);
     } else {
         token.cancel();
     }
@@ -66,17 +68,18 @@ fn retained_waker_lifecycle(eager: bool, complete: bool) {
         before,
         "retired task must not request frames"
     );
-    assert_eq!(driver.ready_task_count(), 0);
-    assert_eq!(driver.poll_ready(), 0);
+    assert_eq!(frame.ready_task_count(), 0);
+    assert_eq!(frame.poll_ready(), 0);
 
     // Retirement must not poison the next task or let old handles target it.
     let next = driver.spawn_local(Box::pin(async {}));
     first.wake_by_ref();
-    assert_eq!(driver.poll_ready(), 1);
+    assert_eq!(frame.poll_ready(), 1);
     assert_eq!(driver.pending_task_count(), 0);
     drop(next);
     drop(token);
     drop(driver);
+    drop(frame);
     let before = requests.load(Ordering::Relaxed);
     second.wake_by_ref();
     assert_eq!(
@@ -106,7 +109,9 @@ fn pending_waker_does_not_retain_driver() {
             self.0.store(true, Ordering::Release);
         }
     }
-    let driver = AsyncDriver::new();
+    let scheduler = UpdateScheduler::new();
+    let frame = OwnerFrame::new(&scheduler);
+    let driver = frame.async_driver();
     let retired = Arc::new(AtomicBool::new(false));
     let guard = Retired(Arc::clone(&retired));
     let observed = Arc::new(Mutex::new(None::<Waker>));
@@ -116,13 +121,14 @@ fn pending_waker_does_not_retain_driver() {
         *task_observed.lock().expect("waker observation") = Some(cx.waker().clone());
         Poll::<()>::Pending
     })));
-    assert_eq!(driver.poll_ready(), 1);
+    assert_eq!(frame.poll_ready(), 1);
     let waker = observed
         .lock()
         .expect("waker observation")
         .clone()
         .expect("polled waker");
     drop(driver);
+    drop(frame);
     assert!(
         retired.load(Ordering::Acquire),
         "a pending task must drop with its driver despite external wakers"

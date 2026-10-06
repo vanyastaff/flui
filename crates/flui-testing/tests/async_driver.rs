@@ -171,13 +171,13 @@ struct Parked {
 }
 
 /// Spawns one owner-local task in `init_state` that waits on `gate`
-/// holding a [`Capture`]; panics in `dispose` when `dispose_panics`.
+/// holding a [`Capture`]; its state's destructor panics when `state_drop_panics`.
 #[derive(Clone, StatefulView)]
 struct TaskOwner {
     gate: WorkerGate,
     drops: Rc<RefCell<Vec<std::thread::ThreadId>>>,
     parked: Parked,
-    dispose_panics: bool,
+    state_drop_panics: bool,
 }
 
 struct TaskOwnerState {
@@ -212,18 +212,20 @@ impl ViewState<TaskOwner> for TaskOwnerState {
     fn build(&self, _view: &TaskOwner, _ctx: &dyn BuildContext) -> impl IntoView {
         flui_widgets::SizedBox::new(10.0, 10.0)
     }
+}
 
-    fn dispose(&mut self) {
-        assert!(!self.view.dispose_panics, "dispose probe");
+impl Drop for TaskOwnerState {
+    fn drop(&mut self) {
+        assert!(!self.view.state_drop_panics, "state drop probe");
     }
 }
 
-fn mount_task_owner(dispose_panics: bool) -> (LaidOut, TaskOwner) {
+fn mount_task_owner(state_drop_panics: bool) -> (LaidOut, TaskOwner) {
     let view = TaskOwner {
         gate: WorkerGate::default(),
         drops: Rc::new(RefCell::new(Vec::new())),
         parked: Parked::default(),
-        dispose_panics,
+        state_drop_panics,
     };
     let laid = lay_out(view.clone(), loose(100.0));
     assert_eq!(view.parked.tokens.borrow().len(), 1, "one task spawned");
@@ -246,16 +248,16 @@ fn late_completion_after_an_ordinary_teardown() {
     assert_eq!(view.drops.borrow().len(), 1, "a dead token retires nothing");
 }
 
-/// The same when a widget's `dispose` panics during the teardown: the
+/// The same when a widget state's destructor panics during the teardown: the
 /// realm still retires its tasks on the owner thread before raising the
 /// first failure.
 fn late_completion_after_a_teardown_that_panics() {
     let (laid, view) = mount_task_owner(true);
     let teardown = catch_unwind(AssertUnwindSafe(move || drop(laid)));
-    let payload = teardown.expect_err("the dispose panic reaches the realm's owner");
+    let payload = teardown.expect_err("the destructor panic reaches the realm's owner");
     assert_eq!(
         payload.downcast_ref::<&str>().copied(),
-        Some("dispose probe"),
+        Some("state drop probe"),
         "the first failure stays authoritative"
     );
     view.gate.complete_from_a_worker();
@@ -303,6 +305,28 @@ pub(crate) fn a_leaked_async_driver_holds_no_task_after_the_realm() {
         [std::thread::current().id()],
         "the refused future is dropped at once, on the caller's thread"
     );
+
+    // Nor does it keep the realm's task store: a hook installed through it
+    // lands nowhere and is dropped at once.
+    let hook_drops = Arc::new(AtomicUsize::new(0));
+    let hook_capture = HookCapture(Arc::clone(&hook_drops));
+    leaked.set_request_frame(move || {
+        let _capture = &hook_capture;
+    });
+    assert_eq!(
+        hook_drops.load(Ordering::SeqCst),
+        1,
+        "a handle that outlived its realm retains nothing"
+    );
+}
+
+/// A `Send` hook capture that counts its drops.
+struct HookCapture(Arc<AtomicUsize>);
+
+impl Drop for HookCapture {
+    fn drop(&mut self) {
+        self.0.fetch_add(1, Ordering::SeqCst);
+    }
 }
 
 #[test]

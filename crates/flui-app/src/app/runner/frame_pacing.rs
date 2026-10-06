@@ -45,7 +45,7 @@ pub(super) enum WakeAction {
     /// frames are enabled and there is real work or a scheduled ticker.
     Render,
     /// Frames are disabled (`AppLifecycleState::Hidden`/`Paused`/
-    /// `Detached`): poll only [`UpdateScheduler::drive_async_tasks`](flui_scheduler::UpdateScheduler::drive_async_tasks) — never
+    /// `Detached`): poll only the realm's ready async tasks (`UiRealm::pump_background`) — never
     /// begin/draw a frame, tick, run the pipeline, or present. Dirty work
     /// is left untouched; it accumulates until frames re-enable.
     PumpAsync,
@@ -63,7 +63,7 @@ pub(super) enum WakeAction {
 /// driver; the dirty work is left alone (it accumulates untouched) rather
 /// than running a full frame nobody can see. This is the ONLY thing that
 /// keeps a spawned future progressing while the app is backgrounded: the
-/// mid-frame `drive_async_tasks` poll inside `handle_begin_frame` never
+/// mid-frame owner-task poll inside `handle_begin_frame` never
 /// runs in `PumpAsync` mode (no frame runs at all), so this explicit call
 /// is the only pump.
 ///
