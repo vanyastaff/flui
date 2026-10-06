@@ -836,6 +836,22 @@ Why not just Drop?
   of life for every handle at once
 - Explicit disposal can be called safely multiple times
 
+### Known gaps in the current controller
+
+These are defects, recorded here so the document matches the code until the
+controller rework lands; each has an ignored `contract:` test row that pins
+the intended behaviour.
+
+- After `dispose`, `set_value` still changes the value, listener registration
+  is still accepted, and value listeners stay attached.
+- A status listener that panics stops the listeners after it from seeing that
+  transition, and a panicking curve or simulation ends the whole
+  `Vsync::tick_all` walk for that frame.
+- A curved run publishes the curve's output without a finiteness check or a
+  clamp to the bounds: a curve returning NaN or overshooting is published as is.
+- `AnimationSwitch` reads its parents' `value()` and `status()` while holding its
+  own lock, so a parent that reads the switch back deadlocks.
+
 ## Extension Traits
 
 Add fluent APIs without cluttering core types:
