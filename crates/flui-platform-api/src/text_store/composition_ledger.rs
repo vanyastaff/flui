@@ -92,10 +92,7 @@ impl CompositionLedger {
         let end = hit.iter().map(|s| s.range.end).fold(edit.end, usize::max);
         let origin = self.view(text, start..end, &hit);
         let new_end = end - edit.len() + inserted;
-        self.inserted
-            .retain(|range| !(range.start < end && range.end > start));
-        self.inserted = std::mem::take(&mut self.inserted)
-            .into_iter()
+        self.inserted = outside(std::mem::take(&mut self.inserted), start..end)
             .map(|range| shift(range, &edit, inserted))
             .collect();
         self.cleared = Some(Standing {
@@ -150,8 +147,7 @@ impl CompositionLedger {
             &text[start..range.start],
             &text[range.end..end],
         );
-        self.inserted
-            .retain(|inserted| !(inserted.start < end && inserted.end > start));
+        self.inserted = outside(std::mem::take(&mut self.inserted), start..end).collect();
         if !hit_cleared {
             self.cleared = cleared;
         }
@@ -265,6 +261,20 @@ fn rebased(origin: String, before: &str, after: &str) -> String {
     } else {
         inner.to_owned()
     }
+}
+
+/// The parts of `ranges` outside `span`: a range `span` cuts keeps what lies
+/// before and after it, so text a session inserted and only partly marked
+/// stays new where it was not marked.
+fn outside(ranges: Vec<Range<usize>>, span: Range<usize>) -> impl Iterator<Item = Range<usize>> {
+    ranges.into_iter().flat_map(move |range| {
+        [
+            range.start..range.end.min(span.start),
+            range.start.max(span.end)..range.end,
+        ]
+        .into_iter()
+        .filter(|part| part.start < part.end)
+    })
 }
 
 /// Whether `edit` clears a composition over `range`: it neither ends at or
