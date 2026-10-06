@@ -22,6 +22,7 @@ mod doctor;
 mod file_length;
 mod fonts;
 mod globals;
+mod host_lock;
 mod markers;
 mod module_dag;
 mod perf;
@@ -141,12 +142,37 @@ enum Command {
     Worktree(worktree::WorktreeArgs),
 }
 
+impl Command {
+    /// Whether this command builds or tests the workspace, and so waits for
+    /// any other such run on the host ([`host_lock`]). A dry run builds
+    /// nothing.
+    fn is_heavy(&self) -> bool {
+        let run = match self {
+            Self::Gate(args) => args.run,
+            Self::Test(args) => args.run,
+            Self::Ci(args) => args.run,
+            Self::CiFull(args) => args.run,
+            Self::CheckChanged(args) => args.run,
+            Self::GpuTest(args) => args.run,
+            _ => return false,
+        };
+        !run.dry_run()
+    }
+}
+
 fn main() -> ExitCode {
     let cli = Cli::parse();
     if let Err(error) = util::built_from_this_checkout() {
         eprintln!("xtask: {error:#}");
         return ExitCode::from(2);
     }
+    let _heavy_run = cli.command.is_heavy().then(|| {
+        host_lock::HeavyRunLock::acquire(
+            &host_lock::LockSettings::from_env(),
+            &host_lock::Holder::this_run(),
+            &mut std::io::stderr(),
+        )
+    });
     let result = match cli.command {
         Command::Checks(args) => tasks::checks(&args),
         Command::Lint(args) => tasks::lint(&args),

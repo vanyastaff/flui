@@ -90,6 +90,7 @@ impl Cmd {
             .args(&self.args)
             .envs(self.env.iter().map(|(key, value)| (key, value)))
             .current_dir(repo_root());
+        crate::host_lock::mark_child(&mut command);
         command
     }
 

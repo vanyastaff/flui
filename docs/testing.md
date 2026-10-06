@@ -144,6 +144,14 @@ passes `--strict`, which makes a missing one a failure. The flui-platform step
 of `test` needs `xvfb-run` on Linux (`apt install xvfb`), runs without it on
 Windows, and is skipped with a message on macOS.
 
+`check-changed`, `test`, `ci`, `ci-full`, `gate` and `gpu-test` take a host-wide
+lock (`flui-xtask-heavy.lock` in the temporary directory, or
+`FLUI_XTASK_LOCK_FILE`), so runs from different checkouts queue instead of
+oversubscribing the machine; a waiting run names the one it waits for. The OS
+releases the lock when its holder exits, crashed or not. One composite command
+running another, in-process or as a child process, does not wait for itself.
+`FLUI_XTASK_NO_LOCK=1` skips the lock; `--dry-run` never takes it.
+
 **Adding a new gate** means two changes together, not one: a `cargo xtask`
 command (so a contributor can run it standalone) *and* a step in
 `.github/workflows/ci.yml`'s `checks` job (so CI actually runs it — `gate` and

@@ -102,6 +102,11 @@ pub(crate) struct RunOpts {
 }
 
 impl RunOpts {
+    /// Whether the task only prints its commands.
+    pub(crate) fn dry_run(self) -> bool {
+        self.dry_run
+    }
+
     fn runner(self) -> Runner {
         Runner {
             dry_run: self.dry_run,
@@ -721,7 +726,7 @@ pub(crate) fn lint(args: &LintArgs) -> anyhow::Result<ExitCode> {
 #[derive(Debug, clap::Args)]
 pub(crate) struct GateArgs {
     #[command(flatten)]
-    run: RunOpts,
+    pub(crate) run: RunOpts,
 }
 
 /// `cargo xtask gate`: `checks`, `lint` and `doc-strict`.
@@ -764,7 +769,7 @@ pub(crate) struct TestArgs {
     #[arg(long, conflicts_with_all = ["fast", "nested"])]
     no_trybuild: bool,
     #[command(flatten)]
-    run: RunOpts,
+    pub(crate) run: RunOpts,
 }
 
 /// `cargo xtask test`: run the workspace test suite the way CI does.
@@ -826,7 +831,7 @@ pub(crate) fn build_all_targets_task(args: &BuildAllTargetsArgs) -> anyhow::Resu
 #[derive(Debug, clap::Args)]
 pub(crate) struct CiArgs {
     #[command(flatten)]
-    run: RunOpts,
+    pub(crate) run: RunOpts,
 }
 
 /// `cargo xtask ci`: `gate`, `test` and the doctests: the local mirror of CI's required checks.
@@ -838,7 +843,7 @@ pub(crate) fn ci(args: &CiArgs) -> anyhow::Result<ExitCode> {
 #[derive(Debug, clap::Args)]
 pub(crate) struct CiFullArgs {
     #[command(flatten)]
-    run: RunOpts,
+    pub(crate) run: RunOpts,
 }
 
 /// `cargo xtask ci-full`: `ci` plus every heavy CI job this host can run.
@@ -885,7 +890,7 @@ pub(crate) struct CheckChangedArgs {
     #[arg(long, default_value = "origin/main")]
     base: String,
     #[command(flatten)]
-    run: RunOpts,
+    pub(crate) run: RunOpts,
 }
 
 /// `cargo xtask check-changed`: fmt, clippy and tests over the crates a change touches.
@@ -1040,7 +1045,7 @@ pub(crate) fn live_smoke(args: &LiveSmokeArgs) -> anyhow::Result<ExitCode> {
 #[derive(Debug, clap::Args)]
 pub(crate) struct GpuTestArgs {
     #[command(flatten)]
-    run: RunOpts,
+    pub(crate) run: RunOpts,
 }
 
 /// `cargo xtask gpu-test`: the GPU readback suites.
