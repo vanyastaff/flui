@@ -92,8 +92,10 @@ impl Angle {
     /// ```
     #[must_use]
     pub fn nearest_equivalent(self, reference: Angle) -> Angle {
-        let _ = (reference, PI);
-        self
+        // `rem_euclid` lands in [0, TAU); folding (PI, TAU) down gives (-PI, PI].
+        let delta = (self.radians - reference.radians).rem_euclid(TAU);
+        let delta = if delta > PI { delta - TAU } else { delta };
+        Self::from_radians(reference.radians + delta)
     }
 }
 
