@@ -18,10 +18,10 @@ use std::time::Duration;
 
 use criterion::{Criterion, criterion_group, criterion_main};
 
-use flui_animation::smoothing::{SmoothDamp, exp_decay_half_life};
 use flui_animation::{
     Animatable, AnimatedValue, Animation, AnimationController, ColorTween, Curve, CurvedAnimation,
-    Curves, FloatTween, OklabColorTween, Simulation, SpringDescription, SpringSimulation, Tween,
+    Curves, FloatTween, OklabColorTween, Simulation, SpringDescription, SpringSimulation,
+    Tolerance, Tween,
 };
 use flui_foundation::geometry::Offset;
 use flui_painting::styling::Color;
@@ -75,41 +75,12 @@ fn curve_eval(c: &mut Criterion) {
     group.finish();
 }
 
-fn smoothing_step(c: &mut Criterion) {
-    let mut group = c.benchmark_group("smoothing");
-
-    group.bench_function("exp_decay_half_life", |b| {
-        b.iter(|| {
-            black_box(exp_decay_half_life(
-                black_box(10.0),
-                black_box(100.0),
-                black_box(0.25),
-                black_box(1.0 / 120.0),
-            ))
-        });
-    });
-
-    let mut damp = SmoothDamp::new(0.2);
-    let mut pos = 0.0_f64;
-    group.bench_function("smooth_damp_step", |b| {
-        b.iter(|| {
-            pos = damp.step(black_box(pos), black_box(100.0), black_box(1.0 / 120.0));
-            black_box(pos)
-        });
-    });
-
-    group.finish();
-}
-
 fn spring_step(c: &mut Criterion) {
     let mut group = c.benchmark_group("spring");
 
-    let sim = SpringSimulation::new(
-        SpringDescription::with_response_and_damping(0.3, 0.8),
-        0.0,
-        100.0,
-        0.0,
-    );
+    let spring =
+        SpringDescription::with_response_and_damping(Duration::from_millis(300), 0.8).unwrap();
+    let sim = SpringSimulation::try_new(spring, 0.0, 100.0, 0.0, Tolerance::DEFAULT).unwrap();
     group.bench_function("simulation_x_dx", |b| {
         b.iter(|| {
             let t = black_box(0.1_f64);
@@ -117,12 +88,30 @@ fn spring_step(c: &mut Criterion) {
         });
     });
 
-    // Per-component color spring: advance one frame and read the value.
-    let mut value = AnimatedValue::new(Color::rgba(0, 0, 0, 255), SpringDescription::smooth());
-    value.animate_to(Color::rgba(255, 128, 0, 255));
+    // Construction includes the rest-time search.
+    group.bench_function("simulation_new", |b| {
+        b.iter(|| {
+            black_box(
+                SpringSimulation::try_new(
+                    black_box(spring),
+                    black_box(0.0),
+                    black_box(100.0),
+                    black_box(250.0),
+                    Tolerance::DEFAULT,
+                )
+                .unwrap(),
+            )
+        });
+    });
+
+    // Per-component color spring: retarget, then one frame advance and read.
+    let smooth =
+        SpringDescription::with_duration_and_bounce(Duration::from_millis(500), 0.0).unwrap();
+    let mut value = AnimatedValue::new(Color::rgba(0, 0, 0, 255), smooth).unwrap();
     group.bench_function("animated_value_color_frame", |b| {
         b.iter(|| {
-            value.advance(black_box(1.0 / 60.0));
+            value.animate_to(Color::rgba(255, 128, 0, 255)).unwrap();
+            value.advance(black_box(Duration::from_nanos(16_666_667)));
             black_box(value.value())
         });
     });
@@ -159,7 +148,6 @@ criterion_group!(
     benches,
     tween_transform,
     curve_eval,
-    smoothing_step,
     spring_step,
     controller_tick
 );

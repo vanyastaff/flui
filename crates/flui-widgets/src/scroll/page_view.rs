@@ -42,7 +42,7 @@ use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::time::Duration;
 
 use flui_animation::Curve;
-use flui_animation::simulation::{ScrollSpringSimulation, Simulation, SpringDescription};
+use flui_animation::simulation::{Simulation, SpringDescription, SpringSimulation};
 use flui_foundation::geometry::Axis;
 use flui_foundation::{Listenable, ListenerId};
 use flui_rendering::view::{
@@ -72,7 +72,7 @@ use crate::support::{ValueCallback, value_callback};
 ///
 /// The target page is picked with a velocity-vs-tolerance ±half-page bias,
 /// rounded to the nearest whole page, and sprung to via
-/// [`ScrollSpringSimulation`]. The `ScrollPhysics` trait has no
+/// [`SpringSimulation`], resting within half a device pixel. The `ScrollPhysics` trait has no
 /// `parent`-chaining (see `scroll_physics.rs`'s module docs), so out-of-range
 /// handling is delegated to [`boundary`](Self::boundary), which this type owns
 /// directly.
@@ -91,11 +91,10 @@ pub struct PageScrollPhysics {
     pub spring: SpringDescription,
     /// Below this absolute velocity (logical px/s), the target-page pick
     /// applies no directional bias — the drag settles to the nearest page
-    /// rather than committing to next/previous. Equals
-    /// `1.0 / (0.050 * devicePixelRatio)` at a device pixel ratio of 1.0:
-    /// `ScrollMetrics` carries no device-pixel-ratio field, consistent with the
-    /// fixed velocity thresholds `ClampingScrollPhysics`/
-    /// `BouncingScrollPhysics` already use.
+    /// rather than committing to next/previous. A fixed logical-pixel
+    /// threshold, like the minimum fling velocities of
+    /// `ClampingScrollPhysics`/`BouncingScrollPhysics`; only the rest
+    /// tolerance scales with [`ScrollMetrics::device_pixel_ratio`].
     pub velocity_tolerance_px_per_sec: f64,
 }
 
@@ -151,12 +150,15 @@ impl ScrollPhysics for PageScrollPhysics {
         let target = metrics.pixels_from_page(self.viewport_fraction, page.round());
 
         if (target - metrics.pixels).abs() > f64::EPSILON {
-            Some(Box::new(ScrollSpringSimulation::new(
+            let spring = SpringSimulation::try_new(
                 self.spring,
                 metrics.pixels,
                 target,
                 velocity_px_per_sec,
-            )))
+                metrics.ballistic_tolerance()?,
+            )
+            .ok()?;
+            Some(Box::new(spring))
         } else {
             None
         }

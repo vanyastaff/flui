@@ -15,9 +15,8 @@
 //! - [`Tween`] - Maps animation values to any type T;
 //!   [`OklabColorTween`] interpolates colors perceptually (Oklab) instead of
 //!   componentwise sRGB
-//! - [`smoothing`] - Frame-rate-independent followers:
-//!   [`exp_decay`]/[`Smoothed`] (half-life exponential decay) and
-//!   [`SmoothDamp`] (critically damped, max-speed-clamped)
+//! - [`simulation`] - Validated physics: springs, friction and a bouncing
+//!   scroll fling that rest at a precomputed time
 //! - [`AnimatedValue`] - Interruptible spring value with velocity-preserving
 //!   retargeting (`#[derive(Animatable)]` for custom types)
 //! - [`AnimationError`] - Error type for animation operations
@@ -106,7 +105,6 @@ pub mod ext;
 pub mod proxy;
 pub mod reverse;
 pub mod simulation;
-pub mod smoothing;
 pub mod spring;
 pub mod switch;
 pub mod tween;
@@ -129,10 +127,10 @@ pub use ext::{AnimatableExt, AnimationExt};
 pub use proxy::ProxyAnimation;
 pub use reverse::ReverseAnimation;
 pub use simulation::{
-    BoundedFrictionSimulation, ClampedSimulation, FrictionSimulation, GravitySimulation,
-    ScrollSpringSimulation, Simulation, SpringDescription, SpringSimulation, SpringType, Tolerance,
+    BoundedFrictionSimulation, BouncingScrollSimulation, FrictionSimulation, Simulation,
+    SimulationBounds, SimulationError, SimulationParameter, SpringDescription, SpringSimulation,
+    SpringType, Tolerance,
 };
-pub use smoothing::{SmoothDamp, Smoothed, exp_decay, exp_decay_half_life};
 pub use spring::{AnimatedValue, TwoWayConverter};
 // `#[derive(Animatable)]` generates a `TwoWayConverter` impl. It shares the name
 // `Animatable` with the trait above but lives in the macro namespace (the serde
@@ -184,8 +182,7 @@ pub mod prelude {
     pub use crate::proxy::ProxyAnimation;
     pub use crate::reverse::ReverseAnimation;
     pub use crate::simulation::{
-        FrictionSimulation, GravitySimulation, Simulation, SpringDescription, SpringSimulation,
-        SpringType, Tolerance,
+        FrictionSimulation, Simulation, SpringDescription, SpringSimulation, SpringType, Tolerance,
     };
     pub use crate::status::{AnimationBehavior, AnimationStatus};
     pub use crate::switch::AnimationSwitch;

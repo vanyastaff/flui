@@ -1833,6 +1833,7 @@ dependencies = [
  "flui-painting",
  "flui-scheduler",
  "parking_lot",
+ "proptest",
  "serde",
  "smallvec",
  "thiserror 2.0.20",

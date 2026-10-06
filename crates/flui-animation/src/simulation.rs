@@ -1,57 +1,243 @@
 //! Physics simulations for animation.
 //!
-//! This module provides simulation types for physics-based animations,
-//! including spring physics. Simulations model objects in one-dimensional
-//! space with forces applied.
+//! A [`Simulation`] is a one-dimensional motion: a position [`x`](Simulation::x)
+//! and velocity [`dx`](Simulation::dx) at a time `t` in seconds since the
+//! simulation began, and a monotonic [`is_done`](Simulation::is_done).
 //!
-//! # Example
+//! Every simulation here is an immutable value with no locks and no callbacks;
+//! share one as `Arc<dyn Simulation>`. Constructors validate their input and
+//! return [`SimulationError`]: a simulation that was built never publishes a
+//! non-finite position or velocity.
+//!
+//! Rest is a moment, not a sample. Each simulation computes at construction
+//! the time after which it is guaranteed to stay within its [`Tolerance`]; from
+//! that time on `x` is exactly the resting position and `dx` is `0.0`, so
+//! `is_done` never flickers and does not depend on how time is sampled.
+//!
+//! # Examples
 //!
 //! ```
-//! use flui_animation::simulation::{Simulation, SpringSimulation, SpringDescription, Tolerance};
+//! use flui_animation::simulation::{Simulation, SpringDescription, SpringSimulation, Tolerance};
+//! use std::time::Duration;
 //!
-//! // Create a spring with damping ratio
-//! let spring = SpringDescription::with_damping_ratio(1.0, 500.0, 1.0);
+//! # fn main() -> Result<(), flui_animation::simulation::SimulationError> {
+//! let spring = SpringDescription::with_duration_and_bounce(Duration::from_millis(500), 0.2)?;
+//! let sim = SpringSimulation::try_new(spring, 0.0, 1.0, 0.0, Tolerance::DEFAULT)?;
 //!
-//! // Create simulation from position 0 to 1 with initial velocity 0
-//! let sim = SpringSimulation::new(spring, 0.0, 1.0, 0.0);
-//!
-//! // Query position and velocity at time t
-//! let position = sim.x(0.1);
-//! let velocity = sim.dx(0.1);
-//! let done = sim.is_done(0.1);
+//! assert_eq!(sim.x(0.0), 0.0);
+//! assert!(sim.x(0.1) > 0.0);
+//! assert!(sim.is_done(10.0));
+//! assert_eq!(sim.x(10.0), 1.0); // exactly the target once at rest
+//! # Ok(())
+//! # }
 //! ```
 
-use std::f64::consts::PI;
+use std::f64::consts::TAU;
+use std::fmt;
+use std::time::Duration;
 
-/// Tolerance for determining when simulations are "done".
+// ---------------------------------------------------------------------------
+// Errors
+// ---------------------------------------------------------------------------
+
+/// The input a [`SimulationError::OutOfRange`] refers to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum SimulationParameter {
+    /// A spring's mass.
+    Mass,
+    /// A spring's stiffness.
+    Stiffness,
+    /// A spring's damping coefficient.
+    Damping,
+    /// A spring's damping ratio `ζ`.
+    DampingRatio,
+    /// A perceptual spring's duration or response, in seconds.
+    Duration,
+    /// A perceptual spring's bounce.
+    Bounce,
+    /// A perceptual spring's damping fraction.
+    DampingFraction,
+    /// A friction drag coefficient.
+    Drag,
+    /// A start or target position.
+    Position,
+    /// An initial velocity, or a tolerance's velocity limit.
+    Velocity,
+    /// A tolerance's distance.
+    Distance,
+    /// A device pixel ratio.
+    DevicePixelRatio,
+}
+
+impl fmt::Display for SimulationParameter {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Mass => "mass",
+            Self::Stiffness => "stiffness",
+            Self::Damping => "damping",
+            Self::DampingRatio => "damping ratio",
+            Self::Duration => "duration",
+            Self::Bounce => "bounce",
+            Self::DampingFraction => "damping fraction",
+            Self::Drag => "drag",
+            Self::Position => "position",
+            Self::Velocity => "velocity",
+            Self::Distance => "distance",
+            Self::DevicePixelRatio => "device pixel ratio",
+        })
+    }
+}
+
+/// Why a simulation, spring, tolerance or bounds value could not be built.
+#[derive(Debug, Clone, Copy, PartialEq, thiserror::Error)]
+#[non_exhaustive]
+pub enum SimulationError {
+    /// One input is NaN, infinite, or outside its documented range.
+    #[error("{parameter} = {value} is outside its admitted range")]
+    OutOfRange {
+        /// The refused input.
+        parameter: SimulationParameter,
+        /// Its value (a duration in seconds).
+        value: f64,
+    },
+    /// Every input is in range, but a constant derived from them is not a
+    /// finite non-zero `f64` (for example `ω²` of an extremely stiff, light
+    /// spring, or an initial displacement `start − end` that overflows).
+    #[error("simulation constants are not representable as finite f64 values")]
+    Overflow,
+    /// Bounds that are not finite or whose `min > max`.
+    #[error("bounds must be finite and ordered, got [{min}, {max}]")]
+    InvalidBounds {
+        /// The refused lower bound.
+        min: f64,
+        /// The refused upper bound.
+        max: f64,
+    },
+}
+
+/// `Ok(value)` when `value` is finite and `> 0`.
+fn positive(parameter: SimulationParameter, value: f64) -> Result<f64, SimulationError> {
+    let _ = parameter;
+    Ok(value)
+}
+
+fn finite(parameter: SimulationParameter, value: f64) -> Result<f64, SimulationError> {
+    let _ = parameter;
+    Ok(value)
+}
+
+/// `Ok(value)` when a derived constant is finite.
+fn representable(value: f64) -> Result<f64, SimulationError> {
+    Ok(value)
+}
+
+/// Before the simulation began: `t < 0` or `t` is NaN.
+fn before_start(time: f64) -> bool {
+    let _ = time;
+    false
+}
+
+// ---------------------------------------------------------------------------
+// Tolerance
+// ---------------------------------------------------------------------------
+
+/// How close to rest a simulation must be before it reports done.
 ///
-/// Specifies maximum allowable magnitudes for distances and velocities
-/// to be considered at rest.
+/// A simulation rests from the first moment after which it stays within
+/// `distance` of its resting position and, unless the velocity limit is
+/// infinite, below `velocity` in speed. With an infinite velocity limit the
+/// simulation derives one from its own time scale: `distance · ω` for a
+/// spring, and for friction the speed at which the remaining glide is
+/// `distance`.
+///
+/// # Examples
+///
+/// ```
+/// use flui_animation::simulation::Tolerance;
+///
+/// let precise = Tolerance::new(1e-4, 1e-4)?;
+/// let screen = Tolerance::for_device_pixel_ratio(2.0)?; // a quarter logical pixel
+/// assert_ne!(precise, screen);
+/// assert!(Tolerance::new(f64::NAN, 1.0).is_err());
+/// # Ok::<(), flui_animation::simulation::SimulationError>(())
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Tolerance {
-    /// Maximum distance from target to be considered "at rest".
-    pub distance: f64,
-    /// Maximum velocity to be considered "at rest".
-    pub velocity: f64,
-    /// Maximum time difference to be considered equal.
-    pub time: f64,
+    pub(crate) distance: f64,
+    pub(crate) velocity: f64,
+    /// Not read by any simulation; the controller still builds a tolerance
+    /// by struct literal and must name it.
+    pub(crate) time: f64,
 }
 
 impl Tolerance {
-    /// Default tolerance with all values at 0.001.
-    pub const DEFAULT: Tolerance = Tolerance {
+    /// `distance` and `velocity` of `0.001` in the simulation's own units.
+    pub const DEFAULT: Self = Self {
         distance: 1e-3,
         velocity: 1e-3,
         time: 1e-3,
     };
 
-    /// Create a new tolerance with custom values.
-    #[must_use]
-    pub const fn new(distance: f64, velocity: f64, time: f64) -> Self {
-        Self {
+    /// A tolerance of `distance` (finite, `> 0`) in position units and
+    /// `velocity` (`> 0`, `f64::INFINITY` for a velocity limit derived from
+    /// the simulation's own time scale) in position units per second.
+    ///
+    /// # Errors
+    ///
+    /// [`SimulationError::OutOfRange`] naming [`SimulationParameter::Distance`]
+    /// or [`SimulationParameter::Velocity`] for a NaN, non-positive or (for
+    /// `distance`) infinite value.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_animation::simulation::Tolerance;
+    ///
+    /// assert!(Tolerance::new(0.5, f64::INFINITY).is_ok());
+    /// assert!(Tolerance::new(0.0, 1.0).is_err());
+    /// ```
+    pub fn new(distance: f64, velocity: f64) -> Result<Self, SimulationError> {
+        let distance = positive(SimulationParameter::Distance, distance)?;
+        Ok(Self {
             distance,
             velocity,
-            time,
+            time: 1e-3,
+        })
+    }
+
+    /// Half a device pixel at `device_pixel_ratio` device pixels per logical
+    /// pixel, with a derived velocity limit: the tolerance for a motion in
+    /// logical pixels whose rest must not be visible.
+    ///
+    /// # Errors
+    ///
+    /// [`SimulationError::OutOfRange`] naming
+    /// [`SimulationParameter::DevicePixelRatio`] when the ratio is NaN,
+    /// infinite, non-positive, or so small that half a device pixel overflows.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_animation::simulation::Tolerance;
+    ///
+    /// assert_eq!(
+    ///     Tolerance::for_device_pixel_ratio(2.0)?,
+    ///     Tolerance::new(0.25, f64::INFINITY)?,
+    /// );
+    /// # Ok::<(), flui_animation::simulation::SimulationError>(())
+    /// ```
+    pub fn for_device_pixel_ratio(device_pixel_ratio: f64) -> Result<Self, SimulationError> {
+        let _ = device_pixel_ratio;
+        Ok(Self::DEFAULT)
+    }
+
+    /// The speed limit for a motion whose natural rate is `rate` per second.
+    fn velocity_limit(self, rate: f64) -> f64 {
+        if self.velocity.is_infinite() {
+            self.distance * rate
+        } else {
+            self.velocity
         }
     }
 }
@@ -62,36 +248,34 @@ impl Default for Tolerance {
     }
 }
 
-/// A physics simulation in one-dimensional space.
+// ---------------------------------------------------------------------------
+// Simulation
+// ---------------------------------------------------------------------------
+
+/// A one-dimensional motion sampled at `time` seconds since it began.
 ///
-/// Simulations model an object with position and velocity, subject to forces.
-/// They expose:
-/// - Position via [`x()`](Simulation::x)
-/// - Velocity via [`dx()`](Simulation::dx)
-/// - Completion state via [`is_done()`](Simulation::is_done)
+/// Implementations used by the framework guarantee: `x` and `dx` are finite
+/// for every `time`; a `time` before the start (negative or NaN) yields the
+/// initial state; `is_done` is monotonic in `time`.
 pub trait Simulation: Send + Sync {
-    /// The position of the object at the given time.
+    /// The position at `time` seconds.
     fn x(&self, time: f64) -> f64;
 
-    /// The velocity of the object at the given time.
+    /// The velocity, in position units per second, at `time` seconds.
     fn dx(&self, time: f64) -> f64;
 
-    /// Whether the simulation is "done" at the given time.
-    ///
-    /// Typically returns true when the object has come to rest
-    /// within the specified tolerance.
+    /// Whether the motion has come to rest at `time` seconds.
     fn is_done(&self, time: f64) -> bool;
 
-    /// The tolerance used to determine when the simulation is done.
-    fn tolerance(&self) -> Tolerance;
+    /// The tolerance this simulation rests within. Drivers do not read it;
+    /// the default returns [`Tolerance::DEFAULT`].
+    fn tolerance(&self) -> Tolerance {
+        Tolerance::DEFAULT
+    }
 }
 
-/// Blanket implementation so `Box<dyn Simulation>` itself satisfies `Simulation`.
-///
-/// This lets callers that receive a `Box<dyn Simulation>` (e.g. from
-/// `ScrollPhysics::create_ballistic_simulation`) pass it directly to
-/// `AnimationController::animate_with`, which is generic over
-/// `S: Simulation + 'static`.
+/// Lets a `Box<dyn Simulation>` (as `ScrollPhysics` returns) be passed where
+/// `S: Simulation` is expected.
 impl<S: Simulation + ?Sized> Simulation for Box<S> {
     #[inline]
     fn x(&self, time: f64) -> f64 {
@@ -114,303 +298,444 @@ impl<S: Simulation + ?Sized> Simulation for Box<S> {
     }
 }
 
-/// Description of a spring's physical properties.
+// ---------------------------------------------------------------------------
+// SpringDescription
+// ---------------------------------------------------------------------------
+
+/// A damped spring, stored as its natural angular frequency `ω` (radians per
+/// second) and damping ratio `ζ`.
 ///
-/// Used to configure [`SpringSimulation`].
+/// The fields are private, so a spring outside the admitted domain — `ω` and
+/// `ζ` finite and positive, `ω²` and `ζω` finite — cannot be written down.
+/// Mass does not appear: motion depends on `ω = √(k/m)` and
+/// `ζ = c / (2√(km))` only. An undamped spring (`ζ = 0`) is refused because
+/// it never comes to rest.
+///
+/// ```compile_fail
+/// use flui_animation::simulation::SpringDescription;
+///
+/// let spring = SpringDescription { omega: 10.0, zeta: -1.0 }; // private fields
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SpringDescription {
-    /// The mass of the spring (m).
-    pub mass: f64,
-    /// The spring constant / stiffness (k).
-    pub stiffness: f64,
-    /// The damping coefficient (c).
-    pub damping: f64,
+    omega: f64,
+    zeta: f64,
 }
 
 impl SpringDescription {
-    /// Creates a spring with explicit mass, stiffness, and damping.
+    /// A spring of `mass`, `stiffness` and `damping` coefficient, each finite
+    /// and `> 0`.
     ///
-    /// # Panics
-    /// Panics if mass or stiffness is not finite and positive, or if damping is
-    /// not finite and non-negative (`NaN` / `±Inf` are rejected).
-    #[must_use]
-    pub fn new(mass: f64, stiffness: f64, damping: f64) -> Self {
-        assert!(mass.is_finite(), "Mass must be finite");
-        assert!(mass > 0.0, "Mass must be positive");
-        assert!(stiffness.is_finite(), "Stiffness must be finite");
-        assert!(stiffness > 0.0, "Stiffness must be positive");
-        assert!(damping.is_finite(), "Damping must be finite");
-        assert!(damping >= 0.0, "Damping must be non-negative");
-        Self {
-            mass,
-            stiffness,
-            damping,
-        }
+    /// # Errors
+    ///
+    /// [`SimulationError::OutOfRange`] naming the first input that is NaN,
+    /// infinite or not positive; [`SimulationError::Overflow`] when `ω` or `ζ`
+    /// is not representable.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_animation::simulation::{SpringDescription, SpringType};
+    ///
+    /// let spring = SpringDescription::new(1.0, 100.0, 20.0)?;
+    /// assert_eq!(spring.spring_type(), SpringType::CriticallyDamped);
+    /// assert!(SpringDescription::new(1.0, 100.0, 0.0).is_err());
+    /// # Ok::<(), flui_animation::simulation::SimulationError>(())
+    /// ```
+    pub fn new(mass: f64, stiffness: f64, damping: f64) -> Result<Self, SimulationError> {
+        let mass = positive(SimulationParameter::Mass, mass)?.sqrt();
+        let stiffness = positive(SimulationParameter::Stiffness, stiffness)?.sqrt();
+        let damping = positive(SimulationParameter::Damping, damping)?;
+        Self::from_omega_zeta(stiffness / mass, damping / 2.0 / stiffness / mass)
     }
 
-    /// Creates a spring given mass, stiffness, and damping ratio.
+    /// A spring of `mass` and `stiffness` damped at `ratio` of critical
+    /// damping: `1.0` settles fastest without overshoot, `< 1.0` bounces,
+    /// `> 1.0` creeps.
     ///
-    /// The damping ratio describes oscillation decay:
-    /// - `ratio = 1.0`: critically damped (no oscillation, fastest settling)
-    /// - `ratio > 1.0`: overdamped (slow, no oscillation)
-    /// - `ratio < 1.0`: underdamped (oscillates before settling)
+    /// Meant for constant springs; [`new`](Self::new) is the fallible form.
     ///
     /// # Panics
-    /// Panics if mass or stiffness is not finite and positive, or if ratio is
-    /// not finite and non-negative (`NaN` / `±Inf` are rejected).
+    ///
+    /// When an input is NaN, infinite or not positive, or `ω` is not
+    /// representable.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_animation::simulation::{SpringDescription, SpringType};
+    ///
+    /// let spring = SpringDescription::with_damping_ratio(1.0, 500.0, 1.0);
+    /// assert_eq!(spring.spring_type(), SpringType::CriticallyDamped);
+    /// ```
     #[must_use]
     pub fn with_damping_ratio(mass: f64, stiffness: f64, ratio: f64) -> Self {
-        assert!(mass.is_finite(), "Mass must be finite");
-        assert!(mass > 0.0, "Mass must be positive");
-        assert!(stiffness.is_finite(), "Stiffness must be finite");
-        assert!(stiffness > 0.0, "Stiffness must be positive");
-        assert!(ratio.is_finite(), "Damping ratio must be finite");
-        assert!(ratio >= 0.0, "Damping ratio must be non-negative");
-        let damping = ratio * 2.0 * (mass * stiffness).sqrt();
-        Self {
-            mass,
-            stiffness,
-            damping,
+        let spring = positive(SimulationParameter::Mass, mass).and_then(|mass| {
+            let stiffness = positive(SimulationParameter::Stiffness, stiffness)?;
+            let ratio = positive(SimulationParameter::DampingRatio, ratio)?;
+            Self::from_omega_zeta(stiffness.sqrt() / mass.sqrt(), ratio)
+        });
+        match spring {
+            Ok(spring) => spring,
+            Err(error) => panic!("invalid spring: {error}"),
         }
     }
 
-    /// Creates a spring based on desired animation duration and bounce.
+    /// A spring that completes a perceptual `duration` with `bounce`, the
+    /// parameterization of SwiftUI's `Spring(duration:bounce:)`:
+    /// `ω = 2π / duration`; `ζ = 1 − bounce` for `bounce ≥ 0`.
     ///
-    /// # Arguments
-    /// * `duration_secs` - Perceptual duration of the spring animation
-    /// * `bounce` - Bounciness: 0 = critically damped, 0..1 = bouncy, <0 = overdamped
-    #[must_use]
-    pub fn with_duration_and_bounce(duration_secs: f64, bounce: f64) -> Self {
-        const MASS: f64 = 1.0;
-
-        debug_assert!(duration_secs > 0.0, "Duration must be positive");
-
-        let stiffness = (4.0 * PI * PI * MASS) / (duration_secs * duration_secs);
-        let damping_ratio = if bounce > 0.0 {
+    /// `bounce` is in the open range `(−1, 1)`: `0` is critically damped,
+    /// positive values overshoot. For a negative bounce, `ζ = 1 / (1 + bounce)`
+    /// (an overdamped spring) — a mapping that is not confirmed against
+    /// Apple's documentation.
+    ///
+    /// # Errors
+    ///
+    /// [`SimulationError::OutOfRange`] for a zero `duration` or a `bounce`
+    /// outside `(−1, 1)`; [`SimulationError::Overflow`] for a `duration` so
+    /// short that `ω²` overflows.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_animation::simulation::{SpringDescription, SpringType};
+    /// use std::time::Duration;
+    ///
+    /// let spring = SpringDescription::with_duration_and_bounce(Duration::from_millis(500), 0.3)?;
+    /// assert_eq!(spring.spring_type(), SpringType::Underdamped);
+    /// # Ok::<(), flui_animation::simulation::SimulationError>(())
+    /// ```
+    pub fn with_duration_and_bounce(
+        duration: Duration,
+        bounce: f64,
+    ) -> Result<Self, SimulationError> {
+        let omega = angular_frequency(duration)?;
+        let zeta = if bounce >= 0.0 {
             1.0 - bounce
         } else {
-            1.0 / (bounce + 1.0)
+            1.0 / (1.0 + bounce)
         };
-        let damping = damping_ratio * 2.0 * (MASS * stiffness).sqrt();
-
-        Self {
-            mass: MASS,
-            stiffness,
-            damping,
-        }
+        Self::from_omega_zeta(omega, zeta)
     }
 
-    /// Build a spring from Apple's perceptual parameters: `response` is the
-    /// natural period in seconds (the time for one undamped oscillation) and
-    /// `damping_fraction` is the damping ratio (`1.0` = critically damped / no
-    /// overshoot, `< 1.0` = bouncy, `> 1.0` = sluggish).
+    /// A spring with a natural period of `response` and a damping ratio of
+    /// `damping_fraction` (`> 0`), the parameterization of SwiftUI's
+    /// `spring(response:dampingFraction:)`: `ω = 2π / response`,
+    /// `ζ = damping_fraction`. The `response` mapping is not confirmed
+    /// against Apple's documentation.
     ///
-    /// This is the parameterization designers reason about and the recommended
-    /// way to configure a UI spring — far more intuitive than raw
-    /// mass/stiffness/damping. Mirrors SwiftUI's
-    /// `spring(response:dampingFraction:)`.
-    #[must_use]
-    pub fn with_response_and_damping(response: f64, damping_fraction: f64) -> Self {
-        const MASS: f64 = 1.0;
-        debug_assert!(response > 0.0, "response (natural period) must be positive");
-        // ω = 2π/response ; k = ω²·m ; c = 2·ζ·√(k·m)
-        let omega = 2.0 * PI / response;
-        let stiffness = omega * omega * MASS;
-        let damping = 2.0 * damping_fraction * (stiffness * MASS).sqrt();
-        Self {
-            mass: MASS,
-            stiffness,
-            damping,
-        }
-    }
-
-    /// Apple `smooth` preset: a gentle spring with no bounce (response 0.5s).
-    #[must_use]
-    pub fn smooth() -> Self {
-        Self::with_duration_and_bounce(0.5, 0.0)
-    }
-
-    /// Apple `snappy` preset: quick with a slight bounce (response 0.5s).
-    #[must_use]
-    pub fn snappy() -> Self {
-        Self::with_duration_and_bounce(0.5, 0.15)
-    }
-
-    /// Apple `bouncy` preset: a lively spring with noticeable bounce (response 0.5s).
-    #[must_use]
-    pub fn bouncy() -> Self {
-        Self::with_duration_and_bounce(0.5, 0.3)
-    }
-
-    /// Returns the damping ratio of this spring.
+    /// # Errors
     ///
-    /// - `1.0`: critically damped
-    /// - `> 1.0`: overdamped
-    /// - `< 1.0`: underdamped
-    #[must_use]
-    pub fn damping_ratio(&self) -> f64 {
-        self.damping / (2.0 * (self.mass * self.stiffness).sqrt())
-    }
-
-    /// Returns the bounce value (inverse of damping ratio mapping).
-    #[must_use]
-    pub fn bounce(&self) -> f64 {
-        let ratio = self.damping_ratio();
-        if ratio < 1.0 {
-            1.0 - ratio
-        } else {
-            (1.0 / ratio) - 1.0
-        }
-    }
-
-    /// Returns the type of spring based on damping.
+    /// [`SimulationError::OutOfRange`] for a zero `response` or a NaN,
+    /// infinite or non-positive `damping_fraction`;
+    /// [`SimulationError::Overflow`] when `ω²` or `ζω` overflows.
     ///
-    /// Classification uses `f64`. The only round-trip correction is an exact
-    /// match against the `f64` damping that `with_damping_ratio(..., 1.0)`
-    /// stores (`2√(mk)` after `f64` arithmetic) — representable non-critical
-    /// ratios keep their true under-/over-damped regime.
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_animation::simulation::SpringDescription;
+    /// use std::time::Duration;
+    ///
+    /// let spring = SpringDescription::with_response_and_damping(Duration::from_millis(300), 0.8)?;
+    /// assert!(SpringDescription::with_response_and_damping(Duration::ZERO, 0.8).is_err());
+    /// # let _ = spring;
+    /// # Ok::<(), flui_animation::simulation::SimulationError>(())
+    /// ```
+    pub fn with_response_and_damping(
+        response: Duration,
+        damping_fraction: f64,
+    ) -> Result<Self, SimulationError> {
+        let omega = angular_frequency(response)?;
+        let zeta = positive(SimulationParameter::DampingFraction, damping_fraction)?;
+        Self::from_omega_zeta(omega, zeta)
+    }
+
+    /// The spring's motion regime, from its damping ratio.
     #[must_use]
     pub fn spring_type(&self) -> SpringType {
-        spring_regime(*self)
+        match self.zeta.total_cmp(&1.0) {
+            std::cmp::Ordering::Less => SpringType::Underdamped,
+            std::cmp::Ordering::Equal => SpringType::CriticallyDamped,
+            std::cmp::Ordering::Greater => SpringType::Overdamped,
+        }
+    }
+
+    fn from_omega_zeta(omega: f64, zeta: f64) -> Result<Self, SimulationError> {
+        Ok(Self { omega, zeta })
     }
 }
 
-/// `c² - 4mk` in `f64`. Internal analytic constants need this precision so
-/// extreme but finite springs keep a usable slow root (see [`OverdampedSolution`]).
-#[inline]
-fn spring_discriminant(spring: SpringDescription) -> f64 {
-    let mass = spring.mass;
-    let stiffness = spring.stiffness;
-    let damping = spring.damping;
-    damping * damping - 4.0 * mass * stiffness
+/// `2π / period`, refusing a zero period.
+fn angular_frequency(period: Duration) -> Result<f64, SimulationError> {
+    Ok(TAU / period.as_secs_f64())
 }
 
-/// `f64` critical damping `2√(mk)`, matching [`SpringDescription::with_damping_ratio`]
-/// at ratio `1.0`. Comparing against this exact bit pattern — not a relative
-/// band — preserves representable non-critical ratios while still snapping the
-/// ratio-`1.0` round-trip (whose `f64` discriminant is a tiny nonzero).
-#[inline]
-fn critical_damping_f32(mass: f64, stiffness: f64) -> f64 {
-    2.0 * (mass * stiffness).sqrt()
-}
-
-#[inline]
-fn spring_regime(spring: SpringDescription) -> SpringType {
-    // Snap only the exact `with_damping_ratio(..., 1.0)` bit pattern.
-    if spring.damping == critical_damping_f32(spring.mass, spring.stiffness) {
-        return SpringType::CriticallyDamped;
-    }
-
-    let discriminant = spring_discriminant(spring);
-    if discriminant > 0.0 {
-        SpringType::Overdamped
-    } else if discriminant < 0.0 {
-        SpringType::Underdamped
-    } else {
-        SpringType::CriticallyDamped
-    }
-}
-
-/// The type of spring behavior.
+/// The motion regime of a spring.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum SpringType {
-    /// A spring that does not bounce and returns to rest in the shortest time.
+    /// `ζ = 1`: no overshoot, the fastest approach without one.
     CriticallyDamped,
-    /// A spring that bounces (oscillates) before settling.
+    /// `ζ < 1`: oscillates while it settles.
     Underdamped,
-    /// A spring that does not bounce but takes longer to settle than critically damped.
+    /// `ζ > 1`: no overshoot, slower than critical damping.
     Overdamped,
 }
 
-/// A spring physics simulation.
+// ---------------------------------------------------------------------------
+// SpringSimulation
+// ---------------------------------------------------------------------------
+
+/// Below this `|q t²|`, `cos`/`sin` and `cosh`/`sinh` are summed as series so
+/// the motion is continuous through `ζ = 1` and exact at `t → 0`.
+const SERIES_LIMIT: f64 = 1e-2;
+
+/// A spring moving from `start` toward `end`.
 ///
-/// Models a particle attached to a spring following Hooke's law.
-#[derive(Debug, Clone)]
+/// The motion is the closed-form solution of `x'' + 2ζω x' + ω² x = 0` in one
+/// form for every damping ratio, finite for every `t`. The spring rests at a
+/// time computed at construction from a conservative envelope of the motion:
+/// from then on it stays within its [`Tolerance`], [`x`](Simulation::x) is
+/// exactly `end` and [`dx`](Simulation::dx) is `0.0`.
+#[derive(Debug, Clone, PartialEq)]
 pub struct SpringSimulation {
-    end_position: f64,
-    solution: SpringSolution,
+    start: f64,
+    end: f64,
+    /// Initial displacement `start − end` and velocity.
+    x0: f64,
+    v0: f64,
+    /// `a = ζω` and `q = ω²(1 − ζ²)`.
+    a: f64,
+    q: f64,
+    /// `a·x0 + v0` and `ω²·x0 + a·v0`: the coefficients of `e^{−at}·S`.
+    position_s: f64,
+    velocity_s: f64,
+    omega: f64,
+    zeta: f64,
+    roots: Roots,
+    rest_secs: f64,
     tolerance: Tolerance,
-    snap_to_end: bool,
+}
+
+/// The decay rates the propagator and the rest envelopes need.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Roots {
+    /// `ζ < 1`: damped angular frequency `ω_d = √q`.
+    Oscillating { damped_omega: f64 },
+    /// `ζ = 1`.
+    Critical,
+    /// `ζ > 1`: `s = √(−q)` and the slow and fast roots `λs = −a + s`,
+    /// `λf = −a − s`, each computed without cancellation.
+    Decaying { s: f64, slow: f64, fast: f64 },
 }
 
 impl SpringSimulation {
-    /// Creates a new spring simulation.
+    /// A spring from `start` to `end` with initial `velocity`, resting within
+    /// [`Tolerance::DEFAULT`].
     ///
-    /// # Arguments
-    /// * `spring` - The spring's physical properties
-    /// * `start` - Starting position
-    /// * `end` - Target/end position
-    /// * `velocity` - Initial velocity
+    /// Meant for inputs already known to be finite; [`try_new`](Self::try_new)
+    /// is the fallible form.
+    ///
+    /// # Panics
+    ///
+    /// When `start`, `end` or `velocity` is not finite, or the motion's
+    /// constants overflow.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_animation::simulation::{Simulation, SpringDescription, SpringSimulation};
+    ///
+    /// let spring = SpringDescription::with_damping_ratio(1.0, 300.0, 0.5);
+    /// let sim = SpringSimulation::new(spring, 0.0, 1.0, 0.0);
+    /// assert_eq!(sim.x(0.0), 0.0);
+    /// ```
     #[must_use]
     pub fn new(spring: SpringDescription, start: f64, end: f64, velocity: f64) -> Self {
-        Self {
-            end_position: end,
-            solution: SpringSolution::new(spring, start - end, velocity),
-            tolerance: Tolerance::DEFAULT,
-            snap_to_end: false,
+        match Self::try_new(spring, start, end, velocity, Tolerance::DEFAULT) {
+            Ok(simulation) => simulation,
+            Err(error) => panic!("invalid spring simulation: {error}"),
         }
     }
 
-    /// Creates a spring simulation with custom tolerance.
-    #[must_use]
-    pub fn with_tolerance(
+    /// A spring from `start` to `end` with initial `velocity` (position units
+    /// per second), resting within `tolerance`.
+    ///
+    /// # Errors
+    ///
+    /// [`SimulationError::OutOfRange`] naming [`SimulationParameter::Position`]
+    /// or [`SimulationParameter::Velocity`] for a non-finite input;
+    /// [`SimulationError::Overflow`] when `start − end` or a product of it
+    /// with the spring's rates is not finite.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_animation::simulation::{Simulation, SpringDescription, SpringSimulation, Tolerance};
+    ///
+    /// let spring = SpringDescription::new(1.0, 100.0, 10.0)?;
+    /// let sim = SpringSimulation::try_new(spring, 0.0, 100.0, 0.0, Tolerance::new(0.5, f64::INFINITY)?)?;
+    /// assert!(!sim.is_done(0.1));
+    /// assert!(SpringSimulation::try_new(spring, f64::NAN, 1.0, 0.0, Tolerance::DEFAULT).is_err());
+    /// # Ok::<(), flui_animation::simulation::SimulationError>(())
+    /// ```
+    pub fn try_new(
         spring: SpringDescription,
         start: f64,
         end: f64,
         velocity: f64,
         tolerance: Tolerance,
-    ) -> Self {
-        Self {
-            end_position: end,
-            solution: SpringSolution::new(spring, start - end, velocity),
-            tolerance,
-            snap_to_end: false,
+    ) -> Result<Self, SimulationError> {
+        let start = finite(SimulationParameter::Position, start)?;
+        let end = finite(SimulationParameter::Position, end)?;
+        let v0 = finite(SimulationParameter::Velocity, velocity)?;
+        let SpringDescription { omega, zeta } = spring;
+        let x0 = representable(start - end)?;
+        let a = omega * zeta;
+        let q = omega * omega * ((1.0 - zeta) * (1.0 + zeta));
+        let roots = match spring.spring_type() {
+            SpringType::Underdamped => Roots::Oscillating {
+                damped_omega: q.sqrt(),
+            },
+            SpringType::CriticallyDamped => Roots::Critical,
+            SpringType::Overdamped => {
+                // √(ζ² − 1): factored near one (no cancellation), scaled
+                // for a huge ζ (no overflow of ζ²).
+                let root = if zeta < 1e100 {
+                    ((zeta - 1.0) * (zeta + 1.0)).sqrt()
+                } else {
+                    zeta * (1.0 - zeta.recip().powi(2)).sqrt()
+                };
+                let spread = zeta + root;
+                Roots::Decaying {
+                    s: omega * root,
+                    slow: -omega / spread,
+                    fast: -omega * spread,
+                }
+            }
+        };
+        let position_s = representable(a * x0 + v0)?;
+        let velocity_s = representable(omega * omega * x0 + a * v0)?;
+        if let Roots::Decaying { fast, .. } = roots {
+            representable(fast * x0)?;
+            representable(fast * v0)?;
         }
+        let mut simulation = Self {
+            start,
+            end,
+            x0,
+            v0,
+            a,
+            q,
+            position_s,
+            velocity_s,
+            omega,
+            zeta,
+            roots,
+            rest_secs: 0.0,
+            tolerance,
+        };
+        simulation.rest_secs = f64::INFINITY;
+        Ok(simulation)
     }
 
-    /// Enables snapping to the exact end position when done.
-    ///
-    /// When enabled, [`x()`](Self::x) returns exactly `end` and [`dx()`](Self::dx)
-    /// returns 0 once [`is_done()`](Self::is_done) is true.
+    /// The spring's motion regime.
     #[must_use]
-    pub fn with_snap_to_end(mut self, snap: bool) -> Self {
-        self.snap_to_end = snap;
+    pub fn spring_type(&self) -> SpringType {
+        SpringDescription {
+            omega: self.omega,
+            zeta: self.zeta,
+        }
+        .spring_type()
+    }
+
+    /// Accepted for source compatibility: a spring always settles exactly at
+    /// `end` once at rest.
+    #[must_use]
+    pub(crate) fn with_snap_to_end(self, _snap: bool) -> Self {
         self
     }
 
-    /// Returns the type of spring behavior.
-    #[must_use]
-    pub fn spring_type(&self) -> SpringType {
-        self.solution.spring_type()
+    /// `(e^{−at}·C(t), e^{−at}·S(t))`, where `C = cos(ω_d t)`,
+    /// `S = sin(ω_d t)/ω_d` (and their hyperbolic and `ζ = 1` limits).
+    fn propagator(&self, t: f64) -> (f64, f64) {
+        let qt2 = self.q * t * t;
+        if qt2.abs() < SERIES_LIMIT {
+            // C = Σ (−q t²)ⁿ/(2n)!, S = t·Σ (−q t²)ⁿ/(2n+1)!.
+            let ratio = -qt2;
+            let mut cosine = 1.0;
+            let mut sine_over_t = 1.0;
+            let mut cosine_term = 1.0;
+            let mut sine_term = 1.0;
+            for order in 1..=6_u32 {
+                let order = f64::from(order);
+                cosine_term *= ratio / ((2.0 * order - 1.0) * (2.0 * order));
+                sine_term *= ratio / ((2.0 * order) * (2.0 * order + 1.0));
+                cosine += cosine_term;
+                sine_over_t += sine_term;
+            }
+            let decay = (-self.a * t).exp();
+            return (decay * cosine, decay * sine_over_t * t);
+        }
+        match self.roots {
+            Roots::Oscillating { damped_omega } => {
+                let decay = (-self.a * t).exp();
+                let (sin, cos) = (damped_omega * t).sin_cos();
+                (decay * cos, decay * sin / damped_omega)
+            }
+            // q = 0 always takes the series branch.
+            Roots::Critical => {
+                let decay = (-self.a * t).exp();
+                (decay, decay * t)
+            }
+            Roots::Decaying { s, slow, .. } => {
+                // e^{−at}cosh(st) = ½e^{λs t}(1 + e^{−2st}),
+                // e^{−at}sinh(st)/s = e^{λs t}(1 − e^{−2st})/(2s).
+                let slow_decay = (slow * t).exp();
+                let gap = (-2.0 * s * t).exp_m1();
+                (0.5 * slow_decay * (2.0 + gap), slow_decay * -gap / (2.0 * s))
+            }
+        }
     }
 
-    /// Returns the target end position.
-    #[must_use]
-    pub fn end_position(&self) -> f64 {
-        self.end_position
+    /// The analytic displacement from `end` at `t ≥ 0`, ignoring rest.
+    fn displacement(&self, t: f64) -> f64 {
+        let (c, s) = self.propagator(t);
+        c * self.x0 + s * self.position_s
+    }
+
+    /// The analytic velocity at `t ≥ 0`, ignoring rest.
+    fn velocity(&self, t: f64) -> f64 {
+        let (c, s) = self.propagator(t);
+        c * self.v0 - s * self.velocity_s
     }
 }
 
 impl Simulation for SpringSimulation {
     fn x(&self, time: f64) -> f64 {
-        if self.snap_to_end && self.is_done(time) {
-            self.end_position
+        if before_start(time) {
+            self.start
+        } else if time >= self.rest_secs {
+            self.end
         } else {
-            self.end_position + self.solution.x(time)
+            self.end + self.displacement(time)
         }
     }
 
     fn dx(&self, time: f64) -> f64 {
-        if self.snap_to_end && self.is_done(time) {
+        if before_start(time) {
+            self.v0
+        } else if time >= self.rest_secs {
             0.0
         } else {
-            self.solution.dx(time)
+            self.velocity(time)
         }
     }
 
     fn is_done(&self, time: f64) -> bool {
-        near_zero(self.solution.x(time), self.tolerance.distance)
-            && near_zero(self.solution.dx(time), self.tolerance.velocity)
+        self.displacement(time).abs() < self.tolerance.distance
+            && self.velocity(time).abs() < self.tolerance.velocity
     }
 
     fn tolerance(&self) -> Tolerance {
@@ -418,388 +743,132 @@ impl Simulation for SpringSimulation {
     }
 }
 
-// Internal spring solution variants
-#[derive(Debug, Clone)]
-enum SpringSolution {
-    Critical(CriticalSolution),
-    Overdamped(OverdampedSolution),
-    Underdamped(UnderdampedSolution),
-}
+// ---------------------------------------------------------------------------
+// Friction
+// ---------------------------------------------------------------------------
 
-impl SpringSolution {
-    fn new(spring: SpringDescription, initial_position: f64, initial_velocity: f64) -> Self {
-        match spring_regime(spring) {
-            SpringType::Overdamped => SpringSolution::Overdamped(OverdampedSolution::new(
-                spring,
-                initial_position,
-                initial_velocity,
-            )),
-            SpringType::Underdamped => SpringSolution::Underdamped(UnderdampedSolution::new(
-                spring,
-                initial_position,
-                initial_velocity,
-            )),
-            SpringType::CriticallyDamped => SpringSolution::Critical(CriticalSolution::new(
-                spring,
-                initial_position,
-                initial_velocity,
-            )),
-        }
-    }
-
-    fn x(&self, time: f64) -> f64 {
-        match self {
-            SpringSolution::Critical(s) => s.x(time),
-            SpringSolution::Overdamped(s) => s.x(time),
-            SpringSolution::Underdamped(s) => s.x(time),
-        }
-    }
-
-    fn dx(&self, time: f64) -> f64 {
-        match self {
-            SpringSolution::Critical(s) => s.dx(time),
-            SpringSolution::Overdamped(s) => s.dx(time),
-            SpringSolution::Underdamped(s) => s.dx(time),
-        }
-    }
-
-    fn spring_type(&self) -> SpringType {
-        match self {
-            SpringSolution::Critical(_) => SpringType::CriticallyDamped,
-            SpringSolution::Overdamped(_) => SpringType::Overdamped,
-            SpringSolution::Underdamped(_) => SpringType::Underdamped,
-        }
-    }
-}
-
-/// Critically damped spring solution.
+/// Motion decelerating by drag: velocity `v₀·dragᵗ`, coasting toward
+/// [`final_x`](Self::final_x).
 ///
-/// Analytic constants are `f64` so samples stay continuous with the neighboring
-/// over-/under-damped regimes when public parameters are stored as `f64`.
-#[derive(Debug, Clone)]
-struct CriticalSolution {
-    r: f64,
-    c1: f64,
-    c2: f64,
-}
-
-impl CriticalSolution {
-    fn new(spring: SpringDescription, distance: f64, velocity: f64) -> Self {
-        let mass = spring.mass;
-        let damping = spring.damping;
-        let r = -damping / (2.0 * mass);
-        let c1 = distance;
-        let c2 = velocity - (r * distance);
-        Self { r, c1, c2 }
-    }
-
-    fn x(&self, time: f64) -> f64 {
-        (self.c1 + self.c2 * time) * (self.r * time).exp()
-    }
-
-    fn dx(&self, time: f64) -> f64 {
-        let power = (self.r * time).exp();
-
-        self.r * (self.c1 + self.c2 * time) * power + self.c2 * power
-    }
-}
-
-/// Overdamped spring solution.
-///
-/// Roots and coefficients are computed in `f64`. The slow root uses Vieta's
-/// product relation (`r1·r2 = k/m`) instead of `-c + √(c²-4mk)`, which cancels
-/// to exactly `0` in `f64` for heavy damping (e.g. mass=1, stiffness=1,
-/// damping=10000) and leaves the simulation stuck away from the target.
-#[derive(Debug, Clone)]
-struct OverdampedSolution {
-    r1: f64,
-    r2: f64,
-    c1: f64,
-    c2: f64,
-}
-
-impl OverdampedSolution {
-    fn new(spring: SpringDescription, distance: f64, velocity: f64) -> Self {
-        let mass = spring.mass;
-        let stiffness = spring.stiffness;
-        let damping = spring.damping;
-
-        let cmk = damping * damping - 4.0 * mass * stiffness;
-        // Fast (more negative) root: both terms share sign, so no cancellation.
-        let r1 = (-damping - cmk.sqrt()) / (2.0 * mass);
-        // Slow root via Vieta — stable when `√(c²-4mk)` ≈ `c`.
-        let r2 = (stiffness / mass) / r1;
-        let c2 = (velocity - r1 * distance) / (r2 - r1);
-        let c1 = distance - c2;
-        Self { r1, r2, c1, c2 }
-    }
-
-    fn x(&self, time: f64) -> f64 {
-        self.c1 * (self.r1 * time).exp() + self.c2 * (self.r2 * time).exp()
-    }
-
-    fn dx(&self, time: f64) -> f64 {
-        self.c1 * self.r1 * (self.r1 * time).exp() + self.c2 * self.r2 * (self.r2 * time).exp()
-    }
-}
-
-/// Underdamped spring solution.
-///
-/// Analytic constants are `f64` for the same continuity reasons as
-/// [`CriticalSolution`] / [`OverdampedSolution`].
-#[derive(Debug, Clone)]
-struct UnderdampedSolution {
-    w: f64,
-    r: f64,
-    c1: f64,
-    c2: f64,
-}
-
-impl UnderdampedSolution {
-    fn new(spring: SpringDescription, distance: f64, velocity: f64) -> Self {
-        let mass = spring.mass;
-        let stiffness = spring.stiffness;
-        let damping = spring.damping;
-
-        let w = (4.0 * mass * stiffness - damping * damping).sqrt() / (2.0 * mass);
-        let r = -(damping / (2.0 * mass));
-        let c1 = distance;
-        let c2 = (velocity - r * distance) / w;
-        Self { w, r, c1, c2 }
-    }
-
-    fn x(&self, time: f64) -> f64 {
-        (self.r * time).exp() * (self.c1 * (self.w * time).cos() + self.c2 * (self.w * time).sin())
-    }
-
-    fn dx(&self, time: f64) -> f64 {
-        let power = (self.r * time).exp();
-        let cosine = (self.w * time).cos();
-        let sine = (self.w * time).sin();
-
-        power * (self.c2 * self.w * cosine - self.c1 * self.w * sine)
-            + self.r * power * (self.c2 * sine + self.c1 * cosine)
-    }
-}
-
-/// Checks if a value is near zero within the given threshold.
-#[inline]
-fn near_zero(value: f64, threshold: f64) -> bool {
-    value.abs() < threshold
-}
-
-/// A friction simulation that slows an object by a constant deceleration.
-#[derive(Debug, Clone)]
+/// It rests once the remaining glide is within the tolerance's distance (and
+/// the speed under its velocity limit); from then on `x` is exactly
+/// `final_x` and `dx` is `0.0`.
+#[derive(Debug, Clone, PartialEq)]
 pub struct FrictionSimulation {
     drag: f64,
     drag_log: f64,
-    initial_position: f64,
-    initial_velocity: f64,
+    position: f64,
+    velocity: f64,
+    final_x: f64,
+    rest_secs: f64,
     tolerance: Tolerance,
 }
 
 impl FrictionSimulation {
-    /// Creates a new friction simulation.
+    /// Motion from `position` at `velocity` (units per second), losing all
+    /// but `drag` (in the open range `(0, 1)`) of its velocity each second.
     ///
-    /// # Arguments
-    /// * `drag` - Drag coefficient, in the open range `(0, 1)` (typically ~0.01-0.2)
-    /// * `position` - Initial position
-    /// * `velocity` - Initial velocity
+    /// # Errors
     ///
-    /// # Panics
-    /// Panics if `drag` is not in `(0, 1)`. A drag of exactly 1.0 divides by
-    /// `ln(1) = 0`; a drag `>= 1` makes the object *accelerate* (`v·drag^t`
-    /// grows), so the simulation would never come to rest — a hang, not a slow
-    /// stop.
-    #[must_use]
-    pub fn new(drag: f64, position: f64, velocity: f64) -> Self {
-        assert!(
-            drag > 0.0 && drag < 1.0,
-            "friction drag must be in (0, 1), got {drag}: drag >= 1 never decelerates"
-        );
-        Self {
+    /// [`SimulationError::OutOfRange`] for a `drag` outside `(0, 1)` or a
+    /// non-finite `position` or `velocity`; [`SimulationError::Overflow`]
+    /// when the resting position is not finite.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_animation::simulation::{FrictionSimulation, Simulation, Tolerance};
+    ///
+    /// let sim = FrictionSimulation::new(0.135, 0.0, 1000.0, Tolerance::new(0.5, f64::INFINITY)?)?;
+    /// assert!(sim.final_x() > 0.0);
+    /// assert!(sim.is_done(10.0));
+    /// assert_eq!(sim.x(10.0), sim.final_x());
+    /// assert!(FrictionSimulation::new(1.0, 0.0, 1.0, Tolerance::DEFAULT).is_err());
+    /// # Ok::<(), flui_animation::simulation::SimulationError>(())
+    /// ```
+    pub fn new(
+        drag: f64,
+        position: f64,
+        velocity: f64,
+        tolerance: Tolerance,
+    ) -> Result<Self, SimulationError> {
+        let position = finite(SimulationParameter::Position, position)?;
+        let velocity = finite(SimulationParameter::Velocity, velocity)?;
+        let drag_log = drag.ln();
+        let final_x = representable(position - velocity / drag_log)?;
+        // Remaining glide |v(t)/ln d| ≤ distance, and |v(t)| ≤ the limit.
+        let speed_limit = tolerance
+            .velocity_limit(-drag_log)
+            .min(tolerance.distance * -drag_log);
+        let _ = speed_limit;
+        let rest_secs = f64::INFINITY;
+        Ok(Self {
             drag,
-            drag_log: drag.ln(),
-            initial_position: position,
-            initial_velocity: velocity,
-            tolerance: Tolerance::DEFAULT,
-        }
-    }
-
-    /// Creates a friction simulation with custom tolerance.
-    ///
-    /// # Panics
-    /// Panics if `drag` is not in `(0, 1)` (see [`new`](Self::new)).
-    #[must_use]
-    pub fn with_tolerance(drag: f64, position: f64, velocity: f64, tolerance: Tolerance) -> Self {
-        assert!(
-            drag > 0.0 && drag < 1.0,
-            "friction drag must be in (0, 1), got {drag}: drag >= 1 never decelerates"
-        );
-        Self {
-            drag,
-            drag_log: drag.ln(),
-            initial_position: position,
-            initial_velocity: velocity,
+            drag_log,
+            position,
+            velocity,
+            final_x,
+            rest_secs,
             tolerance,
-        }
+        })
     }
 
-    /// Returns the final resting position.
+    /// The position the motion coasts toward.
     #[must_use]
     pub fn final_x(&self) -> f64 {
-        self.initial_position - self.initial_velocity / self.drag_log
+        self.final_x
     }
 
-    /// Returns the time at which the simulation reaches the given position.
+    /// The time at which the unrested motion passes `x`: `0.0` at the start,
+    /// `+inf` for a position it never reaches (behind the start, at or past
+    /// [`final_x`](Self::final_x), or any position other than the start when
+    /// the velocity is zero), NaN for a NaN `x`.
     #[must_use]
     pub fn time_at_x(&self, x: f64) -> f64 {
-        if (x - self.initial_position).abs() < 1e-6 {
-            0.0
-        } else {
-            // Solve x(t) = x for t. From `x(t) = x0 + v·(drag^t - 1)/ln(drag)`,
-            //   drag^t = ln(drag)·(x - x0)/v + 1, so t = ln(that) / ln(drag).
-            // (Previously used `(x0 - x)`, the wrong sign, which returned
-            // negative times for forward motion; `time_at_x(final_x)` is `+inf`,
-            // the asymptote.)
-            (self.drag_log * (x - self.initial_position) / self.initial_velocity).ln_1p()
-                / self.drag_log
+        if x.is_nan() {
+            return f64::NAN;
         }
+        if x == self.position {
+            return 0.0;
+        }
+        // x(t) = x₀ + v·(dᵗ − 1)/ln d  ⇒  t = ln(1 + ln d·(x − x₀)/v)/ln d.
+        let time = (self.drag_log * (x - self.position) / self.velocity).ln_1p() / self.drag_log;
+        time
     }
 
-    /// Creates a friction simulation that travels from `start_position` to
-    /// `end_position`, decelerating from `start_velocity` down to
-    /// `end_velocity`.
-    ///
-    /// This is how scrollables fling to a *specific* resting point (e.g. snapping
-    /// to a page boundary): the drag is solved so the object arrives at
-    /// `end_position` with `end_velocity`, and the tolerance is set so the
-    /// simulation reports done at that velocity.
-    ///
-    /// # Panics
-    /// Panics if the solved drag is not in `(0, 1)` — which happens only for
-    /// physically impossible requests (e.g. asking to *speed up* over the span,
-    /// or to move opposite the velocity).
-    #[must_use]
-    pub fn through(
-        start_position: f64,
-        end_position: f64,
-        start_velocity: f64,
-        end_velocity: f64,
-    ) -> Self {
-        // Zero travel distance puts a 0 (or ±0-signed) denominator under the
-        // exponent and produces drag = e^±inf / NaN; fail with the physical
-        // constraint instead of the downstream "drag must be in (0,1)" panic.
-        assert!(
-            (start_position - end_position).abs() > f64::EPSILON,
-            "FrictionSimulation::through requires start_position != end_position: \
-             zero travel distance has no finite drag solution"
-        );
-        // drag = e^((vStart - vEnd) / (xStart - xEnd)).
-        let drag = std::f64::consts::E
-            .powf((start_velocity - end_velocity) / (start_position - end_position));
-        Self::with_tolerance(
-            drag,
-            start_position,
-            start_velocity,
-            Tolerance {
-                velocity: end_velocity.abs(),
-                ..Tolerance::DEFAULT
-            },
-        )
+    fn glide(&self, time: f64) -> f64 {
+        // exp_m1 keeps small displacements for drag near one or time near zero.
+        self.position + self.velocity * (self.drag_log * time).exp_m1() / self.drag_log
+    }
+
+    fn speed(&self, time: f64) -> f64 {
+        self.velocity * self.drag.powf(time)
     }
 }
 
 impl Simulation for FrictionSimulation {
     fn x(&self, time: f64) -> f64 {
-        // exp_m1 retains small displacement for drag near one or time near
-        // zero, where subtracting one from drag^time loses those bits.
-        // Single-term form: pos + vel*(drag^t - 1)/drag_log
-        // Algebraically equivalent to the two-term form for finite inputs, but
-        // avoids INF - INF = NaN when |vel| → ∞ (e.g. before the 8 000 px/s
-        // cap is applied).
-        self.initial_position
-            + self.initial_velocity * (self.drag_log * time).exp_m1() / self.drag_log
-    }
-
-    fn dx(&self, time: f64) -> f64 {
-        self.initial_velocity * self.drag.powf(time)
-    }
-
-    fn is_done(&self, time: f64) -> bool {
-        self.dx(time).abs() < self.tolerance.velocity
-    }
-
-    fn tolerance(&self) -> Tolerance {
-        self.tolerance
-    }
-}
-
-/// A gravity simulation with constant acceleration.
-#[derive(Debug, Clone)]
-pub struct GravitySimulation {
-    acceleration: f64,
-    initial_position: f64,
-    initial_velocity: f64,
-    end_position: f64,
-    tolerance: Tolerance,
-}
-
-impl GravitySimulation {
-    /// Creates a new gravity simulation.
-    ///
-    /// # Arguments
-    /// * `acceleration` - Gravitational acceleration (positive = downward if end > start)
-    /// * `position` - Initial position
-    /// * `velocity` - Initial velocity
-    /// * `end` - Target position where simulation ends
-    #[must_use]
-    pub fn new(acceleration: f64, position: f64, velocity: f64, end: f64) -> Self {
-        Self {
-            acceleration,
-            initial_position: position,
-            initial_velocity: velocity,
-            end_position: end,
-            tolerance: Tolerance::DEFAULT,
-        }
-    }
-
-    /// Creates a gravity simulation with custom tolerance.
-    #[must_use]
-    pub fn with_tolerance(
-        acceleration: f64,
-        position: f64,
-        velocity: f64,
-        end: f64,
-        tolerance: Tolerance,
-    ) -> Self {
-        Self {
-            acceleration,
-            initial_position: position,
-            initial_velocity: velocity,
-            end_position: end,
-            tolerance,
-        }
-    }
-}
-
-impl Simulation for GravitySimulation {
-    fn x(&self, time: f64) -> f64 {
-        self.initial_position + self.initial_velocity * time + 0.5 * self.acceleration * time * time
-    }
-
-    fn dx(&self, time: f64) -> f64 {
-        self.initial_velocity + self.acceleration * time
-    }
-
-    fn is_done(&self, time: f64) -> bool {
-        let current = self.x(time);
-        // Check if we've passed the end position
-        if self.end_position >= self.initial_position {
-            current >= self.end_position
+        if before_start(time) {
+            self.position
+        } else if time >= self.rest_secs {
+            self.final_x
         } else {
-            current <= self.end_position
+            self.glide(time)
         }
+    }
+
+    fn dx(&self, time: f64) -> f64 {
+        if before_start(time) {
+            self.velocity
+        } else if time >= self.rest_secs {
+            0.0
+        } else {
+            self.speed(time)
+        }
+    }
+
+    fn is_done(&self, time: f64) -> bool {
+        self.speed(time).abs() < self.tolerance.velocity
     }
 
     fn tolerance(&self) -> Tolerance {
@@ -807,279 +876,296 @@ impl Simulation for GravitySimulation {
     }
 }
 
-/// A spring tuned for scroll overscroll: identical to [`SpringSimulation`] but
-/// it never snaps to the end, so the spring's natural overshoot is visible —
-/// that is exactly the bounce a scrollable shows when dragged past its edge.
-#[derive(Debug, Clone)]
-pub struct ScrollSpringSimulation {
-    spring: SpringSimulation,
+// ---------------------------------------------------------------------------
+// Bounds
+// ---------------------------------------------------------------------------
+
+/// A finite, ordered position range `[min, max]`.
+///
+/// # Examples
+///
+/// ```
+/// use flui_animation::simulation::SimulationBounds;
+///
+/// assert!(SimulationBounds::new(0.0, 100.0).is_ok());
+/// assert!(SimulationBounds::new(100.0, 0.0).is_err());
+/// assert!(SimulationBounds::new(0.0, f64::NAN).is_err());
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SimulationBounds {
+    min: f64,
+    max: f64,
 }
 
-impl ScrollSpringSimulation {
-    /// Creates a scroll spring from `start` toward `end` with an initial `velocity`.
-    #[must_use]
-    pub fn new(spring: SpringDescription, start: f64, end: f64, velocity: f64) -> Self {
-        // `with_snap_to_end` is left at its default (false): overscroll bounce
-        // requires the un-snapped value.
-        Self {
-            spring: SpringSimulation::new(spring, start, end, velocity),
-        }
+impl SimulationBounds {
+    /// The range `[min, max]`.
+    ///
+    /// # Errors
+    ///
+    /// [`SimulationError::InvalidBounds`] when either end is not finite or
+    /// `min > max`.
+    pub fn new(min: f64, max: f64) -> Result<Self, SimulationError> {
+        Ok(Self { min, max })
     }
-}
 
-impl Simulation for ScrollSpringSimulation {
-    fn x(&self, time: f64) -> f64 {
-        self.spring.x(time)
-    }
-    fn dx(&self, time: f64) -> f64 {
-        self.spring.dx(time)
-    }
-    fn is_done(&self, time: f64) -> bool {
-        self.spring.is_done(time)
-    }
-    fn tolerance(&self) -> Tolerance {
-        self.spring.tolerance()
-    }
-}
-
-/// Wraps another simulation, clamping its position to `[x_min, x_max]` and its
-/// velocity to `[dx_min, dx_max]`.
-pub struct ClampedSimulation {
-    inner: Box<dyn Simulation>,
-    x_min: f64,
-    x_max: f64,
-    dx_min: f64,
-    dx_max: f64,
-}
-
-impl ClampedSimulation {
-    /// Wraps `inner`, clamping position to `[x_min, x_max]` and velocity to
-    /// `[dx_min, dx_max]`.
-    #[must_use]
-    pub fn new(
-        inner: Box<dyn Simulation>,
-        x_min: f64,
-        x_max: f64,
-        dx_min: f64,
-        dx_max: f64,
-    ) -> Self {
-        Self {
-            inner,
-            x_min,
-            x_max,
-            dx_min,
-            dx_max,
-        }
+    fn contains(self, x: f64) -> bool {
+        self.min <= x && x <= self.max
     }
 }
 
-impl std::fmt::Debug for ClampedSimulation {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ClampedSimulation")
-            .field("x_min", &self.x_min)
-            .field("x_max", &self.x_max)
-            .field("dx_min", &self.dx_min)
-            .field("dx_max", &self.dx_max)
-            .finish_non_exhaustive()
-    }
-}
-
-impl Simulation for ClampedSimulation {
-    fn x(&self, time: f64) -> f64 {
-        self.inner.x(time).clamp(self.x_min, self.x_max)
-    }
-    fn dx(&self, time: f64) -> f64 {
-        self.inner.dx(time).clamp(self.dx_min, self.dx_max)
-    }
-    fn is_done(&self, time: f64) -> bool {
-        self.inner.is_done(time)
-    }
-    fn tolerance(&self) -> Tolerance {
-        self.inner.tolerance()
-    }
-}
-
-/// A [`FrictionSimulation`] clamped to a position range, finishing when the
-/// friction settles *or* the object reaches a bound. Used by scrollables so a fling that overshoots the
-/// content extent stops cleanly at the edge.
-#[derive(Debug, Clone)]
+/// Friction confined to bounds: it stops at the bound it travels toward, or
+/// where the friction rests if that comes first.
+///
+/// A clamping scroll uses it so a fling that would overshoot the content
+/// stops at the edge.
+#[derive(Debug, Clone, PartialEq)]
 pub struct BoundedFrictionSimulation {
     friction: FrictionSimulation,
-    min_x: f64,
-    max_x: f64,
-    /// Travel direction at construction: a fling with positive velocity heads
-    /// toward `max_x` and finishes once the unclamped friction position reaches
-    /// that bound; a negative one heads toward `min_x`.
-    positive_direction: bool,
+    bounds: SimulationBounds,
+    rest_x: f64,
+    rest_secs: f64,
 }
 
 impl BoundedFrictionSimulation {
-    /// Creates a bounded friction simulation confined to `[min_x, max_x]`.
+    /// Friction from `position` at `velocity` with `drag`, confined to
+    /// `bounds`.
     ///
-    /// # Panics
-    /// Panics if `drag` is not in `(0, 1)` (see [`FrictionSimulation::new`]).
-    #[must_use]
-    pub fn new(drag: f64, position: f64, velocity: f64, min_x: f64, max_x: f64) -> Self {
-        Self {
-            friction: FrictionSimulation::new(drag, position, velocity),
-            min_x,
-            max_x,
-            positive_direction: velocity > 0.0,
-        }
+    /// # Errors
+    ///
+    /// As [`FrictionSimulation::new`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_animation::simulation::{BoundedFrictionSimulation, Simulation, SimulationBounds, Tolerance};
+    ///
+    /// let bounds = SimulationBounds::new(0.0, 100.0)?;
+    /// let sim = BoundedFrictionSimulation::new(0.135, 50.0, 8000.0, bounds, Tolerance::DEFAULT)?;
+    /// assert!(sim.is_done(1.0));
+    /// assert_eq!(sim.x(1.0), 100.0);
+    /// # Ok::<(), flui_animation::simulation::SimulationError>(())
+    /// ```
+    pub fn new(
+        drag: f64,
+        position: f64,
+        velocity: f64,
+        bounds: SimulationBounds,
+        tolerance: Tolerance,
+    ) -> Result<Self, SimulationError> {
+        let friction = FrictionSimulation::new(drag, position, velocity, tolerance)?;
+        let bound = if velocity > 0.0 {
+            bounds.max
+        } else {
+            bounds.min
+        };
+        let reach = if velocity == 0.0 {
+            f64::INFINITY
+        } else if (velocity > 0.0 && position >= bound) || (velocity < 0.0 && position <= bound)
+        {
+            0.0
+        } else {
+            friction.time_at_x(bound)
+        };
+        let (rest_x, rest_secs) = if reach < friction.rest_secs {
+            (bound, reach)
+        } else {
+            (
+                friction.final_x.clamp(bounds.min, bounds.max),
+                friction.rest_secs,
+            )
+        };
+        Ok(Self {
+            friction,
+            bounds,
+            rest_x,
+            rest_secs,
+        })
     }
 }
 
 impl Simulation for BoundedFrictionSimulation {
     fn x(&self, time: f64) -> f64 {
-        self.friction.x(time).clamp(self.min_x, self.max_x)
+        if before_start(time) {
+            self.friction.position
+        } else if time >= self.rest_secs {
+            self.rest_x
+        } else {
+            self.friction
+                .glide(time)
+                .clamp(self.bounds.min, self.bounds.max)
+        }
     }
+
     fn dx(&self, time: f64) -> f64 {
-        // Once pinned at the bound the object is at rest, so report zero velocity
-        // — matching the clamped position — instead of the still-decaying
-        // friction velocity a controller would otherwise keep sampling.
-        if self.is_done(time) {
+        if before_start(time) {
+            self.friction.velocity
+        } else if time >= self.rest_secs {
             0.0
         } else {
-            self.friction.dx(time)
+            self.friction.speed(time)
         }
     }
+
     fn is_done(&self, time: f64) -> bool {
-        // Done when the friction settles OR the fling reaches the bound it is
-        // travelling toward. The previous code tested whether the *clamped*
-        // position was within tolerance of the exact bound, which a fast fling
-        // skips entirely: its unclamped position can jump from inside the range
-        // to far past the bound between frames, leaving the simulation "active"
-        // (and the controller ticking) while x() is already pinned at the edge.
-        if self.friction.is_done(time) {
-            return true;
-        }
-        let fx = self.friction.x(time);
-        if self.positive_direction {
-            fx >= self.max_x
-        } else {
-            fx <= self.min_x
-        }
+        time >= self.rest_secs
     }
+
     fn tolerance(&self) -> Tolerance {
-        self.friction.tolerance()
+        self.friction.tolerance
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+// ---------------------------------------------------------------------------
+// BouncingScrollSimulation
+// ---------------------------------------------------------------------------
 
-    fn friction_drag_ge_one_panics_instead_of_hanging() {
-        // drag >= 1 would make dx grow forever; construction must reject it.
-        let payload = std::panic::catch_unwind(|| FrictionSimulation::new(1.5, 0.0, 100.0))
-            .expect_err("drag >= 1 must be rejected at construction");
-        let message = payload
-            .downcast_ref::<String>()
-            .map(String::as_str)
-            .or_else(|| payload.downcast_ref::<&str>().copied())
-            .unwrap_or_default();
-        assert!(
-            message.contains("drag >= 1 never decelerates"),
-            "unexpected panic message: {message}"
-        );
-    }
+/// A scroll fling with overscroll: friction inside the bounds; where the
+/// friction would carry past an edge, a spring takes over at the edge with
+/// the friction's velocity, overshoots and returns to rest exactly on the
+/// edge. A start outside the bounds springs back to the nearest edge.
+///
+/// Position and velocity are continuous where the spring takes over.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BouncingScrollSimulation {
+    phase: BouncingPhase,
+    rest_secs: f64,
+}
 
-    fn test_gravity_simulation() {
-        let sim = GravitySimulation::new(9.8, 0.0, 0.0, 100.0);
+#[derive(Debug, Clone, PartialEq)]
+enum BouncingPhase {
+    /// The friction rests inside the bounds.
+    Friction(FrictionSimulation),
+    /// The start is outside the bounds.
+    Spring(SpringSimulation),
+    /// Friction until `edge_secs`, then the edge spring.
+    Handoff {
+        friction: FrictionSimulation,
+        spring: SpringSimulation,
+        edge_secs: f64,
+    },
+}
 
-        // Should start at initial position
-        assert_eq!(sim.x(0.0), 0.0);
-
-        // Position should increase with gravity
-        assert!(sim.x(1.0) > 0.0);
-
-        // Velocity should increase
-        assert!(sim.dx(1.0) > sim.dx(0.0));
-    }
-
-    fn spring_regimes_preserve_initial_conditions_and_settle() {
-        let cases = [
-            (
-                "critical",
-                SpringDescription::with_damping_ratio(1.0, 500.0, 1.0),
-                SpringType::CriticallyDamped,
-            ),
-            (
-                "underdamped",
-                SpringDescription::with_damping_ratio(1.0, 500.0, 0.5),
-                SpringType::Underdamped,
-            ),
-            (
-                "overdamped",
-                SpringDescription::with_damping_ratio(1.0, 500.0, 2.0),
-                SpringType::Overdamped,
-            ),
-            (
-                "near_critical_over",
-                SpringDescription::with_damping_ratio(1.0, 500.0, 1.001),
-                SpringType::Overdamped,
-            ),
-            (
-                "near_critical_under",
-                SpringDescription::with_damping_ratio(1.0, 500.0, 0.999),
-                SpringType::Underdamped,
-            ),
-        ];
-
-        for (label, spring, expected_type) in cases {
-            let start = 0.25_f64;
-            let end = 1.0_f64;
-            let velocity = 2.5_f64;
-            let sim = SpringSimulation::new(spring, start, end, velocity);
-            assert_eq!(
-                sim.spring_type(),
-                expected_type,
-                "{label}: unexpected spring type"
-            );
-            assert!(
-                (sim.x(0.0) - start).abs() < 1e-5,
-                "{label}: x(0)={} expected {start}",
-                sim.x(0.0)
-            );
-            assert!(
-                (sim.dx(0.0) - velocity).abs() < 1e-4,
-                "{label}: dx(0)={} expected {velocity}",
-                sim.dx(0.0)
-            );
-
-            // Analytic derivative should agree with a central finite difference.
-            for t in [0.05_f64, 0.2] {
-                let h = 1e-4_f64;
-                let dx = sim.dx(t);
-                let fd = (sim.x(t + h) - sim.x(t - h)) / (2.0 * h);
-                let tol = (1e-3 * (1.0 + dx.abs())).max(5e-3);
-                assert!(
-                    (fd - dx).abs() < tol,
-                    "{label}: dx({t})={dx} vs fd={fd} (tol={tol})"
-                );
+impl BouncingScrollSimulation {
+    /// A fling from `position` at `velocity` with friction `drag`, bouncing
+    /// off `bounds` on `spring`, resting within `tolerance`.
+    ///
+    /// # Errors
+    ///
+    /// As [`FrictionSimulation::new`] and [`SpringSimulation::try_new`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_animation::simulation::{
+    ///     BouncingScrollSimulation, Simulation, SimulationBounds, SpringDescription, Tolerance,
+    /// };
+    ///
+    /// let spring = SpringDescription::with_damping_ratio(1.0, 500.0, 0.75);
+    /// let bounds = SimulationBounds::new(0.0, 100.0)?;
+    /// let sim = BouncingScrollSimulation::new(spring, 0.135, 90.0, 2000.0, bounds, Tolerance::DEFAULT)?;
+    /// let overscroll = (1..200).map(|i| sim.x(f64::from(i) * 0.01)).fold(f64::MIN, f64::max);
+    /// assert!(overscroll > 100.0);
+    /// assert!(sim.is_done(10.0));
+    /// assert_eq!(sim.x(10.0), 100.0);
+    /// # Ok::<(), flui_animation::simulation::SimulationError>(())
+    /// ```
+    pub fn new(
+        spring: SpringDescription,
+        drag: f64,
+        position: f64,
+        velocity: f64,
+        bounds: SimulationBounds,
+        tolerance: Tolerance,
+    ) -> Result<Self, SimulationError> {
+        let edge_spring =
+            |edge, from, v| SpringSimulation::try_new(spring, from, edge, v, tolerance);
+        let position = finite(SimulationParameter::Position, position)?;
+        let phase = if position < bounds.min {
+            BouncingPhase::Spring(edge_spring(bounds.min, position, velocity)?)
+        } else if position > bounds.max {
+            BouncingPhase::Spring(edge_spring(bounds.max, position, velocity)?)
+        } else {
+            let friction = FrictionSimulation::new(drag, position, velocity, tolerance)?;
+            if bounds.contains(friction.final_x) || bounds.min <= bounds.max {
+                BouncingPhase::Friction(friction)
+            } else {
+                let edge = if friction.final_x > bounds.max {
+                    bounds.max
+                } else {
+                    bounds.min
+                };
+                let edge_secs = friction.time_at_x(edge);
+                let edge_secs = if edge_secs.is_finite() { edge_secs } else { 0.0 };
+                let spring = edge_spring(edge, edge, friction.speed(edge_secs))?;
+                BouncingPhase::Handoff {
+                    friction,
+                    spring,
+                    edge_secs,
+                }
             }
+        };
+        let rest_secs = match &phase {
+            BouncingPhase::Friction(friction) => friction.rest_secs,
+            BouncingPhase::Spring(spring) => spring.rest_secs,
+            BouncingPhase::Handoff {
+                spring, edge_secs, ..
+            } => edge_secs + spring.rest_secs,
+        };
+        Ok(Self { phase, rest_secs })
+    }
+}
 
-            assert!(
-                sim.is_done(10.0),
-                "{label}: should settle by t=10; x={} dx={}",
-                sim.x(10.0),
-                sim.dx(10.0)
-            );
+impl Simulation for BouncingScrollSimulation {
+    fn x(&self, time: f64) -> f64 {
+        match &self.phase {
+            BouncingPhase::Friction(friction) => friction.x(time),
+            BouncingPhase::Spring(spring) => spring.x(time),
+            BouncingPhase::Handoff {
+                friction,
+                spring,
+                edge_secs,
+            } => {
+                if before_start(time) {
+                    friction.position
+                } else if time < *edge_secs {
+                    friction.glide(time)
+                } else {
+                    spring.x(time - edge_secs)
+                }
+            }
         }
     }
 
-    #[test]
-    fn simulation_contract() {
-        crate::test_cases::run_cases(&[
-            (
-                "friction drag ge one panics instead of hanging",
-                friction_drag_ge_one_panics_instead_of_hanging,
-            ),
-            ("test gravity simulation", test_gravity_simulation),
-            (
-                "spring regimes preserve initial conditions and settle",
-                spring_regimes_preserve_initial_conditions_and_settle,
-            ),
-        ]);
+    fn dx(&self, time: f64) -> f64 {
+        match &self.phase {
+            BouncingPhase::Friction(friction) => friction.dx(time),
+            BouncingPhase::Spring(spring) => spring.dx(time),
+            BouncingPhase::Handoff {
+                friction,
+                spring,
+                edge_secs,
+            } => {
+                if before_start(time) {
+                    friction.velocity
+                } else if time < *edge_secs {
+                    friction.speed(time)
+                } else {
+                    spring.dx(time - edge_secs)
+                }
+            }
+        }
+    }
+
+    fn is_done(&self, time: f64) -> bool {
+        time >= self.rest_secs
+    }
+
+    fn tolerance(&self) -> Tolerance {
+        match &self.phase {
+            BouncingPhase::Friction(friction) => friction.tolerance,
+            BouncingPhase::Spring(spring) | BouncingPhase::Handoff { spring, .. } => {
+                spring.tolerance
+            }
+        }
     }
 }

@@ -12,7 +12,11 @@
 //! (the widget layer drives it from a ticker); it owns no ticker or listeners,
 //! which keeps it trivially testable and composable.
 
-use crate::simulation::{Simulation, SpringDescription, SpringSimulation};
+use crate::error::AnimationError;
+use crate::simulation::{
+    Simulation, SimulationError, SpringDescription, SpringSimulation, Tolerance,
+};
+use std::time::Duration;
 use flui_foundation::geometry::{Offset, Size};
 use flui_painting::styling::Color;
 use smallvec::SmallVec;
@@ -91,78 +95,112 @@ impl TwoWayConverter for Color {
     }
 }
 
+/// One spring per scalar component (inline for the common 1–4 component case).
+type Components = SmallVec<[SpringSimulation; 4]>;
+
 /// An interruptible spring-animated value. See the module docs.
 ///
 /// Advance it with [`advance`](Self::advance), read it with [`value`](Self::value),
 /// retarget it with [`animate_to`](Self::animate_to), and check for rest with
-/// [`is_settled`](Self::is_settled).
+/// [`is_settled`](Self::is_settled). Time is an exact [`Duration`] sum, so `N`
+/// calls of `advance(dt)` land on the same value as one `advance(N · dt)`.
+///
+/// # Examples
+///
+/// ```
+/// use flui_animation::{AnimatedValue, simulation::SpringDescription};
+/// use std::time::Duration;
+///
+/// let spring = SpringDescription::with_response_and_damping(Duration::from_millis(300), 1.0)?;
+/// let mut value = AnimatedValue::new(0.0_f64, spring).expect("finite initial value");
+/// value.animate_to(100.0).expect("finite target");
+/// value.advance(Duration::from_millis(100));
+/// assert!(value.value() > 0.0 && value.value() < 100.0);
+/// value.advance(Duration::from_secs(10));
+/// assert!(value.is_settled());
+/// assert_eq!(value.value(), 100.0);
+/// # Ok::<(), flui_animation::simulation::SimulationError>(())
+/// ```
 #[derive(Debug, Clone)]
 pub struct AnimatedValue<T: TwoWayConverter> {
     spring: SpringDescription,
-    /// One spring per scalar component (inline for the common 1–4 component case).
-    components: SmallVec<[SpringSimulation; 4]>,
+    components: Components,
     /// The current target value (also serves as a correctly-sized scratch buffer).
     target: T,
-    /// Seconds elapsed since the most recent (re)target.
-    elapsed: f64,
+    /// Time since the most recent (re)target.
+    elapsed: Duration,
 }
 
 impl<T: TwoWayConverter> AnimatedValue<T> {
-    /// Create a value resting at `initial`, animated by `spring`.
-    #[must_use]
-    pub fn new(initial: T, spring: SpringDescription) -> Self {
-        let vector = initial.to_vector();
-        let components = vector
-            .as_ref()
-            .iter()
-            .map(|&c| SpringSimulation::new(spring, c, c, 0.0).with_snap_to_end(true))
-            .collect();
-        Self {
+    /// A value resting at `initial`, animated by `spring`.
+    ///
+    /// # Errors
+    ///
+    /// [`AnimationError::NonFiniteTarget`] when a component of `initial` is
+    /// not finite.
+    pub fn new(initial: T, spring: SpringDescription) -> Result<Self, AnimationError> {
+        let components = resting(spring, &initial)?;
+        Ok(Self {
             spring,
             components,
             target: initial,
-            elapsed: 0.0,
-        }
+            elapsed: Duration::ZERO,
+        })
     }
 
-    /// Retarget toward `target`, preserving each component's current velocity.
+    /// Retarget toward `target`, preserving each component's current
+    /// position and velocity, so an in-flight animation flows into the new
+    /// one without a jump in either. A component already at rest starts
+    /// from its previous target with zero velocity.
     ///
-    /// Each component spring is re-seeded from its analytic position and
-    /// velocity at the current time, so an in-flight animation flows into the
-    /// new one without snapping or losing momentum.
-    pub fn animate_to(&mut self, target: T) {
+    /// # Errors
+    ///
+    /// [`AnimationError::NonFiniteTarget`] when a component of `target` is
+    /// not finite, or its distance from the current value overflows; the
+    /// value is then left unchanged.
+    pub fn animate_to(&mut self, target: T) -> Result<(), AnimationError> {
         let goal = target.to_vector();
-        for (sim, &goal_c) in self.components.iter_mut().zip(goal.as_ref()) {
-            let position = sim.x(self.elapsed);
-            let velocity = sim.dx(self.elapsed);
-            *sim = SpringSimulation::new(self.spring, position, goal_c, velocity)
-                .with_snap_to_end(true);
-        }
-        self.elapsed = 0.0;
+        let t = self.elapsed.as_secs_f64();
+        let components = self
+            .components
+            .iter()
+            .zip(goal.as_ref())
+            .map(|(sim, &goal)| {
+                SpringSimulation::try_new(self.spring, sim.x(t), goal, sim.dx(t), Tolerance::DEFAULT)
+            })
+            .collect::<Result<Components, _>>()
+            .map_err(refused)?;
+        self.components = components;
+        self.elapsed = Duration::ZERO;
         self.target = target;
+        Ok(())
     }
 
     /// Jump immediately to `value`, cancelling any motion (zero velocity).
-    pub fn set_value(&mut self, value: T) {
-        let v = value.to_vector();
-        for (sim, &c) in self.components.iter_mut().zip(v.as_ref()) {
-            *sim = SpringSimulation::new(self.spring, c, c, 0.0).with_snap_to_end(true);
-        }
-        self.elapsed = 0.0;
+    ///
+    /// # Errors
+    ///
+    /// [`AnimationError::NonFiniteTarget`] when a component of `value` is
+    /// not finite; the value is then left unchanged.
+    pub fn set_value(&mut self, value: T) -> Result<(), AnimationError> {
+        self.components = resting(self.spring, &value)?;
+        self.elapsed = Duration::ZERO;
         self.target = value;
+        Ok(())
     }
 
-    /// Advance time by `dt` seconds.
-    pub fn advance(&mut self, dt: f64) {
-        self.elapsed += dt;
+    /// Advance time by `dt`, saturating at [`Duration::MAX`].
+    pub fn advance(&mut self, dt: Duration) {
+        self.elapsed = self.elapsed.saturating_add(dt);
     }
 
     /// The current animated value.
     #[must_use]
     pub fn value(&self) -> T {
+        let t = self.elapsed.as_secs_f64();
         let mut buffer = self.target.to_vector();
         for (slot, sim) in buffer.as_mut().iter_mut().zip(&self.components) {
-            *slot = sim.x(self.elapsed);
+            *slot = sim.x(t);
         }
         T::from_vector(buffer)
     }
@@ -176,43 +214,25 @@ impl<T: TwoWayConverter> AnimatedValue<T> {
     /// Whether every component spring has come to rest at its target.
     #[must_use]
     pub fn is_settled(&self) -> bool {
-        self.components.iter().all(|sim| sim.is_done(self.elapsed))
+        let t = self.elapsed.as_secs_f64();
+        self.components.iter().all(|sim| sim.is_done(t))
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+/// Springs resting at each component of `value`.
+fn resting<T: TwoWayConverter>(
+    spring: SpringDescription,
+    value: &T,
+) -> Result<Components, AnimationError> {
+    value
+        .to_vector()
+        .as_ref()
+        .iter()
+        .map(|&c| SpringSimulation::try_new(spring, c, c, 0.0, Tolerance::DEFAULT))
+        .collect::<Result<Components, _>>()
+        .map_err(refused)
+}
 
-    fn spring() -> SpringDescription {
-        SpringDescription::with_response_and_damping(0.3, 1.0)
-    }
-
-    #[test]
-    fn retarget_preserves_velocity() {
-        // Animate toward 100; midway (moving fast) retarget to 0. With velocity
-        // preserved the value must briefly continue PAST its position toward 100
-        // before the new spring pulls it back — momentum is not discarded.
-        let mut v = AnimatedValue::new(0.0_f64, spring());
-        v.animate_to(100.0);
-        for _ in 0..6 {
-            v.advance(1.0 / 60.0);
-        }
-        let position = v.value();
-        assert!(
-            position > 0.0 && position < 100.0,
-            "mid-flight pos={position}"
-        );
-
-        v.animate_to(0.0);
-        let v_after = {
-            v.advance(1.0 / 60.0);
-            v.value()
-        };
-        // Momentum carried it further from 0 than where it was when retargeted.
-        assert!(
-            v_after > position,
-            "velocity not preserved: {v_after} should overshoot past {position}"
-        );
-    }
+fn refused(error: SimulationError) -> AnimationError {
+    AnimationError::NonFiniteTarget(format!("animated value component refused: {error}"))
 }

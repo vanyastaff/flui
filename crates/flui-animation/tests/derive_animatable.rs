@@ -15,6 +15,9 @@ mod child_process;
 #[path = "contracts/simulation.rs"]
 mod simulation;
 
+#[path = "contracts/spring.rs"]
+mod spring;
+
 #[path = "contracts/proxy.rs"]
 mod proxy;
 
