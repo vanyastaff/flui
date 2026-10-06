@@ -447,3 +447,23 @@ changelog и combos (+0.5), crop и средние тона (+0.5), ревью P
 3. **Снимок окна.** HDR, Auto Color Management, масштаб DWM или свёрнутое окно портят
    WGC-снимок без участия FLUI. Смягчение: `CANNOT_VERIFY` при advanced color, `IsIconic` и
    несовпадении размера crop.
+
+## Изменения контракта после заморозки (2026-10-06, решение оркестратора)
+
+Основание — отчёт T1 (`render-proof/contract` @ `c679846f3`). Зависимые задачи (T5 — владелец
+`pixels.rs`, T10, T14) уведомляются через этот раздел.
+
+1. **Путь обновления эталона.** Замороженный API не давал попытки записи, поэтому
+   `reference_update_requires_explicit_opt_in` не мог упасть по задуманной причине. Добавляется
+   `Reference::conclude(&self, actual: &Readback, comparison: Comparison, sidecar: &str) ->
+   Result<Comparison, ReferenceError>`: в режиме `Verify` возвращает сравнение; в `Update` сначала
+   требует, чтобы Size, Samples и калибровка прошли (иначе `Refused`), затем пишет PNG и sidecar и
+   возвращает `Updated { path }`. Тест добавляется в T1, реализация — в T5.
+2. **`testing-gpu` и CI.** Включение фичи в `TEST_FEATURES` унифицирует `testing` движка и добавляет
+   18 тестов, которые паникуют в `test_device_and_queue` без адаптера. Решение: эти тесты проходят
+   через то же правило `gpu_or_skip` — без адаптера пропуск, при `FLUI_REQUIRE_GPU=1` жёсткий отказ.
+   После этого `testing-gpu` входит в `TEST_FEATURES`, и тест R10 попадает в CI.
+3. **`FrameRule::new(channel_tolerance, max_differing_pixels)`** входит в контракт: `FrameRule` —
+   `#[non_exhaustive]`, а facade-тестам нужно задавать правило.
+4. **`HeadlessRenderer::adapter_info`** сохраняет имя: оно повторяет upstream-тип
+   `wgpu::AdapterInfo` и точно его называет (правило именования не нарушено).
