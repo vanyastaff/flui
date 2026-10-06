@@ -193,21 +193,35 @@ impl Motion {
 }
 /// Конечное и строго положительное: `Scaled(0)` непредставимо.
 pub struct DurationScale(f64);
+/// Каждое поле — Option: None, где у ОС нет значения; потребитель держит своё умолчание.
 #[non_exhaustive]
-pub struct GesturePreferences { /* double_click_interval, double_click_area: Size,
-                                    drag_area: Size, long_press_timeout */ }
+pub struct GesturePreferences { /* double_click_interval: Duration, double_click_area: Size,
+                                    drag_area: Size, long_press_timeout: Duration,
+                                    touch_slop: Distance, fling: FlingSpeeds */ }
+pub struct Distance(f64);          // логические px, конечное ≥ 0
+pub struct Speed(f64);             // логические px/с, конечное > 0
+pub struct FlingSpeeds { /* min ≤ max, проверяется */ }
 #[non_exhaustive]
-pub enum InvalidPreference { TextScale, DurationScale, GestureArea }
+pub struct WheelPreferences { /* vertical: Option<WheelStep>, horizontal_chars: Option<u32> */ }
+#[non_exhaustive]
+pub enum WheelStep { Lines(u32), Page }
+#[non_exhaustive]
+pub enum InvalidPreference { TextScale, DurationScale, GestureArea, Distance, Speed, FlingRange }
 ```
 
 - **Производитель:** `Platform::preferences()` и одна подписка `on_preferences_changed` в ядре-
   хосте (колбэк `Platform`, `+ Send`, как остальные хуки `Platform`; в храповике send-flip —
   класс «platform hook»). Каждый бэкенд подписывается на ОС один раз: Win32 `WM_SETTINGCHANGE`
-  и `SystemParametersInfo`/`GetDoubleClickTime`/`SM_CXDOUBLECLK`/`SM_CXDRAG`; AppKit
+  и `SystemParametersInfo` (в том числе `SPI_GETWHEELSCROLLLINES`, `SPI_GETWHEELSCROLLCHARS`)/
+  `GetDoubleClickTime`/`SM_CXDOUBLECLK`/`SM_CXDRAG`; AppKit
   `NSWorkspace`/`NSEvent.doubleClickInterval`; iOS `UIContentSizeCategory`/
-  `UIAccessibility`; Android `Settings.Global`/`ViewConfiguration`; web `matchMedia`; winit/Linux
-  — значения по умолчанию, пока нет источника (порталы XDG — позже). Бэкенд без ответа ОС
-  отдаёт `SystemPreferences::default()`; значения по умолчанию задокументированы у типа.
+  `UIAccessibility`; Android `Settings.Global`/`ViewConfiguration` (`getScaledTouchSlop`,
+  `getScaledMinimumFlingVelocity`, `getScaledMaximumFlingVelocity`); web `matchMedia`; winit/Linux
+  — значения по умолчанию, пока нет источника (порталы XDG — позже). Где у ОС нет значения,
+  поле жестов или колеса — `None`, и потребитель держит своё умолчание (контракт «системных
+  умолчаний» не выдумывает); масштаб текста по умолчанию — 1, motion — `NoPreference`.
+  `Distance` и `Speed` — скалярные логические значения ADR-0098; с ADR-0153 они переезжают в
+  `flui-geometry` вместе с остальной геометрией.
 - **Доставка:** `flui-app` кладёт текущее значение в каждый realm при создании (значение есть до
   первого окна) и рассылает изменение одной типизированной операцией хоста.
 - **Потребители** строят своё: `MediaQuery` (масштаб текста, контраст, bold, локали, motion для

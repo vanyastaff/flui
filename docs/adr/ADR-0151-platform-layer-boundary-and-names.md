@@ -131,10 +131,13 @@ that moves them supersedes ADR-0039 §2.
 (`NoPreference`, `Reduce`, `Scaled(DurationScale)`, where a `DurationScale` is finite and
 strictly positive, so `Scaled(0)` cannot be written; `Motion::from_duration_scale` maps an OS
 scale of 0 to `Reduce`, exactly 1 to `NoPreference` and refuses negative or non-finite values),
-the preferred-locale list and gesture
-preferences (double-click interval, double-click area and drag area as logical `Size` per
-ADR-0098, long-press timeout). Fields are private; backends build values through a builder whose
-setters validate (non-finite or negative values are an `InvalidPreference` error).
+the preferred-locale list, gesture preferences (double-click interval, double-click area and
+drag area as logical `Size` per ADR-0098, long-press timeout, touch slop as a logical
+`Distance`, fling speeds as a validated minimum and maximum `Speed` in logical pixels per second)
+and wheel preferences (lines or a page per notch, characters per horizontal notch). Every
+gesture and wheel value is an `Option`: `None` where the OS has no value, and the consumer keeps
+its own default. Fields are private; backends build values through a builder whose setters
+validate (non-finite, negative or inverted values are an `InvalidPreference` error).
 
 - **One producer per host.** `Platform::preferences()` and one `on_preferences_changed`
   subscription in the core host. `flui-app` seeds every realm with the current value at
