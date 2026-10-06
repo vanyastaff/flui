@@ -689,6 +689,24 @@ fn cubic_slope_matches_differences_of_the_css_reference() {
     }
 }
 
+/// Next to `EaseInOutExpo`'s vertical tangent a `1e-4`-step difference
+/// straddles the tangent and is off by a large factor; the exact cubic
+/// derivative is not. Analytic: s = 0.5 + cbrt((x − 0.5)/4),
+/// dy/dx = y'(s)/x'(s) = 6s(1 − s) / (12 (s − 0.5)²).
+fn cubic_slope_is_exact_where_a_difference_is_not() {
+    for dx in [1e-6_f64, -1e-6, 1e-5] {
+        let x = 0.5 + dx;
+        let s = 0.5 + ((x - 0.5) / 4.0).cbrt();
+        let want = 6.0 * s * (1.0 - s) / (12.0 * (s - 0.5) * (s - 0.5));
+        assert_close(
+            &format!("next to the vertical tangent at {x}"),
+            Curves::EaseInOutExpo.slope(x),
+            want,
+            1e-3 * want,
+        );
+    }
+}
+
 fn default_difference_is_second_order() {
     // Exact for a quadratic, including the one-sided ends.
     for t in [0.0, 1e-5, 0.3, 1.0 - 1e-5, 1.0] {
@@ -757,6 +775,10 @@ fn curve_slope_is_the_derivative_of_transform() {
         (
             "cubic slope matches differences of the css reference",
             cubic_slope_matches_differences_of_the_css_reference,
+        ),
+        (
+            "cubic slope is exact where a difference is not",
+            cubic_slope_is_exact_where_a_difference_is_not,
         ),
         (
             "default difference is second order",

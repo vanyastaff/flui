@@ -64,10 +64,32 @@ pub trait Curve {
         FlippedCurve { curve: self }
     }
 
-    /// The derivative `d transform / dt` at progress `t`.
+    /// The derivative `d transform / dt` at progress `t`: how fast the
+    /// eased progress moves per unit of progress.
+    ///
+    /// Same input policy as [`transform`](Self::transform): NaN gives NaN,
+    /// and outside `[0, 1]` the curve is constant, so the slope is 0. Inside
+    /// `[0, 1]` the result is finite: where the true derivative is infinite
+    /// (a vertical tangent, a step) the curve reports a finite secant slope
+    /// instead, and the default never returns a non-finite value.
+    ///
+    /// The default is a second-order finite difference with step
+    /// `h = 1e-4`: central inside, one-sided
+    /// `(−3f(t) + 4f(t ± h) − f(t ± 2h)) / 2h` within a step of either end.
+    /// Its error is about `h²·|f'''|`; a non-finite difference reports 0.
+    /// [`Linear`], [`Cubic`], [`Interval`], [`FlippedCurve`] and
+    /// [`ArcCurve`] override it exactly.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_animation::{Curve, Curves};
+    ///
+    /// assert_eq!(Curves::Linear.slope(0.3), 1.0);
+    /// assert_eq!(Curves::EaseIn.slope(2.0), 0.0);
+    /// ```
     fn slope(&self, t: f64) -> f64 {
-        let _ = t;
-        0.0
+        difference_slope(|t| self.transform(t), t)
     }
 
     /// The value of a curve this crate defines, which lets [`ArcCurve`]
@@ -82,11 +104,46 @@ pub trait Curve {
     }
 }
 
+/// The step of [`Curve::slope`]'s default finite difference.
+const SLOPE_STEP: f64 = 1e-4;
+
+/// [`Curve::slope`]'s default: a second-order difference of `f` at `t`.
+fn difference_slope(f: impl Fn(f64) -> f64, t: f64) -> f64 {
+    if t.is_nan() {
+        return t;
+    }
+    if !(0.0..=1.0).contains(&t) {
+        return 0.0;
+    }
+    let h = SLOPE_STEP;
+    let slope = if t - h < 0.0 {
+        (-3.0 * f(t) + 4.0 * f(t + h) - f(t + 2.0 * h)) / (2.0 * h)
+    } else if t + h > 1.0 {
+        (3.0 * f(t) - 4.0 * f(t - h) + f(t - 2.0 * h)) / (2.0 * h)
+    } else {
+        (f(t + h) - f(t - h)) / (2.0 * h)
+    };
+    if slope.is_finite() { slope } else { 0.0 }
+}
+
+/// The slope outside `(0, 1)` and for NaN, or `None` for a `t` the curve's
+/// own derivative handles (`[0, 1]`).
+#[inline]
+fn settled_slope(t: f64) -> Option<f64> {
+    if t.is_nan() {
+        Some(t)
+    } else if (0.0..=1.0).contains(&t) {
+        None
+    } else {
+        Some(0.0)
+    }
+}
+
 /// The closed set of curves [`ArcCurve`] compares by value.
 mod builtin {
     use super::{
         Cubic, Curve, ElasticInCurve, ElasticInOutCurve, ElasticOutCurve, ThreePointCubic,
-        interval_transform,
+        interval_slope, interval_transform,
     };
     use std::sync::Arc;
 
@@ -118,6 +175,25 @@ mod builtin {
                     interval_transform(*begin, *end, t, |local| curve.transform(local))
                 }
                 Builtin::Flipped(curve) => 1.0 - curve.transform(1.0 - t),
+            }
+        }
+
+        pub(super) fn slope(&self, t: f64) -> f64 {
+            match &*self.0 {
+                Builtin::Linear => super::Linear.slope(t),
+                Builtin::Decelerate => super::DecelerateCurve.slope(t),
+                Builtin::BounceIn => super::BounceInCurve.slope(t),
+                Builtin::BounceOut => super::BounceOutCurve.slope(t),
+                Builtin::BounceInOut => super::BounceInOutCurve.slope(t),
+                Builtin::Cubic(curve) => curve.slope(t),
+                Builtin::ThreePointCubic(curve) => curve.slope(t),
+                Builtin::ElasticIn(curve) => curve.slope(t),
+                Builtin::ElasticOut(curve) => curve.slope(t),
+                Builtin::ElasticInOut(curve) => curve.slope(t),
+                Builtin::Interval { begin, end, curve } => {
+                    interval_slope(*begin, *end, t, |local| curve.slope(local))
+                }
+                Builtin::Flipped(curve) => curve.slope(1.0 - t),
             }
         }
     }
@@ -314,6 +390,10 @@ impl Curve for Linear {
     fn transform(&self, t: f64) -> f64 {
         t.clamp(0.0, 1.0)
     }
+
+    fn slope(&self, t: f64) -> f64 {
+        settled_slope(t).unwrap_or(1.0)
+    }
 }
 
 /// A curve that is 0 until `begin`, follows `curve` rescaled to
@@ -422,6 +502,10 @@ impl<C: Curve + Copy> Curve for Interval<C> {
         interval_transform(self.begin, self.end, t, |local| self.curve.transform(local))
     }
 
+    fn slope(&self, t: f64) -> f64 {
+        interval_slope(self.begin, self.end, t, |local| self.curve.slope(local))
+    }
+
     fn builtin(&self) -> Option<BuiltinCurve> {
         let curve = self.curve.builtin()?;
         Some(BuiltinCurve::new(Builtin::Interval {
@@ -429,6 +513,19 @@ impl<C: Curve + Copy> Curve for Interval<C> {
             end: self.end,
             curve,
         }))
+    }
+}
+
+/// [`Interval`]'s derivative by the chain rule: 0 outside `[begin, end]`
+/// and for a step, `inner(local) / (end − begin)` inside.
+fn interval_slope(begin: f64, end: f64, t: f64, inner: impl FnOnce(f64) -> f64) -> f64 {
+    if let Some(settled) = settled_slope(t) {
+        return settled;
+    }
+    if t < begin || t > end || end - begin < 1e-6 {
+        0.0
+    } else {
+        inner((t - begin) / (end - begin)) / (end - begin)
     }
 }
 
@@ -512,7 +609,15 @@ impl UnitBezier {
     fn slope(self, s: f64) -> f64 {
         (3.0 * self.a * s + 2.0 * self.b) * s + self.c
     }
+
+    #[inline]
+    fn curvature(self, s: f64) -> f64 {
+        6.0 * self.a * s + 2.0 * self.b
+    }
 }
+
+/// Below this `|x'(s)|` the cubic slope `y'/x'` is not computed directly.
+const MIN_SLOPE_DENOMINATOR: f64 = 1e-9;
 
 /// Bezier parameters of the x lookup table.
 const SAMPLE_PARAMETERS: [f64; 11] = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0];
@@ -726,6 +831,34 @@ impl Cubic {
 
 impl Curve for Cubic {
     builtin_value!(Cubic(self));
+
+    /// `dy/dx = y'(s) / x'(s)` at the solved parameter `s`. Where
+    /// `x'(s) = 0`: if `y'(s) = 0` too (a flat start such as
+    /// `cubic-bezier(0, 0, …)`), the limit `y''(s) / x''(s)`; otherwise the
+    /// tangent is vertical and the slope is the finite secant of the default
+    /// difference.
+    fn slope(&self, t: f64) -> f64 {
+        if let Some(settled) = settled_slope(t) {
+            return settled;
+        }
+        let s = if t <= 0.0 {
+            0.0
+        } else if t >= 1.0 {
+            1.0
+        } else {
+            self.solve(t)
+        };
+        let dx = self.x.slope(s);
+        let dy = self.y.slope(s);
+        if dx.abs() >= MIN_SLOPE_DENOMINATOR {
+            return dy / dx;
+        }
+        let ddx = self.x.curvature(s);
+        if dy.abs() < MIN_SLOPE_DENOMINATOR && ddx.abs() >= MIN_SLOPE_DENOMINATOR {
+            return self.y.curvature(s) / ddx;
+        }
+        difference_slope(|t| self.transform(t), t)
+    }
 
     fn transform(&self, t: f64) -> f64 {
         if let Some(settled) = settled(t) {
@@ -1621,6 +1754,12 @@ impl<C: Curve> Curve for FlippedCurve<C> {
         1.0 - self.curve.transform(1.0 - t)
     }
 
+    fn slope(&self, t: f64) -> f64 {
+        // d/dt [1 − c(1 − t)] = c'(1 − t); NaN and the outside-[0, 1] zero
+        // carry through.
+        self.curve.slope(1.0 - t)
+    }
+
     fn builtin(&self) -> Option<BuiltinCurve> {
         Some(BuiltinCurve::new(Builtin::Flipped(self.curve.builtin()?)))
     }
@@ -1876,6 +2015,13 @@ impl Curve for ArcCurve {
         }
     }
 
+    fn slope(&self, t: f64) -> f64 {
+        match &self.0 {
+            Erased::Builtin(curve) => curve.slope(t),
+            Erased::Custom(curve) => curve.slope(t),
+        }
+    }
+
     fn builtin(&self) -> Option<BuiltinCurve> {
         match &self.0 {
             Erased::Builtin(curve) => Some(curve.clone()),
@@ -1903,6 +2049,10 @@ impl fmt::Debug for ArcCurve {
 impl Curve for Arc<dyn Curve + Send + Sync> {
     fn transform(&self, t: f64) -> f64 {
         (**self).transform(t)
+    }
+
+    fn slope(&self, t: f64) -> f64 {
+        (**self).slope(t)
     }
 
     fn builtin(&self) -> Option<BuiltinCurve> {
