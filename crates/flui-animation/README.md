@@ -191,7 +191,20 @@ assert!((flipped.transform(0.25) - (1.0 - Curves::EaseIn.transform(0.75))).abs()
 ```
 
 To run a curve backwards in time, reverse the animation that drives it
-(`ReverseAnimation`, `AnimationExt::reversed`), not the curve.
+(`ReverseAnimation`), not the curve.
+
+### Steps
+
+`Steps` is CSS `steps(n, <jump>)`: `n` equal intervals, each holding one
+value, with the jumps placed by `JumpAt`.
+
+```rust
+use flui_animation::{Curve, JumpAt, Steps};
+
+let ticks = Steps::new(8, JumpAt::End);
+assert_eq!(ticks.transform(0.124), 0.0);
+assert_eq!(ticks.transform(0.125), 0.125);
+```
 
 ---
 
@@ -232,36 +245,44 @@ let value = tween.transform(0.5);  // 50.0
 let position = tween.transform(controller.value());
 ```
 
-### Tween Sequences
+### Keyframes
 
-Chain tweens with weights:
+A `Keyframes<T>` track is a value as a pure function of time. Segments are
+timed by `Duration` and laid end to end; each `to` segment carries the curve
+that eases *into* its value, `cubic` segments form a Catmull-Rom spline
+through the keyframe times, `hold` pauses and `jump` changes the value
+instantly. At a boundary the track returns the keyframe exactly (the value
+after a jump), and a non-finite sample is never published.
 
-```rust,ignore
-let sequence = TweenSequence::new(vec![
-    TweenSequenceItem::new(FloatTween::new(0.0, 100.0), 1.0),   // 0.0–0.25
-    TweenSequenceItem::new(FloatTween::new(100.0, 100.0), 2.0), // 0.25–0.75 (hold)
-    TweenSequenceItem::new(FloatTween::new(100.0, 0.0), 1.0),   // 0.75–1.0
-]);
+```rust
+use std::time::Duration;
+use flui_animation::{Animatable, Curves, Keyframes, Linear};
 
-// Weights: 1 + 2 + 1 = 4
-// First segment: t ∈ [0, 0.25]
-// Second segment: t ∈ [0.25, 0.75]  
-// Third segment: t ∈ [0.75, 1.0]
+let ms = Duration::from_millis;
+let pulse = Keyframes::builder(0.0, ms(1000))
+    .to(100.0, ms(250), Curves::EaseOut) // 0–250 ms
+    .hold(ms(500))                       // 250–750 ms
+    .to(0.0, ms(250), Linear)            // 750–1000 ms
+    .build()
+    .expect("the segments fit in 1 s");
+
+assert_eq!(pulse.value_at(ms(500)), 100.0);
+assert_eq!(pulse.transform(0.875), 50.0); // progress of a 1 s controller
+assert_eq!(pulse.value_at_looped(ms(1250)), 100.0);
 ```
+
+A delay is a leading `hold`; tracks that share one `total` read one
+controller as a group. `Stagger` gives per-index delays (`step · |origin − i|`)
+so one controller drives many elements.
 
 ### Tween Composition
 
 ```rust,ignore
-use flui_animation::AnimatableExt;
-
-// Chain: first tween, then second
-let chained = tween1.chain(tween2);
-
-// Apply curve to tween output
-let curved = tween.with_curve(Curves::EaseIn);
+// Chain: a curve, then a value tween
+let curved = ChainedTween::new(CurveTween::new(Curves::EaseIn), tween);
 
 // Reverse direction
-let reversed = tween.reversed();
+let reversed = ReverseTween::new(tween);
 ```
 
 ### CurveTween
@@ -369,61 +390,16 @@ let switch = AnimationSwitch::new(anim1.clone(), Some(anim2.clone()));
 
 ---
 
-## Extension Traits
+## Driving a tween
 
-### AnimationExt
-
-```rust,ignore
-use flui_animation::AnimationExt;
-
-let anim: Arc<dyn Animation<f32>> = Arc::new(controller);
-
-// Apply curve
-let curved = anim.clone().curved(Curves::EaseIn);
-
-// Reverse
-let reversed = anim.clone().reversed();
-
-// Combine with operator
-let combined = anim.clone().combine(other, AnimationOperator::Add);
-
-// Shorthand operators
-let sum = anim.clone().add(other);
-let diff = anim.clone().subtract(other);
-let prod = anim.clone().multiply(other);
-let quot = anim.clone().divide(other);
-```
-
-### AnimatableExt (for tweens)
+`AnimatableExt::animate` wraps a tween and a parent animation in a
+`TweenAnimation`; a curve over an animation is `CurvedAnimation::new`.
 
 ```rust,ignore
 use flui_animation::AnimatableExt;
 
-let tween = FloatTween::new(0.0, 100.0);
-
-// Animate with a controller
-let animated = tween.animate(controller.clone());
-
-// Chain tweens
-let chained = tween.chain(other_tween);
-
-// Apply curve
-let eased = tween.with_curve(Curves::EaseOut);
-
-// Reverse
-let reversed = tween.reversed();
-```
-
-### CurveExt
-
-```rust,ignore
-use flui_animation::CurveExt;
-
-// Convert curve to CurveTween
-let tween = Curves::EaseIn.into_tween();
-
-// Chain curves
-let combined = Curves::EaseIn.then(Curves::EaseOut);
+let curved = Arc::new(CurvedAnimation::new(controller.clone(), Curves::EaseOut));
+let animated = FloatTween::new(0.0, 100.0).animate(curved);
 ```
 
 ---
@@ -562,7 +538,7 @@ Constructors validate parameters and panic on invalid input:
 | `SpringDescription::new` | mass ≤ 0, stiffness ≤ 0, damping < 0 |
 | `SpringDescription::with_damping_ratio` | mass ≤ 0, stiffness ≤ 0, ratio < 0 |
 | `FrictionSimulation::new` | drag ≤ 0, drag = 1.0 |
-| `TweenSequenceItem::new` | weight ≤ 0, weight is infinite |
+| `Steps::new` | count = 0, or count = 1 with `JumpAt::None` |
 | `Interval::new` | begin/end not finite or outside [0,1], end < begin |
 | `Cubic::new` | any argument not finite, x1 or x2 outside [0,1] |
 | `ThreePointCubic::new` | midpoint not strictly inside the unit square, a control x outside its segment, a coordinate not finite |

@@ -46,10 +46,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use flui_sdk::animation::ext::AnimatableExt;
-use flui_sdk::animation::ext::AnimationExt;
+
 use flui_sdk::animation::{
-    Animation, AnimationController, Curves, FloatTween, TickerFuture, UpdateScheduler, Vsync,
-    VsyncRegistration,
+    Animation, AnimationController, CurvedAnimation, Curves, FloatTween, TickerFuture,
+    UpdateScheduler, Vsync, VsyncRegistration,
 };
 use flui_sdk::geometry::EdgeInsets;
 use flui_sdk::painting::Alignment;
@@ -559,7 +559,10 @@ impl ViewState<CupertinoButton> for CupertinoButtonState {
         let opacity: Arc<dyn Animation<f64>> = match &self.controller {
             Some(controller) => {
                 let pressed_opacity = view.pressed_opacity.unwrap_or(1.0);
-                let curved = Arc::new(Arc::new(controller.clone()).curved(Curves::Decelerate));
+                let curved = Arc::new(CurvedAnimation::new(
+                    Arc::new(controller.clone()) as Arc<dyn Animation<f64>>,
+                    Curves::Decelerate,
+                ));
                 Arc::new(
                     FloatTween::new(1.0, pressed_opacity)
                         .animate(curved as Arc<dyn Animation<f64>>),

@@ -43,7 +43,9 @@ src/
 ├── status.rs         # AnimationStatus, AnimationBehavior
 ├── simulation.rs     # Simulation trait, Spring, Friction, Gravity
 │
-├── ext.rs            # AnimatableExt, AnimationExt, CurveExt
+├── keyframes.rs      # Keyframes, KeyframesBuilder, KeyframesError
+├── stagger.rs        # Stagger, StaggerOrigin
+├── ext.rs            # AnimatableExt (`animate`)
 └── error.rs          # AnimationError
 ```
 
@@ -842,43 +844,6 @@ Why not just Drop?
 - `Drop` takes `&mut self`, not compatible with `Arc<Self>`
 - Explicit disposal can be called safely multiple times
 
-## Extension Traits
-
-Add fluent APIs without cluttering core types:
-
-### AnimationExt
-
-```rust
-pub trait AnimationExt: Animation<f64> + Sized + 'static {
-    fn curved<C: Curve>(self: Arc<Self>, curve: C) -> Arc<CurvedAnimation<C>>;
-    fn reversed(self: Arc<Self>) -> Arc<ReverseAnimation>;
-    fn add(self: Arc<Self>, other: Arc<dyn Animation<f64>>) -> Arc<CompoundAnimation>;
-    // ...
-}
-
-impl<A: Animation<f64> + 'static> AnimationExt for A {}
-```
-
-### AnimatableExt
-
-```rust
-pub trait AnimatableExt<T>: Animatable<T> {
-    fn animate<A: Animation<f64>>(self, parent: Arc<A>) -> TweenAnimation<T, Self>;
-    fn chain<B: Animatable<T>>(self, next: B) -> ChainedTween<Self, B>;
-    fn with_curve<C: Curve>(self, curve: C) -> ChainedTween<CurveTween<C>, Self>;
-    fn reversed(self) -> ReverseTween<T, Self>;
-}
-```
-
-### CurveExt
-
-```rust
-pub trait CurveExt: Curve + Sized {
-    fn into_tween(self) -> CurveTween<Self>;
-    fn then<C: Curve>(self, next: C) -> ChainedCurve<Self, C>;
-}
-```
-
 ### Proxy queries release the parent guard before user code
 
 A custom `Animation` may replace a proxy's parent from its `value` or `status`
@@ -902,22 +867,45 @@ Existing rounding, flooring and progress clamping remain deliberate.
 The public consumer family `integer_tweens_interpolate_across_the_full_range`
 checks both directions across the full range and ordinary rounding.
 
-### Weighted progress uses relative weights and exact endpoints
+### Keyframe tracks are pure functions of `Duration`
 
-`TweenSequence` revalidates each item's finite positive weight after caller edits
-to the public item fields. Evaluation scales weights by the largest weight, so
-finite inputs whose raw sum overflows still describe usable relative durations.
-The `total_weight` accessor retains the original sum and may return infinity;
-it does not drive interpolation. Exact progress endpoints return the first and
-last tween's endpoints. Interior progress divides by the actual relative weight,
-without an arbitrary epsilon that discards short segments. A relative interval
-that underflows to zero cannot be selected by representable interior progress,
-but its endpoint remains reachable.
+A `Keyframes<T>` track stores its start value, its `total` and segments placed
+once by `build` (`checked_add` of each segment's `Duration`), so order is
+structural and the only placement errors are `Overrun`, `DurationOverflow` and
+`ZeroTotal`; non-finite keyframes are `NonFiniteValue`. Evaluation is a binary
+search for the first segment still running and one sample, with no state and
+no allocation beyond cloning `T`.
 
-Public consumer families `weighted_sequences_preserve_endpoints_and_relative_progress`
-and `weighted_sequences_reject_invalid_edited_configuration` cover overflowing
-finite weights, small first and final intervals, ordinary weighted progress,
-edited invalid configuration and a subsequent valid sequence.
+- **Right-continuous.** At a segment boundary the track returns the keyframe
+  value as a clone; at a zero-length `jump` it returns the value after the jump.
+  `keyframes_boundaries_are_exact`,
+  `keyframes_boundaries_are_exact_for_any_durations`.
+- **The curve belongs to the arriving segment.** `to(value, over, curve)` eases
+  into `value`; Compose's `using` on a key shapes the *following* interval
+  instead, which this API makes unrepresentable.
+  `keyframes_curve_belongs_to_arriving_segment`.
+- **Cubic segments are solved by time.** Consecutive `cubic` segments are a
+  cubic Hermite spline with Catmull-Rom tangents `(p₊ − p₋)/(t₊ − t₋)` over the
+  keyframe *times*; next to a `to` segment the tangent is that curve's
+  `Curve::slope` at the join, and next to a `hold`, a `jump` or a track end it
+  is zero, so the track is C¹ at every cubic join. There is no parameter-to-x
+  inversion to get wrong: the knots are times. `cubic_keyframes_pass_through_keys`,
+  `cubic_keyframes_are_c1_at_joins`.
+- **No non-finite sample is published.** A curve that returns NaN or infinity,
+  or a lerp or Hermite sum that overflows, publishes the segment's start value.
+  `keyframes_never_publish_non_finite`.
+- **Clamped and looped reads.** `value_at` clamps to `total`;
+  `value_at_looped` reduces `elapsed` modulo `total` in `u128` nanoseconds, so
+  `Duration::MAX` does not panic. As an `Animatable`, progress is clamped into
+  `[0, 1]` and NaN reads as 0. `keyframes_clamp_and_loop`,
+  `keyframes_progress_maps_to_time`,
+  `keyframes_extreme_durations_keep_relative_progress`.
+- **A panicking curve leaves the track intact**: there is no state to repair.
+  `keyframes_survive_panicking_curve`.
+
+`Stagger::delay` computes `step · |origin − i|` in half-step nanoseconds, so a
+centre between two indices is exact, and saturates at `Duration::MAX`.
+`stagger_delays_follow_origin`.
 
 ### Controller sources execute outside the state lock
 

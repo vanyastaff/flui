@@ -246,6 +246,53 @@ fn keyframes_progress_maps_to_time() {
     ]);
 }
 
+/// Two linear segments, 0 → 1 → 2, lasting `first` and `last`.
+fn two_ramps(first: Duration, last: Duration) -> Keyframes<f64> {
+    Keyframes::builder(0.0, first + last)
+        .to(1.0, first, Linear)
+        .to(2.0, last, Linear)
+        .build()
+        .expect("fits")
+}
+
+fn huge_segments_keep_interior_progress() {
+    let half = Duration::MAX / 2;
+    let track = two_ramps(half, half);
+    assert_eq!(track.transform(0.0), 0.0);
+    assert_close(track.transform(0.25), 0.5, "middle of the first half");
+    assert_close(track.value_at(half), 1.0, "the join");
+    assert_close(track.transform(0.75), 1.5, "middle of the second half");
+    assert_eq!(track.transform(1.0), 2.0);
+}
+
+fn tiny_last_segment_reaches_its_end_and_interior() {
+    let track = two_ramps(Duration::from_secs(1), Duration::from_nanos(10));
+    assert_close(
+        track.value_at(Duration::new(1, 5)),
+        1.5,
+        "half way through 10 ns",
+    );
+    assert_eq!(track.transform(1.0), 2.0);
+}
+
+fn tiny_first_segment_keeps_its_interior() {
+    let track = two_ramps(Duration::from_nanos(10), Duration::from_secs(1));
+    assert_eq!(track.value_at(Duration::ZERO), 0.0);
+    assert_close(track.value_at(Duration::from_nanos(5)), 0.5, "5 of 10 ns");
+}
+
+#[test]
+fn keyframes_extreme_durations_keep_relative_progress() {
+    crate::run_table(&[
+        ("huge segments", huge_segments_keep_interior_progress),
+        (
+            "tiny last segment",
+            tiny_last_segment_reaches_its_end_and_interior,
+        ),
+        ("tiny first segment", tiny_first_segment_keeps_its_interior),
+    ]);
+}
+
 // ---- build errors -----------------------------------------------------------
 
 fn zero_total() {

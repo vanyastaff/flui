@@ -17,7 +17,7 @@
     reason = "each import only has to resolve; nothing here is used"
 )]
 mod measured {
-    use flui_sdk::animation::ext::{AnimatableExt as _, AnimationExt as _};
+    use flui_sdk::animation::ext::AnimatableExt as _;
     use flui_sdk::animation::{
         Animation as _, AnimationController as _, AnimationStatus as _, ArcCurve as _,
         ConstantAnimation as _, Curve as _, CurvedAnimation as _, Curves as _, FloatTween as _,

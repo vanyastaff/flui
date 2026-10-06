@@ -23,6 +23,6 @@
 ### Removed
 
 - **`flui-animation`**: `ReverseCurve` and `Curve::reversed` (they mapped 0 to 1, breaking the
-  curve contract): reverse the driving animation (`ReverseAnimation`, `AnimationExt::reversed`)
+  curve contract): reverse the driving animation (`ReverseAnimation`)
   or use `.flipped()` to turn an ease-in into an ease-out. `SawTooth` and `Threshold`: use
   `Interval::linear(t, t)` for a step at `t`.

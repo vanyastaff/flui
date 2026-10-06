@@ -2,7 +2,6 @@
 
 use crate::animation::{Retirement, Terminal};
 
-use smallvec::SmallVec;
 use std::fmt;
 use std::sync::Arc;
 
@@ -294,37 +293,6 @@ fn settled(t: f64) -> Option<f64> {
         Some(1.0)
     } else {
         None
-    }
-}
-
-/// A parametric curve in 2D space.
-pub trait ParametricCurve<T> {
-    /// Returns the value of the curve at point `t`.
-    fn transform(&self, t: f64) -> T;
-}
-
-/// A curve that maps a value in the unit interval to a 2D point.
-pub trait Curve2D {
-    /// Returns the point on the curve at parameter `t`.
-    fn transform(&self, t: f64) -> Curve2DSample;
-}
-
-/// A sample point on a 2D curve.
-#[derive(Debug, Clone, Copy, PartialEq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct Curve2DSample {
-    /// The value of the curve at this point.
-    pub value: f64,
-    /// The derivative (slope) of the curve at this point.
-    pub derivative: f64,
-}
-
-impl Curve2DSample {
-    /// Creates a new 2D curve sample.
-    #[inline]
-    #[must_use]
-    pub const fn new(value: f64, derivative: f64) -> Self {
-        Self { value, derivative }
     }
 }
 
@@ -1461,161 +1429,6 @@ impl Curve for DecelerateCurve {
     fn transform(&self, t: f64) -> f64 {
         let t = t.clamp(0.0, 1.0);
         1.0 - (1.0 - t) * (1.0 - t)
-    }
-}
-
-// ============================================================================
-// Catmull-Rom Curves
-// ============================================================================
-
-/// A Catmull-Rom curve passing through a set of points.
-///
-/// Uses stack allocation for up to 8 points to avoid heap allocations in common cases.
-///
-/// The points' x coordinates are ignored: the points are spaced evenly in
-/// progress, and the ends take the first and last points' y. It meets the
-/// [`Curve`] endpoint contract only when those are 0 and 1.
-#[derive(Debug, Clone, PartialEq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct CatmullRomCurve {
-    /// The control points of the curve.
-    /// Stack-allocated for up to 8 points, heap-allocated for more.
-    pub points: SmallVec<[(f64, f64); 8]>,
-    /// The tension parameter (0.0 = no tension, 0.5 = Catmull-Rom, 1.0 = tight).
-    pub tension: f64,
-}
-
-impl CatmullRomCurve {
-    /// Creates a new Catmull-Rom curve.
-    #[inline]
-    #[must_use]
-    pub fn new(points: impl Into<SmallVec<[(f64, f64); 8]>>, tension: f64) -> Self {
-        let points = points.into();
-        assert!(points.len() >= 2, "Must have at least 2 points");
-        Self { points, tension }
-    }
-
-    /// Creates a Catmull-Rom curve with default tension (0.0).
-    #[inline]
-    #[must_use]
-    pub fn with_points(points: impl Into<SmallVec<[(f64, f64); 8]>>) -> Self {
-        Self::new(points, 0.0)
-    }
-}
-
-impl Curve for CatmullRomCurve {
-    fn transform(&self, t: f64) -> f64 {
-        let t = t.clamp(0.0, 1.0);
-
-        if self.points.len() == 1 {
-            return self.points[0].1;
-        }
-
-        // Find the segment
-        let segment_count = self.points.len() - 1;
-        let t_scaled = t * segment_count as f64;
-        let segment = (t_scaled.floor() as usize).min(segment_count - 1);
-        let local_t = t_scaled - segment as f64;
-
-        // Get the 4 control points for this segment
-        let p0 = if segment > 0 {
-            self.points[segment - 1]
-        } else {
-            self.points[0]
-        };
-        let p1 = self.points[segment];
-        let p2 = self.points[segment + 1];
-        let p3 = if segment + 2 < self.points.len() {
-            self.points[segment + 2]
-        } else {
-            self.points[segment + 1]
-        };
-
-        // Catmull-Rom interpolation
-        let t2 = local_t * local_t;
-        let t3 = t2 * local_t;
-
-        let v0 = (p2.1 - p0.1) * (1.0 - self.tension) * 0.5;
-        let v1 = (p3.1 - p1.1) * (1.0 - self.tension) * 0.5;
-
-        (2.0 * p1.1 - 2.0 * p2.1 + v0 + v1) * t3
-            + (-3.0 * p1.1 + 3.0 * p2.1 - 2.0 * v0 - v1) * t2
-            + v0 * local_t
-            + p1.1
-    }
-}
-
-/// A Catmull-Rom spline.
-///
-/// Uses stack allocation for up to 8 points to avoid heap allocations in common cases.
-#[derive(Debug, Clone, PartialEq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct CatmullRomSpline {
-    /// The control points of the spline.
-    /// Stack-allocated for up to 8 points, heap-allocated for more.
-    pub points: SmallVec<[Curve2DSample; 8]>,
-}
-
-impl CatmullRomSpline {
-    /// Creates a new Catmull-Rom spline.
-    #[inline]
-    #[must_use]
-    pub fn new(points: impl Into<SmallVec<[Curve2DSample; 8]>>) -> Self {
-        let points = points.into();
-        assert!(points.len() >= 2, "Must have at least 2 points");
-        Self { points }
-    }
-}
-
-impl Curve2D for CatmullRomSpline {
-    fn transform(&self, t: f64) -> Curve2DSample {
-        let t = t.clamp(0.0, 1.0);
-
-        if self.points.len() == 1 {
-            return self.points[0];
-        }
-
-        // Find the segment
-        let segment_count = self.points.len() - 1;
-        let t_scaled = t * segment_count as f64;
-        let segment = (t_scaled.floor() as usize).min(segment_count - 1);
-        let local_t = t_scaled - segment as f64;
-
-        // Get the 4 control points for this segment
-        let p0 = if segment > 0 {
-            self.points[segment - 1]
-        } else {
-            self.points[0]
-        };
-        let p1 = self.points[segment];
-        let p2 = self.points[segment + 1];
-        let p3 = if segment + 2 < self.points.len() {
-            self.points[segment + 2]
-        } else {
-            self.points[segment + 1]
-        };
-
-        // Catmull-Rom interpolation for both value and derivative
-        let t2 = local_t * local_t;
-        let t3 = t2 * local_t;
-
-        let v0_val = (p2.value - p0.value) * 0.5;
-        let v1_val = (p3.value - p1.value) * 0.5;
-
-        let value = (2.0 * p1.value - 2.0 * p2.value + v0_val + v1_val) * t3
-            + (-3.0 * p1.value + 3.0 * p2.value - 2.0 * v0_val - v1_val) * t2
-            + v0_val * local_t
-            + p1.value;
-
-        let v0_der = (p2.derivative - p0.derivative) * 0.5;
-        let v1_der = (p3.derivative - p1.derivative) * 0.5;
-
-        let derivative = (2.0 * p1.derivative - 2.0 * p2.derivative + v0_der + v1_der) * t3
-            + (-3.0 * p1.derivative + 3.0 * p2.derivative - 2.0 * v0_der - v1_der) * t2
-            + v0_der * local_t
-            + p1.derivative;
-
-        Curve2DSample::new(value, derivative)
     }
 }
 

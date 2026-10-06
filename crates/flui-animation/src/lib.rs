@@ -15,6 +15,9 @@
 //! - [`Tween`] - Maps animation values to any type T;
 //!   [`OklabColorTween`] interpolates colors perceptually (Oklab) instead of
 //!   componentwise sRGB
+//! - [`Keyframes`] - A value as a pure function of time: segments timed by
+//!   `Duration`, eased, cubic, held or jumping; [`Stagger`] offsets one
+//!   track per index
 //! - [`smoothing`] - Frame-rate-independent followers:
 //!   [`exp_decay`]/[`Smoothed`] (half-life exponential decay) and
 //!   [`SmoothDamp`] (critically damped, max-speed-clamped)
@@ -127,7 +130,7 @@ pub use constant::{ALWAYS_COMPLETE, ALWAYS_DISMISSED, ConstantAnimation};
 pub use controller::AnimationController;
 pub use curved::CurvedAnimation;
 pub use error::AnimationError;
-pub use ext::{AnimatableExt, AnimationExt};
+pub use ext::AnimatableExt;
 pub use keyframes::{Keyframes, KeyframesBuilder, KeyframesError};
 pub use proxy::ProxyAnimation;
 pub use reverse::ReverseAnimation;
@@ -149,17 +152,15 @@ pub use vsync::{Vsync, VsyncRegistration, VsyncRegistrationError};
 
 // Re-exports from data type modules
 pub use curve::{
-    ArcCurve, BounceInCurve, BounceInOutCurve, BounceOutCurve, CatmullRomCurve, CatmullRomSpline,
-    Cubic, Curve, Curve2D, Curve2DSample, CurveError, Curves, DecelerateCurve, ElasticInCurve,
-    ElasticInOutCurve, ElasticOutCurve, FlippedCurve, Interval, JumpAt, Linear, ParametricCurve,
-    Split, Steps, ThreePointCubic,
+    ArcCurve, BounceInCurve, BounceInOutCurve, BounceOutCurve, Cubic, Curve, CurveError, Curves,
+    DecelerateCurve, ElasticInCurve, ElasticInOutCurve, ElasticOutCurve, FlippedCurve, Interval,
+    JumpAt, Linear, Split, Steps, ThreePointCubic,
 };
 pub use status::{AnimationBehavior, AnimationStatus};
 pub use tween_types::{
     AlignmentTween, Animatable, BorderRadiusTween, ChainedTween, ColorTween, ConstantTween,
-    CurveExt, CurveTween, EdgeInsetsTween, FloatTween, IntTween, Matrix4Tween, OffsetTween,
-    OklabColorTween, RectTween, ReverseTween, SizeTween, StepTween, Tween, TweenSequence,
-    TweenSequenceItem,
+    CurveTween, EdgeInsetsTween, FloatTween, IntTween, Matrix4Tween, OffsetTween, OklabColorTween,
+    RectTween, ReverseTween, SizeTween, StepTween, Tween,
 };
 
 // Re-export scheduler types for convenience.
@@ -184,7 +185,7 @@ pub mod prelude {
     pub use crate::curve::{Curve, Curves};
     pub use crate::curved::CurvedAnimation;
     pub use crate::error::AnimationError;
-    pub use crate::ext::{AnimatableExt, AnimationExt};
+    pub use crate::ext::AnimatableExt;
     pub use crate::proxy::ProxyAnimation;
     pub use crate::reverse::ReverseAnimation;
     pub use crate::simulation::{
@@ -194,7 +195,7 @@ pub mod prelude {
     pub use crate::status::{AnimationBehavior, AnimationStatus};
     pub use crate::switch::AnimationSwitch;
     pub use crate::tween::TweenAnimation;
-    pub use crate::tween_types::{Animatable, CurveExt, Tween, TweenSequence};
+    pub use crate::tween_types::{Animatable, Tween};
 
     // Re-export scheduler types
     pub use crate::{

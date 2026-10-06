@@ -10,7 +10,7 @@ or controller created by an earlier section.
 
 ```rust
 use flui_animation::{
-    AnimationController, Animation, AnimationExt,
+    AnimationController, Animation, CurvedAnimation,
     Curves, FloatTween, Animatable,
 };
 use flui_scheduler::UpdateScheduler;
@@ -207,21 +207,20 @@ let error = ElasticOutCurve::try_new(0.0).expect_err("period must be > 0");
 assert!(matches!(error, CurveError::OutOfRange { parameter: "period", .. }));
 ```
 
-### Splines
+### Steps
 
-`CatmullRomCurve` spaces its points evenly in progress and ignores their x
-coordinates:
+`Steps` is CSS `steps(n, <jump>)` (CSS Easing 1 §2.3.1); `JumpAt` places the
+jumps. The ends keep the curve contract: `0 → 0`, `1 → 1`.
 
 ```rust
-use flui_animation::CatmullRomCurve;
+use flui_animation::{Curve, JumpAt, Steps};
 
-let spline = CatmullRomCurve::with_points(vec![
-    (0.0, 0.0),
-    (0.3, 0.8),
-    (0.7, 0.2),
-    (1.0, 1.0),
-]);
+assert_eq!(Steps::new(4, JumpAt::End).transform(0.6), 0.5);
+assert_eq!(Steps::new(4, JumpAt::Start).transform(0.6), 0.75);
 ```
+
+A spline through points at given times is a `Keyframes` track of `cubic`
+segments (see [Keyframes](#keyframes)).
 
 ### Modifiers
 
@@ -234,7 +233,7 @@ assert_eq!(flipped.transform(1.0), 1.0);
 ```
 
 To play a curve backwards in time, reverse the driving animation
-(`AnimationExt::reversed`), not the curve.
+(`ReverseAnimation`), not the curve.
 
 ---
 
@@ -279,36 +278,61 @@ BorderRadiusTween::new(BorderRadius::ZERO, BorderRadius::circular(8.0))
 ConstantTween::new(42.0)
 ```
 
-### Tween Sequences
+### Keyframes
 
-```rust,ignore
-use flui_animation::{TweenSequence, TweenSequenceItem, FloatTween};
+A `Keyframes<T>` track (`T: Lerp + TwoWayConverter`) is a value as a pure
+function of elapsed time. Segments are timed by `Duration` and placed end to
+end from zero:
 
-let sequence = TweenSequence::new(vec![
-    TweenSequenceItem::new(FloatTween::new(0.0, 100.0), 1.0),
-    TweenSequenceItem::new(FloatTween::new(100.0, 100.0), 2.0), // hold
-    TweenSequenceItem::new(FloatTween::new(100.0, 0.0), 1.0),
-]);
+| Segment | Moves | Velocity at a join with `cubic` |
+|---|---|---|
+| `to(value, over, curve)` | eases into `value`; the curve belongs to this segment | the curve's slope at that end |
+| `cubic(value, over)` | Catmull-Rom spline through the keyframe *times* | the chord of the neighbouring keys |
+| `hold(over)` | keeps the value | zero |
+| `jump(value)` | changes the value instantly | zero |
 
-// Weights: 1 + 2 + 1 = 4
-// t ∈ [0.00, 0.25] → first tween
-// t ∈ [0.25, 0.75] → second tween (hold at 100)
-// t ∈ [0.75, 1.00] → third tween
+At a boundary the track returns the keyframe value exactly; at a jump, the
+value after it. A curve that returns NaN or infinity, or interpolation that
+overflows, publishes the segment's start value. `build` reports a zero
+total, a segment past the total, a `Duration` overflow or a non-finite
+keyframe as a `KeyframesError`.
+
+```rust
+use std::time::Duration;
+use flui_animation::{Animatable, Curves, Keyframes};
+
+let ms = Duration::from_millis;
+// Keys 0, 1, 0 at 0, 1, 2 s on a spline: half way up at 0.5 s.
+let arc = Keyframes::builder(0.0, ms(2000))
+    .cubic(1.0, ms(1000))
+    .cubic(0.0, ms(1000))
+    .build()
+    .expect("fits");
+assert!((arc.value_at(ms(500)) - 0.5).abs() < 1e-12);
+assert_eq!(arc.value_at(ms(1000)), 1.0);
+
+// One controller's progress reads every track of a group at one time.
+let fade = Keyframes::builder(1.0, ms(2000))
+    .hold(ms(1000)) // a delay is a leading hold
+    .to(0.0, ms(1000), Curves::EaseIn)
+    .build()
+    .expect("fits");
+assert_eq!(fade.transform(0.5), 1.0);
 ```
+
+Repeat with a repeating controller (or `value_at_looped`). `Stagger` gives
+element `i` of `n` the delay `step · |origin − i|` (`First`, `Last`,
+`Center`, `Index`), so one controller drives every element:
+`track.value_at_looped(elapsed + track.total() - stagger.delay(i, n))`.
 
 ### Chaining and Composition
 
 ```rust,ignore
-use flui_animation::AnimatableExt;
-
-// Apply curve
-let eased = tween.with_curve(Curves::EaseIn);
-
-// Chain tweens
-let chained = tween1.chain(tween2);
+// A curve, then a value tween
+let eased = ChainedTween::new(CurveTween::new(Curves::EaseIn), tween);
 
 // Reverse
-let reversed = tween.reversed();
+let reversed = ReverseTween::new(tween);
 ```
 
 ---
@@ -326,9 +350,6 @@ let curved = CurvedAnimation::new(
     controller.clone(),
     Curves::EaseInOut,
 );
-
-// Or with extension
-let curved = Arc::new(controller).curved(Curves::EaseInOut);
 ```
 
 ### TweenAnimation
@@ -525,15 +546,6 @@ let curved1 = CurvedAnimation::new(controller.clone(), Curves::EaseIn);
 let curved2 = CurvedAnimation::new(controller.clone(), Curves::EaseOut);
 ```
 
-### Prefer Extension Traits
-
-```rust,ignore
-// Verbose
-let curved = CurvedAnimation::new(Arc::new(controller), curve);
-
-// Fluent
-let curved = Arc::new(controller).curved(curve);
-```
 
 ### Reuse Controllers
 

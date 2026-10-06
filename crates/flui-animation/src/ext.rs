@@ -1,84 +1,33 @@
-//! Extension traits for animation composition and convenience methods.
-//!
-//! This module provides extension traits that add fluent API methods to animation types,
-//! following the Rust API Guidelines for extension traits (C-CONV-SPECIFIC).
+//! The method that drives an [`Animatable`] with a parent animation.
 
 use crate::animation::Animation;
-use crate::compound::{AnimationOperator, CompoundAnimation};
-use crate::curve::Curve;
-use crate::curved::CurvedAnimation;
-use crate::reverse::ReverseAnimation;
 use crate::tween::TweenAnimation;
-use crate::tween_types::{Animatable, ChainedTween, CurveTween, ReverseTween};
+use crate::tween_types::Animatable;
 use std::fmt;
 use std::sync::Arc;
 
-/// Extension trait for composing [`Animatable`] types and creating
-/// animations from them.
-///
-/// This trait provides a fluent API for transforming animatables
-/// ([`reversed`](Self::reversed), [`chain`](Self::chain),
-/// [`with_curve`](Self::with_curve)) and for driving them with a parent
-/// animation ([`animate`](Self::animate)).
+/// Drives an [`Animatable`] with a parent animation: `tween.animate(parent)`
+/// is [`TweenAnimation::new`]`(tween, parent)` in method position.
 ///
 /// # Examples
 ///
 /// ```
-/// use flui_animation::{AnimationController, Animation, Animatable, Curves};
-/// use flui_animation::ext::AnimatableExt;
-/// use flui_animation::FloatTween;
+/// use flui_animation::{AnimatableExt, Animation, AnimationController, FloatTween};
 /// use flui_scheduler::UpdateScheduler;
 /// use std::sync::Arc;
 /// use std::time::Duration;
 ///
-/// let tween = FloatTween::new(0.0, 100.0);
-///
-/// // Reverse the tween
-/// let reversed = tween.reversed();
-/// assert_eq!(reversed.transform(0.0), 100.0);
-///
-/// // Chain with a curve
-/// let curved = tween.with_curve(Curves::EaseIn);
-/// assert!(curved.transform(0.5) < 50.0);
-///
-/// // Drive with a controller
 /// let scheduler = UpdateScheduler::new();
 /// let controller = Arc::new(AnimationController::new(
 ///     Duration::from_millis(300),
 ///     &scheduler,
 /// ));
-/// let animation = tween.animate(controller as Arc<dyn Animation<f64>>);
+/// let animation = FloatTween::new(0.0, 100.0).animate(controller as Arc<dyn Animation<f64>>);
 /// assert_eq!(animation.value(), 0.0);
 /// ```
 pub trait AnimatableExt<T>: Animatable<T> + Sized {
-    /// Create a [`TweenAnimation`] from this animatable and a parent animation.
-    ///
-    /// This is a convenience method that is equivalent to calling
-    /// `TweenAnimation::new(self, parent)`.
-    ///
-    /// # Arguments
-    ///
-    /// * `parent` - The parent animation (typically 0.0 to 1.0)
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use flui_animation::{AnimationController, Animation};
-    /// use flui_animation::ext::AnimatableExt;
-    /// use flui_animation::FloatTween;
-    /// use flui_scheduler::UpdateScheduler;
-    /// use std::sync::Arc;
-    /// use std::time::Duration;
-    ///
-    /// let scheduler = UpdateScheduler::new();
-    /// let controller = Arc::new(AnimationController::new(
-    ///     Duration::from_millis(300),
-    ///     &scheduler,
-    /// ));
-    ///
-    /// let animation = FloatTween::new(0.0, 100.0)
-    ///     .animate(controller as Arc<dyn Animation<f64>>);
-    /// ```
+    /// Creates a [`TweenAnimation`] that reads this animatable at the
+    /// parent's value.
     fn animate(self, parent: Arc<dyn Animation<f64>>) -> TweenAnimation<T, Self>
     where
         Self: fmt::Debug + Clone + Send + Sync + 'static,
@@ -86,302 +35,6 @@ pub trait AnimatableExt<T>: Animatable<T> + Sized {
     {
         TweenAnimation::new(self, parent)
     }
-
-    /// Returns a reversed version of this animatable.
-    ///
-    /// The reversed animatable transforms `t` to `1.0 - t` before passing
-    /// to the original animatable.
-    #[inline]
-    #[must_use]
-    fn reversed(self) -> ReverseTween<T, Self> {
-        ReverseTween::new(self)
-    }
-
-    /// Chains this animatable with another.
-    ///
-    /// The output of `self` is passed as input to `other`.
-    /// This is useful when `self` outputs `f64` (like a curve) and `other`
-    /// transforms that to the final type.
-    #[inline]
-    #[must_use]
-    fn chain<B>(self, other: B) -> ChainedTween<Self, B>
-    where
-        Self: Animatable<f64>,
-    {
-        ChainedTween::new(self, other)
-    }
-
-    /// Applies a curve to this animatable.
-    ///
-    /// This is a convenience method that chains a `CurveTween` before this animatable.
-    #[inline]
-    #[must_use]
-    fn with_curve<C: Curve>(self, curve: C) -> ChainedTween<CurveTween<C>, Self> {
-        ChainedTween::new(CurveTween::new(curve), self)
-    }
 }
 
-// Blanket implementation for all types that implement Animatable
 impl<T, A: Animatable<T>> AnimatableExt<T> for A {}
-
-/// Extension trait for composing animations.
-///
-/// This trait provides a fluent API for composing animations with curves,
-/// reversal, and mathematical operators.
-///
-/// # Examples
-///
-/// ```
-/// use flui_animation::{AnimationController, Animation};
-/// use flui_animation::ext::AnimationExt;
-/// use flui_animation::Curves;
-/// use flui_scheduler::UpdateScheduler;
-/// use std::sync::Arc;
-/// use std::time::Duration;
-///
-/// let scheduler = UpdateScheduler::new();
-/// let controller = Arc::new(AnimationController::new(
-///     Duration::from_millis(300),
-///     &scheduler,
-/// ));
-///
-/// // Apply a curve using the fluent API
-/// let curved = controller.curved(Curves::EaseInOut);
-/// ```
-pub trait AnimationExt: Animation<f64> + Sized + 'static {
-    /// Apply a curve to this animation.
-    ///
-    /// Creates a [`CurvedAnimation`] that transforms the linear 0.0..1.0 progression
-    /// into a non-linear progression based on the provided curve.
-    ///
-    /// # Arguments
-    ///
-    /// * `curve` - The curve to apply
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use flui_animation::{AnimationController, Animation};
-    /// use flui_animation::ext::AnimationExt;
-    /// use flui_animation::Curves;
-    /// use flui_scheduler::UpdateScheduler;
-    /// use std::sync::Arc;
-    /// use std::time::Duration;
-    ///
-    /// let scheduler = UpdateScheduler::new();
-    /// let controller = Arc::new(AnimationController::new(
-    ///     Duration::from_millis(300),
-    ///     &scheduler,
-    /// ));
-    ///
-    /// let curved = controller.curved(Curves::EaseIn);
-    /// ```
-    fn curved<C>(self: Arc<Self>, curve: C) -> CurvedAnimation<C>
-    where
-        C: Curve + Clone + Send + Sync + fmt::Debug + 'static,
-    {
-        CurvedAnimation::new(self as Arc<dyn Animation<f64>>, curve)
-    }
-
-    /// Reverse this animation.
-    ///
-    /// Creates a [`ReverseAnimation`] that inverts the animation values:
-    /// - When parent = 0.0, reversed = 1.0
-    /// - When parent = 1.0, reversed = 0.0
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use flui_animation::{AnimationController, Animation};
-    /// use flui_animation::ext::AnimationExt;
-    /// use flui_scheduler::UpdateScheduler;
-    /// use std::sync::Arc;
-    /// use std::time::Duration;
-    ///
-    /// let scheduler = UpdateScheduler::new();
-    /// let controller = Arc::new(AnimationController::new(
-    ///     Duration::from_millis(300),
-    ///     &scheduler,
-    /// ));
-    ///
-    /// controller.set_value(0.25);
-    /// let reversed = controller.reversed();
-    /// assert_eq!(reversed.value(), 0.75);
-    /// ```
-    fn reversed(self: Arc<Self>) -> ReverseAnimation {
-        ReverseAnimation::new(self as Arc<dyn Animation<f64>>)
-    }
-
-    /// Combine with another animation using an operator.
-    ///
-    /// Creates a [`CompoundAnimation`] that combines two animations
-    /// using the specified operator.
-    ///
-    /// # Arguments
-    ///
-    /// * `other` - The other animation to combine with
-    /// * `op` - The operator to use for combining
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use flui_animation::{AnimationController, Animation, AnimationOperator};
-    /// use flui_animation::ext::AnimationExt;
-    /// use flui_scheduler::UpdateScheduler;
-    /// use std::sync::Arc;
-    /// use std::time::Duration;
-    ///
-    /// let scheduler = UpdateScheduler::new();
-    /// let controller1 = Arc::new(AnimationController::new(
-    ///     Duration::from_millis(300),
-    ///     &scheduler,
-    /// ));
-    /// let controller2 = Arc::new(AnimationController::new(
-    ///     Duration::from_millis(300),
-    ///     &scheduler,
-    /// ));
-    ///
-    /// controller1.set_value(0.5);
-    /// controller2.set_value(0.3);
-    ///
-    /// let combined = controller1.combine(
-    ///     controller2 as Arc<dyn Animation<f64>>,
-    ///     AnimationOperator::Add,
-    /// );
-    /// assert_eq!(combined.value(), 0.8);
-    /// ```
-    fn combine(
-        self: Arc<Self>,
-        other: Arc<dyn Animation<f64>>,
-        op: AnimationOperator,
-    ) -> CompoundAnimation {
-        CompoundAnimation::new(self as Arc<dyn Animation<f64>>, other, op)
-    }
-
-    /// Add another animation to this one.
-    ///
-    /// This is a convenience method equivalent to `combine(other, AnimationOperator::Add)`.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use flui_animation::{AnimationController, Animation};
-    /// use flui_animation::ext::AnimationExt;
-    /// use flui_scheduler::UpdateScheduler;
-    /// use std::sync::Arc;
-    /// use std::time::Duration;
-    ///
-    /// let scheduler = UpdateScheduler::new();
-    /// let c1 = Arc::new(AnimationController::new(Duration::from_millis(300), &scheduler));
-    /// let c2 = Arc::new(AnimationController::new(Duration::from_millis(300), &scheduler));
-    ///
-    /// c1.set_value(0.5);
-    /// c2.set_value(0.3);
-    ///
-    /// let sum = c1.add(c2 as Arc<dyn Animation<f64>>);
-    /// assert_eq!(sum.value(), 0.8);
-    /// ```
-    fn add(self: Arc<Self>, other: Arc<dyn Animation<f64>>) -> CompoundAnimation {
-        CompoundAnimation::add(self as Arc<dyn Animation<f64>>, other)
-    }
-
-    /// Multiply with another animation.
-    ///
-    /// This is a convenience method equivalent to `combine(other, AnimationOperator::Multiply)`.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use flui_animation::{AnimationController, Animation};
-    /// use flui_animation::ext::AnimationExt;
-    /// use flui_scheduler::UpdateScheduler;
-    /// use std::sync::Arc;
-    /// use std::time::Duration;
-    ///
-    /// let scheduler = UpdateScheduler::new();
-    /// let c1 = Arc::new(AnimationController::new(Duration::from_millis(300), &scheduler));
-    /// let c2 = Arc::new(AnimationController::new(Duration::from_millis(300), &scheduler));
-    ///
-    /// c1.set_value(0.5);
-    /// c2.set_value(0.4);
-    ///
-    /// let product = c1.multiply(c2 as Arc<dyn Animation<f64>>);
-    /// assert!((product.value() - 0.2).abs() < 1e-6);
-    /// ```
-    fn multiply(self: Arc<Self>, other: Arc<dyn Animation<f64>>) -> CompoundAnimation {
-        CompoundAnimation::multiply(self as Arc<dyn Animation<f64>>, other)
-    }
-
-    /// Subtract another animation from this one.
-    ///
-    /// This is a convenience method equivalent to `combine(other, AnimationOperator::Subtract)`.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use flui_animation::{AnimationController, Animation};
-    /// use flui_animation::ext::AnimationExt;
-    /// use flui_scheduler::UpdateScheduler;
-    /// use std::sync::Arc;
-    /// use std::time::Duration;
-    ///
-    /// let scheduler = UpdateScheduler::new();
-    /// let c1 = Arc::new(AnimationController::new(Duration::from_millis(300), &scheduler));
-    /// let c2 = Arc::new(AnimationController::new(Duration::from_millis(300), &scheduler));
-    ///
-    /// c1.set_value(0.8);
-    /// c2.set_value(0.3);
-    ///
-    /// let diff = c1.subtract(c2 as Arc<dyn Animation<f64>>);
-    /// assert!((diff.value() - 0.5).abs() < 1e-6);
-    /// ```
-    fn subtract(self: Arc<Self>, other: Arc<dyn Animation<f64>>) -> CompoundAnimation {
-        CompoundAnimation::subtract(self as Arc<dyn Animation<f64>>, other)
-    }
-
-    /// Divide this animation by another.
-    ///
-    /// This is a convenience method equivalent to `combine(other, AnimationOperator::Divide)`.
-    ///
-    /// Note: Division by zero will produce infinity or NaN.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use flui_animation::{AnimationController, Animation};
-    /// use flui_animation::ext::AnimationExt;
-    /// use flui_scheduler::UpdateScheduler;
-    /// use std::sync::Arc;
-    /// use std::time::Duration;
-    ///
-    /// let scheduler = UpdateScheduler::new();
-    /// let c1 = Arc::new(AnimationController::new(Duration::from_millis(300), &scheduler));
-    /// let c2 = Arc::new(AnimationController::new(Duration::from_millis(300), &scheduler));
-    ///
-    /// c1.set_value(0.8);
-    /// c2.set_value(0.4);
-    ///
-    /// let quotient = c1.divide(c2 as Arc<dyn Animation<f64>>);
-    /// assert!((quotient.value() - 2.0).abs() < 1e-6);
-    /// ```
-    fn divide(self: Arc<Self>, other: Arc<dyn Animation<f64>>) -> CompoundAnimation {
-        CompoundAnimation::divide(self as Arc<dyn Animation<f64>>, other)
-    }
-
-    /// Return the minimum of this animation and another.
-    ///
-    /// This is a convenience method equivalent to `combine(other, AnimationOperator::Min)`.
-    fn min(self: Arc<Self>, other: Arc<dyn Animation<f64>>) -> CompoundAnimation {
-        CompoundAnimation::min(self as Arc<dyn Animation<f64>>, other)
-    }
-
-    /// Return the maximum of this animation and another.
-    ///
-    /// This is a convenience method equivalent to `combine(other, AnimationOperator::Max)`.
-    fn max(self: Arc<Self>, other: Arc<dyn Animation<f64>>) -> CompoundAnimation {
-        CompoundAnimation::max(self as Arc<dyn Animation<f64>>, other)
-    }
-}
-
-// Blanket implementation for all types that implement Animation<f64>
-impl<A: Animation<f64> + 'static> AnimationExt for A {}

@@ -186,7 +186,7 @@ table).
 | `ThreePointCubic` | 432 bytes | 5 points + two precomputed `Cubic` segments |
 | `ElasticInCurve` | 8 bytes | period: f64 |
 | `Interval<C>` | 8 + sizeof(C) | begin, end + curve |
-| `CatmullRomCurve` | 32 bytes | SmallVec (8 points inline) |
+| `Steps` | 8 bytes | count: u32 + `JumpAt` |
 
 ### Tween Sizes
 
@@ -196,7 +196,7 @@ table).
 | `IntTween` | 8 bytes | 2 × i32 |
 | `ColorTween` | 32 bytes | 2 × Color |
 | `SizeTween` | 16 bytes | 2 × Size |
-| `TweenSequence<T, A>` | 24 bytes | Vec + total_weight |
+| `Keyframes<T>` | sizeof(T) + 32 bytes | start value, total, boxed segment slice |
 
 ---
 
@@ -326,7 +326,7 @@ table above):
 | `EaseInOutSine` | 1 trig | low |
 | `ElasticIn/Out` | pow + sin | low-moderate |
 | `BounceOut` | 3-4 branches + muls | low |
-| `CatmullRomCurve` | spline interpolation | moderate |
+| `Steps` | 1 floor + 1 division | trivial |
 
 All curves are comfortably within a 60fps (~16ms) frame budget. The `Cubic`
 solve is the heaviest single curve (~15 ns): a table lookup, a few Newton
@@ -342,7 +342,7 @@ steps and two probes on the common path.
 | `IntTween` | 1 lerp + round | ~2ns |
 | `ColorTween` | 4 lerps | ~4ns |
 | `SizeTween` | 2 lerps | ~2ns |
-| `TweenSequence` | Segment lookup + lerp | ~10ns |
+| `Keyframes` | binary search over segments + one curve and lerp (or a cubic Hermite); no allocation | not benchmarked |
 
 ---
 
