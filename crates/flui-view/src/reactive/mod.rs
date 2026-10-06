@@ -516,10 +516,9 @@ impl Reactive {
                         // A closed graph still releases this element's live
                         // slots, so `check`'s closed refusal does not apply.
                         if slot.graph() == self.id
-                            && inner
-                                .nodes
-                                .get(slot.index() as usize)
-                                .is_some_and(|node| node.live && node.generation == slot.generation())
+                            && inner.nodes.get(slot.index() as usize).is_some_and(|node| {
+                                node.live && node.generation == slot.generation()
+                            })
                         {
                             retired.push((slot, Self::release_index(&mut inner, slot.index())));
                         }
