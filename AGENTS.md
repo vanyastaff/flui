@@ -275,10 +275,32 @@ A green gate proves the gates pass, not that the behavior exists. So a change is
 
 Pull requests are reviewed by Codex, which reads this section; a human reviewer can use it the
 same way. fmt, clippy (pedantic, `unwrap_used`, the lints in the table above), rustdoc and the
-script gates already run in CI, so style and anything they catch is not worth a comment.
+script gates already run in CI, so formatting and anything they catch is not worth a comment.
 
 - **What to report:** defects that would block the merge, each with a concrete failure
   scenario; without one, it is a hypothesis.
+- **Code quality is a merge criterion, not style.** The bar is code an experienced Rust developer
+  is not embarrassed by. Report, with a concrete better shape:
+  - **Simplicity.** A second abstraction layer, generic parameter or trait with one user. A
+    builder, newtype or enum is fine when it removes a mistake class.
+  - **Ownership.** Moving instead of cloning; `Rc`/`Arc` only where ownership is really shared;
+    `RefCell`/`Mutex` only where no `&mut` path exists. No borrow held across user code.
+  - **Lifetimes and borrowing.** A borrowed view (`&str`, `&[T]`, `impl Iterator`) instead of an
+    owned copy, with no lifetime gymnastics a reader has to decode.
+  - **Generics, traits and GATs.** Static dispatch where the type is known, `dyn` where a
+    heterogeneous collection or an object boundary needs it. Associated types and GATs over
+    parameter soup. Sealed traits for closed sets.
+  - **Types over conventions.** Illegal states unrepresentable (enums over flags plus options,
+    typestate where it pays). Errors as `thiserror` enums a caller can match.
+  - **Current stable Rust** (the toolchain in `rust-toolchain.toml`): let-chains, `let`-`else`,
+    async closures, return-position `impl Trait` in traits, precise capturing, trait upcasting
+    and current std APIs (`get_disjoint_mut`, `LazyLock`, …) where they make the code simpler.
+    Check the release notes of the pinned version rather than recalling them.
+  - **Conventions.** The Rust API Guidelines: naming, `as_`/`to_`/`into_`, getters without
+    `get_`, `From`/`TryFrom`/`Display`/`Default` where they apply, `#[must_use]`,
+    `#[non_exhaustive]` on public enums that will grow.
+  - **Architecture.** One responsibility per module, dependencies down the layers, no
+    behavior-free pass-through types.
 - **Tests:** for each behavior change, find the test that covers it and ask whether it would fail
   with the production hunk reverted. Tests here have passed both ways by reimplementing the
   predicate they pin, asserting that a widget exists rather than that it was laid out or
