@@ -41,7 +41,8 @@ src/
 ├── curve.rs          # Curve trait, Curves, implementations
 ├── tween_types.rs    # Animatable, Tween, all tween types
 ├── status.rs         # AnimationStatus, AnimationBehavior
-├── simulation.rs     # Simulation trait, Spring, Friction, Gravity
+├── simulation.rs     # Simulation trait, Spring, Friction, bounded and bouncing scroll
+├── spring.rs         # AnimatedValue, TwoWayConverter
 │
 ├── ext.rs            # AnimatableExt, AnimationExt, CurveExt
 └── error.rs          # AnimationError
@@ -137,10 +138,11 @@ pub trait Simulation: Send + Sync {
     /// Velocity at time t
     fn dx(&self, time: f64) -> f64;
     
-    /// Has simulation settled?
+    /// Has simulation settled? Monotonic in `time`.
     fn is_done(&self, time: f64) -> bool;
-    
-    fn tolerance(&self) -> Tolerance;
+
+    /// Not read by any driver; defaults to `Tolerance::DEFAULT`.
+    fn tolerance(&self) -> Tolerance { Tolerance::DEFAULT }
 }
 ```
 
@@ -723,20 +725,43 @@ assertion no longer holds.
 
 Friction displacement uses `exp_m1(log_drag * time)`, and inverse arrival time
 uses `ln_1p` of the relative displacement. This retains small finite movement
-as drag approaches one without changing constructor validation, velocity
-sampling or the existing near-origin inverse threshold. Public consumer test
+as drag approaches one. A position the motion never reaches (behind the
+start, at or past the resting position) answers `+inf`. Public consumer test
 `friction_preserves_small_decay_and_position_time_roundtrips` checks the
 constant-velocity limit, positive and negative normal flings, position/time
-round trips and unreachable/non-finite queries.
+round trips, unreachable queries and the remaining-glide rest.
 
-### Smoothing survives an idle tick
+### Simulations are validated values that rest at a precomputed time
 
-`SmoothDamp`'s overshoot guard places the follower exactly at its target and
-sets its velocity to zero. That assignment does not divide by elapsed time:
-a zero-duration tick while at rest must leave the follower usable for its
-next target. `damped_motion_remains_usable_after_idle_ticks` checks positive
-and negative retargeting after a zero-duration idle tick, with an ordinary
-idle tick as a control, through the public smoothing API.
+- A spring is stored as `(ω, ζ)` with private fields; every constructor
+  refuses NaN, infinite and non-positive inputs (an undamped spring never
+  rests) and constants that overflow (`SimulationError`), the same in debug
+  and release. `spring_constructors_refuse_outside_the_admitted_domain`.
+- The motion is one closed form for every `ζ`:
+  `x = e^{−at}[x0·C + (a·x0 + v0)·S]`, `v = e^{−at}[v0·C − (ω²x0 + a·v0)·S]`,
+  `a = ζω`, with `C`, `S` summed as series where `|ω²(1 − ζ²)t²| < 10⁻²`
+  (continuous through `ζ = 1`) and the overdamped roots computed without
+  cancellation (`λs = −ω/(ζ + √(ζ² − 1))`), so a very heavy spring still
+  moves and every `t ∈ [0, ∞]` is finite. `spring_matches_analytic_reference`,
+  `spring_outputs_are_finite_over_the_admitted_domain`.
+- Rest is a moment, computed at construction from a conservative envelope of
+  the motion (`(1 + at)·e^{−rt}`, the amplitude bound below `ζ = 1`, the
+  two-exponential bound above): from it on the simulation stays within its
+  tolerance, `x` is exactly the target, `dx` is `0.0` and `is_done` stays
+  true. Rest therefore does not depend on how frames partition time, and is at
+  most `1.25·t_last + 2/ω` for the last moment `t_last` the motion leaves the
+  tolerance. `rest_time_is_conservative_and_tight`,
+  `spring_run_is_independent_of_frame_partition`,
+  `simulation_time_domain_edges`.
+- A tolerance with an infinite velocity limit derives one from the motion's
+  own time scale (`distance·ω`, or the remaining glide for friction). Scroll
+  physics use `Tolerance::for_device_pixel_ratio`, half a device pixel, with
+  the ratio read from the presentation's pipeline at release
+  (`ScrollMetrics::device_pixel_ratio`).
+  `scroll_fling_rest_scales_with_device_pixel_ratio`.
+- `BouncingScrollSimulation` hands friction to the edge spring at the moment
+  the friction reaches the edge, with the friction's velocity, so position and
+  velocity are continuous. `bouncing_simulation_hands_friction_to_spring_at_the_edge`.
 
 ## Composition Model
 

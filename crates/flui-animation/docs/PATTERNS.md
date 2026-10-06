@@ -284,26 +284,22 @@ Invalid parameters (zero mass, negative duration) cause runtime failures.
 
 ### Solution
 
-Validate in constructors, panic on violation:
+Validate in constructors and return a typed error; keep the fields private so
+an invalid value cannot be built by literal:
 
-```rust
+```rust,ignore
 impl SpringDescription {
-    pub fn new(mass: f32, stiffness: f32, damping: f32) -> Self {
-        assert!(mass > 0.0, "Mass must be positive");
-        assert!(stiffness > 0.0, "Stiffness must be positive");
-        assert!(damping >= 0.0, "Damping must be non-negative");
-        Self { mass, stiffness, damping }
-    }
-}
-
-impl FrictionSimulation {
-    pub fn new(drag: f32, position: f32, velocity: f32) -> Self {
-        assert!(drag > 0.0, "Drag must be positive");
-        assert!((drag - 1.0).abs() > 1e-6, "Drag cannot be 1.0");
-        // ...
+    pub fn new(mass: f64, stiffness: f64, damping: f64) -> Result<Self, SimulationError> {
+        let mass = positive(SimulationParameter::Mass, mass)?.sqrt();
+        let stiffness = positive(SimulationParameter::Stiffness, stiffness)?.sqrt();
+        let damping = positive(SimulationParameter::Damping, damping)?;
+        Self::from_omega_zeta(stiffness / mass, damping / 2.0 / stiffness / mass)
     }
 }
 ```
+
+A panicking constructor is kept only for constants
+(`SpringDescription::with_damping_ratio`), documented under `# Panics`.
 
 ### Boundary Guarantees
 

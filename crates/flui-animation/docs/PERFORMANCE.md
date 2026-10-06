@@ -22,8 +22,9 @@ baseline, not as a hardware promise.
 | `Curves::Linear` | ~0.42 ns |
 | `Curves::ElasticOut` | ~7.4 ns |
 | `Curves::EaseInOut` (Cubic, Newton-Raphson solve) | ~11 ns |
-| `SpringSimulation` x + dx | ~19 ns |
-| `AnimatedValue<Color>` advance + value (4 component springs) | ~97 ns |
+| `SpringSimulation` x + dx | ~30 ns |
+| `SpringSimulation::try_new` (includes the rest-time search) | ~100 ns |
+| `AnimatedValue<Color>` retarget + advance + value (4 component springs) | ~180 ns |
 | `AnimationController::tick_at` (frame advance) | ~8.8 ns |
 | `CurvedAnimation::value` (1 `Arc<dyn>` hop + cubic) | ~59 ns |
 

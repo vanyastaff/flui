@@ -105,7 +105,7 @@ controller.fling(-1.0)?;  // toward lower_bound
 
 // Custom spring
 let spring = SpringDescription::with_damping_ratio(1.0, 500.0, 0.7);
-controller.fling_with(1.0, spring)?;
+controller.fling_with(1.0, Some(spring))?;
 
 // Arbitrary simulation
 let sim = SpringSimulation::new(spring, 0.0, 1.0, 0.0);
@@ -396,71 +396,61 @@ let switch = AnimationSwitch::new(anim1, Some(anim2));
 
 ## Physics Simulations
 
+Simulations are immutable values with validating constructors
+(`Result<_, SimulationError>`). Each computes at construction the time from
+which it stays within its `Tolerance`; from then on `x` is exactly the resting
+position and `is_done` stays `true`.
+
 ### SpringDescription
 
-```rust,ignore
-use flui_animation::SpringDescription;
+```rust
+use flui_animation::simulation::{SimulationError, SpringDescription};
+use std::time::Duration;
 
-// Explicit parameters
-let spring = SpringDescription::new(
-    1.0,    // mass
-    500.0,  // stiffness
-    10.0,   // damping
-);
-
-// From damping ratio (intuitive)
-let spring = SpringDescription::with_damping_ratio(
-    1.0,    // mass
-    500.0,  // stiffness
-    1.0,    // 1.0 = critical, <1 = bouncy, >1 = overdamped
-);
-
-// From feel
-let spring = SpringDescription::with_duration_and_bounce(
-    0.5,    // perceptual duration (seconds)
-    0.3,    // bounce (0 = none, higher = more)
-);
+# fn main() -> Result<(), SimulationError> {
+let physical = SpringDescription::new(1.0, 500.0, 10.0)?; // mass, stiffness, damping
+let perceptual = SpringDescription::with_duration_and_bounce(Duration::from_millis(500), 0.3)?;
+let response = SpringDescription::with_response_and_damping(Duration::from_millis(300), 0.8)?;
+// For constants: panics on invalid input.
+let critical = SpringDescription::with_damping_ratio(1.0, 500.0, 1.0);
+# let _ = (physical, perceptual, response, critical);
+# Ok(())
+# }
 ```
 
 ### SpringSimulation
 
-```rust,ignore
-use flui_animation::SpringSimulation;
+```rust
+use flui_animation::simulation::{Simulation, SpringDescription, SpringSimulation, Tolerance};
 
-let sim = SpringSimulation::new(spring, start, end, velocity);
-
-sim.x(0.1);       // position at t=0.1
-sim.dx(0.1);      // velocity at t=0.1
-sim.is_done(0.1); // within tolerance?
+# fn main() -> Result<(), flui_animation::simulation::SimulationError> {
+let spring = SpringDescription::with_damping_ratio(1.0, 500.0, 0.7);
+let sim = SpringSimulation::try_new(spring, 0.0, 1.0, 0.0, Tolerance::DEFAULT)?;
+assert!(sim.dx(0.1).is_finite()); // velocity at t = 0.1 s
+assert!(sim.is_done(5.0));
+assert_eq!(sim.x(5.0), 1.0);
+# Ok(())
+# }
 ```
 
 ### FrictionSimulation
 
-```rust,ignore
-use flui_animation::FrictionSimulation;
+```rust
+use flui_animation::simulation::{FrictionSimulation, Tolerance};
 
-let sim = FrictionSimulation::new(
-    0.05,   // drag (0 < drag < 1, drag ≠ 1)
-    0.0,    // position
-    100.0,  // velocity
-);
-
-sim.final_x();     // resting position
-sim.time_at_x(x);  // time to reach x
+# fn main() -> Result<(), flui_animation::simulation::SimulationError> {
+// drag in (0, 1), position, velocity
+let sim = FrictionSimulation::new(0.05, 0.0, 100.0, Tolerance::DEFAULT)?;
+let resting = sim.final_x();
+assert!(sim.time_at_x(resting / 2.0) > 0.0);
+# Ok(())
+# }
 ```
 
-### GravitySimulation
-
-```rust,ignore
-use flui_animation::GravitySimulation;
-
-let sim = GravitySimulation::new(
-    9.8,    // acceleration
-    0.0,    // position
-    10.0,   // velocity
-    100.0,  // end position
-);
-```
+Scroll physics use `BoundedFrictionSimulation` (stops at a bound) and
+`BouncingScrollSimulation` (overscrolls an edge and springs back), with
+`Tolerance::for_device_pixel_ratio` so a fling rests within half a device
+pixel.
 
 ---
 
