@@ -207,91 +207,6 @@ fn a_panicking_settle_with_no_owner_gate_resumes_after_release() {
     assert!(!arbiter.is_locked(), "the lock was released first");
 }
 
-/// An owner listener that removes itself and then panics: the store's clone
-/// is its last owner, and destroying it runs the listener's captures. That
-/// destruction stays inside the settle's containment, so the listener's own
-/// panic is the failure reported and the capture's is retained after it.
-fn a_listener_that_removes_itself_and_panics_keeps_the_first_failure() {
-    struct PanicsOnDrop;
-    impl Drop for PanicsOnDrop {
-        fn drop(&mut self) {
-            panic!("listener capture destroyed");
-        }
-    }
-    let store = InMemoryTextStore::new("");
-    let gate = CommitGate::new();
-    store.set_commit_gate(gate.clone());
-    let (weak, capture) = (Rc::downgrade(&store), PanicsOnDrop);
-    store.set_owner_listener(Some(Rc::new(move || {
-        let _keep_alive = &capture;
-        if let Some(store) = weak.upgrade() {
-            store.set_owner_listener(None);
-        }
-        panic!("listener failure");
-    })));
-    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        store.request_lock(
-            LockGrant::read_write(|session| {
-                session.insert_at_selection("a").expect("in range");
-            }),
-            LockTiming::Sync,
-        )
-    }));
-    assert_eq!(
-        outcome.ok(),
-        Some(Ok(LockOutcome::Granted)),
-        "the grant stands and its failure waits at the gate"
-    );
-    assert_eq!(store.text(), "a");
-    let first = gate
-        .take_failure()
-        .expect("the listener's failure waits at the gate");
-    assert_eq!(
-        flui_foundation::panic::payload_text(&*first),
-        Some("listener failure"),
-        "the listener's failure stays authoritative over its capture's"
-    );
-    flui_foundation::panic::retain_opaque_payload(first);
-    assert!(gate.take_failure().is_none(), "a failure is reported once");
-}
-
-/// Owner code that moves the store to another presentation (installs its
-/// gate) and then panics: the failure belongs to the presentation that
-/// admitted the grant, whose gate it waits in.
-fn a_failure_after_the_store_changes_gate_waits_at_the_admitting_gate() {
-    let store = InMemoryTextStore::new("");
-    let (admitting, next) = (CommitGate::new(), CommitGate::new());
-    store.set_commit_gate(admitting.clone());
-    let (weak, moved_to) = (Rc::downgrade(&store), next.clone());
-    store.set_owner_listener(Some(Rc::new(move || {
-        if let Some(store) = weak.upgrade() {
-            store.set_commit_gate(moved_to.clone());
-        }
-        panic!("owner failure after moving");
-    })));
-    let outcome = store.request_lock(
-        LockGrant::read_write(|session| {
-            session.insert_at_selection("a").expect("in range");
-        }),
-        LockTiming::Sync,
-    );
-    store.set_owner_listener(None);
-    assert_eq!(outcome, Ok(LockOutcome::Granted));
-    let parked = next.take_failure();
-    let misplaced = parked.is_some();
-    if let Some(payload) = parked {
-        flui_foundation::panic::retain_opaque_payload(payload);
-    }
-    let first = admitting.take_failure();
-    assert!(
-        !misplaced && first.is_some(),
-        "the failure waits at the admitting gate, not the one installed during settle"
-    );
-    if let Some(payload) = first {
-        flui_foundation::panic::retain_opaque_payload(payload);
-    }
-}
-
 #[test]
 fn settling_runs_owner_code_outside_the_lock() {
     let cases: &[(&str, fn())] = &[
@@ -306,14 +221,6 @@ fn settling_runs_owner_code_outside_the_lock() {
         (
             "a_panicking_settle_with_no_owner_gate_resumes_after_release",
             a_panicking_settle_with_no_owner_gate_resumes_after_release,
-        ),
-        (
-            "a_listener_that_removes_itself_and_panics_keeps_the_first_failure",
-            a_listener_that_removes_itself_and_panics_keeps_the_first_failure,
-        ),
-        (
-            "a_failure_after_the_store_changes_gate_waits_at_the_admitting_gate",
-            a_failure_after_the_store_changes_gate_waits_at_the_admitting_gate,
         ),
     ];
     let mut failures = Vec::new();

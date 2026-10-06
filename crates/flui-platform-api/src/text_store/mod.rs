@@ -31,6 +31,7 @@
 mod composition_ledger;
 mod in_memory;
 mod lock;
+mod owner_calls;
 mod projection;
 mod session;
 mod store;
@@ -42,6 +43,7 @@ pub use lock::{
     CommitGate, DEFERRED_LOCK_CAPACITY, LockArbiter, LockGrant, LockKind, LockOutcome, LockTiming,
     TextStoreError,
 };
+pub use owner_calls::{OwnerCalls, RetainOnFailure};
 pub use projection::project_ime_event;
 pub use session::{
     Composition, PointMode, RangeRect, Selection, TextChange, TextStoreEdit, TextStoreRead,
