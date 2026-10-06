@@ -68,10 +68,19 @@ work before admitting a new request. If a grant closes the gate, later grants
 remain queued in request order; a new synchronous request is refused and an
 asynchronous request joins the queue's tail. Reopening the gate lets the next
 commit anchor resume that work.
+A grant runs only the platform's code. The store's own owner (a widget's
+`on_changed`) runs in the `settle` function the arbiter calls after each grant
+has released its lock and before the next queued one, so owner code that asks
+for a lock is granted it; a panic there is caught by the arbiter and parked in
+the `CommitGate` for the gate's owner to report, and the queue keeps running
+(ADR-0090 amendment item 2). With no gate installed by an owner there is no one
+to report to, and the panic resumes after the lock is released.
 **Tests:** the `text_store` module's unit tests, and `flui-testing`'s
-`in_memory_store_conforms_to_kit_v1`; the public
+`in_memory_store_conforms_to_the_kit`; the public
 `queued_text_store_grants_respect_gate_changes` family covers gate closure
-during deferred and direct grants, FIFO ordering, refusal and resumed progress.
+during deferred and direct grants, FIFO ordering, refusal and resumed progress,
+and `settling_runs_owner_code_outside_the_lock` the settle order and its
+failure paths.
 
 ### Data-transfer delivery shares the foundation claim slot
 

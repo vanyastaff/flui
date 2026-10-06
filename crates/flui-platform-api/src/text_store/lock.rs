@@ -68,6 +68,7 @@ use std::any::Any;
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::marker::PhantomData;
+use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::rc::Rc;
 
 use super::session::{TextStoreEdit, TextStoreRead};
@@ -200,7 +201,7 @@ impl std::fmt::Debug for CommitGate {
         f.debug_struct("CommitGate")
             .field("open", &self.is_open())
             .field("failed", &self.failure.borrow().is_some())
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -227,14 +228,25 @@ impl CommitGate {
     /// a later one is retained unreported (ADR-0127): it is never dropped
     /// here, since dropping an opaque payload can run user code.
     pub fn defer_failure(&self, payload: Box<dyn Any + Send>) {
-        flui_foundation::panic::retain_opaque_payload(payload);
+        let later = {
+            let mut held = self.failure.borrow_mut();
+            if held.is_some() {
+                Some(payload)
+            } else {
+                *held = Some(payload);
+                None
+            }
+        };
+        if let Some(later) = later {
+            flui_foundation::panic::retain_opaque_payload(later);
+        }
     }
 
     /// The failure held since the last call, if any; the owner reports it
     /// (resumes it inside its own containment).
     #[must_use]
     pub fn take_failure(&self) -> Option<Box<dyn Any + Send>> {
-        None
+        self.failure.borrow_mut().take()
     }
 }
 
@@ -252,6 +264,9 @@ pub struct LockArbiter {
     locked: Cell<bool>,
     queue: RefCell<VecDeque<LockGrant>>,
     gate: RefCell<CommitGate>,
+    /// Whether an owner installed the gate ([`Self::set_gate`]), so a
+    /// failure caught while settling has someone to be reported to.
+    owned_gate: Cell<bool>,
     _owner_thread: PhantomData<*const ()>,
 }
 
@@ -285,6 +300,7 @@ impl LockArbiter {
     /// Follow `gate` from now on, replacing the one installed before.
     pub fn set_gate(&self, gate: CommitGate) {
         *self.gate.borrow_mut() = gate;
+        self.owned_gate.set(true);
     }
 
     /// Whether the installed gate is open.
@@ -391,10 +407,21 @@ impl LockArbiter {
     }
 
     fn run_one(&self, grant: LockGrant, open: &mut dyn FnMut(LockGrant), settle: &mut dyn FnMut()) {
-        let _ = settle;
-        self.locked.set(true);
-        let _held = Held(&self.locked);
-        open(grant);
+        {
+            self.locked.set(true);
+            let _held = Held(&self.locked);
+            open(grant);
+        }
+        // The grant ran and its lock is released: the store's owner runs now,
+        // before the next grant. A failure there cannot undo the grant.
+        let Err(payload) = catch_unwind(AssertUnwindSafe(settle)) else {
+            return;
+        };
+        if !self.owned_gate.get() {
+            resume_unwind(payload);
+        }
+        let gate = self.gate.borrow().clone();
+        gate.defer_failure(payload);
     }
 }
 

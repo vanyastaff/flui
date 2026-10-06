@@ -40,6 +40,10 @@ pub struct InMemoryTextStore {
     pending: RefCell<Vec<Notice>>,
     protected: Cell<bool>,
     owner_notifications: Cell<usize>,
+    /// A session changed the committed text and its owner notification is
+    /// not delivered yet: it is, once the session's lock is released.
+    owner_owed: Cell<bool>,
+    owner_listener: RefCell<Option<Rc<dyn Fn()>>>,
 }
 
 /// One notification an [`InMemoryTextStore`] owes its observer.
@@ -85,6 +89,8 @@ impl InMemoryTextStore {
             pending: RefCell::new(Vec::new()),
             protected: Cell::new(false),
             owner_notifications: Cell::new(0),
+            owner_owed: Cell::new(false),
+            owner_listener: RefCell::new(None),
         })
     }
 
@@ -146,7 +152,23 @@ impl InMemoryTextStore {
     /// released and before the next queued grant, so it may request a
     /// synchronous lock of its own.
     pub fn set_owner_listener(&self, listener: Option<Rc<dyn Fn()>>) {
-        let _ = listener;
+        // The replaced listener is dropped after the borrow is released.
+        let previous = std::mem::replace(&mut *self.owner_listener.borrow_mut(), listener);
+        drop(previous);
+    }
+
+    /// Deliver what a finished grant owes, now that its lock is released:
+    /// the owner notification, then the observer's.
+    fn settle(&self) {
+        if self.owner_owed.replace(false) {
+            self.owner_notifications
+                .set(self.owner_notifications.get() + 1);
+            let listener = self.owner_listener.borrow().clone();
+            if let Some(listener) = listener {
+                listener();
+            }
+        }
+        self.flush_notifications();
     }
 
     /// Queue `notice` and send everything queued if the observer may hear
@@ -188,19 +210,14 @@ impl InMemoryTextStore {
                 });
             }
             LockGrant::ReadWrite(body) => {
-                let edited = {
-                    let mut doc = self.doc.borrow_mut();
-                    let mut session = EditSession {
-                        doc: &mut doc,
-                        protected,
-                        edited: false,
-                    };
-                    body(&mut session);
-                    session.edited
-                };
-                if edited {
-                    self.owner_notifications
-                        .set(self.owner_notifications.get() + 1);
+                let mut doc = self.doc.borrow_mut();
+                let committed = doc.committed();
+                body(&mut EditSession {
+                    doc: &mut doc,
+                    protected,
+                });
+                if doc.committed() != committed {
+                    self.owner_owed.set(true);
                 }
             }
         }
@@ -222,7 +239,9 @@ impl TextStore for InMemoryTextStore {
         self.flush_notifications();
         let outcome =
             self.arbiter
-                .request(grant, timing, &mut |grant| self.open(grant), &mut || {});
+                .request(grant, timing, &mut |grant| self.open(grant), &mut || {
+                    self.settle();
+                });
         self.flush_notifications();
         outcome
     }
@@ -233,7 +252,7 @@ impl TextStore for InMemoryTextStore {
         self.flush_notifications();
         let ran = self
             .arbiter
-            .run_deferred(&mut |grant| self.open(grant), &mut || {});
+            .run_deferred(&mut |grant| self.open(grant), &mut || self.settle());
         self.flush_notifications();
         ran
     }
@@ -256,6 +275,18 @@ struct Document {
 }
 
 impl Document {
+    /// The text without the composition's range.
+    fn committed(&self) -> String {
+        let Some(composition) = self.composition else {
+            return self.text.clone();
+        };
+        let bytes = utf16::byte_range(&self.text, composition.range)
+            .expect("BUG: a composition is checked against the text it lies in");
+        let mut committed = self.text.clone();
+        committed.replace_range(bytes, "");
+        committed
+    }
+
     fn check(&self, offset: Utf16Offset) -> Result<(), TextStoreError> {
         utf16::byte_offset(&self.text, offset)?;
         Ok(())
@@ -329,7 +360,6 @@ struct ReadSession<'a> {
 struct EditSession<'a> {
     doc: &'a mut Document,
     protected: bool,
-    edited: bool,
 }
 
 fn read_text(doc: &Document, protected: bool, range: Utf16Range) -> Result<String, TextStoreError> {
@@ -470,9 +500,7 @@ impl TextStoreRead for EditSession<'_> {
 
 impl TextStoreEdit for EditSession<'_> {
     fn replace(&mut self, range: Utf16Range, text: &str) -> Result<TextChange, TextStoreError> {
-        let change = self.doc.replace(range, text)?;
-        self.edited = true;
-        Ok(change)
+        self.doc.replace(range, text)
     }
 
     fn insert_at_selection(&mut self, text: &str) -> Result<TextChange, TextStoreError> {
@@ -483,10 +511,7 @@ impl TextStoreEdit for EditSession<'_> {
     fn set_selection(&mut self, selection: Selection) -> Result<(), TextStoreError> {
         self.doc.check(selection.anchor)?;
         self.doc.check(selection.active)?;
-        if self.doc.selection != selection {
-            self.doc.selection = selection;
-            self.edited = true;
-        }
+        self.doc.selection = selection;
         Ok(())
     }
 
@@ -495,10 +520,7 @@ impl TextStoreEdit for EditSession<'_> {
             self.doc.check(composition.range.start())?;
             self.doc.check(composition.range.end())?;
         }
-        if self.doc.composition != composition {
-            self.doc.composition = composition;
-            self.edited = true;
-        }
+        self.doc.composition = composition;
         Ok(())
     }
 }
