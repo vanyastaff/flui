@@ -19,6 +19,15 @@ stamps it. `trybuild_ui::ui_tests` pins E0277 for both local-state types' thread
 bounds, E0624 for depth minting and E0308 for raw-integer stamping, alongside
 valid local-state constructors and an opaque-depth forwarding caller.
 
+### Clean widget frames report no builds
+
+The binding's draw-frame entry clears build telemetry even when no build work is pending.
+Dirty frames reset the same report through `BuildOwner::build_scope`; lazy child service
+adds its builds to that frame's report. A realm pump producing no draw frame retains the
+most recent actual frame report. Clearing telemetry does not route build work or change
+the scheduler's drain budget. Pinned by
+`tests/build_owner_tests.rs::clean_binding_frames_report_no_builds`.
+
 ### Owner and key envelopes retire after authority is withdrawn
 
 **Rule:** the build owner's reactive graph, tree observer and scheduled-build
@@ -277,8 +286,8 @@ is the all-bits mask; an empty mask is promoted to a whole-provider dependency r
 silently opting out. There is no read path that does not record a dependency.
 
 **Typing.** Aspects are compile-time field masks and every public read depends. There is no blanket `Data: PartialEq` bound — the diff
-comes from the opt-in derive. The dependent registry is the same reader registry signals use
-(ADR-0074 §5.5).
+comes from the opt-in derive. Inherited field dependencies and signal reads have separate
+registries, feeding the same owner scheduler and depth-ordered build drain (ADR-0074 §5.5).
 
 ### Signal reads subscribe through a private sink
 
@@ -294,6 +303,14 @@ marked as building. `begin_element_build`/`end_element_build` bracket every buil
 (next section). The routing test is
 `tests/signal_reads.rs::a_read_in_build_subscribes_through_the_production_context`; the
 `Reactive`/`ElementReads` sink pair is pinned by `static_assertions` in the module's tests.
+
+**Membership cost and order.** Signal reader sets and their element-to-slot reverse index keep
+up to four entries inline. Larger sets use a membership index and insertion-ordered storage;
+removal leaves holes, compacted when holes reach the surviving population. A rebuild wave
+therefore does amortized linear dependency bookkeeping while preserving the inbox's peer
+scheduling order. Failed-build restoration, explicit release and unmount use these same sets.
+`tests/signal_reads.rs::changing_read_sets_preserves_peer_rebuild_order` exercises repeated
+reads, subscription changes in both directions, peer rebuild ordering and slot reuse.
 
 ### Writes open through a WriterSource
 

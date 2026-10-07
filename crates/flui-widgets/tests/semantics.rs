@@ -4,6 +4,82 @@ use crate::common::{lay_out, loose};
 use flui_rendering::semantics::{SemanticsAction, semantics_action_for};
 use flui_widgets::{MergeSemantics, Semantics, SizedBox};
 
+pub(crate) fn retained_visibility_hides_child_semantics_by_default() {
+    use flui_widgets::Visibility;
+
+    for (visible, maintain_semantics, announced) in [
+        (true, false, true),
+        (false, false, false),
+        (false, true, true),
+        (true, true, true),
+    ] {
+        let mut laid = lay_out(
+            Visibility::new(
+                Semantics::new()
+                    .container(true)
+                    .label("retained visibility child")
+                    .child(SizedBox::new(40.0, 20.0)),
+            )
+            .visible(visible)
+            .maintain_state(true)
+            .maintain_animation(true)
+            .maintain_size(true)
+            .maintain_semantics(maintain_semantics),
+            loose(200.0),
+        );
+        laid.enable_semantics();
+        laid.tick();
+        let tree = laid.a11y_tree().expect("semantics enabled");
+        assert_eq!(
+            tree.find_by_label("retained visibility child").is_ok(),
+            announced,
+            "visible={visible}, maintain_semantics={maintain_semantics}: {}",
+            tree.describe()
+        );
+    }
+}
+
+pub(crate) fn retained_visibility_updates_semantics_without_changing_layout() {
+    use flui_widgets::Visibility;
+
+    let view = |visible, maintain_semantics| {
+        Visibility::new(
+            Semantics::new()
+                .container(true)
+                .label("retained visibility child")
+                .child(SizedBox::new(40.0, 20.0)),
+        )
+        .visible(visible)
+        .maintain_state(true)
+        .maintain_animation(true)
+        .maintain_size(true)
+        .maintain_semantics(maintain_semantics)
+    };
+    let mut laid = lay_out(view(true, false), loose(200.0));
+    laid.enable_semantics();
+    laid.tick();
+    for (visible, maintain_semantics, announced) in [
+        (true, false, true),
+        (false, false, false),
+        (false, true, true),
+        (false, false, false),
+        (true, true, true),
+        (false, true, true),
+        (true, false, true),
+        (false, false, false),
+    ] {
+        laid.pump_widget(view(visible, maintain_semantics));
+        let tree = laid.a11y_tree().expect("semantics enabled");
+        assert_eq!(
+            tree.find_by_label("retained visibility child").is_ok(),
+            announced,
+            "visible={visible}, maintain_semantics={maintain_semantics}: {}",
+            tree.describe()
+        );
+        assert_eq!(laid.size(laid.root()), crate::common::size(40.0, 20.0));
+    }
+}
+
 // ===========================================================================
 // RenderParagraph — plain text publishes its own label
 // ===========================================================================

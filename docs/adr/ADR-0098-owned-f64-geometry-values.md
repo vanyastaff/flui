@@ -223,7 +223,8 @@ fractional ratios ([flutter#151065](https://github.com/flutter/flutter/issues/15
 | IME, haptics, `Brightness`, `Locale`, `TargetPlatform` | `flui-platform-api` |
 | `MaterialColors` and design-system colours | `flui-material` / `flui-cupertino` |
 | `PointerData`, `OffsetPair`, `DeviceOrientation`, `FractionalOffset`, `Orientation`, `MaterialColors`, Bézier types, text-path types, and `flui-types`' duplicates of `BoxConstraints`, `FlexFit`, `CacheExtentStyle` and the simulations | deleted (no consumer, or an in-use counterpart) |
-| `Line`, `Circle`, `Vec2`, `Bounds` | still in `flui_foundation::geometry`; pruning them to the census's consumers is follow-up work |
+| `Line` and `Circle::intersect_line` | deleted; their only callers were geometry tests (`rg -n '\bLine\b|intersect_line' crates packages src examples tools -g '*.rs'`, excluding unrelated text-line and draw-command types) |
+| `Circle`, `Vec2`, `Bounds` | still in `flui_foundation::geometry`; pruning them to the census's consumers is follow-up work |
 
 - Both crates leave the workspace once `cargo tree -i` and a source search find no dependent.
 - No family becomes its own crate.
@@ -287,7 +288,7 @@ What is deferred, each with its reason:
   (Oklab, premultiplied). `Color` stays four `u8` channels, which are already lawfully
   `Eq + Hash`; wide-gamut and gradient-space work change the engine's shaders and belong
   together. peniko is not added: the display list stores no peniko type.
-- **Pruning `Vec2`, `Bounds`, `Line`, `Circle`** and the scalar traits to their consumers.
+- **Pruning `Vec2`, `Bounds`, `Circle`** and the scalar traits to their consumers.
 
 ## Alternatives considered
 

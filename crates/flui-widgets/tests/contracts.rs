@@ -212,6 +212,8 @@ fn semantics_translation_and_routing() {
     run_cases(
         "semantics_translation_and_routing",
         &[
+            ("semantics::retained_visibility_hides_child_semantics_by_default", crate::semantics::retained_visibility_hides_child_semantics_by_default as fn()),
+            ("semantics::retained_visibility_updates_semantics_without_changing_layout", crate::semantics::retained_visibility_updates_semantics_without_changing_layout as fn()),
             ("semantics::queued_directional_actions_and_numeric_values_reach_the_frame_producer", crate::semantics::queued_directional_actions_and_numeric_values_reach_the_frame_producer as fn()),
             ("semantics::numeric_range_admission_and_owner_payload_validation", crate::semantics::numeric_range_admission_and_owner_payload_validation as fn()),
             ("semantics::a_set_text_request_without_a_payload_is_dropped_rather_than_emptied", crate::semantics::a_set_text_request_without_a_payload_is_dropped_rather_than_emptied as fn()),

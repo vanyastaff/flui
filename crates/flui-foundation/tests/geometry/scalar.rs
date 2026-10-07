@@ -1,5 +1,5 @@
 //! Scalar geometry across the representable coordinate range.
-use flui_foundation::geometry::{ApproxEq, Circle, DevicePoint, Line, Offset, Point, Vec2};
+use flui_foundation::geometry::{ApproxEq, Circle, DevicePoint, Offset, Point, Vec2};
 fn opposite_extremes_are_distinct() {
     let min = DevicePoint::new(i32::MIN, 0);
     let max = DevicePoint::new(i32::MAX, 0);
@@ -43,21 +43,13 @@ fn double_precision_midpoints_keep_finite_extremes() {
     let opposite = Point::new(-f64::MAX, f64::MAX);
     assert_eq!(endpoint.midpoint(opposite), Point::new(0.0, 0.0));
     assert_eq!(opposite.midpoint(endpoint), Point::new(0.0, 0.0));
-    assert_eq!(Line::new(endpoint, endpoint).midpoint(), endpoint);
-    assert_eq!(
-        Line::new(endpoint, opposite).midpoint(),
-        Point::new(0.0, 0.0)
-    );
 }
 
 fn single_precision_midpoints_keep_finite_extremes() {
     let endpoint = Point::new(f32::MAX, -f32::MAX);
     assert_eq!(endpoint.midpoint(endpoint), endpoint);
     let opposite = Point::new(-f32::MAX, f32::MAX);
-    assert_eq!(
-        Line::new(endpoint, opposite).midpoint(),
-        Point::new(0.0, 0.0)
-    );
+    assert_eq!(endpoint.midpoint(opposite), Point::new(0.0, 0.0));
     assert_eq!(opposite.midpoint(endpoint), Point::new(0.0, 0.0));
 }
 
@@ -66,17 +58,17 @@ fn midpoint_rounding_preserves_subnormal_coordinates() {
     let a = Point::new(tiny, -tiny);
     assert_eq!(a.midpoint(a), a);
     let b = Point::new(f64::from_bits(2), -f64::from_bits(2));
-    assert_eq!(Line::new(a, b).midpoint(), b);
+    assert_eq!(a.midpoint(b), b);
     let tiny = f32::from_bits(1);
     let a = Point::new(tiny, -tiny);
     assert_eq!(a.midpoint(a), a);
     let b = Point::new(f32::from_bits(2), -f32::from_bits(2));
-    assert_eq!(Line::new(a, b).midpoint(), b);
+    assert_eq!(a.midpoint(b), b);
 }
 
 fn midpoint_nonfinite_coordinates_follow_ieee_behavior() {
     let a = Point::new(f64::INFINITY, f64::NEG_INFINITY);
-    assert_eq!(Line::new(a, a).midpoint(), a);
+    assert_eq!(a.midpoint(a), a);
     assert_eq!(a.midpoint(Point::new(1.0, 2.0)), a);
     let opposite = a.midpoint(Point::new(f64::NEG_INFINITY, f64::INFINITY));
     assert!(opposite.x.is_nan() && opposite.y.is_nan());
@@ -84,7 +76,7 @@ fn midpoint_nonfinite_coordinates_follow_ieee_behavior() {
     assert!(nan.x.is_nan());
     assert_eq!(nan.y, 3.0);
     let a = Point::new(f32::INFINITY, f32::NEG_INFINITY);
-    assert_eq!(Line::new(a, a).midpoint(), a);
+    assert_eq!(a.midpoint(a), a);
     let opposite = a.midpoint(Point::new(f32::NEG_INFINITY, f32::INFINITY));
     assert!(opposite.x.is_nan() && opposite.y.is_nan());
     let nan = Point::new(f32::NAN, 2.0).midpoint(Point::new(1.0, 4.0));
@@ -121,10 +113,9 @@ fn single_precision_distance_uses_the_returned_double_range() {
     let expected = 3.402_823_669_209_385e38;
     assert_eq!(a.distance(b), expected);
     assert_eq!(b.distance(a), expected);
-    assert_eq!(Line::new(a, b).length(), expected);
     let a = Point::new(0.0, a.x);
     let b = Point::new(0.0, b.x);
-    assert_eq!(Line::new(a, b).length(), expected);
+    assert_eq!(a.distance(b), expected);
 }
 
 fn single_precision_squared_distance_uses_the_returned_double_range() {
@@ -134,23 +125,22 @@ fn single_precision_squared_distance_uses_the_returned_double_range() {
     let expected = 1.157_920_892_373_162e77;
     assert_eq!(a.distance_squared(b), expected);
     assert_eq!(b.distance_squared(a), expected);
-    assert_eq!(Line::new(a, b).length_squared(), expected);
     let a = Point::new(0.0, a.x);
     let b = Point::new(0.0, b.x);
-    assert_eq!(Line::new(a, b).length_squared(), expected);
+    assert_eq!(a.distance_squared(b), expected);
 }
 
 fn ordinary_and_coincident_distances_keep_their_geometry() {
     let a = Point::new(1.0_f32, 2.0);
     let b = Point::new(4.0_f32, 6.0);
     assert_eq!(a.distance(b), 5.0);
-    assert_eq!(Line::new(a, b).length_squared(), 25.0);
+    assert_eq!(a.distance_squared(b), 25.0);
     let endpoint = Point::new(f32::MAX, -f32::MAX);
     assert_eq!(endpoint.distance(endpoint), 0.0);
-    assert_eq!(Line::new(endpoint, endpoint).length_squared(), 0.0);
+    assert_eq!(endpoint.distance_squared(endpoint), 0.0);
     let a = Point::new(1.0_f64, 2.0);
     let b = Point::new(4.0_f64, 6.0);
-    assert_eq!(Line::new(a, b).length(), 5.0);
+    assert_eq!(a.distance(b), 5.0);
     assert_eq!(a.distance_squared(b), 25.0);
 }
 
@@ -204,12 +194,6 @@ fn invalid_and_near_zero_vectors_use_the_fallback() {
     assert_eq!(Vec2::new(3.0, 4.0).normalize(), Vec2::new(0.6, 0.8));
     assert_eq!(Vec2::new(f64::EPSILON * 2.0, 0.0).normalize(), Vec2::X);
     assert_eq!(Vec2::new(f32::MAX, 0.0).normalize(), Vec2::X);
-}
-
-fn line_consumer_keeps_the_extreme_direction() {
-    let target = Point::new(f64::MAX, f64::MAX);
-    let direction = Line::new(Point::new(0.0, 0.0), target).direction();
-    assert!((direction.length() - 1.0).abs() < 1e-15);
 }
 
 fn circle_consumer_keeps_the_extreme_direction() {
@@ -277,63 +261,9 @@ fn vector_normalization_keeps_finite_directions_and_refuses_invalid_input() {
             "fallback admission",
             invalid_and_near_zero_vectors_use_the_fallback,
         ),
-        ("line consumer", line_consumer_keeps_the_extreme_direction),
         (
             "circle consumer",
             circle_consumer_keeps_the_extreme_direction,
-        ),
-    ]);
-}
-
-fn coincident_line_endpoints_have_no_circle_intersection() {
-    let circle = Circle::new(Point::new(0.0, 0.0), 2.0);
-    for point in [
-        Point::new(0.0, 0.0),
-        Point::new(2.0, 0.0),
-        Point::new(3.0, 0.0),
-    ] {
-        assert_eq!(circle.intersect_line(&Line::new(point, point)), None);
-    }
-    // Squaring this nonzero direction underflows to the same computed zero.
-    assert_eq!(
-        circle.intersect_line(&Line::new(
-            Point::new(0.0, 0.0),
-            Point::new(f64::from_bits(1), 0.0)
-        )),
-        None
-    );
-    let hits = circle
-        .intersect_line(&Line::new(Point::new(-3.0, 0.0), Point::new(3.0, 0.0)))
-        .expect("ordinary crossing after refusal");
-    assert_eq!(hits, (Point::new(-2.0, 0.0), Point::new(2.0, 0.0)));
-}
-
-fn circle_intersection_keeps_infinite_line_and_tangent_behavior() {
-    let circle = Circle::new(Point::new(0.0, 0.0), 2.0);
-    let hits = circle
-        .intersect_line(&Line::new(Point::new(3.0, 0.0), Point::new(4.0, 0.0)))
-        .expect("intersection outside the endpoint segment");
-    assert_eq!(hits, (Point::new(-2.0, 0.0), Point::new(2.0, 0.0)));
-    assert_eq!(
-        circle.intersect_line(&Line::new(Point::new(-1.0, 2.0), Point::new(1.0, 2.0))),
-        Some((Point::new(0.0, 2.0), Point::new(0.0, 2.0)))
-    );
-    assert_eq!(
-        circle.intersect_line(&Line::new(Point::new(-1.0, 3.0), Point::new(1.0, 3.0))),
-        None
-    );
-}
-
-#[test]
-fn circle_line_intersection_requires_a_computed_direction() {
-    crate::run_table(&[
-        (
-            "coincident endpoints",
-            coincident_line_endpoints_have_no_circle_intersection,
-        ),
-        (
-            "infinite line and tangent",
-            circle_intersection_keeps_infinite_line_and_tangent_behavior,
         ),
     ]);
 }
