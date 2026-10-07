@@ -186,6 +186,135 @@ pub(crate) fn viewer_pan_transitions_to_pinch_without_contact_count_jumps() {
     assert_eq!(*lifecycle.borrow(), ["start", "end"]);
 }
 
+/// Rotation is authored explicitly and keeps the scene's focal point fixed.
+pub(crate) fn viewer_native_rotation_preserves_the_scene_pivot() {
+    use flui_widgets::{InteractiveViewer, TransformationController};
+    let controller = TransformationController::new();
+    let mut laid = lay_out(
+        InteractiveViewer::new()
+            .controller(controller.clone())
+            .rotation_enabled(true)
+            .boundary_margin(EdgeInsets::all(1000.0))
+            .child(SizedBox::new(100.0, 100.0)),
+        tight(100.0, 100.0),
+    );
+    laid.dispatch_pointer_event(&pan_zoom(PanZoomPhase::Start));
+    laid.dispatch_pointer_event(&pan_zoom(PanZoomPhase::Update(
+        PanZoomTransform::try_new(Offset::ZERO, 1.5, std::f64::consts::FRAC_PI_2)
+            .expect("finite scale and quarter turn"),
+    )));
+    let pivot = controller.to_scene(Offset::new(50.0, 50.0));
+    assert_scale(pivot.dx, 50.0);
+    assert_scale(pivot.dy, 50.0);
+    let transformed = controller.value().transform_point(60.0, 50.0);
+    assert_scale(transformed.0, 50.0);
+    assert_scale(transformed.1, 65.0);
+    let rotated = controller.value();
+    laid.pump_widget(
+        InteractiveViewer::new()
+            .controller(controller.clone())
+            .rotation_enabled(true)
+            .boundary_margin(EdgeInsets::all(1000.0))
+            .child(SizedBox::new(100.0, 100.0)),
+    );
+    laid.pump();
+    laid.dispatch_pointer_event(&pan_zoom(PanZoomPhase::Update(
+        PanZoomTransform::try_new(Offset::ZERO, 1.5, std::f64::consts::FRAC_PI_2)
+            .expect("repeated cumulative transform"),
+    )));
+    assert_eq!(
+        controller.value(),
+        rotated,
+        "rebuild preserves cumulative rotation history"
+    );
+    laid.dispatch_pointer_event(&pan_zoom(PanZoomPhase::End));
+}
+
+/// The real presentation ticks the release velocity and new input retires it.
+pub(crate) fn viewer_focal_fling_advances_then_stops_on_new_input() {
+    use flui_animation::Vsync;
+    use flui_widgets::{InteractiveViewer, TransformationController, VsyncScope};
+    use std::time::Duration;
+    let controller = TransformationController::new();
+    let released = Rc::new(RefCell::new(Vec::new()));
+    let ends = released.clone();
+    let vsync = Vsync::new();
+    let mut laid = lay_out(
+        VsyncScope::new(
+            vsync.clone(),
+            InteractiveViewer::new()
+                .controller(controller.clone())
+                .boundary_margin(EdgeInsets::all(1000.0))
+                .on_interaction_end(move |_, details| ends.borrow_mut().push(details.velocity))
+                .child(SizedBox::new(200.0, 200.0)),
+        ),
+        tight(200.0, 200.0),
+    );
+    laid.adopt_vsync(vsync);
+    let source = PointerInfo::new(
+        PointerId::try_from(81_u64).expect("contact"),
+        PointerKind::Touch,
+    );
+    let sample = |millis: u64, x| {
+        PointerSample::new(
+            EventTime::from_nanos(millis * 1_000_000),
+            position(x, 100.0),
+        )
+    };
+    let down = |millis, x| {
+        PointerEvent::Down(PointerPress::new(
+            source,
+            PointerButton::PRIMARY,
+            PointerButtons::NONE.with(PointerButton::PRIMARY),
+            sample(millis, x),
+        ))
+    };
+    let movement = |millis, x| {
+        PointerEvent::Move(PointerMove::new(
+            source,
+            PointerButtons::NONE.with(PointerButton::PRIMARY),
+            sample(millis, x),
+        ))
+    };
+    laid.dispatch_pointer_event(&down(0, 20.0));
+    for (millis, x) in [(10, 50.0), (20, 80.0), (30, 110.0)] {
+        laid.dispatch_pointer_event(&movement(millis, x));
+        laid.pump_for(Duration::from_millis(10));
+    }
+    laid.dispatch_pointer_event(&PointerEvent::Up(PointerRelease::new(
+        source,
+        PointerButton::PRIMARY,
+        PointerButtons::NONE,
+        sample(31, 110.0),
+    )));
+    assert!(
+        released
+            .borrow()
+            .last()
+            .expect("release callback")
+            .pixels_per_second
+            .dx
+            > 1000.0
+    );
+    let before = controller.value().transform_point(0.0, 0.0).0;
+    laid.pump_for(Duration::from_millis(16));
+    laid.pump_for(Duration::from_millis(16));
+    let after = controller.value().transform_point(0.0, 0.0).0;
+    assert!(
+        after > before,
+        "measured focal velocity continues through presentation ticks"
+    );
+    laid.dispatch_pointer_event(&down(70, 80.0));
+    let stopped = controller.value();
+    laid.pump_for(Duration::from_millis(16));
+    laid.pump_for(Duration::from_millis(16));
+    assert_eq!(
+        controller.value(),
+        stopped,
+        "new contact stops the previous focal fling"
+    );
+}
+
 fn mouse() -> PointerInfo {
     PointerInfo::new(
         PointerId::try_from(7_u64).expect("valid pointer"),
