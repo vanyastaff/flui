@@ -188,8 +188,8 @@ mod native_windows {
         UI::Input::KeyboardAndMouse::{
             ACTIVATE_KEYBOARD_LAYOUT_FLAGS, ActivateKeyboardLayout, GetCapture, GetKeyState,
             GetKeyboardLayout, GetKeyboardState, HKL, KLF_ACTIVATE, LoadKeyboardLayoutW,
-            ReleaseCapture, SetCapture, SetKeyboardState, VIRTUAL_KEY, VK_LBUTTON, VK_LMENU,
-            VK_LSHIFT, VK_MBUTTON, VK_MENU, VK_RBUTTON, VK_SHIFT,
+            ReleaseCapture, SetCapture, SetKeyboardState, VIRTUAL_KEY, VK_CONTROL, VK_LBUTTON,
+            VK_LCONTROL, VK_LMENU, VK_LSHIFT, VK_MBUTTON, VK_MENU, VK_RBUTTON, VK_RMENU, VK_SHIFT,
         },
         UI::WindowsAndMessaging::{
             CWPSTRUCT, CallNextHookEx, DispatchMessageW, GetClientRect, IsIconic, IsWindowVisible,
@@ -281,6 +281,14 @@ mod native_windows {
         (
             "system_dead_key_is_reported_as_dead",
             system_dead_key_is_reported_as_dead,
+        ),
+        (
+            "altgr_dead_key_is_reported_as_dead",
+            altgr_dead_key_is_reported_as_dead,
+        ),
+        (
+            "dead_key_release_survives_a_layout_switch",
+            dead_key_release_survives_a_layout_switch,
         ),
         (
             "consumed_alt_space_withdraws_its_system_char",
@@ -1206,28 +1214,38 @@ mod native_windows {
     // `NamedKey::Dead`, not as its unshifted character, so a shortcut bound
     // to that character does not fire mid-composition.
     fn dead_key_is_reported_as_dead() {
-        dead_keydown_reports_dead(DeadKeyPath::Plain);
+        dead_key_reports_dead(DeadKeyCase::UsInternationalAcute);
     }
 
     // With Alt held the same key arrives as a system keydown and keyup.
     fn system_dead_key_is_reported_as_dead() {
-        dead_keydown_reports_dead(DeadKeyPath::System);
+        dead_key_reports_dead(DeadKeyCase::SystemAcute);
+    }
+
+    // French AltGr+2 is a dead tilde, while unshifted 2 types `é`: the dead
+    // mapping exists only on the AltGr layer.
+    fn altgr_dead_key_is_reported_as_dead() {
+        dead_key_reports_dead(DeadKeyCase::FrenchAltGrTilde);
+    }
+
+    // The layout switches to plain US while the dead key is held; its release
+    // keeps the identity its press reported.
+    fn dead_key_release_survives_a_layout_switch() {
+        dead_key_reports_dead(DeadKeyCase::LayoutSwitchWhileHeld);
     }
 
     #[derive(Clone, Copy)]
-    enum DeadKeyPath {
-        Plain,
-        System,
+    enum DeadKeyCase {
+        UsInternationalAcute,
+        SystemAcute,
+        FrenchAltGrTilde,
+        LayoutSwitchWhileHeld,
     }
 
     #[expect(unsafe_code, reason = "owned Win32 keyboard dispatch")]
-    fn dead_keydown_reports_dead(path: DeadKeyPath) {
-        // US-International: VK_OEM_7 (apostrophe) is the acute-accent dead key.
-        // The layout is activated for this thread only and restored below;
-        // each row runs in its own child process.
+    fn dead_key_reports_dead(case: DeadKeyCase) {
         let platform = WindowsPlatform::new().expect("native Windows platform");
         let window = open_shown(&platform);
-        let layout = ThreadLayout::activate("00020409");
         let hwnd = window
             .as_any()
             .downcast_ref::<WindowsWindow>()
@@ -1247,13 +1265,28 @@ mod native_windows {
             }
             DispatchEventResult::resolved(true, false)
         }));
-        let (vk, scan) = (0xDE_usize, 0x28_isize);
-        let (down, up, context) = match path {
-            DeadKeyPath::Plain => (WM_KEYDOWN, WM_KEYUP, 0),
-            DeadKeyPath::System => (WM_SYSKEYDOWN, WM_SYSKEYUP, 1 << 29),
+        // Layouts are switched for this thread only, after the window exists
+        // (creating it resets the thread's layout), and restored on drop; each
+        // row runs in its own child process.
+        let (layout_id, vk, scan) = match case {
+            DeadKeyCase::FrenchAltGrTilde => ("0000040C", 0x32_usize, 0x03_isize),
+            _ => ("00020409", 0xDE, 0x28),
+        };
+        let layout = ThreadLayout::activate(layout_id);
+        let altgr = matches!(case, DeadKeyCase::FrenchAltGrTilde).then(|| {
+            ThreadKeyboardState::with_keys(&[
+                (VK_CONTROL, true),
+                (VK_LCONTROL, true),
+                (VK_MENU, true),
+                (VK_RMENU, true),
+            ])
+        });
+        let (down, up, context) = match case {
+            DeadKeyCase::SystemAcute => (WM_SYSKEYDOWN, WM_SYSKEYUP, 1 << 29),
+            _ => (WM_KEYDOWN, WM_KEYUP, 0),
         };
         // SAFETY: integer key data for the fixture's own HWND on this thread;
-        // dispatch is synchronous. Bits 30 and 31 mark the key-up.
+        // dispatch is synchronous.
         unsafe {
             SendMessageW(
                 hwnd,
@@ -1261,6 +1294,11 @@ mod native_windows {
                 Some(WPARAM(vk)),
                 Some(LPARAM(1 | (scan << 16) | context)),
             );
+        }
+        let switched = matches!(case, DeadKeyCase::LayoutSwitchWhileHeld)
+            .then(|| ThreadLayout::activate("00000409"));
+        // SAFETY: as above. Bits 30 and 31 mark the release of a held key.
+        unsafe {
             SendMessageW(
                 hwnd,
                 up,
@@ -1268,6 +1306,8 @@ mod native_windows {
                 Some(LPARAM(1 | (scan << 16) | context | (1 << 30) | (1 << 31))),
             );
         }
+        drop(switched);
+        drop(altgr);
         drop(layout);
         let dead = keyboard_types::Key::Named(keyboard_types::NamedKey::Dead);
         assert_eq!(

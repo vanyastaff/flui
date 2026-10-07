@@ -370,6 +370,9 @@ pub(super) struct WindowContext {
     /// path in `window_proc` uses this; the `WM_KEYDOWN` drain sees a whole
     /// burst at once and never needs cross-message state.
     pub pending_high_surrogate: std::cell::Cell<Option<u16>>,
+    /// Physical keys held down that were pressed as dead keys, so their
+    /// release reports `Dead` like the press.
+    pub held_dead_keys: std::cell::RefCell<super::events::HeldDeadKeys>,
     /// Borrow ledger deferring this context's free past every live borrow
     /// on the owner thread — see [`ContextLedger`] for the reentrancy
     /// hazard (a framework callback closing the window from inside a
@@ -1640,7 +1643,10 @@ impl WindowsPlatform {
 
                         // Dispatch keyboard event via per-window callback
                         use super::events::key_down_event;
-                        let event = key_down_event(wparam, lparam, translated);
+                        let event = {
+                            let mut held = ctx.held_dead_keys.borrow_mut();
+                            key_down_event(wparam, lparam, translated, &mut held)
+                        };
                         let result = ctx.callbacks.dispatch_input(event);
                         // A callback can close this window and create another
                         // with a recycled HWND. The entry guard pins the old
@@ -1667,7 +1673,10 @@ impl WindowsPlatform {
                         ctx.modifiers.set(super::events::message_modifiers());
 
                         use super::events::key_up_event;
-                        let event = key_up_event(wparam, lparam);
+                        let event = {
+                            let mut held = ctx.held_dead_keys.borrow_mut();
+                            key_up_event(wparam, lparam, &mut held)
+                        };
                         let result = ctx.callbacks.dispatch_input(event);
                         if result.default_prevented
                             || GetWindowLongPtrW(hwnd, GWLP_USERDATA) != ctx_ptr as isize
