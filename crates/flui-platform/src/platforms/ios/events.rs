@@ -250,10 +250,12 @@ fn touch_sample(
     orientation: Option<(f64, f64)>,
 ) -> PointerSample {
     let mut sample = PointerSample::new(time, position);
+    let normalized_force = force / maximum_force;
     if has_force
         && maximum_force.is_finite()
         && maximum_force > 0.0
-        && let Ok(pressure) = Pressure::try_new(force / maximum_force)
+        && (0.0..=1.0).contains(&normalized_force)
+        && let Ok(pressure) = Pressure::try_new(normalized_force as f32)
     {
         sample = sample.with_pressure(pressure);
     }
