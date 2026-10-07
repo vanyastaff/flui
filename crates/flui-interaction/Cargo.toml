@@ -33,13 +33,10 @@ web-time = { workspace = true }
 # the OS backends (ADR-0082).
 flui-platform-api = { workspace = true }
 
-# UI Events - Cross-platform input event abstraction (W3C compliant)
-ui-events = { workspace = true }
 cursor-icon = { workspace = true }
 
 # Synchronization & Concurrency
 parking_lot = { workspace = true }
-dashmap = { workspace = true }
 
 # Collections (optimized for small sizes)
 smallvec = { workspace = true }
@@ -47,7 +44,6 @@ smallvec = { workspace = true }
 # Logging
 tracing = { workspace = true }
 thiserror = { workspace = true }
-dpi = "0.1.2"
 
 [dev-dependencies]
 # `log_capture::disarm_interest_cache`, which this crate's tracing-capturing
